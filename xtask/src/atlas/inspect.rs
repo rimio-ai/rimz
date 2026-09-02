@@ -1,81 +1,68 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
-use serde::Serialize;
+use anyhow::{Result, bail};
 
 use super::conform::{self, Direction};
+use super::detect::{self, GuardFamily};
 use super::facts::{Facets, Facts};
+use super::history::{self, Commit};
 use super::index::IndexPolicy;
-use super::modules::{bounded_names, crate_module_for_path, module_is_within, path_in_scope};
+use super::modules::{
+    EscapingItem, crate_module_for_path, escaping_items_for_boundary, module_is_within,
+    path_in_scope, reference_module_label,
+};
 use super::references::{Edge, EdgeKind, FunctionId};
+use super::shapes::{self, ShapeFamily};
 use super::sources::Source;
-use super::syntax::FileSyntax;
-use super::target::{self, ModuleRule, TARGET_FILE, Target};
-use super::{REPORT_VERSION, positive_usize, set_once, validate_scope, value};
+use super::syntax::{FileSyntax, PubItem, resolved_internal_import};
+use super::target::{self, ModuleRule, TARGET_FILE, Target, Verdict, VerdictKind};
+use super::{positive_usize, set_once, value};
 
-const USAGE: &str = "cargo xtask atlas inspect --from <module|path> --to <module|path> [--path <scope>] [--file <target.toml>] [--top N] [--md|--json]
+const USAGE: &str = "cargo xtask atlas inspect --module <module|path> [--from <module|path>] [--item <module::Name>] [--top N]
 
-Shows the functions in one module that assemble escaping items from another.
-The exact reference index is required; use `seams --module` for a use-edge view.
+Builds a Markdown dossier for one Rust module from exact SCIP references.
 
-  --from <value>  calling crate module or root-relative file/directory
-  --to <value>    target crate module or root-relative file/directory
-  --path <path>   root-relative analysis scope (default .)
-  --file <path>   target file (default root refactor-target.toml)
-  --top <n>       functions, tests, and names shown per list (default 10)
-  --md            markdown headings and fenced report sections
-  --json          versioned JSON agent contract (v4)";
+  --module <value>  module or root-relative Rust file/directory
+  --from <value>    caller module to quote (default: heaviest caller)
+  --item <value>    public item key to investigate
+  --top <n>         rows and names shown per section (default 20)";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
-    from: String,
-    to: String,
-    path: PathBuf,
-    file: Option<PathBuf>,
+    module: String,
+    from: Option<String>,
+    item: Option<String>,
     top: usize,
-    markdown: bool,
-    json: bool,
 }
 
-#[derive(Debug, Serialize)]
-struct Report {
-    version: u8,
-    verb: &'static str,
-    from: String,
-    to: String,
+#[derive(Clone, Debug)]
+struct Caller {
+    module: String,
+    items: Vec<String>,
+    max_fn_items: usize,
+    top_fns: Vec<CallerFn>,
+}
+
+#[derive(Clone, Debug)]
+struct CallerFn {
+    function: String,
     path: PathBuf,
-    totals: Totals,
-    functions: Vec<FunctionRow>,
-    heaviest: Option<Heaviest>,
-    tests: Vec<TestRow>,
-    rules: Vec<RuleRow>,
-    parse_failures: Vec<PathBuf>,
-    #[serde(skip)]
-    target_configured: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct Totals {
-    functions: usize,
+    line: usize,
     items: usize,
-    sites: usize,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 struct FunctionRow {
     function: String,
     path: PathBuf,
     line: usize,
     end_line: usize,
     items: Vec<String>,
-    items_total: usize,
     sites: usize,
-    #[serde(skip)]
-    outside: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug)]
 struct Heaviest {
     function: String,
     path: PathBuf,
@@ -84,26 +71,65 @@ struct Heaviest {
     source: String,
 }
 
-#[derive(Debug, Serialize)]
-struct TestRow {
+#[derive(Clone, Debug)]
+struct SurfaceItem {
+    module: String,
+    name: String,
     path: PathBuf,
-    sites: usize,
-    items: Vec<String>,
-    items_total: usize,
+    line: usize,
+    test_referrers: usize,
+    pass_through: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug)]
+struct UnresolvedItem {
+    module: String,
+    name: String,
+    path: PathBuf,
+    line: usize,
+}
+
+#[derive(Clone, Debug)]
+struct AssemblyGroup {
+    items: Vec<String>,
+    functions: Vec<AssemblyFunction>,
+    score: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct AssemblyFunction {
+    module: String,
+    function: FunctionId,
+}
+
+#[derive(Clone, Debug)]
+struct Provider {
+    module: String,
+    sites: usize,
+    items: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
 struct RuleRow {
     path: PathBuf,
+    provider: String,
     kind: &'static str,
     direction: &'static str,
     admitted: Option<String>,
 }
 
-#[derive(Default)]
-struct FunctionAggregate {
-    items: BTreeSet<String>,
-    sites: usize,
+#[derive(Clone, Debug)]
+struct ItemEvidence {
+    key: String,
+    path: PathBuf,
+    line: usize,
+    declared: String,
+    effective_reach: String,
+    production_referrers: Vec<String>,
+    test_referrers: Vec<String>,
+    commits: Vec<Commit>,
+    markers: Vec<String>,
+    verdict: Option<Verdict>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -130,20 +156,93 @@ impl ModuleSelector {
     clippy::print_stdout,
     reason = "xtask atlas inspect output is the command's stdout contract"
 )]
-pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
-    let Some(args) = parse_args(args)? else {
+pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
+    let Some(args) = parse_args(raw)? else {
         println!("{USAGE}");
         return Ok(());
     };
-    let mut report = build_report(root, &args)?;
-    if args.json {
-        compact_json(&mut report, args.top);
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report).context("rendering atlas inspect JSON")?
-        );
-    } else {
-        print_report(&report, args.top, args.markdown);
+    let facts = Facts::load(
+        root,
+        Path::new("."),
+        Facets {
+            references: Some(IndexPolicy::Required),
+            ..Facets::default()
+        },
+    )?;
+    let module = resolve_module(root, &facts.syntax.files, &args.module, "--module")?;
+    let references = facts
+        .references
+        .as_ref()
+        .expect("the required reference facet is loaded");
+    let target = target::load(&root.join(TARGET_FILE))?;
+    let callers = callers_from_edges(&references.edges, &module);
+    let from = args
+        .from
+        .as_deref()
+        .map(|raw| resolve_module(root, &facts.syntax.files, raw, "--from"))
+        .transpose()?
+        .or_else(|| {
+            callers.first().map(|caller| ModuleSelector {
+                module: caller.module.clone(),
+                path: None,
+                directory: false,
+            })
+        });
+    let assembly = from.as_ref().map_or_else(Vec::new, |from| {
+        assembly_functions(&references.edges, &facts.syntax.files, from, &module)
+    });
+    let heaviest = assembly
+        .first()
+        .and_then(|function| quote_function(function, &facts.sources));
+    let (zero_surface, unresolved) = zero_production_surface(&facts, &module);
+    let repeated = repeated_assembly(&references.edges, &module, args.top);
+    let shape_families = shapes::families(&facts, Path::new("."))
+        .into_iter()
+        .filter(|family| {
+            family
+                .members
+                .iter()
+                .any(|member| module.matches(&crate_module_for_path(&member.path), &member.path))
+        })
+        .collect::<Vec<_>>();
+    let guard_families = detect::guard_families(&facts, Path::new("."))
+        .into_iter()
+        .filter(|family| {
+            family
+                .locations
+                .iter()
+                .any(|site| module.matches(&crate_module_for_path(&site.path), &site.path))
+        })
+        .collect::<Vec<_>>();
+    let providers = providers(&facts, &module);
+    let rules = target.as_ref().map_or_else(Vec::new, |target| {
+        target_rules(root, target, &facts, &module, &providers)
+    });
+    let stale = target.as_ref().map_or_else(Vec::new, |target| {
+        stale_module_verdicts(target, &module.module, &facts)
+    });
+    let item = args
+        .item
+        .as_deref()
+        .map(|key| item_evidence(root, &facts, &module, target.as_ref(), key))
+        .transpose()?;
+
+    print_callers(&callers, args.top);
+    print_heaviest(&assembly, heaviest.as_ref(), args.top);
+    print_zero_surface(&zero_surface, &unresolved, args.top);
+    print_repeated(&repeated, args.top);
+    print_duplicated(&shape_families, &guard_families, args.top);
+    print_providers(&providers, args.top);
+    print_footer(
+        &facts,
+        &module,
+        target.is_some(),
+        &rules,
+        &unresolved,
+        &stale,
+    );
+    if let Some(item) = &item {
+        print_item(item, args.top);
     }
     Ok(())
 }
@@ -152,48 +251,25 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     if args.iter().any(|arg| crate::is_help_flag(arg)) {
         return Ok(None);
     }
+    let mut module = None;
     let mut from = None;
-    let mut to = None;
-    let mut path = None;
-    let mut file = None;
+    let mut item = None;
     let mut top = None;
-    let mut markdown = false;
-    let mut json = false;
     let mut index = 0;
     while index < args.len() {
-        match args[index].as_str() {
-            "--from" => {
-                let raw = value(args, index, "inspect", "--from")?;
+        let flag = args[index].as_str();
+        match flag {
+            "--module" | "--from" | "--item" => {
+                let raw = value(args, index, "inspect", flag)?;
                 if raw.is_empty() {
-                    bail!("atlas inspect --from requires a non-empty module or path");
+                    bail!("atlas inspect {flag} requires a non-empty value");
                 }
-                set_once(&mut from, raw.to_owned(), "inspect", "--from")?;
-                index += 2;
-            }
-            "--to" => {
-                let raw = value(args, index, "inspect", "--to")?;
-                if raw.is_empty() {
-                    bail!("atlas inspect --to requires a non-empty module or path");
+                match flag {
+                    "--module" => set_once(&mut module, raw.to_owned(), "inspect", flag)?,
+                    "--from" => set_once(&mut from, raw.to_owned(), "inspect", flag)?,
+                    "--item" => set_once(&mut item, raw.to_owned(), "inspect", flag)?,
+                    _ => unreachable!(),
                 }
-                set_once(&mut to, raw.to_owned(), "inspect", "--to")?;
-                index += 2;
-            }
-            "--path" => {
-                let raw = value(args, index, "inspect", "--path")?;
-                set_once(
-                    &mut path,
-                    validate_scope(raw, "inspect --path")?,
-                    "inspect",
-                    "--path",
-                )?;
-                index += 2;
-            }
-            "--file" => {
-                let raw = value(args, index, "inspect", "--file")?;
-                if raw.is_empty() {
-                    bail!("atlas inspect --file requires a non-empty path");
-                }
-                set_once(&mut file, PathBuf::from(raw), "inspect", "--file")?;
                 index += 2;
             }
             "--top" => {
@@ -206,98 +282,16 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
                 )?;
                 index += 2;
             }
-            "--md" => {
-                if markdown || json {
-                    bail!("atlas inspect accepts only one of --md or --json");
-                }
-                markdown = true;
-                index += 1;
-            }
-            "--json" => {
-                if markdown || json {
-                    bail!("atlas inspect accepts only one of --md or --json");
-                }
-                json = true;
-                index += 1;
-            }
-            "--no-index" => {
-                bail!(
-                    "atlas inspect is a reference view; use `atlas seams --module` for the use-edge view"
-                );
-            }
+            "--no-index" => bail!("atlas inspect requires the exact SCIP reference index"),
             flag => bail!("unknown atlas inspect flag `{flag}`\n\n{USAGE}"),
         }
     }
     Ok(Some(Args {
-        from: from.ok_or_else(|| anyhow::anyhow!("atlas inspect requires --from"))?,
-        to: to.ok_or_else(|| anyhow::anyhow!("atlas inspect requires --to"))?,
-        path: path.unwrap_or_else(|| PathBuf::from(".")),
-        file,
-        top: top.unwrap_or(10),
-        markdown,
-        json,
+        module: module.ok_or_else(|| anyhow::anyhow!("atlas inspect requires --module"))?,
+        from,
+        item,
+        top: top.unwrap_or(20),
     }))
-}
-
-fn build_report(root: &Path, args: &Args) -> Result<Report> {
-    let facts = Facts::load(
-        root,
-        &args.path,
-        Facets {
-            references: Some(IndexPolicy::Required),
-            ..Facets::default()
-        },
-    )?;
-    let from = resolve_module(root, &facts.syntax.files, &args.from, "--from")?;
-    let to = resolve_module(root, &facts.syntax.files, &args.to, "--to")?;
-    let references = facts
-        .references
-        .as_ref()
-        .expect("the required reference facet is loaded");
-    let (totals, functions, heaviest, tests) = assembly_report(
-        &references.edges,
-        &facts.sources,
-        &facts.syntax.files,
-        &from,
-        &to,
-        &args.path,
-    );
-
-    let target_path = args
-        .file
-        .as_ref()
-        .map_or_else(|| root.join(TARGET_FILE), |path| root.join(path));
-    let target = target::load(&target_path)?;
-    if args.file.is_some() && target.is_none() {
-        bail!(
-            "atlas inspect target file `{}` does not exist",
-            target_path.display()
-        );
-    }
-    let rules = target.as_ref().map_or_else(Vec::new, |target| {
-        target_rules(root, target, &facts, &from, &to)
-    });
-    let target_configured = target.is_some();
-    Ok(Report {
-        version: REPORT_VERSION,
-        verb: "inspect",
-        from: from.module,
-        to: to.module,
-        path: args.path.clone(),
-        totals,
-        functions,
-        heaviest,
-        tests,
-        rules,
-        parse_failures: facts
-            .syntax
-            .parse_failures
-            .iter()
-            .filter(|path| path_in_scope(path, &args.path))
-            .cloned()
-            .collect(),
-        target_configured,
-    })
 }
 
 fn resolve_module(
@@ -308,7 +302,7 @@ fn resolve_module(
 ) -> Result<ModuleSelector> {
     let path_like = raw.contains('/') || raw.ends_with(".rs") || root.join(raw).exists();
     let (module, path, directory) = if path_like {
-        let path = validate_scope(raw, &format!("inspect {flag}"))?;
+        let path = super::validate_scope(raw, &format!("inspect {flag}"))?;
         let absolute = root.join(&path);
         if !absolute.exists() {
             bail!("atlas inspect {flag} path `{raw}` does not exist");
@@ -330,15 +324,14 @@ fn resolve_module(
             false,
         )
     };
-    let matches = syntax_files.iter().any(|file| {
+    if syntax_files.iter().any(|file| {
         module_is_within(&file.module_path, &module)
             && match &path {
                 Some(scope) if directory => path_in_scope(&file.path, scope),
                 Some(source) => &file.path == source,
                 None => true,
             }
-    });
-    if matches {
+    }) {
         return Ok(ModuleSelector {
             module,
             path,
@@ -348,54 +341,104 @@ fn resolve_module(
     bail!("atlas inspect {flag} `{raw}` does not match a Rust module")
 }
 
-fn assembly_report(
+fn callers_from_edges(edges: &[Edge], target: &ModuleSelector) -> Vec<Caller> {
+    #[derive(Default)]
+    struct Assembly {
+        items: BTreeSet<String>,
+        functions: BTreeMap<FunctionId, BTreeSet<String>>,
+    }
+    let mut rows = BTreeMap::<String, Assembly>::new();
+    for edge in edges.iter().filter(|edge| {
+        edge.kind == EdgeKind::Reference
+            && !edge.test
+            && target.matches(&edge.to, &edge.to_path)
+            && !target.matches(&edge.from, &edge.from_path)
+    }) {
+        let assembly = rows.entry(edge.from.clone()).or_default();
+        assembly.items.insert(edge.item.clone());
+        if let Some(function) = &edge.from_fn {
+            assembly
+                .functions
+                .entry(FunctionId::new(&edge.from_path, function))
+                .or_default()
+                .insert(edge.item.clone());
+        }
+    }
+    let mut rows = rows
+        .into_iter()
+        .map(|(module, assembly)| {
+            let mut top_fns = assembly
+                .functions
+                .into_iter()
+                .map(|(function, items)| CallerFn {
+                    function: function.label,
+                    path: function.path,
+                    line: function.line,
+                    items: items.len(),
+                })
+                .collect::<Vec<_>>();
+            top_fns.sort_by(|left, right| {
+                right
+                    .items
+                    .cmp(&left.items)
+                    .then_with(|| left.function.cmp(&right.function))
+                    .then_with(|| left.path.cmp(&right.path))
+                    .then_with(|| left.line.cmp(&right.line))
+            });
+            let max_fn_items = top_fns.first().map_or(0, |function| function.items);
+            top_fns.truncate(3);
+            Caller {
+                module,
+                items: assembly.items.into_iter().collect(),
+                max_fn_items,
+                top_fns,
+            }
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        right
+            .max_fn_items
+            .cmp(&left.max_fn_items)
+            .then_with(|| right.items.len().cmp(&left.items.len()))
+            .then_with(|| left.module.cmp(&right.module))
+    });
+    rows
+}
+
+fn assembly_functions(
     edges: &[Edge],
-    sources: &[Source],
     syntax_files: &[FileSyntax],
     from: &ModuleSelector,
     to: &ModuleSelector,
-    scope: &Path,
-) -> (Totals, Vec<FunctionRow>, Option<Heaviest>, Vec<TestRow>) {
-    let production = edges
-        .iter()
-        .filter(|edge| {
-            edge.kind == EdgeKind::Reference
-                && !edge.test
-                && path_in_scope(&edge.from_path, scope)
-                && from.matches(&edge.from, &edge.from_path)
-                && to.matches(&edge.to, &edge.to_path)
-        })
-        .collect::<Vec<_>>();
-    let mut items = BTreeSet::new();
-    let mut by_function = BTreeMap::<FunctionId, FunctionAggregate>::new();
-    let mut outside = FunctionAggregate::default();
-    for edge in &production {
-        items.insert(edge.item.clone());
-        if let Some(function) = &edge.from_fn {
-            let aggregate = by_function
-                .entry(FunctionId::new(&edge.from_path, function))
-                .or_default();
-            aggregate.items.insert(edge.item.clone());
-            aggregate.sites += 1;
-        } else {
-            outside.items.insert(edge.item.clone());
-            outside.sites += 1;
-        }
+) -> Vec<FunctionRow> {
+    let mut by_function = BTreeMap::<FunctionId, (BTreeSet<String>, usize)>::new();
+    for edge in edges.iter().filter(|edge| {
+        edge.kind == EdgeKind::Reference
+            && !edge.test
+            && from.matches(&edge.from, &edge.from_path)
+            && to.matches(&edge.to, &edge.to_path)
+    }) {
+        let Some(function) = &edge.from_fn else {
+            continue;
+        };
+        let aggregate = by_function
+            .entry(FunctionId::new(&edge.from_path, function))
+            .or_default();
+        aggregate.0.insert(edge.item.clone());
+        aggregate.1 += 1;
     }
-    let mut functions = by_function
+    let mut rows = by_function
         .into_iter()
-        .map(|(key, aggregate)| FunctionRow {
-            end_line: function_end_line(syntax_files, &key),
-            function: key.label,
-            path: key.path,
-            line: key.line,
-            items_total: aggregate.items.len(),
-            items: aggregate.items.into_iter().collect(),
-            sites: aggregate.sites,
-            outside: false,
+        .map(|(function, (items, sites))| FunctionRow {
+            end_line: function_end_line(syntax_files, &function),
+            function: function.label,
+            path: function.path,
+            line: function.line,
+            items: items.into_iter().collect(),
+            sites,
         })
         .collect::<Vec<_>>();
-    functions.sort_by(|left, right| {
+    rows.sort_by(|left, right| {
         right
             .items
             .len()
@@ -404,60 +447,7 @@ fn assembly_report(
             .then_with(|| left.path.cmp(&right.path))
             .then_with(|| left.line.cmp(&right.line))
     });
-    let function_count = functions.len();
-    let heaviest = functions
-        .first()
-        .and_then(|function| quote_function(function, sources));
-    if outside.sites > 0 {
-        functions.push(FunctionRow {
-            function: "(outside any function)".to_owned(),
-            path: PathBuf::from("-"),
-            line: 0,
-            end_line: 0,
-            items_total: outside.items.len(),
-            items: outside.items.into_iter().collect(),
-            sites: outside.sites,
-            outside: true,
-        });
-    }
-
-    let mut tests_by_path = BTreeMap::<PathBuf, FunctionAggregate>::new();
-    for edge in edges.iter().filter(|edge| {
-        edge.kind == EdgeKind::Reference
-            && edge.test
-            && path_in_scope(&edge.from_path, scope)
-            && to.matches(&edge.to, &edge.to_path)
-            && items.contains(&edge.item)
-    }) {
-        let aggregate = tests_by_path.entry(edge.from_path.clone()).or_default();
-        aggregate.items.insert(edge.item.clone());
-        aggregate.sites += 1;
-    }
-    let mut tests = tests_by_path
-        .into_iter()
-        .map(|(path, aggregate)| TestRow {
-            path,
-            sites: aggregate.sites,
-            items_total: aggregate.items.len(),
-            items: aggregate.items.into_iter().collect(),
-        })
-        .collect::<Vec<_>>();
-    tests.sort_by(|left, right| {
-        right
-            .sites
-            .cmp(&left.sites)
-            .then_with(|| left.path.cmp(&right.path))
-    });
-    (
-        Totals {
-            functions: function_count,
-            items: items.len(),
-            sites: production.len(),
-        },
-        functions,
-        heaviest,
-        tests,
-    )
+    rows
 }
 
 fn function_end_line(files: &[FileSyntax], key: &FunctionId) -> usize {
@@ -494,29 +484,231 @@ fn quote_function(function: &FunctionRow, sources: &[Source]) -> Option<Heaviest
     })
 }
 
+fn zero_production_surface(
+    facts: &Facts,
+    target: &ModuleSelector,
+) -> (Vec<SurfaceItem>, Vec<UnresolvedItem>) {
+    let files = facts
+        .syntax
+        .files
+        .iter()
+        .filter(|file| target.matches(&file.module_path, &file.path))
+        .collect::<Vec<_>>();
+    let escaping = escaping_items_for_boundary(&files, &target.module, &facts.mod_index);
+    let references = facts
+        .references
+        .as_ref()
+        .expect("inspect loads exact references");
+    let mut zero = Vec::new();
+    let mut unresolved = Vec::new();
+    for item in escaping {
+        let Some((file, definition)) = definition_for_escaping(&files, &item) else {
+            continue;
+        };
+        let Some(item_refs) = references.get(file, definition) else {
+            unresolved.push(UnresolvedItem {
+                module: item.id.module,
+                name: item.id.name,
+                path: item.path,
+                line: item.line,
+            });
+            continue;
+        };
+        if item_refs.production_count != 0 {
+            continue;
+        }
+        zero.push(SurfaceItem {
+            module: item.id.module,
+            name: item.id.name.clone(),
+            path: item.path,
+            line: item.line,
+            test_referrers: item_refs.test_count,
+            pass_through: file
+                .fns
+                .iter()
+                .any(|function| function.name == item.id.name && function.forwards.is_some()),
+        });
+    }
+    zero.sort_by(|left, right| {
+        right
+            .test_referrers
+            .cmp(&left.test_referrers)
+            .then_with(|| left.module.cmp(&right.module))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    unresolved.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.line.cmp(&right.line))
+    });
+    (zero, unresolved)
+}
+
+fn definition_for_escaping<'a>(
+    files: &'a [&FileSyntax],
+    escaping: &EscapingItem,
+) -> Option<(&'a FileSyntax, &'a PubItem)> {
+    let file = files
+        .iter()
+        .copied()
+        .find(|file| file.path == escaping.path)?;
+    let item = file.pub_items.iter().find(|item| {
+        item.line == escaping.line
+            && item.module == escaping.id.module
+            && item.name == escaping.id.name
+    })?;
+    Some((file, item))
+}
+
+fn repeated_assembly(edges: &[Edge], target: &ModuleSelector, top: usize) -> Vec<AssemblyGroup> {
+    let mut functions = BTreeMap::<FunctionId, (String, BTreeSet<String>)>::new();
+    for edge in edges.iter().filter(|edge| {
+        edge.kind == EdgeKind::Reference
+            && !edge.test
+            && target.matches(&edge.to, &edge.to_path)
+            && !target.matches(&edge.from, &edge.from_path)
+    }) {
+        let Some(function) = &edge.from_fn else {
+            continue;
+        };
+        let aggregate = functions
+            .entry(FunctionId::new(&edge.from_path, function))
+            .or_insert_with(|| (edge.from.clone(), BTreeSet::new()));
+        aggregate.1.insert(edge.item.clone());
+    }
+    let functions = functions.into_iter().collect::<Vec<_>>();
+    let mut intersections = BTreeMap::<Vec<String>, BTreeSet<AssemblyFunction>>::new();
+    for left in 0..functions.len() {
+        for right in left + 1..functions.len() {
+            if functions[left].1.0 == functions[right].1.0 {
+                continue;
+            }
+            let items = functions[left]
+                .1
+                .1
+                .intersection(&functions[right].1.1)
+                .cloned()
+                .collect::<Vec<_>>();
+            if items.len() < 3 {
+                continue;
+            }
+            let group = intersections.entry(items).or_default();
+            for (function, (module, _)) in [&functions[left], &functions[right]] {
+                group.insert(AssemblyFunction {
+                    module: module.clone(),
+                    function: function.clone(),
+                });
+            }
+        }
+    }
+    let mut rows = intersections
+        .into_iter()
+        .filter(|(_, functions)| {
+            functions.len() >= 2
+                && functions
+                    .iter()
+                    .map(|function| &function.module)
+                    .collect::<BTreeSet<_>>()
+                    .len()
+                    >= 2
+        })
+        .map(|(items, functions)| AssemblyGroup {
+            score: items.len() * functions.len(),
+            items,
+            functions: functions.into_iter().collect(),
+        })
+        .collect::<Vec<_>>();
+    let retained = rows
+        .iter()
+        .enumerate()
+        .filter(|(index, row)| {
+            !rows.iter().enumerate().any(|(other_index, other)| {
+                index != &other_index
+                    && row.functions == other.functions
+                    && row.items.len() < other.items.len()
+                    && row.items.iter().all(|item| other.items.contains(item))
+            })
+        })
+        .map(|(_, row)| row.clone())
+        .collect::<Vec<_>>();
+    rows = retained;
+    rows.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.items.cmp(&right.items))
+    });
+    rows.truncate(top);
+    rows
+}
+
+fn providers(facts: &Facts, target: &ModuleSelector) -> Vec<Provider> {
+    let mut rows = BTreeMap::<String, (usize, BTreeSet<String>)>::new();
+    for file in facts
+        .syntax
+        .files
+        .iter()
+        .filter(|file| target.matches(&file.module_path, &file.path))
+    {
+        for dependency in &file.dependencies {
+            let Some(resolved) =
+                resolved_internal_import(dependency, &facts.known_modules, &facts.crate_names)
+            else {
+                continue;
+            };
+            if module_is_within(&resolved, &target.module) {
+                continue;
+            }
+            let top = resolved.split("::").next().unwrap_or(&resolved).to_owned();
+            let aggregate = rows.entry(top).or_default();
+            aggregate.0 += 1;
+            aggregate.1.insert(dependency.item.clone());
+        }
+    }
+    let mut rows = rows
+        .into_iter()
+        .map(|(module, (sites, items))| Provider {
+            module,
+            sites,
+            items: items.into_iter().collect(),
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        right
+            .sites
+            .cmp(&left.sites)
+            .then_with(|| left.module.cmp(&right.module))
+    });
+    rows
+}
+
 fn target_rules(
     root: &Path,
     target: &Target,
     facts: &Facts,
-    from: &ModuleSelector,
-    to: &ModuleSelector,
+    module: &ModuleSelector,
+    providers: &[Provider],
 ) -> Vec<RuleRow> {
-    let from_files = facts
+    let files = facts
         .syntax
         .files
         .iter()
-        .filter(|file| from.matches(&file.module_path, &file.path))
+        .filter(|file| module.matches(&file.module_path, &file.path))
         .collect::<Vec<_>>();
     let ranks = target.layer_ranks();
     target
         .modules
         .iter()
         .filter(|rule| {
-            from_files
+            files
                 .iter()
                 .any(|file| conform::rule_covers_path(root, &rule.path, &file.path))
         })
-        .map(|rule| rule_row(rule, &ranks, &from.module, &to.module))
+        .flat_map(|rule| {
+            providers
+                .iter()
+                .map(|provider| rule_row(rule, &ranks, &module.module, &provider.module))
+        })
         .collect()
 }
 
@@ -532,174 +724,369 @@ fn rule_row(rule: &ModuleRule, ranks: &super::target::LayerRanks, from: &str, to
         .as_deref()
         .or(rule.upward_dependencies.as_deref())
         .unwrap_or_default();
-    let admitted = admissions
-        .iter()
-        .find(|prefix| module_is_within(to, prefix))
-        .cloned();
     RuleRow {
         path: rule.path.clone(),
+        provider: to.to_owned(),
         kind: if rule.allowed_dependencies.is_some() {
             "module"
         } else {
             "upward-dependency"
         },
         direction,
-        admitted,
+        admitted: admissions
+            .iter()
+            .find(|prefix| module_is_within(to, prefix))
+            .cloned(),
     }
 }
 
-fn compact_json(report: &mut Report, top: usize) {
-    let outside = report
-        .functions
+fn stale_module_verdicts(target: &Target, module: &str, facts: &Facts) -> Vec<String> {
+    let pass_throughs = detect::passthroughs(facts, Path::new("."))
+        .into_iter()
+        .map(|row| format!("{}::{}", row.module, row.name))
+        .collect::<BTreeSet<_>>();
+    let items = facts
+        .syntax
+        .files
         .iter()
-        .position(|function| function.outside)
-        .map(|index| report.functions.remove(index));
-    report.functions.truncate(top);
-    if let Some(outside) = outside {
-        report.functions.push(outside);
+        .flat_map(|file| &file.pub_items)
+        .map(|item| format!("{}::{}", item.module, item.name))
+        .collect::<BTreeSet<_>>();
+    let mut stale = target
+        .verdicts
+        .iter()
+        .filter(|verdict| {
+            matches!(verdict.kind, VerdictKind::Item | VerdictKind::PassThrough)
+                && (verdict.key == module || verdict.key.starts_with(&format!("{module}::")))
+                && match verdict.kind {
+                    VerdictKind::Item => !items.contains(&verdict.key),
+                    VerdictKind::PassThrough => !pass_throughs.contains(&verdict.key),
+                    _ => false,
+                }
+        })
+        .map(|verdict| format!("{:?}:{}", verdict.kind, verdict.key))
+        .collect::<Vec<_>>();
+    stale.sort();
+    stale
+}
+
+fn item_evidence(
+    root: &Path,
+    facts: &Facts,
+    target: &ModuleSelector,
+    configured: Option<&Target>,
+    key: &str,
+) -> Result<ItemEvidence> {
+    let (item_module, name) = key
+        .rsplit_once("::")
+        .ok_or_else(|| anyhow::anyhow!("atlas inspect --item requires `module::Name`"))?;
+    if !module_is_within(item_module, &target.module) {
+        bail!(
+            "atlas inspect --item `{key}` is outside --module `{}`",
+            target.module
+        );
     }
-    for function in &mut report.functions {
-        function.items.truncate(top);
-    }
-    report.tests.truncate(top);
-    for test in &mut report.tests {
-        test.items.truncate(top);
+    let (file, item) = facts
+        .syntax
+        .files
+        .iter()
+        .filter(|file| target.matches(&file.module_path, &file.path))
+        .find_map(|file| {
+            file.pub_items
+                .iter()
+                .find(|item| item.module == item_module && item.name == name)
+                .map(|item| (file, item))
+        })
+        .ok_or_else(|| anyhow::anyhow!("atlas inspect --item `{key}` is not a public item"))?;
+    let references = facts
+        .references
+        .as_ref()
+        .expect("inspect loads exact references");
+    let referrer = |edge: &Edge| {
+        let module = reference_module_label(&edge.from, &target.module);
+        edge.from_fn.as_ref().map_or_else(
+            || format!("{module}::(outside any function)"),
+            |function| format!("{module}::{}", function.label),
+        )
+    };
+    let matching = references.edges.iter().filter(|edge| {
+        edge.kind == EdgeKind::Reference
+            && edge.item == name
+            && target.matches(&edge.to, &edge.to_path)
+    });
+    let production_referrers = matching
+        .clone()
+        .filter(|edge| !edge.test)
+        .map(referrer)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let test_referrers = matching
+        .filter(|edge| edge.test)
+        .map(referrer)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let commits = history::introducing_commits(root, &file.path, name)?;
+    let markers = commits
+        .iter()
+        .flat_map(|commit| history::fix_markers(&format!("{}\n{}", commit.subject, commit.body)))
+        .collect();
+    Ok(ItemEvidence {
+        key: key.to_owned(),
+        path: file.path.clone(),
+        line: item.line,
+        declared: item.declared.clone(),
+        effective_reach: facts.mod_index.effective_reach(file, item),
+        production_referrers,
+        test_referrers,
+        commits,
+        markers,
+        verdict: configured.and_then(|target| item_verdict(target, key)),
+    })
+}
+
+fn item_verdict(target: &Target, key: &str) -> Option<Verdict> {
+    target
+        .verdicts
+        .iter()
+        .find(|verdict| verdict.kind == VerdictKind::Item && verdict.key == key)
+        .cloned()
+}
+
+#[expect(clippy::print_stdout, reason = "atlas inspect Markdown section")]
+fn print_callers(rows: &[Caller], top: usize) {
+    println!("# Callers by assembly\n");
+    println!("| caller | items | max/fn | heaviest functions |");
+    println!("|---|---:|---:|---|");
+    for row in rows.iter().take(top) {
+        let functions = row
+            .top_fns
+            .iter()
+            .map(|function| {
+                format!(
+                    "{} ({}:{}; {})",
+                    function.function,
+                    function.path.display(),
+                    function.line,
+                    function.items
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("<br>");
+        println!(
+            "| {} | {} | {} | {} |",
+            row.module,
+            row.items.len(),
+            row.max_fn_items,
+            functions
+        );
     }
 }
 
-#[expect(clippy::print_stdout, reason = "atlas inspect report helper")]
-fn print_report(report: &Report, top: usize, markdown: bool) {
-    let fence = markdown_fence(
-        report
-            .heaviest
-            .as_ref()
-            .map_or("", |heaviest| &heaviest.source),
-    );
+#[expect(clippy::print_stdout, reason = "atlas inspect Markdown section")]
+fn print_heaviest(rows: &[FunctionRow], heaviest: Option<&Heaviest>, top: usize) {
+    println!("\n# Heaviest assembly\n");
+    println!("| function | items | sites | location |");
+    println!("|---|---:|---:|---|");
+    for row in rows.iter().take(top) {
+        println!(
+            "| {} | {} | {} | {}:{} |",
+            row.function,
+            row.items.len(),
+            row.sites,
+            row.path.display(),
+            row.line
+        );
+    }
+    let Some(heaviest) = heaviest else {
+        println!("\nnone");
+        return;
+    };
     println!(
-        "{} → {}: {} functions, {} distinct items, {} sites",
-        report.from, report.to, report.totals.functions, report.totals.items, report.totals.sites
+        "\n## Quote\n\n{}:{}-{} `{}`\n\n```rust\n{}\n```",
+        heaviest.path.display(),
+        heaviest.line,
+        heaviest.end_line,
+        heaviest.function,
+        heaviest.source
     );
-    section(
-        &format!("Functions ({})", report.totals.functions),
-        markdown,
-        &fence,
-    );
-    println!("function | path:line | items | sites");
-    for function in displayed_functions(report, top) {
+}
+
+#[expect(clippy::print_stdout, reason = "atlas inspect Markdown section")]
+fn print_zero_surface(zero: &[SurfaceItem], unresolved: &[UnresolvedItem], top: usize) {
+    println!("\n# Zero-production surface\n");
+    for item in zero.iter().take(top) {
+        let pass_through = if item.pass_through {
+            " (pass-through)"
+        } else {
+            ""
+        };
         println!(
-            "{} | {}:{} | {} | {}",
-            function.function,
-            function.path.display(),
-            function.line,
-            function.items_total,
-            function.sites
+            "- `{}`::`{}` — {}:{}; test referrers: {}{}",
+            item.module,
+            item.name,
+            item.path.display(),
+            item.line,
+            item.test_referrers,
+            pass_through
         );
     }
-    close(markdown, &fence);
-
-    section("Items by function", markdown, &fence);
-    for function in displayed_functions(report, top) {
+    println!("\n## Unresolved definitions\n");
+    for item in unresolved.iter().take(top) {
         println!(
-            "{}: {}",
-            function.function,
-            bounded_names(&function.items, top)
+            "- `{}`::`{}` — {}:{}",
+            item.module,
+            item.name,
+            item.path.display(),
+            item.line
         );
     }
-    close(markdown, &fence);
+}
 
-    section("Heaviest call site", markdown, &fence);
-    if let Some(heaviest) = &report.heaviest {
+#[expect(clippy::print_stdout, reason = "atlas inspect Markdown section")]
+fn print_repeated(rows: &[AssemblyGroup], top: usize) {
+    println!("\n# Repeated assembly\n");
+    for row in rows.iter().take(top) {
         println!(
-            "{}:{}-{}  {}",
-            heaviest.path.display(),
-            heaviest.line,
-            heaviest.end_line,
-            heaviest.function
+            "- {} items × {} functions",
+            row.items.len(),
+            row.functions.len()
         );
-        println!("{}", heaviest.source);
-    } else {
-        println!("none");
-    }
-    close(markdown, &fence);
-
-    section(
-        &format!("Tests touching the same items ({})", report.tests.len()),
-        markdown,
-        &fence,
-    );
-    for test in report.tests.iter().take(top) {
-        println!(
-            "{}: {} sites — {}",
-            test.path.display(),
-            test.sites,
-            bounded_names(&test.items, top)
-        );
-    }
-    close(markdown, &fence);
-
-    section("Target rules", markdown, &fence);
-    if !report.target_configured {
-        println!("no target configured");
-    } else if report.rules.is_empty() {
-        println!("no covering rules");
-    } else {
-        println!("rule path | kind | direction | admitted");
-        for rule in &report.rules {
+        println!("  - items: {}", row.items.join(", "));
+        for function in &row.functions {
             println!(
-                "{} | {} | {} | {}",
-                rule.path.display(),
-                rule.kind,
-                rule.direction,
-                rule.admitted.as_deref().unwrap_or("none"),
+                "  - {}::{} ({}:{})",
+                function.module,
+                function.function.label,
+                function.function.path.display(),
+                function.function.line
             );
         }
     }
-    close(markdown, &fence);
+}
 
-    if !report.parse_failures.is_empty() {
-        section("Parse failures", markdown, &fence);
-        for path in &report.parse_failures {
-            println!("{}", path.display());
+#[expect(clippy::print_stdout, reason = "atlas inspect Markdown section")]
+fn print_duplicated(shapes: &[ShapeFamily], guards: &[GuardFamily], top: usize) {
+    println!("\n# Duplicated knowledge\n");
+    println!("## Shape families\n");
+    for family in shapes.iter().take(top) {
+        println!(
+            "- key: `{}` — {} files, mean {:.1} SLOC, score {:.1}",
+            family.name, family.files, family.mean_sloc, family.score
+        );
+        for member in family.members.iter().take(5) {
+            println!(
+                "  - {}:{} `{}`",
+                member.path.display(),
+                member.line,
+                member.name
+            );
         }
-        close(markdown, &fence);
+    }
+    println!("\n## Guard families\n");
+    for family in guards.iter().take(top) {
+        println!(
+            "- key: `{}` — {} files, {} sites",
+            family.key, family.files, family.sites
+        );
+        for site in family.locations.iter().take(5) {
+            println!("  - {}:{} ({})", site.path.display(), site.line, site.kind);
+        }
     }
 }
 
-fn displayed_functions(report: &Report, top: usize) -> Vec<&FunctionRow> {
-    let mut functions = report
-        .functions
-        .iter()
-        .filter(|function| !function.outside)
-        .take(top)
-        .collect::<Vec<_>>();
-    functions.extend(report.functions.iter().find(|function| function.outside));
-    functions
+#[expect(clippy::print_stdout, reason = "atlas inspect Markdown section")]
+fn print_providers(rows: &[Provider], top: usize) {
+    println!("\n# Providers\n");
+    println!("| module | sites | items |");
+    println!("|---|---:|---|");
+    for row in rows.iter().take(top) {
+        let items = if rows.len() <= top {
+            row.items.join(", ")
+        } else {
+            "—".to_owned()
+        };
+        println!("| {} | {} | {} |", row.module, row.sites, items);
+    }
 }
 
-#[expect(clippy::print_stdout, reason = "atlas inspect report helper")]
-fn section(name: &str, markdown: bool, fence: &str) {
-    if markdown {
-        println!("\n## {name}\n{fence}text");
+#[expect(clippy::print_stdout, reason = "atlas inspect Markdown section")]
+fn print_footer(
+    facts: &Facts,
+    module: &ModuleSelector,
+    configured: bool,
+    rules: &[RuleRow],
+    unresolved: &[UnresolvedItem],
+    stale: &[String],
+) {
+    println!("\n# Footer\n");
+    if !configured {
+        println!("target rules: no target configured");
+    } else if rules.is_empty() {
+        println!("target rules: no covering rules");
     } else {
-        println!("\n{name}");
+        println!("| rule | provider | kind | direction | admitted |");
+        println!("|---|---|---|---|---|");
+        for rule in rules {
+            println!(
+                "| {} | {} | {} | {} | {} |",
+                rule.path.display(),
+                rule.provider,
+                rule.kind,
+                rule.direction,
+                rule.admitted.as_deref().unwrap_or("none")
+            );
+        }
+    }
+    let parse_failures = facts
+        .syntax
+        .parse_failures
+        .iter()
+        .filter(|path| {
+            module
+                .path
+                .as_ref()
+                .is_none_or(|scope| path_in_scope(path, scope))
+        })
+        .count();
+    println!("\nparse failures: {parse_failures}");
+    println!("unresolved definitions: {}", unresolved.len());
+    println!("stale item/pass-through verdicts: {}", stale.len());
+    for key in stale {
+        println!("- `{key}`");
     }
 }
 
-#[expect(clippy::print_stdout, reason = "atlas inspect report helper")]
-fn close(markdown: bool, fence: &str) {
-    if markdown {
-        println!("{fence}");
+#[expect(clippy::print_stdout, reason = "atlas inspect Markdown section")]
+fn print_item(item: &ItemEvidence, top: usize) {
+    println!("\n# Item evidence — `{}`\n", item.key);
+    println!("- definition: {}:{}", item.path.display(), item.line);
+    println!("- declared reach: `{}`", item.declared);
+    println!("- effective reach: `{}`", item.effective_reach);
+    println!("- production referrers:");
+    for referrer in item.production_referrers.iter().take(top) {
+        println!("  - `{referrer}`");
     }
-}
-
-fn markdown_fence(contents: &str) -> String {
-    let longest = contents
-        .split(|character| character != '`')
-        .map(str::len)
-        .max()
-        .unwrap_or(0);
-    "`".repeat(longest.saturating_add(1).max(3))
+    println!("- test referrers:");
+    for referrer in item.test_referrers.iter().take(top) {
+        println!("  - `{referrer}`");
+    }
+    println!("- introducing commits:");
+    for commit in &item.commits {
+        println!("  - `{}` {} {}", commit.short, commit.time, commit.subject);
+    }
+    println!("- fix markers:");
+    for marker in &item.markers {
+        println!("  - {marker}");
+    }
+    if let Some(verdict) = &item.verdict {
+        println!("- verdict: {}", verdict.reason);
+    } else {
+        println!("- verdict: none");
+    }
 }
 
 #[cfg(test)]
+#[path = "inspect/tests.rs"]
 mod tests;

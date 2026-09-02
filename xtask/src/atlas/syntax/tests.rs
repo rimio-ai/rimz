@@ -520,5 +520,31 @@ fn run(ready: bool, closed: bool) {
     )]);
 
     assert_eq!(report.files[0].guards.len(), 1);
-    assert_eq!(report.files[0].guards[0].normalized, "ready&&!closed");
+    assert_eq!(report.files[0].guards[0].normalized, "$0&&!$1");
+}
+
+#[test]
+fn guard_families_alpha_normalize_bindings_and_path_aliases() {
+    let report = analyze_sources(&[
+        Source::new(
+            "crates/rimz/src/a.rs",
+            "fn a(retries: usize, state: Status) { if retries > 0 && crate::state::Status::Ready == state {} }",
+        ),
+        Source::new(
+            "crates/rimz/src/b.rs",
+            "fn b(attempts: usize, current: Status) { if attempts > 0 && alias::Status::Ready == current {} }",
+        ),
+        Source::new(
+            "crates/rimz/src/c.rs",
+            "fn c(remaining: usize, status: Status) { if remaining > 0 && other::Status::Ready == status {} }",
+        ),
+    ]);
+
+    let normalized = report
+        .files
+        .iter()
+        .map(|file| file.guards[0].normalized.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(normalized, ["$0>_&&Status::Ready==$1"; 3]);
 }

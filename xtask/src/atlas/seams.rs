@@ -258,7 +258,6 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
             } else {
                 super::index::IndexPolicy::Required
             }),
-            ..Facets::default()
         },
     )?;
     let scoped_sources = facts.sources_in(&args.path);
