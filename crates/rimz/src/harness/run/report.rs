@@ -10,20 +10,13 @@ use crate::store::{StatePaths, Store};
 
 use super::{RecordMutation, Result, RunRecord, update_record};
 
-#[derive(Debug, thiserror::Error)]
-pub enum JoinRunErr {
-    #[error(transparent)]
-    RunStore(#[from] super::RunStoreErr),
-    #[error(transparent)]
-    Store(#[from] crate::store::StoreErr),
-}
-
 pub fn join_and_settle_digest(
     store: &Store,
     session_name: &str,
     run_id: &RunId,
-) -> std::result::Result<RunRecord, JoinRunErr> {
-    let (record, fully_joined) = mark_joined(store.paths(), run_id)?;
+) -> crate::store::Result<RunRecord> {
+    let (record, fully_joined) =
+        mark_joined(store.paths(), run_id).map_err(crate::store::StoreErr::from)?;
     if let Some(message_id) = record.report_message_id.as_ref()
         && fully_joined
     {
