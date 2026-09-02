@@ -8,10 +8,10 @@ use serde::Serialize;
 use super::conform::{self, Direction};
 use super::detect::{self, GuardFamily};
 use super::facts::{Facets, Facts};
-use super::history::{self, Commit};
+use super::history::{self, BlameCommit, Commit};
 use super::modules::{
-    EscapingItem, crate_module_for_path, escaping_items_for_boundary, is_declaration_only,
-    module_is_within, path_in_scope, reference_module_label,
+    EscapingItem, bounded_names, crate_module_for_path, escaping_items_for_boundary,
+    is_declaration_only, module_is_within, path_in_scope, reference_module_label,
 };
 use super::output::{self, OutputArgs};
 use super::references::{Edge, EdgeKind, FunctionId};
@@ -35,12 +35,17 @@ const SECTIONS: &[&str] = &[
     "heaviest",
     "surface",
     "assembly",
+    "calls",
     "shapes",
     "guards",
     "providers",
     "footer",
     "item",
 ];
+
+/// Share of outside production sites the head of the surface table must
+/// cover before the summary stops counting items.
+const SURFACE_HEAD_SHARE: f64 = 0.8;
 
 fn usage() -> String {
     format!("{USAGE}\n\n{}", output::USAGE)
@@ -100,6 +105,71 @@ struct SurfaceItem {
     line: usize,
     test_referrers: usize,
     pass_through: bool,
+}
+
+/// One escaping item measured from outside the boundary: how many
+/// production sites and files reach it, and from which modules.
+#[derive(Clone, Debug, Serialize)]
+struct SurfaceRow {
+    module: String,
+    name: String,
+    kind: String,
+    path: PathBuf,
+    line: usize,
+    #[serde(skip)]
+    end_line: usize,
+    outside_sites: usize,
+    outside_files: usize,
+    callers: Vec<String>,
+    internal_sites: usize,
+    test_sites: usize,
+}
+
+/// Where test code reaches the module: through its escaping interface or
+/// past it, at boundary-visible items the interface does not expose.
+#[derive(Clone, Debug, Default, Serialize)]
+struct TestReach {
+    sites: usize,
+    through_interface: usize,
+    past_interface: usize,
+    past_items: Vec<PastItem>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct PastItem {
+    module: String,
+    name: String,
+    sites: usize,
+}
+
+/// An escaping item at most one production site reaches whose definition
+/// no commit has touched since the one that introduced it.
+#[derive(Clone, Debug, Serialize)]
+struct VestigialItem {
+    module: String,
+    name: String,
+    path: PathBuf,
+    line: usize,
+    production_sites: usize,
+    introduced: BlameCommit,
+    /// The introducing commit reads as a fix: the item pins a behaviour
+    /// someone already paid for.
+    pins_fix: bool,
+}
+
+/// Call shapes below this many distinct items only earn a row when several
+/// functions share them; longer ones are the assembly a caller pays and
+/// stand alone.
+const CALL_SHAPE_SHARED_ITEMS: usize = 3;
+const CALL_SHAPE_SOLO_ITEMS: usize = 5;
+
+/// One ordered sequence of target-item references shared by caller
+/// functions: the call-site test written by the callers themselves.
+#[derive(Clone, Debug, Serialize)]
+struct CallShape {
+    shape: Vec<String>,
+    items: usize,
+    functions: Vec<AssemblyFunction>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -181,6 +251,7 @@ struct Report {
     heaviest: HeaviestSection,
     surface: SurfaceSection,
     assembly: Vec<AssemblyGroup>,
+    calls: Vec<CallShape>,
     shapes: Vec<ShapeFamily>,
     guards: Vec<GuardFamily>,
     providers: Vec<Provider>,
@@ -194,8 +265,15 @@ struct HeaviestSection {
     quote: Option<Heaviest>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 struct SurfaceSection {
+    items: Vec<SurfaceRow>,
+    outside_sites: usize,
+    head_items: usize,
+    single_site: usize,
+    internal_only: usize,
+    test_reach: TestReach,
+    vestigial: Vec<VestigialItem>,
     zero_production: Vec<SurfaceItem>,
     unresolved: Vec<UnresolvedItem>,
 }
@@ -318,8 +396,10 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
     let heaviest = assembly
         .first()
         .and_then(|function| quote_function(function, &facts.sources));
-    let (zero_surface, unresolved, declaration_only) = zero_production_surface(&facts, &module);
+    let (mut surface, declaration_only) = surface_section(&facts, &module);
+    surface.vestigial = vestigial_items(root, &surface.items)?;
     let repeated = repeated_assembly(&references.edges, &module);
+    let calls = call_shapes(&references.edges, &module);
     let shape_families = shapes::families(&facts, Path::new("."))
         .into_iter()
         .filter(|family| {
@@ -329,15 +409,7 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
                 .any(|member| module.matches(&crate_module_for_path(&member.path), &member.path))
         })
         .collect::<Vec<_>>();
-    let guard_families = detect::guard_families(&facts, Path::new("."))
-        .into_iter()
-        .filter(|family| {
-            family
-                .locations
-                .iter()
-                .any(|site| module.matches(&crate_module_for_path(&site.path), &site.path))
-        })
-        .collect::<Vec<_>>();
+    let guard_families = module_item_guards(&facts, &module);
     let providers = providers(&facts, &module);
     let rules = target.as_ref().map_or_else(Vec::new, |target| {
         target_rules(root, target, &facts, &module)
@@ -364,18 +436,16 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
                 .is_none_or(|scope| path_in_scope(path, scope))
         })
         .count();
-    let unresolved_definitions = unresolved.len();
+    let unresolved_definitions = surface.unresolved.len();
     let report = Report {
         callers,
         heaviest: HeaviestSection {
             functions: assembly,
             quote: heaviest,
         },
-        surface: SurfaceSection {
-            zero_production: zero_surface,
-            unresolved,
-        },
+        surface,
         assembly: repeated,
+        calls,
         shapes: shape_families,
         guards: guard_families,
         providers,
@@ -721,10 +791,23 @@ fn quote_function(function: &FunctionRow, sources: &[Source]) -> Option<Heaviest
     })
 }
 
-fn zero_production_surface(
-    facts: &Facts,
-    target: &ModuleSelector,
-) -> (Vec<SurfaceItem>, Vec<UnresolvedItem>, usize) {
+/// Identity of a referenced definition as edges carry it.
+type EdgeTarget = (PathBuf, String, String, usize);
+
+fn edge_target(edge: &Edge) -> EdgeTarget {
+    (
+        edge.to_path.clone(),
+        edge.to.clone(),
+        edge.item.clone(),
+        edge.to_line,
+    )
+}
+
+/// Measures the escaping interface from outside: per-item outside sites and
+/// files, the head that carries most sites, the one-site tail, items only
+/// the module itself reaches, test reach, and the unreferenced remainder.
+/// Returns the section beside the count of unmeasured declarations.
+fn surface_section(facts: &Facts, target: &ModuleSelector) -> (SurfaceSection, usize) {
     let files = facts
         .syntax
         .files
@@ -736,9 +819,38 @@ fn zero_production_surface(
         .references
         .as_ref()
         .expect("inspect loads exact references");
-    let mut zero = Vec::new();
-    let mut unresolved = Vec::new();
+
+    #[derive(Default)]
+    struct Outside {
+        sites: usize,
+        files: BTreeSet<PathBuf>,
+        modules: BTreeSet<String>,
+    }
+    let mut outside = BTreeMap::<EdgeTarget, Outside>::new();
+    let mut test_sites = BTreeMap::<EdgeTarget, usize>::new();
+    for edge in references
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == EdgeKind::Reference && target.matches(&edge.to, &edge.to_path))
+    {
+        if edge.test {
+            *test_sites.entry(edge_target(edge)).or_default() += 1;
+            continue;
+        }
+        if target.matches(&edge.from, &edge.from_path) {
+            continue;
+        }
+        let aggregate = outside.entry(edge_target(edge)).or_default();
+        aggregate.sites += 1;
+        aggregate.files.insert(edge.from_path.clone());
+        aggregate
+            .modules
+            .insert(reference_module_label(&edge.from, &target.module));
+    }
+
+    let mut section = SurfaceSection::default();
     let mut declaration_only = 0;
+    let mut escaping_targets = BTreeSet::new();
     for item in escaping {
         let Some((file, definition)) = definition_for_escaping(&files, &item) else {
             continue;
@@ -748,7 +860,7 @@ fn zero_production_surface(
                 declaration_only += 1;
                 continue;
             }
-            unresolved.push(UnresolvedItem {
+            section.unresolved.push(UnresolvedItem {
                 module: item.id.module,
                 name: item.id.name,
                 path: item.path,
@@ -756,34 +868,246 @@ fn zero_production_surface(
             });
             continue;
         };
-        if item_refs.production_count != 0 {
-            continue;
+        let key = (
+            item.path.clone(),
+            item.id.module.clone(),
+            item.id.name.clone(),
+            item.line,
+        );
+        escaping_targets.insert(key.clone());
+        if item_refs.production_count == 0 {
+            section.zero_production.push(SurfaceItem {
+                module: item.id.module.clone(),
+                name: item.id.name.clone(),
+                path: item.path.clone(),
+                line: item.line,
+                test_referrers: item_refs.test_count,
+                pass_through: file
+                    .fns
+                    .iter()
+                    .any(|function| function.name == item.id.name && function.forwards.is_some()),
+            });
         }
-        zero.push(SurfaceItem {
+        let reached = outside.remove(&key).unwrap_or_default();
+        section.items.push(SurfaceRow {
             module: item.id.module,
-            name: item.id.name.clone(),
+            name: item.id.name,
+            kind: item.id.kind,
             path: item.path,
             line: item.line,
-            test_referrers: item_refs.test_count,
-            pass_through: file
-                .fns
-                .iter()
-                .any(|function| function.name == item.id.name && function.forwards.is_some()),
+            end_line: definition.end_line,
+            outside_sites: reached.sites,
+            outside_files: reached.files.len(),
+            callers: reached.modules.into_iter().collect(),
+            internal_sites: item_refs.production_count - reached.sites,
+            test_sites: test_sites.get(&key).copied().unwrap_or_default(),
         });
     }
-    zero.sort_by(|left, right| {
+    section.items.sort_by(|left, right| {
+        right
+            .outside_sites
+            .cmp(&left.outside_sites)
+            .then_with(|| right.internal_sites.cmp(&left.internal_sites))
+            .then_with(|| left.module.cmp(&right.module))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    section.outside_sites = section.items.iter().map(|row| row.outside_sites).sum();
+    let head_target = (section.outside_sites as f64 * SURFACE_HEAD_SHARE).ceil() as usize;
+    let mut covered = 0;
+    section.head_items = section
+        .items
+        .iter()
+        .take_while(|row| {
+            let below = covered < head_target;
+            covered += row.outside_sites;
+            below
+        })
+        .count();
+    section.single_site = section
+        .items
+        .iter()
+        .filter(|row| row.outside_sites == 1)
+        .count();
+    section.internal_only = section
+        .items
+        .iter()
+        .filter(|row| row.outside_sites == 0 && row.internal_sites > 0)
+        .count();
+    section.test_reach = test_reach(&test_sites, &escaping_targets);
+    section.zero_production.sort_by(|left, right| {
         right
             .test_referrers
             .cmp(&left.test_referrers)
             .then_with(|| left.module.cmp(&right.module))
             .then_with(|| left.name.cmp(&right.name))
     });
-    unresolved.sort_by(|left, right| {
+    section.unresolved.sort_by(|left, right| {
         left.path
             .cmp(&right.path)
             .then_with(|| left.line.cmp(&right.line))
     });
-    (zero, unresolved, declaration_only)
+    (section, declaration_only)
+}
+
+fn test_reach(
+    test_sites: &BTreeMap<EdgeTarget, usize>,
+    escaping: &BTreeSet<EdgeTarget>,
+) -> TestReach {
+    let mut reach = TestReach::default();
+    let mut past = BTreeMap::<(String, String), usize>::new();
+    for (key, sites) in test_sites {
+        reach.sites += sites;
+        if escaping.contains(key) {
+            reach.through_interface += sites;
+        } else {
+            reach.past_interface += sites;
+            *past.entry((key.1.clone(), key.2.clone())).or_default() += sites;
+        }
+    }
+    reach.past_items = past
+        .into_iter()
+        .map(|((module, name), sites)| PastItem {
+            module,
+            name,
+            sites,
+        })
+        .collect();
+    reach.past_items.sort_by(|left, right| {
+        right
+            .sites
+            .cmp(&left.sites)
+            .then_with(|| left.module.cmp(&right.module))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    reach
+}
+
+/// Escaping items with at most one production site whose definition lines
+/// all blame to one commit: introduced once and never revisited. One
+/// `git blame` per file that holds a candidate.
+fn vestigial_items(root: &Path, rows: &[SurfaceRow]) -> Result<Vec<VestigialItem>> {
+    let mut blames = BTreeMap::<PathBuf, Vec<BlameCommit>>::new();
+    let mut vestigial = Vec::new();
+    for row in rows
+        .iter()
+        .filter(|row| row.outside_sites + row.internal_sites <= 1)
+    {
+        if !blames.contains_key(&row.path) {
+            blames.insert(row.path.clone(), history::blame_lines(root, &row.path)?);
+        }
+        let blame = &blames[&row.path];
+        let Some(first) = blame.get(row.line.saturating_sub(1)) else {
+            continue;
+        };
+        let end = row.end_line.max(row.line).min(blame.len());
+        if blame[row.line - 1..end]
+            .iter()
+            .all(|commit| commit == first)
+        {
+            vestigial.push(VestigialItem {
+                module: row.module.clone(),
+                name: row.name.clone(),
+                path: row.path.clone(),
+                line: row.line,
+                production_sites: row.outside_sites + row.internal_sites,
+                pins_fix: !history::fix_markers(&first.summary).is_empty(),
+                introduced: first.clone(),
+            });
+        }
+    }
+    vestigial.sort_by(|left, right| {
+        left.introduced
+            .time
+            .cmp(&right.introduced.time)
+            .then_with(|| left.production_sites.cmp(&right.production_sites))
+            .then_with(|| left.module.cmp(&right.module))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    Ok(vestigial)
+}
+
+/// Guard families anywhere in the crate that name an item the target module
+/// defines: the decisions callers make about this module's state that the
+/// module could make once.
+fn module_item_guards(facts: &Facts, target: &ModuleSelector) -> Vec<GuardFamily> {
+    let mut names = BTreeSet::new();
+    for file in facts
+        .syntax
+        .files
+        .iter()
+        .filter(|file| target.matches(&file.module_path, &file.path))
+    {
+        names.extend(file.pub_items.iter().map(|item| item.name.as_str()));
+        names.extend(file.fns.iter().map(|function| function.name.as_str()));
+    }
+    detect::guard_families(facts, Path::new("."))
+        .into_iter()
+        .filter(|family| {
+            detect::named_identifiers(&family.key)
+                .into_iter()
+                .any(|name| !detect::is_std_identifier(name) && names.contains(name))
+        })
+        .collect()
+}
+
+/// Orders each outside production function's target references by source
+/// line, drops consecutive repeats, and groups functions that share the
+/// same sequence.
+fn call_shapes(edges: &[Edge], target: &ModuleSelector) -> Vec<CallShape> {
+    let mut functions = BTreeMap::<FunctionId, (String, Vec<(usize, String)>)>::new();
+    for edge in edges.iter().filter(|edge| {
+        edge.kind == EdgeKind::Reference
+            && !edge.test
+            && target.matches(&edge.to, &edge.to_path)
+            && !target.matches(&edge.from, &edge.from_path)
+    }) {
+        let Some(function) = &edge.from_fn else {
+            continue;
+        };
+        functions
+            .entry(FunctionId::new(&edge.from_path, function))
+            .or_insert_with(|| (edge.from.clone(), Vec::new()))
+            .1
+            .push((edge.from_line, edge.item.clone()));
+    }
+    let mut shapes = BTreeMap::<Vec<String>, Vec<AssemblyFunction>>::new();
+    for (function, (module, mut sites)) in functions {
+        sites.sort();
+        let mut shape = Vec::<String>::new();
+        for (_, item) in sites {
+            if shape.last() != Some(&item) {
+                shape.push(item);
+            }
+        }
+        shapes
+            .entry(shape)
+            .or_default()
+            .push(AssemblyFunction { module, function });
+    }
+    let mut rows = shapes
+        .into_iter()
+        .map(|(shape, mut functions)| {
+            functions.sort();
+            CallShape {
+                items: shape.iter().collect::<BTreeSet<_>>().len(),
+                shape,
+                functions,
+            }
+        })
+        .filter(|row| {
+            row.items >= CALL_SHAPE_SOLO_ITEMS
+                || (row.functions.len() >= 2 && row.items >= CALL_SHAPE_SHARED_ITEMS)
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        right
+            .functions
+            .len()
+            .cmp(&left.functions.len())
+            .then_with(|| right.items.cmp(&left.items))
+            .then_with(|| left.shape.cmp(&right.shape))
+    });
+    rows
 }
 
 fn definition_for_escaping<'a>(
@@ -1273,15 +1597,13 @@ fn render_markdown(report: &Report, output: &OutputArgs, top: usize) -> String {
         );
     }
     if output.wants("surface") {
-        render_zero_surface(
-            &mut rendered,
-            &report.surface.zero_production,
-            &report.surface.unresolved,
-            top,
-        );
+        render_surface(&mut rendered, &report.surface, top);
     }
     if output.wants("assembly") {
         render_repeated(&mut rendered, &report.assembly, top);
+    }
+    if output.wants("calls") {
+        render_call_shapes(&mut rendered, &report.calls, top);
     }
     if output.wants("shapes") || output.wants("guards") {
         render_duplicated(
@@ -1373,13 +1695,117 @@ fn render_heaviest(
     .expect("writing to a String cannot fail");
 }
 
+fn render_surface(out: &mut String, surface: &SurfaceSection, top: usize) {
+    out.push_str("\n# Escaping surface\n\n");
+    out.push_str("| item | kind | outside sites | files | internal | tests | callers |\n");
+    out.push_str("|---|---|---:|---:|---:|---:|---|\n");
+    for row in surface.items.iter().take(top) {
+        writeln!(
+            out,
+            "| `{}::{}` | {} | {} | {} | {} | {} | {} |",
+            row.module,
+            row.name,
+            row.kind,
+            row.outside_sites,
+            row.outside_files,
+            row.internal_sites,
+            row.test_sites,
+            bounded_names(&row.callers, 4)
+        )
+        .expect("writing to a String cannot fail");
+    }
+    if surface.items.len() > top {
+        writeln!(out, "\n_{} more items omitted._", surface.items.len() - top)
+            .expect("writing to a String cannot fail");
+    }
+    writeln!(
+        out,
+        "\n{} escaping items, {} outside production sites; {} items carry {}% of sites; {} items have one outside site; {} items only the module itself reaches",
+        surface.items.len(),
+        surface.outside_sites,
+        surface.head_items,
+        (SURFACE_HEAD_SHARE * 100.0) as usize,
+        surface.single_site,
+        surface.internal_only
+    )
+    .expect("writing to a String cannot fail");
+
+    let reach = &surface.test_reach;
+    writeln!(
+        out,
+        "\n## Test reach\n\n{} test sites: {} through the escaping interface, {} past it",
+        reach.sites, reach.through_interface, reach.past_interface
+    )
+    .expect("writing to a String cannot fail");
+    for item in reach.past_items.iter().take(top) {
+        writeln!(
+            out,
+            "- `{}::{}` — {} test sites",
+            item.module, item.name, item.sites
+        )
+        .expect("writing to a String cannot fail");
+    }
+
+    out.push_str("\n## Vestigial candidates\n\n");
+    for item in surface.vestigial.iter().take(top) {
+        writeln!(
+            out,
+            "- `{}::{}` — {}:{}; production sites: {}; untouched since `{}` {}{}",
+            item.module,
+            item.name,
+            item.path.display(),
+            item.line,
+            item.production_sites,
+            item.introduced.short,
+            item.introduced.summary,
+            if item.pins_fix { " (pins a fix)" } else { "" }
+        )
+        .expect("writing to a String cannot fail");
+    }
+    if surface.vestigial.len() > top {
+        writeln!(
+            out,
+            "\n_{} more candidates omitted._",
+            surface.vestigial.len() - top
+        )
+        .expect("writing to a String cannot fail");
+    }
+
+    render_zero_surface(out, &surface.zero_production, &surface.unresolved, top);
+}
+
+fn render_call_shapes(out: &mut String, rows: &[CallShape], top: usize) {
+    out.push_str("\n# Call shapes\n\n");
+    for row in rows.iter().take(top) {
+        writeln!(
+            out,
+            "- ×{} ({} items): `{}`",
+            row.functions.len(),
+            row.items,
+            bounded_names(&row.shape, 16).replace(", ", " → ")
+        )
+        .expect("writing to a String cannot fail");
+        for function in row.functions.iter().take(5) {
+            writeln!(
+                out,
+                "  - {}::{} ({}:{})",
+                function.module,
+                function.function.label,
+                function.function.path.display(),
+                function.function.line
+            )
+            .expect("writing to a String cannot fail");
+        }
+    }
+}
+
 fn render_zero_surface(
     out: &mut String,
     zero: &[SurfaceItem],
     unresolved: &[UnresolvedItem],
     top: usize,
 ) {
-    out.push_str("\n# Zero-production surface\n\n");
+    out.push_str("\n## Zero-production surface\n\n");
     for item in zero.iter().take(top) {
         let pass_through = if item.pass_through {
             " (pass-through)"

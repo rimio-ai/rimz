@@ -34,6 +34,11 @@ pub(super) struct Facts {
     pub(super) syntax: SyntaxReport,
     pub(super) mod_index: ModIndex,
     pub(super) known_modules: BTreeSet<String>,
+    /// Every identifier the workspace defines in production code: boundary
+    /// visible items, function names, impl owners, and module names. Family
+    /// detectors use it to tell crate vocabulary from std vocabulary without
+    /// a SCIP index.
+    pub(super) defined_names: BTreeSet<String>,
     pub(super) crate_names: BTreeSet<String>,
     pub(super) sizes: BTreeMap<PathBuf, FileSize>,
     pub(super) history: Option<Log>,
@@ -96,6 +101,7 @@ impl Facts {
             .iter()
             .map(|file| file.module_path.clone())
             .collect();
+        let defined_names = defined_names(&syntax);
         let sizes = file_sizes(&sources, &syntax);
         let scoped_sources = sources
             .iter()
@@ -132,6 +138,7 @@ impl Facts {
             syntax,
             mod_index,
             known_modules,
+            defined_names,
             crate_names,
             sizes,
             history,
@@ -147,6 +154,25 @@ impl Facts {
             .cloned()
             .collect()
     }
+}
+
+pub(super) fn defined_names(syntax: &SyntaxReport) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for file in &syntax.files {
+        names.extend(file.pub_items.iter().map(|item| item.name.clone()));
+        for function in &file.fns {
+            names.insert(function.name.clone());
+            if let Some(owner) = &function.owner {
+                names.insert(owner.clone());
+            }
+        }
+        names.extend(
+            file.mod_decls
+                .iter()
+                .filter_map(|(module, _)| module.rsplit("::").next().map(str::to_owned)),
+        );
+    }
+    names
 }
 
 fn file_sizes(sources: &[Source], syntax: &SyntaxReport) -> BTreeMap<PathBuf, FileSize> {

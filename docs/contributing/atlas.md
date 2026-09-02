@@ -8,31 +8,30 @@
 - **Churn%** — the share of scoped history commits that touched a module, after renames are folded to their current paths.
 - **Pace** — the module's share of commits in the recent 25% window divided by its lifetime share; `1.0` is its historical rate and `1.5` or more is `hot`.
 - **`max/fn`** — the greatest number of distinct target items referenced by any one production function in a caller module.
-- **Family** — repeated knowledge grouped across functions: either similar call shapes or normalized guards. Each family has a stable key suitable for a verdict: a shape family is keyed by its shared callee set (`file_name+is_dir+read_dir`), a guard family by its normalized guard text. Guard families whose only named identifiers are std vocabulary (`is_empty`, `is_some`, `Some`, …) are dropped as idiom, and the footer counts them.
+- **Family** — repeated knowledge grouped across functions: either similar call shapes or normalized guards. Each family has a stable key suitable for a verdict: a shape family is keyed by its shared callee set (`decode_catalog_hook+set_ask+with_worktree`), a guard family by its normalized guard text. A family is knowledge only when its key names something the crate defines: shape keys naming only std or external vocabulary (`Vec::new`, `Line::from`, `min`) and guard keys whose named identifiers are all std idiom (`is_empty`, `ErrorKind::NotFound`, `insert`) are dropped, and the footer counts both.
+- **Siblings** — member files of one shape family that occupy the same role in sibling directories (`agents/adapters/*/spend.rs`): parallel implementations of one responsibility. Families with siblings rank first.
+- **Debt** — the upward dependencies a target rule admits, counted at their sites, beside any it has not admitted, and each strangler's current count against its baseline. Every admission is a `rehome` candidate someone already named.
 - **Verdict** — a durable, reasoned disposition of one item, pass-through, guard family, or shape family. Atlas reports stale verdict keys when their evidence disappears.
 - **Dependency site** — a syntax-derived internal dependency written as either a `use` or a qualified path. Sites are deduplicated per file by resolved module and item.
+- **Call shape** — one caller function's target references in source order with consecutive repeats removed; functions sharing a sequence group into one shape with its `×N`. A shape earns a row when several functions share three or more items, or when one function alone references five or more. The ideal call for the common case, written beside the shape, is the call-site test.
+- **Test reach** — where test code reaches a module: through its escaping interface, or past it at boundary-visible items the interface does not expose (public items of a private submodule, `pub(super)` helpers). Private items are not indexed and stay unmeasured.
+- **Vestigial candidate** — an escaping item at most one production site reaches, inside or outside the module, whose definition lines all blame to one commit, taken as the one that introduced it. A candidate whose introducing commit reads as a fix is marked `pins a fix`: read that commit before deleting.
 
 ## `survey` — map a scope
 
-`survey` ranks production size, tests, `esc`, churn%, pace, complexity, and test/code ratio, then lists shape and guard families. It reads the working tree and history without building a SCIP index. `--path` defaults to `crates/rimz/src`; `--top` defaults to 20. Sections: `rank`, `shapes`, `guards`, `footer`.
+`survey` ranks production size, tests, `esc`, churn%, pace, complexity, and test/code ratio, lists recorded debt under the target rules touching the scope, then lists shape and guard families. It reads the working tree and history without building a SCIP index. `--path` defaults to `crates/rimz/src`; `--top` defaults to 20. Sections: `rank`, `debt`, `shapes`, `guards`, `footer`.
 
 ```sh
 cargo xtask atlas survey --path crates/rimz/src/store --top 20
 ```
 
-## Output flags
-
-Every report verb (`survey`, `inspect`, `diff`) takes the same three flags. `--json` emits the full report as JSON (`--top` bounds Markdown only); `--out <file>` writes it there instead of stdout; `--section <a,b>` keeps only the named sections in either form. An agent reading a dossier should write it with `--out` and narrow it with `--section` or `jq` rather than let the whole report through stdout.
-
-```sh
-cargo xtask atlas inspect --module crates/rimz/src/store --json --section assembly,surface --out /tmp/store.json
-```
-
 ## `inspect` — learn one module
 
-`inspect --module <module|path>` uses exact SCIP references to report callers, `max/fn`, the heaviest caller quoted at its target sites, zero-production-referrer surface, repeated assembly, families, providers, target rules, and stale item/pass-through verdicts. `--from` selects a caller and `--item <module::Name>` adds item history, referrers, markers, and its verdict. Sections: `callers`, `heaviest`, `surface`, `assembly`, `shapes`, `guards`, `providers`, `footer`, `item`.
+`inspect --module <module|path>` uses exact SCIP references to report callers, `max/fn`, the heaviest caller quoted at its target sites, the escaping surface measured from outside, repeated assembly, call shapes, families, providers, target rules, and stale item/pass-through verdicts. `--from` selects a caller and `--item <module::Name>` adds item history, referrers, markers, and its verdict. Sections: `callers`, `heaviest`, `surface`, `assembly`, `calls`, `shapes`, `guards`, `providers`, `footer`, `item`.
 
-Repeated assembly prints one root per cluster — the smallest item set the most callers share, with its full caller list — and nests each deeper subset under it as `+ <extra items>: K of M functions`. Unresolved definitions exclude `mod` declarations and `pub use` re-exports, which SCIP never defines in place; the footer counts those separately as unmeasured.
+The surface section is the `deepen` decision in numbers. Its table lists every escaping item with outside production sites, distinct caller files, internal sites, test sites, and caller modules, sorted by outside sites; the summary line names how many items carry 80% of outside sites, how many have exactly one outside site, and how many only the module itself reaches (escaping wider than any caller needs). Test reach, vestigial candidates, zero-production surface, and unresolved definitions follow it.
+
+Repeated assembly prints one root per cluster — the smallest item set the most callers share, with its full caller list — and nests each deeper subset under it as `+ <extra items>: K of M functions`. Call shapes complement it with order: `×3 (4 items): MessageRecord → new → with_channel → deliver_one` is three callers performing the same choreography. Guard families in `inspect` are the ones that name an item this module defines, wherever their sites are; `survey` lists families by where they sit. Unresolved definitions exclude `mod` declarations and `pub use` re-exports, which SCIP never defines in place; the footer counts those separately as unmeasured.
 
 ```sh
 cargo xtask atlas inspect --module crates/rimz/src/store --from sidebar::enrich --item store::agent_context::write_record
@@ -54,6 +53,18 @@ cargo xtask atlas diff --expect /tmp/atlas-pass-contract.toml
 cargo xtask atlas conform --ratchet
 ```
 
+## Output flags
+
+Every report verb (`survey`, `inspect`, `diff`) takes the same three flags. `--json` emits the full report as JSON (`--top` bounds Markdown only); `--out <file>` writes it there instead of stdout; `--section <a,b>` keeps only the named sections in either form. An agent reading a dossier should write it with `--out` and narrow it with `--section` or `jq` rather than let the whole report through stdout.
+
+```sh
+cargo xtask atlas inspect --module crates/rimz/src/store --json --section assembly,surface --out /tmp/store.json
+```
+
+## Index cache
+
+`inspect` and `diff` read a rust-analyzer SCIP index of the whole workspace, cached under `target/atlas/index-<key>.scip` where the key hashes every Rust source and `Cargo.lock`. The first run after any source change generates it, which takes over a minute and says so on stderr; later runs on the same tree reuse it. `diff` indexes `--base` in a temporary checkout under the same cache, so its first run generates twice. The two newest indexes are kept. `survey` and `conform` never build one.
+
 ## Pass contract v1
 
 ```toml
@@ -69,6 +80,28 @@ max-items = 3
 ```
 
 `paths` must be non-empty root-relative boundaries, and `max-production-sloc-delta` must be negative. Each optional assembly row names resolvable caller/provider modules. With `diff --expect`, exit is zero only when production SLOC is at or below the delta ceiling, every assembly value both shrinks and is at or below `max-items`, every changed path is inside `paths`, and evidence has no parse failure or newly unresolved definition; otherwise the command reports drift and exits nonzero.
+
+## Review workflow
+
+The verbs map onto an architecture review pass, and the pass contract is where the review's plan meets the coder's proof.
+
+1. **Survey and size.** `survey` on the crate, `--section rank,debt`: the rank picks the subtree paying the most accretion cost; the debt section and the `layers` in `refactor-target.toml` are the repository's recorded decisions, read before judging.
+2. **Learn what it does.** `inspect --module <target> --section surface,calls,assembly,guards --json --out /tmp/<target>.json`, then narrow with `jq`. The surface table decides whether the interface is wide or deep; call shapes and repeated assembly quote the assembly callers pay; guards show the decisions callers make about the module's state. A shape proves reach, not assembly: brief a subagent with the heaviest caller and the top call shape and ask whether the caller constructs and wires the module's internals or merely names several of its items.
+3. **Plan.** A `deepen` names the caller→provider pairs it shrinks and the `max-items` each lands at; a `delete` or `collapse` names its SLOC delta. Write those as the pass contract, and put the contract in the plan verbatim so the coder runs `diff --expect` and the reviewer reads drift instead of re-deriving it:
+
+```toml
+version = 1
+base = "main"
+paths = ["crates/rimz/src/message", "crates/rimz/src/cli/agents_cmd"]
+max-production-sloc-delta = -60
+
+[[assembly]]
+from = "cli::agents_cmd::idle_compact"
+to = "message"
+max-items = 4
+```
+
+4. **Prove.** `diff --expect <contract>` after the pass; `conform --tighten` once it lands, so the ceilings the pass earned stay earned.
 
 ## Target schema v5
 
@@ -110,3 +143,6 @@ Method keys are name-only within their module. If several public items share tha
 1. SCIP names a package, not a target, so same-package target attribution is unavailable.
 2. `git log -S` candidates are reported, never chosen; read the candidate commits before drawing a history conclusion.
 3. Macro bodies carry no dependency sites because syntax analysis does not parse their token streams.
+4. The family vocabulary filter matches identifiers, not resolved receivers: `io::stdin().is_terminal()` survives as a guard family wherever the crate also defines an `is_terminal`.
+5. Call shapes order references by line; two references on one line sort by name.
+6. A definition rewritten wholesale in one later commit blames entirely to that commit, so a vestigial candidate's "introducing" commit is the last one to rewrite it; the summary shown is still the one to read.

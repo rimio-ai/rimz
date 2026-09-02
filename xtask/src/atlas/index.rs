@@ -27,7 +27,7 @@ pub(super) fn ensure(root: &Path, sources: &[Source]) -> Result<PathBuf> {
     let lockfile_bytes = fs::read(&lockfile)
         .with_context(|| format!("reading {} for atlas index key", lockfile.display()))?;
     let key = cache_key(sources, &lockfile_bytes);
-    ensure_keyed(&cache_dir, root, &key, None)
+    ensure_keyed(&cache_dir, root, &key, None, "working tree")
 }
 
 pub(super) fn ensure_revision(root: &Path, revision: &str, sources: &[Source]) -> Result<PathBuf> {
@@ -50,8 +50,15 @@ pub(super) fn ensure_revision(root: &Path, revision: &str, sources: &[Source]) -
     }
     fs::create_dir(&checkout)
         .with_context(|| format!("creating Atlas checkout {}", checkout.display()))?;
-    let result = materialize_revision(root, revision, &checkout)
-        .and_then(|()| ensure_keyed(&cache_dir, &checkout, &key, Some(files::target_dir(root))));
+    let result = materialize_revision(root, revision, &checkout).and_then(|()| {
+        ensure_keyed(
+            &cache_dir,
+            &checkout,
+            &key,
+            Some(files::target_dir(root)),
+            revision,
+        )
+    });
     let cleanup = fs::remove_dir_all(&checkout)
         .with_context(|| format!("removing Atlas checkout {}", checkout.display()));
     match (result, cleanup) {
@@ -133,6 +140,7 @@ fn ensure_keyed(
     index_root: &Path,
     key: &str,
     cargo_target_dir: Option<PathBuf>,
+    label: &str,
 ) -> Result<PathBuf> {
     let destination = cache_path(cache_dir, key);
     if destination.is_file() {
@@ -151,7 +159,10 @@ fn ensure_keyed(
     ));
     files::remove_stale_file(&staged)?;
 
-    eprintln!("atlas: generating rust-analyzer SCIP index (this can take over a minute)");
+    eprintln!(
+        "atlas: generating rust-analyzer SCIP index for {label} (key {key}; this can take over a minute, then caches under {})",
+        cache_dir.display()
+    );
     let output = run_scip(index_root, &staged, None, cargo_target_dir.as_deref());
     let mut output = match output {
         Ok(output) => output,

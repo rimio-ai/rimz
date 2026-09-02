@@ -124,6 +124,79 @@ pub(super) fn introducing_commits(root: &Path, file: &Path, name: &str) -> Resul
     Ok(commits)
 }
 
+/// One commit as `git blame` attributes it to a line.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(super) struct BlameCommit {
+    pub(super) short: String,
+    pub(super) time: i64,
+    pub(super) summary: String,
+}
+
+/// The blaming commit of every line in `file`, indexed by 1-based line;
+/// one `git blame` per file answers "untouched since introduction" for every
+/// item in it without a per-item history walk.
+pub(super) fn blame_lines(root: &Path, file: &Path) -> Result<Vec<BlameCommit>> {
+    let output = Command::new("git")
+        .args(["blame", "--line-porcelain", "--"])
+        .arg(file)
+        .current_dir(root)
+        .output()
+        .with_context(|| format!("blaming {}", file.display()))?;
+    if !output.status.success() {
+        bail!(
+            "git blame failed for {}: {}",
+            file.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let raw = String::from_utf8(output.stdout).context("git blame returned non-UTF-8 text")?;
+    parse_blame(&raw)
+}
+
+/// Parses `git blame --line-porcelain`: a `<sha> <orig> <final>` header per
+/// line, metadata only on a commit's first appearance, then the tab-led
+/// content line.
+fn parse_blame(raw: &str) -> Result<Vec<BlameCommit>> {
+    let mut lines = Vec::new();
+    let mut commits = HashMap::<String, BlameCommit>::new();
+    let mut current: Option<String> = None;
+    for line in raw.lines() {
+        if line.starts_with('\t') {
+            let id = current
+                .take()
+                .context("git blame emitted content before its commit header")?;
+            lines.push(commits[&id].clone());
+            continue;
+        }
+        if let Some(id) = &current {
+            let commit = commits
+                .get_mut(id)
+                .expect("the header that set `current` inserted its commit");
+            if let Some(time) = line.strip_prefix("committer-time ") {
+                commit.time = time
+                    .trim()
+                    .parse()
+                    .with_context(|| format!("invalid git blame committer time `{time}`"))?;
+            } else if let Some(summary) = line.strip_prefix("summary ") {
+                commit.summary = summary.to_owned();
+            }
+            continue;
+        }
+        let Some((id, _)) = line.split_once(' ') else {
+            continue;
+        };
+        if id.len() == 40 && id.chars().all(|character| character.is_ascii_hexdigit()) {
+            commits.entry(id.to_owned()).or_insert_with(|| BlameCommit {
+                short: id.chars().take(7).collect(),
+                time: 0,
+                summary: String::new(),
+            });
+            current = Some(id.to_owned());
+        }
+    }
+    Ok(lines)
+}
+
 pub(super) fn fix_markers(text: &str) -> Vec<String> {
     text.lines()
         .filter(|line| {
@@ -415,6 +488,21 @@ fn new_identity(path: &Path, identities: &mut Vec<Identity>) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blame_porcelain_attributes_every_line_and_reuses_commit_metadata() {
+        let raw = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 1 1 2\nauthor A\ncommitter-time 100\nsummary feat: add store\nfilename src/store.rs\n\tpub fn open() {}\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 2 2\n\tpub fn close() {}\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 3 3 1\nauthor B\ncommitter-time 200\nsummary fix: close twice\nfilename src/store.rs\n\tpub fn reset() {}\n";
+
+        let lines = parse_blame(raw).unwrap();
+
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], lines[1]);
+        assert_eq!(lines[0].short, "aaaaaaa");
+        assert_eq!(lines[0].time, 100);
+        assert_eq!(lines[0].summary, "feat: add store");
+        assert_eq!(lines[2].short, "bbbbbbb");
+        assert_eq!(lines[2].summary, "fix: close twice");
+    }
     use std::fs;
 
     #[test]

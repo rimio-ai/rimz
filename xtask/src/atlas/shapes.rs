@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -35,6 +35,12 @@ pub(super) struct ShapeFamily {
     pub(super) files: usize,
     pub(super) mean_sloc: f64,
     pub(super) score: f64,
+    /// Distinct member files that occupy the same role in sibling
+    /// directories (`agents/adapters/*/spend.rs`): parallel implementations
+    /// of one responsibility, the strongest duplication signal.
+    pub(super) siblings: usize,
+    /// The sibling role pattern behind `siblings`, when there is one.
+    pub(super) role: Option<String>,
 }
 
 fn clusters(
@@ -74,8 +80,210 @@ fn clusters(
 }
 
 pub(super) fn families(facts: &Facts, scope: &Path) -> Vec<ShapeFamily> {
+    families_with_dropped(facts, scope).0
+}
+
+/// Shape families keyed by crate vocabulary, ranked sibling roles first,
+/// beside the count of families dropped because their key named only std
+/// or external vocabulary.
+pub(super) fn families_with_dropped(facts: &Facts, scope: &Path) -> (Vec<ShapeFamily>, usize) {
     let (_, clusters) = clusters(facts, scope, 40, 0.35);
-    merge_families(clusters)
+    let all = merge_families(clusters);
+    let total = all.len();
+    let mut families = all
+        .into_iter()
+        .filter(|family| {
+            family
+                .name
+                .split('+')
+                .any(|callee| is_crate_vocabulary(callee, &facts.defined_names))
+        })
+        .collect::<Vec<_>>();
+    families.sort_by(|left, right| {
+        right
+            .siblings
+            .cmp(&left.siblings)
+            .then_with(|| right.score.total_cmp(&left.score))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    let dropped = total - families.len();
+    (families, dropped)
+}
+
+/// Whether one family-key callee names something the crate defines: a
+/// crate type or module on the path, or a crate function that is not a std
+/// trait method. `Vec::new` and `Line::from` are vocabulary; `Store::open`
+/// and `decode_catalog_hook` are knowledge.
+fn is_crate_vocabulary(callee: &str, defined_names: &BTreeSet<String>) -> bool {
+    let segments = callee.split("::").collect::<Vec<_>>();
+    let Some((last, prefix)) = segments.split_last() else {
+        return false;
+    };
+    if segments
+        .first()
+        .is_some_and(|root| STD_ROOTS.contains(root))
+    {
+        return false;
+    }
+    if prefix
+        .iter()
+        .any(|segment| defined_names.contains(*segment))
+    {
+        return true;
+    }
+    !STD_METHODS.contains(last) && defined_names.contains(*last)
+}
+
+/// Path roots that mark a callee as std or well-known external vocabulary
+/// regardless of what the crate happens to define.
+const STD_ROOTS: &[&str] = &[
+    "std",
+    "core",
+    "alloc",
+    "Vec",
+    "String",
+    "Option",
+    "Result",
+    "Box",
+    "Arc",
+    "Rc",
+    "Mutex",
+    "RwLock",
+    "BTreeMap",
+    "BTreeSet",
+    "HashMap",
+    "HashSet",
+    "VecDeque",
+    "Path",
+    "PathBuf",
+    "Command",
+    "Stdio",
+    "Instant",
+    "Duration",
+    "SystemTime",
+    "Some",
+    "Ok",
+    "Err",
+    "io",
+    "fs",
+    "env",
+    "fmt",
+    "iter",
+    "mem",
+    "ptr",
+    "thread",
+    "process",
+    "Default",
+    "From",
+    "Into",
+    "TryFrom",
+    "Iterator",
+    "NonZeroU16",
+    "NonZeroU32",
+    "NonZeroUsize",
+    "usize",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "i32",
+    "i64",
+    "f32",
+    "f64",
+    "char",
+    "str",
+    "serde_json",
+    "toml",
+    "json",
+    "E",
+];
+
+/// Method names the crate defines for its own types (trait impls, process
+/// and terminal helpers) that carry no domain knowledge in a call shape.
+const STD_METHODS: &[&str] = &[
+    "new",
+    "default",
+    "from",
+    "into",
+    "try_from",
+    "try_into",
+    "from_str",
+    "fmt",
+    "clone",
+    "eq",
+    "ne",
+    "cmp",
+    "partial_cmp",
+    "hash",
+    "drop",
+    "deref",
+    "deref_mut",
+    "as_ref",
+    "as_mut",
+    "borrow",
+    "to_string",
+    "to_owned",
+    "next",
+    "serialize",
+    "deserialize",
+    "deserialize_any",
+    "visit_str",
+    "custom",
+    "write_str",
+    "write_fmt",
+    "index",
+    "add",
+    "sub",
+    "mul",
+    "div",
+    "entry",
+    "zip",
+    "min",
+    "max",
+    "saturating_sub",
+    "saturating_add",
+    "push_str",
+    "style",
+    "fg",
+    "bg",
+    "spawn",
+    "kill",
+    "wait",
+    "try_wait",
+    "write_all",
+    "current_dir",
+    "stdin",
+    "stdout",
+    "stderr",
+    "success",
+    "status",
+];
+
+/// The sibling role shared by the most member files: the path pattern with
+/// one directory component wildcarded, over distinct member paths.
+fn sibling_role(members: &[Member]) -> (usize, Option<String>) {
+    let paths = members
+        .iter()
+        .map(|member| member.path.as_path())
+        .collect::<BTreeSet<_>>();
+    let mut patterns = BTreeMap::<String, BTreeSet<&Path>>::new();
+    for path in &paths {
+        let components = path
+            .iter()
+            .map(|component| component.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        for index in 0..components.len().saturating_sub(1) {
+            let mut pattern = components.clone();
+            pattern[index] = "*".to_owned();
+            patterns.entry(pattern.join("/")).or_default().insert(path);
+        }
+    }
+    patterns
+        .into_iter()
+        .map(|(pattern, paths)| (paths.len(), pattern))
+        .filter(|(count, _)| *count >= 2)
+        .max_by(|left, right| left.0.cmp(&right.0).then_with(|| right.1.cmp(&left.1)))
+        .map_or((0, None), |(count, pattern)| (count, Some(pattern)))
 }
 
 fn merge_families(clusters: Vec<Cluster>) -> Vec<ShapeFamily> {
@@ -124,12 +332,15 @@ fn merge_families(clusters: Vec<Cluster>) -> Vec<ShapeFamily> {
                 .len();
             let mean_sloc = members.iter().map(|member| member.sloc).sum::<usize>() as f64
                 / members.len().max(1) as f64;
+            let (siblings, role) = sibling_role(&members);
             ShapeFamily {
                 name,
                 score: files as f64 * mean_sloc,
                 members,
                 files,
                 mean_sloc,
+                siblings,
+                role,
             }
         })
         .collect::<Vec<_>>();
@@ -603,6 +814,55 @@ mod tests {
         assert_eq!(families[0].members.len(), 4);
         assert_eq!(families[0].files, 4);
         assert_eq!(families[0].score, 200.0);
+    }
+
+    #[test]
+    fn crate_vocabulary_needs_a_crate_defined_type_module_or_function() {
+        let defined = [
+            "Store",
+            "open",
+            "render",
+            "decode_catalog_hook",
+            "new",
+            "from",
+            "min",
+        ]
+        .map(str::to_owned)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+        assert!(is_crate_vocabulary("Store::open", &defined));
+        assert!(is_crate_vocabulary("render::Table::new", &defined));
+        assert!(is_crate_vocabulary("decode_catalog_hook", &defined));
+        assert!(!is_crate_vocabulary("Vec::new", &defined));
+        assert!(!is_crate_vocabulary("Line::from", &defined));
+        assert!(!is_crate_vocabulary("min", &defined));
+        assert!(!is_crate_vocabulary("E::custom", &defined));
+    }
+
+    #[test]
+    fn sibling_roles_wildcard_one_directory_over_distinct_paths() {
+        let member = |path: &str| Member {
+            path: PathBuf::from(path),
+            line: 1,
+            name: "load".to_owned(),
+            sloc: 50,
+        };
+        let members = vec![
+            member("src/agents/adapters/claude/spend.rs"),
+            member("src/agents/adapters/claude/spend.rs"),
+            member("src/agents/adapters/codex/spend.rs"),
+            member("src/agents/adapters/kimi/spend.rs"),
+            member("src/cli/stats.rs"),
+        ];
+
+        assert_eq!(
+            sibling_role(&members),
+            (3, Some("src/agents/adapters/*/spend.rs".to_owned()))
+        );
+        assert_eq!(
+            sibling_role(&[member("src/a.rs"), member("src/b.rs")]),
+            (0, None)
+        );
     }
 
     #[test]

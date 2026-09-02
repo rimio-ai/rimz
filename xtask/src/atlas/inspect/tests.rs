@@ -196,36 +196,233 @@ fn heaviest_quote_caps_site_windows_and_reports_omitted_sites() {
 }
 
 #[test]
-fn inspect_lists_zero_production_refs_apart_from_unresolved() {
-    let root = crate_fixture(
-        "pub fn dead() {}\npub fn unknown() {}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn references_dead() { super::dead(); super::dead(); }\n}\n",
-    );
+fn surface_measures_outside_reach_test_reach_and_the_unreferenced_rest() {
+    let root = crate_with_files(&[
+        ("src/lib.rs", "mod store;\nmod cli;\n"),
+        (
+            "src/store.rs",
+            "pub fn open() {}\npub fn dead() {}\npub fn unknown() {}\nmod inner { pub fn helper() {} }\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn references_dead() { super::dead(); super::dead(); }\n}\n",
+        ),
+        (
+            "src/cli.rs",
+            "fn run() { crate::store::open(); crate::store::open(); }\nfn also() { crate::store::open(); }\n#[cfg(test)]\nmod tests { fn t() { crate::store::inner::helper(); crate::store::open(); } }\n",
+        ),
+    ]);
     let mut facts = Facts::load(root.path(), Path::new("."), Facets::default()).unwrap();
-    let symbol = "rust-analyzer cargo probe 0.0.0 dead().";
+    let open = "rust-analyzer cargo probe 0.0.0 open().";
+    let dead = "rust-analyzer cargo probe 0.0.0 dead().";
+    let helper = "rust-analyzer cargo probe 0.0.0 inner/helper().";
     let index = Index {
-        documents: vec![scip::types::Document {
-            relative_path: "src/store.rs".to_owned(),
-            occurrences: vec![
-                occurrence(0, symbol, true),
-                occurrence(5, symbol, false),
-                occurrence(5, symbol, false),
-            ],
-            ..scip::types::Document::default()
-        }],
+        documents: vec![
+            scip::types::Document {
+                relative_path: "src/store.rs".to_owned(),
+                occurrences: vec![
+                    occurrence(0, open, true),
+                    occurrence(1, dead, true),
+                    occurrence(3, helper, true),
+                    occurrence(7, dead, false),
+                    occurrence(7, dead, false),
+                ],
+                ..scip::types::Document::default()
+            },
+            scip::types::Document {
+                relative_path: "src/cli.rs".to_owned(),
+                occurrences: vec![
+                    occurrence(0, open, false),
+                    occurrence(0, open, false),
+                    occurrence(1, open, false),
+                    occurrence(3, helper, false),
+                    occurrence(3, open, false),
+                ],
+                ..scip::types::Document::default()
+            },
+        ],
         ..Index::default()
     };
     let index_path = root.path().join("index.scip");
     scip::write_message_to_file(&index_path, index).unwrap();
     facts.references = Some(References::load(&index_path, &facts.syntax, &facts.sources).unwrap());
 
-    let (zero, unresolved, declaration_only) = zero_production_surface(&facts, &selector("store"));
+    let (surface, declaration_only) = surface_section(&facts, &selector("store"));
 
-    assert_eq!(zero.len(), 1);
-    assert_eq!(zero[0].name, "dead");
-    assert_eq!(zero[0].test_referrers, 2);
-    assert_eq!(unresolved.len(), 1);
-    assert_eq!(unresolved[0].name, "unknown");
+    let names = surface
+        .items
+        .iter()
+        .map(|row| row.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["open", "dead"]);
+    let open = &surface.items[0];
+    assert_eq!(
+        (
+            open.outside_sites,
+            open.outside_files,
+            open.internal_sites,
+            open.test_sites
+        ),
+        (3, 1, 0, 1)
+    );
+    assert_eq!(open.callers, ["cli"]);
+    assert_eq!(surface.outside_sites, 3);
+    assert_eq!(surface.head_items, 1);
+    assert_eq!(surface.single_site, 0);
+    assert_eq!(surface.internal_only, 0);
+    assert_eq!(
+        (
+            surface.test_reach.sites,
+            surface.test_reach.through_interface,
+            surface.test_reach.past_interface
+        ),
+        (4, 3, 1)
+    );
+    assert_eq!(
+        surface.test_reach.past_items,
+        [PastItem {
+            module: "store::inner".to_owned(),
+            name: "helper".to_owned(),
+            sites: 1,
+        }]
+    );
+    assert_eq!(surface.zero_production.len(), 1);
+    assert_eq!(surface.zero_production[0].name, "dead");
+    assert_eq!(surface.zero_production[0].test_referrers, 2);
+    assert_eq!(surface.unresolved.len(), 1);
+    assert_eq!(surface.unresolved[0].name, "unknown");
     assert_eq!(declaration_only, 0);
+}
+
+#[test]
+fn call_shapes_group_functions_by_ordered_sequence_and_skip_single_items() {
+    let mut edges = Vec::new();
+    for (item, line) in [("A", 11), ("B", 12), ("B", 13), ("C", 14)] {
+        let mut edge = edge(item, "left", Some(("build", 10)), false);
+        edge.from_line = line;
+        edges.push(edge);
+    }
+    for (item, line) in [("A", 21), ("B", 22), ("C", 23)] {
+        let mut edge = edge(item, "right", Some(("assemble", 20)), false);
+        edge.from_line = line;
+        edges.push(edge);
+    }
+    for (item, line) in [("C", 41), ("A", 42)] {
+        let mut edge = edge(item, "left", Some(("other", 40)), false);
+        edge.from_line = line;
+        edges.push(edge);
+    }
+    for (item, line) in [("E", 61), ("D", 62), ("C", 63), ("B", 64), ("A", 65)] {
+        let mut edge = edge(item, "right", Some(("heavy", 60)), false);
+        edge.from_line = line;
+        edges.push(edge);
+    }
+    edges.push(edge("A", "right", Some(("restore", 30)), false));
+    edges.push(edge("A", "store", Some(("inside", 50)), false));
+
+    let rows = call_shapes(&edges, &selector("store"));
+
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(rows[0].shape, ["A", "B", "C"]);
+    assert_eq!(rows[0].items, 3);
+    assert_eq!(rows[0].functions.len(), 2);
+    assert_eq!(rows[1].shape, ["E", "D", "C", "B", "A"]);
+    assert_eq!(rows[1].functions.len(), 1);
+}
+
+#[test]
+fn module_item_guards_keep_only_guards_naming_the_modules_items() {
+    let caller = |name: &str| {
+        format!(
+            "fn {name}(s: &crate::store::S, v: &[u8]) {{\n    if s.is_ready() && s.is_ready() {{}}\n    if crate::cli::is_stale(v) && v.len() > 2 {{}}\n}}\n"
+        )
+    };
+    let root = crate_with_files(&[
+        (
+            "src/lib.rs",
+            "mod store;\nmod cli;\nmod a;\nmod b;\nmod c;\n",
+        ),
+        (
+            "src/store.rs",
+            "pub struct S;\nimpl S {\n    pub fn is_ready(&self) -> bool { true }\n}\n",
+        ),
+        (
+            "src/cli.rs",
+            "pub fn is_stale(v: &[u8]) -> bool { v.is_empty() }\n",
+        ),
+        ("src/a.rs", &caller("a")),
+        ("src/b.rs", &caller("b")),
+        ("src/c.rs", &caller("c")),
+    ]);
+    let facts = Facts::load(root.path(), Path::new("."), Facets::default()).unwrap();
+
+    let families = module_item_guards(&facts, &selector("store"));
+
+    assert_eq!(families.len(), 1, "{families:?}");
+    assert!(families[0].key.contains("is_ready"));
+    assert_eq!(families[0].files, 3);
+    let cli = module_item_guards(&facts, &selector("cli"));
+    assert_eq!(cli.len(), 1, "{cli:?}");
+    assert!(cli[0].key.contains("is_stale"));
+}
+
+#[test]
+fn vestigial_items_need_at_most_one_outside_site_and_one_blame_commit() {
+    let root = tempfile::tempdir().unwrap();
+    run(root.path(), &["init", "--quiet"]);
+    fs::create_dir(root.path().join("src")).unwrap();
+    fs::write(root.path().join("lib.rs"), "").unwrap();
+    fs::write(
+        root.path().join("src/store.rs"),
+        "pub fn stale() {}\npub fn live() {\n}\npub fn busy() {}\n",
+    )
+    .unwrap();
+    run(root.path(), &["add", "-A"]);
+    commit(root.path(), "introduce store");
+    fs::write(
+        root.path().join("src/store.rs"),
+        "pub fn stale() {}\npub fn live() {\n    let _ = 1;\n}\npub fn busy() {}\n",
+    )
+    .unwrap();
+    run(root.path(), &["add", "-A"]);
+    commit(root.path(), "touch live");
+    let row = |name: &str, line, end_line, outside_sites, internal_sites| SurfaceRow {
+        module: "store".to_owned(),
+        name: name.to_owned(),
+        kind: "fn".to_owned(),
+        path: PathBuf::from("src/store.rs"),
+        line,
+        end_line,
+        outside_sites,
+        outside_files: outside_sites,
+        callers: Vec::new(),
+        internal_sites,
+        test_sites: 0,
+    };
+    let rows = [
+        row("stale", 1, 1, 1, 0),
+        row("live", 2, 4, 0, 0),
+        row("busy", 5, 5, 0, 3),
+    ];
+
+    let vestigial = vestigial_items(root.path(), &rows).unwrap();
+
+    assert_eq!(vestigial.len(), 1, "{vestigial:?}");
+    assert_eq!(vestigial[0].name, "stale");
+    assert_eq!(vestigial[0].production_sites, 1);
+    assert!(!vestigial[0].pins_fix);
+    assert_eq!(vestigial[0].introduced.summary, "introduce store");
+}
+
+fn crate_with_files(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname = \"probe\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    for (path, text) in files {
+        let path = root.path().join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+    root
 }
 
 fn occurrence(line: i32, symbol: &str, definition: bool) -> Occurrence {
@@ -386,6 +583,7 @@ fn target_rule_rows_use_each_rules_files_and_resolved_admissions() {
             .iter()
             .map(|file| file.module_path.clone())
             .collect(),
+        defined_names: super::super::facts::defined_names(&syntax),
         syntax,
         sources: sources.to_vec(),
         crate_names: BTreeSet::new(),
@@ -458,6 +656,7 @@ fn edge(item: &str, from: &str, function: Option<(&str, usize)>, test: bool) -> 
         }),
         from: from.to_owned(),
         to: "store".to_owned(),
+        to_line: 1,
         item: item.to_owned(),
         kind: EdgeKind::Reference,
         test,

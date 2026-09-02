@@ -1473,6 +1473,7 @@ mod tests {
                 .iter()
                 .map(|file| file.module_path.clone())
                 .collect(),
+            defined_names: super::super::facts::defined_names(&syntax),
             syntax,
             sources,
             crate_names: BTreeSet::new(),
@@ -1592,6 +1593,7 @@ mod tests {
                 .iter()
                 .map(|file| file.module_path.clone())
                 .collect(),
+            defined_names: super::super::facts::defined_names(&syntax),
             syntax,
             sources,
             crate_names: BTreeSet::new(),
@@ -1608,6 +1610,7 @@ mod tests {
             to_path: PathBuf::from("src/target.rs"),
             from: "caller".to_owned(),
             to: "target".to_owned(),
+            to_line: 1,
             item: item.to_owned(),
             kind: EdgeKind::Reference,
             test: false,

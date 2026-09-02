@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -6,12 +6,15 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use serde_json::{Map, json};
 
+use super::conform::{self, Direction};
 use super::detect::{self, GuardFamily};
 use super::facts::{Facets, Facts};
+use super::modules::{module_is_within, path_in_scope};
 use super::output::{self, OutputArgs};
 use super::rank::{self, Row, Totals};
 use super::shapes::{self, ShapeFamily};
-use super::target::{self, TARGET_FILE, VerdictKind};
+use super::syntax::resolved_internal_import;
+use super::target::{self, TARGET_FILE, Target, VerdictKind};
 use super::{positive_usize, set_once, validate_scope, value};
 
 const DEFAULT_PATH: &str = "crates/rimz/src";
@@ -19,9 +22,40 @@ const DEFAULT_TOP: usize = 20;
 
 const USAGE: &str = "cargo xtask atlas survey [--path <prefix>] [--top N]
 
-Emits a bounded Markdown survey of accretion and duplicated knowledge.";
+Emits a bounded Markdown survey of accretion, recorded debt, and duplicated knowledge.";
 
-const SECTIONS: &[&str] = &["rank", "shapes", "guards", "footer"];
+const SECTIONS: &[&str] = &["rank", "debt", "shapes", "guards", "footer"];
+
+/// One target rule's upward dependencies: the debt the target already
+/// admits, counted at its sites, beside anything it has not admitted.
+#[derive(Clone, Debug, Serialize)]
+struct DebtRow {
+    path: PathBuf,
+    upward_sites: usize,
+    admitted: Vec<ProviderSites>,
+    unadmitted: Vec<ProviderSites>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct ProviderSites {
+    provider: String,
+    sites: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct StranglerRow {
+    path: PathBuf,
+    symbol: String,
+    current: usize,
+    baseline: usize,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+struct Debt {
+    configured: bool,
+    rules: Vec<DebtRow>,
+    stranglers: Vec<StranglerRow>,
+}
 
 fn usage() -> String {
     format!("{USAGE}\n\n{}", output::USAGE)
@@ -39,11 +73,13 @@ struct Report {
     path: PathBuf,
     rows: Vec<Row>,
     totals: Totals,
+    debt: Debt,
     shapes: Vec<ShapeFamily>,
     guards: Vec<GuardFamily>,
     history_commits: usize,
     pace_window: usize,
     parse_failures: usize,
+    shape_families_dropped: usize,
     guard_families_dropped: usize,
     suppressed: usize,
     stale: Vec<String>,
@@ -111,7 +147,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
 fn build_report(root: &Path, facts: &Facts, scope: &Path) -> Result<Report> {
     let rows = rank::rows(facts, scope)?;
     let totals = rank::totals(&rows);
-    let all_shapes = shapes::families(facts, scope);
+    let (all_shapes, shape_families_dropped) = shapes::families_with_dropped(facts, scope);
     let (all_guards, guard_families_dropped) = detect::guard_families_with_dropped(facts, scope);
     let shape_keys = all_shapes
         .iter()
@@ -166,11 +202,15 @@ fn build_report(root: &Path, facts: &Facts, scope: &Path) -> Result<Report> {
         .history
         .as_ref()
         .context("survey history facts missing")?;
+    let debt = configured.as_ref().map_or_else(Debt::default, |target| {
+        recorded_debt(root, target, facts, scope)
+    });
 
     Ok(Report {
         path: facts.scope.clone(),
         rows,
         totals,
+        debt,
         shapes,
         guards,
         history_commits: log.len(),
@@ -179,12 +219,122 @@ fn build_report(root: &Path, facts: &Facts, scope: &Path) -> Result<Report> {
             .syntax
             .parse_failures
             .iter()
-            .filter(|path| super::modules::path_in_scope(path, scope))
+            .filter(|path| path_in_scope(path, scope))
             .count(),
+        shape_families_dropped,
         guard_families_dropped,
         suppressed,
         stale,
     })
+}
+
+/// Counts every upward dependency site under each target rule that touches
+/// the scope, grouped by the admission it matches, and every strangler's
+/// current count against its baseline. Syntax-only, so it needs no index.
+fn recorded_debt(root: &Path, target: &Target, facts: &Facts, scope: &Path) -> Debt {
+    let ranks = target.layer_ranks();
+    let touches_scope = |path: &Path| path_in_scope(path, scope) || path_in_scope(scope, path);
+    let mut rules = Vec::new();
+    for rule in target
+        .modules
+        .iter()
+        .filter(|rule| touches_scope(&rule.path))
+    {
+        let admissions = rule
+            .allowed_dependencies
+            .as_deref()
+            .or(rule.upward_dependencies.as_deref())
+            .unwrap_or_default();
+        let mut admitted = BTreeMap::<String, usize>::new();
+        let mut unadmitted = BTreeMap::<String, usize>::new();
+        let files = facts
+            .syntax
+            .files
+            .iter()
+            .filter(|file| conform::rule_covers_path(root, &rule.path, &file.path));
+        let target_module =
+            super::modules::crate_module_for_path(&if root.join(&rule.path).is_dir() {
+                rule.path.join("mod.rs")
+            } else {
+                rule.path.clone()
+            });
+        for file in files {
+            for dependency in &file.dependencies {
+                let Some(resolved) =
+                    resolved_internal_import(dependency, &facts.known_modules, &facts.crate_names)
+                else {
+                    continue;
+                };
+                if module_is_within(&resolved, &target_module)
+                    || conform::layer_direction(&ranks, &file.module_path, &resolved)
+                        != Some(Direction::Upward)
+                {
+                    continue;
+                }
+                match admissions
+                    .iter()
+                    .find(|prefix| module_is_within(&resolved, prefix))
+                {
+                    Some(prefix) => *admitted.entry(prefix.clone()).or_default() += 1,
+                    None => *unadmitted.entry(resolved).or_default() += 1,
+                }
+            }
+        }
+        let upward_sites = admitted.values().sum::<usize>() + unadmitted.values().sum::<usize>();
+        if upward_sites == 0 {
+            continue;
+        }
+        rules.push(DebtRow {
+            path: rule.path.clone(),
+            upward_sites,
+            admitted: provider_sites(admitted),
+            unadmitted: provider_sites(unadmitted),
+        });
+    }
+    rules.sort_by(|left, right| {
+        right
+            .upward_sites
+            .cmp(&left.upward_sites)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    let stranglers = target
+        .strangler
+        .iter()
+        .filter(|strangler| touches_scope(&strangler.path))
+        .map(|strangler| {
+            let is_file = root.join(&strangler.path).is_file();
+            let sources = conform::sources_for_path(&facts.sources, &strangler.path, is_file);
+            StranglerRow {
+                path: strangler.path.clone(),
+                symbol: strangler.symbol.clone(),
+                current: conform::count_in_sources(
+                    &sources,
+                    &facts.syntax.files,
+                    &strangler.symbol,
+                ),
+                baseline: strangler.baseline,
+            }
+        })
+        .collect();
+    Debt {
+        configured: true,
+        rules,
+        stranglers,
+    }
+}
+
+fn provider_sites(counts: BTreeMap<String, usize>) -> Vec<ProviderSites> {
+    let mut rows = counts
+        .into_iter()
+        .map(|(provider, sites)| ProviderSites { provider, sites })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        right
+            .sites
+            .cmp(&left.sites)
+            .then_with(|| left.provider.cmp(&right.provider))
+    });
+    rows
 }
 
 fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> String {
@@ -231,6 +381,10 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
         .unwrap();
     }
 
+    if output_args.wants("debt") {
+        render_debt(&mut output, &report.debt, top);
+    }
+
     if output_args.wants("shapes") || output_args.wants("guards") {
         writeln!(output, "\n## Duplicated knowledge").unwrap();
     }
@@ -244,9 +398,12 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
                 .map(|member| format!("{}:{}", member.path.display(), member.line))
                 .collect::<Vec<_>>()
                 .join(", ");
+            let siblings = family.role.as_ref().map_or_else(String::new, |role| {
+                format!("; siblings {} ({role})", family.siblings)
+            });
             writeln!(
                 output,
-                "- shape key: `{}`; {} members / {} files; mean {:.1} sloc; {}",
+                "- shape key: `{}`; {} members / {} files{siblings}; mean {:.1} sloc; {}",
                 family.name,
                 family.members.len(),
                 family.files,
@@ -286,6 +443,12 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
         writeln!(output, "parse failures: {}", report.parse_failures).unwrap();
         writeln!(
             output,
+            "shape families dropped as std vocabulary: {}",
+            report.shape_families_dropped
+        )
+        .unwrap();
+        writeln!(
+            output,
             "guard families dropped as std idiom: {}",
             report.guard_families_dropped
         )
@@ -320,6 +483,71 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
     output
 }
 
+fn render_debt(output: &mut String, debt: &Debt, top: usize) {
+    writeln!(output, "\n## Recorded debt").unwrap();
+    if !debt.configured {
+        writeln!(output, "no {TARGET_FILE}; nothing recorded").unwrap();
+        return;
+    }
+    if debt.rules.is_empty() {
+        writeln!(output, "upward dependencies: none under scoped rules").unwrap();
+    } else {
+        writeln!(
+            output,
+            "| rule | upward sites | admitted (sites) | unadmitted (sites) |"
+        )
+        .unwrap();
+        writeln!(output, "| --- | ---: | --- | --- |").unwrap();
+        for row in debt.rules.iter().take(top) {
+            writeln!(
+                output,
+                "| {} | {} | {} | {} |",
+                row.path.display(),
+                row.upward_sites,
+                render_provider_sites(&row.admitted, top),
+                render_provider_sites(&row.unadmitted, top)
+            )
+            .unwrap();
+        }
+        if debt.rules.len() > top {
+            writeln!(output, "\n_{} more rules omitted._", debt.rules.len() - top).unwrap();
+        }
+    }
+    if !debt.stranglers.is_empty() {
+        let stranglers = debt
+            .stranglers
+            .iter()
+            .take(top)
+            .map(|row| {
+                format!(
+                    "`{}` {} {}/{}",
+                    row.symbol,
+                    row.path.display(),
+                    row.current,
+                    row.baseline
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(output, "\nstranglers (current/baseline): {stranglers}").unwrap();
+    }
+}
+
+fn render_provider_sites(rows: &[ProviderSites], top: usize) -> String {
+    if rows.is_empty() {
+        return "—".to_owned();
+    }
+    let mut rendered = rows
+        .iter()
+        .take(top)
+        .map(|row| format!("{} {}", row.provider, row.sites))
+        .collect::<Vec<_>>();
+    if rows.len() > top {
+        rendered.push(format!("… {} more", rows.len() - top));
+    }
+    rendered.join(", ")
+}
+
 fn render_json(report: &Report, output_args: &OutputArgs) -> Result<String> {
     let mut sections = Map::new();
     sections.insert("path".to_owned(), serde_json::to_value(&report.path)?);
@@ -331,6 +559,9 @@ fn render_json(report: &Report, output_args: &OutputArgs) -> Result<String> {
                 "totals": &report.totals,
             }),
         );
+    }
+    if output_args.wants("debt") {
+        sections.insert("debt".to_owned(), serde_json::to_value(&report.debt)?);
     }
     if output_args.wants("shapes") {
         sections.insert("shapes".to_owned(), serde_json::to_value(&report.shapes)?);
@@ -345,6 +576,7 @@ fn render_json(report: &Report, output_args: &OutputArgs) -> Result<String> {
                 "history_commits": report.history_commits,
                 "pace_window": report.pace_window,
                 "parse_failures": report.parse_failures,
+                "shape_families_dropped_as_std_vocabulary": report.shape_families_dropped,
                 "guard_families_dropped_as_std_idiom": report.guard_families_dropped,
                 "suppressed_families": report.suppressed,
                 "stale_verdict_keys": &report.stale,
@@ -381,6 +613,8 @@ mod tests {
                 files: 1,
                 mean_sloc: 40.0,
                 score: 40.0,
+                siblings: 0,
+                role: None,
             })
             .collect();
         let guards = (0..30)
@@ -399,11 +633,32 @@ mod tests {
             path: PathBuf::from("src"),
             totals: rank::totals(&rows),
             rows,
+            debt: Debt {
+                configured: true,
+                rules: (0..30)
+                    .map(|index| DebtRow {
+                        path: PathBuf::from(format!("src/rule-{index}")),
+                        upward_sites: 30 - index,
+                        admitted: vec![ProviderSites {
+                            provider: "cli".to_owned(),
+                            sites: 30 - index,
+                        }],
+                        unadmitted: Vec::new(),
+                    })
+                    .collect(),
+                stranglers: vec![StranglerRow {
+                    path: PathBuf::from("src/store"),
+                    symbol: "legacy_open".to_owned(),
+                    current: 2,
+                    baseline: 3,
+                }],
+            },
             shapes,
             guards,
             history_commits: 100,
             pace_window: 25,
             parse_failures: 0,
+            shape_families_dropped: 6,
             guard_families_dropped: 4,
             suppressed: 0,
             stale: (0..30)
@@ -413,10 +668,15 @@ mod tests {
 
         let output = render_markdown(&report, 20, &OutputArgs::default());
 
-        assert!(output.lines().count() <= 80);
+        assert!(output.lines().count() <= 110);
         assert!(output.contains("module-19"));
         assert!(!output.contains("module-20"));
         assert!(output.contains("and 10 more"));
+        assert!(output.contains("| src/rule-19 | 11 | cli 11 | — |"));
+        assert!(!output.contains("src/rule-20"));
+        assert!(output.contains("_10 more rules omitted._"));
+        assert!(output.contains("stranglers (current/baseline): `legacy_open` src/store 2/3"));
+        assert!(output.contains("shape families dropped as std vocabulary: 6"));
         assert!(output.contains("guard families dropped as std idiom: 4"));
         assert!(output.contains("cx: severity-weighted over-threshold excess"));
     }

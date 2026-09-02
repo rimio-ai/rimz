@@ -238,7 +238,7 @@ Run `cargo xtask hooks` once per clone to activate the tracked git hooks (it poi
 
 Three deserve a note:
 
-- `cargo xtask atlas <survey|inspect|diff|conform>` is the bounded refactor-review instrument: `survey` maps accretion and duplicated families, `inspect` builds an indexed module dossier, `diff` compares a base or enforces a v1 pass contract, and `conform` checks or tightens the target. Target schema v5 carries grouped layers, dependency admissions, surface budgets, stranglers, and reasoned verdicts; only indexed commands require rust-analyzer's cached SCIP export, and only `conform --ratchet` runs in `gate` and `checks`.
+- `cargo xtask atlas <survey|inspect|diff|conform>` is the bounded refactor-review instrument: `survey` maps accretion, recorded debt, and duplicated families, `inspect` builds an indexed module dossier (escaping surface from outside, call shapes, test reach, vestigial candidates), `diff` compares a base or enforces a v1 pass contract, and `conform` checks or tightens the target. Target schema v5 carries grouped layers, dependency admissions, surface budgets, stranglers, and reasoned verdicts; only indexed commands require rust-analyzer's cached SCIP export, and only `conform --ratchet` runs in `gate` and `checks`.
 - `cargo xtask install-dev` is the contributor opt-in to [off-box reporting](../internals/diagnostics.md#off-box-error-reporting): it installs the optimized `profiling` host profile with `--features sentry`, line tables, frame pointers, and v0 symbol names, so dogfooding sessions stay profilable and default to the `development` Sentry environment.
 - `cargo xtask profile-build` writes the same optimized `target/profiling/rimz` without installing it.
 

@@ -77,6 +77,9 @@ pub(super) struct Edge {
     pub(super) from_line: usize,
     pub(super) from_fn: Option<FnRef>,
     pub(super) to: String,
+    /// Definition line of the referenced item, so two same-named public
+    /// items in one file (methods on different owners) stay distinct.
+    pub(super) to_line: usize,
     pub(super) item: String,
     pub(super) kind: EdgeKind,
     pub(super) test: bool,
@@ -203,6 +206,7 @@ impl References {
                             from_line: site.line,
                             from_fn,
                             to: item.module.clone(),
+                            to_line: item.line,
                             item: item.name.clone(),
                             kind: EdgeKind::Reference,
                             test: site.test,
