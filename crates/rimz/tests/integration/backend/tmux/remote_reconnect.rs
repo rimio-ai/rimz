@@ -11,6 +11,64 @@ use crate::common::ssh_trace::{
 use super::support::*;
 
 #[test]
+fn supervised_remote_wrapper_reports_a_destroyed_tmux_session() {
+    require_tmux!();
+
+    let env = Env::new();
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
+    let session = "watchdog-tmux";
+    server.ensure_with_shell(session);
+
+    let log = env.project_root.join("ssh-trace.log");
+    let pair = remote_connect_pty();
+    let mut cmd = remote_connect_pty_command(&env, &log);
+    cmd.env(
+        "RIMZ_TEST_SSH_EXEC_ARGV",
+        format!(
+            "{}\t--mux\ttmux\tattach\t--attach\t{session}",
+            env.rimz_bin().display()
+        ),
+    );
+    cmd.env("RIMZ_REMOTE_SUPERVISED", "1");
+
+    let mut child = pair.slave.spawn_command(cmd).expect("spawn remote connect");
+    drop(pair.slave);
+    let terminal = FakeTerminal::new(pair.master, Duration::from_millis(600), Answers::Ghostty);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while server.client_widths(session).is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        !server.client_widths(session).is_empty(),
+        "tmux attach client did not register"
+    );
+
+    server.tmux(&["kill-server"]);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll remote connect") {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "remote connect did not notice the destroyed tmux session"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let output = String::from_utf8_lossy(&terminal.finish()).into_owned();
+
+    assert!(
+        status.success(),
+        "remote connect failed: {status:?}\n{output}"
+    );
+    assert!(
+        output.contains("rimz: remote room on dev-box ended"),
+        "{output}"
+    );
+    assert!(!output.contains("[Y/n]"), "{output}");
+    assert_eq!(main_invocation_count(&log), 1, "{output}");
+}
+
+#[test]
 fn supervised_reconnect_keeps_duplicate_terminal_replies_out_of_the_tmux_pane() {
     require_tmux!();
 
