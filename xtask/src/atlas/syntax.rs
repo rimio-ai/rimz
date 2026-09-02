@@ -1223,13 +1223,25 @@ fn normalize_token_stream(
             TokenTree::Literal(_) => normalized.push('_'),
             TokenTree::Ident(ident) => {
                 let name = ident.to_string();
-                let number = *names.entry(name).or_insert_with(|| {
-                    let number = *next_name;
-                    *next_name += 1;
-                    number
-                });
-                normalized.push('$');
-                normalized.push_str(&number.to_string());
+                let after_dot = matches!(
+                    index.checked_sub(1).and_then(|index| tokens.get(index)),
+                    Some(TokenTree::Punct(punct)) if punct.as_char() == '.'
+                );
+                let before_call = matches!(
+                    tokens.get(index + 1),
+                    Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Parenthesis
+                );
+                if after_dot || before_call {
+                    normalized.push_str(&name);
+                } else {
+                    let number = *names.entry(name).or_insert_with(|| {
+                        let number = *next_name;
+                        *next_name += 1;
+                        number
+                    });
+                    normalized.push('$');
+                    normalized.push_str(&number.to_string());
+                }
             }
             TokenTree::Punct(punct) => normalized.push(punct.as_char()),
         }
