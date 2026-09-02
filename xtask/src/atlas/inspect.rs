@@ -118,6 +118,19 @@ struct RuleRow {
 }
 
 #[derive(Clone, Debug)]
+struct ItemCandidate {
+    path: PathBuf,
+    line: usize,
+    owner: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct VerdictDiagnostics {
+    stale: Vec<String>,
+    ambiguous: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
 struct ItemEvidence {
     key: String,
     path: PathBuf,
@@ -144,7 +157,9 @@ impl ModuleSelector {
             return false;
         }
         match &self.path {
-            Some(scope) if self.directory => path_in_scope(path, scope),
+            Some(scope) if self.directory => {
+                path_in_scope(path, scope) || path == scope.with_extension("rs")
+            }
             Some(file) => path == file,
             None => true,
         }
@@ -168,7 +183,13 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
             ..Facets::default()
         },
     )?;
-    let module = resolve_module(root, &facts.syntax.files, &args.module, "--module")?;
+    let module = resolve_module(
+        root,
+        &facts.syntax.files,
+        &args.module,
+        "inspect",
+        "--module",
+    )?;
     let references = facts
         .references
         .as_ref()
@@ -178,7 +199,7 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
     let from = args
         .from
         .as_deref()
-        .map(|raw| resolve_module(root, &facts.syntax.files, raw, "--from"))
+        .map(|raw| resolve_module(root, &facts.syntax.files, raw, "inspect", "--from"))
         .transpose()?
         .or_else(|| {
             callers.first().map(|caller| ModuleSelector {
@@ -215,11 +236,13 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
         .collect::<Vec<_>>();
     let providers = providers(&facts, &module);
     let rules = target.as_ref().map_or_else(Vec::new, |target| {
-        target_rules(root, target, &facts, &module, &providers)
+        target_rules(root, target, &facts, &module)
     });
-    let stale = target.as_ref().map_or_else(Vec::new, |target| {
-        stale_module_verdicts(target, &module.module, &facts)
-    });
+    let verdicts = target
+        .as_ref()
+        .map_or_else(VerdictDiagnostics::default, |target| {
+            stale_module_verdicts(target, &module.module, &facts)
+        });
     let item = args
         .item
         .as_deref()
@@ -238,7 +261,8 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
         target.is_some(),
         &rules,
         &unresolved,
-        &stale,
+        &verdicts,
+        args.top,
     );
     if let Some(item) = &item {
         print_item(item, args.top);
@@ -297,18 +321,19 @@ pub(super) fn resolve_module(
     root: &Path,
     syntax_files: &[FileSyntax],
     raw: &str,
+    command: &str,
     flag: &str,
 ) -> Result<ModuleSelector> {
     let path_like = raw.contains('/') || raw.ends_with(".rs") || root.join(raw).exists();
     let (module, path, directory) = if path_like {
-        let path = super::validate_scope(raw, &format!("inspect {flag}"))?;
+        let path = super::validate_scope(raw, &format!("{command} {flag}"))?;
         let absolute = root.join(&path);
         if !absolute.exists() {
-            bail!("atlas inspect {flag} path `{raw}` does not exist");
+            bail!("atlas {command} {flag} path `{raw}` does not exist");
         }
         let directory = absolute.is_dir();
         if !directory && path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
-            bail!("atlas inspect {flag} `{raw}` does not match a Rust module");
+            bail!("atlas {command} {flag} `{raw}` does not match a Rust module");
         }
         let entry = if directory {
             path.join("mod.rs")
@@ -326,7 +351,9 @@ pub(super) fn resolve_module(
     if syntax_files.iter().any(|file| {
         module_is_within(&file.module_path, &module)
             && match &path {
-                Some(scope) if directory => path_in_scope(&file.path, scope),
+                Some(scope) if directory => {
+                    path_in_scope(&file.path, scope) || file.path == scope.with_extension("rs")
+                }
                 Some(source) => &file.path == source,
                 None => true,
             }
@@ -337,7 +364,7 @@ pub(super) fn resolve_module(
             directory,
         });
     }
-    bail!("atlas inspect {flag} `{raw}` does not match a Rust module")
+    bail!("atlas {command} {flag} `{raw}` does not match a Rust module")
 }
 
 fn callers_from_edges(edges: &[Edge], target: &ModuleSelector) -> Vec<Caller> {
@@ -686,7 +713,6 @@ fn target_rules(
     target: &Target,
     facts: &Facts,
     module: &ModuleSelector,
-    providers: &[Provider],
 ) -> Vec<RuleRow> {
     let files = facts
         .syntax
@@ -704,9 +730,17 @@ fn target_rules(
                 .any(|file| conform::rule_covers_path(root, &rule.path, &file.path))
         })
         .flat_map(|rule| {
-            providers
+            files
                 .iter()
-                .map(|provider| rule_row(rule, &ranks, &module.module, &provider.module))
+                .filter(|file| conform::rule_covers_path(root, &rule.path, &file.path))
+                .flat_map(|file| &file.dependencies)
+                .filter_map(|dependency| {
+                    resolved_internal_import(dependency, &facts.known_modules, &facts.crate_names)
+                })
+                .filter(|provider| !module_is_within(provider, &module.module))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .map(|provider| rule_row(rule, &ranks, &module.module, &provider))
         })
         .collect()
 }
@@ -739,34 +773,99 @@ fn rule_row(rule: &ModuleRule, ranks: &super::target::LayerRanks, from: &str, to
     }
 }
 
-fn stale_module_verdicts(target: &Target, module: &str, facts: &Facts) -> Vec<String> {
+fn stale_module_verdicts(target: &Target, module: &str, facts: &Facts) -> VerdictDiagnostics {
     let pass_throughs = detect::passthroughs(facts, Path::new("."))
         .into_iter()
-        .map(|row| format!("{}::{}", row.module, row.name))
-        .collect::<BTreeSet<_>>();
-    let items = facts
-        .syntax
-        .files
+        .fold(
+            BTreeMap::<String, Vec<ItemCandidate>>::new(),
+            |mut rows, row| {
+                let owner = facts
+                    .syntax
+                    .files
+                    .iter()
+                    .find(|file| file.path == row.path)
+                    .and_then(|file| function_owner(file, &row.name, row.line));
+                rows.entry(format!("{}::{}", row.module, row.name))
+                    .or_default()
+                    .push(ItemCandidate {
+                        path: row.path,
+                        line: row.line,
+                        owner,
+                    });
+                rows
+            },
+        );
+    let items = public_item_candidates(facts);
+    let mut diagnostics = VerdictDiagnostics::default();
+    for verdict in target.verdicts.iter().filter(|verdict| {
+        matches!(verdict.kind, VerdictKind::Item | VerdictKind::PassThrough)
+            && (verdict.key == module || verdict.key.starts_with(&format!("{module}::")))
+    }) {
+        let candidates = match verdict.kind {
+            VerdictKind::Item => items.get(&verdict.key),
+            VerdictKind::PassThrough => pass_throughs.get(&verdict.key),
+            _ => None,
+        };
+        let label = format!("{:?}:{}", verdict.kind, verdict.key);
+        match candidates.map(Vec::as_slice).unwrap_or_default() {
+            [] => diagnostics.stale.push(label),
+            candidates if candidates.len() > 1 => diagnostics
+                .ambiguous
+                .push(format!("{label} — {}", ambiguity(&verdict.key, candidates))),
+            _ => {}
+        }
+    }
+    diagnostics.stale.sort();
+    diagnostics.ambiguous.sort();
+    diagnostics
+}
+
+fn public_item_candidates(facts: &Facts) -> BTreeMap<String, Vec<ItemCandidate>> {
+    let mut candidates = BTreeMap::<String, Vec<ItemCandidate>>::new();
+    for file in &facts.syntax.files {
+        for item in &file.pub_items {
+            candidates
+                .entry(format!("{}::{}", item.module, item.name))
+                .or_default()
+                .push(ItemCandidate {
+                    path: file.path.clone(),
+                    line: item.line,
+                    owner: function_owner(file, &item.name, item.line),
+                });
+        }
+    }
+    candidates
+}
+
+fn function_owner(file: &FileSyntax, name: &str, line: usize) -> Option<String> {
+    file.fns
         .iter()
-        .flat_map(|file| &file.pub_items)
-        .map(|item| format!("{}::{}", item.module, item.name))
-        .collect::<BTreeSet<_>>();
-    let mut stale = target
-        .verdicts
+        .find(|function| function.name == name && function.line == line)
+        .and_then(|function| function.owner.clone())
+}
+
+fn ambiguity(key: &str, candidates: &[ItemCandidate]) -> String {
+    let name = key.rsplit_once("::").map_or(key, |(_, name)| name);
+    let locations = candidates
         .iter()
-        .filter(|verdict| {
-            matches!(verdict.kind, VerdictKind::Item | VerdictKind::PassThrough)
-                && (verdict.key == module || verdict.key.starts_with(&format!("{module}::")))
-                && match verdict.kind {
-                    VerdictKind::Item => !items.contains(&verdict.key),
-                    VerdictKind::PassThrough => !pass_throughs.contains(&verdict.key),
-                    _ => false,
-                }
+        .map(|candidate| {
+            candidate.owner.as_ref().map_or_else(
+                || format!("{}:{}", candidate.path.display(), candidate.line),
+                |owner| {
+                    format!(
+                        "{}:{} (owner {owner})",
+                        candidate.path.display(),
+                        candidate.line
+                    )
+                },
+            )
         })
-        .map(|verdict| format!("{:?}:{}", verdict.kind, verdict.key))
-        .collect::<Vec<_>>();
-    stale.sort();
-    stale
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "ambiguous: {} public items named {name}: {locations}",
+        candidates.len()
+    )
 }
 
 fn item_evidence(
@@ -785,17 +884,35 @@ fn item_evidence(
             target.module
         );
     }
-    let (file, item) = facts
+    let matches = facts
         .syntax
         .files
         .iter()
         .filter(|file| target.matches(&file.module_path, &file.path))
-        .find_map(|file| {
+        .flat_map(|file| {
             file.pub_items
                 .iter()
-                .find(|item| item.module == item_module && item.name == name)
-                .map(|item| (file, item))
+                .filter(move |item| item.module == item_module && item.name == name)
+                .map(move |item| (file, item))
         })
+        .collect::<Vec<_>>();
+    if matches.len() > 1 {
+        let candidates = matches
+            .iter()
+            .map(|(file, item)| ItemCandidate {
+                path: file.path.clone(),
+                line: item.line,
+                owner: function_owner(file, &item.name, item.line),
+            })
+            .collect::<Vec<_>>();
+        bail!(
+            "atlas inspect --item `{key}` is {}",
+            ambiguity(key, &candidates)
+        );
+    }
+    let (file, item) = matches
+        .into_iter()
+        .next()
         .ok_or_else(|| anyhow::anyhow!("atlas inspect --item `{key}` is not a public item"))?;
     let references = facts
         .references
@@ -811,7 +928,8 @@ fn item_evidence(
     let matching = references.edges.iter().filter(|edge| {
         edge.kind == EdgeKind::Reference
             && edge.item == name
-            && target.matches(&edge.to, &edge.to_path)
+            && edge.to == item_module
+            && edge.to_path == file.path
     });
     let production_referrers = matching
         .clone()
@@ -1001,11 +1119,11 @@ fn print_providers(rows: &[Provider], top: usize) {
     println!("| module | sites | items |");
     println!("|---|---:|---|");
     for row in rows.iter().take(top) {
-        let items = if rows.len() <= top {
-            row.items.join(", ")
-        } else {
-            "—".to_owned()
-        };
+        let mut items = row.items.iter().take(top).cloned().collect::<Vec<_>>();
+        if row.items.len() > top {
+            items.push(format!("… {} more", row.items.len() - top));
+        }
+        let items = items.join(", ");
         println!("| {} | {} | {} |", row.module, row.sites, items);
     }
 }
@@ -1017,7 +1135,8 @@ fn print_footer(
     configured: bool,
     rules: &[RuleRow],
     unresolved: &[UnresolvedItem],
-    stale: &[String],
+    verdicts: &VerdictDiagnostics,
+    top: usize,
 ) {
     println!("\n# Footer\n");
     if !configured {
@@ -1027,7 +1146,7 @@ fn print_footer(
     } else {
         println!("| rule | provider | kind | direction | admitted |");
         println!("|---|---|---|---|---|");
-        for rule in rules {
+        for rule in rules.iter().take(top) {
             println!(
                 "| {} | {} | {} | {} | {} |",
                 rule.path.display(),
@@ -1036,6 +1155,9 @@ fn print_footer(
                 rule.direction,
                 rule.admitted.as_deref().unwrap_or("none")
             );
+        }
+        if rules.len() > top {
+            println!("\n_{} more target-rule rows omitted._", rules.len() - top);
         }
     }
     let parse_failures = facts
@@ -1051,8 +1173,15 @@ fn print_footer(
         .count();
     println!("\nparse failures: {parse_failures}");
     println!("unresolved definitions: {}", unresolved.len());
-    println!("stale item/pass-through verdicts: {}", stale.len());
-    for key in stale {
+    println!("stale item/pass-through verdicts: {}", verdicts.stale.len());
+    for key in &verdicts.stale {
+        println!("- `{key}`");
+    }
+    println!(
+        "ambiguous item/pass-through verdicts: {}",
+        verdicts.ambiguous.len()
+    );
+    for key in &verdicts.ambiguous {
         println!("- `{key}`");
     }
 }

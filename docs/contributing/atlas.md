@@ -30,10 +30,10 @@ cargo xtask atlas inspect --module crates/rimz/src/store --from sidebar::enrich 
 
 ## `diff` — prove one pass
 
-`diff --base <ref> --path <scope>` compares an indexed base with the indexed working tree: SLOC, boundary `esc`, call-site assembly, dependency sites, changed files, parse failures, and newly unresolved definitions. `--expect` instead reads the executable pass contract below.
+`diff --base <ref> --path <scope>` compares an indexed base with the indexed working tree: SLOC, boundary `esc`, call-site assembly, dependency sites, changed files, parse failures, and newly unresolved definitions. `--expect` instead reads the executable pass contract below; keep that ephemeral contract outside the worktree so it is not itself an out-of-scope change.
 
 ```sh
-cargo xtask atlas diff --expect pass-contract.toml
+cargo xtask atlas diff --expect /tmp/atlas-pass-contract.toml
 ```
 
 ## `conform` — keep the target
@@ -88,12 +88,12 @@ Every `[[verdict]]` needs a non-empty reason and a unique `(kind, key)`. Key for
 
 | kind | key |
 | --- | --- |
-| `item` | `module::path::Name`; methods use `module::path::Owner::method` |
-| `pass-through` | `module::path::Name`; methods use `module::path::Owner::method` |
+| `item` | `module::path::Name` |
+| `pass-through` | `module::path::Name` |
 | `guard` | normalized guard text printed as the family key |
 | `shape` | shape-family name printed as the family key |
 
-Shape and guard verdicts suppress matching families in `survey`; `inspect` displays item verdicts and stale item/pass-through keys. `conform` preserves verdicts but does not enforce their reasons.
+Method keys are name-only within their module. If several public items share that name, `inspect` reports the ambiguity with each definition and known owner rather than selecting one. Shape and guard verdicts suppress matching families in `survey`; `inspect` displays item verdicts and stale item/pass-through keys. `conform` preserves verdicts but does not enforce their reasons.
 
 ## Caveats
 
