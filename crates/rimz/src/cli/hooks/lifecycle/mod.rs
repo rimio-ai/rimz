@@ -182,10 +182,12 @@ pub(super) fn handle_lifecycle_hook(
             store,
             agent,
             recorded,
-            assistant_message.as_deref(),
-            questions,
-            &delivered,
-            transcript_run.as_ref(),
+            ConversationInput {
+                assistant_message: assistant_message.as_deref(),
+                questions,
+                delivered: &delivered,
+                run: transcript_run.as_ref(),
+            },
         ) {
             warn!(
                 agent = agent.spec().kind,

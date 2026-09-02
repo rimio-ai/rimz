@@ -38,6 +38,19 @@ fn recorded(signal: LifecycleSignal) -> RecordedLifecycle {
     }
 }
 
+fn conversation_input<'a>(
+    assistant_message: Option<&'a str>,
+    questions: &'a [rimz::transcript::AskQuestion],
+    delivered: &'a [rimz::message::MessageRecord],
+) -> ConversationInput<'a> {
+    ConversationInput {
+        assistant_message,
+        questions,
+        delivered,
+        run: None,
+    }
+}
+
 fn append_launched_agent(
     store: &Store,
     kind: &str,
@@ -117,10 +130,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
         &store,
         rimz::agents::definition_by_kind("claude").unwrap(),
         &started,
-        None,
-        &[],
-        &[first.clone(), second.clone()],
-        None,
+        conversation_input(None, &[], &[first.clone(), second.clone()]),
     )
     .unwrap();
 
@@ -145,10 +155,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
             errored: false,
             parked_on_background: false,
         }),
-        Some("done"),
-        &[],
-        &[],
-        None,
+        conversation_input(Some("done"), &[], &[]),
     )
     .unwrap();
     assert_eq!(
@@ -170,15 +177,16 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
             detail: None,
             native_key: None,
         }),
-        None,
-        &[rimz::transcript::AskQuestion {
-            question: "Ship?".to_owned(),
-            options: Vec::new(),
-            multi_select: false,
-            has_option_previews: false,
-        }],
-        &[],
-        None,
+        conversation_input(
+            None,
+            &[rimz::transcript::AskQuestion {
+                question: "Ship?".to_owned(),
+                options: Vec::new(),
+                multi_select: false,
+                has_option_previews: false,
+            }],
+            &[],
+        ),
     )
     .unwrap();
     assert_eq!(
@@ -198,10 +206,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
         &store,
         rimz::agents::definition_by_kind("claude").unwrap(),
         &hand_typed,
-        None,
-        &[],
-        &[],
-        None,
+        conversation_input(None, &[], &[]),
     )
     .unwrap();
     assert!(
@@ -256,10 +261,7 @@ fn subagent_report_records_as_a_hidden_harness_report() {
         &store,
         rimz::agents::definition_by_kind("claude").unwrap(),
         &started,
-        None,
-        &[],
-        std::slice::from_ref(&message),
-        None,
+        conversation_input(None, &[], std::slice::from_ref(&message)),
     )
     .unwrap();
 
@@ -300,10 +302,7 @@ fn mixed_submit_records_stray_text_as_direct_input() {
         &store,
         rimz::agents::definition_by_kind("claude").unwrap(),
         &started,
-        None,
-        &[],
-        std::slice::from_ref(&message),
-        None,
+        conversation_input(None, &[], std::slice::from_ref(&message)),
     )
     .unwrap();
 
@@ -341,10 +340,7 @@ fn user_message_header_records_prompt_without_envelope() {
         &store,
         rimz::agents::definition_by_kind("claude").unwrap(),
         &started,
-        None,
-        &[],
-        std::slice::from_ref(&message),
-        None,
+        conversation_input(None, &[], std::slice::from_ref(&message)),
     )
     .unwrap();
 
@@ -402,10 +398,10 @@ fn launched_child_brief_is_attributed_to_parent() {
         &store,
         rimz::agents::definition_by_kind("claude").unwrap(),
         &started,
-        None,
-        &[],
-        &[],
-        Some(&run),
+        ConversationInput {
+            run: Some(&run),
+            ..conversation_input(None, &[], &[])
+        },
     )
     .unwrap();
 
@@ -416,10 +412,10 @@ fn launched_child_brief_is_attributed_to_parent() {
         &store,
         rimz::agents::definition_by_kind("claude").unwrap(),
         &later,
-        None,
-        &[],
-        &[],
-        Some(&run),
+        ConversationInput {
+            run: Some(&run),
+            ..conversation_input(None, &[], &[])
+        },
     )
     .unwrap();
 
@@ -477,10 +473,7 @@ fn agent_message_does_not_answer_open_ask() {
         &store,
         rimz::agents::definition_by_kind("claude").unwrap(),
         &started,
-        None,
-        &[],
-        std::slice::from_ref(&message),
-        None,
+        conversation_input(None, &[], std::slice::from_ref(&message)),
     )
     .unwrap();
 
@@ -511,10 +504,7 @@ fn prompt_without_waiting_transition_does_not_answer_stale_ask() {
         &store,
         rimz::agents::definition_by_kind("claude").unwrap(),
         &started,
-        None,
-        &[],
-        &[],
-        None,
+        conversation_input(None, &[], &[]),
     )
     .unwrap();
 
@@ -547,10 +537,7 @@ fn idless_ask_does_not_capture_prompt() {
         &store,
         rimz::agents::definition_by_kind("claude").unwrap(),
         &started,
-        None,
-        &[],
-        &[],
-        None,
+        conversation_input(None, &[], &[]),
     )
     .unwrap();
 
@@ -589,10 +576,7 @@ fn prompt_after_answered_ask_starts_a_new_turn() {
         &store,
         rimz::agents::definition_by_kind("claude").unwrap(),
         &started,
-        None,
-        &[],
-        &[],
-        None,
+        conversation_input(None, &[], &[]),
     )
     .unwrap();
 
@@ -659,10 +643,7 @@ fn unheadered_system_batch_keeps_each_confirmed_message_causal() {
         &store,
         rimz::agents::definition_by_kind("claude").unwrap(),
         &started,
-        None,
-        &[],
-        &[first.clone(), second.clone()],
-        None,
+        conversation_input(None, &[], &[first.clone(), second.clone()]),
     )
     .unwrap();
 
@@ -731,10 +712,7 @@ fn cursor_response_hook_is_the_only_assistant_text_authority() {
             &store,
             rimz::agents::definition_by_kind("cursor").unwrap(),
             &stopped,
-            None,
-            &[],
-            &[],
-            None,
+            conversation_input(None, &[], &[]),
         )
         .unwrap();
     }
