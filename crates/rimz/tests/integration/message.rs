@@ -2702,7 +2702,7 @@ fn smart_compact_sends_the_configured_instruction() {
         let compact_at = lines
             .iter()
             .position(|line| {
-                line.ends_with("\taction\twrite-chars\t--pane-id\tterminal_3\t/compact")
+                line.ends_with("\taction\twrite-chars\t--pane-id\tterminal_3\t--\t/compact")
             })
             .expect("bare compact command trace");
         let enter_at = lines[compact_at + 1..]
@@ -3311,12 +3311,12 @@ fn is_enter_key(line: &str) -> bool {
 
 fn is_compact_command(line: &str) -> bool {
     line.contains(&format!(
-        "\taction\twrite-chars\t--pane-id\t{TRACE_PANE}\t/compact"
+        "\taction\twrite-chars\t--pane-id\t{TRACE_PANE}\t--\t/compact"
     ))
 }
 
 fn assert_compact_segments_then_enter(lines: &[String], instruction: &str) {
-    let write_prefix = format!("\taction\twrite-chars\t--pane-id\t{TRACE_PANE}\t");
+    let write_prefix = format!("\taction\twrite-chars\t--pane-id\t{TRACE_PANE}\t--\t");
     let head_at = lines
         .iter()
         .position(|line| line.ends_with(&format!("{write_prefix}/compact ")))

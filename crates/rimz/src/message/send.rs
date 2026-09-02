@@ -179,12 +179,16 @@ fn write_batch(
     match head.body {
         MessageBody::Command => {
             debug_assert_eq!(batch.len(), 1);
-            let (token, arguments) = command_segments(&head.text);
-            type_into_pane(pane_id, token)?;
-            if let Some(arguments) = arguments {
-                send.pause_raw_typing(head.body);
-                type_into_pane(pane_id, arguments)?;
-            }
+            let declared = crate::agents::spec_by_kind(target.kind.as_str())
+                .and_then(|spec| spec.launch.compact_command)
+                .map(|compact| compact.command);
+            type_command_with(
+                &head.text,
+                declared,
+                send,
+                |segment| type_into_pane(pane_id, segment),
+                sleep,
+            )?;
         }
         MessageBody::Prompt => {
             debug_assert!(
@@ -220,6 +224,23 @@ fn write_batch(
         press_pane_key(pane_id, NamedKey::Enter)?;
     }
     Ok(PaneWrite::Sent)
+}
+
+fn type_command_with<E>(
+    text: &str,
+    declared: Option<&str>,
+    send: &LiveSend,
+    mut write: impl FnMut(&str) -> std::result::Result<(), E>,
+    sleeper: impl FnOnce(Duration),
+) -> std::result::Result<(), E> {
+    let (token, arguments) =
+        declared.map_or((text, None), |command| command_segments(text, command));
+    write(token)?;
+    if let Some(arguments) = arguments {
+        send.pause_raw_typing_with(MessageBody::Command, sleeper);
+        write(arguments)?;
+    }
+    Ok(())
 }
 
 enum PaneWrite {
@@ -350,5 +371,33 @@ mod tests {
         assert!(!no_delay.pause_raw_typing_with(MessageBody::Command, |_| {
             panic!("zero command delay must not sleep");
         }));
+    }
+
+    #[test]
+    fn argument_write_is_paced_from_the_declared_command() {
+        let send = LiveSend {
+            force: false,
+            steer: false,
+            pacer: Pacer::new(Duration::ZERO),
+            command_submit_delay: Duration::from_millis(200),
+        };
+        let events = std::cell::RefCell::new(Vec::new());
+
+        type_command_with(
+            "/compact preserve context",
+            Some("/compact"),
+            &send,
+            |segment| {
+                events.borrow_mut().push(format!("write:{segment}"));
+                Ok::<_, ()>(())
+            },
+            |duration| events.borrow_mut().push(format!("sleep:{duration:?}")),
+        )
+        .expect("command writes");
+
+        assert_eq!(
+            events.into_inner(),
+            ["write:/compact ", "sleep:200ms", "write:preserve context"]
+        );
     }
 }

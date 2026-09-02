@@ -53,6 +53,23 @@ fn pane_short_name_uses_program_basename() {
 }
 
 #[cfg(unix)]
+#[test]
+fn send_keys_separates_dash_leading_text_from_zellij_options() {
+    let (temp, shim) = support::logging_shim();
+    let backend = ZellijBackend::with_program_for_test(&shim);
+    let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
+
+    backend
+        .send_keys(&pane, "- keep the open questions")
+        .expect("send literal text");
+
+    assert_eq!(
+        shim_log(&temp).trim(),
+        "action write-chars --pane-id terminal_7 -- - keep the open questions"
+    );
+}
+
+#[cfg(unix)]
 struct TestRoom {
     runtime_root: tempfile::TempDir,
     project_root: tempfile::TempDir,

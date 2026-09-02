@@ -11,12 +11,23 @@ use crate::store::snapshot::PaneAgent;
 
 #[test]
 fn command_segments_separate_arguments_from_the_slash_token() {
-    assert_eq!(command_segments("/compact"), ("/compact", None));
+    assert_eq!(command_segments("/compact", "/compact"), ("/compact", None));
     assert_eq!(
-        command_segments("/compact keep the open questions"),
+        command_segments("/compact keep the open questions", "/compact"),
         ("/compact ", Some("keep the open questions"))
     );
-    assert_eq!(command_segments("/compact "), ("/compact ", None));
+    assert_eq!(
+        command_segments("/compact ", "/compact"),
+        ("/compact ", None)
+    );
+    assert_eq!(
+        command_segments("/context compact", "/context compact"),
+        ("/context compact", None)
+    );
+    assert_eq!(
+        command_segments("/context compact keep it", "/context compact"),
+        ("/context compact ", Some("keep it"))
+    );
 }
 
 #[test]
