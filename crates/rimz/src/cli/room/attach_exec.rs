@@ -2,6 +2,7 @@
 
 use std::ffi::OsStr;
 use std::io::{IsTerminal, Write};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use rimz::ids::{MuxName, WorkspaceId};
@@ -18,6 +19,51 @@ const ATTACH_MARK: &[u8] = b"\x1b[32m\xe2\x9c\x93\x1b[39m";
 const ALTERNATE_SCROLL_SAVE: &[u8] = b"\x1b[?1007s";
 const ALTERNATE_SCROLL_DISABLE: &[u8] = b"\x1b[?1007l";
 const ALTERNATE_SCROLL_RESTORE: &[u8] = b"\x1b[?1007r";
+const ATTACH_PROCESS_POLL: Duration = Duration::from_millis(150);
+const REMOTE_ROOM_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+
+#[derive(Debug)]
+enum AttachOutcome {
+    Exited(std::process::ExitStatus),
+    RoomEnded,
+}
+
+struct RemoteRoomMonitor {
+    backend: Box<dyn rimz::mux::MuxBackend>,
+    session_name: String,
+    watchdog: rimz::remote::RemoteRoomWatchdog,
+}
+
+impl RemoteRoomMonitor {
+    fn new(mux: MuxName, session_name: &str) -> Self {
+        Self {
+            backend: rimz::mux::backend_for(mux),
+            session_name: session_name.to_owned(),
+            watchdog: rimz::remote::RemoteRoomWatchdog::default(),
+        }
+    }
+
+    fn poll(&mut self, elapsed: Duration) -> rimz::remote::RemoteRoomWatchdogAction {
+        use rimz::remote::RemoteRoomWatchdogAction;
+
+        let action = self.watchdog.advance(elapsed, None);
+        if !matches!(action, RemoteRoomWatchdogAction::Observe) {
+            return action;
+        }
+        let observation = observe_remote_room(self.backend.as_ref(), &self.session_name);
+        let action = self.watchdog.advance(elapsed, Some(observation));
+        if matches!(action, RemoteRoomWatchdogAction::RoomEnded)
+            && let Err(err) = self.backend.kill_session(&self.session_name)
+        {
+            tracing::warn!(
+                session = %self.session_name,
+                error = %err,
+                "remote room ended but its leftover mux session could not be removed",
+            );
+        }
+        action
+    }
+}
 
 pub(super) fn run_attach_action(
     spec: &rimz::mux::CommandSpec,
@@ -38,19 +84,37 @@ pub(super) fn run_attach_action(
         }
         AttachAction::Launch => {
             reap_remote_zellij_predecessors(mux, session_name, workspace_id);
-            launch_attach_command_with_bracket(
+            let supervised = std::env::var_os(rimz::remote::REMOTE_SUPERVISED_ENV)
+                .is_some_and(|marker| !marker.is_empty());
+            let mut monitor = supervised.then(|| RemoteRoomMonitor::new(mux, session_name));
+            let outcome = launch_attach_command_with_bracket(
                 spec,
                 alternate_scroll_bracket_enabled(
                     std::env::var_os(rimz::remote::OUTER_SCROLL_BRACKET_ENV).as_deref(),
                 ),
+                |elapsed| {
+                    monitor.as_mut().map_or(
+                        rimz::remote::RemoteRoomWatchdogAction::Wait(Duration::MAX),
+                        |monitor| monitor.poll(elapsed),
+                    )
+                },
             )?;
-            let supervised = std::env::var_os(rimz::remote::REMOTE_SUPERVISED_ENV)
-                .is_some_and(|marker| !marker.is_empty());
-            let liveness = supervised
-                .then(|| rimz::mux::backend_for(mux).session_liveness(session_name))
-                .and_then(Result::ok);
-            if let Some(code) = remote_session_lost_exit(supervised, liveness) {
-                std::process::exit(code);
+            let status = match outcome {
+                AttachOutcome::RoomEnded => {
+                    std::process::exit(rimz::remote::REMOTE_SESSION_LOST_EXIT)
+                }
+                AttachOutcome::Exited(status) => status,
+            };
+            let observation = supervised.then(|| {
+                monitor.map_or(rimz::remote::RemoteRoomObservation::Unknown, |monitor| {
+                    observe_remote_room(monitor.backend.as_ref(), session_name)
+                })
+            });
+            if remote_session_lost_exit(supervised, observation) {
+                std::process::exit(rimz::remote::REMOTE_SESSION_LOST_EXIT);
+            }
+            if !status.success() {
+                std::process::exit(status.code().unwrap_or(1));
             }
             Ok(())
         }
@@ -59,13 +123,46 @@ pub(super) fn run_attach_action(
 
 fn remote_session_lost_exit(
     supervised: bool,
-    liveness: Option<rimz::mux::SessionLiveness>,
-) -> Option<i32> {
-    match (supervised, liveness) {
-        (true, Some(rimz::mux::SessionLiveness::Exited | rimz::mux::SessionLiveness::Absent)) => {
-            Some(rimz::remote::REMOTE_SESSION_LOST_EXIT)
-        }
-        _ => None,
+    observation: Option<rimz::remote::RemoteRoomObservation>,
+) -> bool {
+    supervised
+        && matches!(
+            observation,
+            Some(rimz::remote::RemoteRoomObservation::NoWorkPanes)
+        )
+}
+
+fn observe_remote_room(
+    backend: &dyn rimz::mux::MuxBackend,
+    session_name: &str,
+) -> rimz::remote::RemoteRoomObservation {
+    let listing = backend.list_panes(rimz::mux::PaneListOptions {
+        session_name: Some(session_name.to_owned()),
+        consistency: rimz::mux::PaneReadConsistency::RequireAuthoritative,
+        command_timeout: Some(REMOTE_ROOM_PROBE_TIMEOUT),
+        ..Default::default()
+    });
+    match listing {
+        Ok(listing) => pane_roster_observation(&listing.panes),
+        Err(_) => match backend.session_liveness(session_name) {
+            Ok(rimz::mux::SessionLiveness::Exited | rimz::mux::SessionLiveness::Absent) => {
+                rimz::remote::RemoteRoomObservation::NoWorkPanes
+            }
+            Ok(rimz::mux::SessionLiveness::Live) | Err(_) => {
+                rimz::remote::RemoteRoomObservation::Unknown
+            }
+        },
+    }
+}
+
+fn pane_roster_observation(panes: &[rimz::pane::PaneRef]) -> rimz::remote::RemoteRoomObservation {
+    if panes
+        .iter()
+        .any(|pane| !pane.is_floating && !pane.is_rimz_sidebar())
+    {
+        rimz::remote::RemoteRoomObservation::WorkPanePresent
+    } else {
+        rimz::remote::RemoteRoomObservation::NoWorkPanes
     }
 }
 
@@ -166,28 +263,33 @@ pub(super) fn report_already_inside(
 }
 
 pub(crate) fn launch_attach_command(spec: &rimz::mux::CommandSpec) -> Result<()> {
-    launch_attach_command_with_bracket(spec, true)
+    let outcome = launch_attach_command_with_bracket(spec, true, |_| {
+        rimz::remote::RemoteRoomWatchdogAction::Wait(Duration::MAX)
+    })?;
+    if let AttachOutcome::Exited(status) = outcome
+        && !status.success()
+    {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    Ok(())
 }
 
 fn launch_attach_command_with_bracket(
     spec: &rimz::mux::CommandSpec,
     bracket_alternate_scroll: bool,
-) -> Result<()> {
+    mut poll_room: impl FnMut(Duration) -> rimz::remote::RemoteRoomWatchdogAction,
+) -> Result<AttachOutcome> {
     let mut command = attach_command(spec);
     let stdout_is_terminal = std::io::stdout().is_terminal();
     let mut stdout = std::io::stdout().lock();
-    let status = run_attach_command(
+    run_attach_command(
         spec,
         &mut stdout,
         stdout_is_terminal,
         std::env::var_os(rimz::remote::ATTACH_MARK_ENV).as_deref(),
         bracket_alternate_scroll,
-        |_| run_attach_process(&mut command),
-    )?;
-    if !status.success() {
-        std::process::exit(status.code().unwrap_or(1));
-    }
-    Ok(())
+        |_| run_attach_process(&mut command, &mut poll_room),
+    )
 }
 
 fn run_attach_command(
@@ -196,8 +298,8 @@ fn run_attach_command(
     stdout_is_terminal: bool,
     attach_mark: Option<&OsStr>,
     bracket_alternate_scroll: bool,
-    run: impl FnOnce(&mut dyn Write) -> std::io::Result<std::process::ExitStatus>,
-) -> Result<std::process::ExitStatus> {
+    run: impl FnOnce(&mut dyn Write) -> std::io::Result<AttachOutcome>,
+) -> Result<AttachOutcome> {
     if bracket_alternate_scroll {
         emit_terminal_bytes(stdout, stdout_is_terminal, ALTERNATE_SCROLL_SAVE);
         emit_terminal_bytes(stdout, stdout_is_terminal, ALTERNATE_SCROLL_DISABLE);
@@ -213,20 +315,40 @@ fn run_attach_command(
 #[cfg(not(unix))]
 fn run_attach_process(
     command: &mut std::process::Command,
-) -> std::io::Result<std::process::ExitStatus> {
-    command.status()
+    poll_room: &mut dyn FnMut(Duration) -> rimz::remote::RemoteRoomWatchdogAction,
+) -> std::io::Result<AttachOutcome> {
+    let started = Instant::now();
+    let mut child = command.spawn()?;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(AttachOutcome::Exited(status));
+        }
+        match poll_room(started.elapsed()) {
+            rimz::remote::RemoteRoomWatchdogAction::RoomEnded => {
+                child.kill()?;
+                child.wait()?;
+                return Ok(AttachOutcome::RoomEnded);
+            }
+            rimz::remote::RemoteRoomWatchdogAction::Wait(delay) => {
+                std::thread::sleep(delay.min(ATTACH_PROCESS_POLL));
+            }
+            rimz::remote::RemoteRoomWatchdogAction::Observe => {}
+        }
+    }
 }
 
 #[cfg(unix)]
 fn run_attach_process(
     command: &mut std::process::Command,
-) -> std::io::Result<std::process::ExitStatus> {
+    poll_room: &mut dyn FnMut(Duration) -> rimz::remote::RemoteRoomWatchdogAction,
+) -> std::io::Result<AttachOutcome> {
     use nix::errno::Errno;
     use nix::sys::signal::{Signal, kill, raise};
     use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
     use nix::unistd::Pid;
     use std::os::unix::process::ExitStatusExt;
 
+    let started = Instant::now();
     let child = command.spawn()?;
     let pid = Pid::from_raw(i32::try_from(child.id()).map_err(|_| {
         std::io::Error::new(
@@ -235,13 +357,17 @@ fn run_attach_process(
         )
     })?);
     loop {
-        match waitpid(pid, Some(WaitPidFlag::WUNTRACED)) {
+        match waitpid(pid, Some(WaitPidFlag::WNOHANG | WaitPidFlag::WUNTRACED)) {
             Ok(WaitStatus::Exited(_, code)) => {
-                return Ok(std::process::ExitStatus::from_raw(code << 8));
+                return Ok(AttachOutcome::Exited(std::process::ExitStatus::from_raw(
+                    code << 8,
+                )));
             }
             Ok(WaitStatus::Signaled(_, signal, dumped_core)) => {
                 let raw = signal as i32 | if dumped_core { 0x80 } else { 0 };
-                return Ok(std::process::ExitStatus::from_raw(raw));
+                return Ok(AttachOutcome::Exited(std::process::ExitStatus::from_raw(
+                    raw,
+                )));
             }
             Ok(WaitStatus::Stopped(_, _)) => {
                 // tmux's suspend-client stops only itself. Mirror that stop so
@@ -253,6 +379,26 @@ fn run_attach_process(
                     Err(err) => return Err(errno_io(err)),
                 }
             }
+            Ok(WaitStatus::StillAlive) => match poll_room(started.elapsed()) {
+                rimz::remote::RemoteRoomWatchdogAction::RoomEnded => {
+                    match kill(pid, Signal::SIGKILL) {
+                        Ok(()) | Err(Errno::ESRCH) => {}
+                        Err(err) => return Err(errno_io(err)),
+                    }
+                    loop {
+                        match waitpid(pid, None) {
+                            Ok(_) | Err(Errno::ECHILD) => break,
+                            Err(Errno::EINTR) => {}
+                            Err(err) => return Err(errno_io(err)),
+                        }
+                    }
+                    return Ok(AttachOutcome::RoomEnded);
+                }
+                rimz::remote::RemoteRoomWatchdogAction::Wait(delay) => {
+                    std::thread::sleep(delay.min(ATTACH_PROCESS_POLL));
+                }
+                rimz::remote::RemoteRoomWatchdogAction::Observe => {}
+            },
             Ok(_) => {}
             Err(Errno::EINTR) => {}
             Err(err) => return Err(errno_io(err)),
@@ -373,24 +519,41 @@ mod tests {
 
     #[test]
     fn remote_session_loss_translates_only_missing_sessions() {
-        use rimz::mux::SessionLiveness;
+        use rimz::remote::RemoteRoomObservation;
+
+        assert!(!remote_session_lost_exit(
+            true,
+            Some(RemoteRoomObservation::WorkPanePresent)
+        ));
+        assert!(remote_session_lost_exit(
+            true,
+            Some(RemoteRoomObservation::NoWorkPanes)
+        ));
+        assert!(!remote_session_lost_exit(true, None));
+        assert!(!remote_session_lost_exit(
+            false,
+            Some(RemoteRoomObservation::NoWorkPanes)
+        ));
+    }
+
+    #[test]
+    fn remote_room_roster_ignores_sidebar_and_floating_panes() {
+        let mut sidebar =
+            rimz::pane::PaneRef::from_id("tmux:%1".parse().expect("normalized sidebar pane id"));
+        sidebar.command = Some(rimz::pane::SIDEBAR_CHROME_TITLE.to_owned());
+        let mut floating =
+            rimz::pane::PaneRef::from_id("tmux:%2".parse().expect("normalized floating pane id"));
+        floating.is_floating = true;
+        let work =
+            rimz::pane::PaneRef::from_id("tmux:%3".parse().expect("normalized work pane id"));
 
         assert_eq!(
-            remote_session_lost_exit(true, Some(SessionLiveness::Live)),
-            None
+            pane_roster_observation(&[sidebar.clone(), floating]),
+            rimz::remote::RemoteRoomObservation::NoWorkPanes
         );
         assert_eq!(
-            remote_session_lost_exit(true, Some(SessionLiveness::Exited)),
-            Some(rimz::remote::REMOTE_SESSION_LOST_EXIT)
-        );
-        assert_eq!(
-            remote_session_lost_exit(true, Some(SessionLiveness::Absent)),
-            Some(rimz::remote::REMOTE_SESSION_LOST_EXIT)
-        );
-        assert_eq!(remote_session_lost_exit(true, None), None);
-        assert_eq!(
-            remote_session_lost_exit(false, Some(SessionLiveness::Absent)),
-            None
+            pane_roster_observation(&[sidebar, work]),
+            rimz::remote::RemoteRoomObservation::WorkPanePresent
         );
     }
 
@@ -403,7 +566,9 @@ mod tests {
         let mut output = Vec::new();
         let status = run_attach_command(&spec, &mut output, true, None, true, |stdout| {
             stdout.write_all(b"child")?;
-            Ok(std::process::ExitStatus::from_raw(23 << 8))
+            Ok(AttachOutcome::Exited(std::process::ExitStatus::from_raw(
+                23 << 8,
+            )))
         })
         .expect("child status");
 
@@ -417,7 +582,31 @@ mod tests {
             ]
             .concat(),
         );
+        let AttachOutcome::Exited(status) = status else {
+            panic!("expected child exit")
+        };
         assert_eq!(status.code(), Some(23));
+    }
+
+    #[test]
+    fn attach_restores_terminal_bracket_when_the_room_ends() {
+        let spec = rimz::mux::CommandSpec::new("mux");
+        let mut output = Vec::new();
+        let outcome = run_attach_command(&spec, &mut output, true, None, true, |_| {
+            Ok(AttachOutcome::RoomEnded)
+        })
+        .expect("room-ended outcome");
+
+        assert!(matches!(outcome, AttachOutcome::RoomEnded));
+        assert_eq!(
+            output,
+            [
+                ALTERNATE_SCROLL_SAVE,
+                ALTERNATE_SCROLL_DISABLE,
+                ALTERNATE_SCROLL_RESTORE,
+            ]
+            .concat(),
+        );
     }
 
     #[test]

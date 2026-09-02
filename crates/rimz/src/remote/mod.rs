@@ -78,9 +78,58 @@ pub const REMOTE_VERSION_INCOMPATIBLE_EXIT: i32 = 66;
 /// The guarded snippet refused a remote workspace path that does not exist.
 pub const REMOTE_PATH_MISSING_EXIT: i32 = 67;
 
-/// A supervised remote mux client exited successfully, but its session no
-/// longer exists.
+/// A supervised remote room no longer has a live work pane.
 pub const REMOTE_SESSION_LOST_EXIT: i32 = 68;
+
+/// Cadence for checking whether a supervised remote room still has work.
+pub const REMOTE_ROOM_WATCHDOG_INTERVAL: Duration = Duration::from_secs(2);
+
+/// One bounded observation of a supervised remote room's pane roster.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemoteRoomObservation {
+    WorkPanePresent,
+    NoWorkPanes,
+    Unknown,
+}
+
+/// The next effect requested by [`RemoteRoomWatchdog`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemoteRoomWatchdogAction {
+    Wait(Duration),
+    Observe,
+    RoomEnded,
+}
+
+/// Pure timing and arming policy for the remote attach wrapper's room probe.
+#[derive(Debug, Default)]
+pub struct RemoteRoomWatchdog {
+    work_pane_seen: bool,
+    next_observation: Duration,
+}
+
+impl RemoteRoomWatchdog {
+    pub fn advance(
+        &mut self,
+        elapsed: Duration,
+        observation: Option<RemoteRoomObservation>,
+    ) -> RemoteRoomWatchdogAction {
+        if let Some(observation) = observation {
+            match observation {
+                RemoteRoomObservation::WorkPanePresent => self.work_pane_seen = true,
+                RemoteRoomObservation::NoWorkPanes if self.work_pane_seen => {
+                    return RemoteRoomWatchdogAction::RoomEnded;
+                }
+                RemoteRoomObservation::NoWorkPanes | RemoteRoomObservation::Unknown => {}
+            }
+            self.next_observation = elapsed.saturating_add(REMOTE_ROOM_WATCHDOG_INTERVAL);
+        }
+        if elapsed >= self.next_observation {
+            RemoteRoomWatchdogAction::Observe
+        } else {
+            RemoteRoomWatchdogAction::Wait(self.next_observation - elapsed)
+        }
+    }
+}
 
 /// What the part after the `:` names on the remote host.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -942,9 +991,6 @@ pub enum Verdict {
     },
     /// The link dropped on an established session — enter background recovery.
     Retry,
-    /// A settled remote session ended ambiguously — ask before recreating the
-    /// room, then route through the observed SSH state.
-    OfferReattach,
     /// SSH is still healthy, but an established multiplexer client ended
     /// abnormally — attach a replacement over the existing connection.
     Reattach,
@@ -978,14 +1024,7 @@ impl ReconnectState {
                 | REMOTE_VERSION_INCOMPATIBLE_EXIT
                 | REMOTE_PATH_MISSING_EXIT),
             ) => Verdict::Fatal { code },
-            Some(REMOTE_SESSION_LOST_EXIT)
-                if evidence.is_some_and(|(_, lived_past_gatetime)| lived_past_gatetime) =>
-            {
-                Verdict::OfferReattach
-            }
-            Some(REMOTE_SESSION_LOST_EXIT) => Verdict::Fatal {
-                code: REMOTE_SESSION_LOST_EXIT,
-            },
+            Some(REMOTE_SESSION_LOST_EXIT) => Verdict::CleanExit,
             Some(SSH_TRANSPORT_EXIT) if self.established => Verdict::Retry,
             Some(_)
                 if self.established
