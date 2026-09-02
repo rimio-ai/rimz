@@ -171,16 +171,26 @@ pub(super) fn latest_native_ask_id(
         .and_then(|entry| entry.id)
 }
 
+pub(super) struct ConversationInput<'a> {
+    pub(super) assistant_message: Option<&'a str>,
+    pub(super) questions: &'a [rimz::transcript::AskQuestion],
+    pub(super) delivered: &'a [rimz::message::MessageRecord],
+    pub(super) run: Option<&'a rimz::harness::run::RunRecord>,
+}
+
 pub(super) fn record_conversation(
     workspace: &ResolvedWorkspace,
     store: &Store,
     agent: &AgentDefinition,
     recorded: &RecordedLifecycle,
-    assistant_message: Option<&str>,
-    questions: &[rimz::transcript::AskQuestion],
-    delivered: &[rimz::message::MessageRecord],
-    run: Option<&rimz::harness::run::RunRecord>,
+    input: ConversationInput<'_>,
 ) -> rimz::transcript::Result<()> {
+    let ConversationInput {
+        assistant_message,
+        questions,
+        delivered,
+        run,
+    } = input;
     let observation = &recorded.observation;
     if observation.parent_agent_id.is_some() {
         return Ok(());
