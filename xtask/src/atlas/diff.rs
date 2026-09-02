@@ -8,7 +8,7 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use super::conform::{self, Direction};
-use super::contract::{AssemblyExpectation, PassContract};
+use super::contract::{AssemblyExpectation, DeleteExpectation, EscExpectation, PassContract};
 use super::facts::{Facets, Facts};
 use super::inspect;
 use super::modules::{
@@ -28,11 +28,11 @@ const USAGE: &str =
     "cargo xtask atlas diff (--base <ref> --path <scope> | --expect <contract.toml>) [--top N]
 
 Proves structural movement from an indexed base revision to the indexed working
-tree. --expect supplies the base and one or more paths from a v1 pass contract.
+tree. --expect supplies the base and one or more paths from a v2 pass contract.
 
   --base <ref>       base revision for an exploratory diff
   --path <scope>     root-relative boundary for an exploratory diff
-  --expect <file>    v1 executable pass contract
+  --expect <file>    v1 or v2 executable pass contract
   --top N            detail rows shown per section (default 20)";
 
 const SECTIONS: &[&str] = &[
@@ -136,6 +136,25 @@ struct AssemblyCheck {
     current: usize,
 }
 
+#[derive(Clone, Debug)]
+struct EscCheck {
+    expectation: EscExpectation,
+    base: usize,
+    current: usize,
+}
+
+#[derive(Clone, Debug)]
+struct DeleteCheck {
+    expectation: DeleteExpectation,
+    current: Option<DefinitionSite>,
+}
+
+#[derive(Clone, Debug)]
+struct DefinitionSite {
+    path: PathBuf,
+    line: usize,
+}
+
 #[derive(Clone, Debug, Serialize)]
 struct ExpectationRow {
     assertion: String,
@@ -197,19 +216,24 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
             ..Facets::default()
         },
     )?;
-    let (base, paths, contract) = match &args.input {
+    let (base, exploratory_paths, contract_path) = match &args.input {
         Input::Base { base, path } => (base.clone(), vec![path.clone()], None),
-        Input::Expect(path) => {
-            let contract = super::contract::load(root, path, &current.syntax.files)?;
-            (
-                contract.base.clone(),
-                contract.paths.clone(),
-                Some(contract),
-            )
-        }
+        Input::Expect(path) => (
+            super::contract::read_base(path)?,
+            Vec::new(),
+            Some(path.as_path()),
+        ),
     };
     let base_commit = resolve_base(root, &base)?;
     let base_facts = Facts::load_at(root, Path::new("."), &base_commit, true)?;
+    let contract = contract_path
+        .map(|path| {
+            super::contract::load(root, path, &current.syntax.files, &base_facts.syntax.files)
+        })
+        .transpose()?;
+    let paths = contract
+        .as_ref()
+        .map_or(exploratory_paths, |contract| contract.paths.clone());
     let report = build_report(root, base, paths, contract.as_ref(), &base_facts, &current)?;
     let rendered = if args.output.json {
         render_json(&report, &args.output)?
@@ -361,11 +385,34 @@ fn build_report(
     } else {
         Vec::new()
     };
+    let esc_checks = contract.map_or_else(Vec::new, |contract| {
+        contract
+            .esc
+            .iter()
+            .map(|expectation| EscCheck {
+                expectation: expectation.clone(),
+                base: boundary_surface(base, &expectation.path).items.len(),
+                current: boundary_surface(current, &expectation.path).items.len(),
+            })
+            .collect()
+    });
+    let delete_checks = contract.map_or_else(Vec::new, |contract| {
+        contract
+            .delete
+            .iter()
+            .map(|expectation| DeleteCheck {
+                expectation: expectation.clone(),
+                current: definition_site(&current.syntax.files, &expectation.item),
+            })
+            .collect()
+    });
     let expectations = contract.map_or_else(Vec::new, |contract| {
         expectation_rows(
             contract,
             production.delta,
             &assembly_checks,
+            &esc_checks,
+            &delete_checks,
             &changed_outside,
             evidence.complete(),
         )
@@ -426,34 +473,36 @@ fn size_delta(base: &Facts, current: &Facts, paths: &[PathBuf], tests: bool) -> 
 fn boundary_surfaces(facts: &Facts, paths: &[PathBuf]) -> Vec<BoundarySurface> {
     paths
         .iter()
-        .map(|scope| {
-            let files = facts
-                .syntax
-                .files
-                .iter()
-                .filter(|file| in_boundary(&file.path, scope))
-                .collect::<Vec<_>>();
-            let entry = if scope.extension().is_some_and(|extension| extension == "rs") {
-                scope.clone()
-            } else {
-                scope.join("mod.rs")
-            };
-            let module = crate_module_for_path(&entry);
-            let items = escaping_items_for_boundary(&files, &module, &facts.mod_index)
-                .into_iter()
-                .map(|item| SurfaceItem {
-                    scope: scope.clone(),
-                    id: item.id,
-                    path: item.path,
-                    line: item.line,
-                })
-                .collect();
-            BoundarySurface {
-                scope: scope.clone(),
-                items,
-            }
-        })
+        .map(|scope| boundary_surface(facts, scope))
         .collect()
+}
+
+fn boundary_surface(facts: &Facts, scope: &Path) -> BoundarySurface {
+    let files = facts
+        .syntax
+        .files
+        .iter()
+        .filter(|file| in_boundary(&file.path, scope))
+        .collect::<Vec<_>>();
+    let entry = if scope.extension().is_some_and(|extension| extension == "rs") {
+        scope.to_path_buf()
+    } else {
+        scope.join("mod.rs")
+    };
+    let module = crate_module_for_path(&entry);
+    let items = escaping_items_for_boundary(&files, &module, &facts.mod_index)
+        .into_iter()
+        .map(|item| SurfaceItem {
+            scope: scope.to_path_buf(),
+            id: item.id,
+            path: item.path,
+            line: item.line,
+        })
+        .collect();
+    BoundarySurface {
+        scope: scope.to_path_buf(),
+        items,
+    }
 }
 
 fn surface_changes(left: &[BoundarySurface], right: &[BoundarySurface]) -> Vec<SurfaceItem> {
@@ -773,10 +822,25 @@ fn split_changed_paths(
         .partition(|path| in_paths(path, paths))
 }
 
+fn definition_site(files: &[super::syntax::FileSyntax], key: &str) -> Option<DefinitionSite> {
+    let (module, name) = key.rsplit_once("::")?;
+    files.iter().find_map(|file| {
+        file.pub_items
+            .iter()
+            .find(|item| item.module == module && item.name == name)
+            .map(|item| DefinitionSite {
+                path: file.path.clone(),
+                line: item.line,
+            })
+    })
+}
+
 fn expectation_rows(
     contract: &PassContract,
     production_delta: i64,
     assembly: &[AssemblyCheck],
+    esc: &[EscCheck],
+    delete: &[DeleteCheck],
     changed_outside: &[PathBuf],
     evidence_complete: bool,
 ) -> Vec<ExpectationRow> {
@@ -788,6 +852,33 @@ fn expectation_rows(
             contract.max_production_sloc_delta
         ),
     }];
+    rows.extend(esc.iter().map(|check| {
+        let landed = check.current <= check.expectation.max;
+        let excess = check.current.saturating_sub(check.expectation.max);
+        ExpectationRow {
+            assertion: format!("esc `{}`", check.expectation.path.display()),
+            landed,
+            detail: format!(
+                "base {} → current {} → max {}{}",
+                check.base,
+                check.current,
+                check.expectation.max,
+                if landed {
+                    String::new()
+                } else {
+                    format!("; excess {excess}")
+                }
+            ),
+        }
+    }));
+    rows.extend(delete.iter().map(|check| ExpectationRow {
+        assertion: format!("delete `{}`", check.expectation.item),
+        landed: check.current.is_none(),
+        detail: check.current.as_ref().map_or_else(
+            || "deleted".to_owned(),
+            |site| format!("still defined at {}:{}", site.path.display(), site.line),
+        ),
+    }));
     rows.extend(assembly.iter().map(|check| ExpectationRow {
         assertion: format!(
             "assembly {} → {}",
@@ -1036,42 +1127,10 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
 
     if output_args.wants("files") {
         markdown_line(&mut output, format_args!("\n## Files\n"));
-        markdown_line(&mut output, format_args!("| location | path |"));
-        markdown_line(&mut output, format_args!("|---|---|"));
-        if report.enforcing {
-            for (location, path) in report
-                .changed_inside
-                .iter()
-                .map(|path| ("inside", path))
-                .chain(report.changed_outside.iter().map(|path| ("outside", path)))
-                .take(top)
-            {
-                markdown_line(
-                    &mut output,
-                    format_args!("| {location} | `{}` |", path.display()),
-                );
-            }
-            write_omitted(
-                &mut output,
-                report.changed_inside.len() + report.changed_outside.len(),
-                top,
-            );
-        } else {
-            for path in report.changed_inside.iter().take(top) {
-                markdown_line(
-                    &mut output,
-                    format_args!("| inside | `{}` |", path.display()),
-                );
-            }
-            write_omitted(&mut output, report.changed_inside.len(), top);
-            markdown_line(
-                &mut output,
-                format_args!(
-                    "{} changed paths outside the scope.",
-                    report.changed_outside.len()
-                ),
-            );
-        }
+        markdown_line(&mut output, format_args!("| location | group | path |"));
+        markdown_line(&mut output, format_args!("|---|---|---|"));
+        write_changed_paths(&mut output, "inside", &report.changed_inside, top);
+        write_changed_paths(&mut output, "outside", &report.changed_outside, top);
     }
 
     if output_args.wants("evidence") {
@@ -1256,6 +1315,56 @@ fn write_omitted(output: &mut String, total: usize, top: usize) {
     }
 }
 
+fn write_changed_paths(output: &mut String, location: &str, paths: &[PathBuf], top: usize) {
+    for (group, path) in grouped_paths(paths).into_iter().take(top) {
+        markdown_line(
+            output,
+            format_args!("| {location} | `{group}` | `{}` |", path.display()),
+        );
+    }
+    if paths.len() > top {
+        markdown_line(
+            output,
+            format_args!("\n_{} more omitted._", paths.len() - top),
+        );
+    }
+}
+
+fn grouped_paths(paths: &[PathBuf]) -> Vec<(String, &Path)> {
+    let mut grouped = paths
+        .iter()
+        .map(|path| (changed_path_group(path), path.as_path()))
+        .collect::<Vec<_>>();
+    grouped.sort_by(|(left_group, left_path), (right_group, right_path)| {
+        left_group
+            .cmp(right_group)
+            .then_with(|| left_path.cmp(right_path))
+    });
+    grouped
+}
+
+fn changed_path_group(path: &Path) -> String {
+    let components = path
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(component) => Some(component.to_string_lossy()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if let [crates, rimz, src, module, ..] = components.as_slice()
+        && crates == "crates"
+        && rimz == "rimz"
+        && src == "src"
+    {
+        return module.strip_suffix(".rs").unwrap_or(module).to_owned();
+    }
+    match components.as_slice() {
+        [_] => "(root)".to_owned(),
+        [first, ..] => format!("{first}/"),
+        [] => "(root)".to_owned(),
+    }
+}
+
 fn markdown_line(output: &mut String, arguments: fmt::Arguments<'_>) {
     // String's `fmt::Write` implementation is infallible.
     output
@@ -1415,7 +1524,7 @@ mod tests {
             base: 4,
             current: 4,
         }];
-        let rows = expectation_rows(&contract, -2, &checks, &[], true);
+        let rows = expectation_rows(&contract, -2, &checks, &[], &[], &[], true);
 
         assert!(!rows[1].landed);
         assert!(rows[1].detail.contains("4 → 4"));
@@ -1430,8 +1539,55 @@ mod tests {
             current: 2,
         }];
 
-        assert!(!expectation_rows(&contract, -2, &checks, &[], true)[0].landed);
-        assert!(expectation_rows(&contract, -3, &checks, &[], true)[0].landed);
+        assert!(!expectation_rows(&contract, -2, &checks, &[], &[], &[], true)[0].landed);
+        assert!(expectation_rows(&contract, -3, &checks, &[], &[], &[], true)[0].landed);
+    }
+
+    #[test]
+    fn diff_expect_rejects_esc_excess() {
+        let mut contract = contract(-1);
+        contract.esc.push(EscExpectation {
+            path: PathBuf::from("src/message"),
+            max: 2,
+        });
+        let checks = [EscCheck {
+            expectation: contract.esc[0].clone(),
+            base: 1,
+            current: 3,
+        }];
+
+        let rows = expectation_rows(&contract, -2, &[], &checks, &[], &[], true);
+        let row = rows
+            .iter()
+            .find(|row| row.assertion == "esc `src/message`")
+            .unwrap();
+
+        assert!(!row.landed);
+        assert_eq!(row.detail, "base 1 → current 3 → max 2; excess 1");
+    }
+
+    #[test]
+    fn diff_expect_rejects_still_defined_delete_item() {
+        let mut contract = contract(-1);
+        contract.delete.push(DeleteExpectation {
+            item: "message::OLD".to_owned(),
+        });
+        let checks = [DeleteCheck {
+            expectation: contract.delete[0].clone(),
+            current: Some(DefinitionSite {
+                path: PathBuf::from("src/message.rs"),
+                line: 27,
+            }),
+        }];
+
+        let rows = expectation_rows(&contract, -2, &[], &[], &checks, &[], true);
+        let row = rows
+            .iter()
+            .find(|row| row.assertion == "delete `message::OLD`")
+            .unwrap();
+
+        assert!(!row.landed);
+        assert_eq!(row.detail, "still defined at src/message.rs:27");
     }
 
     #[test]
@@ -1447,7 +1603,7 @@ mod tests {
             base: 4,
             current: 2,
         }];
-        let rows = expectation_rows(&contract, -2, &checks, &outside, true);
+        let rows = expectation_rows(&contract, -2, &checks, &[], &[], &outside, true);
 
         assert_eq!(outside, [PathBuf::from("README.md")]);
         assert!(
@@ -1567,6 +1723,25 @@ mod tests {
         assert_eq!(leaf.len(), 1);
     }
 
+    #[test]
+    fn changed_paths_are_grouped_and_bounded_for_markdown() {
+        let paths = vec![
+            PathBuf::from("README.md"),
+            PathBuf::from("docs/guide/start.md"),
+            PathBuf::from("crates/rimz/src/message/deliver.rs"),
+            PathBuf::from("xtask/src/atlas/diff.rs"),
+        ];
+        let mut output = String::new();
+
+        write_changed_paths(&mut output, "outside", &paths, 3);
+
+        assert!(output.contains("| outside | `(root)` | `README.md` |"));
+        assert!(output.contains("| outside | `docs/` | `docs/guide/start.md` |"));
+        assert!(output.contains("| outside | `message` | `crates/rimz/src/message/deliver.rs` |"));
+        assert!(!output.contains("xtask/src/atlas/diff.rs"));
+        assert!(output.contains("_1 more omitted._"));
+    }
+
     fn contract(max_production_sloc_delta: i64) -> PassContract {
         PassContract {
             version: 1,
@@ -1578,6 +1753,8 @@ mod tests {
                 to: "target".to_owned(),
                 max_items: 3,
             }],
+            esc: Vec::new(),
+            delete: Vec::new(),
         }
     }
 
