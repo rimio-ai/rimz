@@ -16,6 +16,7 @@ mod index;
 mod inspect;
 mod metrics;
 mod modules;
+mod output;
 mod rank;
 mod references;
 mod shapes;

@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use serde::Serialize;
 
 use super::facts::{Facts, FileSize};
 use super::history;
@@ -20,7 +21,7 @@ const HOT_PACE: f64 = 1.5;
 
 type Size = FileSize;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub(super) struct Row {
     pub(super) module: String,
     pub(super) code: u64,
@@ -32,7 +33,7 @@ pub(super) struct Row {
     pub(super) flags: Vec<&'static str>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub(super) struct Totals {
     pub(super) code: u64,
     pub(super) tests: u64,

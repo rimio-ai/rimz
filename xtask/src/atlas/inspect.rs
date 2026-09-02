@@ -1,16 +1,19 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
+use serde::Serialize;
 
 use super::conform::{self, Direction};
 use super::detect::{self, GuardFamily};
 use super::facts::{Facets, Facts};
 use super::history::{self, Commit};
 use super::modules::{
-    EscapingItem, crate_module_for_path, escaping_items_for_boundary, module_is_within,
-    path_in_scope, reference_module_label,
+    EscapingItem, crate_module_for_path, escaping_items_for_boundary, is_declaration_only,
+    module_is_within, path_in_scope, reference_module_label,
 };
+use super::output::{self, OutputArgs};
 use super::references::{Edge, EdgeKind, FunctionId};
 use super::shapes::{self, ShapeFamily};
 use super::sources::Source;
@@ -27,15 +30,32 @@ Builds a Markdown dossier for one Rust module from exact SCIP references.
   --item <value>    public item key to investigate
   --top <n>         rows and names shown per section (default 20)";
 
+const SECTIONS: &[&str] = &[
+    "callers",
+    "heaviest",
+    "surface",
+    "assembly",
+    "shapes",
+    "guards",
+    "providers",
+    "footer",
+    "item",
+];
+
+fn usage() -> String {
+    format!("{USAGE}\n\n{}", output::USAGE)
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
     module: String,
     from: Option<String>,
     item: Option<String>,
     top: usize,
+    output: OutputArgs,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 struct Caller {
     module: String,
     items: Vec<String>,
@@ -43,7 +63,7 @@ struct Caller {
     top_fns: Vec<CallerFn>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 struct CallerFn {
     function: String,
     path: PathBuf,
@@ -51,7 +71,7 @@ struct CallerFn {
     items: usize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 struct FunctionRow {
     function: String,
     path: PathBuf,
@@ -59,18 +79,20 @@ struct FunctionRow {
     end_line: usize,
     items: Vec<String>,
     sites: usize,
+    site_lines: Vec<usize>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 struct Heaviest {
     function: String,
     path: PathBuf,
     line: usize,
     end_line: usize,
+    site_lines: Vec<usize>,
     source: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 struct SurfaceItem {
     module: String,
     name: String,
@@ -80,7 +102,7 @@ struct SurfaceItem {
     pass_through: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 struct UnresolvedItem {
     module: String,
     name: String,
@@ -88,27 +110,35 @@ struct UnresolvedItem {
     line: usize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 struct AssemblyGroup {
     items: Vec<String>,
     functions: Vec<AssemblyFunction>,
+    children: Vec<AssemblyDepth>,
     score: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Serialize)]
+struct AssemblyDepth {
+    extra_items: Vec<String>,
+    functions: Vec<AssemblyFunction>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 struct AssemblyFunction {
     module: String,
+    #[serde(serialize_with = "serialize_function_id")]
     function: FunctionId,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 struct Provider {
     module: String,
     sites: usize,
     items: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 struct RuleRow {
     path: PathBuf,
     provider: String,
@@ -124,13 +154,13 @@ struct ItemCandidate {
     owner: Option<String>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize)]
 struct VerdictDiagnostics {
     stale: Vec<String>,
     ambiguous: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 struct ItemEvidence {
     key: String,
     path: PathBuf,
@@ -139,9 +169,88 @@ struct ItemEvidence {
     effective_reach: String,
     production_referrers: Vec<String>,
     test_referrers: Vec<String>,
+    #[serde(serialize_with = "serialize_commits")]
     commits: Vec<Commit>,
     markers: Vec<String>,
     verdict: Option<Verdict>,
+}
+
+#[derive(Debug, Serialize)]
+struct Report {
+    callers: Vec<Caller>,
+    heaviest: HeaviestSection,
+    surface: SurfaceSection,
+    assembly: Vec<AssemblyGroup>,
+    shapes: Vec<ShapeFamily>,
+    guards: Vec<GuardFamily>,
+    providers: Vec<Provider>,
+    footer: Footer,
+    item: Option<ItemEvidence>,
+}
+
+#[derive(Debug, Serialize)]
+struct HeaviestSection {
+    functions: Vec<FunctionRow>,
+    quote: Option<Heaviest>,
+}
+
+#[derive(Debug, Serialize)]
+struct SurfaceSection {
+    zero_production: Vec<SurfaceItem>,
+    unresolved: Vec<UnresolvedItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct Footer {
+    configured: bool,
+    rules: Vec<RuleRow>,
+    parse_failures: usize,
+    unresolved_definitions: usize,
+    declaration_only: usize,
+    verdicts: VerdictDiagnostics,
+}
+
+fn serialize_function_id<S>(function: &FunctionId, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    #[derive(Serialize)]
+    struct SerializableFunction<'a> {
+        path: &'a Path,
+        label: &'a str,
+        line: usize,
+    }
+    SerializableFunction {
+        path: &function.path,
+        label: &function.label,
+        line: function.line,
+    }
+    .serialize(serializer)
+}
+
+fn serialize_commits<S>(commits: &[Commit], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    #[derive(Serialize)]
+    struct SerializableCommit<'a> {
+        id: &'a str,
+        short: &'a str,
+        time: i64,
+        subject: &'a str,
+        body: &'a str,
+    }
+    commits
+        .iter()
+        .map(|commit| SerializableCommit {
+            id: &commit.id,
+            short: &commit.short,
+            time: commit.time,
+            subject: &commit.subject,
+            body: &commit.body,
+        })
+        .collect::<Vec<_>>()
+        .serialize(serializer)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -166,14 +275,9 @@ impl ModuleSelector {
     }
 }
 
-#[expect(
-    clippy::print_stdout,
-    reason = "xtask atlas inspect output is the command's stdout contract"
-)]
 pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
     let Some(args) = parse_args(raw)? else {
-        println!("{USAGE}");
-        return Ok(());
+        return OutputArgs::default().emit(&format!("{}\n", usage()));
     };
     let facts = Facts::load(
         root,
@@ -214,8 +318,8 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
     let heaviest = assembly
         .first()
         .and_then(|function| quote_function(function, &facts.sources));
-    let (zero_surface, unresolved) = zero_production_surface(&facts, &module);
-    let repeated = repeated_assembly(&references.edges, &module, args.top);
+    let (zero_surface, unresolved, declaration_only) = zero_production_surface(&facts, &module);
+    let repeated = repeated_assembly(&references.edges, &module);
     let shape_families = shapes::families(&facts, Path::new("."))
         .into_iter()
         .filter(|family| {
@@ -249,25 +353,48 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
         .map(|key| item_evidence(root, &facts, &module, target.as_ref(), key))
         .transpose()?;
 
-    print_callers(&callers, args.top);
-    print_heaviest(&assembly, heaviest.as_ref(), args.top);
-    print_zero_surface(&zero_surface, &unresolved, args.top);
-    print_repeated(&repeated, args.top);
-    print_duplicated(&shape_families, &guard_families, args.top);
-    print_providers(&providers, args.top);
-    print_footer(
-        &facts,
-        &module,
-        target.is_some(),
-        &rules,
-        &unresolved,
-        &verdicts,
-        args.top,
-    );
-    if let Some(item) = &item {
-        print_item(item, args.top);
-    }
-    Ok(())
+    let parse_failures = facts
+        .syntax
+        .parse_failures
+        .iter()
+        .filter(|path| {
+            module
+                .path
+                .as_ref()
+                .is_none_or(|scope| path_in_scope(path, scope))
+        })
+        .count();
+    let unresolved_definitions = unresolved.len();
+    let report = Report {
+        callers,
+        heaviest: HeaviestSection {
+            functions: assembly,
+            quote: heaviest,
+        },
+        surface: SurfaceSection {
+            zero_production: zero_surface,
+            unresolved,
+        },
+        assembly: repeated,
+        shapes: shape_families,
+        guards: guard_families,
+        providers,
+        footer: Footer {
+            configured: target.is_some(),
+            rules,
+            parse_failures,
+            unresolved_definitions,
+            declaration_only,
+            verdicts,
+        },
+        item,
+    };
+    let rendered = if args.output.json {
+        render_json(&report, &args.output)?
+    } else {
+        render_markdown(&report, &args.output, args.top)
+    };
+    args.output.emit(&rendered)
 }
 
 fn parse_args(args: &[String]) -> Result<Option<Args>> {
@@ -278,8 +405,13 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     let mut from = None;
     let mut item = None;
     let mut top = None;
+    let mut output = OutputArgs::default();
     let mut index = 0;
     while index < args.len() {
+        if let Some(eaten) = output.parse_flag(args, index, "inspect")? {
+            index += eaten;
+            continue;
+        }
         let flag = args[index].as_str();
         match flag {
             "--module" | "--from" | "--item" => {
@@ -306,14 +438,16 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
                 index += 2;
             }
             "--no-index" => bail!("atlas inspect requires the exact SCIP reference index"),
-            flag => bail!("unknown atlas inspect flag `{flag}`\n\n{USAGE}"),
+            flag => bail!("unknown atlas inspect flag `{flag}`\n\n{}", usage()),
         }
     }
+    output.validate_sections("inspect", SECTIONS)?;
     Ok(Some(Args {
         module: module.ok_or_else(|| anyhow::anyhow!("atlas inspect requires --module"))?,
         from,
         item,
         top: top.unwrap_or(20),
+        output,
     }))
 }
 
@@ -437,7 +571,7 @@ fn assembly_functions(
     from: &ModuleSelector,
     to: &ModuleSelector,
 ) -> Vec<FunctionRow> {
-    let mut by_function = BTreeMap::<FunctionId, (BTreeSet<String>, usize)>::new();
+    let mut by_function = BTreeMap::<FunctionId, (BTreeSet<String>, usize, BTreeSet<usize>)>::new();
     for edge in edges.iter().filter(|edge| {
         edge.kind == EdgeKind::Reference
             && !edge.test
@@ -452,16 +586,18 @@ fn assembly_functions(
             .or_default();
         aggregate.0.insert(edge.item.clone());
         aggregate.1 += 1;
+        aggregate.2.insert(edge.from_line);
     }
     let mut rows = by_function
         .into_iter()
-        .map(|(function, (items, sites))| FunctionRow {
+        .map(|(function, (items, sites, site_lines))| FunctionRow {
             end_line: function_end_line(syntax_files, &function),
             function: function.label,
             path: function.path,
             line: function.line,
             items: items.into_iter().collect(),
             sites,
+            site_lines: site_lines.into_iter().collect(),
         })
         .collect::<Vec<_>>();
     rows.sort_by(|left, right| {
@@ -490,30 +626,105 @@ fn function_end_line(files: &[FileSyntax], key: &FunctionId) -> usize {
 
 fn quote_function(function: &FunctionRow, sources: &[Source]) -> Option<Heaviest> {
     let source = sources.iter().find(|source| source.path == function.path)?;
-    let span_lines = function.end_line.saturating_sub(function.line) + 1;
-    let mut lines = source
-        .text
-        .lines()
-        .skip(function.line.saturating_sub(1))
-        .take(span_lines.min(80))
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    if span_lines > 80 {
-        lines.push(format!("… {} more lines", span_lines - 80));
+    let source_lines = source.text.lines().collect::<Vec<_>>();
+    let start = function.line.max(1);
+    let end = function.end_line.min(source_lines.len()).max(start);
+    let signature_end = (start..=end)
+        .find(|line| source_lines[*line - 1].contains('{'))
+        .unwrap_or_else(|| (start + 2).min(end));
+
+    #[derive(Debug)]
+    struct Window {
+        start: usize,
+        end: usize,
+        sites: BTreeSet<usize>,
+    }
+
+    let mut windows = vec![Window {
+        start,
+        end: signature_end,
+        sites: BTreeSet::new(),
+    }];
+    for site in function
+        .site_lines
+        .iter()
+        .copied()
+        .filter(|site| (start..=end).contains(site))
+    {
+        let window = Window {
+            start: site.saturating_sub(1).max(start),
+            end: (site + 1).min(end),
+            sites: BTreeSet::from([site]),
+        };
+        if let Some(previous) = windows.last_mut()
+            && window.start <= previous.end + 1
+        {
+            previous.end = previous.end.max(window.end);
+            previous.sites.extend(window.sites);
+        } else {
+            windows.push(window);
+        }
+    }
+
+    let mut rendered = Vec::new();
+    let mut source_line_count = 0;
+    let mut previous_end = None;
+    let mut omitted_sites = 0;
+    for (index, window) in windows.iter().enumerate() {
+        let available = 80_usize.saturating_sub(source_line_count);
+        let window_lines = window.end - window.start + 1;
+        if available == 0 {
+            omitted_sites += windows[index..]
+                .iter()
+                .map(|window| window.sites.len())
+                .sum::<usize>();
+            break;
+        }
+        let included_end = window.end.min(window.start + available - 1);
+        if let Some(previous_end) = previous_end
+            && window.start > previous_end + 1
+        {
+            rendered.push(format!("… {} lines", window.start - previous_end - 1));
+        }
+        rendered.extend(
+            source_lines[window.start - 1..included_end]
+                .iter()
+                .map(|line| (*line).to_owned()),
+        );
+        source_line_count += included_end - window.start + 1;
+        previous_end = Some(included_end);
+        if included_end < window.end {
+            omitted_sites += window
+                .sites
+                .iter()
+                .filter(|site| **site > included_end)
+                .count();
+            omitted_sites += windows[index + 1..]
+                .iter()
+                .map(|window| window.sites.len())
+                .sum::<usize>();
+            break;
+        }
+        debug_assert!(source_line_count <= 80);
+        debug_assert_eq!(window_lines, included_end - window.start + 1);
+    }
+    if omitted_sites > 0 {
+        rendered.push(format!("… {omitted_sites} more sites"));
     }
     Some(Heaviest {
         function: function.function.clone(),
         path: function.path.clone(),
         line: function.line,
         end_line: function.end_line,
-        source: lines.join("\n"),
+        site_lines: function.site_lines.clone(),
+        source: rendered.join("\n"),
     })
 }
 
 fn zero_production_surface(
     facts: &Facts,
     target: &ModuleSelector,
-) -> (Vec<SurfaceItem>, Vec<UnresolvedItem>) {
+) -> (Vec<SurfaceItem>, Vec<UnresolvedItem>, usize) {
     let files = facts
         .syntax
         .files
@@ -527,11 +738,16 @@ fn zero_production_surface(
         .expect("inspect loads exact references");
     let mut zero = Vec::new();
     let mut unresolved = Vec::new();
+    let mut declaration_only = 0;
     for item in escaping {
         let Some((file, definition)) = definition_for_escaping(&files, &item) else {
             continue;
         };
         let Some(item_refs) = references.get(file, definition) else {
+            if is_declaration_only(&item.id.kind) {
+                declaration_only += 1;
+                continue;
+            }
             unresolved.push(UnresolvedItem {
                 module: item.id.module,
                 name: item.id.name,
@@ -567,7 +783,7 @@ fn zero_production_surface(
             .cmp(&right.path)
             .then_with(|| left.line.cmp(&right.line))
     });
-    (zero, unresolved)
+    (zero, unresolved, declaration_only)
 }
 
 fn definition_for_escaping<'a>(
@@ -586,7 +802,7 @@ fn definition_for_escaping<'a>(
     Some((file, item))
 }
 
-fn repeated_assembly(edges: &[Edge], target: &ModuleSelector, top: usize) -> Vec<AssemblyGroup> {
+fn repeated_assembly(edges: &[Edge], target: &ModuleSelector) -> Vec<AssemblyGroup> {
     let mut functions = BTreeMap::<FunctionId, (String, BTreeSet<String>)>::new();
     for edge in edges.iter().filter(|edge| {
         edge.kind == EdgeKind::Reference
@@ -603,7 +819,7 @@ fn repeated_assembly(edges: &[Edge], target: &ModuleSelector, top: usize) -> Vec
         aggregate.1.insert(edge.item.clone());
     }
     let functions = functions.into_iter().collect::<Vec<_>>();
-    let mut intersections = BTreeMap::<Vec<String>, BTreeSet<AssemblyFunction>>::new();
+    let mut intersections = BTreeSet::<Vec<String>>::new();
     for left in 0..functions.len() {
         for right in left + 1..functions.len() {
             if functions[left].1.0 == functions[right].1.0 {
@@ -618,54 +834,108 @@ fn repeated_assembly(edges: &[Edge], target: &ModuleSelector, top: usize) -> Vec
             if items.len() < 3 {
                 continue;
             }
-            let group = intersections.entry(items).or_default();
-            for (function, (module, _)) in [&functions[left], &functions[right]] {
-                group.insert(AssemblyFunction {
-                    module: module.clone(),
-                    function: function.clone(),
-                });
-            }
+            intersections.insert(items);
         }
     }
-    let mut rows = intersections
+    let rows = intersections
         .into_iter()
-        .filter(|(_, functions)| {
-            functions.len() >= 2
-                && functions
+        .filter_map(|items| {
+            let assembly_functions = functions
+                .iter()
+                .filter(|(_, (_, function_items))| {
+                    items.iter().all(|item| function_items.contains(item))
+                })
+                .map(|(function, (module, _))| AssemblyFunction {
+                    module: module.clone(),
+                    function: function.clone(),
+                })
+                .collect::<Vec<_>>();
+            (assembly_functions.len() >= 2
+                && assembly_functions
                     .iter()
                     .map(|function| &function.module)
                     .collect::<BTreeSet<_>>()
                     .len()
-                    >= 2
+                    >= 2)
+                .then_some((items, assembly_functions))
         })
         .map(|(items, functions)| AssemblyGroup {
             score: items.len() * functions.len(),
             items,
-            functions: functions.into_iter().collect(),
+            functions,
+            children: Vec::new(),
         })
         .collect::<Vec<_>>();
-    let retained = rows
+    let root_indexes = rows
         .iter()
         .enumerate()
         .filter(|(index, row)| {
             !rows.iter().enumerate().any(|(other_index, other)| {
                 index != &other_index
-                    && row.functions == other.functions
-                    && row.items.len() < other.items.len()
-                    && row.items.iter().all(|item| other.items.contains(item))
+                    && other.items.iter().all(|item| row.items.contains(item))
+                    && row
+                        .functions
+                        .iter()
+                        .all(|function| other.functions.contains(function))
+                    && (row.items.len() > other.items.len()
+                        || row.functions.len() < other.functions.len())
             })
         })
-        .map(|(_, row)| row.clone())
+        .map(|(index, _)| index)
         .collect::<Vec<_>>();
-    rows = retained;
-    rows.sort_by(|left, right| {
+    let mut roots = root_indexes
+        .iter()
+        .map(|index| rows[*index].clone())
+        .collect::<Vec<_>>();
+    for (index, row) in rows.iter().enumerate() {
+        if root_indexes.contains(&index) {
+            continue;
+        }
+        let Some(root) = roots
+            .iter_mut()
+            .filter(|root| {
+                root.items.iter().all(|item| row.items.contains(item))
+                    && row
+                        .functions
+                        .iter()
+                        .all(|function| root.functions.contains(function))
+            })
+            .min_by(|left, right| {
+                left.items
+                    .len()
+                    .cmp(&right.items.len())
+                    .then_with(|| right.functions.len().cmp(&left.functions.len()))
+                    .then_with(|| left.items.cmp(&right.items))
+            })
+        else {
+            continue;
+        };
+        root.children.push(AssemblyDepth {
+            extra_items: row
+                .items
+                .iter()
+                .filter(|item| !root.items.contains(item))
+                .cloned()
+                .collect(),
+            functions: row.functions.clone(),
+        });
+    }
+    for root in &mut roots {
+        root.children.sort_by(|left, right| {
+            right
+                .functions
+                .len()
+                .cmp(&left.functions.len())
+                .then_with(|| left.extra_items.cmp(&right.extra_items))
+        });
+    }
+    roots.sort_by(|left, right| {
         right
             .score
             .cmp(&left.score)
             .then_with(|| left.items.cmp(&right.items))
     });
-    rows.truncate(top);
-    rows
+    roots
 }
 
 fn providers(facts: &Facts, target: &ModuleSelector) -> Vec<Provider> {
@@ -971,11 +1241,74 @@ fn item_verdict(target: &Target, key: &str) -> Option<Verdict> {
         .cloned()
 }
 
-#[expect(clippy::print_stdout, reason = "atlas inspect Markdown section")]
-fn print_callers(rows: &[Caller], top: usize) {
-    println!("# Callers by assembly\n");
-    println!("| caller | items | max/fn | heaviest functions |");
-    println!("|---|---:|---:|---|");
+fn render_json(report: &Report, output: &OutputArgs) -> Result<String> {
+    let mut value = serde_json::to_value(report)?;
+    let object = value
+        .as_object_mut()
+        .expect("serializing Report always produces a JSON object");
+    let mut selected = serde_json::Map::new();
+    for section in SECTIONS {
+        if output.wants(section)
+            && let Some(value) = object.remove(*section)
+        {
+            selected.insert((*section).to_owned(), value);
+        }
+    }
+    let mut rendered = serde_json::to_string_pretty(&selected)?;
+    rendered.push('\n');
+    Ok(rendered)
+}
+
+fn render_markdown(report: &Report, output: &OutputArgs, top: usize) -> String {
+    let mut rendered = String::new();
+    if output.wants("callers") {
+        render_callers(&mut rendered, &report.callers, top);
+    }
+    if output.wants("heaviest") {
+        render_heaviest(
+            &mut rendered,
+            &report.heaviest.functions,
+            report.heaviest.quote.as_ref(),
+            top,
+        );
+    }
+    if output.wants("surface") {
+        render_zero_surface(
+            &mut rendered,
+            &report.surface.zero_production,
+            &report.surface.unresolved,
+            top,
+        );
+    }
+    if output.wants("assembly") {
+        render_repeated(&mut rendered, &report.assembly, top);
+    }
+    if output.wants("shapes") || output.wants("guards") {
+        render_duplicated(
+            &mut rendered,
+            output.wants("shapes").then_some(report.shapes.as_slice()),
+            output.wants("guards").then_some(report.guards.as_slice()),
+            top,
+        );
+    }
+    if output.wants("providers") {
+        render_providers(&mut rendered, &report.providers, top);
+    }
+    if output.wants("footer") {
+        render_footer(&mut rendered, &report.footer, top);
+    }
+    if output.wants("item")
+        && let Some(item) = &report.item
+    {
+        render_item(&mut rendered, item, top);
+    }
+    rendered
+}
+
+fn render_callers(out: &mut String, rows: &[Caller], top: usize) {
+    out.push_str("# Callers by assembly\n\n");
+    out.push_str("| caller | items | max/fn | heaviest functions |\n");
+    out.push_str("|---|---:|---:|---|\n");
     for row in rows.iter().take(top) {
         let functions = row
             .top_fns
@@ -991,55 +1324,70 @@ fn print_callers(rows: &[Caller], top: usize) {
             })
             .collect::<Vec<_>>()
             .join("<br>");
-        println!(
+        writeln!(
+            out,
             "| {} | {} | {} | {} |",
             row.module,
             row.items.len(),
             row.max_fn_items,
             functions
-        );
+        )
+        .expect("writing to a String cannot fail");
     }
 }
 
-#[expect(clippy::print_stdout, reason = "atlas inspect Markdown section")]
-fn print_heaviest(rows: &[FunctionRow], heaviest: Option<&Heaviest>, top: usize) {
-    println!("\n# Heaviest assembly\n");
-    println!("| function | items | sites | location |");
-    println!("|---|---:|---:|---|");
+fn render_heaviest(
+    out: &mut String,
+    rows: &[FunctionRow],
+    heaviest: Option<&Heaviest>,
+    top: usize,
+) {
+    out.push_str("\n# Heaviest assembly\n\n");
+    out.push_str("| function | items | sites | location |\n");
+    out.push_str("|---|---:|---:|---|\n");
     for row in rows.iter().take(top) {
-        println!(
+        writeln!(
+            out,
             "| {} | {} | {} | {}:{} |",
             row.function,
             row.items.len(),
             row.sites,
             row.path.display(),
             row.line
-        );
+        )
+        .expect("writing to a String cannot fail");
     }
     let Some(heaviest) = heaviest else {
-        println!("\nnone");
+        out.push_str("\nnone\n");
         return;
     };
-    println!(
+    writeln!(
+        out,
         "\n## Quote\n\n{}:{}-{} `{}`\n\n```rust\n{}\n```",
         heaviest.path.display(),
         heaviest.line,
         heaviest.end_line,
         heaviest.function,
         heaviest.source
-    );
+    )
+    .expect("writing to a String cannot fail");
 }
 
-#[expect(clippy::print_stdout, reason = "atlas inspect Markdown section")]
-fn print_zero_surface(zero: &[SurfaceItem], unresolved: &[UnresolvedItem], top: usize) {
-    println!("\n# Zero-production surface\n");
+fn render_zero_surface(
+    out: &mut String,
+    zero: &[SurfaceItem],
+    unresolved: &[UnresolvedItem],
+    top: usize,
+) {
+    out.push_str("\n# Zero-production surface\n\n");
     for item in zero.iter().take(top) {
         let pass_through = if item.pass_through {
             " (pass-through)"
         } else {
             ""
         };
-        println!(
+        writeln!(
+            out,
             "- `{}`::`{}` — {}:{}; test referrers: {}{}",
             item.module,
             item.name,
@@ -1047,171 +1395,222 @@ fn print_zero_surface(zero: &[SurfaceItem], unresolved: &[UnresolvedItem], top: 
             item.line,
             item.test_referrers,
             pass_through
-        );
+        )
+        .expect("writing to a String cannot fail");
     }
-    println!("\n## Unresolved definitions\n");
+    out.push_str("\n## Unresolved definitions\n\n");
     for item in unresolved.iter().take(top) {
-        println!(
+        writeln!(
+            out,
             "- `{}`::`{}` — {}:{}",
             item.module,
             item.name,
             item.path.display(),
             item.line
-        );
+        )
+        .expect("writing to a String cannot fail");
     }
 }
 
-#[expect(clippy::print_stdout, reason = "atlas inspect Markdown section")]
-fn print_repeated(rows: &[AssemblyGroup], top: usize) {
-    println!("\n# Repeated assembly\n");
+fn render_repeated(out: &mut String, rows: &[AssemblyGroup], top: usize) {
+    out.push_str("\n# Repeated assembly\n\n");
     for row in rows.iter().take(top) {
-        println!(
+        writeln!(
+            out,
             "- {} items × {} functions",
             row.items.len(),
             row.functions.len()
-        );
-        println!("  - items: {}", row.items.join(", "));
+        )
+        .expect("writing to a String cannot fail");
+        writeln!(out, "  - items: {}", row.items.join(", "))
+            .expect("writing to a String cannot fail");
         for function in &row.functions {
-            println!(
+            writeln!(
+                out,
                 "  - {}::{} ({}:{})",
                 function.module,
                 function.function.label,
                 function.function.path.display(),
                 function.function.line
-            );
+            )
+            .expect("writing to a String cannot fail");
+        }
+        for child in &row.children {
+            writeln!(
+                out,
+                "  - + {}: {} of {} functions",
+                child.extra_items.join(", "),
+                child.functions.len(),
+                row.functions.len()
+            )
+            .expect("writing to a String cannot fail");
         }
     }
 }
 
-#[expect(clippy::print_stdout, reason = "atlas inspect Markdown section")]
-fn print_duplicated(shapes: &[ShapeFamily], guards: &[GuardFamily], top: usize) {
-    println!("\n# Duplicated knowledge\n");
-    println!("## Shape families\n");
-    for family in shapes.iter().take(top) {
-        println!(
-            "- key: `{}` — {} files, mean {:.1} SLOC, score {:.1}",
-            family.name, family.files, family.mean_sloc, family.score
-        );
-        for member in family.members.iter().take(5) {
-            println!(
-                "  - {}:{} `{}`",
-                member.path.display(),
-                member.line,
-                member.name
-            );
+fn render_duplicated(
+    out: &mut String,
+    shapes: Option<&[ShapeFamily]>,
+    guards: Option<&[GuardFamily]>,
+    top: usize,
+) {
+    out.push_str("\n# Duplicated knowledge\n\n");
+    if let Some(shapes) = shapes {
+        out.push_str("## Shape families\n\n");
+        for family in shapes.iter().take(top) {
+            writeln!(
+                out,
+                "- key: `{}` — {} files, mean {:.1} SLOC, score {:.1}",
+                family.name, family.files, family.mean_sloc, family.score
+            )
+            .expect("writing to a String cannot fail");
+            for member in family.members.iter().take(5) {
+                writeln!(
+                    out,
+                    "  - {}:{} `{}`",
+                    member.path.display(),
+                    member.line,
+                    member.name
+                )
+                .expect("writing to a String cannot fail");
+            }
         }
     }
-    println!("\n## Guard families\n");
-    for family in guards.iter().take(top) {
-        println!(
-            "- key: `{}` — {} files, {} sites",
-            family.key, family.files, family.sites
-        );
-        for site in family.locations.iter().take(5) {
-            println!("  - {}:{} ({})", site.path.display(), site.line, site.kind);
+    if let Some(guards) = guards {
+        out.push_str("\n## Guard families\n\n");
+        for family in guards.iter().take(top) {
+            writeln!(
+                out,
+                "- key: `{}` — {} files, {} sites",
+                family.key, family.files, family.sites
+            )
+            .expect("writing to a String cannot fail");
+            for site in family.locations.iter().take(5) {
+                writeln!(
+                    out,
+                    "  - {}:{} ({})",
+                    site.path.display(),
+                    site.line,
+                    site.kind
+                )
+                .expect("writing to a String cannot fail");
+            }
         }
     }
 }
 
-#[expect(clippy::print_stdout, reason = "atlas inspect Markdown section")]
-fn print_providers(rows: &[Provider], top: usize) {
-    println!("\n# Providers\n");
-    println!("| module | sites | items |");
-    println!("|---|---:|---|");
+fn render_providers(out: &mut String, rows: &[Provider], top: usize) {
+    out.push_str("\n# Providers\n\n");
+    out.push_str("| module | sites | items |\n");
+    out.push_str("|---|---:|---|\n");
     for row in rows.iter().take(top) {
         let mut items = row.items.iter().take(top).cloned().collect::<Vec<_>>();
         if row.items.len() > top {
             items.push(format!("… {} more", row.items.len() - top));
         }
         let items = items.join(", ");
-        println!("| {} | {} | {} |", row.module, row.sites, items);
+        writeln!(out, "| {} | {} | {} |", row.module, row.sites, items)
+            .expect("writing to a String cannot fail");
     }
 }
 
-#[expect(clippy::print_stdout, reason = "atlas inspect Markdown section")]
-fn print_footer(
-    facts: &Facts,
-    module: &ModuleSelector,
-    configured: bool,
-    rules: &[RuleRow],
-    unresolved: &[UnresolvedItem],
-    verdicts: &VerdictDiagnostics,
-    top: usize,
-) {
-    println!("\n# Footer\n");
-    if !configured {
-        println!("target rules: no target configured");
-    } else if rules.is_empty() {
-        println!("target rules: no covering rules");
+fn render_footer(out: &mut String, footer: &Footer, top: usize) {
+    out.push_str("\n# Footer\n\n");
+    if !footer.configured {
+        out.push_str("target rules: no target configured\n");
+    } else if footer.rules.is_empty() {
+        out.push_str("target rules: no covering rules\n");
     } else {
-        println!("| rule | provider | kind | direction | admitted |");
-        println!("|---|---|---|---|---|");
-        for rule in rules.iter().take(top) {
-            println!(
+        out.push_str("| rule | provider | kind | direction | admitted |\n");
+        out.push_str("|---|---|---|---|---|\n");
+        for rule in footer.rules.iter().take(top) {
+            writeln!(
+                out,
                 "| {} | {} | {} | {} | {} |",
                 rule.path.display(),
                 rule.provider,
                 rule.kind,
                 rule.direction,
                 rule.admitted.as_deref().unwrap_or("none")
-            );
+            )
+            .expect("writing to a String cannot fail");
         }
-        if rules.len() > top {
-            println!("\n_{} more target-rule rows omitted._", rules.len() - top);
+        if footer.rules.len() > top {
+            writeln!(
+                out,
+                "\n_{} more target-rule rows omitted._",
+                footer.rules.len() - top
+            )
+            .expect("writing to a String cannot fail");
         }
     }
-    let parse_failures = facts
-        .syntax
-        .parse_failures
-        .iter()
-        .filter(|path| {
-            module
-                .path
-                .as_ref()
-                .is_none_or(|scope| path_in_scope(path, scope))
-        })
-        .count();
-    println!("\nparse failures: {parse_failures}");
-    println!("unresolved definitions: {}", unresolved.len());
-    println!("stale item/pass-through verdicts: {}", verdicts.stale.len());
-    for key in &verdicts.stale {
-        println!("- `{key}`");
+    writeln!(out, "\nparse failures: {}", footer.parse_failures)
+        .expect("writing to a String cannot fail");
+    writeln!(
+        out,
+        "unresolved definitions: {}",
+        footer.unresolved_definitions
+    )
+    .expect("writing to a String cannot fail");
+    writeln!(
+        out,
+        "re-exports and mod declarations (unmeasured): {}",
+        footer.declaration_only
+    )
+    .expect("writing to a String cannot fail");
+    writeln!(
+        out,
+        "stale item/pass-through verdicts: {}",
+        footer.verdicts.stale.len()
+    )
+    .expect("writing to a String cannot fail");
+    for key in &footer.verdicts.stale {
+        writeln!(out, "- `{key}`").expect("writing to a String cannot fail");
     }
-    println!(
+    writeln!(
+        out,
         "ambiguous item/pass-through verdicts: {}",
-        verdicts.ambiguous.len()
-    );
-    for key in &verdicts.ambiguous {
-        println!("- `{key}`");
+        footer.verdicts.ambiguous.len()
+    )
+    .expect("writing to a String cannot fail");
+    for key in &footer.verdicts.ambiguous {
+        writeln!(out, "- `{key}`").expect("writing to a String cannot fail");
     }
 }
 
-#[expect(clippy::print_stdout, reason = "atlas inspect Markdown section")]
-fn print_item(item: &ItemEvidence, top: usize) {
-    println!("\n# Item evidence — `{}`\n", item.key);
-    println!("- definition: {}:{}", item.path.display(), item.line);
-    println!("- declared reach: `{}`", item.declared);
-    println!("- effective reach: `{}`", item.effective_reach);
-    println!("- production referrers:");
+fn render_item(out: &mut String, item: &ItemEvidence, top: usize) {
+    writeln!(out, "\n# Item evidence — `{}`\n", item.key).expect("writing to a String cannot fail");
+    writeln!(out, "- definition: {}:{}", item.path.display(), item.line)
+        .expect("writing to a String cannot fail");
+    writeln!(out, "- declared reach: `{}`", item.declared)
+        .expect("writing to a String cannot fail");
+    writeln!(out, "- effective reach: `{}`", item.effective_reach)
+        .expect("writing to a String cannot fail");
+    out.push_str("- production referrers:\n");
     for referrer in item.production_referrers.iter().take(top) {
-        println!("  - `{referrer}`");
+        writeln!(out, "  - `{referrer}`").expect("writing to a String cannot fail");
     }
-    println!("- test referrers:");
+    out.push_str("- test referrers:\n");
     for referrer in item.test_referrers.iter().take(top) {
-        println!("  - `{referrer}`");
+        writeln!(out, "  - `{referrer}`").expect("writing to a String cannot fail");
     }
-    println!("- introducing commits:");
+    out.push_str("- introducing commits:\n");
     for commit in &item.commits {
-        println!("  - `{}` {} {}", commit.short, commit.time, commit.subject);
+        writeln!(
+            out,
+            "  - `{}` {} {}",
+            commit.short, commit.time, commit.subject
+        )
+        .expect("writing to a String cannot fail");
     }
-    println!("- fix markers:");
+    out.push_str("- fix markers:\n");
     for marker in &item.markers {
-        println!("  - {marker}");
+        writeln!(out, "  - {marker}").expect("writing to a String cannot fail");
     }
     if let Some(verdict) = &item.verdict {
-        println!("- verdict: {}", verdict.reason);
+        writeln!(out, "- verdict: {}", verdict.reason).expect("writing to a String cannot fail");
     } else {
-        println!("- verdict: none");
+        out.push_str("- verdict: none\n");
     }
 }
 

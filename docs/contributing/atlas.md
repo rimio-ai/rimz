@@ -8,21 +8,31 @@
 - **Churn%** — the share of scoped history commits that touched a module, after renames are folded to their current paths.
 - **Pace** — the module's share of commits in the recent 25% window divided by its lifetime share; `1.0` is its historical rate and `1.5` or more is `hot`.
 - **`max/fn`** — the greatest number of distinct target items referenced by any one production function in a caller module.
-- **Family** — repeated knowledge grouped across functions: either similar call shapes or normalized guards. Each family has a stable key suitable for a verdict.
+- **Family** — repeated knowledge grouped across functions: either similar call shapes or normalized guards. Each family has a stable key suitable for a verdict: a shape family is keyed by its shared callee set (`file_name+is_dir+read_dir`), a guard family by its normalized guard text. Guard families whose only named identifiers are std vocabulary (`is_empty`, `is_some`, `Some`, …) are dropped as idiom, and the footer counts them.
 - **Verdict** — a durable, reasoned disposition of one item, pass-through, guard family, or shape family. Atlas reports stale verdict keys when their evidence disappears.
 - **Dependency site** — a syntax-derived internal dependency written as either a `use` or a qualified path. Sites are deduplicated per file by resolved module and item.
 
 ## `survey` — map a scope
 
-`survey` ranks production size, tests, `esc`, churn%, pace, complexity, and test/code ratio, then lists shape and guard families. It reads the working tree and history without building a SCIP index. `--path` defaults to `crates/rimz/src`; `--top` defaults to 20.
+`survey` ranks production size, tests, `esc`, churn%, pace, complexity, and test/code ratio, then lists shape and guard families. It reads the working tree and history without building a SCIP index. `--path` defaults to `crates/rimz/src`; `--top` defaults to 20. Sections: `rank`, `shapes`, `guards`, `footer`.
 
 ```sh
 cargo xtask atlas survey --path crates/rimz/src/store --top 20
 ```
 
+## Output flags
+
+Every report verb (`survey`, `inspect`, `diff`) takes the same three flags. `--json` emits the full report as JSON (`--top` bounds Markdown only); `--out <file>` writes it there instead of stdout; `--section <a,b>` keeps only the named sections in either form. An agent reading a dossier should write it with `--out` and narrow it with `--section` or `jq` rather than let the whole report through stdout.
+
+```sh
+cargo xtask atlas inspect --module crates/rimz/src/store --json --section assembly,surface --out /tmp/store.json
+```
+
 ## `inspect` — learn one module
 
-`inspect --module <module|path>` uses exact SCIP references to report callers, `max/fn`, the heaviest quoted caller, zero-production-referrer surface, repeated assembly, families, providers, target rules, and stale item/pass-through verdicts. `--from` selects a caller and `--item <module::Name>` adds item history, referrers, markers, and its verdict.
+`inspect --module <module|path>` uses exact SCIP references to report callers, `max/fn`, the heaviest caller quoted at its target sites, zero-production-referrer surface, repeated assembly, families, providers, target rules, and stale item/pass-through verdicts. `--from` selects a caller and `--item <module::Name>` adds item history, referrers, markers, and its verdict. Sections: `callers`, `heaviest`, `surface`, `assembly`, `shapes`, `guards`, `providers`, `footer`, `item`.
+
+Repeated assembly prints one root per cluster — the smallest item set the most callers share, with its full caller list — and nests each deeper subset under it as `+ <extra items>: K of M functions`. Unresolved definitions exclude `mod` declarations and `pub use` re-exports, which SCIP never defines in place; the footer counts those separately as unmeasured.
 
 ```sh
 cargo xtask atlas inspect --module crates/rimz/src/store --from sidebar::enrich --item store::agent_context::write_record
@@ -30,7 +40,7 @@ cargo xtask atlas inspect --module crates/rimz/src/store --from sidebar::enrich 
 
 ## `diff` — prove one pass
 
-`diff --base <ref> --path <scope>` compares an indexed base with the indexed working tree: SLOC, boundary `esc`, call-site assembly, dependency sites, changed files, parse failures, and newly unresolved definitions. `--expect` instead reads the executable pass contract below; keep that ephemeral contract outside the worktree so it is not itself an out-of-scope change.
+`diff --base <ref> --path <scope>` compares an indexed base with the indexed working tree: SLOC, boundary `esc`, call-site assembly (only the caller→provider pairs whose `max/fn` moved, with the unchanged count), dependency sites, changed files (outside-scope paths as a count under `--base`, listed under `--expect`), parse failures, and newly unresolved definitions. `--expect` instead reads the executable pass contract below; keep that ephemeral contract outside the worktree so it is not itself an out-of-scope change. Sections: `expectations`, `totals`, `interface`, `surface`, `dependencies`, `files`, `evidence`.
 
 ```sh
 cargo xtask atlas diff --expect /tmp/atlas-pass-contract.toml
@@ -91,7 +101,7 @@ Every `[[verdict]]` needs a non-empty reason and a unique `(kind, key)`. Key for
 | `item` | `module::path::Name` |
 | `pass-through` | `module::path::Name` |
 | `guard` | normalized guard text printed as the family key |
-| `shape` | shape-family name printed as the family key |
+| `shape` | shared callee set printed as the family key |
 
 Method keys are name-only within their module. If several public items share that name, `inspect` reports the ambiguity with each definition and known owner rather than selecting one. Shape and guard verdicts suppress matching families in `survey`; `inspect` displays item verdicts and stale item/pass-through keys. `conform` preserves verdicts but does not enforce their reasons.
 

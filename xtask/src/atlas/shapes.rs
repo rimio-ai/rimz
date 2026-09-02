@@ -28,7 +28,7 @@ struct Cluster {
     members: Vec<Member>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub(super) struct ShapeFamily {
     pub(super) name: String,
     pub(super) members: Vec<Member>,
@@ -116,14 +116,7 @@ fn merge_families(clusters: Vec<Cluster>) -> Vec<ShapeFamily> {
             members.dedup_by(|left, right| {
                 left.path == right.path && left.line == right.line && left.name == right.name
             });
-            let mut names = std::collections::BTreeMap::<String, usize>::new();
-            for member in &members {
-                *names.entry(member.name.clone()).or_default() += 1;
-            }
-            let name = names
-                .into_iter()
-                .max_by(|left, right| left.1.cmp(&right.1).then_with(|| right.0.cmp(&left.0)))
-                .map_or_else(|| "shape".to_owned(), |(name, _)| name);
+            let name = family_key(&clusters, &indexes);
             let files = members
                 .iter()
                 .map(|member| &member.path)
@@ -147,6 +140,52 @@ fn merge_families(clusters: Vec<Cluster>) -> Vec<ShapeFamily> {
             .then_with(|| left.name.cmp(&right.name))
     });
     families
+}
+
+fn family_key(clusters: &[Cluster], indexes: &[usize]) -> String {
+    let Some(first) = indexes.first() else {
+        return "shape".to_owned();
+    };
+    let mut shared = clusters[*first]
+        .shared_callees
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    for index in &indexes[1..] {
+        let callees = clusters[*index]
+            .shared_callees
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        shared = shared.intersection(&callees).cloned().collect();
+    }
+    let key_callees = if shared.is_empty() {
+        let mut largest = *first;
+        for index in &indexes[1..] {
+            if clusters[*index].members.len() > clusters[largest].members.len() {
+                largest = *index;
+            }
+        }
+        clusters[largest]
+            .shared_callees
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+    } else {
+        shared
+    };
+    let name = key_callees
+        .iter()
+        .map(|callee| callee.strip_prefix('.').unwrap_or(callee))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join("+");
+    if name.is_empty() {
+        "shape".to_owned()
+    } else {
+        name
+    }
 }
 
 fn clusters_related(left: &Cluster, right: &Cluster) -> bool {
@@ -546,23 +585,63 @@ mod tests {
                     member("src/a.rs", 1, "decode_hook"),
                     member("src/b.rs", 1, "decode_a"),
                 ],
-                &["load_a", "parse_a", "finish_a"],
+                &[".decode", "load_a", "parse_a"],
             ),
             cluster(
                 vec![
                     member("src/c.rs", 1, "decode_hook"),
                     member("src/d.rs", 1, "decode_b"),
                 ],
-                &["load_b", "parse_b", "finish_b"],
+                &[".decode", "load_b", "parse_b"],
             ),
         ];
 
         let families = merge_families(clusters);
 
         assert_eq!(families.len(), 1);
-        assert_eq!(families[0].name, "decode_hook");
+        assert_eq!(families[0].name, "decode");
         assert_eq!(families[0].members.len(), 4);
         assert_eq!(families[0].files, 4);
         assert_eq!(families[0].score, 200.0);
+    }
+
+    #[test]
+    fn family_key_falls_back_to_the_largest_clusters_callees() {
+        let member = |path: &str, name: &str| Member {
+            path: PathBuf::from(path),
+            line: 1,
+            name: name.to_owned(),
+            sloc: 50,
+        };
+        let cluster = |members: Vec<Member>, shared_callees: &[&str]| Cluster {
+            similarity_floor: 0.5,
+            mean_sloc: 50.0,
+            score: members.len() as f64 * 50.0,
+            distinct_files: members.len(),
+            distinct_modules: members.len(),
+            shared_callees: shared_callees
+                .iter()
+                .map(|callee| (*callee).to_owned())
+                .collect(),
+            members,
+        };
+        let clusters = vec![
+            cluster(
+                vec![
+                    member("src/a.rs", "walk"),
+                    member("src/b.rs", "walk_a"),
+                    member("src/c.rs", "walk_b"),
+                ],
+                &["read_dir", ".is_dir", ".file_name"],
+            ),
+            cluster(
+                vec![member("src/d.rs", "walk"), member("src/e.rs", "walk_c")],
+                &["load", "parse", "finish"],
+            ),
+        ];
+
+        let families = merge_families(clusters);
+
+        assert_eq!(families[0].name, "file_name+is_dir+read_dir");
     }
 }

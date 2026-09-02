@@ -15,14 +15,14 @@ pub(super) struct PassThrough {
     pub(super) callee: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub(super) struct GuardSite {
     pub(super) path: PathBuf,
     pub(super) line: usize,
     pub(super) kind: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub(super) struct GuardFamily {
     pub(super) key: String,
     pub(super) files: usize,
@@ -58,6 +58,13 @@ pub(super) fn passthroughs(facts: &Facts, scope: &Path) -> Vec<PassThrough> {
 }
 
 pub(super) fn guard_families(facts: &Facts, scope: &Path) -> Vec<GuardFamily> {
+    guard_families_with_dropped(facts, scope).0
+}
+
+pub(super) fn guard_families_with_dropped(
+    facts: &Facts,
+    scope: &Path,
+) -> (Vec<GuardFamily>, usize) {
     let mut groups = BTreeMap::<String, Vec<GuardSite>>::new();
     for guard in facts
         .syntax
@@ -75,6 +82,7 @@ pub(super) fn guard_families(facts: &Facts, scope: &Path) -> Vec<GuardFamily> {
                 kind: guard.kind.clone(),
             });
     }
+    let mut dropped = 0;
     let mut families = groups
         .into_iter()
         .filter_map(|(key, mut locations)| {
@@ -88,7 +96,14 @@ pub(super) fn guard_families(facts: &Facts, scope: &Path) -> Vec<GuardFamily> {
                 .map(|site| &site.path)
                 .collect::<BTreeSet<_>>()
                 .len();
-            (files >= 3).then_some(GuardFamily {
+            if files < 3 {
+                return None;
+            }
+            if !is_domain_guard(&key) {
+                dropped += 1;
+                return None;
+            }
+            Some(GuardFamily {
                 key,
                 files,
                 sites: locations.len(),
@@ -103,5 +118,115 @@ pub(super) fn guard_families(facts: &Facts, scope: &Path) -> Vec<GuardFamily> {
             .then_with(|| right.sites.cmp(&left.sites))
             .then_with(|| left.key.cmp(&right.key))
     });
-    families
+    (families, dropped)
+}
+
+fn is_domain_guard(key: &str) -> bool {
+    const STD_IDENTIFIERS: &[&str] = &[
+        "is_empty",
+        "len",
+        "is_some",
+        "is_none",
+        "is_ok",
+        "is_err",
+        "contains",
+        "starts_with",
+        "ends_with",
+        "trim",
+        "kind",
+        "exists",
+        "is_dir",
+        "is_file",
+        "is_absolute",
+        "is_relative",
+        "parent",
+        "strip_prefix",
+        "strip_suffix",
+        "get",
+        "first",
+        "last",
+        "as_ref",
+        "as_str",
+        "unwrap_or",
+        "unwrap_or_default",
+        "now",
+        "elapsed",
+        "as_secs",
+        "as_millis",
+        "file_name",
+        "extension",
+        "to_string_lossy",
+        "chars",
+        "bytes",
+        "lines",
+        "split",
+        "iter",
+        "next",
+        "peek",
+        "any",
+        "all",
+        "matches",
+        "Some",
+        "None",
+        "Ok",
+        "Err",
+        "Instant",
+        "SystemTime",
+        "Duration",
+        "Path",
+        "PathBuf",
+        "String",
+        "Vec",
+        "Option",
+        "Result",
+        "max",
+        "min",
+        "abs",
+        "saturating_sub",
+        "saturating_add",
+        "checked_sub",
+        "is_ascii",
+        "is_alphanumeric",
+        "is_whitespace",
+    ];
+
+    let mut identifiers = key.char_indices().peekable();
+    while let Some((start, first)) = identifiers.next() {
+        if first != '_' && !first.is_alphabetic() {
+            continue;
+        }
+        let mut end = start + first.len_utf8();
+        while let Some(&(index, next)) = identifiers.peek() {
+            if next != '_' && !next.is_alphanumeric() {
+                break;
+            }
+            identifiers.next();
+            end = index + next.len_utf8();
+        }
+        let before = &key[..start];
+        let after = &key[end..];
+        let named = before.ends_with('.')
+            || after.starts_with('(')
+            || before.ends_with("::")
+            || after.starts_with("::");
+        if named && !STD_IDENTIFIERS.contains(&&key[start..end]) {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_domain_guard;
+
+    #[test]
+    fn domain_guards_require_a_non_std_named_identifier() {
+        assert!(!is_domain_guard("$0.is_empty()"));
+        assert!(!is_domain_guard("!$0.trim().is_empty()"));
+        assert!(!is_domain_guard("$0Some($1)=$2"));
+        assert!(is_domain_guard("$0.parent_agent_id.is_some()"));
+        assert!(is_domain_guard("$0.is_provider_subagent()"));
+        assert!(is_domain_guard("$0.kind()==ErrorKind::NotFound"));
+    }
 }

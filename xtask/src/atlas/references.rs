@@ -331,7 +331,10 @@ mod tests {
         assert_eq!(key.path, Path::new("crates/demo/src/lib.rs"));
         assert_eq!(item_refs.production, BTreeSet::from(["caller".to_owned()]));
         assert_eq!(item_refs.production_count, 1);
-        assert_eq!(item_refs.tests, BTreeSet::from([String::new()]));
+        assert_eq!(
+            item_refs.tests,
+            BTreeSet::from([String::new(), "tests::public_api".to_owned()])
+        );
         assert_eq!(item_refs.test_count, 2);
         assert_eq!(references.edges.len(), 3);
         assert!(references.edges.iter().all(|edge| {

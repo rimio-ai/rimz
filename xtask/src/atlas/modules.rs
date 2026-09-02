@@ -128,6 +128,18 @@ pub(super) fn crate_module_for_path(path: &Path) -> String {
             after_src = true;
         }
     }
+    if !after_src {
+        let parent = path
+            .parent()
+            .and_then(Path::file_name)
+            .map(|component| component.to_string_lossy());
+        let stem = path.file_stem().map(|stem| stem.to_string_lossy());
+        return match (parent, stem) {
+            (Some(parent), Some(stem)) => format!("{parent}::{stem}"),
+            (None, Some(stem)) => stem.into_owned(),
+            _ => String::new(),
+        };
+    }
     if let Some(last) = parts.last_mut() {
         if matches!(last.as_str(), "lib.rs" | "main.rs" | "mod.rs") {
             parts.pop();
@@ -136,6 +148,10 @@ pub(super) fn crate_module_for_path(path: &Path) -> String {
         }
     }
     parts.join("::")
+}
+
+pub(super) fn is_declaration_only(kind: &str) -> bool {
+    matches!(kind, "mod" | "use")
 }
 
 pub(super) fn crate_path_for_source(path: &Path) -> PathBuf {
@@ -337,6 +353,25 @@ mod tests {
             ),
             "(root)"
         );
+    }
+
+    #[test]
+    fn crate_modules_fall_back_to_parent_and_stem_outside_src() {
+        assert_eq!(
+            crate_module_for_path(Path::new("crates/rimz/examples/seed_perf_workspace.rs")),
+            "examples::seed_perf_workspace"
+        );
+        assert_eq!(
+            crate_module_for_path(Path::new("crates/rimz/benches/hotpath.rs")),
+            "benches::hotpath"
+        );
+    }
+
+    #[test]
+    fn declaration_only_kinds_are_mods_and_uses() {
+        assert!(is_declaration_only("mod"));
+        assert!(is_declaration_only("use"));
+        assert!(!is_declaration_only("fn"));
     }
 
     #[test]
