@@ -39,11 +39,11 @@ struct Args {
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct Member {
-    path: PathBuf,
-    line: usize,
-    name: String,
-    sloc: usize,
+pub(super) struct Member {
+    pub(super) path: PathBuf,
+    pub(super) line: usize,
+    pub(super) name: String,
+    pub(super) sloc: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -55,6 +55,15 @@ struct Cluster {
     distinct_modules: usize,
     shared_callees: Vec<String>,
     members: Vec<Member>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct ShapeFamily {
+    pub(super) name: String,
+    pub(super) members: Vec<Member>,
+    pub(super) files: usize,
+    pub(super) mean_sloc: f64,
+    pub(super) score: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -156,13 +165,39 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
 }
 
 fn view(facts: &Facts, args: &Args) -> Result<Report> {
+    let (eligible_functions, mut clusters) =
+        clusters(facts, &args.path, args.min_sloc, args.similarity);
+    let total_clusters = clusters.len();
+    clusters.truncate(args.top);
+    Ok(Report {
+        version: REPORT_VERSION,
+        verb: "shapes",
+        path: args.path.clone(),
+        eligible_functions,
+        total_clusters,
+        clusters,
+        parse_failures: facts
+            .syntax
+            .parse_failures
+            .iter()
+            .filter(|path| path_in_scope(path, &args.path))
+            .count(),
+    })
+}
+
+fn clusters(
+    facts: &Facts,
+    scope: &Path,
+    min_sloc: usize,
+    similarity: f64,
+) -> (usize, Vec<Cluster>) {
     let functions = facts
         .syntax
         .files
         .iter()
-        .filter(|file| path_in_scope(&file.path, &args.path))
+        .filter(|file| path_in_scope(&file.path, scope))
         .flat_map(|file| &file.fns)
-        .filter(|function| function.sloc >= args.min_sloc)
+        .filter(|function| function.sloc >= min_sloc)
         .cloned()
         .collect::<Vec<_>>();
     let callees = functions
@@ -177,28 +212,110 @@ fn view(facts: &Facts, args: &Args) -> Result<Report> {
             similarities[right][left] = similarity;
         }
     }
-    let mut clusters = complete_linkage_groups(&similarities, args.similarity)
+    let mut clusters = complete_linkage_groups(&similarities, similarity)
         .into_iter()
         .filter(|members| members.len() > 1)
-        .map(|members| cluster(&functions, &callees, members, &args.path))
+        .map(|members| cluster(&functions, &callees, members, scope))
         .collect::<Vec<_>>();
     sort_clusters(&mut clusters);
-    let total_clusters = clusters.len();
-    clusters.truncate(args.top);
-    Ok(Report {
-        version: REPORT_VERSION,
-        verb: "shapes",
-        path: args.path.clone(),
-        eligible_functions: functions.len(),
-        total_clusters,
-        clusters,
-        parse_failures: facts
-            .syntax
-            .parse_failures
+    (functions.len(), clusters)
+}
+
+pub(super) fn families(facts: &Facts, scope: &Path) -> Vec<ShapeFamily> {
+    let (_, clusters) = clusters(facts, scope, 40, 0.35);
+    merge_families(clusters)
+}
+
+fn merge_families(clusters: Vec<Cluster>) -> Vec<ShapeFamily> {
+    let mut groups = (0..clusters.len())
+        .map(|index| vec![index])
+        .collect::<Vec<_>>();
+    let mut left = 0;
+    while left < groups.len() {
+        let mut right = left + 1;
+        while right < groups.len() {
+            let related = groups[left].iter().any(|left| {
+                groups[right]
+                    .iter()
+                    .any(|right| clusters_related(&clusters[*left], &clusters[*right]))
+            });
+            if related {
+                let merged = groups.remove(right);
+                groups[left].extend(merged);
+            } else {
+                right += 1;
+            }
+        }
+        left += 1;
+    }
+    let mut families = groups
+        .into_iter()
+        .map(|indexes| {
+            let mut members = indexes
+                .iter()
+                .flat_map(|index| clusters[*index].members.iter().cloned())
+                .collect::<Vec<_>>();
+            members.sort_by(|left, right| {
+                left.path
+                    .cmp(&right.path)
+                    .then_with(|| left.line.cmp(&right.line))
+                    .then_with(|| left.name.cmp(&right.name))
+            });
+            members.dedup_by(|left, right| {
+                left.path == right.path && left.line == right.line && left.name == right.name
+            });
+            let mut names = std::collections::BTreeMap::<String, usize>::new();
+            for member in &members {
+                *names.entry(member.name.clone()).or_default() += 1;
+            }
+            let name = names
+                .into_iter()
+                .max_by(|left, right| left.1.cmp(&right.1).then_with(|| right.0.cmp(&left.0)))
+                .map_or_else(|| "shape".to_owned(), |(name, _)| name);
+            let files = members
+                .iter()
+                .map(|member| &member.path)
+                .collect::<BTreeSet<_>>()
+                .len();
+            let mean_sloc = members.iter().map(|member| member.sloc).sum::<usize>() as f64
+                / members.len().max(1) as f64;
+            ShapeFamily {
+                name,
+                score: files as f64 * mean_sloc,
+                members,
+                files,
+                mean_sloc,
+            }
+        })
+        .collect::<Vec<_>>();
+    families.sort_by(|left, right| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    families
+}
+
+fn clusters_related(left: &Cluster, right: &Cluster) -> bool {
+    let left_names = left
+        .members
+        .iter()
+        .map(|member| member.name.as_str())
+        .collect::<BTreeSet<_>>();
+    let right_names = right
+        .members
+        .iter()
+        .map(|member| member.name.as_str())
+        .collect::<BTreeSet<_>>();
+    !left_names.is_disjoint(&right_names)
+        || left
+            .shared_callees
             .iter()
-            .filter(|path| path_in_scope(path, &args.path))
-            .count(),
-    })
+            .filter(|callee| right.shared_callees.contains(callee))
+            .take(MIN_SHARED_CALLEES)
+            .count()
+            >= MIN_SHARED_CALLEES
 }
 
 pub(super) fn survey_value(facts: &Facts, scope: &Path) -> Result<serde_json::Value> {
@@ -618,5 +735,51 @@ mod tests {
         assert_eq!(clusters[0].distinct_modules, 3);
         assert_eq!(clusters[0].distinct_files, 3);
         assert_eq!(clusters[1].score, 500.0);
+    }
+
+    #[test]
+    fn families_merge_clusters_sharing_a_member_name() {
+        let member = |path: &str, line, name: &str| Member {
+            path: PathBuf::from(path),
+            line,
+            name: name.to_owned(),
+            sloc: 50,
+        };
+        let cluster = |members: Vec<Member>, shared_callees: &[&str]| Cluster {
+            similarity_floor: 0.5,
+            mean_sloc: 50.0,
+            score: members.len() as f64 * 50.0,
+            distinct_files: members.len(),
+            distinct_modules: members.len(),
+            shared_callees: shared_callees
+                .iter()
+                .map(|callee| (*callee).to_owned())
+                .collect(),
+            members,
+        };
+        let clusters = vec![
+            cluster(
+                vec![
+                    member("src/a.rs", 1, "decode_hook"),
+                    member("src/b.rs", 1, "decode_a"),
+                ],
+                &["load_a", "parse_a", "finish_a"],
+            ),
+            cluster(
+                vec![
+                    member("src/c.rs", 1, "decode_hook"),
+                    member("src/d.rs", 1, "decode_b"),
+                ],
+                &["load_b", "parse_b", "finish_b"],
+            ),
+        ];
+
+        let families = merge_families(clusters);
+
+        assert_eq!(families.len(), 1);
+        assert_eq!(families[0].name, "decode_hook");
+        assert_eq!(families[0].members.len(), 4);
+        assert_eq!(families[0].files, 4);
+        assert_eq!(families[0].score, 200.0);
     }
 }

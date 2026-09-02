@@ -142,7 +142,6 @@ fn large_directory_rows_split_and_preserve_the_parent_subtotal() {
             functions: Vec::new(),
         }),
         references: None,
-        blame: None,
     };
     let args = parse_args(&[
         "--path".into(),

@@ -8,9 +8,12 @@ use serde::Serialize;
 use super::modules::{rust_module_for_path, scope_for_matching};
 
 #[derive(Clone, Debug)]
-struct Commit {
-    id: String,
-    time: i64,
+pub(super) struct Commit {
+    pub(super) id: String,
+    pub(super) short: String,
+    pub(super) time: i64,
+    pub(super) subject: String,
+    pub(super) body: String,
     changes: Vec<Change>,
 }
 
@@ -59,6 +62,11 @@ pub(super) struct Log {
     commits: Vec<Commit>,
 }
 
+struct IntroducingCandidate {
+    commit: Commit,
+    path: PathBuf,
+}
+
 impl Log {
     #[cfg(test)]
     pub(super) fn empty() -> Self {
@@ -75,12 +83,6 @@ impl Log {
         Ok(Self { commits })
     }
 
-    pub(super) fn window_start(&self, window_pct: usize) -> i64 {
-        recent_window(&self.commits, window_pct)
-            .first()
-            .map_or(0, |commit| commit.time)
-    }
-
     pub(super) fn first_time(&self) -> i64 {
         self.commits.first().map_or(0, |commit| commit.time)
     }
@@ -90,92 +92,130 @@ impl Log {
     }
 }
 
-#[derive(Debug, Default)]
-pub(super) struct Blame {
-    pub(super) lines: BTreeMap<PathBuf, Vec<(String, i64)>>,
-}
-
-type BlamedFile = (PathBuf, Vec<(String, i64)>);
-
-impl Blame {
-    pub(super) fn read(root: &Path, files: &[PathBuf], workers: usize) -> Result<Self> {
-        let workers = workers.max(1).min(files.len().max(1));
-        let chunks = (0..workers)
-            .map(|worker| {
-                files
-                    .iter()
-                    .skip(worker)
-                    .step_by(workers)
-                    .cloned()
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        let batches = std::thread::scope(|scope| {
-            let handles = chunks
-                .into_iter()
-                .map(|paths| scope.spawn(move || blame_files(root, paths)))
-                .collect::<Vec<_>>();
-            handles
-                .into_iter()
-                .map(|handle| {
-                    handle
-                        .join()
-                        .map_err(|_| anyhow::anyhow!("atlas blame worker panicked"))?
-                })
-                .collect::<Result<Vec<_>>>()
-        })?;
-        Ok(Self {
-            lines: batches.into_iter().flatten().collect(),
-        })
+pub(super) fn introducing_commits(root: &Path, file: &Path, name: &str) -> Result<Vec<Commit>> {
+    let output = Command::new("git")
+        .args([
+            "log",
+            "--follow",
+            "--name-only",
+            "--format=%x1e%H%x00%h%x00%ct%x00%s%x00%b%x00",
+        ])
+        .arg(format!("-S{name}"))
+        .arg("--")
+        .arg(file)
+        .current_dir(root)
+        .output()
+        .with_context(|| format!("finding commits that introduced `{name}`"))?;
+    if !output.status.success() {
+        bail!(
+            "git log failed for {}: {}",
+            file.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
     }
-}
-
-fn blame_files(root: &Path, paths: Vec<PathBuf>) -> Result<Vec<BlamedFile>> {
-    paths
+    let raw = String::from_utf8(output.stdout).context("git log returned non-UTF-8 text")?;
+    let mut commits = parse_introducing_candidates(&raw)?
         .into_iter()
-        .map(|path| {
+        .filter_map(|candidate| {
             let output = Command::new("git")
-                .args(["blame", "--line-porcelain", "--"])
-                .arg(&path)
+                .args(["show", "--format="])
+                .arg(&candidate.commit.id)
+                .arg("--")
+                .arg(&candidate.path)
                 .current_dir(root)
-                .output()
-                .with_context(|| format!("blaming {}", path.display()))?;
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                if stderr.contains("no such path") {
-                    return Ok(None);
-                }
-                bail!("git blame failed for {}: {}", path.display(), stderr.trim());
-            }
-            let raw = String::from_utf8(output.stdout).context("git blame returned non-UTF-8")?;
-            Ok(Some((path, parse_blame(&raw)?)))
+                .output();
+            output
+                .is_ok_and(|output| {
+                    output.status.success()
+                        && String::from_utf8_lossy(&output.stdout)
+                            .lines()
+                            .any(|line| declares_added_name(line, name))
+                })
+                .then_some(candidate.commit)
         })
-        .collect::<Result<Vec<_>>>()
-        .map(|files| files.into_iter().flatten().collect())
+        .collect::<Vec<_>>();
+    commits.reverse();
+    Ok(commits)
 }
 
-fn parse_blame(input: &str) -> Result<Vec<(String, i64)>> {
-    let mut commit = String::new();
-    let mut time = 0;
-    let mut lines = Vec::new();
-    for line in input.lines() {
-        if let Some(value) = line.strip_prefix("committer-time ") {
-            time = value
-                .parse()
-                .with_context(|| format!("invalid git blame time `{value}`"))?;
-        } else if line.starts_with('\t') {
-            lines.push((commit.clone(), time));
-        } else if line.split_whitespace().next().is_some_and(|value| {
-            value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-        }) {
-            commit = line
-                .split_whitespace()
-                .next()
-                .unwrap_or_default()
-                .to_owned();
-        }
+pub(super) fn fix_markers(text: &str) -> Vec<String> {
+    text.lines()
+        .filter(|line| {
+            line.split(|character: char| !character.is_alphanumeric() && character != '_')
+                .any(|word| {
+                    matches!(
+                        word.to_ascii_lowercase().as_str(),
+                        "fix" | "bug" | "incident" | "regression"
+                    )
+                })
+                || line
+                    .as_bytes()
+                    .windows(2)
+                    .any(|pair| pair[0] == b'#' && pair[1].is_ascii_digit())
+        })
+        .map(str::trim)
+        .map(str::to_owned)
+        .collect()
+}
+
+fn parse_introducing_candidates(raw: &str) -> Result<Vec<IntroducingCandidate>> {
+    raw.split('\x1e')
+        .filter_map(|record| {
+            let record = record.trim_matches('\n');
+            (!record.is_empty()).then_some(record)
+        })
+        .map(|record| {
+            let fields = record.splitn(6, '\0').collect::<Vec<_>>();
+            if fields.len() != 6 {
+                bail!("malformed git log record for introducing commits");
+            }
+            let paths = fields[5]
+                .lines()
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+                .collect::<Vec<_>>();
+            let [path] = paths.as_slice() else {
+                bail!("malformed historical path for introducing commit");
+            };
+            Ok(IntroducingCandidate {
+                commit: Commit {
+                    id: fields[0].to_owned(),
+                    short: fields[1].to_owned(),
+                    time: fields[2]
+                        .parse()
+                        .with_context(|| format!("invalid git commit time `{}`", fields[2]))?,
+                    subject: fields[3].to_owned(),
+                    body: fields[4].trim_end().to_owned(),
+                    changes: Vec::new(),
+                },
+                path: PathBuf::from(path),
+            })
+        })
+        .collect()
+}
+
+fn declares_added_name(line: &str, name: &str) -> bool {
+    if !line.starts_with('+') || line.starts_with("+++") {
+        return false;
     }
-    Ok(lines)
+    let tokens = line[1..]
+        .split(|character: char| !character.is_alphanumeric() && character != '_')
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    tokens.windows(2).any(|pair| {
+        matches!(
+            pair[0],
+            "fn" | "struct"
+                | "enum"
+                | "union"
+                | "type"
+                | "trait"
+                | "const"
+                | "static"
+                | "mod"
+                | "macro_rules"
+        ) && pair[1] == name
+    })
 }
 
 pub(super) fn pace(
@@ -221,72 +261,6 @@ pub(super) fn cochange(
         commits: commits.len(),
         edges: fold_cochange(commits, scope, max_commit_files),
     })
-}
-
-pub(super) fn cochange_partners(
-    log: &Log,
-    scope: &Path,
-    module: &Path,
-    window_pct: usize,
-    max_commit_files: usize,
-) -> CochangeReport {
-    let target = module
-        .strip_prefix(scope_for_matching(scope))
-        .unwrap_or(module)
-        .with_extension("")
-        .to_string_lossy()
-        .replace(std::path::MAIN_SEPARATOR, "/");
-    let mut counts = BTreeMap::<String, usize>::new();
-    let commits = recent_window(&log.commits, window_pct);
-    for commit in commits {
-        let files = commit
-            .changes
-            .iter()
-            .map(|change| match change {
-                Change::Touch(path) | Change::Delete(path) => path,
-                Change::Rename { new, .. } => new,
-            })
-            .filter(|path| path.starts_with(scope_for_matching(scope)))
-            .filter(|path| rust_module_for_path(path, scope).is_some())
-            .collect::<BTreeSet<_>>();
-        if files.len() > max_commit_files {
-            continue;
-        }
-        let modules = files
-            .into_iter()
-            .filter_map(|path| {
-                if path.starts_with(scope_for_matching(module)) {
-                    Some(target.clone())
-                } else {
-                    rust_module_for_path(path, scope)
-                }
-            })
-            .collect::<BTreeSet<_>>();
-        if !modules.contains(&target) {
-            continue;
-        }
-        for partner in modules.iter().filter(|partner| *partner != &target) {
-            *counts.entry(partner.clone()).or_default() += 1;
-        }
-    }
-    let mut edges = counts
-        .into_iter()
-        .map(|(partner, commits)| CochangeEdge {
-            left: target.clone(),
-            right: partner,
-            commits,
-        })
-        .collect::<Vec<_>>();
-    edges.sort_by(|left, right| {
-        right
-            .commits
-            .cmp(&left.commits)
-            .then_with(|| left.right.cmp(&right.right))
-    });
-    CochangeReport {
-        commits: commits.len(),
-        edges,
-    }
 }
 
 fn recent_window(commits: &[Commit], window_pct: usize) -> &[Commit] {
@@ -398,9 +372,12 @@ fn parse_history(input: &str) -> Result<Vec<Commit>> {
                 .map_or((header, "0"), |(id, time)| (id, time));
             commits.push(Commit {
                 id: id.to_owned(),
+                short: id.chars().take(7).collect(),
                 time: time
                     .parse()
                     .with_context(|| format!("invalid git commit time `{time}`"))?,
+                subject: String::new(),
+                body: String::new(),
                 changes: Vec::new(),
             });
             continue;
@@ -557,37 +534,27 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn blame_skips_files_not_present_in_head() {
+    fn introducing_commits_follow_a_renamed_file() {
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("scratch.rs"), "fn scratch() {}\n").unwrap();
-        let output = Command::new("git")
-            .args(["init", "--quiet"])
-            .current_dir(root.path())
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        let output = Command::new("git")
-            .args([
-                "-c",
-                "user.name=Atlas Test",
-                "-c",
-                "user.email=atlas@example.invalid",
-                "commit",
-                "--quiet",
-                "--allow-empty",
-                "-m",
-                "initial",
-            ])
-            .current_dir(root.path())
-            .output()
-            .unwrap();
-        assert!(output.status.success());
+        run_git(root.path(), &["init", "-q"]);
+        run_git(root.path(), &["config", "user.email", "atlas@example.com"]);
+        run_git(root.path(), &["config", "user.name", "Atlas Test"]);
+        fs::create_dir(root.path().join("src")).unwrap();
+        fs::write(root.path().join("src/old.rs"), "pub fn target() {}\n").unwrap();
+        run_git(root.path(), &["add", "."]);
+        run_git(root.path(), &["commit", "-qm", "introduce target"]);
+        fs::rename(
+            root.path().join("src/old.rs"),
+            root.path().join("src/new.rs"),
+        )
+        .unwrap();
+        run_git(root.path(), &["add", "-A"]);
+        run_git(root.path(), &["commit", "-qm", "rename source"]);
 
-        assert!(
-            blame_files(root.path(), vec![PathBuf::from("scratch.rs")])
-                .unwrap()
-                .is_empty()
-        );
+        let commits = introducing_commits(root.path(), Path::new("src/new.rs"), "target").unwrap();
+
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].subject, "introduce target");
     }
 
     #[test]
@@ -686,6 +653,19 @@ mod tests {
         assert_eq!(
             (&edges[0].left, &edges[0].right),
             (&"a".into(), &"c".into())
+        );
+    }
+
+    fn run_git(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 }

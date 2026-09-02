@@ -6,8 +6,6 @@
 //! ponytail: this is an xtask module while RimZ is its only consumer; extract
 //! the source/syntax/history seams into a crate if another repository adopts it.
 
-mod api;
-mod brief;
 mod conform;
 mod detect;
 mod diff;
@@ -37,10 +35,8 @@ pub(crate) const USAGE: &str = "cargo xtask atlas <verb> [flags]
 Verbs:
   rank      prioritize modules by size, escaping surface, churn, and complexity
   seams     report imports, external surface, co-change, and divergence
-  api       report effective reach and exact production/test references
   shapes    cluster large functions by shared call choreography
   survey    produce one architecture-review sweep over a scope
-  brief     produce a module dossier (or one per split leaf)
   diff      compare a base revision with the working tree: surface, imports, edges, files
   inspect   show what one module's functions assemble from another, and where
   conform   compare the tree with refactor-target.toml budgets
@@ -63,8 +59,6 @@ pub(crate) fn atlas(root: &Path, args: &[String]) -> Result<()> {
     match verb.as_str() {
         "rank" => rank::run(root, rest),
         "seams" => seams::run(root, rest),
-        "api" => api::run(root, rest),
-        "brief" => brief::run(root, rest),
         "diff" => diff::run(root, rest),
         "inspect" => inspect::run(root, rest),
         "shapes" => shapes::run(root, rest),
