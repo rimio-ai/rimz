@@ -52,6 +52,8 @@ rimz subagents claude "trace the authentication call path"
 
 Each launch is equivalent to a one-cell `rimz agents <profile> <prompt> -p --bg` run with a timeout. It prints the minted petname immediately and writes a callback notice to stderr, so a parent can start several children without waiting between launches. Pass `--wait[=DURATION]` to print the petname and then join the child like `subagents wait <name>`, including its final message or failure tail. `--json` is accepted on a single launch only with `--wait`; it emits the full run record, the same shape as `subagents wait <name> --json`, without the human petname line.
 
+Read a child's conversation with `rimz transcript @<petname>`. Channel, `@all`, and parent-focused transcript views leave launched-child conversations out.
+
 ```sh
 first=$(rimz subagents codex "find the smallest safe fix")
 second=$(rimz subagents launch reviewer "review the proposed API")

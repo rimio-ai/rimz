@@ -377,7 +377,7 @@ Hook and delivery paths append to fixed 7-day buckets at `transcript/<bucket-sta
 | Kind | Records | Reads back as |
 | --- | --- | --- |
 | `Prompt` | a human prompt when no question is open | `user: @receiver, text` |
-| `Message` | an inter-agent delivery, with structured `from` | `@sender: @receiver, text` |
+| `Message` | an inter-agent delivery, or a launched child's run-matched launch brief, with structured `from` | `@sender: @receiver, text` |
 | `SubagentReport` | the status-only launched-child fleet digest, with `from: @rimz` | hidden from human rendering; included by `--json` |
 | `Assistant` | a root turn's final assistant message | `@receiver: text` |
 | `Ask` | a native question, when a blocking hook marks the agent waiting; `questions` carry option labels and descriptions | the agent's question |
@@ -392,7 +392,9 @@ Two fields link entries into conversations, and both default empty so older JSON
 
 `reply_to` carries the parent message ids. The same turn-start replaces `AgentContext.turn_opened_by` with every matched id, including an empty vector that clears a prior turn. An agent-authored enqueue copies that current-turn vector into its new record's `in_reply_to`; a human sender, `--no-from`, an unnamed sender, or missing context starts a root. The turn's final `Assistant` entry and any mid-turn `Ask` copy `turn_opened_by` into `reply_to`. Requeue preserves `in_reply_to`, so retrying text keeps its causal position.
 
-A batched delivery splits on blank-line boundaries that introduce another `Type: AGENT_MESSAGE`, `Type: SUBAGENT_REPORT`, or `Type: USER_MESSAGE` header, so each section becomes its own entry. A provider turn-error becomes an `Error` entry only on the hook-path merge (`StopFailure` or a `Stop` tail refresh); statusline-only detections stay card enrichment, because that path is lock-free and writes no transcript.
+`parent_agent_id` and `parent_agent_kind` carry the direct parent of a pane-backed launched child. The read side folds that stamp from any entry into the session identity, keeping the child's whole conversation out of channel, `@all`, and parent-focused transcript scopes even after the live store row is gone. Targeting the child directly still shows it.
+
+A launched child's initial headerless prompt becomes a `Message` from its parent when it exactly matches the durable subagent run prompt; later headerless input remains a human `Prompt`. A batched delivery splits on blank-line boundaries that introduce another `Type: AGENT_MESSAGE`, `Type: SUBAGENT_REPORT`, or `Type: USER_MESSAGE` header, so each section becomes its own entry. A provider turn-error becomes an `Error` entry only on the hook-path merge (`StopFailure` or a `Stop` tail refresh); statusline-only detections stay card enrichment, because that path is lock-free and writes no transcript.
 
 `rimz transcript` projects linked entries into flat conversation components: it unions output edges from an `Assistant`, `Ask`, `Error`, or `Answer` to the messages that opened its turn, plus reply-back edges from a message to a parent whose sender is that message's receiver. Other causal edges, including hand-offs to third parties, root new conversations. The earliest entry in a component is its root; the rest follow chronologically beneath it. `--flat` skips the assembly.
 

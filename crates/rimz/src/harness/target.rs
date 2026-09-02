@@ -1321,6 +1321,16 @@ pub fn message_header(
             harness_notice_type(notice)
         ));
     }
+    let handle = agent_sender_handle(sender, peers, target_channel)?;
+    Some(format!("Type: AGENT_MESSAGE\nFrom: {handle}\nContent:\n"))
+}
+
+/// The canonical handle used in an agent-authored message header.
+pub fn agent_sender_handle(
+    sender: &MessageSender,
+    peers: &[&AgentState],
+    target_channel: Option<&str>,
+) -> Option<String> {
     let MessageSender::Agent {
         kind,
         name,
@@ -1338,10 +1348,7 @@ pub fn message_header(
             .find(|agent| agent.name.as_deref() == Some(sender_name))
     {
         let include_channel = agent_channel(agent).as_deref() != target_channel;
-        return Some(format!(
-            "Type: AGENT_MESSAGE\nFrom: {}\nContent:\n",
-            agent_handle(agent, peers, include_channel)
-        ));
+        return Some(agent_handle(agent, peers, include_channel));
     }
     let include_channel = channel.as_deref() != target_channel;
     let mut handle = identity_handle(kind, profile.as_deref(), role.as_deref());
@@ -1349,7 +1356,7 @@ pub fn message_header(
         handle.push('#');
         handle.push_str(channel);
     }
-    Some(format!("Type: AGENT_MESSAGE\nFrom: {handle}\nContent:\n"))
+    Some(handle)
 }
 
 const fn harness_notice_type(notice: &HarnessNotice) -> &'static str {

@@ -38,6 +38,38 @@ fn recorded(signal: LifecycleSignal) -> RecordedLifecycle {
     }
 }
 
+fn append_launched_agent(
+    store: &Store,
+    kind: &str,
+    agent_id: &str,
+    name: &str,
+    launch: rimz::agents::LaunchParams,
+) {
+    let kind = rimz::ids::AgentKind::new_unchecked(kind);
+    store
+        .append_event(&rimz::store::event::EventEnvelope::agent_launched(
+            store.paths().workspace_id.clone(),
+            "session",
+            &kind,
+            rimz::store::event::AgentLaunchPayload {
+                agent_id: rimz::ids::AgentSessionId::from(agent_id),
+                launch_id: None,
+                agent_name: name.to_owned(),
+                agent_name_explicit: true,
+                launch,
+                state: rimz::store::event::AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some("/tmp/hooks-test/chat".to_owned()),
+                worktree_branch: Some("chat".to_owned()),
+                prompt: None,
+                description: None,
+            },
+        ))
+        .unwrap();
+}
+
 #[test]
 fn one_terminal_extraction_is_shared_when_run_and_conversation_both_need_it() {
     let calls = std::cell::Cell::new(0);
@@ -88,6 +120,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
         None,
         &[],
         &[first.clone(), second.clone()],
+        None,
     )
     .unwrap();
 
@@ -115,6 +148,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
         Some("done"),
         &[],
         &[],
+        None,
     )
     .unwrap();
     assert_eq!(
@@ -144,6 +178,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
             has_option_previews: false,
         }],
         &[],
+        None,
     )
     .unwrap();
     assert_eq!(
@@ -166,6 +201,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
         None,
         &[],
         &[],
+        None,
     )
     .unwrap();
     assert!(
@@ -223,6 +259,7 @@ fn subagent_report_records_as_a_hidden_harness_report() {
         None,
         &[],
         std::slice::from_ref(&message),
+        None,
     )
     .unwrap();
 
@@ -266,6 +303,7 @@ fn mixed_submit_records_stray_text_as_direct_input() {
         None,
         &[],
         std::slice::from_ref(&message),
+        None,
     )
     .unwrap();
 
@@ -306,6 +344,7 @@ fn user_message_header_records_prompt_without_envelope() {
         None,
         &[],
         std::slice::from_ref(&message),
+        None,
     )
     .unwrap();
 
@@ -315,6 +354,96 @@ fn user_message_header_records_prompt_without_envelope() {
     assert_eq!(entries[0].from, None);
     assert_eq!(entries[0].text, "from a human");
     assert_eq!(entries[0].message_id.as_ref(), Some(&message.message_id));
+}
+
+#[test]
+fn launched_child_brief_is_attributed_to_parent() {
+    let (_dir, store) = store();
+    let workspace = workspace();
+    append_launched_agent(
+        &store,
+        "codex",
+        "parent-session",
+        "steady-parent",
+        rimz::agents::LaunchParams {
+            role: Some("planner".to_owned()),
+            channel: Some("chat".to_owned()),
+            ..Default::default()
+        },
+    );
+    append_launched_agent(
+        &store,
+        "claude",
+        "child-session",
+        "swift-child",
+        rimz::agents::LaunchParams {
+            parent_agent_id: Some(rimz::ids::AgentSessionId::from("parent-session")),
+            parent_agent_kind: Some(rimz::ids::AgentKind::new_unchecked("codex")),
+            launch_depth: Some(1),
+            channel: Some("chat".to_owned()),
+            ..Default::default()
+        },
+    );
+
+    let mut run = rimz::harness::run::RunRecord::new(
+        workspace.workspace_id.clone(),
+        rimz::ids::AgentKind::new_unchecked("claude"),
+        rimz::agents::PermissionMode::Auto,
+        "inspect the infra".to_owned(),
+        workspace.worktree_root.clone(),
+    );
+    run.subagent = true;
+    let mut started = recorded(LifecycleSignal::TurnStarted);
+    started.observation.agent_id = Some(rimz::ids::AgentSessionId::from("child-session"));
+    started.observation.prompt = Some("  inspect the infra  ".to_owned());
+
+    record_conversation(
+        &workspace,
+        &store,
+        rimz::agents::definition_by_kind("claude").unwrap(),
+        &started,
+        None,
+        &[],
+        &[],
+        Some(&run),
+    )
+    .unwrap();
+
+    let mut later = started;
+    later.observation.prompt = Some("follow-up from the human".to_owned());
+    record_conversation(
+        &workspace,
+        &store,
+        rimz::agents::definition_by_kind("claude").unwrap(),
+        &later,
+        None,
+        &[],
+        &[],
+        Some(&run),
+    )
+    .unwrap();
+
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].entry, rimz::transcript::TranscriptKind::Message);
+    assert_eq!(entries[0].from.as_deref(), Some("@planner"));
+    assert_eq!(
+        entries[0].parent_agent_id.as_deref(),
+        Some("parent-session")
+    );
+    assert_eq!(
+        entries[0]
+            .parent_agent_kind
+            .as_ref()
+            .map(|kind| kind.as_str()),
+        Some("codex")
+    );
+    assert_eq!(entries[1].entry, rimz::transcript::TranscriptKind::Prompt);
+    assert_eq!(entries[1].from, None);
+    assert_eq!(
+        entries[1].parent_agent_id.as_deref(),
+        Some("parent-session")
+    );
 }
 
 #[test]
@@ -351,6 +480,7 @@ fn agent_message_does_not_answer_open_ask() {
         None,
         &[],
         std::slice::from_ref(&message),
+        None,
     )
     .unwrap();
 
@@ -384,6 +514,7 @@ fn prompt_without_waiting_transition_does_not_answer_stale_ask() {
         None,
         &[],
         &[],
+        None,
     )
     .unwrap();
 
@@ -419,6 +550,7 @@ fn idless_ask_does_not_capture_prompt() {
         None,
         &[],
         &[],
+        None,
     )
     .unwrap();
 
@@ -460,6 +592,7 @@ fn prompt_after_answered_ask_starts_a_new_turn() {
         None,
         &[],
         &[],
+        None,
     )
     .unwrap();
 
@@ -529,6 +662,7 @@ fn unheadered_system_batch_keeps_each_confirmed_message_causal() {
         None,
         &[],
         &[first.clone(), second.clone()],
+        None,
     )
     .unwrap();
 
@@ -600,6 +734,7 @@ fn cursor_response_hook_is_the_only_assistant_text_authority() {
             None,
             &[],
             &[],
+            None,
         )
         .unwrap();
     }

@@ -585,6 +585,142 @@ fn transcript_hook_strips_user_message_header_from_prompt_entry() {
 }
 
 #[test]
+fn transcript_scopes_launched_child_and_attributes_brief() {
+    let env = Env::new();
+    let branch = "launched-child-transcript";
+    let store = env.store();
+    let parent_kind = AgentKind::new_unchecked("claude");
+    let parent_id = AgentSessionId::from("parent-transcript-session");
+    store
+        .append_event(&rimz::store::event::EventEnvelope::agent_launched(
+            env.workspace_id.clone(),
+            "rimz-test",
+            &parent_kind,
+            rimz::store::event::AgentLaunchPayload {
+                agent_id: parent_id.clone(),
+                launch_id: None,
+                agent_name: "steady-parent".to_owned(),
+                agent_name_explicit: true,
+                launch: rimz::agents::LaunchParams {
+                    role: Some("planner".to_owned()),
+                    channel: Some(branch.to_owned()),
+                    ..Default::default()
+                },
+                state: rimz::store::event::AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.home_root.join(branch).display().to_string()),
+                worktree_branch: Some(branch.to_owned()),
+                prompt: None,
+                description: None,
+            },
+        ))
+        .expect("seed parent");
+    let mut parent_entry = agent_entry(
+        "claude",
+        parent_id.as_str(),
+        branch,
+        TranscriptKind::Prompt,
+        "root conversation",
+        "2026-06-01T00:00:00Z",
+    );
+    parent_entry.role = Some("planner".to_owned());
+    append_transcript(&env, parent_entry);
+
+    let child_kind = AgentKind::new_unchecked("codex");
+    let child_id = AgentSessionId::from("child-transcript-session");
+    let mut run = rimz::harness::run::RunRecord::new(
+        env.workspace_id.clone(),
+        child_kind.clone(),
+        rimz::agents::PermissionMode::Auto,
+        "inspect the launch path".to_owned(),
+        env.home_root.join(branch),
+    );
+    run.agent_id = Some(child_id.clone());
+    run.agent_name = Some("swift-child".to_owned());
+    run.subagent = true;
+    rimz::harness::run::create(store.paths(), &run).expect("create child run");
+    store
+        .append_event(&rimz::store::event::EventEnvelope::agent_launched(
+            env.workspace_id.clone(),
+            "rimz-test",
+            &child_kind,
+            rimz::store::event::AgentLaunchPayload {
+                agent_id: child_id.clone(),
+                launch_id: None,
+                agent_name: "swift-child".to_owned(),
+                agent_name_explicit: true,
+                launch: rimz::agents::LaunchParams {
+                    parent_agent_id: Some(parent_id.clone()),
+                    parent_agent_kind: Some(parent_kind),
+                    launch_depth: Some(1),
+                    channel: Some(branch.to_owned()),
+                    ..Default::default()
+                },
+                state: rimz::store::event::AgentLaunchState::Bound,
+                run_id: Some(run.run_id.clone()),
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.home_root.join(branch).display().to_string()),
+                worktree_branch: Some(branch.to_owned()),
+                prompt: Some(run.prompt.clone()),
+                description: None,
+            },
+        ))
+        .expect("seed child");
+
+    run_hook_for_run(
+        &env,
+        "codex",
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": child_id.as_str(),
+            "prompt": run.prompt,
+            "worktree_branch": branch,
+            "worktree_path": env.home_root.join(branch),
+        }),
+        &run.run_id,
+    );
+    run_hook_for_run(
+        &env,
+        "codex",
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": child_id.as_str(),
+            "last_assistant_message": "child answer",
+            "worktree_branch": branch,
+            "worktree_path": env.home_root.join(branch),
+        }),
+        &run.run_id,
+    );
+
+    let channel = run_ok(env.rimz().args(["transcript", &format!("#{branch}")]));
+    assert!(channel.contains("root conversation"), "{channel}");
+    assert!(!channel.contains("inspect the launch path"), "{channel}");
+    assert!(!channel.contains("child answer"), "{channel}");
+    let channel_json = run_ok(
+        env.rimz()
+            .args(["transcript", &format!("#{branch}"), "--json"]),
+    );
+    assert!(
+        !channel_json.contains("inspect the launch path"),
+        "{channel_json}"
+    );
+    assert!(!channel_json.contains("child answer"), "{channel_json}");
+
+    let child = run_ok(env.rimz().args(["transcript", child_id.as_str(), "--all"]));
+    assert!(child.contains("@planner → @codex"), "{child}");
+    assert!(child.contains("inspect the launch path"), "{child}");
+    assert!(child.contains("child answer"), "{child}");
+
+    let parent = run_ok(env.rimz().args(["transcript", parent_id.as_str(), "--all"]));
+    assert!(parent.contains("root conversation"), "{parent}");
+    assert!(!parent.contains("inspect the launch path"), "{parent}");
+    assert!(!parent.contains("child answer"), "{parent}");
+}
+
+#[test]
 fn transcript_defaults_to_live_session_and_archives_prior_life() {
     let env = Env::new();
     let branch = "living-transcript";
@@ -918,6 +1054,23 @@ fn run_hook(env: &Env, source: &str, payload: serde_json::Value) {
 }
 
 fn run_hook_for_owner(env: &Env, source: &str, payload: serde_json::Value, owner_pid: u32) {
+    run_hook_for_owner_and_run(env, source, payload, owner_pid, None);
+}
+
+fn run_hook_for_run(env: &Env, source: &str, payload: serde_json::Value, run_id: &rimz::RunId) {
+    let mut owner = dummy_agent_process();
+    run_hook_for_owner_and_run(env, source, payload, owner.id(), Some(run_id));
+    let _ = owner.kill();
+    let _ = owner.wait();
+}
+
+fn run_hook_for_owner_and_run(
+    env: &Env,
+    source: &str,
+    payload: serde_json::Value,
+    owner_pid: u32,
+    run_id: Option<&rimz::RunId>,
+) {
     let mut payload = payload;
     stamp_worktree_path(env, &mut payload);
     let payload = serde_json::to_string(&payload).expect("payload");
@@ -925,6 +1078,9 @@ fn run_hook_for_owner(env: &Env, source: &str, payload: serde_json::Value, owner
     scrub_launch_identity(&mut cmd);
     cmd.env("RIMZ_AGENT_PID", owner_pid.to_string());
     cmd.env(rimz::harness::launch::ENV_AGENT_ROLE, source);
+    if let Some(run_id) = run_id {
+        cmd.env(rimz::harness::launch::ENV_RUN_ID, run_id.as_str());
+    }
     let output = env
         .spawn_payload(cmd, &payload)
         .wait_with_output()

@@ -71,6 +71,12 @@ pub struct TranscriptEntry {
     pub profile: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    /// Direct parent of a pane-backed `rimz subagents` child. Absent for root
+    /// agents; classifies the session as a child for transcript scoping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_agent_id: Option<AgentSessionId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_agent_kind: Option<AgentKind>,
     pub entry: TranscriptKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
@@ -100,6 +106,8 @@ impl TranscriptEntry {
             name: None,
             profile: None,
             role: None,
+            parent_agent_id: None,
+            parent_agent_kind: None,
             entry,
             from: None,
             text,

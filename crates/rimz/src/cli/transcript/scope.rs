@@ -17,7 +17,7 @@ pub(super) fn live_root_agents(workspace: &rimz::ResolvedWorkspace) -> Vec<LiveR
             snapshot
                 .agents
                 .into_iter()
-                .filter(|agent| !agent.is_provider_subagent())
+                .filter(|agent| agent.parent_agent_id.is_none())
                 .map(|agent| {
                     let channel = rimz::harness::target::agent_channel(&agent);
                     LiveRootAgent {
@@ -45,12 +45,19 @@ fn live_agent_in_scope(agent: &LiveRootAgent, scope: &Scope) -> bool {
     }
 }
 
-pub(super) fn entry_in_scope(entry: &TranscriptEntry, scope: &Scope) -> bool {
+pub(super) fn entry_in_scope(
+    entry: &TranscriptEntry,
+    scope: &Scope,
+    identities: &HashMap<AgentKey, Identity>,
+) -> bool {
     scope
         .focus_keys
         .as_ref()
         .is_some_and(|focus| focus.contains(&entry_key(entry)))
-        || channel_matches(entry.channel.as_deref(), scope.channel_filter.as_deref())
+        || (channel_matches(entry.channel.as_deref(), scope.channel_filter.as_deref())
+            && !identities
+                .get(&entry_key(entry))
+                .is_some_and(|identity| identity.child))
 }
 
 pub(super) fn compare_optional_timestamps(
@@ -169,6 +176,7 @@ pub(super) fn build_identities(entries: &[TranscriptEntry]) -> HashMap<AgentKey,
             role: entry.role.clone(),
             last_at: entry.at,
             rich: entry.role.is_some() || entry.name.is_some() || entry.profile.is_some(),
+            child: entry.parent_agent_id.is_some(),
         };
         identities
             .entry(entry_key(entry))
@@ -177,6 +185,7 @@ pub(super) fn build_identities(entries: &[TranscriptEntry]) -> HashMap<AgentKey,
                 if existing.channel.is_none() {
                     existing.channel = candidate.channel.clone();
                 }
+                existing.child |= candidate.child;
                 if candidate.rich && !existing.rich {
                     existing.base_handle = candidate.base_handle.clone();
                     existing.name = candidate.name.clone();
