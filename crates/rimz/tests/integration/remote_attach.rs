@@ -1601,53 +1601,59 @@ fn noninteractive_remote_session_loss_does_not_recreate() {
 }
 
 #[test]
-fn supervised_remote_attach_ends_a_stuck_sidebar_only_room() {
-    let env = Env::new();
-    let session = "watchdog-room";
-    let zellij_log = env.project_root.join("zellij-watchdog.log");
-    let watchdog_state = env.project_root.join("zellij-watchdog.state");
-    let output = env
-        .rimz()
-        .args(["--mux", "zellij", "attach", "--attach", session])
-        .env(
+fn supervised_remote_attach_ends_a_sidebar_only_room() {
+    for attach_exits in [false, true] {
+        let env = Env::new();
+        let session = "watchdog-room";
+        let zellij_log = env.project_root.join("zellij-watchdog.log");
+        let watchdog_state = env.project_root.join("zellij-watchdog.state");
+        let mut command = env.rimz();
+        command
+            .args(["--mux", "zellij", "attach", "--attach", session])
+            .env(
             "RIMZ_ZELLIJ_BIN",
             crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
         )
-        .env("RIMZ_TEST_ZELLIJ_LOG", &zellij_log)
-        .env(
-            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
-            format!("{session} [Created 1s ago]\n"),
-        )
-        .env(
-            "RIMZ_TEST_ZELLIJ_LIST_PANES",
-            r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
-        )
-        .env("RIMZ_TEST_ZELLIJ_WATCHDOG_STATE", &watchdog_state)
-        .env("RIMZ_REMOTE_SUPERVISED", "1")
-        .bounded_output()
-        .expect("run supervised remote attach wrapper");
+            .env("RIMZ_TEST_ZELLIJ_LOG", &zellij_log)
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{session} [Created 1s ago]\n"),
+            )
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_PANES",
+                r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+            )
+            .env("RIMZ_TEST_ZELLIJ_WATCHDOG_STATE", &watchdog_state)
+            .env("RIMZ_REMOTE_SUPERVISED", "1");
+        if attach_exits {
+            command.env("RIMZ_TEST_ZELLIJ_WATCHDOG_ATTACH_EXIT", "1");
+        }
+        let output = command
+            .bounded_output()
+            .expect("run supervised remote attach wrapper");
 
-    assert_eq!(
-        output.status.code(),
-        Some(rimz::remote::REMOTE_SESSION_LOST_EXIT),
-        "watchdog should translate room end to the remote sentinel\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stderr),
-    );
-    let trace = std::fs::read_to_string(&zellij_log).expect("read zellij watchdog trace");
-    assert!(
-        trace.contains("\tattach\t--create\twatchdog-room"),
-        "{trace}"
-    );
-    assert!(trace.contains("delete-session"), "{trace}");
-    let pid = std::fs::read_to_string(watchdog_state.with_extension("pid"))
-        .expect("read parked client pid")
-        .parse::<i32>()
-        .expect("parse parked client pid");
-    assert_eq!(
-        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
-        Err(nix::errno::Errno::ESRCH),
-        "parked mux client should be dead before the wrapper returns",
-    );
+        assert_eq!(
+            output.status.code(),
+            Some(rimz::remote::REMOTE_SESSION_LOST_EXIT),
+            "watchdog should translate room end to the remote sentinel\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+        let trace = std::fs::read_to_string(&zellij_log).expect("read zellij watchdog trace");
+        assert!(
+            trace.contains("\tattach\t--create\twatchdog-room"),
+            "{trace}"
+        );
+        assert!(trace.contains("delete-session"), "{trace}");
+        let pid = std::fs::read_to_string(watchdog_state.with_extension("pid"))
+            .expect("read attached client pid")
+            .parse::<i32>()
+            .expect("parse attached client pid");
+        assert_eq!(
+            nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
+            Err(nix::errno::Errno::ESRCH),
+            "mux client should be dead before the wrapper returns",
+        );
+    }
 }
 
 #[test]

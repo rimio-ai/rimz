@@ -174,6 +174,10 @@ fn handle_attach() {
     std::fs::write(state.with_extension("attached"), b"").expect("mark attached client");
     std::fs::write(state.with_extension("pid"), std::process::id().to_string())
         .expect("record attached client pid");
+    if env::var_os("RIMZ_TEST_ZELLIJ_WATCHDOG_ATTACH_EXIT").is_some() {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        return;
+    }
     std::thread::park_timeout(std::time::Duration::from_secs(60));
 }
 
