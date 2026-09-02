@@ -50,6 +50,7 @@ Builds a Markdown dossier for one Rust module from exact SCIP references.
 
 const SECTIONS: &[&str] = &[
     "verdict",
+    "record",
     "callers",
     "heaviest",
     "surface",
@@ -121,9 +122,20 @@ struct ItemEvidence {
     verdict: Option<Verdict>,
 }
 
+/// What the repository already says about the module: its root file's
+/// `//!` header and the nearest `AGENTS.md` contract above it, so a dossier
+/// carries the record beside the numbers.
+#[derive(Debug, Serialize)]
+struct Record {
+    path: Option<PathBuf>,
+    header: Option<String>,
+    contract: Option<PathBuf>,
+}
+
 #[derive(Debug, Serialize)]
 struct Report {
     verdict: InspectVerdict,
+    record: Record,
     callers: Vec<Caller>,
     heaviest: HeaviestSection,
     surface: SurfaceSection,
@@ -271,6 +283,7 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
     );
     let report = Report {
         verdict,
+        record: record(root, &facts, &module),
         callers,
         heaviest: HeaviestSection {
             functions: assembly,
@@ -773,10 +786,55 @@ fn render_json(report: &Report, output: &OutputArgs) -> Result<String> {
     Ok(rendered)
 }
 
+fn record(root: &Path, facts: &Facts, module: &ModuleSelector) -> Record {
+    let root_file = facts
+        .syntax
+        .files
+        .iter()
+        .find(|file| file.module_path == module.module);
+    // `store/mod.rs` and `store.rs` both start the walk at `store/`, then
+    // climb to the crate root.
+    let contract = root_file.and_then(|file| {
+        file.path
+            .with_extension("")
+            .ancestors()
+            .take_while(|ancestor| ancestor.starts_with(&file.crate_path))
+            .map(|ancestor| ancestor.join("AGENTS.md"))
+            .find(|candidate| root.join(candidate).is_file())
+    });
+    Record {
+        path: root_file.map(|file| file.path.clone()),
+        header: root_file.and_then(|file| file.doc_head.clone()),
+        contract,
+    }
+}
+
+fn render_record(out: &mut String, record: &Record) {
+    out.push_str("\n# Record\n\n");
+    match &record.path {
+        Some(path) => writeln!(out, "- module: {}", path.display()),
+        None => writeln!(out, "- module: no root file"),
+    }
+    .expect("writing to a String cannot fail");
+    match &record.contract {
+        Some(path) => writeln!(out, "- contract: {}", path.display()),
+        None => writeln!(out, "- contract: none above the module"),
+    }
+    .expect("writing to a String cannot fail");
+    match &record.header {
+        Some(header) => writeln!(out, "- header: {header}\n"),
+        None => writeln!(out, "- header: none\n"),
+    }
+    .expect("writing to a String cannot fail");
+}
+
 fn render_markdown(report: &Report, output: &OutputArgs, top: usize) -> String {
     let mut rendered = String::new();
     if output.wants("verdict") {
         render_verdict(&mut rendered, &report.verdict);
+    }
+    if output.wants("record") {
+        render_record(&mut rendered, &report.record);
     }
     if output.wants("item")
         && let Some(item) = &report.item

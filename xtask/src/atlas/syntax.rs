@@ -8,9 +8,9 @@ use serde::{Serialize, Serializer};
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{
-    Expr, ExprCall, ExprIf, ExprMethodCall, ExprWhile, File, FnArg, ImplItem, ImplItemFn, Item,
-    ItemFn, ItemImpl, ItemMod, ItemTrait, Pat, PatGuard, Stmt, TraitItem, TraitItemFn, UseTree,
-    Visibility,
+    AttrStyle, Expr, ExprCall, ExprIf, ExprLit, ExprMethodCall, ExprWhile, File, FnArg, ImplItem,
+    ImplItemFn, Item, ItemFn, ItemImpl, ItemMod, ItemTrait, Lit, Meta, Pat, PatGuard, Stmt,
+    TraitItem, TraitItemFn, UseTree, Visibility,
 };
 
 use super::modules::{
@@ -129,6 +129,9 @@ pub(super) struct FileSyntax {
     pub(super) path: PathBuf,
     pub(super) crate_path: PathBuf,
     pub(super) module_path: String,
+    /// First paragraph of the file's `//!` header: the module's own
+    /// statement of what it is for.
+    pub(super) doc_head: Option<String>,
     pub(super) pub_items: Vec<PubItem>,
     pub(super) mod_decls: Vec<(String, String)>,
     /// Named fields of every struct, one entry per declaring struct.
@@ -267,6 +270,7 @@ fn analyze_file(
         path: path.to_path_buf(),
         crate_path,
         module_path,
+        doc_head: doc_head(file),
         pub_items,
         mod_decls,
         struct_fields,
@@ -277,6 +281,35 @@ fn analyze_file(
         test_fns: fn_collector.test_functions,
         guards: guard_collector.guards,
     }
+}
+
+fn doc_head(file: &File) -> Option<String> {
+    let mut lines = Vec::new();
+    for attr in &file.attrs {
+        if !matches!(attr.style, AttrStyle::Inner(_)) || !attr.path().is_ident("doc") {
+            continue;
+        }
+        let Meta::NameValue(meta) = &attr.meta else {
+            continue;
+        };
+        let Expr::Lit(ExprLit {
+            lit: Lit::Str(text),
+            ..
+        }) = &meta.value
+        else {
+            continue;
+        };
+        let line = text.value();
+        let line = line.trim();
+        if line.is_empty() {
+            if !lines.is_empty() {
+                break;
+            }
+            continue;
+        }
+        lines.push(line.to_owned());
+    }
+    (!lines.is_empty()).then(|| lines.join(" "))
 }
 
 fn collect_public_items(

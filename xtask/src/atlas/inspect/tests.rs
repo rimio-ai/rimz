@@ -278,3 +278,34 @@ fn crate_fixture(store: &str) -> tempfile::TempDir {
     fs::write(root.path().join("src/store.rs"), store).unwrap();
     root
 }
+
+#[test]
+fn record_reads_the_root_files_header_and_the_nearest_contract() {
+    let root = crate_with_files(&[
+        ("src/lib.rs", "//! Demo crate.\nmod store;\nmod lane;\n"),
+        (
+            "src/store/mod.rs",
+            "//! Durable state engine.\n//! Every write is fsynced.\n//!\n//! Not part of the head.\npub fn open() {}\n",
+        ),
+        ("src/store/AGENTS.md", "# store\n"),
+        ("src/lane.rs", "pub fn lane() {}\n"),
+        ("AGENTS.md", "# crate\n"),
+    ]);
+    let facts = Facts::load(root.path(), Path::new("."), Facets::default()).unwrap();
+
+    let store = record(root.path(), &facts, &selector("store"));
+    assert_eq!(store.path.as_deref(), Some(Path::new("src/store/mod.rs")));
+    assert_eq!(
+        store.header.as_deref(),
+        Some("Durable state engine. Every write is fsynced.")
+    );
+    assert_eq!(
+        store.contract.as_deref(),
+        Some(Path::new("src/store/AGENTS.md"))
+    );
+
+    let lane = record(root.path(), &facts, &selector("lane"));
+    assert_eq!(lane.path.as_deref(), Some(Path::new("src/lane.rs")));
+    assert_eq!(lane.header, None);
+    assert_eq!(lane.contract.as_deref(), Some(Path::new("AGENTS.md")));
+}

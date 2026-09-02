@@ -390,6 +390,9 @@ pub(super) fn render_surface(out: &mut String, surface: &SurfaceSection, top: us
     .expect("writing to a String cannot fail");
 
     out.push_str("\n## Vestigial candidates\n\n");
+    if surface.vestigial.is_empty() {
+        out.push_str("none\n");
+    }
     for item in surface.vestigial.iter().take(top) {
         let introduced = item.introduced.as_ref().map_or_else(
             || "definition spans multiple commits".to_owned(),
