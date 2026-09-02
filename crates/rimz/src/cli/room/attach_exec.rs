@@ -95,16 +95,20 @@ impl RemoteRoomMonitor {
         }
         let observation = observe_remote_room(self.backend.as_ref(), &self.session_name);
         let action = self.watchdog.advance(elapsed, Some(observation));
-        if matches!(action, RemoteRoomWatchdogAction::RoomEnded)
-            && let Err(err) = self.backend.kill_session(&self.session_name)
-        {
+        if matches!(action, RemoteRoomWatchdogAction::RoomEnded) {
+            self.remove_session();
+        }
+        action
+    }
+
+    fn remove_session(&self) {
+        if let Err(err) = self.backend.kill_session(&self.session_name) {
             tracing::warn!(
                 session = %self.session_name,
                 error = %err,
                 "remote room ended but its leftover mux session could not be removed",
             );
         }
-        action
     }
 }
 
@@ -150,11 +154,16 @@ pub(super) fn run_attach_action(
                 AttachOutcome::Exited(status) => status,
             };
             let observation = supervised.then(|| {
-                monitor.map_or(RemoteRoomObservation::Unknown, |monitor| {
-                    observe_remote_room(monitor.backend.as_ref(), session_name)
-                })
+                monitor
+                    .as_ref()
+                    .map_or(RemoteRoomObservation::Unknown, |monitor| {
+                        observe_remote_room(monitor.backend.as_ref(), session_name)
+                    })
             });
-            if remote_session_lost_exit(supervised, observation) {
+            if remote_session_lost_exit(supervised, status.success(), observation) {
+                if let Some(monitor) = &monitor {
+                    monitor.remove_session();
+                }
                 std::process::exit(rimz::remote::REMOTE_SESSION_LOST_EXIT);
             }
             if !status.success() {
@@ -165,8 +174,12 @@ pub(super) fn run_attach_action(
     }
 }
 
-fn remote_session_lost_exit(supervised: bool, observation: Option<RemoteRoomObservation>) -> bool {
-    supervised && matches!(observation, Some(RemoteRoomObservation::NoWorkPanes))
+fn remote_session_lost_exit(
+    supervised: bool,
+    status_success: bool,
+    observation: Option<RemoteRoomObservation>,
+) -> bool {
+    supervised && status_success && matches!(observation, Some(RemoteRoomObservation::NoWorkPanes))
 }
 
 fn observe_remote_room(
@@ -556,14 +569,22 @@ mod tests {
     fn remote_session_loss_translates_only_missing_sessions() {
         assert!(!remote_session_lost_exit(
             true,
+            true,
             Some(RemoteRoomObservation::WorkPanePresent)
         ));
         assert!(remote_session_lost_exit(
             true,
+            true,
             Some(RemoteRoomObservation::NoWorkPanes)
         ));
-        assert!(!remote_session_lost_exit(true, None));
+        assert!(!remote_session_lost_exit(true, true, None));
         assert!(!remote_session_lost_exit(
+            false,
+            true,
+            Some(RemoteRoomObservation::NoWorkPanes)
+        ));
+        assert!(!remote_session_lost_exit(
+            true,
             false,
             Some(RemoteRoomObservation::NoWorkPanes)
         ));
