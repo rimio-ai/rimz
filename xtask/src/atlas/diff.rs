@@ -320,8 +320,8 @@ fn build_report(
             .map(|expectation| {
                 Ok(AssemblyCheck {
                     expectation: expectation.clone(),
-                    base: contract_assembly(root, base, expectation)?,
-                    current: contract_assembly(root, current, expectation)?,
+                    base: contract_assembly(root, base, expectation, true)?,
+                    current: contract_assembly(root, current, expectation, false)?,
                 })
             })
             .collect::<Result<Vec<_>>>()?
@@ -583,19 +583,27 @@ fn contract_assembly(
     root: &Path,
     facts: &Facts,
     expectation: &AssemblyExpectation,
+    absent_as_zero: bool,
 ) -> Result<usize> {
     let from = inspect::resolve_module(
         root,
         &facts.syntax.files,
         &expectation.from,
+        "diff",
         "contract assembly.from",
-    )?;
+    );
     let to = inspect::resolve_module(
         root,
         &facts.syntax.files,
         &expectation.to,
+        "diff",
         "contract assembly.to",
-    )?;
+    );
+    let (from, to) = match (from, to) {
+        (Ok(from), Ok(to)) => (from, to),
+        _ if absent_as_zero => return Ok(0),
+        (Err(error), _) | (_, Err(error)) => return Err(error),
+    };
     let mut functions = BTreeMap::<FunctionId, BTreeSet<String>>::new();
     for edge in facts
         .references
@@ -963,7 +971,8 @@ mod tests {
     use std::collections::BTreeSet;
     use std::fs;
 
-    use super::super::references::FnRef;
+    use super::super::references::{FnRef, References};
+    use super::super::sources::Source;
     use super::*;
 
     #[test]
@@ -1075,6 +1084,46 @@ mod tests {
                 .find(|row| row.assertion == "changed paths")
                 .unwrap()
                 .landed
+        );
+    }
+
+    #[test]
+    fn contract_assembly_treats_a_base_only_missing_endpoint_as_zero() {
+        let root = tempfile::tempdir().unwrap();
+        let sources = vec![Source::new("src/caller.rs", "fn call() {}")];
+        let syntax = super::super::syntax::analyze_sources(&sources, &BTreeSet::new());
+        let facts = Facts {
+            root: root.path().to_path_buf(),
+            scope: PathBuf::from("."),
+            mod_index: super::super::syntax::ModIndex::new(&syntax.files),
+            known_modules: syntax
+                .files
+                .iter()
+                .map(|file| file.module_path.clone())
+                .collect(),
+            syntax,
+            sources,
+            crate_names: BTreeSet::new(),
+            sizes: BTreeMap::new(),
+            history: None,
+            metrics: None,
+            references: Some(References::default()),
+        };
+        let expectation = AssemblyExpectation {
+            from: "caller".to_owned(),
+            to: "newmod".to_owned(),
+            max_items: 1,
+        };
+
+        assert_eq!(
+            contract_assembly(root.path(), &facts, &expectation, true).unwrap(),
+            0
+        );
+        assert!(
+            contract_assembly(root.path(), &facts, &expectation, false)
+                .unwrap_err()
+                .to_string()
+                .contains("atlas diff contract assembly.to")
         );
     }
 
