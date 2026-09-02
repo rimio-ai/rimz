@@ -163,8 +163,10 @@ fn narrow_visibility_covers_callers_without_exceeding_them() {
             .collect::<BTreeSet<_>>()
     };
 
+    let no_bins = BTreeSet::new();
+
     assert_eq!(
-        narrow_to("store", EXTERNAL_REACH, &callers(&[]), 0),
+        narrow_to("store", EXTERNAL_REACH, &callers(&[]), 0, &no_bins),
         "private"
     );
     assert_eq!(
@@ -172,12 +174,19 @@ fn narrow_visibility_covers_callers_without_exceeding_them() {
             "store::writer",
             EXTERNAL_REACH,
             &callers(&["store::reader"]),
-            1
+            1,
+            &no_bins
         ),
         "pub(super)"
     );
     assert_eq!(
-        narrow_to("store::writer", EXTERNAL_REACH, &callers(&["cli"]), 1),
+        narrow_to(
+            "store::writer",
+            EXTERNAL_REACH,
+            &callers(&["cli"]),
+            1,
+            &no_bins
+        ),
         "pub(crate)"
     );
     assert_eq!(
@@ -185,12 +194,41 @@ fn narrow_visibility_covers_callers_without_exceeding_them() {
             "store::writer::record",
             EXTERNAL_REACH,
             &callers(&["store::reader"]),
-            1
+            1,
+            &no_bins
         ),
         "pub(in crate::store)"
     );
     assert_eq!(
-        narrow_to("store::writer", "store", &callers(&["store::reader"]), 1),
+        narrow_to(
+            "store::writer",
+            "store",
+            &callers(&["store::reader"]),
+            1,
+            &no_bins
+        ),
+        "keep"
+    );
+    // Descendants see private items already.
+    assert_eq!(
+        narrow_to(
+            "message",
+            EXTERNAL_REACH,
+            &callers(&["message::deliver", "message::send"]),
+            2,
+            &no_bins
+        ),
+        "private"
+    );
+    // A caller in the binary crate needs the item at least `pub`.
+    assert_eq!(
+        narrow_to(
+            "store::writer",
+            EXTERNAL_REACH,
+            &callers(&["cli::show"]),
+            1,
+            &callers(&["cli"])
+        ),
         "keep"
     );
 }

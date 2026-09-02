@@ -296,16 +296,7 @@ fn add_outlier_flags(rows: &mut [Row]) {
 
 fn is_binary_module(facts: &Facts, module: &str) -> bool {
     let top = module.split('/').next().unwrap_or(module);
-    let declares =
-        |file: &super::syntax::FileSyntax| file.mod_decls.iter().any(|(module, _)| module == top);
-    facts
-        .syntax
-        .files
-        .iter()
-        .any(|file| file.path.file_name().is_some_and(|name| name == "main.rs") && declares(file))
-        && !facts.syntax.files.iter().any(|file| {
-            file.path.file_name().is_some_and(|name| name == "lib.rs") && declares(file)
-        })
+    facts.bin_modules.contains(top)
 }
 
 fn sort_rows(rows: &mut [Row], by: RankBy) {

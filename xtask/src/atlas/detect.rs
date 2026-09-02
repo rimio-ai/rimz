@@ -120,7 +120,7 @@ fn guard_family_report(
             if files < 3 {
                 return None;
             }
-            let classification = classify_guard(&key, &facts.defined_names);
+            let classification = classify_guard(&key, &facts.defined_names, &facts.unique_fields);
             match classification {
                 GuardClassification::Vocabulary => dropped.vocabulary += 1,
                 GuardClassification::PredicateUse => dropped.predicate_use += 1,
@@ -288,14 +288,6 @@ pub(super) fn named_identifier_roles(key: &str) -> Vec<NamedIdentifier<'_>> {
     names
 }
 
-/// Names-only compatibility view used by inspect's target matching.
-pub(super) fn named_identifiers(key: &str) -> Vec<&str> {
-    named_identifier_roles(key)
-        .into_iter()
-        .map(|identifier| identifier.name)
-        .collect()
-}
-
 pub(super) fn is_std_identifier(name: &str) -> bool {
     STD_IDENTIFIERS.contains(&name)
 }
@@ -308,12 +300,23 @@ enum GuardClassification {
 }
 
 /// A guard duplicates knowledge only when it composes crate vocabulary.
-/// Naming one crate-defined method is merely using its predicate.
-fn classify_guard(key: &str, defined_names: &BTreeSet<String>) -> GuardClassification {
+/// Naming one crate-defined method is merely using its predicate, and a
+/// field reads one type's state only when exactly one struct declares it.
+fn classify_guard(
+    key: &str,
+    defined_names: &BTreeSet<String>,
+    unique_fields: &BTreeSet<String>,
+) -> GuardClassification {
     let identifiers = named_identifier_roles(key)
         .into_iter()
         .filter(|identifier| {
-            !is_std_identifier(identifier.name) && defined_names.contains(identifier.name)
+            !is_std_identifier(identifier.name)
+                && match identifier.role {
+                    IdentifierRole::Field => unique_fields.contains(identifier.name),
+                    IdentifierRole::Method | IdentifierRole::Path => {
+                        defined_names.contains(identifier.name)
+                    }
+                }
         })
         .collect::<Vec<_>>();
     let distinct = identifiers
@@ -337,61 +340,103 @@ fn classify_guard(key: &str, defined_names: &BTreeSet<String>) -> GuardClassific
 }
 
 #[cfg(test)]
-fn is_domain_guard(key: &str, defined_names: &BTreeSet<String>) -> bool {
-    classify_guard(key, defined_names) == GuardClassification::Composed
-}
-
-#[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{IdentifierRole, is_domain_guard, named_identifier_roles, named_identifiers};
+    use super::{GuardClassification, IdentifierRole, classify_guard, named_identifier_roles};
+
+    fn named_identifiers(key: &str) -> Vec<&str> {
+        named_identifier_roles(key)
+            .into_iter()
+            .map(|identifier| identifier.name)
+            .collect()
+    }
+
+    fn names(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    fn is_domain_guard(key: &str, defined: &[&str], unique_fields: &[&str]) -> bool {
+        classify_guard(key, &names(defined), &names(unique_fields)) == GuardClassification::Composed
+    }
 
     #[test]
-    fn domain_guards_require_a_crate_defined_named_identifier() {
+    fn domain_guards_compose_crate_defined_identifiers() {
         let defined = [
             "parent_agent_id",
             "is_provider_subagent",
             "needs_attention",
             "ValueRefreshKind",
-        ]
-        .map(str::to_owned)
-        .into_iter()
-        .collect::<BTreeSet<_>>();
-        assert!(!is_domain_guard("$0.is_empty()", &defined));
-        assert!(!is_domain_guard("!$0.trim().is_empty()", &defined));
-        assert!(!is_domain_guard("$0Some($1)=$2", &defined));
-        assert!(!is_domain_guard("$0.kind()==ErrorKind::NotFound", &defined));
-        assert!(is_domain_guard("$0.parent_agent_id.is_some()", &defined));
-        assert!(!is_domain_guard("$0.is_provider_subagent()", &defined));
+        ];
+        let fields = ["parent_agent_id"];
+        assert!(!is_domain_guard("$0.is_empty()", &defined, &fields));
+        assert!(!is_domain_guard("!$0.trim().is_empty()", &defined, &fields));
+        assert!(!is_domain_guard("$0Some($1)=$2", &defined, &fields));
+        assert!(!is_domain_guard(
+            "$0.kind()==ErrorKind::NotFound",
+            &defined,
+            &fields
+        ));
+        assert!(is_domain_guard(
+            "$0.parent_agent_id.is_some()",
+            &defined,
+            &fields
+        ));
+        assert!(!is_domain_guard(
+            "$0.is_provider_subagent()",
+            &defined,
+            &fields
+        ));
         assert!(is_domain_guard(
             "$0.is_provider_subagent()&&$1.needs_attention()",
-            &defined
+            &defined,
+            &fields
         ));
         assert!(is_domain_guard(
             "$0.kind()!=ValueRefreshKind::Cached",
-            &defined
+            &defined,
+            &fields
         ));
+    }
+
+    #[test]
+    fn a_field_composes_only_when_one_struct_declares_it() {
+        // `rows` is a field on many structs and a function name elsewhere;
+        // `parent_agent_id` is declared once.
+        let defined = ["rows", "parent_agent_id"];
+        assert!(!is_domain_guard(
+            "$0.rows.is_empty()",
+            &defined,
+            &["parent_agent_id"]
+        ));
+        assert!(is_domain_guard(
+            "$0.rows.is_empty()",
+            &defined,
+            &["rows", "parent_agent_id"]
+        ));
+        assert_eq!(
+            classify_guard("$0.rows.is_empty()", &names(&defined), &names(&[])),
+            GuardClassification::Vocabulary
+        );
     }
 
     #[test]
     fn single_crate_predicate_use_is_not_duplicated_knowledge() {
-        let defined = ["is_provider_subagent"]
-            .map(str::to_owned)
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-
-        assert!(!is_domain_guard("$0.is_provider_subagent()", &defined));
+        assert_eq!(
+            classify_guard(
+                "$0.is_provider_subagent()",
+                &names(&["is_provider_subagent"]),
+                &names(&[])
+            ),
+            GuardClassification::PredicateUse
+        );
     }
 
     #[test]
     fn crate_defined_std_lookalikes_do_not_make_a_guard_domain() {
-        let defined = ["insert", "is_zero"]
-            .map(str::to_owned)
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        assert!(!is_domain_guard("!$0.insert($1)", &defined));
-        assert!(!is_domain_guard("$0.is_zero()", &defined));
+        let defined = ["insert", "is_zero"];
+        assert!(!is_domain_guard("!$0.insert($1)", &defined, &[]));
+        assert!(!is_domain_guard("$0.is_zero()", &defined, &[]));
     }
 
     #[test]

@@ -6,7 +6,7 @@ use anyhow::{Result, bail};
 use serde::Serialize;
 
 use super::conform::{self, Direction};
-use super::detect::{self, GuardFamily};
+use super::detect::{self, GuardFamily, IdentifierRole};
 use super::facts::{Facets, Facts};
 use super::history::{self, Commit};
 use super::modules::{
@@ -36,14 +36,15 @@ pub(super) use selector::resolve_module;
 use surface::{SurfaceSection, render_surface, surface_section, vestigial_items};
 use verdict::{InspectVerdict, render_verdict};
 
-const USAGE: &str = "cargo xtask atlas inspect --module <module|path> [--from <module|path>] [--item <module::Name>] [--top N]
+const USAGE: &str = "cargo xtask atlas inspect --module <module|path> [--from <module|path>] [--item <module::Name>] [--top N] [--all]
 
 Builds a Markdown dossier for one Rust module from exact SCIP references.
 
   --module <value>  module or root-relative Rust file/directory
   --from <value>    caller module to quote (default: heaviest caller)
   --item <value>    public item key to investigate
-  --top <n>         rows and names shown per section (default 20)";
+  --top <n>         rows and names shown per section (default 20)
+  --all             show shape and guard families below the finding gate";
 
 const SECTIONS: &[&str] = &[
     "verdict",
@@ -69,6 +70,7 @@ struct Args {
     from: Option<String>,
     item: Option<String>,
     top: usize,
+    all: bool,
     output: OutputArgs,
 }
 
@@ -213,16 +215,20 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
     surface.vestigial = vestigial_items(root, &surface.items)?;
     let repeated = repeated_assembly(&references.edges, &module, &facts.syntax.files);
     let calls = call_shapes(&references.edges, &module, &facts.syntax.files);
-    let shape_families = shapes::families(&facts, Path::new("."))
-        .into_iter()
-        .filter(|family| {
-            family
-                .members
-                .iter()
-                .any(|member| module.matches(&crate_module_for_path(&member.path), &member.path))
-        })
-        .collect::<Vec<_>>();
-    let guard_families = module_item_guards(&facts, &module);
+    let shape_families = if args.all {
+        shapes::families_all_with_dropped(&facts, Path::new(".")).0
+    } else {
+        shapes::families(&facts, Path::new("."))
+    }
+    .into_iter()
+    .filter(|family| {
+        family
+            .members
+            .iter()
+            .any(|member| module.matches(&crate_module_for_path(&member.path), &member.path))
+    })
+    .collect::<Vec<_>>();
+    let guard_families = module_item_guards(&facts, &module, args.all);
     let providers = providers(&facts, &module);
     let rules = target.as_ref().map_or_else(Vec::new, |target| {
         target_rules(root, target, &facts, &module)
@@ -290,6 +296,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     let mut from = None;
     let mut item = None;
     let mut top = None;
+    let mut all = false;
     let mut output = OutputArgs::default();
     let mut index = 0;
     while index < args.len() {
@@ -322,6 +329,13 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
                 )?;
                 index += 2;
             }
+            "--all" => {
+                if all {
+                    bail!("atlas inspect --all may only be passed once");
+                }
+                all = true;
+                index += 1;
+            }
             "--no-index" => bail!("atlas inspect requires the exact SCIP reference index"),
             flag => bail!("unknown atlas inspect flag `{flag}`\n\n{}", usage()),
         }
@@ -332,12 +346,22 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
         from,
         item,
         top: top.unwrap_or(20),
+        all,
         output,
     }))
 }
 
-fn module_item_guards(facts: &Facts, target: &ModuleSelector) -> Vec<GuardFamily> {
+/// Guard families anywhere in the crate that name an item the target
+/// defines; `include_all` keeps the ones below the finding gate. A path
+/// segment counts only under one of the target's own modules or types, so
+/// `event::poll` never matches a module that also defines a `poll`.
+fn module_item_guards(
+    facts: &Facts,
+    target: &ModuleSelector,
+    include_all: bool,
+) -> Vec<GuardFamily> {
     let mut names = BTreeSet::new();
+    let mut scopes = BTreeSet::new();
     for file in facts
         .syntax
         .files
@@ -346,13 +370,52 @@ fn module_item_guards(facts: &Facts, target: &ModuleSelector) -> Vec<GuardFamily
     {
         names.extend(file.pub_items.iter().map(|item| item.name.as_str()));
         names.extend(file.fns.iter().map(|function| function.name.as_str()));
+        scopes.extend(file.module_path.rsplit("::").next());
+        scopes.extend(
+            file.mod_decls
+                .iter()
+                .filter_map(|(module, _)| module.rsplit("::").next()),
+        );
+        scopes.extend(
+            file.pub_items
+                .iter()
+                .filter(|item| {
+                    matches!(
+                        item.kind.as_str(),
+                        "struct" | "enum" | "trait" | "type" | "union"
+                    )
+                })
+                .map(|item| item.name.as_str()),
+        );
     }
-    detect::guard_families(facts, Path::new("."))
+    let families = if include_all {
+        detect::guard_families_all_with_dropped(facts, Path::new(".")).0
+    } else {
+        detect::guard_families(facts, Path::new("."))
+    };
+    families
         .into_iter()
         .filter(|family| {
-            detect::named_identifiers(&family.key)
+            detect::named_identifier_roles(&family.key)
                 .into_iter()
-                .any(|name| !detect::is_std_identifier(name) && names.contains(name))
+                .any(|identifier| {
+                    if detect::is_std_identifier(identifier.name)
+                        || !names.contains(identifier.name)
+                    {
+                        return false;
+                    }
+                    match identifier.role {
+                        IdentifierRole::Path => {
+                            scopes.contains(identifier.name)
+                                || scopes.iter().any(|scope| {
+                                    family
+                                        .key
+                                        .contains(&format!("{scope}::{}", identifier.name))
+                                })
+                        }
+                        IdentifierRole::Method | IdentifierRole::Field => true,
+                    }
+                })
         })
         .collect()
 }

@@ -39,6 +39,12 @@ pub(super) struct Facts {
     /// detectors use it to tell crate vocabulary from std vocabulary without
     /// a SCIP index.
     pub(super) defined_names: BTreeSet<String>,
+    /// Struct fields exactly one struct in the workspace declares: a guard
+    /// naming one reads one type's state rather than a common field name.
+    pub(super) unique_fields: BTreeSet<String>,
+    /// Top-level modules only a `main.rs` declares. Callers there sit outside
+    /// the library crate, so nothing they reach can narrow below `pub`.
+    pub(super) bin_modules: BTreeSet<String>,
     pub(super) crate_names: BTreeSet<String>,
     pub(super) sizes: BTreeMap<PathBuf, FileSize>,
     pub(super) history: Option<Log>,
@@ -102,6 +108,8 @@ impl Facts {
             .map(|file| file.module_path.clone())
             .collect();
         let defined_names = defined_names(&syntax);
+        let unique_fields = unique_fields(&syntax);
+        let bin_modules = bin_modules(&syntax);
         let sizes = file_sizes(&sources, &syntax);
         let scoped_sources = sources
             .iter()
@@ -139,6 +147,8 @@ impl Facts {
             mod_index,
             known_modules,
             defined_names,
+            unique_fields,
+            bin_modules,
             crate_names,
             sizes,
             history,
@@ -173,6 +183,33 @@ pub(super) fn defined_names(syntax: &SyntaxReport) -> BTreeSet<String> {
         );
     }
     names
+}
+
+pub(super) fn unique_fields(syntax: &SyntaxReport) -> BTreeSet<String> {
+    let mut declaring_structs = BTreeMap::<&str, usize>::new();
+    for field in syntax.files.iter().flat_map(|file| &file.struct_fields) {
+        *declaring_structs.entry(field).or_default() += 1;
+    }
+    declaring_structs
+        .into_iter()
+        .filter(|(_, structs)| *structs == 1)
+        .map(|(field, _)| field.to_owned())
+        .collect()
+}
+
+pub(super) fn bin_modules(syntax: &SyntaxReport) -> BTreeSet<String> {
+    let declared_by = |root: &str| {
+        syntax
+            .files
+            .iter()
+            .filter(|file| file.path.file_name().is_some_and(|name| name == root))
+            .flat_map(|file| file.mod_decls.iter().map(|(module, _)| module.clone()))
+            .collect::<BTreeSet<_>>()
+    };
+    declared_by("main.rs")
+        .difference(&declared_by("lib.rs"))
+        .cloned()
+        .collect()
 }
 
 fn file_sizes(sources: &[Source], syntax: &SyntaxReport) -> BTreeMap<PathBuf, FileSize> {

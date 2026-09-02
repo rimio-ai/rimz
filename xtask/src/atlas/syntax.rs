@@ -84,6 +84,8 @@ pub(super) struct FileSyntax {
     pub(super) module_path: String,
     pub(super) pub_items: Vec<PubItem>,
     pub(super) mod_decls: Vec<(String, String)>,
+    /// Named fields of every struct, one entry per declaring struct.
+    pub(super) struct_fields: Vec<String>,
     pub(super) test_regions: Vec<Range<usize>>,
     pub(super) dependencies: Vec<DependencySite>,
     pub(super) fns: Vec<FnBody>,
@@ -170,12 +172,14 @@ fn analyze_file(
     let crate_path = crate_path_for_source(path);
     let mut pub_items = Vec::new();
     let mut mod_decls = Vec::new();
+    let mut struct_fields = Vec::new();
     collect_public_items(
         &file.items,
         &module_path,
         EXTERNAL_REACH,
         &mut pub_items,
         &mut mod_decls,
+        &mut struct_fields,
     );
     let mut test_regions = Vec::new();
     collect_test_regions(&file.items, &mut test_regions);
@@ -213,6 +217,7 @@ fn analyze_file(
         module_path,
         pub_items,
         mod_decls,
+        struct_fields,
         test_regions,
         dependencies,
         fns: fn_collector.functions,
@@ -227,10 +232,21 @@ fn collect_public_items(
     enclosing_reach: &str,
     output: &mut Vec<PubItem>,
     mod_decls: &mut Vec<(String, String)>,
+    struct_fields: &mut Vec<String>,
 ) {
     for item in items {
         if is_cfg_test(item_attributes(item)) {
             continue;
+        }
+        if let Item::Struct(item) = item
+            && let syn::Fields::Named(fields) = &item.fields
+        {
+            struct_fields.extend(
+                fields
+                    .named
+                    .iter()
+                    .filter_map(|field| field.ident.as_ref().map(ToString::to_string)),
+            );
         }
         if let Item::Impl(item) = item {
             for method in &item.items {
@@ -316,7 +332,14 @@ fn collect_public_items(
                 });
             }
             if let Some((_, items)) = &item.content {
-                collect_public_items(items, &nested_module, &module_reach, output, mod_decls);
+                collect_public_items(
+                    items,
+                    &nested_module,
+                    &module_reach,
+                    output,
+                    mod_decls,
+                    struct_fields,
+                );
             }
             continue;
         }

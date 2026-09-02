@@ -47,17 +47,22 @@ fn inspect_args_require_a_module_and_parse_output_flags() {
 fn module_item_guards_keep_only_guards_naming_the_modules_items() {
     let caller = |name: &str| {
         format!(
-            "fn {name}(s: &crate::store::S, v: &[u8]) {{\n    if s.is_ready() && s.is_ready() {{}}\n    if crate::cli::is_stale(v) && v.len() > 2 {{}}\n}}\n"
+            "fn {name}(s: &crate::store::S, v: &[u8]) {{\n    if s.phase == crate::store::Phase::Ready {{}}\n    if s.is_ready() {{}}\n    if crate::cli::is_stale(v) && v.len() > 2 {{}}\n    if crate::event::poll(v) {{}}\n}}\n"
         )
     };
     let root = crate_with_files(&[
         (
             "src/lib.rs",
-            "mod store;\nmod cli;\nmod a;\nmod b;\nmod c;\n",
+            "mod store;\nmod cli;\nmod event;\nmod other;\nmod a;\nmod b;\nmod c;\n",
         ),
         (
+            "src/event.rs",
+            "pub fn poll(v: &[u8]) -> bool { v.is_empty() }\n",
+        ),
+        ("src/other.rs", "pub fn poll() -> bool { true }\n"),
+        (
             "src/store.rs",
-            "pub struct S;\nimpl S {\n    pub fn is_ready(&self) -> bool { true }\n}\n",
+            "#[derive(PartialEq)]\npub enum Phase { Ready }\npub struct S { pub phase: Phase }\nimpl S {\n    pub fn is_ready(&self) -> bool { true }\n}\n",
         ),
         (
             "src/cli.rs",
@@ -69,14 +74,23 @@ fn module_item_guards_keep_only_guards_naming_the_modules_items() {
     ]);
     let facts = Facts::load(root.path(), Path::new("."), Facets::default()).unwrap();
 
-    let families = module_item_guards(&facts, &selector("store"));
+    let families = module_item_guards(&facts, &selector("store"), false);
 
+    // `s.is_ready()` alone is predicate use, not composed knowledge.
     assert_eq!(families.len(), 1, "{families:?}");
-    assert!(families[0].key.contains("is_ready"));
+    assert!(families[0].key.contains("Phase::Ready"));
     assert_eq!(families[0].files, 3);
-    let cli = module_item_guards(&facts, &selector("cli"));
+    let all = module_item_guards(&facts, &selector("store"), true);
+    assert_eq!(all.len(), 2, "{all:?}");
+    assert!(all.iter().any(|family| family.key.contains("is_ready")));
+    let cli = module_item_guards(&facts, &selector("cli"), false);
     assert_eq!(cli.len(), 1, "{cli:?}");
     assert!(cli[0].key.contains("is_stale"));
+    // `event::poll` names `event`'s item, not `other`'s same-named `poll`.
+    let event = module_item_guards(&facts, &selector("event"), false);
+    assert_eq!(event.len(), 1, "{event:?}");
+    assert!(event[0].key.contains("event::poll"));
+    assert!(module_item_guards(&facts, &selector("other"), false).is_empty());
 }
 
 #[test]
@@ -197,6 +211,8 @@ fn target_rule_rows_use_each_rules_files_and_resolved_admissions() {
             .map(|file| file.module_path.clone())
             .collect(),
         defined_names: super::super::facts::defined_names(&syntax),
+        unique_fields: super::super::facts::unique_fields(&syntax),
+        bin_modules: super::super::facts::bin_modules(&syntax),
         syntax,
         sources: sources.to_vec(),
         crate_names: BTreeSet::new(),

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use serde::Serialize;
@@ -11,6 +12,9 @@ pub(super) struct InspectVerdict {
     outside_production_sites: usize,
     head_items: usize,
     internal_only: usize,
+    /// Items that can narrow, counted by the visibility they narrow to,
+    /// most frequent first.
+    narrowable: Vec<(String, usize)>,
     top_assembly_items: Vec<String>,
     top_assembly_callers: usize,
     heaviest_caller: Option<String>,
@@ -27,11 +31,21 @@ impl InspectVerdict {
     ) -> Self {
         let top_assembly = assembly.iter().max_by_key(|group| group.functions.len());
         let heaviest_caller = callers.first().and_then(|caller| caller.top_fns.first());
+        let mut narrowable = BTreeMap::<&str, usize>::new();
+        for row in surface.items.iter().filter(|row| row.narrow_to != "keep") {
+            *narrowable.entry(&row.narrow_to).or_default() += 1;
+        }
+        let mut narrowable = narrowable
+            .into_iter()
+            .map(|(visibility, items)| (visibility.to_owned(), items))
+            .collect::<Vec<_>>();
+        narrowable.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
         Self {
             escaping_items: surface.items.len(),
             outside_production_sites: surface.outside_sites,
             head_items: surface.head_items,
             internal_only: surface.internal_only,
+            narrowable,
             top_assembly_items: top_assembly.map_or_else(Vec::new, |group| group.items.clone()),
             top_assembly_callers: top_assembly.map_or(0, |group| group.functions.len()),
             heaviest_caller: heaviest_caller.map(|function| function.function.clone()),
@@ -53,10 +67,25 @@ pub(super) fn render_verdict(out: &mut String, verdict: &InspectVerdict) {
         verdict.escaping_items, verdict.outside_production_sites, verdict.head_items
     )
     .expect("writing to a String cannot fail");
+    let narrowable = verdict
+        .narrowable
+        .iter()
+        .map(|(visibility, items)| format!("{visibility} {items}"))
+        .collect::<Vec<_>>();
     writeln!(
         out,
-        "{} items only the module itself reaches (narrow to pub(super)/pub(crate): see surface)",
-        verdict.internal_only
+        "{} items only the module itself reaches; {} items can narrow{}",
+        verdict.internal_only,
+        verdict
+            .narrowable
+            .iter()
+            .map(|(_, items)| items)
+            .sum::<usize>(),
+        if narrowable.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", narrowable.join(", "))
+        }
     )
     .expect("writing to a String cannot fail");
     if verdict.top_assembly_items.is_empty() {

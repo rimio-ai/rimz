@@ -140,20 +140,33 @@ fn parent_module(module: &str) -> &str {
     module.rsplit_once("::").map_or("", |(parent, _)| parent)
 }
 
+/// The narrowest visibility that still covers every production caller:
+/// `private` when only the item's module and its descendants reach it, or
+/// nothing does. A caller in a binary-only module sits outside the library
+/// crate, so the item must stay as visible as it is.
 fn narrow_to(
     item_module: &str,
     effective_reach: &str,
     production_callers: &BTreeSet<String>,
     production_sites: usize,
+    bin_modules: &BTreeSet<String>,
 ) -> String {
     if production_sites == 0 {
         return "private".to_owned();
+    }
+    let in_binary =
+        |caller: &String| bin_modules.contains(caller.split("::").next().unwrap_or(caller));
+    if production_callers.iter().any(in_binary) {
+        return "keep".to_owned();
     }
     let ancestor = common_ancestor(
         std::iter::once(item_module).chain(production_callers.iter().map(String::as_str)),
     );
     if ancestor == effective_reach {
         "keep".to_owned()
+    } else if ancestor == item_module {
+        // A private item is visible to its own module and every descendant.
+        "private".to_owned()
     } else if ancestor.is_empty() {
         "pub(crate)".to_owned()
     } else if ancestor == parent_module(item_module) {
@@ -268,6 +281,7 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
                 &effective_reach,
                 &item_refs.production,
                 item_refs.production_count,
+                &facts.bin_modules,
             ),
             path: item.path,
             line: item.line,

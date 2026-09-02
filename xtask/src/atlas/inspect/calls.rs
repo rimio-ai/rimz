@@ -153,6 +153,9 @@ fn folded_label(owner: &str, names: &[String]) -> String {
     if names.is_empty() {
         return owner.to_owned();
     }
+    if let [name] = names.as_slice() {
+        return format!("{owner}::{name}");
+    }
     let omitted = names.len().saturating_sub(3);
     names.truncate(3);
     if omitted > 0 {
@@ -176,36 +179,33 @@ fn folded_sequence(edges: &[&Edge], syntax_files: &[FileSyntax]) -> Vec<String> 
             .then_with(|| left.item.cmp(&right.item))
     });
 
-    let mut owner_runs = BTreeMap::<String, Vec<Vec<(usize, String)>>>::new();
+    // Every reference to one owner type (the type, its variants, and its
+    // associated functions) is one item, shown at its first reference.
+    let mut owner_runs = BTreeMap::<String, Vec<(usize, String)>>::new();
     for (index, reference) in references.iter().enumerate() {
         let Some(owner) = &reference.owner else {
             continue;
         };
-        let runs = owner_runs.entry(owner.clone()).or_default();
-        if runs.is_empty() || reference.item == *owner {
-            runs.push(Vec::new());
-        }
-        runs.last_mut()
-            .expect("an owner run was just ensured")
+        owner_runs
+            .entry(owner.clone())
+            .or_default()
             .push((index, reference.item.clone()));
     }
     let mut folded_runs = BTreeMap::<usize, String>::new();
     let mut folded_sites = BTreeSet::new();
-    for (owner, runs) in owner_runs {
-        for sites in runs {
-            let names = sites
-                .iter()
-                .map(|(_, name)| name.clone())
-                .collect::<Vec<_>>();
-            if names.iter().collect::<BTreeSet<_>>().len() < 2 {
-                continue;
-            }
-            let Some((first, _)) = sites.first() else {
-                continue;
-            };
-            folded_runs.insert(*first, folded_label(&owner, &names));
-            folded_sites.extend(sites.into_iter().map(|(index, _)| index));
+    for (owner, sites) in owner_runs {
+        let names = sites
+            .iter()
+            .map(|(_, name)| name.clone())
+            .collect::<Vec<_>>();
+        if names.iter().collect::<BTreeSet<_>>().len() < 2 {
+            continue;
         }
+        let Some((first, _)) = sites.first() else {
+            continue;
+        };
+        folded_runs.insert(*first, folded_label(&owner, &names));
+        folded_sites.extend(sites.into_iter().map(|(index, _)| index));
     }
     let mut folded = Vec::new();
     for (index, reference) in references.into_iter().enumerate() {

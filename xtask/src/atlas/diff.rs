@@ -1630,6 +1630,8 @@ mod tests {
                 .map(|file| file.module_path.clone())
                 .collect(),
             defined_names: super::super::facts::defined_names(&syntax),
+            unique_fields: super::super::facts::unique_fields(&syntax),
+            bin_modules: super::super::facts::bin_modules(&syntax),
             syntax,
             sources,
             crate_names: BTreeSet::new(),
@@ -1771,6 +1773,8 @@ mod tests {
                 .map(|file| file.module_path.clone())
                 .collect(),
             defined_names: super::super::facts::defined_names(&syntax),
+            unique_fields: super::super::facts::unique_fields(&syntax),
+            bin_modules: super::super::facts::bin_modules(&syntax),
             syntax,
             sources,
             crate_names: BTreeSet::new(),
