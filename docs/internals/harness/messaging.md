@@ -199,7 +199,7 @@ The same reactor separately nudges the sweep when this agent is *referenced* by 
 1. **Settle.** Sleep briefly (400 ms, `RIMZ_MESSAGE_SETTLE_MS`) so the agent's state stabilizes after the hook fired.
 2. **Re-check.** Run the ordered check against a fresh snapshot. The hook's decision is a hint; this is the decision.
 3. **Claim.** Under the workspace lock, move the compatible FIFO batch from `Queued` to `Claimed` and bump each `attempts` in one transaction. Claimed records leave the queued scan immediately.
-4. **Write.** Send through the same paste path as `--steer`. If smart compaction fires, write the `/compact` command alone and release the prompt batch back to `Queued` with no attempt penalty.
+4. **Write.** Send through the same paste path as `--steer`. If smart compaction fires, write the rendered compact command alone and release the prompt batch back to `Queued` with no attempt penalty.
 5. **Record.** A successful write moves the batch to `Sent`, still live until confirmed.
 
 `rimz message steer <id>` reuses the helper with a steer policy: it still requires the named record, a receiver card, and a live pane, but ignores `not_before`, FIFO position, the ordinary gate, and the resume-recovery check. It claims only the named record through `claim_message_for_steer`, keeping the TTL guard and skipping the FIFO compare. This is the manual escape hatch for a dependency cycle or a vanished upstream agent. A waiting ask still defers unless the record or the command carries `--force`.

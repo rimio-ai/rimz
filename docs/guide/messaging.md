@@ -114,7 +114,7 @@ rimz message @codex#feat-a --create "start on the auth refactor"    # launch one
 
 ## Land against a fresh window
 
-A long turn can hit the context limit mid-message. Smart compaction sends `/compact` ahead of your text once the agent's context is full enough, so the prompt runs against a fresh window instead of racing the agent's own compaction.
+A long turn can hit the context limit mid-message. Smart compaction sends the agent's compact command ahead of your text once its context is full enough, including the configured summary brief when the command accepts one, so the prompt runs against a fresh window instead of racing the agent's own compaction.
 
 ```sh
 rimz message --smart-compact 70% @claude "now write the migration guide"   # compact first if context ≥ 70% full
