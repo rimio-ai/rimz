@@ -266,7 +266,10 @@ fn child_total_tokens(child: &AgentState) -> Option<u64> {
         .and_then(|context| context.tokens.as_ref())
         .and_then(|tokens| tokens.session_usage.as_ref())
         .map(AgentSessionUsage::displayed_total_tokens)
-        .filter(|total| *total > 0)
+        // Keep this type explicit: rust-analyzer 1.97.1's SCIP inlay-hints
+        // pass panics in hir-ty/src/infer/callee.rs when inferring this
+        // `Option::filter` closure through the iterator-style chain.
+        .filter(|total: &u64| *total > 0)
         .or(child.usage.total_tokens)
 }
 

@@ -162,6 +162,7 @@ fn ensure_keyed(
     };
     let initial_panic = if rust_analyzer_panicked(&output) {
         let excerpt = stderr_excerpt(&output.stderr, 12);
+        let guidance = scip_panic_guidance(&output.stderr);
         files::remove_stale_file(&staged)?;
         eprintln!(
             "atlas: rust-analyzer panicked; retrying the exact SCIP export with one cache-priming worker"
@@ -171,20 +172,20 @@ fn ensure_keyed(
             Err(error) => {
                 let _ = files::remove_stale_file(&staged);
                 return Err(error).context(format!(
-                    "retrying rust-analyzer scip after an internal panic:\n{excerpt}"
+                    "retrying rust-analyzer scip after an internal panic:\n{excerpt}\n\n{guidance}"
                 ));
             }
         };
-        Some(excerpt)
+        Some((excerpt, guidance))
     } else {
         None
     };
     if !output.status.success() {
         let _ = files::remove_stale_file(&staged);
         let stderr = stderr_excerpt(&output.stderr, 12);
-        if let Some(initial_panic) = initial_panic {
+        if let Some((initial_panic, guidance)) = initial_panic {
             bail!(
-                "rust-analyzer scip panicked, then its single-worker retry failed with {}:\n{stderr}\n\ninitial panic:\n{initial_panic}",
+                "rust-analyzer scip panicked, then its single-worker retry failed with {}:\n{stderr}\n\ninitial panic:\n{initial_panic}\n\n{guidance}",
                 output.status
             );
         }
@@ -243,6 +244,19 @@ fn rust_analyzer_panicked(output: &process::Output) -> bool {
 
 fn is_rust_panic_exit_code(code: Option<i32>) -> bool {
     code == Some(RUST_PANIC_EXIT_CODE)
+}
+
+fn scip_panic_guidance(stderr: &[u8]) -> &'static str {
+    if String::from_utf8_lossy(stderr).contains("ide::inlay_hints::hints") {
+        "failing rust-analyzer pass: ide::inlay_hints::hints during SCIP static-index export\n\
+         This is an upstream rust-analyzer closure-inference bug. Work around it by giving the \
+         offending closure parameter an explicit type or replacing the closure with a named function, \
+         then rerun Atlas."
+    } else {
+        "failing rust-analyzer pass: SCIP static-index export\n\
+         This is an internal rust-analyzer failure. Try rewriting the expression named by the panic \
+         with more explicit types, then rerun Atlas."
+    }
 }
 
 fn cache_key(sources: &[Source], lockfile_bytes: &[u8]) -> String {
@@ -348,7 +362,10 @@ mod tests {
     use std::fs;
     use std::time::{Duration, SystemTime};
 
-    use super::{cache_key, is_rust_panic_exit_code, remove_old_indexes, stderr_excerpt, touch};
+    use super::{
+        cache_key, is_rust_panic_exit_code, remove_old_indexes, scip_panic_guidance,
+        stderr_excerpt, touch,
+    };
     use crate::atlas::sources::Source;
 
     #[test]
@@ -376,6 +393,16 @@ mod tests {
             stderr_excerpt(stderr, 12),
             "thread 'main' panicked at infer.rs:1:1:\nbroken"
         );
+    }
+
+    #[test]
+    fn scip_inlay_hint_panic_names_the_pass_and_closure_workaround() {
+        let stderr = b"10: ide::inlay_hints::hints\n11: ide::static_index::StaticIndex::compute\n";
+        let guidance = scip_panic_guidance(stderr);
+
+        assert!(guidance.contains("ide::inlay_hints::hints"));
+        assert!(guidance.contains("closure parameter an explicit type"));
+        assert!(guidance.contains("upstream rust-analyzer"));
     }
 
     #[test]
