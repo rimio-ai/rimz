@@ -716,12 +716,26 @@ fn stop_children(names: Vec<String>, all: bool, globals: &GlobalFlags) -> Result
     if children.is_empty() {
         bail!("this agent has no live subagents to stop");
     }
+    let runs = rimz::harness::run::list(ctx.store.paths())?;
     let peers = rimz::harness::target::addressable_agents(&snapshot);
     let mut tracker = agents_cmd::StopTracker::default();
     let mut failed = false;
     let mut out = render::out();
     for child in children {
         let label = rimz::harness::target::agent_handle(child, &peers, true);
+        if let Some(run) = newest_run_for_child(&runs, child) {
+            // Stamp before canceling because cancellation wakes the wrapper,
+            // which can report the settled run immediately.
+            if let Err(err) = rimz::harness::run::report::join_and_settle_digest(
+                &ctx.store,
+                &ctx.workspace.session_name,
+                &run.run_id,
+            ) {
+                failed = true;
+                writeln!(out, "error {label}: {err:#}")?;
+                continue;
+            }
+        }
         match agents_cmd::stop_resolved(&ctx, globals, &snapshot, child, &mut tracker) {
             Ok(true) => writeln!(out, "stopped {label}")?,
             Ok(false) => {}

@@ -323,6 +323,7 @@ mod tests {
 
     use rimz::agents::{AgentLifecycleObservation, AgentStatus, LifecycleSignal, PermissionMode};
     use rimz::ids::{AgentKind, WorkspaceId};
+    use rimz::message::MessageStatus;
     use rimz::store::writer::AgentLifecycleIntent;
     use rimz::store::{RuntimePaths, StatePaths};
     use rimz::workspace::RootClass;
@@ -471,5 +472,80 @@ mod tests {
             ReportOutcome::NothingToReport
         );
         assert_eq!(store.list_messages().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn dismissed_child_is_not_reported() {
+        let (_dir, workspace, store) = fixture();
+        append_agent(&store, "parent", None);
+        for name in ["first", "second"] {
+            append_agent(&store, name, Some("parent"));
+        }
+        let first = child_run(&workspace.workspace_id, "first", RunStatus::Completed);
+        let second = child_run(&workspace.workspace_id, "second", RunStatus::Running);
+        for record in [&first, &second] {
+            run::create(store.paths(), record).unwrap();
+        }
+        run::report::join_and_settle_digest(&store, &workspace.session_name, &second.run_id)
+            .unwrap();
+        run::cancel(store.paths(), &second.run_id).unwrap();
+
+        assert!(matches!(
+            report_fleet(&workspace, &store, &AgentSessionId::from("parent")).unwrap(),
+            ReportOutcome::Queued { .. }
+        ));
+        let messages = store.list_messages().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].text.contains("Your subagent settled"));
+        assert!(messages[0].text.contains("@first"));
+        assert!(!messages[0].text.contains("@second"));
+    }
+
+    #[test]
+    fn dismissing_every_child_reports_nothing() {
+        let (_dir, workspace, store) = fixture();
+        append_agent(&store, "parent", None);
+        for name in ["first", "second"] {
+            append_agent(&store, name, Some("parent"));
+            let record = child_run(&workspace.workspace_id, name, RunStatus::Running);
+            run::create(store.paths(), &record).unwrap();
+            run::report::join_and_settle_digest(&store, &workspace.session_name, &record.run_id)
+                .unwrap();
+            run::cancel(store.paths(), &record.run_id).unwrap();
+        }
+
+        assert_eq!(
+            report_fleet(&workspace, &store, &AgentSessionId::from("parent")).unwrap(),
+            ReportOutcome::NothingToReport
+        );
+        assert!(store.list_messages().unwrap().is_empty());
+    }
+
+    #[test]
+    fn dismissing_every_row_of_a_queued_digest_cancels_it() {
+        let (_dir, workspace, store) = fixture();
+        append_agent(&store, "parent", None);
+        let records = ["first", "second"].map(|name| {
+            append_agent(&store, name, Some("parent"));
+            let record = child_run(&workspace.workspace_id, name, RunStatus::Completed);
+            run::create(store.paths(), &record).unwrap();
+            record
+        });
+        let ReportOutcome::Queued { message_id, .. } =
+            report_fleet(&workspace, &store, &AgentSessionId::from("parent")).unwrap()
+        else {
+            panic!("digest should queue");
+        };
+
+        for record in &records {
+            run::report::join_and_settle_digest(&store, &workspace.session_name, &record.run_id)
+                .unwrap();
+        }
+
+        assert!(store.list_messages().unwrap().is_empty());
+        let history = store.list_message_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].message_id, message_id);
+        assert_eq!(history[0].status, MessageStatus::Canceled);
     }
 }

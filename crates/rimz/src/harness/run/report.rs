@@ -1,13 +1,36 @@
-//! Durable membership markers for inline joins and subagent report digests.
+//! Durable membership markers for parent-owned results and subagent report digests.
 //!
-//! A joined run is excluded from a digest that has not been composed. Once a
-//! digest exists, the joiner may cancel it only after every listed run has been
-//! joined, preserving the notice while any row remains unread.
+//! A run printed inline or dismissed by the parent's `rimz subagents stop` is
+//! excluded from a digest that has not been composed. Once a digest exists, it
+//! may be canceled only after every listed run has been claimed this way,
+//! preserving the notice while any row remains unread.
 
 use crate::ids::{MessageId, RunId};
-use crate::store::StatePaths;
+use crate::store::{StatePaths, Store};
 
 use super::{RecordMutation, Result, RunRecord, update_record};
+
+#[derive(Debug, thiserror::Error)]
+pub enum JoinRunErr {
+    #[error(transparent)]
+    RunStore(#[from] super::RunStoreErr),
+    #[error(transparent)]
+    Store(#[from] crate::store::StoreErr),
+}
+
+pub fn join_and_settle_digest(
+    store: &Store,
+    session_name: &str,
+    run_id: &RunId,
+) -> std::result::Result<RunRecord, JoinRunErr> {
+    let (record, fully_joined) = mark_joined(store.paths(), run_id)?;
+    if let Some(message_id) = record.report_message_id.as_ref()
+        && fully_joined
+    {
+        store.cancel_message(message_id, session_name, "joined inline")?;
+    }
+    Ok(record)
+}
 
 pub fn mark_joined(paths: &StatePaths, run_id: &RunId) -> Result<(RunRecord, bool)> {
     let record = update_record(paths, run_id, |record, now| {

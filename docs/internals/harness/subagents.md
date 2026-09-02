@@ -149,7 +149,7 @@ Which projection each verb reads is the other half:
 | --- | --- | --- |
 | agent `list`, `wait` | `RuntimeScope::Audit` | includes ended children, so completed work stays listable and joinable |
 | user-shell `list` | `RuntimeScope::Audit` | includes ended RimZ-launched children in the current channel, or every channel when there is no current channel |
-| `stop` | alive snapshot, `ended_at.is_none()` | only live children can be stopped |
+| `stop` | alive snapshot, `ended_at.is_none()` | only live children can be stopped; stamps the newest run's `joined_at` before canceling it |
 
 `wait` with no names joins every child that has a run record; `--any` first filters to children whose newest run is still non-terminal, since reporting "the first to finish" is meaningless against an already-terminal set. Named children resolve against the child set alone, so an address that names some other agent in the room fails with ``not one of this agent's subagents`` rather than reaching outside the family. Each child's newest run is matched by `agent_id`, falling back to `agent_name`, taking the latest `started_at`.
 
@@ -165,7 +165,7 @@ Which projection each verb reads is the other half:
 
 The fleet includes every child launched before digest composition: a child launched while siblings run joins that fleet, while one launched after the digest starts belongs to the next. Two last settlers can race on the first-writer-wins row stamps; the winner claims its whole row set atomically and the loser queues nothing. No row is duplicated or lost. A missing or ended parent suppresses the digest without changing the runs.
 
-Inline joins and fleet digests use a two-field handshake on the run record. The joiner stamps `joined_at` at the point it prints a terminal run, which excludes that row from a digest that has not yet been composed; the reporter stores the digest id in `report_message_id` on every row before the message becomes visible. Both mutations take the run lock. After each join, the joiner loads only runs carrying that message id and cancels only that queued digest when all of them have `joined_at`; an unjoined row keeps the notice intact, and a digest already sent cannot be recalled.
+Inline joins, parent stops, and fleet digests use a two-field handshake on the run record. The joiner stamps `joined_at` at the point it prints a terminal run, and the parent's `stop` stamps it before canceling the child; either action excludes that row from a digest that has not yet been composed. The reporter stores the digest id in `report_message_id` on every row before the message becomes visible. Both mutations take the run lock. After each join or stop, the caller loads only runs carrying that message id and cancels only that queued digest when all of them have `joined_at`; an unread, unstopped row keeps the notice intact, and a digest already sent cannot be recalled. This also lets `stop` cancel a queued digest for a `--keep` child once every listed row has been joined or stopped.
 
 `wait` never closes the pane. It is the result path when the caller needs the child's text synchronously or wants to reread durable history; it stamps inline delivery and may cancel a fully joined queued digest, but never one that still represents an unread row. `--keep` is the sole linger path, leaving reclamation to `rimz subagents stop` or `rimz gc`.
 
