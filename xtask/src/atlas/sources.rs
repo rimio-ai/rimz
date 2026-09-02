@@ -133,7 +133,7 @@ pub(super) fn revision_sources(root: &Path, revision: &str) -> Result<Vec<Source
 
 pub(super) fn changed_paths(root: &Path, base: &str) -> Result<BTreeSet<PathBuf>> {
     let diff = Command::new("git")
-        .args(["diff", "--name-only", "-z", base, "--"])
+        .args(["diff", "--no-renames", "--name-only", "-z", base, "--"])
         .current_dir(root)
         .output()
         .with_context(|| format!("listing paths changed from `{base}`"))?;
@@ -368,27 +368,28 @@ fn cfg_predicate_kind(predicate: &Meta) -> Option<SourceKind> {
 mod tests {
     use super::*;
 
+    fn git(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     #[test]
     fn changed_paths_include_untracked_files() {
         let root = tempfile::tempdir().unwrap();
-        let git = |args: &[&str]| {
-            let output = Command::new("git")
-                .args(args)
-                .current_dir(root.path())
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "git {args:?} failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        };
-        git(&["init"]);
-        git(&["config", "user.email", "atlas@example.test"]);
-        git(&["config", "user.name", "Atlas Test"]);
+        git(root.path(), &["init"]);
+        git(root.path(), &["config", "user.email", "atlas@example.test"]);
+        git(root.path(), &["config", "user.name", "Atlas Test"]);
         fs::write(root.path().join("tracked.txt"), "base\n").unwrap();
-        git(&["add", "tracked.txt"]);
-        git(&["commit", "-m", "base"]);
+        git(root.path(), &["add", "tracked.txt"]);
+        git(root.path(), &["commit", "-m", "base"]);
         fs::write(root.path().join("tracked.txt"), "changed\n").unwrap();
         fs::write(root.path().join("untracked.md"), "new\n").unwrap();
 
@@ -397,6 +398,35 @@ mod tests {
         assert_eq!(
             paths,
             BTreeSet::from([PathBuf::from("tracked.txt"), PathBuf::from("untracked.md")])
+        );
+    }
+
+    #[test]
+    fn changed_paths_include_both_sides_of_committed_rename() {
+        let root = tempfile::tempdir().unwrap();
+        git(root.path(), &["init"]);
+        git(root.path(), &["config", "user.email", "atlas@example.test"]);
+        git(root.path(), &["config", "user.name", "Atlas Test"]);
+        fs::write(root.path().join("outside.rs"), "pub struct Moved;\n").unwrap();
+        git(root.path(), &["add", "outside.rs"]);
+        git(root.path(), &["commit", "-m", "base"]);
+        fs::create_dir(root.path().join("selected")).unwrap();
+        fs::rename(
+            root.path().join("outside.rs"),
+            root.path().join("selected/inside.rs"),
+        )
+        .unwrap();
+        git(root.path(), &["add", "--all"]);
+        git(root.path(), &["commit", "-m", "move into selected path"]);
+
+        let paths = changed_paths(root.path(), "HEAD^").unwrap();
+
+        assert_eq!(
+            paths,
+            BTreeSet::from([
+                PathBuf::from("outside.rs"),
+                PathBuf::from("selected/inside.rs"),
+            ])
         );
     }
 
