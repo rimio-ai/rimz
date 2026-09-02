@@ -322,7 +322,6 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
             } else {
                 super::index::IndexPolicy::Required
             }),
-            ..Facets::default()
         },
     )?;
     let current_files = facts
@@ -714,8 +713,21 @@ fn reference_medians(
     }
     counts
         .into_iter()
-        .map(|(module, values)| (module, super::api::median(values)))
+        .map(|(module, values)| (module, median(values)))
         .collect()
+}
+
+fn median(mut values: Vec<usize>) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.sort_unstable();
+    let middle = values.len() / 2;
+    if values.len().is_multiple_of(2) {
+        (values[middle - 1] + values[middle]) as f64 / 2.0
+    } else {
+        values[middle] as f64
+    }
 }
 
 #[expect(

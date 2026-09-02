@@ -1,38 +1,48 @@
 use std::fs;
+use std::process::Command;
 
-use super::super::references::{EdgeKind, FnRef};
+use scip::types::{Index, Occurrence, SymbolRole};
+
+use super::super::references::{FnRef, References};
 use super::super::sources::Source;
-use super::super::target::ModuleRule;
+use super::super::target::Verdict;
 use super::*;
 
 #[test]
-fn inspect_args_resolve_modules_from_paths_and_reject_no_index() {
+fn inspect_args_require_a_module_and_reject_old_output_flags() {
     let args = parse_args(&[
-        "--from".into(),
+        "--module".into(),
         "crate::store".into(),
-        "--to".into(),
+        "--from".into(),
         "cli".into(),
+        "--item".into(),
+        "store::open".into(),
         "--top".into(),
         "4".into(),
     ])
     .unwrap()
     .unwrap();
-    assert_eq!(args.from, "crate::store");
-    assert_eq!(args.to, "cli");
+    assert_eq!(args.module, "crate::store");
+    assert_eq!(args.from.as_deref(), Some("cli"));
+    assert_eq!(args.item.as_deref(), Some("store::open"));
     assert_eq!(args.top, 4);
     assert!(
-        parse_args(&[
-            "--from".into(),
-            "store".into(),
-            "--to".into(),
-            "cli".into(),
-            "--no-index".into(),
-        ])
-        .unwrap_err()
-        .to_string()
-        .contains("reference view")
+        parse_args(&[])
+            .unwrap_err()
+            .to_string()
+            .contains("--module")
     );
+    assert!(parse_args(&["--module".into(), "store".into(), "--json".into()]).is_err());
+    assert!(
+        parse_args(&["--module".into(), "store".into(), "--no-index".into()])
+            .unwrap_err()
+            .to_string()
+            .contains("SCIP")
+    );
+}
 
+#[test]
+fn module_selectors_resolve_paths_and_module_names() {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir_all(root.path().join("crates/demo/src/store")).unwrap();
     fs::write(
@@ -47,12 +57,13 @@ fn inspect_args_resolve_modules_from_paths_and_reject_no_index() {
         ],
         &BTreeSet::new(),
     );
+
     assert_eq!(
         resolve_module(
             root.path(),
             &syntax.files,
             "crates/demo/src/store",
-            "--from",
+            "--module"
         )
         .unwrap(),
         ModuleSelector {
@@ -62,19 +73,8 @@ fn inspect_args_resolve_modules_from_paths_and_reject_no_index() {
         }
     );
     assert_eq!(
-        resolve_module(root.path(), &syntax.files, "crate::cli", "--to").unwrap(),
-        ModuleSelector {
-            module: "cli".to_owned(),
-            path: None,
-            directory: false,
-        }
-    );
-    fs::create_dir(root.path().join("docs")).unwrap();
-    assert!(
-        resolve_module(root.path(), &syntax.files, "docs", "--to")
-            .unwrap_err()
-            .to_string()
-            .contains("does not match a Rust module")
+        resolve_module(root.path(), &syntax.files, "crate::cli", "--from").unwrap(),
+        selector("cli")
     );
 }
 
@@ -101,93 +101,138 @@ fn functions_rank_by_distinct_items_and_quote_the_heaviest() {
         .find(|function| function.name == "light")
         .unwrap();
     let edges = vec![
-        edge("a", Some(("heavy", heavy.line)), false),
-        edge("b", Some(("heavy", heavy.line)), false),
-        edge("a", Some(("heavy", heavy.line)), false),
-        edge("c", Some(("light", light.line)), false),
-        edge("d", None, false),
-        Edge {
-            from_path: PathBuf::from("crates/demo/tests/api.rs"),
-            to_path: PathBuf::from("crates/demo/src/store.rs"),
-            from_line: 3,
-            from_fn: None,
-            from: "tests::api".to_owned(),
-            to: "store".to_owned(),
-            item: "a".to_owned(),
-            kind: EdgeKind::Reference,
-            test: true,
-        },
+        edge("a", "caller", Some(("heavy", heavy.line)), false),
+        edge("b", "caller", Some(("heavy", heavy.line)), false),
+        edge("a", "caller", Some(("heavy", heavy.line)), false),
+        edge("c", "caller", Some(("light", light.line)), false),
     ];
 
-    let (totals, functions, heaviest, tests) = assembly_report(
+    let functions = assembly_functions(
         &edges,
-        std::slice::from_ref(&source),
         &syntax.files,
         &selector("caller"),
         &selector("store"),
-        Path::new("."),
     );
 
-    assert_eq!(totals.functions, 2);
-    assert_eq!(totals.items, 4);
-    assert_eq!(totals.sites, 5);
     assert_eq!(functions[0].function, "heavy");
     assert_eq!(functions[0].items, ["a", "b"]);
-    assert_eq!(functions[0].items_total, 2);
-    assert_eq!(functions.last().unwrap().function, "(outside any function)");
-    let heaviest = heaviest.unwrap();
+    assert_eq!(functions[0].sites, 3);
+    let heaviest = quote_function(&functions[0], &[source]).unwrap();
     assert_eq!(heaviest.function, "heavy");
     assert_eq!(heaviest.source.lines().count(), 81);
     assert!(heaviest.source.ends_with("… 3 more lines"));
-    assert_eq!(tests[0].items, ["a"]);
-    assert_eq!(tests[0].items_total, 1);
 }
 
 #[test]
-fn compact_json_preserves_complete_item_counts() {
-    let mut report = Report {
-        version: REPORT_VERSION,
-        verb: "inspect",
-        from: "caller".to_owned(),
-        to: "store".to_owned(),
-        path: PathBuf::from("."),
-        totals: Totals {
-            functions: 1,
-            items: 3,
-            sites: 3,
+fn inspect_lists_zero_production_refs_apart_from_unresolved() {
+    let root = crate_fixture(
+        "pub fn dead() {}\npub fn unknown() {}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn references_dead() { super::dead(); super::dead(); }\n}\n",
+    );
+    let mut facts = Facts::load(root.path(), Path::new("."), Facets::default()).unwrap();
+    let symbol = "rust-analyzer cargo probe 0.0.0 dead().";
+    let index = Index {
+        documents: vec![scip::types::Document {
+            relative_path: "src/store.rs".to_owned(),
+            occurrences: vec![
+                occurrence(0, symbol, true),
+                occurrence(5, symbol, false),
+                occurrence(5, symbol, false),
+            ],
+            ..scip::types::Document::default()
+        }],
+        ..Index::default()
+    };
+    let index_path = root.path().join("index.scip");
+    scip::write_message_to_file(&index_path, index).unwrap();
+    facts.references = Some(References::load(&index_path, &facts.syntax, &facts.sources).unwrap());
+
+    let (zero, unresolved) = zero_production_surface(&facts, &selector("store"));
+
+    assert_eq!(zero.len(), 1);
+    assert_eq!(zero[0].name, "dead");
+    assert_eq!(zero[0].test_referrers, 2);
+    assert_eq!(unresolved.len(), 1);
+    assert_eq!(unresolved[0].name, "unknown");
+}
+
+fn occurrence(line: i32, symbol: &str, definition: bool) -> Occurrence {
+    Occurrence {
+        range: vec![line, 0, 1],
+        symbol: symbol.to_owned(),
+        symbol_roles: if definition {
+            SymbolRole::Definition as i32
+        } else {
+            0
         },
-        functions: vec![FunctionRow {
-            function: "run".to_owned(),
-            path: PathBuf::from("src/lib.rs"),
-            line: 1,
-            end_line: 4,
-            items: vec!["a".to_owned(), "b".to_owned(), "c".to_owned()],
-            items_total: 3,
-            sites: 3,
-            outside: false,
+        ..Occurrence::default()
+    }
+}
+
+#[test]
+fn inspect_groups_repeated_assembly_across_caller_modules() {
+    let edges = ["a", "b", "c", "left_only"]
+        .into_iter()
+        .map(|item| edge(item, "left", Some(("build", 10)), false))
+        .chain(
+            ["a", "b", "c", "right_only"]
+                .into_iter()
+                .map(|item| edge(item, "right", Some(("assemble", 20)), false)),
+        )
+        .collect::<Vec<_>>();
+
+    let rows = repeated_assembly(&edges, &selector("store"), 20);
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].items, ["a", "b", "c"]);
+    assert_eq!(rows[0].functions.len(), 2);
+    assert_eq!(rows[0].score, 6);
+}
+
+#[test]
+fn inspect_item_reports_every_validated_introducing_commit() {
+    let root = tempfile::tempdir().unwrap();
+    run(root.path(), &["init", "--quiet"]);
+    fs::write(root.path().join("lib.rs"), "").unwrap();
+    commit(root.path(), "initial");
+    fs::write(root.path().join("lib.rs"), "pub fn kept() {}\n").unwrap();
+    commit(root.path(), "introduce kept");
+    fs::write(root.path().join("lib.rs"), "").unwrap();
+    commit(root.path(), "remove kept");
+    fs::write(root.path().join("lib.rs"), "pub fn kept() {}\n").unwrap();
+    commit(root.path(), "fix regression #42");
+
+    let commits = history::introducing_commits(root.path(), Path::new("lib.rs"), "kept").unwrap();
+
+    assert_eq!(commits.len(), 2);
+    assert_eq!(commits[0].subject, "introduce kept");
+    assert_eq!(commits[1].subject, "fix regression #42");
+    assert_eq!(
+        history::fix_markers(&commits[1].subject),
+        ["fix regression #42"]
+    );
+}
+
+#[test]
+fn inspect_item_surfaces_persisted_verdict() {
+    let target = Target {
+        version: 5,
+        layers: Vec::new(),
+        modules: Vec::new(),
+        strangler: Vec::new(),
+        verdicts: vec![Verdict {
+            kind: VerdictKind::Item,
+            key: "store::kept".to_owned(),
+            reason: "public compatibility seam".to_owned(),
         }],
-        heaviest: None,
-        tests: vec![TestRow {
-            path: PathBuf::from("tests/api.rs"),
-            sites: 3,
-            items: vec!["a".to_owned(), "b".to_owned(), "c".to_owned()],
-            items_total: 3,
-        }],
-        rules: Vec::new(),
-        parse_failures: Vec::new(),
-        target_configured: false,
     };
 
-    compact_json(&mut report, 1);
+    let verdict = item_verdict(&target, "store::kept").unwrap();
 
-    assert_eq!(report.functions[0].items, ["a"]);
-    assert_eq!(report.functions[0].items_total, 3);
-    assert_eq!(report.tests[0].items, ["a"]);
-    assert_eq!(report.tests[0].items_total, 3);
+    assert_eq!(verdict.reason, "public compatibility seam");
+    assert!(item_verdict(&target, "store::missing").is_none());
 }
 
-#[test]
-fn rules_report_direction_and_admission() {
+fn crate_fixture(store: &str) -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir(root.path().join("src")).unwrap();
     fs::write(
@@ -195,73 +240,21 @@ fn rules_report_direction_and_admission() {
         "[package]\nname = \"probe\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
     )
     .unwrap();
-    fs::write(
-        root.path().join("src/lib.rs"),
-        "mod cli;\nmod config;\nmod store;\n",
-    )
-    .unwrap();
-    fs::write(root.path().join("src/cli.rs"), "pub struct Thing;\n").unwrap();
-    fs::write(root.path().join("src/config.rs"), "pub struct Peer;\n").unwrap();
-    fs::write(
-        root.path().join("src/store.rs"),
-        "use crate::cli::Thing;\npub fn visible() -> Thing { Thing }\n",
-    )
-    .unwrap();
-    let facts = Facts::load(root.path(), Path::new("."), Facets::default()).unwrap();
-    let target = Target {
-        version: 5,
-        layers: vec![
-            vec!["store".to_owned(), "config".to_owned()],
-            vec!["cli".to_owned()],
-        ],
-        modules: vec![ModuleRule {
-            path: PathBuf::from("src/store.rs"),
-            allowed_dependencies: None,
-            upward_dependencies: Some(vec!["cli".to_owned()]),
-            surface_budget: 2,
-            config_line: 4,
-        }],
-        strangler: Vec::new(),
-        verdicts: Vec::new(),
-    };
-
-    let rules = target_rules(
-        root.path(),
-        &target,
-        &facts,
-        &selector("store"),
-        &selector("cli"),
-    );
-
-    assert_eq!(rules.len(), 1);
-    assert_eq!(rules[0].direction, "upward");
-    assert_eq!(rules[0].admitted.as_deref(), Some("cli"));
-
-    let partial = rule_row(
-        &ModuleRule {
-            path: PathBuf::from("src/store.rs"),
-            allowed_dependencies: Some(vec!["cli::render".to_owned()]),
-            upward_dependencies: None,
-            surface_budget: 2,
-            config_line: 4,
-        },
-        &target.layer_ranks(),
-        "store",
-        "cli",
-    );
-    assert_eq!(partial.admitted, None);
+    fs::write(root.path().join("src/lib.rs"), "mod store;\n").unwrap();
+    fs::write(root.path().join("src/store.rs"), store).unwrap();
+    root
 }
 
-fn edge(item: &str, function: Option<(&str, usize)>, test: bool) -> Edge {
+fn edge(item: &str, from: &str, function: Option<(&str, usize)>, test: bool) -> Edge {
     Edge {
-        from_path: PathBuf::from("crates/demo/src/caller.rs"),
+        from_path: PathBuf::from(format!("crates/demo/src/{from}.rs")),
         to_path: PathBuf::from("crates/demo/src/store.rs"),
         from_line: function.map_or(1, |(_, line)| line + 1),
         from_fn: function.map(|(label, line)| FnRef {
             label: label.to_owned(),
             line,
         }),
-        from: "caller".to_owned(),
+        from: from.to_owned(),
         to: "store".to_owned(),
         item: item.to_owned(),
         kind: EdgeKind::Reference,
@@ -275,4 +268,35 @@ fn selector(module: &str) -> ModuleSelector {
         path: None,
         directory: false,
     }
+}
+
+fn run(root: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn commit(root: &Path, message: &str) {
+    run(root, &["add", "lib.rs"]);
+    run(
+        root,
+        &[
+            "-c",
+            "user.name=Atlas Test",
+            "-c",
+            "user.email=atlas@example.invalid",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            message,
+        ],
+    );
 }

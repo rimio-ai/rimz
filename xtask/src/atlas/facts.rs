@@ -5,7 +5,7 @@ use anyhow::{Result, bail};
 
 use crate::source_files;
 
-use super::history::{Blame, Log};
+use super::history::Log;
 use super::index::{self, IndexPolicy};
 use super::metrics::{self, MetricsReport};
 use super::modules::{path_in_scope, workspace_crate_names};
@@ -24,7 +24,6 @@ pub(super) struct Facets {
     pub(super) history: bool,
     pub(super) metrics: bool,
     pub(super) references: Option<IndexPolicy>,
-    pub(super) blame: bool,
 }
 
 #[derive(Debug)]
@@ -40,7 +39,6 @@ pub(super) struct Facts {
     pub(super) history: Option<Log>,
     pub(super) metrics: Option<MetricsReport>,
     pub(super) references: Option<References>,
-    pub(super) blame: Option<Blame>,
 }
 
 impl Facts {
@@ -126,21 +124,6 @@ impl Facts {
             }
             Some(IndexPolicy::Skip) | None => None,
         };
-        let blame = facets
-            .blame
-            .then(|| {
-                let files = sources
-                    .iter()
-                    .filter(|source| source.is_production() && path_in_scope(&source.path, scope))
-                    .map(|source| source.path.clone())
-                    .collect::<Vec<_>>();
-                Blame::read(
-                    root,
-                    &files,
-                    std::thread::available_parallelism().map_or(1, usize::from),
-                )
-            })
-            .transpose()?;
         Ok(Self {
             root: root.to_path_buf(),
             scope: scope.to_path_buf(),
@@ -153,7 +136,6 @@ impl Facts {
             history,
             metrics,
             references,
-            blame,
         })
     }
 

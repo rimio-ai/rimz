@@ -1177,9 +1177,34 @@ fn token_count(tokens: TokenStream) -> usize {
 }
 
 fn normalize_tokens(tokens: TokenStream) -> String {
-    tokens
-        .into_iter()
-        .map(|token| match token {
+    normalize_token_stream(tokens.into_iter().collect(), &mut BTreeMap::new(), &mut 0)
+}
+
+fn normalize_token_stream(
+    tokens: Vec<TokenTree>,
+    names: &mut BTreeMap<String, usize>,
+    next_name: &mut usize,
+) -> String {
+    let mut normalized = String::new();
+    let mut index = 0;
+    while index < tokens.len() {
+        if matches!(tokens.get(index), Some(TokenTree::Ident(_))) {
+            let mut segments = vec![tokens[index].to_string()];
+            let mut end = index;
+            while matches!(tokens.get(end + 1), Some(TokenTree::Punct(punct)) if punct.as_char() == ':')
+                && matches!(tokens.get(end + 2), Some(TokenTree::Punct(punct)) if punct.as_char() == ':')
+                && matches!(tokens.get(end + 3), Some(TokenTree::Ident(_)))
+            {
+                segments.push(tokens[end + 3].to_string());
+                end += 3;
+            }
+            if segments.len() > 1 {
+                normalized.push_str(&segments[segments.len().saturating_sub(2)..].join("::"));
+                index = end + 1;
+                continue;
+            }
+        }
+        match &tokens[index] {
             TokenTree::Group(group) => {
                 let (open, close) = match group.delimiter() {
                     Delimiter::Parenthesis => ("(", ")"),
@@ -1187,13 +1212,30 @@ fn normalize_tokens(tokens: TokenStream) -> String {
                     Delimiter::Bracket => ("[", "]"),
                     Delimiter::None => ("", ""),
                 };
-                format!("{open}{}{close}", normalize_tokens(group.stream()))
+                normalized.push_str(open);
+                normalized.push_str(&normalize_token_stream(
+                    group.stream().into_iter().collect(),
+                    names,
+                    next_name,
+                ));
+                normalized.push_str(close);
             }
-            TokenTree::Literal(_) => "_".to_owned(),
-            TokenTree::Ident(ident) => ident.to_string(),
-            TokenTree::Punct(punct) => punct.as_char().to_string(),
-        })
-        .collect()
+            TokenTree::Literal(_) => normalized.push('_'),
+            TokenTree::Ident(ident) => {
+                let name = ident.to_string();
+                let number = *names.entry(name).or_insert_with(|| {
+                    let number = *next_name;
+                    *next_name += 1;
+                    number
+                });
+                normalized.push('$');
+                normalized.push_str(&number.to_string());
+            }
+            TokenTree::Punct(punct) => normalized.push(punct.as_char()),
+        }
+        index += 1;
+    }
+    normalized
 }
 
 #[derive(Default)]

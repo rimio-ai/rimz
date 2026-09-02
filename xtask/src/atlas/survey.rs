@@ -5,13 +5,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
-use super::detect::{self, PassThrough, RepeatedGuard, SingleCaller, VestigialItem};
+use super::detect::{self, PassThrough};
 use super::facts::{Facets, Facts};
 use super::history::{self, CochangeEdge};
 use super::index::IndexPolicy;
-use super::modules::{
-    crate_module_for_path, module_endpoint, module_for_path, module_is_within, path_in_scope,
-};
+use super::modules::{crate_module_for_path, module_endpoint, module_for_path, path_in_scope};
 use super::{REPORT_VERSION, positive_usize, set_once, validate_scope, value};
 
 const DEFAULT_PATH: &str = "crates/rimz/src";
@@ -80,11 +78,7 @@ struct Report {
     divergence: Vec<Divergence>,
     shapes: serde_json::Value,
     external_providers: Vec<Provider>,
-    single_callers: Vec<SingleCaller>,
     passthroughs: Vec<PassThrough>,
-    vestigial_items: Vec<VestigialItem>,
-    repeated_guards: Vec<RepeatedGuard>,
-    detector_counts: BTreeMap<String, BTreeMap<String, usize>>,
     parse_failures: usize,
 }
 
@@ -115,7 +109,6 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
             } else {
                 IndexPolicy::Required
             }),
-            blame: true,
         },
     )?;
     let report = build_report(&facts, &args)?;
@@ -227,24 +220,8 @@ fn build_report(facts: &Facts, args: &Args) -> Result<Report> {
             .then_with(|| left.module.cmp(&right.module))
     });
     let cochange = history::cochange(log, &facts.root, &args.path, None, 25, 10)?;
-    let single_callers = detect::single_callers(facts, &args.path);
     let passthroughs = detect::passthroughs(facts, &args.path);
-    let vestigial_items = detect::vestigial(facts, &args.path, 25);
-    let repeated_guards = detect::guards(facts, &args.path, args.guard_files);
-    let detector_counts = BTreeMap::from([
-        (
-            "single-callers".to_owned(),
-            detect::counts_by_module(&single_callers, |row| &row.module),
-        ),
-        (
-            "passthroughs".to_owned(),
-            detect::counts_by_module(&passthroughs, |row| &row.module),
-        ),
-        (
-            "vestigial".to_owned(),
-            detect::counts_by_module(&vestigial_items, |row| &row.module),
-        ),
-    ]);
+    let _ = args.guard_files;
     let divergence = divergence(facts, &args.path, &cochange.edges, 3);
     let cochange_clusters = cochange_clusters(&cochange.edges, 3);
     Ok(Report {
@@ -262,11 +239,7 @@ fn build_report(facts: &Facts, args: &Args) -> Result<Report> {
         divergence,
         shapes: super::shapes::survey_value(facts, &args.path)?,
         external_providers: providers(facts, &args.path),
-        single_callers,
         passthroughs,
-        vestigial_items,
-        repeated_guards,
-        detector_counts,
         parse_failures: facts
             .syntax
             .parse_failures
@@ -374,75 +347,6 @@ pub(super) fn divergence(
 
 fn reference_in_scope(edge: &super::references::Edge, scope: &Path) -> bool {
     !edge.test && (path_in_scope(&edge.from_path, scope) || path_in_scope(&edge.to_path, scope))
-}
-
-pub(super) fn module_divergence(
-    facts: &Facts,
-    scope: &Path,
-    target: &str,
-    cochange: &[CochangeEdge],
-    minimum: usize,
-) -> Vec<Divergence> {
-    let scope_module = crate_module_for_path(&scope.join("mod.rs"));
-    let endpoint = |module: &str| {
-        if module_is_within(module, &scope_module) {
-            target.to_owned()
-        } else {
-            module_endpoint(module, &scope_module)
-        }
-    };
-    let mut coupling = BTreeMap::<(String, String), BTreeSet<String>>::new();
-    for file in facts
-        .syntax
-        .files
-        .iter()
-        .filter(|file| path_in_scope(&file.path, scope))
-    {
-        for import in &file.dependencies {
-            let Some(resolved) = super::syntax::resolved_internal_import(
-                import,
-                &facts.known_modules,
-                &facts.crate_names,
-            ) else {
-                continue;
-            };
-            let to = endpoint(&resolved);
-            if to != target {
-                coupling
-                    .entry(ordered_pair(target, &to))
-                    .or_default()
-                    .insert(import.item.clone());
-            }
-        }
-    }
-    if let Some(references) = &facts.references {
-        for edge in references.edges.iter().filter(|edge| !edge.test) {
-            let Some(pair) = scoped_reference_pair(&edge.from, &edge.to, &scope_module, target)
-            else {
-                continue;
-            };
-            coupling.entry(pair).or_default().insert(edge.item.clone());
-        }
-    }
-    divergence_rows(coupling, cochange, minimum)
-}
-
-fn scoped_reference_pair(
-    from: &str,
-    to: &str,
-    scope_module: &str,
-    target: &str,
-) -> Option<(String, String)> {
-    let endpoint = |module: &str| {
-        if module_is_within(module, scope_module) {
-            target.to_owned()
-        } else {
-            module_endpoint(module, scope_module)
-        }
-    };
-    let from = endpoint(from);
-    let to = endpoint(to);
-    (from != to && (from == target || to == target)).then(|| ordered_pair(&from, &to))
 }
 
 fn divergence_rows(
@@ -677,18 +581,6 @@ fn print_markdown(report: &Report, top: usize, markdown: bool) {
         }
     }
     close(fence);
-    section("Exact single callers", fence, markdown);
-    for row in report.single_callers.iter().take(top) {
-        println!(
-            "{}:{} {}::{} -> {}",
-            row.path.display(),
-            row.line,
-            row.module,
-            row.name,
-            row.caller
-        );
-    }
-    close(fence);
     section("Pass-throughs", fence, markdown);
     for row in report.passthroughs.iter().take(top) {
         println!(
@@ -698,22 +590,6 @@ fn print_markdown(report: &Report, top: usize, markdown: bool) {
             row.name,
             row.callee
         );
-    }
-    close(fence);
-    section("Vestigial items", fence, markdown);
-    for row in report.vestigial_items.iter().take(top) {
-        println!(
-            "{}:{} {} ({}d)",
-            row.path.display(),
-            row.line,
-            row.name,
-            row.age_days
-        );
-    }
-    close(fence);
-    section("Repeated guards", fence, markdown);
-    for row in report.repeated_guards.iter().take(top) {
-        println!("{} files  {}", row.files, row.predicate);
     }
     close(fence);
 }
@@ -753,22 +629,6 @@ fn print_rank(row: &RankRow, indent: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn module_reference_pairs_include_edges_in_both_directions() {
-        let scope = "agents::adapters";
-        let target = "agents/adapters";
-
-        assert_eq!(
-            scoped_reference_pair("cli::agents_cmd", scope, scope, target),
-            Some((target.to_owned(), "cli".to_owned()))
-        );
-        assert_eq!(
-            scoped_reference_pair(scope, "store::runtime", scope, target),
-            Some((target.to_owned(), "store".to_owned()))
-        );
-        assert_eq!(scoped_reference_pair("cli", "store", scope, target), None);
-    }
 
     #[test]
     fn reference_scope_keeps_inbound_edges() {
