@@ -59,7 +59,7 @@ pub struct LaunchSpec {
     pub fork: Option<SessionCommand>,
     pub permission: LaunchPermissionArgs,
     pub max_turn_flag: Option<&'static str>,
-    pub compact_command: Option<&'static str>,
+    pub compact_command: Option<CompactCommand>,
     pub presets: PresetMatchers,
 }
 
@@ -98,9 +98,21 @@ impl LaunchSpec {
             .map(|flag| vec![flag.to_owned(), limit.to_string()])
     }
 
-    /// Return the interactive command for manual context compaction.
-    pub const fn compact_command(self) -> Option<&'static str> {
-        self.compact_command
+    /// Render the interactive command for manual context compaction.
+    ///
+    /// Instructions ride after commands that accept them and are folded to a
+    /// single line because commands are raw-typed and a newline submits them.
+    pub fn compact_command(self, instruction: &str) -> Option<String> {
+        let compact = self.compact_command?;
+        let mut command = compact.command.to_owned();
+        if compact.instruction == CompactInstruction::Trailing {
+            let folded = instruction.split_whitespace().collect::<Vec<_>>().join(" ");
+            if !folded.is_empty() {
+                command.push(' ');
+                command.push_str(&folded);
+            }
+        }
+        Some(command)
     }
 
     /// Describe the provider-native argv spelling rendered for a preset field.
@@ -212,6 +224,22 @@ impl LaunchSpec {
 pub struct SessionCommand {
     pub before_id: &'static [&'static str],
     pub after_id: &'static [&'static str],
+}
+
+/// An interactive context-compaction command and its instruction support.
+#[derive(Clone, Copy, Debug)]
+pub struct CompactCommand {
+    pub command: &'static str,
+    pub instruction: CompactInstruction,
+}
+
+/// Whether a compact command accepts free text that steers its summary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompactInstruction {
+    /// The command takes no arguments, so guidance is dropped.
+    Unsupported,
+    /// Free text after the command steers the summary.
+    Trailing,
 }
 
 impl SessionCommand {
@@ -1098,7 +1126,7 @@ impl AgentSpec {
 mod tests {
     use serde_json::json;
 
-    use super::{LaunchSpec, PromptStyle, program_names_kind};
+    use super::{CompactCommand, CompactInstruction, LaunchSpec, PromptStyle, program_names_kind};
     use crate::agents::AskKind;
     use crate::agents::registry::BUILTINS;
 
@@ -1154,6 +1182,40 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn compact_command_renders_supported_instructions_on_one_line() {
+        let trailing = LaunchSpec {
+            compact_command: Some(CompactCommand {
+                command: "/compact",
+                instruction: CompactInstruction::Trailing,
+            }),
+            ..LaunchSpec::EMPTY
+        };
+        assert_eq!(
+            trailing.compact_command("a\n  b\tc "),
+            Some("/compact a b c".to_owned())
+        );
+        for instruction in ["", " \n\t "] {
+            assert_eq!(
+                trailing.compact_command(instruction),
+                Some("/compact".to_owned())
+            );
+        }
+
+        let unsupported = LaunchSpec {
+            compact_command: Some(CompactCommand {
+                command: "/compact",
+                instruction: CompactInstruction::Unsupported,
+            }),
+            ..LaunchSpec::EMPTY
+        };
+        assert_eq!(
+            unsupported.compact_command("keep the plan"),
+            Some("/compact".to_owned())
+        );
+        assert_eq!(LaunchSpec::EMPTY.compact_command("instruction"), None);
     }
 
     #[test]

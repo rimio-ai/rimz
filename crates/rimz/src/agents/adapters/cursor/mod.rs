@@ -104,7 +104,10 @@ static CURSOR_DESCRIPTOR: AgentSpec = AgentSpec {
             plan: &["--mode=plan"],
         },
         max_turn_flag: None,
-        compact_command: Some("/summarize"),
+        compact_command: Some(super::CompactCommand {
+            command: "/summarize",
+            instruction: super::CompactInstruction::Unsupported,
+        }),
         presets: super::PresetMatchers {
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             ..super::PresetMatchers::EMPTY

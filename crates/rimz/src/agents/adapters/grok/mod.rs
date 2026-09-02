@@ -99,7 +99,10 @@ static GROK_DESCRIPTOR: AgentSpec = AgentSpec {
             plan: &[],
         },
         max_turn_flag: Some("--max-turns"),
-        compact_command: Some("/compact"),
+        compact_command: Some(super::CompactCommand {
+            command: "/compact",
+            instruction: super::CompactInstruction::Unsupported,
+        }),
         presets: super::PresetMatchers {
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             effort: Some(super::StaticPresetMatcher::Flag(&["--reasoning-effort"])),

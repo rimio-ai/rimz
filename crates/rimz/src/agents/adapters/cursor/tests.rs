@@ -1675,8 +1675,8 @@ fn launch_modes_presets_resume_and_compaction_are_cursor_native() {
         vec!["--force", "--sandbox", "disabled"]
     );
     assert_eq!(
-        CursorAdapter.spec().launch.compact_command(),
-        Some("/summarize")
+        CursorAdapter.spec().launch.compact_command(""),
+        Some("/summarize".to_owned())
     );
 
     let launch = CursorAdapter

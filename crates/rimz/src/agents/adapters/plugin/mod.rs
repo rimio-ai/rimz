@@ -378,10 +378,12 @@ fn build_descriptor(manifest: &'static PluginManifest, plugin_dir: &'static Path
                     plan: leak_strings(&launch.permission_args.plan),
                 },
                 max_turn_flag: None,
-                compact_command: launch
-                    .compact_command
-                    .as_ref()
-                    .map(|command| leak_string(command.clone())),
+                compact_command: launch.compact_command.as_ref().map(|command| {
+                    super::CompactCommand {
+                        command: leak_string(command.clone()),
+                        instruction: super::CompactInstruction::Unsupported,
+                    }
+                }),
                 presets: PresetMatchers {
                     model: flag(&launch.model_flag),
                     effort: flag(&launch.effort_flag),

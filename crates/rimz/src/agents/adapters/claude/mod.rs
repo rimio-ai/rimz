@@ -151,7 +151,10 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
             plan: &["--permission-mode", "plan"],
         },
         max_turn_flag: Some("--max-turns"),
-        compact_command: Some("/compact"),
+        compact_command: Some(super::CompactCommand {
+            command: "/compact",
+            instruction: super::CompactInstruction::Trailing,
+        }),
         presets: super::PresetMatchers {
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             effort: Some(super::StaticPresetMatcher::Flag(&["--effort"])),

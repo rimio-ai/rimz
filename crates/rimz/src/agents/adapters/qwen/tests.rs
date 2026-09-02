@@ -76,7 +76,10 @@ fn launch_and_permission_argv_match_qwen_cli() {
         adapter.spec().launch.max_turns_args(7),
         Some(vec!["--max-session-turns".to_owned(), "7".to_owned()])
     );
-    assert_eq!(adapter.spec().launch.compact_command(), Some("/compress"));
+    assert_eq!(
+        adapter.spec().launch.compact_command(""),
+        Some("/compress".to_owned())
+    );
 }
 
 #[test]

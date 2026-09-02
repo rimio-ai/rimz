@@ -112,7 +112,10 @@ static QWEN_DESCRIPTOR: AgentSpec = AgentSpec {
             plan: &["--approval-mode", "plan"],
         },
         max_turn_flag: Some("--max-session-turns"),
-        compact_command: Some("/compress"),
+        compact_command: Some(super::CompactCommand {
+            command: "/compress",
+            instruction: super::CompactInstruction::Unsupported,
+        }),
         presets: super::PresetMatchers {
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             system_prompt_file: Some(super::StaticPresetMatcher::EnvPathVar("QWEN_SYSTEM_MD")),
