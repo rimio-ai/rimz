@@ -67,9 +67,16 @@ fn validate(
             root,
             syntax_files,
             &expectation.from,
+            "diff",
             "contract assembly.from",
         )?;
-        inspect::resolve_module(root, syntax_files, &expectation.to, "contract assembly.to")?;
+        inspect::resolve_module(
+            root,
+            syntax_files,
+            &expectation.to,
+            "diff",
+            "contract assembly.to",
+        )?;
     }
     Ok(contract)
 }

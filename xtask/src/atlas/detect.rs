@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use super::facts::Facts;
-use super::modules::{module_for_path, path_in_scope};
+use super::modules::{crate_module_for_path, path_in_scope};
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct PassThrough {
@@ -39,7 +39,7 @@ pub(super) fn passthroughs(facts: &Facts, scope: &Path) -> Vec<PassThrough> {
         .flat_map(|file| {
             file.fns.iter().filter_map(|function| {
                 function.forwards.as_ref().map(|callee| PassThrough {
-                    module: module_for_path(&file.path, scope),
+                    module: crate_module_for_path(&file.path),
                     path: file.path.clone(),
                     line: function.line,
                     name: function.name.clone(),
