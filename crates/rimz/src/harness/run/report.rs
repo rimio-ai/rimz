@@ -16,7 +16,7 @@ pub fn join_and_settle_digest(
     run_id: &RunId,
 ) -> crate::store::Result<RunRecord> {
     let (record, fully_joined) =
-        mark_joined(store.paths(), run_id).map_err(crate::store::StoreErr::from)?;
+        mark_joined_record(store.paths(), run_id).map_err(crate::store::StoreErr::from)?;
     if let Some(message_id) = record.report_message_id.as_ref()
         && fully_joined
     {
@@ -25,7 +25,7 @@ pub fn join_and_settle_digest(
     Ok(record)
 }
 
-pub fn mark_joined(paths: &StatePaths, run_id: &RunId) -> Result<(RunRecord, bool)> {
+fn mark_joined_record(paths: &StatePaths, run_id: &RunId) -> Result<(RunRecord, bool)> {
     let record = update_record(paths, run_id, |record, now| {
         if record.joined_at.is_some() {
             return Ok(RecordMutation::Keep(()));
@@ -132,8 +132,8 @@ mod tests {
         );
         super::super::create(&paths, &record).expect("create run");
 
-        let (joined, _) = mark_joined(&paths, &record.run_id).expect("mark joined");
-        let (joined_again, _) = mark_joined(&paths, &record.run_id).expect("repeat joined");
+        let (joined, _) = mark_joined_record(&paths, &record.run_id).expect("mark joined");
+        let (joined_again, _) = mark_joined_record(&paths, &record.run_id).expect("repeat joined");
         assert_eq!(joined_again.joined_at, joined.joined_at);
 
         let first = MessageId::new();
@@ -179,9 +179,9 @@ mod tests {
         });
 
         assert!(!digest_fully_joined(&paths, &message_id).expect("unjoined digest"));
-        mark_joined(&paths, &records[0].run_id).expect("join first");
+        mark_joined_record(&paths, &records[0].run_id).expect("join first");
         assert!(!digest_fully_joined(&paths, &message_id).expect("partially joined digest"));
-        mark_joined(&paths, &records[1].run_id).expect("join second");
+        mark_joined_record(&paths, &records[1].run_id).expect("join second");
         assert!(digest_fully_joined(&paths, &message_id).expect("fully joined digest"));
         assert!(!digest_fully_joined(&paths, &MessageId::new()).expect("unknown digest"));
     }
