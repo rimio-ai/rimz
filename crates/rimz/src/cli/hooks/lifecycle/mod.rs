@@ -175,6 +175,8 @@ pub(super) fn handle_lifecycle_hook(
             LifecycleSignal::AwaitingInput { .. } => decoded.questions(),
             _ => &[],
         };
+        let transcript_run =
+            env_run_id().and_then(|run_id| rimz::harness::run::load(store.paths(), &run_id).ok());
         if let Err(err) = record_conversation(
             workspace,
             store,
@@ -183,6 +185,7 @@ pub(super) fn handle_lifecycle_hook(
             assistant_message.as_deref(),
             questions,
             &delivered,
+            transcript_run.as_ref(),
         ) {
             warn!(
                 agent = agent.spec().kind,

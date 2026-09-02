@@ -127,6 +127,7 @@ struct Identity {
     role: Option<String>,
     last_at: jiff::Timestamp,
     rich: bool,
+    child: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -280,7 +281,7 @@ fn chat_view_with_mode(
     )?;
     let filtered: Vec<&TranscriptEntry> = entries
         .iter()
-        .filter(|entry| entry_in_scope(entry, &scope))
+        .filter(|entry| entry_in_scope(entry, &scope, &identities))
         .filter(|entry| mode.hidden.includes(entry))
         .collect();
     if filtered.is_empty() {

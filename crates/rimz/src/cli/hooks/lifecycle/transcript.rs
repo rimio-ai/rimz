@@ -19,12 +19,7 @@ pub(super) fn record_assistant_response(
         return None;
     }
     let agent_id = decoded.event_agent_id()?.clone();
-    let state = store.snapshot_cached().ok().and_then(|snapshot| {
-        snapshot
-            .agents
-            .into_iter()
-            .find(|state| state.kind == agent.spec().kind && state.agent_id == agent_id)
-    });
+    let state = agent_state(store, agent, &agent_id);
     let worktree_path = recorded
         .and_then(|recorded| recorded.observation.worktree_path.as_deref())
         .or(decoded.worktree_path())
@@ -62,6 +57,7 @@ pub(super) fn record_assistant_response(
     entry.role = recorded
         .and_then(|recorded| recorded.observation.launch.role.clone())
         .or_else(|| state.as_ref().and_then(|state| state.role.clone()));
+    stamp_parent(&mut entry, state.as_ref());
     entry.reply_to = turn_opened_by(store, agent, &agent_id);
     if let Err(err) = rimz::transcript::append(store.paths(), &entry) {
         warn!(
@@ -99,16 +95,10 @@ pub(super) fn record_native_answer(
     // confirmation already closed it, so the idempotent append suppresses the
     // native duplicate rather than emitting a legacy id-less answer.
     let ask_id = latest_native_ask_id(store, agent.spec().kind, agent_id.as_str());
+    let state = agent_state(store, agent, agent_id);
     let awaiting = recorded.is_some_and(|recorded| recorded.waiting_cleared)
-        || store
-            .snapshot_cached()
-            .ok()
-            .and_then(|snapshot| {
-                snapshot
-                    .agents
-                    .into_iter()
-                    .find(|state| state.kind == agent.spec().kind && state.agent_id == *agent_id)
-            })
+        || state
+            .as_ref()
             .is_some_and(|state| state.is_awaiting_input())
         || open_ask.is_some();
     if !awaiting {
@@ -135,6 +125,7 @@ pub(super) fn record_native_answer(
     entry.from = Some("you".to_owned());
     entry.answers = answers.to_vec();
     entry.id = ask_id;
+    stamp_parent(&mut entry, state.as_ref());
     if let Err(err) = rimz::transcript::append_answer_if_missing(store.paths(), &entry) {
         warn!(
             agent = agent.spec().kind,
@@ -188,6 +179,7 @@ pub(super) fn record_conversation(
     assistant_message: Option<&str>,
     questions: &[rimz::transcript::AskQuestion],
     delivered: &[rimz::message::MessageRecord],
+    run: Option<&rimz::harness::run::RunRecord>,
 ) -> rimz::transcript::Result<()> {
     let observation = &recorded.observation;
     if observation.parent_agent_id.is_some() {
@@ -197,6 +189,13 @@ pub(super) fn record_conversation(
         return Ok(());
     };
     let kind = agent.spec().kind_id();
+    let snapshot = store.snapshot_cached().ok();
+    let state = snapshot.as_ref().and_then(|snapshot| {
+        snapshot
+            .agents
+            .iter()
+            .find(|state| state.kind == kind && state.agent_id == agent_id)
+    });
     let channel = rimz::transcript::entry_channel(
         observation.launch.channel.as_deref(),
         observation.worktree_path.as_deref(),
@@ -207,6 +206,35 @@ pub(super) fn record_conversation(
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
     });
+    let parent_handle = state
+        .filter(|state| state.is_launched_child())
+        .and_then(|state| {
+            let snapshot = snapshot.as_ref()?;
+            let parent_id = state.parent_agent_id.as_ref()?;
+            let parent_kind = state.parent_agent_kind.as_ref().unwrap_or(&state.kind);
+            let parent = snapshot
+                .agents
+                .iter()
+                .find(|parent| parent.kind == *parent_kind && parent.agent_id == *parent_id);
+            let sender = match parent {
+                Some(parent) => rimz::message::MessageSender::Agent {
+                    kind: parent.kind.clone(),
+                    name: parent.name.clone(),
+                    profile: parent.profile.clone(),
+                    role: parent.role.clone(),
+                    channel: rimz::harness::target::agent_channel(parent),
+                },
+                None => rimz::message::MessageSender::Agent {
+                    kind: parent_kind.clone(),
+                    name: None,
+                    profile: None,
+                    role: None,
+                    channel: None,
+                },
+            };
+            let peers = rimz::harness::target::addressable_agents(snapshot);
+            rimz::harness::target::agent_sender_handle(&sender, &peers, channel.as_deref())
+        });
     let entry_base = |entry, text: String| {
         let mut entry = rimz::transcript::TranscriptEntry::new(
             jiff::Timestamp::now(),
@@ -219,6 +247,7 @@ pub(super) fn record_conversation(
         entry.name = observation.agent_name.clone();
         entry.profile = observation.launch.profile.clone();
         entry.role = observation.launch.role.clone();
+        stamp_parent(&mut entry, state);
         entry
     };
 
@@ -288,13 +317,23 @@ pub(super) fn record_conversation(
                                     delivered_text,
                                 )
                             }
-                            None => (
-                                entry_base(
-                                    rimz::transcript::TranscriptKind::Prompt,
+                            None => {
+                                let launch_brief = parent_handle.as_ref().filter(|_| {
+                                    run.is_some_and(|run| {
+                                        run.subagent && run.prompt.trim() == segment
+                                    })
+                                });
+                                let mut entry = entry_base(
+                                    if launch_brief.is_some() {
+                                        rimz::transcript::TranscriptKind::Message
+                                    } else {
+                                        rimz::transcript::TranscriptKind::Prompt
+                                    },
                                     segment.to_owned(),
-                                ),
-                                segment.to_owned(),
-                            ),
+                                );
+                                entry.from = launch_brief.cloned();
+                                (entry, segment.to_owned())
+                            }
                         };
                     let matched = if aligned_record {
                         delivered.get(delivered_cursor).map(|message| (0, message))
@@ -470,6 +509,8 @@ pub(super) fn record_turn_error_entry(
         .worktree_root
         .file_name()
         .map(|name| name.to_string_lossy().into_owned());
+    let state = agent_state(store, agent, &entry.agent_id);
+    stamp_parent(&mut entry, state.as_ref());
     if let Err(err) = rimz::transcript::append(store.paths(), &entry) {
         warn!(
             agent = agent.spec().kind,
@@ -479,6 +520,35 @@ pub(super) fn record_turn_error_entry(
             "lifecycle: failed to record turn-error transcript entry",
         );
     }
+}
+
+fn agent_state(
+    store: &Store,
+    agent: &AgentDefinition,
+    agent_id: &rimz::ids::AgentSessionId,
+) -> Option<rimz::agents::AgentState> {
+    store.snapshot_cached().ok().and_then(|snapshot| {
+        snapshot
+            .agents
+            .into_iter()
+            .find(|state| state.kind == agent.spec().kind && state.agent_id == *agent_id)
+    })
+}
+
+fn stamp_parent(
+    entry: &mut rimz::transcript::TranscriptEntry,
+    state: Option<&rimz::agents::AgentState>,
+) {
+    let Some(state) = state.filter(|state| state.is_launched_child()) else {
+        return;
+    };
+    entry.parent_agent_id.clone_from(&state.parent_agent_id);
+    entry.parent_agent_kind = Some(
+        state
+            .parent_agent_kind
+            .clone()
+            .unwrap_or_else(|| state.kind.clone()),
+    );
 }
 
 pub(super) fn merge_turn_error_marker(

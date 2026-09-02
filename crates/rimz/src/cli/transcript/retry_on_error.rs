@@ -137,7 +137,7 @@ fn exact_session_id_resolves_outside_the_current_channel() {
 
     assert_eq!(scope.channel.as_deref(), Some("other"));
     assert_eq!(focus_key(&scope), entry_key(&exact));
-    assert!(entry_in_scope(&exact, &scope));
+    assert!(entry_in_scope(&exact, &scope, &identities));
 }
 
 #[test]

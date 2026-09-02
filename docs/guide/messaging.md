@@ -175,7 +175,7 @@ Statuses read straight across: `queued` and `claimed` are still live, `sent` mea
 
 `rimz message` is the same command whether you type it or an agent runs it, so a running agent hands work to a teammate exactly as you do. Every attributed delivery starts with a `Type` / `From` / `Content` header: agent sends use `AGENT_MESSAGE` and their handle, the status digest sent once the current fleet of an agent's launched subagents settles uses `SUBAGENT_REPORT` and `@rimz`, while your sends use `USER_MESSAGE` and `@user`. Agent deliveries land as first-class conversation lines, but `rimz transcript` hides subagent digests from its human view; `rimz transcript --json` retains them. User headers are removed when the prompt is recorded. `--no-from` delivers verbatim without a header when a script wants the raw text.
 
-Read the conversation back — every prompt, answer, and inter-agent message across a channel or one agent, with each exchange grouped under the message that opened it — with `rimz transcript` ([transcript CLI](../reference/cli/transcript.md)).
+Read the root-agent conversation back across a channel, with each exchange grouped under the message that opened it, using `rimz transcript`. Name a launched child to read its separate conversation: `rimz transcript @<petname>` ([transcript CLI](../reference/cli/transcript.md)).
 
 ## Channels
 

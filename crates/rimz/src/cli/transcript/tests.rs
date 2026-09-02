@@ -1364,3 +1364,53 @@ fn channel_filter_matches_exact_lanes() {
     ));
     assert!(channel_matches(Some("web-token/forge"), None));
 }
+
+#[test]
+fn child_entries_require_child_focus() {
+    let parent = log_entry(
+        "claude",
+        "parent-session",
+        TranscriptKind::Prompt,
+        None,
+        "parent prompt",
+    );
+    let mut child = log_entry(
+        "codex",
+        "child-session",
+        TranscriptKind::Message,
+        Some("@claude"),
+        "launch brief",
+    );
+    child.parent_agent_id = Some(AgentSessionId::from("parent-session"));
+    child.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+    let identities = build_identities(&[parent.clone(), child.clone()]);
+
+    assert!(identities[&entry_key(&child)].child);
+    assert!(!entry_in_scope(
+        &child,
+        &single_channel_scope("chat".to_owned()),
+        &identities,
+    ));
+    assert!(!entry_in_scope(
+        &child,
+        &Scope {
+            channel: Some("chat".to_owned()),
+            channel_filter: Some("chat".to_owned()),
+            focus: Some("@claude".to_owned()),
+            focus_keys: Some(BTreeSet::from([entry_key(&parent)])),
+            include_channel: false,
+        },
+        &identities,
+    ));
+    assert!(entry_in_scope(
+        &child,
+        &Scope {
+            channel: Some("chat".to_owned()),
+            channel_filter: Some("chat".to_owned()),
+            focus: Some("@codex".to_owned()),
+            focus_keys: Some(BTreeSet::from([entry_key(&child)])),
+            include_channel: false,
+        },
+        &identities,
+    ));
+}
