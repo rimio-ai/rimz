@@ -70,6 +70,7 @@ const LEGACY_SET_KEYS: &[&str] = &[
     "agents.worktree.base",
     "agents.placement",
     "harness.smart_compact",
+    "harness.compact_instruction",
     "harness.idle_compact",
     "harness.idle_compact_after",
     "harness.budget",
@@ -267,6 +268,7 @@ fn validates_config_key_read_and_write_surfaces() {
         "notifications.title",
         "notifications.body",
         "harness.smart_compact",
+        "harness.compact_instruction",
         "harness.idle_compact",
         "harness.idle_compact_after",
         "harness.budget",
@@ -1142,6 +1144,27 @@ fn harness_smart_compact_values_are_parsed_as_strings() {
     assert_eq!(parse_set_value(&key, "70%").as_str(), Some("70%"));
     assert_eq!(parse_set_value(&key, "120000").as_str(), Some("120000"));
     assert_eq!(parse_set_value(&key, "180k").as_str(), Some("180k"));
+}
+
+#[test]
+fn harness_compact_instruction_values_are_parsed_as_strings() {
+    let key = parse_key("harness.compact_instruction").expect("key");
+
+    for (raw, expected) in [
+        ("keep the open questions", "keep the open questions"),
+        ("\"\"", ""),
+        ("[summary]", "[summary]"),
+    ] {
+        let value = parse_set_value(&key, raw);
+        assert_eq!(value.as_str(), Some(expected));
+        validate_set_value(&key, &value).expect("compact instruction string");
+    }
+    assert_eq!(
+        validate_set_value(&key, &Value::from(true))
+            .expect_err("non-string compact instruction")
+            .to_string(),
+        "harness.compact_instruction must be a string"
+    );
 }
 
 #[test]
