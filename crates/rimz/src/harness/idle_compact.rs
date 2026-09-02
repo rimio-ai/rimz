@@ -60,7 +60,7 @@ pub(crate) fn compact_idle_agents(
         .then(|| crate::sidebar::refresh::pr::read_pr_state_cache(&runtime.pr_state_path()));
     for agent in &snapshot.agents {
         let command = crate::agents::spec_by_kind(agent.kind.as_str())
-            .and_then(|spec| spec.launch.compact_command());
+            .and_then(|spec| spec.launch.compact_command(config.compact_instruction()));
         let occupied = agent.occupied_context_tokens();
         let record_path = fire_record_path(runtime, &agent.kind, &agent.agent_id);
         let signals = if config.idle_compact == IdleCompactMode::Auto {
@@ -75,7 +75,7 @@ pub(crate) fn compact_idle_agents(
         };
         if !should_compact(
             agent,
-            command,
+            command.as_deref(),
             occupied,
             config.idle_compact,
             config.idle_compact_after(),
@@ -98,7 +98,7 @@ pub(crate) fn compact_idle_agents(
             &agent.kind,
             &agent.agent_id,
             &pane_id,
-            command,
+            &command,
             occupied,
             &label,
         ) {

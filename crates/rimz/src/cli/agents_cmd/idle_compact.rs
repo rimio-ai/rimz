@@ -19,8 +19,12 @@ use rimz::message::{
 use super::Ctx;
 
 pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
+    let config = MachineConfig::load_lenient();
     let expected_command = rimz::agents::spec_by_kind(request.kind.as_str())
-        .and_then(|spec| spec.launch.compact_command())
+        .and_then(|spec| {
+            spec.launch
+                .compact_command(config.harness.compact_instruction())
+        })
         .context("idle-compaction target adapter has no compact command")?;
     if request.command != expected_command {
         bail!(
@@ -30,7 +34,6 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         );
     }
 
-    let config = MachineConfig::load_lenient();
     if config.harness.idle_compact == IdleCompactMode::Off {
         return Ok(());
     }
@@ -84,13 +87,12 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
             "idle-compaction context reading changed before helper validation",
         );
     }
-    if already_compacted_at(store, agent, expected_command, occupied_tokens)
+    if already_compacted_at(store, agent, occupied_tokens)
         || latest_delivered_was_compaction(
             &store
                 .list_message_history()
                 .context("reading idle-compaction message history")?,
             agent,
-            expected_command,
         )
     {
         return Ok(());
@@ -181,7 +183,6 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
 fn latest_delivered_was_compaction(
     history: &[MessageRecord],
     agent: &rimz::agents::AgentState,
-    command: &str,
 ) -> bool {
     history
         .iter()
@@ -191,9 +192,7 @@ fn latest_delivered_was_compaction(
         })
         .max_by(|left, right| left.message_id.as_str().cmp(right.message_id.as_str()))
         .is_some_and(|message| {
-            message.body == MessageBody::Command
-                && message.text == command
-                && message.compacted_context_tokens.is_some()
+            message.body == MessageBody::Command && message.compacted_context_tokens.is_some()
         })
 }
 
@@ -252,15 +251,10 @@ mod tests {
         let compact = delivered(&agent, "/compact", MessageBody::Command, Some(80_000));
         assert!(latest_delivered_was_compaction(
             std::slice::from_ref(&compact),
-            &agent,
-            "/compact"
+            &agent
         ));
 
         let prompt = delivered(&agent, "continue", MessageBody::Prompt, None);
-        assert!(!latest_delivered_was_compaction(
-            &[compact, prompt],
-            &agent,
-            "/compact"
-        ));
+        assert!(!latest_delivered_was_compaction(&[compact, prompt], &agent));
     }
 }
