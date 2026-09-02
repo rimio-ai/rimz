@@ -283,8 +283,12 @@ fn mark_joined<'a>(
         let TerminalPayload::Run(record) = &outcome.payload else {
             continue;
         };
-        let result =
-            rimz::harness::run::report::join_and_settle_digest(store, session_name, &record.run_id);
+        let result = rimz::harness::run::report::join_and_settle_digest(
+            store,
+            session_name,
+            &record.run_id,
+            "joined inline",
+        );
         if let Err(err) = result {
             tracing::warn!(
                 run_id = %record.run_id,

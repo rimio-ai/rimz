@@ -486,8 +486,13 @@ mod tests {
         for record in [&first, &second] {
             run::create(store.paths(), record).unwrap();
         }
-        run::report::join_and_settle_digest(&store, &workspace.session_name, &second.run_id)
-            .unwrap();
+        run::report::join_and_settle_digest(
+            &store,
+            &workspace.session_name,
+            &second.run_id,
+            "stopped by parent",
+        )
+        .unwrap();
         run::cancel(store.paths(), &second.run_id).unwrap();
 
         assert!(matches!(
@@ -509,8 +514,13 @@ mod tests {
             append_agent(&store, name, Some("parent"));
             let record = child_run(&workspace.workspace_id, name, RunStatus::Running);
             run::create(store.paths(), &record).unwrap();
-            run::report::join_and_settle_digest(&store, &workspace.session_name, &record.run_id)
-                .unwrap();
+            run::report::join_and_settle_digest(
+                &store,
+                &workspace.session_name,
+                &record.run_id,
+                "stopped by parent",
+            )
+            .unwrap();
             run::cancel(store.paths(), &record.run_id).unwrap();
         }
 
@@ -538,8 +548,13 @@ mod tests {
         };
 
         for record in &records {
-            run::report::join_and_settle_digest(&store, &workspace.session_name, &record.run_id)
-                .unwrap();
+            run::report::join_and_settle_digest(
+                &store,
+                &workspace.session_name,
+                &record.run_id,
+                "stopped by parent",
+            )
+            .unwrap();
         }
 
         assert!(store.list_messages().unwrap().is_empty());
