@@ -2,7 +2,7 @@ use std::fs;
 
 use super::super::references::{EdgeKind, FnRef};
 use super::super::sources::Source;
-use super::super::target::{Layer, ModuleRule};
+use super::super::target::ModuleRule;
 use super::*;
 
 #[test]
@@ -40,10 +40,13 @@ fn inspect_args_resolve_modules_from_paths_and_reject_no_index() {
         "mod writer;\n",
     )
     .unwrap();
-    let syntax = super::super::syntax::analyze_sources(&[
-        Source::new("crates/demo/src/store/writer.rs", "fn write() {}"),
-        Source::new("crates/demo/src/cli.rs", "fn run() {}"),
-    ]);
+    let syntax = super::super::syntax::analyze_sources(
+        &[
+            Source::new("crates/demo/src/store/writer.rs", "fn write() {}"),
+            Source::new("crates/demo/src/cli.rs", "fn run() {}"),
+        ],
+        &BTreeSet::new(),
+    );
     assert_eq!(
         resolve_module(
             root.path(),
@@ -85,7 +88,8 @@ fn functions_rank_by_distinct_items_and_quote_the_heaviest() {
         "crates/demo/src/caller.rs",
         format!("fn heavy() {{\n{statements}\n}}\n\nfn light() {{\n    let value = 1;\n}}\n"),
     );
-    let syntax = super::super::syntax::analyze_sources(std::slice::from_ref(&source));
+    let syntax =
+        super::super::syntax::analyze_sources(std::slice::from_ref(&source), &BTreeSet::new());
     let heavy = syntax.files[0]
         .fns
         .iter()
@@ -183,7 +187,7 @@ fn compact_json_preserves_complete_item_counts() {
 }
 
 #[test]
-fn rules_report_direction_admission_and_debt() {
+fn rules_report_direction_and_admission() {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir(root.path().join("src")).unwrap();
     fs::write(
@@ -205,51 +209,42 @@ fn rules_report_direction_admission_and_debt() {
     .unwrap();
     let facts = Facts::load(root.path(), Path::new("."), Facets::default()).unwrap();
     let target = Target {
-        version: 4,
+        version: 5,
         layers: vec![
-            Layer::Group(vec!["store".to_owned(), "config".to_owned()]),
-            Layer::Module("cli".to_owned()),
+            vec!["store".to_owned(), "config".to_owned()],
+            vec!["cli".to_owned()],
         ],
         modules: vec![ModuleRule {
             path: PathBuf::from("src/store.rs"),
-            allowed_imports: None,
-            upward_imports: Some(vec!["cli".to_owned()]),
+            allowed_dependencies: None,
+            upward_dependencies: Some(vec!["cli".to_owned()]),
             surface_budget: 2,
-            surface_goal: None,
-            upward_debt: Some(vec!["cli".to_owned()]),
             config_line: 4,
         }],
         strangler: Vec::new(),
+        verdicts: Vec::new(),
     };
 
     let rules = target_rules(
         root.path(),
         &target,
-        &root.path().join("target.toml"),
         &facts,
         &selector("store"),
         &selector("cli"),
-    )
-    .unwrap();
+    );
 
     assert_eq!(rules.len(), 1);
     assert_eq!(rules[0].direction, "upward");
     assert_eq!(rules[0].admitted.as_deref(), Some("cli"));
-    let debt = rules[0].debt.as_ref().unwrap();
-    assert_eq!(debt.prefix, "cli");
-    assert_eq!(debt.sites, 1);
 
     let partial = rule_row(
         &ModuleRule {
             path: PathBuf::from("src/store.rs"),
-            allowed_imports: Some(vec!["cli::render".to_owned()]),
-            upward_imports: None,
+            allowed_dependencies: Some(vec!["cli::render".to_owned()]),
+            upward_dependencies: None,
             surface_budget: 2,
-            surface_goal: None,
-            upward_debt: None,
             config_line: 4,
         },
-        &BTreeMap::new(),
         &target.layer_ranks(),
         "store",
         "cli",

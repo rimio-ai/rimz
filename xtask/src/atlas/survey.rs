@@ -335,7 +335,7 @@ pub(super) fn divergence(
         .filter(|file| path_in_scope(&file.path, scope))
     {
         let from = module_for_path(&file.path, scope);
-        for import in &file.imports {
+        for import in &file.dependencies {
             let Some(resolved) = super::syntax::resolved_internal_import(
                 import,
                 &facts.known_modules,
@@ -398,7 +398,7 @@ pub(super) fn module_divergence(
         .iter()
         .filter(|file| path_in_scope(&file.path, scope))
     {
-        for import in &file.imports {
+        for import in &file.dependencies {
             let Some(resolved) = super::syntax::resolved_internal_import(
                 import,
                 &facts.known_modules,
@@ -592,7 +592,7 @@ fn providers(facts: &Facts, scope: &Path) -> Vec<Provider> {
         .filter(|file| path_in_scope(&file.path, scope))
     {
         let from = module_for_path(&file.path, scope);
-        for import in &file.imports {
+        for import in &file.dependencies {
             let Some(resolved) = super::syntax::resolved_internal_import(
                 import,
                 &facts.known_modules,

@@ -662,7 +662,7 @@ fn upward_edges(
         .iter()
         .filter(|file| path_in_scope(&file.path, scope))
     {
-        for import in &file.imports {
+        for import in &file.dependencies {
             let Some(resolved) = super::syntax::resolved_internal_import(
                 import,
                 &facts.known_modules,
@@ -759,7 +759,7 @@ fn use_edges(facts: &Facts, scope: &Path) -> EdgeMap {
         .filter(|file| path_in_scope(&file.path, scope))
     {
         let from = module_endpoint(&file.module_path, &scope_module);
-        for import in &file.imports {
+        for import in &file.dependencies {
             let Some(resolved) = super::syntax::resolved_internal_import(
                 import,
                 &facts.known_modules,
@@ -1085,7 +1085,7 @@ fn print_report(report: &Report, top: usize, markdown: bool) {
     );
     if let Some(upward) = &report.totals.upward_imports {
         println!(
-            "upward imports     {:>8} → {:>8} ({:+}); pairs +{} -{}",
+            "upward dependencies {:>7} → {:>8} ({:+}); pairs +{} -{}",
             upward.sites.base,
             upward.sites.current,
             upward.sites.delta,
@@ -1093,10 +1093,10 @@ fn print_report(report: &Report, top: usize, markdown: bool) {
             upward.pairs_closed
         );
     } else {
-        println!("upward imports          no target configured");
+        println!("upward dependencies     no target configured");
     }
     println!(
-        "use edges               +{} -{}",
+        "dependency sites        +{} -{}",
         report.totals.use_edges.added, report.totals.use_edges.removed
     );
     if let Some(references) = &report.totals.reference_edges {
@@ -1183,11 +1183,16 @@ fn print_report(report: &Report, top: usize, markdown: bool) {
         markdown,
     );
     if let Some(upward) = &report.upward {
-        print_imports("Upward imports", upward, top, markdown);
+        print_imports("Upward dependencies", upward, top, markdown);
     }
-    print_edges("Use edges added", &report.use_edges.added, top, markdown);
     print_edges(
-        "Use edges removed",
+        "Dependency sites added",
+        &report.use_edges.added,
+        top,
+        markdown,
+    );
+    print_edges(
+        "Dependency sites removed",
         &report.use_edges.removed,
         top,
         markdown,
@@ -1446,7 +1451,7 @@ mod tests {
         .unwrap();
         fs::write(
             root.join("refactor-target.toml"),
-            "version = 4\nlayers = [\"store\", \"cli\"]\n[[strangler]]\nsymbol = \"LegacyToken\"\npath = \"src\"\nbaseline = 0\n",
+            "version = 5\nlayers = [[\"store\"], [\"cli\"]]\n[[strangler]]\nsymbol = \"LegacyToken\"\npath = \"src\"\nbaseline = 0\n",
         )
         .unwrap();
         run_git(root, &["add", "."]);

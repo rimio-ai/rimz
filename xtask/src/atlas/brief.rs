@@ -499,7 +499,7 @@ fn providers(facts: &Facts, module: &Path, crate_module: &str) -> Vec<Provider> 
         .iter()
         .filter(|file| path_in_scope(&file.path, module))
     {
-        for import in &file.imports {
+        for import in &file.dependencies {
             let Some(resolved) = super::syntax::resolved_internal_import(
                 import,
                 &facts.known_modules,
