@@ -3,13 +3,14 @@ use super::*;
 use anyhow::bail;
 
 #[derive(Clone, Debug)]
-pub(super) struct LiveRootAgent {
+pub(super) struct LiveAgent {
     pub(super) key: AgentKey,
     pub(super) channel: Option<String>,
     pub(super) registered_at: Option<jiff::Timestamp>,
+    pub(super) root: bool,
 }
 
-pub(super) fn live_root_agents(workspace: &rimz::ResolvedWorkspace) -> Vec<LiveRootAgent> {
+pub(super) fn live_agents(workspace: &rimz::ResolvedWorkspace) -> Vec<LiveAgent> {
     crate::cli::open_store(workspace)
         .ok()
         .and_then(|store| store.snapshot_cached().ok())
@@ -17,13 +18,15 @@ pub(super) fn live_root_agents(workspace: &rimz::ResolvedWorkspace) -> Vec<LiveR
             snapshot
                 .agents
                 .into_iter()
-                .filter(|agent| agent.parent_agent_id.is_none())
+                .filter(|agent| !agent.is_provider_subagent())
                 .map(|agent| {
                     let channel = rimz::harness::target::agent_channel(&agent);
-                    LiveRootAgent {
+                    let root = agent.parent_agent_id.is_none();
+                    LiveAgent {
                         key: (agent.kind, agent.agent_id),
                         channel,
                         registered_at: agent.registered_at,
+                        root,
                     }
                 })
                 .collect()
@@ -31,17 +34,19 @@ pub(super) fn live_root_agents(workspace: &rimz::ResolvedWorkspace) -> Vec<LiveR
         .unwrap_or_default()
 }
 
-pub(super) fn live_boundary(scope: &Scope, live: &[LiveRootAgent]) -> Option<jiff::Timestamp> {
+pub(super) fn live_boundary(scope: &Scope, live: &[LiveAgent]) -> Option<jiff::Timestamp> {
     live.iter()
         .filter(|agent| live_agent_in_scope(agent, scope))
         .filter_map(|agent| agent.registered_at)
         .min()
 }
 
-fn live_agent_in_scope(agent: &LiveRootAgent, scope: &Scope) -> bool {
+fn live_agent_in_scope(agent: &LiveAgent, scope: &Scope) -> bool {
     match &scope.focus_keys {
         Some(keys) => keys.contains(&agent.key),
-        None => channel_matches(agent.channel.as_deref(), scope.channel_filter.as_deref()),
+        None => {
+            agent.root && channel_matches(agent.channel.as_deref(), scope.channel_filter.as_deref())
+        }
     }
 }
 

@@ -175,7 +175,7 @@ pub(super) struct ConversationInput<'a> {
     pub(super) assistant_message: Option<&'a str>,
     pub(super) questions: &'a [rimz::transcript::AskQuestion],
     pub(super) delivered: &'a [rimz::message::MessageRecord],
-    pub(super) run: Option<&'a rimz::harness::run::RunRecord>,
+    pub(super) run_id: Option<&'a rimz::RunId>,
 }
 
 pub(super) fn record_conversation(
@@ -189,7 +189,7 @@ pub(super) fn record_conversation(
         assistant_message,
         questions,
         delivered,
-        run,
+        run_id,
     } = input;
     let observation = &recorded.observation;
     if observation.parent_agent_id.is_some() {
@@ -216,35 +216,6 @@ pub(super) fn record_conversation(
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
     });
-    let parent_handle = state
-        .filter(|state| state.is_launched_child())
-        .and_then(|state| {
-            let snapshot = snapshot.as_ref()?;
-            let parent_id = state.parent_agent_id.as_ref()?;
-            let parent_kind = state.parent_agent_kind.as_ref().unwrap_or(&state.kind);
-            let parent = snapshot
-                .agents
-                .iter()
-                .find(|parent| parent.kind == *parent_kind && parent.agent_id == *parent_id);
-            let sender = match parent {
-                Some(parent) => rimz::message::MessageSender::Agent {
-                    kind: parent.kind.clone(),
-                    name: parent.name.clone(),
-                    profile: parent.profile.clone(),
-                    role: parent.role.clone(),
-                    channel: rimz::harness::target::agent_channel(parent),
-                },
-                None => rimz::message::MessageSender::Agent {
-                    kind: parent_kind.clone(),
-                    name: None,
-                    profile: None,
-                    role: None,
-                    channel: None,
-                },
-            };
-            let peers = rimz::harness::target::addressable_agents(snapshot);
-            rimz::harness::target::agent_sender_handle(&sender, &peers, channel.as_deref())
-        });
     let entry_base = |entry, text: String| {
         let mut entry = rimz::transcript::TranscriptEntry::new(
             jiff::Timestamp::now(),
@@ -328,11 +299,19 @@ pub(super) fn record_conversation(
                                 )
                             }
                             None => {
-                                let launch_brief = parent_handle.as_ref().filter(|_| {
-                                    run.is_some_and(|run| {
-                                        run.subagent && run.prompt.trim() == segment
-                                    })
-                                });
+                                let launch_brief = state
+                                    .filter(|state| state.is_launched_child())
+                                    .and_then(|state| {
+                                        let run = rimz::harness::run::load(store.paths(), run_id?)
+                                            .ok()?;
+                                        (run.subagent && run.prompt.trim() == segment)
+                                            .then_some(())?;
+                                        launched_parent_handle(
+                                            snapshot.as_ref()?,
+                                            state,
+                                            channel.as_deref(),
+                                        )
+                                    });
                                 let mut entry = entry_base(
                                     if launch_brief.is_some() {
                                         rimz::transcript::TranscriptKind::Message
@@ -341,7 +320,7 @@ pub(super) fn record_conversation(
                                     },
                                     segment.to_owned(),
                                 );
-                                entry.from = launch_brief.cloned();
+                                entry.from = launch_brief;
                                 (entry, segment.to_owned())
                             }
                         };
@@ -423,6 +402,31 @@ pub(super) fn record_conversation(
         _ => {}
     }
     Ok(())
+}
+
+fn launched_parent_handle(
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
+    child: &rimz::agents::AgentState,
+    child_channel: Option<&str>,
+) -> Option<String> {
+    let sender = match rimz::harness::target::launched_parent(&snapshot.agents, child) {
+        Some(parent) => rimz::message::MessageSender::Agent {
+            kind: parent.kind.clone(),
+            name: parent.name.clone(),
+            profile: parent.profile.clone(),
+            role: parent.role.clone(),
+            channel: rimz::harness::target::agent_channel(parent),
+        },
+        None => rimz::message::MessageSender::Agent {
+            kind: child.parent_agent_kind.clone()?,
+            name: None,
+            profile: None,
+            role: None,
+            channel: None,
+        },
+    };
+    let peers = rimz::harness::target::addressable_agents(snapshot);
+    rimz::harness::target::agent_sender_handle(&sender, &peers, child_channel)
 }
 
 fn append_turn_entry(
@@ -553,12 +557,7 @@ fn stamp_parent(
         return;
     };
     entry.parent_agent_id.clone_from(&state.parent_agent_id);
-    entry.parent_agent_kind = Some(
-        state
-            .parent_agent_kind
-            .clone()
-            .unwrap_or_else(|| state.kind.clone()),
-    );
+    entry.parent_agent_kind.clone_from(&state.parent_agent_kind);
 }
 
 pub(super) fn merge_turn_error_marker(

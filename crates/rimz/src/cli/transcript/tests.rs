@@ -1309,21 +1309,31 @@ fn live_boundary_uses_channel_cohort_or_focus_key() {
     let channel_a = agent_key_for("claude", "sess-a");
     let channel_b = agent_key_for("codex", "sess-b");
     let other = agent_key_for("claude", "sess-other");
+    let child = agent_key_for("codex", "sess-child");
     let live = vec![
-        LiveRootAgent {
+        LiveAgent {
             key: channel_a.clone(),
             channel: Some("chat".to_owned()),
             registered_at: Some(ts("2026-06-01T00:03:00Z")),
+            root: true,
         },
-        LiveRootAgent {
+        LiveAgent {
             key: channel_b,
             channel: Some("chat".to_owned()),
             registered_at: Some(ts("2026-06-01T00:02:00Z")),
+            root: true,
         },
-        LiveRootAgent {
+        LiveAgent {
             key: other.clone(),
             channel: Some("elsewhere".to_owned()),
             registered_at: Some(ts("2026-06-01T00:01:00Z")),
+            root: true,
+        },
+        LiveAgent {
+            key: child.clone(),
+            channel: Some("chat".to_owned()),
+            registered_at: Some(ts("2026-06-01T00:04:00Z")),
+            root: false,
         },
     ];
 
@@ -1347,6 +1357,19 @@ fn live_boundary_uses_channel_cohort_or_focus_key() {
     assert_eq!(
         live_boundary(&single_channel_scope("missing".to_owned()), &live),
         None
+    );
+    assert_eq!(
+        live_boundary(
+            &Scope {
+                channel: Some("chat".to_owned()),
+                channel_filter: Some("chat".to_owned()),
+                focus: Some("@codex".to_owned()),
+                focus_keys: Some(BTreeSet::from([child])),
+                include_channel: false,
+            },
+            &live,
+        ),
+        Some(ts("2026-06-01T00:04:00Z"))
     );
 }
 
@@ -1383,7 +1406,11 @@ fn child_entries_require_child_focus() {
     );
     child.parent_agent_id = Some(AgentSessionId::from("parent-session"));
     child.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
-    let identities = build_identities(&[parent.clone(), child.clone()]);
+    let mut unstamped_child = child.clone();
+    unstamped_child.parent_agent_id = None;
+    unstamped_child.parent_agent_kind = None;
+    unstamped_child.at = ts("2026-06-01T00:00:01Z");
+    let identities = build_identities(&[parent.clone(), unstamped_child, child.clone()]);
 
     assert!(identities[&entry_key(&child)].child);
     assert!(!entry_in_scope(

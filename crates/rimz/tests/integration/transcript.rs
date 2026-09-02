@@ -681,6 +681,7 @@ fn transcript_scopes_launched_child_and_attributes_brief() {
             "worktree_path": env.home_root.join(branch),
         }),
         &run.run_id,
+        "swift-child",
     );
     run_hook_for_run(
         &env,
@@ -693,6 +694,7 @@ fn transcript_scopes_launched_child_and_attributes_brief() {
             "worktree_path": env.home_root.join(branch),
         }),
         &run.run_id,
+        "swift-child",
     );
 
     let channel = run_ok(env.rimz().args(["transcript", &format!("#{branch}")]));
@@ -709,7 +711,7 @@ fn transcript_scopes_launched_child_and_attributes_brief() {
     );
     assert!(!channel_json.contains("child answer"), "{channel_json}");
 
-    let child = run_ok(env.rimz().args(["transcript", child_id.as_str(), "--all"]));
+    let child = run_ok(env.rimz().args(["transcript", "@swift-child", "--all"]));
     assert!(child.contains("@planner → @codex"), "{child}");
     assert!(child.contains("inspect the launch path"), "{child}");
     assert!(child.contains("child answer"), "{child}");
@@ -1054,12 +1056,25 @@ fn run_hook(env: &Env, source: &str, payload: serde_json::Value) {
 }
 
 fn run_hook_for_owner(env: &Env, source: &str, payload: serde_json::Value, owner_pid: u32) {
-    run_hook_for_owner_and_run(env, source, payload, owner_pid, None);
+    run_hook_for_owner_and_run(env, source, payload, owner_pid, None, None);
 }
 
-fn run_hook_for_run(env: &Env, source: &str, payload: serde_json::Value, run_id: &rimz::RunId) {
+fn run_hook_for_run(
+    env: &Env,
+    source: &str,
+    payload: serde_json::Value,
+    run_id: &rimz::RunId,
+    agent_name: &str,
+) {
     let mut owner = dummy_agent_process();
-    run_hook_for_owner_and_run(env, source, payload, owner.id(), Some(run_id));
+    run_hook_for_owner_and_run(
+        env,
+        source,
+        payload,
+        owner.id(),
+        Some(run_id),
+        Some(agent_name),
+    );
     let _ = owner.kill();
     let _ = owner.wait();
 }
@@ -1070,6 +1085,7 @@ fn run_hook_for_owner_and_run(
     payload: serde_json::Value,
     owner_pid: u32,
     run_id: Option<&rimz::RunId>,
+    agent_name: Option<&str>,
 ) {
     let mut payload = payload;
     stamp_worktree_path(env, &mut payload);
@@ -1080,6 +1096,9 @@ fn run_hook_for_owner_and_run(
     cmd.env(rimz::harness::launch::ENV_AGENT_ROLE, source);
     if let Some(run_id) = run_id {
         cmd.env(rimz::harness::launch::ENV_RUN_ID, run_id.as_str());
+    }
+    if let Some(agent_name) = agent_name {
+        cmd.env(rimz::harness::launch::ENV_AGENT_NAME, agent_name);
     }
     let output = env
         .spawn_payload(cmd, &payload)
