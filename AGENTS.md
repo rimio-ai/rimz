@@ -134,5 +134,5 @@ Every other document is a leaf from here, grouped by purpose: **interface** (see
 **Contributing** — `docs/contributing/`
 - [rust-conventions.md](./docs/contributing/rust-conventions.md) — Rust shape: CLI, errors, stdout discipline, actor pattern, test taxonomy, toolchain, quality gates.
 - [agent-adapters.md](./docs/contributing/agent-adapters.md) — the built-in adapter integration playbook: protocol reference to landed adapter, step by step, with the deliverables checklist.
-- [atlas.md](./docs/contributing/atlas.md) — operating guide for `cargo xtask atlas` refactor analysis: reading each verb, the target-driven program shape, and the `refactor-target.toml` convergence loop.
+- [atlas.md](./docs/contributing/atlas.md) — operating guide for `cargo xtask atlas`: the four verbs, the pass contract, and the `refactor-target.toml` schema.
 - [sidebar-screenshots.md](./docs/contributing/sidebar-screenshots.md) — contributor PNG capture workflow for sidebar frames.
