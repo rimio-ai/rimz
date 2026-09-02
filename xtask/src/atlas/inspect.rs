@@ -353,7 +353,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
 
 /// Guard families anywhere in the crate that name an item the target
 /// defines; `include_all` keeps the ones below the finding gate. A path
-/// segment counts only under one of the target's own modules or types, so
+/// chain counts only under one of the target's own modules or types, so
 /// `event::poll` never matches a module that also defines a `poll`.
 fn module_item_guards(
     facts: &Facts,
@@ -388,34 +388,45 @@ fn module_item_guards(
                 .map(|item| item.name.as_str()),
         );
     }
-    let families = if include_all {
-        detect::guard_families_all_with_dropped(facts, Path::new(".")).0
-    } else {
-        detect::guard_families(facts, Path::new("."))
-    };
-    families
+    let default_keys = detect::guard_families(facts, Path::new("."))
+        .into_iter()
+        .map(|family| family.key)
+        .collect::<BTreeSet<_>>();
+    detect::guard_families_all_with_dropped(facts, Path::new("."))
+        .0
         .into_iter()
         .filter(|family| {
-            detect::named_identifier_roles(&family.key)
-                .into_iter()
-                .any(|identifier| {
-                    if detect::is_std_identifier(identifier.name)
-                        || !names.contains(identifier.name)
-                    {
-                        return false;
-                    }
-                    match identifier.role {
-                        IdentifierRole::Path => {
-                            scopes.contains(identifier.name)
-                                || scopes.iter().any(|scope| {
-                                    family
-                                        .key
-                                        .contains(&format!("{scope}::{}", identifier.name))
-                                })
+            let mut qualified = false;
+            let targets_module =
+                detect::named_identifier_roles(&family.key)
+                    .into_iter()
+                    .any(|identifier| {
+                        let segments = identifier
+                            .segments()
+                            .filter(|segment| !matches!(*segment, "crate" | "self" | "super"))
+                            .collect::<Vec<_>>();
+                        let Some(last) = segments.last() else {
+                            return false;
+                        };
+                        if detect::is_std_identifier(last) {
+                            return false;
                         }
-                        IdentifierRole::Method | IdentifierRole::Field => true,
-                    }
-                })
+                        if segments.len() >= 2 {
+                            qualified = true;
+                            segments.first().is_some_and(|first| {
+                                scopes.contains(first)
+                                    && (names.contains(last) || names.contains(first))
+                            })
+                        } else {
+                            names.contains(last)
+                                && matches!(
+                                    identifier.role,
+                                    IdentifierRole::Method | IdentifierRole::Field
+                                )
+                        }
+                    });
+            targets_module
+                && (include_all || qualified || default_keys.contains(family.key.as_str()))
         })
         .collect()
 }
@@ -696,10 +707,7 @@ fn item_evidence(
         .into_iter()
         .collect();
     let commits = history::introducing_commits(root, &file.path, name)?;
-    let markers = commits
-        .iter()
-        .flat_map(|commit| history::fix_markers(&format!("{}\n{}", commit.subject, commit.body)))
-        .collect();
+    let markers = commit_markers(&commits);
     Ok(ItemEvidence {
         key: key.to_owned(),
         path: file.path.clone(),
@@ -712,6 +720,18 @@ fn item_evidence(
         markers,
         verdict: configured.and_then(|target| item_verdict(target, key)),
     })
+}
+
+fn commit_markers(commits: &[Commit]) -> Vec<String> {
+    let mut marker_commits = BTreeSet::new();
+    commits
+        .iter()
+        .filter(|commit| {
+            !history::fix_markers(&format!("{}\n{}", commit.subject, commit.body)).is_empty()
+                && marker_commits.insert(commit.id.as_str())
+        })
+        .map(|commit| format!("{} {}", commit.short, commit.subject))
+        .collect()
 }
 
 fn item_verdict(target: &Target, key: &str) -> Option<Verdict> {
@@ -744,6 +764,11 @@ fn render_markdown(report: &Report, output: &OutputArgs, top: usize) -> String {
     let mut rendered = String::new();
     if output.wants("verdict") {
         render_verdict(&mut rendered, &report.verdict);
+    }
+    if output.wants("item")
+        && let Some(item) = &report.item
+    {
+        render_item(&mut rendered, item, top);
     }
     if output.wants("callers") {
         render_callers(&mut rendered, &report.callers, top);
@@ -779,11 +804,6 @@ fn render_markdown(report: &Report, output: &OutputArgs, top: usize) -> String {
     if output.wants("footer") {
         render_footer(&mut rendered, &report.footer, top);
     }
-    if output.wants("item")
-        && let Some(item) = &report.item
-    {
-        render_item(&mut rendered, item, top);
-    }
     rendered
 }
 
@@ -797,9 +817,13 @@ fn render_duplicated(
     if let Some(shapes) = shapes {
         out.push_str("## Shape families\n\n");
         for family in shapes.iter().take(top) {
+            let provider = family
+                .provider
+                .as_ref()
+                .map_or_else(String::new, |provider| format!(", provider {provider}"));
             writeln!(
                 out,
-                "- key: `{}` — {} files, mean {:.1} SLOC, score {:.1}",
+                "- key: `{}` — {} files, mean {:.1} SLOC, score {:.1}{provider}",
                 family.name, family.files, family.mean_sloc, family.score
             )
             .expect("writing to a String cannot fail");

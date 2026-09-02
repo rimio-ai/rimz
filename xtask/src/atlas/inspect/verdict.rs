@@ -29,7 +29,7 @@ impl InspectVerdict {
         assembly: &[AssemblyGroup],
         callers: &[Caller],
     ) -> Self {
-        let top_assembly = assembly.iter().max_by_key(|group| group.functions.len());
+        let top_assembly = assembly.first();
         let heaviest_caller = callers.first().and_then(|caller| caller.top_fns.first());
         let mut narrowable = BTreeMap::<&str, usize>::new();
         for row in surface.items.iter().filter(|row| row.narrow_to != "keep") {
@@ -111,7 +111,7 @@ pub(super) fn render_verdict(out: &mut String, verdict: &InspectVerdict) {
     }
     writeln!(
         out,
-        "{} vestigial candidates, {} pin a fix",
+        "{} items without production sites, {} pin a fix",
         verdict.vestigial_candidates, verdict.pins_fix
     )
     .expect("writing to a String cannot fail");

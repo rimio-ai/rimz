@@ -115,6 +115,10 @@ fn inspect_item_reports_every_validated_introducing_commit() {
         history::fix_markers(&commits[1].subject),
         ["fix regression #42"]
     );
+    assert_eq!(
+        commit_markers(&commits),
+        [format!("{} fix regression #42", commits[1].short)]
+    );
 }
 
 #[test]
@@ -212,6 +216,7 @@ fn target_rule_rows_use_each_rules_files_and_resolved_admissions() {
             .collect(),
         defined_names: super::super::facts::defined_names(&syntax),
         unique_fields: super::super::facts::unique_fields(&syntax),
+        defining_modules: super::super::facts::defining_modules(&syntax),
         bin_modules: super::super::facts::bin_modules(&syntax),
         syntax,
         sources: sources.to_vec(),

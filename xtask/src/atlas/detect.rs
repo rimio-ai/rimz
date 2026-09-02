@@ -250,27 +250,59 @@ pub(super) struct NamedIdentifier<'a> {
     pub(super) role: IdentifierRole,
 }
 
+impl<'a> NamedIdentifier<'a> {
+    pub(super) fn segments(self) -> impl Iterator<Item = &'a str> {
+        self.name.split("::")
+    }
+}
+
 /// Identifiers a normalized guard key names and the role each occupies.
 /// Alpha-renamed bindings (`$0`) are not names.
 pub(super) fn named_identifier_roles(key: &str) -> Vec<NamedIdentifier<'_>> {
     let mut names = Vec::new();
-    let mut identifiers = key.char_indices().peekable();
-    while let Some((start, first)) = identifiers.next() {
+    let mut cursor = 0;
+    while cursor < key.len() {
+        let Some(first) = key[cursor..].chars().next() else {
+            break;
+        };
         if first != '_' && !first.is_alphabetic() {
+            cursor += first.len_utf8();
             continue;
         }
-        let mut end = start + first.len_utf8();
-        while let Some(&(index, next)) = identifiers.peek() {
+        let start = cursor;
+        let mut end = cursor + first.len_utf8();
+        while let Some(next) = key[end..].chars().next() {
             if next != '_' && !next.is_alphanumeric() {
                 break;
             }
-            identifiers.next();
-            end = index + next.len_utf8();
+            end += next.len_utf8();
+        }
+        let mut qualified = false;
+        while key[end..].starts_with("::") {
+            let segment_start = end + 2;
+            let Some(first) = key[segment_start..].chars().next() else {
+                break;
+            };
+            if first != '_' && !first.is_alphabetic() {
+                break;
+            }
+            qualified = true;
+            end = segment_start + first.len_utf8();
+            while let Some(next) = key[end..].chars().next() {
+                if next != '_' && !next.is_alphanumeric() {
+                    break;
+                }
+                end += next.len_utf8();
+            }
         }
         let before = &key[..start];
         let after = &key[end..];
-        let role = if before.ends_with("::") || after.starts_with("::") {
-            Some(IdentifierRole::Path)
+        let role = if qualified {
+            Some(if after.starts_with('(') {
+                IdentifierRole::Method
+            } else {
+                IdentifierRole::Path
+            })
         } else if after.starts_with('(') {
             Some(IdentifierRole::Method)
         } else if before.ends_with('.') {
@@ -284,6 +316,7 @@ pub(super) fn named_identifier_roles(key: &str) -> Vec<NamedIdentifier<'_>> {
                 role,
             });
         }
+        cursor = end;
     }
     names
 }
@@ -310,12 +343,18 @@ fn classify_guard(
     let identifiers = named_identifier_roles(key)
         .into_iter()
         .filter(|identifier| {
-            !is_std_identifier(identifier.name)
+            let segments = identifier.segments().collect::<Vec<_>>();
+            !segments
+                .first()
+                .is_some_and(|segment| is_std_identifier(segment))
+                && !segments
+                    .last()
+                    .is_some_and(|segment| is_std_identifier(segment))
                 && match identifier.role {
                     IdentifierRole::Field => unique_fields.contains(identifier.name),
-                    IdentifierRole::Method | IdentifierRole::Path => {
-                        defined_names.contains(identifier.name)
-                    }
+                    IdentifierRole::Method | IdentifierRole::Path => segments
+                        .iter()
+                        .any(|segment| defined_names.contains(*segment)),
                 }
         })
         .collect::<Vec<_>>();
@@ -440,10 +479,30 @@ mod tests {
     }
 
     #[test]
+    fn qualified_callee_is_one_predicate() {
+        assert_eq!(
+            classify_guard(
+                "$0Err($1)=atomic::write_temp_then_rename_cache($2)",
+                &names(&["atomic", "write_temp_then_rename_cache"]),
+                &names(&[])
+            ),
+            GuardClassification::PredicateUse
+        );
+        assert_eq!(
+            classify_guard(
+                "$0.root_class!=RootClass::Repo",
+                &names(&["RootClass"]),
+                &names(&["root_class"])
+            ),
+            GuardClassification::Composed
+        );
+    }
+
+    #[test]
     fn named_identifiers_skip_alpha_renamed_bindings() {
         assert_eq!(
             named_identifiers("$0Err($1)=child_process::spawn_detached_rimz($2,$3,_)"),
-            ["Err", "child_process", "spawn_detached_rimz"]
+            ["Err", "child_process::spawn_detached_rimz"]
         );
         assert_eq!(
             named_identifiers("$0.status.is_terminal()"),
@@ -470,11 +529,7 @@ mod tests {
                     role: IdentifierRole::Method,
                 },
                 super::NamedIdentifier {
-                    name: "ValueRefreshKind",
-                    role: IdentifierRole::Path,
-                },
-                super::NamedIdentifier {
-                    name: "Cached",
+                    name: "ValueRefreshKind::Cached",
                     role: IdentifierRole::Path,
                 },
             ]

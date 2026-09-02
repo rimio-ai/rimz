@@ -140,6 +140,18 @@ fn owner_for_edge(edge: &Edge, syntax_files: &[FileSyntax]) -> Option<String> {
         .and_then(|function| function.owner.clone())
 }
 
+fn is_type_alias_edge(edge: &Edge, syntax_files: &[FileSyntax]) -> bool {
+    syntax_files
+        .iter()
+        .find(|file| file.path == edge.to_path)
+        .and_then(|file| {
+            file.pub_items
+                .iter()
+                .find(|item| item.line == edge.to_line && item.name == edge.item)
+        })
+        .is_some_and(|item| item.kind == "type")
+}
+
 fn folded_label(owner: &str, names: &[String]) -> String {
     let mut names = names.iter().filter(|name| name.as_str() != owner).fold(
         Vec::<String>::new(),
@@ -349,6 +361,7 @@ pub(super) fn assembly_functions(
             && !edge.test
             && from.matches(&edge.from, &edge.from_path)
             && to.matches(&edge.to, &edge.to_path)
+            && !is_type_alias_edge(edge, syntax_files)
     }) {
         let Some(function) = &edge.from_fn else {
             continue;
@@ -511,6 +524,7 @@ pub(super) fn call_shapes(
             && !edge.test
             && target.matches(&edge.to, &edge.to_path)
             && !target.matches(&edge.from, &edge.from_path)
+            && !is_type_alias_edge(edge, syntax_files)
     }) {
         let Some(function) = &edge.from_fn else {
             continue;
@@ -575,6 +589,7 @@ pub(super) fn repeated_assembly(
             && !edge.test
             && target.matches(&edge.to, &edge.to_path)
             && !target.matches(&edge.from, &edge.from_path)
+            && !is_type_alias_edge(edge, syntax_files)
     }) {
         let Some(function) = &edge.from_fn else {
             continue;

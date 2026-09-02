@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use super::facts::Facts;
-use super::modules::{module_for_path, path_in_scope};
+use super::modules::{crate_module_for_path, module_for_path, module_is_within, path_in_scope};
 use super::syntax::FnBody;
 
 const MIN_SHARED_CALLEES: usize = 3;
@@ -42,12 +42,16 @@ pub(super) struct ShapeFamily {
     pub(super) siblings: usize,
     /// The sibling role pattern behind `siblings`, when there is one.
     pub(super) role: Option<String>,
+    /// One module whose API supplies every crate-vocabulary callee, when no
+    /// member function lives in that module's subtree.
+    pub(super) provider: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize)]
 pub(super) struct FamilyDrops {
     pub(super) vocabulary: usize,
     pub(super) below_gate: usize,
+    pub(super) single_provider: usize,
 }
 
 fn clusters(
@@ -119,21 +123,85 @@ fn family_report(
     let mut drops = FamilyDrops::default();
     let mut families = all
         .into_iter()
-        .filter(|family| {
+        .filter_map(|mut family| {
             let crate_vocabulary = family
                 .name
                 .split('+')
                 .any(|callee| is_crate_vocabulary(callee, &facts.defined_names));
+            family.provider =
+                single_provider(&family, &facts.defined_names, &facts.defining_modules);
+            let passes_gate = passes_finding_gate(&family);
             if !crate_vocabulary {
                 drops.vocabulary += 1;
-            } else if !passes_finding_gate(family) {
+            } else if family.provider.is_some() {
+                drops.single_provider += 1;
+            } else if !passes_gate {
                 drops.below_gate += 1;
             }
-            include_all || (crate_vocabulary && passes_finding_gate(family))
+            (include_all || (crate_vocabulary && passes_gate && family.provider.is_none()))
+                .then_some(family)
         })
         .collect::<Vec<_>>();
     sort_families(&mut families);
     (families, drops)
+}
+
+fn single_provider(
+    family: &ShapeFamily,
+    defined_names: &BTreeSet<String>,
+    defining_modules: &BTreeMap<String, BTreeSet<String>>,
+) -> Option<String> {
+    // Siblings are the family's substance only when they are most of it;
+    // two same-named members among fifteen consumers of one API are not.
+    if family.siblings >= 2 && family.siblings * 2 >= family.members.len() {
+        return None;
+    }
+    let callees = family
+        .name
+        .split('+')
+        .filter(|callee| is_crate_vocabulary(callee, defined_names))
+        .map(|callee| {
+            callee
+                .split("::")
+                .filter_map(|segment| defining_modules.get(segment))
+                .flatten()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+        })
+        .collect::<Vec<_>>();
+    if callees.is_empty() || callees.iter().any(BTreeSet::is_empty) {
+        return None;
+    }
+    let member_modules = family
+        .members
+        .iter()
+        .map(|member| crate_module_for_path(&member.path))
+        .collect::<BTreeSet<_>>();
+    let candidates = callees
+        .iter()
+        .flatten()
+        .flat_map(|module| {
+            let segments = module.split("::").collect::<Vec<_>>();
+            (1..=segments.len()).map(move |end| segments[..end].join("::"))
+        })
+        .collect::<BTreeSet<_>>();
+    candidates
+        .into_iter()
+        .filter(|provider| {
+            callees.iter().all(|modules| {
+                modules
+                    .iter()
+                    .any(|module| module_is_within(module, provider))
+            }) && member_modules
+                .iter()
+                .all(|module| !module_is_within(module, provider))
+        })
+        .max_by(|left, right| {
+            left.split("::")
+                .count()
+                .cmp(&right.split("::").count())
+                .then_with(|| right.cmp(left))
+        })
 }
 
 fn passes_finding_gate(family: &ShapeFamily) -> bool {
@@ -382,6 +450,7 @@ fn merge_families(clusters: Vec<Cluster>) -> Vec<ShapeFamily> {
                 mean_sloc,
                 siblings,
                 role,
+                provider: None,
             }
         })
         .collect::<Vec<_>>();
@@ -917,12 +986,59 @@ mod tests {
             score: 0.0,
             siblings,
             role: None,
+            provider: None,
         };
 
         assert!(passes_finding_gate(&family(1, 20.0, 2)));
         assert!(passes_finding_gate(&family(3, 40.0, 0)));
         assert!(!passes_finding_gate(&family(2, 100.0, 0)));
         assert!(!passes_finding_gate(&family(3, 39.9, 0)));
+    }
+
+    #[test]
+    fn single_provider_api_is_dropped_only_for_non_sibling_consumers() {
+        let member = |path: &str| Member {
+            path: PathBuf::from(path),
+            line: 1,
+            name: "show".to_owned(),
+            sloc: 40,
+        };
+        let family = |members: Vec<Member>, siblings| ShapeFamily {
+            name: "render+cell+Table::new".to_owned(),
+            files: members.len(),
+            mean_sloc: 40.0,
+            sloc_in_play: members.len() as f64 * 40.0,
+            score: members.len() as f64 * 40.0,
+            members,
+            siblings,
+            role: None,
+            provider: None,
+        };
+        let defined = set(&["render", "cell", "Table", "new"]);
+        let modules = ["render", "cell", "Table", "new"]
+            .into_iter()
+            .map(|name| (name.to_owned(), set(&["cli::render"])))
+            .collect::<BTreeMap<_, _>>();
+        let consumers = vec![
+            member("crates/demo/src/cli/a.rs"),
+            member("crates/demo/src/cli/b.rs"),
+            member("crates/demo/src/cli/c.rs"),
+        ];
+
+        assert_eq!(
+            single_provider(&family(consumers.clone(), 0), &defined, &modules),
+            Some("cli::render".to_owned())
+        );
+        let mut provider_member = consumers.clone();
+        provider_member.push(member("crates/demo/src/cli/render/x.rs"));
+        assert_eq!(
+            single_provider(&family(provider_member, 0), &defined, &modules),
+            None
+        );
+        assert_eq!(
+            single_provider(&family(consumers, 2), &defined, &modules),
+            None
+        );
     }
 
     #[test]
@@ -936,6 +1052,7 @@ mod tests {
             score: 0.0,
             siblings,
             role: None,
+            provider: None,
         };
         let mut families = vec![
             family("large", 2, 500.0),

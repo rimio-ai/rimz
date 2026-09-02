@@ -195,6 +195,7 @@ fn split_leaves_replace_the_parent_and_consume_top() {
             .collect(),
         defined_names: super::super::facts::defined_names(&syntax),
         unique_fields: super::super::facts::unique_fields(&syntax),
+        defining_modules: super::super::facts::defining_modules(&syntax),
         bin_modules: super::super::facts::bin_modules(&syntax),
         crate_names: BTreeSet::new(),
         sizes: BTreeMap::from([

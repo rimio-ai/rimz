@@ -23,16 +23,6 @@ const SURFACE_HEAD_SHARE: f64 = 0.8;
 #[path = "surface/tests.rs"]
 mod tests;
 
-#[derive(Clone, Debug, Serialize)]
-pub(super) struct SurfaceItem {
-    pub(super) module: String,
-    pub(super) name: String,
-    pub(super) path: PathBuf,
-    pub(super) line: usize,
-    pub(super) test_referrers: usize,
-    pub(super) pass_through: bool,
-}
-
 /// One escaping item measured from outside the boundary: how many
 /// production sites and files reach it, and from which modules.
 #[derive(Clone, Debug, Serialize)]
@@ -53,33 +43,15 @@ pub(super) struct SurfaceRow {
     pub(super) test_sites: usize,
 }
 
-/// Where test code reaches the module: through its escaping interface or
-/// past it, at boundary-visible items the interface does not expose.
-#[derive(Clone, Debug, Default, Serialize)]
-pub(super) struct TestReach {
-    pub(super) sites: usize,
-    pub(super) through_interface: usize,
-    pub(super) past_interface: usize,
-    pub(super) past_items: Vec<PastItem>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub(super) struct PastItem {
-    pub(super) module: String,
-    pub(super) name: String,
-    pub(super) sites: usize,
-}
-
-/// An escaping item at most one production site reaches whose definition
-/// no commit has touched since the one that introduced it.
+/// An escaping item with no production referrers.
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct VestigialItem {
     pub(super) module: String,
     pub(super) name: String,
     pub(super) path: PathBuf,
     pub(super) line: usize,
-    pub(super) production_sites: usize,
-    pub(super) introduced: BlameCommit,
+    pub(super) test_referrers: usize,
+    pub(super) introduced: Option<BlameCommit>,
     /// The introducing commit reads as a fix: the item pins a behaviour
     /// someone already paid for.
     pub(super) pins_fix: bool,
@@ -99,9 +71,7 @@ pub(super) struct SurfaceSection {
     pub(super) head_items: usize,
     pub(super) single_site: usize,
     pub(super) internal_only: usize,
-    pub(super) test_reach: TestReach,
     pub(super) vestigial: Vec<VestigialItem>,
-    pub(super) zero_production: Vec<SurfaceItem>,
     pub(super) unresolved: Vec<UnresolvedItem>,
 }
 
@@ -231,7 +201,6 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
 
     let mut section = SurfaceSection::default();
     let mut declaration_only = 0;
-    let mut escaping_targets = BTreeSet::new();
     for item in escaping {
         let Some((file, definition)) = definition_for_escaping(&files, &item) else {
             continue;
@@ -255,20 +224,6 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
             item.id.name.clone(),
             item.line,
         );
-        escaping_targets.insert(key.clone());
-        if item_refs.production_count == 0 {
-            section.zero_production.push(SurfaceItem {
-                module: item.id.module.clone(),
-                name: item.id.name.clone(),
-                path: item.path.clone(),
-                line: item.line,
-                test_referrers: item_refs.test_count,
-                pass_through: file
-                    .fns
-                    .iter()
-                    .any(|function| function.name == item.id.name && function.forwards.is_some()),
-            });
-        }
         let reached = outside.remove(&key).unwrap_or_default();
         let effective_reach = facts.mod_index.effective_reach(file, definition);
         section.items.push(SurfaceRow {
@@ -323,14 +278,6 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
         .iter()
         .filter(|row| row.outside_sites == 0 && row.internal_sites > 0)
         .count();
-    section.test_reach = test_reach(&test_sites, &escaping_targets);
-    section.zero_production.sort_by(|left, right| {
-        right
-            .test_referrers
-            .cmp(&left.test_referrers)
-            .then_with(|| left.module.cmp(&right.module))
-            .then_with(|| left.name.cmp(&right.name))
-    });
     section.unresolved.sort_by(|left, right| {
         left.path
             .cmp(&right.path)
@@ -339,77 +286,45 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
     (section, declaration_only)
 }
 
-fn test_reach(
-    test_sites: &BTreeMap<EdgeTarget, usize>,
-    escaping: &BTreeSet<EdgeTarget>,
-) -> TestReach {
-    let mut reach = TestReach::default();
-    let mut past = BTreeMap::<(String, String), usize>::new();
-    for (key, sites) in test_sites {
-        reach.sites += sites;
-        if escaping.contains(key) {
-            reach.through_interface += sites;
-        } else {
-            reach.past_interface += sites;
-            *past.entry((key.1.clone(), key.2.clone())).or_default() += sites;
-        }
-    }
-    reach.past_items = past
-        .into_iter()
-        .map(|((module, name), sites)| PastItem {
-            module,
-            name,
-            sites,
-        })
-        .collect();
-    reach.past_items.sort_by(|left, right| {
-        right
-            .sites
-            .cmp(&left.sites)
-            .then_with(|| left.module.cmp(&right.module))
-            .then_with(|| left.name.cmp(&right.name))
-    });
-    reach
-}
-
-/// Escaping items with at most one production site whose definition lines
-/// all blame to one commit: introduced once and never revisited. One
-/// `git blame` per file that holds a candidate.
+/// Escaping items with no production sites. A definition whose lines all
+/// blame to one commit carries that commit as evidence. One `git blame` per
+/// file that holds a candidate.
 pub(super) fn vestigial_items(root: &Path, rows: &[SurfaceRow]) -> Result<Vec<VestigialItem>> {
     let mut blames = BTreeMap::<PathBuf, Vec<BlameCommit>>::new();
     let mut vestigial = Vec::new();
     for row in rows
         .iter()
-        .filter(|row| row.outside_sites + row.internal_sites <= 1)
+        .filter(|row| row.outside_sites + row.internal_sites == 0)
     {
         if !blames.contains_key(&row.path) {
             blames.insert(row.path.clone(), history::blame_lines(root, &row.path)?);
         }
         let blame = &blames[&row.path];
-        let Some(first) = blame.get(row.line.saturating_sub(1)) else {
-            continue;
-        };
-        let end = row.end_line.max(row.line).min(blame.len());
-        if blame[row.line - 1..end]
-            .iter()
-            .all(|commit| commit == first)
-        {
-            vestigial.push(VestigialItem {
-                module: row.module.clone(),
-                name: row.name.clone(),
-                path: row.path.clone(),
-                line: row.line,
-                production_sites: row.outside_sites + row.internal_sites,
-                pins_fix: !history::fix_markers(&first.summary).is_empty(),
-                introduced: first.clone(),
-            });
-        }
+        let introduced = blame.get(row.line.saturating_sub(1)).and_then(|first| {
+            let end = row.end_line.max(row.line).min(blame.len());
+            blame
+                .get(row.line.saturating_sub(1)..end)
+                .filter(|commits| commits.iter().all(|commit| commit == first))
+                .map(|_| first.clone())
+        });
+        let pins_fix = introduced
+            .as_ref()
+            .is_some_and(|commit| !history::fix_markers(&commit.summary).is_empty());
+        vestigial.push(VestigialItem {
+            module: row.module.clone(),
+            name: row.name.clone(),
+            path: row.path.clone(),
+            line: row.line,
+            test_referrers: row.test_sites,
+            introduced,
+            pins_fix,
+        });
     }
     vestigial.sort_by(|left, right| {
         left.introduced
-            .time
-            .cmp(&right.introduced.time)
-            .then_with(|| left.production_sites.cmp(&right.production_sites))
+            .as_ref()
+            .map(|commit| commit.time)
+            .cmp(&right.introduced.as_ref().map(|commit| commit.time))
             .then_with(|| left.module.cmp(&right.module))
             .then_with(|| left.name.cmp(&right.name))
     });
@@ -474,34 +389,21 @@ pub(super) fn render_surface(out: &mut String, surface: &SurfaceSection, top: us
     )
     .expect("writing to a String cannot fail");
 
-    let reach = &surface.test_reach;
-    writeln!(
-        out,
-        "\n## Test reach\n\n{} test sites: {} through the escaping interface, {} past it",
-        reach.sites, reach.through_interface, reach.past_interface
-    )
-    .expect("writing to a String cannot fail");
-    for item in reach.past_items.iter().take(top) {
-        writeln!(
-            out,
-            "- `{}::{}` — {} test sites",
-            item.module, item.name, item.sites
-        )
-        .expect("writing to a String cannot fail");
-    }
-
     out.push_str("\n## Vestigial candidates\n\n");
     for item in surface.vestigial.iter().take(top) {
+        let introduced = item.introduced.as_ref().map_or_else(
+            || "definition spans multiple commits".to_owned(),
+            |commit| format!("untouched since `{}` {}", commit.short, commit.summary),
+        );
         writeln!(
             out,
-            "- `{}::{}` — {}:{}; production sites: {}; untouched since `{}` {}{}",
+            "- `{}::{}` — {}:{}; test referrers: {}; {}{}",
             item.module,
             item.name,
             item.path.display(),
             item.line,
-            item.production_sites,
-            item.introduced.short,
-            item.introduced.summary,
+            item.test_referrers,
+            introduced,
             if item.pins_fix { " (pins a fix)" } else { "" }
         )
         .expect("writing to a String cannot fail");
@@ -515,34 +417,10 @@ pub(super) fn render_surface(out: &mut String, surface: &SurfaceSection, top: us
         .expect("writing to a String cannot fail");
     }
 
-    render_zero_surface(out, &surface.zero_production, &surface.unresolved, top);
+    render_unresolved(out, &surface.unresolved, top);
 }
 
-fn render_zero_surface(
-    out: &mut String,
-    zero: &[SurfaceItem],
-    unresolved: &[UnresolvedItem],
-    top: usize,
-) {
-    out.push_str("\n## Zero-production surface\n\n");
-    for item in zero.iter().take(top) {
-        let pass_through = if item.pass_through {
-            " (pass-through)"
-        } else {
-            ""
-        };
-        writeln!(
-            out,
-            "- `{}`::`{}` — {}:{}; test referrers: {}{}",
-            item.module,
-            item.name,
-            item.path.display(),
-            item.line,
-            item.test_referrers,
-            pass_through
-        )
-        .expect("writing to a String cannot fail");
-    }
+fn render_unresolved(out: &mut String, unresolved: &[UnresolvedItem], top: usize) {
     out.push_str("\n## Unresolved definitions\n\n");
     for item in unresolved.iter().take(top) {
         writeln!(

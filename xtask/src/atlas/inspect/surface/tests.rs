@@ -9,7 +9,7 @@ use super::super::testkit::{commit, crate_with_files, occurrence, run, selector}
 use super::*;
 
 #[test]
-fn surface_measures_outside_reach_test_reach_and_the_unreferenced_rest() {
+fn surface_measures_outside_reach_and_the_unreferenced_rest() {
     let root = crate_with_files(&[
         ("src/lib.rs", "mod store;\nmod cli;\n"),
         (
@@ -21,6 +21,21 @@ fn surface_measures_outside_reach_test_reach_and_the_unreferenced_rest() {
             "fn run() { crate::store::open(); crate::store::open(); }\nfn also() { crate::store::open(); }\n#[cfg(test)]\nmod tests { fn t() { crate::store::inner::helper(); crate::store::open(); } }\n",
         ),
     ]);
+    run(root.path(), &["init", "--quiet"]);
+    run(root.path(), &["add", "-A"]);
+    run(
+        root.path(),
+        &[
+            "-c",
+            "user.name=Atlas Test",
+            "-c",
+            "user.email=atlas@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "introduce fixture",
+        ],
+    );
     let mut facts = Facts::load(root.path(), Path::new("."), Facets::default()).unwrap();
     let open = "rust-analyzer cargo probe 0.0.0 open().";
     let dead = "rust-analyzer cargo probe 0.0.0 dead().";
@@ -56,7 +71,8 @@ fn surface_measures_outside_reach_test_reach_and_the_unreferenced_rest() {
     scip::write_message_to_file(&index_path, index).unwrap();
     facts.references = Some(References::load(&index_path, &facts.syntax, &facts.sources).unwrap());
 
-    let (surface, declaration_only) = surface_section(&facts, &selector("store"));
+    let (mut surface, declaration_only) = surface_section(&facts, &selector("store"));
+    surface.vestigial = vestigial_items(root.path(), &surface.items).unwrap();
 
     let names = surface
         .items
@@ -81,45 +97,29 @@ fn surface_measures_outside_reach_test_reach_and_the_unreferenced_rest() {
     assert_eq!(surface.head_items, 1);
     assert_eq!(surface.single_site, 0);
     assert_eq!(surface.internal_only, 0);
-    assert_eq!(
-        (
-            surface.test_reach.sites,
-            surface.test_reach.through_interface,
-            surface.test_reach.past_interface
-        ),
-        (4, 3, 1)
-    );
-    assert_eq!(
-        surface.test_reach.past_items,
-        [PastItem {
-            module: "store::inner".to_owned(),
-            name: "helper".to_owned(),
-            sites: 1,
-        }]
-    );
-    assert_eq!(surface.zero_production.len(), 1);
-    assert_eq!(surface.zero_production[0].name, "dead");
-    assert_eq!(surface.zero_production[0].test_referrers, 2);
+    assert_eq!(surface.vestigial.len(), 1);
+    assert_eq!(surface.vestigial[0].name, "dead");
+    assert_eq!(surface.vestigial[0].test_referrers, 2);
     assert_eq!(surface.unresolved.len(), 1);
     assert_eq!(surface.unresolved[0].name, "unknown");
     assert_eq!(declaration_only, 0);
 }
 #[test]
-fn vestigial_items_need_at_most_one_outside_site_and_one_blame_commit() {
+fn vestigial_items_need_zero_production_sites_and_keep_optional_blame() {
     let root = tempfile::tempdir().unwrap();
     run(root.path(), &["init", "--quiet"]);
     fs::create_dir(root.path().join("src")).unwrap();
     fs::write(root.path().join("lib.rs"), "").unwrap();
     fs::write(
         root.path().join("src/store.rs"),
-        "pub fn stale() {}\npub fn live() {\n}\npub fn busy() {}\n",
+        "pub fn stale() {}\npub fn live() {\n}\npub fn one_site() {}\npub fn busy() {}\n",
     )
     .unwrap();
     run(root.path(), &["add", "-A"]);
     commit(root.path(), "introduce store");
     fs::write(
         root.path().join("src/store.rs"),
-        "pub fn stale() {}\npub fn live() {\n    let _ = 1;\n}\npub fn busy() {}\n",
+        "pub fn stale() {}\npub fn live() {\n    let _ = 1;\n}\npub fn one_site() {}\npub fn busy() {}\n",
     )
     .unwrap();
     run(root.path(), &["add", "-A"]);
@@ -140,18 +140,29 @@ fn vestigial_items_need_at_most_one_outside_site_and_one_blame_commit() {
         test_sites: 0,
     };
     let rows = [
-        row("stale", 1, 1, 1, 0),
+        row("stale", 1, 1, 0, 0),
         row("live", 2, 4, 0, 0),
-        row("busy", 5, 5, 0, 3),
+        row("one_site", 5, 5, 1, 0),
+        row("busy", 6, 6, 0, 3),
     ];
 
     let vestigial = vestigial_items(root.path(), &rows).unwrap();
 
-    assert_eq!(vestigial.len(), 1, "{vestigial:?}");
-    assert_eq!(vestigial[0].name, "stale");
-    assert_eq!(vestigial[0].production_sites, 1);
-    assert!(!vestigial[0].pins_fix);
-    assert_eq!(vestigial[0].introduced.summary, "introduce store");
+    assert_eq!(vestigial.len(), 2, "{vestigial:?}");
+    let stale = vestigial.iter().find(|item| item.name == "stale").unwrap();
+    assert!(!stale.pins_fix);
+    assert_eq!(
+        stale.introduced.as_ref().unwrap().summary,
+        "introduce store"
+    );
+    assert!(
+        vestigial
+            .iter()
+            .find(|item| item.name == "live")
+            .unwrap()
+            .introduced
+            .is_none()
+    );
 }
 
 #[test]

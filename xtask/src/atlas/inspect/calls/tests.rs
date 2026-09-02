@@ -235,3 +235,48 @@ fn builder_chain_folds_for_callers_heaviest_and_call_shapes() {
     assert_eq!(shapes[0].functions[0].items, 7);
     assert_eq!(shapes[0].functions[0].items_unfolded, 13);
 }
+
+#[test]
+fn type_aliases_are_not_assembly_items() {
+    let target = Source::new(
+        "crates/demo/src/store.rs",
+        "pub type Result<T> = std::result::Result<T, ()>;\npub fn load() {}\npub fn route() {}\npub fn park() {}\npub fn send() {}\npub fn wake() {}\n",
+    );
+    let caller = Source::new(
+        "crates/demo/src/caller.rs",
+        "fn assemble() {\n    // target references supplied by the fixture\n}\n",
+    );
+    let syntax = super::super::super::syntax::analyze_sources(&[target, caller], &BTreeSet::new());
+    let target_file = syntax
+        .files
+        .iter()
+        .find(|file| file.module_path == "store")
+        .unwrap();
+    let edges = ["Result", "load", "route", "park", "send", "wake"]
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            let mut reference = edge(name, "caller", Some(("assemble", 1)), false);
+            reference.from_line = index + 2;
+            reference.to_line = target_file
+                .pub_items
+                .iter()
+                .find(|item| item.name == *name)
+                .unwrap()
+                .line;
+            reference
+        })
+        .collect::<Vec<_>>();
+
+    let assembly = assembly_functions(
+        &edges,
+        &syntax.files,
+        &selector("caller"),
+        &selector("store"),
+    );
+    assert!(!assembly[0].items.iter().any(|item| item == "Result"));
+    assert_eq!(assembly[0].items_unfolded, 5);
+    let shapes = call_shapes(&edges, &selector("store"), &syntax.files);
+    assert!(!shapes[0].shape.iter().any(|item| item == "Result"));
+    assert_eq!(shapes[0].items_unfolded, 5);
+}

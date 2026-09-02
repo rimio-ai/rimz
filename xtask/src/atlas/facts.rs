@@ -39,6 +39,9 @@ pub(super) struct Facts {
     /// detectors use it to tell crate vocabulary from std vocabulary without
     /// a SCIP index.
     pub(super) defined_names: BTreeSet<String>,
+    /// Modules that define each production identifier. Shape-family gates use
+    /// it to distinguish duplicated knowledge from use of one module's API.
+    pub(super) defining_modules: BTreeMap<String, BTreeSet<String>>,
     /// Struct fields exactly one struct in the workspace declares: a guard
     /// naming one reads one type's state rather than a common field name.
     pub(super) unique_fields: BTreeSet<String>,
@@ -108,6 +111,7 @@ impl Facts {
             .map(|file| file.module_path.clone())
             .collect();
         let defined_names = defined_names(&syntax);
+        let defining_modules = defining_modules(&syntax);
         let unique_fields = unique_fields(&syntax);
         let bin_modules = bin_modules(&syntax);
         let sizes = file_sizes(&sources, &syntax);
@@ -147,6 +151,7 @@ impl Facts {
             mod_index,
             known_modules,
             defined_names,
+            defining_modules,
             unique_fields,
             bin_modules,
             crate_names,
@@ -183,6 +188,37 @@ pub(super) fn defined_names(syntax: &SyntaxReport) -> BTreeSet<String> {
         );
     }
     names
+}
+
+pub(super) fn defining_modules(syntax: &SyntaxReport) -> BTreeMap<String, BTreeSet<String>> {
+    let mut modules = BTreeMap::<String, BTreeSet<String>>::new();
+    for file in &syntax.files {
+        for name in file
+            .pub_items
+            .iter()
+            .map(|item| &item.name)
+            .chain(file.fns.iter().map(|function| &function.name))
+            .chain(
+                file.fns
+                    .iter()
+                    .filter_map(|function| function.owner.as_ref()),
+            )
+        {
+            modules
+                .entry(name.clone())
+                .or_default()
+                .insert(file.module_path.clone());
+        }
+        for (module, _) in &file.mod_decls {
+            if let Some(name) = module.rsplit("::").next() {
+                modules
+                    .entry(name.to_owned())
+                    .or_default()
+                    .insert(module.clone());
+            }
+        }
+    }
+    modules
 }
 
 pub(super) fn unique_fields(syntax: &SyntaxReport) -> BTreeSet<String> {

@@ -23,13 +23,13 @@ const DEFAULT_TOP: usize = 20;
 const USAGE: &str = "cargo xtask atlas survey [--path <prefix>] [--top N]
     [--by <code|esc|churn|pace|cx|tc>] [--all]
 
-Emits a bounded Markdown survey of accretion, recorded debt, and duplicated knowledge.
+Emits a bounded Markdown survey of accretion, admitted upward dependencies, and duplicated knowledge.
 Rank order defaults to accretion (code × churn).";
 
 const SECTIONS: &[&str] = &["rank", "hot", "debt", "shapes", "guards", "footer"];
 
-/// One target rule's upward dependencies: the debt the target already
-/// admits, counted at its sites, beside anything it has not admitted.
+/// One target rule's upward dependencies, counted at their sites and split
+/// by whether the target admits them.
 #[derive(Clone, Debug, Serialize)]
 struct DebtRow {
     path: PathBuf,
@@ -466,9 +466,13 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
             let siblings = family.role.as_ref().map_or_else(String::new, |role| {
                 format!("; siblings {} ({role})", family.siblings)
             });
+            let provider = family
+                .provider
+                .as_ref()
+                .map_or_else(String::new, |provider| format!("; provider {provider}"));
             writeln!(
                 output,
-                "- shape key: `{}`; {} members / {} files{siblings}; mean {:.1} sloc; {:.1} sloc in play; {}",
+                "- shape key: `{}`; {} members / {} files{siblings}{provider}; mean {:.1} sloc; {:.1} sloc in play; {}",
                 family.name,
                 family.members.len(),
                 family.files,
@@ -509,9 +513,10 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
         writeln!(output, "parse failures: {}", report.parse_failures).unwrap();
         writeln!(
             output,
-            "shape families dropped as std vocabulary: {}; {} below the finding gate (`--all` shows them)",
+            "shape families dropped as std vocabulary: {}; {} below the finding gate; {} as one module's API (`--all` shows them)",
             report.shape_families_dropped.vocabulary,
-            report.shape_families_dropped.below_gate
+            report.shape_families_dropped.below_gate,
+            report.shape_families_dropped.single_provider
         )
         .unwrap();
         writeln!(
@@ -551,7 +556,7 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
 }
 
 fn render_debt(output: &mut String, debt: &Debt, top: usize) {
-    writeln!(output, "\n## Recorded debt").unwrap();
+    writeln!(output, "\n## Admitted upward dependencies").unwrap();
     if !debt.configured {
         writeln!(output, "no {TARGET_FILE}; nothing recorded").unwrap();
         return;
@@ -648,6 +653,7 @@ fn render_json(report: &Report, output_args: &OutputArgs) -> Result<String> {
                 "parse_failures": report.parse_failures,
                 "shape_families_dropped_as_std_vocabulary": report.shape_families_dropped.vocabulary,
                 "shape_families_below_finding_gate": report.shape_families_dropped.below_gate,
+                "shape_families_dropped_as_one_module_api": report.shape_families_dropped.single_provider,
                 "guard_families_dropped_as_std_idiom": report.guard_families_dropped.vocabulary,
                 "guard_families_dropped_as_predicate_use": report.guard_families_dropped.predicate_use,
                 "suppressed_families": report.suppressed,
@@ -688,6 +694,7 @@ mod tests {
                 score: 40.0,
                 siblings: 0,
                 role: None,
+                provider: None,
             })
             .collect();
         let guards = (0..30)
@@ -745,6 +752,7 @@ mod tests {
             shape_families_dropped: shapes::FamilyDrops {
                 vocabulary: 6,
                 below_gate: 3,
+                single_provider: 2,
             },
             guard_families_dropped: detect::GuardDrops {
                 vocabulary: 4,
@@ -770,6 +778,7 @@ mod tests {
         assert!(output.contains("stranglers (current/baseline): `legacy_open` src/store 2/3"));
         assert!(output.contains("shape families dropped as std vocabulary: 6"));
         assert!(output.contains("3 below the finding gate"));
+        assert!(output.contains("2 as one module's API"));
         assert!(output.contains("guard families dropped as std idiom: 4"));
         assert!(output.contains("2 as predicate use"));
         assert!(output.contains("cx: severity-weighted over-threshold excess"));
