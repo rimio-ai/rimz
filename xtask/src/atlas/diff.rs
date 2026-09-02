@@ -1393,10 +1393,6 @@ mod tests {
         let mut test_edge = reference_edge("src/a.rs", "TestOnly", Some(10));
         test_edge.test = true;
         current_edges.push(test_edge);
-        let mut use_edge = reference_edge("src/a.rs", "UseOnly", Some(10));
-        use_edge.kind = EdgeKind::Use;
-        current_edges.push(use_edge);
-
         let base = collect_reference_edges(base_edges.iter(), Path::new("."), "");
         let current = collect_reference_edges(current_edges.iter(), Path::new("."), "");
         let pair = ("caller".to_owned(), "target".to_owned());

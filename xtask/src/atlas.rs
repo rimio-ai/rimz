@@ -17,7 +17,6 @@ mod metrics;
 mod modules;
 mod rank;
 mod references;
-mod seams;
 mod shapes;
 mod sources;
 mod survey;
@@ -33,9 +32,6 @@ use anyhow::{Result, bail};
 pub(crate) const USAGE: &str = "cargo xtask atlas <verb> [flags]
 
 Verbs:
-  rank      prioritize modules by size, escaping surface, churn, and complexity
-  seams     report imports, external surface, co-change, and divergence
-  shapes    cluster large functions by shared call choreography
   survey    produce one architecture-review sweep over a scope
   diff      compare a base revision with the working tree: surface, imports, edges, files
   inspect   show what one module's functions assemble from another, and where
@@ -57,11 +53,8 @@ pub(crate) fn atlas(root: &Path, args: &[String]) -> Result<()> {
         return Ok(());
     }
     match verb.as_str() {
-        "rank" => rank::run(root, rest),
-        "seams" => seams::run(root, rest),
         "diff" => diff::run(root, rest),
         "inspect" => inspect::run(root, rest),
-        "shapes" => shapes::run(root, rest),
         "survey" => survey::run(root, rest),
         "conform" => conform::run(root, rest),
         _ => bail!("unknown atlas verb `{verb}`\n\n{USAGE}"),
@@ -107,16 +100,6 @@ fn positive_usize(value: &str, verb: &str, flag: &str) -> Result<usize> {
         .map_err(|_| anyhow::anyhow!("atlas {verb} {flag} requires a positive integer"))?;
     if parsed == 0 {
         bail!("atlas {verb} {flag} must be greater than zero");
-    }
-    Ok(parsed)
-}
-
-fn finite_nonnegative(value: &str, verb: &str, flag: &str) -> Result<f64> {
-    let parsed = value
-        .parse::<f64>()
-        .map_err(|_| anyhow::anyhow!("atlas {verb} {flag} requires a non-negative number"))?;
-    if !parsed.is_finite() || parsed < 0.0 {
-        bail!("atlas {verb} {flag} requires a finite non-negative number");
     }
     Ok(parsed)
 }
