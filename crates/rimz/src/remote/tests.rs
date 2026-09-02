@@ -966,19 +966,17 @@ fn attached_exit_uses_control_liveness_instead_of_mux_status() {
     assert_eq!(settle(true, false), Verdict::Fatal { code: 1 });
     assert_eq!(
         ReconnectState::default().settle(Some(REMOTE_SESSION_LOST_EXIT), true, Some((true, true)),),
-        Verdict::OfferReattach
+        Verdict::CleanExit
     );
     assert_eq!(
         ReconnectState::default()
             .settle(Some(REMOTE_SESSION_LOST_EXIT), true, Some((false, true)),),
-        Verdict::OfferReattach
+        Verdict::CleanExit
     );
     assert_eq!(
         ReconnectState::default()
             .settle(Some(REMOTE_SESSION_LOST_EXIT), true, Some((true, false)),),
-        Verdict::Fatal {
-            code: REMOTE_SESSION_LOST_EXIT
-        }
+        Verdict::CleanExit
     );
     assert_eq!(
         ReconnectState::default().settle(
@@ -986,14 +984,54 @@ fn attached_exit_uses_control_liveness_instead_of_mux_status() {
             true,
             Some((false, false)),
         ),
-        Verdict::Fatal {
-            code: REMOTE_SESSION_LOST_EXIT
-        }
+        Verdict::CleanExit
     );
     assert_eq!(
         ReconnectState::default().settle(Some(REMOTE_VERSION_SKEW_EXIT), true, Some((true, true)),),
         Verdict::Fatal {
             code: REMOTE_VERSION_SKEW_EXIT
         }
+    );
+}
+
+#[test]
+fn remote_room_watchdog_arms_on_work_and_fires_on_empty() {
+    let mut watchdog = RemoteRoomWatchdog::default();
+
+    assert_eq!(
+        watchdog.advance(Duration::ZERO, None),
+        RemoteRoomWatchdogAction::Observe
+    );
+    assert_eq!(
+        watchdog.advance(Duration::ZERO, Some(RemoteRoomObservation::WorkPanePresent),),
+        RemoteRoomWatchdogAction::Wait(REMOTE_ROOM_WATCHDOG_INTERVAL)
+    );
+    assert_eq!(
+        watchdog.advance(REMOTE_ROOM_WATCHDOG_INTERVAL, None),
+        RemoteRoomWatchdogAction::Observe
+    );
+    assert_eq!(
+        watchdog.advance(
+            REMOTE_ROOM_WATCHDOG_INTERVAL,
+            Some(RemoteRoomObservation::NoWorkPanes),
+        ),
+        RemoteRoomWatchdogAction::RoomEnded
+    );
+}
+
+#[test]
+fn remote_room_watchdog_fails_open_until_work_is_observed() {
+    let mut watchdog = RemoteRoomWatchdog::default();
+
+    assert_eq!(
+        watchdog.advance(Duration::ZERO, Some(RemoteRoomObservation::Unknown),),
+        RemoteRoomWatchdogAction::Wait(REMOTE_ROOM_WATCHDOG_INTERVAL)
+    );
+    assert_eq!(
+        watchdog.advance(
+            REMOTE_ROOM_WATCHDOG_INTERVAL,
+            Some(RemoteRoomObservation::NoWorkPanes),
+        ),
+        RemoteRoomWatchdogAction::Wait(REMOTE_ROOM_WATCHDOG_INTERVAL)
     );
 }

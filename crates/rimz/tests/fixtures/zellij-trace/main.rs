@@ -23,6 +23,7 @@ enum Invocation<'a> {
     },
     Write,
     Birth,
+    Attach,
     Unhandled,
 }
 
@@ -67,6 +68,7 @@ fn main() {
         } => handle_dump_topology(&log_path, session, configuration),
         Invocation::Write => handle_write(&log_path, cli),
         Invocation::Birth => handle_birth(&log_path),
+        Invocation::Attach => handle_attach(),
         Invocation::Unhandled => {}
     }
 }
@@ -84,6 +86,11 @@ fn classify_leading_invocation(cli: &[String]) -> Option<Invocation<'_>> {
     }
     if cli.first().is_some_and(|arg| arg == "list-sessions") {
         return Some(Invocation::ListSessions);
+    }
+    if cli.first().is_some_and(|arg| arg == "attach")
+        && !cli.get(1).is_some_and(|arg| arg == "--create-background")
+    {
+        return Some(Invocation::Attach);
     }
     None
 }
@@ -137,8 +144,41 @@ fn handle_list_sessions(log_path: &Path) {
 fn handle_action_query(query: ActionQuery) {
     match query {
         ActionQuery::Clients => write_env_raw("RIMZ_TEST_ZELLIJ_LIST_CLIENTS"),
-        ActionQuery::Panes => write_env_raw("RIMZ_TEST_ZELLIJ_LIST_PANES"),
+        ActionQuery::Panes => {
+            if let Some(state) = watchdog_state_path() {
+                let attached = state.with_extension("attached");
+                if attached.exists() {
+                    let observed = state.with_extension("observed");
+                    if observed.exists() {
+                        write_stdout_raw(
+                            r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"}]"#,
+                        );
+                    } else {
+                        std::fs::write(observed, b"").expect("mark first watchdog observation");
+                        write_stdout_raw(
+                            r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+                        );
+                    }
+                    return;
+                }
+            }
+            write_env_raw("RIMZ_TEST_ZELLIJ_LIST_PANES")
+        }
     }
+}
+
+fn handle_attach() {
+    let Some(state) = watchdog_state_path() else {
+        return;
+    };
+    std::fs::write(state.with_extension("attached"), b"").expect("mark attached client");
+    std::fs::write(state.with_extension("pid"), std::process::id().to_string())
+        .expect("record attached client pid");
+    std::thread::park_timeout(std::time::Duration::from_secs(60));
+}
+
+fn watchdog_state_path() -> Option<std::path::PathBuf> {
+    env::var_os("RIMZ_TEST_ZELLIJ_WATCHDOG_STATE").map(std::path::PathBuf::from)
 }
 
 fn handle_presence_boot(log_path: &Path, session: Option<&str>, configuration: Option<&str>) {
