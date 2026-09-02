@@ -6,7 +6,7 @@ use anyhow::{Result, bail};
 use crate::source_files;
 
 use super::history::Log;
-use super::index::{self, IndexPolicy};
+use super::index;
 use super::metrics::{self, MetricsReport};
 use super::modules::{path_in_scope, workspace_crate_names};
 use super::references::References;
@@ -23,7 +23,7 @@ pub(super) struct FileSize {
 pub(super) struct Facets {
     pub(super) history: bool,
     pub(super) metrics: bool,
-    pub(super) references: Option<IndexPolicy>,
+    pub(super) references: bool,
 }
 
 #[derive(Debug)]
@@ -57,7 +57,7 @@ impl Facts {
         root: &Path,
         scope: &Path,
         reference: &str,
-        references: Option<IndexPolicy>,
+        references: bool,
     ) -> Result<Self> {
         let sources = sources::revision_sources(root, reference)?;
         if !sources
@@ -113,17 +113,18 @@ impl Facts {
             .metrics
             .then(|| metrics::analyze(root, scope, &scoped_sources, &scoped_syntax))
             .transpose()?;
-        let references = match facets.references {
-            Some(IndexPolicy::Required) => {
-                let path = if let Some(reference) = reference {
-                    index::ensure_revision(root, reference, &sources)?
+        let references = facets
+            .references
+            .then(|| {
+                if let Some(reference) = reference {
+                    index::ensure_revision(root, reference, &sources)
                 } else {
-                    index::ensure(root, &sources)?
-                };
-                Some(References::load(&path, &syntax, &sources)?)
-            }
-            None => None,
-        };
+                    index::ensure(root, &sources)
+                }
+            })
+            .transpose()?
+            .map(|path| References::load(&path, &syntax, &sources))
+            .transpose()?;
         Ok(Self {
             root: root.to_path_buf(),
             scope: scope.to_path_buf(),
