@@ -14,15 +14,15 @@ pub fn join_and_settle_digest(
     store: &Store,
     session_name: &str,
     run_id: &RunId,
-) -> crate::store::Result<RunRecord> {
-    let (record, fully_joined) =
-        mark_joined_record(store.paths(), run_id).map_err(crate::store::StoreErr::from)?;
+    reason: &str,
+) -> crate::store::Result<()> {
+    let (record, fully_joined) = mark_joined_record(store.paths(), run_id)?;
     if let Some(message_id) = record.report_message_id.as_ref()
         && fully_joined
     {
-        store.cancel_message(message_id, session_name, "joined inline")?;
+        store.cancel_message(message_id, session_name, reason)?;
     }
-    Ok(record)
+    Ok(())
 }
 
 fn mark_joined_record(paths: &StatePaths, run_id: &RunId) -> Result<(RunRecord, bool)> {

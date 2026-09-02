@@ -519,6 +519,64 @@ fn default_wait_keeps_finished_supervised_children() {
 }
 
 #[test]
+fn stop_preparation_stamps_entire_selected_fleet_before_cancellation() {
+    let dir = tempfile::tempdir().expect("state tempdir");
+    let workspace_id = rimz::WorkspaceId::from_project_root(dir.path());
+    let state = rimz::store::StatePaths::under(workspace_id.clone(), &dir.path().join("state"))
+        .expect("state paths");
+    let runtime =
+        rimz::store::RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime"))
+            .expect("runtime paths");
+    let store = rimz::Store::open(state, runtime).expect("store");
+    let mut first =
+        rimz::agents::AgentState::stub("codex", "first", rimz::agents::AgentStatus::Running);
+    first.name = Some("first".to_owned());
+    let mut second =
+        rimz::agents::AgentState::stub("codex", "second", rimz::agents::AgentStatus::Success);
+    second.name = Some("second".to_owned());
+    let runs = [
+        ("first", &first, rimz::harness::run::RunStatus::Running),
+        ("second", &second, rimz::harness::run::RunStatus::Completed),
+    ]
+    .map(|(name, child, status)| {
+        let mut run = rimz::harness::run::RunRecord::new(
+            workspace_id.clone(),
+            child.kind.clone(),
+            rimz::agents::PermissionMode::Auto,
+            format!("{name} task"),
+            dir.path().to_path_buf(),
+        );
+        run.agent_id = Some(child.agent_id.clone());
+        run.agent_name = child.name.clone();
+        run.status = status;
+        rimz::harness::run::create(store.paths(), &run).expect("create run");
+        run
+    });
+
+    let (prepared, errors) =
+        prepare_children_for_stop(&store, "stop-test", &runs, vec![&first, &second]);
+
+    assert!(errors.is_empty());
+    assert_eq!(prepared, vec![&first, &second]);
+    for run in &runs {
+        let stored = rimz::harness::run::load(store.paths(), &run.run_id).expect("load run");
+        assert!(
+            stored.joined_at.is_some(),
+            "{} was not dismissed",
+            run.prompt
+        );
+    }
+    rimz::harness::run::cancel(store.paths(), &runs[0].run_id).expect("cancel first");
+    assert!(
+        rimz::harness::run::load(store.paths(), &runs[1].run_id)
+            .expect("load second")
+            .joined_at
+            .is_some(),
+        "the settled sibling must already be dismissed when cancellation begins"
+    );
+}
+
+#[test]
 fn child_reports_name_each_parent_and_channel() {
     let mut planner =
         rimz::agents::AgentState::stub("claude", "planner", rimz::agents::AgentStatus::Idle);

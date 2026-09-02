@@ -719,23 +719,17 @@ fn stop_children(names: Vec<String>, all: bool, globals: &GlobalFlags) -> Result
     let runs = rimz::harness::run::list(ctx.store.paths())?;
     let peers = rimz::harness::target::addressable_agents(&snapshot);
     let mut tracker = agents_cmd::StopTracker::default();
-    let mut failed = false;
     let mut out = render::out();
+    // Prepare the whole fleet before any cancellation wakes a child reporter.
+    let (children, errors) =
+        prepare_children_for_stop(&ctx.store, &ctx.workspace.session_name, &runs, children);
+    let mut failed = !errors.is_empty();
+    for (child, err) in errors {
+        let label = rimz::harness::target::agent_handle(child, &peers, true);
+        writeln!(out, "error {label}: {err:#}")?;
+    }
     for child in children {
         let label = rimz::harness::target::agent_handle(child, &peers, true);
-        if let Some(run) = newest_run_for_child(&runs, child) {
-            // Stamp before canceling because cancellation wakes the wrapper,
-            // which can report the settled run immediately.
-            if let Err(err) = rimz::harness::run::report::join_and_settle_digest(
-                &ctx.store,
-                &ctx.workspace.session_name,
-                &run.run_id,
-            ) {
-                failed = true;
-                writeln!(out, "error {label}: {err:#}")?;
-                continue;
-            }
-        }
         match agents_cmd::stop_resolved(&ctx, globals, &snapshot, child, &mut tracker) {
             Ok(true) => writeln!(out, "stopped {label}")?,
             Ok(false) => {}
@@ -749,6 +743,35 @@ fn stop_children(names: Vec<String>, all: bool, globals: &GlobalFlags) -> Result
         std::process::exit(1);
     }
     Ok(())
+}
+
+fn prepare_children_for_stop<'a>(
+    store: &rimz::Store,
+    session_name: &str,
+    runs: &[rimz::harness::run::RunRecord],
+    children: Vec<&'a AgentState>,
+) -> (
+    Vec<&'a AgentState>,
+    Vec<(&'a AgentState, rimz::store::StoreErr)>,
+) {
+    let mut prepared = Vec::with_capacity(children.len());
+    let mut errors = Vec::new();
+    for child in children {
+        let Some(run) = newest_run_for_child(runs, child) else {
+            prepared.push(child);
+            continue;
+        };
+        match rimz::harness::run::report::join_and_settle_digest(
+            store,
+            session_name,
+            &run.run_id,
+            "stopped by parent",
+        ) {
+            Ok(()) => prepared.push(child),
+            Err(err) => errors.push((child, err)),
+        }
+    }
+    (prepared, errors)
 }
 
 fn resolve_child_names<'a>(
