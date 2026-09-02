@@ -345,7 +345,7 @@ mod tests {
             "src/agents.rs",
             "pub struct A;\npub struct B;\nimpl A { pub fn name() {} }\nimpl B { pub fn name() {} }\n",
         )];
-        let syntax = syntax::analyze_sources(&sources);
+        let syntax = syntax::analyze_sources(&sources, &BTreeSet::new());
         let index = syntax::ModIndex::new(&syntax.files);
 
         let files = syntax.files.iter().collect::<Vec<_>>();

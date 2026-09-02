@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -31,13 +31,21 @@ pub(super) struct PubItem {
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub(super) struct ImportedItem {
+pub(super) struct DependencySite {
     pub(super) module_path: String,
     pub(super) item: String,
     pub(super) line: usize,
     pub(super) internal: bool,
     #[serde(skip)]
     pub(super) leaf_may_be_module: bool,
+    pub(super) spelling: Spelling,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum Spelling {
+    Use,
+    Qualified,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -77,7 +85,7 @@ pub(super) struct FileSyntax {
     pub(super) pub_items: Vec<PubItem>,
     pub(super) mod_decls: Vec<(String, String)>,
     pub(super) test_regions: Vec<Range<usize>>,
-    pub(super) imports: Vec<ImportedItem>,
+    pub(super) dependencies: Vec<DependencySite>,
     pub(super) fns: Vec<FnBody>,
     #[serde(skip)]
     test_fns: Vec<FnBody>,
@@ -134,7 +142,7 @@ impl ModIndex {
     }
 }
 
-pub(super) fn analyze_sources(sources: &[Source]) -> SyntaxReport {
+pub(super) fn analyze_sources(sources: &[Source], crate_names: &BTreeSet<String>) -> SyntaxReport {
     let mut files = Vec::new();
     let mut parse_failures = Vec::new();
     for source in sources {
@@ -142,7 +150,7 @@ pub(super) fn analyze_sources(sources: &[Source]) -> SyntaxReport {
             continue;
         }
         match syn::parse_file(&source.text) {
-            Ok(file) => files.push(analyze_file(&source.path, &source.text, &file)),
+            Ok(file) => files.push(analyze_file(&source.path, &source.text, &file, crate_names)),
             Err(_) => parse_failures.push(source.path.clone()),
         }
     }
@@ -152,7 +160,12 @@ pub(super) fn analyze_sources(sources: &[Source]) -> SyntaxReport {
     }
 }
 
-fn analyze_file(path: &Path, source: &str, file: &File) -> FileSyntax {
+fn analyze_file(
+    path: &Path,
+    source: &str,
+    file: &File,
+    crate_names: &BTreeSet<String>,
+) -> FileSyntax {
     let module_path = crate_module_for_path(path);
     let crate_path = crate_path_for_source(path);
     let mut pub_items = Vec::new();
@@ -167,13 +180,15 @@ fn analyze_file(path: &Path, source: &str, file: &File) -> FileSyntax {
     let mut test_regions = Vec::new();
     collect_test_regions(&file.items, &mut test_regions);
 
-    let imports = {
-        let mut use_collector = UseCollector {
+    let dependencies = {
+        let mut dependency_collector = DependencyCollector {
             file_module: &module_path,
-            imports: Vec::new(),
+            crate_names,
+            seen: BTreeSet::new(),
+            sites: Vec::new(),
         };
-        use_collector.visit_file(file);
-        use_collector.imports
+        dependency_collector.visit_file(file);
+        dependency_collector.sites
     };
 
     let mut fn_collector = FnCollector {
@@ -199,7 +214,7 @@ fn analyze_file(path: &Path, source: &str, file: &File) -> FileSyntax {
         pub_items,
         mod_decls,
         test_regions,
-        imports,
+        dependencies,
         fns: fn_collector.functions,
         test_fns: fn_collector.test_functions,
         guards: guard_collector.guards,
@@ -571,12 +586,25 @@ fn is_boundary_visible(visibility: &Visibility) -> bool {
     }
 }
 
-struct UseCollector<'a> {
+struct DependencyCollector<'a> {
     file_module: &'a str,
-    imports: Vec<ImportedItem>,
+    crate_names: &'a BTreeSet<String>,
+    seen: BTreeSet<(String, String)>,
+    sites: Vec<DependencySite>,
 }
 
-impl<'ast> Visit<'ast> for UseCollector<'_> {
+impl DependencyCollector<'_> {
+    fn push(&mut self, site: DependencySite) {
+        if self
+            .seen
+            .insert((site.module_path.clone(), site.item.clone()))
+        {
+            self.sites.push(site);
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for DependencyCollector<'_> {
     fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
         if is_cfg_test(&item.attrs) {
             return;
@@ -593,16 +621,50 @@ impl<'ast> Visit<'ast> for UseCollector<'_> {
                 module_path = "(crate)".to_owned();
             }
             if !module_path.is_empty() {
-                self.imports.push(ImportedItem {
+                self.push(DependencySite {
                     module_path,
                     item: imported_item,
                     line: item.span().start().line,
                     internal,
                     leaf_may_be_module,
+                    spelling: Spelling::Use,
                 });
             }
         }
         visit::visit_item_use(self, item);
+    }
+
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        let segments = path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect::<Vec<_>>();
+        let internal = segments
+            .first()
+            .is_some_and(|segment| matches!(segment.as_str(), "crate" | "self" | "super"));
+        let workspace = segments
+            .first()
+            .is_some_and(|segment| self.crate_names.contains(segment));
+        if path.leading_colon.is_none() && segments.len() >= 2 && (internal || workspace) {
+            let mut module_path =
+                resolve_import_path(self.file_module, &segments[..segments.len() - 1]);
+            if module_path.is_empty() && internal {
+                module_path = "(crate)".to_owned();
+            }
+            self.push(DependencySite {
+                module_path,
+                item: segments
+                    .last()
+                    .cloned()
+                    .expect("a qualified path has a leaf"),
+                line: path.span().start().line,
+                internal,
+                leaf_may_be_module: true,
+                spelling: Spelling::Qualified,
+            });
+        }
+        visit::visit_path(self, path);
     }
 
     fn visit_item_mod(&mut self, item: &'ast ItemMod) {
@@ -643,11 +705,11 @@ impl<'ast> Visit<'ast> for UseCollector<'_> {
 }
 
 pub(super) fn resolved_internal_import(
-    import: &ImportedItem,
-    known_modules: &std::collections::BTreeSet<String>,
-    workspace_crates: &std::collections::BTreeSet<String>,
+    import: &DependencySite,
+    known_modules: &BTreeSet<String>,
+    workspace_crates: &BTreeSet<String>,
 ) -> Option<String> {
-    let module_path = if import.internal {
+    let mut module_path = if import.internal {
         import.module_path.clone()
     } else {
         let mut parts = import.module_path.split("::");
@@ -662,6 +724,16 @@ pub(super) fn resolved_internal_import(
             path
         }
     };
+    if import.spelling == Spelling::Qualified {
+        while module_path != "(crate)" && !known_modules.contains(&module_path) {
+            let Some((parent, _)) = module_path.rsplit_once("::") else {
+                module_path = "(crate)".to_owned();
+                break;
+            };
+            module_path.truncate(parent.len());
+        }
+        return Some(module_path);
+    }
     if !import.leaf_may_be_module {
         return Some(module_path);
     }

@@ -98,13 +98,6 @@ struct RuleRow {
     kind: &'static str,
     direction: &'static str,
     admitted: Option<String>,
-    debt: Option<RuleDebt>,
-}
-
-#[derive(Debug, Serialize)]
-struct RuleDebt {
-    prefix: String,
-    sites: usize,
 }
 
 #[derive(Default)]
@@ -281,10 +274,9 @@ fn build_report(root: &Path, args: &Args) -> Result<Report> {
             target_path.display()
         );
     }
-    let rules = target.as_ref().map_or_else(
-        || Ok(Vec::new()),
-        |target| target_rules(root, target, &target_path, &facts, &from, &to),
-    )?;
+    let rules = target.as_ref().map_or_else(Vec::new, |target| {
+        target_rules(root, target, &facts, &from, &to)
+    });
     let target_configured = target.is_some();
     Ok(Report {
         version: REPORT_VERSION,
@@ -505,12 +497,10 @@ fn quote_function(function: &FunctionRow, sources: &[Source]) -> Option<Heaviest
 fn target_rules(
     root: &Path,
     target: &Target,
-    target_path: &Path,
     facts: &Facts,
     from: &ModuleSelector,
     to: &ModuleSelector,
-) -> Result<Vec<RuleRow>> {
-    let debt_sites = conform::debt_sites_by_rule(root, target, target_path, facts)?;
+) -> Vec<RuleRow> {
     let from_files = facts
         .syntax
         .files
@@ -518,7 +508,7 @@ fn target_rules(
         .filter(|file| from.matches(&file.module_path, &file.path))
         .collect::<Vec<_>>();
     let ranks = target.layer_ranks();
-    Ok(target
+    target
         .modules
         .iter()
         .filter(|rule| {
@@ -526,17 +516,11 @@ fn target_rules(
                 .iter()
                 .any(|file| conform::rule_covers_path(root, &rule.path, &file.path))
         })
-        .map(|rule| rule_row(rule, &debt_sites, &ranks, &from.module, &to.module))
-        .collect())
+        .map(|rule| rule_row(rule, &ranks, &from.module, &to.module))
+        .collect()
 }
 
-fn rule_row(
-    rule: &ModuleRule,
-    debt_sites: &BTreeMap<(PathBuf, String), usize>,
-    ranks: &super::target::LayerRanks,
-    from: &str,
-    to: &str,
-) -> RuleRow {
+fn rule_row(rule: &ModuleRule, ranks: &super::target::LayerRanks, from: &str, to: &str) -> RuleRow {
     let direction = match conform::layer_direction(ranks, from, to) {
         Some(Direction::Upward) => "upward",
         Some(Direction::Same) => "same",
@@ -544,36 +528,23 @@ fn rule_row(
         None => "unranked",
     };
     let admissions = rule
-        .allowed_imports
+        .allowed_dependencies
         .as_deref()
-        .or(rule.upward_imports.as_deref())
+        .or(rule.upward_dependencies.as_deref())
         .unwrap_or_default();
     let admitted = admissions
         .iter()
         .find(|prefix| module_is_within(to, prefix))
         .cloned();
-    let debt = rule
-        .upward_debt
-        .iter()
-        .flatten()
-        .find(|prefix| module_is_within(to, prefix))
-        .map(|prefix| RuleDebt {
-            prefix: prefix.clone(),
-            sites: debt_sites
-                .get(&(rule.path.clone(), prefix.clone()))
-                .copied()
-                .unwrap_or(0),
-        });
     RuleRow {
         path: rule.path.clone(),
-        kind: if rule.allowed_imports.is_some() {
+        kind: if rule.allowed_dependencies.is_some() {
             "module"
         } else {
-            "upward-import"
+            "upward-dependency"
         },
         direction,
         admitted,
-        debt,
     }
 }
 
@@ -672,19 +643,14 @@ fn print_report(report: &Report, top: usize, markdown: bool) {
     } else if report.rules.is_empty() {
         println!("no covering rules");
     } else {
-        println!("rule path | kind | direction | admitted | debt");
+        println!("rule path | kind | direction | admitted");
         for rule in &report.rules {
-            let debt = rule.debt.as_ref().map_or_else(
-                || "none".to_owned(),
-                |debt| format!("{} ({} sites)", debt.prefix, debt.sites),
-            );
             println!(
-                "{} | {} | {} | {} | {}",
+                "{} | {} | {} | {}",
                 rule.path.display(),
                 rule.kind,
                 rule.direction,
                 rule.admitted.as_deref().unwrap_or("none"),
-                debt
             );
         }
     }
