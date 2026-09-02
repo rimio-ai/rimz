@@ -82,6 +82,7 @@ fn heaviest_quote_caps_site_windows_and_reports_omitted_sites() {
         items_unfolded: 1,
         sites: site_lines.len(),
         site_lines,
+        also: Vec::new(),
     };
 
     let quote = quote_function(&function, &[source]).unwrap();
@@ -210,6 +211,14 @@ fn builder_chain_folds_for_callers_heaviest_and_call_shapes() {
             reference
         })
         .collect::<Vec<_>>();
+    for (item, line) in [("queue", 1), ("deliver", 2), ("queue", 1)] {
+        let mut reference = edge(item, "caller", Some(("run_idle_compact", 1)), false);
+        reference.from_line = names.len() + line + 2;
+        reference.to = "third::service".to_owned();
+        reference.to_path = PathBuf::from("crates/demo/src/third/service.rs");
+        reference.to_line = line;
+        edges.push(reference);
+    }
     edges.sort_by_key(|edge| edge.from_line);
 
     let assembly = assembly_functions(
@@ -220,6 +229,7 @@ fn builder_chain_folds_for_callers_heaviest_and_call_shapes() {
     );
     assert_eq!(assembly[0].items.len(), 7, "{:?}", assembly[0].items);
     assert_eq!(assembly[0].items_unfolded, 13);
+    assert_eq!(assembly[0].also, [("third".to_owned(), 2)]);
     assert_eq!(
         assembly[0].items[0],
         "MessageRecord::{new, with_channel, with_sender, +3}"

@@ -256,7 +256,7 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
         })
         .count();
     let unresolved_definitions = surface.unresolved.len();
-    let verdict = InspectVerdict::from_report_data(&surface, &repeated, &callers);
+    let verdict = InspectVerdict::from_report_data(&surface, &repeated, &callers, &assembly);
     let report = Report {
         verdict,
         callers,

@@ -54,6 +54,29 @@ fn rows_can_be_ranked_by_tc_with_thinnest_tests_first() {
 }
 
 #[test]
+fn rows_can_be_ranked_by_depth_with_shallowest_first_and_no_surface_last() {
+    let row = |module: &str, depth| Row {
+        module: module.to_owned(),
+        depth,
+        ..Row::default()
+    };
+    let mut rows = vec![
+        row("deep", Some(100.0)),
+        row("none", None),
+        row("shallow", Some(20.0)),
+    ];
+
+    sort_rows(&mut rows, RankBy::parse("depth").unwrap());
+
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.module.as_str())
+            .collect::<Vec<_>>(),
+        ["shallow", "deep", "none"]
+    );
+}
+
+#[test]
 fn top_complexity_decile_is_flagged() {
     let mut rows = (1..=10)
         .map(|cx| Row {
@@ -244,4 +267,5 @@ fn split_leaves_replace_the_parent_and_consume_top() {
         ["large/sub", "large/a", "large/(root)"]
     );
     assert_eq!(rows.iter().take(1).count(), 1);
+    assert_eq!(rows[0].depth, Some(4_501.0));
 }

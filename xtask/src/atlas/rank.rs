@@ -35,6 +35,7 @@ pub(super) enum RankBy {
     Pace,
     Cx,
     TestCode,
+    Depth,
 }
 
 impl RankBy {
@@ -46,6 +47,7 @@ impl RankBy {
             "pace" => Some(Self::Pace),
             "cx" => Some(Self::Cx),
             "tc" => Some(Self::TestCode),
+            "depth" => Some(Self::Depth),
             _ => None,
         }
     }
@@ -57,6 +59,7 @@ pub(super) struct Row {
     pub(super) code: u64,
     pub(super) tests: u64,
     pub(super) esc: usize,
+    pub(super) depth: Option<f64>,
     pub(super) churn: f64,
     pub(super) pace: Option<f64>,
     pub(super) cx: f64,
@@ -257,6 +260,10 @@ fn level_rows(
                 code: size.code,
                 tests: size.tests,
                 esc: escaping.get(&module).map_or(0, Vec::len),
+                depth: escaping
+                    .get(&module)
+                    .filter(|items| !items.is_empty())
+                    .map(|items| size.code as f64 / items.len() as f64),
                 churn,
                 pace: history.pace,
                 cx: complexity.get(&module).copied().unwrap_or(0.0),
@@ -314,6 +321,10 @@ fn sort_rows(rows: &mut [Row], by: RankBy) {
                 .total_cmp(&left.pace.unwrap_or(f64::NEG_INFINITY)),
             RankBy::Cx => right.cx.total_cmp(&left.cx),
             RankBy::TestCode => test_code_ratio(left).total_cmp(&test_code_ratio(right)),
+            RankBy::Depth => left
+                .depth
+                .unwrap_or(f64::INFINITY)
+                .total_cmp(&right.depth.unwrap_or(f64::INFINITY)),
         };
         primary
             .then_with(|| right.cx.total_cmp(&left.cx))

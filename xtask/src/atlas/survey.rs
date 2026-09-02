@@ -9,7 +9,9 @@ use serde_json::{Map, json};
 use super::conform::{self, Direction};
 use super::detect::{self, GuardFamily};
 use super::facts::{Facets, Facts};
-use super::modules::{module_is_within, path_in_scope};
+use super::modules::{
+    crate_module_for_path, crate_module_for_row, module_is_within, path_in_scope,
+};
 use super::output::{self, OutputArgs};
 use super::rank::{self, Hotspot, RankBy, Row, Totals};
 use super::shapes::{self, ShapeFamily};
@@ -21,12 +23,44 @@ const DEFAULT_PATH: &str = "crates/rimz/src";
 const DEFAULT_TOP: usize = 20;
 
 const USAGE: &str = "cargo xtask atlas survey [--path <prefix>] [--top N]
-    [--by <code|esc|churn|pace|cx|tc>] [--all]
+    [--by <code|esc|churn|pace|cx|tc|depth>] [--all]
 
 Emits a bounded Markdown survey of accretion, admitted upward dependencies, and duplicated knowledge.
 Rank order defaults to accretion (code × churn).";
 
-const SECTIONS: &[&str] = &["rank", "hot", "debt", "shapes", "guards", "footer"];
+const SECTIONS: &[&str] = &[
+    "probes", "rank", "hot", "debt", "shapes", "guards", "footer",
+];
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+struct ProbeHotspot {
+    function: String,
+    hot: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+struct Probe {
+    module: String,
+    rank: usize,
+    code: u64,
+    esc: usize,
+    churn: f64,
+    flags: Vec<&'static str>,
+    hot: Vec<ProbeHotspot>,
+    shape_families: usize,
+    sibling_families: usize,
+    guard_families: usize,
+    admitted_upward_sites: usize,
+    next: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct Cycle {
+    a: String,
+    b: String,
+    a_to_b: usize,
+    b_to_a: usize,
+}
 
 /// One target rule's upward dependencies, counted at their sites and split
 /// by whether the target admits them.
@@ -75,10 +109,12 @@ struct Args {
 #[derive(Serialize)]
 struct Report {
     path: PathBuf,
+    probes: Vec<Probe>,
     rows: Vec<Row>,
     totals: Totals,
     hot: Vec<Hotspot>,
     debt: Debt,
+    cycles: Vec<Cycle>,
     shapes: Vec<ShapeFamily>,
     guards: Vec<GuardFamily>,
     history_commits: usize,
@@ -144,7 +180,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
                 let raw = value(args, index, "survey", "--by")?;
                 let parsed = RankBy::parse(raw).ok_or_else(|| {
                     anyhow::anyhow!(
-                        "atlas survey --by must be one of code, esc, churn, pace, cx, tc"
+                        "atlas survey --by must be one of code, esc, churn, pace, cx, tc, depth"
                     )
                 })?;
                 set_once(&mut by, parsed, "survey", "--by")?;
@@ -250,13 +286,17 @@ fn build_report(
     let debt = configured.as_ref().map_or_else(Debt::default, |target| {
         recorded_debt(root, target, facts, scope)
     });
+    let probes = build_probes(scope, &rows, &hot, &shapes, &guards, &debt);
+    let cycles = same_layer_cycles(facts, scope);
 
     Ok(Report {
         path: facts.scope.clone(),
+        probes,
         rows,
         totals,
         hot,
         debt,
+        cycles,
         shapes,
         guards,
         history_commits: log.len(),
@@ -383,19 +423,235 @@ fn provider_sites(counts: BTreeMap<String, usize>) -> Vec<ProviderSites> {
     rows
 }
 
+fn build_probes(
+    scope: &Path,
+    rows: &[Row],
+    hot: &[Hotspot],
+    shapes: &[ShapeFamily],
+    guards: &[GuardFamily],
+    debt: &Debt,
+) -> Vec<Probe> {
+    rows.iter()
+        .take(5)
+        .enumerate()
+        .map(|(index, row)| {
+            let crate_module = crate_module_for_row(scope, &row.module.replace('/', "::"));
+            let path_matches = |path: &Path| {
+                module_is_within(&crate_module_for_path(path), &crate_module)
+            };
+            let hot = hot
+                .iter()
+                .filter(|hotspot| path_matches(&hotspot.path))
+                .take(2)
+                .map(|hotspot| ProbeHotspot {
+                    function: hotspot.function.clone(),
+                    hot: hotspot.hot,
+                })
+                .collect::<Vec<_>>();
+            let matching_shapes = shapes
+                .iter()
+                .filter(|family| family.members.iter().any(|member| path_matches(&member.path)))
+                .collect::<Vec<_>>();
+            let guard_families = guards
+                .iter()
+                .filter(|family| family.locations.iter().any(|site| path_matches(&site.path)))
+                .count();
+            let admitted_upward_sites = debt
+                .rules
+                .iter()
+                .filter(|rule| {
+                    let rule_module = if rule.path.extension().is_some() {
+                        crate_module_for_path(&rule.path)
+                    } else {
+                        crate_module_for_path(&rule.path.join("mod.rs"))
+                    };
+                    module_is_within(&crate_module, &rule_module)
+                })
+                .flat_map(|rule| &rule.admitted)
+                .map(|provider| provider.sites)
+                .sum();
+            let next_module = crate_module.replace("::", "-");
+            Probe {
+                module: row.module.clone(),
+                rank: index + 1,
+                code: row.code,
+                esc: row.esc,
+                churn: row.churn,
+                flags: row.flags.clone(),
+                hot,
+                shape_families: matching_shapes.len(),
+                sibling_families: matching_shapes
+                    .iter()
+                    .filter(|family| family.siblings >= 2)
+                    .count(),
+                guard_families,
+                admitted_upward_sites,
+                next: format!(
+                    "cargo xtask atlas inspect --module {crate_module} --section verdict,callers,heaviest,calls --out /tmp/atlas-{next_module}.md"
+                ),
+            }
+        })
+        .collect()
+}
+
+fn same_layer_cycles(facts: &Facts, scope: &Path) -> Vec<Cycle> {
+    cycles_from_syntax(
+        &facts.syntax.files,
+        &facts.known_modules,
+        &facts.crate_names,
+        scope,
+    )
+}
+
+fn cycles_from_syntax(
+    files: &[super::syntax::FileSyntax],
+    known_modules: &BTreeSet<String>,
+    crate_names: &BTreeSet<String>,
+    scope: &Path,
+) -> Vec<Cycle> {
+    let scope_module = crate_module_for_row(scope, "(root)");
+    let mut pairs = BTreeMap::<(String, String), (usize, usize)>::new();
+    for file in files.iter().filter(|file| path_in_scope(&file.path, scope)) {
+        let from = conform::top_module(&file.module_path);
+        for dependency in &file.dependencies {
+            let Some(resolved) = resolved_internal_import(dependency, known_modules, crate_names)
+            else {
+                continue;
+            };
+            if !module_is_within(&resolved, &scope_module) {
+                continue;
+            }
+            let to = conform::top_module(&resolved);
+            if from == to {
+                continue;
+            }
+            let (key, forward) = if from < to {
+                ((from.to_owned(), to.to_owned()), true)
+            } else {
+                ((to.to_owned(), from.to_owned()), false)
+            };
+            let counts = pairs.entry(key).or_default();
+            if forward {
+                counts.0 += 1;
+            } else {
+                counts.1 += 1;
+            }
+        }
+    }
+    let mut cycles = pairs
+        .into_iter()
+        .filter_map(|((a, b), (a_to_b, b_to_a))| {
+            (a_to_b > 0 && b_to_a > 0).then_some(Cycle {
+                a,
+                b,
+                a_to_b,
+                b_to_a,
+            })
+        })
+        .collect::<Vec<_>>();
+    cycles.sort_by(|left, right| {
+        (right.a_to_b + right.b_to_a)
+            .cmp(&(left.a_to_b + left.b_to_a))
+            .then_with(|| left.a.cmp(&right.a))
+            .then_with(|| left.b.cmp(&right.b))
+    });
+    cycles
+}
+
+fn compact_code(code: u64) -> String {
+    if code >= 1_000 {
+        format!("{:.1}k", code as f64 / 1_000.0)
+    } else {
+        code.to_string()
+    }
+}
+
+fn render_probes(output: &mut String, probes: &[Probe]) {
+    writeln!(output, "\n# Probes").expect("writing to a String cannot fail");
+    for probe in probes {
+        let flags = if probe.flags.is_empty() {
+            String::new()
+        } else {
+            format!(", flags {}", probe.flags.join(","))
+        };
+        let mut signals = vec![format!(
+            "rank #{} (code {}, esc {}, churn {:.1}{flags})",
+            probe.rank,
+            compact_code(probe.code),
+            probe.esc,
+            probe.churn
+        )];
+        if !probe.hot.is_empty() {
+            signals.push(format!(
+                "hot: {}",
+                probe
+                    .hot
+                    .iter()
+                    .map(|hotspot| format!("{} {:.1}", hotspot.function, hotspot.hot))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if probe.shape_families > 0 {
+            let siblings = if probe.sibling_families == 0 {
+                String::new()
+            } else {
+                format!(
+                    " ({} sibling{} → collapse?)",
+                    probe.sibling_families,
+                    if probe.sibling_families == 1 { "" } else { "s" }
+                )
+            };
+            signals.push(format!(
+                "shapes: {} famil{}{}",
+                probe.shape_families,
+                if probe.shape_families == 1 {
+                    "y"
+                } else {
+                    "ies"
+                },
+                siblings
+            ));
+        }
+        if probe.guard_families > 0 {
+            signals.push(format!(
+                "guards: {} famil{}",
+                probe.guard_families,
+                if probe.guard_families == 1 {
+                    "y"
+                } else {
+                    "ies"
+                }
+            ));
+        }
+        if probe.admitted_upward_sites > 0 {
+            signals.push(format!(
+                "admitted upward: {} sites",
+                probe.admitted_upward_sites
+            ));
+        }
+        writeln!(output, "\n- `{}` — {}", probe.module, signals.join(" · "))
+            .expect("writing to a String cannot fail");
+        writeln!(output, "  next: {}", probe.next).expect("writing to a String cannot fail");
+    }
+}
+
 fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> String {
     let mut output = String::new();
     writeln!(output, "# Atlas survey — {}", report.path.display()).unwrap();
+    if output_args.wants("probes") {
+        render_probes(&mut output, &report.probes);
+    }
     if output_args.wants("rank") {
         writeln!(output, "\n## Accretion rank").unwrap();
         writeln!(
             output,
-            "| module | code | tests | esc | churn% | pace | cx | t/c | flags |"
+            "| module | code | tests | esc | depth | churn% | pace | cx | t/c | flags |"
         )
         .unwrap();
         writeln!(
             output,
-            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
         )
         .unwrap();
         for row in report.rows.iter().take(top) {
@@ -412,10 +668,22 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
             } else {
                 row.flags.join(",")
             };
+            let depth = row
+                .depth
+                .map_or_else(|| "-".to_owned(), |depth| format!("{depth:.1}"));
             writeln!(
                 output,
-                "| {} | {} | {} | {} | {:.1} | {} | {:.1} | {} | {} |",
-                row.module, row.code, row.tests, row.esc, row.churn, pace, row.cx, ratio, flags
+                "| {} | {} | {} | {} | {} | {:.1} | {} | {:.1} | {} | {} |",
+                row.module,
+                row.code,
+                row.tests,
+                row.esc,
+                depth,
+                row.churn,
+                pace,
+                row.cx,
+                ratio,
+                flags
             )
             .unwrap();
         }
@@ -447,7 +715,7 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
     }
 
     if output_args.wants("debt") {
-        render_debt(&mut output, &report.debt, top);
+        render_debt(&mut output, &report.debt, &report.cycles, top);
     }
 
     if output_args.wants("shapes") || output_args.wants("guards") {
@@ -555,10 +823,11 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
     output
 }
 
-fn render_debt(output: &mut String, debt: &Debt, top: usize) {
+fn render_debt(output: &mut String, debt: &Debt, cycles: &[Cycle], top: usize) {
     writeln!(output, "\n## Admitted upward dependencies").unwrap();
     if !debt.configured {
         writeln!(output, "no {TARGET_FILE}; nothing recorded").unwrap();
+        render_cycles(output, cycles, top);
         return;
     }
     if debt.rules.is_empty() {
@@ -603,6 +872,29 @@ fn render_debt(output: &mut String, debt: &Debt, top: usize) {
             .join(", ");
         writeln!(output, "\nstranglers (current/baseline): {stranglers}").unwrap();
     }
+    render_cycles(output, cycles, top);
+}
+
+fn render_cycles(output: &mut String, cycles: &[Cycle], top: usize) {
+    if cycles.is_empty() {
+        writeln!(output, "\nsame-layer cycles: none").expect("writing to a String cannot fail");
+        return;
+    }
+    let mut rendered = cycles
+        .iter()
+        .take(top)
+        .map(|cycle| {
+            format!(
+                "{} ↔ {} ({}/{} sites)",
+                cycle.a, cycle.b, cycle.a_to_b, cycle.b_to_a
+            )
+        })
+        .collect::<Vec<_>>();
+    if cycles.len() > top {
+        rendered.push(format!("… {} more", cycles.len() - top));
+    }
+    writeln!(output, "\nsame-layer cycles: {}", rendered.join(", "))
+        .expect("writing to a String cannot fail");
 }
 
 fn render_provider_sites(rows: &[ProviderSites], top: usize) -> String {
@@ -623,6 +915,9 @@ fn render_provider_sites(rows: &[ProviderSites], top: usize) -> String {
 fn render_json(report: &Report, output_args: &OutputArgs) -> Result<String> {
     let mut sections = Map::new();
     sections.insert("path".to_owned(), serde_json::to_value(&report.path)?);
+    if output_args.wants("probes") {
+        sections.insert("probes".to_owned(), serde_json::to_value(&report.probes)?);
+    }
     if output_args.wants("rank") {
         sections.insert(
             "rank".to_owned(),
@@ -637,6 +932,7 @@ fn render_json(report: &Report, output_args: &OutputArgs) -> Result<String> {
     }
     if output_args.wants("debt") {
         sections.insert("debt".to_owned(), serde_json::to_value(&report.debt)?);
+        sections.insert("cycles".to_owned(), serde_json::to_value(&report.cycles)?);
     }
     if output_args.wants("shapes") {
         sections.insert("shapes".to_owned(), serde_json::to_value(&report.shapes)?);
@@ -721,6 +1017,7 @@ mod tests {
             .collect();
         let report = Report {
             path: PathBuf::from("src"),
+            probes: Vec::new(),
             totals: rank::totals(&rows),
             rows,
             hot,
@@ -744,6 +1041,7 @@ mod tests {
                     baseline: 3,
                 }],
             },
+            cycles: Vec::new(),
             shapes,
             guards,
             history_commits: 100,
@@ -766,7 +1064,7 @@ mod tests {
 
         let output = render_markdown(&report, 20, &OutputArgs::default());
 
-        assert!(output.lines().count() <= 135);
+        assert!(output.lines().count() <= 150);
         assert!(output.contains("module-19"));
         assert!(!output.contains("module-20"));
         assert!(output.contains("hot-19"));
@@ -782,6 +1080,159 @@ mod tests {
         assert!(output.contains("guard families dropped as std idiom: 4"));
         assert!(output.contains("2 as predicate use"));
         assert!(output.contains("cx: severity-weighted over-threshold excess"));
+    }
+
+    #[test]
+    fn probes_join_rank_hot_shapes_guards_and_admitted_debt() {
+        let rows = vec![Row {
+            module: "store/snapshot".to_owned(),
+            code: 3_200,
+            esc: 28,
+            churn: 4.1,
+            flags: vec!["pin", "cx"],
+            ..Row::default()
+        }];
+        let hot = vec![
+            Hotspot {
+                function: "fold_snapshot".to_owned(),
+                path: PathBuf::from("crates/rimz/src/store/snapshot.rs"),
+                line: 10,
+                cx: 10.0,
+                churn: 7.13,
+                hot: 71.3,
+            },
+            Hotspot {
+                function: "apply_delta".to_owned(),
+                path: PathBuf::from("crates/rimz/src/store/snapshot/apply.rs"),
+                line: 20,
+                cx: 8.0,
+                churn: 5.025,
+                hot: 40.2,
+            },
+        ];
+        let shapes = vec![
+            ShapeFamily {
+                name: "fold".to_owned(),
+                members: vec![Member {
+                    path: PathBuf::from("crates/rimz/src/store/snapshot.rs"),
+                    line: 10,
+                    name: "fold_snapshot".to_owned(),
+                    sloc: 40,
+                }],
+                files: 1,
+                mean_sloc: 40.0,
+                sloc_in_play: 40.0,
+                score: 40.0,
+                siblings: 0,
+                role: None,
+                provider: None,
+            },
+            ShapeFamily {
+                name: "apply".to_owned(),
+                members: vec![Member {
+                    path: PathBuf::from("crates/rimz/src/store/snapshot/apply.rs"),
+                    line: 20,
+                    name: "apply_delta".to_owned(),
+                    sloc: 40,
+                }],
+                files: 2,
+                mean_sloc: 40.0,
+                sloc_in_play: 80.0,
+                score: 80.0,
+                siblings: 2,
+                role: Some("apply.rs".to_owned()),
+                provider: None,
+            },
+        ];
+        let guards = vec![GuardFamily {
+            key: "ready".to_owned(),
+            files: 1,
+            sites: 3,
+            locations: vec![GuardSite {
+                path: PathBuf::from("crates/rimz/src/store/snapshot.rs"),
+                line: 30,
+                kind: "if".to_owned(),
+            }],
+        }];
+        let debt = Debt {
+            configured: true,
+            rules: vec![DebtRow {
+                path: PathBuf::from("crates/rimz/src/store"),
+                upward_sites: 200,
+                admitted: vec![ProviderSites {
+                    provider: "cli".to_owned(),
+                    sites: 185,
+                }],
+                unadmitted: vec![ProviderSites {
+                    provider: "agents".to_owned(),
+                    sites: 15,
+                }],
+            }],
+            stranglers: Vec::new(),
+        };
+
+        let probes = build_probes(
+            Path::new("crates/rimz/src"),
+            &rows,
+            &hot,
+            &shapes,
+            &guards,
+            &debt,
+        );
+
+        assert_eq!(probes[0].module, "store/snapshot");
+        assert_eq!(probes[0].rank, 1);
+        assert_eq!(probes[0].hot.len(), 2);
+        assert_eq!(probes[0].shape_families, 2);
+        assert_eq!(probes[0].sibling_families, 1);
+        assert_eq!(probes[0].guard_families, 1);
+        assert_eq!(probes[0].admitted_upward_sites, 185);
+        assert_eq!(
+            probes[0].next,
+            "cargo xtask atlas inspect --module store::snapshot --section verdict,callers,heaviest,calls --out /tmp/atlas-store-snapshot.md"
+        );
+        let mut output = String::new();
+        render_probes(&mut output, &probes);
+        assert!(output.contains(
+            "`store/snapshot` — rank #1 (code 3.2k, esc 28, churn 4.1, flags pin,cx) · hot: fold_snapshot 71.3, apply_delta 40.2 · shapes: 2 families (1 sibling → collapse?) · guards: 1 family · admitted upward: 185 sites"
+        ));
+    }
+
+    #[test]
+    fn cycles_count_dependency_sites_in_both_directions() {
+        let sources = vec![
+            super::super::sources::Source::new(
+                "crates/demo/src/a.rs",
+                "use crate::b::{one, two};\npub fn back() {}\n",
+            ),
+            super::super::sources::Source::new(
+                "crates/demo/src/b.rs",
+                "use crate::a::back;\npub fn one() {}\npub fn two() {}\n",
+            ),
+        ];
+        let syntax = super::super::syntax::analyze_sources(&sources, &BTreeSet::new());
+        let known_modules = syntax
+            .files
+            .iter()
+            .map(|file| file.module_path.clone())
+            .collect::<BTreeSet<_>>();
+
+        let cycles = cycles_from_syntax(
+            &syntax.files,
+            &known_modules,
+            &BTreeSet::new(),
+            Path::new("crates/demo/src"),
+        );
+
+        assert_eq!(
+            cycles,
+            [Cycle {
+                a: "a".to_owned(),
+                b: "b".to_owned(),
+                a_to_b: 2,
+                b_to_a: 1,
+            }]
+        );
     }
 
     #[test]

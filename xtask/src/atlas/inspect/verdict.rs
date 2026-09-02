@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 
 use serde::Serialize;
 
-use super::calls::{AssemblyGroup, Caller};
+use super::calls::{AssemblyGroup, Caller, FunctionRow};
 use super::surface::SurfaceSection;
 
 #[derive(Debug, Serialize)]
@@ -19,6 +19,7 @@ pub(super) struct InspectVerdict {
     top_assembly_callers: usize,
     heaviest_caller: Option<String>,
     heaviest_caller_items: usize,
+    heaviest_caller_also: Vec<(String, usize)>,
     vestigial_candidates: usize,
     pins_fix: usize,
 }
@@ -28,6 +29,7 @@ impl InspectVerdict {
         surface: &SurfaceSection,
         assembly: &[AssemblyGroup],
         callers: &[Caller],
+        functions: &[FunctionRow],
     ) -> Self {
         let top_assembly = assembly.first();
         let heaviest_caller = callers.first().and_then(|caller| caller.top_fns.first());
@@ -50,6 +52,15 @@ impl InspectVerdict {
             top_assembly_callers: top_assembly.map_or(0, |group| group.functions.len()),
             heaviest_caller: heaviest_caller.map(|function| function.function.clone()),
             heaviest_caller_items: heaviest_caller.map_or(0, |function| function.items),
+            heaviest_caller_also: heaviest_caller
+                .and_then(|caller| {
+                    functions.iter().find(|function| {
+                        function.function == caller.function
+                            && function.path == caller.path
+                            && function.line == caller.line
+                    })
+                })
+                .map_or_else(Vec::new, |function| function.also.clone()),
             vestigial_candidates: surface.vestigial.len(),
             pins_fix: surface
                 .vestigial
@@ -100,10 +111,25 @@ pub(super) fn render_verdict(out: &mut String, verdict: &InspectVerdict) {
         .expect("writing to a String cannot fail");
     }
     if let Some(function) = &verdict.heaviest_caller {
+        let mut also = verdict
+            .heaviest_caller_also
+            .iter()
+            .take(3)
+            .map(|(module, items)| format!("{module} {items}"))
+            .collect::<Vec<_>>();
+        if verdict.heaviest_caller_also.len() > 3 {
+            also.push(format!("+{}", verdict.heaviest_caller_also.len() - 3));
+        }
+        let also = also.join(", ");
         writeln!(
             out,
-            "heaviest caller: {function} at {} items",
-            verdict.heaviest_caller_items
+            "heaviest caller: {function} at {} items{}",
+            verdict.heaviest_caller_items,
+            if also.is_empty() {
+                String::new()
+            } else {
+                format!(" (also wires {also})")
+            }
         )
         .expect("writing to a String cannot fail");
     } else {

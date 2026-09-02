@@ -40,6 +40,7 @@ pub(super) struct FunctionRow {
     pub(super) items_unfolded: usize,
     pub(super) sites: usize,
     pub(super) site_lines: Vec<usize>,
+    pub(super) also: Vec<(String, usize)>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -355,6 +356,28 @@ pub(super) fn assembly_functions(
     from: &ModuleSelector,
     to: &ModuleSelector,
 ) -> Vec<FunctionRow> {
+    let target_module = to.module.split("::").next().unwrap_or(&to.module);
+    let mut also_by_function =
+        BTreeMap::<FunctionId, BTreeMap<String, BTreeSet<(String, usize)>>>::new();
+    for edge in edges
+        .iter()
+        .filter(|edge| edge.kind == EdgeKind::Reference && !edge.test)
+    {
+        let Some(function) = &edge.from_fn else {
+            continue;
+        };
+        let provider = edge.to.split("::").next().unwrap_or(&edge.to);
+        let caller = edge.from.split("::").next().unwrap_or(&edge.from);
+        if provider == caller || provider == target_module {
+            continue;
+        }
+        also_by_function
+            .entry(FunctionId::new(&edge.from_path, function))
+            .or_default()
+            .entry(provider.to_owned())
+            .or_default()
+            .insert((edge.item.clone(), edge.to_line));
+    }
     let mut by_function = BTreeMap::<FunctionId, (Vec<&Edge>, usize, BTreeSet<usize>)>::new();
     for edge in edges.iter().filter(|edge| {
         edge.kind == EdgeKind::Reference
@@ -377,6 +400,13 @@ pub(super) fn assembly_functions(
         .into_iter()
         .map(|(function, (edges, sites, site_lines))| {
             let items_unfolded = unfolded_items(&edges);
+            let mut also = also_by_function
+                .remove(&function)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(module, items)| (module, items.len()))
+                .collect::<Vec<_>>();
+            also.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
             FunctionRow {
                 end_line: function_end_line(syntax_files, &function),
                 function: function.label,
@@ -386,6 +416,7 @@ pub(super) fn assembly_functions(
                 items_unfolded,
                 sites,
                 site_lines: site_lines.into_iter().collect(),
+                also,
             }
         })
         .collect::<Vec<_>>();
@@ -770,15 +801,25 @@ pub(super) fn render_heaviest(
     top: usize,
 ) {
     out.push_str("\n# Heaviest assembly\n\n");
-    out.push_str("| function | items | sites | location |\n");
-    out.push_str("|---|---:|---:|---|\n");
+    out.push_str("| function | items | sites | also wires | location |\n");
+    out.push_str("|---|---:|---:|---|---|\n");
     for row in rows.iter().take(top) {
+        let mut also = row
+            .also
+            .iter()
+            .take(3)
+            .map(|(module, items)| format!("{module} {items}"))
+            .collect::<Vec<_>>();
+        if row.also.len() > 3 {
+            also.push(format!("+{}", row.also.len() - 3));
+        }
         writeln!(
             out,
-            "| {} | {} | {} | {}:{} |",
+            "| {} | {} | {} | {} | {}:{} |",
             row.function,
             row.items.len(),
             row.sites,
+            also.join(", "),
             row.path.display(),
             row.line
         )
