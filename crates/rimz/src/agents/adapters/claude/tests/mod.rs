@@ -92,8 +92,15 @@ fn claude_commands_and_permission_args_match_run_posture() {
         vec!["--dangerously-skip-permissions"]
     );
     assert_eq!(
-        ClaudeAdapter.spec().launch.compact_command(),
-        Some("/compact")
+        ClaudeAdapter.spec().launch.compact_command(""),
+        Some("/compact".to_owned())
+    );
+    assert_eq!(
+        ClaudeAdapter
+            .spec()
+            .launch
+            .compact_command("preserve the implementation plan"),
+        Some("/compact preserve the implementation plan".to_owned())
     );
     assert_eq!(
         ClaudeAdapter.spec().launch.max_turns_args(3),

@@ -130,7 +130,10 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
         }),
         permission: super::LaunchPermissionArgs::EMPTY,
         max_turn_flag: None,
-        compact_command: Some("/compact"),
+        compact_command: Some(super::CompactCommand {
+            command: "/compact",
+            instruction: super::CompactInstruction::Unsupported,
+        }),
         presets: super::PresetMatchers {
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             effort: Some(super::StaticPresetMatcher::Flag(&["--thinking"])),

@@ -606,8 +606,8 @@ fn launch_resume_and_presets_use_v3_surface() {
             .is_none()
     );
     assert_eq!(
-        KiroAdapter.spec().launch.compact_command(),
-        Some("/compact")
+        KiroAdapter.spec().launch.compact_command(""),
+        Some("/compact".to_owned())
     );
 }
 

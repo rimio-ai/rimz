@@ -110,7 +110,10 @@ static OPENCODE_DESCRIPTOR: AgentSpec = AgentSpec {
             plan: &["--agent", "plan"],
         },
         max_turn_flag: None,
-        compact_command: Some("/compact"),
+        compact_command: Some(super::CompactCommand {
+            command: "/compact",
+            instruction: super::CompactInstruction::Unsupported,
+        }),
         presets: super::PresetMatchers {
             model: Some(super::StaticPresetMatcher::Flag(&["--model", "-m"])),
             ..super::PresetMatchers::EMPTY

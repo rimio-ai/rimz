@@ -57,7 +57,7 @@ fn launch_resume_and_preset_commands_match_amp_cli() {
         ])
     );
     assert_eq!(AmpAdapter.spec().launch.fork_command("T-abc123"), None);
-    assert_eq!(AmpAdapter.spec().launch.compact_command(), None);
+    assert_eq!(AmpAdapter.spec().launch.compact_command(""), None);
 }
 
 #[test]

@@ -116,8 +116,11 @@ fn codex_commands_and_permission_args_match_run_posture() {
         vec!["--dangerously-bypass-approvals-and-sandbox"]
     );
     assert_eq!(
-        CodexAdapter.spec().launch.compact_command(),
-        Some("/compact")
+        CodexAdapter
+            .spec()
+            .launch
+            .compact_command("preserve the implementation plan"),
+        Some("/compact".to_owned())
     );
 }
 

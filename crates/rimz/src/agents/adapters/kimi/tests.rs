@@ -150,8 +150,8 @@ fn prompt_parts_flags_tools_and_resume_match_kimi_code() {
         Some(vec!["kimi".to_owned()])
     );
     assert_eq!(
-        KimiAdapter.spec().launch.compact_command(),
-        Some("/compact")
+        KimiAdapter.spec().launch.compact_command(""),
+        Some("/compact".to_owned())
     );
 
     let write = hook_lifecycle(
