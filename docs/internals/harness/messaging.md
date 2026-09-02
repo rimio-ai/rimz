@@ -287,10 +287,12 @@ A percent threshold reads the same fill gauge the sidebar card renders (`context
 
 Two paths, because the modes have different promises:
 
-- **Boundary.** Send the tracked `/compact` command alone, release the claimed prompt batch back to `Queued` with no attempt penalty, and let `CompactionEnded` start a fresh delivery against the new window. A parked record re-reads fill at the boundary rather than trusting the reading from enqueue time.
-- **Steer.** Keep immediate semantics: type `/compact`, then one message interval later paste the prompt into the composer. Reconciliation holds that `Sent` prompt in place while compaction delays its confirmation.
+- **Boundary.** Send the tracked compact command alone, release the claimed prompt batch back to `Queued` with no attempt penalty, and let `CompactionEnded` start a fresh delivery against the new window. A parked record re-reads fill at the boundary rather than trusting the reading from enqueue time.
+- **Steer.** Keep immediate semantics: type the compact command, then one message interval later paste the prompt into the composer. Reconciliation holds that `Sent` prompt in place while compaction delays its confirmation.
 
-`compacted_context_tokens` records the reading a compaction fired on. While a carried-forward stale gauge still equals that baseline, the send path suppresses duplicate `/compact` commands; a new reading re-enables it. Without this a stuck gauge would compact on every message.
+`LaunchSpec::compact_command` renders the adapter's native command. When the adapter declares `CompactInstruction::Trailing`, it appends [`[harness] compact_instruction`](../../guide/configuration.md#smart-compaction), folded to one line because command text is raw-typed and a newline submits it; adapters without that capability receive the bare command.
+
+`compacted_context_tokens` records the reading a compaction fired on. While a carried-forward stale gauge still equals that baseline, the send path structurally suppresses another compact command regardless of its text; a new reading re-enables it. Without this a stuck gauge would compact on every message.
 
 A failed compaction fails the delivery through the same retry path as a failed send, which is the point of routing the command through a real record rather than typing it inline.
 
@@ -298,7 +300,7 @@ A failed compaction fails the delivery through the same retry path as a failed s
 
 Idle compaction reuses the command-record half of smart compaction without attaching a following prompt. The elected sidebar producer checks top-level rollup agents against `[harness] idle_compact`, the idle threshold, the 50,000-token floor, adapter support, and the `auto` re-engagement signals, then spawns a detached `rimz agents idle-compact` helper so the sidebar import graph remains read-only on the store.
 
-The helper re-resolves the workspace, session, and pane, verifies that the agent is still idle and the configured threshold is still due, and validates the command against the adapter. It queues one automated system `MessageBody::Command` with `DeliveryGate::Done`, pins the pane, stamps `compacted_context_tokens` from the fresh context reading, and attempts `DeliveryPolicy::Boundary`. A closed boundary stays queued through the ordinary retry disposition rather than typing into a working, waiting, parked, or compacting pane.
+The helper re-resolves the workspace, session, and pane, verifies that the agent is still idle and the configured threshold is still due, and validates the command against the adapter and its current configured instruction. It queues one automated system `MessageBody::Command` with `DeliveryGate::Done`, pins the pane, stamps `compacted_context_tokens` from the fresh context reading, and attempts `DeliveryPolicy::Boundary`. A closed boundary stays queued through the ordinary retry disposition rather than typing into a working, waiting, parked, or compacting pane.
 
 Three layers make the action once-per-idle-stretch. The producer's cache-class `(kind, agent_id)` record suppresses the same `last_activity` and throttles helper respawns; the live queue and `last_compact_command_tokens` suppress the same occupied reading; and the helper stops when the session's latest delivered record is already a compact command. A later delivered prompt breaks that final guard and begins a new eligible stretch once its own activity and context thresholds are reached.
 

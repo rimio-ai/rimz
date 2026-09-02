@@ -102,6 +102,8 @@ account = ["./probes/account"]
 version = ["mybot", "--version"]
 ```
 
+Plugin `compact-command` values are sent bare; the manifest cannot currently declare support for a trailing compaction instruction.
+
 `kind` matches `[a-z0-9-]+`, starts and ends with a letter or digit, matches its directory name, and does not collide with a built-in or another plugin. `session_start` is required because it establishes the session row. Optional tables tolerate unknown keys for forward compatibility; protocol version, identity, event names, tool subsets, probe commands, and resume placeholders validate strictly.
 
 Relative probe executables and relative transcript globs resolve from the bundle directory. A launch or resume executable containing a path separator also resolves from the bundle directory; bare executable names use `PATH`. `model-flag` and `effort-flag` receive their configured values. `system-prompt-file-flag` declares a replacement mechanism: RimZ passes the resolved absolute `system-prompt-file` path directly. It must be a file-path flag, not a text flag or an append-only flag. Launch presets fail when a configured `model`, `effort`, or system-prompt field has no declared rendering, so launch intent is not silently discarded.
