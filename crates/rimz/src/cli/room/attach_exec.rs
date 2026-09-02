@@ -21,6 +21,51 @@ const ALTERNATE_SCROLL_DISABLE: &[u8] = b"\x1b[?1007l";
 const ALTERNATE_SCROLL_RESTORE: &[u8] = b"\x1b[?1007r";
 const ATTACH_PROCESS_POLL: Duration = Duration::from_millis(150);
 const REMOTE_ROOM_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+const REMOTE_ROOM_WATCHDOG_INTERVAL: Duration = Duration::from_secs(2);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RemoteRoomObservation {
+    WorkPanePresent,
+    NoWorkPanes,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RemoteRoomWatchdogAction {
+    Wait(Duration),
+    Observe,
+    RoomEnded,
+}
+
+#[derive(Debug, Default)]
+struct RemoteRoomWatchdog {
+    work_pane_seen: bool,
+    next_observation: Duration,
+}
+
+impl RemoteRoomWatchdog {
+    fn advance(
+        &mut self,
+        elapsed: Duration,
+        observation: Option<RemoteRoomObservation>,
+    ) -> RemoteRoomWatchdogAction {
+        if let Some(observation) = observation {
+            match observation {
+                RemoteRoomObservation::WorkPanePresent => self.work_pane_seen = true,
+                RemoteRoomObservation::NoWorkPanes if self.work_pane_seen => {
+                    return RemoteRoomWatchdogAction::RoomEnded;
+                }
+                RemoteRoomObservation::NoWorkPanes | RemoteRoomObservation::Unknown => {}
+            }
+            self.next_observation = elapsed.saturating_add(REMOTE_ROOM_WATCHDOG_INTERVAL);
+        }
+        if elapsed >= self.next_observation {
+            RemoteRoomWatchdogAction::Observe
+        } else {
+            RemoteRoomWatchdogAction::Wait(self.next_observation - elapsed)
+        }
+    }
+}
 
 #[derive(Debug)]
 enum AttachOutcome {
@@ -31,7 +76,7 @@ enum AttachOutcome {
 struct RemoteRoomMonitor {
     backend: Box<dyn rimz::mux::MuxBackend>,
     session_name: String,
-    watchdog: rimz::remote::RemoteRoomWatchdog,
+    watchdog: RemoteRoomWatchdog,
 }
 
 impl RemoteRoomMonitor {
@@ -39,13 +84,11 @@ impl RemoteRoomMonitor {
         Self {
             backend: rimz::mux::backend_for(mux),
             session_name: session_name.to_owned(),
-            watchdog: rimz::remote::RemoteRoomWatchdog::default(),
+            watchdog: RemoteRoomWatchdog::default(),
         }
     }
 
-    fn poll(&mut self, elapsed: Duration) -> rimz::remote::RemoteRoomWatchdogAction {
-        use rimz::remote::RemoteRoomWatchdogAction;
-
+    fn poll(&mut self, elapsed: Duration) -> RemoteRoomWatchdogAction {
         let action = self.watchdog.advance(elapsed, None);
         if !matches!(action, RemoteRoomWatchdogAction::Observe) {
             return action;
@@ -93,10 +136,11 @@ pub(super) fn run_attach_action(
                     std::env::var_os(rimz::remote::OUTER_SCROLL_BRACKET_ENV).as_deref(),
                 ),
                 |elapsed| {
-                    monitor.as_mut().map_or(
-                        rimz::remote::RemoteRoomWatchdogAction::Wait(Duration::MAX),
-                        |monitor| monitor.poll(elapsed),
-                    )
+                    monitor
+                        .as_mut()
+                        .map_or(RemoteRoomWatchdogAction::Wait(Duration::MAX), |monitor| {
+                            monitor.poll(elapsed)
+                        })
                 },
             )?;
             let status = match outcome {
@@ -106,7 +150,7 @@ pub(super) fn run_attach_action(
                 AttachOutcome::Exited(status) => status,
             };
             let observation = supervised.then(|| {
-                monitor.map_or(rimz::remote::RemoteRoomObservation::Unknown, |monitor| {
+                monitor.map_or(RemoteRoomObservation::Unknown, |monitor| {
                     observe_remote_room(monitor.backend.as_ref(), session_name)
                 })
             });
@@ -121,21 +165,14 @@ pub(super) fn run_attach_action(
     }
 }
 
-fn remote_session_lost_exit(
-    supervised: bool,
-    observation: Option<rimz::remote::RemoteRoomObservation>,
-) -> bool {
-    supervised
-        && matches!(
-            observation,
-            Some(rimz::remote::RemoteRoomObservation::NoWorkPanes)
-        )
+fn remote_session_lost_exit(supervised: bool, observation: Option<RemoteRoomObservation>) -> bool {
+    supervised && matches!(observation, Some(RemoteRoomObservation::NoWorkPanes))
 }
 
 fn observe_remote_room(
     backend: &dyn rimz::mux::MuxBackend,
     session_name: &str,
-) -> rimz::remote::RemoteRoomObservation {
+) -> RemoteRoomObservation {
     let listing = backend.list_panes(rimz::mux::PaneListOptions {
         session_name: Some(session_name.to_owned()),
         consistency: rimz::mux::PaneReadConsistency::RequireAuthoritative,
@@ -146,23 +183,21 @@ fn observe_remote_room(
         Ok(listing) => pane_roster_observation(&listing.panes),
         Err(_) => match backend.session_liveness(session_name) {
             Ok(rimz::mux::SessionLiveness::Exited | rimz::mux::SessionLiveness::Absent) => {
-                rimz::remote::RemoteRoomObservation::NoWorkPanes
+                RemoteRoomObservation::NoWorkPanes
             }
-            Ok(rimz::mux::SessionLiveness::Live) | Err(_) => {
-                rimz::remote::RemoteRoomObservation::Unknown
-            }
+            Ok(rimz::mux::SessionLiveness::Live) | Err(_) => RemoteRoomObservation::Unknown,
         },
     }
 }
 
-fn pane_roster_observation(panes: &[rimz::pane::PaneRef]) -> rimz::remote::RemoteRoomObservation {
+fn pane_roster_observation(panes: &[rimz::pane::PaneRef]) -> RemoteRoomObservation {
     if panes
         .iter()
         .any(|pane| !pane.is_floating && !pane.is_rimz_sidebar())
     {
-        rimz::remote::RemoteRoomObservation::WorkPanePresent
+        RemoteRoomObservation::WorkPanePresent
     } else {
-        rimz::remote::RemoteRoomObservation::NoWorkPanes
+        RemoteRoomObservation::NoWorkPanes
     }
 }
 
@@ -264,7 +299,7 @@ pub(super) fn report_already_inside(
 
 pub(crate) fn launch_attach_command(spec: &rimz::mux::CommandSpec) -> Result<()> {
     let outcome = launch_attach_command_with_bracket(spec, true, |_| {
-        rimz::remote::RemoteRoomWatchdogAction::Wait(Duration::MAX)
+        RemoteRoomWatchdogAction::Wait(Duration::MAX)
     })?;
     if let AttachOutcome::Exited(status) = outcome
         && !status.success()
@@ -277,7 +312,7 @@ pub(crate) fn launch_attach_command(spec: &rimz::mux::CommandSpec) -> Result<()>
 fn launch_attach_command_with_bracket(
     spec: &rimz::mux::CommandSpec,
     bracket_alternate_scroll: bool,
-    mut poll_room: impl FnMut(Duration) -> rimz::remote::RemoteRoomWatchdogAction,
+    mut poll_room: impl FnMut(Duration) -> RemoteRoomWatchdogAction,
 ) -> Result<AttachOutcome> {
     let mut command = attach_command(spec);
     let stdout_is_terminal = std::io::stdout().is_terminal();
@@ -315,7 +350,7 @@ fn run_attach_command(
 #[cfg(not(unix))]
 fn run_attach_process(
     command: &mut std::process::Command,
-    poll_room: &mut dyn FnMut(Duration) -> rimz::remote::RemoteRoomWatchdogAction,
+    poll_room: &mut dyn FnMut(Duration) -> RemoteRoomWatchdogAction,
 ) -> std::io::Result<AttachOutcome> {
     let started = Instant::now();
     let mut child = command.spawn()?;
@@ -324,15 +359,15 @@ fn run_attach_process(
             return Ok(AttachOutcome::Exited(status));
         }
         match poll_room(started.elapsed()) {
-            rimz::remote::RemoteRoomWatchdogAction::RoomEnded => {
+            RemoteRoomWatchdogAction::RoomEnded => {
                 child.kill()?;
                 child.wait()?;
                 return Ok(AttachOutcome::RoomEnded);
             }
-            rimz::remote::RemoteRoomWatchdogAction::Wait(delay) => {
+            RemoteRoomWatchdogAction::Wait(delay) => {
                 std::thread::sleep(delay.min(ATTACH_PROCESS_POLL));
             }
-            rimz::remote::RemoteRoomWatchdogAction::Observe => {}
+            RemoteRoomWatchdogAction::Observe => {}
         }
     }
 }
@@ -340,7 +375,7 @@ fn run_attach_process(
 #[cfg(unix)]
 fn run_attach_process(
     command: &mut std::process::Command,
-    poll_room: &mut dyn FnMut(Duration) -> rimz::remote::RemoteRoomWatchdogAction,
+    poll_room: &mut dyn FnMut(Duration) -> RemoteRoomWatchdogAction,
 ) -> std::io::Result<AttachOutcome> {
     use nix::errno::Errno;
     use nix::sys::signal::{Signal, kill, raise};
@@ -380,7 +415,7 @@ fn run_attach_process(
                 }
             }
             Ok(WaitStatus::StillAlive) => match poll_room(started.elapsed()) {
-                rimz::remote::RemoteRoomWatchdogAction::RoomEnded => {
+                RemoteRoomWatchdogAction::RoomEnded => {
                     match kill(pid, Signal::SIGKILL) {
                         Ok(()) | Err(Errno::ESRCH) => {}
                         Err(err) => return Err(errno_io(err)),
@@ -394,10 +429,10 @@ fn run_attach_process(
                     }
                     return Ok(AttachOutcome::RoomEnded);
                 }
-                rimz::remote::RemoteRoomWatchdogAction::Wait(delay) => {
+                RemoteRoomWatchdogAction::Wait(delay) => {
                     std::thread::sleep(delay.min(ATTACH_PROCESS_POLL));
                 }
-                rimz::remote::RemoteRoomWatchdogAction::Observe => {}
+                RemoteRoomWatchdogAction::Observe => {}
             },
             Ok(_) => {}
             Err(Errno::EINTR) => {}
@@ -519,8 +554,6 @@ mod tests {
 
     #[test]
     fn remote_session_loss_translates_only_missing_sessions() {
-        use rimz::remote::RemoteRoomObservation;
-
         assert!(!remote_session_lost_exit(
             true,
             Some(RemoteRoomObservation::WorkPanePresent)
@@ -549,11 +582,53 @@ mod tests {
 
         assert_eq!(
             pane_roster_observation(&[sidebar.clone(), floating]),
-            rimz::remote::RemoteRoomObservation::NoWorkPanes
+            RemoteRoomObservation::NoWorkPanes
         );
         assert_eq!(
             pane_roster_observation(&[sidebar, work]),
-            rimz::remote::RemoteRoomObservation::WorkPanePresent
+            RemoteRoomObservation::WorkPanePresent
+        );
+    }
+
+    #[test]
+    fn remote_room_watchdog_arms_on_work_and_fires_on_empty() {
+        let mut watchdog = RemoteRoomWatchdog::default();
+
+        assert_eq!(
+            watchdog.advance(Duration::ZERO, None),
+            RemoteRoomWatchdogAction::Observe
+        );
+        assert_eq!(
+            watchdog.advance(Duration::ZERO, Some(RemoteRoomObservation::WorkPanePresent),),
+            RemoteRoomWatchdogAction::Wait(REMOTE_ROOM_WATCHDOG_INTERVAL)
+        );
+        assert_eq!(
+            watchdog.advance(REMOTE_ROOM_WATCHDOG_INTERVAL, None),
+            RemoteRoomWatchdogAction::Observe
+        );
+        assert_eq!(
+            watchdog.advance(
+                REMOTE_ROOM_WATCHDOG_INTERVAL,
+                Some(RemoteRoomObservation::NoWorkPanes),
+            ),
+            RemoteRoomWatchdogAction::RoomEnded
+        );
+    }
+
+    #[test]
+    fn remote_room_watchdog_fails_open_until_work_is_observed() {
+        let mut watchdog = RemoteRoomWatchdog::default();
+
+        assert_eq!(
+            watchdog.advance(Duration::ZERO, Some(RemoteRoomObservation::Unknown),),
+            RemoteRoomWatchdogAction::Wait(REMOTE_ROOM_WATCHDOG_INTERVAL)
+        );
+        assert_eq!(
+            watchdog.advance(
+                REMOTE_ROOM_WATCHDOG_INTERVAL,
+                Some(RemoteRoomObservation::NoWorkPanes),
+            ),
+            RemoteRoomWatchdogAction::Wait(REMOTE_ROOM_WATCHDOG_INTERVAL)
         );
     }
 
