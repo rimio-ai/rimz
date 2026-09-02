@@ -52,7 +52,7 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
         Facets {
             history: true,
             metrics: true,
-            references: None,
+            references: false,
         },
     )?;
     let report = build_report(root, &facts, &args.path)?;

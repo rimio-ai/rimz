@@ -7,6 +7,7 @@
 //! the source/syntax/history seams into a crate if another repository adopts it.
 
 mod conform;
+mod contract;
 mod detect;
 mod diff;
 mod facts;
@@ -22,8 +23,6 @@ mod sources;
 mod survey;
 mod syntax;
 mod target;
-
-pub(super) const REPORT_VERSION: u8 = 4;
 
 use std::path::{Component, Path, PathBuf};
 
@@ -102,12 +101,4 @@ fn positive_usize(value: &str, verb: &str, flag: &str) -> Result<usize> {
         bail!("atlas {verb} {flag} must be greater than zero");
     }
     Ok(parsed)
-}
-
-#[expect(
-    clippy::print_stderr,
-    reason = "atlas explicitly reports degraded no-index analysis"
-)]
-fn note_no_index() {
-    eprintln!("atlas: --no-index omits exact-reference fields");
 }

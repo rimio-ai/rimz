@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -128,6 +129,69 @@ pub(super) fn revision_sources(root: &Path, revision: &str) -> Result<Vec<Source
     }
     classify_sources(&mut sources);
     Ok(sources)
+}
+
+pub(super) fn changed_paths(root: &Path, base: &str) -> Result<BTreeSet<PathBuf>> {
+    let diff = Command::new("git")
+        .args(["diff", "--name-only", "-z", base, "--"])
+        .current_dir(root)
+        .output()
+        .with_context(|| format!("listing paths changed from `{base}`"))?;
+    if !diff.status.success() {
+        bail!(
+            "git diff from `{base}` failed: {}",
+            String::from_utf8_lossy(&diff.stderr).trim()
+        );
+    }
+    let status = Command::new("git")
+        .args(["status", "--porcelain", "-z", "--untracked-files=all"])
+        .current_dir(root)
+        .output()
+        .context("listing working-tree changes")?;
+    if !status.status.success() {
+        bail!(
+            "git status failed: {}",
+            String::from_utf8_lossy(&status.stderr).trim()
+        );
+    }
+
+    let mut paths = nul_paths(&diff.stdout)?;
+    let records = status.stdout.split(|byte| *byte == 0).collect::<Vec<_>>();
+    let mut index = 0;
+    while let Some(record) = records.get(index).filter(|record| !record.is_empty()) {
+        if record.len() < 4 || record[2] != b' ' {
+            bail!("git status returned a malformed porcelain record");
+        }
+        let code = &record[..2];
+        paths.insert(PathBuf::from(
+            std::str::from_utf8(&record[3..]).context("git status returned a non-UTF-8 path")?,
+        ));
+        if code.contains(&b'R') || code.contains(&b'C') {
+            index += 1;
+            let original = records
+                .get(index)
+                .filter(|record| !record.is_empty())
+                .context("git status omitted a renamed path")?;
+            paths.insert(PathBuf::from(
+                std::str::from_utf8(original)
+                    .context("git status returned a non-UTF-8 renamed path")?,
+            ));
+        }
+        index += 1;
+    }
+    Ok(paths)
+}
+
+fn nul_paths(output: &[u8]) -> Result<BTreeSet<PathBuf>> {
+    output
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| {
+            std::str::from_utf8(path)
+                .map(PathBuf::from)
+                .context("git returned a non-UTF-8 path")
+        })
+        .collect()
 }
 
 pub(super) fn revision_blob(root: &Path, revision: &str, path: &Path) -> Result<Vec<u8>> {
@@ -303,6 +367,38 @@ fn cfg_predicate_kind(predicate: &Meta) -> Option<SourceKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changed_paths_include_untracked_files() {
+        let root = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .args(args)
+                .current_dir(root.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init"]);
+        git(&["config", "user.email", "atlas@example.test"]);
+        git(&["config", "user.name", "Atlas Test"]);
+        fs::write(root.path().join("tracked.txt"), "base\n").unwrap();
+        git(&["add", "tracked.txt"]);
+        git(&["commit", "-m", "base"]);
+        fs::write(root.path().join("tracked.txt"), "changed\n").unwrap();
+        fs::write(root.path().join("untracked.md"), "new\n").unwrap();
+
+        let paths = changed_paths(root.path(), "HEAD").unwrap();
+
+        assert_eq!(
+            paths,
+            BTreeSet::from([PathBuf::from("tracked.txt"), PathBuf::from("untracked.md")])
+        );
+    }
 
     #[test]
     fn working_tree_walk_keeps_source_modules_named_target() {

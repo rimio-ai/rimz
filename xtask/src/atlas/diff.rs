@@ -3,259 +3,209 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
 
 use super::conform::{self, Direction};
+use super::contract::{AssemblyExpectation, PassContract};
 use super::facts::{Facets, Facts};
-use super::index::IndexPolicy;
+use super::inspect;
 use super::modules::{
-    ItemId, bounded_names, crate_module_for_row, module_endpoint, module_for_path, path_in_scope,
+    ItemId, bounded_names, crate_module_for_path, escaping_items_for_boundary, path_in_scope,
 };
 use super::references::{Edge, EdgeKind, FunctionId};
-use super::target::{self, LayerRanks, TARGET_FILE, Target};
-use super::{REPORT_VERSION, positive_usize, set_once, validate_scope, value};
+use super::sources;
+use super::syntax::Spelling;
+use super::target::{self, LayerRanks, TARGET_FILE};
+use super::{positive_usize, set_once, validate_scope, value};
 
-const DEFAULT_PATH: &str = ".";
 const DEFAULT_TOP: usize = 20;
 
-const USAGE: &str = "cargo xtask atlas diff --base <ref> [--path <prefix>] [--file <target.toml>] [--top N] [--md|--json] [--no-index]
+const USAGE: &str =
+    "cargo xtask atlas diff (--base <ref> --path <scope> | --expect <contract.toml>) [--top N]
 
-Compares a base commit with the working tree. The report shows structural
-movement in escaping surface, layer direction, use/reference edges, stranglers,
-and Rust files. --no-index omits reference edges, per-function assembly, and
-unresolved items.
+Proves structural movement from an indexed base revision to the indexed working
+tree. --expect supplies the base and one or more paths from a v1 pass contract.
 
-  --base <ref>          required base revision
-  --path <path>         root-relative subtree (default .)
-  --file <path>         target file (default refactor-target.toml)
-  --top N               names shown per list (default 20)
-  --md                  markdown output
-  --json                versioned JSON agent contract (v4)
-  --no-index            syntax-only report";
+  --base <ref>       base revision for an exploratory diff
+  --path <scope>     root-relative boundary for an exploratory diff
+  --expect <file>    v1 executable pass contract
+  --top N            detail rows shown per section (default 20)";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
-    base: String,
-    path: PathBuf,
-    file: Option<PathBuf>,
+    input: Input,
     top: usize,
-    markdown: bool,
-    json: bool,
-    no_index: bool,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Debug, PartialEq, Eq)]
+enum Input {
+    Base { base: String, path: PathBuf },
+    Expect(PathBuf),
+}
+
+#[derive(Clone, Debug)]
 struct ValueDelta {
     base: u64,
     current: u64,
     delta: i64,
 }
 
-#[derive(Clone, Debug, Serialize)]
-struct Movement {
-    added: usize,
-    removed: usize,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct SurfaceDelta {
-    base: usize,
-    current: usize,
-    added: usize,
-    removed: usize,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct StranglerSummary {
-    rules: usize,
-    regressed: usize,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct UpwardSummary {
-    sites: ValueDelta,
-    pairs_opened: usize,
-    pairs_closed: usize,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct ParseFailures {
-    base: Vec<PathBuf>,
-    current: Vec<PathBuf>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct Totals {
-    code: ValueDelta,
-    tests: ValueDelta,
-    escaping: SurfaceDelta,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    upward_imports: Option<UpwardSummary>,
-    use_edges: Movement,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reference_edges: Option<Movement>,
-    files: Movement,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    newly_unresolved: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stranglers: Option<StranglerSummary>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct ModuleRow {
-    module: String,
-    code: u64,
-    delta_code: i64,
-    tests: u64,
-    delta_tests: i64,
-    escaping: usize,
-    escaping_added: usize,
-    escaping_removed: usize,
-    upward_sites_delta: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    references_added: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    references_removed: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    assembly_max_delta: Option<i64>,
-}
-
-impl ModuleRow {
-    fn unchanged(&self) -> bool {
-        self.delta_code == 0
-            && self.delta_tests == 0
-            && self.escaping_added == 0
-            && self.escaping_removed == 0
-            && self.upward_sites_delta == 0
-            && self.references_added.unwrap_or_default() == 0
-            && self.references_removed.unwrap_or_default() == 0
-            && self.assembly_max_delta.unwrap_or_default() == 0
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-struct Site {
-    path: PathBuf,
-    line: usize,
-}
-
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 struct SurfaceItem {
-    #[serde(flatten)]
+    scope: PathBuf,
     id: ItemId,
-    row: String,
     path: PathBuf,
     line: usize,
 }
 
 #[derive(Debug)]
-struct SurfaceSnapshot {
-    items: BTreeMap<ItemId, SurfaceItem>,
-    counts: BTreeMap<String, usize>,
-    total: usize,
+struct BoundarySurface {
+    scope: PathBuf,
+    items: Vec<SurfaceItem>,
 }
 
-struct SizeSnapshots<'a> {
-    current: &'a BTreeMap<String, (u64, u64)>,
-    base: &'a BTreeMap<String, (u64, u64)>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct ImportChange {
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct DependencyKey {
     from: String,
     to: String,
-    base: usize,
-    current: usize,
-    delta: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    status: Option<&'static str>,
-    sites: Vec<Site>,
-    #[serde(skip)]
-    row: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct EdgeChange {
-    from: String,
-    to: String,
-    items: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct ReferenceChange {
-    from: String,
-    to: String,
-    items: Vec<String>,
-    base_assembly: usize,
-    current_assembly: usize,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct StranglerChange {
-    symbol: String,
     path: PathBuf,
+    item: String,
+    spelling: Spelling,
+}
+
+#[derive(Clone, Debug)]
+struct DependencySite {
+    key: DependencyKey,
+    line: usize,
+    direction: &'static str,
+}
+
+#[derive(Clone, Debug, Default)]
+struct EdgeData {
+    items: BTreeSet<String>,
+    by_fn: BTreeMap<FunctionId, BTreeSet<String>>,
+}
+
+impl EdgeData {
+    fn assembly(&self) -> usize {
+        self.by_fn.values().map(BTreeSet::len).max().unwrap_or(0)
+    }
+
+    fn heaviest(&self) -> Option<(&FunctionId, usize)> {
+        self.by_fn
+            .iter()
+            .map(|(function, items)| (function, items.len()))
+            .max_by(|(left_fn, left), (right_fn, right)| {
+                left.cmp(right).then_with(|| right_fn.cmp(left_fn))
+            })
+    }
+}
+
+type EdgeMap = BTreeMap<(String, String), EdgeData>;
+
+#[derive(Clone, Debug)]
+struct InterfaceRow {
+    from: String,
+    to: String,
     base: usize,
     current: usize,
-    regressed: bool,
+    base_heaviest: Option<String>,
+    current_heaviest: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
-struct Changed<T> {
-    added: Vec<T>,
-    removed: Vec<T>,
+#[derive(Clone, Debug)]
+struct AssemblyCheck {
+    expectation: AssemblyExpectation,
+    base: usize,
+    current: usize,
 }
 
-#[derive(Clone, Debug, Serialize)]
-struct FilesChanged {
-    created: Vec<PathBuf>,
-    deleted: Vec<PathBuf>,
+#[derive(Clone, Debug)]
+struct ExpectationRow {
+    assertion: String,
+    landed: bool,
+    detail: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
+struct Evidence {
+    base_parse_failures: Vec<PathBuf>,
+    current_parse_failures: Vec<PathBuf>,
+    newly_unresolved: Vec<SurfaceItem>,
+}
+
+impl Evidence {
+    fn complete(&self) -> bool {
+        self.base_parse_failures.is_empty()
+            && self.current_parse_failures.is_empty()
+            && self.newly_unresolved.is_empty()
+    }
+}
+
+#[derive(Debug)]
 struct Report {
-    version: u8,
-    verb: &'static str,
     base: String,
-    base_commit: String,
-    path: PathBuf,
-    no_index: bool,
-    parse_failures: ParseFailures,
-    totals: Totals,
-    modules: Vec<ModuleRow>,
-    modules_unchanged: usize,
-    escaping: Changed<SurfaceItem>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    upward: Option<Vec<ImportChange>>,
-    use_edges: Changed<EdgeChange>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reference_edges: Option<Changed<ReferenceChange>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stranglers: Option<Vec<StranglerChange>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    unresolved_added: Option<Vec<SurfaceItem>>,
-    files: FilesChanged,
+    paths: Vec<PathBuf>,
+    production: ValueDelta,
+    tests: ValueDelta,
+    base_surface: Vec<BoundarySurface>,
+    current_surface: Vec<BoundarySurface>,
+    dependencies_added: Vec<DependencySite>,
+    dependencies_removed: Vec<DependencySite>,
+    base_dependency_counts: BTreeMap<&'static str, usize>,
+    current_dependency_counts: BTreeMap<&'static str, usize>,
+    interfaces: Vec<InterfaceRow>,
+    rust_files_base: usize,
+    rust_files_current: usize,
+    changed_inside: Vec<PathBuf>,
+    changed_outside: Vec<PathBuf>,
+    evidence: Evidence,
+    expectations: Vec<ExpectationRow>,
 }
 
 #[expect(
     clippy::print_stdout,
-    reason = "xtask atlas diff output is a command stdout contract"
+    reason = "xtask atlas diff output is the command stdout contract"
 )]
-pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
-    let Some(args) = parse_args(args)? else {
+pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
+    let Some(args) = parse_args(raw)? else {
         println!("{USAGE}");
         return Ok(());
     };
-    if args.no_index {
-        super::note_no_index();
-    }
-    let report = build_report(root, &args)?;
-    if args.json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report).context("rendering atlas diff JSON")?
+    let current = Facts::load(
+        root,
+        Path::new("."),
+        Facets {
+            references: true,
+            ..Facets::default()
+        },
+    )?;
+    let (base, paths, contract) = match &args.input {
+        Input::Base { base, path } => (base.clone(), vec![path.clone()], None),
+        Input::Expect(path) => {
+            let contract = super::contract::load(root, path, &current.syntax.files)?;
+            (
+                contract.base.clone(),
+                contract.paths.clone(),
+                Some(contract),
+            )
+        }
+    };
+    let base_commit = resolve_base(root, &base)?;
+    let base_facts = Facts::load_at(root, Path::new("."), &base_commit, true)?;
+    let report = build_report(root, base, paths, contract.as_ref(), &base_facts, &current)?;
+    print_report(&report, args.top);
+
+    let drifted = report
+        .expectations
+        .iter()
+        .filter(|row| !row.landed)
+        .map(|row| format!("{}: {}", row.assertion, row.detail))
+        .collect::<Vec<_>>();
+    if !drifted.is_empty() {
+        bail!(
+            "atlas diff expectations drifted:\n- {}",
+            drifted.join("\n- ")
         );
-    } else {
-        print_report(&report, args.top, args.markdown);
     }
     Ok(())
 }
@@ -266,20 +216,17 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     }
     let mut base = None;
     let mut path = None;
-    let mut file = None;
+    let mut expect = None;
     let mut top = None;
-    let mut markdown = false;
-    let mut json = false;
-    let mut no_index = false;
     let mut index = 0;
     while let Some(arg) = args.get(index) {
         match arg.as_str() {
             "--base" => {
-                let parsed = value(args, index, "diff", "--base")?.to_owned();
+                let parsed = value(args, index, "diff", "--base")?;
                 if parsed.is_empty() {
                     bail!("atlas diff --base requires a non-empty revision");
                 }
-                set_once(&mut base, parsed, "diff", "--base")?;
+                set_once(&mut base, parsed.to_owned(), "diff", "--base")?;
                 index += 2;
             }
             "--path" => {
@@ -287,12 +234,12 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
                 set_once(&mut path, parsed, "diff", "--path")?;
                 index += 2;
             }
-            "--file" => {
-                let parsed = value(args, index, "diff", "--file")?;
+            "--expect" => {
+                let parsed = value(args, index, "diff", "--expect")?;
                 if parsed.is_empty() {
-                    bail!("atlas diff --file requires a non-empty path");
+                    bail!("atlas diff --expect requires a non-empty path");
                 }
-                set_once(&mut file, PathBuf::from(parsed), "diff", "--file")?;
+                set_once(&mut expect, PathBuf::from(parsed), "diff", "--expect")?;
                 index += 2;
             }
             "--top" => {
@@ -300,36 +247,18 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
                 set_once(&mut top, parsed, "diff", "--top")?;
                 index += 2;
             }
-            "--md" if !markdown => {
-                markdown = true;
-                index += 1;
-            }
-            "--json" if !json => {
-                json = true;
-                index += 1;
-            }
-            "--no-index" if !no_index => {
-                no_index = true;
-                index += 1;
-            }
-            "--md" | "--json" | "--no-index" => {
-                bail!("atlas diff {arg} may only be passed once")
-            }
             _ => bail!("unknown atlas diff flag `{arg}`\n\n{USAGE}"),
         }
     }
-    if markdown && json {
-        bail!("atlas diff --md and --json are mutually exclusive");
-    }
-    let base = base.context("atlas diff requires --base <ref>")?;
+    let input = match (base, path, expect) {
+        (Some(base), Some(path), None) => Input::Base { base, path },
+        (None, None, Some(expect)) => Input::Expect(expect),
+        (None, None, None) => bail!("atlas diff requires --base with --path, or --expect"),
+        _ => bail!("atlas diff accepts either --base with --path, or --expect, not both"),
+    };
     Ok(Some(Args {
-        base,
-        path: path.unwrap_or_else(|| PathBuf::from(DEFAULT_PATH)),
-        file,
+        input,
         top: top.unwrap_or(DEFAULT_TOP),
-        markdown,
-        json,
-        no_index,
     }))
 }
 
@@ -352,256 +281,107 @@ fn resolve_base(root: &Path, reference: &str) -> Result<String> {
         .to_owned())
 }
 
-fn build_report(root: &Path, args: &Args) -> Result<Report> {
-    let base_commit = resolve_base(root, &args.base)?;
-    let references = (!args.no_index).then_some(IndexPolicy::Required);
-    let base = Facts::load_at(root, Path::new("."), &base_commit, references)?;
-    let current = Facts::load(
-        root,
-        Path::new("."),
-        Facets {
-            references,
-            ..Facets::default()
-        },
-    )?;
+fn build_report(
+    root: &Path,
+    base_name: String,
+    paths: Vec<PathBuf>,
+    contract: Option<&PassContract>,
+    base: &Facts,
+    current: &Facts,
+) -> Result<Report> {
     if !base
         .sources
         .iter()
         .chain(&current.sources)
-        .any(|source| path_in_scope(&source.path, &args.path))
+        .any(|source| in_paths(&source.path, &paths))
     {
-        bail!(
-            "no Rust files under `{}` at the base or in the working tree",
-            args.path.display()
-        );
+        bail!("no Rust files under the requested Atlas diff paths");
     }
-    let target_path = args
-        .file
-        .clone()
-        .unwrap_or_else(|| PathBuf::from(TARGET_FILE));
-    let target = target::load(&root.join(&target_path))?;
-    if target.is_none() && args.file.is_some() {
-        bail!(
-            "atlas diff target file `{}` does not exist",
-            target_path.display()
-        );
-    }
-
-    let current_sizes = sizes(&current, &args.path);
-    let base_sizes = sizes(&base, &args.path);
-    let current_surface = surface_items(&current, &args.path);
-    let base_surface = surface_items(&base, &args.path);
-    let escaping_added = values_for_difference(&current_surface.items, &base_surface.items);
-    let escaping_removed = values_for_difference(&base_surface.items, &current_surface.items);
-
-    let (upward, upward_sites) = if let Some(target) = &target {
-        let ranks = target.layer_ranks();
-        let current_edges = upward_edges(&current, &args.path, &ranks);
-        let base_edges = upward_edges(&base, &args.path, &ranks);
-        (
-            Some(import_changes(&base_edges, &current_edges, &args.path)),
-            Some((
-                base_edges.values().map(BTreeSet::len).sum::<usize>(),
-                current_edges.values().map(BTreeSet::len).sum::<usize>(),
-            )),
-        )
-    } else {
-        (None, None)
-    };
-
-    let current_use = use_edges(&current, &args.path);
-    let base_use = use_edges(&base, &args.path);
-    let use_added = edge_changes(&current_use, &base_use);
-    let use_removed = edge_changes(&base_use, &current_use);
-
-    let (reference_edges, reference_added, reference_removed, assembly) = if args.no_index {
-        (None, 0, 0, BTreeMap::new())
-    } else {
-        let current_refs = reference_edges(&current, &args.path);
-        let base_refs = reference_edges(&base, &args.path);
-        let added = reference_changes(&current_refs, &base_refs, &base_refs, &current_refs);
-        let removed = reference_changes(&base_refs, &current_refs, &base_refs, &current_refs);
-        let added_count = added.len();
-        let removed_count = removed.len();
-        let assembly = assembly_deltas(&base_refs, &current_refs);
-        (
-            Some(Changed { added, removed }),
-            added_count,
-            removed_count,
-            assembly,
-        )
-    };
-
-    let current_files = rust_files(&current, &args.path);
-    let base_files = rust_files(&base, &args.path);
-    let created = current_files
-        .difference(&base_files)
-        .cloned()
-        .collect::<Vec<_>>();
-    let deleted = base_files
-        .difference(&current_files)
-        .cloned()
-        .collect::<Vec<_>>();
-
-    let unresolved_added = if args.no_index {
-        None
-    } else {
-        Some(newly_unresolved(
-            &base,
-            &current,
-            &base_surface.items,
-            &current_surface.items,
-        ))
-    };
-    let stranglers = target
-        .as_ref()
-        .map(|target| strangler_changes(target, &base, &current));
-
-    let modules = module_rows(
-        SizeSnapshots {
-            current: &current_sizes,
-            base: &base_sizes,
-        },
-        &current_surface,
-        &base_surface,
-        upward.as_ref(),
-        reference_edges.as_ref(),
-        &assembly,
-        &endpoint_rows(&base, &current, &args.path),
-    );
-    let modules_unchanged = modules.iter().filter(|row| row.unchanged()).count();
-    let mut modules = modules
-        .into_iter()
-        .filter(|row| !row.unchanged())
-        .collect::<Vec<_>>();
-    modules.sort_by(|left, right| {
-        let left_escape = left.escaping_added + left.escaping_removed;
-        let right_escape = right.escaping_added + right.escaping_removed;
-        right_escape
-            .cmp(&left_escape)
-            .then_with(|| {
-                right
-                    .delta_code
-                    .unsigned_abs()
-                    .cmp(&left.delta_code.unsigned_abs())
+    let target = target::load(&root.join(TARGET_FILE))?;
+    let ranks = target.as_ref().map(|target| target.layer_ranks());
+    let base_dependencies = dependencies(base, &paths, ranks.as_ref());
+    let current_dependencies = dependencies(current, &paths, ranks.as_ref());
+    let dependencies_added = difference(&current_dependencies, &base_dependencies);
+    let dependencies_removed = difference(&base_dependencies, &current_dependencies);
+    let base_edges = interface_edges(base, &paths);
+    let current_edges = interface_edges(current, &paths);
+    let interfaces = interface_rows(&base_edges, &current_edges);
+    let base_surface = boundary_surfaces(base, &paths);
+    let current_surface = boundary_surfaces(current, &paths);
+    let evidence = evidence(base, current, &paths);
+    let changed = sources::changed_paths(root, &base_name)?;
+    let (changed_inside, changed_outside) = split_changed_paths(&changed, &paths);
+    let production = size_delta(base, current, &paths, false);
+    let tests = size_delta(base, current, &paths, true);
+    let assembly_checks = if let Some(contract) = contract {
+        contract
+            .assembly
+            .iter()
+            .map(|expectation| {
+                Ok(AssemblyCheck {
+                    expectation: expectation.clone(),
+                    base: contract_assembly(root, base, expectation)?,
+                    current: contract_assembly(root, current, expectation)?,
+                })
             })
-            .then_with(|| left.module.cmp(&right.module))
-    });
-
-    let code = value_delta(
-        total_size(&base_sizes, false),
-        total_size(&current_sizes, false),
-    );
-    let tests = value_delta(
-        total_size(&base_sizes, true),
-        total_size(&current_sizes, true),
-    );
-    let strangler_summary = stranglers.as_ref().map(|rows| StranglerSummary {
-        rules: rows.len(),
-        regressed: rows.iter().filter(|row| row.regressed).count(),
-    });
-    let totals = Totals {
-        code,
-        tests,
-        escaping: SurfaceDelta {
-            base: base_surface.total,
-            current: current_surface.total,
-            added: escaping_added.len(),
-            removed: escaping_removed.len(),
-        },
-        upward_imports: upward.as_ref().map(|changes| {
-            let (base_sites, current_sites) = upward_sites.unwrap_or_default();
-            UpwardSummary {
-                sites: value_delta(base_sites as u64, current_sites as u64),
-                pairs_opened: changes
-                    .iter()
-                    .filter(|change| change.status == Some("opened"))
-                    .count(),
-                pairs_closed: changes
-                    .iter()
-                    .filter(|change| change.status == Some("closed"))
-                    .count(),
-            }
-        }),
-        use_edges: Movement {
-            added: use_added.len(),
-            removed: use_removed.len(),
-        },
-        reference_edges: (!args.no_index).then_some(Movement {
-            added: reference_added,
-            removed: reference_removed,
-        }),
-        files: Movement {
-            added: created.len(),
-            removed: deleted.len(),
-        },
-        newly_unresolved: unresolved_added.as_ref().map(Vec::len),
-        stranglers: strangler_summary,
+            .collect::<Result<Vec<_>>>()?
+    } else {
+        Vec::new()
     };
+    let expectations = contract.map_or_else(Vec::new, |contract| {
+        expectation_rows(
+            contract,
+            production.delta,
+            &assembly_checks,
+            &changed_outside,
+            evidence.complete(),
+        )
+    });
+    let rust_files_base = rust_file_count(base, &paths);
+    let rust_files_current = rust_file_count(current, &paths);
 
     Ok(Report {
-        version: REPORT_VERSION,
-        verb: "diff",
-        base: args.base.clone(),
-        base_commit,
-        path: args.path.clone(),
-        no_index: args.no_index,
-        parse_failures: ParseFailures {
-            base: base
-                .syntax
-                .parse_failures
-                .iter()
-                .filter(|path| path_in_scope(path, &args.path))
-                .cloned()
-                .collect(),
-            current: current
-                .syntax
-                .parse_failures
-                .iter()
-                .filter(|path| path_in_scope(path, &args.path))
-                .cloned()
-                .collect(),
-        },
-        totals,
-        modules,
-        modules_unchanged,
-        escaping: Changed {
-            added: escaping_added,
-            removed: escaping_removed,
-        },
-        upward,
-        use_edges: Changed {
-            added: use_added,
-            removed: use_removed,
-        },
-        reference_edges,
-        stranglers,
-        unresolved_added,
-        files: FilesChanged { created, deleted },
+        base: base_name,
+        paths,
+        production,
+        tests,
+        base_surface,
+        current_surface,
+        dependencies_added,
+        dependencies_removed,
+        base_dependency_counts: dependency_counts(&base_dependencies),
+        current_dependency_counts: dependency_counts(&current_dependencies),
+        interfaces,
+        rust_files_base,
+        rust_files_current,
+        changed_inside,
+        changed_outside,
+        evidence,
+        expectations,
     })
 }
 
-fn sizes(facts: &Facts, scope: &Path) -> BTreeMap<String, (u64, u64)> {
-    let mut sizes = BTreeMap::<String, (u64, u64)>::new();
-    for (path, size) in &facts.sizes {
-        if !path_in_scope(path, scope) {
-            continue;
-        }
-        let row = sizes.entry(module_for_path(path, scope)).or_default();
-        row.0 += size.code;
-        row.1 += size.tests;
-    }
-    sizes
+fn in_paths(path: &Path, paths: &[PathBuf]) -> bool {
+    paths.iter().any(|scope| in_boundary(path, scope))
 }
 
-fn total_size(sizes: &BTreeMap<String, (u64, u64)>, tests: bool) -> u64 {
-    sizes
-        .values()
-        .map(|size| if tests { size.1 } else { size.0 })
-        .sum()
+fn in_boundary(path: &Path, scope: &Path) -> bool {
+    path_in_scope(path, scope)
+        || (!scope.extension().is_some_and(|extension| extension == "rs")
+            && path == scope.with_extension("rs"))
 }
 
-fn value_delta(base: u64, current: u64) -> ValueDelta {
+fn size_delta(base: &Facts, current: &Facts, paths: &[PathBuf], tests: bool) -> ValueDelta {
+    let total = |facts: &Facts| {
+        facts
+            .sizes
+            .iter()
+            .filter(|(path, _)| in_paths(path, paths))
+            .map(|(_, size)| if tests { size.tests } else { size.code })
+            .sum::<u64>()
+    };
+    let base = total(base);
+    let current = total(current);
     ValueDelta {
         base,
         current,
@@ -609,307 +389,242 @@ fn value_delta(base: u64, current: u64) -> ValueDelta {
     }
 }
 
-fn surface_items(facts: &Facts, scope: &Path) -> SurfaceSnapshot {
-    let files = facts
-        .syntax
-        .files
+fn boundary_surfaces(facts: &Facts, paths: &[PathBuf]) -> Vec<BoundarySurface> {
+    paths
         .iter()
-        .filter(|file| path_in_scope(&file.path, scope))
-        .collect::<Vec<_>>();
-    let escaping = super::modules::escaping_items(&files, scope, &facts.mod_index);
-    let counts = escaping
-        .iter()
-        .map(|(row, items)| (row.clone(), items.len()))
-        .collect::<BTreeMap<_, _>>();
-    let total = counts.values().sum();
-    let mut items = BTreeMap::new();
-    for (row, located) in escaping {
-        for item in located {
-            items.entry(item.id.clone()).or_insert_with(|| SurfaceItem {
-                id: item.id,
-                row: row.clone(),
-                path: item.path,
-                line: item.line,
-            });
-        }
-    }
-    SurfaceSnapshot {
-        items,
-        counts,
-        total,
-    }
-}
-
-fn values_for_difference(
-    left: &BTreeMap<ItemId, SurfaceItem>,
-    right: &BTreeMap<ItemId, SurfaceItem>,
-) -> Vec<SurfaceItem> {
-    left.iter()
-        .filter(|(id, _)| !right.contains_key(*id))
-        .map(|(_, item)| item.clone())
+        .map(|scope| {
+            let files = facts
+                .syntax
+                .files
+                .iter()
+                .filter(|file| in_boundary(&file.path, scope))
+                .collect::<Vec<_>>();
+            let entry = if scope.extension().is_some_and(|extension| extension == "rs") {
+                scope.clone()
+            } else {
+                scope.join("mod.rs")
+            };
+            let module = crate_module_for_path(&entry);
+            let items = escaping_items_for_boundary(&files, &module, &facts.mod_index)
+                .into_iter()
+                .map(|item| SurfaceItem {
+                    scope: scope.clone(),
+                    id: item.id,
+                    path: item.path,
+                    line: item.line,
+                })
+                .collect();
+            BoundarySurface {
+                scope: scope.clone(),
+                items,
+            }
+        })
         .collect()
 }
 
-fn upward_edges(
+fn surface_changes(left: &[BoundarySurface], right: &[BoundarySurface]) -> Vec<SurfaceItem> {
+    left.iter()
+        .flat_map(|surface| {
+            let other_ids = right
+                .iter()
+                .find(|candidate| candidate.scope == surface.scope)
+                .into_iter()
+                .flat_map(|surface| surface.items.iter().map(|item| &item.id))
+                .collect::<BTreeSet<_>>();
+            surface
+                .items
+                .iter()
+                .filter(move |item| !other_ids.contains(&item.id))
+                .cloned()
+        })
+        .collect()
+}
+
+fn dependencies(
     facts: &Facts,
-    scope: &Path,
-    ranks: &LayerRanks,
-) -> BTreeMap<(String, String), BTreeSet<Site>> {
-    let mut edges = BTreeMap::<(String, String), BTreeSet<Site>>::new();
+    paths: &[PathBuf],
+    ranks: Option<&LayerRanks>,
+) -> BTreeMap<DependencyKey, DependencySite> {
+    let mut sites = BTreeMap::new();
     for file in facts
         .syntax
         .files
         .iter()
-        .filter(|file| path_in_scope(&file.path, scope))
+        .filter(|file| in_paths(&file.path, paths))
     {
-        for import in &file.dependencies {
-            let Some(resolved) = super::syntax::resolved_internal_import(
-                import,
+        for dependency in &file.dependencies {
+            let Some(to) = super::syntax::resolved_internal_import(
+                dependency,
                 &facts.known_modules,
                 &facts.crate_names,
             ) else {
                 continue;
             };
-            if conform::layer_direction(ranks, &file.module_path, &resolved)
-                != Some(Direction::Upward)
-            {
+            if file.module_path == to {
                 continue;
             }
-            let from = conform::top_module(&file.module_path).to_owned();
-            let to = conform::top_module(&resolved).to_owned();
-            edges.entry((from, to)).or_default().insert(Site {
+            let direction = ranks
+                .and_then(|ranks| conform::layer_direction(ranks, &file.module_path, &to))
+                .map_or("unranked", direction_label);
+            let key = DependencyKey {
+                from: file.module_path.clone(),
+                to,
                 path: file.path.clone(),
-                line: import.line,
+                item: dependency.item.clone(),
+                spelling: dependency.spelling,
+            };
+            sites.entry(key.clone()).or_insert(DependencySite {
+                key,
+                line: dependency.line,
+                direction,
             });
         }
     }
-    edges
+    sites
 }
 
-fn import_changes(
-    base: &BTreeMap<(String, String), BTreeSet<Site>>,
-    current: &BTreeMap<(String, String), BTreeSet<Site>>,
-    scope: &Path,
-) -> Vec<ImportChange> {
+fn direction_label(direction: Direction) -> &'static str {
+    match direction {
+        Direction::Downward => "downward",
+        Direction::Same => "same",
+        Direction::Upward => "upward",
+    }
+}
+
+fn difference(
+    left: &BTreeMap<DependencyKey, DependencySite>,
+    right: &BTreeMap<DependencyKey, DependencySite>,
+) -> Vec<DependencySite> {
+    left.iter()
+        .filter(|(key, _)| !right.contains_key(*key))
+        .map(|(_, site)| site.clone())
+        .collect()
+}
+
+fn dependency_counts(
+    sites: &BTreeMap<DependencyKey, DependencySite>,
+) -> BTreeMap<&'static str, usize> {
+    let mut counts = BTreeMap::new();
+    for site in sites.values() {
+        *counts.entry(site.direction).or_default() += 1;
+    }
+    counts
+}
+
+fn interface_edges(facts: &Facts, paths: &[PathBuf]) -> EdgeMap {
+    collect_reference_edges(
+        facts
+            .references
+            .as_ref()
+            .expect("diff loads required reference evidence")
+            .edges
+            .iter(),
+        paths,
+    )
+}
+
+fn collect_reference_edges<'a>(
+    edges: impl Iterator<Item = &'a Edge>,
+    paths: &[PathBuf],
+) -> EdgeMap {
+    let mut rows = EdgeMap::new();
+    for edge in edges.filter(|edge| {
+        edge.kind == EdgeKind::Reference
+            && !edge.test
+            && (in_paths(&edge.from_path, paths) ^ in_paths(&edge.to_path, paths))
+    }) {
+        let data = rows
+            .entry((edge.from.clone(), edge.to.clone()))
+            .or_default();
+        data.items.insert(edge.item.clone());
+        if let Some(function) = &edge.from_fn {
+            data.by_fn
+                .entry(FunctionId::new(&edge.from_path, function))
+                .or_default()
+                .insert(edge.item.clone());
+        }
+    }
+    rows
+}
+
+fn interface_rows(base: &EdgeMap, current: &EdgeMap) -> Vec<InterfaceRow> {
     base.keys()
         .chain(current.keys())
         .cloned()
         .collect::<BTreeSet<_>>()
         .into_iter()
-        .filter_map(|(from, to)| {
-            let base_sites = base.get(&(from.clone(), to.clone()));
-            let current_sites = current.get(&(from.clone(), to.clone()));
-            let base_count = base_sites.map_or(0, BTreeSet::len);
-            let current_count = current_sites.map_or(0, BTreeSet::len);
-            if base_count == current_count {
-                return None;
+        .map(|(from, to)| {
+            let base_data = base.get(&(from.clone(), to.clone()));
+            let current_data = current.get(&(from.clone(), to.clone()));
+            InterfaceRow {
+                from,
+                to,
+                base: base_data.map_or(0, EdgeData::assembly),
+                current: current_data.map_or(0, EdgeData::assembly),
+                base_heaviest: base_data.and_then(heaviest_label),
+                current_heaviest: current_data.and_then(heaviest_label),
             }
-            let sites = current_sites
-                .filter(|sites| !sites.is_empty())
-                .or(base_sites)
-                .into_iter()
-                .flatten()
-                .cloned()
-                .collect::<Vec<_>>();
-            let row = sites.first().map_or_else(
-                || "(root)".to_owned(),
-                |site| module_for_path(&site.path, scope),
-            );
-            Some(ImportChange {
-                from: from.clone(),
-                to: to.clone(),
-                base: base_count,
-                current: current_count,
-                delta: current_count as i64 - base_count as i64,
-                status: if base_count == 0 {
-                    Some("opened")
-                } else if current_count == 0 {
-                    Some("closed")
-                } else {
-                    None
-                },
-                sites,
-                row,
-            })
         })
         .collect()
 }
 
-#[derive(Clone, Debug, Default)]
-struct EdgeData {
-    items: BTreeSet<String>,
-    by_fn: BTreeMap<FunctionId, BTreeSet<String>>,
+fn heaviest_label(data: &EdgeData) -> Option<String> {
+    data.heaviest().map(|(function, _)| {
+        format!(
+            "{} ({}:{})",
+            function.label,
+            function.path.display(),
+            function.line
+        )
+    })
 }
 
-impl EdgeData {
-    fn assembly(&self) -> usize {
-        self.by_fn.values().map(BTreeSet::len).max().unwrap_or(0)
-    }
-}
-
-type EdgeMap = BTreeMap<(String, String), EdgeData>;
-
-fn use_edges(facts: &Facts, scope: &Path) -> EdgeMap {
-    let scope_module = crate_module_for_row(scope, "(root)");
-    let mut edges = EdgeMap::new();
-    for file in facts
-        .syntax
-        .files
+fn contract_assembly(
+    root: &Path,
+    facts: &Facts,
+    expectation: &AssemblyExpectation,
+) -> Result<usize> {
+    let from = inspect::resolve_module(
+        root,
+        &facts.syntax.files,
+        &expectation.from,
+        "contract assembly.from",
+    )?;
+    let to = inspect::resolve_module(
+        root,
+        &facts.syntax.files,
+        &expectation.to,
+        "contract assembly.to",
+    )?;
+    let mut functions = BTreeMap::<FunctionId, BTreeSet<String>>::new();
+    for edge in facts
+        .references
+        .as_ref()
+        .expect("diff loads required reference evidence")
+        .edges
         .iter()
-        .filter(|file| path_in_scope(&file.path, scope))
-    {
-        let from = module_endpoint(&file.module_path, &scope_module);
-        for import in &file.dependencies {
-            let Some(resolved) = super::syntax::resolved_internal_import(
-                import,
-                &facts.known_modules,
-                &facts.crate_names,
-            ) else {
-                continue;
-            };
-            let to = module_endpoint(&resolved, &scope_module);
-            if from != to {
-                edges
-                    .entry((from.clone(), to))
-                    .or_default()
-                    .items
-                    .insert(import.item.clone());
-            }
-        }
-    }
-    edges
-}
-
-fn reference_edges(facts: &Facts, scope: &Path) -> EdgeMap {
-    let scope_module = crate_module_for_row(scope, "(root)");
-    collect_reference_edges(
-        facts
-            .references
-            .as_ref()
-            .into_iter()
-            .flat_map(|references| &references.edges),
-        scope,
-        &scope_module,
-    )
-}
-
-fn collect_reference_edges<'a>(
-    source: impl Iterator<Item = &'a Edge>,
-    scope: &Path,
-    scope_module: &str,
-) -> EdgeMap {
-    source
         .filter(|edge| {
-            edge.kind == EdgeKind::Reference && !edge.test && path_in_scope(&edge.from_path, scope)
+            edge.kind == EdgeKind::Reference
+                && !edge.test
+                && from.matches(&edge.from, &edge.from_path)
+                && to.matches(&edge.to, &edge.to_path)
         })
-        .fold(EdgeMap::new(), |mut edges, edge| {
-            let from = module_endpoint(&edge.from, scope_module);
-            let to = module_endpoint(&edge.to, scope_module);
-            if from == to {
-                return edges;
-            }
-            let data = edges.entry((from, to)).or_default();
-            data.items.insert(edge.item.clone());
-            if let Some(function) = &edge.from_fn {
-                data.by_fn
-                    .entry(FunctionId::new(&edge.from_path, function))
-                    .or_default()
-                    .insert(edge.item.clone());
-            }
-            edges
-        })
-}
-
-fn edge_changes(left: &EdgeMap, right: &EdgeMap) -> Vec<EdgeChange> {
-    left.iter()
-        .filter_map(|((from, to), data)| {
-            let other = right
-                .get(&(from.clone(), to.clone()))
-                .map(|data| &data.items);
-            let changed = data
-                .items
-                .iter()
-                .filter(|item| other.is_none_or(|other| !other.contains(*item)))
-                .cloned()
-                .collect::<Vec<_>>();
-            (!changed.is_empty()).then(|| EdgeChange {
-                from: from.clone(),
-                to: to.clone(),
-                items: changed,
-            })
-        })
-        .collect()
-}
-
-fn reference_changes(
-    left: &EdgeMap,
-    right: &EdgeMap,
-    base: &EdgeMap,
-    current: &EdgeMap,
-) -> Vec<ReferenceChange> {
-    edge_changes(left, right)
-        .into_iter()
-        .map(|change| {
-            let key = (change.from.clone(), change.to.clone());
-            ReferenceChange {
-                base_assembly: base.get(&key).map_or(0, EdgeData::assembly),
-                current_assembly: current.get(&key).map_or(0, EdgeData::assembly),
-                from: change.from,
-                to: change.to,
-                items: change.items,
-            }
-        })
-        .collect()
-}
-
-fn assembly_deltas(base: &EdgeMap, current: &EdgeMap) -> BTreeMap<String, i64> {
-    let pairs = base
-        .keys()
-        .chain(current.keys())
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let mut deltas = BTreeMap::<String, i64>::new();
-    for pair in pairs {
-        let delta = current.get(&pair).map_or(0, EdgeData::assembly) as i64
-            - base.get(&pair).map_or(0, EdgeData::assembly) as i64;
-        let entry = deltas.entry(pair.0).or_default();
-        if delta.unsigned_abs() > entry.unsigned_abs() {
-            *entry = delta;
+    {
+        if let Some(function) = &edge.from_fn {
+            functions
+                .entry(FunctionId::new(&edge.from_path, function))
+                .or_default()
+                .insert(edge.item.clone());
         }
     }
-    deltas
-}
-
-fn rust_files(facts: &Facts, scope: &Path) -> BTreeSet<PathBuf> {
-    facts
-        .sources
-        .iter()
-        .filter(|source| path_in_scope(&source.path, scope))
-        .map(|source| source.path.clone())
-        .collect()
-}
-
-fn newly_unresolved(
-    base: &Facts,
-    current: &Facts,
-    base_surface: &BTreeMap<ItemId, SurfaceItem>,
-    current_surface: &BTreeMap<ItemId, SurfaceItem>,
-) -> Vec<SurfaceItem> {
-    let base_resolution = resolution(base);
-    let current_resolution = resolution(current);
-    base_surface
-        .keys()
-        .filter(|id| current_surface.contains_key(*id))
-        .filter(|id| base_resolution.get(*id) == Some(&true))
-        .filter(|id| current_resolution.get(*id) == Some(&false))
-        .filter_map(|id| current_surface.get(id).cloned())
-        .collect()
+    Ok(functions.values().map(BTreeSet::len).max().unwrap_or(0))
 }
 
 fn resolution(facts: &Facts) -> BTreeMap<ItemId, bool> {
-    let Some(references) = &facts.references else {
-        return BTreeMap::new();
-    };
+    let references = facts
+        .references
+        .as_ref()
+        .expect("diff loads required reference evidence");
     let mut resolution = BTreeMap::<ItemId, bool>::new();
     for file in &facts.syntax.files {
         for item in &file.pub_items {
@@ -928,448 +643,359 @@ fn resolution(facts: &Facts) -> BTreeMap<ItemId, bool> {
     resolution
 }
 
-fn strangler_changes(target: &Target, base: &Facts, current: &Facts) -> Vec<StranglerChange> {
-    target
-        .strangler
-        .iter()
-        .map(|rule| {
-            let base_sources = conform::sources_for_path(
-                &base.sources,
-                &rule.path,
-                base.sources.iter().any(|source| source.path == rule.path),
-            );
-            let current_sources = conform::sources_for_path(
-                &current.sources,
-                &rule.path,
-                current
-                    .sources
-                    .iter()
-                    .any(|source| source.path == rule.path),
-            );
-            let base_count =
-                conform::count_in_sources(&base_sources, &base.syntax.files, &rule.symbol);
-            let current_count =
-                conform::count_in_sources(&current_sources, &current.syntax.files, &rule.symbol);
-            StranglerChange {
-                symbol: rule.symbol.clone(),
-                path: rule.path.clone(),
-                base: base_count,
-                current: current_count,
-                regressed: current_count > rule.baseline,
-            }
-        })
-        .collect()
-}
-
-fn endpoint_rows(base: &Facts, current: &Facts, scope: &Path) -> BTreeMap<String, String> {
-    let scope_module = crate_module_for_row(scope, "(root)");
-    base.syntax
+fn evidence(base: &Facts, current: &Facts, paths: &[PathBuf]) -> Evidence {
+    let parse_failures = |facts: &Facts| {
+        facts
+            .syntax
+            .parse_failures
+            .iter()
+            .filter(|path| in_paths(path, paths))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let base_resolution = resolution(base);
+    let current_resolution = resolution(current);
+    let newly_unresolved = current
+        .syntax
         .files
         .iter()
-        .chain(&current.syntax.files)
-        .filter(|file| path_in_scope(&file.path, scope))
-        .map(|file| {
-            (
-                module_endpoint(&file.module_path, &scope_module),
-                module_for_path(&file.path, scope),
-            )
-        })
-        .collect()
-}
-
-fn module_rows(
-    sizes: SizeSnapshots<'_>,
-    current_surface: &SurfaceSnapshot,
-    base_surface: &SurfaceSnapshot,
-    upward: Option<&Vec<ImportChange>>,
-    references: Option<&Changed<ReferenceChange>>,
-    assembly: &BTreeMap<String, i64>,
-    endpoint_rows: &BTreeMap<String, String>,
-) -> Vec<ModuleRow> {
-    let modules = sizes
-        .current
-        .keys()
-        .chain(sizes.base.keys())
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    modules
-        .into_iter()
-        .map(|module| {
-            let current_size = sizes.current.get(&module).copied().unwrap_or_default();
-            let base_size = sizes.base.get(&module).copied().unwrap_or_default();
-            let current_ids = current_surface
-                .items
-                .iter()
-                .filter(|(_, item)| item.row == module)
-                .map(|(id, _)| id)
-                .collect::<BTreeSet<_>>();
-            let base_ids = base_surface
-                .items
-                .iter()
-                .filter(|(_, item)| item.row == module)
-                .map(|(id, _)| id)
-                .collect::<BTreeSet<_>>();
-            let upward_sites_delta = upward.map_or(0, |changes| {
-                changes
-                    .iter()
-                    .filter(|change| change.row == module)
-                    .map(|change| change.delta)
-                    .sum()
-            });
-            let references_added = references.map(|changed| {
-                changed
-                    .added
-                    .iter()
-                    .filter(|edge| endpoint_rows.get(&edge.from) == Some(&module))
-                    .count()
-            });
-            let references_removed = references.map(|changed| {
-                changed
-                    .removed
-                    .iter()
-                    .filter(|edge| endpoint_rows.get(&edge.from) == Some(&module))
-                    .count()
-            });
-            ModuleRow {
-                module: module.clone(),
-                code: current_size.0,
-                delta_code: current_size.0 as i64 - base_size.0 as i64,
-                tests: current_size.1,
-                delta_tests: current_size.1 as i64 - base_size.1 as i64,
-                escaping: current_surface
-                    .counts
-                    .get(&module)
-                    .copied()
-                    .unwrap_or_default(),
-                escaping_added: current_ids.difference(&base_ids).count(),
-                escaping_removed: base_ids.difference(&current_ids).count(),
-                upward_sites_delta,
-                references_added,
-                references_removed,
-                assembly_max_delta: references.is_some().then(|| {
-                    assembly
+        .filter(|file| in_paths(&file.path, paths))
+        .flat_map(|file| {
+            let base_resolution = &base_resolution;
+            let current_resolution = &current_resolution;
+            file.pub_items.iter().filter_map(move |item| {
+                let id = ItemId {
+                    module: item.module.clone(),
+                    kind: item.kind.clone(),
+                    name: item.name.clone(),
+                };
+                (base_resolution.get(&id) == Some(&true)
+                    && current_resolution.get(&id) == Some(&false))
+                .then(|| SurfaceItem {
+                    scope: paths
                         .iter()
-                        .filter(|(endpoint, _)| endpoint_rows.get(*endpoint) == Some(&module))
-                        .map(|(_, delta)| *delta)
-                        .max_by_key(|delta| delta.unsigned_abs())
-                        .unwrap_or_default()
-                }),
-            }
+                        .find(|scope| in_boundary(&file.path, scope))
+                        .cloned()
+                        .unwrap_or_default(),
+                    id,
+                    path: file.path.clone(),
+                    line: item.line,
+                })
+            })
         })
-        .collect()
+        .collect();
+    Evidence {
+        base_parse_failures: parse_failures(base),
+        current_parse_failures: parse_failures(current),
+        newly_unresolved,
+    }
 }
 
-#[expect(clippy::print_stdout, reason = "atlas diff report helper")]
-fn print_report(report: &Report, top: usize, markdown: bool) {
-    let title = if markdown { "# " } else { "" };
-    println!(
-        "{title}Atlas diff — {} → working tree ({})",
-        report.base,
-        report.path.display()
-    );
-    section("Totals", markdown);
-    println!(
-        "code              {:>8} → {:>8} ({:+})",
-        report.totals.code.base, report.totals.code.current, report.totals.code.delta
-    );
-    println!(
-        "tests             {:>8} → {:>8} ({:+})",
-        report.totals.tests.base, report.totals.tests.current, report.totals.tests.delta
-    );
-    println!(
-        "esc               {:>8} → {:>8} (+{} -{})",
-        report.totals.escaping.base,
-        report.totals.escaping.current,
-        report.totals.escaping.added,
-        report.totals.escaping.removed
-    );
-    if let Some(upward) = &report.totals.upward_imports {
-        println!(
-            "upward dependencies {:>7} → {:>8} ({:+}); pairs +{} -{}",
-            upward.sites.base,
-            upward.sites.current,
-            upward.sites.delta,
-            upward.pairs_opened,
-            upward.pairs_closed
-        );
-    } else {
-        println!("upward dependencies     no target configured");
-    }
-    println!(
-        "dependency sites        +{} -{}",
-        report.totals.use_edges.added, report.totals.use_edges.removed
-    );
-    if let Some(references) = &report.totals.reference_edges {
-        println!(
-            "reference edges         +{} -{}",
-            references.added, references.removed
-        );
-    }
-    println!(
-        "files                   +{} -{}",
-        report.totals.files.added, report.totals.files.removed
-    );
-    if let Some(unresolved) = report.totals.newly_unresolved {
-        println!("unresolved              +{unresolved}");
-    }
-    if let Some(stranglers) = &report.totals.stranglers {
-        println!(
-            "stranglers              {} rules, {} regressed",
-            stranglers.rules, stranglers.regressed
-        );
-    }
-    println!(
-        "parse failures           base {} current {}",
-        report.parse_failures.base.len(),
-        report.parse_failures.current.len()
-    );
-    for path in &report.parse_failures.base {
-        println!("base parse failure: {}", path.display());
-    }
-    for path in &report.parse_failures.current {
-        println!("current parse failure: {}", path.display());
-    }
-    close(markdown);
+fn rust_file_count(facts: &Facts, paths: &[PathBuf]) -> usize {
+    facts
+        .sources
+        .iter()
+        .filter(|source| in_paths(&source.path, paths))
+        .count()
+}
 
-    section("Modules", markdown);
-    println!(
-        "{:<24} {:>7} {:>7} {:>7} {:>7} {:>5} {:>9} {:>8} {:>9} {:>8}",
-        "module", "code", "Δcode", "tests", "Δtests", "esc", "Δesc", "up Δ", "refs", "asm Δ"
-    );
-    for row in report.modules.iter().take(top) {
-        let refs = row
-            .references_added
-            .zip(row.references_removed)
-            .map_or_else(
-                || "-".to_owned(),
-                |(added, removed)| format!("+{added}/-{removed}"),
-            );
-        let assembly = row
-            .assembly_max_delta
-            .map_or_else(|| "-".to_owned(), |delta| format!("{delta:+}"));
-        println!(
-            "{:<24} {:>7} {:+7} {:>7} {:+7} {:>5} {:>4}/-{:<3} {:+8} {:>9} {:>8}",
-            row.module,
-            row.code,
-            row.delta_code,
-            row.tests,
-            row.delta_tests,
-            row.escaping,
-            row.escaping_added,
-            row.escaping_removed,
-            row.upward_sites_delta,
-            refs,
-            assembly
-        );
-    }
-    if report.modules.len() > top {
-        println!("… {} more changed modules", report.modules.len() - top);
-    }
-    if report.modules_unchanged > 0 {
-        println!("{} modules unchanged", report.modules_unchanged);
-    }
-    close(markdown);
+fn split_changed_paths(
+    changed: &BTreeSet<PathBuf>,
+    paths: &[PathBuf],
+) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    changed
+        .iter()
+        .cloned()
+        .partition(|path| in_paths(path, paths))
+}
 
-    print_surface(
-        "Escaping items added",
-        &report.escaping.added,
-        top,
-        markdown,
+fn expectation_rows(
+    contract: &PassContract,
+    production_delta: i64,
+    assembly: &[AssemblyCheck],
+    changed_outside: &[PathBuf],
+    evidence_complete: bool,
+) -> Vec<ExpectationRow> {
+    let mut rows = vec![ExpectationRow {
+        assertion: "production SLOC".to_owned(),
+        landed: production_delta <= contract.max_production_sloc_delta,
+        detail: format!(
+            "delta {production_delta:+}, ceiling {:+}",
+            contract.max_production_sloc_delta
+        ),
+    }];
+    rows.extend(assembly.iter().map(|check| ExpectationRow {
+        assertion: format!(
+            "assembly {} → {}",
+            check.expectation.from, check.expectation.to
+        ),
+        landed: check.current < check.base && check.current <= check.expectation.max_items,
+        detail: format!(
+            "max/fn {} → {}, ceiling {}",
+            check.base, check.current, check.expectation.max_items
+        ),
+    }));
+    rows.push(ExpectationRow {
+        assertion: "changed paths".to_owned(),
+        landed: changed_outside.is_empty(),
+        detail: if changed_outside.is_empty() {
+            "all changes are inside contract paths".to_owned()
+        } else {
+            format!("{} outside contract paths", changed_outside.len())
+        },
+    });
+    rows.push(ExpectationRow {
+        assertion: "evidence complete".to_owned(),
+        landed: evidence_complete,
+        detail: if evidence_complete {
+            "no parse failures or newly unresolved definitions".to_owned()
+        } else {
+            "parse failures or newly unresolved definitions remain".to_owned()
+        },
+    });
+    rows
+}
+
+#[expect(clippy::print_stdout, reason = "atlas diff report helpers")]
+fn print_report(report: &Report, top: usize) {
+    println!("# Atlas diff — {} → working tree", report.base);
+    println!(
+        "\nPaths: {}",
+        bounded_names(
+            &report
+                .paths
+                .iter()
+                .map(|path| format!("`{}`", path.display()))
+                .collect::<Vec<_>>(),
+            report.paths.len(),
+        )
     );
-    print_surface(
-        "Escaping items removed",
-        &report.escaping.removed,
-        top,
-        markdown,
-    );
-    if let Some(upward) = &report.upward {
-        print_imports("Upward dependencies", upward, top, markdown);
-    }
-    print_edges(
-        "Dependency sites added",
-        &report.use_edges.added,
-        top,
-        markdown,
-    );
-    print_edges(
-        "Dependency sites removed",
-        &report.use_edges.removed,
-        top,
-        markdown,
-    );
-    if let Some(references) = &report.reference_edges {
-        print_references("Reference edges added", &references.added, top, markdown);
-        print_references(
-            "Reference edges removed",
-            &references.removed,
-            top,
-            markdown,
-        );
-    }
-    if let Some(stranglers) = &report.stranglers {
-        section("Stranglers", markdown);
-        for row in stranglers.iter().take(top) {
+    if !report.expectations.is_empty() {
+        println!("\n## Expectations\n");
+        println!("| assertion | status | evidence |");
+        println!("|---|---|---|");
+        for row in &report.expectations {
             println!(
-                "{} {}: {} → {}{}",
-                row.symbol,
-                row.path.display(),
-                row.base,
-                row.current,
-                if row.regressed { " regressed" } else { "" }
+                "| {} | {} | {} |",
+                row.assertion,
+                if row.landed { "landed" } else { "drifted" },
+                row.detail
             );
         }
-        close(markdown);
     }
-    if let Some(unresolved) = &report.unresolved_added {
-        print_surface("Newly unresolved", unresolved, top, markdown);
-    }
-    section(
-        &format!(
-            "Files (+{} -{})",
-            report.files.created.len(),
-            report.files.deleted.len()
-        ),
-        markdown,
-    );
-    for path in report.files.created.iter().take(top) {
-        println!("+{}", path.display());
-    }
-    for path in report.files.deleted.iter().take(top) {
-        println!("-{}", path.display());
-    }
-    close(markdown);
-}
 
-#[expect(clippy::print_stdout, reason = "atlas diff report helper")]
-fn section(name: &str, markdown: bool) {
-    println!("\n{}{name}", if markdown { "## " } else { "" });
-    if markdown {
-        println!("```");
-    }
-}
-
-#[expect(clippy::print_stdout, reason = "atlas diff report helper")]
-fn close(markdown: bool) {
-    if markdown {
-        println!("```");
-    }
-}
-
-#[expect(clippy::print_stdout, reason = "atlas diff report helper")]
-fn print_surface(name: &str, items: &[SurfaceItem], top: usize, markdown: bool) {
-    section(&format!("{name} ({})", items.len()), markdown);
-    for item in items.iter().take(top) {
+    println!("\n## Totals\n");
+    println!("| measure | base | current | delta |");
+    println!("|---|---:|---:|---:|");
+    print_value_row("production SLOC", &report.production);
+    print_value_row("test SLOC", &report.tests);
+    for current in &report.current_surface {
+        let base = report
+            .base_surface
+            .iter()
+            .find(|base| base.scope == current.scope)
+            .map_or(0, |base| base.items.len());
         println!(
-            "{}::{} ({}) {}:{}",
+            "| esc `{}` | {} | {} | {:+} |",
+            current.scope.display(),
+            base,
+            current.items.len(),
+            current.items.len() as i64 - base as i64
+        );
+    }
+    for direction in ["downward", "same", "upward", "unranked"] {
+        let base = report
+            .base_dependency_counts
+            .get(direction)
+            .copied()
+            .unwrap_or(0);
+        let current = report
+            .current_dependency_counts
+            .get(direction)
+            .copied()
+            .unwrap_or(0);
+        if base > 0 || current > 0 {
+            println!(
+                "| dependency sites ({direction}) | {base} | {current} | {:+} |",
+                current as i64 - base as i64
+            );
+        }
+    }
+    println!(
+        "| Rust files | {} | {} | {:+} |",
+        report.rust_files_base,
+        report.rust_files_current,
+        report.rust_files_current as i64 - report.rust_files_base as i64
+    );
+
+    println!("\n## Call-site interface\n");
+    println!("| caller → provider | max/fn | heaviest function |");
+    println!("|---|---:|---|");
+    for row in report.interfaces.iter().take(top) {
+        println!(
+            "| {} → {} | {} → {} | {} → {} |",
+            row.from,
+            row.to,
+            row.base,
+            row.current,
+            row.base_heaviest.as_deref().unwrap_or("none"),
+            row.current_heaviest.as_deref().unwrap_or("none")
+        );
+    }
+    print_omitted(report.interfaces.len(), top);
+
+    let surface_added = surface_changes(&report.current_surface, &report.base_surface);
+    let surface_removed = surface_changes(&report.base_surface, &report.current_surface);
+    println!("\n## Escaping surface\n");
+    println!("| movement | boundary | item | site |");
+    println!("|---|---|---|---|");
+    for (movement, item) in surface_added
+        .iter()
+        .map(|item| ("added", item))
+        .chain(surface_removed.iter().map(|item| ("removed", item)))
+        .take(top)
+    {
+        println!(
+            "| {movement} | `{}` | `{}::{}` | `{}:{}` |",
+            item.scope.display(),
             item.id.module,
             item.id.name,
-            item.id.kind,
             item.path.display(),
             item.line
         );
     }
-    close(markdown);
-}
+    print_omitted(surface_added.len() + surface_removed.len(), top);
 
-#[expect(clippy::print_stdout, reason = "atlas diff report helper")]
-fn print_imports(name: &str, edges: &[ImportChange], top: usize, markdown: bool) {
-    section(&format!("{name} ({})", edges.len()), markdown);
-    for edge in edges.iter().take(top) {
-        let sites = edge
-            .sites
-            .iter()
-            .take(5)
-            .map(|site| format!("{}:{}", site.path.display(), site.line))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let omitted = edge.sites.len().saturating_sub(5);
-        let omitted = if omitted == 0 {
-            String::new()
-        } else {
-            format!(" … {omitted} more")
-        };
-        let status = edge
-            .status
-            .map_or(String::new(), |status| format!(" {status}"));
+    println!("\n## Dependencies\n");
+    println!("| movement | direction | module pair | item | site |");
+    println!("|---|---|---|---|---|");
+    for (movement, site) in report
+        .dependencies_added
+        .iter()
+        .map(|site| ("added", site))
+        .chain(
+            report
+                .dependencies_removed
+                .iter()
+                .map(|site| ("removed", site)),
+        )
+        .take(top)
+    {
         println!(
-            "{} → {}: sites {} → {} ({:+}){}  {sites}{omitted}",
-            edge.from, edge.to, edge.base, edge.current, edge.delta, status
+            "| {movement} | {} | {} → {} | `{}{}` | `{}:{}` |",
+            site.direction,
+            site.key.from,
+            site.key.to,
+            site.key.item,
+            spelling_suffix(site.key.spelling),
+            site.key.path.display(),
+            site.line
         );
     }
-    close(markdown);
-}
+    print_omitted(
+        report.dependencies_added.len() + report.dependencies_removed.len(),
+        top,
+    );
 
-#[expect(clippy::print_stdout, reason = "atlas diff report helper")]
-fn print_edges(name: &str, edges: &[EdgeChange], top: usize, markdown: bool) {
-    section(&format!("{name} ({})", edges.len()), markdown);
-    for edge in edges.iter().take(top) {
+    println!("\n## Files\n");
+    println!("| location | path |");
+    println!("|---|---|");
+    for (location, path) in report
+        .changed_inside
+        .iter()
+        .map(|path| ("inside", path))
+        .chain(report.changed_outside.iter().map(|path| ("outside", path)))
+        .take(top)
+    {
+        println!("| {location} | `{}` |", path.display());
+    }
+    print_omitted(
+        report.changed_inside.len() + report.changed_outside.len(),
+        top,
+    );
+
+    println!("\n## Incomplete evidence\n");
+    if report.evidence.complete() {
+        println!("None.");
+        return;
+    }
+    for path in &report.evidence.base_parse_failures {
+        println!("- base parse failure: `{}`", path.display());
+    }
+    for path in &report.evidence.current_parse_failures {
+        println!("- current parse failure: `{}`", path.display());
+    }
+    for item in &report.evidence.newly_unresolved {
         println!(
-            "{} → {}  {}",
-            edge.from,
-            edge.to,
-            bounded_names(&edge.items, top)
+            "- newly unresolved: `{}::{}` at `{}:{}`",
+            item.id.module,
+            item.id.name,
+            item.path.display(),
+            item.line
         );
     }
-    close(markdown);
 }
 
-#[expect(clippy::print_stdout, reason = "atlas diff report helper")]
-fn print_references(name: &str, edges: &[ReferenceChange], top: usize, markdown: bool) {
-    section(&format!("{name} ({})", edges.len()), markdown);
-    for edge in edges.iter().take(top) {
-        println!(
-            "{} → {}  assembly {} → {} max/fn  {}",
-            edge.from,
-            edge.to,
-            edge.base_assembly,
-            edge.current_assembly,
-            bounded_names(&edge.items, top)
-        );
+#[expect(clippy::print_stdout, reason = "atlas diff report helpers")]
+fn print_value_row(name: &str, value: &ValueDelta) {
+    println!(
+        "| {name} | {} | {} | {:+} |",
+        value.base, value.current, value.delta
+    );
+}
+
+#[expect(clippy::print_stdout, reason = "atlas diff report helpers")]
+fn print_omitted(total: usize, top: usize) {
+    if total > top {
+        println!("\n_{} more rows omitted._", total - top);
     }
-    close(markdown);
+}
+
+fn spelling_suffix(spelling: Spelling) -> &'static str {
+    match spelling {
+        Spelling::Use => "",
+        Spelling::Qualified => " (qualified)",
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::fs;
-    use std::process::Command;
 
     use super::super::references::FnRef;
     use super::*;
 
     #[test]
-    fn diff_args_require_base_and_reject_repeated_flags() {
+    fn diff_args_require_base_and_path_or_expect() {
         assert!(parse_args(&[]).is_err());
+        assert!(parse_args(&["--base".into(), "HEAD".into()]).is_err());
         assert!(
             parse_args(&[
                 "--base".into(),
                 "HEAD".into(),
-                "--base".into(),
-                "main".into()
-            ])
-            .is_err()
-        );
-        assert!(
-            parse_args(&[
-                "--base".into(),
-                "HEAD".into(),
-                "--md".into(),
-                "--json".into()
+                "--path".into(),
+                "src".into(),
+                "--expect".into(),
+                "pass.toml".into(),
             ])
             .is_err()
         );
         assert_eq!(
-            parse_args(&["--base".into(), "HEAD~1".into()])
-                .unwrap()
-                .unwrap(),
+            parse_args(&[
+                "--base".into(),
+                "HEAD~1".into(),
+                "--path".into(),
+                "src".into(),
+            ])
+            .unwrap()
+            .unwrap(),
             Args {
-                base: "HEAD~1".to_owned(),
-                path: PathBuf::from("."),
-                file: None,
+                input: Input::Base {
+                    base: "HEAD~1".to_owned(),
+                    path: PathBuf::from("src"),
+                },
                 top: 20,
-                markdown: false,
-                json: false,
-                no_index: false,
             }
         );
     }
@@ -1380,177 +1006,123 @@ mod tests {
             reference_edge("src/a.rs", "One", Some(10)),
             reference_edge("src/a.rs", "Two", Some(10)),
             reference_edge("src/a.rs", "Three", Some(30)),
-            reference_edge("src/b.rs", "Four", Some(10)),
+            reference_edge("src/a.rs", "Four", Some(30)),
             reference_edge("src/a.rs", "Outside", None),
         ];
-        let mut current_edges = vec![
+        let current_edges = [
             reference_edge("src/a.rs", "One", Some(10)),
             reference_edge("src/a.rs", "Two", Some(10)),
             reference_edge("src/a.rs", "Three", Some(10)),
             reference_edge("src/a.rs", "Four", Some(10)),
             reference_edge("src/a.rs", "Outside", None),
         ];
-        let mut test_edge = reference_edge("src/a.rs", "TestOnly", Some(10));
-        test_edge.test = true;
-        current_edges.push(test_edge);
-        let base = collect_reference_edges(base_edges.iter(), Path::new("."), "");
-        let current = collect_reference_edges(current_edges.iter(), Path::new("."), "");
+        let paths = [PathBuf::from("src/a.rs")];
+        let base = collect_reference_edges(base_edges.iter(), &paths);
+        let current = collect_reference_edges(current_edges.iter(), &paths);
         let pair = ("caller".to_owned(), "target".to_owned());
 
         assert_eq!(base[&pair].items, current[&pair].items);
         assert_eq!(base[&pair].assembly(), 2);
         assert_eq!(current[&pair].assembly(), 4);
-        let delta = assembly_deltas(&base, &current)["caller"];
-        assert_eq!(delta, 2);
+    }
+
+    #[test]
+    fn diff_expect_requires_call_site_shrink() {
+        let contract = contract(-1);
+        let checks = [AssemblyCheck {
+            expectation: contract.assembly[0].clone(),
+            base: 4,
+            current: 4,
+        }];
+        let rows = expectation_rows(&contract, -2, &checks, &[], true);
+
+        assert!(!rows[1].landed);
+        assert!(rows[1].detail.contains("4 → 4"));
+    }
+
+    #[test]
+    fn diff_expect_enforces_negative_sloc_budget() {
+        let contract = contract(-3);
+        let checks = [AssemblyCheck {
+            expectation: contract.assembly[0].clone(),
+            base: 4,
+            current: 2,
+        }];
+
+        assert!(!expectation_rows(&contract, -2, &checks, &[], true)[0].landed);
+        assert!(expectation_rows(&contract, -3, &checks, &[], true)[0].landed);
+    }
+
+    #[test]
+    fn diff_expect_rejects_changes_outside_paths() {
+        let changed = BTreeSet::from([
+            PathBuf::from("src/store/mod.rs"),
+            PathBuf::from("README.md"),
+        ]);
+        let (_, outside) = split_changed_paths(&changed, &[PathBuf::from("src/store")]);
+        let contract = contract(-1);
+        let checks = [AssemblyCheck {
+            expectation: contract.assembly[0].clone(),
+            base: 4,
+            current: 2,
+        }];
+        let rows = expectation_rows(&contract, -2, &checks, &outside, true);
+
+        assert_eq!(outside, [PathBuf::from("README.md")]);
         assert!(
-            !ModuleRow {
-                module: "caller".to_owned(),
-                code: 0,
-                delta_code: 0,
-                tests: 0,
-                delta_tests: 0,
-                escaping: 0,
-                escaping_added: 0,
-                escaping_removed: 0,
-                upward_sites_delta: 0,
-                references_added: Some(0),
-                references_removed: Some(0),
-                assembly_max_delta: Some(delta),
-            }
-            .unchanged()
+            !rows
+                .iter()
+                .find(|row| row.assertion == "changed paths")
+                .unwrap()
+                .landed
         );
     }
 
     #[test]
-    fn diff_reports_escaping_upward_strangler_and_file_movement_without_the_index() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path();
-        run_git(root, &["init"]);
-        run_git(root, &["config", "user.email", "atlas@example.test"]);
-        run_git(root, &["config", "user.name", "Atlas Test"]);
-        fs::create_dir(root.join("src")).unwrap();
+    fn diff_reports_boundary_esc_not_leaf_sums() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("src/domain")).unwrap();
         fs::write(
-            root.join("Cargo.toml"),
+            root.path().join("Cargo.toml"),
             "[package]\nname = \"atlas-fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
         )
         .unwrap();
-        fs::write(root.join("src/lib.rs"), "pub mod cli;\npub mod store;\n").unwrap();
+        fs::write(root.path().join("src/lib.rs"), "pub mod domain;\n").unwrap();
+        fs::write(root.path().join("src/domain/mod.rs"), "mod detail;\n").unwrap();
         fs::write(
-            root.join("src/cli.rs"),
-            "pub struct Helper;\npub struct Other;\n",
+            root.path().join("src/domain/detail.rs"),
+            "pub fn helper() {}\n",
         )
         .unwrap();
-        fs::write(
-            root.join("src/store.rs"),
-            "use crate::cli::Helper;\nuse crate::cli::Other;\npub fn a() {}\npub fn b() { let _ = (Helper, Other); }\n",
-        )
-        .unwrap();
-        fs::write(
-            root.join("refactor-target.toml"),
-            "version = 5\nlayers = [[\"store\"], [\"cli\"]]\n[[strangler]]\nsymbol = \"LegacyToken\"\npath = \"src\"\nbaseline = 0\n",
-        )
-        .unwrap();
-        run_git(root, &["add", "."]);
-        run_git(root, &["commit", "-m", "base"]);
+        let facts = Facts::load(root.path(), Path::new("."), Facets::default()).unwrap();
 
-        fs::write(
-            root.join("src/store.rs"),
-            "use crate::cli::Other;\npub fn a() {}\npub fn c() { let _ = Other; }\nfn consume() { let _ = \"LegacyToken\"; }\n",
-        )
-        .unwrap();
-        fs::write(root.join("src/new.rs"), "fn new_detail() {}\n").unwrap();
-
-        let report = build_report(
-            root,
-            &Args {
-                base: "HEAD".to_owned(),
-                path: PathBuf::from("src"),
-                file: None,
-                top: 20,
-                markdown: false,
-                json: false,
-                no_index: true,
-            },
-        )
-        .unwrap();
-
-        assert_eq!(
-            report
-                .escaping
-                .added
+        let boundary = boundary_surfaces(&facts, &[PathBuf::from("src/domain")]);
+        let leaf = escaping_items_for_boundary(
+            &[facts
+                .syntax
+                .files
                 .iter()
-                .map(|item| item.id.name.as_str())
-                .collect::<Vec<_>>(),
-            ["c"]
-        );
-        assert_eq!(
-            report
-                .escaping
-                .removed
-                .iter()
-                .map(|item| item.id.name.as_str())
-                .collect::<Vec<_>>(),
-            ["b"]
-        );
-        assert_eq!(report.files.created, [PathBuf::from("src/new.rs")]);
-        assert_eq!(report.upward.as_ref().unwrap().len(), 1);
-        assert_eq!(report.upward.as_ref().unwrap()[0].base, 2);
-        assert_eq!(report.upward.as_ref().unwrap()[0].current, 1);
-        assert_eq!(report.upward.as_ref().unwrap()[0].delta, -1);
-        assert_eq!(report.upward.as_ref().unwrap()[0].status, None);
-        assert_eq!(report.stranglers.as_ref().unwrap()[0].base, 0);
-        assert_eq!(report.stranglers.as_ref().unwrap()[0].current, 1);
-        assert!(report.totals.code.delta > 0);
-
-        let created_scope = build_report(
-            root,
-            &Args {
-                path: PathBuf::from("src/new.rs"),
-                ..args_for_test()
-            },
-        )
-        .unwrap();
-        assert_eq!(created_scope.files.created, [PathBuf::from("src/new.rs")]);
-
-        let missing_target = build_report(
-            root,
-            &Args {
-                file: Some(PathBuf::from("missing-target.toml")),
-                ..args_for_test()
-            },
-        )
-        .unwrap_err();
-        assert!(
-            missing_target
-                .to_string()
-                .contains("target file `missing-target.toml` does not exist")
+                .find(|file| file.path == Path::new("src/domain/detail.rs"))
+                .unwrap()],
+            "domain::detail",
+            &facts.mod_index,
         );
 
-        fs::write(
-            root.join("src/store.rs"),
-            "pub fn a() {}\npub fn c() {}\nfn consume() { let _ = \"LegacyToken\"; }\n",
-        )
-        .unwrap();
-        let closed = build_report(root, &args_for_test()).unwrap();
-        assert_eq!(closed.upward.as_ref().unwrap()[0].status, Some("closed"));
-
-        fs::write(root.join("src/store.rs"), "pub fn broken( {\n").unwrap();
-        let unparseable = build_report(root, &args_for_test()).unwrap();
-        assert_eq!(
-            unparseable.parse_failures.current,
-            [PathBuf::from("src/store.rs")]
-        );
+        assert!(boundary[0].items.is_empty());
+        assert_eq!(leaf.len(), 1);
     }
 
-    fn args_for_test() -> Args {
-        Args {
+    fn contract(max_production_sloc_delta: i64) -> PassContract {
+        PassContract {
+            version: 1,
             base: "HEAD".to_owned(),
-            path: PathBuf::from("src"),
-            file: None,
-            top: 20,
-            markdown: false,
-            json: false,
-            no_index: true,
+            paths: vec![PathBuf::from("src")],
+            max_production_sloc_delta,
+            assembly: vec![AssemblyExpectation {
+                from: "caller".to_owned(),
+                to: "target".to_owned(),
+                max_items: 3,
+            }],
         }
     }
 
@@ -1569,18 +1141,5 @@ mod tests {
                 line,
             }),
         }
-    }
-
-    fn run_git(root: &Path, args: &[&str]) {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(root)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
     }
 }

@@ -17,12 +17,6 @@ const CACHE_SUFFIX: &str = ".scip";
 const KEY_LENGTH: usize = 16;
 const RUST_PANIC_EXIT_CODE: i32 = 101;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) enum IndexPolicy {
-    #[default]
-    Required,
-}
-
 /// Returns the SCIP index for the exact working-tree snapshot in `sources`.
 ///
 /// The cache key includes the lockfile because rust-analyzer indexes resolved

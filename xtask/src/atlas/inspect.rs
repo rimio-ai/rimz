@@ -7,7 +7,6 @@ use super::conform::{self, Direction};
 use super::detect::{self, GuardFamily};
 use super::facts::{Facets, Facts};
 use super::history::{self, Commit};
-use super::index::IndexPolicy;
 use super::modules::{
     EscapingItem, crate_module_for_path, escaping_items_for_boundary, module_is_within,
     path_in_scope, reference_module_label,
@@ -133,14 +132,14 @@ struct ItemEvidence {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct ModuleSelector {
+pub(super) struct ModuleSelector {
     module: String,
     path: Option<PathBuf>,
     directory: bool,
 }
 
 impl ModuleSelector {
-    fn matches(&self, module: &str, path: &Path) -> bool {
+    pub(super) fn matches(&self, module: &str, path: &Path) -> bool {
         if !module_is_within(module, &self.module) {
             return false;
         }
@@ -165,7 +164,7 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
         root,
         Path::new("."),
         Facets {
-            references: Some(IndexPolicy::Required),
+            references: true,
             ..Facets::default()
         },
     )?;
@@ -294,7 +293,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     }))
 }
 
-fn resolve_module(
+pub(super) fn resolve_module(
     root: &Path,
     syntax_files: &[FileSyntax],
     raw: &str,
