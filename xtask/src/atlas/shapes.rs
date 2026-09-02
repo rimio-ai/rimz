@@ -1,42 +1,13 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
-use super::facts::{Facets, Facts};
+use super::facts::Facts;
 use super::modules::{module_for_path, path_in_scope};
 use super::syntax::FnBody;
-use super::{REPORT_VERSION, finite_nonnegative, positive_usize, set_once, validate_scope, value};
 
-const DEFAULT_PATH: &str = "crates/rimz/src";
 const MIN_SHARED_CALLEES: usize = 3;
-
-const USAGE: &str =
-    "cargo xtask atlas shapes [--path <prefix>] [--top N] [--min-sloc N] [--similarity S] [--json]
-
-Clusters large functions by Jaccard similarity over the functions and methods
-they call. Generic iterator, conversion, and error-context methods are omitted,
-and a pair must share at least three callees, so the report highlights shared
-domain choreography rather than incidental loop shape.
-Functions with parallel control flow but different callees do not cluster;
-use `rank --verbose` to find those large entry points.
-Clusters spanning more modules and files rank before member-count × mean-sloc.
-
-  --path <path>   root-relative subtree (default crates/rimz/src)
-  --top N         clusters to report (default 10)
-  --min-sloc N    minimum function source lines (default 40)
-  --similarity S  Jaccard threshold from 0 through 1 (default 0.35)
-  --json          versioned JSON agent contract (v4)";
-
-#[derive(Debug)]
-struct Args {
-    path: PathBuf,
-    top: usize,
-    min_sloc: usize,
-    similarity: f64,
-    json: bool,
-}
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct Member {
@@ -64,125 +35,6 @@ pub(super) struct ShapeFamily {
     pub(super) files: usize,
     pub(super) mean_sloc: f64,
     pub(super) score: f64,
-}
-
-#[derive(Debug, Serialize)]
-struct Report {
-    version: u8,
-    verb: &'static str,
-    path: PathBuf,
-    eligible_functions: usize,
-    total_clusters: usize,
-    clusters: Vec<Cluster>,
-    parse_failures: usize,
-}
-
-#[expect(
-    clippy::print_stdout,
-    reason = "xtask atlas shapes output is a command stdout contract"
-)]
-pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
-    let Some(args) = parse_args(args)? else {
-        println!("{USAGE}");
-        return Ok(());
-    };
-    let report = build_report(root, &args)?;
-    if args.json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report).context("rendering atlas shapes JSON")?
-        );
-    } else {
-        print_report(&report);
-    }
-    Ok(())
-}
-
-fn parse_args(args: &[String]) -> Result<Option<Args>> {
-    if args.iter().any(|arg| crate::is_help_flag(arg)) {
-        return Ok(None);
-    }
-    let mut path = None;
-    let mut top = None;
-    let mut min_sloc = None;
-    let mut similarity = None;
-    let mut json = false;
-    let mut index = 0;
-    while let Some(arg) = args.get(index) {
-        match arg.as_str() {
-            "--path" => {
-                let parsed = validate_scope(value(args, index, "shapes", "--path")?, "--path")?;
-                set_once(&mut path, parsed, "shapes", "--path")?;
-                index += 2;
-            }
-            "--top" => {
-                let parsed =
-                    positive_usize(value(args, index, "shapes", "--top")?, "shapes", "--top")?;
-                set_once(&mut top, parsed, "shapes", "--top")?;
-                index += 2;
-            }
-            "--min-sloc" => {
-                let parsed = positive_usize(
-                    value(args, index, "shapes", "--min-sloc")?,
-                    "shapes",
-                    "--min-sloc",
-                )?;
-                set_once(&mut min_sloc, parsed, "shapes", "--min-sloc")?;
-                index += 2;
-            }
-            "--similarity" => {
-                let parsed = finite_nonnegative(
-                    value(args, index, "shapes", "--similarity")?,
-                    "shapes",
-                    "--similarity",
-                )?;
-                if parsed > 1.0 {
-                    bail!("atlas shapes --similarity must not exceed 1");
-                }
-                set_once(&mut similarity, parsed, "shapes", "--similarity")?;
-                index += 2;
-            }
-            "--json" if !json => {
-                json = true;
-                index += 1;
-            }
-            "--json" => bail!("atlas shapes --json may only be passed once"),
-            _ => bail!("unknown atlas shapes argument `{arg}`"),
-        }
-    }
-    Ok(Some(Args {
-        path: path.unwrap_or_else(|| PathBuf::from(DEFAULT_PATH)),
-        top: top.unwrap_or(10),
-        min_sloc: min_sloc.unwrap_or(40),
-        similarity: similarity.unwrap_or(0.35),
-        json,
-    }))
-}
-
-fn build_report(root: &Path, args: &Args) -> Result<Report> {
-    let facts = Facts::load(root, &args.path, Facets::default())?;
-    view(&facts, args)
-}
-
-fn view(facts: &Facts, args: &Args) -> Result<Report> {
-    let (eligible_functions, mut clusters) =
-        clusters(facts, &args.path, args.min_sloc, args.similarity);
-    let total_clusters = clusters.len();
-    clusters.truncate(args.top);
-    Ok(Report {
-        version: REPORT_VERSION,
-        verb: "shapes",
-        path: args.path.clone(),
-        eligible_functions,
-        total_clusters,
-        clusters,
-        parse_failures: facts
-            .syntax
-            .parse_failures
-            .iter()
-            .filter(|path| path_in_scope(path, &args.path))
-            .count(),
-    })
 }
 
 fn clusters(
@@ -316,20 +168,6 @@ fn clusters_related(left: &Cluster, right: &Cluster) -> bool {
             .take(MIN_SHARED_CALLEES)
             .count()
             >= MIN_SHARED_CALLEES
-}
-
-pub(super) fn survey_value(facts: &Facts, scope: &Path) -> Result<serde_json::Value> {
-    let report = view(
-        facts,
-        &Args {
-            path: scope.to_path_buf(),
-            top: usize::MAX,
-            min_sloc: 40,
-            similarity: 0.35,
-            json: true,
-        },
-    )?;
-    serde_json::to_value(report).context("rendering atlas shapes survey value")
 }
 
 fn sort_clusters(clusters: &mut [Cluster]) {
@@ -570,61 +408,6 @@ fn complete_linkage_groups(similarities: &[Vec<f64>], threshold: f64) -> Vec<Vec
         groups[keep].sort_unstable();
     }
     groups
-}
-
-#[expect(
-    clippy::print_stdout,
-    reason = "xtask atlas shapes report is the command's stdout contract"
-)]
-fn print_report(report: &Report) {
-    println!("Atlas shapes — {}", report.path.display());
-    for (index, cluster) in report.clusters.iter().enumerate() {
-        println!(
-            "{}. {} members across {} files / {} modules, mean {:.1} sloc, similarity floor {:.2}",
-            index + 1,
-            cluster.members.len(),
-            cluster.distinct_files,
-            cluster.distinct_modules,
-            cluster.mean_sloc,
-            cluster.similarity_floor
-        );
-        let mut calls = cluster
-            .shared_callees
-            .iter()
-            .take(8)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(", ");
-        if cluster.shared_callees.len() > 8 {
-            calls.push_str(&format!(
-                ", … +{}",
-                cluster.shared_callees.len().saturating_sub(8)
-            ));
-        }
-        println!("   calls: {calls}");
-        for member in cluster.members.iter().take(5) {
-            println!(
-                "   {}:{} {} {} sloc",
-                member.path.display(),
-                member.line,
-                member.name,
-                member.sloc
-            );
-        }
-        if cluster.members.len() > 5 {
-            println!("   … and {} more members", cluster.members.len() - 5);
-        }
-    }
-    if report.total_clusters > report.clusters.len() {
-        println!(
-            "… and {} more clusters",
-            report.total_clusters - report.clusters.len()
-        );
-    }
-    println!(
-        "total: {} eligible functions, {} clusters, {} parse failures",
-        report.eligible_functions, report.total_clusters, report.parse_failures
-    );
 }
 
 #[cfg(test)]

@@ -122,7 +122,7 @@ impl Facts {
                 };
                 Some(References::load(&path, &syntax, &sources)?)
             }
-            Some(IndexPolicy::Skip) | None => None,
+            None => None,
         };
         Ok(Self {
             root: root.to_path_buf(),

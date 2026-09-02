@@ -40,21 +40,7 @@ pub(super) struct PaceMetrics {
 
 #[derive(Debug)]
 pub(super) struct PaceReport {
-    pub(super) commits: usize,
     pub(super) modules: BTreeMap<String, PaceMetrics>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub(super) struct CochangeEdge {
-    pub(super) left: String,
-    pub(super) right: String,
-    pub(super) commits: usize,
-}
-
-#[derive(Debug)]
-pub(super) struct CochangeReport {
-    pub(super) commits: usize,
-    pub(super) edges: Vec<CochangeEdge>,
 }
 
 #[derive(Debug)]
@@ -83,12 +69,12 @@ impl Log {
         Ok(Self { commits })
     }
 
-    pub(super) fn first_time(&self) -> i64 {
-        self.commits.first().map_or(0, |commit| commit.time)
+    pub(super) fn len(&self) -> usize {
+        self.commits.len()
     }
 
-    pub(super) fn last_time(&self) -> i64 {
-        self.commits.last().map_or(0, |commit| commit.time)
+    pub(super) fn window_len(&self, pct: usize) -> usize {
+        window_size(self.commits.len(), pct)
     }
 }
 
@@ -236,86 +222,6 @@ pub(super) fn pace(
     ))
 }
 
-pub(super) fn cochange(
-    log: &Log,
-    root: &Path,
-    scope: &Path,
-    since: Option<&str>,
-    window_pct: usize,
-    max_commit_files: usize,
-) -> Result<CochangeReport> {
-    let selected;
-    let commits = if let Some(reference) = since {
-        let ids = commits_since(root, reference)?;
-        selected = log
-            .commits
-            .iter()
-            .filter(|commit| ids.contains(&commit.id))
-            .cloned()
-            .collect::<Vec<_>>();
-        selected.as_slice()
-    } else {
-        recent_window(&log.commits, window_pct)
-    };
-    Ok(CochangeReport {
-        commits: commits.len(),
-        edges: fold_cochange(commits, scope, max_commit_files),
-    })
-}
-
-fn recent_window(commits: &[Commit], window_pct: usize) -> &[Commit] {
-    let first = commits
-        .len()
-        .saturating_sub(window_size(commits.len(), window_pct));
-    &commits[first..]
-}
-
-fn fold_cochange(commits: &[Commit], scope: &Path, max_commit_files: usize) -> Vec<CochangeEdge> {
-    let mut counts = BTreeMap::<(String, String), usize>::new();
-    for commit in commits {
-        let files = commit
-            .changes
-            .iter()
-            .map(|change| match change {
-                Change::Touch(path) | Change::Delete(path) => path,
-                Change::Rename { new, .. } => new,
-            })
-            .filter(|path| path.starts_with(scope_for_matching(scope)))
-            .filter(|path| rust_module_for_path(path, scope).is_some())
-            .collect::<BTreeSet<_>>();
-        if files.len() > max_commit_files {
-            continue;
-        }
-        let modules = files
-            .into_iter()
-            .filter_map(|path| rust_module_for_path(path, scope))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        for (index, left) in modules.iter().enumerate() {
-            for right in &modules[index + 1..] {
-                *counts.entry((left.clone(), right.clone())).or_default() += 1;
-            }
-        }
-    }
-    let mut edges = counts
-        .into_iter()
-        .map(|((left, right), commits)| CochangeEdge {
-            left,
-            right,
-            commits,
-        })
-        .collect::<Vec<_>>();
-    edges.sort_by(|left, right| {
-        right
-            .commits
-            .cmp(&left.commits)
-            .then_with(|| left.left.cmp(&right.left))
-            .then_with(|| left.right.cmp(&right.right))
-    });
-    edges
-}
-
 fn git_history(root: &Path, scope: &Path) -> Result<String> {
     let mut command = Command::new("git");
     command.args([
@@ -342,25 +248,6 @@ fn git_history(root: &Path, scope: &Path) -> Result<String> {
         );
     }
     String::from_utf8(output.stdout).context("git log returned non-UTF-8 paths")
-}
-
-fn commits_since(root: &Path, reference: &str) -> Result<BTreeSet<String>> {
-    let output = Command::new("git")
-        .args(["rev-list", &format!("{reference}..HEAD")])
-        .current_dir(root)
-        .output()
-        .with_context(|| format!("listing commits since `{reference}`"))?;
-    if !output.status.success() {
-        bail!(
-            "git rev-list `{reference}..HEAD` failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    Ok(String::from_utf8(output.stdout)
-        .context("git rev-list returned non-UTF-8 commit ids")?
-        .lines()
-        .map(str::to_owned)
-        .collect())
 }
 
 fn parse_history(input: &str) -> Result<Vec<Commit>> {
@@ -487,10 +374,7 @@ fn fold_pace(
             )
         })
         .collect();
-    PaceReport {
-        commits: total,
-        modules,
-    }
+    PaceReport { modules }
 }
 
 fn window_size(commits: usize, pct: usize) -> usize {
@@ -558,7 +442,7 @@ mod tests {
     }
 
     #[test]
-    fn cochange_history_parser_preserves_renames() {
+    fn history_parser_preserves_renames() {
         let commits =
             parse_history("@a\nM\tcli/a.rs\nM\tcli/b.rs\n@b\nR100\tcli/a.rs\tcli/c.rs\n").unwrap();
         assert_eq!(commits.len(), 2);
@@ -586,7 +470,6 @@ mod tests {
         .unwrap();
 
         let report = fold_pace(root.path(), Path::new("src"), &commits, 25, 1, 1);
-        assert_eq!(report.commits, 6);
         assert_eq!(report.modules.len(), 1);
         assert_eq!(report.modules["new"].commits, 4);
     }
@@ -600,60 +483,6 @@ mod tests {
         assert!(pace_is_noisy(19, 10, 20, 5));
         assert!(pace_is_noisy(20, 4, 20, 5));
         assert!(!pace_is_noisy(20, 5, 20, 5));
-    }
-
-    #[test]
-    fn cochange_fold_counts_module_pairs_and_omits_broad_commits() {
-        let commits = parse_history(
-            "@a\nM\tsrc/a/one.rs\nM\tsrc/b/one.rs\n\
-             @b\nM\tsrc/a/two.rs\nM\tsrc/b/two.rs\n\
-             @c\nM\tsrc/a/three.rs\nM\tsrc/b/three.rs\nM\tsrc/c/three.rs\n",
-        )
-        .unwrap();
-        let edges = fold_cochange(&commits, Path::new("src"), 2);
-        assert_eq!(edges.len(), 1);
-        assert_eq!(
-            (&edges[0].left, &edges[0].right, edges[0].commits),
-            (&"a".to_owned(), &"b".to_owned(), 2)
-        );
-    }
-
-    #[test]
-    fn cochange_ignores_non_rust_test_data() {
-        let commits = parse_history(
-            "@a\nM\tsrc/a.rs\nM\tsrc/snapshots/a.snap\n\
-             @b\nM\tsrc/a.rs\nM\tsrc/b.rs\nM\tsrc/snapshots/b.snap\n",
-        )
-        .unwrap();
-
-        let edges = fold_cochange(&commits, Path::new("src"), 2);
-
-        assert_eq!(edges.len(), 1);
-        assert_eq!(
-            (&edges[0].left, &edges[0].right),
-            (&"a".into(), &"b".into())
-        );
-    }
-
-    #[test]
-    fn cochange_window_keeps_the_most_recent_commits() {
-        let commits = parse_history(
-            "@a\nM\tsrc/a/one.rs\nM\tsrc/b/one.rs\n\
-             @b\nM\tsrc/a/two.rs\nM\tsrc/b/two.rs\n\
-             @c\nM\tsrc/a/three.rs\nM\tsrc/b/three.rs\n\
-             @d\nM\tsrc/a/four.rs\nM\tsrc/c/four.rs\n",
-        )
-        .unwrap();
-
-        let recent = recent_window(&commits, 25);
-        let edges = fold_cochange(recent, Path::new("src"), 10);
-
-        assert_eq!(recent.len(), 1);
-        assert_eq!(edges.len(), 1);
-        assert_eq!(
-            (&edges[0].left, &edges[0].right),
-            (&"a".into(), &"c".into())
-        );
     }
 
     fn run_git(root: &Path, args: &[&str]) {
