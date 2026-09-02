@@ -14,7 +14,7 @@ expression: screen
 ▌  store refactor                                    ▐
 ▌  ▣ ━━━━━━━━━━━━━╺━╺────────────────────────── 38.2%▐
 ▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                      ▐
-▌  ⧉ subagents (2)                                   ▐
+▌  ⧉ subagents (2)                              $0.42▐
 ▌    ✓ Explore — locate the render seam         $0.42▐
 ▌      ◇ 12k · Opus 4.8  · high                      ▐
 ▌    ⠁ review — audit the trust hash                 ▐

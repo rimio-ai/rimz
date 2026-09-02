@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use jiff::Timestamp;
 use tracing::debug;
 
-use crate::agents::{AgentState, AgentStatus};
+use crate::agents::{AgentSessionUsage, AgentState, AgentStatus};
 use crate::store::snapshot::row::{SidebarRow, SidebarSubAgent};
 
 use super::super::layout::cmp_start_asc;
@@ -69,12 +69,20 @@ pub(super) fn attach_sub_agents_indexed(
         let parent = rows[row_index]
             .as_agent_mut()
             .expect("row index contains only agent rows");
-        parent.delegated_cost_usd = all_newest
-            .values()
-            .filter(|child| child.is_launched_child())
-            .fold(None, |total, child| {
-                crate::agents::spending::sum_optional_cost(total, child_cost_usd(child))
-            });
+        let mut delegated_cost_usd = None;
+        let mut sub_agent_cost_usd = None;
+        for child in all_newest.values() {
+            let cost_usd = child_cost_usd(child);
+            sub_agent_cost_usd =
+                crate::agents::spending::sum_optional_cost(sub_agent_cost_usd, cost_usd);
+            if child.is_launched_child() {
+                delegated_cost_usd =
+                    crate::agents::spending::sum_optional_cost(delegated_cost_usd, cost_usd);
+            }
+        }
+        parent.delegated_cost_usd = delegated_cost_usd;
+        parent.sub_agent_count = u32::try_from(all_newest.len()).unwrap_or(u32::MAX);
+        parent.sub_agent_cost_usd = sub_agent_cost_usd;
         parent.sub_agents.extend(
             visible_newest
                 .into_values()
@@ -239,13 +247,27 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
             .subagent_description
             .clone()
             .or_else(|| child.description.clone()),
-        total_tokens: child.usage.total_tokens,
+        total_tokens: child_total_tokens(child),
         cost_usd: child_cost_usd(child),
         elapsed_secs,
         started_at,
         last_activity: child.last_activity,
         registered_at: child.registered_at,
     }
+}
+
+/// A pane-backed child's spend fold carries cumulative session counters; the
+/// hook-reported total fills in before that fold lands or for providers that do
+/// not produce one.
+fn child_total_tokens(child: &AgentState) -> Option<u64> {
+    child
+        .context
+        .as_ref()
+        .and_then(|context| context.tokens.as_ref())
+        .and_then(|tokens| tokens.session_usage.as_ref())
+        .map(AgentSessionUsage::displayed_total_tokens)
+        .filter(|total| *total > 0)
+        .or(child.usage.total_tokens)
 }
 
 fn child_cost_usd(child: &AgentState) -> Option<f64> {

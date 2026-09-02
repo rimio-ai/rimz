@@ -100,7 +100,9 @@ fn build_adversarial_snapshot(
                 card.description = Some(spec.text.clone());
                 card.model = Some(spec.text.clone());
                 card.effort = Some(spec.text.clone());
-                card.sub_agents = sub_agents(spec.sub_agents, &spec.text);
+                let sub_agents = sub_agents(spec.sub_agents, &spec.text);
+                card.sub_agent_count = sub_agents.len() as u32;
+                card.sub_agents = sub_agents;
                 card.turn_error_label = Some(spec.text.clone());
             }
         }

@@ -15,7 +15,7 @@ expression: strip_sgr(&ansi)
 ▌  plan router cutover                               ▐
 ▌  󰕰 ━━━━━━━━━━━━━╺━╺──────────────────────────   18%▐
 ▌  󰿦 183k · 󱥸 157k  18k  7k  22k             󰪠 22m▐
-▌   subagents (5)                                   ▐
+▌   subagents (5)                              $1.05▐
 ▌     Explore — trace handler graph            $0.34▐
 ▌       20k · Haiku · xhigh                         ▐
 ▌     Explore — exercise auth edge cases       $0.27▐

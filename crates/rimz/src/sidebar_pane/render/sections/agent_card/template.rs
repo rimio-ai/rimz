@@ -42,6 +42,9 @@ pub(super) enum CardSlot {
     AwaitingDots,
     Gauge,
     Tokens,
+    /// Standing lifetime child count and cost; data keeps it empty until this
+    /// session has spawned a child.
+    SubagentStats,
     Subagents,
 }
 
@@ -56,12 +59,14 @@ const ENGAGED: &[CardSlot] = &[
     CardSlot::Description,
     CardSlot::Gauge,
     CardSlot::Tokens,
+    CardSlot::SubagentStats,
 ];
 const ENGAGED_WITH_SUBAGENTS: &[CardSlot] = &[
     CardSlot::Identity,
     CardSlot::Description,
     CardSlot::Gauge,
     CardSlot::Tokens,
+    CardSlot::SubagentStats,
     CardSlot::Subagents,
 ];
 
@@ -162,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn fresh_templates_never_gain_token_stats() {
+    fn fresh_templates_never_gain_session_stats() {
         for stage in [
             CardStage::Fresh { labeled: false },
             CardStage::Fresh { labeled: true },
@@ -170,9 +175,10 @@ mod tests {
             for status in STATUSES {
                 for density in DENSITIES {
                     for expanded in [false, true] {
-                        assert!(
-                            !template(stage, status, density, expanded).contains(&CardSlot::Tokens)
-                        );
+                        let template = template(stage, status, density, expanded);
+                        assert!(!template.contains(&CardSlot::Tokens));
+                        assert!(!template.contains(&CardSlot::SubagentStats));
+                        assert!(!template.contains(&CardSlot::Subagents));
                     }
                 }
             }

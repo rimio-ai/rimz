@@ -88,7 +88,45 @@ fn launched_child_projects_profile_cost_and_lifetime_delegated_spend() {
     attach_sub_agents(&mut rows, &[parent, child, native], epoch());
     let card = rows[0].as_agent().expect("parent card");
     assert!(card.sub_agents.iter().all(|child| child.id != "child"));
+    assert_eq!(card.sub_agent_count, 2);
+    assert!((card.sub_agent_cost_usd.expect("known child cost") - 0.67).abs() < 1e-9);
     assert_eq!(card.delegated_cost_usd, Some(0.42));
+}
+
+#[test]
+fn launched_child_tokens_prefer_the_cumulative_session_fold() {
+    let mut child = agent("codex", "child", AgentStatus::Running, 0);
+    child.parent_agent_id = Some("root".into());
+    child.launch_depth = Some(1);
+    child.usage.total_tokens = Some(12_000);
+    let mut context = crate::agents::AgentContext::new("codex", epoch());
+    context.tokens = Some(crate::agents::AgentTokenUsage {
+        session_usage: Some(crate::agents::AgentSessionUsage {
+            input_tokens: Some(30_000),
+            output_tokens: Some(5_000),
+            cache_creation_input_tokens: Some(2_000),
+            cache_read_input_tokens: Some(200_000),
+            ..crate::agents::AgentSessionUsage::default()
+        }),
+        ..crate::agents::AgentTokenUsage::default()
+    });
+    child.context = Some(context);
+
+    assert_eq!(
+        sub_agent_from_state(&child, epoch()).total_tokens,
+        Some(37_000)
+    );
+
+    child
+        .context
+        .as_mut()
+        .and_then(|context| context.tokens.as_mut())
+        .expect("child token context")
+        .session_usage = None;
+    assert_eq!(
+        sub_agent_from_state(&child, epoch()).total_tokens,
+        Some(12_000)
+    );
 }
 
 #[test]
@@ -164,6 +202,11 @@ fn sub_agent_retention_tracks_the_parent_turn_boundary() {
         let mut rows = vec![row_from_agent(&parent, epoch())];
         attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
         assert_eq!(!rows[0].sub_agents().is_empty(), expect_kept, "{label}");
+        assert_eq!(
+            rows[0].as_agent().expect("parent card").sub_agent_count,
+            1,
+            "{label}"
+        );
     }
 }
 
