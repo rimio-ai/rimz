@@ -34,6 +34,7 @@ pub(super) struct ShapeFamily {
     pub(super) members: Vec<Member>,
     pub(super) files: usize,
     pub(super) mean_sloc: f64,
+    pub(super) sloc_in_play: f64,
     pub(super) score: f64,
     /// Distinct member files that occupy the same role in sibling
     /// directories (`agents/adapters/*/spend.rs`): parallel implementations
@@ -41,6 +42,12 @@ pub(super) struct ShapeFamily {
     pub(super) siblings: usize,
     /// The sibling role pattern behind `siblings`, when there is one.
     pub(super) role: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+pub(super) struct FamilyDrops {
+    pub(super) vocabulary: usize,
+    pub(super) below_gate: usize,
 }
 
 fn clusters(
@@ -86,28 +93,61 @@ pub(super) fn families(facts: &Facts, scope: &Path) -> Vec<ShapeFamily> {
 /// Shape families keyed by crate vocabulary, ranked sibling roles first,
 /// beside the count of families dropped because their key named only std
 /// or external vocabulary.
-pub(super) fn families_with_dropped(facts: &Facts, scope: &Path) -> (Vec<ShapeFamily>, usize) {
+pub(super) fn families_with_dropped(
+    facts: &Facts,
+    scope: &Path,
+) -> (Vec<ShapeFamily>, FamilyDrops) {
+    family_report(facts, scope, false)
+}
+
+/// Every candidate family, including std vocabulary and families below the
+/// finding gate, alongside the counts the default report omits.
+pub(super) fn families_all_with_dropped(
+    facts: &Facts,
+    scope: &Path,
+) -> (Vec<ShapeFamily>, FamilyDrops) {
+    family_report(facts, scope, true)
+}
+
+fn family_report(
+    facts: &Facts,
+    scope: &Path,
+    include_all: bool,
+) -> (Vec<ShapeFamily>, FamilyDrops) {
     let (_, clusters) = clusters(facts, scope, 40, 0.35);
     let all = merge_families(clusters);
-    let total = all.len();
+    let mut drops = FamilyDrops::default();
     let mut families = all
         .into_iter()
         .filter(|family| {
-            family
+            let crate_vocabulary = family
                 .name
                 .split('+')
-                .any(|callee| is_crate_vocabulary(callee, &facts.defined_names))
+                .any(|callee| is_crate_vocabulary(callee, &facts.defined_names));
+            if !crate_vocabulary {
+                drops.vocabulary += 1;
+            } else if !passes_finding_gate(family) {
+                drops.below_gate += 1;
+            }
+            include_all || (crate_vocabulary && passes_finding_gate(family))
         })
         .collect::<Vec<_>>();
+    sort_families(&mut families);
+    (families, drops)
+}
+
+fn passes_finding_gate(family: &ShapeFamily) -> bool {
+    family.siblings >= 2 || (family.files >= 3 && family.mean_sloc >= 40.0)
+}
+
+fn sort_families(families: &mut [ShapeFamily]) {
     families.sort_by(|left, right| {
         right
             .siblings
             .cmp(&left.siblings)
-            .then_with(|| right.score.total_cmp(&left.score))
+            .then_with(|| right.sloc_in_play.total_cmp(&left.sloc_in_play))
             .then_with(|| left.name.cmp(&right.name))
     });
-    let dropped = total - families.len();
-    (families, dropped)
 }
 
 /// Whether one family-key callee names something the crate defines: a
@@ -336,6 +376,7 @@ fn merge_families(clusters: Vec<Cluster>) -> Vec<ShapeFamily> {
             ShapeFamily {
                 name,
                 score: files as f64 * mean_sloc,
+                sloc_in_play: members.len() as f64 * mean_sloc,
                 members,
                 files,
                 mean_sloc,
@@ -862,6 +903,54 @@ mod tests {
         assert_eq!(
             sibling_role(&[member("src/a.rs"), member("src/b.rs")]),
             (0, None)
+        );
+    }
+
+    #[test]
+    fn finding_gate_requires_siblings_or_three_substantial_files() {
+        let family = |files, mean_sloc, siblings| ShapeFamily {
+            name: "shape".to_owned(),
+            members: Vec::new(),
+            files,
+            mean_sloc,
+            sloc_in_play: 0.0,
+            score: 0.0,
+            siblings,
+            role: None,
+        };
+
+        assert!(passes_finding_gate(&family(1, 20.0, 2)));
+        assert!(passes_finding_gate(&family(3, 40.0, 0)));
+        assert!(!passes_finding_gate(&family(2, 100.0, 0)));
+        assert!(!passes_finding_gate(&family(3, 39.9, 0)));
+    }
+
+    #[test]
+    fn finding_families_rank_by_siblings_then_sloc_in_play() {
+        let family = |name: &str, siblings, sloc_in_play| ShapeFamily {
+            name: name.to_owned(),
+            members: Vec::new(),
+            files: 3,
+            mean_sloc: 40.0,
+            sloc_in_play,
+            score: 0.0,
+            siblings,
+            role: None,
+        };
+        let mut families = vec![
+            family("large", 2, 500.0),
+            family("small", 3, 100.0),
+            family("medium", 2, 300.0),
+        ];
+
+        sort_families(&mut families);
+
+        assert_eq!(
+            families
+                .iter()
+                .map(|family| family.name.as_str())
+                .collect::<Vec<_>>(),
+            ["small", "large", "medium"]
         );
     }
 

@@ -30,6 +30,12 @@ pub(super) struct GuardFamily {
     pub(super) locations: Vec<GuardSite>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+pub(super) struct GuardDrops {
+    pub(super) vocabulary: usize,
+    pub(super) predicate_use: usize,
+}
+
 pub(super) fn passthroughs(facts: &Facts, scope: &Path) -> Vec<PassThrough> {
     let mut rows = facts
         .syntax
@@ -64,7 +70,22 @@ pub(super) fn guard_families(facts: &Facts, scope: &Path) -> Vec<GuardFamily> {
 pub(super) fn guard_families_with_dropped(
     facts: &Facts,
     scope: &Path,
-) -> (Vec<GuardFamily>, usize) {
+) -> (Vec<GuardFamily>, GuardDrops) {
+    guard_family_report(facts, scope, false)
+}
+
+pub(super) fn guard_families_all_with_dropped(
+    facts: &Facts,
+    scope: &Path,
+) -> (Vec<GuardFamily>, GuardDrops) {
+    guard_family_report(facts, scope, true)
+}
+
+fn guard_family_report(
+    facts: &Facts,
+    scope: &Path,
+    include_all: bool,
+) -> (Vec<GuardFamily>, GuardDrops) {
     let mut groups = BTreeMap::<String, Vec<GuardSite>>::new();
     for guard in facts
         .syntax
@@ -82,7 +103,7 @@ pub(super) fn guard_families_with_dropped(
                 kind: guard.kind.clone(),
             });
     }
-    let mut dropped = 0;
+    let mut dropped = GuardDrops::default();
     let mut families = groups
         .into_iter()
         .filter_map(|(key, mut locations)| {
@@ -99,8 +120,13 @@ pub(super) fn guard_families_with_dropped(
             if files < 3 {
                 return None;
             }
-            if !is_domain_guard(&key, &facts.defined_names) {
-                dropped += 1;
+            let classification = classify_guard(&key, &facts.defined_names);
+            match classification {
+                GuardClassification::Vocabulary => dropped.vocabulary += 1,
+                GuardClassification::PredicateUse => dropped.predicate_use += 1,
+                GuardClassification::Composed => {}
+            }
+            if !include_all && classification != GuardClassification::Composed {
                 return None;
             }
             Some(GuardFamily {
@@ -122,8 +148,7 @@ pub(super) fn guard_families_with_dropped(
 }
 
 /// Method and type names the crate also defines but that read as std
-/// vocabulary at a guard site; a guard needs another crate-defined name to
-/// count as domain knowledge.
+/// vocabulary at a guard site; they do not contribute to crate composition.
 const STD_IDENTIFIERS: &[&str] = &[
     "is_empty",
     "len",
@@ -212,10 +237,22 @@ const STD_IDENTIFIERS: &[&str] = &[
     "is_whitespace",
 ];
 
-/// Identifiers a normalized guard key names as a call, field, or path
-/// segment: `$0.parent_agent_id.is_some()` names `parent_agent_id` and
-/// `is_some`; alpha-renamed bindings (`$0`) are not names.
-pub(super) fn named_identifiers(key: &str) -> Vec<&str> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum IdentifierRole {
+    Method,
+    Field,
+    Path,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct NamedIdentifier<'a> {
+    pub(super) name: &'a str,
+    pub(super) role: IdentifierRole,
+}
+
+/// Identifiers a normalized guard key names and the role each occupies.
+/// Alpha-renamed bindings (`$0`) are not names.
+pub(super) fn named_identifier_roles(key: &str) -> Vec<NamedIdentifier<'_>> {
     let mut names = Vec::new();
     let mut identifiers = key.char_indices().peekable();
     while let Some((start, first)) = identifiers.next() {
@@ -232,40 +269,90 @@ pub(super) fn named_identifiers(key: &str) -> Vec<&str> {
         }
         let before = &key[..start];
         let after = &key[end..];
-        let named = before.ends_with('.')
-            || after.starts_with('(')
-            || before.ends_with("::")
-            || after.starts_with("::");
-        if named {
-            names.push(&key[start..end]);
+        let role = if before.ends_with("::") || after.starts_with("::") {
+            Some(IdentifierRole::Path)
+        } else if after.starts_with('(') {
+            Some(IdentifierRole::Method)
+        } else if before.ends_with('.') {
+            Some(IdentifierRole::Field)
+        } else {
+            None
+        };
+        if let Some(role) = role {
+            names.push(NamedIdentifier {
+                name: &key[start..end],
+                role,
+            });
         }
     }
     names
+}
+
+/// Names-only compatibility view used by inspect's target matching.
+pub(super) fn named_identifiers(key: &str) -> Vec<&str> {
+    named_identifier_roles(key)
+        .into_iter()
+        .map(|identifier| identifier.name)
+        .collect()
 }
 
 pub(super) fn is_std_identifier(name: &str) -> bool {
     STD_IDENTIFIERS.contains(&name)
 }
 
-/// A guard is domain knowledge when it names something the crate defines;
-/// a guard built only from std and external vocabulary is idiom.
-fn is_domain_guard(key: &str, defined_names: &BTreeSet<String>) -> bool {
-    named_identifiers(key)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GuardClassification {
+    Vocabulary,
+    PredicateUse,
+    Composed,
+}
+
+/// A guard duplicates knowledge only when it composes crate vocabulary.
+/// Naming one crate-defined method is merely using its predicate.
+fn classify_guard(key: &str, defined_names: &BTreeSet<String>) -> GuardClassification {
+    let identifiers = named_identifier_roles(key)
         .into_iter()
-        .any(|name| !is_std_identifier(name) && defined_names.contains(name))
+        .filter(|identifier| {
+            !is_std_identifier(identifier.name) && defined_names.contains(identifier.name)
+        })
+        .collect::<Vec<_>>();
+    let distinct = identifiers
+        .iter()
+        .map(|identifier| identifier.name)
+        .collect::<BTreeSet<_>>();
+    if distinct.is_empty() {
+        GuardClassification::Vocabulary
+    } else if distinct.len() >= 2
+        || identifiers.iter().any(|identifier| {
+            matches!(
+                identifier.role,
+                IdentifierRole::Field | IdentifierRole::Path
+            )
+        })
+    {
+        GuardClassification::Composed
+    } else {
+        GuardClassification::PredicateUse
+    }
+}
+
+#[cfg(test)]
+fn is_domain_guard(key: &str, defined_names: &BTreeSet<String>) -> bool {
+    classify_guard(key, defined_names) == GuardClassification::Composed
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{is_domain_guard, named_identifiers};
+    use super::{IdentifierRole, is_domain_guard, named_identifier_roles, named_identifiers};
 
     #[test]
     fn domain_guards_require_a_crate_defined_named_identifier() {
         let defined = [
             "parent_agent_id",
             "is_provider_subagent",
+            "needs_attention",
             "ValueRefreshKind",
         ]
         .map(str::to_owned)
@@ -276,11 +363,25 @@ mod tests {
         assert!(!is_domain_guard("$0Some($1)=$2", &defined));
         assert!(!is_domain_guard("$0.kind()==ErrorKind::NotFound", &defined));
         assert!(is_domain_guard("$0.parent_agent_id.is_some()", &defined));
-        assert!(is_domain_guard("$0.is_provider_subagent()", &defined));
+        assert!(!is_domain_guard("$0.is_provider_subagent()", &defined));
+        assert!(is_domain_guard(
+            "$0.is_provider_subagent()&&$1.needs_attention()",
+            &defined
+        ));
         assert!(is_domain_guard(
             "$0.kind()!=ValueRefreshKind::Cached",
             &defined
         ));
+    }
+
+    #[test]
+    fn single_crate_predicate_use_is_not_duplicated_knowledge() {
+        let defined = ["is_provider_subagent"]
+            .map(str::to_owned)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+
+        assert!(!is_domain_guard("$0.is_provider_subagent()", &defined));
     }
 
     #[test]
@@ -302,6 +403,36 @@ mod tests {
         assert_eq!(
             named_identifiers("$0.status.is_terminal()"),
             ["status", "is_terminal"]
+        );
+        assert_eq!(
+            named_identifier_roles("$0.parent_agent_id.is_some()"),
+            [
+                super::NamedIdentifier {
+                    name: "parent_agent_id",
+                    role: IdentifierRole::Field,
+                },
+                super::NamedIdentifier {
+                    name: "is_some",
+                    role: IdentifierRole::Method,
+                },
+            ]
+        );
+        assert_eq!(
+            named_identifier_roles("$0.kind()!=ValueRefreshKind::Cached"),
+            [
+                super::NamedIdentifier {
+                    name: "kind",
+                    role: IdentifierRole::Method,
+                },
+                super::NamedIdentifier {
+                    name: "ValueRefreshKind",
+                    role: IdentifierRole::Path,
+                },
+                super::NamedIdentifier {
+                    name: "Cached",
+                    role: IdentifierRole::Path,
+                },
+            ]
         );
     }
 }

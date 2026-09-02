@@ -19,7 +19,7 @@ fn rows_are_ranked_by_churn_weighted_size() {
         row("cold-low-cx", 2_000, 0.0, 1.0),
     ];
 
-    sort_rows(&mut rows);
+    sort_rows(&mut rows, RankBy::Accretion);
 
     assert_eq!(
         rows.iter()
@@ -27,6 +27,107 @@ fn rows_are_ranked_by_churn_weighted_size() {
             .collect::<Vec<_>>(),
         ["large-warm", "small-hot", "cold", "cold-low-cx"]
     );
+}
+
+#[test]
+fn rows_can_be_ranked_by_tc_with_thinnest_tests_first() {
+    let row = |module: &str, code, tests| Row {
+        module: module.to_owned(),
+        code,
+        tests,
+        ..Row::default()
+    };
+    let mut rows = vec![
+        row("well-tested", 100, 80),
+        row("thin", 200, 10),
+        row("medium", 100, 30),
+    ];
+
+    sort_rows(&mut rows, RankBy::parse("tc").unwrap());
+
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.module.as_str())
+            .collect::<Vec<_>>(),
+        ["thin", "medium", "well-tested"]
+    );
+}
+
+#[test]
+fn top_complexity_decile_is_flagged() {
+    let mut rows = (1..=10)
+        .map(|cx| Row {
+            module: format!("module-{cx}"),
+            cx: cx as f64,
+            ..Row::default()
+        })
+        .collect::<Vec<_>>();
+
+    add_outlier_flags(&mut rows);
+
+    assert!(rows[9].flags.contains(&"cx"));
+    assert!(!rows[8].flags.contains(&"cx"));
+}
+
+#[test]
+fn large_modules_with_thin_tests_are_flagged() {
+    let mut rows = vec![
+        Row {
+            module: "thin".to_owned(),
+            code: 200,
+            tests: 59,
+            ..Row::default()
+        },
+        Row {
+            module: "small".to_owned(),
+            code: 199,
+            tests: 0,
+            ..Row::default()
+        },
+        Row {
+            module: "covered".to_owned(),
+            code: 200,
+            tests: 60,
+            ..Row::default()
+        },
+    ];
+
+    add_outlier_flags(&mut rows);
+
+    assert!(rows[0].flags.contains(&"thin"));
+    assert!(!rows[1].flags.contains(&"thin"));
+    assert!(!rows[2].flags.contains(&"thin"));
+}
+
+#[test]
+fn file_churn_can_make_lower_complexity_function_hotter() {
+    let function = |name: &str, path: &str, score| super::super::metrics::FunctionMetric {
+        module: "fixture".to_owned(),
+        path: PathBuf::from(path),
+        name: name.to_owned(),
+        line: 10,
+        cyclomatic: 0.0,
+        cognitive: 0.0,
+        sloc: 0.0,
+        score,
+    };
+    let metrics = MetricsReport {
+        module_scores: BTreeMap::new(),
+        functions: vec![
+            function("complex", "src/stable.rs", 10.0),
+            function("churning", "src/churning.rs", 5.0),
+        ],
+    };
+    let shares = BTreeMap::from([
+        (PathBuf::from("src/stable.rs"), 0.1),
+        (PathBuf::from("src/churning.rs"), 0.5),
+    ]);
+
+    let hotspots = hotspots(&metrics, &shares);
+
+    assert_eq!(hotspots[0].function, "churning");
+    assert_eq!(hotspots[0].hot, 250.0);
+    assert_eq!(hotspots[1].hot, 100.0);
 }
 
 #[test]
@@ -127,7 +228,7 @@ fn split_leaves_replace_the_parent_and_consume_top() {
         references: None,
     };
 
-    let rows = rows(&facts, Path::new("src")).unwrap();
+    let rows = rows_by(&facts, Path::new("src"), RankBy::Accretion).unwrap();
 
     assert_eq!(rows.len(), 3);
     assert!(rows.iter().all(|row| row.module != "large"));

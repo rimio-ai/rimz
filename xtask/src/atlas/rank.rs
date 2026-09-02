@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
 
 use super::facts::{Facts, FileSize};
 use super::history;
+use super::metrics::MetricsReport;
 use super::modules::{
     crate_module_for_row, escaping_items, escaping_items_for_boundary, module_for_path,
     path_in_scope,
@@ -18,8 +19,37 @@ const NOISE_WINDOW: usize = 5;
 const PIN_CHURN: f64 = 3.0;
 const PIN_TEST_CODE: f64 = 0.30;
 const HOT_PACE: f64 = 1.5;
+const THIN_TEST_CODE: f64 = 0.30;
+const THIN_MIN_CODE: u64 = 200;
+const CX_DECILE: usize = 10;
 
 type Size = FileSize;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum RankBy {
+    #[default]
+    Accretion,
+    Code,
+    Esc,
+    Churn,
+    Pace,
+    Cx,
+    TestCode,
+}
+
+impl RankBy {
+    pub(super) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "code" => Some(Self::Code),
+            "esc" => Some(Self::Esc),
+            "churn" => Some(Self::Churn),
+            "pace" => Some(Self::Pace),
+            "cx" => Some(Self::Cx),
+            "tc" => Some(Self::TestCode),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub(super) struct Row {
@@ -41,9 +71,20 @@ pub(super) struct Totals {
     pub(super) cx: f64,
 }
 
-pub(super) fn rows(facts: &Facts, scope: &Path) -> Result<Vec<Row>> {
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub(super) struct Hotspot {
+    pub(super) function: String,
+    pub(super) path: PathBuf,
+    pub(super) line: u64,
+    pub(super) cx: f64,
+    pub(super) churn: f64,
+    pub(super) hot: f64,
+}
+
+pub(super) fn rows_by(facts: &Facts, scope: &Path, by: RankBy) -> Result<Vec<Row>> {
     let mut rows = split_rows(facts, scope, "")?;
-    sort_rows(&mut rows);
+    add_outlier_flags(&mut rows);
+    sort_rows(&mut rows, by);
     Ok(rows)
 }
 
@@ -55,6 +96,38 @@ pub(super) fn totals(rows: &[Row]) -> Totals {
         totals.cx += row.cx;
         totals
     })
+}
+
+pub(super) fn hotspots(
+    metrics: &MetricsReport,
+    file_shares: &BTreeMap<PathBuf, f64>,
+) -> Vec<Hotspot> {
+    let mut rows = metrics
+        .functions
+        .iter()
+        .filter(|function| function.score > 0.0)
+        .map(|function| {
+            let churn = file_shares.get(&function.path).copied().unwrap_or(0.0) * 100.0;
+            Hotspot {
+                function: function.name.clone(),
+                path: function.path.clone(),
+                line: function.line,
+                cx: function.score,
+                churn,
+                hot: function.score * churn,
+            }
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        right
+            .hot
+            .total_cmp(&left.hot)
+            .then_with(|| right.cx.total_cmp(&left.cx))
+            .then_with(|| left.path.cmp(&right.path))
+            .then_with(|| left.line.cmp(&right.line))
+            .then_with(|| left.function.cmp(&right.function))
+    });
+    rows
 }
 
 fn split_rows(facts: &Facts, scope: &Path, prefix: &str) -> Result<Vec<Row>> {
@@ -197,6 +270,30 @@ fn is_pinned(churn: f64, test_code_ratio: Option<f64>) -> bool {
     churn >= PIN_CHURN && test_code_ratio.is_some_and(|ratio| ratio < PIN_TEST_CODE)
 }
 
+fn add_outlier_flags(rows: &mut [Row]) {
+    let mut positive_cx = rows
+        .iter()
+        .map(|row| row.cx)
+        .filter(|cx| *cx > 0.0)
+        .collect::<Vec<_>>();
+    positive_cx.sort_by(|left, right| right.total_cmp(left));
+    let cx_threshold = positive_cx
+        .len()
+        .checked_sub(1)
+        .map(|_| positive_cx.len().div_ceil(CX_DECILE))
+        .and_then(|count| positive_cx.get(count.saturating_sub(1)))
+        .copied();
+    for row in rows {
+        if cx_threshold.is_some_and(|threshold| row.cx >= threshold) {
+            row.flags.push("cx");
+        }
+        let ratio = (row.code > 0).then_some(row.tests as f64 / row.code as f64);
+        if row.code >= THIN_MIN_CODE && ratio.is_some_and(|ratio| ratio < THIN_TEST_CODE) {
+            row.flags.push("thin");
+        }
+    }
+}
+
 fn is_binary_module(facts: &Facts, module: &str) -> bool {
     let top = module.split('/').next().unwrap_or(module);
     let declares =
@@ -211,16 +308,35 @@ fn is_binary_module(facts: &Facts, module: &str) -> bool {
         })
 }
 
-fn sort_rows(rows: &mut [Row]) {
+fn sort_rows(rows: &mut [Row], by: RankBy) {
     rows.sort_by(|left, right| {
-        let left_value = left.code as f64 * left.churn;
-        let right_value = right.code as f64 * right.churn;
-        right_value
-            .total_cmp(&left_value)
+        let primary = match by {
+            RankBy::Accretion => {
+                (right.code as f64 * right.churn).total_cmp(&(left.code as f64 * left.churn))
+            }
+            RankBy::Code => right.code.cmp(&left.code),
+            RankBy::Esc => right.esc.cmp(&left.esc),
+            RankBy::Churn => right.churn.total_cmp(&left.churn),
+            RankBy::Pace => right
+                .pace
+                .unwrap_or(f64::NEG_INFINITY)
+                .total_cmp(&left.pace.unwrap_or(f64::NEG_INFINITY)),
+            RankBy::Cx => right.cx.total_cmp(&left.cx),
+            RankBy::TestCode => test_code_ratio(left).total_cmp(&test_code_ratio(right)),
+        };
+        primary
             .then_with(|| right.cx.total_cmp(&left.cx))
             .then_with(|| right.code.cmp(&left.code))
             .then_with(|| left.module.cmp(&right.module))
     });
+}
+
+fn test_code_ratio(row: &Row) -> f64 {
+    if row.code == 0 {
+        f64::INFINITY
+    } else {
+        row.tests as f64 / row.code as f64
+    }
 }
 
 fn path_in_level(path: &Path, scope: &Path, include_module_file: bool) -> bool {

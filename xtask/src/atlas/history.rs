@@ -76,6 +76,19 @@ impl Log {
     pub(super) fn window_len(&self, pct: usize) -> usize {
         window_size(self.commits.len(), pct)
     }
+
+    /// Lifetime commit share for each current file, with pre-rename commits
+    /// folded into the file's present path.
+    pub(super) fn file_shares(&self, root: &Path, scope: &Path) -> BTreeMap<PathBuf, f64> {
+        let total = self.commits.len();
+        if total == 0 {
+            return BTreeMap::new();
+        }
+        current_file_commits(root, scope, &self.commits)
+            .into_iter()
+            .map(|(path, commits)| (path, commits.len() as f64 / total as f64))
+            .collect()
+    }
 }
 
 pub(super) fn introducing_commits(root: &Path, file: &Path, name: &str) -> Result<Vec<Commit>> {
@@ -379,6 +392,45 @@ fn fold_pace(
     noise_lifetime: usize,
     noise_window: usize,
 ) -> PaceReport {
+    let file_commits = current_file_commits(root, scope, commits);
+    let mut module_commits = BTreeMap::<String, BTreeSet<usize>>::new();
+    for (path, commits) in file_commits {
+        let Some(module) = rust_module_for_path(&path, scope) else {
+            continue;
+        };
+        module_commits.entry(module).or_default().extend(commits);
+    }
+    let total = commits.len();
+    let window_size = window_size(total, window_pct);
+    let first = total.saturating_sub(window_size);
+    let modules = module_commits
+        .into_iter()
+        .map(|(module, commits)| {
+            let lifetime = commits.len();
+            let window = commits.range(first..).count();
+            let share = lifetime as f64 / total as f64;
+            let noisy = pace_is_noisy(lifetime, window, noise_lifetime, noise_window);
+            let pace =
+                (!noisy && share > 0.0).then_some((window as f64 / window_size as f64) / share);
+            (
+                module,
+                PaceMetrics {
+                    commits: lifetime,
+                    share,
+                    pace,
+                    noisy,
+                },
+            )
+        })
+        .collect();
+    PaceReport { modules }
+}
+
+fn current_file_commits(
+    root: &Path,
+    scope: &Path,
+    commits: &[Commit],
+) -> BTreeMap<PathBuf, BTreeSet<usize>> {
     let mut paths = HashMap::<PathBuf, usize>::new();
     let mut identities = Vec::<Identity>::new();
     for (commit_index, commit) in commits.iter().enumerate() {
@@ -409,45 +461,15 @@ fn fold_pace(
         }
     }
 
-    let mut module_commits = BTreeMap::<String, BTreeSet<usize>>::new();
-    for identity in identities {
-        let Some(path) = identity.path.filter(|path| {
-            path.starts_with(scope_for_matching(scope)) && root.join(path).is_file()
-        }) else {
-            continue;
-        };
-        let Some(module) = rust_module_for_path(&path, scope) else {
-            continue;
-        };
-        module_commits
-            .entry(module)
-            .or_default()
-            .extend(identity.commits);
-    }
-    let total = commits.len();
-    let window_size = window_size(total, window_pct);
-    let first = total.saturating_sub(window_size);
-    let modules = module_commits
+    identities
         .into_iter()
-        .map(|(module, commits)| {
-            let lifetime = commits.len();
-            let window = commits.range(first..).count();
-            let share = lifetime as f64 / total as f64;
-            let noisy = pace_is_noisy(lifetime, window, noise_lifetime, noise_window);
-            let pace =
-                (!noisy && share > 0.0).then_some((window as f64 / window_size as f64) / share);
-            (
-                module,
-                PaceMetrics {
-                    commits: lifetime,
-                    share,
-                    pace,
-                    noisy,
-                },
-            )
+        .filter_map(|identity| {
+            let path = identity.path.filter(|path| {
+                path.starts_with(scope_for_matching(scope)) && root.join(path).is_file()
+            })?;
+            Some((path, identity.commits))
         })
-        .collect();
-    PaceReport { modules }
+        .collect()
 }
 
 fn window_size(commits: usize, pct: usize) -> usize {
@@ -560,6 +582,8 @@ mod tests {
         let report = fold_pace(root.path(), Path::new("src"), &commits, 25, 1, 1);
         assert_eq!(report.modules.len(), 1);
         assert_eq!(report.modules["new"].commits, 4);
+        let shares = Log { commits }.file_shares(root.path(), Path::new("src"));
+        assert_eq!(shares[Path::new("src/new/current.rs")], 4.0 / 6.0);
     }
 
     #[test]

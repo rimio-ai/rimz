@@ -11,7 +11,7 @@ use super::detect::{self, GuardFamily};
 use super::facts::{Facets, Facts};
 use super::modules::{module_is_within, path_in_scope};
 use super::output::{self, OutputArgs};
-use super::rank::{self, Row, Totals};
+use super::rank::{self, Hotspot, RankBy, Row, Totals};
 use super::shapes::{self, ShapeFamily};
 use super::syntax::resolved_internal_import;
 use super::target::{self, TARGET_FILE, Target, VerdictKind};
@@ -21,10 +21,12 @@ const DEFAULT_PATH: &str = "crates/rimz/src";
 const DEFAULT_TOP: usize = 20;
 
 const USAGE: &str = "cargo xtask atlas survey [--path <prefix>] [--top N]
+    [--by <code|esc|churn|pace|cx|tc>] [--all]
 
-Emits a bounded Markdown survey of accretion, recorded debt, and duplicated knowledge.";
+Emits a bounded Markdown survey of accretion, recorded debt, and duplicated knowledge.
+Rank order defaults to accretion (code × churn).";
 
-const SECTIONS: &[&str] = &["rank", "debt", "shapes", "guards", "footer"];
+const SECTIONS: &[&str] = &["rank", "hot", "debt", "shapes", "guards", "footer"];
 
 /// One target rule's upward dependencies: the debt the target already
 /// admits, counted at its sites, beside anything it has not admitted.
@@ -65,6 +67,8 @@ fn usage() -> String {
 struct Args {
     path: PathBuf,
     top: usize,
+    by: RankBy,
+    all: bool,
     output: OutputArgs,
 }
 
@@ -73,14 +77,15 @@ struct Report {
     path: PathBuf,
     rows: Vec<Row>,
     totals: Totals,
+    hot: Vec<Hotspot>,
     debt: Debt,
     shapes: Vec<ShapeFamily>,
     guards: Vec<GuardFamily>,
     history_commits: usize,
     pace_window: usize,
     parse_failures: usize,
-    shape_families_dropped: usize,
-    guard_families_dropped: usize,
+    shape_families_dropped: shapes::FamilyDrops,
+    guard_families_dropped: detect::GuardDrops,
     suppressed: usize,
     stale: Vec<String>,
 }
@@ -98,7 +103,7 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
             references: false,
         },
     )?;
-    let report = build_report(root, &facts, &args.path)?;
+    let report = build_report(root, &facts, &args.path, args.by, args.all)?;
     let rendered = if args.output.json {
         render_json(&report, &args.output)?
     } else {
@@ -113,6 +118,8 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     }
     let mut path = None;
     let mut top = None;
+    let mut by = None;
+    let mut all = false;
     let mut output = OutputArgs::default();
     let mut index = 0;
     while index < args.len() {
@@ -133,6 +140,23 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
                 set_once(&mut top, parsed, "survey", "--top")?;
                 index += 2;
             }
+            "--by" => {
+                let raw = value(args, index, "survey", "--by")?;
+                let parsed = RankBy::parse(raw).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "atlas survey --by must be one of code, esc, churn, pace, cx, tc"
+                    )
+                })?;
+                set_once(&mut by, parsed, "survey", "--by")?;
+                index += 2;
+            }
+            "--all" => {
+                if all {
+                    bail!("atlas survey --all may only be passed once");
+                }
+                all = true;
+                index += 1;
+            }
             _ => bail!("unknown atlas survey argument `{arg}`"),
         }
     }
@@ -140,15 +164,31 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     Ok(Some(Args {
         path: path.unwrap_or_else(|| PathBuf::from(DEFAULT_PATH)),
         top: top.unwrap_or(DEFAULT_TOP),
+        by: by.unwrap_or_default(),
+        all,
         output,
     }))
 }
 
-fn build_report(root: &Path, facts: &Facts, scope: &Path) -> Result<Report> {
-    let rows = rank::rows(facts, scope)?;
+fn build_report(
+    root: &Path,
+    facts: &Facts,
+    scope: &Path,
+    by: RankBy,
+    include_all: bool,
+) -> Result<Report> {
+    let rows = rank::rows_by(facts, scope, by)?;
     let totals = rank::totals(&rows);
-    let (all_shapes, shape_families_dropped) = shapes::families_with_dropped(facts, scope);
-    let (all_guards, guard_families_dropped) = detect::guard_families_with_dropped(facts, scope);
+    let (all_shapes, shape_families_dropped) = if include_all {
+        shapes::families_all_with_dropped(facts, scope)
+    } else {
+        shapes::families_with_dropped(facts, scope)
+    };
+    let (all_guards, guard_families_dropped) = if include_all {
+        detect::guard_families_all_with_dropped(facts, scope)
+    } else {
+        detect::guard_families_with_dropped(facts, scope)
+    };
     let shape_keys = all_shapes
         .iter()
         .map(|family| family.name.clone())
@@ -202,6 +242,11 @@ fn build_report(root: &Path, facts: &Facts, scope: &Path) -> Result<Report> {
         .history
         .as_ref()
         .context("survey history facts missing")?;
+    let metrics = facts
+        .metrics
+        .as_ref()
+        .context("survey metric facts missing")?;
+    let hot = rank::hotspots(metrics, &log.file_shares(&facts.root, scope));
     let debt = configured.as_ref().map_or_else(Debt::default, |target| {
         recorded_debt(root, target, facts, scope)
     });
@@ -210,6 +255,7 @@ fn build_report(root: &Path, facts: &Facts, scope: &Path) -> Result<Report> {
         path: facts.scope.clone(),
         rows,
         totals,
+        hot,
         debt,
         shapes,
         guards,
@@ -381,6 +427,25 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
         .unwrap();
     }
 
+    if output_args.wants("hot") {
+        writeln!(output, "\n## Function hotspots").unwrap();
+        writeln!(output, "| function | file:line | cx | churn% | hot |").unwrap();
+        writeln!(output, "| --- | --- | ---: | ---: | ---: |").unwrap();
+        for row in report.hot.iter().take(top) {
+            writeln!(
+                output,
+                "| {} | {}:{} | {:.1} | {:.1} | {:.1} |",
+                row.function,
+                row.path.display(),
+                row.line,
+                row.cx,
+                row.churn,
+                row.hot
+            )
+            .unwrap();
+        }
+    }
+
     if output_args.wants("debt") {
         render_debt(&mut output, &report.debt, top);
     }
@@ -403,11 +468,12 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
             });
             writeln!(
                 output,
-                "- shape key: `{}`; {} members / {} files{siblings}; mean {:.1} sloc; {}",
+                "- shape key: `{}`; {} members / {} files{siblings}; mean {:.1} sloc; {:.1} sloc in play; {}",
                 family.name,
                 family.members.len(),
                 family.files,
                 family.mean_sloc,
+                family.sloc_in_play,
                 locations
             )
             .unwrap();
@@ -443,14 +509,15 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
         writeln!(output, "parse failures: {}", report.parse_failures).unwrap();
         writeln!(
             output,
-            "shape families dropped as std vocabulary: {}",
-            report.shape_families_dropped
+            "shape families dropped as std vocabulary: {}; {} below the finding gate (`--all` shows them)",
+            report.shape_families_dropped.vocabulary,
+            report.shape_families_dropped.below_gate
         )
         .unwrap();
         writeln!(
             output,
-            "guard families dropped as std idiom: {}",
-            report.guard_families_dropped
+            "guard families dropped as std idiom: {}; {} as predicate use (`--all` shows them)",
+            report.guard_families_dropped.vocabulary, report.guard_families_dropped.predicate_use
         )
         .unwrap();
         writeln!(output, "suppressed families: {}", report.suppressed).unwrap();
@@ -560,6 +627,9 @@ fn render_json(report: &Report, output_args: &OutputArgs) -> Result<String> {
             }),
         );
     }
+    if output_args.wants("hot") {
+        sections.insert("hot".to_owned(), serde_json::to_value(&report.hot)?);
+    }
     if output_args.wants("debt") {
         sections.insert("debt".to_owned(), serde_json::to_value(&report.debt)?);
     }
@@ -576,8 +646,10 @@ fn render_json(report: &Report, output_args: &OutputArgs) -> Result<String> {
                 "history_commits": report.history_commits,
                 "pace_window": report.pace_window,
                 "parse_failures": report.parse_failures,
-                "shape_families_dropped_as_std_vocabulary": report.shape_families_dropped,
-                "guard_families_dropped_as_std_idiom": report.guard_families_dropped,
+                "shape_families_dropped_as_std_vocabulary": report.shape_families_dropped.vocabulary,
+                "shape_families_below_finding_gate": report.shape_families_dropped.below_gate,
+                "guard_families_dropped_as_std_idiom": report.guard_families_dropped.vocabulary,
+                "guard_families_dropped_as_predicate_use": report.guard_families_dropped.predicate_use,
                 "suppressed_families": report.suppressed,
                 "stale_verdict_keys": &report.stale,
             }),
@@ -612,6 +684,7 @@ mod tests {
                 }],
                 files: 1,
                 mean_sloc: 40.0,
+                sloc_in_play: 40.0,
                 score: 40.0,
                 siblings: 0,
                 role: None,
@@ -629,10 +702,21 @@ mod tests {
                 }],
             })
             .collect();
+        let hot = (0..30)
+            .map(|index| Hotspot {
+                function: format!("hot-{index}"),
+                path: PathBuf::from(format!("src/hot-{index}.rs")),
+                line: 1,
+                cx: 1.0,
+                churn: 1.0,
+                hot: 1.0,
+            })
+            .collect();
         let report = Report {
             path: PathBuf::from("src"),
             totals: rank::totals(&rows),
             rows,
+            hot,
             debt: Debt {
                 configured: true,
                 rules: (0..30)
@@ -658,8 +742,14 @@ mod tests {
             history_commits: 100,
             pace_window: 25,
             parse_failures: 0,
-            shape_families_dropped: 6,
-            guard_families_dropped: 4,
+            shape_families_dropped: shapes::FamilyDrops {
+                vocabulary: 6,
+                below_gate: 3,
+            },
+            guard_families_dropped: detect::GuardDrops {
+                vocabulary: 4,
+                predicate_use: 2,
+            },
             suppressed: 0,
             stale: (0..30)
                 .map(|index| format!("shape:stale-{index}"))
@@ -668,16 +758,20 @@ mod tests {
 
         let output = render_markdown(&report, 20, &OutputArgs::default());
 
-        assert!(output.lines().count() <= 110);
+        assert!(output.lines().count() <= 135);
         assert!(output.contains("module-19"));
         assert!(!output.contains("module-20"));
+        assert!(output.contains("hot-19"));
+        assert!(!output.contains("hot-20"));
         assert!(output.contains("and 10 more"));
         assert!(output.contains("| src/rule-19 | 11 | cli 11 | — |"));
         assert!(!output.contains("src/rule-20"));
         assert!(output.contains("_10 more rules omitted._"));
         assert!(output.contains("stranglers (current/baseline): `legacy_open` src/store 2/3"));
         assert!(output.contains("shape families dropped as std vocabulary: 6"));
+        assert!(output.contains("3 below the finding gate"));
         assert!(output.contains("guard families dropped as std idiom: 4"));
+        assert!(output.contains("2 as predicate use"));
         assert!(output.contains("cx: severity-weighted over-threshold excess"));
     }
 
@@ -689,6 +783,9 @@ mod tests {
             "/tmp/atlas-survey.json",
             "--section",
             "rank,guards",
+            "--by",
+            "tc",
+            "--all",
         ]
         .map(str::to_owned)
         .to_vec();
@@ -696,6 +793,8 @@ mod tests {
         let parsed = parse_args(&args).unwrap().unwrap();
 
         assert!(parsed.output.json);
+        assert_eq!(parsed.by, RankBy::TestCode);
+        assert!(parsed.all);
         assert_eq!(
             parsed.output.out.as_deref(),
             Some(Path::new("/tmp/atlas-survey.json"))
