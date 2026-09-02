@@ -18,9 +18,9 @@ expression: strip_sgr(&ansi)
 ▎  port auth watcher                                 🮇
 ▎  ▣ ━━━━━━━━━━━━━━━━━━━━╺━━╺──────────────────   34%🮇
 ▎  ▤ 341k · ◌ 293k ◍ 34k ↘ 13k ↗ 42k                 🮇
+▎  ⧉ subagents (2)                              $0.46🮇
 ▎⣾ cargo nextest                                     🮇
 ▎  integration::backend::zellij                      🮇
-▎○ codex · GPT 5.1 Codex · xhigh                     🮇
 ▎○ codex · GPT 5.1 Codex · xhigh                     🮇
 ▎○ codex · GPT 5.1 Codex · xhigh                     🮇
 

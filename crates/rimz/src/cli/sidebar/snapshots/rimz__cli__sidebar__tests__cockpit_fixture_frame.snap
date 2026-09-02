@@ -21,8 +21,8 @@ expression: strip_sgr(&ansi)
    stabilize render diff
    󰕰 ━━━━━━━━━━━━━━━━╺━╺───────────────────────   24%
    󰿦 247k · 󱥸 212k  24k  9k  30k
+    subagents (2)                              $0.46
  ▁ claude · Opus 4.8 · xhigh · 1m              $28.90
-   compact provider trace
 
  ─── Claude ──── Codex ──── Pi ──── Open Code ───────
 

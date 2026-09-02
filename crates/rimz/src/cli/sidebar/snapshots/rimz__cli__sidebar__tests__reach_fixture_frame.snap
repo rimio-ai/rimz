@@ -15,7 +15,7 @@ expression: strip_sgr(&ansi)
 ▌  verify remote attach                              ▐
 ▌  ▣ ━━━━━━━━━━━━━━━━━━━━╺━━╺──────────────────   33%▐
 ▌  ▤ 333k · ◌ 286k ◍ 33k ↘ 13k ↗ 41k · ↻ 2           ▐
-▌  ⧉ subagents (2)                                   ▐
+▌  ⧉ subagents (2)                              $0.46▐
 ▌    ✓ Explore — audit auth watcher changes     $0.34▐
 ▌      ◇ 22k · Haiku · xhigh                         ▐
 ▌    ⠁ Plan — run focused nextest               $0.12▐

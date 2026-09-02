@@ -43,6 +43,7 @@ fn sub_agent(parent: &str, index: usize) -> SidebarSubAgent {
 
 fn agent_row(group: usize, index: usize) -> SidebarRow {
     let id = format!("agent-{group}-{index}");
+    let sub_agents = (0..3).map(|sub| sub_agent(&id, sub)).collect::<Vec<_>>();
     SidebarRow {
         id: id.clone(),
         name: "claude".to_owned(),
@@ -89,7 +90,8 @@ fn agent_row(group: usize, index: usize) -> SidebarRow {
             context_severity: Some(crate::agents::ContextSeverity::Yellow),
             // Row 0 is the default selection, so its card expands these in every
             // composed frame — the sub-agent loop stays inside the measured work.
-            sub_agents: (0..3).map(|sub| sub_agent(&id, sub)).collect(),
+            sub_agent_count: sub_agents.len() as u32,
+            sub_agents,
             ..AgentCard::default()
         })),
     }

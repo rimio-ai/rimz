@@ -164,10 +164,21 @@ fn launched_subagent_renders_profile_cost_and_parent_rollup() {
     child.launch_depth = Some(1);
     child.profile = Some("explorer".to_owned());
     child.description = Some("map sidebar".to_owned());
+    child.usage.total_tokens = Some(12_000);
     let mut child_context = crate::agents::AgentContext::new("codex", fixed_now());
     child_context.cost = Some(crate::agents::AgentCost {
         total_cost_usd: Some(0.42),
         ..crate::agents::AgentCost::default()
+    });
+    child_context.tokens = Some(crate::agents::AgentTokenUsage {
+        session_usage: Some(crate::agents::AgentSessionUsage {
+            input_tokens: Some(30_000),
+            output_tokens: Some(5_000),
+            cache_creation_input_tokens: Some(2_000),
+            cache_read_input_tokens: Some(200_000),
+            ..crate::agents::AgentSessionUsage::default()
+        }),
+        ..crate::agents::AgentTokenUsage::default()
     });
     child.context = Some(child_context);
 
@@ -198,9 +209,97 @@ fn launched_subagent_renders_profile_cost_and_parent_rollup() {
         "the child cost pins on its line:\n{rendered}"
     );
     assert!(
+        rendered
+            .lines()
+            .any(|line| line.contains("⧉ subagents (1)") && line.contains("$0.42")),
+        "the lifetime stats line carries child cost:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("◇ 37k"),
+        "the child metadata uses cumulative session tokens:\n{rendered}"
+    );
+    assert!(
         rendered.lines().any(|line| line.contains("$0.52")),
         "the parent cost includes delegated spend:\n{rendered}"
     );
+}
+
+#[test]
+fn subagent_stats_line_outlives_the_turn() {
+    let mut parent = agent(
+        "claude-root",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("delegate"),
+    );
+    parent.turn_started_at = Some(fixed_now() - Duration::from_secs(10));
+
+    let mut child = agent(
+        "codex-child",
+        "codex",
+        AgentStatus::Success,
+        None,
+        None,
+        Some("map sidebar"),
+    );
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(1);
+    child.last_activity = fixed_now() - Duration::from_secs(60);
+    child.last_seen = child.last_activity;
+    child.ended_at = Some(child.last_activity);
+    let mut context = crate::agents::AgentContext::new("codex", fixed_now());
+    context.cost = Some(crate::agents::AgentCost {
+        total_cost_usd: Some(0.42),
+        ..crate::agents::AgentCost::default()
+    });
+    child.context = Some(context);
+
+    let snapshot = snapshot_with(vec![parent, child]);
+    let theme = Theme::fixed(false);
+    let unselected = line_texts(&group_lines(&snapshot, &theme, usize::MAX));
+    assert_eq!(unselected.len(), 6, "{}", unselected.join("\n"));
+    assert!(
+        unselected[5].contains("⧉ subagents (1)") && unselected[5].contains("$0.42"),
+        "{}",
+        unselected.join("\n")
+    );
+
+    let selected = line_texts(&group_lines(&snapshot, &theme, 0));
+    assert_eq!(selected.len(), 6, "{}", selected.join("\n"));
+    assert!(selected[5].contains("⧉ subagents (1)"));
+    assert!(!selected.iter().any(|line| line.contains("map sidebar")));
+
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &UiState {
+            selected_index: usize::MAX,
+            ..Default::default()
+        },
+        60,
+        20,
+    );
+    assert_snapshot("subagent_stats_line", rendered);
+}
+
+#[test]
+fn engaged_card_without_children_has_no_stats_line() {
+    let parent = agent(
+        "claude-root",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("delegate"),
+    );
+    let snapshot = snapshot_with(vec![parent]);
+    let rendered = line_texts(&group_lines(&snapshot, &Theme::fixed(false), usize::MAX));
+
+    assert_eq!(rendered.len(), 5, "{}", rendered.join("\n"));
+    assert!(!rendered.iter().any(|line| line.contains("⧉ subagents")));
 }
 
 #[test]

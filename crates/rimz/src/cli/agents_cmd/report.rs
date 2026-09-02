@@ -760,6 +760,7 @@ mod tests {
                 context: Some(context),
                 context_severity: Some(ContextSeverity::Yellow),
                 estimated_active_secs: Some(754),
+                sub_agent_count: 1,
                 sub_agents: vec![SidebarSubAgent {
                     id: "child".to_owned(),
                     name: "explorer".to_owned(),
