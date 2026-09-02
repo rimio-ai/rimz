@@ -81,56 +81,6 @@ pub const REMOTE_PATH_MISSING_EXIT: i32 = 67;
 /// A supervised remote room no longer has a live work pane.
 pub const REMOTE_SESSION_LOST_EXIT: i32 = 68;
 
-/// Cadence for checking whether a supervised remote room still has work.
-pub const REMOTE_ROOM_WATCHDOG_INTERVAL: Duration = Duration::from_secs(2);
-
-/// One bounded observation of a supervised remote room's pane roster.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RemoteRoomObservation {
-    WorkPanePresent,
-    NoWorkPanes,
-    Unknown,
-}
-
-/// The next effect requested by [`RemoteRoomWatchdog`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RemoteRoomWatchdogAction {
-    Wait(Duration),
-    Observe,
-    RoomEnded,
-}
-
-/// Pure timing and arming policy for the remote attach wrapper's room probe.
-#[derive(Debug, Default)]
-pub struct RemoteRoomWatchdog {
-    work_pane_seen: bool,
-    next_observation: Duration,
-}
-
-impl RemoteRoomWatchdog {
-    pub fn advance(
-        &mut self,
-        elapsed: Duration,
-        observation: Option<RemoteRoomObservation>,
-    ) -> RemoteRoomWatchdogAction {
-        if let Some(observation) = observation {
-            match observation {
-                RemoteRoomObservation::WorkPanePresent => self.work_pane_seen = true,
-                RemoteRoomObservation::NoWorkPanes if self.work_pane_seen => {
-                    return RemoteRoomWatchdogAction::RoomEnded;
-                }
-                RemoteRoomObservation::NoWorkPanes | RemoteRoomObservation::Unknown => {}
-            }
-            self.next_observation = elapsed.saturating_add(REMOTE_ROOM_WATCHDOG_INTERVAL);
-        }
-        if elapsed >= self.next_observation {
-            RemoteRoomWatchdogAction::Observe
-        } else {
-            RemoteRoomWatchdogAction::Wait(self.next_observation - elapsed)
-        }
-    }
-}
-
 /// What the part after the `:` names on the remote host.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RemoteSpec {
