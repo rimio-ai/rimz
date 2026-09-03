@@ -39,6 +39,8 @@ pub(super) struct SurfaceRow {
     pub(super) line: usize,
     #[serde(skip)]
     pub(super) end_line: usize,
+    /// Lines the definition spans, for a plan's line arithmetic.
+    pub(super) sloc: usize,
     pub(super) outside_sites: usize,
     pub(super) outside_files: usize,
     pub(super) callers: Vec<String>,
@@ -59,6 +61,7 @@ pub(super) struct VestigialItem {
     pub(super) name: String,
     pub(super) path: PathBuf,
     pub(super) line: usize,
+    pub(super) sloc: usize,
     pub(super) test_referrers: usize,
     pub(super) introduced: Option<BlameCommit>,
     /// The introducing commit reads as a fix: the item pins a behaviour
@@ -329,6 +332,7 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
                 path: def_file.path.clone(),
                 line: definition.line,
                 end_line: definition.end_line,
+                sloc: definition.end_line.max(definition.line) - definition.line + 1,
                 outside_sites: reached.sites,
                 outside_files: reached.files.len(),
                 callers: reached.modules.into_iter().collect(),
@@ -463,6 +467,7 @@ pub(super) fn vestigial_items(root: &Path, rows: &[SurfaceRow]) -> Result<Vec<Ve
             name: row.name.clone(),
             path: row.path.clone(),
             line: row.line,
+            sloc: row.sloc,
             test_referrers: row.test_sites,
             introduced,
             pins_fix,
@@ -502,16 +507,17 @@ fn definition_for_escaping<'a>(
 pub(super) fn render_surface(out: &mut String, surface: &SurfaceSection, top: usize) {
     out.push_str("\n# Escaping surface\n\n");
     out.push_str(
-        "| item | kind | reach | narrow to | outside sites | files | internal | tests | callers |\n",
+        "| item | kind | sloc | reach | narrow to | outside sites | files | internal | tests | callers |\n",
     );
-    out.push_str("|---|---|---|---|---:|---:|---:|---:|---|\n");
+    out.push_str("|---|---|---:|---|---|---:|---:|---:|---:|---|\n");
     for row in surface.items.iter().take(top) {
         writeln!(
             out,
-            "| `{}::{}` | {} | {} | {} | {} | {} | {} | {} | {} |",
+            "| `{}::{}` | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
             row.module,
             row.name,
             row.kind,
+            row.sloc,
             row.reach,
             row.narrow_to,
             row.outside_sites,
@@ -565,11 +571,12 @@ pub(super) fn render_surface(out: &mut String, surface: &SurfaceSection, top: us
             });
         writeln!(
             out,
-            "- `{}::{}` — {}:{}{reexport}; test referrers: {}; {}{}",
+            "- `{}::{}` — {}:{} ({} sloc){reexport}; test referrers: {}; {}{}",
             item.module,
             item.name,
             item.path.display(),
             item.line,
+            item.sloc,
             item.test_referrers,
             introduced,
             if item.pins_fix { " (pins a fix)" } else { "" }

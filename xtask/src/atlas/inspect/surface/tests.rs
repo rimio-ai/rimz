@@ -133,6 +133,7 @@ fn vestigial_items_need_zero_production_sites_and_keep_optional_blame() {
         path: PathBuf::from("src/store.rs"),
         line,
         end_line,
+        sloc: end_line - line + 1,
         outside_sites,
         outside_files: outside_sites,
         callers: Vec::new(),
