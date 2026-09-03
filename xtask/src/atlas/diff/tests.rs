@@ -101,13 +101,40 @@ fn assembly_delta_uses_the_per_function_maximum() {
         reference_edge("src/a.rs", "Outside", None),
     ];
     let paths = [PathBuf::from("src/a.rs")];
-    let base = collect_reference_edges(base_edges.iter(), &paths);
-    let current = collect_reference_edges(current_edges.iter(), &paths);
+    let base = collect_reference_edges(base_edges.iter(), &paths, &[]);
+    let current = collect_reference_edges(current_edges.iter(), &paths, &[]);
     let pair = ("caller".to_owned(), "target".to_owned());
 
     assert_eq!(base[&pair].items, current[&pair].items);
     assert_eq!(base[&pair].assembly(), 2);
     assert_eq!(current[&pair].assembly(), 4);
+}
+
+#[test]
+fn assembly_folds_one_owner_type_into_one_item_like_the_dossier() {
+    let target = Source::new(
+        "src/target.rs",
+        "pub struct Rec;\nimpl Rec {\n    pub fn new() -> Self { Self }\n    pub fn with(self) -> Self { self }\n}\npub fn open() {}\n",
+    );
+    let syntax = super::super::syntax::analyze_sources(&[target], &BTreeSet::new());
+    let mut edges = [
+        reference_edge("src/a.rs", "Rec", Some(10)),
+        reference_edge("src/a.rs", "new", Some(10)),
+        reference_edge("src/a.rs", "with", Some(10)),
+        reference_edge("src/a.rs", "open", Some(10)),
+    ];
+    for (edge, line) in edges.iter_mut().zip([1, 3, 4, 6]) {
+        edge.to_line = line;
+    }
+    let paths = [PathBuf::from("src/a.rs")];
+
+    let unfolded = collect_reference_edges(edges.iter(), &paths, &[]);
+    let folded = collect_reference_edges(edges.iter(), &paths, &syntax.files);
+    let pair = ("caller".to_owned(), "target".to_owned());
+
+    assert_eq!(unfolded[&pair].assembly(), 4);
+    assert_eq!(folded[&pair].assembly(), 2);
+    assert_eq!(folded[&pair].items.len(), 4);
 }
 
 #[test]
@@ -135,8 +162,8 @@ fn interface_line_shift_does_not_move_the_heaviest_function() {
     let paths = [PathBuf::from("src/a.rs")];
     let base_edges = [reference_edge("src/a.rs", "One", Some(10))];
     let current_edges = [reference_edge("src/a.rs", "One", Some(20))];
-    let base = collect_reference_edges(base_edges.iter(), &paths);
-    let current = collect_reference_edges(current_edges.iter(), &paths);
+    let base = collect_reference_edges(base_edges.iter(), &paths, &[]);
+    let current = collect_reference_edges(current_edges.iter(), &paths, &[]);
 
     let rows = interface_rows(&base, &current);
 

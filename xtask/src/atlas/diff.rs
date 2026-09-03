@@ -21,7 +21,7 @@ use super::modules::{
 use super::output::{self, OutputArgs};
 use super::references::{Edge, EdgeKind, FunctionId};
 use super::sources;
-use super::syntax::Spelling;
+use super::syntax::{FileSyntax, Spelling};
 use super::target::{self, LayerRanks, TARGET_FILE};
 use super::{positive_usize, set_once, validate_scope, value};
 
@@ -104,18 +104,19 @@ struct DependencySite {
 #[derive(Clone, Debug, Default)]
 struct EdgeData {
     items: BTreeSet<String>,
-    by_fn: BTreeMap<FunctionId, BTreeSet<String>>,
+    /// Folded distinct items per calling function (`max/fn`).
+    by_fn: BTreeMap<FunctionId, usize>,
 }
 
 impl EdgeData {
     fn assembly(&self) -> usize {
-        self.by_fn.values().map(BTreeSet::len).max().unwrap_or(0)
+        self.by_fn.values().copied().max().unwrap_or(0)
     }
 
     fn heaviest(&self) -> Option<(&FunctionId, usize)> {
         self.by_fn
             .iter()
-            .map(|(function, items)| (function, items.len()))
+            .map(|(function, items)| (function, *items))
             .max_by(|(left_fn, left), (right_fn, right)| {
                 left.cmp(right).then_with(|| right_fn.cmp(left_fn))
             })
@@ -358,21 +359,32 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     }))
 }
 
+/// The base commit: the merge base of `reference` and `HEAD`, so a branch
+/// name such as `main` judges the pass against where it forked rather than
+/// against trunk's later movement. An ancestor SHA resolves to itself.
 fn resolve_base(root: &Path, reference: &str) -> Result<String> {
     let verify = format!("{reference}^{{commit}}");
+    let commit = git_commit(root, &["rev-parse", "--verify", &verify])
+        .with_context(|| format!("resolving atlas diff base `{reference}`"))?;
+    git_commit(root, &["merge-base", &commit, "HEAD"])
+        .with_context(|| format!("atlas diff base `{reference}` shares no history with HEAD"))
+}
+
+fn git_commit(root: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("git")
-        .args(["rev-parse", "--verify", &verify])
+        .args(args)
         .current_dir(root)
         .output()
-        .with_context(|| format!("resolving atlas diff base `{reference}`"))?;
+        .with_context(|| format!("running git {}", args.join(" ")))?;
     if !output.status.success() {
         bail!(
-            "atlas diff base `{reference}` is not a commit: {}",
+            "git {} failed: {}",
+            args.join(" "),
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
     Ok(String::from_utf8(output.stdout)
-        .context("git rev-parse returned a non-UTF-8 commit")?
+        .context("git returned a non-UTF-8 commit")?
         .trim()
         .to_owned())
 }
@@ -715,31 +727,50 @@ fn interface_edges(facts: &Facts, paths: &[PathBuf]) -> EdgeMap {
             .edges
             .iter(),
         paths,
+        &facts.syntax.files,
     )
 }
 
 fn collect_reference_edges<'a>(
     edges: impl Iterator<Item = &'a Edge>,
     paths: &[PathBuf],
+    syntax_files: &[FileSyntax],
 ) -> EdgeMap {
     let mut rows = EdgeMap::new();
+    let mut by_fn = BTreeMap::<(String, String), BTreeMap<FunctionId, Vec<&Edge>>>::new();
     for edge in edges.filter(|edge| {
         edge.kind == EdgeKind::Reference
             && !edge.test
             && (in_paths(&edge.from_path, paths) ^ in_paths(&edge.to_path, paths))
     }) {
-        let data = rows
-            .entry((edge.from.clone(), edge.to.clone()))
-            .or_default();
-        data.items.insert(edge.item.clone());
+        let pair = (edge.from.clone(), edge.to.clone());
+        rows.entry(pair.clone())
+            .or_default()
+            .items
+            .insert(edge.item.clone());
         if let Some(function) = &edge.from_fn {
-            data.by_fn
+            by_fn
+                .entry(pair)
+                .or_default()
                 .entry(FunctionId::new(&edge.from_path, function))
                 .or_default()
-                .insert(edge.item.clone());
+                .push(edge);
         }
     }
+    for (pair, functions) in by_fn {
+        rows.entry(pair).or_default().by_fn = fold_by_fn(functions, syntax_files);
+    }
     rows
+}
+
+fn fold_by_fn(
+    functions: BTreeMap<FunctionId, Vec<&Edge>>,
+    syntax_files: &[FileSyntax],
+) -> BTreeMap<FunctionId, usize> {
+    functions
+        .into_iter()
+        .map(|(function, edges)| (function, inspect::folded_item_count(&edges, syntax_files)))
+        .collect()
 }
 
 fn interface_rows(base: &EdgeMap, current: &EdgeMap) -> Vec<InterfaceRow> {
@@ -818,7 +849,7 @@ fn contract_assembly(
         _ if absent_as_zero => return Ok(0),
         (Err(error), _) | (_, Err(error)) => return Err(error),
     };
-    let mut functions = BTreeMap::<FunctionId, BTreeSet<String>>::new();
+    let mut functions = BTreeMap::<FunctionId, Vec<&Edge>>::new();
     for edge in facts
         .references
         .as_ref()
@@ -836,10 +867,13 @@ fn contract_assembly(
             functions
                 .entry(FunctionId::new(&edge.from_path, function))
                 .or_default()
-                .insert(edge.item.clone());
+                .push(edge);
         }
     }
-    Ok(functions.values().map(BTreeSet::len).max().unwrap_or(0))
+    Ok(fold_by_fn(functions, &facts.syntax.files)
+        .into_values()
+        .max()
+        .unwrap_or(0))
 }
 
 fn resolution(facts: &Facts) -> BTreeMap<ItemId, bool> {

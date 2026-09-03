@@ -63,6 +63,49 @@ fn functions_rank_by_distinct_items_and_quote_the_heaviest() {
 }
 
 #[test]
+fn heaviest_quote_keeps_a_short_function_whole_and_short_gaps_inline() {
+    let statements = (0..120)
+        .map(|index| format!("    let value_{index} = {index};"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = Source::new(
+        "crates/demo/src/caller.rs",
+        format!(
+            "fn heavy() {{\n{statements}\n}}\n\nfn short() {{\n    let a = 1;\n    let b = 2;\n    let c = 3;\n}}\n"
+        ),
+    );
+    let row = |name: &str, line, end_line, site_lines: Vec<usize>| FunctionRow {
+        function: name.to_owned(),
+        path: source.path.clone(),
+        line,
+        end_line,
+        items: vec!["a".to_owned()],
+        items_unfolded: 1,
+        sites: site_lines.len(),
+        site_lines,
+        also: Vec::new(),
+    };
+
+    let short = quote_function(
+        &row("short", 124, 128, vec![126]),
+        std::slice::from_ref(&source),
+    )
+    .unwrap();
+    assert_eq!(short.source.lines().count(), 5, "{}", short.source);
+    assert!(!short.source.contains('…'));
+
+    // Sites 30 and 38 sit 6 lines apart: quoted through; 38 to 90 is elided.
+    let long = quote_function(&row("heavy", 1, 122, vec![30, 38, 90]), &[source]).unwrap();
+    assert!(
+        long.source.contains("let value_32 = 32;"),
+        "{}",
+        long.source
+    );
+    assert!(!long.source.contains("let value_60 = 60;"));
+    assert!(long.source.contains("… 49 lines"), "{}", long.source);
+}
+
+#[test]
 fn heaviest_quote_caps_site_windows_and_reports_omitted_sites() {
     let statements = (0..200)
         .map(|index| format!("    let value_{index} = {index};"))

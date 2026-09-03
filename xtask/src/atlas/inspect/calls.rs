@@ -244,6 +244,14 @@ fn distinct_folded_items(edges: &[&Edge], syntax_files: &[FileSyntax]) -> Vec<St
         .collect()
 }
 
+/// Distinct target items one function references, every reference to one
+/// owner type folded into one item: the `max/fn` the vocabulary defines,
+/// shared by the dossier and `diff` so a contract ceiling read from one is
+/// judged by the other.
+pub(in crate::atlas) fn folded_item_count(edges: &[&Edge], syntax_files: &[FileSyntax]) -> usize {
+    distinct_folded_items(edges, syntax_files).len()
+}
+
 fn unfolded_items(edges: &[&Edge]) -> usize {
     edges
         .iter()
@@ -444,14 +452,27 @@ fn function_end_line(files: &[FileSyntax], key: &FunctionId) -> usize {
         .map_or(key.line, |function| function.end_line)
 }
 
+/// Lines a quote may hold before later sites are dropped.
+const QUOTE_LINES: usize = 80;
+/// A gap between two site windows shorter than this stays quoted, since
+/// the wiring the call-site test judges sits between the references.
+const QUOTE_GAP: usize = 10;
+
+/// Quotes the heaviest caller: the whole function when it fits in
+/// `QUOTE_LINES`, else its signature and every reference site with a line
+/// of context, gaps under `QUOTE_GAP` lines kept, longer ones elided.
 pub(super) fn quote_function(function: &FunctionRow, sources: &[Source]) -> Option<Heaviest> {
     let source = sources.iter().find(|source| source.path == function.path)?;
     let source_lines = source.text.lines().collect::<Vec<_>>();
     let start = function.line.max(1);
     let end = function.end_line.min(source_lines.len()).max(start);
-    let signature_end = (start..=end)
-        .find(|line| source_lines[*line - 1].contains('{'))
-        .unwrap_or_else(|| (start + 2).min(end));
+    let signature_end = if end - start < QUOTE_LINES {
+        end
+    } else {
+        (start..=end)
+            .find(|line| source_lines[*line - 1].contains('{'))
+            .unwrap_or_else(|| (start + 2).min(end))
+    };
 
     #[derive(Debug)]
     struct Window {
@@ -477,7 +498,7 @@ pub(super) fn quote_function(function: &FunctionRow, sources: &[Source]) -> Opti
             sites: BTreeSet::from([site]),
         };
         if let Some(previous) = windows.last_mut()
-            && window.start <= previous.end + 1
+            && window.start <= previous.end + QUOTE_GAP
         {
             previous.end = previous.end.max(window.end);
             previous.sites.extend(window.sites);
@@ -491,7 +512,7 @@ pub(super) fn quote_function(function: &FunctionRow, sources: &[Source]) -> Opti
     let mut previous_end = None;
     let mut omitted_sites = 0;
     for (index, window) in windows.iter().enumerate() {
-        let available = 80_usize.saturating_sub(source_line_count);
+        let available = QUOTE_LINES.saturating_sub(source_line_count);
         let window_lines = window.end - window.start + 1;
         if available == 0 {
             omitted_sites += windows[index..]
@@ -525,7 +546,7 @@ pub(super) fn quote_function(function: &FunctionRow, sources: &[Source]) -> Opti
                 .sum::<usize>();
             break;
         }
-        debug_assert!(source_line_count <= 80);
+        debug_assert!(source_line_count <= QUOTE_LINES);
         debug_assert_eq!(window_lines, included_end - window.start + 1);
     }
     if omitted_sites > 0 {

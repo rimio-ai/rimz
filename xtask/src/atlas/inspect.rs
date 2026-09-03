@@ -21,6 +21,8 @@ use super::{positive_usize, set_once, value};
 
 mod calls;
 mod flags;
+
+pub(super) use calls::folded_item_count;
 mod selector;
 mod surface;
 #[cfg(test)]
@@ -144,6 +146,7 @@ struct ItemEvidence {
     key: String,
     path: PathBuf,
     line: usize,
+    sloc: usize,
     declared: String,
     effective_reach: String,
     production_referrers: Vec<String>,
@@ -871,6 +874,7 @@ fn item_evidence(
     Ok(ItemEvidence {
         path: file.path.clone(),
         line: item.line,
+        sloc: item.end_line.max(item.line) - item.line + 1,
         declared: if declared.kind == "use" {
             format!("{} (re-exported from {})", declared.declared, item.module)
         } else {
@@ -1161,8 +1165,14 @@ fn render_footer(out: &mut String, footer: &Footer, top: usize) {
 
 fn render_item(out: &mut String, item: &ItemEvidence, top: usize) {
     writeln!(out, "\n# Item evidence — `{}`\n", item.key).expect("writing to a String cannot fail");
-    writeln!(out, "- definition: {}:{}", item.path.display(), item.line)
-        .expect("writing to a String cannot fail");
+    writeln!(
+        out,
+        "- definition: {}:{} ({} sloc)",
+        item.path.display(),
+        item.line,
+        item.sloc
+    )
+    .expect("writing to a String cannot fail");
     writeln!(out, "- declared reach: `{}`", item.declared)
         .expect("writing to a String cannot fail");
     writeln!(out, "- effective reach: `{}`", item.effective_reach)
