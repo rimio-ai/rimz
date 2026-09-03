@@ -639,3 +639,70 @@ fn guard_families_preserve_method_and_call_names() {
     assert_eq!(normalized[2], "$0.is_empty()&&ready($0)");
     assert_eq!(normalized[3], "$0.is_none()&&ready($0)");
 }
+
+#[test]
+fn pub_use_items_carry_their_targets_and_source_names() {
+    let report = super::analyze_sources(
+        &[Source::new(
+            "crates/rimz/src/store/snapshot/mod.rs",
+            "mod row;\npub use row::{Snapshot, Row as SnapshotRow};\npub use crate::ids::AgentId;\npub use rimz::theme::Tone;\npub use anyhow::Result;\npub use super::*;\n",
+        )],
+        &BTreeSet::from(["rimz".to_owned()]),
+    );
+    let file = &report.files[0];
+    let targets = file
+        .pub_items
+        .iter()
+        .filter(|item| item.kind == "use")
+        .map(|item| {
+            let target = item.target.as_ref().expect("a use item carries its target");
+            (
+                item.name.as_str(),
+                target
+                    .modules
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                target.name.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        targets,
+        [
+            ("Snapshot", vec!["store::snapshot::row", "row"], "Snapshot"),
+            ("SnapshotRow", vec!["store::snapshot::row", "row"], "Row"),
+            ("AgentId", vec!["ids"], "AgentId"),
+            (
+                "Tone",
+                vec!["store::snapshot::rimz::theme", "rimz::theme", "theme"],
+                "Tone"
+            ),
+            (
+                "Result",
+                vec!["store::snapshot::anyhow", "anyhow"],
+                "Result"
+            ),
+            ("*", vec!["store"], "*"),
+        ]
+    );
+    // A renamed import depends on the source name, not the local alias.
+    let use_items = file
+        .dependencies
+        .iter()
+        .filter(|site| site.spelling == Spelling::Use)
+        .map(|site| site.item.as_str())
+        .collect::<Vec<_>>();
+    assert!(use_items.contains(&"Row"), "{use_items:?}");
+    assert!(!use_items.contains(&"SnapshotRow"), "{use_items:?}");
+    assert!(
+        file.pub_items
+            .iter()
+            .all(|item| item.kind != "use" || item.target.is_some())
+    );
+    assert!(
+        file.pub_items
+            .iter()
+            .all(|item| item.kind == "use" || item.target.is_none())
+    );
+}

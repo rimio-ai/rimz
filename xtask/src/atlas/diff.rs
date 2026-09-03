@@ -935,16 +935,13 @@ fn split_changed_paths(
 }
 
 fn definition_site(files: &[super::syntax::FileSyntax], key: &str) -> Option<DefinitionSite> {
-    let (module, name) = key.rsplit_once("::")?;
-    files.iter().find_map(|file| {
-        file.pub_items
-            .iter()
-            .find(|item| item.module == module && item.name == name)
-            .map(|item| DefinitionSite {
-                path: file.path.clone(),
-                line: item.line,
-            })
-    })
+    key.contains("::")
+        .then(|| super::modules::items_for_key(files, key))
+        .and_then(|items| items.into_iter().next())
+        .map(|(file, item)| DefinitionSite {
+            path: file.path.clone(),
+            line: item.line,
+        })
 }
 
 fn definition_sites(

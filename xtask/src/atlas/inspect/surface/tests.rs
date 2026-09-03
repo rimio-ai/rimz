@@ -138,6 +138,13 @@ fn vestigial_items_need_zero_production_sites_and_keep_optional_blame() {
         callers: Vec::new(),
         internal_sites,
         test_sites: 0,
+        reexport_of: None,
+        definition: (
+            PathBuf::from("src/store.rs"),
+            "store".to_owned(),
+            name.to_owned(),
+            line,
+        ),
     };
     let rows = [
         row("stale", 1, 1, 0, 0),
@@ -241,5 +248,98 @@ fn narrow_visibility_covers_callers_without_exceeding_them() {
             &callers(&["cli"])
         ),
         "keep"
+    );
+}
+
+#[test]
+fn surface_measures_reexports_at_their_definitions_and_pins_tests_past_the_narrowing() {
+    let root = crate_with_files(&[
+        ("src/lib.rs", "pub mod store;\nmod cli;\n"),
+        ("src/store.rs", "mod row;\npub use row::{Row, Hidden};\n"),
+        ("src/store/row.rs", "pub struct Row;\npub struct Hidden;\n"),
+        (
+            "src/cli.rs",
+            "fn run() { let _ = crate::store::Row; }\n#[cfg(test)]\nmod tests {\n    fn t() { let _ = crate::store::Hidden; }\n}\n",
+        ),
+        ("tests/api.rs", "fn t() { let _ = probe::store::Row; }\n"),
+    ]);
+    run(root.path(), &["init", "--quiet"]);
+    run(root.path(), &["add", "-A"]);
+    let mut facts = Facts::load(root.path(), Path::new("."), Facets::default()).unwrap();
+    let row = "rust-analyzer cargo probe 0.0.0 store/row/Row#";
+    let hidden = "rust-analyzer cargo probe 0.0.0 store/row/Hidden#";
+    let index = Index {
+        documents: vec![
+            scip::types::Document {
+                relative_path: "src/store/row.rs".to_owned(),
+                occurrences: vec![occurrence(0, row, true), occurrence(1, hidden, true)],
+                ..scip::types::Document::default()
+            },
+            scip::types::Document {
+                relative_path: "src/cli.rs".to_owned(),
+                occurrences: vec![occurrence(0, row, false), occurrence(3, hidden, false)],
+                ..scip::types::Document::default()
+            },
+            scip::types::Document {
+                relative_path: "tests/api.rs".to_owned(),
+                occurrences: vec![occurrence(0, row, false)],
+                ..scip::types::Document::default()
+            },
+        ],
+        ..Index::default()
+    };
+    let index_path = root.path().join("index.scip");
+    scip::write_message_to_file(&index_path, index).unwrap();
+    facts.references = Some(References::load(&index_path, &facts.syntax, &facts.sources).unwrap());
+
+    let (surface, declaration_only) = surface_section(&facts, &selector("store"));
+
+    assert_eq!(declaration_only, 0);
+    assert_eq!(surface.reexports, 2);
+    let keys = surface
+        .items
+        .iter()
+        .map(|item| format!("{}::{} {}", item.module, item.name, item.kind))
+        .collect::<Vec<_>>();
+    assert_eq!(keys, ["store::Row struct", "store::Hidden struct"]);
+    let row = &surface.items[0];
+    assert_eq!(row.reexport_of.as_deref(), Some("store::row"));
+    assert_eq!(row.path, Path::new("src/store/row.rs"));
+    assert_eq!(row.line, 1);
+    assert_eq!((row.outside_sites, row.test_sites), (1, 1));
+    assert_eq!(row.reach, "extern");
+    assert_eq!(row.narrow_to, "pub(crate)");
+    let hidden = &surface.items[1];
+    assert_eq!((hidden.outside_sites, hidden.test_sites), (0, 1));
+    assert_eq!(hidden.narrow_to, "private");
+
+    let pins = surface
+        .pins
+        .iter()
+        .map(|pin| {
+            (
+                format!("{}::{}", pin.module, pin.name),
+                pin.narrow_to.as_str(),
+                pin.lost_sites,
+                pin.tests.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        pins,
+        [
+            (
+                "store::Hidden".to_owned(),
+                "private",
+                1,
+                vec!["t (src/cli.rs:4)".to_owned()]
+            ),
+            (
+                "store::Row".to_owned(),
+                "pub(crate)",
+                1,
+                vec!["tests/api.rs:1".to_owned()]
+            ),
+        ]
     );
 }

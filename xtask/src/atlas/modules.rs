@@ -23,6 +23,148 @@ pub(super) struct EscapingItem {
     pub(super) line: usize,
 }
 
+/// Every public item a `module::Name` key names: `Name` defined in `module`
+/// or any module beneath it, so `message::queue_synthetic` finds
+/// `message::deliver::queue_synthetic`. Definitions in the named module
+/// itself win over deeper ones, and a bare `Name` searches the whole crate.
+pub(super) fn items_for_key<'a>(
+    files: &'a [FileSyntax],
+    key: &str,
+) -> Vec<(&'a FileSyntax, &'a PubItem)> {
+    let (module, name) = key.rsplit_once("::").unwrap_or(("", key));
+    let matches = files
+        .iter()
+        .flat_map(|file| {
+            file.pub_items
+                .iter()
+                .filter(|item| item.name == name && module_is_within(&item.module, module))
+                .map(move |item| (file, item))
+        })
+        .collect::<Vec<_>>();
+    let exact = matches
+        .iter()
+        .filter(|(_, item)| item.module == module)
+        .copied()
+        .collect::<Vec<_>>();
+    if exact.is_empty() { matches } else { exact }
+}
+
+/// Where a `use` item's references live once the SCIP index resolves them.
+#[derive(Clone, Debug)]
+pub(super) enum ReExport<'a> {
+    /// One definition, possibly through a chain of re-exports.
+    Definition(&'a FileSyntax, &'a PubItem),
+    /// A glob: every public definition of the named module.
+    Glob(Vec<(&'a FileSyntax, &'a PubItem)>),
+    /// A module, or an item of a crate the index does not cover.
+    Foreign,
+    /// A known module that defines no such name.
+    Unresolved,
+}
+
+const REEXPORT_DEPTH: usize = 8;
+
+/// Follows a `use` item to the definition it re-exports. A definition is
+/// never a `use` or a `mod`; chains and globs resolve up to a bounded depth.
+pub(super) fn resolve_reexport<'a>(files: &'a [FileSyntax], item: &PubItem) -> ReExport<'a> {
+    resolve_reexport_depth(files, item, REEXPORT_DEPTH)
+}
+
+fn known_module(files: &[FileSyntax], module: &str) -> bool {
+    files.iter().any(|file| {
+        file.module_path == module || file.pub_items.iter().any(|item| item.module == module)
+    })
+}
+
+fn resolve_reexport_depth<'a>(
+    files: &'a [FileSyntax],
+    item: &PubItem,
+    depth: usize,
+) -> ReExport<'a> {
+    let Some(target) = &item.target else {
+        return ReExport::Foreign;
+    };
+    let Some(module) = target
+        .modules
+        .iter()
+        .find(|module| known_module(files, module))
+    else {
+        return ReExport::Foreign;
+    };
+    if target.name == "*" {
+        return ReExport::Glob(glob_definitions(files, module, depth));
+    }
+    let mut current = (module.clone(), target.name.clone());
+    for _ in 0..depth {
+        let found = files.iter().find_map(|file| {
+            file.pub_items
+                .iter()
+                .find(|item| item.module == current.0 && item.name == current.1)
+                .map(|item| (file, item))
+        });
+        let Some((file, item)) = found else {
+            return if known_module(files, &current.0) {
+                ReExport::Unresolved
+            } else {
+                ReExport::Foreign
+            };
+        };
+        match item.kind.as_str() {
+            "mod" => return ReExport::Foreign,
+            "use" => {
+                let Some(next) = &item.target else {
+                    return ReExport::Foreign;
+                };
+                let Some(module) = next
+                    .modules
+                    .iter()
+                    .find(|module| known_module(files, module))
+                else {
+                    return ReExport::Foreign;
+                };
+                // A name passing through a glob keeps its own name there.
+                let name = if next.name == "*" {
+                    current.1
+                } else {
+                    next.name.clone()
+                };
+                current = (module.clone(), name);
+            }
+            _ => return ReExport::Definition(file, item),
+        }
+    }
+    ReExport::Unresolved
+}
+
+/// Every definition a glob of `module` exports: its own definitions plus
+/// what its own re-exports resolve to.
+fn glob_definitions<'a>(
+    files: &'a [FileSyntax],
+    module: &str,
+    depth: usize,
+) -> Vec<(&'a FileSyntax, &'a PubItem)> {
+    let mut definitions = Vec::new();
+    for file in files {
+        for item in file.pub_items.iter().filter(|item| item.module == module) {
+            match item.kind.as_str() {
+                "mod" => {}
+                "use" => {
+                    if depth == 0 {
+                        continue;
+                    }
+                    match resolve_reexport_depth(files, item, depth - 1) {
+                        ReExport::Definition(file, item) => definitions.push((file, item)),
+                        ReExport::Glob(items) => definitions.extend(items),
+                        ReExport::Foreign | ReExport::Unresolved => {}
+                    }
+                }
+                _ => definitions.push((file, item)),
+            }
+        }
+    }
+    definitions
+}
+
 pub(super) fn item_escapes(
     file: &FileSyntax,
     item: &PubItem,
@@ -442,5 +584,106 @@ mod tests {
             reference_module_label("cli::agents_cmd", "agents"),
             "cli::agents_cmd"
         );
+    }
+}
+
+#[cfg(test)]
+mod key_tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+    use crate::atlas::{sources::Source, syntax};
+
+    fn files(sources: &[(&str, &str)]) -> Vec<FileSyntax> {
+        let sources = sources
+            .iter()
+            .map(|(path, text)| Source::new(*path, *text))
+            .collect::<Vec<_>>();
+        syntax::analyze_sources(&sources, &BTreeSet::new()).files
+    }
+
+    #[test]
+    fn items_for_key_prefers_the_named_module_then_searches_beneath() {
+        let files = files(&[
+            (
+                "crates/demo/src/message.rs",
+                "pub mod deliver;\npub fn send() {}\n",
+            ),
+            (
+                "crates/demo/src/message/deliver.rs",
+                "pub fn queue_synthetic() {}\npub fn send() {}\n",
+            ),
+        ]);
+        let names = |key: &str| {
+            items_for_key(&files, key)
+                .into_iter()
+                .map(|(_, item)| format!("{}::{}", item.module, item.name))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names("message::queue_synthetic"),
+            ["message::deliver::queue_synthetic"]
+        );
+        assert_eq!(names("message::send"), ["message::send"]);
+        assert_eq!(names("message::deliver::send"), ["message::deliver::send"]);
+        assert_eq!(names("send"), ["message::send", "message::deliver::send"]);
+        assert!(names("message::missing").is_empty());
+        assert!(names("cli::send").is_empty());
+    }
+
+    #[test]
+    fn reexports_resolve_to_definitions_through_chains_and_globs() {
+        let files = files(&[
+            (
+                "crates/demo/src/store.rs",
+                "mod snapshot;\npub use snapshot::Snapshot;\npub use snapshot::*;\npub use crate::ids::Id;\npub use anyhow::Result;\npub use snapshot::Missing;\n",
+            ),
+            (
+                "crates/demo/src/store/snapshot.rs",
+                "mod row;\npub use row::{Row as Snapshot, Extra};\n",
+            ),
+            (
+                "crates/demo/src/store/snapshot/row.rs",
+                "pub struct Row;\npub struct Extra;\n",
+            ),
+            ("crates/demo/src/ids.rs", "pub struct Id;\n"),
+        ]);
+        let store = files
+            .iter()
+            .find(|file| file.module_path == "store")
+            .expect("store file");
+        let item = |name: &str| {
+            store
+                .pub_items
+                .iter()
+                .find(|item| item.name == name)
+                .expect("store re-exports the name")
+        };
+        let definition = |name: &str| match resolve_reexport(&files, item(name)) {
+            ReExport::Definition(file, definition) => {
+                format!("{}::{}", file.module_path, definition.name)
+            }
+            other => panic!("{name} resolved to {other:?}"),
+        };
+        assert_eq!(definition("Snapshot"), "store::snapshot::row::Row");
+        assert_eq!(definition("Id"), "ids::Id");
+        let ReExport::Glob(items) = resolve_reexport(&files, item("*")) else {
+            panic!("a glob resolves to a glob");
+        };
+        assert_eq!(
+            items
+                .iter()
+                .map(|(_, item)| item.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Row", "Extra"]
+        );
+        assert!(matches!(
+            resolve_reexport(&files, item("Result")),
+            ReExport::Foreign
+        ));
+        assert!(matches!(
+            resolve_reexport(&files, item("Missing")),
+            ReExport::Unresolved
+        ));
     }
 }

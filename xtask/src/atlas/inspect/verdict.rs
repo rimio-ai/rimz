@@ -24,6 +24,11 @@ pub(super) struct InspectVerdict {
     pins_fix: usize,
     one_caller_flags: usize,
     constant_parameters: usize,
+    reexports: usize,
+    pinned_items: usize,
+    pinned_test_sites: usize,
+    passthroughs: usize,
+    escaping_passthroughs: usize,
 }
 
 impl InspectVerdict {
@@ -34,6 +39,7 @@ impl InspectVerdict {
         functions: &[FunctionRow],
         one_caller_flags: usize,
         constant_parameters: usize,
+        passthroughs: &[super::PassThroughRow],
     ) -> Self {
         let top_assembly = assembly.first();
         let heaviest_caller = callers.first().and_then(|caller| caller.top_fns.first());
@@ -73,6 +79,11 @@ impl InspectVerdict {
                 .count(),
             one_caller_flags,
             constant_parameters,
+            reexports: surface.reexports,
+            pinned_items: surface.pins.len(),
+            pinned_test_sites: surface.pins.iter().map(|pin| pin.lost_sites).sum(),
+            passthroughs: passthroughs.len(),
+            escaping_passthroughs: passthroughs.iter().filter(|row| row.escaping).count(),
         }
     }
 }
@@ -80,8 +91,11 @@ impl InspectVerdict {
 pub(super) fn render_verdict(out: &mut String, verdict: &InspectVerdict) {
     writeln!(
         out,
-        "# Verdict\n\n{} escaping items, {} outside production sites; {} items carry 80%",
-        verdict.escaping_items, verdict.outside_production_sites, verdict.head_items
+        "# Verdict\n\n{} escaping items ({} through `pub use`), {} outside production sites; {} items carry 80%",
+        verdict.escaping_items,
+        verdict.reexports,
+        verdict.outside_production_sites,
+        verdict.head_items
     )
     .expect("writing to a String cannot fail");
     let narrowable = verdict
@@ -151,6 +165,15 @@ pub(super) fn render_verdict(out: &mut String, verdict: &InspectVerdict) {
         out,
         "{} one-caller flags, {} constant parameters",
         verdict.one_caller_flags, verdict.constant_parameters
+    )
+    .expect("writing to a String cannot fail");
+    writeln!(
+        out,
+        "{} pass-throughs ({} escaping); {} items keep {} test sites past their narrowed reach",
+        verdict.passthroughs,
+        verdict.escaping_passthroughs,
+        verdict.pinned_items,
+        verdict.pinned_test_sites
     )
     .expect("writing to a String cannot fail");
 }

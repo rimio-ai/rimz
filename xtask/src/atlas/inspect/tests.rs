@@ -309,3 +309,38 @@ fn record_reads_the_root_files_header_and_the_nearest_contract() {
     assert_eq!(lane.header, None);
     assert_eq!(lane.contract.as_deref(), Some(Path::new("AGENTS.md")));
 }
+
+#[test]
+fn inspect_brief_presets_sections_and_top_unless_given() {
+    let args = parse_args(&["--module".into(), "store".into(), "--brief".into()])
+        .unwrap()
+        .unwrap();
+    assert_eq!(args.top, BRIEF_TOP);
+    for section in BRIEF_SECTIONS {
+        assert!(args.output.wants(section), "{section}");
+    }
+    assert!(!args.output.wants("callers"));
+    assert!(!args.output.wants("providers"));
+
+    let args = parse_args(&[
+        "--module".into(),
+        "store".into(),
+        "--brief".into(),
+        "--top".into(),
+        "3".into(),
+    ])
+    .unwrap()
+    .unwrap();
+    assert_eq!(args.top, 3);
+
+    let error = parse_args(&[
+        "--module".into(),
+        "store".into(),
+        "--brief".into(),
+        "--section".into(),
+        "verdict".into(),
+    ])
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("mutually exclusive"), "{error}");
+}

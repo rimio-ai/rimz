@@ -10,7 +10,7 @@ use super::detect::{self, GuardFamily, IdentifierRole};
 use super::facts::{Facets, Facts};
 use super::history::{self, Commit};
 use super::modules::{
-    crate_module_for_path, module_is_within, path_in_scope, reference_module_label,
+    self, crate_module_for_path, module_is_within, path_in_scope, reference_module_label,
 };
 use super::output::{self, OutputArgs};
 use super::references::{Edge, EdgeKind};
@@ -38,15 +38,18 @@ pub(super) use selector::resolve_module;
 use surface::{SurfaceSection, render_surface, surface_section, vestigial_items};
 use verdict::{InspectVerdict, render_verdict};
 
-const USAGE: &str = "cargo xtask atlas inspect --module <module|path> [--from <module|path>] [--item <module::Name>] [--top N] [--all]
+const USAGE: &str = "cargo xtask atlas inspect --module <module|path> [--from <module|path>] [--item <module::Name>] [--top N] [--all] [--brief]
 
 Builds a Markdown dossier for one Rust module from exact SCIP references.
 
   --module <value>  module or root-relative Rust file/directory
   --from <value>    caller module to quote (default: heaviest caller)
-  --item <value>    public item key to investigate
+  --item <value>    public item to investigate: `Name` in the module, or
+                    `module::Name` for `Name` anywhere under `module`
   --top <n>         rows and names shown per section (default 20)
-  --all             show shape and guard families below the finding gate";
+  --all             show shape and guard families below the finding gate
+  --brief           the subagent brief: verdict, record, heaviest, surface,
+                    flags, passthroughs, pins at --top 10";
 
 const SECTIONS: &[&str] = &[
     "verdict",
@@ -62,7 +65,24 @@ const SECTIONS: &[&str] = &[
     "providers",
     "footer",
     "item",
+    "pins",
+    "passthroughs",
 ];
+
+/// The sections a subagent brief needs: what the module claims, what the
+/// heaviest caller pays, what escapes, the parameters one caller bends,
+/// the functions that forward, and the tests a narrowing moves.
+const BRIEF_SECTIONS: &[&str] = &[
+    "verdict",
+    "record",
+    "heaviest",
+    "surface",
+    "flags",
+    "passthroughs",
+    "pins",
+    "item",
+];
+const BRIEF_TOP: usize = 10;
 
 fn usage() -> String {
     format!("{USAGE}\n\n{}", output::USAGE)
@@ -76,6 +96,18 @@ struct Args {
     top: usize,
     all: bool,
     output: OutputArgs,
+}
+
+/// A function whose body only forwards to one callee: the deletion test's
+/// first candidate.
+#[derive(Clone, Debug, Serialize)]
+struct PassThroughRow {
+    module: String,
+    name: String,
+    callee: String,
+    path: PathBuf,
+    line: usize,
+    escaping: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -147,6 +179,8 @@ struct Report {
     providers: Vec<Provider>,
     footer: Footer,
     item: Option<ItemEvidence>,
+    pins: Vec<surface::PinRow>,
+    passthroughs: Vec<PassThroughRow>,
 }
 
 #[derive(Debug, Serialize)]
@@ -273,6 +307,7 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
         })
         .count();
     let unresolved_definitions = surface.unresolved.len();
+    let passthroughs = passthrough_rows(&facts, &module, &surface);
     let verdict = InspectVerdict::from_report_data(
         &surface,
         &repeated,
@@ -280,7 +315,9 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
         &assembly,
         flags.one_caller_count(),
         flags.constant_count(),
+        &passthroughs,
     );
+    let pins = std::mem::take(&mut surface.pins);
     let report = Report {
         verdict,
         record: record(root, &facts, &module),
@@ -305,6 +342,8 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
             verdicts,
         },
         item,
+        pins,
+        passthroughs,
     };
     let rendered = if args.output.json {
         render_json(&report, &args.output)?
@@ -323,6 +362,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     let mut item = None;
     let mut top = None;
     let mut all = false;
+    let mut brief = false;
     let mut output = OutputArgs::default();
     let mut index = 0;
     while index < args.len() {
@@ -332,6 +372,13 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
         }
         let flag = args[index].as_str();
         match flag {
+            "--brief" => {
+                if brief {
+                    bail!("atlas inspect --brief may only be passed once");
+                }
+                brief = true;
+                index += 1;
+            }
             "--module" | "--from" | "--item" => {
                 let raw = value(args, index, "inspect", flag)?;
                 if raw.is_empty() {
@@ -367,6 +414,12 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
         }
     }
     output.validate_sections("inspect", SECTIONS)?;
+    if brief {
+        if !output.default_sections(BRIEF_SECTIONS) {
+            bail!("atlas inspect --brief and --section are mutually exclusive");
+        }
+        top.get_or_insert(BRIEF_TOP);
+    }
     Ok(Some(Args {
         module: module.ok_or_else(|| anyhow::anyhow!("atlas inspect requires --module"))?,
         from,
@@ -375,6 +428,71 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
         all,
         output,
     }))
+}
+
+/// Functions in the target whose body forwards to one callee, marked when
+/// they escape the boundary.
+fn passthrough_rows(
+    facts: &Facts,
+    target: &ModuleSelector,
+    surface: &SurfaceSection,
+) -> Vec<PassThroughRow> {
+    let escaping = surface
+        .items
+        .iter()
+        .map(|row| (row.path.as_path(), row.line))
+        .collect::<BTreeSet<_>>();
+    let mut rows = facts
+        .syntax
+        .files
+        .iter()
+        .filter(|file| target.matches(&file.module_path, &file.path))
+        .flat_map(|file| {
+            file.fns.iter().filter_map(|function| {
+                function.forwards.as_ref().map(|callee| PassThroughRow {
+                    module: file.module_path.clone(),
+                    name: function.label(),
+                    callee: callee.clone(),
+                    path: file.path.clone(),
+                    line: function.line,
+                    escaping: escaping.contains(&(file.path.as_path(), function.line)),
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        right
+            .escaping
+            .cmp(&left.escaping)
+            .then_with(|| left.path.cmp(&right.path))
+            .then_with(|| left.line.cmp(&right.line))
+    });
+    rows
+}
+
+fn render_passthroughs(out: &mut String, rows: &[PassThroughRow], top: usize) {
+    out.push_str("\n# Pass-throughs\n\n");
+    if rows.is_empty() {
+        out.push_str("none\n");
+        return;
+    }
+    for row in rows.iter().take(top) {
+        writeln!(
+            out,
+            "- `{}::{}` → `{}` — {}:{}{}",
+            row.module,
+            row.name,
+            row.callee,
+            row.path.display(),
+            row.line,
+            if row.escaping { " (escaping)" } else { "" }
+        )
+        .expect("writing to a String cannot fail");
+    }
+    if rows.len() > top {
+        writeln!(out, "\n_{} more omitted._", rows.len() - top)
+            .expect("writing to a String cannot fail");
+    }
 }
 
 /// Guard families anywhere in the crate that name an item the target
@@ -663,26 +781,26 @@ fn item_evidence(
     configured: Option<&Target>,
     key: &str,
 ) -> Result<ItemEvidence> {
-    let (item_module, name) = key
+    // A bare name searches the target; `module::Name` searches that module
+    // and everything beneath it, so the key form in the doc example and
+    // the bare names other sections print both resolve.
+    let key = if key.contains("::") || target.module.is_empty() {
+        key.to_owned()
+    } else {
+        format!("{}::{key}", target.module)
+    };
+    let (item_module, _) = key
         .rsplit_once("::")
-        .ok_or_else(|| anyhow::anyhow!("atlas inspect --item requires `module::Name`"))?;
+        .expect("the key was just qualified with a module");
     if !module_is_within(item_module, &target.module) {
         bail!(
             "atlas inspect --item `{key}` is outside --module `{}`",
             target.module
         );
     }
-    let matches = facts
-        .syntax
-        .files
-        .iter()
-        .filter(|file| target.matches(&file.module_path, &file.path))
-        .flat_map(|file| {
-            file.pub_items
-                .iter()
-                .filter(move |item| item.module == item_module && item.name == name)
-                .map(move |item| (file, item))
-        })
+    let matches = modules::items_for_key(&facts.syntax.files, &key)
+        .into_iter()
+        .filter(|(file, _)| target.matches(&file.module_path, &file.path))
         .collect::<Vec<_>>();
     if matches.len() > 1 {
         let candidates = matches
@@ -695,13 +813,28 @@ fn item_evidence(
             .collect::<Vec<_>>();
         bail!(
             "atlas inspect --item `{key}` is {}",
-            ambiguity(key, &candidates)
+            ambiguity(&key, &candidates)
         );
     }
     let (file, item) = matches
         .into_iter()
         .next()
         .ok_or_else(|| anyhow::anyhow!("atlas inspect --item `{key}` is not a public item"))?;
+    let (declared_file, declared) = (file, item);
+    // A `pub use` has no references of its own: the evidence is the
+    // definition it re-exports.
+    let (file, item) = if item.kind == "use" {
+        match modules::resolve_reexport(&facts.syntax.files, item) {
+            modules::ReExport::Definition(file, item) => (file, item),
+            _ => bail!(
+                "atlas inspect --item `{key}` is a re-export the index does not resolve to one definition"
+            ),
+        }
+    } else {
+        (file, item)
+    };
+    let key = format!("{}::{}", declared.module, declared.name);
+    let name = item.name.as_str();
     let references = facts
         .references
         .as_ref()
@@ -716,7 +849,8 @@ fn item_evidence(
     let matching = references.edges.iter().filter(|edge| {
         edge.kind == EdgeKind::Reference
             && edge.item == name
-            && edge.to == item_module
+            && edge.to == item.module
+            && edge.to_line == item.line
             && edge.to_path == file.path
     });
     let production_referrers = matching
@@ -735,16 +869,20 @@ fn item_evidence(
     let commits = history::introducing_commits(root, &file.path, name)?;
     let markers = commit_markers(&commits);
     Ok(ItemEvidence {
-        key: key.to_owned(),
         path: file.path.clone(),
         line: item.line,
-        declared: item.declared.clone(),
-        effective_reach: facts.mod_index.effective_reach(file, item),
+        declared: if declared.kind == "use" {
+            format!("{} (re-exported from {})", declared.declared, item.module)
+        } else {
+            declared.declared.clone()
+        },
+        effective_reach: facts.mod_index.effective_reach(declared_file, declared),
         production_referrers,
         test_referrers,
         commits,
         markers,
-        verdict: configured.and_then(|target| item_verdict(target, key)),
+        verdict: configured.and_then(|target| item_verdict(target, &key)),
+        key,
     })
 }
 
@@ -854,6 +992,12 @@ fn render_markdown(report: &Report, output: &OutputArgs, top: usize) -> String {
     }
     if output.wants("surface") {
         render_surface(&mut rendered, &report.surface, top);
+    }
+    if output.wants("pins") {
+        surface::render_pins(&mut rendered, &report.pins, top);
+    }
+    if output.wants("passthroughs") {
+        render_passthroughs(&mut rendered, &report.passthroughs, top);
     }
     if output.wants("assembly") {
         render_repeated(&mut rendered, &report.assembly, top);
@@ -991,7 +1135,7 @@ fn render_footer(out: &mut String, footer: &Footer, top: usize) {
     .expect("writing to a String cannot fail");
     writeln!(
         out,
-        "re-exports and mod declarations (unmeasured): {}",
+        "mod declarations and re-exports of foreign items (unmeasured): {}",
         footer.declaration_only
     )
     .expect("writing to a String cannot fail");
@@ -1036,7 +1180,9 @@ fn render_item(out: &mut String, item: &ItemEvidence, top: usize) {
         writeln!(
             out,
             "  - `{}` {} {}",
-            commit.short, commit.time, commit.subject
+            commit.short,
+            history::civil_date(commit.time),
+            commit.subject
         )
         .expect("writing to a String cannot fail");
     }

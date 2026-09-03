@@ -86,6 +86,16 @@ impl OutputArgs {
         Ok(())
     }
 
+    /// Installs a preset section list; returns `false` when `--section`
+    /// already chose one.
+    pub(super) fn default_sections(&mut self, names: &[&str]) -> bool {
+        if self.sections.is_some() {
+            return false;
+        }
+        self.sections = Some(names.iter().map(|name| (*name).to_owned()).collect());
+        true
+    }
+
     pub(super) fn wants(&self, section: &str) -> bool {
         self.sections
             .as_ref()

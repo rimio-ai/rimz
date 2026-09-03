@@ -206,15 +206,8 @@ fn item_parts<'a>(kind: &str, key: &'a str) -> Result<(&'a str, &'a str)> {
 }
 
 fn validate_base_item(files: &[FileSyntax], kind: &str, key: &str, base: &str) -> Result<()> {
-    let (module, name) = item_parts(kind, key)?;
-    let definitions = files
-        .iter()
-        .flat_map(|file| {
-            file.pub_items
-                .iter()
-                .filter(move |item| item.module == module && item.name == name)
-        })
-        .count();
+    item_parts(kind, key)?;
+    let definitions = super::modules::items_for_key(files, key).len();
     if definitions == 0 {
         bail!("pass contract {kind} item `{key}` is not defined at base {base}");
     }

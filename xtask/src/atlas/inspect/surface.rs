@@ -8,8 +8,9 @@ use serde::Serialize;
 use super::super::facts::Facts;
 use super::super::history::{self, BlameCommit};
 use super::super::modules::{
-    EXTERNAL_REACH, EscapingItem, bounded_names, escaping_items_for_boundary, is_declaration_only,
-    reference_module_label,
+    EXTERNAL_REACH, EscapingItem, ReExport, bounded_names, crate_path_for_source,
+    escaping_items_for_boundary, is_declaration_only, module_is_within, reference_module_label,
+    resolve_reexport,
 };
 use super::super::references::{Edge, EdgeKind};
 use super::super::syntax::{FileSyntax, PubItem};
@@ -24,7 +25,9 @@ const SURFACE_HEAD_SHARE: f64 = 0.8;
 mod tests;
 
 /// One escaping item measured from outside the boundary: how many
-/// production sites and files reach it, and from which modules.
+/// production sites and files reach it, and from which modules. A
+/// re-export is measured at the definition it names (`path`, `line`) and
+/// keyed by the module that exports it.
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct SurfaceRow {
     pub(super) module: String,
@@ -41,6 +44,12 @@ pub(super) struct SurfaceRow {
     pub(super) callers: Vec<String>,
     pub(super) internal_sites: usize,
     pub(super) test_sites: usize,
+    /// The defining module when the escaping declaration is a `pub use`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) reexport_of: Option<String>,
+    /// The definition as edges identify it.
+    #[serde(skip)]
+    pub(super) definition: EdgeTarget,
 }
 
 /// An escaping item with no production referrers.
@@ -55,6 +64,8 @@ pub(super) struct VestigialItem {
     /// The introducing commit reads as a fix: the item pins a behaviour
     /// someone already paid for.
     pub(super) pins_fix: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) reexport_of: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -64,6 +75,18 @@ pub(super) struct UnresolvedItem {
     pub(super) path: PathBuf,
     pub(super) line: usize,
 }
+
+/// An item whose tests reach it from outside the visibility it can narrow
+/// to: narrowing moves these tests.
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct PinRow {
+    pub(super) module: String,
+    pub(super) name: String,
+    pub(super) narrow_to: String,
+    pub(super) lost_sites: usize,
+    pub(super) tests: Vec<String>,
+}
+
 #[derive(Debug, Default, Serialize)]
 pub(super) struct SurfaceSection {
     pub(super) items: Vec<SurfaceRow>,
@@ -71,12 +94,27 @@ pub(super) struct SurfaceSection {
     pub(super) head_items: usize,
     pub(super) single_site: usize,
     pub(super) internal_only: usize,
+    /// Rows measured through a `pub use` at their definition.
+    pub(super) reexports: usize,
+    /// Further `pub use` declarations of an item already measured.
+    pub(super) aliases: usize,
+    /// `pub use` declarations whose definition lies outside the boundary.
+    pub(super) foreign_reexports: usize,
     pub(super) vestigial: Vec<VestigialItem>,
     pub(super) unresolved: Vec<UnresolvedItem>,
+    pub(super) pins: Vec<PinRow>,
 }
 
 /// Identity of a referenced definition as edges carry it.
 type EdgeTarget = (PathBuf, String, String, usize);
+
+/// One test reference to a definition in the boundary.
+struct TestSite {
+    module: String,
+    path: PathBuf,
+    line: usize,
+    function: Option<String>,
+}
 
 fn edge_target(edge: &Edge) -> EdgeTarget {
     (
@@ -157,7 +195,10 @@ fn reach_label(effective_reach: &str) -> String {
 /// Measures the escaping interface from outside: per-item outside sites and
 /// files, the head that carries most sites, the one-site tail, items only
 /// the module itself reaches, test reach, and the unreferenced remainder.
-/// Returns the section beside the count of unmeasured declarations.
+/// A `pub use` is measured at the definition it re-exports, so a module
+/// whose root re-exports private submodules reads at its real surface.
+/// Returns the section beside the count of unmeasured declarations
+/// (`mod` items and re-exports of things the index does not define).
 pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (SurfaceSection, usize) {
     let files = facts
         .syntax
@@ -165,7 +206,10 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
         .iter()
         .filter(|file| target.matches(&file.module_path, &file.path))
         .collect::<Vec<_>>();
-    let escaping = escaping_items_for_boundary(&files, &target.module, &facts.mod_index);
+    let mut escaping = escaping_items_for_boundary(&files, &target.module, &facts.mod_index);
+    // Definitions first, so a re-export of an item that escapes on its own
+    // reads as an alias rather than claiming the row.
+    escaping.sort_by_key(|item| item.id.kind == "use");
     let references = facts
         .references
         .as_ref()
@@ -178,14 +222,22 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
         modules: BTreeSet<String>,
     }
     let mut outside = BTreeMap::<EdgeTarget, Outside>::new();
-    let mut test_sites = BTreeMap::<EdgeTarget, usize>::new();
+    let mut test_sites = BTreeMap::<EdgeTarget, Vec<TestSite>>::new();
     for edge in references
         .edges
         .iter()
         .filter(|edge| edge.kind == EdgeKind::Reference && target.matches(&edge.to, &edge.to_path))
     {
         if edge.test {
-            *test_sites.entry(edge_target(edge)).or_default() += 1;
+            test_sites
+                .entry(edge_target(edge))
+                .or_default()
+                .push(TestSite {
+                    module: edge.from.clone(),
+                    path: edge.from_path.clone(),
+                    line: edge.from_line,
+                    function: edge.from_fn.as_ref().map(|function| function.label.clone()),
+                });
             continue;
         }
         if target.matches(&edge.from, &edge.from_path) {
@@ -201,52 +253,91 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
 
     let mut section = SurfaceSection::default();
     let mut declaration_only = 0;
+    let mut measured = BTreeSet::<EdgeTarget>::new();
     for item in escaping {
-        let Some((file, definition)) = definition_for_escaping(&files, &item) else {
+        let Some((file, declared)) = definition_for_escaping(&files, &item) else {
             continue;
         };
-        let Some(item_refs) = references.get(file, definition) else {
-            if is_declaration_only(&item.id.kind) {
-                declaration_only += 1;
+        let unresolved = |item: &EscapingItem| UnresolvedItem {
+            module: item.id.module.clone(),
+            name: item.id.name.clone(),
+            path: item.path.clone(),
+            line: item.line,
+        };
+        // (name at the boundary, defining file, definition)
+        let definitions: Vec<(String, &FileSyntax, &PubItem)> = if declared.kind == "use" {
+            match resolve_reexport(&facts.syntax.files, declared) {
+                ReExport::Definition(def_file, definition) => {
+                    vec![(item.id.name.clone(), def_file, definition)]
+                }
+                ReExport::Glob(items) => items
+                    .into_iter()
+                    .map(|(def_file, definition)| (definition.name.clone(), def_file, definition))
+                    .collect(),
+                ReExport::Foreign => {
+                    declaration_only += 1;
+                    continue;
+                }
+                ReExport::Unresolved => {
+                    section.unresolved.push(unresolved(&item));
+                    continue;
+                }
+            }
+        } else if is_declaration_only(&declared.kind) {
+            declaration_only += 1;
+            continue;
+        } else {
+            vec![(item.id.name.clone(), file, declared)]
+        };
+        let effective_reach = facts.mod_index.effective_reach(file, declared);
+        for (name, def_file, definition) in definitions {
+            let reexport_of = (declared.kind == "use").then(|| definition.module.clone());
+            if reexport_of.is_some() && !target.matches(&def_file.module_path, &def_file.path) {
+                section.foreign_reexports += 1;
                 continue;
             }
-            section.unresolved.push(UnresolvedItem {
-                module: item.id.module,
-                name: item.id.name,
-                path: item.path,
-                line: item.line,
+            let Some(item_refs) = references.get(def_file, definition) else {
+                section.unresolved.push(unresolved(&item));
+                continue;
+            };
+            let key = (
+                def_file.path.clone(),
+                definition.module.clone(),
+                definition.name.clone(),
+                definition.line,
+            );
+            if !measured.insert(key.clone()) {
+                section.aliases += 1;
+                continue;
+            }
+            if reexport_of.is_some() {
+                section.reexports += 1;
+            }
+            let reached = outside.remove(&key).unwrap_or_default();
+            section.items.push(SurfaceRow {
+                module: item.id.module.clone(),
+                name,
+                kind: definition.kind.clone(),
+                reach: reach_label(&effective_reach),
+                narrow_to: narrow_to(
+                    &item.id.module,
+                    &effective_reach,
+                    &item_refs.production,
+                    item_refs.production_count,
+                    &facts.bin_modules,
+                ),
+                path: def_file.path.clone(),
+                line: definition.line,
+                end_line: definition.end_line,
+                outside_sites: reached.sites,
+                outside_files: reached.files.len(),
+                callers: reached.modules.into_iter().collect(),
+                internal_sites: item_refs.production_count - reached.sites,
+                test_sites: test_sites.get(&key).map_or(0, Vec::len),
+                reexport_of,
+                definition: key,
             });
-            continue;
-        };
-        let key = (
-            item.path.clone(),
-            item.id.module.clone(),
-            item.id.name.clone(),
-            item.line,
-        );
-        let reached = outside.remove(&key).unwrap_or_default();
-        let effective_reach = facts.mod_index.effective_reach(file, definition);
-        section.items.push(SurfaceRow {
-            module: item.id.module,
-            name: item.id.name,
-            kind: item.id.kind,
-            reach: reach_label(&effective_reach),
-            narrow_to: narrow_to(
-                &definition.module,
-                &effective_reach,
-                &item_refs.production,
-                item_refs.production_count,
-                &facts.bin_modules,
-            ),
-            path: item.path,
-            line: item.line,
-            end_line: definition.end_line,
-            outside_sites: reached.sites,
-            outside_files: reached.files.len(),
-            callers: reached.modules.into_iter().collect(),
-            internal_sites: item_refs.production_count - reached.sites,
-            test_sites: test_sites.get(&key).copied().unwrap_or_default(),
-        });
+        }
     }
     section.items.sort_by(|left, right| {
         right
@@ -283,7 +374,64 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
             .cmp(&right.path)
             .then_with(|| left.line.cmp(&right.line))
     });
+    section.pins = pins(&section.items, &test_sites);
     (section, declaration_only)
+}
+
+/// Items whose tests sit outside the visibility they can narrow to. A test
+/// in another crate (`tests/`) loses every narrowing; a test in another
+/// module loses `private`, `pub(super)`, and `pub(in …)`. These are the
+/// tests a narrowing pass rewrites or deletes.
+fn pins(rows: &[SurfaceRow], test_sites: &BTreeMap<EdgeTarget, Vec<TestSite>>) -> Vec<PinRow> {
+    let mut pins = Vec::new();
+    for row in rows.iter().filter(|row| row.narrow_to != "keep") {
+        let Some(sites) = test_sites.get(&row.definition) else {
+            continue;
+        };
+        let crate_src = crate_path_for_source(&row.path).join("src");
+        let reach = match row.narrow_to.as_str() {
+            "private" => Some(row.module.clone()),
+            "pub(super)" => Some(parent_module(&row.module).to_owned()),
+            "pub(crate)" => None,
+            other => other
+                .strip_prefix("pub(in crate::")
+                .and_then(|rest| rest.strip_suffix(')'))
+                .map(str::to_owned),
+        };
+        let lost = sites
+            .iter()
+            .filter(|site| {
+                !site.path.starts_with(&crate_src)
+                    || reach
+                        .as_deref()
+                        .is_some_and(|reach| !module_is_within(&site.module, reach))
+            })
+            .map(|site| {
+                site.function.as_deref().map_or_else(
+                    || format!("{}:{}", site.path.display(), site.line),
+                    |function| format!("{function} ({}:{})", site.path.display(), site.line),
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        if lost.is_empty() {
+            continue;
+        }
+        pins.push(PinRow {
+            module: row.module.clone(),
+            name: row.name.clone(),
+            narrow_to: row.narrow_to.clone(),
+            lost_sites: lost.len(),
+            tests: lost.into_iter().collect(),
+        });
+    }
+    pins.sort_by(|left, right| {
+        right
+            .lost_sites
+            .cmp(&left.lost_sites)
+            .then_with(|| left.module.cmp(&right.module))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    pins
 }
 
 /// Escaping items with no production sites. A definition whose lines all
@@ -318,6 +466,7 @@ pub(super) fn vestigial_items(root: &Path, rows: &[SurfaceRow]) -> Result<Vec<Ve
             test_referrers: row.test_sites,
             introduced,
             pins_fix,
+            reexport_of: row.reexport_of.clone(),
         });
     }
     vestigial.sort_by(|left, right| {
@@ -379,13 +528,16 @@ pub(super) fn render_surface(out: &mut String, surface: &SurfaceSection, top: us
     }
     writeln!(
         out,
-        "\n{} escaping items, {} outside production sites; {} items carry {}% of sites; {} items have one outside site; {} items only the module itself reaches",
+        "\n{} escaping items, {} outside production sites; {} items carry {}% of sites; {} items have one outside site; {} items only the module itself reaches; {} measured through `pub use` ({} further aliases, {} re-exports defined outside the boundary)",
         surface.items.len(),
         surface.outside_sites,
         surface.head_items,
         (SURFACE_HEAD_SHARE * 100.0) as usize,
         surface.single_site,
-        surface.internal_only
+        surface.internal_only,
+        surface.reexports,
+        surface.aliases,
+        surface.foreign_reexports
     )
     .expect("writing to a String cannot fail");
 
@@ -396,11 +548,24 @@ pub(super) fn render_surface(out: &mut String, surface: &SurfaceSection, top: us
     for item in surface.vestigial.iter().take(top) {
         let introduced = item.introduced.as_ref().map_or_else(
             || "definition spans multiple commits".to_owned(),
-            |commit| format!("untouched since `{}` {}", commit.short, commit.summary),
+            |commit| {
+                format!(
+                    "untouched since `{}` {} {}",
+                    commit.short,
+                    history::civil_date(commit.time),
+                    commit.summary
+                )
+            },
         );
+        let reexport = item
+            .reexport_of
+            .as_ref()
+            .map_or_else(String::new, |module| {
+                format!(" (re-exported from {module})")
+            });
         writeln!(
             out,
-            "- `{}::{}` — {}:{}; test referrers: {}; {}{}",
+            "- `{}::{}` — {}:{}{reexport}; test referrers: {}; {}{}",
             item.module,
             item.name,
             item.path.display(),
@@ -421,6 +586,39 @@ pub(super) fn render_surface(out: &mut String, surface: &SurfaceSection, top: us
     }
 
     render_unresolved(out, &surface.unresolved, top);
+}
+
+pub(super) fn render_pins(out: &mut String, pins: &[PinRow], top: usize) {
+    out.push_str("\n# Tests past the narrowed reach\n\n");
+    if pins.is_empty() {
+        out.push_str("none: every test reaches its item from inside the narrowed reach\n");
+        return;
+    }
+    out.push_str("| item | narrow to | test sites lost | tests |\n");
+    out.push_str("|---|---|---:|---|\n");
+    for pin in pins.iter().take(top) {
+        writeln!(
+            out,
+            "| `{}::{}` | {} | {} | {} |",
+            pin.module,
+            pin.name,
+            pin.narrow_to,
+            pin.lost_sites,
+            bounded_names(&pin.tests, 3)
+        )
+        .expect("writing to a String cannot fail");
+    }
+    if pins.len() > top {
+        writeln!(out, "\n_{} more items omitted._", pins.len() - top)
+            .expect("writing to a String cannot fail");
+    }
+    writeln!(
+        out,
+        "\n{} items keep {} test sites past their narrowed reach; those tests move with the narrowing",
+        pins.len(),
+        pins.iter().map(|pin| pin.lost_sites).sum::<usize>()
+    )
+    .expect("writing to a String cannot fail");
 }
 
 fn render_unresolved(out: &mut String, unresolved: &[UnresolvedItem], top: usize) {

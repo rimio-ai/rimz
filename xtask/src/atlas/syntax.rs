@@ -28,6 +28,27 @@ pub(super) struct PubItem {
     pub(super) end_line: usize,
     pub(super) declared: String,
     pub(super) reach: String,
+    /// For a `use` item, what it re-exports: the modules its path may name
+    /// and the source name there (`*` for a glob).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) target: Option<UseTarget>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct UseTarget {
+    /// Candidate modules in resolution order; the first that defines the
+    /// name wins.
+    pub(super) modules: Vec<String>,
+    pub(super) name: String,
+}
+
+/// One leaf of a `use` tree: the path before it, the name at the source,
+/// and the name it binds locally (they differ under `as`).
+struct UseLeaf {
+    path: Vec<String>,
+    name: String,
+    local: String,
+    grouped: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -228,6 +249,7 @@ fn analyze_file(
         &file.items,
         &module_path,
         EXTERNAL_REACH,
+        crate_names,
         &mut pub_items,
         &mut mod_decls,
         &mut struct_fields,
@@ -316,6 +338,7 @@ fn collect_public_items(
     items: &[Item],
     module: &str,
     enclosing_reach: &str,
+    crate_names: &BTreeSet<String>,
     output: &mut Vec<PubItem>,
     mod_decls: &mut Vec<(String, String)>,
     struct_fields: &mut Vec<String>,
@@ -353,6 +376,7 @@ fn collect_public_items(
                             enclosing_reach,
                             module,
                         ),
+                        target: None,
                     });
                 }
             }
@@ -374,6 +398,7 @@ fn collect_public_items(
                     end_line: item.span().end().line,
                     declared: render_visibility(&item.vis),
                     reach: trait_reach.clone(),
+                    target: None,
                 });
                 for method in &item.items {
                     if let TraitItem::Fn(method) = method
@@ -388,6 +413,7 @@ fn collect_public_items(
                             end_line: method.span().end().line,
                             declared: "inherited".to_owned(),
                             reach: trait_reach.clone(),
+                            target: None,
                         });
                     }
                 }
@@ -415,6 +441,7 @@ fn collect_public_items(
                     end_line: item.span().end().line,
                     declared: render_visibility(&item.vis),
                     reach: module_reach.clone(),
+                    target: None,
                 });
             }
             if let Some((_, items)) = &item.content {
@@ -422,6 +449,7 @@ fn collect_public_items(
                     items,
                     &nested_module,
                     &module_reach,
+                    crate_names,
                     output,
                     mod_decls,
                     struct_fields,
@@ -487,12 +515,12 @@ fn collect_public_items(
                 item.ident.span().start().line,
             ),
             Item::Use(item) if is_boundary_visible(&item.vis) => {
-                let mut names = Vec::new();
-                flatten_use(&item.tree, &mut Vec::new(), &mut names);
-                for (_, name, _) in names {
+                let mut leaves = Vec::new();
+                flatten_use(&item.tree, &mut Vec::new(), &mut leaves);
+                for leaf in leaves {
                     output.push(PubItem {
                         module: module.to_owned(),
-                        name,
+                        name: leaf.local,
                         kind: "use".to_owned(),
                         params: None,
                         line: item.span().start().line,
@@ -503,6 +531,10 @@ fn collect_public_items(
                             enclosing_reach,
                             module,
                         ),
+                        target: Some(UseTarget {
+                            modules: use_target_modules(module, &leaf.path, crate_names),
+                            name: leaf.name,
+                        }),
                     });
                 }
                 continue;
@@ -523,7 +555,31 @@ fn collect_public_items(
                     enclosing_reach,
                     module,
                 ),
+                target: None,
             });
+        }
+    }
+}
+
+/// The modules a `use` path may name, in resolution order. An explicit
+/// `crate`, `self`, or `super` path resolves once; a bare path is first a
+/// child of the declaring module (uniform paths), then a crate-root path,
+/// then the path with the crate's own name stripped.
+fn use_target_modules(
+    module: &str,
+    path: &[String],
+    crate_names: &BTreeSet<String>,
+) -> Vec<String> {
+    match path.first().map(String::as_str) {
+        None => vec![module.to_owned()],
+        Some("crate" | "self" | "super") => vec![resolve_import_path(module, path)],
+        Some(first) => {
+            let bare = path.join("::");
+            let mut modules = vec![join_module(module, &bare), bare];
+            if crate_names.contains(first) {
+                modules.push(path[1..].join("::"));
+            }
+            modules
         }
     }
 }
@@ -718,21 +774,22 @@ impl<'ast> Visit<'ast> for DependencyCollector<'_> {
         if is_cfg_test(&item.attrs) {
             return;
         }
-        let mut flattened = Vec::new();
-        flatten_use(&item.tree, &mut Vec::new(), &mut flattened);
-        for (path, imported_item, grouped) in flattened {
-            let internal = path
+        let mut leaves = Vec::new();
+        flatten_use(&item.tree, &mut Vec::new(), &mut leaves);
+        for leaf in leaves {
+            let internal = leaf
+                .path
                 .first()
                 .is_some_and(|segment| matches!(segment.as_str(), "crate" | "self" | "super"));
-            let leaf_may_be_module = path.len() == 1 && !grouped;
-            let mut module_path = resolve_import_path(self.file_module, &path);
+            let leaf_may_be_module = leaf.path.len() == 1 && !leaf.grouped;
+            let mut module_path = resolve_import_path(self.file_module, &leaf.path);
             if module_path.is_empty() && internal {
                 module_path = "(crate)".to_owned();
             }
             if !module_path.is_empty() {
                 self.push(DependencySite {
                     module_path,
-                    item: imported_item,
+                    item: leaf.name,
                     line: item.span().start().line,
                     internal,
                     leaf_may_be_module,
@@ -861,18 +918,14 @@ pub(super) fn resolved_internal_import(
     }
 }
 
-fn flatten_use(
-    tree: &UseTree,
-    prefix: &mut Vec<String>,
-    output: &mut Vec<(Vec<String>, String, bool)>,
-) {
+fn flatten_use(tree: &UseTree, prefix: &mut Vec<String>, output: &mut Vec<UseLeaf>) {
     flatten_use_inner(tree, prefix, output, false);
 }
 
 fn flatten_use_inner(
     tree: &UseTree,
     prefix: &mut Vec<String>,
-    output: &mut Vec<(Vec<String>, String, bool)>,
+    output: &mut Vec<UseLeaf>,
     grouped: bool,
 ) {
     match tree {
@@ -881,13 +934,24 @@ fn flatten_use_inner(
             flatten_use_inner(&path.tree, prefix, output, grouped);
             prefix.pop();
         }
-        UseTree::Name(name) => {
-            output.push((prefix.clone(), name.ident.to_string(), grouped));
-        }
-        UseTree::Rename(rename) => {
-            output.push((prefix.clone(), rename.rename.to_string(), grouped));
-        }
-        UseTree::Glob(_) => output.push((prefix.clone(), "*".to_owned(), grouped)),
+        UseTree::Name(name) => output.push(UseLeaf {
+            path: prefix.clone(),
+            name: name.ident.to_string(),
+            local: name.ident.to_string(),
+            grouped,
+        }),
+        UseTree::Rename(rename) => output.push(UseLeaf {
+            path: prefix.clone(),
+            name: rename.ident.to_string(),
+            local: rename.rename.to_string(),
+            grouped,
+        }),
+        UseTree::Glob(_) => output.push(UseLeaf {
+            path: prefix.clone(),
+            name: "*".to_owned(),
+            local: "*".to_owned(),
+            grouped,
+        }),
         UseTree::Group(group) => {
             for item in &group.items {
                 flatten_use_inner(item, prefix, output, true);
