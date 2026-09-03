@@ -16,7 +16,7 @@ use super::output::{self, OutputArgs};
 use super::rank::{self, Hotspot, RankBy, Row, Totals};
 use super::shapes::{self, ShapeFamily};
 use super::syntax::resolved_internal_import;
-use super::target::{self, TARGET_FILE, Target, VerdictKind};
+use super::target::{self, LayerRanks, TARGET_FILE, Target, VerdictKind};
 use super::{positive_usize, set_once, validate_scope, value};
 
 const DEFAULT_PATH: &str = "crates/rimz/src";
@@ -60,6 +60,10 @@ struct Cycle {
     b: String,
     a_to_b: usize,
     b_to_a: usize,
+    /// Whether both modules sit in one target layer; `None` without a
+    /// target or when a module is unranked. A same-layer cycle is the one
+    /// layering cannot express; a cross-layer one already reads as debt.
+    same_layer: Option<bool>,
 }
 
 /// One target rule's upward dependencies, counted at their sites and split
@@ -287,7 +291,8 @@ fn build_report(
         recorded_debt(root, target, facts, scope)
     });
     let probes = build_probes(scope, &rows, &hot, &shapes, &guards, &debt);
-    let cycles = same_layer_cycles(facts, scope);
+    let ranks = configured.as_ref().map(Target::layer_ranks);
+    let cycles = module_cycles(facts, scope, ranks.as_ref());
 
     Ok(Report {
         path: facts.scope.clone(),
@@ -494,20 +499,23 @@ fn build_probes(
         .collect()
 }
 
-fn same_layer_cycles(facts: &Facts, scope: &Path) -> Vec<Cycle> {
+fn module_cycles(facts: &Facts, scope: &Path, ranks: Option<&LayerRanks>) -> Vec<Cycle> {
     cycles_from_syntax(
         &facts.syntax.files,
         &facts.known_modules,
         &facts.crate_names,
         scope,
+        ranks,
     )
 }
 
+/// Top-level module pairs that import each other, same-layer pairs first.
 fn cycles_from_syntax(
     files: &[super::syntax::FileSyntax],
     known_modules: &BTreeSet<String>,
     crate_names: &BTreeSet<String>,
     scope: &Path,
+    ranks: Option<&LayerRanks>,
 ) -> Vec<Cycle> {
     let scope_module = crate_module_for_row(scope, "(root)");
     let mut pairs = BTreeMap::<(String, String), (usize, usize)>::new();
@@ -541,7 +549,11 @@ fn cycles_from_syntax(
     let mut cycles = pairs
         .into_iter()
         .filter_map(|((a, b), (a_to_b, b_to_a))| {
-            (a_to_b > 0 && b_to_a > 0).then_some(Cycle {
+            (a_to_b > 0 && b_to_a > 0).then(|| Cycle {
+                same_layer: ranks.and_then(|ranks| {
+                    conform::layer_direction(ranks, &a, &b)
+                        .map(|direction| direction == Direction::Same)
+                }),
                 a,
                 b,
                 a_to_b,
@@ -550,8 +562,10 @@ fn cycles_from_syntax(
         })
         .collect::<Vec<_>>();
     cycles.sort_by(|left, right| {
-        (right.a_to_b + right.b_to_a)
-            .cmp(&(left.a_to_b + left.b_to_a))
+        right
+            .same_layer
+            .cmp(&left.same_layer)
+            .then_with(|| (right.a_to_b + right.b_to_a).cmp(&(left.a_to_b + left.b_to_a)))
             .then_with(|| left.a.cmp(&right.a))
             .then_with(|| left.b.cmp(&right.b))
     });
@@ -877,15 +891,20 @@ fn render_debt(output: &mut String, debt: &Debt, cycles: &[Cycle], top: usize) {
 
 fn render_cycles(output: &mut String, cycles: &[Cycle], top: usize) {
     if cycles.is_empty() {
-        writeln!(output, "\nsame-layer cycles: none").expect("writing to a String cannot fail");
+        writeln!(output, "\nmodule cycles: none").expect("writing to a String cannot fail");
         return;
     }
     let mut rendered = cycles
         .iter()
         .take(top)
         .map(|cycle| {
+            let layer = match cycle.same_layer {
+                Some(true) => ", same layer",
+                Some(false) => ", cross-layer",
+                None => "",
+            };
             format!(
-                "{} ↔ {} ({}/{} sites)",
+                "{} ↔ {} ({}/{} sites{layer})",
                 cycle.a, cycle.b, cycle.a_to_b, cycle.b_to_a
             )
         })
@@ -893,7 +912,7 @@ fn render_cycles(output: &mut String, cycles: &[Cycle], top: usize) {
     if cycles.len() > top {
         rendered.push(format!("… {} more", cycles.len() - top));
     }
-    writeln!(output, "\nsame-layer cycles: {}", rendered.join(", "))
+    writeln!(output, "\nmodule cycles: {}", rendered.join(", "))
         .expect("writing to a String cannot fail");
 }
 
@@ -1222,6 +1241,7 @@ mod tests {
             &known_modules,
             &BTreeSet::new(),
             Path::new("crates/demo/src"),
+            None,
         );
 
         assert_eq!(
@@ -1231,8 +1251,19 @@ mod tests {
                 b: "b".to_owned(),
                 a_to_b: 2,
                 b_to_a: 1,
+                same_layer: None,
             }]
         );
+
+        let ranks = LayerRanks::new(&[vec!["a".to_owned()], vec!["b".to_owned()]]);
+        let cycles = cycles_from_syntax(
+            &syntax.files,
+            &known_modules,
+            &BTreeSet::new(),
+            Path::new("crates/demo/src"),
+            Some(&ranks),
+        );
+        assert_eq!(cycles[0].same_layer, Some(false));
     }
 
     #[test]
