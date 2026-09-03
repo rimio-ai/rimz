@@ -960,7 +960,7 @@ fn flatten_use_inner(
     }
 }
 
-fn resolve_import_path(file_module: &str, path: &[String]) -> String {
+pub(super) fn resolve_import_path(file_module: &str, path: &[String]) -> String {
     let mut base = file_module
         .split("::")
         .filter(|part| !part.is_empty())

@@ -15,7 +15,7 @@ use super::modules::{
 use super::output::{self, OutputArgs};
 use super::rank::{self, Hotspot, RankBy, Row, Totals};
 use super::shapes::{self, ShapeFamily};
-use super::syntax::resolved_internal_import;
+use super::syntax::{FileSyntax, FnBody, Spelling, resolve_import_path, resolved_internal_import};
 use super::target::{self, LayerRanks, TARGET_FILE, Target, VerdictKind};
 use super::{positive_usize, set_once, validate_scope, value};
 
@@ -29,8 +29,19 @@ Emits a bounded Markdown survey of accretion, admitted upward dependencies, and 
 Rank order defaults to accretion (code × churn).";
 
 const SECTIONS: &[&str] = &[
-    "probes", "rank", "hot", "debt", "shapes", "guards", "footer",
+    "probes",
+    "rank",
+    "hot",
+    "assemblers",
+    "debt",
+    "shapes",
+    "guards",
+    "footer",
 ];
+
+/// Distinct scope modules a function must call into before it reads as an
+/// assembler.
+const ASSEMBLER_MIN_MODULES: usize = 3;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 struct ProbeHotspot {
@@ -52,6 +63,20 @@ struct Probe {
     guard_families: usize,
     admitted_upward_sites: usize,
     next: String,
+}
+
+/// One production function that calls into several of the scope's modules:
+/// the caller-side `deepen` candidate. Derived from syntax, callees resolved
+/// through the file's imports, so `survey` stays index-free; `inspect
+/// --from` measures the same function exactly.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct Assembler {
+    function: String,
+    path: PathBuf,
+    line: usize,
+    /// Scope modules called into, each with its distinct callees, most first.
+    providers: Vec<ProviderSites>,
+    callees: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -117,6 +142,7 @@ struct Report {
     rows: Vec<Row>,
     totals: Totals,
     hot: Vec<Hotspot>,
+    assemblers: Vec<Assembler>,
     debt: Debt,
     cycles: Vec<Cycle>,
     shapes: Vec<ShapeFamily>,
@@ -293,6 +319,12 @@ fn build_report(
     let probes = build_probes(scope, &rows, &hot, &shapes, &guards, &debt);
     let ranks = configured.as_ref().map(Target::layer_ranks);
     let cycles = module_cycles(facts, scope, ranks.as_ref());
+    let assemblers = assemblers(
+        &facts.syntax.files,
+        &facts.known_modules,
+        &facts.crate_names,
+        scope,
+    );
 
     Ok(Report {
         path: facts.scope.clone(),
@@ -300,6 +332,7 @@ fn build_report(
         rows,
         totals,
         hot,
+        assemblers,
         debt,
         cycles,
         shapes,
@@ -497,6 +530,143 @@ fn build_probes(
             }
         })
         .collect()
+}
+
+/// The module row a scope-internal module belongs to: its first segment
+/// below the scope module (`(root)` for the scope module itself).
+fn scope_row<'a>(module: &'a str, scope_module: &str) -> &'a str {
+    if scope_module.is_empty() {
+        return if module == "(crate)" {
+            "(root)"
+        } else {
+            conform::top_module(module)
+        };
+    }
+    module
+        .strip_prefix(scope_module)
+        .and_then(|rest| rest.strip_prefix("::"))
+        .map_or("(root)", conform::top_module)
+}
+
+/// Resolves one syntax callee to the scope module that defines it: a
+/// `crate`/`self`/`super` path directly, otherwise through the file's
+/// imports, trimmed to a module the crate defines; method calls and
+/// unimported names are unknown. A crate-root item reads as `(crate)`.
+fn callee_module(
+    callee: &str,
+    file_module: &str,
+    imports: &BTreeMap<&str, String>,
+    known_modules: &BTreeSet<String>,
+) -> Option<String> {
+    let segments = callee.split("::").collect::<Vec<_>>();
+    let (first, rest) = segments.split_first()?;
+    let (mut module, floor) = match *first {
+        "crate" | "self" | "super" => {
+            let path = segments[..segments.len() - 1]
+                .iter()
+                .map(|segment| (*segment).to_owned())
+                .collect::<Vec<_>>();
+            (resolve_import_path(file_module, &path), String::new())
+        }
+        _ => {
+            let base = imports.get(first)?.clone();
+            let module = rest[..rest.len().saturating_sub(1)]
+                .iter()
+                .fold(base.clone(), |module, segment| {
+                    format!("{module}::{segment}")
+                });
+            (module, base)
+        }
+    };
+    while module != floor && !known_modules.contains(&module) {
+        module = module
+            .rsplit_once("::")
+            .map_or_else(|| floor.clone(), |(parent, _)| parent.to_owned());
+    }
+    if module.is_empty() {
+        module = "(crate)".to_owned();
+    }
+    Some(module)
+}
+
+fn assemblers(
+    files: &[FileSyntax],
+    known_modules: &BTreeSet<String>,
+    crate_names: &BTreeSet<String>,
+    scope: &Path,
+) -> Vec<Assembler> {
+    let scope_module = crate_module_for_row(scope, "(root)");
+    let mut assemblers = Vec::new();
+    for file in files.iter().filter(|file| path_in_scope(&file.path, scope)) {
+        let imports = file
+            .dependencies
+            .iter()
+            .filter(|dependency| dependency.spelling == Spelling::Use)
+            .filter_map(|dependency| {
+                resolved_internal_import(dependency, known_modules, crate_names)
+                    .map(|module| (dependency.item.as_str(), module))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let own_row = scope_row(&file.module_path, &scope_module);
+        for function in &file.fns {
+            let mut providers = BTreeMap::<String, BTreeSet<&str>>::new();
+            for callee in &function.callees {
+                let Some(module) =
+                    callee_module(callee, &file.module_path, &imports, known_modules)
+                else {
+                    continue;
+                };
+                if !module_is_within(&module, &scope_module) {
+                    continue;
+                }
+                let row = scope_row(&module, &scope_module);
+                if row == own_row {
+                    continue;
+                }
+                providers
+                    .entry(row.to_owned())
+                    .or_default()
+                    .insert(callee.rsplit("::").next().unwrap_or(callee));
+            }
+            if providers.len() < ASSEMBLER_MIN_MODULES {
+                continue;
+            }
+            assemblers.push(assembler(function, providers));
+        }
+    }
+    assemblers.sort_by(|left, right| {
+        right
+            .providers
+            .len()
+            .cmp(&left.providers.len())
+            .then_with(|| right.callees.cmp(&left.callees))
+            .then_with(|| left.path.cmp(&right.path))
+            .then_with(|| left.line.cmp(&right.line))
+    });
+    assemblers
+}
+
+fn assembler(function: &FnBody, providers: BTreeMap<String, BTreeSet<&str>>) -> Assembler {
+    let mut providers = providers
+        .into_iter()
+        .map(|(provider, callees)| ProviderSites {
+            provider,
+            sites: callees.len(),
+        })
+        .collect::<Vec<_>>();
+    providers.sort_by(|left, right| {
+        right
+            .sites
+            .cmp(&left.sites)
+            .then_with(|| left.provider.cmp(&right.provider))
+    });
+    Assembler {
+        function: function.label(),
+        path: function.path.clone(),
+        line: function.line,
+        callees: providers.iter().map(|provider| provider.sites).sum(),
+        providers,
+    }
 }
 
 fn module_cycles(facts: &Facts, scope: &Path, ranks: Option<&LayerRanks>) -> Vec<Cycle> {
@@ -726,6 +896,36 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
             )
             .unwrap();
         }
+    }
+
+    if output_args.wants("assemblers") {
+        writeln!(output, "\n## Assemblers").unwrap();
+        writeln!(
+            output,
+            "| function | file:line | modules | callees | wires |"
+        )
+        .unwrap();
+        writeln!(output, "| --- | --- | ---: | ---: | --- |").unwrap();
+        for row in report.assemblers.iter().take(top) {
+            writeln!(
+                output,
+                "| {} | {}:{} | {} | {} | {} |",
+                row.function,
+                row.path.display(),
+                row.line,
+                row.providers.len(),
+                row.callees,
+                render_provider_sites(&row.providers, 4)
+            )
+            .unwrap();
+        }
+        writeln!(
+            output,
+            "\n{} functions call into {}+ scope modules (syntax-resolved through imports; `inspect --from` measures one exactly)",
+            report.assemblers.len(),
+            ASSEMBLER_MIN_MODULES
+        )
+        .unwrap();
     }
 
     if output_args.wants("debt") {
@@ -983,7 +1183,48 @@ fn render_json(report: &Report, output_args: &OutputArgs) -> Result<String> {
 mod tests {
     use super::super::detect::GuardSite;
     use super::super::shapes::Member;
+    use super::super::sources::Source;
     use super::*;
+
+    #[test]
+    fn assemblers_count_distinct_scope_modules_a_function_calls_into() {
+        let report = super::super::syntax::analyze_sources(
+            &[Source::new(
+                "crates/demo/src/cli.rs",
+                "use crate::agents;\nuse crate::config::Config;\nuse crate::store::open;\nfn run() {\n    open();\n    agents::list();\n    agents::catalog::load();\n    Config::load();\n    crate::mux::attach();\n    crate::Paths::load();\n    self::helper();\n    value.finish();\n}\nfn light() { open(); Config::load(); }\nfn helper() {}\n",
+            )],
+            &BTreeSet::new(),
+        );
+        let known = ["cli", "agents", "agents::catalog", "config", "store", "mux"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+
+        let rows = assemblers(
+            &report.files,
+            &known,
+            &BTreeSet::new(),
+            Path::new("crates/demo/src"),
+        );
+
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].function, "run");
+        assert_eq!(rows[0].callees, 6);
+        assert_eq!(
+            rows[0]
+                .providers
+                .iter()
+                .map(|provider| (provider.provider.as_str(), provider.sites))
+                .collect::<Vec<_>>(),
+            [
+                ("agents", 2),
+                ("(root)", 1),
+                ("config", 1),
+                ("mux", 1),
+                ("store", 1)
+            ]
+        );
+    }
 
     #[test]
     fn survey_output_is_bounded_by_top() {
@@ -1040,6 +1281,7 @@ mod tests {
             totals: rank::totals(&rows),
             rows,
             hot,
+            assemblers: Vec::new(),
             debt: Debt {
                 configured: true,
                 rules: (0..30)
