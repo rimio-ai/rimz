@@ -102,8 +102,8 @@ This indexes what lives where; runtime shape and the single-binary rationale liv
 - `agents/` — the provider-neutral `AgentDefinition` catalog, caller-aligned capability contracts and services, `state.rs` rollup, private `adapters/` implementations for every built-in and process plugin, and shared spend/pricing/account machinery including upstream pricing projection.
 - `room/` — private managed-room context, birth/reset lifecycle, sidebar/presence options, and health gating.
 - `harness/` — layout IR, teams, address grammar, launch argv, supervised runs and their wake socket, loop scheduling, resume planning, and rebirth recovery inspection/materialization.
-- `message/` — durable per-agent message queue: park-vs-live dispatch, live-pane send, scheduled wakeups.
-- `store/` — durable state engine: `Store` handle, canonical snapshot schema, writer mutation vocabulary/choreography, framed event log, message/run stores, GC.
+- `message/` — message delivery: park-vs-live dispatch, live-pane send, reply waits, scheduled wakeups.
+- `store/` — durable state engine: `Store` handle, canonical snapshot schema, writer mutation vocabulary/choreography, framed event log, message record and queue codec, lifecycle follower, run store, GC.
 - `mux/` — Zellij/tmux seam: `MuxBackend`, subprocess engine, reconcile planner, recovery.
 - `sidebar/` — data plane: Zellij presence ingestion, producer election, pulled-truth/event fusion, projection fold, heavy-lane refresh, consumer wake fanout.
 - `sidebar_pane/` — native renderer process: serve loop, pets, and the ratatui theme/component edge.

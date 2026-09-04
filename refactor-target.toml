@@ -18,13 +18,13 @@ layers = [
     "agent_activity",
     "pane",
     "proc",
-    "store",
     "config",
     "trust",
     "theme",
 ],
+    ["agents"],
+    ["store"],
     [
-    "agents",
     "daemon_view",
     "message",
     "mux",
@@ -55,7 +55,6 @@ layers = [
     "cli",
 ],
 ]
-verdict = []
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
@@ -65,9 +64,12 @@ surface-budget = 6
 path = "crates/rimz/src/agents"
 upward-dependencies = [
     "child_process",
+    "daemon_view",
+    "diag::rotating",
     "harness::budget",
     "harness::run",
     "harness::target",
+    "mux",
     "worktree",
 ]
 surface-budget = 978
@@ -132,8 +134,11 @@ surface-budget = 83
 
 [[module]]
 path = "crates/rimz/src/disk"
-allowed-dependencies = ["ids", "sock"]
-surface-budget = 111
+allowed-dependencies = [
+    "ids",
+    "sock",
+]
+surface-budget = 110
 
 [[module]]
 path = "crates/rimz/src/disk_usage.rs"
@@ -178,7 +183,7 @@ upward-dependencies = [
     "harness::target",
     "sidebar::produce",
 ]
-surface-budget = 157
+surface-budget = 90
 
 [[module]]
 path = "crates/rimz/src/mux"
@@ -206,6 +211,7 @@ surface-budget = 4
 
 [[module]]
 path = "crates/rimz/src/pane"
+upward-dependencies = ["store::snapshot"]
 surface-budget = 26
 
 [[module]]
@@ -256,7 +262,6 @@ surface-budget = 17
 [[module]]
 path = "crates/rimz/src/store"
 upward-dependencies = [
-    "agents",
     "daemon_view",
     "diag",
     "diag::record",
@@ -265,7 +270,6 @@ upward-dependencies = [
     "harness::run",
     "harness::run_wake",
     "harness::target",
-    "message",
     "mux",
     "remote::link",
     "sidebar::heartbeat",
@@ -282,6 +286,7 @@ surface-budget = 31
 
 [[module]]
 path = "crates/rimz/src/transcript.rs"
+upward-dependencies = ["store::snapshot"]
 surface-budget = 15
 
 [[module]]
@@ -311,7 +316,10 @@ surface-budget = 48
 
 [[module]]
 path = "crates/rimz/src/workspace.rs"
-upward-dependencies = ["worktree"]
+upward-dependencies = [
+    "store::workspace_record",
+    "worktree",
+]
 surface-budget = 21
 
 [[module]]
@@ -397,7 +405,6 @@ allowed-dependencies = [
     "ids",
     "mux",
     "sidebar",
-    "store",
 ]
 surface-budget = 2
 
@@ -462,8 +469,12 @@ surface-budget = 10
 
 [[module]]
 path = "crates/rimz/src/store/mod.rs"
-allowed-dependencies = ["disk", "disk::paths", "harness::run"]
-surface-budget = 37
+allowed-dependencies = [
+    "disk",
+    "disk::paths",
+    "harness::run",
+]
+surface-budget = 30
 
 [[module]]
 path = "crates/rimz/src/utils/time.rs"
@@ -578,7 +589,6 @@ allowed-dependencies = [
     "harness::spec",
     "ids",
     "proc",
-    "store",
 ]
 surface-budget = 9
 
@@ -609,3 +619,13 @@ baseline = 0
 symbol = "invalidate_snapshot_caches"
 path = "crates/rimz/src/store"
 baseline = 3
+
+[[verdict]]
+kind = "item"
+key = "store::event::for_terminal_status"
+reason = "Mirrors MessageStatus::is_terminal on purpose: the event method names the wire event per terminal status, and a derived mapping would hide the audit vocabulary."
+
+[[verdict]]
+kind = "item"
+key = "store::agent_context::write_record"
+reason = "Fully-shaped sidecar fixture for integration tests; lives behind the testkit feature, not production API."

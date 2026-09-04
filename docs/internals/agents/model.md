@@ -98,7 +98,7 @@ One pure transition function, [`step`](../../../crates/rimz/src/agents/lifecycle
 
 Hook ingestion dispatches these envelopes through a static reactor table. Each reactor declares a [`SignalSet`](../../../crates/rimz/src/agents/lifecycle/event.rs) beside its action; queued-delivery nudges, terminal run wakes, and ended-agent message archival consume the same vocabulary that external harnesses receive. Reactors remain latency paths and re-check durable state before acting.
 
-[`rimz events follow`](../../reference/cli/events.md) folds the same `step` function over the durable log and emits one envelope per conforming lifecycle record. The stream starts from a read-only rollup seed at the live edge, or from an empty state at the start of the current generation under `--replay`, and drains a rotated tail before reading the new active log. The durable log remains truth; polling and reactor dispatch only surface it sooner.
+[`rimz events follow`](../../reference/cli/events.md) uses the read-only [`store::follow`](../../../crates/rimz/src/store/follow.rs) follower to fold the same `step` function over the durable log and emit one envelope per conforming lifecycle record. The stream starts from a read-only rollup seed at the live edge, or from an empty state at the start of the current generation under `--replay`, and drains a rotated tail before reading the new active log. The durable log remains truth; polling and reactor dispatch only surface it sooner.
 
 ```text
  ●
