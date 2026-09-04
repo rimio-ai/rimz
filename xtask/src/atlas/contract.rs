@@ -13,6 +13,8 @@ use super::syntax::FileSyntax;
 pub(super) struct PassContract {
     pub(super) version: u8,
     pub(super) base: String,
+    #[serde(default)]
+    pub(super) kind: PassKind,
     pub(super) paths: Vec<PathBuf>,
     pub(super) max_production_sloc_delta: i64,
     #[serde(default)]
@@ -25,6 +27,14 @@ pub(super) struct PassContract {
     pub(super) rehome: Vec<RehomeExpectation>,
     #[serde(default)]
     pub(super) dependency: Vec<DependencyExpectation>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum PassKind {
+    #[default]
+    Module,
+    Seam,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -159,8 +169,14 @@ fn validate_schema(contract: &PassContract) -> Result<()> {
             "diff contract path",
         )?;
     }
-    if contract.max_production_sloc_delta >= 0 {
-        bail!("pass contract max-production-sloc-delta must be negative");
+    match contract.kind {
+        PassKind::Module if contract.max_production_sloc_delta >= 0 => bail!(
+            "pass contract max-production-sloc-delta must be negative for a module pass; a seam pass declares kind = \"seam\" and takes a flat ceiling"
+        ),
+        PassKind::Seam if contract.dependency.is_empty() && contract.rehome.is_empty() => bail!(
+            "pass contract kind = \"seam\" needs a [[dependency]] or [[rehome]] row to prove the seam"
+        ),
+        _ => {}
     }
     for expectation in &contract.esc {
         let path = super::validate_scope(
@@ -256,6 +272,7 @@ mod tests {
         PassContract {
             version: 1,
             base: "main".to_owned(),
+            kind: PassKind::Module,
             paths: vec![PathBuf::from("src")],
             max_production_sloc_delta: -1,
             assembly: vec![AssemblyExpectation {
@@ -295,11 +312,73 @@ mod tests {
     }
 
     #[test]
-    fn contract_rejects_nonnegative_sloc_budgets() {
+    fn module_contract_rejects_nonnegative_sloc_ceiling() {
         let (root, syntax) = syntax();
         let mut contract = contract();
         contract.max_production_sloc_delta = 0;
-        assert!(validate(root.path(), &syntax, &syntax, contract).is_err());
+        let error = validate(root.path(), &syntax, &syntax, contract)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("must be negative for a module pass"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn seam_contract_takes_a_flat_ceiling() {
+        let (root, syntax) = syntax();
+        let path = root.path().join("pass.toml");
+        for ceiling in [0, 12] {
+            fs::write(
+                &path,
+                format!(
+                    r#"version = 2
+base = "main"
+kind = "seam"
+paths = ["src"]
+max-production-sloc-delta = {ceiling}
+
+[[dependency]]
+from = "caller"
+to = "provider"
+max-sites = 0
+"#
+                ),
+            )
+            .unwrap();
+
+            let loaded = load(root.path(), &path, &syntax, &syntax).unwrap();
+
+            assert_eq!(loaded.kind, PassKind::Seam);
+            assert_eq!(loaded.max_production_sloc_delta, ceiling);
+        }
+    }
+
+    #[test]
+    fn seam_contract_needs_a_seam_row() {
+        let (root, syntax) = syntax();
+        let path = root.path().join("pass.toml");
+        fs::write(
+            &path,
+            r#"version = 2
+base = "main"
+kind = "seam"
+paths = ["src"]
+max-production-sloc-delta = 0
+"#,
+        )
+        .unwrap();
+
+        let error = format!(
+            "{:#}",
+            load(root.path(), &path, &syntax, &syntax).unwrap_err()
+        );
+
+        assert!(
+            error.contains("needs a [[dependency]] or [[rehome]] row"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -363,6 +442,7 @@ max-production-sloc-delta = -1
         let loaded = load(root.path(), &path, &syntax, &syntax).unwrap();
 
         assert_eq!(loaded.version, 1);
+        assert_eq!(loaded.kind, PassKind::Module);
         assert!(loaded.esc.is_empty());
         assert!(loaded.delete.is_empty());
         assert!(loaded.rehome.is_empty());
