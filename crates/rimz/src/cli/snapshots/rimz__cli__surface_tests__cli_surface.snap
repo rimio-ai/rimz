@@ -710,6 +710,17 @@ rimz events
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
 
+rimz events emit
+    <name>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json <OBJECT>  [action=set takes=1..=1]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --source <SOURCE>  [action=set takes=1..=1 hidden default=cli values=cli|forge]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
 rimz events follow
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     -h, --help  [action=help takes=0..=0]
@@ -721,6 +732,8 @@ rimz events follow
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz events help
+
+rimz events help emit
 
 rimz events help follow
 
@@ -842,6 +855,8 @@ rimz help daemon content [hidden]
 rimz help doctor
 
 rimz help events
+
+rimz help events emit
 
 rimz help events follow
 
@@ -1057,6 +1072,14 @@ rimz help uninstall
 
 rimz help update
 
+rimz help wake
+
+rimz help wake cancel
+
+rimz help wake list
+
+rimz help wake watch [hidden]
+
 rimz help web
 
 rimz help web exec [hidden]
@@ -1209,15 +1232,18 @@ rimz loop add
     --every <EVERY>  [action=set takes=1..=1]
     -h, --help  [action=help takes=0..=0]
     --in <DUR>  [action=set takes=1..=1]
+    --match <KEY=VALUE>  [action=append takes=1..=1]
     --max-attempts <N>  [action=set takes=1..=1]
     --max-strikes <N>  [action=set takes=1..=1]
     --mode <MODE>  [action=set takes=1..=1]
     --mux <MUX>  [action=set takes=1..=1 global]
-    --on <fail|success>  [action=set takes=1..=1]
+    --on <fail|success|any>  [action=set takes=1..=1]
+    --once  [action=set-true takes=0..=0]
     --project  [action=set-true takes=0..=0]
     --prompt <PROMPT>  [action=set takes=1..=1]
     --prompt-file <PATH>  [action=set takes=1..=1]
     --root <ROOT>  [action=set takes=1..=1 default=.]
+    --signal <NAME>  [action=set takes=1..=1]
     --surplus <RATIO>  [action=set takes=1..=1]
     --surplus-after <DUR>  [action=set takes=1..=1]
     --system-prompt-file <PATH>  [action=set takes=1..=1]
@@ -1353,6 +1379,7 @@ rimz loop run [hidden]
     -h, --help  [action=help takes=0..=0]
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
+    --signal-json <SIGNAL_JSON>  [action=set takes=1..=1 hidden]
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
 
@@ -2502,6 +2529,62 @@ rimz update
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
     --version <TAG>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz wake
+    <command>  [action=append takes=1..=inf]
+    <target>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --in <DURATION>  [action=set takes=1..=1]
+    --json  [action=set-true takes=0..=0]
+    --match <KEY=VALUE>  [action=append takes=1..=1]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --on <fail|success|any>  [action=set takes=1..=1 values=fail|success|any]
+    --prompt <PROMPT>  [action=set takes=1..=1]
+    --prompt-file <PATH>  [action=set takes=1..=1]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --signal <NAME>  [action=set takes=1..=1]
+    --timeout <DURATION>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --wait <DURATION>  [action=set takes=0..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz wake cancel
+    <name>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz wake help
+
+rimz wake help cancel
+
+rimz wake help help
+
+rimz wake help list
+
+rimz wake help watch [hidden]
+
+rimz wake list (aliases: ls)
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz wake watch [hidden]
+    <name>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz web

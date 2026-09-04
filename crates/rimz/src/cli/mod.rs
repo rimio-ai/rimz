@@ -48,6 +48,7 @@ mod transcript;
 mod trust;
 mod uninstall;
 mod update;
+mod wake;
 mod web;
 mod workspace;
 mod worktree;
@@ -126,6 +127,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Worktree(args)) => worktree::run(args, &globals),
         Some(Subcmd::Agents(args)) => agents_cmd::run(*args, &globals),
         Some(Subcmd::Subagents(args)) => subagents::run(*args, &globals),
+        Some(Subcmd::Wake(args)) => wake::run(*args, &globals),
         Some(Subcmd::Teams(args)) => teams::run(*args, &globals),
         Some(Subcmd::Asks(args)) => asks::run(args, &globals),
         Some(Subcmd::Answer(args)) => answer::run(args, &globals),
@@ -516,6 +518,8 @@ enum Subcmd {
     Agents(Box<agents_cmd::AgentsArgs>),
     /// Launch and drive supervised child agents.
     Subagents(Box<subagents::SubagentsArgs>),
+    /// Wake an agent when a timer, command, or signal finishes.
+    Wake(Box<wake::WakeCommand>),
     /// Discover, inspect, install, launch, and resume named teams.
     Teams(Box<teams::TeamsArgs>),
     /// Inspect the blocking prompts agents currently have open.
