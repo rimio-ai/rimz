@@ -499,7 +499,8 @@ fn newer_launch_contradicts_observation(
 fn local_pane_matches(pane: &PaneRef, observation: &LocalSessionObservation) -> bool {
     pane_may_host_kind(pane, observation.kind.as_str())
         && crate::store::snapshot::process::pane_worktree_path(pane).is_some_and(|workspace| {
-            crate::worktree::normalize_path_lexical(Path::new(workspace)) == observation.workspace
+            crate::utils::path::normalize_path_lexical(Path::new(workspace))
+                == observation.workspace
         })
 }
 

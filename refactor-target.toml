@@ -308,7 +308,7 @@ surface-budget = 18
 
 [[module]]
 path = "crates/rimz/src/utils.rs"
-surface-budget = 1
+surface-budget = 2
 
 [[module]]
 path = "crates/rimz/src/web"
@@ -530,6 +530,7 @@ allowed-dependencies = [
     "mux",
     "store::runtime",
     "store::writer",
+    "utils::path",
     "worktree",
 ]
 surface-budget = 59

@@ -538,7 +538,7 @@ fn absolute_lexical_path(path: &Path) -> Result<PathBuf> {
             .context("reading current directory")?
             .join(path)
     };
-    Ok(rimz::worktree::normalize_path_lexical(&path))
+    Ok(rimz::utils::path::normalize_path_lexical(&path))
 }
 
 #[cfg(unix)]

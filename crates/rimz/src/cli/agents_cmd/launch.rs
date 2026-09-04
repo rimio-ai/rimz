@@ -366,7 +366,7 @@ fn launch_resume_layout(
     let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
     let agents = match worktree_filter {
         Some(target) => {
-            let target = rimz::worktree::normalize_path_lexical(target);
+            let target = rimz::utils::path::normalize_path_lexical(target);
             projection
                 .agents
                 .into_iter()
@@ -524,7 +524,7 @@ fn launch_resume_layout(
 
 fn agent_matches_worktree_filter(agent: &AgentState, target: &Path) -> bool {
     agent.worktree_path.as_deref().is_some_and(|worktree| {
-        rimz::worktree::normalize_path_lexical(Path::new(worktree)) == target
+        rimz::utils::path::normalize_path_lexical(Path::new(worktree)) == target
     })
 }
 
@@ -577,8 +577,8 @@ fn resume_outside_launch_dir(
     worktree_root: &Path,
     launch_dir: Option<&Path>,
 ) -> bool {
-    let target = rimz::worktree::normalize_path_lexical(cwd);
-    if launch_dir.is_some_and(|dir| rimz::worktree::normalize_path_lexical(dir) == target) {
+    let target = rimz::utils::path::normalize_path_lexical(cwd);
+    if launch_dir.is_some_and(|dir| rimz::utils::path::normalize_path_lexical(dir) == target) {
         return false;
     }
     channel.is_some() || (cwd != project_root && cwd != worktree_root)
@@ -650,7 +650,7 @@ fn write_launch_receipt(
         (None, identities) => format!("{} agents", identities.len()),
     };
     let lane = channel.map_or_else(String::new, |channel| format!(" in #{channel}"));
-    let cwd = rimz::worktree::normalize_path_lexical(cwd);
+    let cwd = rimz::utils::path::normalize_path_lexical(cwd);
     let cwd = render::home_relative(&cwd.display().to_string());
     writeln!(w, "launched {subject}{lane} ({cwd})")?;
 
@@ -1040,7 +1040,7 @@ mod tests {
 
     #[test]
     fn worktree_filter_matches_normalized_agent_paths() {
-        let target = rimz::worktree::normalize_path_lexical(Path::new("/repo-worktrees/demo"));
+        let target = rimz::utils::path::normalize_path_lexical(Path::new("/repo-worktrees/demo"));
         let mut agent = test_agent("sess-demo");
         agent.worktree_path = Some("/repo/../repo-worktrees/demo".to_owned());
 

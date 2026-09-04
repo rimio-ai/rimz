@@ -58,7 +58,7 @@ impl SpendingServiceNamespace {
         let mut hasher = Sha256::new();
         hasher.update(b"rimz.spending-service.namespace.v2\0");
         let persistent_shared_root =
-            crate::worktree::normalize_path_lexical(persistent_shared_root);
+            crate::utils::path::normalize_path_lexical(persistent_shared_root);
         hash_namespace_part(
             &mut hasher,
             persistent_shared_root.as_os_str().as_encoded_bytes(),
@@ -236,7 +236,7 @@ fn normalize_absolute(
             format!("{field} must be absolute: {}", path.display()),
         ));
     }
-    *path = crate::worktree::normalize_path_lexical(path);
+    *path = crate::utils::path::normalize_path_lexical(path);
     Ok(())
 }
 

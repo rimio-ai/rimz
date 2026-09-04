@@ -202,7 +202,7 @@ impl SpendingSourceTree {
 }
 
 fn encode_path(out: &mut Vec<u8>, path: &Path) {
-    let normalized = crate::worktree::normalize_path_lexical(path);
+    let normalized = crate::utils::path::normalize_path_lexical(path);
     encode_bytes(out, normalized.as_os_str().as_encoded_bytes());
 }
 

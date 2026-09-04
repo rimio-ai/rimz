@@ -36,7 +36,7 @@ pub fn append(record: &UserInputRecord) {
 pub fn append_in(state_root: &Path, record: &UserInputRecord) {
     let mut record = record.clone();
     record.origin = record.origin.as_deref().and_then(|origin| {
-        let origin = crate::worktree::normalize_path_lexical(origin);
+        let origin = crate::utils::path::normalize_path_lexical(origin);
         origin.is_absolute().then_some(origin)
     });
     crate::disk::rotating::append(&log_path(state_root), MAX_BYTES, &record);

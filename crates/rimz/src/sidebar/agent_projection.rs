@@ -52,7 +52,7 @@ impl LocalSessionInputs {
             let Some(workspace) = crate::store::snapshot::pane_worktree_path(pane) else {
                 continue;
             };
-            let workspace = crate::worktree::normalize_path_lexical(Path::new(workspace));
+            let workspace = crate::utils::path::normalize_path_lexical(Path::new(workspace));
             if workspace.is_absolute() {
                 by_kind
                     .entry(AgentKind::new_unchecked(kind))
@@ -99,7 +99,7 @@ impl LocalSessionInputs {
                 workspaces.iter().map(|workspace| {
                     (
                         kind.clone(),
-                        crate::worktree::normalize_path_lexical(workspace),
+                        crate::utils::path::normalize_path_lexical(workspace),
                     )
                 })
             })
@@ -136,9 +136,9 @@ fn candidate_pane_agent_kind(pane: &PaneRef) -> Option<&'static str> {
 
 fn normalize_observations(observations: &mut Vec<LocalSessionObservation>) {
     for observation in observations.iter_mut() {
-        observation.workspace = crate::worktree::normalize_path_lexical(&observation.workspace);
+        observation.workspace = crate::utils::path::normalize_path_lexical(&observation.workspace);
         observation.transcript_path =
-            crate::worktree::normalize_path_lexical(&observation.transcript_path);
+            crate::utils::path::normalize_path_lexical(&observation.transcript_path);
     }
     observations
         .sort_by_cached_key(|observation| serde_json::to_vec(observation).unwrap_or_default());
@@ -328,7 +328,7 @@ fn project_published(
         .filter(|observation| {
             admitted.contains(&(
                 observation.kind.clone(),
-                crate::worktree::normalize_path_lexical(&observation.workspace),
+                crate::utils::path::normalize_path_lexical(&observation.workspace),
             ))
         })
         .cloned()

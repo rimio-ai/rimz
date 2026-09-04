@@ -195,7 +195,7 @@ fn local_worktrees(workspace: &rimz::ResolvedWorkspace) -> Result<Vec<LaneWorktr
         .map(|entry| {
             Ok(LaneWorktree {
                 name: entry.marker.name,
-                path: rimz::worktree::normalize_path_lexical(&entry.path),
+                path: rimz::utils::path::normalize_path_lexical(&entry.path),
                 branch: entry.branch,
                 from_pr: entry.marker.from_pr,
             })

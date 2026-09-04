@@ -65,7 +65,7 @@ impl Store {
         worktree_branch: Option<&str>,
     ) -> Result<usize> {
         let projection = self.runtime_projection(RuntimeScope::Audit)?;
-        let target_path = crate::worktree::normalize_path_lexical(worktree_path);
+        let target_path = crate::utils::path::normalize_path_lexical(worktree_path);
         let victims = projection
             .agents
             .iter()
@@ -73,7 +73,7 @@ impl Store {
             .filter(|agent| agent.ended_at.is_none())
             .filter(|agent| {
                 agent.worktree_path.as_deref().is_some_and(|path| {
-                    crate::worktree::normalize_path_lexical(Path::new(path)) == target_path
+                    crate::utils::path::normalize_path_lexical(Path::new(path)) == target_path
                 }) || worktree_branch
                     .is_some_and(|branch| agent.worktree_branch.as_deref() == Some(branch))
             })

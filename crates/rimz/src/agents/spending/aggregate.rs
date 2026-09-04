@@ -491,7 +491,7 @@ impl SpendScope {
             .into_iter()
             .chain(worktree_roots.iter().map(PathBuf::as_path))
             .chain(worktree_home)
-            .map(crate::worktree::normalize_path_lexical)
+            .map(crate::utils::path::normalize_path_lexical)
             .filter(|root| root.is_absolute())
             .collect();
         roots.sort();
@@ -524,7 +524,7 @@ impl SpendScope {
             .components()
             .any(|component| component == std::path::Component::ParentDir)
         {
-            normalized = crate::worktree::normalize_path_lexical(origin);
+            normalized = crate::utils::path::normalize_path_lexical(origin);
             normalized.as_path()
         } else {
             origin
@@ -537,7 +537,7 @@ impl SpendScope {
 }
 
 pub(crate) fn stamp_file_origin(entry: &mut FileCacheEntry, origin: &Path) -> bool {
-    let origin = crate::worktree::normalize_path_lexical(origin);
+    let origin = crate::utils::path::normalize_path_lexical(origin);
     if entry.origin_path.as_ref() != Some(&origin) {
         entry.origin_path = Some(origin.clone());
         return true;
@@ -550,7 +550,7 @@ pub(crate) fn origin_path(raw: Option<&str>) -> Option<PathBuf> {
 }
 
 pub(crate) fn normalized_absolute_path(path: &Path) -> Option<PathBuf> {
-    let normalized = crate::worktree::normalize_path_lexical(path);
+    let normalized = crate::utils::path::normalize_path_lexical(path);
     normalized.is_absolute().then_some(normalized)
 }
 
