@@ -49,7 +49,7 @@ fn write_then_read_round_trips() {
 #[test]
 fn old_context_record_without_current_scalar_still_decodes() {
     let now = Timestamp::now();
-    let mut record = new_record("qwen", "sess-1", ctx(now));
+    let mut record = AgentContextRecord::new("qwen", "sess-1", ctx(now));
     record.context.tokens = Some(crate::agents::AgentTokenUsage {
         context_window_size: Some(1_000_000),
         current_context_tokens: Some(42),
@@ -153,7 +153,7 @@ fn session_usage_survives_whole_context_statusline_refresh() {
 fn statusline_refresh_keeps_the_local_fold_bound_to_its_transcript() {
     let (_dir, runtime) = runtime();
     let now = Timestamp::now();
-    let mut record = new_record("claude", "sess-1", ctx(now));
+    let mut record = AgentContextRecord::new("claude", "sess-1", ctx(now));
     record.transcript_path = Some("/tmp/sess-1.jsonl".to_owned());
     record.transcript_stat = Some(crate::agents::TranscriptStat {
         mtime_secs: 1,

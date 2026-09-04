@@ -6,8 +6,9 @@
 //! refresh the watcher's flush invokes, against real sidecar and rollout files.
 
 use rimz::agents::AgentContext;
+use rimz::agents::context::AgentContextRecord;
 use rimz::sidebar::refresh::refresh_session_transcript_context;
-use rimz::store::agent_context::{self, new_record};
+use rimz::store::agent_context;
 
 use crate::common::Harness;
 
@@ -32,7 +33,7 @@ fn simulated_rollout_event_merges_fresh_tokens_into_the_sidecar() {
          {\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5\"}}\n",
     )
     .expect("seed rollout");
-    let mut record = new_record(
+    let mut record = AgentContextRecord::new(
         "codex",
         SESSION_ID,
         AgentContext::new("codex", jiff::Timestamp::UNIX_EPOCH),
@@ -105,7 +106,7 @@ fn cursor_transcript_event_recovers_terminal_state_without_content() {
         ),
     )
     .unwrap();
-    let mut record = new_record(
+    let mut record = AgentContextRecord::new(
         "cursor",
         SESSION_ID,
         AgentContext::new("cursor", jiff::Timestamp::UNIX_EPOCH),

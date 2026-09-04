@@ -507,7 +507,7 @@ impl Env {
     }
 
     /// Read every persisted agent-context sidecar for the harness workspace.
-    pub fn agent_contexts(&self) -> Vec<rimz::store::agent_context::AgentContextRecord> {
+    pub fn agent_contexts(&self) -> Vec<rimz::agents::context::AgentContextRecord> {
         rimz::store::agent_context::read_all(&self.runtime_paths())
     }
 

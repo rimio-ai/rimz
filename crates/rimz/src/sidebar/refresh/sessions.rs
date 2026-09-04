@@ -309,7 +309,7 @@ fn retry_unconfirmed_codex_turn_death(
     runtime: &RuntimePaths,
     kind: &str,
     session_id: &str,
-    prior: Option<&crate::store::agent_context::AgentContextRecord>,
+    prior: Option<&crate::agents::context::AgentContextRecord>,
 ) -> SessionRefreshResult<bool> {
     let Some(error) = prior.and_then(|record| record.context.turn_error.as_ref()) else {
         return Ok(false);
@@ -666,7 +666,7 @@ mod tests {
             at,
             label: Some("turn ended with no final message".to_owned()),
         };
-        let mut record = crate::store::agent_context::new_record(
+        let mut record = crate::agents::context::AgentContextRecord::new(
             "codex",
             "sess-1",
             crate::agents::AgentContext::new("codex", at),
@@ -754,7 +754,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut record = crate::store::agent_context::new_record(
+        let mut record = crate::agents::context::AgentContextRecord::new(
             "codex",
             "sess-1",
             crate::agents::AgentContext::new("codex", Timestamp::now()),
@@ -827,7 +827,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut record = crate::store::agent_context::new_record(
+        let mut record = crate::agents::context::AgentContextRecord::new(
             "codex",
             "sess-1",
             crate::agents::AgentContext::new("codex", Timestamp::now()),
@@ -880,7 +880,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut record = crate::store::agent_context::new_record(
+        let mut record = crate::agents::context::AgentContextRecord::new(
             "codex",
             "sess-1",
             crate::agents::AgentContext::new("codex", Timestamp::now()),

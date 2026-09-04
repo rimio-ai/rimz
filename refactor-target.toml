@@ -70,7 +70,7 @@ upward-dependencies = [
     "harness::target",
     "worktree",
 ]
-surface-budget = 977
+surface-budget = 978
 
 [[module]]
 path = "crates/rimz/src/bin"

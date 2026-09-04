@@ -715,7 +715,7 @@ mod tests {
         .unwrap();
 
         let observed_at = jiff::Timestamp::from_second(1_780_394_400).unwrap();
-        let mut prior = rimz::store::agent_context::new_record(
+        let mut prior = rimz::agents::context::AgentContextRecord::new(
             "claude",
             "sess-1",
             rimz::agents::AgentContext::new("claude", observed_at),
@@ -805,7 +805,7 @@ mod tests {
         assert!(initial_stat.companion.is_some());
         let main_before = rimz::agents::TranscriptStat::from_path(&transcript).unwrap();
         let observed_at = jiff::Timestamp::from_second(1_750_000_000).unwrap();
-        let mut prior = rimz::store::agent_context::new_record(
+        let mut prior = rimz::agents::context::AgentContextRecord::new(
             "opencode",
             "sess-1",
             rimz::agents::AgentContext::new("opencode", observed_at),
