@@ -310,7 +310,7 @@ impl Env {
     pub fn hook_command(&self, source: &str) -> Command {
         let mut cmd = self.rimz();
         cmd.args(["hooks", "feed", "--source", source])
-            .env("RIMZ_AGENT_PID", std::process::id().to_string())
+            .env("RIMZ_AGENT_PID", self.agent_owner_pid().to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

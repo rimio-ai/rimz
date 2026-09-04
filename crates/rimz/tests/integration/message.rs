@@ -1515,7 +1515,7 @@ fn bare_resumed_agent_message_is_attributed_by_process_ancestry() {
     provider
         .args([
             "-c",
-            "read _; \"$0\" message --steer @sess-codex-bare-receiver -- ping",
+            "read _; \"$0\" message --steer @sess-codex-bare-receiver -- ping; exit $?",
         ])
         .arg(env.rimz_bin());
     for (key, value) in traced.get_envs() {
