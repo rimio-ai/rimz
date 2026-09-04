@@ -41,7 +41,6 @@ struct ImportSite {
 
 #[derive(Clone, Debug)]
 struct RuleResult {
-    kind: &'static str,
     path: PathBuf,
     symbol: Option<String>,
     current: usize,
@@ -49,12 +48,21 @@ struct RuleResult {
     unallowed_dependencies: Vec<String>,
     unallowed_dependency_sites: Vec<ImportSite>,
     used_dependencies: BTreeSet<String>,
-    config_line: usize,
+    config_line: Option<usize>,
+    fix: Option<String>,
 }
 
 impl RuleResult {
     fn regression(&self) -> bool {
         self.current > self.budget || !self.unallowed_dependencies.is_empty()
+    }
+
+    fn measure(&self) -> &'static str {
+        if self.symbol.is_some() {
+            "strangler"
+        } else {
+            "surface"
+        }
     }
 }
 
@@ -271,12 +279,23 @@ fn evaluate_with_facts(
         }
         let unallowed_dependencies = unallowed.keys().cloned().collect::<Vec<_>>();
         let unallowed_dependency_sites = dependency_sites(unallowed);
+        let fix =
+            (current > module.surface_budget || !unallowed_dependencies.is_empty()).then(|| {
+                let mut rule = module.clone();
+                rule.surface_budget = current.max(rule.surface_budget);
+                if !unallowed_dependencies.is_empty() {
+                    let dependencies = if let Some(dependencies) = &mut rule.allowed_dependencies {
+                        dependencies
+                    } else {
+                        rule.upward_dependencies.get_or_insert_with(Vec::new)
+                    };
+                    dependencies.extend(unallowed_dependencies.iter().cloned());
+                    dependencies.sort();
+                    dependencies.dedup();
+                }
+                target::render_module_rule(&rule)
+            });
         rules.push(RuleResult {
-            kind: if module.allowed_dependencies.is_some() {
-                "module"
-            } else {
-                "upward-dependency"
-            },
             path: module.path.clone(),
             symbol: None,
             current,
@@ -284,7 +303,8 @@ fn evaluate_with_facts(
             unallowed_dependencies,
             unallowed_dependency_sites,
             used_dependencies,
-            config_line: module.config_line,
+            config_line: Some(module.config_line),
+            fix,
         });
     }
     for file in facts.syntax.files.iter().filter(|file| {
@@ -319,16 +339,27 @@ fn evaluate_with_facts(
         if unallowed.is_empty() {
             continue;
         }
+        let unallowed_dependencies = unallowed.keys().cloned().collect::<Vec<_>>();
+        let module = crate_module_for_path(&file.path);
+        let surface_budget =
+            super::modules::escaping_items_for_boundary(&[file], &module, &facts.mod_index).len();
+        let fix = target::render_module_rule(&target::ModuleRule {
+            path: file.path.clone(),
+            allowed_dependencies: None,
+            upward_dependencies: Some(unallowed_dependencies.clone()),
+            surface_budget,
+            config_line: 0,
+        });
         rules.push(RuleResult {
-            kind: "upward-dependency",
             path: file.path.clone(),
             symbol: None,
             current: 0,
             budget: 0,
-            unallowed_dependencies: unallowed.keys().cloned().collect(),
+            unallowed_dependencies,
             unallowed_dependency_sites: dependency_sites(unallowed),
             used_dependencies: BTreeSet::new(),
-            config_line: 1,
+            config_line: None,
+            fix: Some(fix),
         });
     }
     for strangler in &target.strangler {
@@ -350,16 +381,22 @@ fn evaluate_with_facts(
                 .filter(|path| rule_covers_path(root, &strangler.path, path))
                 .cloned(),
         );
+        let current = count_in_sources(&scoped_sources, &facts.syntax.files, &strangler.symbol);
+        let fix = (current > strangler.baseline).then(|| {
+            let mut rule = strangler.clone();
+            rule.baseline = current;
+            target::render_strangler_rule(&rule)
+        });
         rules.push(RuleResult {
-            kind: "strangler",
             path: strangler.path.clone(),
             symbol: Some(strangler.symbol.clone()),
-            current: count_in_sources(&scoped_sources, &facts.syntax.files, &strangler.symbol),
+            current,
             budget: strangler.baseline,
             unallowed_dependencies: Vec::new(),
             unallowed_dependency_sites: Vec::new(),
             used_dependencies: BTreeSet::new(),
-            config_line: strangler.config_line,
+            config_line: Some(strangler.config_line),
+            fix,
         });
     }
     Ok(Report {
@@ -434,18 +471,26 @@ fn enforce(report: &Report) -> Result<()> {
     }
     let mut violations = Vec::new();
     for rule in report.rules.iter().filter(|rule| rule.regression()) {
+        let location = rule.config_line.map_or_else(
+            || report.target.display().to_string(),
+            |line| format!("{}:{line}", report.target.display()),
+        );
         if rule.current > rule.budget {
-            violations.push(format!(
-                "{}:{}: {} `{}` is {} above {}",
-                report.target.display(),
-                rule.config_line,
-                rule.kind,
-                rule.symbol
-                    .as_deref()
-                    .unwrap_or_else(|| rule.path.to_str().unwrap_or("?")),
-                rule.current,
-                rule.budget
-            ));
+            violations.push(if let Some(symbol) = &rule.symbol {
+                format!(
+                    "{location}: strangler `{symbol}` in `{}` is {} above {}",
+                    rule.path.display(),
+                    rule.current,
+                    rule.budget
+                )
+            } else {
+                format!(
+                    "{location}: surface of `{}` is {} above {}",
+                    rule.path.display(),
+                    rule.current,
+                    rule.budget
+                )
+            });
         }
         if !rule.unallowed_dependencies.is_empty() {
             let sites = rule
@@ -456,19 +501,33 @@ fn enforce(report: &Report) -> Result<()> {
                 .collect::<Vec<_>>()
                 .join(", ");
             violations.push(format!(
-                "{}:{}: module `{}` has dependencies outside its admissions: {}\n  source: {}",
-                report.target.display(),
-                rule.config_line,
+                "{location}: module `{}` has dependencies outside its admissions: {}\n  source: {}",
                 rule.path.display(),
                 rule.unallowed_dependencies.join(", "),
                 sites,
             ));
         }
+        if let Some(fix) = &rule.fix {
+            let action = rule.config_line.map_or_else(
+                || format!("  fix: add to {}", report.target.display()),
+                |line| {
+                    format!(
+                        "  fix: replace the rule at {}:{line} with",
+                        report.target.display()
+                    )
+                },
+            );
+            let block = fix
+                .lines()
+                .map(|line| format!("    {line}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            violations.push(format!("{action}\n{block}"));
+        }
     }
     bail!(
-        "atlas conform ratchet regressed:\n{}\n\nReduce the current values, run `cargo xtask atlas conform --tighten` after improvement, or deliberately edit {} to reopen a budget.",
-        violations.join("\n"),
-        report.target.display()
+        "atlas conform ratchet regressed:\n{}\n\nReduce the current values, run `cargo xtask atlas conform --tighten` after improvement, or paste a fix above to reopen its budget deliberately.",
+        violations.join("\n")
     )
 }
 
@@ -538,7 +597,7 @@ fn print_report(report: &Report) {
         if rule.current > rule.budget {
             violations.push(format!(
                 "{} {}: {} / {}",
-                rule.kind,
+                rule.measure(),
                 rule.symbol
                     .as_deref()
                     .unwrap_or_else(|| rule.path.to_str().unwrap_or("?")),

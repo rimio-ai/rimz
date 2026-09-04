@@ -13,10 +13,12 @@ fn conform_rejects_upward_dependency_spelled_as_a_qualified_path() {
     )
     .unwrap();
     fs::write(root.path().join("src/upper.rs"), "pub fn f() {}\n").unwrap();
+    let mut rule = module_rule("src/lower.rs");
+    rule.surface_budget = 0;
     let target = Target {
         version: 5,
         layers: vec![vec!["lower".to_owned()], vec!["upper".to_owned()]],
-        modules: vec![module_rule("src/lower.rs")],
+        modules: vec![rule],
         strangler: Vec::new(),
         verdicts: Vec::new(),
     };
@@ -29,7 +31,72 @@ fn conform_rejects_upward_dependency_spelled_as_a_qualified_path() {
         error.contains("src/lower.rs:1 (qualified) (upper)"),
         "{error}"
     );
+    assert!(error.contains("[[module]]"), "{error}");
+    assert!(error.contains("path = \"src/lower.rs\""), "{error}");
+    assert!(
+        error.contains("upward-dependencies = [\"upper\"]"),
+        "{error}"
+    );
+    assert!(error.contains("surface-budget = 0"), "{error}");
     assert_eq!(report.rules[0].unallowed_dependencies, ["upper"]);
+}
+
+#[test]
+fn conform_labels_and_fixes_a_surface_excess() {
+    let root = fixture_root();
+    fs::write(root.path().join("src/lib.rs"), "mod upper;\n").unwrap();
+    fs::write(root.path().join("src/upper.rs"), "pub fn open() {}\n").unwrap();
+    let mut rule = module_rule("src/upper.rs");
+    rule.surface_budget = 0;
+    let target = Target {
+        version: 5,
+        layers: Vec::new(),
+        modules: vec![rule],
+        strangler: Vec::new(),
+        verdicts: Vec::new(),
+    };
+    let target_path = root.path().join(TARGET_FILE);
+
+    let report = evaluate(root.path(), &target, &target_path).unwrap();
+    let error = enforce(&report).unwrap_err().to_string();
+
+    assert!(
+        error.contains("surface of `src/upper.rs` is 1 above 0"),
+        "{error}"
+    );
+    assert!(error.contains("surface-budget = 1"), "{error}");
+    assert!(!error.contains("upward-dependency"), "{error}");
+    assert!(!error.contains("upward-dependencies"), "{error}");
+}
+
+#[test]
+fn conform_fixes_an_implicit_rule_at_its_measured_surface() {
+    let root = fixture_root();
+    fs::write(root.path().join("src/lib.rs"), "mod lower;\nmod upper;\n").unwrap();
+    fs::write(
+        root.path().join("src/lower.rs"),
+        "pub fn call() { crate::upper::f(); }\n",
+    )
+    .unwrap();
+    fs::write(root.path().join("src/upper.rs"), "pub fn f() {}\n").unwrap();
+    let target = Target {
+        version: 5,
+        layers: vec![vec!["lower".to_owned()], vec!["upper".to_owned()]],
+        modules: Vec::new(),
+        strangler: Vec::new(),
+        verdicts: Vec::new(),
+    };
+    let target_path = root.path().join(TARGET_FILE);
+
+    let report = evaluate(root.path(), &target, &target_path).unwrap();
+    let error = enforce(&report).unwrap_err().to_string();
+
+    assert!(
+        error.contains(&format!("fix: add to {}", target_path.display())),
+        "{error}"
+    );
+    assert!(error.contains("path = \"src/lower.rs\""), "{error}");
+    assert!(error.contains("surface-budget = 1"), "{error}");
 }
 
 #[test]
@@ -128,7 +195,6 @@ fn tighten_lowers_counts_drops_unused_admissions_and_preserves_verdicts() {
         layers: Vec::new(),
         rules: vec![
             RuleResult {
-                kind: "upward-dependency",
                 path: PathBuf::from("src/store"),
                 symbol: None,
                 current: 3,
@@ -136,10 +202,10 @@ fn tighten_lowers_counts_drops_unused_admissions_and_preserves_verdicts() {
                 unallowed_dependencies: Vec::new(),
                 unallowed_dependency_sites: Vec::new(),
                 used_dependencies: BTreeSet::from(["cli".to_owned()]),
-                config_line: 2,
+                config_line: Some(2),
+                fix: None,
             },
             RuleResult {
-                kind: "strangler",
                 path: PathBuf::from("src/store"),
                 symbol: Some("legacy".to_owned()),
                 current: 1,
@@ -147,7 +213,8 @@ fn tighten_lowers_counts_drops_unused_admissions_and_preserves_verdicts() {
                 unallowed_dependencies: Vec::new(),
                 unallowed_dependency_sites: Vec::new(),
                 used_dependencies: BTreeSet::new(),
-                config_line: 8,
+                config_line: Some(8),
+                fix: None,
             },
         ],
         parse_failure_paths: Vec::new(),
