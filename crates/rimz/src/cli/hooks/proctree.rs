@@ -1,27 +1,9 @@
 use super::*;
 
-#[cfg(unix)]
 pub(super) fn walk_to_agent_ancestor(source: &str) -> Option<u32> {
-    // Cap the walk so a pathologically deep tree (or a process-table glitch)
-    // cannot loop the hook helper. 32 levels is far beyond any real agent
-    // launch chain.
-    let mut pid = std::os::unix::process::parent_id();
-    for _ in 0..32 {
-        if pid <= 1 {
-            return None;
-        }
-        let (name, ppid) = rimz::proc::comm_and_ppid(pid)?;
-        if matches_agent_kind(&name, source) {
-            return Some(pid);
-        }
-        pid = ppid;
-    }
-    None
-}
-
-#[cfg(not(unix))]
-pub(super) fn walk_to_agent_ancestor(_source: &str) -> Option<u32> {
-    None
+    rimz::proc::ancestor_pids()
+        .into_iter()
+        .find(|pid| rimz::proc::comm(*pid).is_some_and(|name| matches_agent_kind(&name, source)))
 }
 
 /// Whether the kernel-reported `comm` is one of the agent's declared process
