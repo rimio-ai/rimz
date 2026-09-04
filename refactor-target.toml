@@ -626,3 +626,33 @@ baseline = 3
 kind = "item"
 key = "store::event::for_terminal_status"
 reason = "Mirrors MessageStatus::is_terminal on purpose: the event method names the wire event per terminal status, and a derived mapping would hide the audit vocabulary."
+
+[[verdict]]
+kind = "shape"
+key = "AgentLifecycleObservation::new+HookRouting::session+Vec::new+attach_lifecycle+decode_catalog_hook+optional_payload_string+payloads::parse_payload+sanitize_user_prompt+set_ask+set_final_message+set_observed_context+set_routing+spec+with_worktree+with_worktree_from_payload"
+reason = "Each adapter's decode_hook is provider policy over the shared HookOutput and catalog API; its divergences are pinned fixes (pass 2)."
+
+[[verdict]]
+kind = "shape"
+key = "BTreeMap::new+CachedEntry::new+TokenSplit::new+cached"
+reason = "The map tracks unknown models; pricing, CachedEntry, deduplication, and aggregation already live in agents::spending, while provider parsers own I/O, replay, and cost precedence (pass 2)."
+
+[[verdict]]
+kind = "shape"
+key = "auto_flag+blocking_tool_kind+session_start_signal+stop_payload_errored+tool_edits_files+tool_mutates"
+reason = "The callees live once in AgentSpec, payload, SessionSource, and CompactTrigger; the three mappers retain fix-pinned per-event provider policy (pass 2)."
+
+[[verdict]]
+kind = "shape"
+key = "AnswerPlanErr::Invalid+AnswerStep::Key+Vec::new+std::iter::repeat_n+zip"
+reason = "Question extraction is shared in agents::question; the planners share only a small validation shell and otherwise implement distinct provider TUI state machines (pass 2)."
+
+[[verdict]]
+kind = "shape"
+key = "PendingWrite::optional+report_files+settings_json::commit_pair+settings_json::read_optional_bytes+settings_json::render_json"
+reason = "settings_json::commit_pair owns the shared transaction; Copilot and Cursor retain different fix-pinned rollback policies (pass 2)."
+
+[[verdict]]
+kind = "guard"
+key = "$0.kind()!=ValueRefreshKind::Cached"
+reason = "These cfg(test) counters observe one StableValueCache policy; production already has one implementation (pass 2)."

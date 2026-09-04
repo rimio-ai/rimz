@@ -126,6 +126,10 @@ emit HookReply on stdout   the agent-native neutral no-op, and nothing else
 
 An absent lifecycle fact means "no transition here", which is how high-frequency events stay silent. The adapter never decides a status: it emits the signal, and [`step`](./model.md#the-state-machine) derives the status from it.
 
+An adapter that keeps a hook catalog does not classify by hand. [`decode_catalog_hook`](../../../crates/rimz/src/agents/hook_types.rs) is the one entry point: it takes any iterator of `HookEventSpec` references plus the event name and an optional `AskKind`, finds the matching entry, and returns the `HookOutput` carrying that entry's class and its progress and session-ended policy. The iterator parameter is why a catalog whose rows wrap the spec with install data reaches the same entry point: Antigravity pairs each spec with its config event, matcher, and installed command, and decodes through `ANTIGRAVITY_HOOKS.iter().map(|entry| &entry.hook)`. An event the catalog does not name classifies unknown.
+
+`SessionStart` is the other shared decision. Claude, Codex, Droid, and Qwen all carry the same `source` field, and [`SessionSource::session_start_signal`](../../../crates/rimz/src/agents/hook_types.rs) maps it once: `compact` closes a compaction with `CompactionEnded`, and every other source (including one RimZ does not recognize) is a `Registered` signal.
+
 ### Two channels
 
 `decode_hook` sorts every native event into one of two wired channels, and the difference is whether the hook can hold the agent open while RimZ answers.
@@ -193,6 +197,8 @@ A session's context gauge (how full the window is, what the turn cost) is the on
 **A gauge stamped on the hook wire** is available to any provider whose hook wire RimZ authors. Pi's extension stamps its in-process context API onto every envelope; OpenCode's plugin maintains its gauge from `message.updated` events and stamps the latest split plus the model's window onto each lifecycle envelope. Neither then needs a tail or a transport.
 
 Two trigger methods hang the refreshes off the hook path. `local_context_refresh(RefreshTrigger::Hook | Tick)` returns explicit keep, set, clear, and token-merge patches from a cheap bounded local read that runs inline. `context_refresh_spawn` returns argv for a detached `rimz` helper when the provider's transport needs network, a subprocess, or a broker connection: the caller spawns it with fully nulled stdio and never waits, so it adds no latency to the agent's turn. Store applies each patch under the sidecar record lock and owns persistence only; merge policy stays in the adapter.
+
+The gate on a local refresh is shared. The adapter resolves its own source path and the logical stat that stands for it (usually `TranscriptStat::from_path`, and for Grok one composite stat folding the transcript's own `(mtime, nanos, len)` with its `summary.json`, `signals.json`, and events companions), then passes it to [`LocalContextRefreshCtx::changed_transcript`](../../../crates/rimz/src/agents/mod.rs), which returns the stat only when it differs from the one the sidecar recorded and otherwise ends the refresh before any read. Amp, Copilot, Cursor, Grok, Kimi, and Kiro decide there. Three adapters keep a specialized gate because they have a second reason to re-read a file whose stat is unchanged: Claude when resuming its spend fold resets it (a truncated file, or a stored fold predating the dedup window), Codex when a live fold still needs token-counter backfill, and Droid inside its telemetry read, which compares a composite settings-plus-transcript stat it builds there.
 
 ### Reading rules
 

@@ -23,10 +23,23 @@ Ordered. A seam pass at the head is proposed before any module pass. Status is `
 | # | seam | evidence at baseline | status |
 | --- | --- | --- | --- |
 | 1 | `store` → `agents` and `store` → `message` upward dependencies; decide the direction and close it | `debt`: store admits agents 134 sites, message 22; cycles agents ↔ store 46/134, message ↔ store 24/22, both cross-layer | landed pass-1 |
-| 2 | Adapter sibling families in `agents/adapters/*`: collapse each onto one implementation with the divergences a fix pins | `shapes`: decode-hook family 9 members / 8 siblings (`*/mod.rs`, 935 SLOC in play); `spend.rs` cache 4 siblings (354); `ask.rs` plan 3 siblings (182); `install.rs` 2 siblings (90) | queued |
+| 2 | Adapter sibling families in `agents/adapters/*`: collapse each onto one implementation with the divergences a fix pins | `shapes`: decode-hook family 9 members / 8 siblings (`*/mod.rs`, 935 SLOC in play); `spend.rs` cache 4 siblings (354); `ask.rs` plan 3 siblings (182); `install.rs` 2 siblings (90) | landed pass-2 |
 | 3 | `mux` ↔ `sidebar` and `daemon_view` ↔ `mux` cycles | cycles mux ↔ sidebar 27/42 cross-layer; daemon_view ↔ mux 10/3 same layer; mux admits sidebar 27 sites | queued |
 | 4 | Homes for `store::workspace_record` (→ `workspace`) and `store::snapshot::compose_channel` (`transcript`, `harness::target` callers); the only upward L2 → store sites after pass 1 | pass-1 re-layer admissions: `workspace` 3 sites, `transcript` 1, `pane` 1 | queued |
 | 5 | `agents` → `mux` (`NamedKey`, `CommandSpec`), `daemon_view` (markers), `diag::rotating`, `observability`: adapter-side reach into peers exposed by the re-layer | pass-1 re-layer admissions: `mux` 6 sites, `daemon_view` 3, `diag::rotating` 3; no current `observability` site | queued |
+
+### Pass 2 family verdicts
+
+| family | members reviewed | verdict and pins |
+| --- | --- | --- |
+| hook decode | every built-in adapter and the process-plugin adapter (`Kiro` uses the default) | holds: the generic caller already sees one `HookOutput`; event choreography is provider policy. Fix pins: `929ba4745`, `75ff1da53`, `53cc53892`, `6d79cac0c`, `55685b741`, `7c42e0184`, `f93cecb04`, `491ecd20d`, `9acad2888`, `567a18bc8`, `940758fad`, `071bf1ba3`. |
+| spend cache | the ten adapter `spend.rs` parsers | holds: `agents::spending` already owns pricing, cache entries, deduplication, and aggregation; providers retain format, replay, rewind, and cost precedence. Fix pins: `b23d1898f`, `5951e11bd`, `2d2bab7c3`, `3b1754c89`, `517de4f21`, `217577bcd`, `253cac4c9`, `6e0a6f814`, `46265e8b2`. |
+| lifecycle tool classification | Claude, Codex, Qwen | holds: the classifiers live once; event tables remain provider policy. The hook-decode fixes above pin the divergent arms. |
+| answer plan | Claude, Codex, Pi | holds: extraction is shared; key sequences implement different provider TUIs. Fix pins: `d3d072eab`, `bff26f369`, `0908a9a52`, `512cb7390`. |
+| paired settings install | Copilot, Cursor | holds: `settings_json::commit_pair` is the shared transaction; cleanup rollback differs. Fix pins: `a84ad352b`, `0c5284908`. |
+| `result.kind() != ValueRefreshKind::Cached` | six test-only sites in Antigravity, Claude, Codex, Kiro | holds: counters instrument the one production `StableValueCache` policy; `23ddf5697` pins Kiro's distinct invalidation branch. |
+
+Module-pass notes: Copilot and Cursor still hand-build parallel `report_files` lists (`copilot/install.rs`, `cursor/install.rs`); Droid and each sibling retain provider-specific session-origin stamping. The store-free `spend.rs` invariant matches by filename, so a future shared spend helper outside a `spend.rs` needs the invariant widened with it.
 
 ## Module verdicts
 
@@ -36,6 +49,9 @@ One row per module reviewed, at the granularity `survey` ranks. `holds` names th
 | --- | --- | --- | --- | --- |
 | `store` | landed pass-1 | — | — | seam reviewed; module interior remains a candidate |
 | `agents` | landed pass-1 | — | — | seam reviewed; module interior remains a candidate |
+| `agents/adapters` | landed pass-2 | — | — | sibling seam reviewed; provider interiors remain separate module candidates |
+| `agents/adapters/codex` | candidate | — | — | survey rank 3; app-server, broker, rollout, and install interiors unreviewed |
+| `agents/adapters/claude` | candidate | — | — | survey rank 6; remote-control and install interiors unreviewed |
 | `config` | candidate | — | — | esc 182, depth 35.9, churn 8.9%; 38 admitted upward sites |
 | `message` | landed pass-1 | — | — | seam reviewed; module interior remains a candidate (baseline esc 157, depth 25.2) |
 | `harness/schedule` | candidate | — | — | esc 168, depth 22.2 |
@@ -71,3 +87,4 @@ One row per pass, newest last. Deltas are the `diff --expect` totals at merge.
 | date | pass | scope (`paths`) | base | verbs landed | Δ prod SLOC | Δ esc | Δ dep sites | deferred |
 | --- | --- | --- | --- | --- | ---: | ---: | ---: | --- |
 | 2026-09-03 | pass-1 seam `store` ⇄ `agents`, `store` ⇄ `message` + `disk` lift | `crates/rimz`; `xtask/src/invariants.rs`; `docs`; `refactor-target.toml`; `AGENTS.md`; `CLAUDE.md`; `ARCHITECTURE.md` | `3e01afc71` | rehome ×7, delete ×7 | −4 | +4 | +20 | Seam 4: `workspace_record`/`compose_channel` homes; seam 5: agents → peer modules; `for_terminal_status` kept. Tightened surfaces: `store` 321, `message` 90. Contract ceiling loosened −20→−1 because the estimate omitted the one-line-per-file import splits a no-shim lift imposes and the method signatures the record's merge rules gained; measured −2 at step 7, −4 after the review round. Atlas advisories: multiple destination definition sites are reported as “not defined under”; cfg-gated items count as production while files behind an equivalent cfg-gated module do not. |
+| 2026-09-04 | pass-2 seam adapter sibling families | `crates/rimz/src/agents`; `docs`; `refactor-target.toml` | `93c4c48d7` | rehome ×1, deepen ×1, collapse ×1 | −45 | −2 | +1 internal (crossing +0) | Five shape families and the cached-value test guard hold for the reasons recorded above. No upward edge was reviewed. Deferred module notes: Copilot/Cursor `report_files`, Droid origin stamping, and the filename-scoped `spend.rs` invariant. Tightened `agents` surface to 970. |
