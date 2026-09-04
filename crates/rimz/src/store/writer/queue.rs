@@ -1052,14 +1052,21 @@ impl Store {
         session_name: &str,
         reason: &str,
     ) -> Result<bool> {
-        Ok(self
-            .settle_message(
-                message_id,
+        self.commit_queue(|queue| {
+            let message = match queue.get(message_id) {
+                Some(message) if message.status.is_open() => message,
+                Some(_) | None => return Ok(false),
+            };
+            let now = Timestamp::now();
+            queue.terminalize(
+                message,
                 MessageStatus::Canceled,
                 session_name,
                 Some(reason),
-            )?
-            .is_some())
+                now,
+            );
+            Ok(true)
+        })
     }
 
     #[must_use = "durability barrier; check the result"]

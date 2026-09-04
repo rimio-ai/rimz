@@ -4,9 +4,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, bail};
 use jiff::Timestamp;
 
-use rimz::harness::schedule::run_log::{self, LoopRunRecord, LoopRunResult};
-
 use super::*;
+use rimz::harness::schedule::run_log::{self, LoopRunRecord, LoopRunResult};
 
 const POLL: Duration = Duration::from_millis(500);
 
@@ -78,4 +77,58 @@ fn success_shaped(record: &LoopRunRecord) -> bool {
         .check
         .as_ref()
         .is_none_or(|check| !check.timed_out && check.code == Some(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use rimz::agents::{AgentState, AgentStatus};
+    use rimz::ids::WorkspaceId;
+    use rimz::store::message::{DeliveryGate, MessageRecord, MessageStatus};
+    use rimz::{RuntimePaths, StatePaths, Store};
+
+    #[test]
+    fn inline_wait_cancels_open_message_but_preserves_sent_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let state = StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
+        let runtime =
+            RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime")).unwrap();
+        let store = Store::open(state, runtime).unwrap();
+        let agent = AgentState::stub("claude", "provider-session", AgentStatus::Idle);
+        let queued = MessageRecord::new(
+            workspace_id.clone(),
+            &agent,
+            "queued".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        let sent = MessageRecord::new(
+            workspace_id,
+            &agent,
+            "sent".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        store.queue_message(&queued, "session").unwrap();
+        store.queue_message(&sent, "session").unwrap();
+        store
+            .record_sent_batch(std::slice::from_ref(&sent), "session")
+            .unwrap();
+
+        store
+            .cancel_message(&queued.message_id, "session", "joined inline")
+            .unwrap();
+        store
+            .cancel_message(&sent.message_id, "session", "joined inline")
+            .unwrap();
+
+        let live = store.list_messages().unwrap();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].message_id, sent.message_id);
+        assert_eq!(live[0].status, MessageStatus::Sent);
+        let history = store.list_message_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].message_id, queued.message_id);
+        assert_eq!(history[0].status, MessageStatus::Canceled);
+    }
 }
