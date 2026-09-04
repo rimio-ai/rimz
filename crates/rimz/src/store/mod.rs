@@ -48,8 +48,6 @@ pub(crate) mod session_death;
 pub(crate) mod sidecar;
 pub mod snapshot;
 pub mod subagent_context;
-pub mod workspace_record;
-
 pub mod writer;
 
 use std::io;
@@ -94,7 +92,7 @@ pub enum StoreErr {
     #[error(transparent)]
     Snapshot(#[from] snapshot::SnapshotErr),
     #[error(transparent)]
-    WorkspaceRecord(#[from] workspace_record::WorkspaceRecordErr),
+    WorkspaceRecord(#[from] crate::workspace::record::WorkspaceRecordErr),
     #[error("{0}")]
     AgentLaunchIdentity(String),
     #[error("cannot access {path}: {source}")]

@@ -29,8 +29,8 @@ use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
+use self::record::{WorkspaceRecord, WorkspaceRecordErr};
 use crate::ids::{MuxName, WorkspaceId};
-use crate::store::workspace_record::{self, WorkspaceRecord};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceErr {
@@ -139,8 +139,6 @@ pub fn known_workspaces() -> io::Result<Vec<KnownWorkspace>> {
 
 /// [`known_workspaces`] over an explicit state root, for tests against a tempdir.
 pub fn known_workspaces_under(workspaces_root: &Path) -> io::Result<Vec<KnownWorkspace>> {
-    use crate::store::workspace_record::WorkspaceRecordErr;
-
     let entries = match std::fs::read_dir(workspaces_root) {
         Ok(entries) => entries,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -159,7 +157,7 @@ pub fn known_workspaces_under(workspaces_root: &Path) -> io::Result<Vec<KnownWor
             continue;
         };
         let record_path = path.join("workspace.json");
-        match workspace_record::read(&record_path) {
+        match record::read(&record_path) {
             Ok(record) => {
                 let Some(candidate) =
                     normalize_known_workspace_record(workspace_id, &record_path, record)
@@ -223,7 +221,7 @@ fn normalize_known_workspace_record(
                 record.project_root = project_root;
                 record.session_name = session_name;
                 record.updated_at = jiff::Timestamp::now();
-                if let Err(err) = workspace_record::write_path(record_path, &record) {
+                if let Err(err) = record::write_path(record_path, &record) {
                     tracing::warn!(
                         path = %record_path.display(),
                         error = %err,
@@ -706,6 +704,8 @@ fn session_name_for(project_root: &Path) -> String {
         .unwrap_or(workspace_id.as_str());
     format!("rimz-{slug}-{}", &hash[..6])
 }
+
+pub mod record;
 
 #[cfg(test)]
 mod tests;
