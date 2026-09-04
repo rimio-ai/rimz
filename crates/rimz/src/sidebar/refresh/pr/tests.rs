@@ -1,6 +1,8 @@
 use super::*;
 use crate::sidebar::refresh::git_stats::{DiffStatsCache, DiffStatsCacheEntry};
 
+mod signal_transitions;
+
 #[test]
 fn failure_ttl_escalates_to_success_ttl_cap() {
     assert_eq!(pr_state_failure_ttl(0, PR_STATE_TTL), PR_STATE_RETRY_TTL);

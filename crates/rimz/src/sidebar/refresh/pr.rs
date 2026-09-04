@@ -5,6 +5,7 @@
 //! CI enrichment stays best-effort: GitHub projects aggregate check rollups, while Tea reads combined commit status for branches and commits.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -20,6 +21,8 @@ use crate::sidebar::refresh::git_stats::{
 use crate::sidebar::timing::{PR_STATE_HOT_TTL, PR_STATE_RETRY_TTL, PR_STATE_TTL};
 use crate::store::snapshot::{SidebarSnapshot, WorktreePrCi, WorktreePrState};
 use crate::utils::time::unix_now_ms;
+
+mod transitions;
 
 const PR_STATE_WAIT_STEP: Duration = Duration::from_millis(20);
 const PR_STATE_WAIT_STEPS: u32 = 15;
@@ -50,6 +53,26 @@ pub struct PrStateCache {
     /// before shelling out for branch/remote metadata.
     #[serde(default)]
     path_repos: BTreeMap<String, String>,
+    /// Branch/incarnation identity observed for each supported worktree.
+    #[serde(default)]
+    target_seen: BTreeMap<String, TargetStamp>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct TargetStamp {
+    branch: String,
+    #[serde(default)]
+    incarnation: Option<jiff::Timestamp>,
+}
+
+impl TargetStamp {
+    fn owns_link(&self, link: &PrLink) -> bool {
+        Self::owns(&self.branch, self.incarnation, link)
+    }
+
+    fn owns(branch: &str, incarnation: Option<jiff::Timestamp>, link: &PrLink) -> bool {
+        link.branch.as_deref() == Some(branch) && link.incarnation == incarnation
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +136,8 @@ impl<'de> Deserialize<'de> for PrStateCache {
             head_seen: BTreeMap<String, String>,
             #[serde(default)]
             path_repos: BTreeMap<String, String>,
+            #[serde(default)]
+            target_seen: BTreeMap<String, TargetStamp>,
         }
 
         let disk = DiskCache::deserialize(deserializer)?;
@@ -123,6 +148,7 @@ impl<'de> Deserialize<'de> for PrStateCache {
             repos: disk.repos,
             head_seen: disk.head_seen,
             path_repos: disk.path_repos,
+            target_seen: disk.target_seen,
         };
         if legacy {
             // Old freshness stamps predate branch CI, and trunk paths were
@@ -131,6 +157,7 @@ impl<'de> Deserialize<'de> for PrStateCache {
             cache.repos.clear();
             cache.head_seen.clear();
             cache.path_repos.clear();
+            cache.target_seen.clear();
         }
         Ok(cache)
     }
@@ -202,7 +229,15 @@ pub(super) fn produce_pr_states(
                 return prior;
             }
             let cache = probe_due_repos(&groups, &due, &prior, &needed, &diff_cache, now_ms);
-            write_pr_state_cache(&path, &cache);
+            if write_pr_state_cache(&path, &cache)
+                && let Some(project_root) = snapshot.project_root.as_deref()
+            {
+                emit_transitions(
+                    runtime,
+                    project_root,
+                    transitions::transitions(&prior, &cache),
+                );
+            }
             cache
         }
         crate::disk::single_flight::Coalesced::ProduceLocal => {
@@ -392,6 +427,13 @@ struct RepoGroup {
 }
 
 impl Target {
+    fn stamp(&self) -> TargetStamp {
+        TargetStamp {
+            branch: self.branch.clone(),
+            incarnation: self.marker_created_at,
+        }
+    }
+
     fn pr_link(
         &self,
         state: WorktreePrState,
@@ -420,8 +462,7 @@ impl Target {
     }
 
     fn owns_link(&self, link: &PrLink) -> bool {
-        link.branch.as_deref() == Some(self.branch.as_str())
-            && link.incarnation == self.marker_created_at
+        TargetStamp::owns(&self.branch, self.marker_created_at, link)
     }
 
     fn accepts_terminal_pr(&self, number: u64, created_at: Option<jiff::Timestamp>) -> bool {
@@ -573,6 +614,9 @@ fn reconcile_target_bookkeeping(
     cache
         .path_repos
         .retain(|path, _| current_needed_paths.contains(path) && target_paths.contains(path));
+    cache
+        .target_seen
+        .retain(|path, _| current_needed_paths.contains(path) && target_paths.contains(path));
     let mut saw_unsupported = false;
     for path in needed.iter().filter(|path| !target_paths.contains(*path)) {
         saw_unsupported = true;
@@ -689,6 +733,9 @@ fn probe_due_repos(
             cache
                 .path_repos
                 .insert(target.path.clone(), target.repo_key.clone());
+            cache
+                .target_seen
+                .insert(target.path.clone(), target.stamp());
         }
         for (path, state) in result.states {
             cache.states.insert(path, state);
@@ -1161,15 +1208,60 @@ pub(crate) fn read_pr_state_cache(path: &Path) -> PrStateCache {
     super::runner::read_json_cache(path)
 }
 
-fn write_pr_state_cache(path: &Path, cache: &PrStateCache) {
-    if let Err(err) = crate::disk::atomic::write_temp_then_rename_cache(path, cache) {
-        tracing::warn!(
-            path = %path.display(),
-            tags.operation = "cache.pr_state_write",
-            error = &err as &dyn std::error::Error,
-            "sidebar PR-state cache write failed",
-        );
+fn write_pr_state_cache(path: &Path, cache: &PrStateCache) -> bool {
+    match crate::disk::atomic::write_temp_then_rename_cache(path, cache) {
+        Ok(()) => true,
+        Err(err) => {
+            tracing::warn!(
+                path = %path.display(),
+                tags.operation = "cache.pr_state_write",
+                error = &err as &dyn std::error::Error,
+                "sidebar PR-state cache write failed",
+            );
+            false
+        }
     }
+}
+
+fn emit_transitions(
+    runtime: &RuntimePaths,
+    project_root: &Path,
+    signals: Vec<crate::harness::schedule::signal::Signal>,
+) {
+    for signal in signals {
+        let name = signal.name.clone();
+        let args = transition_argv(project_root, &signal);
+        if let Err(err) =
+            crate::child_process::spawn_detached_rimz(runtime, args, "forge-signal-emit")
+        {
+            tracing::debug!(
+                signal = %name,
+                workspace = %runtime.workspace_id,
+                tags.operation = "forge_signal.spawn",
+                error = &err as &dyn std::error::Error,
+                "sidebar: failed to spawn forge signal emitter",
+            );
+        }
+    }
+}
+
+fn transition_argv(
+    project_root: &Path,
+    signal: &crate::harness::schedule::signal::Signal,
+) -> Vec<OsString> {
+    let payload = serde_json::to_string(&signal.payload)
+        .expect("forge signal payload contains only serializable JSON values");
+    vec![
+        "--root".into(),
+        project_root.as_os_str().to_owned(),
+        "events".into(),
+        "emit".into(),
+        signal.name.as_str().into(),
+        "--source".into(),
+        "forge".into(),
+        "--json".into(),
+        payload.into(),
+    ]
 }
 
 #[cfg(test)]
