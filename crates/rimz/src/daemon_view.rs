@@ -24,7 +24,7 @@ use crate::mux::{
     DaemonView, HostPane, MuxBackend, PaneListOptions, PaneListing, PaneReadConsistency,
     SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget,
 };
-use crate::pane::{APP_SERVER_MARKER, COMMAND_MARKER, PaneRef, VIEW_NAME, command_is_claude_host};
+use crate::pane::{APP_SERVER_MARKER, PaneRef, VIEW_NAME, command_is_claude_host};
 use crate::workspace::record;
 
 const REPAIR_LIST_TIMEOUT: Duration = Duration::from_secs(3);
