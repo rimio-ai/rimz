@@ -827,7 +827,7 @@ impl crate::agents::capabilities::ContextCapability for CodexAdapter {
 
     fn merge_session_context(
         &self,
-        record: &mut crate::agents::context::AgentContextRecord,
+        record: &mut crate::agents::context::record::AgentContextRecord,
         observed: &AgentContext,
     ) -> bool {
         merge_app_server_context(record, observed)

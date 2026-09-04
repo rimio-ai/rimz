@@ -3635,7 +3635,8 @@ fn seed_context_fill(env: &Env, agent_id: &str, used_pct: u8) {
         used_percentage: Some(used_pct),
         ..Default::default()
     });
-    let record = rimz::agents::context::AgentContextRecord::new("claude", agent_id, context);
+    let record =
+        rimz::agents::context::record::AgentContextRecord::new("claude", agent_id, context);
     rimz::store::agent_context::write_record(&env.runtime_paths(), &record)
         .expect("seed context sidecar");
 }
@@ -3650,7 +3651,8 @@ fn seed_context_tokens(env: &Env, agent_id: &str, used: u64, window: u64) {
         }),
         ..Default::default()
     });
-    let record = rimz::agents::context::AgentContextRecord::new("claude", agent_id, context);
+    let record =
+        rimz::agents::context::record::AgentContextRecord::new("claude", agent_id, context);
     rimz::store::agent_context::write_record(&env.runtime_paths(), &record)
         .expect("seed context sidecar");
 }
@@ -3669,7 +3671,8 @@ fn seed_turn_error(env: &Env, agent_id: &str, class: TurnErrorClass) {
         at,
         label: Some("provider parked".to_owned()),
     });
-    let record = rimz::agents::context::AgentContextRecord::new("claude", agent_id, context);
+    let record =
+        rimz::agents::context::record::AgentContextRecord::new("claude", agent_id, context);
     rimz::store::agent_context::write_record(&env.runtime_paths(), &record)
         .expect("seed turn error");
 }

@@ -273,7 +273,7 @@ upward-dependencies = [
     "sidebar::wakeup",
     "worktree",
 ]
-surface-budget = 320
+surface-budget = 321
 
 [[module]]
 path = "crates/rimz/src/theme"

@@ -23,9 +23,7 @@ use crate::ids::{AgentSessionId, MessageId};
 use super::LocalContextRefresh;
 use super::definition::AgentSpec;
 
-mod record;
-
-pub use record::AgentContextRecord;
+pub mod record;
 
 /// One rich-context reading paired with the provider session that owns it.
 #[derive(Clone, Debug, PartialEq)]
@@ -246,7 +244,7 @@ pub struct SessionContextInput<'a> {
     pub server_url: Option<&'a str>,
     /// The sidecar as last written, so an adapter can throttle its expensive
     /// read and diff against what is already stored.
-    pub prior: Option<&'a AgentContextRecord>,
+    pub prior: Option<&'a record::AgentContextRecord>,
     /// The shared price book, for adapters that fold cost while refreshing.
     pub pricing_cache_path: &'a Path,
     /// This session's warm broker socket, for adapters that host one.

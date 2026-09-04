@@ -15,7 +15,7 @@ use super::panes::SidebarOwnView;
 use super::row::{PaneAgent, SidebarRow};
 use crate::agents::AgentState;
 use crate::agents::SpendTally;
-use crate::agents::context::AgentContextRecord;
+use crate::agents::context::record::AgentContextRecord;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 #[cfg(test)]
 use crate::store::event::EventEnvelope;

@@ -1588,7 +1588,8 @@ fn agents_show_retains_ended_pidless_audit_card_and_keeps_fresh_context() {
         }),
         ..Default::default()
     });
-    let record = rimz::agents::context::AgentContextRecord::new("claude", "sess-fresh", context);
+    let record =
+        rimz::agents::context::record::AgentContextRecord::new("claude", "sess-fresh", context);
     rimz::store::agent_context::write_record(&runtime, &record).expect("write context sidecar");
 
     let out = env
@@ -1779,7 +1780,7 @@ fn agents_cli_routes_launch_role_to_successful_same_instance_successor() {
         });
         rimz::store::agent_context::write_record(
             &env.runtime_paths(),
-            &rimz::agents::context::AgentContextRecord::new("codex", agent_id, context),
+            &rimz::agents::context::record::AgentContextRecord::new("codex", agent_id, context),
         )
         .expect("write provider rest certificate");
     }

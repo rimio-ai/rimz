@@ -583,7 +583,7 @@ fn connection_attempts_prefer_warm_paths_before_cold_spawn() {
 #[test]
 fn app_server_due_uses_app_server_stamp_not_whole_sidecar() {
     let now = Timestamp::now();
-    let mut record = crate::agents::context::AgentContextRecord::new(
+    let mut record = crate::agents::context::record::AgentContextRecord::new(
         "codex",
         "sess-1",
         crate::agents::AgentContext::new("codex", now),

@@ -315,8 +315,11 @@ fn agent_budget_edits_and_views_use_local_day() {
         total_cost_usd: Some(50.0),
         ..rimz::agents::AgentCost::default()
     });
-    let record =
-        rimz::agents::context::AgentContextRecord::new("claude", agent_id.as_str(), context);
+    let record = rimz::agents::context::record::AgentContextRecord::new(
+        "claude",
+        agent_id.as_str(),
+        context,
+    );
     rimz::store::agent_context::write_record(&env.runtime_paths(), &record)
         .expect("write cost sidecar");
     let mut ledger = BudgetLedger::new("20/day".parse().expect("budget"));

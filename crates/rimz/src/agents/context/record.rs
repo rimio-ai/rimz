@@ -9,6 +9,9 @@ use crate::ids::{AgentKind, AgentSessionId};
 
 use super::AgentContext;
 
+#[cfg(any(test, feature = "testkit"))]
+mod fixture;
+
 /// A session's context sidecar: the normalized record plus the
 /// `(kind, agent_id)` it is filed under, so a read can confirm the key — and
 /// shrug off a digest collision — instead of trusting the filename.
@@ -104,35 +107,10 @@ impl AgentContextRecord {
         if observed_cost {
             locally_priced_cost.owns_context_cost = false;
         }
-        *self = Self {
-            kind: AgentKind::new_unchecked(kind),
-            agent_id: agent_id.into(),
-            context,
-            rate_limits_observed_at: None,
-            rich_observed_at: None,
-            transcript_path: self.transcript_path.clone(),
-            transcript_stat: None,
-            spend_fold: self.spend_fold.clone(),
-            locally_priced_cost,
-        };
-        true
-    }
-
-    pub(crate) fn apply_fixture(&mut self, mut next: Self, existed: bool) -> bool {
-        let observed_cost =
-            next.context.cost.is_some() && !next.locally_priced_cost.owns_context_cost;
-        if next.context.cost.is_none() {
-            next.context.cost.clone_from(&self.context.cost);
-        }
-        if next.locally_priced_cost.is_empty() {
-            next.locally_priced_cost = self.locally_priced_cost.clone();
-        }
-        if existed {
-            next.spend_fold.clone_from(&self.spend_fold);
-        }
-        if observed_cost {
-            next.locally_priced_cost.owns_context_cost = false;
-        }
+        let mut next = Self::new(kind, agent_id, context);
+        next.transcript_path.clone_from(&self.transcript_path);
+        next.spend_fold.clone_from(&self.spend_fold);
+        next.locally_priced_cost = locally_priced_cost;
         *self = next;
         true
     }
