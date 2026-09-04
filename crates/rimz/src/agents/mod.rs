@@ -854,6 +854,12 @@ pub struct LocalContextRefreshCtx<'a> {
     pub shared_pricing_cache_path: &'a Path,
 }
 
+impl LocalContextRefreshCtx<'_> {
+    fn changed_transcript(&self, stat: TranscriptStat) -> Option<TranscriptStat> {
+        (self.prior_transcript_stat != Some(&stat)).then_some(stat)
+    }
+}
+
 /// Display-only context derived from a local transcript, rollout, or telemetry read. The
 /// adapter owns the provider mapping; the CLI owns merging and writing the
 /// sidecar.
@@ -1034,6 +1040,21 @@ pub fn hook_trust_fix(kind: &str) -> String {
 mod tests {
     use super::*;
 
+    fn local_context_refresh_ctx(
+        prior_transcript_stat: Option<&TranscriptStat>,
+    ) -> LocalContextRefreshCtx<'_> {
+        LocalContextRefreshCtx {
+            agent_id: "session",
+            model_hint: None,
+            prior_session_name: None,
+            current_transcript_path: None,
+            prior_transcript_path: None,
+            prior_transcript_stat,
+            prior_spend_fold: None,
+            shared_pricing_cache_path: Path::new("pricing.json"),
+        }
+    }
+
     fn spend_entry(key: Option<(&str, &str)>, input: u64, cost_usd: f64) -> spending::CachedEntry {
         spending::CachedEntry {
             input,
@@ -1110,6 +1131,40 @@ mod tests {
         assert!(stat.mtime_secs >= 0);
         assert!(stat.mtime_nanos < 1_000_000_000);
         assert_eq!(stat.companion, None);
+    }
+
+    #[test]
+    fn changed_transcript_accepts_stat_without_prior() {
+        let stat = TranscriptStat::default();
+
+        assert_eq!(
+            local_context_refresh_ctx(None).changed_transcript(stat),
+            Some(stat)
+        );
+    }
+
+    #[test]
+    fn changed_transcript_accepts_changed_stat() {
+        let prior = TranscriptStat::default();
+        let changed = TranscriptStat {
+            len: 1,
+            ..TranscriptStat::default()
+        };
+
+        assert_eq!(
+            local_context_refresh_ctx(Some(&prior)).changed_transcript(changed),
+            Some(changed)
+        );
+    }
+
+    #[test]
+    fn changed_transcript_rejects_equal_stat() {
+        let stat = TranscriptStat::default();
+
+        assert_eq!(
+            local_context_refresh_ctx(Some(&stat)).changed_transcript(stat),
+            None
+        );
     }
 
     #[test]
