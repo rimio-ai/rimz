@@ -780,6 +780,9 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     if let Some(origin) = input.observation.origin {
         state.origin = Some(origin);
     }
+    if let Some(account_key) = &input.observation.account_key {
+        state.account_key = Some(account_key.clone());
+    }
     if let Some(compacted_from) = &input.observation.compacted_from {
         state.compacted_from = Some(compacted_from.clone());
     }

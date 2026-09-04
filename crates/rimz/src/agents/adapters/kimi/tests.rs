@@ -461,6 +461,7 @@ fn subagent_observations_namespace_identity_and_keep_the_parent_link() {
         },
         signal: SubagentStarted,
         agent_pid: None,
+        account_key: None,
         agent_process_start: None,
         runtime_owner: None,
         worktree_path: Some(

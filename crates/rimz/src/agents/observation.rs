@@ -247,6 +247,10 @@ pub struct AgentLifecycleObservation {
     /// process disappears.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_pid: Option<u32>,
+    /// Opaque provider account fingerprint observed at registration, using the
+    /// same digest as the account-usage probe. Never contains the credential.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_process_start: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -317,6 +321,7 @@ impl AgentLifecycleObservation {
             launch: LaunchParams::default(),
             signal,
             agent_pid: None,
+            account_key: None,
             agent_process_start: None,
             runtime_owner: None,
             worktree_path: None,

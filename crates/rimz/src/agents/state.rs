@@ -491,6 +491,10 @@ pub struct AgentState {
     /// superseded same-pane `/clear` conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<crate::agents::SessionOrigin>,
+    /// Opaque provider account fingerprint observed when this session
+    /// registered. It is identity-lifetime state, never a credential.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_key: Option<String>,
     /// The predecessor root condensed into this session, carried forward from
     /// provider compact evidence so the predecessor can be superseded exactly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -658,6 +662,8 @@ struct AgentStateWire {
     transcript_path: Option<String>,
     origin: Option<crate::agents::SessionOrigin>,
     #[serde(default)]
+    account_key: Option<String>,
+    #[serde(default)]
     compacted_from: Option<AgentSessionId>,
     #[serde(default)]
     recent_prompts: Vec<String>,
@@ -736,6 +742,7 @@ impl From<AgentStateWire> for AgentState {
             description: wire.description,
             transcript_path: wire.transcript_path,
             origin: wire.origin,
+            account_key: wire.account_key,
             compacted_from: wire.compacted_from,
             recent_prompts: wire.recent_prompts,
             model: wire.model,
@@ -808,6 +815,7 @@ impl AgentState {
             description: None,
             transcript_path: None,
             origin: None,
+            account_key: None,
             compacted_from: None,
             recent_prompts: Vec::new(),
             model: None,

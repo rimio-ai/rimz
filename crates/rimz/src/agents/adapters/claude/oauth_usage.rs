@@ -165,15 +165,23 @@ pub(crate) fn fetch_usage_with_token(
 }
 
 pub(crate) fn load_credentials() -> Result<ClaudeOauthCredentials> {
+    parse_credentials(&read_credentials_bytes()?)
+}
+
+pub(crate) fn load_account_key() -> Result<String> {
+    parse_account_key(&read_credentials_bytes()?)
+}
+
+fn read_credentials_bytes() -> Result<Vec<u8>> {
     let path = credentials_path();
     match std::fs::read(&path) {
-        Ok(bytes) => parse_credentials(&bytes),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => load_keychain_credentials(),
+        Ok(bytes) => Ok(bytes),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => read_keychain_credentials_bytes(),
         Err(err) => Err(ClaudeOauthUsageErr::Io(err)),
     }
 }
 
-fn load_keychain_credentials() -> Result<ClaudeOauthCredentials> {
+fn read_keychain_credentials_bytes() -> Result<Vec<u8>> {
     #[cfg(target_os = "macos")]
     {
         let mut command = Command::new("/usr/bin/security");
@@ -192,7 +200,7 @@ fn load_keychain_credentials() -> Result<ClaudeOauthCredentials> {
         if output.timed_out || !output.status.success() {
             return Err(ClaudeOauthUsageErr::NoCredentials);
         }
-        parse_credentials(&output.stdout)
+        Ok(output.stdout)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -237,6 +245,20 @@ pub(crate) fn parse_credentials(bytes: &[u8]) -> Result<ClaudeOauthCredentials> 
         access_token,
         account_key,
     })
+}
+
+pub(crate) fn parse_account_key(bytes: &[u8]) -> Result<String> {
+    let parsed: CredentialsFile = serde_json::from_slice(bytes)?;
+    let Some(oauth) = parsed.claude_ai_oauth else {
+        return Err(ClaudeOauthUsageErr::NoCredentials);
+    };
+    if let Some(refresh_token) = oauth.refresh_token.as_deref().and_then(non_empty_trimmed) {
+        return Ok(account_key("refresh-token", &refresh_token));
+    }
+    let Some(access_token) = oauth.access_token.as_deref().and_then(non_empty_trimmed) else {
+        return Err(ClaudeOauthUsageErr::NoCredentials);
+    };
+    Ok(account_key("access-token", &access_token))
 }
 
 pub(crate) fn fetch_usage_with_url(

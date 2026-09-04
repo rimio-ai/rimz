@@ -34,6 +34,7 @@ fn inject_lifecycle(
         launch: LaunchParams::default(),
         signal,
         agent_pid: None,
+        account_key: None,
         agent_process_start: None,
         runtime_owner: None,
         worktree_path: Some(env.project_root.display().to_string()),

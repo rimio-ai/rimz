@@ -19,9 +19,9 @@ impl SidebarSnapshot {
     /// probed account has something to show: a metered login, a non-empty
     /// identity, or recorded spend (an account-only block, so the dashboard
     /// shows substantive accounts and budgets between turns).
-    /// Sums each kind's spend, tokens, and edited lines; takes the plan, version,
-    /// and rate-limit windows from the freshest session (account state is shared,
-    /// so the latest reading is truest). `probed_accounts` carries out-of-band
+    /// Sums each kind's spend, tokens, and edited lines; takes the plan and version
+    /// from the freshest session, and rate-limit windows from sessions speaking
+    /// for one birth account. `probed_accounts` carries out-of-band
     /// login facts the context cannot (Claude's `auth status`, Codex's
     /// `auth.json`), preferred only when the freshest context has none — and a kind
     /// whose only signal is a qualifying probed account still earns a block;
@@ -73,8 +73,8 @@ impl SidebarSnapshot {
                 continue;
             }
 
-            // The freshest context wins the account-scoped facts (plan, version)
-            // — every session shares one account.
+            // The freshest context wins plan and version independently of the
+            // birth-account partition used for live rate-limit windows.
             let freshest = sessions
                 .iter()
                 .filter_map(|agent| agent.context.as_ref())
@@ -106,16 +106,25 @@ impl SidebarSnapshot {
             // last; the enrich layer fuses this live reading with the cached and
             // authoritative truth.
             let now = self.now;
-            let windows_for = |of_kind: &str| {
-                fresh_windows(
-                    self.agents
-                        .iter()
-                        .filter(|agent| !agent.is_provider_subagent() && agent.kind == *of_kind)
-                        .filter_map(|agent| agent.context.as_ref()?.rate_limits.as_ref()),
-                    now,
-                )
-            };
-            let windows = windows_for(&kind);
+            let account_key = sessions
+                .iter()
+                .filter(|agent| agent.account_key.is_some())
+                .max_by_key(|agent| (agent.registered_at, agent.agent_id.clone()))
+                .and_then(|agent| agent.account_key.clone());
+            let windows = fresh_windows(
+                sessions
+                    .iter()
+                    .filter(|agent| {
+                        account_key.as_ref().is_none_or(|panel_key| {
+                            agent
+                                .account_key
+                                .as_ref()
+                                .is_none_or(|session_key| session_key == panel_key)
+                        })
+                    })
+                    .filter_map(|agent| agent.context.as_ref()?.rate_limits.as_ref()),
+                now,
+            );
             let has_windows = !windows.is_empty();
 
             let metered = account
@@ -173,6 +182,7 @@ impl SidebarSnapshot {
                 SidebarProviderPanel {
                     kind,
                     account_scope,
+                    account_key,
                     product_name: identity.product_name,
                     art: identity.art,
                     art_tints: identity.art_tints,

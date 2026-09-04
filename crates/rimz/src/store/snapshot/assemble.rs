@@ -567,6 +567,7 @@ mod tests {
             launch: LaunchParams::default(),
             signal: LifecycleSignal::Registered,
             agent_pid,
+            account_key: None,
             agent_process_start: None,
             runtime_owner: None,
             worktree_path: None,

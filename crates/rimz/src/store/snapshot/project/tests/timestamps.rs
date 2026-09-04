@@ -54,6 +54,57 @@ fn registered_at_stamps_first_event_and_survives_end_and_restart() {
 }
 
 #[test]
+fn account_key_carries_through_turns_and_rebinds_on_registration() {
+    let first = raw_lifecycle_at(
+        "claude",
+        0,
+        serde_json::json!({
+            "event_name": "SessionStart",
+            "agent_id": "s1",
+            "account_key": "account-one",
+            "signal": { "signal": "registered" }
+        }),
+    );
+    let prompt = raw_lifecycle_at(
+        "claude",
+        10,
+        serde_json::json!({
+            "event_name": "UserPromptSubmit",
+            "agent_id": "s1",
+            "signal": { "signal": "turn_started" }
+        }),
+    );
+    let stop = raw_lifecycle_at(
+        "claude",
+        20,
+        serde_json::json!({
+            "event_name": "Stop",
+            "agent_id": "s1",
+            "signal": {
+                "signal": "turn_ended",
+                "errored": false,
+                "parked_on_background": false
+            }
+        }),
+    );
+    let during_turn = reduce_agent_states(&[first.clone(), prompt, stop]);
+    assert_eq!(during_turn[0].account_key.as_deref(), Some("account-one"));
+
+    let resumed = raw_lifecycle_at(
+        "claude",
+        30,
+        serde_json::json!({
+            "event_name": "SessionStart",
+            "agent_id": "s1",
+            "account_key": "account-two",
+            "signal": { "signal": "registered" }
+        }),
+    );
+    let rebound = reduce_agent_states(&[first, resumed]);
+    assert_eq!(rebound[0].account_key.as_deref(), Some("account-two"));
+}
+
+#[test]
 fn launch_registered_at_stamps_first_launch_event() {
     let mut launch = raw_launch(
         AgentLaunchState::Bound,

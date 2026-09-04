@@ -25,6 +25,7 @@ fn panel(kind: &str) -> SidebarProviderPanel {
     SidebarProviderPanel {
         kind: kind.to_owned(),
         account_scope: ProviderAccountScope::KindWide,
+        account_key: None,
         product_name: kind.to_owned(),
         art: Vec::new(),
         art_tints: Vec::new(),
@@ -128,6 +129,7 @@ fn protocol_fixture(
     now: Timestamp,
 ) -> (AccountsCache, SidebarProviderPanel, ProviderSpendingCache) {
     let mut provider = panel("claude");
+    provider.account_key = Some("must-not-leak".to_owned());
     provider.active_sessions = 2;
     provider.windows = vec![
         RateLimitWindow {
@@ -216,6 +218,8 @@ fn pretty_and_json_reports_are_stable() {
     insta::assert_snapshot!("provider_report_pretty", pretty);
 
     let json = serde_json::to_string_pretty(&reports).unwrap();
+    assert!(!json.contains("account_key"));
+    assert!(!json.contains("must-not-leak"));
     insta::assert_snapshot!("provider_report_json", json);
 }
 

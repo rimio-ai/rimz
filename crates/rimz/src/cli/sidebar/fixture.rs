@@ -2204,6 +2204,7 @@ fn provider_panel(
     SidebarProviderPanel {
         kind: kind.to_owned(),
         account_scope: Default::default(),
+        account_key: None,
         product_name,
         art: emblem.lines,
         art_tints: emblem.tints,

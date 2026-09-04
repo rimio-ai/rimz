@@ -612,23 +612,9 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
         {
             let mut observation =
                 build_claude_observation(payload, &parts, signal, agent_id, parent_agent_id);
-            if observation.parent_agent_id.is_none()
-                && matches!(observation.signal, LifecycleSignal::Registered)
-            {
-                observation.origin =
-                    parts
-                        .session_start
-                        .as_ref()
-                        .and_then(|start| match start.source {
-                            SessionSource::Startup | SessionSource::Clear => {
-                                Some(SessionOrigin::Fresh)
-                            }
-                            SessionSource::Fork => Some(SessionOrigin::Forked),
-                            SessionSource::Resume
-                            | SessionSource::Compact
-                            | SessionSource::Unknown => None,
-                        });
-            }
+            enrich_root_registration(&mut observation, &parts, || {
+                oauth_usage::load_account_key().ok()
+            });
             decoded.attach_lifecycle(observation);
         }
         let final_message = decoded.lifecycle().and_then(|observation| {
@@ -1076,6 +1062,27 @@ fn resolve_claude_observation_identity(
             RootIdentity::ForeignChild => None,
         }
     }
+}
+
+fn enrich_root_registration(
+    observation: &mut AgentLifecycleObservation,
+    parts: &ClaudeLifecycleParts,
+    load_account_key: impl FnOnce() -> Option<String>,
+) {
+    if observation.parent_agent_id.is_some()
+        || !matches!(observation.signal, LifecycleSignal::Registered)
+    {
+        return;
+    }
+    observation.account_key = load_account_key();
+    observation.origin = parts
+        .session_start
+        .as_ref()
+        .and_then(|start| match start.source {
+            SessionSource::Startup | SessionSource::Clear => Some(SessionOrigin::Fresh),
+            SessionSource::Fork => Some(SessionOrigin::Forked),
+            SessionSource::Resume | SessionSource::Compact | SessionSource::Unknown => None,
+        });
 }
 
 fn build_claude_observation(

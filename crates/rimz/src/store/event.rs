@@ -43,7 +43,7 @@ macro_rules! lifetime_fields {
     };
 }
 
-lifetime_fields!(transcript_path; worktree_path, worktree_branch; role, team, channel, profile);
+lifetime_fields!(transcript_path; worktree_path, worktree_branch, account_key; role, team, channel, profile);
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentLifecyclePayload {

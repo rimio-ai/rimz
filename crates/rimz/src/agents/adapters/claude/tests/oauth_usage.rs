@@ -133,6 +133,38 @@ fn account_key_prefers_refresh_token_and_never_contains_credentials() {
 }
 
 #[test]
+fn birth_account_key_ignores_usage_eligibility_and_matches_valid_credentials() {
+    let expired = br#"{
+        "claudeAiOauth": {
+            "accessToken": "expired-access",
+            "refreshToken": "stable-refresh",
+            "expiresAt": 1,
+            "scopes": ["other"]
+        }
+    }"#;
+    assert!(matches!(
+        parse_credentials(expired),
+        Err(ClaudeOauthUsageErr::MissingScope)
+    ));
+    let expired_key = parse_account_key(expired).expect("birth key");
+
+    let valid = br#"{
+        "claudeAiOauth": {
+            "accessToken": "rotated-access",
+            "refreshToken": "stable-refresh",
+            "expiresAt": 4102444800000,
+            "scopes": ["user:profile"]
+        }
+    }"#;
+    let credentials = parse_credentials(valid).expect("usage credentials");
+    assert_eq!(expired_key, credentials.account_key);
+    assert_eq!(expired_key, parse_account_key(valid).expect("valid key"));
+    for secret in ["expired-access", "rotated-access", "stable-refresh"] {
+        assert!(!expired_key.contains(secret));
+    }
+}
+
+#[test]
 fn usage_response_maps_windows_and_extra_usage() {
     let usage = parse_usage_response(
         r#"{

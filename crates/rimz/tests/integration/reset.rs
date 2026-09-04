@@ -212,6 +212,7 @@ fn agent_observation(project_root: &Path) -> AgentLifecycleObservation {
         launch: LaunchParams::default(),
         signal: LifecycleSignal::Registered,
         agent_pid: None,
+        account_key: None,
         agent_process_start: None,
         runtime_owner: None,
         worktree_path: Some(project_root.display().to_string()),
