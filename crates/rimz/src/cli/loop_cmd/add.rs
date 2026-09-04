@@ -590,6 +590,9 @@ fn resolve_add_timing(args: &AddArgs) -> Result<AddTiming> {
     if duration.is_zero() {
         bail!("--in must be greater than zero");
     }
+    if duration >= Duration::from_secs(24 * 60 * 60) {
+        bail!("--in must be less than 24h");
+    }
     let mut target = Timestamp::now()
         .to_zoned(MachineConfig::load_lenient().time_zone())
         .checked_add(duration)

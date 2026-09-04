@@ -74,6 +74,18 @@ fn wake_without_target_refuses_a_plain_shell() {
 }
 
 #[test]
+fn wake_rejects_delays_the_minute_scheduler_cannot_represent() {
+    let env = Env::new();
+    let output = agent_wake(&env)
+        .args(["wake", "--in", "1d"])
+        .output()
+        .expect("run wake with long delay");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--in must be less than 24h"), "{stderr}");
+}
+
+#[test]
 fn wake_wait_reports_a_watched_failure_and_settles_its_message() {
     let env = Env::new();
     env.install_agent_hooks("claude");
