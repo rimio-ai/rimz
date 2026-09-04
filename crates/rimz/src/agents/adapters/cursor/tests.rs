@@ -1509,6 +1509,20 @@ fn transcript_refresh_registers_live_file_and_recovers_interruption() {
     assert_eq!(first.context.settle, crate::agents::FieldPatch::Clear);
     assert_eq!(first.context.turn_error, crate::agents::FieldPatch::Clear);
 
+    assert!(
+        transcript::refresh(&crate::agents::LocalContextRefreshCtx {
+            agent_id: "conv-1",
+            model_hint: None,
+            prior_session_name: None,
+            current_transcript_path: Some(&path_string),
+            prior_transcript_path: None,
+            prior_transcript_stat: first.transcript_stat.as_ref(),
+            prior_spend_fold: None,
+            shared_pricing_cache_path: &pricing,
+        })
+        .is_none()
+    );
+
     std::fs::write(
         &path,
         "{\"role\":\"user\",\"message\":{\"content\":[]}}\n{\"type\":\"turn_ended\",\"status\":\"aborted\"}\n",
