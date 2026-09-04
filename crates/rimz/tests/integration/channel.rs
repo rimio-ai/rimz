@@ -263,8 +263,17 @@ fn register_idle_lane_agent(env: &Env, session_id: &str, channel: &str, team: Op
         "worktree_path": env.project_root.display().to_string(),
     })
     .to_string();
+    let mut owner = Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn agent owner");
+    let owner_pid = owner.id();
+    let _ = std::thread::spawn(move || {
+        let _ = owner.wait();
+    });
     let mut cmd = env.hook_command("claude");
     cmd.env(rimz::harness::launch::ENV_CHANNEL, channel)
+        .env("RIMZ_AGENT_PID", owner_pid.to_string())
         .env("ZELLIJ_PANE_ID", "3");
     if let Some(team) = team {
         cmd.env(rimz::harness::launch::ENV_TEAM, team);
