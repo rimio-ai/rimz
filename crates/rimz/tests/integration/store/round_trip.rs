@@ -19,7 +19,7 @@ fn runtime_projection_serves_lock_free_while_a_writer_holds_the_lock() {
         ))
         .expect("append agent");
 
-    let _guard = rimz::disk::lock::WorkspaceLock::acquire(h.store.workspace_lock_path())
+    let _guard = rimz::disk::lock::WorkspaceLock::acquire(&h.store.paths().workspace_lock)
         .expect("hold workspace lock");
 
     let store = h.store.clone();

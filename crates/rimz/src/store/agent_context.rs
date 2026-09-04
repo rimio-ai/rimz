@@ -183,6 +183,7 @@ pub(crate) fn attach_rest_certificates<'a>(
 /// Persist a fully-shaped sidecar fixture while preserving concurrently owned
 /// cost and spend state. Production mutations use [`update_record`].
 #[doc(hidden)]
+#[cfg(any(test, feature = "testkit"))]
 pub fn write_record(
     runtime: &RuntimePaths,
     record: &AgentContextRecord,
