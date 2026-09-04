@@ -4,11 +4,14 @@
 //! snapshots, and sidebar projections. They stay outside the
 //! store snapshot modules so live-presence types do not depend on durable
 //! read/write layers.
+//! Coarse daemon-host classification lives here so every projection and mux
+//! adapter uses the same pane identity rules.
 
 pub mod bandwidth;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 use crate::ids::{AgentKind, AgentSessionId, PaneId, ViewKind};
 
@@ -17,6 +20,42 @@ use crate::ids::{AgentKind, AgentSessionId, PaneId, ViewKind};
 /// Zellij layout names its pane with it, and the tmux/Zellij/store
 /// classifiers all match against it.
 pub const SIDEBAR_CHROME_TITLE: &str = "rimz-sidebar";
+
+/// View name for the managed daemon tab. Shared by the launcher and pane
+/// classifiers so every backend speaks the same name.
+pub const VIEW_NAME: &str = "rimzd";
+
+/// Substring marking the Claude remote-control host in a pane command.
+pub(crate) const COMMAND_MARKER: &str = "remote-control";
+
+/// Substring marking the per-session Codex app-server broker.
+pub(crate) const APP_SERVER_MARKER: &str = "app-server";
+
+/// Whether a command line is one of RimZ's managed daemon hosts.
+pub fn command_is_host(command: &str) -> bool {
+    command.contains(COMMAND_MARKER) || command.contains(APP_SERVER_MARKER)
+}
+
+pub(crate) fn command_is_claude_host(command: &str) -> bool {
+    let mut tokens = command.split_whitespace();
+    while let Some(token) = tokens.next() {
+        let is_claude = Path::new(token)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == "claude");
+        if is_claude {
+            return tokens.next() == Some(COMMAND_MARKER);
+        }
+    }
+    false
+}
+
+/// Whether `pane` belongs to the daemon dashboard.
+pub fn pane_is_host(pane: &PaneRef) -> bool {
+    pane.spawn_command.as_deref().is_some_and(command_is_host)
+        || pane.command.as_deref().is_some_and(command_is_host)
+        || pane.view_name.as_deref() == Some(VIEW_NAME)
+}
 
 /// Runtime owner class for records that should appear in live views.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -248,6 +287,32 @@ mod tests {
         assert!(pane("terminal_1", "tab_1", Some("sudo rimz-sidebar")).is_rimz_sidebar());
         assert!(!pane("terminal_1", "tab_1", Some("rimz")).is_rimz_sidebar());
         assert!(!pane("terminal_1", "tab_1", Some("rimz-sidebar-helper")).is_rimz_sidebar());
+    }
+
+    #[test]
+    fn pane_ref_classifies_daemon_hosts_across_identity_fields() {
+        assert!(pane_is_host(&pane(
+            "terminal_1",
+            "tab_1",
+            Some("claude remote-control --spawn worktree")
+        )));
+        assert!(pane_is_host(&pane(
+            "terminal_1",
+            "tab_1",
+            Some("rimz codex app-server serve --workspace-id w")
+        )));
+        assert!(pane_is_host(&PaneRef {
+            spawn_command: Some("claude remote-control --spawn worktree".to_owned()),
+            ..pane("terminal_1", "tab_1", None)
+        }));
+        assert!(pane_is_host(&PaneRef {
+            view_name: Some(VIEW_NAME.to_owned()),
+            ..pane("terminal_1", "tab_1", Some("rimz"))
+        }));
+        assert!(!pane_is_host(&PaneRef {
+            view_name: Some("work".to_owned()),
+            ..pane("terminal_1", "tab_1", Some("claude"))
+        }));
     }
 
     #[test]

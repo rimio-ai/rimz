@@ -242,7 +242,7 @@ fn repair_daemon_view_recreates_missing_runtime_panes_in_one_column() {
         .open_sidebar(&sidebar, None)
         .expect("open_sidebar");
     let view = rimz::mux::DaemonView {
-        name: rimz::daemon_view::VIEW_NAME.to_owned(),
+        name: rimz::pane::VIEW_NAME.to_owned(),
         content: vec![held_managed_pane(&[
             "rimz", "daemon", "content", "--slot", "0",
         ])],

@@ -315,7 +315,7 @@ impl SidebarOwnView {
         let own_view_is_daemon = !non_sidebar_siblings.is_empty()
             && non_sidebar_siblings
                 .iter()
-                .all(|pane| crate::daemon_view::pane_is_host(&frame.pane_ref_for_state(tab, pane)));
+                .all(|pane| crate::pane::pane_is_host(&frame.pane_ref_for_state(tab, pane)));
         Some(Self {
             sibling_count: siblings.len(),
             working_pane_ids,

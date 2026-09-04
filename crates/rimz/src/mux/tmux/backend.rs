@@ -630,7 +630,7 @@ impl MuxBackend for TmuxBackend {
             let view = pane.view_id.clone()?;
             let role = ReconcilePaneRole::from_evidence(
                 pane.is_rimz_sidebar(),
-                crate::daemon_view::pane_is_host(pane),
+                crate::pane::pane_is_host(pane),
             );
             Some(ReconcilePane {
                 view,
