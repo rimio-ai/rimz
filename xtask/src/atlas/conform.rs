@@ -519,7 +519,7 @@ fn enforce(report: &Report) -> Result<()> {
             );
             let block = fix
                 .lines()
-                .map(|line| format!("    {line}"))
+                .map(str::to_owned)
                 .collect::<Vec<_>>()
                 .join("\n");
             violations.push(format!("{action}\n{block}"));

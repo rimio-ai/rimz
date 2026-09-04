@@ -62,7 +62,7 @@ cargo xtask atlas survey --path crates/rimz/src/store --by depth --top 20
 - `providers`, `footer` — **evidence.** What the module depends on, the target rules that cover it, parse failures, and unresolved definitions (`mod` declarations and re-exports of items defined outside the boundary are counted as unmeasured).
 
 ```sh
-cargo xtask atlas inspect --module crates/rimz/src/store --from sidebar::enrich --item store::agent_context::write_record
+cargo xtask atlas inspect --module crates/rimz/src/store --from sidebar::enrich --item store::message::MessageRecord
 cargo xtask atlas inspect --module message --brief --out /tmp/atlas-message.md
 ```
 

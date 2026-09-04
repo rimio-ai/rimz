@@ -31,8 +31,10 @@ fn conform_rejects_upward_dependency_spelled_as_a_qualified_path() {
         error.contains("src/lower.rs:1 (qualified) (upper)"),
         "{error}"
     );
-    assert!(error.contains("[[module]]"), "{error}");
-    assert!(error.contains("path = \"src/lower.rs\""), "{error}");
+    assert!(
+        error.contains("with\n[[module]]\npath = \"src/lower.rs\""),
+        "{error}"
+    );
     assert!(
         error.contains("upward-dependencies = [\"upper\"]"),
         "{error}"
@@ -42,7 +44,7 @@ fn conform_rejects_upward_dependency_spelled_as_a_qualified_path() {
 }
 
 #[test]
-fn conform_labels_and_fixes_a_surface_excess() {
+fn conform_labels_and_fixes_surface_and_strangler_excesses() {
     let root = fixture_root();
     fs::write(root.path().join("src/lib.rs"), "mod upper;\n").unwrap();
     fs::write(root.path().join("src/upper.rs"), "pub fn open() {}\n").unwrap();
@@ -52,7 +54,12 @@ fn conform_labels_and_fixes_a_surface_excess() {
         version: 5,
         layers: Vec::new(),
         modules: vec![rule],
-        strangler: Vec::new(),
+        strangler: vec![StranglerRule {
+            symbol: "open".to_owned(),
+            path: PathBuf::from("src/upper.rs"),
+            baseline: 0,
+            config_line: 2,
+        }],
         verdicts: Vec::new(),
     };
     let target_path = root.path().join(TARGET_FILE);
@@ -65,6 +72,14 @@ fn conform_labels_and_fixes_a_surface_excess() {
         "{error}"
     );
     assert!(error.contains("surface-budget = 1"), "{error}");
+    assert!(
+        error.contains("strangler `open` in `src/upper.rs` is 1 above 0"),
+        "{error}"
+    );
+    assert!(
+        error.contains("[[strangler]]\nsymbol = \"open\"\npath = \"src/upper.rs\"\nbaseline = 1"),
+        "{error}"
+    );
     assert!(!error.contains("upward-dependency"), "{error}");
     assert!(!error.contains("upward-dependencies"), "{error}");
 }
