@@ -38,7 +38,7 @@ Shared seam, `crates/rimz/src/mux/`:
 | [`recovery.rs`](../../crates/rimz/src/mux/recovery.rs) | Destructive teardown and guarded process sweep shared by `rimz reset` and attended auto-reset. |
 | [`domain.rs`](../../crates/rimz/src/mux/domain.rs) | `ProcessDomain`: the guard every heuristic process kill passes. |
 | [`focus_key.rs`](../../crates/rimz/src/mux/focus_key.rs) | Parsing and rendering the `[sidebar] focus_key` and `zoom_key` chords both backends bind. |
-| [`keys.rs`](../../crates/rimz/src/mux/keys.rs) | Named key presses and bracketed-paste markers. |
+| [`pane/keys.rs`](../../crates/rimz/src/pane/keys.rs) | Named key presses and bracketed-paste markers shared by both backends. |
 | [`capabilities.rs`](../../crates/rimz/src/mux/capabilities.rs) | Static backend facts, such as whether a view is a tab or a window. |
 | [`binaries.rs`](../../crates/rimz/src/mux/binaries.rs) | PATH and live-server binary probes for `rimz doctor`. |
 
