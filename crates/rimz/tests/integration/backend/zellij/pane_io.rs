@@ -4,10 +4,10 @@ use std::time::{Duration, Instant};
 
 use rimz::ids::{MuxName, PaneId};
 use rimz::mux::{
-    BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, MuxBackend, NamedKey, PaneListOptions,
-    PaneReadConsistency, SidebarLiveness, SplitPaneOptions, SplitPlacement, SplitTarget,
-    ZellijBackend,
+    MuxBackend, PaneListOptions, PaneReadConsistency, SidebarLiveness, SplitPaneOptions,
+    SplitPlacement, SplitTarget, ZellijBackend,
 };
+use rimz::pane::keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey};
 use tempfile::TempDir;
 
 use crate::common::{CommandTimeoutExt, Env};

@@ -10,7 +10,6 @@ mod capabilities;
 mod command;
 pub mod domain;
 mod focus_key;
-mod keys;
 mod mount_proof;
 mod reconcile;
 pub mod recovery;
@@ -23,8 +22,6 @@ pub use capabilities::{drops_desktop_osc, lists_full_cmdline, view_kind, wraps_o
 pub use command::CommandSpec;
 pub(crate) use command::{COMMAND_TIMEOUT, LIST_SESSIONS_TIMEOUT};
 pub use focus_key::RoomKeyBinding;
-pub(crate) use keys::paste_payload;
-pub use keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, UnknownKey};
 pub(crate) use reconcile::{
     ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, execute_reconcile_plan,
     group_reconcile_panes, plan_reconcile,
@@ -43,6 +40,8 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Duration;
+
+use crate::pane::keys::NamedKey;
 
 use serde::{Deserialize, Serialize};
 

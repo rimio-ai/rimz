@@ -12,10 +12,9 @@ use super::GlobalFlags;
 use crate::cli::render;
 use rimz::agents::{AgentState, TurnPhase};
 use rimz::ids::PaneId;
-use rimz::mux::{
-    MuxBackend, NamedKey, PaneListOptions, SplitPaneOptions, SplitPlacement, SplitTarget,
-};
+use rimz::mux::{MuxBackend, PaneListOptions, SplitPaneOptions, SplitPlacement, SplitTarget};
 use rimz::pane::PaneRef;
+use rimz::pane::keys::NamedKey;
 use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
 
 #[derive(Debug, Args)]

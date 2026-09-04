@@ -11,11 +11,12 @@ pub(super) use rimz::RuntimePaths;
 pub(super) use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 pub(super) use rimz::ids::{AgentKind, MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 pub(super) use rimz::mux::{
-    ClientFocusOptions, LayoutColumn, LayoutPanes, MuxBackend, NamedKey, PaneCmd, PaneListOptions,
+    ClientFocusOptions, LayoutColumn, LayoutPanes, MuxBackend, PaneCmd, PaneListOptions,
     PaneReadConsistency, SessionOptions, SidebarPaneOptions, SidebarWidth, SplitPaneOptions,
     SplitPlacement, SplitTarget, TabOptions, TmuxBackend,
 };
 pub(super) use rimz::pane::PaneRef;
+pub(super) use rimz::pane::keys::NamedKey;
 pub(super) use rimz::sidebar::{SidebarLaunchOutcome, launch_sidebar_if_needed, write_heartbeat};
 pub(super) use rimz::workspace::WorkspaceResolver;
 pub(super) use tempfile::TempDir;

@@ -52,8 +52,8 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::mux::NamedKey;
 use crate::pane::RuntimeOwnerKind;
+use crate::pane::keys::NamedKey;
 use crate::transcript::{AskOption, AskQuestion};
 
 pub(crate) use account::WindowSurplus;

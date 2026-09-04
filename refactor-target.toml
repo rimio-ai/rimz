@@ -212,7 +212,7 @@ surface-budget = 4
 [[module]]
 path = "crates/rimz/src/pane"
 upward-dependencies = ["store::snapshot"]
-surface-budget = 33
+surface-budget = 41
 
 [[module]]
 path = "crates/rimz/src/proc"
@@ -391,6 +391,7 @@ allowed-dependencies = [
     "harness::target",
     "message",
     "mux",
+    "pane::keys",
     "store",
     "store::snapshot",
     "workspace",

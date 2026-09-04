@@ -2,7 +2,7 @@ use serde_json::json;
 
 use super::super::ask;
 use crate::agents::{AnswerPlanErr, AnswerStep, AskKind, AskReply};
-use crate::mux::NamedKey;
+use crate::pane::keys::NamedKey;
 use crate::transcript::{AskOption, AskQuestion};
 
 #[test]

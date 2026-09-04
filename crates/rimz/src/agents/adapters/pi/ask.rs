@@ -2,7 +2,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::agents::{AnswerPlanErr, AnswerStep, AskKind, AskReply};
-use crate::mux::NamedKey;
+use crate::pane::keys::NamedKey;
 use crate::transcript::{AskAnswer, AskQuestion};
 
 #[derive(Debug, Default, Deserialize)]
