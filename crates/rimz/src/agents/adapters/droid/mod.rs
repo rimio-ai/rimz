@@ -304,16 +304,8 @@ impl crate::agents::capabilities::HookCapability for DroidAdapter {
         decoded.set_routing(HookRouting::session(
             agent_id.as_deref().map(AgentSessionId::from),
         ));
-        let session_start = (event_name == "SessionStart").then(|| parse_session_start(payload));
         let signal = match event_name {
-            "SessionStart" => match session_start.as_ref().map(|start| &start.source) {
-                Some(SessionSource::Compact) => LifecycleSignal::CompactionEnded {
-                    auto: None,
-                    failed: false,
-                },
-                Some(_) => LifecycleSignal::Registered,
-                None => return Ok(decoded),
-            },
+            "SessionStart" => parse_session_start(payload).source.session_start_signal(),
             "UserPromptSubmit" => LifecycleSignal::TurnStarted,
             "PostToolUse" => LifecycleSignal::ToolUsed {
                 mutates: self.spec().tool_mutates(payload),
@@ -345,9 +337,10 @@ impl crate::agents::capabilities::HookCapability for DroidAdapter {
             observation.launch.effort = effort;
         }
         if matches!(observation.signal, LifecycleSignal::Registered)
-            && session_start.as_ref().is_some_and(|start| {
-                matches!(start.source, SessionSource::Startup | SessionSource::Clear)
-            })
+            && matches!(
+                parse_session_start(payload).source,
+                SessionSource::Startup | SessionSource::Clear
+            )
         {
             observation.origin = Some(SessionOrigin::Fresh);
         }

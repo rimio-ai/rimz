@@ -1215,16 +1215,7 @@ fn map_codex_lifecycle_signal(
     plan_proposed: bool,
 ) -> Option<LifecycleSignal> {
     match event_name {
-        "SessionStart" => {
-            let p = parts.session_start.as_ref()?;
-            Some(match p.source {
-                SessionSource::Compact => LifecycleSignal::CompactionEnded {
-                    auto: None,
-                    failed: false,
-                },
-                _ => LifecycleSignal::Registered,
-            })
-        }
+        "SessionStart" => Some(parts.session_start.as_ref()?.source.session_start_signal()),
         "SubagentStart" => Some(LifecycleSignal::SubagentStarted),
         "UserPromptSubmit" => Some(LifecycleSignal::TurnStarted),
         "SubagentStop" => Some(LifecycleSignal::SubagentStopped {

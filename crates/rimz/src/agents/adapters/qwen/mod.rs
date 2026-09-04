@@ -615,16 +615,7 @@ fn lifecycle_signal(
     payload: &Value,
 ) -> Option<LifecycleSignal> {
     match event_name {
-        "SessionStart" => Some(
-            if parse_session_start(payload).source == SessionSource::Compact {
-                LifecycleSignal::CompactionEnded {
-                    auto: None,
-                    failed: false,
-                }
-            } else {
-                LifecycleSignal::Registered
-            },
-        ),
+        "SessionStart" => Some(parse_session_start(payload).source.session_start_signal()),
         "UserPromptSubmit" => {
             // Qwen fires this hook on internal continuations with an empty prompt;
             // a real user prompt always carries text.
