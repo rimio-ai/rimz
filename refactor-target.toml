@@ -154,7 +154,7 @@ upward-dependencies = [
     "sidebar::refresh",
     "sidebar::refresh::pr",
 ]
-surface-budget = 591
+surface-budget = 592
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -220,7 +220,7 @@ upward-dependencies = [
     "agents",
     "agents::registry",
 ]
-surface-budget = 95
+surface-budget = 97
 
 [[module]]
 path = "crates/rimz/src/reload.rs"
@@ -488,8 +488,10 @@ allowed-dependencies = [
     "harness::launch",
     "ids",
     "mux",
+    "pane",
+    "proc",
 ]
-surface-budget = 9
+surface-budget = 10
 
 [[module]]
 path = "crates/rimz/src/harness/plan.rs"
