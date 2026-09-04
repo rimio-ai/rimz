@@ -24,9 +24,9 @@ Ordered. A seam pass at the head is proposed before any module pass. Status is `
 | --- | --- | --- | --- |
 | 1 | `store` → `agents` and `store` → `message` upward dependencies; decide the direction and close it | `debt`: store admits agents 134 sites, message 22; cycles agents ↔ store 46/134, message ↔ store 24/22, both cross-layer | landed pass-1 |
 | 2 | Adapter sibling families in `agents/adapters/*`: collapse each onto one implementation with the divergences a fix pins | `shapes`: decode-hook family 9 members / 8 siblings (`*/mod.rs`, 935 SLOC in play); `spend.rs` cache 4 siblings (354); `ask.rs` plan 3 siblings (182); `install.rs` 2 siblings (90) | landed pass-2 |
-| 3 | `mux` ↔ `sidebar` and `daemon_view` ↔ `mux` cycles | cycles mux ↔ sidebar 27/42 cross-layer; daemon_view ↔ mux 10/3 same layer; mux admits sidebar 27 sites | queued |
-| 4 | Homes for `store::workspace_record` (→ `workspace`) and `store::snapshot::compose_channel` (`transcript`, `harness::target` callers); the only upward L2 → store sites after pass 1 | pass-1 re-layer admissions: `workspace` 3 sites, `transcript` 1, `pane` 1 | queued |
-| 5 | `agents` → `mux` (`NamedKey`, `CommandSpec`), `daemon_view` (markers), `diag::rotating`, `observability`: adapter-side reach into peers exposed by the re-layer | pass-1 re-layer admissions: `mux` 6 sites, `daemon_view` 3, `diag::rotating` 3; no current `observability` site | queued |
+| 3 | `mux` ↔ `sidebar` and `daemon_view` ↔ `mux` cycles | cycles mux ↔ sidebar 27/42 cross-layer; daemon_view ↔ mux 10/3 same layer; mux admits sidebar 27 sites | `daemon_view` ↔ `mux` landed pass-3; `mux` ↔ `sidebar` queued (pass 4) |
+| 4 | Homes for `store::workspace_record` (→ `workspace`) and `store::snapshot::compose_channel` (`transcript`, `harness::target` callers); the only upward L2 → store sites after pass 1 | pass-1 re-layer admissions: `workspace` 3 sites, `transcript` 1, `pane` 1 | landed pass-3 |
+| 5 | `agents` → `mux` (`NamedKey`, `CommandSpec`), `daemon_view` (markers), `diag::rotating`, `observability`: adapter-side reach into peers exposed by the re-layer | pass-1 re-layer admissions: `mux` 6 sites, `daemon_view` 3, `diag::rotating` 3; no current `observability` site | landed pass-3 |
 
 ### Pass 2 family verdicts
 
@@ -50,6 +50,9 @@ One row per module reviewed, at the granularity `survey` ranks. `holds` names th
 | `store` | landed pass-1 | — | — | seam reviewed; module interior remains a candidate |
 | `agents` | landed pass-1 | — | — | seam reviewed; module interior remains a candidate |
 | `agents/adapters` | landed pass-2 | — | — | sibling seam reviewed; provider interiors remain separate module candidates |
+| `daemon_view` | landed pass-3 | — | — | seam reviewed; interior remains a candidate |
+| `pane` | landed pass-3 | — | — | seam reviewed; interior remains a candidate |
+| `workspace` | landed pass-3 | — | — | seam reviewed; interior remains a candidate |
 | `agents/adapters/codex` | candidate | — | — | survey rank 3; app-server, broker, rollout, and install interiors unreviewed |
 | `agents/adapters/claude` | candidate | — | — | survey rank 6; remote-control and install interiors unreviewed |
 | `config` | candidate | — | — | esc 182, depth 35.9, churn 8.9%; 38 admitted upward sites |
@@ -69,12 +72,24 @@ One row per upward dependency edge reviewed. `keep` means the edge is the intend
 | `agents` → `store` | 46 | closed | pass 1 |
 | `store` → `message` | 22 | closed | pass 1 |
 | `config` → `store::message` | 2 | keep | `AutoCompact` is config vocabulary and persisted record data; the persisted home wins |
-| `agents` → `mux` | 6 | close | seam 5 |
-| `agents` → `daemon_view` | 3 | close | seam 5 |
-| `agents` → `diag::rotating` | 3 | close | seam 5 |
-| `pane` → `store::snapshot` | 1 | close | seam 4 |
-| `transcript` → `store::snapshot` | 1 | close | seam 4 |
-| `workspace` → `store::workspace_record` | 3 | close | seam 4 |
+| `agents` → `mux` | 6 | closed | pass 3 |
+| `agents` → `daemon_view` | 3 | closed | pass 3 |
+| `agents` → `diag::rotating` | 3 | closed | pass 3 |
+| `pane` → `store::snapshot` | 1 | closed | pass 3 |
+| `transcript` → `store::snapshot` | 1 | closed | pass 3 |
+| `workspace` → `store::workspace_record` | 3 | closed | pass 3 |
+| `agents` → `worktree` | 7 | closed | pass 3 |
+| `store` → `daemon_view` | 2 | closed | pass 3 |
+| `store` → `worktree` | 4 | closed | pass 3 |
+| `mux` → `daemon_view` | 3 | closed | pass 3 |
+| `workspace` → `worktree` | 1 | closed | pass 3 |
+| `agents` → `child_process` | 2 | closed | re-layer: `child_process` is a process-lifecycle module and sits at L2 (pass 3) |
+| `message` → `child_process` | 2 | closed | re-layer: `child_process` is a process-lifecycle module and sits at L2 (pass 3) |
+| `diag` → `child_process` | 2 | closed | re-layer: `child_process` is a process-lifecycle module and sits at L2 (pass 3) |
+| `daemon_view` → `remote_control` | 4 | closed | re-layer: `daemon_view` sits at L6, same layer (pass 3) |
+| `agents` → `harness::target` | 2 | keep | `agent_handle` is the canonical address; `agent_channel` becomes `AgentState::channel()` in a later pass |
+| `agents` → `harness::budget` | 1 | close | later pass: `BudgetPark`/`BudgetScope`/`BudgetWindow` are `AgentState` record vocabulary |
+| `agents` → `harness::run` | 1 | close | later pass: a `LifecycleSignal` terminal disposition in `agents::lifecycle`, mapped to `RunStatus` in harness |
 | `theme` → `agents` | 5 | keep | catalog and spec vocabulary are the shared language below the store |
 | `trust` → `agents` | 1 | keep | catalog and spec vocabulary are the shared language below the store |
 | `proc` → `agents` | 4 | keep | catalog and spec vocabulary are the shared language below the store |
@@ -88,3 +103,4 @@ One row per pass, newest last. Deltas are the `diff --expect` totals at merge.
 | --- | --- | --- | --- | --- | ---: | ---: | ---: | --- |
 | 2026-09-03 | pass-1 seam `store` ⇄ `agents`, `store` ⇄ `message` + `disk` lift | `crates/rimz`; `xtask/src/invariants.rs`; `docs`; `refactor-target.toml`; `AGENTS.md`; `CLAUDE.md`; `ARCHITECTURE.md` | `3e01afc71` | rehome ×7, delete ×7 | −4 | +4 | +20 | Seam 4: `workspace_record`/`compose_channel` homes; seam 5: agents → peer modules; `for_terminal_status` kept. Tightened surfaces: `store` 321, `message` 90. Contract ceiling loosened −20→−1 because the estimate omitted the one-line-per-file import splits a no-shim lift imposes and the method signatures the record's merge rules gained; measured −2 at step 7, −4 after the review round. Atlas advisories: multiple destination definition sites are reported as “not defined under”; cfg-gated items count as production while files behind an equivalent cfg-gated module do not. |
 | 2026-09-04 | pass-2 seam adapter sibling families | `crates/rimz/src/agents`; `docs`; `refactor-target.toml` | `93c4c48d7` | rehome ×1, deepen ×1, collapse ×1 | −45 | −2 | +1 internal (crossing +0) | Five shape families and the cached-value test guard hold for the reasons recorded above. No upward edge was reviewed. Deferred module notes: Copilot/Cursor `report_files`, Droid origin stamping, and the filename-scoped `spend.rs` invariant. Tightened `agents` surface to 970. |
+| 2026-09-04 | pass-3 seam #4 + #5 + `daemon_view` ↔ `mux` | `crates/rimz`; `docs`; `refactor-target.toml`; `AGENTS.md`; `ARCHITECTURE.md` | `d8361c248` | rehome ×10, deepen ×1, re-layer ×2 | +5 | −6 | +4 internal | `AgentState::channel()`; `BudgetPark`/`BudgetScope`/`BudgetWindow` into `agents`; `LifecycleSignal` terminal-disposition split; `PaneRef` method forms; `CommandSpec` runner collapse; Codex daemon spawn-failure and timeout warning text changes as declared. |
