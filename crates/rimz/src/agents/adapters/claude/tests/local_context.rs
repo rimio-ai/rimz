@@ -40,21 +40,54 @@ fn usage_block_line(
     .to_string()
 }
 
+fn usage_block_with_advisor_line(
+    request: &str,
+    message: &str,
+    input: u64,
+    output: u64,
+    cache_write: u64,
+    cache_read: u64,
+) -> String {
+    serde_json::json!({
+        "timestamp": "2026-01-01T10:00:00.000Z",
+        "requestId": request,
+        "message": {
+            "id": message,
+            "model": "claude-sonnet-4-6",
+            "usage": {
+                "input_tokens": input,
+                "output_tokens": output,
+                "cache_creation_input_tokens": cache_write,
+                "cache_read_input_tokens": cache_read,
+                "iterations": [{
+                    "type": "advisor_message",
+                    "model": "claude-sonnet-4-6",
+                    "input_tokens": 7,
+                    "output_tokens": 3,
+                    "cache_creation_input_tokens": 2,
+                    "cache_read_input_tokens": 8,
+                }],
+            },
+        },
+    })
+    .to_string()
+}
+
 #[test]
 fn local_context_fold_counts_content_block_rows_once() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("session-1.jsonl");
-    let repeated = usage_block_line("one", "msg-one", 10, 5, 20, 70);
+    let repeated = usage_block_with_advisor_line("one", "msg-one", 10, 5, 20, 70);
     std::fs::write(&path, format!("{repeated}\n{repeated}\n")).unwrap();
 
     let first = refresh(&path, None, None).unwrap();
     assert_eq!(
         session_tokens(&first),
         &crate::agents::AgentSessionUsage {
-            input_tokens: Some(10),
-            output_tokens: Some(5),
-            cache_creation_input_tokens: Some(20),
-            cache_read_input_tokens: Some(70),
+            input_tokens: Some(17),
+            output_tokens: Some(8),
+            cache_creation_input_tokens: Some(22),
+            cache_read_input_tokens: Some(78),
             thinking_tokens: None,
         }
     );
@@ -72,10 +105,10 @@ fn local_context_fold_counts_content_block_rows_once() {
     assert_eq!(
         session_tokens(&resumed),
         &crate::agents::AgentSessionUsage {
-            input_tokens: Some(13),
-            output_tokens: Some(7),
-            cache_creation_input_tokens: Some(20),
-            cache_read_input_tokens: Some(75),
+            input_tokens: Some(20),
+            output_tokens: Some(10),
+            cache_creation_input_tokens: Some(22),
+            cache_read_input_tokens: Some(83),
             thinking_tokens: None,
         }
     );
@@ -88,11 +121,6 @@ fn local_context_fold_without_request_window_replays_once() {
     let repeated = usage_block_line("one", "msg-one", 10, 5, 20, 70);
     std::fs::write(&path, format!("{repeated}\n{repeated}\n")).unwrap();
     let stat = crate::agents::TranscriptStat::from_path(&path).unwrap();
-    let mut stale_stat = stat;
-    stale_stat.mtime_nanos = stale_stat.mtime_nanos.saturating_sub(1);
-    if stale_stat == stat {
-        stale_stat.mtime_secs = stale_stat.mtime_secs.saturating_sub(1);
-    }
     let legacy = LocalSpendFold {
         cursor: crate::agents::spending::SpendCursor {
             offset: stat.len,
@@ -102,14 +130,14 @@ fn local_context_fold_without_request_window_replays_once() {
         ..LocalSpendFold::default()
     };
 
-    let replayed = refresh(&path, Some(&stale_stat), Some(&legacy)).unwrap();
+    let replayed = refresh(&path, Some(&stat), Some(&legacy)).unwrap();
 
     assert_eq!(session_tokens(&replayed).input_tokens, Some(10));
     assert!(
         replayed
             .spend_fold
             .as_set()
-            .and_then(|fold| fold.last_request.as_ref())
+            .and_then(|fold| fold.last_requests.first())
             .is_some()
     );
 }

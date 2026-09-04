@@ -17,16 +17,17 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
         .or_else(|| find_session_transcript(ctx.agent_id))?;
     let stat = TranscriptStat::from_path(&path)?;
     let reuses_prior_path = ctx.prior_transcript_path.map(Path::new) == Some(path.as_path());
+    let prior_fold = reuses_prior_path.then_some(ctx.prior_spend_fold).flatten();
+    let mut fold = LocalSpendFold::resume(prior_fold, stat.len);
     if reuses_prior_path
         && ctx
             .prior_transcript_stat
             .is_some_and(|prior| *prior == stat)
+        && prior_fold == Some(&fold)
     {
         return None;
     }
 
-    let prior_fold = reuses_prior_path.then_some(ctx.prior_spend_fold).flatten();
-    let mut fold = LocalSpendFold::resume(prior_fold, stat.len);
     let prices = pricing::cached_book(ctx.shared_pricing_cache_path);
     let prices = managed_pricing::overlay(&prices);
     let parsed = parse_claude_spend(&path, fold.cursor.offset, &prices);
