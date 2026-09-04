@@ -153,6 +153,74 @@ fn targeted_transcript_lookup_checks_only_exact_candidates_across_sorted_buckets
 }
 
 #[test]
+fn local_context_refresh_gates_an_unchanged_transcript_stat() {
+    let home = tempfile::tempdir().unwrap();
+    let session_id = "sess_33333333-3333-4333-8333-333333333333";
+    let workspace = Path::new("/workspace/project");
+    let session_dir = home
+        .path()
+        .join("sessions")
+        .join(session::workspace_bucket(workspace).unwrap())
+        .join(session_id);
+    std::fs::create_dir_all(&session_dir).unwrap();
+    std::fs::write(
+        session_dir.join("session.json"),
+        serde_json::json!({
+            "id": session_id,
+            "schemaVersion": "1.0.0",
+            "dataModelVersion": 1,
+            "workspacePaths": [workspace],
+            "createdAt": "2025-01-03T00:00:00Z"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let transcript = session_dir.join("messages.jsonl");
+    std::fs::write(&transcript, "{}\n").unwrap();
+    let transcript_path = transcript.to_string_lossy().into_owned();
+    let pricing = home.path().join("pricing-cache.json");
+
+    let fresh = KiroAdapter
+        .local_context_refresh(
+            RefreshTrigger::Tick,
+            &crate::agents::LocalContextRefreshCtx {
+                agent_id: session_id,
+                model_hint: None,
+                prior_session_name: None,
+                current_transcript_path: None,
+                prior_transcript_path: Some(&transcript_path),
+                prior_transcript_stat: None,
+                prior_spend_fold: None,
+                shared_pricing_cache_path: &pricing,
+            },
+        )
+        .expect("fresh transcript stat");
+    assert_eq!(
+        fresh.transcript_path.as_deref(),
+        Some(transcript_path.as_str())
+    );
+    let stat = fresh.transcript_stat.expect("fresh transcript stat");
+
+    assert!(
+        KiroAdapter
+            .local_context_refresh(
+                RefreshTrigger::Tick,
+                &crate::agents::LocalContextRefreshCtx {
+                    agent_id: session_id,
+                    model_hint: None,
+                    prior_session_name: None,
+                    current_transcript_path: None,
+                    prior_transcript_path: Some(&transcript_path),
+                    prior_transcript_stat: Some(&stat),
+                    prior_spend_fold: None,
+                    shared_pricing_cache_path: &pricing,
+                },
+            )
+            .is_none()
+    );
+}
+
+#[test]
 fn discovery_validates_layout_and_folds_ordered_records() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path().join("workspace");

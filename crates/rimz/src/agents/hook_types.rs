@@ -722,6 +722,10 @@ mod tests {
         let stop = decode_catalog_hook(&HOOKS, "Stop", None);
         assert!(!stop.records_progress());
         assert!(stop.ends_session());
+        assert_eq!(
+            decode_catalog_hook(&HOOKS, "Unknown", None).class(),
+            AgentHookClass::Unknown
+        );
     }
 
     #[test]
