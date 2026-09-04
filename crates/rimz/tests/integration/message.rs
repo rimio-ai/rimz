@@ -6,8 +6,8 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use rimz::agents::{
-    AgentLifecycleObservation, AgentRateLimits, AgentTurnError, AskKind, LaunchParams,
-    LifecycleSignal, RateLimitWindow, TurnErrorClass,
+    AgentLifecycleObservation, AgentRateLimits, AgentTurnError, AskKind, COMPACTING_WINDOW_SECS,
+    LaunchParams, LifecycleSignal, RateLimitWindow, TurnErrorClass,
 };
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, MuxName, PaneId};
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope, MessageEventMethod};
@@ -1919,6 +1919,152 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
             .iter()
             .any(|event| event.method == "message.delivered"),
         "delivery confirmation records a terminal event"
+    );
+}
+
+#[test]
+fn sweep_holds_unconfirmed_prompt_while_compaction_bracket_is_open() {
+    let env = Env::new();
+    env.write_config(&env.project_root, "");
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(
+        &env,
+        "sess-compact-reconcile",
+        "feature-compact-reconcile",
+        pane_env,
+    );
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-compact-reconcile",
+            "worktree_branch": "feature-compact-reconcile",
+        }),
+        pane_env,
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+
+    let first_trace = env
+        .project_root
+        .join("zellij-compact-reconcile-first-trace.log");
+    let out = run_success(
+        traced_rimz(&env, "zellij-compact-reconcile-first-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "@claude", "--", "hold me"]),
+        "send-now message",
+    );
+    let message_id = MessageId::parse(&delivered_id_from_stdout(&out.stdout)).expect("message id");
+    assert_text_then_enter(&first_trace, &user_message("hold me"));
+
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let mut observation = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("sess-compact-reconcile")),
+        LifecycleSignal::Compacting,
+    );
+    observation.worktree_branch = Some("feature-compact-reconcile".to_owned());
+    observation.worktree_path = Some(env.project_root.display().to_string());
+    observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "3"));
+    let mut event = EventEnvelope::agent_lifecycle(
+        workspace.workspace_id,
+        workspace.session_name,
+        "claude",
+        "PreCompact",
+        &observation,
+    );
+    event.timestamp =
+        jiff::Timestamp::now() - jiff::SignedDuration::from_secs(COMPACTING_WINDOW_SECS + 60);
+    env.store()
+        .append_event(&event)
+        .expect("append old compaction start");
+
+    let second_trace = env
+        .project_root
+        .join("zellij-compact-reconcile-second-trace.log");
+    run_success(
+        traced_rimz(&env, "zellij-compact-reconcile-second-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "0")
+            .args(["message", "sweep"]),
+        "message sweep",
+    );
+    assert_eq!(
+        trace_lines(&second_trace)
+            .iter()
+            .filter(|line| is_paste(line, &user_message("hold me")))
+            .count(),
+        0,
+        "sweep must not paste another copy during compaction"
+    );
+    let held = message_by_id(&env, &message_id);
+    assert_eq!(held.status, MessageStatus::Sent);
+    assert_eq!(held.unconfirmed_sends, 0);
+    assert_eq!(
+        env.read_events()
+            .iter()
+            .filter(|event| {
+                event.method == "message.queued"
+                    && event.params_value()["reason"].as_str() == Some("reconcile")
+            })
+            .count(),
+        0
+    );
+
+    run_success(
+        env.rimz()
+            .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "0")
+            .args(["gc", "--older-than", "24h"]),
+        "gc during compaction",
+    );
+    let held = message_by_id(&env, &message_id);
+    assert_eq!(held.status, MessageStatus::Sent);
+    assert_eq!(held.unconfirmed_sends, 0);
+    assert_eq!(
+        env.read_events()
+            .iter()
+            .filter(|event| {
+                event.method == "message.queued"
+                    && event.params_value()["reason"].as_str() == Some("reconcile")
+            })
+            .count(),
+        0
+    );
+
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "PostCompact",
+            "session_id": "sess-compact-reconcile",
+            "trigger": "manual",
+            "worktree_branch": "feature-compact-reconcile",
+        }),
+        pane_env,
+    );
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-compact-reconcile",
+            "prompt": user_message("hold me"),
+            "worktree_branch": "feature-compact-reconcile",
+        }),
+        pane_env,
+    );
+    assert!(env.store().list_messages().expect("messages").is_empty());
+    assert_eq!(
+        env.read_events()
+            .iter()
+            .filter(|event| event.method == "message.delivered")
+            .count(),
+        1
+    );
+    assert_eq!(
+        [first_trace, second_trace]
+            .iter()
+            .flat_map(|trace| trace_lines(trace))
+            .filter(|line| is_paste(line, &user_message("hold me")))
+            .count(),
+        1
     );
 }
 
