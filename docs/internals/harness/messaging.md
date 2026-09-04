@@ -177,7 +177,7 @@ Two clarifications the table cannot carry:
 
 **Hook installation is an enqueue check, not a delivery check.** A parked record needs hooks because hooks are the trigger, so dispatch refuses the send up front rather than accepting text it could never release.
 
-**The compaction window at check 6 closes every gate, including `Resume`.** A receiver carrying a `compacting_since` marker inside 90 seconds takes nothing at all. The window expires by design: a lost compaction-end signal degrades to a delay rather than a wedged queue.
+**The compaction window at check 6 closes every gate, including `Resume`.** A receiver carrying a `compacting_since` marker inside 90 seconds takes nothing at all. The window expires by design: a lost compaction-end signal degrades to a delay rather than a wedged queue. This bounded window governs the delivery gate only; stale-`Sent` reconciliation uses the full compaction bracket.
 
 `DeliveryGate::Resume` has no flag. Auto-continue stamps it on its own nudge, and check 8 re-verifies at delivery time that the park is still resumable. Ordinary `Done` and `Any` messages stay parked while an agent is paused, which is what keeps a rate-limited agent from receiving a pile of user text the moment it wakes.
 
@@ -233,7 +233,7 @@ When a turn-start adapter reports no usable prompt text, confirmation falls back
 | `Claimed` + acknowledgement | Ignored; the in-flight write owns the pane and its subsequent acknowledgement settles the record |
 | Unconfirmed-send cap reached | `TimedOut` |
 
-The `Claimed` exclusion leaves one residual duplicate window between claim and the write's acknowledgement (normally the 400 ms settle plus the paste). Settling during that interval could not retract the in-flight paste, so the active deliverer keeps ownership. While the receiver is compacting, reconciliation holds a stale `Sent` record in place rather than applying the elapsed-window transition.
+The `Claimed` exclusion leaves one residual duplicate window between claim and the write's acknowledgement (normally the 400 ms settle plus the paste). Settling during that interval could not retract the in-flight paste, so the active deliverer keeps ownership. While the receiver's durable compaction bracket is open, reconciliation holds a stale `Sent` record in place rather than applying the elapsed-window transition. A composer queues a paste made during compaction and submits it when the bracket closes, so every resend would become another turn. The store applies this unbounded hold for every reconciler caller, including `message sweep` and `gc`.
 
 Failure has three shapes:
 
@@ -243,7 +243,7 @@ Failure has three shapes:
 
 **Unconfirmed command** (bytes landed, no hook arrived for 3 minutes by default). The sweep settles the record `TimedOut` with `delivery unconfirmed; command not resent`. A command reaches the pane at most once because a duplicate `/compact` can discard context and no missing acknowledgement proves the first submit failed.
 
-While the receiver is compacting, the reconciler pushes the held record's wake hint one body-specific window ahead: confirmation is delayed rather than discarded.
+While the receiver's compaction bracket is open, the reconciler pushes the held record's wake hint one body-specific window ahead: confirmation is delayed rather than discarded.
 
 **Neither.** A record whose agent simply has not reached a qualifying boundary is not a failure. It stays `Queued` with no counter moving.
 
@@ -291,7 +291,7 @@ A percent threshold reads the same fill gauge the sidebar card renders (`context
 Two paths, because the modes have different promises:
 
 - **Boundary.** Send the tracked compact command alone, release the claimed prompt batch back to `Queued` with no attempt penalty, and let `CompactionEnded` start a fresh delivery against the new window. A parked record re-reads fill at the boundary rather than trusting the reading from enqueue time.
-- **Steer.** Keep immediate semantics: type the compact command, then one message interval later paste the prompt into the composer. Reconciliation holds that `Sent` prompt in place while compaction delays its confirmation.
+- **Steer.** Keep immediate semantics: type the compact command, then one message interval later paste the prompt into the composer. Reconciliation holds that `Sent` prompt in place while the compaction bracket delays its confirmation.
 
 `LaunchSpec::compact_command` renders the adapter's native command. When the adapter declares `CompactInstruction::Trailing`, it appends [`[harness] compact_instruction`](../../guide/configuration.md#smart-compaction), folded to one line because a newline would submit it, then the send path raw-types that instruction as the command's second segment; adapters without that capability receive the bare command.
 

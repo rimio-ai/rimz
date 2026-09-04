@@ -98,6 +98,7 @@ fn compacting_marker_expires_after_delivery_window() {
 
     agent.compacting_since = Some(now - jiff::SignedDuration::from_secs(COMPACTING_WINDOW_SECS));
     assert!(!agent.is_compacting(now));
+    assert!(agent.compaction_open());
 }
 
 #[test]

@@ -577,8 +577,8 @@ pub struct AgentState {
     /// of its most-recent compaction-start signal (`PreCompact` or Pi
     /// `session_before_compact`). Set by the rollup, cleared by the session's
     /// next lifecycle signal; the sidebar renders a transient "compacting" head
-    /// while it is recent (see [`COMPACTING_WINDOW_SECS`]); delivery also
-    /// treats a recent marker as busy.
+    /// while it is recent (see [`COMPACTING_WINDOW_SECS`]); the delivery gate
+    /// also treats a recent marker as busy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compacting_since: Option<Timestamp>,
     /// How many times this session has condensed its context window — the count
@@ -847,10 +847,20 @@ impl AgentState {
         self.parent_agent_id.is_some() && self.launch_depth.is_none()
     }
 
-    /// Whether this agent is inside the bounded compaction window.
+    /// Whether this agent is inside the bounded compaction window used by
+    /// display and delivery gates. The expiry prevents a lost close signal
+    /// from leaving those surfaces blocked forever.
     pub fn is_compacting(&self, now: Timestamp) -> bool {
         self.compacting_since
             .is_some_and(|since| now.duration_since(since).as_secs() < COMPACTING_WINDOW_SECS)
+    }
+
+    /// Whether this agent's durable compaction bracket remains open.
+    /// Pane-write reconciliation uses this unbounded marker because a composer
+    /// queues text pasted during compaction and submits it when the bracket
+    /// closes; resending would create a duplicate turn.
+    pub fn compaction_open(&self) -> bool {
+        self.compacting_since.is_some()
     }
 
     /// Minimal test fixture with stable identity fields and empty enrichment.
@@ -896,7 +906,7 @@ impl AgentState {
         LifecycleState {
             status: self.status,
             phase: self.phase,
-            compacting: self.compacting_since.is_some(),
+            compacting: self.compaction_open(),
         }
     }
 

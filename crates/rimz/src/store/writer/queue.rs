@@ -842,15 +842,33 @@ impl Store {
         })
     }
 
+    /// Requeue or time out stale pane writes after their acknowledgement
+    /// window. An open receiver compaction bracket holds a `Sent` record
+    /// without a time limit because the composer queues the original write and
+    /// submits it when compaction ends; resending would duplicate the turn.
     #[must_use = "durability barrier; check the result"]
     pub fn reconcile_stale_sent_messages(
         &self,
         session_name: &str,
         now: Timestamp,
         max_attempts: u32,
-        defer: impl Fn(&MessageRecord) -> bool,
     ) -> Result<ReconcileReport> {
         self.commit_queue(|queue| {
+            let stale_sent = queue.live().iter().any(|message| {
+                message.status == MessageStatus::Sent
+                    && message
+                        .sent_reconcile_deadline()
+                        .is_some_and(|deadline| now >= deadline)
+            });
+            let compacting_agents = if stale_sent {
+                self.snapshot()?
+                    .agents
+                    .into_iter()
+                    .filter(crate::agents::AgentState::compaction_open)
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
             let mut report = ReconcileReport::default();
             let updated = queue.apply_all(session_name, now, |message| {
                 if message.status != MessageStatus::Sent {
@@ -862,7 +880,10 @@ impl Store {
                 if now < deadline {
                     return MessageUpdate::Keep;
                 }
-                if defer(message) {
+                if compacting_agents
+                    .iter()
+                    .any(|agent| message.same_agent_card(agent))
+                {
                     message.retry_after = Some(now + message.body.delivery_window());
                     return MessageUpdate::SilentRewrite;
                 }

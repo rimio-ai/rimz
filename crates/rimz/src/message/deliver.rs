@@ -383,14 +383,6 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
         &workspace.session_name,
         now,
         max_delivery_attempts_from_env(),
-        |message| {
-            snapshot.as_ref().is_some_and(|snapshot| {
-                snapshot
-                    .agents
-                    .iter()
-                    .any(|agent| message.same_agent_card(agent) && agent.is_compacting(now))
-            })
-        },
     )?;
     let live = store.list_messages()?;
     if live
