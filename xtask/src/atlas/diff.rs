@@ -1041,12 +1041,22 @@ fn expectation_rows(
     }));
     rows.extend(checks.rehome.iter().map(|check| {
         let landed = check.old.is_none() && check.destinations.len() == 1;
-        let detail = if let Some(site) = &check.old {
-            format!("still defined at {}:{}", site.path.display(), site.line)
-        } else if landed {
-            "moved".to_owned()
-        } else {
-            format!("not defined under {}", check.expectation.to)
+        let detail = match (&check.old, check.destinations.as_slice()) {
+            (Some(site), _) => {
+                format!("still defined at {}:{}", site.path.display(), site.line)
+            }
+            (None, [_]) => "moved".to_owned(),
+            (None, []) => format!("not defined under {}", check.expectation.to),
+            (None, sites) => format!(
+                "defined {} times under {}: {}",
+                sites.len(),
+                check.expectation.to,
+                sites
+                    .iter()
+                    .map(|site| format!("{}:{}", site.path.display(), site.line))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         };
         ExpectationRow {
             assertion: format!(
