@@ -40,7 +40,7 @@ use crate::agents::{
 use crate::config::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, ResumeConfig};
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
-use crate::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus};
+use crate::store::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus};
 #[cfg(test)]
 use crate::store::snapshot::PaneAgent;
 use crate::store::snapshot::ResumeOutcome;

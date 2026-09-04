@@ -62,10 +62,10 @@ use rimz::harness::run::{RunRecord, RunStatus, SupervisedRunOutcome};
 use rimz::harness::run_timeout::RunTimeoutRequest;
 use rimz::harness::spec::{AgentCell, Cell, LayoutSpec};
 use rimz::ids::{AgentKind, AgentSessionId};
-use rimz::message::{DeliveryGate, gate_open};
 use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd, SplitPaneOptions, own_pane_id};
 use rimz::room::{RoomContext, RoomSizing};
 use rimz::sidebar::refresh::usage::AccountUsageRefreshRequest;
+use rimz::store::message::{DeliveryGate, gate_open};
 use rimz::store::{
     writer::AgentLaunchBatch, writer::AgentLaunchIdentity, writer::AgentLaunchName,
     writer::AgentLaunchRequest, writer::AgentLaunchScope,

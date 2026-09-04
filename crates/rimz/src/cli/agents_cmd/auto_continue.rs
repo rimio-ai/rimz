@@ -14,7 +14,8 @@ use std::time::Duration;
 
 use rimz::harness::AutoContinueRequest;
 use rimz::harness::assist_log::{Assist, AssistRecord};
-use rimz::message::{DeliveryGate, deliver};
+use rimz::message::deliver;
+use rimz::store::message::DeliveryGate;
 
 use super::Ctx;
 
@@ -57,7 +58,7 @@ pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
             workspace,
             store,
             agent,
-            rimz::message::MessageSender::System,
+            rimz::store::message::MessageSender::System,
             text.to_owned(),
             gate,
             Some(&request.pane_id),

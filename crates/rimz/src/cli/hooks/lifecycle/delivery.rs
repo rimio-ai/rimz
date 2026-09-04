@@ -10,7 +10,7 @@ pub(super) fn confirm_sent_message_for_lifecycle(
     agent: &AgentDefinition,
     recorded: &RecordedLifecycle,
     session_name: &str,
-) -> Vec<rimz::message::MessageRecord> {
+) -> Vec<rimz::store::message::MessageRecord> {
     let ack = match recorded.observation.signal {
         LifecycleSignal::TurnStarted => rimz::store::writer::DeliveryAck::TurnStarted {
             prompt: recorded
@@ -51,7 +51,7 @@ pub(super) fn record_user_input_for_lifecycle(
     workspace: &ResolvedWorkspace,
     agent: &AgentDefinition,
     recorded: &RecordedLifecycle,
-    delivered: &[rimz::message::MessageRecord],
+    delivered: &[rimz::store::message::MessageRecord],
     supervised: bool,
     state_root: Option<&std::path::Path>,
 ) {
@@ -118,13 +118,13 @@ pub(super) fn spawn_queue_delivery_if_checkpoint(
     let agent_name = event.agent_name.as_deref();
     let card = rimz::agents::AgentCardRef::new(kind, agent_id, agent_name);
     if pending.iter().any(|message| {
-        message.status == rimz::message::MessageStatus::Queued
+        message.status == rimz::store::message::MessageStatus::Queued
             && delivery_checkpoint
             && message
                 .after
                 .iter()
                 .any(|condition| condition.met_at.is_none() && condition.card_ref().matches(card))
-            || message.status == rimz::message::MessageStatus::Queued
+            || message.status == rimz::store::message::MessageStatus::Queued
                 && condition_checkpoint
                 && message.when.iter().any(|condition| {
                     condition.met_at.is_none() && condition.card_ref().matches(card)
@@ -144,7 +144,7 @@ pub(super) fn spawn_queue_delivery_if_checkpoint(
     }
     // FIFO spans this card's provisional and registered ids, so the stable
     // agent name folds a message queued before registration into the same queue.
-    let Some(head) = rimz::message::queue_head(
+    let Some(head) = rimz::store::message::queue_head(
         pending.iter(),
         kind,
         agent_id,

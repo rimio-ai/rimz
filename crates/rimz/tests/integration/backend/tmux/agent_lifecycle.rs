@@ -397,14 +397,14 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
         "resumed session keeps its role address"
     );
 
-    let message = rimz::message::MessageRecord::new_for_card(
+    let message = rimz::store::message::MessageRecord::new_for_card(
         workspace.workspace_id,
         kind,
         agent_id.into(),
         bound.name.clone(),
         "anything".to_owned(),
         true,
-        rimz::message::DeliveryGate::Done,
+        rimz::store::message::DeliveryGate::Done,
     );
     assert_eq!(
         rimz::message::deliver::explain(

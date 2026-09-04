@@ -45,8 +45,8 @@ use rimz::harness::schedule::{
     strikes,
 };
 use rimz::ids::WorkspaceId;
-use rimz::message::DeliveryGate;
 use rimz::sidebar::fresh_sidebar_present;
+use rimz::store::message::DeliveryGate;
 use rimz::trust::{self, TrustState};
 use rimz::workspace::WorkspaceResolver;
 

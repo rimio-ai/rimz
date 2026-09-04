@@ -174,7 +174,7 @@ pub(super) fn latest_native_ask_id(
 pub(super) struct ConversationInput<'a> {
     pub(super) assistant_message: Option<&'a str>,
     pub(super) questions: &'a [rimz::transcript::AskQuestion],
-    pub(super) delivered: &'a [rimz::message::MessageRecord],
+    pub(super) delivered: &'a [rimz::store::message::MessageRecord],
     pub(super) run_id: Option<&'a rimz::RunId>,
 }
 
@@ -337,7 +337,7 @@ pub(super) fn record_conversation(
                     if let Some((offset, message)) = matched {
                         entry.message_id = Some(message.message_id.clone());
                         entry.reply_to = message.in_reply_to.clone();
-                        if matches!(&message.sender, rimz::message::MessageSender::System) {
+                        if matches!(&message.sender, rimz::store::message::MessageSender::System) {
                             entry.from = Some("rimz".to_owned());
                         }
                         matched_ids.push(message.message_id.clone());
@@ -410,14 +410,14 @@ fn launched_parent_handle(
     child_channel: Option<&str>,
 ) -> Option<String> {
     let sender = match rimz::harness::target::launched_parent(&snapshot.agents, child) {
-        Some(parent) => rimz::message::MessageSender::Agent {
+        Some(parent) => rimz::store::message::MessageSender::Agent {
             kind: parent.kind.clone(),
             name: parent.name.clone(),
             profile: parent.profile.clone(),
             role: parent.role.clone(),
             channel: rimz::harness::target::agent_channel(parent),
         },
-        None => rimz::message::MessageSender::Agent {
+        None => rimz::store::message::MessageSender::Agent {
             kind: child.parent_agent_kind.clone()?,
             name: None,
             profile: None,

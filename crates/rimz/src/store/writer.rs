@@ -18,7 +18,7 @@ use crate::store::event::{
 use crate::workspace::ResolvedWorkspace;
 
 use super::{
-    Result, StatePaths, Store, StoreErr, event_log, lock, message_store, runtime, snapshot,
+    Result, StatePaths, Store, StoreErr, event_log, lock, message, runtime, snapshot,
     workspace_record,
 };
 
@@ -40,7 +40,7 @@ pub struct UnresolvedMessage<'a> {
     pub session_name: &'a str,
     pub address: &'a str,
     pub channel: Option<&'a str>,
-    pub sender: &'a crate::message::MessageSender,
+    pub sender: &'a crate::store::message::MessageSender,
     pub text_len: usize,
     pub reason: &'a str,
 }
@@ -294,12 +294,12 @@ impl Store {
     ) -> Result<WorkspaceRewriteOutcome> {
         let (messages_rewritten, events_rewritten) =
             self.commit_boundary(RollupInvalidation::Reseed, |paths| {
-                let mut messages = message_store::list(&paths.messages_dir)?;
+                let mut messages = message::read_queue(&paths.messages_dir)?;
                 let messages_rewritten = messages.len();
                 for message in &mut messages {
                     message.workspace_id = workspace.workspace_id.clone();
                 }
-                message_store::replace_all(&paths.messages_dir, &messages)?;
+                message::write_queue(&paths.messages_dir, &messages)?;
 
                 let mut events = event_log::read_all(&paths.events_log)?;
                 let events_rewritten = events.len();

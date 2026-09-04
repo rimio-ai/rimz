@@ -13,9 +13,11 @@ use jiff::Timestamp;
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, MessageId, MuxName};
 use crate::message::{
-    AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageDraft, MessageRecord,
-    MessageSender, Recipient, WhenCondition, command_submit_delay_from_env,
-    message_interval_from_env, queue_head,
+    MessageDraft, Recipient, command_submit_delay_from_env, message_interval_from_env,
+};
+use crate::store::message::{
+    AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
+    WhenCondition, queue_head,
 };
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::workspace::ResolvedWorkspace;
@@ -722,7 +724,7 @@ fn resolve_when(
     requests: &[WhenRequest],
 ) -> Result<Vec<WhenCondition>> {
     let now = Timestamp::now();
-    let delivery_window = crate::message::delivery_window_from_env();
+    let delivery_window = MessageBody::Prompt.delivery_window();
     requests
         .iter()
         .map(|request| {

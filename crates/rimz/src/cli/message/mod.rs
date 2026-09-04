@@ -19,11 +19,12 @@ use rimz::agents::AgentState;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
 use rimz::message::deliver;
 use rimz::message::dispatch::WhenRequest;
-use rimz::message::{
-    AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
-    MessageStatus, WhenCondition, parse_schedule_at,
-};
+use rimz::message::parse_schedule_at;
 use rimz::store::event::{EventEnvelope, EventKind, MessageEventPayload};
+use rimz::store::message::{
+    AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
+    MessageStatus, WhenCondition,
+};
 use rimz::store::snapshot::SidebarSnapshot;
 use rimz::store::{writer::EditOutcome, writer::MessageEdit};
 

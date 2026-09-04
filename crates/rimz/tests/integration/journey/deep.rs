@@ -1173,7 +1173,7 @@ fn tmux_settled_subagent_reports_to_parent() {
             .iter()
             .all(|message| !matches!(
                 &message.sender,
-                rimz::message::MessageSender::Harness { .. }
+                rimz::store::message::MessageSender::Harness { .. }
             )),
         "no digest should queue while a sibling is running"
     );
@@ -1197,8 +1197,8 @@ fn tmux_settled_subagent_reports_to_parent() {
             .find(|message| {
                 matches!(
                     message.sender,
-                    rimz::message::MessageSender::Harness {
-                        notice: rimz::message::HarnessNotice::SubagentReport
+                    rimz::store::message::MessageSender::Harness {
+                        notice: rimz::store::message::HarnessNotice::SubagentReport
                     }
                 )
             })
@@ -1272,10 +1272,10 @@ fn tmux_settled_subagent_reports_to_parent() {
             .expect("list reports after waited launch")
             .iter()
             .filter(|message| {
-                message.status != rimz::message::MessageStatus::Canceled
+                message.status != rimz::store::message::MessageStatus::Canceled
                     && matches!(
                         &message.sender,
-                        rimz::message::MessageSender::Harness { .. }
+                        rimz::store::message::MessageSender::Harness { .. }
                     )
             })
             .count(),
@@ -1334,11 +1334,11 @@ fn tmux_settled_subagent_reports_to_parent() {
             .expect("list reports after join deadline")
             .into_iter()
             .find(|message| {
-                message.status == rimz::message::MessageStatus::Sent
+                message.status == rimz::store::message::MessageStatus::Sent
                     && matches!(
                         &message.sender,
-                        rimz::message::MessageSender::Harness {
-                            notice: rimz::message::HarnessNotice::SubagentReport
+                        rimz::store::message::MessageSender::Harness {
+                            notice: rimz::store::message::HarnessNotice::SubagentReport
                         }
                     )
                     && message.message_id != fleet_digest.message_id

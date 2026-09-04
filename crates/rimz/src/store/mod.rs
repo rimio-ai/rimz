@@ -9,7 +9,8 @@
 //!   event_log.rs    framed append-log façade
 //!   event_log/      frame codec, rotation, recovery, unit tests
 //!   follow.rs       read-only lifecycle event-log follower
-//!   message_store.rs live message queue JSONL store
+//!   message.rs     durable message vocabulary and selection
+//!   message/       queue and history codec
 //!   sidecar.rs      shared stat-gated enrichment sidecar store
 //!   active_time.rs   grace-capped per-session working-time accumulator
 //!   session_death.rs shared store-provable session death rules
@@ -40,7 +41,7 @@ pub mod event_log;
 pub mod follow;
 pub mod gc;
 pub mod live_roster;
-mod message_store;
+pub mod message;
 pub(crate) mod run_store;
 pub mod runtime;
 pub(crate) mod session_death;
@@ -61,7 +62,6 @@ use crate::store::event::EventEnvelope;
 use crate::store::snapshot::SidebarSnapshot;
 
 pub use crate::store::runtime::{RuntimeProjection, RuntimeScope};
-pub use message_store::MessageStoreErr;
 
 /// High-level handle to a workspace's durable state. Cheap to clone — the
 /// inner state lives behind an `Arc`. Reads here are lock-free; every
@@ -86,7 +86,7 @@ pub enum StoreErr {
     #[error(transparent)]
     EventLog(#[from] event_log::EventLogErr),
     #[error(transparent)]
-    MessageStore(#[from] MessageStoreErr),
+    MessageStore(#[from] message::MessageStoreErr),
     #[error(transparent)]
     RunStore(#[from] crate::harness::run::RunStoreErr),
     #[error(transparent)]

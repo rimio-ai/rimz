@@ -6,8 +6,8 @@ use super::*;
 use crate::agents::{AgentLifecycleObservation, AgentState, LifecycleSignal};
 use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
-use crate::message::{DeliveryGate, MessageRecord, MessageStatus};
 use crate::store::event::MessageEventMethod;
+use crate::store::message::{DeliveryGate, MessageRecord, MessageStatus};
 use crate::workspace::WorkspaceResolver;
 
 #[derive(Default, serde::Deserialize, serde::Serialize)]

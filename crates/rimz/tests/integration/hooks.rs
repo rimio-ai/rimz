@@ -1562,7 +1562,7 @@ fn cursor_transcript_recovery_does_not_settle_a_new_active_turn() {
         rimz::agents::AgentStatus::Running
     );
     assert!(!rimz::message::gate_open_for_agent(
-        rimz::message::DeliveryGate::Done,
+        rimz::store::message::DeliveryGate::Done,
         active,
         false,
         Timestamp::now(),
@@ -1601,7 +1601,7 @@ fn cursor_transcript_recovery_does_not_settle_a_new_active_turn() {
         rimz::agents::AgentStatus::Success
     );
     assert!(rimz::message::gate_open_for_agent(
-        rimz::message::DeliveryGate::Done,
+        rimz::store::message::DeliveryGate::Done,
         settled,
         false,
         Timestamp::now(),
@@ -1650,12 +1650,12 @@ fn duplicate_cursor_session_end_is_idempotent_beyond_audit_end_stamps() {
         .iter()
         .find(|agent| agent.agent_id.as_str() == session_id)
         .unwrap();
-    let message = rimz::message::MessageRecord::new(
+    let message = rimz::store::message::MessageRecord::new(
         env.workspace_id.clone(),
         agent,
         "queued work".to_owned(),
         true,
-        rimz::message::DeliveryGate::Done,
+        rimz::store::message::DeliveryGate::Done,
     );
     let message_id = message.message_id.clone();
     env.store().queue_message(&message, "rimz-test").unwrap();
@@ -1708,7 +1708,10 @@ fn duplicate_cursor_session_end_is_idempotent_beyond_audit_end_stamps() {
         let archived = env.store().list_message_history().unwrap();
         assert_eq!(archived.len(), 1);
         assert_eq!(archived[0].message_id, message_id);
-        assert_eq!(archived[0].status, rimz::message::MessageStatus::Archived);
+        assert_eq!(
+            archived[0].status,
+            rimz::store::message::MessageStatus::Archived
+        );
         assert_eq!(
             env.read_events()
                 .iter()

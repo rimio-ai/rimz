@@ -12,12 +12,12 @@ use crate::agents::state::{append_recent_prompt, usable_description};
 use crate::agents::{AgentLifecycleObservation, LaunchParams};
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId};
-use crate::message::{MessageBody, MessageStatus};
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 use crate::store::event::{
     self, AgentAttachPayload, AgentLaunchPayload, AgentLaunchState, AgentLifecyclePayload,
     EventEnvelope, EventKind, MessageEventPayload,
 };
+use crate::store::message::{MessageBody, MessageStatus};
 
 mod identity;
 

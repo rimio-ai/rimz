@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use rimz::agents::AgentState;
-use rimz::message::{MessageRecord, MessageStatus};
 use rimz::store::event::{EventKind, MessageEventPayload};
+use rimz::store::message::{MessageRecord, MessageStatus};
 
 use crate::cli::address;
 

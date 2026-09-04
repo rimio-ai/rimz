@@ -9,8 +9,10 @@ use crate::agents::{AgentLifecycleObservation, AgentState, LaunchParams, Lifecyc
 use crate::ids::{
     AgentKind, AgentSessionId, EventId, MessageId, MuxName, PaneId, RunId, WorkspaceId,
 };
-use crate::message::{DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus};
 use crate::pane::RuntimeOwner;
+use crate::store::message::{
+    DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
+};
 
 // v2: `agent.lifecycle` params carry a `signal` (the agent-agnostic lifecycle
 // intent folded through `agents::lifecycle::step`) in place of the legacy bare

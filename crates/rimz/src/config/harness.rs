@@ -170,7 +170,7 @@ pub enum TurnCapParseError {
     TooLarge(String),
 }
 
-use crate::message::AutoCompact;
+use crate::store::message::AutoCompact;
 
 /// Default idle span before RimZ compacts a warm provider cache.
 pub const DEFAULT_IDLE_COMPACT_AFTER: Duration = Duration::from_secs(59 * 60);

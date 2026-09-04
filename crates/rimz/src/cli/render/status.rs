@@ -6,8 +6,8 @@
 use rimz::agents::AgentStatus;
 use rimz::agents::TurnPhase;
 use rimz::harness::run::RunStatus;
-use rimz::message::MessageStatus;
 use rimz::sidebar::refresh::ProviderStatus;
+use rimz::store::message::MessageStatus;
 use rimz::trust::TrustState;
 
 use super::palette;

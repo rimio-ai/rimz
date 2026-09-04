@@ -606,20 +606,20 @@ mod tests {
     fn lifecycle_confirms_matching_message_body() {
         let (_dir, store) = test_store();
         let agent = test_agent();
-        let command = rimz::message::MessageRecord::new(
+        let command = rimz::store::message::MessageRecord::new(
             workspace_id(),
             &agent,
             "/compact".to_owned(),
             true,
-            rimz::message::DeliveryGate::Done,
+            rimz::store::message::DeliveryGate::Done,
         )
-        .with_body(rimz::message::MessageBody::Command);
-        let prompt = rimz::message::MessageRecord::new(
+        .with_body(rimz::store::message::MessageBody::Command);
+        let prompt = rimz::store::message::MessageRecord::new(
             workspace_id(),
             &agent,
             "real prompt".to_owned(),
             true,
-            rimz::message::DeliveryGate::Done,
+            rimz::store::message::DeliveryGate::Done,
         );
         store
             .record_sent_batch(std::slice::from_ref(&command), "session")
@@ -662,7 +662,7 @@ mod tests {
                 .find(|message| message.message_id == prompt.message_id)
                 .unwrap()
                 .status,
-            rimz::message::MessageStatus::Sent,
+            rimz::store::message::MessageStatus::Sent,
             "compaction cannot confirm the prompt behind it"
         );
 

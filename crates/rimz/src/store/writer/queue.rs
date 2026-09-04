@@ -6,15 +6,15 @@ use jiff::Timestamp;
 
 use crate::agents::{AgentCardRef, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
+use crate::store::event::{EventEnvelope, MessageEventMethod};
 #[cfg(test)]
-use crate::message::CLAIM_TTL;
-use crate::message::{
+use crate::store::message::CLAIM_TTL;
+use crate::store::message::{
     AutoCompact, DeliveryGate, MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord, MessageStatus,
     claim_expired, delivery_batch_indices,
 };
-use crate::store::event::{EventEnvelope, MessageEventMethod};
 
-use super::super::{Result, Store, message_store};
+use super::super::{Result, Store, message};
 use super::Txn;
 use super::UnresolvedMessage;
 
@@ -160,8 +160,8 @@ enum MessageUpdate {
 
 struct QueueTxn<'txn, 'paths> {
     txn: &'txn mut Txn<'paths>,
-    /// Message-id order comes from `message_store::list` and is restored by
-    /// `replace_all` at the transaction boundary.
+    /// Message-id order comes from `message::read_queue` and is restored by
+    /// `message::write_queue` at the transaction boundary.
     live: Vec<MessageRecord>,
     history: Vec<MessageRecord>,
     events: Vec<EventEnvelope>,
@@ -170,7 +170,7 @@ struct QueueTxn<'txn, 'paths> {
 
 impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
     fn new(txn: &'txn mut Txn<'paths>) -> Result<Self> {
-        let live = message_store::list(&txn.paths.messages_dir)?;
+        let live = message::read_queue(&txn.paths.messages_dir)?;
         debug_assert!(
             live.windows(2)
                 .all(|pair| pair[0].message_id.as_str() <= pair[1].message_id.as_str())
@@ -329,9 +329,9 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
     }
 
     fn finish(self) -> Result<()> {
-        message_store::append_history_many(&self.txn.paths.messages_dir, &self.history)?;
+        message::append_history_many(&self.txn.paths.messages_dir, &self.history)?;
         if self.live_changed {
-            message_store::replace_all(&self.txn.paths.messages_dir, &self.live)?;
+            message::write_queue(&self.txn.paths.messages_dir, &self.live)?;
         }
         for event in &self.events {
             self.txn.append(event)?;
@@ -430,7 +430,7 @@ fn stamp_when_conditions(
                 "{} {} {}",
                 condition.address,
                 condition.status.as_str(),
-                crate::message::format_dwell(condition.dwell_secs)
+                crate::store::message::format_dwell(condition.dwell_secs)
             ))
         })
         .collect()
@@ -458,15 +458,15 @@ impl Store {
     }
 
     pub fn list_messages(&self) -> Result<Vec<MessageRecord>> {
-        Ok(message_store::list(&self.inner.paths.messages_dir)?)
+        Ok(message::read_queue(&self.inner.paths.messages_dir)?)
     }
 
     pub fn list_message_history(&self) -> Result<Vec<MessageRecord>> {
-        Ok(message_store::list_history(&self.inner.paths.messages_dir)?)
+        Ok(message::list_history(&self.inner.paths.messages_dir)?)
     }
 
     pub fn list_pending_messages(&self) -> Result<Vec<MessageRecord>> {
-        Ok(message_store::list_pending(&self.inner.paths.messages_dir)?)
+        Ok(message::list_pending(&self.inner.paths.messages_dir)?)
     }
 
     #[must_use = "durability barrier; check the result"]
@@ -516,7 +516,7 @@ impl Store {
             let mut message = match queue.get(message_id) {
                 Some(message) => message,
                 None => {
-                    return Ok(message_store::list_history(&queue.txn.paths.messages_dir)?
+                    return Ok(message::list_history(&queue.txn.paths.messages_dir)?
                         .into_iter()
                         .find(|message| message.message_id == *message_id)
                         .map_or(EditOutcome::NotFound, |message| {
@@ -649,12 +649,7 @@ impl Store {
                 .map(MessageId::as_str)
                 .collect::<BTreeSet<_>>();
             let updated = queue.apply_all(session_name, now, |message| {
-                if !message_ids.contains(message.message_id.as_str())
-                    || !matches!(
-                        message.status,
-                        MessageStatus::Queued | MessageStatus::Claimed
-                    )
-                {
+                if !message_ids.contains(message.message_id.as_str()) || !message.status.is_open() {
                     return MessageUpdate::Keep;
                 }
                 message.attempts = message.attempts.saturating_sub(1);
@@ -908,7 +903,7 @@ impl Store {
     }
 
     pub fn earliest_message_wake(&self, now: Timestamp) -> Result<Option<Timestamp>> {
-        let next = message_store::list(&self.inner.paths.messages_dir)?
+        let next = message::read_queue(&self.inner.paths.messages_dir)?
             .into_iter()
             .filter_map(|message| message.wake_deadline(now))
             .min();
@@ -924,12 +919,7 @@ impl Store {
     ) -> Result<Option<MessageRecord>> {
         self.commit_queue(|queue| {
             let mut message = match queue.get(&message.message_id) {
-                Some(existing)
-                    if matches!(
-                        existing.status,
-                        MessageStatus::Queued | MessageStatus::Claimed
-                    ) =>
-                {
+                Some(existing) if existing.status.is_open() => {
                     let mut existing = existing;
                     existing.pane_id = message.pane_id.clone();
                     existing
@@ -980,10 +970,7 @@ impl Store {
                 if message.status == MessageStatus::Sent || message.status.is_terminal() {
                     return MessageUpdate::Keep;
                 }
-                if !matches!(
-                    message.status,
-                    MessageStatus::Queued | MessageStatus::Claimed
-                ) {
+                if !message.status.is_open() {
                     return MessageUpdate::Keep;
                 }
                 message.requeue(now, error);
@@ -1117,7 +1104,7 @@ impl Store {
                                 .iter()
                                 .any(|agent| condition.card_ref().matches(agent.card_ref()))
                         })
-                        .map(crate::message::WhenCondition::expiry_reason)
+                        .map(crate::store::message::WhenCondition::expiry_reason)
                 } else {
                     None
                 };

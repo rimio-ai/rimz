@@ -23,8 +23,8 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::config::MachineConfig;
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
-use crate::message::{DeliveryGate, MessageRecord, MessageSender, MessageStatus};
 use crate::store::Store;
+use crate::store::message::{DeliveryGate, MessageRecord, MessageSender, MessageStatus};
 use crate::store::snapshot::SidebarSnapshot;
 
 pub use crate::harness::auto_continue::clear_budget_park;
