@@ -66,6 +66,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_participant_identity(root, &files)?;
     ensure_no_core_pane_auto_use(root, &files)?;
     ensure_managed_tmux_endpoint(root, &files)?;
+    ensure_rolling_release_is_single_writer(root)?;
     ensure_stable_release_dispatches_docs(root)?;
     ensure_inline_tests_stay_small(&files)?;
     Ok(())
@@ -96,6 +97,24 @@ fn ensure_stable_release_dispatches_docs(root: &Path) -> Result<()> {
     if !matches!((publish, dispatch), (Some(publish), Some(dispatch)) if publish < dispatch) {
         bail!(
             "stable releases must dispatch release-published to rimio-ai/rimz-docs after publication"
+        );
+    }
+    Ok(())
+}
+
+fn ensure_rolling_release_is_single_writer(root: &Path) -> Result<()> {
+    let path = root.join(".github/workflows/release.yml");
+    let source = fs::read_to_string(&path)
+        .with_context(|| format!("read release workflow {}", path.display()))?;
+    let freshness_gate = "github.event.workflow_run.head_sha == github.sha";
+    let rolling_lane =
+        "group: release-${{ github.event_name == 'push' && github.ref || 'latest-main' }}";
+    if !source.contains(freshness_gate)
+        || !source.contains(rolling_lane)
+        || !source.contains("cancel-in-progress: false")
+    {
+        bail!(
+            "rolling releases must reject stale CI completions and serialize latest-main publication without cancelling active uploads"
         );
     }
     Ok(())

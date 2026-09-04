@@ -37,6 +37,12 @@ jobs:
     name: build and publish dist archives
     runs-on: ubuntu-latest
     environment: release
+    # Every writer to the moving release uses one non-cancelling lane. A
+    # cancellation during `gh release upload --clobber` can leave an asset set
+    # half-replaced; stable tags use their own immutable-tag lanes.
+    concurrency:
+      group: release-${{ github.event_name == 'push' && github.ref || 'latest-main' }}
+      cancel-in-progress: false
     # Covers the 30-minute CI-verdict wait budget plus the dist build.
     timeout-minutes: 60
     # The rimz-ci image keeps the release container on the same warm baseline as
@@ -50,10 +56,12 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ github.token }}
-    # A `workflow_run` fires for every CI conclusion; gate on success so only a
-    # green default-branch build publishes. Tag pushes and manual dispatches run
-    # the gate themselves (the `cargo xtask ci` step below) before publishing.
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    # A `workflow_run` fires for every CI conclusion. CI for successive main
+    # commits can finish out of order, so only the run for the default-branch
+    # head captured by this event may enter the rolling-release lane. Tag pushes
+    # and manual dispatches run the gate themselves (the `cargo xtask ci` step
+    # below) before publishing.
+    if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_sha == github.sha) }}
     steps:
       - name: Assert running in the rimz-ci image
         run: |
