@@ -18,7 +18,7 @@ struct WakeRow {
 
 pub(super) fn run(json: bool, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
-    let caller_session = caller(&ctx)?.and_then(|caller| caller.launch_id);
+    let caller_session = caller_session(&ctx)?;
     let catalog = TaskCatalog::load(Some(&ctx.workspace.project_root))?;
     let rows = catalog
         .visible()

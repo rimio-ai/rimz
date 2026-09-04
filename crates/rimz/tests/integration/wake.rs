@@ -1,14 +1,16 @@
 //! Integration coverage for the agent-facing `rimz wake` doorway.
 
 use crate::common::Env;
-use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+use rimz::agents::{AgentLifecycleObservation, LaunchParams, LifecycleSignal};
 use rimz::config::Tasks;
 use rimz::ids::{AgentKind, AgentSessionId};
+use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 use rimz::store::writer::AgentLifecycleIntent;
 
 #[test]
 fn wake_signal_arms_one_shot_instance_for_the_calling_agent() {
     let env = Env::new();
+    register_calling_agent(&env);
     let output = agent_wake(&env)
         .args([
             "wake",
@@ -53,8 +55,57 @@ fn wake_signal_arms_one_shot_instance_for_the_calling_agent() {
     assert_eq!(entry.prompt.as_deref(), Some("inspect CI"));
     let target = entry.wake.as_ref().expect("pinned wake target");
     assert_eq!(target.kind, "claude");
-    assert_eq!(target.session, "agent-session");
+    assert_eq!(target.session, "provider-session");
     assert_eq!(target.handle, "@planner");
+}
+
+#[test]
+fn calling_agent_can_list_and_cancel_human_armed_wake_by_launch_identity() {
+    let env = Env::new();
+    register_calling_agent(&env);
+    let armed = env
+        .rimz()
+        .args(["wake", "@planner", "--signal", "ci.finished"])
+        .output()
+        .expect("arm wake from human shell");
+    assert!(
+        armed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&armed.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&armed.stdout);
+    let name = stdout
+        .strip_prefix("armed ")
+        .and_then(|receipt| receipt.split_once(':'))
+        .map(|(name, _)| name)
+        .expect("armed wake name");
+
+    let listed = agent_wake(&env)
+        .args(["wake", "list", "--json"])
+        .output()
+        .expect("list wake as target agent");
+    assert!(
+        listed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let rows: serde_json::Value = serde_json::from_slice(&listed.stdout).expect("wake list JSON");
+    assert_eq!(rows.as_array().expect("wake rows").len(), 1);
+    assert_eq!(rows[0]["name"], name);
+
+    let canceled = agent_wake(&env)
+        .args(["wake", "cancel", name])
+        .output()
+        .expect("cancel wake as target agent");
+    assert!(
+        canceled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&canceled.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&canceled.stdout),
+        format!("canceled {name}\n")
+    );
 }
 
 #[test]
@@ -149,8 +200,32 @@ fn watch_retires_without_delivery_when_its_polarity_does_not_match() {
 
 fn register_calling_agent(env: &Env) {
     let store = env.store();
+    let workspace =
+        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id,
+            &workspace.session_name,
+            &AgentKind::new_unchecked("claude"),
+            AgentLaunchPayload {
+                agent_id: AgentSessionId::from("provider-session"),
+                launch_id: Some(AgentSessionId::from("launch-session")),
+                agent_name: "planner".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams::default(),
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: Some("main".to_owned()),
+                prompt: None,
+                description: None,
+            },
+        ))
+        .expect("seed launched target");
     let mut observation = AgentLifecycleObservation::new(
-        Some(AgentSessionId::from("agent-session")),
+        Some(AgentSessionId::from("provider-session")),
         LifecycleSignal::Registered,
     );
     observation.agent_name = Some("planner".to_owned());
@@ -169,7 +244,7 @@ fn agent_wake(env: &Env) -> std::process::Command {
     let mut command = env.rimz();
     command
         .env("RIMZ_AGENT_KIND", "claude")
-        .env("RIMZ_AGENT_ID", "agent-session")
+        .env("RIMZ_AGENT_ID", "launch-session")
         .env("RIMZ_AGENT_NAME", "planner");
     command
 }
