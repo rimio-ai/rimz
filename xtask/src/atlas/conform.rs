@@ -411,18 +411,13 @@ pub(super) fn count_in_sources(
         .iter()
         .filter(|source| source.is_production())
         .map(|source| {
-            let test_regions = syntax_files
-                .iter()
-                .find(|file| file.path == source.path)
-                .map_or(&[][..], |file| file.test_regions.as_slice());
+            let file_syntax = syntax_files.iter().find(|file| file.path == source.path);
             source
                 .text
                 .split_inclusive('\n')
                 .enumerate()
                 .filter(|(index, _)| {
-                    !test_regions
-                        .iter()
-                        .any(|region| region.contains(&(index + 1)))
+                    file_syntax.is_none_or(|file| file.cfg_kind_at(index + 1).is_none())
                 })
                 .flat_map(|(_, line)| {
                     line.split(|character: char| character != '_' && !character.is_alphanumeric())

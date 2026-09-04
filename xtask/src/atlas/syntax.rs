@@ -16,7 +16,7 @@ use syn::{
 use super::modules::{
     EXTERNAL_REACH, crate_module_for_path, crate_path_for_source, module_is_within,
 };
-use super::sources::Source;
+use super::sources::{self, Source, SourceKind};
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct PubItem {
@@ -145,6 +145,12 @@ pub(super) struct Guard {
     pub(super) normalized: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(super) struct CfgRegion {
+    pub(super) lines: Range<usize>,
+    pub(super) kind: SourceKind,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct FileSyntax {
     pub(super) path: PathBuf,
@@ -157,7 +163,7 @@ pub(super) struct FileSyntax {
     pub(super) mod_decls: Vec<(String, String)>,
     /// Named fields of every struct, one entry per declaring struct.
     pub(super) struct_fields: Vec<String>,
-    pub(super) test_regions: Vec<Range<usize>>,
+    pub(super) cfg_regions: Vec<CfgRegion>,
     pub(super) dependencies: Vec<DependencySite>,
     pub(super) fns: Vec<FnBody>,
     pub(super) calls: Vec<CallSite>,
@@ -167,6 +173,13 @@ pub(super) struct FileSyntax {
 }
 
 impl FileSyntax {
+    pub(super) fn cfg_kind_at(&self, line: usize) -> Option<SourceKind> {
+        self.cfg_regions
+            .iter()
+            .find(|region| region.lines.contains(&line))
+            .map(|region| region.kind)
+    }
+
     pub(super) fn enclosing_fn(&self, line: usize) -> Option<&FnBody> {
         self.fns
             .iter()
@@ -254,8 +267,8 @@ fn analyze_file(
         &mut mod_decls,
         &mut struct_fields,
     );
-    let mut test_regions = Vec::new();
-    collect_test_regions(&file.items, &mut test_regions);
+    let mut cfg_regions = Vec::new();
+    collect_cfg_regions(&file.items, &mut cfg_regions);
 
     let dependencies = {
         let mut dependency_collector = DependencyCollector {
@@ -296,7 +309,7 @@ fn analyze_file(
         pub_items,
         mod_decls,
         struct_fields,
-        test_regions,
+        cfg_regions,
         dependencies,
         fns: fn_collector.functions,
         calls: call_collector.sites,
@@ -344,7 +357,7 @@ fn collect_public_items(
     struct_fields: &mut Vec<String>,
 ) {
     for item in items {
-        if is_cfg_test(item_attributes(item)) {
+        if is_cfg_excluded(item_attributes(item)) {
             continue;
         }
         if let Item::Struct(item) = item
@@ -360,7 +373,7 @@ fn collect_public_items(
         if let Item::Impl(item) = item {
             for method in &item.items {
                 if let ImplItem::Fn(method) = method
-                    && !is_cfg_test(&method.attrs)
+                    && !is_cfg_excluded(&method.attrs)
                     && is_boundary_visible(&method.vis)
                 {
                     output.push(PubItem {
@@ -402,7 +415,7 @@ fn collect_public_items(
                 });
                 for method in &item.items {
                     if let TraitItem::Fn(method) = method
-                        && !is_cfg_test(&method.attrs)
+                        && !is_cfg_excluded(&method.attrs)
                     {
                         output.push(PubItem {
                             module: module.to_owned(),
@@ -421,7 +434,7 @@ fn collect_public_items(
             continue;
         }
         if let Item::Mod(item) = item {
-            if is_cfg_test(&item.attrs) {
+            if is_cfg_excluded(&item.attrs) {
                 continue;
             }
             let nested_module = join_module(module, &item.ident.to_string());
@@ -584,53 +597,60 @@ fn use_target_modules(
     }
 }
 
-fn collect_test_regions(items: &[Item], output: &mut Vec<Range<usize>>) {
+fn collect_cfg_regions(items: &[Item], output: &mut Vec<CfgRegion>) {
     for item in items {
-        if is_cfg_test(item_attributes(item)) {
+        if let Some(kind) = cfg_kind(item_attributes(item)) {
             let attributes = item_attributes(item);
             let start = attributes.first().map_or_else(
                 || item.span().start().line,
                 |attribute| attribute.span().start().line,
             );
-            output.push(start..item.span().end().line.saturating_add(1));
+            output.push(CfgRegion {
+                lines: start..item.span().end().line.saturating_add(1),
+                kind,
+            });
             continue;
         }
         if let Item::Mod(item_mod) = item
             && let Some((_, nested)) = &item_mod.content
         {
-            collect_test_regions(nested, output);
+            collect_cfg_regions(nested, output);
         }
         if let Item::Impl(item_impl) = item {
             for member in &item_impl.items {
                 if let ImplItem::Fn(method) = member
-                    && is_cfg_test(&method.attrs)
+                    && let Some(kind) = cfg_kind(&method.attrs)
                 {
-                    push_test_region(&method.attrs, method.span(), output);
+                    push_cfg_region(&method.attrs, method.span(), kind, output);
                 }
             }
         }
         if let Item::Trait(item_trait) = item {
             for member in &item_trait.items {
                 if let TraitItem::Fn(method) = member
-                    && is_cfg_test(&method.attrs)
+                    && let Some(kind) = cfg_kind(&method.attrs)
                 {
-                    push_test_region(&method.attrs, method.span(), output);
+                    push_cfg_region(&method.attrs, method.span(), kind, output);
                 }
             }
         }
     }
 }
 
-fn push_test_region(
+fn push_cfg_region(
     attributes: &[syn::Attribute],
     span: proc_macro2::Span,
-    output: &mut Vec<Range<usize>>,
+    kind: SourceKind,
+    output: &mut Vec<CfgRegion>,
 ) {
     let start = attributes.first().map_or_else(
         || span.start().line,
         |attribute| attribute.span().start().line,
     );
-    output.push(start..span.end().line.saturating_add(1));
+    output.push(CfgRegion {
+        lines: start..span.end().line.saturating_add(1),
+        kind,
+    });
 }
 
 fn item_attributes(item: &Item) -> &[syn::Attribute] {
@@ -771,7 +791,7 @@ impl DependencyCollector<'_> {
 
 impl<'ast> Visit<'ast> for DependencyCollector<'_> {
     fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
-        if is_cfg_test(&item.attrs) {
+        if is_cfg_excluded(&item.attrs) {
             return;
         }
         let mut leaves = Vec::new();
@@ -834,37 +854,37 @@ impl<'ast> Visit<'ast> for DependencyCollector<'_> {
     }
 
     fn visit_item_mod(&mut self, item: &'ast ItemMod) {
-        if !is_cfg_test(&item.attrs) {
+        if !is_cfg_excluded(&item.attrs) {
             visit::visit_item_mod(self, item);
         }
     }
 
     fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
-        if !is_cfg_test(&item.attrs) {
+        if !is_cfg_excluded(&item.attrs) {
             visit::visit_item_impl(self, item);
         }
     }
 
     fn visit_item_fn(&mut self, item: &'ast ItemFn) {
-        if !is_cfg_test(&item.attrs) {
+        if !is_cfg_excluded(&item.attrs) {
             visit::visit_item_fn(self, item);
         }
     }
 
     fn visit_impl_item_fn(&mut self, item: &'ast ImplItemFn) {
-        if !is_cfg_test(&item.attrs) {
+        if !is_cfg_excluded(&item.attrs) {
             visit::visit_impl_item_fn(self, item);
         }
     }
 
     fn visit_item_trait(&mut self, item: &'ast ItemTrait) {
-        if !is_cfg_test(&item.attrs) {
+        if !is_cfg_excluded(&item.attrs) {
             visit::visit_item_trait(self, item);
         }
     }
 
     fn visit_trait_item_fn(&mut self, item: &'ast TraitItemFn) {
-        if !is_cfg_test(&item.attrs) {
+        if !is_cfg_excluded(&item.attrs) {
             visit::visit_trait_item_fn(self, item);
         }
     }
@@ -1155,7 +1175,7 @@ impl<'ast> Visit<'ast> for FnCollector<'_> {
         };
         let previous_owner = std::mem::replace(&mut self.owner, owner);
         let previous_test_region = self.in_test_region;
-        self.in_test_region |= is_cfg_test(&item.attrs);
+        self.in_test_region |= is_cfg_excluded(&item.attrs);
         visit::visit_item_impl(self, item);
         self.in_test_region = previous_test_region;
         self.owner = previous_owner;
@@ -1164,7 +1184,7 @@ impl<'ast> Visit<'ast> for FnCollector<'_> {
     fn visit_item_fn(&mut self, item: &'ast ItemFn) {
         let previous_owner = self.owner.take();
         let previous_test_region = self.in_test_region;
-        self.in_test_region |= is_cfg_test(&item.attrs);
+        self.in_test_region |= is_cfg_excluded(&item.attrs);
         self.push(&item.sig, item.span(), &item.block);
         visit::visit_item_fn(self, item);
         self.in_test_region = previous_test_region;
@@ -1173,7 +1193,7 @@ impl<'ast> Visit<'ast> for FnCollector<'_> {
 
     fn visit_impl_item_fn(&mut self, item: &'ast ImplItemFn) {
         let previous = self.in_test_region;
-        self.in_test_region |= is_cfg_test(&item.attrs);
+        self.in_test_region |= is_cfg_excluded(&item.attrs);
         self.push(&item.sig, item.span(), &item.block);
         visit::visit_impl_item_fn(self, item);
         self.in_test_region = previous;
@@ -1181,14 +1201,14 @@ impl<'ast> Visit<'ast> for FnCollector<'_> {
 
     fn visit_item_mod(&mut self, item: &'ast ItemMod) {
         let previous = self.in_test_region;
-        self.in_test_region |= is_cfg_test(&item.attrs);
+        self.in_test_region |= is_cfg_excluded(&item.attrs);
         visit::visit_item_mod(self, item);
         self.in_test_region = previous;
     }
 
     fn visit_item_trait(&mut self, item: &'ast ItemTrait) {
         let previous = self.in_test_region;
-        self.in_test_region |= is_cfg_test(&item.attrs);
+        self.in_test_region |= is_cfg_excluded(&item.attrs);
         visit::visit_item_trait(self, item);
         self.in_test_region = previous;
     }
@@ -1196,7 +1216,7 @@ impl<'ast> Visit<'ast> for FnCollector<'_> {
     fn visit_trait_item_fn(&mut self, item: &'ast TraitItemFn) {
         let previous_owner = self.owner.take();
         let previous_test_region = self.in_test_region;
-        self.in_test_region |= is_cfg_test(&item.attrs);
+        self.in_test_region |= is_cfg_excluded(&item.attrs);
         if let Some(block) = &item.default {
             self.push(&item.sig, item.span(), block);
         }
@@ -1206,52 +1226,12 @@ impl<'ast> Visit<'ast> for FnCollector<'_> {
     }
 }
 
-fn is_cfg_test(attributes: &[syn::Attribute]) -> bool {
-    attributes.iter().any(|attribute| match &attribute.meta {
-        syn::Meta::List(list) if list.path.is_ident("cfg") => list
-            .parse_args_with(
-                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
-            )
-            .is_ok_and(|predicates| {
-                !predicates
-                    .iter()
-                    .all(|predicate| cfg_possibilities(predicate).1)
-            }),
-        _ => false,
-    })
+fn cfg_kind(attributes: &[syn::Attribute]) -> Option<SourceKind> {
+    sources::cfg_source_kind(attributes)
 }
 
-fn cfg_possibilities(meta: &syn::Meta) -> (bool, bool) {
-    match meta {
-        syn::Meta::Path(path) if path.is_ident("test") => (true, false),
-        syn::Meta::Path(_) | syn::Meta::NameValue(_) => (true, true),
-        syn::Meta::List(list) => {
-            let Ok(nested) = list.parse_args_with(
-                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
-            ) else {
-                return (true, true);
-            };
-            let possibilities = nested.iter().map(cfg_possibilities).collect::<Vec<_>>();
-            if list.path.is_ident("all") {
-                return (
-                    possibilities.iter().any(|(can_be_false, _)| *can_be_false),
-                    possibilities.iter().all(|(_, can_be_true)| *can_be_true),
-                );
-            }
-            if list.path.is_ident("any") {
-                return (
-                    possibilities.iter().all(|(can_be_false, _)| *can_be_false),
-                    possibilities.iter().any(|(_, can_be_true)| *can_be_true),
-                );
-            }
-            if list.path.is_ident("not")
-                && let [possibility] = possibilities.as_slice()
-            {
-                return (possibility.1, possibility.0);
-            }
-            (true, true)
-        }
-    }
+fn is_cfg_excluded(attributes: &[syn::Attribute]) -> bool {
+    cfg_kind(attributes).is_some()
 }
 
 struct GuardCollector<'a> {
@@ -1297,37 +1277,37 @@ impl<'ast> Visit<'ast> for GuardCollector<'_> {
     }
 
     fn visit_item_mod(&mut self, item: &'ast ItemMod) {
-        if !is_cfg_test(&item.attrs) {
+        if !is_cfg_excluded(&item.attrs) {
             visit::visit_item_mod(self, item);
         }
     }
 
     fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
-        if !is_cfg_test(&item.attrs) {
+        if !is_cfg_excluded(&item.attrs) {
             visit::visit_item_impl(self, item);
         }
     }
 
     fn visit_item_fn(&mut self, item: &'ast ItemFn) {
-        if !is_cfg_test(&item.attrs) {
+        if !is_cfg_excluded(&item.attrs) {
             visit::visit_item_fn(self, item);
         }
     }
 
     fn visit_impl_item_fn(&mut self, item: &'ast ImplItemFn) {
-        if !is_cfg_test(&item.attrs) {
+        if !is_cfg_excluded(&item.attrs) {
             visit::visit_impl_item_fn(self, item);
         }
     }
 
     fn visit_item_trait(&mut self, item: &'ast ItemTrait) {
-        if !is_cfg_test(&item.attrs) {
+        if !is_cfg_excluded(&item.attrs) {
             visit::visit_item_trait(self, item);
         }
     }
 
     fn visit_trait_item_fn(&mut self, item: &'ast TraitItemFn) {
-        if !is_cfg_test(&item.attrs) {
+        if !is_cfg_excluded(&item.attrs) {
             visit::visit_trait_item_fn(self, item);
         }
     }
@@ -1568,37 +1548,37 @@ impl<'ast> Visit<'ast> for CallCollector<'_> {
     }
 
     fn visit_item_mod(&mut self, item: &'ast ItemMod) {
-        if !is_cfg_test(&item.attrs) {
+        if !is_cfg_excluded(&item.attrs) {
             visit::visit_item_mod(self, item);
         }
     }
 
     fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
-        if !is_cfg_test(&item.attrs) {
+        if !is_cfg_excluded(&item.attrs) {
             visit::visit_item_impl(self, item);
         }
     }
 
     fn visit_item_fn(&mut self, item: &'ast ItemFn) {
-        if !is_cfg_test(&item.attrs) {
+        if !is_cfg_excluded(&item.attrs) {
             visit::visit_item_fn(self, item);
         }
     }
 
     fn visit_impl_item_fn(&mut self, item: &'ast ImplItemFn) {
-        if !is_cfg_test(&item.attrs) {
+        if !is_cfg_excluded(&item.attrs) {
             visit::visit_impl_item_fn(self, item);
         }
     }
 
     fn visit_item_trait(&mut self, item: &'ast ItemTrait) {
-        if !is_cfg_test(&item.attrs) {
+        if !is_cfg_excluded(&item.attrs) {
             visit::visit_item_trait(self, item);
         }
     }
 
     fn visit_trait_item_fn(&mut self, item: &'ast TraitItemFn) {
-        if !is_cfg_test(&item.attrs) {
+        if !is_cfg_excluded(&item.attrs) {
             visit::visit_trait_item_fn(self, item);
         }
     }
