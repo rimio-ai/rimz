@@ -838,21 +838,22 @@ fn read_published_snapshot_folds_subagent_context() {
     let base = assemble_frame(vec![live_pane], unix_now_ms(), "rimz-test");
     atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &base).unwrap();
     let now = Timestamp::now();
-    crate::store::subagent_context::write(
-        &runtime,
-        "claude",
-        "child-1",
-        &crate::agents::context::SubagentContext {
-            agent_type: Some("Explore".to_owned()),
-            model: None,
-            effort: None,
-            description: Some("trace the sidebar rows".to_owned()),
-            token_count: Some(12_400),
-            cost_usd: Some(0.42),
-            started_at: Some(now),
-            observed_at: now,
-        },
-    )
+    let context = crate::agents::context::SubagentContext {
+        agent_type: Some("Explore".to_owned()),
+        model: None,
+        effort: None,
+        description: Some("trace the sidebar rows".to_owned()),
+        token_count: Some(12_400),
+        cost_usd: Some(0.42),
+        started_at: Some(now),
+        observed_at: now,
+    };
+    crate::store::subagent_context::update(&runtime, "claude", "child-1", |prior| {
+        (
+            context.clone(),
+            prior.and_then(|record| record.usage_cursor.clone()),
+        )
+    })
     .unwrap();
 
     let snapshot = read_published_snapshot(

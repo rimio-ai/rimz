@@ -48,23 +48,6 @@ impl sidecar::SidecarRecord for SubagentContextRecord {
     }
 }
 
-/// Persist (latest-wins) one child's context. WRITER = a RimZ CLI producer.
-/// Atomic temp+rename (no fsync — disposable sidecar) via
-/// [`write_temp_then_rename_cache`].
-pub fn write(
-    runtime: &RuntimePaths,
-    kind: &str,
-    agent_id: &str,
-    context: &SubagentContext,
-) -> Result<(), atomic::AtomicErr> {
-    update(runtime, kind, agent_id, |prior| {
-        (
-            context.clone(),
-            prior.and_then(|record| record.usage_cursor.clone()),
-        )
-    })
-}
-
 /// Read-modify-write one child sidecar under its per-record advisory lock.
 /// The caller receives the latest valid record and returns both the display
 /// context and resumable transcript-pricing cursor to publish.
@@ -152,7 +135,14 @@ mod tests {
     fn write_then_read_round_trips() {
         let (_dir, runtime) = runtime();
         let now = Timestamp::now();
-        write(&runtime, "claude", "child-1", &ctx(now)).unwrap();
+        let context = ctx(now);
+        update(&runtime, "claude", "child-1", |prior| {
+            (
+                context.clone(),
+                prior.and_then(|record| record.usage_cursor.clone()),
+            )
+        })
+        .unwrap();
         let all = read_all(&runtime);
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].kind, "claude");
@@ -170,7 +160,14 @@ mod tests {
     fn old_record_is_read_liveness_gating_is_the_rollups_job() {
         let (_dir, runtime) = runtime();
         let old = Timestamp::from_second(0).unwrap();
-        write(&runtime, "claude", "child-old", &ctx(old)).unwrap();
+        let context = ctx(old);
+        update(&runtime, "claude", "child-old", |prior| {
+            (
+                context.clone(),
+                prior.and_then(|record| record.usage_cursor.clone()),
+            )
+        })
+        .unwrap();
 
         let all = read_all(&runtime);
 
@@ -240,7 +237,14 @@ mod tests {
     fn update_reads_prior_and_persists_the_returned_cursor() {
         let (_dir, runtime) = runtime();
         let now = Timestamp::now();
-        write(&runtime, "claude", "child-1", &ctx(now)).unwrap();
+        let context = ctx(now);
+        update(&runtime, "claude", "child-1", |prior| {
+            (
+                context.clone(),
+                prior.and_then(|record| record.usage_cursor.clone()),
+            )
+        })
+        .unwrap();
         let cursor = SubagentUsageCursor {
             transcript_path: "child.jsonl".to_owned(),
             offset: 7,

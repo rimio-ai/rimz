@@ -133,10 +133,6 @@ impl Store {
         &self.inner.runtime
     }
 
-    pub fn workspace_lock_path(&self) -> &PathBuf {
-        &self.inner.paths.workspace_lock
-    }
-
     /// Project the live runtime state (event-log agent rollup) for CLI read
     /// entry points and resume planning.
     ///
