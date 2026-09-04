@@ -48,7 +48,7 @@ impl LayerRanks {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub(super) struct ModuleRule {
     pub(super) path: PathBuf,
@@ -61,7 +61,7 @@ pub(super) struct ModuleRule {
     pub(super) config_line: usize,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub(super) struct StranglerRule {
     pub(super) symbol: String,
     pub(super) path: PathBuf,
@@ -191,6 +191,33 @@ pub(super) fn write(path: &Path, target: &Target) -> Result<()> {
     files::write_atomically(path, rendered.as_bytes())
 }
 
+#[derive(Serialize)]
+struct RuleBlock<'a> {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    module: Vec<&'a ModuleRule>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    strangler: Vec<&'a StranglerRule>,
+}
+
+pub(super) fn render_module_rule(rule: &ModuleRule) -> String {
+    render_rule_block(RuleBlock {
+        module: vec![rule],
+        strangler: Vec::new(),
+    })
+}
+
+pub(super) fn render_strangler_rule(rule: &StranglerRule) -> String {
+    render_rule_block(RuleBlock {
+        module: Vec::new(),
+        strangler: vec![rule],
+    })
+}
+
+fn render_rule_block(block: RuleBlock<'_>) -> String {
+    // These rule types contain only values TOML can represent.
+    toml::to_string_pretty(&block).expect("serializing an Atlas rule cannot fail")
+}
+
 fn section_lines(raw: &str, section: &str) -> Vec<usize> {
     raw.lines()
         .enumerate()
@@ -254,6 +281,37 @@ mod tests {
             reparsed.modules[0].upward_dependencies,
             target.modules[0].upward_dependencies
         );
+    }
+
+    #[test]
+    fn rendered_rules_round_trip_with_target_formatting() {
+        let module = ModuleRule {
+            path: PathBuf::from("src/store"),
+            allowed_dependencies: Some(vec!["agents".to_owned(), "message".to_owned()]),
+            upward_dependencies: None,
+            surface_budget: 4,
+            config_line: 0,
+        };
+        let rendered = render_module_rule(&module);
+        let document: toml::Value = toml::from_str(&rendered).unwrap();
+        let reparsed: ModuleRule = document["module"][0].clone().try_into().unwrap();
+
+        assert_eq!(reparsed, module);
+        assert!(
+            rendered.contains("allowed-dependencies = [\n    \"agents\",\n    \"message\",\n]")
+        );
+
+        let strangler = StranglerRule {
+            symbol: "legacy".to_owned(),
+            path: PathBuf::from("src/store"),
+            baseline: 2,
+            config_line: 0,
+        };
+        let rendered = render_strangler_rule(&strangler);
+        let document: toml::Value = toml::from_str(&rendered).unwrap();
+        let reparsed: StranglerRule = document["strangler"][0].clone().try_into().unwrap();
+
+        assert_eq!(reparsed, strangler);
     }
 
     #[test]
