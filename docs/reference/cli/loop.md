@@ -1,6 +1,6 @@
 # Loop CLI
 
-`rimz loop` puts agent turns on a clock. A task is a durable schedule: `rimz loop add` writes recurring machine tasks to `loop.toml`, writes project tasks to the repo's `.rimz/config.toml`, and stores one-shots and poll-until deadlines in state. The room's sidebar elder fires tasks while a room for the task's project is open; the optional machine-wide timer fires tasks for roots without one. `loop remove` deletes the task from whichever store owns it. A task uses `--agent` to spawn one supervised transient pane, `--wake` to deliver a prompt to one live agent session through the message path, `--check` to run a scheduled command, or `--check` as a guard before an agent action. Why you schedule turns, guard them with watchdogs, and pace them against the provider's window is the [loops guide](../../guide/loops.md).
+`rimz loop` puts agent turns on a clock or on an event. A task is a durable trigger: `rimz loop add` writes recurring machine tasks to `loop.toml`, writes project tasks to the repo's `.rimz/config.toml`, and stores one-shots and poll-until deadlines in state. The room's sidebar elder fires clock tasks while a room for the task's project is open, the optional machine-wide timer fires them for roots without one, and a signal task fires from the process that emits its signal. `loop remove` deletes the task from whichever store owns it. A task uses `--agent` to spawn one supervised transient pane, `--wake` to deliver a prompt to one live agent session through the message path, `--check` to run a scheduled command, or `--check` as a guard before an agent action. Why you schedule turns, guard them with watchdogs, and pace them against the provider's window is the [loops guide](../../guide/loops.md). One-shot wakeups an agent arms for itself, including watched commands, are [`rimz wake`](./wake.md).
 
 ```sh
 rimz loop add morning --agent claude --prompt "summarize what landed on main overnight" --every weekday --at 07:00
@@ -11,6 +11,8 @@ rimz loop add watchdog --check "cargo test" --on fail --agent codex --prompt "fi
 rimz loop add auth-fix --agent codex --prompt "fix auth" --verify "cargo xtask test auth" --max-attempts 3 --every day --at 02:00
 rimz loop add ci-green --check "gh run watch --exit-status" --on success --until 30m --every 2m --wake @planner --prompt "CI is green; merge"
 rimz loop add repo-audit --project --agent codex --prompt "audit the dependency lockfile for advisories" --every day --at 08:00
+rimz loop add ci-fix --signal ci.finished --match conclusion=failure --agent codex --prompt "CI failed on {{branch}}; read the failing job and fix it"
+rimz loop add merged --signal pr.merged --once --wake @planner --prompt "PR #{{number}} merged; start the follow-up"
 rimz loop fire pr-watch
 rimz loop rename pr-watch ci-watch
 rimz loop enable pr-watch
@@ -34,7 +36,15 @@ The timer does not bypass the task model. An `--agent` fire births the room thro
 
 ## Schedule shapes
 
-Schedules repeat only with `--every` or `--cron`. Shapes are: one-shot (`--at 07:00` or `--in 30m`), interval (`--every 15m`), calendar (`--every weekday --at 07:00`), raw cron (`--cron`), and poll-until (`--every`, `--check`, `--on`, `--until`, plus an agent action). Calendar, cron, `--in`, and `--until` resolution use the top-level `timezone`, falling back to the system zone when unset.
+A task carries exactly one trigger: a clock (`--at`, `--every`, `--cron`, `--in`) or a signal (`--signal`). Schedules repeat only with `--every` or `--cron`. Shapes are: one-shot (`--at 07:00` or `--in 30m`), interval (`--every 15m`), calendar (`--every weekday --at 07:00`), raw cron (`--cron`), and poll-until (`--every`, `--check`, `--on`, `--until`, plus an agent action). Calendar, cron, `--in`, and `--until` resolution use the top-level `timezone`, falling back to the system zone when unset.
+
+## Signals
+
+`--signal <NAME>` subscribes the task to a named signal instead of a clock: it fires whenever that signal is emitted and keeps listening. `--match KEY=VALUE` requires a top-level payload field to equal the value and repeats for an all-of set; `--once` removes the task after its first fire. Both require `--signal`. Signals come from `rimz events emit`, from forge transitions the room observes, and from agent lifecycle transitions ([events reference](./events.md#emit-a-signal)); `loop list` and `loop show` render a subscription as `on <name> [k=v]` with the state `listening`.
+
+The payload reaches the fired task twice: `{{key}}` placeholders in the prompt are substituted with its top-level values, and the whole payload is appended to the prompt under a `--- signal <name> ---` block. The run record keeps the signal name and its payload, replacing a payload over 4 KiB with a truncated rendering.
+
+A `--wake` task subscribed to an `agent.*` signal must name a different agent with `--match handle=<other>` or `--match session=<other>`, so a wake cannot be triggered by its own target's lifecycle. Signal firing runs in the emitting process and needs no open room, but the task must be enabled here: a disabled, paused, or untrusted-project task is skipped, and nothing is replayed later. Project tasks may use `--signal` and `--match` (both enter the trust hash) and satisfy the repeat requirement with a subscription alone; they still reject `--once`, and `watch` entries are machine state that only `rimz wake` writes.
 
 `--budget <AMOUNT[/day]>` caps each spawned agent run. `--budget-per-day <AMOUNT>` requires a per-run budget, sums that task's cost-bearing run records in the configured local day, and records a skip when the remaining amount cannot fund the next run's cap. `loop list` prints today's spend in its COST column, suffixed by the daily cap when configured. For a check-gated agent or wake task, `loop show` keeps the `spend` line focused on today's daily-cap progress and puts all-record total and average cost in `AGENT RUNS`; other task shapes keep the last-run and rolling ten-run average on `spend`.
 
@@ -56,9 +66,9 @@ A matching exhausted Qwen 5-hour, 7-day, or 30-day window records strike-neutral
 
 ## Machine, project, and state tasks
 
-`rimz loop add` writes repeating tasks to the per-machine `loop.toml` by default. RimZ-generated `--in`, bare `--at`, and `--until` tasks persist as state, not `loop.toml` config, so they clear themselves when they retire.
+`rimz loop add` writes repeating tasks to the per-machine `loop.toml` by default. RimZ-generated `--in`, bare `--at`, `--until`, and `--once` tasks persist as state, not `loop.toml` config, so they clear themselves when they retire. Every `rimz wake` row is state for the same reason.
 
-`--project` writes `[tasks.<name>]` to `.rimz/config.toml` instead: it omits `root` because the project root is implicit, rejects `--wake` and `--until`, requires `--every` or `--cron`, and prints the `rimz trust grant` follow-up after add, remove, or rename. Trusted project tasks win over same-named machine tasks; an untrusted project task does not fire, and during the untrusted window a same-named machine task keeps running. Project tasks ship in the repo, so they need both [project trust](./hooks-trust.md#project-trust) and a machine-local `rimz loop enable <name>` before they run unattended. `rimz loop add --project` enables the task on the authoring machine.
+`--project` writes `[tasks.<name>]` to `.rimz/config.toml` instead: it omits `root` because the project root is implicit, rejects `--wake`, `--until`, and `--once`, requires `--every`, `--cron`, or `--signal`, and prints the `rimz trust grant` follow-up after add, remove, or rename. Trusted project tasks win over same-named machine tasks; an untrusted project task does not fire, and during the untrusted window a same-named machine task keeps running. Project tasks ship in the repo, so they need both [project trust](./hooks-trust.md#project-trust) and a machine-local `rimz loop enable <name>` before they run unattended. `rimz loop add --project` enables the task on the authoring machine.
 
 ## Enable, disable, and pause
 

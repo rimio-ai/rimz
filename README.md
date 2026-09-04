@@ -42,7 +42,7 @@ RimZ is a realtime dashboard for harnessing agentic coding: one human and tens o
 
 RimZ stays out of your way: one lightweight binary inside the Zellij or tmux you already run. Your keybinds stay, the agent CLIs run stock, and the official web, desktop, and mobile apps keep working untouched.
 
-That same small footprint carries the primitives **harness engineering** and **loop engineering** build on: the sidebar for observability, one command grammar for [every supported agent](#agent-compatibility-matrix), durable messages that steer and queue, supervised runs with exit codes for scripts and CI, and scheduled wakeups that keep the fleet on a clock. The harness itself (guardrails, policies, self-running loops) is yours to build on top.
+That same small footprint carries the primitives **harness engineering** and **loop engineering** build on: the sidebar for observability, one command grammar for [every supported agent](#agent-compatibility-matrix), durable messages that steer and queue, supervised runs with exit codes for scripts and CI, and wakeups that put the fleet on a clock or on an event. The harness itself (guardrails, policies, self-running loops) is yours to build on top.
 
 ## Project status
 
@@ -67,7 +67,7 @@ Read that as: ready for personal, daily use today; for production workflows that
 - **Teams, cross-model by design:** pair a Fable planner with a Sol coder and launch them as one team, each role on the model best at its job (reasoning depth, instruction following, speed, price); a mixed team catches what a single model lets through, and delivers better results faster for less
 - **Messages, agents chat as in Slack:** every agent answers to a handle (`@codex`, `@planner`); steer/queue delivery guarantees the message lands, respecting agent state and the context window, and agents talk to each other and to you inside channels
 - **Scriptable, End to End:** `rimz agents -p` is `claude -p` for every agent, with exit codes, JSON output, streaming, and the full transcript kept, so agents drop into scripts, CI, and workflows
-- **Loops, Yours to Engineer:** `rimz loop` schedules supervised runs on a clock (calendar, interval, cron, or a check-guarded watchdog that runs a command and wakes an agent on the result), and notification handlers run your own command the moment a row needs eyes
+- **Loops, Yours to Engineer:** `rimz loop` schedules supervised runs on a clock (calendar, interval, cron, or a check-guarded watchdog that runs a command and wakes an agent on the result) or on a signal anything can emit, `rimz wake` gives an agent the one-shot version to arm for itself instead of sleeping, and notification handlers run your own command the moment a row needs eyes
 - **Auto Continue, while you're Away:** a rate-limit pause resumes the moment the budget window resets and transient API overload retries on a backoff ramp; agents recover themselves and keep working while you're gone
 - **Steer the Fleet from your Phone:** when an agent stops to ask, the question reaches you in the official Claude and ChatGPT mobile apps, exactly as if you were driving the CLI by hand; answer there and it lands in the same terminal session, the fleet moving on in its panes as if you had typed it, with RimZ never between you and the official apps
 - **Pets, your beloved Companion:** an animated sprite on the provider dashboard that keeps you company, running while the agents run and waving when one waits
@@ -214,12 +214,23 @@ rimz agents wait otter fox --any
 rimz loop add standup --agent claude --every weekday --at 07:00 \
     --prompt "Summarize what landed on main since yesterday and flag anything that needs review"
 
-# One-shot wake after a delay
-rimz loop add nudge --wake @planner --prompt "resume the review" --in 30m
-
 # Watchdog: run the check first, wake the agent only on failure
 rimz loop add watchdog --check "cargo test" --on fail \
     --agent codex --prompt "fix the failing test" --every 15m
+```
+
+**Wait without a pane.** [`rimz wake`](./docs/reference/cli/wake.md) is the alarm an agent sets for itself instead of holding its turn open on `sleep`: it ends the turn, and RimZ delivers the prompt back into the same conversation when the delay, the command, or the signal arrives.
+
+```sh
+# One-shot wake after a delay
+rimz wake --in 30m --prompt "resume the review"
+
+# Wake when the command exits, with its output in the prompt
+rimz wake -- gh run watch --exit-status
+
+# Wake on an event anything can emit: CI, a git hook, a deploy script, another agent
+rimz wake --signal ci.finished --match conclusion=failure --prompt "CI failed on {{branch}}; fix it"
+rimz events emit ci.finished --json '{"conclusion":"failure","branch":"main"}'
 ```
 
 ### Step away

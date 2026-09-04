@@ -1,6 +1,6 @@
 # Loops
 
-> `rimz loop` is cron for your agents. A task is a name, a schedule, and one action: an agent turn in a real pane, a wake to an agent that is already running, or a shell command that guards either. The room keeps time while it is open; an optional OS timer keeps time otherwise. The clock, the state files, and the run log underneath are in [loops.md](../internals/harness/loops.md).
+> `rimz loop` is cron for your agents. A task is a name, a trigger, and one action: an agent turn in a real pane, a wake to an agent that is already running, or a shell command that guards either. The trigger is a clock or an event; the room keeps time while it is open, an optional OS timer keeps time otherwise, and `rimz wake` arms the one-shot version an agent sets for itself. The clock, the state files, and the run log underneath are in [loops.md](../internals/harness/loops.md).
 
 ## Why rimz loop
 
@@ -17,7 +17,7 @@ But cron and a hand-rolled `while` loop only know one move: start a fresh proces
 
 Whichever action fires, the turn is a full room citizen: a live card in the sidebar, a permission question that routes to you instead of hanging the job, and a line in the run log that `rimz loop show` summarizes and `rimz loop logs` opens in full.
 
-One rule governs every schedule: a task repeats only when `--every` or `--cron` says so. A bare time (`--at 07:00` or `--in 30m`) fires once and then removes itself. `rimz loop add` prints back exactly what it armed: the action, the schedule in plain words, and the concrete next fire time.
+One rule governs every clock: a task repeats only when `--every` or `--cron` says so. A bare time (`--at 07:00` or `--in 30m`) fires once and then removes itself. `rimz loop add` prints back exactly what it armed: the action, the schedule in plain words, and the concrete next fire time.
 
 ## Schedule a fresh turn
 
@@ -42,9 +42,57 @@ rimz loop add check-ci --wake @planner --prompt "CI should be done; check the ru
 
 RimZ resolves `@planner` the moment you add the task, in the current room and channel, exactly as [`rimz message`](./messaging.md) would, and pins that one session; the add output names the session it pinned. Thirty minutes later the prompt travels the same durable delivery path as any message, so it lands back in that conversation with all of its context. An idle agent takes it at once, a mid-turn agent parks it for its next turn boundary, and a session that has exited by then is skipped and the task removed.
 
-Because `rimz loop add` is a plain command, the agent can set its own alarm. At the end of a turn ("tests pass, CI needs half an hour") it runs the `loop add` from its shell tool and goes idle; thirty minutes later it wakes itself and finishes the job. Tell the agent once that the command exists, or wrap the pattern in a short skill, and "check back later" stops being your job. Chain it and you have a self-paced loop: each wake schedules the next `--in` only while work remains, so the loop advances exactly as long as the goal is unmet, then stops on its own. These self-set alarms are one-shots. They live in state rather than your `loop.toml`, show up in `rimz loop list`, and clear themselves after firing.
+The agent can set the same alarm for itself in one word less: [`rimz wake`](#stop-polling-start-waking) is the one-shot form of this task, aimed at the caller by default.
 
-For a plain reminder with no agent action, [`rimz message --schedule`](./messaging.md) is the lighter tool: one delivery on a timer, no task at all. A loop `--wake` earns its place when the wake repeats with `--every`, waits on a [`--check` guard](#guard-a-turn-with-a-check), or needs to land in the run history.
+For a plain reminder with no agent action, [`rimz message --schedule`](./messaging.md) is the lighter tool: one delivery on a timer, no task at all. A loop `--wake` earns its place when the wake repeats with `--every`, subscribes to a [signal](#stop-polling-start-waking), waits on a [`--check` guard](#guard-a-turn-with-a-check), or needs to land in the run history.
+
+## Stop polling, start waking
+
+An agent that has to wait usually waits badly. The two habits are a `sleep 900` in its shell tool, which holds the turn open for fifteen minutes of nothing, and a poll loop, `while ! gh run watch --exit-status; do sleep 30; done`, which keeps the pane busy until it finishes and takes the wait down with it if the pane closes. Both spend a live agent on watching a clock.
+
+`rimz wake` inverts it. The agent arms a wakeup, ends its turn, and goes idle. RimZ holds the condition; when it trips, a message lands in that same conversation and the agent picks up where it left off, with all of its context. There are three triggers, and an agent that only remembers one line remembers this shape:
+
+```sh
+rimz wake --in 30m --prompt "CI should be done; check the run and merge if green"
+rimz wake -- gh run watch --exit-status
+rimz wake --signal deploy.finished --prompt "the deploy landed; run the smoke tests"
+```
+
+**A delay** (`--in 30m`) is the alarm clock, and the room's clock fires it, so the room has to be open (or the [loop timer](#what-a-task-does-on-your-machine) installed).
+
+**A command** after `--` is the poll loop without the pane. RimZ runs it in a detached watcher process, and when it exits the agent is woken with the command, its exit status, and its output tail already in the prompt. `--on fail` or `--on success` wakes only for that outcome; `--timeout 30m` gives up on a command that never ends. The watcher outlives the turn that armed it, so the agent is free the moment it ends its turn.
+
+**A signal** (`--signal deploy.finished`) waits on an event instead of a command, and the [next section](#signals-the-rooms-event-bus) is where signals come from.
+
+Omit the address and the wake comes back to the calling agent, which is what makes it a self-alarm; pass `@handle` to wake someone else instead. `rimz wake list` shows what is pending, with the trigger, the target, and whether a watcher is still running; `rimz wake cancel <name>` calls it off. Each wake fires once and retires itself, so a chain of them is a self-paced loop: each turn arms the next wake only while work remains, and the loop stops when the goal is met rather than when a counter runs out.
+
+When the agent genuinely has nothing to do until the command finishes, `rimz wake --wait -- cargo build` blocks and prints the same watcher evidence inline. It cancels the wake message when that message is still queued; a message that already reached the pane cannot be recalled. Reach for it in a script; reach for the armed form whenever the agent could be doing something else.
+
+## Signals: the room's event bus
+
+A wake on a timer is a guess about when something will happen. A signal is the thing itself. `rimz events emit` puts a named event into the room, and every wake and loop task subscribed to that name fires:
+
+```sh
+rimz events emit deploy.finished --json '{"env":"prod","version":"1.4.2"}'
+```
+
+Anything that can run a command can emit: a CI job's last step, a git hook, a deploy script, a cron line, another agent. The emitting process fires the subscribers itself, so this works with no daemon and no open room. Nothing is queued or replayed either: a signal reaches the wakes armed at that instant, which is why the agent arms its wake before the work that will emit it starts.
+
+RimZ also emits signals from what the room already watches, so the most common waits need no wiring at all:
+
+| Signal | Fires when | Payload carries |
+| --- | --- | --- |
+| `pr.merged`, `pr.closed` | a pull request the room tracks for a worktree leaves the open state | `path`, `branch`, `repo`, `number`, `url`, `head`, `state` |
+| `ci.finished` | the checks for a tracked worktree settle on success or failure, with or without a pull request | the same fields plus `conclusion` |
+| `agent.started`, `agent.idle`, `agent.waiting`, `agent.failed`, `agent.ended` | an agent's own lifecycle transitions | `kind`, `session`, `handle`, `status`, `errored` |
+
+`--match KEY=VALUE` filters on those fields, and `{{key}}` in the prompt is replaced by the value, so the woken agent reads the specifics rather than going to look them up:
+
+```sh
+rimz wake --signal ci.finished --match conclusion=failure --prompt "CI failed on {{branch}}; read the failing job and fix it"
+```
+
+Waking on an `agent.*` signal must name someone else (`--match handle=@coder` or `--match session=<id>`); RimZ refuses the arrangement where an agent's own idle transition wakes it into another turn. For a subscription that keeps listening instead of retiring after one fire, `rimz loop add <name> --signal ci.finished --agent codex --prompt "…"` is the standing form, and it takes `--once` when you want the loop task to retire like a wake.
 
 ## Guard a turn with a check
 
@@ -86,7 +134,7 @@ rimz loop add refactor --agent claude --prompt "Refactor the next rough module a
 `rimz loop add` edits one file and starts no process:
 
 - A repeating task (`--every` or `--cron`) appends a `[tasks.<name>]` entry to `~/.config/rimz/loop.toml`: per-machine automation, like your crontab, never inherited by a cloned repository.
-- A one-shot (bare `--at`, `--in`, or a `--until` deadline) persists as state instead, so an agent scheduling its own wake never touches your `loop.toml`; the entry retires itself after firing.
+- A one-shot (bare `--at`, `--in`, a `--until` deadline, a `--once` subscription, or any `rimz wake`) persists as state instead, so an agent scheduling its own wake never touches your `loop.toml`; the entry retires itself after firing.
 - `--project` writes the entry to `<root>/.rimz/config.toml`: shared automation that travels with the repo, so it has to be a repeating task (a one-shot is machine state by definition). A committed task runs commands on whoever pulls it, so it enters the project trust hash and stays inert until each user approves it ([security.md](./security.md)). When the workspace is trusted, or this command creates its first project config, your own `loop add`, `loop remove`, and `loop rename` edits re-pin the grant automatically. A config carrying changes not yet reviewed on this machine keeps the surface-diff and grant offer in a terminal, or the review and approve commands elsewhere. A trusted project task wins over a same-named machine task without double-firing.
 
 Trust and enablement answer different questions. Trust says the project config contains commands you accept as yours to run; `rimz loop enable <name>` says this particular task may run unattended on this machine. A project task pulled from a repo starts disabled even after trust is granted, while a task you create with `rimz loop add --project` starts enabled here. The enablement record stays in machine state and never changes the repo or its trust hash.
@@ -97,7 +145,7 @@ There is no RimZ scheduler daemon; the room keeps time. While a room for the tas
 rimz loop timer install
 ```
 
-That command installs one systemd user timer on Linux or launchd agent on macOS. Once a minute it runs a one-off RimZ tick, re-reads every task, and fires only roots without an open room; the room elder still wins wherever one is open. An `--agent` fire starts its room through the normal supervised path and leaves it open, a check-only task needs no room, and a `--wake` still needs the pinned session alive. `rimz loop timer remove` reverses the install. With or without the timer, opening a root late does not replay what was missed: a task first seen past its time waits for the next matching occurrence, so there is never a catch-up storm.
+That command installs one systemd user timer on Linux or launchd agent on macOS. Once a minute it runs a one-off RimZ tick, re-reads every task, and fires only roots without an open room; the room elder still wins wherever one is open. An `--agent` fire starts its room through the normal supervised path and leaves it open, a check-only task needs no room, and a `--wake` still needs the pinned session alive. `rimz loop timer remove` reverses the install. Only clocks need a timekeeper at all: a signal task and a `rimz wake` watcher are fired by the process that emits the signal or runs the command, whether or not a room is open. With or without the timer, opening a root late does not replay what was missed: a task first seen past its time waits for the next matching occurrence, so there is never a catch-up storm.
 
 A scheduled `--agent` fire lands in the `rimzd` loop zone: the runtime column's live loop panel stays open, and transient run panes stack under it instead of splitting the sidebar or a working tab. If the panel pane was closed while the `rimzd` view remains, RimZ recreates the panel at fire time and stacks the run under it; if the whole view is gone or the split fails, it falls back to a new run tab. Manual `rimz loop fire` keeps splitting beside the caller so its foreground stream stays local.
 
@@ -173,6 +221,7 @@ The loops above are points in a small grammar. Each task names one action: `--ag
 | Calendar | `--every <days> --at HH:MM`, where days is `day`, `weekday`, `weekend`, a range `mon-fri`, or a list `mon,wed,fri` | on each matching day | `--every weekday --at 07:00` |
 | Raw cron | `--cron`, a five-field expression | per the expression | `--cron "*/15 * * * *"` |
 | Poll-until | `--every <duration>` plus `--check`, `--on`, `--until`, and an agent action ([above](#guard-a-turn-with-a-check)) | until the check trips or the deadline passes | `--check "gh run watch --exit-status" --on success --until 30m --every 2m` |
+| Signal | `--signal <name>`, narrowed with `--match key=value` ([above](#signals-the-rooms-event-bus)) | on every matching emit, or once with `--once` | `--signal ci.finished --match conclusion=failure` |
 
 One pair is worth a second look. `--every 1d` is an interval: it fires a day after the last fire and drifts with it. `--every day --at 07:00` is the calendar's 07:00 sharp.
 
@@ -240,6 +289,8 @@ Leave the room open, detached on your workstation or on a server you reach with 
 - [Notifications](./notifications.md): the push routes and acting handlers that catch what a loop cannot handle alone.
 - [Messaging](./messaging.md): the delivery path `--wake` uses, `--schedule` for one-off reminders, and smart compaction in full.
 - [Loop CLI](../reference/cli/loop.md): every flag on `add`, `fire`, `list`, `show`, `rename`, and `remove`.
+- [Wake CLI](../reference/cli/wake.md): the one-shot triggers, the watcher, `--wait`, and the exit codes.
+- [Events CLI](../reference/cli/events.md): emitting signals, the signal grammar, and the event stream.
 - [Configuration](./configuration.md): the `[resume]` and `[harness]` keys, and the `loop.toml` shape.
 - [Security and trust](./security.md): the safety posture for bypass flags and project trust.
 - [loops.md](../internals/harness/loops.md): the clock, state files, and run log underneath.

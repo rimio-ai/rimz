@@ -134,6 +134,7 @@ The payload is an `EventEnvelope`: schema version, event id, workspace id, sessi
 | `agent.attached` | Resume identity and placement: provider session id, stable RimZ launch id, pane stamp, and live runtime owner. | Re-stamps identity and placement; an identified discovered resume seeds its row before the provider starts |
 | `agent.launched` | The launch RimZ itself performed: identity, profile, role, team, worktree, permission mode, and a `Starting`/`Bound`/`Failed` state. | Launch admission and resume posture |
 | `message.*` | One of eleven terminal or transitional message outcomes: `queued`, `edited`, `after_met`, `when_met`, `sent`, `delivered`, `timed_out`, `errored`, `canceled`, `abandoned`, `archived`. | The message audit trail ([messaging.md](./harness/messaging.md)) |
+| `signal.emit` | One emitted signal: name, top-level payload object, and source (`cli`, `forge`, or `watch`). | Nothing in the rollup. It is the durable trace of an event ingress, replayed by `rimz events follow` ([loops.md](./harness/loops.md#the-signal-vocabulary)) |
 | `session.rebirth` | Nothing. It is a boundary marker. | Clears every pane stamp recorded before it |
 | `session.death` | `cause` (`reboot` or `crash`) and the agents lost with the previous incarnation. | [Session death](#session-death) |
 | anything else | Raw params. Older `feed.*` frames and methods from a newer binary land here. | Nothing, by design |
