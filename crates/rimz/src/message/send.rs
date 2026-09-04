@@ -257,7 +257,7 @@ fn compact_message_for_target<'a>(
     if !threshold.triggered(agent) {
         return None;
     }
-    if agent.compacting_since.is_some() {
+    if agent.compaction_open() {
         return None;
     }
     let config = crate::config::MachineConfig::load_lenient();

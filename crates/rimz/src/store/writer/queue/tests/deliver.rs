@@ -46,7 +46,7 @@ fn no_op_queue_transaction_changes_no_durable_surface() {
     let _ = std::fs::remove_file(&q.inner.paths.latest_snapshot);
 
     let report = q
-        .reconcile_stale_sent_messages("session", Timestamp::now(), 3, |_| false)
+        .reconcile_stale_sent_messages("session", Timestamp::now(), 3)
         .unwrap();
 
     assert_eq!(report, ReconcileReport::default());
@@ -453,7 +453,7 @@ fn correlated_ack_absorbs_queued_late_ack_but_not_a_claimed_record() {
     let reconcile_at =
         claimed.last_sent_at.expect("sent timestamp") + MessageBody::Prompt.delivery_window();
     let report = q
-        .reconcile_stale_sent_messages("session", reconcile_at, 3, |_| false)
+        .reconcile_stale_sent_messages("session", reconcile_at, 3)
         .unwrap();
     assert_eq!(report.requeued, 2);
     q.claim_message_for_steer(&claimed.message_id, reconcile_at)
@@ -499,12 +499,7 @@ fn stale_sent_message_requeues_before_attempt_cap() {
     let last_sent_at = sent.last_sent_at.expect("last sent");
 
     let report = q
-        .reconcile_stale_sent_messages(
-            "session",
-            last_sent_at + sent.body.delivery_window(),
-            3,
-            |_| false,
-        )
+        .reconcile_stale_sent_messages("session", last_sent_at + sent.body.delivery_window(), 3)
         .unwrap();
 
     assert_eq!(report.requeued, 1);
@@ -535,9 +530,7 @@ fn stale_command_times_out_without_resend_regardless_of_counter() {
     });
     let now = sent.last_sent_at.expect("last sent") + sent.body.delivery_window();
 
-    let report = q
-        .reconcile_stale_sent_messages("session", now, 3, |_| false)
-        .unwrap();
+    let report = q.reconcile_stale_sent_messages("session", now, 3).unwrap();
 
     assert_eq!(
         report,
@@ -563,10 +556,34 @@ fn stale_sent_message_is_deferred_while_receiver_compacts() {
     let sent = q.sent(1);
     let window = sent.body.delivery_window();
     let now = sent.last_sent_at.expect("last sent") + window;
+    let registered = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("sess-1")),
+        LifecycleSignal::Registered,
+    );
+    q.append_event(&EventEnvelope::agent_lifecycle(
+        q.workspace_id.clone(),
+        "session",
+        "claude",
+        "SessionStart",
+        &registered,
+    ))
+    .unwrap();
+    let compacting = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("sess-1")),
+        LifecycleSignal::Compacting,
+    );
+    let mut event = EventEnvelope::agent_lifecycle(
+        q.workspace_id.clone(),
+        "session",
+        "claude",
+        "PreCompact",
+        &compacting,
+    );
+    event.timestamp = Timestamp::now()
+        - jiff::SignedDuration::from_secs(crate::agents::COMPACTING_WINDOW_SECS + 1);
+    q.append_event(&event).unwrap();
 
-    let report = q
-        .reconcile_stale_sent_messages("session", now, 3, |_| true)
-        .unwrap();
+    let report = q.reconcile_stale_sent_messages("session", now, 3).unwrap();
 
     assert_eq!(report, ReconcileReport::default());
     let messages = q.live();
@@ -577,14 +594,49 @@ fn stale_sent_message_is_deferred_while_receiver_compacts() {
 }
 
 #[test]
+fn stale_sent_message_requeues_once_compaction_bracket_closes() {
+    let q = Queue::new();
+    let sent = q.sent(1);
+    let now = sent.last_sent_at.expect("last sent") + sent.body.delivery_window();
+    for (event_name, signal) in [
+        ("SessionStart", LifecycleSignal::Registered),
+        ("PreCompact", LifecycleSignal::Compacting),
+        (
+            "PostCompact",
+            LifecycleSignal::CompactionEnded {
+                auto: Some(false),
+                failed: false,
+            },
+        ),
+    ] {
+        let observation =
+            AgentLifecycleObservation::new(Some(AgentSessionId::from("sess-1")), signal);
+        q.append_event(&EventEnvelope::agent_lifecycle(
+            q.workspace_id.clone(),
+            "session",
+            "claude",
+            event_name,
+            &observation,
+        ))
+        .unwrap();
+    }
+
+    let report = q.reconcile_stale_sent_messages("session", now, 3).unwrap();
+
+    assert_eq!(report.requeued, 1);
+    let message = &q.live()[0];
+    assert_eq!(message.status, MessageStatus::Queued);
+    assert_eq!(message.unconfirmed_sends, 1);
+    assert_eq!(q.reason("message.queued"), "reconcile");
+}
+
+#[test]
 fn stale_sent_message_times_out_at_attempt_cap() {
     let q = Queue::new();
     let sent = q.sent_with(1, |message| message.unconfirmed_sends = 3);
     let now = sent.last_sent_at.expect("last sent") + sent.body.delivery_window();
 
-    let report = q
-        .reconcile_stale_sent_messages("session", now, 3, |_| false)
-        .unwrap();
+    let report = q.reconcile_stale_sent_messages("session", now, 3).unwrap();
 
     assert_eq!(report.requeued, 0);
     assert_eq!(report.timed_out, 1);
@@ -603,8 +655,7 @@ fn stale_sent_reconcile_preserves_cross_message_event_order() {
         .max()
         .expect("deadline");
 
-    q.reconcile_stale_sent_messages("session", now, 3, |_| false)
-        .unwrap();
+    q.reconcile_stale_sent_messages("session", now, 3).unwrap();
 
     let methods = q.methods();
     assert_eq!(
@@ -619,7 +670,7 @@ fn fresh_sent_message_waits_for_reconcile_deadline() {
     q.sent(1);
 
     let report = q
-        .reconcile_stale_sent_messages("session", Timestamp::now(), 3, |_| false)
+        .reconcile_stale_sent_messages("session", Timestamp::now(), 3)
         .unwrap();
 
     assert_eq!(report, ReconcileReport::default());
