@@ -490,7 +490,7 @@ pub(super) fn discover_subagent_chats(home: &Path, workspace: &Path) -> Vec<Curs
 }
 
 fn chats_bucket(home: &Path, workspace: &Path) -> Option<(PathBuf, PathBuf)> {
-    let workspace = crate::worktree::normalize_path_lexical(workspace);
+    let workspace = crate::utils::path::normalize_path_lexical(workspace);
     let workspace_text = workspace.to_str()?;
     if !workspace.is_absolute() || !regular_dir(&workspace) {
         return None;
@@ -646,7 +646,7 @@ fn validate_metadata(metadata: &ChatMetadata, workspace: &Path) -> bool {
         && metadata.created_at_ms >= 0
         && metadata.created_at_ms <= metadata.updated_at_ms
         && metadata.cwd.is_absolute()
-        && crate::worktree::normalize_path_lexical(&metadata.cwd) == workspace
+        && crate::utils::path::normalize_path_lexical(&metadata.cwd) == workspace
 }
 
 fn read_open_wait(

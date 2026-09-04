@@ -520,7 +520,7 @@ fn bare_directory_resolves_as_a_directory_workspace() {
 fn persisted_workspace_id_absolutizes_a_vanished_relative_root() {
     let relative = Path::new("target/rimz-vanished-persisted-root");
     assert!(!relative.exists(), "fixture root must stay nonexistent");
-    let absolute = crate::worktree::normalize_path_lexical(
+    let absolute = crate::utils::path::normalize_path_lexical(
         &std::env::current_dir().expect("current dir").join(relative),
     );
 
@@ -553,7 +553,7 @@ fn nonexistent_dotted_root_override_is_normalized_before_identity() {
     assert!(!dotted.exists(), "fixture root must stay nonexistent");
 
     let resolved = WorkspaceResolver::resolve(dir.path(), Some(dotted)).expect("resolve");
-    let expected = crate::worktree::normalize_path_lexical(&dir.path().join("project"));
+    let expected = crate::utils::path::normalize_path_lexical(&dir.path().join("project"));
 
     assert!(resolved.project_root.is_absolute());
     assert!(
@@ -577,7 +577,7 @@ fn lexical_normalization_folds_bare_cur_dir_to_empty() {
     // The sharp edge `normalized_root` guards against: folding `.` lexically
     // erases it, so an unresolved relative root must never reach the hash.
     assert_eq!(
-        crate::worktree::normalize_path_lexical(std::path::Path::new(".")),
+        crate::utils::path::normalize_path_lexical(std::path::Path::new(".")),
         std::path::PathBuf::new(),
     );
 }

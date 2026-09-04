@@ -187,7 +187,7 @@ impl WorkspaceSnapshotIdentity {
                 return Self::fallback(paths);
             }
         };
-        let root = crate::worktree::normalize_path_lexical(&record.project_root);
+        let root = crate::utils::path::normalize_path_lexical(&record.project_root);
         let display_name = root
             .file_name()
             .and_then(|name| name.to_str())

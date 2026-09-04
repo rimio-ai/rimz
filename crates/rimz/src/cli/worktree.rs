@@ -331,12 +331,12 @@ fn agents_in_worktree<'a>(
     path: &Path,
     branch: Option<&str>,
 ) -> Vec<&'a AgentState> {
-    let target = rimz::worktree::normalize_path_lexical(path);
+    let target = rimz::utils::path::normalize_path_lexical(path);
     agents
         .iter()
         .filter(|agent| {
             agent.worktree_path.as_deref().is_some_and(|recorded| {
-                rimz::worktree::normalize_path_lexical(Path::new(recorded)) == target
+                rimz::utils::path::normalize_path_lexical(Path::new(recorded)) == target
             }) || branch.is_some_and(|branch| agent.worktree_branch.as_deref() == Some(branch))
         })
         .collect()

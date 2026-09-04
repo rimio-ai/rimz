@@ -433,7 +433,7 @@ impl SidebarSnapshot {
     /// like `with_worktree_roots`; the pure path leaves it `None`.
     pub fn with_worktree_home(mut self, worktree_home: Option<PathBuf>) -> Self {
         self.worktree_home =
-            worktree_home.map(|path| crate::worktree::normalize_path_lexical(&path));
+            worktree_home.map(|path| crate::utils::path::normalize_path_lexical(&path));
         self
     }
 

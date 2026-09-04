@@ -797,7 +797,8 @@ fn runtime_protection_includes_realtime_process_cwd() {
         "live",
     ));
 
-    let current = normalize_path_lexical(&std::env::current_dir().expect("current dir"));
+    let current =
+        crate::utils::path::normalize_path_lexical(&std::env::current_dir().expect("current dir"));
 
     assert!(
         protection_set_from_runtime(&[], &[live], None, Occupancy::Unproven).protects(&current)

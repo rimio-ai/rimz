@@ -1037,8 +1037,8 @@ fn resolve_current_lane(
     agents: &[AgentState],
     worktrees: &[LaneWorktree],
 ) -> Result<ResolvedLane, LaneResumeError> {
-    let current = crate::worktree::normalize_path_lexical(current_root);
-    if current == crate::worktree::normalize_path_lexical(project_root) {
+    let current = crate::utils::path::normalize_path_lexical(current_root);
+    if current == crate::utils::path::normalize_path_lexical(project_root) {
         return Err(LaneResumeError::Unknown {
             scope: path_label(&current),
         });
@@ -1307,7 +1307,7 @@ fn lane_summaries(
     liveness: impl Fn(&AgentState) -> AgentLiveness,
 ) -> Vec<LaneSummary> {
     let mut groups = BTreeMap::<(PathBuf, Option<String>), Vec<AgentState>>::new();
-    let root = crate::worktree::normalize_path_lexical(project_root);
+    let root = crate::utils::path::normalize_path_lexical(project_root);
     for agent in agents.iter().filter(|agent| full_session(agent)) {
         let Some(path) = normalized_agent_worktree(agent) else {
             continue;
@@ -1585,7 +1585,7 @@ fn normalized_agent_worktree(agent: &AgentState) -> Option<PathBuf> {
         .as_deref()
         .filter(|path| !path.is_empty())
         .map(Path::new)
-        .map(crate::worktree::normalize_path_lexical)
+        .map(crate::utils::path::normalize_path_lexical)
 }
 
 fn newest_agent<'a>(agents: &[&'a AgentState]) -> Option<&'a AgentState> {
@@ -1964,13 +1964,13 @@ pub fn inspect_cohort_relaunch(
     cells: &[CohortCell],
     team: Option<&str>,
 ) -> CohortRelaunchState {
-    let target = crate::worktree::normalize_path_lexical(worktree);
+    let target = crate::utils::path::normalize_path_lexical(worktree);
     let candidates = agents
         .iter()
         .filter(|agent| {
             !agent.is_provider_subagent()
                 && agent.worktree_path.as_deref().is_some_and(|path| {
-                    crate::worktree::normalize_path_lexical(Path::new(path)) == target
+                    crate::utils::path::normalize_path_lexical(Path::new(path)) == target
                 })
         })
         .collect::<Vec<_>>();

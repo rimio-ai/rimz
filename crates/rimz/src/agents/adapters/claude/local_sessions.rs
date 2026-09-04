@@ -257,7 +257,7 @@ fn conversation_present_under_with(
     cwd: &Path,
     project_dir_name: Option<&str>,
 ) -> bool {
-    let workspace = crate::worktree::normalize_path_lexical(cwd);
+    let workspace = crate::utils::path::normalize_path_lexical(cwd);
     let file = format!("{}.jsonl", session_id.as_str());
     config_dirs.iter().any(|config_dir| {
         project_directory_names_from(&workspace, project_dir_name)

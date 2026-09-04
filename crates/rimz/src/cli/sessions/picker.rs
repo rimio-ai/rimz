@@ -1337,7 +1337,7 @@ fn repo_name(room: &LiveRoom) -> String {
 }
 
 fn repo_display_name(project_root: &Path) -> Option<String> {
-    rimz::worktree::normalize_path_lexical(project_root)
+    rimz::utils::path::normalize_path_lexical(project_root)
         .file_name()
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())

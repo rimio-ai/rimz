@@ -512,7 +512,7 @@ fn normalized_root(root: PathBuf) -> Result<PathBuf> {
         })?;
         cwd.join(&root)
     };
-    let normalized = crate::worktree::normalize_path_lexical(&abs);
+    let normalized = crate::utils::path::normalize_path_lexical(&abs);
     if normalized.as_os_str().is_empty() || !normalized.is_absolute() {
         return Err(WorkspaceErr::Resolve {
             path: abs,

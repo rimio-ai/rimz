@@ -377,7 +377,7 @@ pub(super) fn normalized_workspace_inputs(workspaces: &[&Path]) -> Vec<PathBuf> 
     let mut workspaces = workspaces
         .iter()
         .filter(|workspace| workspace.is_absolute())
-        .map(|workspace| crate::worktree::normalize_path_lexical(workspace))
+        .map(|workspace| crate::utils::path::normalize_path_lexical(workspace))
         .collect::<Vec<_>>();
     workspaces.sort();
     workspaces.dedup();
