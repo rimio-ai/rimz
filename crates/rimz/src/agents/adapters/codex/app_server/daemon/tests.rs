@@ -163,6 +163,31 @@ fn commands_anchor_descendants_to_codex_home() {
 }
 
 #[cfg(unix)]
+#[test]
+fn run_command_reports_exit_status_and_stderr() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let argv = [
+        "sh".to_owned(),
+        "-c".to_owned(),
+        "echo boom >&2; exit 3".to_owned(),
+    ];
+    let Err(ControlError::Exit {
+        action,
+        status,
+        stderr,
+        ..
+    }) = run_command(&argv, true, home.path())
+    else {
+        panic!("nonzero command should report its exit");
+    };
+    assert_eq!(action, "start");
+    assert_eq!(status.code(), Some(3));
+    assert_eq!(stderr, "boom");
+
+    assert!(run_command(&["true".to_owned()], false, home.path()).is_ok());
+}
+
+#[cfg(unix)]
 fn pid_record(pid: u32) -> PidRecord {
     PidRecord {
         pid,

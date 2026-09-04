@@ -236,6 +236,21 @@ mod tests {
     }
 
     #[test]
+    fn pane_ref_classifies_rimz_sidebar_past_program_paths() {
+        assert!(
+            pane(
+                "terminal_1",
+                "tab_1",
+                Some("/opt/rimz/rimz-sidebar --serve")
+            )
+            .is_rimz_sidebar()
+        );
+        assert!(pane("terminal_1", "tab_1", Some("sudo rimz-sidebar")).is_rimz_sidebar());
+        assert!(!pane("terminal_1", "tab_1", Some("rimz")).is_rimz_sidebar());
+        assert!(!pane("terminal_1", "tab_1", Some("rimz-sidebar-helper")).is_rimz_sidebar());
+    }
+
+    #[test]
     fn sidebar_selection_respects_preferred_view_order() {
         let panes = vec![
             pane("terminal_1", "tab_1", Some(SIDEBAR_CHROME_TITLE)),
