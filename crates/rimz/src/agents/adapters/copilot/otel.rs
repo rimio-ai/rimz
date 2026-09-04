@@ -49,10 +49,7 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
         .map(Path::new)
         .filter(|path| paths::validated_transcript_path(path, ctx.agent_id).is_none());
     let path = paths::otel_source(prior_otel_path)?;
-    let stat = TranscriptStat::from_path(&path)?;
-    if ctx.prior_transcript_stat == Some(&stat) {
-        return None;
-    }
+    let stat = ctx.changed_transcript(TranscriptStat::from_path(&path)?)?;
     let usage = latest_chat_usage(&read_transcript_tail(&path)?, ctx.agent_id);
     let model_id = usage
         .as_ref()

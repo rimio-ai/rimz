@@ -46,10 +46,7 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
         ctx.current_transcript_path.map(Path::new),
         ctx.prior_transcript_path.map(Path::new),
     )?;
-    let stat = TranscriptStat::from_path(&path)?;
-    if ctx.prior_transcript_stat == Some(&stat) {
-        return None;
-    }
+    let stat = ctx.changed_transcript(TranscriptStat::from_path(&path)?)?;
     let markers = turn_markers_at(&path, stat)?;
     Some(LocalContextRefresh {
         context: LocalContextPatch {

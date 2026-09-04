@@ -394,10 +394,7 @@ impl crate::agents::capabilities::ContextCapability for AmpAdapter {
         }
         let path =
             spend::resolve_session_file(ctx.agent_id, ctx.prior_transcript_path.map(Path::new))?;
-        let stat = TranscriptStat::from_path(&path)?;
-        if ctx.prior_transcript_stat == Some(&stat) {
-            return None;
-        }
+        let stat = ctx.changed_transcript(TranscriptStat::from_path(&path)?)?;
         let parsed = thread::AmpThread::read(&path).ok()?;
         if parsed.id != ctx.agent_id {
             return None;

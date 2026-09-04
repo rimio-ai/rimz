@@ -508,10 +508,7 @@ pub(crate) fn refresh_resolved_context(
     events: Option<&Path>,
     ctx: &LocalContextRefreshCtx<'_>,
 ) -> Option<LocalContextRefresh> {
-    let stat = transcript::combined_stat(path, events)?;
-    if ctx.prior_transcript_stat == Some(&stat) {
-        return None;
-    }
+    let stat = ctx.changed_transcript(transcript::combined_stat(path, events)?)?;
     let folded = transcript::read(path).ok()?;
     let summary = transcript::read_summary(path).filter(|summary| {
         summary

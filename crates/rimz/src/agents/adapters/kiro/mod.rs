@@ -282,10 +282,7 @@ impl crate::agents::capabilities::ContextCapability for KiroAdapter {
     ) -> Option<LocalContextRefresh> {
         let path =
             self.session_transcript(ctx.agent_id, ctx.prior_transcript_path.map(Path::new))?;
-        let stat = TranscriptStat::from_path(&path)?;
-        if ctx.prior_transcript_stat == Some(&stat) {
-            return None;
-        }
+        let stat = ctx.changed_transcript(TranscriptStat::from_path(&path)?)?;
         Some(LocalContextRefresh {
             context: LocalContextPatch::authoritative_current(),
             transcript_path: Some(path.to_string_lossy().into_owned()),

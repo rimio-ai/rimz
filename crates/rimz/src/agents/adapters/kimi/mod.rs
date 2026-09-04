@@ -660,9 +660,7 @@ fn refresh_wire_path(
     stat: TranscriptStat,
     ctx: &LocalContextRefreshCtx<'_>,
 ) -> Option<LocalContextRefresh> {
-    if ctx.prior_transcript_stat == Some(&stat) {
-        return None;
-    }
+    let stat = ctx.changed_transcript(stat)?;
     let snapshot = wire::WireSnapshot::read(path)?;
     let records = snapshot.tail_records();
     let attribution = wire::effective_attribution(records);
