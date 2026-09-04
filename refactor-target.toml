@@ -63,14 +63,9 @@ surface-budget = 6
 [[module]]
 path = "crates/rimz/src/agents"
 upward-dependencies = [
-    "child_process",
-    "daemon_view",
-    "diag::rotating",
     "harness::budget",
     "harness::run",
     "harness::target",
-    "mux",
-    "worktree",
 ]
 surface-budget = 970
 
@@ -116,21 +111,19 @@ surface-budget = 7
 path = "crates/rimz/src/daemon_view.rs"
 upward-dependencies = [
     "daemon_content",
-    "remote_control",
     "sidebar::cache",
     "sidebar::frame",
     "sidebar::timing",
 ]
-surface-budget = 20
+surface-budget = 14
 
 [[module]]
 path = "crates/rimz/src/diag"
 upward-dependencies = [
-    "child_process",
     "sidebar::presence",
     "sidebar::timing",
 ]
-surface-budget = 83
+surface-budget = 79
 
 [[module]]
 path = "crates/rimz/src/disk"
@@ -154,7 +147,7 @@ upward-dependencies = [
     "sidebar::refresh",
     "sidebar::refresh::pr",
 ]
-surface-budget = 592
+surface-budget = 591
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -175,7 +168,6 @@ surface-budget = 0
 [[module]]
 path = "crates/rimz/src/message"
 upward-dependencies = [
-    "child_process",
     "harness::ancestry",
     "harness::assist_log",
     "harness::auto_continue",
@@ -195,7 +187,7 @@ upward-dependencies = [
     "sidebar::timing",
     "sidebar::width_target",
 ]
-surface-budget = 246
+surface-budget = 241
 
 [[module]]
 path = "crates/rimz/src/observability"
@@ -211,7 +203,6 @@ surface-budget = 4
 
 [[module]]
 path = "crates/rimz/src/pane"
-upward-dependencies = ["store::snapshot"]
 surface-budget = 41
 
 [[module]]
@@ -262,7 +253,6 @@ surface-budget = 17
 [[module]]
 path = "crates/rimz/src/store"
 upward-dependencies = [
-    "daemon_view",
     "diag",
     "diag::record",
     "disk_usage",
@@ -275,9 +265,8 @@ upward-dependencies = [
     "sidebar::heartbeat",
     "sidebar::timing",
     "sidebar::wakeup",
-    "worktree",
 ]
-surface-budget = 318
+surface-budget = 308
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -286,7 +275,6 @@ surface-budget = 31
 
 [[module]]
 path = "crates/rimz/src/transcript.rs"
-upward-dependencies = ["store::snapshot"]
 surface-budget = 15
 
 [[module]]
@@ -316,16 +304,12 @@ surface-budget = 48
 
 [[module]]
 path = "crates/rimz/src/workspace.rs"
-upward-dependencies = [
-    "store::workspace_record",
-    "worktree",
-]
 surface-budget = 22
 
 [[module]]
 path = "crates/rimz/src/worktree"
 upward-dependencies = ["disk_usage"]
-surface-budget = 55
+surface-budget = 54
 
 [[module]]
 path = "crates/rimz/src/cli/remote/supervisor.rs"
@@ -437,7 +421,6 @@ allowed-dependencies = [
     "sidebar::cache",
     "sidebar::timing",
     "disk::paths",
-    "store::workspace_record",
     "workspace",
 ]
 surface-budget = 15
@@ -464,7 +447,6 @@ allowed-dependencies = [
     "ids",
     "sidebar::heartbeat",
     "sidebar::timing",
-    "store",
     "workspace",
 ]
 surface-budget = 10
@@ -477,7 +459,7 @@ allowed-dependencies = [
     "harness::run",
     "workspace::record",
 ]
-surface-budget = 30
+surface-budget = 29
 
 [[module]]
 path = "crates/rimz/src/utils/time.rs"
@@ -660,3 +642,13 @@ reason = "settings_json::commit_pair owns the shared transaction; Copilot and Cu
 kind = "guard"
 key = "$0.kind()!=ValueRefreshKind::Cached"
 reason = "These cfg(test) counters observe one StableValueCache policy; production already has one implementation (pass 2)."
+
+[[verdict]]
+kind = "item"
+key = "mux::command::CommandSpec"
+reason = "Stays the mux control engine; domain callers that need a bounded subprocess use proc::run_bounded_output (pass 3)"
+
+[[verdict]]
+kind = "item"
+key = "harness::target::agent_handle"
+reason = "Attribution's canonical routable address; the renderer is inseparable from target resolution, so agents keeps this one upward call (pass 3)"
