@@ -719,6 +719,36 @@ fn old_account_panel_cannot_reenter_bound_claude_limits() {
 }
 
 #[test]
+fn empty_keyed_panel_preserves_the_bound_cache_entry() {
+    let (_dir, workspace, runtime) = runtime();
+    let now = Timestamp::now();
+    let reset = now + SignedDuration::from_secs(3_600);
+    let authoritative_limits = AgentRateLimits {
+        windows: vec![auth(0, reset, now)],
+    };
+    super::merge_account_rate_limits(
+        &runtime,
+        "claude",
+        AccountUsageIdentity {
+            account_key: Some("new-account".to_owned()),
+            ..Default::default()
+        },
+        authoritative_limits.clone(),
+    );
+
+    let mut panel = provider_panel("claude", Vec::new());
+    panel.account_key = Some("new-account".to_owned());
+    let mut snapshot = snapshot_with_panels(workspace, vec![panel]);
+    refresh_rate_limits(&mut snapshot, &runtime);
+
+    let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    let entry = &cache.entries["claude"];
+    assert_eq!(entry.account_key.as_deref(), Some("new-account"));
+    assert_eq!(entry.limits, authoritative_limits);
+    assert_eq!(entry.bound_limits.as_ref(), Some(&authoritative_limits));
+}
+
+#[test]
 fn matching_birth_account_panel_keeps_instant_climbs() {
     let (_dir, workspace, runtime) = runtime();
     let now = Timestamp::now();

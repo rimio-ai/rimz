@@ -59,6 +59,21 @@ fn newest_keyed_session_partitions_live_windows() {
 }
 
 #[test]
+fn keyed_panel_stays_metered_when_foreign_windows_are_excluded() {
+    let mut old = agent("claude", "old", AgentStatus::Idle, 10).limits(vec![window(88, 3_600)]);
+    old.account_key = Some("old-key".to_owned());
+    old.registered_at = Some(ago(60));
+    let mut new = agent("claude", "new", AgentStatus::Idle, 20);
+    new.account_key = Some("new-key".to_owned());
+    new.registered_at = Some(ago(30));
+
+    let panel = claude_panel(vec![old, new]);
+    assert_eq!(panel.account_key.as_deref(), Some("new-key"));
+    assert!(panel.windows.is_empty());
+    assert!(panel.metered);
+}
+
+#[test]
 fn same_key_parallel_sessions_keep_the_most_drained_window() {
     let mut first = agent("claude", "first", AgentStatus::Idle, 10).limits(vec![window(20, 3_600)]);
     first.account_key = Some("same-key".to_owned());

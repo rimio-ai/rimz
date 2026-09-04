@@ -130,7 +130,7 @@ impl SidebarSnapshot {
             let metered = account
                 .as_ref()
                 .and_then(|account| account.metered)
-                .unwrap_or(has_windows);
+                .unwrap_or(has_windows || account_key.is_some());
             let account_scope = account
                 .as_ref()
                 .map(|account| account.scope.clone())
