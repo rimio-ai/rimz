@@ -114,6 +114,12 @@ The six terminal states are final. A terminal transition appends the full record
 
 ## Sending
 
+### Caller identity
+
+The caller resolver decides whether an invocation is agent-authored before dispatch builds its `MessageSender`. It first resolves the stable RimZ launch identity from the inherited environment. Without that identity, it walks the invoking process's ancestry and matches an ancestor's PID and process-start token against a live durable agent `RuntimeOwner`. The nearest agent-owned match supplies the observed provider's durable card even when RimZ did not launch it, preferring the current pane if multiple rows share that owner; no match remains human-authored.
+
+Daemon-routed adapters such as Codex 0.137+ remain unattributed by this fallback: tool commands run below the shared app-server rather than below the pane's agent process, and that daemon-owned `RuntimeOwner` cannot identify which agent invoked the command.
+
 ### Three modes on one timing axis
 
 All three resolve targets through the same parser, write the same record shape, ride the same pane primitive, and emit the same audit events. They differ only in *when* the record is allowed to deliver.
@@ -139,7 +145,7 @@ The raw-versus-effective distinction is load-bearing. Delivery gates read `effec
 
 1. **Load what the decision needs.** Pending records (boundary mode only), and agent-context sidecars when a smart-compact threshold applies, conditions, an agent sender, or `--wait`.
 2. **Choose a snapshot.** Producing a full resolution snapshot means talking to the multiplexer. When every target already parks (no live pane needed, no lazy-registering kind, no provisional id), `targets_all_park_without_live` proves the cached rollup is enough and dispatch skips the mux round trip entirely. This `rollup_only` path is a latency optimization; correctness never depends on it.
-3. **Resolve targets.** Live agents and live panes both, combined so one agent with a bound pane yields one target rather than two. When the live view finds nothing, the durable audit rollup is the fallback, with pane-shadowed co-resident sessions filtered out first. For intrinsic `@all`, an explicit launch caller captured by the CLI is resolved against that durable rollup and removed before arity checks, condition binding, reply preparation, or delivery; no peers is a dispatch error. Human callers and explicit selector fan-outs are unchanged. A multi-match without `--all` or `@all` is an ambiguity error listing the candidates.
+3. **Resolve targets.** Live agents and live panes both, combined so one agent with a bound pane yields one target rather than two. When the live view finds nothing, the durable audit rollup is the fallback, with pane-shadowed co-resident sessions filtered out first. For intrinsic `@all`, the agent caller captured by the CLI is resolved against that durable rollup and removed before arity checks, condition binding, reply preparation, or delivery; no peers is a dispatch error. Human callers and explicit selector fan-outs are unchanged. A multi-match without `--all` or `@all` is an ambiguity error listing the candidates.
 4. **Bind conditions.** Each `after` and `when` address resolves once and pins a card. A condition that is already satisfied gets its `met_at` stamped immediately, which is why upstream work must be queued *before* the message that waits on it.
 5. **Preflight hooks.** Any target that will park requires installed, trusted hooks for its kind, checked once per kind. Turn-end hooks are the delivery trigger, so parking without them would queue text nothing will ever release.
 6. **Decide park or live, per target.** A schedule or unmet condition parks first. Receiver readiness then comes from the exact pane binding when available or the durable card on the rollup-only path; a rejected write carries either the effective status or the native-input wait through `DispatchOutcome::Queued`. After that readiness decision, an unresolved pane or ready queued backlog parks without adding a reason. Jumping an existing queue would reorder the conversation. Boundary receipts say `delivered to @handle (msg_...)` after a live write, add the status and `rimz message steer msg_...` to a reasoned park (plus `--force` for native input), and keep reason-free parks at `queued for @handle (msg_...)`. Because the rollup-only decision deliberately skips the multiplexer, a status-aware receipt does not prove a pane is still live; `message show` performs the full check.
@@ -274,7 +280,7 @@ Content:
 <message>
 ```
 
-`Type` is `AGENT_MESSAGE` for a send from a RimZ-launched agent, `SUBAGENT_REPORT` for the status-only fleet digest sent after all of an agent's launched children settle, and `USER_MESSAGE` for a human's `rimz message`; a human header always uses `From: @user`, while the fleet digest uses `From: @rimz`. An agent handle gains `#channel` when the delivery crosses lanes. The recipient's lane comes from its registered channel, its live pane channel, or the addressed channel, so a just-launched same-lane teammate does not gain a spurious suffix before pane capture lands.
+`Type` is `AGENT_MESSAGE` for a send from an identified agent caller, `SUBAGENT_REPORT` for the status-only fleet digest sent after all of an agent's launched children settle, and `USER_MESSAGE` for a human's `rimz message`; a human header always uses `From: @user`, while the fleet digest uses `From: @rimz`. An agent handle gains `#channel` when the delivery crosses lanes. The recipient's lane comes from its registered channel, its live pane channel, or the addressed channel, so a just-launched same-lane teammate does not gain a spurious suffix before pane capture lands.
 
 The agent handle is the shortest unique selector over addressable agents: role when unique in scope, then explicit launch name, then profile when unique, else kind, else kind ordinal, else pet name. A session rebirth's co-resident audit row is not addressable, so it never pushes the live pane owner's handle down this ladder. System records and `--no-from` sends stay verbatim.
 

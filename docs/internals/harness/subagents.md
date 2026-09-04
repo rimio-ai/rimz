@@ -27,9 +27,9 @@ The two also differ in reach: a pane-backed child is a peer for `rimz message` a
 
 ## The doorway
 
-Launch, fanout, `wait`, and `stop` refuse outside a RimZ-launched agent ([`cli/subagents/mod.rs`](../../../crates/rimz/src/cli/subagents/mod.rs)). The test is one environment variable: `RIMZ_AGENT_KIND`, exported into every agent pane by the [exec wrapper](./fleet.md#the-exec-wrapper). A user shell that invokes one of those verbs has no such variable and gets pointed at `rimz agents` or `rimz teams` instead.
+Launch, fanout, `wait`, and `stop` refuse unless the caller resolver identifies the invoking process as a live durable agent ([`cli/subagents/mod.rs`](../../../crates/rimz/src/cli/subagents/mod.rs)). The resolver prefers the stable identity exported by the [exec wrapper](./fleet.md#the-exec-wrapper), then falls back to matching process ancestry against a live agent `RuntimeOwner`. A user shell that matches neither path gets pointed at `rimz agents` or `rimz teams` instead.
 
-The read-only `list` and `profiles` verbs are deliberately exempt. `profiles` only loads machine configuration, while `list` selects by caller ancestry when `RIMZ_AGENT_KIND` is present and by the shell's channel when it is absent. Neither operation mutates child lifecycle state.
+The read-only `list` and `profiles` verbs are deliberately exempt. `profiles` only loads machine configuration, while `list` selects by caller ancestry when the caller resolver identifies an agent and by the shell's channel otherwise. Neither operation mutates child lifecycle state.
 
 This is a usability boundary, not a security one — the same launch is expressible as `rimz agents … -p --bg`, and `subagents` exists so a delegating agent does not have to choose the supervision flags correctly. What the doorway buys is that every child launched through it is *uniformly* supervised, background, deadlined, and self-cleaning.
 
@@ -105,7 +105,7 @@ A runtime failure during that loop aborts the remaining launches and reports eve
 
 Ancestry resolves in the supervised runner before layout compilation — **before** provider preflight, worktree creation, store append, or any mux action, so a refusal leaves nothing behind.
 
-`resolve_launch_caller_from_env` finds the launching agent's durable row. It reads `RIMZ_AGENT_KIND` and `RIMZ_AGENT_ID`, then matches the row whose `launch_id` equals that id, with the kind corroborating the match so a stale cross-provider environment cannot attach a child to the wrong row. Only an agent process with no launch id at all — one that survived an upgrade — may fall back to an unambiguous live pane stamp.
+The caller resolver finds the launching agent's durable row. It first reads the stable launch identity from the environment and matches the row whose `launch_id` equals that id, with the kind corroborating the match so a stale cross-provider environment cannot attach a child to the wrong row. Without launch identity, it walks the invoking process's ancestry and matches the nearest ancestor's PID and process-start token against a live durable agent `RuntimeOwner`, preferring the current pane if multiple rows share that owner.
 
 `resolve_launch_ancestry` reads the caller's durable `launch_depth` field as a launch generation:
 
@@ -133,13 +133,13 @@ Ancestry failures are `LaunchAncestryError`, and their messages are written for 
 
 ## Who counts as a launched child
 
-Agent-scoped `list`, `wait`, and `stop` resolve membership the same way: `resolve_launch_caller_from_env` identifies the caller, then [`target::launched_children`](../../../crates/rimz/src/harness/target.rs) selects its children. That selector keeps rows where `is_launched_child()` holds and the child's `parent_agent_id` matches either the parent's current `agent_id` or its stable `launch_id`, with `parent_agent_kind` corroborating the match when stamped, then sorts by registration. The `launch_id` alternative preserves the family when a launched parent adopts its provider-native session id and its `agent_id` changes.
+Agent-scoped `list`, `wait`, and `stop` resolve membership the same way: the caller resolver identifies the durable caller, then [`target::launched_children`](../../../crates/rimz/src/harness/target.rs) selects its children. That selector keeps rows where `is_launched_child()` holds and the child's `parent_agent_id` matches either the parent's current `agent_id` or its stable `launch_id`, with `parent_agent_kind` corroborating the match when stamped, then sorts by registration. The `launch_id` alternative preserves the family when a launched parent adopts its provider-native session id and its `agent_id` changes.
 
-The scope switch keys on whether `RIMZ_AGENT_KIND` is present, not on whether caller resolution will succeed. That leaves one wart worth knowing before chasing it as a bug: an agent-scoped, read-only `list` whose durable caller row cannot be resolved reports `launch refused: …`, because the error text belongs to the launch path whose ancestry resolver it shares.
+The scope switch keys on whether the caller resolver identifies an agent. An unresolved invocation takes the user-shell scope for read-only `list`; launch, `wait`, and `stop` instead refuse because they require a durable caller.
 
 Because a subagent cannot launch again, that set is exactly the caller's direct RimZ-launched children. Peer-chain agents carry no parent id, and provider-native subagents carry no launch generation, so neither enters it.
 
-When `RIMZ_AGENT_KIND` is absent, `list` has no caller to resolve. [`target::launched_children_in_channel`](../../../crates/rimz/src/harness/target.rs) instead keeps RimZ-launched children by their own durable channel stamp and the current scope from `Ctx::channel`: a concrete current channel matches only that stamp, while `None` means all channels. It does not infer membership from a live parent, so ended parents and adopted identities do not hide durable child history. [`target::launched_parent`](../../../crates/rimz/src/harness/target.rs) performs the inverse stable-id join so every listed child can label its parent. The human and JSON reports identify the child by name and include that parent label and the child's channel.
+When the caller resolver finds no agent, [`target::launched_children_in_channel`](../../../crates/rimz/src/harness/target.rs) instead keeps RimZ-launched children by their own durable channel stamp and the current scope from `Ctx::channel`: a concrete current channel matches only that stamp, while `None` means all channels. It does not infer membership from a live parent, so ended parents and adopted identities do not hide durable child history. [`target::launched_parent`](../../../crates/rimz/src/harness/target.rs) performs the inverse stable-id join so every listed child can label its parent. The human and JSON reports identify the child by name and include that parent label and the child's channel.
 
 One channel limitation follows from the shared `Ctx` contract. A RimZ-launched pane carries `RIMZ_CHANNEL`, and a shell in a separate worktree derives its worktree channel, but a plain user shell in the project directory cannot derive an in-place team's `<directory>/<team>` stamp from cwd alone. `Ctx::channel` is therefore `None` there, so user-shell `list` returns all channels; the channel field on each row is the way to distinguish those in-place lanes.
 
