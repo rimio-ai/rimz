@@ -29,7 +29,7 @@ The two also differ in reach: a pane-backed child is a peer for `rimz message` a
 
 Launch, fanout, `wait`, and `stop` refuse unless the caller resolver identifies the invoking process as a live durable agent ([`cli/subagents/mod.rs`](../../../crates/rimz/src/cli/subagents/mod.rs)). The resolver prefers the stable identity exported by the [exec wrapper](./fleet.md#the-exec-wrapper), then falls back to matching process ancestry against a live agent `RuntimeOwner`. A user shell that matches neither path gets pointed at `rimz agents` or `rimz teams` instead.
 
-The read-only `list` and `profiles` verbs are deliberately exempt. `profiles` only loads machine configuration, while `list` selects by caller ancestry when the caller resolver identifies an agent and by the shell's channel otherwise. Neither operation mutates child lifecycle state.
+The read-only `list` and `profiles` verbs are deliberately exempt. `profiles` resolves optional caller context from existing room state without creating it, while `list` selects by caller ancestry when the caller resolver identifies a durable agent row and by the shell's channel otherwise. Neither operation mutates child lifecycle state.
 
 This is a usability boundary, not a security one — the same launch is expressible as `rimz agents … -p --bg`, and `subagents` exists so a delegating agent does not have to choose the supervision flags correctly. What the doorway buys is that every child launched through it is *uniformly* supervised, background, deadlined, and self-cleaning.
 

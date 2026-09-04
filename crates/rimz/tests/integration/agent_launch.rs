@@ -299,11 +299,67 @@ fn user_shell_subagents_list_inspects_the_channel() {
         assert!(!output.status.success(), "{args:?} unexpectedly succeeded");
         assert!(
             String::from_utf8_lossy(&output.stderr)
-                .contains("only available inside a RimZ-launched agent"),
+                .contains("only available to an agent RimZ can identify"),
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn user_shell_subagent_entrypoints_do_not_create_room_state() {
+    let env = Env::new();
+    let state = env.state_path_for(&env.project_root);
+    let long_runtime = env.home_root.join("r".repeat(180));
+    std::fs::create_dir_all(&long_runtime).expect("long runtime root");
+
+    let profiles = env
+        .rimz()
+        .env("XDG_RUNTIME_DIR", &long_runtime)
+        .args(["subagents", "profiles"])
+        .output()
+        .expect("list profiles");
+    assert!(
+        profiles.status.success(),
+        "profiles failed: {}",
+        String::from_utf8_lossy(&profiles.stderr)
+    );
+    assert!(!state.root.exists(), "profiles created room state");
+
+    let launch = env
+        .rimz()
+        .env("XDG_RUNTIME_DIR", &long_runtime)
+        .args(["subagents", "codex", "hello"])
+        .output()
+        .expect("reject user-shell launch");
+    assert!(!launch.status.success(), "user-shell launch succeeded");
+    assert!(
+        String::from_utf8_lossy(&launch.stderr)
+            .contains("only available to an agent RimZ can identify"),
+        "{}",
+        String::from_utf8_lossy(&launch.stderr)
+    );
+    assert!(!state.root.exists(), "launch refusal created room state");
+}
+
+#[cfg(unix)]
+#[test]
+fn unresolved_subagent_list_caller_falls_back_to_channel_scope() {
+    let env = Env::new();
+    let output = env
+        .rimz()
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+        .args(["subagents", "list", "--json"])
+        .output()
+        .expect("list with stale caller identity");
+
+    assert!(
+        output.status.success(),
+        "list failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"[]\n");
 }
 
 #[cfg(unix)]

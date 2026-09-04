@@ -177,8 +177,7 @@ struct SubagentLaunchArgs {
 
 pub fn run(args: SubagentsArgs, globals: &GlobalFlags) -> Result<()> {
     if command_is_agent_only(&args) {
-        let ctx = Ctx::open(globals)?;
-        require_agent_caller(crate::cli::send::resolve_caller(&ctx.store)?.is_some())?;
+        require_agent_caller(resolve_agent_caller(globals)?)?;
     }
     match args.command {
         Some(SubagentsSubcmd::Launch(args)) => launch_child(args.launch, args.json, globals),
@@ -219,8 +218,20 @@ fn require_agent_caller(agent_caller: bool) -> Result<()> {
         return Ok(());
     }
     bail!(
-        "launching, joining, and stopping subagents is only available inside a RimZ-launched agent; from a user shell, `rimz subagents list` inspects the current channel's subagents, and `rimz agents <spec>`, `rimz agents list/wait/stop`, or `rimz teams` drive agents directly"
+        "launching, joining, and stopping subagents is only available to an agent RimZ can identify; from a user shell, `rimz subagents list` inspects the current channel's subagents, and `rimz agents <spec>`, `rimz agents list/wait/stop`, or `rimz teams` drive agents directly"
     )
+}
+
+fn resolve_agent_caller(globals: &GlobalFlags) -> Result<bool> {
+    if rimz::harness::ancestry::CallerIdentity::from_env().is_some() {
+        return Ok(true);
+    }
+    let workspace = rimz::WorkspaceResolver::resolve_participant(".", globals.root.clone())
+        .context("resolving current workspace")?;
+    let Some(store) = crate::cli::open_existing_store(&workspace)? else {
+        return Ok(false);
+    };
+    Ok(crate::cli::send::resolve_caller(&store)?.is_some())
 }
 
 fn launch_child(args: SubagentLaunchArgs, json: bool, globals: &GlobalFlags) -> Result<()> {
@@ -514,12 +525,14 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
         .store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading agent history")?;
-    let scope = list_scope(rimz::harness::ancestry::resolve_caller(&audit.agents).is_some());
-    let children = match scope {
-        ListScope::Caller => caller_and_children(&audit.agents)?.1,
-        ListScope::Channel => {
-            rimz::harness::target::launched_children_in_channel(&audit.agents, ctx.channel())
-        }
+    let caller_identity = rimz::harness::ancestry::resolve_caller(&audit.agents);
+    let caller = caller_identity.as_ref().and_then(|identity| {
+        rimz::harness::ancestry::resolve_launch_caller(&audit.agents, identity).ok()
+    });
+    let scope = list_scope(caller.is_some());
+    let children = match caller {
+        Some(caller) => rimz::harness::target::launched_children(&audit.agents, caller),
+        None => rimz::harness::target::launched_children_in_channel(&audit.agents, ctx.channel()),
     };
     let runs = rimz::harness::run::list(ctx.store.paths())?;
     let reports = child_reports(&audit.agents, &children, &runs);
@@ -606,17 +619,29 @@ fn child_reports(
 fn list_profiles(json: bool, path: bool, globals: &GlobalFlags) -> Result<()> {
     let (config, mut sources) = rimz::config::MachineConfig::load_with_agent_spec_sources()
         .context("loading machine config")?;
-    let ctx = Ctx::open(globals)?;
-    let projection = ctx
-        .store
-        .runtime_projection(rimz::RuntimeScope::Audit)
-        .context("reading agent history")?;
-    let caller = rimz::harness::ancestry::resolve_caller(&projection.agents)
-        .map(|identity| {
-            rimz::harness::ancestry::resolve_launch_caller(&projection.agents, &identity).cloned()
-        })
-        .transpose()?;
-    let project_root = ctx.workspace.project_root;
+    let participant = rimz::WorkspaceResolver::resolve_participant(".", globals.root.clone())
+        .context("resolving current workspace")?;
+    let caller = match crate::cli::open_existing_store(&participant)? {
+        Some(store) => {
+            let projection = store
+                .runtime_projection(rimz::RuntimeScope::Audit)
+                .context("reading agent history")?;
+            rimz::harness::ancestry::resolve_caller(&projection.agents)
+                .map(|identity| {
+                    rimz::harness::ancestry::resolve_launch_caller(&projection.agents, &identity)
+                        .cloned()
+                })
+                .transpose()?
+        }
+        None => None,
+    };
+    let project_root = if caller.is_some() {
+        participant.project_root
+    } else {
+        rimz::WorkspaceResolver::resolve(".", globals.root.clone())
+            .context("resolving current project")?
+            .project_root
+    };
     let effective = rimz::config::effective::load(
         &config.agents,
         &config.subagents.profiles,
