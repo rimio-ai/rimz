@@ -14,7 +14,7 @@ rimz --root /path/to/project events follow --json
 
 JSON Lines is the command's only output format. `--json` is accepted for consistency with other scripting commands and is implied. Each line is flushed as it is emitted. Logs and archive-gap warnings use stderr, and a downstream reader closing the pipe ends the command successfully.
 
-The follower polls the durable log every 250 ms by default. Set `RIMZ_EVENTS_POLL_MS` to a positive integer number of milliseconds to tune that interval.
+The read-only follower lives in [`store::follow`](../../../crates/rimz/src/store/follow.rs) and polls the durable log every 250 ms by default. Set `RIMZ_EVENTS_POLL_MS` to a positive integer number of milliseconds to tune that interval.
 
 ## Lifecycle event schema
 

@@ -14,6 +14,8 @@ One rule resolves that:
 
 Every send persists a `MessageRecord` before a single byte reaches a pane. If the receiver can take the text right now, the same call writes it and marks the record `Sent`. If it cannot, the record stays `Queued` and the agent's next turn boundary delivers it, oldest first. A busy agent, a closed and reopened room, a multiplexer write that fails, a crash between claim and send: none of them lose the text, because the text was never only in flight.
 
+The durable record schema, its FIFO/claim/batch selection, and its JSONL codec live in [`store::message`](../../../crates/rimz/src/store/message.rs); `message/` owns delivery.
+
 Everything else in the module is a consequence: how a record decides it is ready, who wakes up to deliver it, how a write is confirmed, and what happens when confirmation never arrives.
 
 ## Module layout
@@ -22,14 +24,15 @@ Start here when you are looking for where a behaviour lives.
 
 | File | Owns |
 | --- | --- |
-| [`message.rs`](../../../crates/rimz/src/message.rs) | The vocabulary: `MessageRecord`, durable record construction, `MessageStatus`, `DeliveryGate`, `AfterCondition`/`WhenCondition`, `AutoCompact`, card matching, FIFO head and batch selection, and the environment knobs. Pure logic, no I/O. |
+| [`message.rs`](../../../crates/rimz/src/message.rs) | Delivery assembly and parsing: per-recipient record construction, delivery gates, schedule parsing, and delivery timing knobs. Pure logic, no I/O. |
 | [`message/dispatch.rs`](../../../crates/rimz/src/message/dispatch.rs) | One send request end to end: resolve targets, bind conditions, preflight hooks, build records, decide park-vs-live, order the fan-out. |
 | [`message/send.rs`](../../../crates/rimz/src/message/send.rs) | The pane write: bracketed paste, the submit barrier, pacing, and the compact-first command. |
 | [`message/deliver.rs`](../../../crates/rimz/src/message/deliver.rs) | Readiness: the ordered delivery check, the delivery attempt and its failure recovery, condition evaluation, the sweep, and the wake stamp. |
 | [`message/reply.rs`](../../../crates/rimz/src/message/reply.rs) | `--wait`: leg state machines, transcript anchoring, cycle detection, join settlement. |
 | [`message/fire.rs`](../../../crates/rimz/src/message/fire.rs) | The elder's side of the clock: read the wake stamp, spawn `message sweep`. Nothing else. |
+| [`store/message.rs`](../../../crates/rimz/src/store/message.rs) | The durable record schema and vocabulary, card matching, and FIFO/claim/batch selection. |
+| [`store/message/codec.rs`](../../../crates/rimz/src/store/message/codec.rs) | The JSONL live queue and terminal history codec. |
 | [`store/writer/queue.rs`](../../../crates/rimz/src/store/writer/queue.rs) | Every status transition, under the workspace lock, with its audit event. |
-| [`store/message_store.rs`](../../../crates/rimz/src/store/message_store.rs) | The JSONL queue and history files. |
 | [`cli/message/`](../../../crates/rimz/src/cli/message) | Flag parsing, rendering, and the inbox verbs. No delivery logic. |
 | [`cli/hooks/lifecycle/delivery.rs`](../../../crates/rimz/src/cli/hooks/lifecycle/delivery.rs) | The hook side: confirm sent records, spawn the delivery helper at turn boundaries. |
 

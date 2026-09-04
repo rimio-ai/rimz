@@ -18,6 +18,8 @@ An adapter is the *single* place an agent protocol is normalized. It implements 
 
 Provider modules own native protocol and process interpretation. Code outside `agents` resolves definitions and calls neutral services; the `xtask` private-adapter invariant keeps provider modules and concrete adapter types behind this boundary.
 
+Nothing under `agents` imports `store`: Store folds the agent model, and agent record types it persists, including `AgentContextRecord`, are owned here.
+
 `AgentDefinition::probe_account_usage` returns one identity-bearing provider-neutral result. Provider transports parse native wire shapes and provider account modules normalize plan/windows/credits. Sidebar refresh owns account cadence, durable claims, and cache publication; `agents::spending` owns fleet-spending cadence, refresh, and publication while sidebar supplies workspace inputs and consumes its durable results.
 
 - **Plugin manifests derive claims.** The declared canonical event list, capabilities, and probes generate both descriptor matrices. Keep hook installation self-managed and neutral output empty; probes stay bounded, read-only, and off the store import graph.

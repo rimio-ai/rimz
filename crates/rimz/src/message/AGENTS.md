@@ -1,6 +1,6 @@
 # Message system
 
-Local contract for `crates/rimz/src/message/`: the durable queue that routes text into a running agent's pane. Extends [crates/rimz/AGENTS.md](../../AGENTS.md).
+Local contract for `crates/rimz/src/message/`: delivery that routes durable text into a running agent's pane. Extends [crates/rimz/AGENTS.md](../../AGENTS.md).
 
 Topic detail lives in [messaging.md](../../../../docs/internals/harness/messaging.md), which owns the record, the ordered delivery check, the pipeline, reply waits, channels, and the transcript.
 
@@ -18,8 +18,8 @@ Topic detail lives in [messaging.md](../../../../docs/internals/harness/messagin
 ## Boundaries
 
 - Layering runs one way: `dispatch` calls `deliver` and `send`; `deliver` calls `send`; `send` calls the store and the mux. Nothing calls back up.
-- `message.rs` stays pure: types, card matching, FIFO and batch selection, threshold and schedule parsing, environment knobs. I/O belongs in the submodules.
-- Status transitions belong to the store boundary (`store/writer/queue.rs`), under the workspace lock, each with its audit event. The status enum carries vocabulary, not rules.
+- `message.rs` owns delivery assembly and parsing. The record schema and FIFO/claim/batch selection live in `store::message`, while I/O delivery belongs in the submodules.
+- Status transitions stay in `store/writer/queue.rs`, under the workspace lock, each with its audit event. The status enum carries vocabulary, not rules.
 - Message content never enters the event log. Terminal text lives in `messages/history.jsonl`.
 - `fire.rs` runs on the renderer's cache-refresh tick, so keep it as light as that path demands. It reads the wake stamp and spawns `message sweep`; store reads and writes stay in that helper.
 - Address grammar, handle rendering, and channel resolution live in `harness/target.rs`. This module resolves targets through it and never parses addresses itself.
