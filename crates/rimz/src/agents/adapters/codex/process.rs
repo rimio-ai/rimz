@@ -3,8 +3,8 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use crate::daemon_view::{APP_SERVER_MARKER, COMMAND_MARKER};
 use crate::ids::AgentSessionId;
+use crate::pane::{APP_SERVER_MARKER, COMMAND_MARKER};
 
 const CODEX_BINARY_MARKER: &str = "codex";
 
@@ -43,7 +43,7 @@ pub fn pid_is_codex_daemon(pid: u32) -> bool {
 
 /// Whether a command line runs the Codex daemon: the `codex` binary on its
 /// `app-server` or `remote-control` surface. Mirrors
-/// [`crate::daemon_view::pane_is_host`]'s markers, narrowed to the `codex`
+/// [`crate::pane::pane_is_host`]'s markers, narrowed to the `codex`
 /// binary so an unrelated process that merely mentions a marker is not mistaken
 /// for the daemon.
 fn is_codex_daemon_cmdline(cmdline: &str) -> bool {

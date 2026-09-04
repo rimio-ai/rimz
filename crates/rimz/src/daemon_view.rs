@@ -24,12 +24,8 @@ use crate::mux::{
     DaemonView, HostPane, MuxBackend, PaneListOptions, PaneListing, PaneReadConsistency,
     SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget,
 };
-use crate::pane::PaneRef;
+use crate::pane::{APP_SERVER_MARKER, COMMAND_MARKER, PaneRef, VIEW_NAME, command_is_claude_host};
 use crate::store::workspace_record;
-
-/// View name for the managed daemon tab. Shared by the launcher and pane
-/// classifiers so every backend speaks the same name.
-pub const VIEW_NAME: &str = "rimzd";
 
 const REPAIR_LIST_TIMEOUT: Duration = Duration::from_secs(3);
 const SETTLE_ATTEMPTS: usize = 5;
@@ -116,19 +112,8 @@ fn content_supervisor_pane(slot: usize, rimz_bin: &Path, worktree_root: &Path) -
     }
 }
 
-/// Substring marking the Claude remote-control host in a pane command.
-pub(crate) const COMMAND_MARKER: &str = "remote-control";
-
-/// Substring marking the per-session Codex app-server broker.
-pub(crate) const APP_SERVER_MARKER: &str = "app-server";
-
 /// Substring marking the always-present loop panel command.
 pub(crate) const LOOP_PANEL_MARKER: &str = "loop watch";
-
-/// Whether a command line is one of RimZ's managed daemon hosts.
-pub fn command_is_host(command: &str) -> bool {
-    command.contains(COMMAND_MARKER) || command.contains(APP_SERVER_MARKER)
-}
 
 /// Return the oldest loop panel in the managed view.
 pub fn find_loop_panel(panes: &[PaneRef]) -> Option<&PaneRef> {
@@ -574,20 +559,6 @@ fn command_matches_marker(command: &str, marker: &ManagedPaneMarker) -> bool {
     }
 }
 
-pub(crate) fn command_is_claude_host(command: &str) -> bool {
-    let mut tokens = command.split_whitespace();
-    while let Some(token) = tokens.next() {
-        let is_claude = Path::new(token)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name == "claude");
-        if is_claude {
-            return tokens.next() == Some(COMMAND_MARKER);
-        }
-    }
-    false
-}
-
 fn content_slot_from_args(args: &[String]) -> Option<usize> {
     if !args
         .windows(2)
@@ -608,13 +579,6 @@ fn content_slot_from_command(command: &str) -> Option<usize> {
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
     content_slot_from_args(&args)
-}
-
-/// Whether `pane` belongs to the daemon dashboard.
-pub fn pane_is_host(pane: &PaneRef) -> bool {
-    pane.spawn_command.as_deref().is_some_and(command_is_host)
-        || pane.command.as_deref().is_some_and(command_is_host)
-        || pane.view_name.as_deref() == Some(VIEW_NAME)
 }
 
 /// Whether the managed Claude remote-control host pane is present in `panes`.

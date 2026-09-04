@@ -71,8 +71,7 @@ fn remote_control_in_ancestry_from(
         if pid <= 1 {
             return false;
         }
-        if cmdline(pid).is_some_and(|command| crate::daemon_view::command_is_claude_host(&command))
-        {
+        if cmdline(pid).is_some_and(|command| crate::pane::command_is_claude_host(&command)) {
             return true;
         }
         let Some(parent) = parent_pid(pid) else {
@@ -660,7 +659,7 @@ mod tests {
             argv,
             vec!["claude", "remote-control", "--spawn", "worktree"]
         );
-        assert!(crate::daemon_view::command_is_host(&argv.join(" ")));
+        assert!(crate::pane::command_is_host(&argv.join(" ")));
     }
 
     #[test]

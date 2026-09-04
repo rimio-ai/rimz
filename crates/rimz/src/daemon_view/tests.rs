@@ -387,22 +387,7 @@ fn disabled_claude_host_selection_uses_title_and_stays_in_the_daemon_view() {
 }
 
 #[test]
-fn detects_hosts_and_loop_panel_across_mux_identity_fields() {
-    assert!(pane_is_host(&pane(
-        Some("claude remote-control --spawn worktree"),
-        None,
-    )));
-    assert!(pane_is_host(&pane(
-        Some("rimz codex app-server serve --workspace-id w"),
-        None,
-    )));
-    assert!(pane_is_host(&spawned_pane(
-        "claude remote-control --spawn worktree",
-        None,
-    )));
-    assert!(pane_is_host(&pane(Some("rimz"), Some(VIEW_NAME))));
-    assert!(!pane_is_host(&pane(Some("claude"), Some("work"))));
-
+fn find_loop_panel_prefers_the_oldest_managed_pane() {
     let older = spawned_pane_with_id("%2", "rimz loop watch --hold", Some(VIEW_NAME));
     let newer = spawned_pane_with_id("%8", "rimz loop watch --hold", Some(VIEW_NAME));
     assert_eq!(find_loop_panel(&[newer, older.clone()]), Some(&older));

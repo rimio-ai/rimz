@@ -198,7 +198,7 @@ impl RoomContext {
         match self.backend.open_background_view(options) {
             Ok(BackgroundViewLaunch::Launched) => tracing::info!(
                 session = %self.workspace.session_name,
-                view = crate::daemon_view::VIEW_NAME,
+                view = crate::pane::VIEW_NAME,
                 "launched the daemon view",
             ),
             Ok(BackgroundViewLaunch::AlreadyRunning) => {

@@ -212,7 +212,7 @@ surface-budget = 4
 [[module]]
 path = "crates/rimz/src/pane"
 upward-dependencies = ["store::snapshot"]
-surface-budget = 26
+surface-budget = 32
 
 [[module]]
 path = "crates/rimz/src/proc"

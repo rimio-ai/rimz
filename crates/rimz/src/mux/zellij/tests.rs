@@ -285,7 +285,7 @@ fn reconcile_mapping_classifies_native_sidebar_daemon_and_work_panes() {
     let mut sidebar = terminal_pane(1, 4, 20, 0, crate::pane::SIDEBAR_CHROME_TITLE);
     sidebar.is_held = true;
     let mut named_daemon = terminal_pane(2, 5, 80, 20, "host");
-    named_daemon.tab_name = Some(crate::daemon_view::VIEW_NAME.to_owned());
+    named_daemon.tab_name = Some(crate::pane::VIEW_NAME.to_owned());
     let mut command_daemon = terminal_pane(3, 6, 80, 20, "host");
     command_daemon.terminal_command = Some("rimz app-server serve".to_owned());
     let mut work = terminal_pane(4, 7, 80, 20, "work");
