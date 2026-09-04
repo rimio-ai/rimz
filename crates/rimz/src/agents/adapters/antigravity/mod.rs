@@ -30,7 +30,7 @@ use super::definition::{
     HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability, SamePaneSessionPolicy,
     ThreadKey, ToolClassification, UserCoverage,
 };
-use super::hook_types::{HookEventSpec, decode_catalog_entry};
+use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
 use super::{
     AgentLifecycleObservation, HookOutput, HookRouting, LocalSessionObservation, Result,
@@ -379,11 +379,8 @@ impl crate::agents::capabilities::CoreCapability for AntigravityAdapter {
 
 impl crate::agents::capabilities::HookCapability for AntigravityAdapter {
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
-        let mut decoded = decode_catalog_entry(
-            ANTIGRAVITY_HOOKS
-                .iter()
-                .find(|entry| entry.hook.event == event_name)
-                .map(|entry| &entry.hook),
+        let mut decoded = decode_catalog_hook(
+            ANTIGRAVITY_HOOKS.iter().map(|entry| &entry.hook),
             event_name,
             None,
         );
