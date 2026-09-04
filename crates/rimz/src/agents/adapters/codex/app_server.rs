@@ -10,7 +10,7 @@
 //! behind `rimz agents refresh-context` and the daemon-mode liveness probe behind
 //! the sidebar cache refresher's TTL-gated ghost-session reap;
 //! disk_usage
-//! ([`crate::store::agent_context`]) and the snapshot fold-in are
+//! The sidecar storage and snapshot fold-in are
 //! transport-agnostic, exactly as for Claude.
 //!
 //! Connection preference (warmest first): this session's broker

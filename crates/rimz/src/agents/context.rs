@@ -9,8 +9,8 @@
 //! integration produces it from its own transport or local refresh via
 //! [`super::AgentDefinition`]; lifecycle hooks also keep the current turn's
 //! confirmed message openers here so an agent-authored send can retain exact
-//! reply causality. Storage ([`crate::store::agent_context`]) and the snapshot
-//! fold-in stay transport-agnostic; provider-specific wire fields normalize
+//! reply causality. Storage and the snapshot fold-in stay transport-agnostic;
+//! provider-specific wire fields normalize
 //! into these shared slots before either layer sees them.
 
 use std::path::Path;

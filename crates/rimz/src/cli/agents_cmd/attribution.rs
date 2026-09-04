@@ -66,21 +66,38 @@ pub(super) fn attribution(
     let transcript =
         rimz::transcript::read_all(ctx.store.paths()).context("reading conversation transcript")?;
     let me = super::report::SelfIdentity::from_env().resolve(&snapshot);
+    let active_grace_secs = crate::cli::machine_config()
+        .agents
+        .attention
+        .active_grace_secs
+        .get();
+    let now = jiff::Timestamp::now();
+    let active_secs = rimz::store::active_time::read_for_keys(
+        ctx.runtime(),
+        agents
+            .iter()
+            .filter(|agent| !agent.is_launched_child())
+            .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str())),
+    )
+    .into_iter()
+    .map(|record| {
+        (
+            (record.kind.clone(), record.agent_id.clone()),
+            record.display_secs(now, active_grace_secs),
+        )
+    })
+    .collect();
     let report = rimz::agents::attribution::build(AttributionRequest {
         agents: &agents,
         peers: &peers,
         subagents: &subagents,
         transcript: &transcript,
         me: me.as_ref(),
-        runtime: ctx.runtime(),
-        active_grace_secs: crate::cli::machine_config()
-            .agents
-            .attention
-            .active_grace_secs
-            .get(),
+        active_secs: &active_secs,
+        pricing_cache_path: &ctx.runtime().shared_pricing_cache_path(),
         require_contribution: md,
         scope: report_scope,
-        now: jiff::Timestamp::now(),
+        now,
     });
 
     if json {
