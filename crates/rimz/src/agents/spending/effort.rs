@@ -176,6 +176,8 @@ impl EffortParseMemo {
 fn fold_tagged_entries<'a>(
     entries: impl IntoIterator<Item = (&'a CachedEntry, Option<String>)>,
 ) -> SlotEffortBreakdown {
+    // Per-file session selection is already counted; this pass deduplicates
+    // parent-to-child replays across all of the seat's transcript files.
     let mut deduped = SidechainDedup::default();
     for (entry, subagent) in entries {
         deduped.insert(SelectedEntry { entry, subagent });

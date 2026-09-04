@@ -204,6 +204,34 @@ mod tests {
     }
 
     #[test]
+    fn session_turns_counts_a_repeated_provider_response_once() {
+        let messages = vec![
+            message(TranscriptRole::User, 100, "first"),
+            message(TranscriptRole::Assistant, 110, "answer"),
+            message(TranscriptRole::User, 200, "second"),
+        ];
+        let mut repeated = entry(105, None);
+        repeated.message_id = Some("message-1".to_owned());
+        repeated.request_id = Some("request-1".to_owned());
+        let mut richer = repeated.clone();
+        richer.ts_secs = 115;
+        richer.cost_usd = 0.5;
+        richer.input = 20;
+        let mut duplicate = richer.clone();
+        duplicate.ts_secs = 120;
+        let entries = vec![repeated, richer, duplicate, entry(205, None)];
+
+        let turns = session_turns(&messages, &entries, "session-a", true);
+
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].api_calls, 1);
+        assert_eq!(turns[0].fresh_input, 20);
+        assert_eq!(turns[0].cost_usd, Some(0.5));
+        assert_eq!(turns[0].ended_at, Some(at(115)));
+        assert_eq!(turns[1].api_calls, 1);
+    }
+
+    #[test]
     fn empty_or_undated_transcript_has_no_turns() {
         assert!(session_turns(&[], &[], "session-a", false).is_empty());
         let messages = [TranscriptMessage {
