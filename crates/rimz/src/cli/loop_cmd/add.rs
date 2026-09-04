@@ -39,7 +39,7 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     let (entry, resolved_for_preflight) = build_task_entry(&args, action, &project_root)?;
     // Compile once before writing, so validation and feedback share one shape.
     let shape = schedule::TaskShape::compile(&args.name, &entry);
-    let parsed = shape.schedule().as_ref().map_err(Clone::clone)?;
+    let parsed = shape.trigger().as_ref().map_err(Clone::clone)?;
     let task_action = shape.action().map_err(Clone::clone)?;
     if action_kind.has_effect() {
         preflight_entry(task_action, resolved_for_preflight.as_ref())?;
@@ -102,8 +102,12 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
                 "--project tasks cannot use --until; poll-until deadlines are machine state",
             ),
             (
-                args.every.is_none() && args.cron.is_none(),
-                "--project tasks must repeat; set --every or --cron",
+                args.every.is_none() && args.cron.is_none() && args.signal.is_none(),
+                "--project tasks need a trigger; set --every, --cron, or --signal",
+            ),
+            (
+                args.once,
+                "--project tasks cannot use --once; one-shot subscriptions are machine state",
             ),
         ]
         .into_iter()
@@ -126,6 +130,23 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
         })?;
     if args.on.is_some() && args.check.is_none() {
         bail!("--on requires --check");
+    }
+    let matches = parse_matches(&args.matches)?;
+    if !args.matches.is_empty() && args.signal.is_none() {
+        bail!("--match requires --signal");
+    }
+    if args.once && args.signal.is_none() {
+        bail!("--once requires --signal");
+    }
+    if args.wake.is_some()
+        && args
+            .signal
+            .as_deref()
+            .is_some_and(|name| name.starts_with("agent."))
+        && !matches.contains_key("handle")
+        && !matches.contains_key("session")
+    {
+        bail!(self_wake_guard_message());
     }
     if !action_kind.has_effect() && (args.surplus.is_some() || args.surplus_after.is_some()) {
         bail!("--surplus and --surplus-after require --agent or --wake");
@@ -185,9 +206,9 @@ fn resolve_add_action(
         }
         TaskActionKind::Deliver => {
             let address = args.wake.as_deref().unwrap_or_default();
-            AddTaskAction::Deliver {
-                target: resolve_delivery_target(workspace, args, address)?,
-            }
+            let target = resolve_delivery_target(workspace, args, address)?;
+            validate_self_wake(args, &target)?;
+            AddTaskAction::Deliver { target }
         }
         TaskActionKind::CheckOnly => AddTaskAction::CheckOnly,
     };
@@ -239,6 +260,7 @@ fn build_task_entry(
                 .to_owned()
         });
     let on = args.on.as_deref().map(parse_check_on).transpose()?;
+    let matches = parse_matches(&args.matches)?;
     let timing = resolve_add_timing(args)?;
     if !matches!(action, AddTaskAction::CheckOnly)
         && args.prompt.is_none()
@@ -260,6 +282,9 @@ fn build_task_entry(
         at: timing.at,
         every: args.every.clone(),
         cron: args.cron.clone(),
+        signal: args.signal.clone(),
+        matches: (!matches.is_empty()).then_some(matches),
+        once: args.once.then_some(true),
         deadline: timing.deadline,
         surplus,
         surplus_after,
@@ -465,6 +490,51 @@ fn resolve_delivery_target(
     })
 }
 
+fn parse_matches(raw: &[String]) -> Result<BTreeMap<String, String>> {
+    raw.iter()
+        .map(|pair| {
+            let (key, value) = pair
+                .split_once('=')
+                .ok_or_else(|| anyhow::anyhow!("invalid --match `{pair}`; expected KEY=VALUE"))?;
+            if key.is_empty() {
+                bail!("invalid --match `{pair}`; KEY must not be empty");
+            }
+            Ok((key.to_owned(), value.to_owned()))
+        })
+        .collect()
+}
+
+fn validate_self_wake(args: &AddArgs, target: &TaskTarget) -> Result<()> {
+    if !args
+        .signal
+        .as_deref()
+        .is_some_and(|name| name.starts_with("agent."))
+    {
+        return Ok(());
+    }
+    let matches = parse_matches(&args.matches)?;
+    fn unqualified_handle(handle: &str) -> &str {
+        handle.split_once('#').map_or(handle, |(name, _)| name)
+    }
+    let names_other_agent = matches.get("handle").is_some_and(|handle| {
+        unqualified_handle(handle) != unqualified_handle(&target.handle)
+            && args
+                .wake
+                .as_deref()
+                .is_none_or(|address| unqualified_handle(handle) != unqualified_handle(address))
+    }) || matches
+        .get("session")
+        .is_some_and(|session| session != &target.session);
+    if names_other_agent {
+        return Ok(());
+    }
+    bail!(self_wake_guard_message())
+}
+
+fn self_wake_guard_message() -> &'static str {
+    "--wake on an agent.* signal requires --match handle=<other> or --match session=<other> to avoid waking the target from its own lifecycle signal"
+}
+
 fn reject_unsupported_action_flags(args: &AddArgs, kind: TaskActionKind) -> Result<()> {
     if kind.is_spawn() {
         return Ok(());
@@ -520,10 +590,15 @@ fn resolve_add_timing(args: &AddArgs) -> Result<AddTiming> {
     if duration.is_zero() {
         bail!("--in must be greater than zero");
     }
-    let target = Timestamp::now()
+    let mut target = Timestamp::now()
         .to_zoned(MachineConfig::load_lenient().time_zone())
         .checked_add(duration)
         .context("resolving --in against the configured clock")?;
+    if target.second() != 0 || target.subsec_nanosecond() != 0 {
+        target = target
+            .checked_add(Duration::from_secs((60 - target.second()) as u64))
+            .context("rounding --in to the next scheduler minute")?;
+    }
     Ok(AddTiming {
         at: Some(format!("{:02}:{:02}", target.hour(), target.minute())),
         deadline,
@@ -533,7 +608,7 @@ fn resolve_add_timing(args: &AddArgs) -> Result<AddTiming> {
 fn write_add_feedback(
     out: &mut impl Write,
     entry: &TaskEntry,
-    parsed: &schedule::ParsedSchedule,
+    parsed: &schedule::ParsedTrigger,
     action: &TaskAction,
     action_kind: Option<&str>,
 ) -> Result<()> {
@@ -557,7 +632,7 @@ fn write_add_feedback(
         }
     }
     let suffix = if parsed.once { "; then removed" } else { "" };
-    writeln!(out, "schedule: {}{suffix}", parsed.describe())?;
+    writeln!(out, "trigger: fires {}{suffix}", parsed.describe())?;
     if entry.surplus.is_some() || entry.surplus_after.is_some() {
         let kind = action_kind.unwrap_or("provider");
         let threshold = entry
@@ -585,10 +660,13 @@ fn write_add_feedback(
     Ok(())
 }
 
-fn first_next_fire(parsed: &schedule::ParsedSchedule) -> Option<Timestamp> {
+fn first_next_fire(parsed: &schedule::ParsedTrigger) -> Option<Timestamp> {
     let now = Timestamp::now();
     let zone = MachineConfig::load_lenient().time_zone();
-    parsed.schedule.next_after(now, &now.to_zoned(zone))
+    let schedule::Trigger::Schedule(schedule) = &parsed.trigger else {
+        return None;
+    };
+    schedule.schedule.next_after(now, &now.to_zoned(zone))
 }
 
 fn resolve_deadline(raw: &str) -> Result<Timestamp> {

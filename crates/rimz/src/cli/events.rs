@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
+use serde_json::{Map, Value};
 
 use super::{GlobalFlags, render};
 
@@ -30,6 +31,17 @@ enum EventsSubcmd {
         #[arg(long)]
         json: bool,
     },
+    /// Emit a durable signal and fire matching loop tasks.
+    Emit {
+        /// Lowercase dot-separated signal name.
+        name: String,
+        /// Top-level JSON object carried by the signal.
+        #[arg(long, value_name = "OBJECT")]
+        json: Option<String>,
+        /// Internal producer provenance.
+        #[arg(long, hide = true, value_parser = ["cli", "forge"], default_value = "cli")]
+        source: String,
+    },
 }
 
 pub fn run(args: EventsArgs, globals: &GlobalFlags) -> Result<()> {
@@ -38,6 +50,7 @@ pub fn run(args: EventsArgs, globals: &GlobalFlags) -> Result<()> {
             let _ = json;
             follow(replay, globals)
         }
+        EventsSubcmd::Emit { name, json, source } => emit(&name, json.as_deref(), &source, globals),
     }
 }
 
@@ -46,7 +59,7 @@ fn follow(replay: bool, globals: &GlobalFlags) -> Result<()> {
         .context("resolving current workspace")?;
     let paths = rimz::StatePaths::for_workspace(workspace.workspace_id)
         .context("resolving lifecycle event-log paths")?;
-    let mut follower = rimz::store::follow::LifecycleFollower::open(paths, replay)
+    let mut follower = rimz::store::follow::EventFollower::open(paths, replay)
         .context("opening lifecycle event stream")?;
     let stop = Arc::new(AtomicBool::new(false));
     register_stop_signals(Arc::clone(&stop))?;
@@ -86,7 +99,66 @@ fn poll_interval() -> Duration {
         .unwrap_or(DEFAULT_POLL)
 }
 
-fn write_json_line(writer: &mut impl Write, event: &rimz::agents::LifecycleEvent) -> Result<bool> {
+fn emit(name: &str, raw_payload: Option<&str>, source: &str, globals: &GlobalFlags) -> Result<()> {
+    let name = name
+        .parse::<rimz::harness::schedule::signal::SignalName>()
+        .map_err(anyhow::Error::msg)?;
+    if name.is_reserved() {
+        anyhow::bail!("signal name `{name}` is reserved for RimZ");
+    }
+    let payload = parse_payload(raw_payload)?;
+    let workspace = rimz::WorkspaceResolver::resolve_participant(".", globals.root.clone())
+        .context("resolving current workspace")?;
+    let store = super::open_store(&workspace)?;
+    let signal = rimz::harness::schedule::signal::Signal {
+        name: name.clone(),
+        payload,
+        source: match source {
+            "forge" => rimz::harness::schedule::signal::SignalSource::Forge,
+            "cli" => rimz::harness::schedule::signal::SignalSource::Cli,
+            _ => unreachable!("clap restricts signal sources"),
+        },
+        watch: None,
+    };
+    let event_id = store
+        .append_signal(&workspace.session_name, &signal)
+        .context("appending signal event")?;
+    let fired = rimz::harness::schedule::signal::fire_signal(
+        store.runtime_paths(),
+        Some(&workspace.project_root),
+        &signal,
+    )
+    .context("firing signal tasks")?;
+    let mut out = render::out();
+    writeln!(
+        out,
+        "emitted {name} ({event_id}) · fired {} tasks",
+        fired.len()
+    )?;
+    for task in fired {
+        writeln!(out, "  {task}")?;
+    }
+    Ok(())
+}
+
+fn parse_payload(raw: Option<&str>) -> Result<Map<String, Value>> {
+    let Some(raw) = raw else {
+        return Ok(Map::new());
+    };
+    if raw.len() > 64 * 1024 {
+        anyhow::bail!("--json payload exceeds 64 KiB");
+    }
+    serde_json::from_str::<Value>(raw)
+        .context("parsing --json payload")?
+        .as_object()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("--json payload must be a JSON object"))
+}
+
+fn write_json_line(
+    writer: &mut impl Write,
+    event: &rimz::store::follow::FollowEvent,
+) -> Result<bool> {
     match serde_json::to_writer(&mut *writer, event) {
         Ok(()) => {}
         Err(error) if error.io_error_kind() == Some(std::io::ErrorKind::BrokenPipe) => {
@@ -138,6 +210,12 @@ mod tests {
             compaction_closed: false,
             waiting_cleared: false,
         };
-        assert!(!write_json_line(&mut BrokenPipe, &event).unwrap());
+        assert!(
+            !write_json_line(
+                &mut BrokenPipe,
+                &rimz::store::follow::FollowEvent::Lifecycle(event)
+            )
+            .unwrap()
+        );
     }
 }

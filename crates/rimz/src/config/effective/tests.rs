@@ -338,6 +338,44 @@ fn project_tasks_must_repeat() {
 }
 
 #[test]
+fn project_tasks_accept_signals_and_reject_machine_only_trigger_fields() {
+    let project = tempdir().expect("project");
+    let config = tempdir().expect("config");
+    write_project_config(
+        &project,
+        "[tasks.wake]\nagent = \"codex\"\nprompt = \"wake\"\nsignal = \"ci.finished\"\nmatch = { conclusion = \"failure\" }\n",
+    );
+
+    let loaded = load_project_tasks(project.path(), config.path()).expect("signal project task");
+    let task = &loaded.tasks.0["wake"];
+    assert_eq!(task.signal.as_deref(), Some("ci.finished"));
+    assert_eq!(
+        task.matches
+            .as_ref()
+            .and_then(|matches| matches.get("conclusion"))
+            .map(String::as_str),
+        Some("failure")
+    );
+
+    for (field, value) in [("watch", "\"cargo test\""), ("once", "true")] {
+        write_project_config(
+            &project,
+            &format!(
+                "[tasks.wake]\nagent = \"codex\"\nprompt = \"wake\"\nsignal = \"ci.finished\"\n{field} = {value}\n"
+            ),
+        );
+        let err = project_tasks(project.path(), config.path()).expect_err(field);
+        assert!(matches!(
+            err,
+            EffectiveConfigErr::Tasks {
+                source: ProjectTasksErr::UnsupportedField { field: actual, .. },
+                ..
+            } if actual == field
+        ));
+    }
+}
+
+#[test]
 fn untrusted_repo_profiles_are_inert_until_referenced() {
     let project = tempdir().expect("project");
     let config = tempdir().expect("config");

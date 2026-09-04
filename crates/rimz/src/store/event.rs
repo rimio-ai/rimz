@@ -6,6 +6,7 @@ use serde_json::value::{RawValue, to_raw_value};
 use serde_json::{Value, json};
 
 use crate::agents::{AgentLifecycleObservation, AgentState, LaunchParams, LifecycleSignal};
+use crate::harness::schedule::signal::{SignalName, SignalSource};
 use crate::ids::{
     AgentKind, AgentSessionId, EventId, MessageId, MuxName, PaneId, RunId, WorkspaceId,
 };
@@ -19,6 +20,7 @@ use crate::store::message::{
 // `status` + `compacting`; signal-less lifecycle frames fold to nothing.
 pub const EVENT_SCHEMA_VERSION: &str = "rimz.event.v2";
 pub const AGENT_LIFECYCLE_METHOD: &str = "agent.lifecycle";
+pub const SIGNAL_METHOD: &str = "signal.emit";
 
 macro_rules! lifetime_fields {
     ($transcript:ident; $($observation:ident),*; $($launch:ident),*) => {
@@ -51,6 +53,14 @@ pub struct AgentLifecyclePayload {
     pub event_name: Option<String>,
     #[serde(flatten)]
     pub observation: AgentLifecycleObservation,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignalEventPayload {
+    pub name: SignalName,
+    #[serde(default)]
+    pub payload: serde_json::Map<String, Value>,
+    pub source: SignalSource,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -333,6 +343,7 @@ impl AgentLifecyclePayload {
 #[derive(Clone, Debug)]
 pub enum EventKind<'a> {
     AgentLifecycle(Box<AgentLifecyclePayload>),
+    Signal(SignalEventPayload),
     AgentAttach(AgentAttachPayload),
     AgentLaunch(AgentLaunchPayload),
     Message {
@@ -354,6 +365,7 @@ impl PartialEq for EventKind<'_> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::AgentLifecycle(left), Self::AgentLifecycle(right)) => left == right,
+            (Self::Signal(left), Self::Signal(right)) => left == right,
             (Self::AgentAttach(left), Self::AgentAttach(right)) => left == right,
             (Self::AgentLaunch(left), Self::AgentLaunch(right)) => left == right,
             (
@@ -529,6 +541,12 @@ impl EventEnvelope {
                         params: &self.params,
                     })
             }
+            SIGNAL_METHOD => serde_json::from_str(self.params.get())
+                .map(EventKind::Signal)
+                .unwrap_or(EventKind::Other {
+                    method: self.method.as_str(),
+                    params: &self.params,
+                }),
             "agent.launched" => serde_json::from_str(self.params.get())
                 .map(EventKind::AgentLaunch)
                 .unwrap_or(EventKind::Other {

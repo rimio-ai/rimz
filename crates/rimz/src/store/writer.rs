@@ -26,6 +26,7 @@ mod publish;
 mod queue;
 mod reap;
 mod reset;
+mod signal;
 
 pub use lifecycle::{AgentLifecycleIntent, AgentLifecycleReceipt, DEFAULT_EVENT_LOG_ROTATE_BYTES};
 pub(crate) use queue::DeliverySweepUpdate;

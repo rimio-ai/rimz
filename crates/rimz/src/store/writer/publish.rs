@@ -170,6 +170,7 @@ impl Store {
         let agent_signal = match event.kind() {
             EventKind::AgentLifecycle(payload) => Some(payload.observation.signal.tag().to_owned()),
             EventKind::AgentAttach(_)
+            | EventKind::Signal(_)
             | EventKind::AgentLaunch(_)
             | EventKind::Message { .. }
             | EventKind::SessionRebirth

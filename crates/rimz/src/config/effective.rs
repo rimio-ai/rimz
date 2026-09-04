@@ -73,7 +73,7 @@ pub enum ProjectTasksErr {
     },
     #[error("task `{task}` has no prompt; set `prompt` or `prompt-file`")]
     MissingPrompt { task: String },
-    #[error("task `{task}` must repeat; set `every` or `cron` for project tasks")]
+    #[error("task `{task}` needs a trigger; set `every`, `cron`, or `signal` for project tasks")]
     MustRepeat { task: String },
     #[error(transparent)]
     Budget(#[from] crate::config::TaskBudgetError),
@@ -295,7 +295,7 @@ pub fn project_tasks_from_value(
                 source: ProjectTasksErr::MissingPrompt { task: name.clone() },
             });
         }
-        if entry.every.is_none() && entry.cron.is_none() {
+        if entry.every.is_none() && entry.cron.is_none() && entry.signal.is_none() {
             return Err(EffectiveConfigErr::Tasks {
                 path: config_path.to_path_buf(),
                 source: ProjectTasksErr::MustRepeat { task: name.clone() },
@@ -308,7 +308,7 @@ pub fn project_tasks_from_value(
                 source: source.into(),
             })?;
         resolve_task_prompt_paths(entry, config_dir);
-        schedule::parse_schedule(name, entry).map_err(|source| EffectiveConfigErr::Tasks {
+        schedule::parse_trigger(name, entry).map_err(|source| EffectiveConfigErr::Tasks {
             path: config_path.to_path_buf(),
             source: source.into(),
         })?;
@@ -424,7 +424,7 @@ fn reject_project_task_state_fields(
         let Some(table) = value.as_table() else {
             continue;
         };
-        for field in ["root", "wake", "deadline"] {
+        for field in ["root", "wake", "deadline", "watch", "once"] {
             if table.contains_key(field) {
                 return Err(ProjectTasksErr::UnsupportedField {
                     task: task.clone(),
@@ -435,6 +435,8 @@ fn reject_project_task_state_fields(
                         "deadline" => {
                             "poll-until deadlines are machine state; create them with `rimz loop add --until`"
                         }
+                        "watch" => "watched commands are machine state; use `rimz wake`",
+                        "once" => "one-shot subscriptions are machine state; remove `once`",
                         _ => unreachable!("field list is fixed"),
                     },
                 });

@@ -88,6 +88,8 @@ enum RowState {
     Due,
     Held,
     Blocked,
+    Listening,
+    Watching,
     Upcoming(Timestamp),
     NeverRun,
 }
@@ -132,7 +134,7 @@ impl WatchRow {
             WatchBand::Failed => 1,
             WatchBand::Ok => match self.state {
                 RowState::Due => 2,
-                RowState::Upcoming(_) => 3,
+                RowState::Upcoming(_) | RowState::Listening | RowState::Watching => 3,
                 RowState::NeverRun => 5,
                 RowState::Running | RowState::Held | RowState::Blocked => 0,
             },
@@ -225,6 +227,8 @@ fn watch_row_model(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Wat
         RowState::Blocked => "blocked · trust".to_owned(),
         RowState::Due => "due".to_owned(),
         RowState::Upcoming(next) => ui::until_label(next, context.now),
+        RowState::Listening => "listening".to_owned(),
+        RowState::Watching => "watching".to_owned(),
         RowState::NeverRun => "—".to_owned(),
     };
     WatchRow {
@@ -256,6 +260,8 @@ fn row_state_for_timing(timing: &schedule::TaskTiming) -> RowState {
         }
         schedule::TaskTimingState::Due(_) => RowState::Due,
         schedule::TaskTimingState::Upcoming(next) => RowState::Upcoming(next),
+        schedule::TaskTimingState::Listening { .. } => RowState::Listening,
+        schedule::TaskTimingState::Watching { .. } => RowState::Watching,
         schedule::TaskTimingState::Invalid
         | schedule::TaskTimingState::Unarmed
         | schedule::TaskTimingState::NoOccurrence => RowState::NeverRun,
@@ -277,6 +283,8 @@ fn timing_next_text(timing: &schedule::TaskTiming, now: Timestamp) -> String {
         }
         schedule::TaskTimingState::Due(_) => "due".to_owned(),
         schedule::TaskTimingState::Upcoming(next) => ui::until_label(next, now),
+        schedule::TaskTimingState::Listening { .. } => "listening".to_owned(),
+        schedule::TaskTimingState::Watching { .. } => "watching".to_owned(),
         schedule::TaskTimingState::Invalid
         | schedule::TaskTimingState::Unarmed
         | schedule::TaskTimingState::NoOccurrence => "—".to_owned(),
@@ -352,6 +360,7 @@ fn render_watch_rows(out: &mut impl Write, rows: &[&WatchRow], cols: usize) -> s
             RowState::Held | RowState::Blocked => ui::palette::muted(),
             RowState::NeverRun => ui::palette::faint(),
             RowState::Due => ui::palette::warn(),
+            RowState::Listening | RowState::Watching => ui::palette::cool(),
             RowState::Upcoming(_) => anstyle::Style::new(),
         };
         let name = ui::clip_to_width(&row.name, (cols / 4).max(1));

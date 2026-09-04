@@ -171,7 +171,7 @@ fn task_shape_compiles_action_and_timing_independently() {
     );
     assert_eq!(shape.action(), Ok(&TaskAction::Spawn("claude".to_owned())));
     assert!(matches!(
-        shape.schedule(),
+        shape.trigger(),
         Err(ScheduleErr::TimeConflict { .. })
     ));
 }
@@ -294,6 +294,169 @@ fn parse_schedule_rejects_invalid_timing_fields() {
             Err(expected),
             "{label}"
         );
+    }
+}
+
+#[test]
+fn parse_trigger_accepts_signal_and_watch_forms() {
+    let signal = TaskEntry {
+        signal: Some("ci.finished".to_owned()),
+        matches: Some(std::collections::BTreeMap::from([
+            ("conclusion".to_owned(), "failure".to_owned()),
+            ("attempt".to_owned(), "2".to_owned()),
+        ])),
+        once: Some(true),
+        ..spawn_entry()
+    };
+    assert_eq!(
+        parse_trigger("ci", &signal),
+        Ok(ParsedTrigger {
+            trigger: Trigger::Signal {
+                name: "ci.finished".parse().unwrap(),
+                matches: signal.matches.clone().unwrap(),
+            },
+            once: true,
+        })
+    );
+
+    assert_eq!(
+        parse_trigger(
+            "watch",
+            &TaskEntry {
+                watch: Some("cargo test".to_owned()),
+                ..spawn_entry()
+            }
+        ),
+        Ok(ParsedTrigger {
+            trigger: Trigger::Watch {
+                command: "cargo test".to_owned(),
+            },
+            once: true,
+        })
+    );
+}
+
+#[test]
+fn parse_trigger_rejects_conflicting_fields() {
+    for (entry, expected) in [
+        (
+            TaskEntry {
+                signal: Some("ci.finished".to_owned()),
+                every: Some("5m".to_owned()),
+                ..spawn_entry()
+            },
+            ScheduleErr::TriggerConflict {
+                name: "task".to_owned(),
+            },
+        ),
+        (
+            TaskEntry {
+                matches: Some(std::collections::BTreeMap::new()),
+                every: Some("5m".to_owned()),
+                ..spawn_entry()
+            },
+            ScheduleErr::MatchWithoutSignal {
+                name: "task".to_owned(),
+            },
+        ),
+        (
+            TaskEntry {
+                once: Some(true),
+                every: Some("5m".to_owned()),
+                ..spawn_entry()
+            },
+            ScheduleErr::OnceWithoutSignal {
+                name: "task".to_owned(),
+            },
+        ),
+        (
+            TaskEntry {
+                watch: Some("true".to_owned()),
+                check: Some("true".to_owned()),
+                ..spawn_entry()
+            },
+            ScheduleErr::WatchWithCheck {
+                name: "task".to_owned(),
+            },
+        ),
+        (
+            TaskEntry {
+                signal: Some("CI.finished".to_owned()),
+                ..spawn_entry()
+            },
+            ScheduleErr::BadSignal {
+                name: "task".to_owned(),
+                value: "CI.finished".to_owned(),
+            },
+        ),
+        (
+            TaskEntry {
+                watch: Some("  ".to_owned()),
+                ..spawn_entry()
+            },
+            ScheduleErr::BadWatch {
+                name: "task".to_owned(),
+            },
+        ),
+    ] {
+        assert_eq!(parse_trigger("task", &entry), Err(expected), "{entry:?}");
+    }
+}
+
+#[test]
+fn triggers_match_names_and_top_level_payload_values() {
+    let signal = signal::Signal {
+        name: "ci.finished".parse().unwrap(),
+        payload: serde_json::Map::from_iter([
+            ("conclusion".to_owned(), serde_json::json!("failure")),
+            ("attempt".to_owned(), serde_json::json!(2)),
+        ]),
+        source: signal::SignalSource::Cli,
+        watch: None,
+    };
+    let matching = Trigger::Signal {
+        name: "ci.finished".parse().unwrap(),
+        matches: std::collections::BTreeMap::from([
+            ("attempt".to_owned(), "2".to_owned()),
+            ("conclusion".to_owned(), "failure".to_owned()),
+        ]),
+    };
+    assert!(matching.accepts("task", &signal));
+    assert!(
+        !Trigger::Schedule(parse_schedule("task", &entry(None, Some("5m"), None)).unwrap())
+            .accepts("task", &signal)
+    );
+    assert!(
+        Trigger::Watch {
+            command: "true".to_owned()
+        }
+        .accepts(
+            "task",
+            &signal::Signal {
+                name: "wake.task".parse().unwrap(),
+                ..signal.clone()
+            }
+        )
+    );
+
+    for nonmatching in [
+        Trigger::Signal {
+            name: "ci.started".parse().unwrap(),
+            matches: std::collections::BTreeMap::new(),
+        },
+        Trigger::Signal {
+            name: "ci.finished".parse().unwrap(),
+            matches: std::collections::BTreeMap::from([(
+                "conclusion".to_owned(),
+                "success".to_owned(),
+            )]),
+        },
+        Trigger::Signal {
+            name: "ci.finished".parse().unwrap(),
+            matches: std::collections::BTreeMap::from([("missing".to_owned(), "value".to_owned())]),
+        },
+    ] {
+        assert!(!nonmatching.accepts("task", &signal));
     }
 }
 
@@ -449,7 +612,7 @@ impl Timing {
 
     fn state(self, entry: &TaskEntry, now: &Zoned) -> TaskTimingState {
         TaskTiming::evaluate(
-            &parse_schedule("task", entry),
+            &parse_trigger("task", entry),
             self.source,
             self.last_fire,
             self.arming.as_ref(),
@@ -464,7 +627,8 @@ impl Timing {
 #[test]
 fn task_timing_state_precedence_and_classification() {
     use TaskTimingState::{
-        Blocked, Disabled, Due, Invalid, NoOccurrence, Paused, Unarmed, Upcoming,
+        Blocked, Disabled, Due, Invalid, Listening, NoOccurrence, Paused, Unarmed, Upcoming,
+        Watching,
     };
 
     let now = zdt(2026, 6, 24, 8, 10, 0);
@@ -512,6 +676,30 @@ fn task_timing_state_precedence_and_classification() {
     assert_eq!(overlay(Timing::fired(0, &now)), Invalid);
 
     assert_eq!(Timing::default().state(&interval, &now), Unarmed);
+    assert_eq!(
+        Timing::default().state(
+            &TaskEntry {
+                signal: Some("ci.finished".to_owned()),
+                ..spawn_entry()
+            },
+            &now
+        ),
+        Listening {
+            name: "ci.finished".parse().unwrap()
+        }
+    );
+    assert_eq!(
+        Timing::default().state(
+            &TaskEntry {
+                watch: Some("cargo test".to_owned()),
+                ..spawn_entry()
+            },
+            &now
+        ),
+        Watching {
+            command: "cargo test".to_owned()
+        }
+    );
     assert_eq!(
         Timing::fired(10 * 60, &now).state(&interval, &now),
         Upcoming(after(&now, 5 * 60)),

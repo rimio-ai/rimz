@@ -168,6 +168,8 @@ fn next_cell(timing: &schedule::TaskTiming, now: Timestamp) -> ui::Cell {
         schedule::TaskTimingState::Upcoming(next) | schedule::TaskTimingState::Due(next) => {
             ui::cell(ui::rel_until(next, now))
         }
+        schedule::TaskTimingState::Listening { .. } => ui::cell("listening"),
+        schedule::TaskTimingState::Watching { .. } => ui::cell("watching"),
         schedule::TaskTimingState::Invalid
         | schedule::TaskTimingState::Unarmed
         | schedule::TaskTimingState::NoOccurrence => ui::cell("-").dash(),
@@ -347,6 +349,7 @@ pub(super) fn check_skip_decision(entry: &TaskEntry, task_action: &TaskAction) -
     let condition = match entry.on.unwrap_or_default() {
         CheckOn::Fail => "fails",
         CheckOn::Success => "passes",
+        CheckOn::Any => "finishes",
     };
     format!(
         "{} {}; fires when the check {condition}",
@@ -358,6 +361,7 @@ fn check_on_label(on: CheckOn) -> &'static str {
     match on {
         CheckOn::Fail => "fail",
         CheckOn::Success => "success",
+        CheckOn::Any => "any outcome",
     }
 }
 
@@ -636,6 +640,8 @@ fn write_show_headline(
         schedule::TaskTimingState::Upcoming(next) | schedule::TaskTimingState::Due(next) => {
             write!(out, " · next {}", ui::rel_until(next, now))?;
         }
+        schedule::TaskTimingState::Listening { .. } => write!(out, " · listening")?,
+        schedule::TaskTimingState::Watching { .. } => write!(out, " · watching")?,
         schedule::TaskTimingState::Invalid
         | schedule::TaskTimingState::Unarmed
         | schedule::TaskTimingState::NoOccurrence => {}
@@ -1208,6 +1214,8 @@ fn record_has_detail(record: &LoopRunRecord) -> bool {
     record.check.is_some()
         || record.error.is_some()
         || record.last_message.is_some()
+        || record.signal.is_some()
+        || record.message_id.is_some()
         || record.run_id.is_some()
         || record
             .cost_usd

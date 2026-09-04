@@ -464,6 +464,12 @@ pub(super) fn write_record_forensics(
             ui::paint(ui::palette::muted(), &format!("  cost: {spend}"))
         )?;
     }
+    if let Some(signal) = &record.signal {
+        write_detail_link(out, "signal", signal.name.as_str())?;
+    }
+    if let Some(message_id) = &record.message_id {
+        write_detail_link(out, "message", message_id.as_str())?;
+    }
     write_stored_run_links(out, record, run_record.as_ref())
 }
 

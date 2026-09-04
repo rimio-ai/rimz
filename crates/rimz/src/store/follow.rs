@@ -1,4 +1,4 @@
-//! Read-only lifecycle-event follower over the durable event log.
+//! Read-only lifecycle and signal follower over the durable event log.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -7,9 +7,14 @@ use std::io;
 use crate::agents::AgentState;
 use crate::agents::lifecycle::{LifecycleEvent, LifecycleSignal, LifecycleState, step};
 use crate::disk::paths::StatePaths;
+use crate::harness::schedule::signal::{SignalName, SignalSource};
 use crate::ids::{AgentKind, AgentSessionId};
+use crate::ids::{EventId, WorkspaceId};
 use crate::store::event::EventKind;
 use crate::store::{event_log, snapshot};
+use jiff::Timestamp;
+use serde::Serialize;
+use serde_json::{Map, Value};
 
 type AgentKey = (AgentKind, AgentSessionId);
 
@@ -22,13 +27,13 @@ struct FollowState {
 
 /// Events and non-fatal archive-gap warnings observed in one poll.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct LifecycleFollowBatch {
-    pub events: Vec<LifecycleEvent>,
+pub struct EventFollowBatch {
+    pub events: Vec<FollowEvent>,
     pub warnings: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum LifecycleFollowErr {
+pub enum EventFollowErr {
     #[error(transparent)]
     Snapshot(#[from] crate::store::snapshot::SnapshotErr),
     #[error(transparent)]
@@ -42,15 +47,15 @@ pub enum LifecycleFollowErr {
 }
 
 /// Cursor that projects durable `agent.lifecycle` frames into public envelopes.
-pub struct LifecycleFollower {
+pub struct EventFollower {
     paths: StatePaths,
     cursor: event_log::LogExtent,
     states: BTreeMap<AgentKey, FollowState>,
 }
 
-impl LifecycleFollower {
+impl EventFollower {
     /// Start at the live edge, or replay the current active generation from zero.
-    pub fn open(paths: StatePaths, replay: bool) -> Result<Self, LifecycleFollowErr> {
+    pub fn open(paths: StatePaths, replay: bool) -> Result<Self, EventFollowErr> {
         if replay {
             return Ok(Self {
                 cursor: event_log::LogExtent {
@@ -82,9 +87,9 @@ impl LifecycleFollower {
     }
 
     /// Read every lifecycle frame appended since the prior poll.
-    pub fn poll(&mut self) -> Result<LifecycleFollowBatch, LifecycleFollowErr> {
+    pub fn poll(&mut self) -> Result<EventFollowBatch, EventFollowErr> {
         let generation = snapshot::lifecycle_log_generation(&self.paths);
-        let mut batch = LifecycleFollowBatch::default();
+        let mut batch = EventFollowBatch::default();
         if generation > self.cursor.generation {
             self.drain_rotated(generation, &mut batch)?;
         } else if generation < self.cursor.generation {
@@ -115,8 +120,8 @@ impl LifecycleFollower {
     fn drain_rotated(
         &mut self,
         generation: u64,
-        batch: &mut LifecycleFollowBatch,
-    ) -> Result<(), LifecycleFollowErr> {
+        batch: &mut EventFollowBatch,
+    ) -> Result<(), EventFollowErr> {
         let delta = generation.saturating_sub(self.cursor.generation);
         let needed = usize::try_from(delta).unwrap_or(usize::MAX);
         let archives = event_log::newest_archives(&self.paths.events_archive_dir, needed)?;
@@ -150,9 +155,21 @@ impl LifecycleFollower {
         Ok(())
     }
 
-    fn fold(&mut self, envelopes: Vec<crate::store::event::EventEnvelope>) -> Vec<LifecycleEvent> {
+    fn fold(&mut self, envelopes: Vec<crate::store::event::EventEnvelope>) -> Vec<FollowEvent> {
         let mut events = Vec::new();
         for envelope in envelopes {
+            if let EventKind::Signal(payload) = envelope.kind() {
+                events.push(FollowEvent::Signal(SignalEvent {
+                    v: 1,
+                    event_id: envelope.event_id.clone(),
+                    at: envelope.timestamp,
+                    workspace_id: envelope.workspace_id.clone(),
+                    name: payload.name,
+                    payload: payload.payload,
+                    source: payload.source,
+                }));
+                continue;
+            }
             let EventKind::AgentLifecycle(payload) = envelope.kind() else {
                 continue;
             };
@@ -169,7 +186,7 @@ impl LifecycleFollower {
                 prior.and_then(|state| state.interrupted_turn_id.as_deref()),
                 &observation.signal,
             );
-            events.push(LifecycleEvent::new(
+            events.push(FollowEvent::Lifecycle(LifecycleEvent::new(
                 envelope.event_id.clone(),
                 envelope.timestamp,
                 envelope.workspace_id.clone(),
@@ -180,7 +197,7 @@ impl LifecycleFollower {
                 observation.signal.clone(),
                 prior.map(|state| state.lifecycle.status),
                 transition,
-            ));
+            )));
             let open_ask_key = match &observation.signal {
                 LifecycleSignal::AwaitingInput {
                     ask_id: Some(_),
@@ -217,11 +234,29 @@ fn open_ask_key(agent: &AgentState) -> Option<String> {
         .and_then(|ask| ask.native_key.clone())
 }
 
-fn file_len(path: &std::path::Path) -> Result<u64, LifecycleFollowErr> {
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "event", rename_all = "lowercase")]
+pub enum FollowEvent {
+    Lifecycle(LifecycleEvent),
+    Signal(SignalEvent),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SignalEvent {
+    pub v: u8,
+    pub event_id: EventId,
+    pub at: Timestamp,
+    pub workspace_id: WorkspaceId,
+    pub name: SignalName,
+    pub payload: Map<String, Value>,
+    pub source: SignalSource,
+}
+
+fn file_len(path: &std::path::Path) -> Result<u64, EventFollowErr> {
     match fs::metadata(path) {
         Ok(metadata) => Ok(metadata.len()),
         Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(0),
-        Err(source) => Err(LifecycleFollowErr::Io {
+        Err(source) => Err(EventFollowErr::Io {
             path: path.to_path_buf(),
             source,
         }),
@@ -264,20 +299,23 @@ mod tests {
     fn replay_folds_the_active_generation_and_live_mode_starts_at_the_edge() {
         let (_dir, store, paths) = fixture();
         append(&store, LifecycleSignal::Registered);
-        let mut live = LifecycleFollower::open(paths.clone(), false).unwrap();
+        let mut live = EventFollower::open(paths.clone(), false).unwrap();
         assert!(live.poll().unwrap().events.is_empty());
 
-        let mut replay = LifecycleFollower::open(paths, true).unwrap();
+        let mut replay = EventFollower::open(paths, true).unwrap();
         let batch = replay.poll().unwrap();
         assert_eq!(batch.events.len(), 1);
-        assert_eq!(batch.events[0].status, crate::agents::AgentStatus::Idle);
+        let FollowEvent::Lifecycle(event) = &batch.events[0] else {
+            panic!("lifecycle")
+        };
+        assert_eq!(event.status, crate::agents::AgentStatus::Idle);
     }
 
     #[test]
     fn follower_drains_the_rotated_tail_before_the_new_active_log() {
         let (_dir, store, paths) = fixture();
         append(&store, LifecycleSignal::Registered);
-        let mut follower = LifecycleFollower::open(paths, false).unwrap();
+        let mut follower = EventFollower::open(paths, false).unwrap();
         append(&store, LifecycleSignal::TurnStarted);
         assert_eq!(follower.poll().unwrap().events.len(), 1);
 
@@ -292,11 +330,14 @@ mod tests {
         let batch = follower.poll().unwrap();
         assert!(batch.warnings.is_empty());
         assert_eq!(batch.events.len(), 1);
+        let FollowEvent::Lifecycle(event) = &batch.events[0] else {
+            panic!("lifecycle")
+        };
         assert_eq!(
-            batch.events[0].prior_status,
+            event.prior_status,
             Some(crate::agents::AgentStatus::Running)
         );
-        assert_eq!(batch.events[0].status, crate::agents::AgentStatus::Success);
+        assert_eq!(event.status, crate::agents::AgentStatus::Success);
     }
 
     #[test]
@@ -324,9 +365,11 @@ mod tests {
             },
         );
 
-        let mut follower = LifecycleFollower::open(paths, true).unwrap();
+        let mut follower = EventFollower::open(paths, true).unwrap();
         let events = follower.poll().unwrap().events;
-        let tool = events.last().unwrap();
+        let FollowEvent::Lifecycle(tool) = events.last().unwrap() else {
+            panic!("lifecycle")
+        };
         assert_eq!(tool.prior_status, Some(crate::agents::AgentStatus::Waiting));
         assert_eq!(tool.status, crate::agents::AgentStatus::Running);
         assert_eq!(tool.transition, crate::agents::LifecycleTransition::Normal);

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use super::{
-    ParsedSchedule, ScheduleErr, TaskAction, TaskActionErr, TaskShape,
+    ParsedTrigger, ScheduleErr, TaskAction, TaskActionErr, TaskShape,
     arming::{self, TaskKey},
     config_edit, instances, strikes,
 };
@@ -86,8 +86,8 @@ impl LoadedTask {
         self.shape.action()
     }
 
-    pub fn schedule(&self) -> &std::result::Result<ParsedSchedule, ScheduleErr> {
-        self.shape.schedule()
+    pub fn trigger(&self) -> &std::result::Result<ParsedTrigger, ScheduleErr> {
+        self.shape.trigger()
     }
 
     pub const fn is_ephemeral(&self) -> bool {
@@ -324,6 +324,17 @@ impl TaskCatalog {
             match delivery_target_alive(task.entry(), &target) {
                 Ok(true) => {}
                 Ok(false) => {
+                    if task
+                        .trigger()
+                        .as_ref()
+                        .is_ok_and(|parsed| matches!(parsed.trigger, super::Trigger::Watch { .. }))
+                        && let Ok(runtime) =
+                            RuntimePaths::for_workspace(WorkspaceResolver::persisted_workspace_id(
+                                &task.entry().resolved_root(),
+                            )?)
+                    {
+                        let _ = super::signal::stop_watcher(&runtime, &name);
+                    }
                     catalog.consume_scheduled(&name)?;
                     reaped += 1;
                 }
@@ -566,7 +577,7 @@ mod tests {
 
         assert!(matches!(loaded.action(), Ok(TaskAction::Spawn(_))));
         assert!(matches!(
-            loaded.schedule(),
+            loaded.trigger(),
             Err(ScheduleErr::TimeConflict { .. })
         ));
         assert!(catalog.for_run("broken").is_some());

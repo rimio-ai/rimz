@@ -17,6 +17,8 @@ fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
         duration_ms: None,
         error: None,
         check: None,
+        signal: None,
+        message_id: None,
         run_id: None,
         transcript_path: None,
         last_message: None,
@@ -471,7 +473,7 @@ fn interval_timing(
         ..TaskEntry::default()
     };
     schedule::TaskTiming::evaluate(
-        schedule::TaskShape::compile("task", &entry).schedule(),
+        schedule::TaskShape::compile("task", &entry).trigger(),
         blocked.map_or(TaskSource::Config, |state| TaskSource::Project { state }),
         last_fire,
         arming,
@@ -488,6 +490,41 @@ fn next_cell_uses_the_list_relative_time_label() {
     let mut out = Vec::new();
     table.render(&mut out).unwrap();
     assert!(String::from_utf8(out).unwrap().contains("in 5m"));
+}
+
+#[test]
+fn signal_timing_renders_trigger_matches_and_listening_state() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    let entry = TaskEntry {
+        signal: Some("ci.finished".to_owned()),
+        matches: Some(BTreeMap::from([(
+            "conclusion".to_owned(),
+            "failure".to_owned(),
+        )])),
+        ..TaskEntry::default()
+    };
+    let timing = schedule::TaskTiming::evaluate(
+        schedule::TaskShape::compile("task", &entry).trigger(),
+        TaskSource::Config,
+        None,
+        None,
+        &now.to_zoned(jiff::tz::TimeZone::UTC),
+    );
+
+    let mut table = ui::Table::new(["NEXT"]);
+    table.row([next_cell(&timing, now)]);
+    let mut out = Vec::new();
+    table.render(&mut out).unwrap();
+    let list = String::from_utf8(out).unwrap();
+    assert!(list.contains("listening"), "{list}");
+
+    let mut out = Vec::new();
+    write_show_headline(&mut out, "task", &timing, now).unwrap();
+    let show = String::from_utf8(out).unwrap();
+    assert!(
+        show.contains("on ci.finished [conclusion=failure] · listening"),
+        "{show}"
+    );
 }
 
 #[test]

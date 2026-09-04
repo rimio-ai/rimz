@@ -277,15 +277,25 @@ pub(super) fn record_conversation(
                         match rimz::harness::target::parse_message_header(segment) {
                             Some((
                                 header @ (rimz::harness::target::HeaderKind::Agent
-                                | rimz::harness::target::HeaderKind::Subagent),
+                                | rimz::harness::target::HeaderKind::Subagent
+                                | rimz::harness::target::HeaderKind::Wake),
                                 sender,
                                 body,
                             )) => {
                                 let delivered_text = body.clone();
-                                let kind = if header == rimz::harness::target::HeaderKind::Agent {
-                                    rimz::transcript::TranscriptKind::Message
-                                } else {
-                                    rimz::transcript::TranscriptKind::SubagentReport
+                                let kind = match header {
+                                    rimz::harness::target::HeaderKind::Agent => {
+                                        rimz::transcript::TranscriptKind::Message
+                                    }
+                                    rimz::harness::target::HeaderKind::Subagent => {
+                                        rimz::transcript::TranscriptKind::SubagentReport
+                                    }
+                                    rimz::harness::target::HeaderKind::Wake => {
+                                        rimz::transcript::TranscriptKind::Wake
+                                    }
+                                    rimz::harness::target::HeaderKind::User => {
+                                        unreachable!("user header matched separately")
+                                    }
                                 };
                                 let mut entry = entry_base(kind, body);
                                 entry.from = Some(sender);
