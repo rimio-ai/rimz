@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 
-use super::{LifecycleEvent, LifecycleSignal, LifecycleState, step};
 use crate::agents::AgentState;
+use crate::agents::lifecycle::{LifecycleEvent, LifecycleSignal, LifecycleState, step};
 use crate::disk::paths::StatePaths;
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::event::EventKind;
@@ -231,7 +231,6 @@ fn file_len(path: &std::path::Path) -> Result<u64, LifecycleFollowErr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::LifecycleSignal;
     use crate::disk::paths::RuntimePaths;
     use crate::ids::WorkspaceId;
     use crate::store::{Store, writer::AgentLifecycleIntent};

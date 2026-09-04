@@ -8,6 +8,7 @@
 //! store/            file primitives live in sibling module `disk/`
 //!   event_log.rs    framed append-log façade
 //!   event_log/      frame codec, rotation, recovery, unit tests
+//!   follow.rs       read-only lifecycle event-log follower
 //!   message_store.rs live message queue JSONL store
 //!   sidecar.rs      shared stat-gated enrichment sidecar store
 //!   active_time.rs   grace-capped per-session working-time accumulator
@@ -36,6 +37,7 @@ pub mod active_time;
 pub mod agent_context;
 pub mod event;
 pub mod event_log;
+pub mod follow;
 pub mod gc;
 pub mod live_roster;
 mod message_store;
