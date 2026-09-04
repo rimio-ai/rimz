@@ -77,21 +77,8 @@ fn wake_without_target_refuses_a_plain_shell() {
 fn wake_wait_reports_a_watched_failure_and_settles_its_message() {
     let env = Env::new();
     env.install_agent_hooks("claude");
+    register_calling_agent(&env);
     let store = env.store();
-    let mut observation = AgentLifecycleObservation::new(
-        Some(AgentSessionId::from("agent-session")),
-        LifecycleSignal::Registered,
-    );
-    observation.agent_name = Some("planner".to_owned());
-    store
-        .append_agent_lifecycle(AgentLifecycleIntent {
-            session_name: "rimz-test",
-            agent_kind: AgentKind::new_unchecked("claude"),
-            event_name: "test",
-            observation: &observation,
-            spawned_subagents: &[],
-        })
-        .expect("register target");
 
     let output = agent_wake(&env)
         .args([
@@ -118,6 +105,52 @@ fn wake_wait_reports_a_watched_failure_and_settles_its_message() {
     )
     .expect("wake instances JSON");
     assert!(instances.0.is_empty());
+}
+
+#[test]
+fn watch_retires_without_delivery_when_its_polarity_does_not_match() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+
+    let output = agent_wake(&env)
+        .args(["wake", "--on", "fail", "--wait=5s", "--", "true"])
+        .output()
+        .expect("wait for successful watched command");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("skipped · exit 0"), "{stdout}");
+    assert!(env.store().list_pending_messages().unwrap().is_empty());
+    let instances: Tasks = serde_json::from_slice(
+        &std::fs::read(rimz::harness::schedule::catalog::instances_path(
+            &env.state_root(),
+        ))
+        .expect("wake instance store"),
+    )
+    .expect("wake instances JSON");
+    assert!(instances.0.is_empty());
+}
+
+fn register_calling_agent(env: &Env) {
+    let store = env.store();
+    let mut observation = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("agent-session")),
+        LifecycleSignal::Registered,
+    );
+    observation.agent_name = Some("planner".to_owned());
+    store
+        .append_agent_lifecycle(AgentLifecycleIntent {
+            session_name: "rimz-test",
+            agent_kind: AgentKind::new_unchecked("claude"),
+            event_name: "test",
+            observation: &observation,
+            spawned_subagents: &[],
+        })
+        .expect("register target");
 }
 
 fn agent_wake(env: &Env) -> std::process::Command {
