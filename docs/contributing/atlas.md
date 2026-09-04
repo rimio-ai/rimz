@@ -99,8 +99,9 @@ cargo xtask atlas inspect --module crates/rimz/src/store --json --section verdic
 ```toml
 version = 2
 base = "main"
-paths = ["crates/rimz/src/store"]
-max-production-sloc-delta = -1
+kind = "seam"
+paths = ["crates/rimz/src/store", "crates/rimz/src/agents"]
+max-production-sloc-delta = 0
 
 [[esc]]
 path = "crates/rimz/src/store"
@@ -124,7 +125,7 @@ to = "store"
 max-items = 3
 ```
 
-`paths` must be non-empty root-relative boundaries, and `max-production-sloc-delta` must be negative. Each optional row proves one verb: `[[esc]]` caps a boundary's escaping items (the measurement `conform`'s `surface-budget` uses; the path must lie inside `paths`); `[[delete]]` names an item in `module::Name` form (`Name` in `module` or beneath it, as `inspect --item` resolves it) that must exist once at `base` and be gone now; `[[rehome]]` names such an item that must be gone from its base module and defined exactly once under `to` (a drift row lists every site when there are more; a `pub use` re-export is one, caveat 11); `[[dependency]]` caps the syntax dependency sites from one module to another, whatever the layer direction, and prints the base count beside it; `[[assembly]]` names resolvable caller/provider modules whose `max/fn` must both shrink and land at or below `max-items`. With `diff --expect`, exit is zero only when production SLOC is at or below the delta ceiling, every row holds, every changed path is inside `paths`, and evidence has no parse failure or newly unresolved definition; otherwise the command reports drift and exits nonzero. Version 1 contracts (no `esc`, `delete`, `rehome`, or `dependency` rows) still load.
+`paths` must be non-empty root-relative boundaries. `kind` is `module` (the default) or `seam`: a module contract's `max-production-sloc-delta` must be negative; a seam contract carries at least one `[[dependency]]` or `[[rehome]]` row and takes a flat ceiling, `0` by convention or a small positive with the reason in the pass row. Each optional row proves one verb: `[[esc]]` caps a boundary's escaping items (the measurement `conform`'s `surface-budget` uses; the path must lie inside `paths`); `[[delete]]` names an item in `module::Name` form (`Name` in `module` or beneath it, as `inspect --item` resolves it) that must exist once at `base` and be gone now; `[[rehome]]` names such an item that must be gone from its base module and defined exactly once under `to` (a drift row lists every site when there are more; a `pub use` re-export is one, caveat 11); `[[dependency]]` caps the syntax dependency sites from one module to another, whatever the layer direction, and prints the base count beside it; `[[assembly]]` names resolvable caller/provider modules whose `max/fn` must both shrink and land at or below `max-items`. With `diff --expect`, exit is zero only when production SLOC is at or below the delta ceiling, every row holds, every changed path is inside `paths`, and evidence has no parse failure or newly unresolved definition; otherwise the command reports drift and exits nonzero. Version 1 contracts (no `esc`, `delete`, `rehome`, or `dependency` rows) still load.
 
 ## Target schema v5
 

@@ -674,6 +674,7 @@ fn contract(max_production_sloc_delta: i64) -> PassContract {
     PassContract {
         version: 1,
         base: "HEAD".to_owned(),
+        kind: super::super::contract::PassKind::Module,
         paths: vec![PathBuf::from("src")],
         max_production_sloc_delta,
         assembly: vec![AssemblyExpectation {

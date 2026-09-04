@@ -96,7 +96,7 @@ A pass that found nothing ends the same way: a pass row saying so, a `holds` ver
 
 A seam pass is planned like a module pass but with these differences:
 
-- The contract's `paths` lists every module on both sides of the seam, and the proof is a `[[dependency]]` row per edge with `max-sites` at the target count (`0` for a closed direction), beside the `[[rehome]]` rows for what moves.
+- The contract's `paths` lists every module on both sides of the seam, and the proof is a `[[dependency]]` row per edge with `max-sites` at the target count (`0` for a closed direction), beside the `[[rehome]]` rows for what moves. The contract declares `kind = "seam"` and takes a flat ceiling — `max-production-sloc-delta = 0`, or a small positive with the reason in the pass row — since its value is the closed edges, not the line count; net-subtractive stays the module-pass rule.
 - It runs alone. No module pass runs on any module in its `paths` until it merges, and the ledger's seam queue marks it `in flight` with the branch name while it does.
 - Its target section states the intended direction in one sentence that can be copied into the module's `AGENTS.md` and into `refactor-target.toml` as a lowered admission, so the seam stays closed by the `conform` gate rather than by memory.
 - A sibling-family collapse names which member wins and quotes the divergences that must survive (the ones `git log -S` traces to a fix). Atlas has no family-level dossier; build one by running `inspect --module` on each sibling with the same `--section` set and reading them side by side.
