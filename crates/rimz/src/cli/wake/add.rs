@@ -116,6 +116,12 @@ fn validate_shape(args: &WakeArgs) -> Result<()> {
     if args.in_after.is_some_and(|duration| duration.is_zero()) {
         bail!("--in must be greater than zero");
     }
+    if args
+        .in_after
+        .is_some_and(|duration| duration >= Duration::from_secs(24 * 60 * 60))
+    {
+        bail!("--in must be less than 24h");
+    }
     if args.timeout.is_some_and(|duration| duration.is_zero()) {
         bail!("--timeout must be greater than zero");
     }
