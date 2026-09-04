@@ -20,7 +20,7 @@ use crate::RuntimePaths;
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::disk::paths::StatePaths;
 use crate::ids::WorkspaceId;
-use crate::store::workspace_record;
+use crate::workspace::record;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {
@@ -84,7 +84,7 @@ fn fire_tasks(
 
 fn workspace_project_root(runtime: &RuntimePaths) -> Option<PathBuf> {
     let paths = StatePaths::for_workspace(runtime.workspace_id.clone()).ok()?;
-    match workspace_record::read(&paths.workspace_record) {
+    match record::read(&paths.workspace_record) {
         Ok(record) => Some(record.project_root),
         Err(err) => {
             tracing::debug!(

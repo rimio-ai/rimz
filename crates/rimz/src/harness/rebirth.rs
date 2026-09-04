@@ -345,7 +345,7 @@ fn plan_recovery(
         return RecoveryPlan::default();
     };
     let agents = scope_to_roster(projection.agents.clone(), roster);
-    let project_root = crate::store::workspace_record::read(&paths.workspace_record)
+    let project_root = crate::workspace::record::read(&paths.workspace_record)
         .ok()
         .map(|record| record.project_root);
     let (team, flat_agents) = split_team_and_flat(
@@ -426,7 +426,7 @@ fn materialize_recovery(
 }
 
 fn empty_named_channel_tabs(paths: &StatePaths) -> Vec<ResumeTab> {
-    let Ok(record) = crate::store::workspace_record::read(&paths.workspace_record) else {
+    let Ok(record) = crate::workspace::record::read(&paths.workspace_record) else {
         return Vec::new();
     };
     channel::list(&paths.channels_record)

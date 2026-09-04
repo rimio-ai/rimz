@@ -25,7 +25,7 @@ use crate::mux::{
     SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget,
 };
 use crate::pane::{APP_SERVER_MARKER, COMMAND_MARKER, PaneRef, VIEW_NAME, command_is_claude_host};
-use crate::store::workspace_record;
+use crate::workspace::record;
 
 const REPAIR_LIST_TIMEOUT: Duration = Duration::from_secs(3);
 const SETTLE_ATTEMPTS: usize = 5;
@@ -606,7 +606,7 @@ impl DaemonWorkspaceInputs {
     /// Keep workspace freshness metadata out of daemon invalidation: ordinary
     /// CLI and hook entry points refresh `updated_at`, while only these roots
     /// shape the effective view.
-    fn from_record(record: &workspace_record::WorkspaceRecord) -> Self {
+    fn from_record(record: &record::WorkspaceRecord) -> Self {
         Self {
             project_root: record.project_root.clone(),
             worktree_root: record
@@ -624,7 +624,7 @@ struct ResolvedDaemonInputs {
 }
 
 impl ResolvedDaemonInputs {
-    fn read(record: &workspace_record::WorkspaceRecord) -> Self {
+    fn read(record: &record::WorkspaceRecord) -> Self {
         let rimz_bin = crate::proc::rimz_exe();
         let claude_bin = which::which("claude").ok();
         let codex_bin = which::which("codex").ok();
@@ -711,7 +711,7 @@ impl DaemonRepairTracker {
                 return;
             }
         };
-        let record = match workspace_record::read(&state.workspace_record) {
+        let record = match record::read(&state.workspace_record) {
             Ok(record) => record,
             Err(err) => {
                 tracing::debug!(
@@ -802,7 +802,7 @@ pub fn ensure_daemon_view(
             return;
         }
     };
-    let record = match workspace_record::read(&paths.workspace_record) {
+    let record = match record::read(&paths.workspace_record) {
         Ok(record) => record,
         Err(err) => {
             tracing::debug!(
@@ -827,7 +827,7 @@ pub(crate) fn ensure_daemon_view_with_config(
     backend: &dyn MuxBackend,
     workspace_id: &WorkspaceId,
     session_name: &str,
-    record: &workspace_record::WorkspaceRecord,
+    record: &record::WorkspaceRecord,
     machine: &crate::config::MachineConfig,
 ) {
     let readiness = crate::remote_control::ReadinessSnapshot::probe(&machine.remote_control);
@@ -845,7 +845,7 @@ pub(crate) fn ensure_daemon_view_with_readiness(
     backend: &dyn MuxBackend,
     workspace_id: &WorkspaceId,
     session_name: &str,
-    record: &workspace_record::WorkspaceRecord,
+    record: &record::WorkspaceRecord,
     machine: &crate::config::MachineConfig,
     readiness: &crate::remote_control::ReadinessSnapshot,
 ) {
@@ -865,7 +865,7 @@ pub(crate) fn ensure_daemon_view_with_readiness(
 fn effective_daemon_view(
     workspace_id: &WorkspaceId,
     session_name: &str,
-    record: &workspace_record::WorkspaceRecord,
+    record: &record::WorkspaceRecord,
     machine: &crate::config::MachineConfig,
     rimz_bin: &Path,
     readiness: &crate::remote_control::ReadinessSnapshot,

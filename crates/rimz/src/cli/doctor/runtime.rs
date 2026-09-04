@@ -758,7 +758,7 @@ fn tmux_poll_presence(
 fn collect_topology_writer(ws: &rimz::ResolvedWorkspace) -> Option<model::TopologyWriterHealth> {
     let recorded_bin = StatePaths::for_workspace(ws.workspace_id.clone())
         .ok()
-        .and_then(|state| rimz::store::workspace_record::read(&state.workspace_record).ok())
+        .and_then(|state| rimz::workspace::record::read(&state.workspace_record).ok())
         .and_then(|record| record.rimz_bin)
         .map(|path| {
             let exists = path.is_file();

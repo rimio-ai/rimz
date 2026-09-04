@@ -124,9 +124,9 @@ impl Fixture {
     fn seed_named_channel(&self, name: &str) {
         let workspace = crate::workspace::WorkspaceResolver::resolve(&self.project, None)
             .expect("resolve workspace");
-        crate::store::workspace_record::write(
+        crate::workspace::record::write(
             &self.paths,
-            &crate::store::workspace_record::WorkspaceRecord::from_resolved(&workspace),
+            &crate::workspace::record::WorkspaceRecord::from_resolved(&workspace),
         )
         .expect("workspace record");
         crate::channel::register(&workspace, &self.paths, name).expect("channel record");

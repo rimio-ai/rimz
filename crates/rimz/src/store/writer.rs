@@ -16,9 +16,9 @@ use crate::pane::RuntimeOwnerKind;
 use crate::store::event::{
     AgentAttachPayload, AgentLaunchPayload, AgentLaunchState, EventEnvelope,
 };
-use crate::workspace::ResolvedWorkspace;
+use crate::workspace::{ResolvedWorkspace, record};
 
-use super::{Result, Store, StoreErr, event_log, message, runtime, snapshot, workspace_record};
+use super::{Result, Store, StoreErr, event_log, message, runtime, snapshot};
 
 mod debounce;
 mod lifecycle;
@@ -234,7 +234,7 @@ impl Store {
     #[must_use = "durability barrier; check the result"]
     pub fn record_workspace(&self, workspace: &ResolvedWorkspace) -> Result<()> {
         self.commit(|txn| {
-            let prior = workspace_record::read(&txn.paths.workspace_record).ok();
+            let prior = record::read(&txn.paths.workspace_record).ok();
             let record = workspace_record_preserving_rimz_target(prior.as_ref(), workspace, None);
             if prior.as_ref().is_none_or(|prior| {
                 prior.project_root != record.project_root
@@ -243,7 +243,7 @@ impl Store {
             }) {
                 txn.force_publish();
             }
-            workspace_record::write(txn.paths, &record)?;
+            record::write(txn.paths, &record)?;
             Ok(())
         })
     }
@@ -258,7 +258,7 @@ impl Store {
         rimz_build: String,
     ) -> Result<()> {
         self.commit(|txn| {
-            let prior = workspace_record::read(&txn.paths.workspace_record).ok();
+            let prior = record::read(&txn.paths.workspace_record).ok();
             let room_bin_target = rimz_bin.clone();
             let record = workspace_record_preserving_rimz_target(
                 prior.as_ref(),
@@ -272,9 +272,9 @@ impl Store {
             }) {
                 txn.force_publish();
             }
-            workspace_record::write(txn.paths, &record)?;
+            record::write(txn.paths, &record)?;
             crate::disk::atomic::link_executable_atomically(&room_bin_target, &txn.paths.room_bin)
-                .map_err(workspace_record::WorkspaceRecordErr::from)?;
+                .map_err(record::WorkspaceRecordErr::from)?;
             Ok(())
         })
     }
@@ -306,10 +306,10 @@ impl Store {
                 }
                 event_log::replace_all(&paths.events_log, &events)?;
 
-                let prior = workspace_record::read(&paths.workspace_record).ok();
+                let prior = record::read(&paths.workspace_record).ok();
                 let record =
                     workspace_record_preserving_rimz_target(prior.as_ref(), workspace, None);
-                workspace_record::write(paths, &record)?;
+                record::write(paths, &record)?;
                 Ok(((messages_rewritten, events_rewritten), true))
             })?;
 
@@ -620,11 +620,11 @@ impl Store {
 }
 
 fn workspace_record_preserving_rimz_target(
-    prior: Option<&workspace_record::WorkspaceRecord>,
+    prior: Option<&record::WorkspaceRecord>,
     workspace: &ResolvedWorkspace,
     rimz_target: Option<(PathBuf, String)>,
-) -> workspace_record::WorkspaceRecord {
-    let mut record = workspace_record::WorkspaceRecord::from_resolved(workspace);
+) -> record::WorkspaceRecord {
+    let mut record = record::WorkspaceRecord::from_resolved(workspace);
     match rimz_target {
         Some((rimz_bin, rimz_build)) => {
             record.rimz_bin = Some(rimz_bin);

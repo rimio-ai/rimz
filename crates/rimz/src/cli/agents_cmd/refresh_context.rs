@@ -16,7 +16,7 @@ use jiff::Timestamp;
 
 use rimz::agents::{self, LifecycleRefreshRequest};
 use rimz::ids::{PaneId, WorkspaceId};
-use rimz::store::workspace_record;
+use rimz::workspace::record;
 use rimz::{ResolvedWorkspace, RuntimePaths, StatePaths, Store};
 
 pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
@@ -114,7 +114,7 @@ fn session_pane(
     session_id: &str,
 ) -> Option<PaneId> {
     let paths = StatePaths::for_workspace(workspace_id.clone()).ok()?;
-    let record = workspace_record::read(&paths.workspace_record).ok()?;
+    let record = record::read(&paths.workspace_record).ok()?;
     let store = Store::open(paths, runtime.clone()).ok()?;
     let workspace = ResolvedWorkspace {
         workspace_id: workspace_id.clone(),

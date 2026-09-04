@@ -3,7 +3,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::ids::WorkspaceId;
-use crate::store::workspace_record;
+use crate::workspace::record;
 
 use super::{GcErr, Result, read_dir_if_exists};
 
@@ -106,7 +106,7 @@ enum Verdict {
 }
 
 fn classify_workspace(path: &Path) -> Verdict {
-    match workspace_record::read(&path.join("workspace.json")) {
+    match record::read(&path.join("workspace.json")) {
         Ok(record) if record.project_root.exists() => Verdict::Keep,
         Ok(record) => Verdict::Remove(PruneReason::ProjectRootGone, Some(record.project_root)),
         Err(err) if workspace_has_history(path) => Verdict::Retain(err.to_string()),
@@ -242,7 +242,7 @@ mod tests {
     }
 
     fn write_record(dir: &Path, id: &WorkspaceId, project_root: &Path) {
-        use crate::store::workspace_record::WorkspaceRecord;
+        use crate::workspace::record::WorkspaceRecord;
         fs::create_dir_all(dir).unwrap();
         let record = WorkspaceRecord {
             workspace_id: id.clone(),

@@ -8,9 +8,8 @@ use std::time::{Duration, SystemTime};
 use super::{LiveRoomErr, LiveRoomResult};
 use crate::ids::MuxName;
 use crate::mux::MuxBackend;
-use crate::store::workspace_record;
-use crate::workspace::KnownWorkspace;
-use crate::{RuntimePaths, StatePaths, WorkspaceId, store::workspace_record::WorkspaceRecord};
+use crate::workspace::{KnownWorkspace, record};
+use crate::{RuntimePaths, StatePaths, WorkspaceId, workspace::record::WorkspaceRecord};
 use anyhow::{Context, Result, bail};
 
 const LIST_SESSIONS_ATTEMPTS: u8 = 3;
@@ -340,7 +339,7 @@ pub fn retire_renamed_session(backend: &dyn MuxBackend, workspace: &crate::Resol
     let Ok(paths) = StatePaths::for_workspace(workspace.workspace_id.clone()) else {
         return;
     };
-    let recorded = match workspace_record::read(&paths.workspace_record) {
+    let recorded = match record::read(&paths.workspace_record) {
         Ok(record) => record.session_name,
         Err(_) => return, // No prior record: first birth, nothing to retire.
     };
@@ -392,7 +391,7 @@ fn workspace_record_for_session_under(
     record_paths.sort();
     let mut matches = Vec::new();
     for path in record_paths {
-        let record = match workspace_record::read(&path) {
+        let record = match record::read(&path) {
             Ok(record) => record,
             Err(err) => {
                 tracing::warn!(path = %path.display(), error = %err, "skipping unreadable workspace record");
@@ -759,7 +758,7 @@ mod tests {
             rimz_build: None,
             updated_at: jiff::Timestamp::now(),
         };
-        workspace_record::write(&paths, &record).unwrap();
+        record::write(&paths, &record).unwrap();
     }
 
     fn transient_list_sessions_error() -> crate::mux::MuxErr {

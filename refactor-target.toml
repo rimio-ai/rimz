@@ -320,7 +320,7 @@ upward-dependencies = [
     "store::workspace_record",
     "worktree",
 ]
-surface-budget = 21
+surface-budget = 22
 
 [[module]]
 path = "crates/rimz/src/worktree"
@@ -465,6 +465,7 @@ allowed-dependencies = [
     "sidebar::heartbeat",
     "sidebar::timing",
     "store",
+    "workspace",
 ]
 surface-budget = 10
 
@@ -474,6 +475,7 @@ allowed-dependencies = [
     "disk",
     "disk::paths",
     "harness::run",
+    "workspace::record",
 ]
 surface-budget = 30
 

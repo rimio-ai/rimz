@@ -18,9 +18,8 @@ use crate::mux::{
     SessionOptions, SidebarPaneOptions, SidebarWidth,
 };
 use crate::remote_control::ReadinessSnapshot;
-use crate::store::workspace_record;
-use crate::workspace::ResolvedWorkspace;
-use crate::{RuntimePaths, StatePaths, Store, store::workspace_record::WorkspaceRecord};
+use crate::workspace::{ResolvedWorkspace, record};
+use crate::{RuntimePaths, StatePaths, Store, workspace::record::WorkspaceRecord};
 
 pub use birth::{
     AttendedRecovery, BirthOutcome, NormalRebirth, ResetRecoveryError, RoomBirth, RoomResetReport,
@@ -483,7 +482,7 @@ fn shell_quote(value: &str) -> String {
 fn recorded_room_bin(workspace_id: &WorkspaceId) -> PathBuf {
     let recorded = StatePaths::for_workspace(workspace_id.clone())
         .ok()
-        .and_then(|paths| workspace_record::read(&paths.workspace_record).ok())
+        .and_then(|paths| record::read(&paths.workspace_record).ok())
         .and_then(|record| record.rimz_bin);
     crate::workspace::resolve_recorded_rimz_bin(workspace_id, recorded.as_deref())
 }
