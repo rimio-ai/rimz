@@ -1,8 +1,5 @@
-//! Small rotating JSONL streaming read/write helper for diagnostic logs.
-//!
-//! The caller owns the record schema and path. This module owns the shared
-//! rotation lock and append discipline so diagnostic files do not grow separate
-//! implementations.
+//! Best-effort rotating JSONL mechanics; the caller owns the record schema,
+//! path, and cap.
 
 use std::fs::OpenOptions;
 use std::io::BufRead;
@@ -18,7 +15,7 @@ const ROTATE_LOCK_STALE: Duration = Duration::from_secs(60);
 /// Appends best-effort; failures log at debug with the path.
 pub(crate) fn append<T: Serialize>(path: &Path, max_bytes: u64, record: &T) {
     if let Err(err) = append_rotating_jsonl(path, max_bytes, record) {
-        tracing::debug!(path = %path.display(), error = %err, "diagnostic log append failed");
+        tracing::debug!(path = %path.display(), error = %err, "rotating log append failed");
     }
 }
 

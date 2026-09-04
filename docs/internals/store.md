@@ -29,6 +29,7 @@ Freshness is an extent, not a timestamp. A derived rollup records the `LogExtent
 | [`disk/paths.rs`](../../crates/rimz/src/disk/paths.rs) | `StatePaths` and `RuntimePaths`: every filename in this doc, and the XDG resolution behind them. |
 | [`disk/atomic.rs`](../../crates/rimz/src/disk/atomic.rs) | Whole-file publication and sync discipline, plus cache-local temp cleanup. Every fsync syscall in the project is in this file, enforced by a CI grep. |
 | [`disk/lock.rs`](../../crates/rimz/src/disk/lock.rs) | The workspace advisory lock, bounded at 30 seconds and naming the holder-hunting command on timeout. |
+| [`disk/rotating.rs`](../../crates/rimz/src/disk/rotating.rs) | Best-effort rotating JSONL append and decoded visits. |
 | [`event.rs`](../../crates/rimz/src/store/event.rs) | `EventEnvelope`, the typed `EventKind` decode, and the schema version. |
 | [`event_log.rs`](../../crates/rimz/src/store/event_log.rs) | The framed append log: `frame.rs` codec, `recovery.rs` repair, `rotation.rs` archive publication and retention. |
 | [`follow.rs`](../../crates/rimz/src/store/follow.rs) | The read-only lifecycle event-log follower. |
