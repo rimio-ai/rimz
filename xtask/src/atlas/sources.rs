@@ -21,8 +21,9 @@ pub(super) struct Source {
     kind: SourceKind,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SourceKind {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum SourceKind {
     Production,
     Test,
     TestSupport,
@@ -265,7 +266,7 @@ fn classify_sources(sources: &mut [Source]) {
             syn::Item::Mod(module) if module.content.is_none() => Some(module),
             _ => None,
         }) {
-            let declared_kind = conditional_source_kind(&module.attrs);
+            let declared_kind = cfg_source_kind(&module.attrs);
             for candidate in module_file_candidates(&source.path, &module.ident.to_string()) {
                 if let Some(child) = indexes.get(&candidate) {
                     modules.push((parent, *child, declared_kind));
@@ -323,7 +324,10 @@ fn merge_source_kind(current: SourceKind, declared: SourceKind) -> SourceKind {
     }
 }
 
-fn conditional_source_kind(attributes: &[syn::Attribute]) -> Option<SourceKind> {
+/// Classifies the one cfg rule used throughout Atlas: `test` is test code,
+/// `feature = "testkit"` is test-support code, `all`/`any` merge with test
+/// winning, and every other predicate is production code.
+pub(super) fn cfg_source_kind(attributes: &[syn::Attribute]) -> Option<SourceKind> {
     attributes
         .iter()
         .filter(|attribute| attribute.path().is_ident("cfg"))
@@ -489,17 +493,14 @@ mod tests {
         };
 
         assert_eq!(
-            conditional_source_kind(&test_then_support.attrs),
+            cfg_source_kind(&test_then_support.attrs),
             Some(SourceKind::Test)
         );
         assert_eq!(
-            conditional_source_kind(&support_then_test.attrs),
+            cfg_source_kind(&support_then_test.attrs),
             Some(SourceKind::Test)
         );
-        assert_eq!(
-            conditional_source_kind(&stacked.attrs),
-            Some(SourceKind::Test)
-        );
-        assert_eq!(conditional_source_kind(&production_alternative.attrs), None);
+        assert_eq!(cfg_source_kind(&stacked.attrs), Some(SourceKind::Test));
+        assert_eq!(cfg_source_kind(&production_alternative.attrs), None);
     }
 }

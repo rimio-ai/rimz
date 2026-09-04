@@ -257,14 +257,45 @@ fn file_sizes(sources: &[Source], syntax: &SyntaxReport) -> BTreeMap<PathBuf, Fi
         let (code, tests) = if source.is_test() {
             (0, source_files::rust_sloc(&source.text))
         } else {
-            let test_regions = syntax
+            let cfg_regions = syntax
                 .files
                 .iter()
                 .find(|file| file.path == source.path)
-                .map_or(&[][..], |file| file.test_regions.as_slice());
-            source_files::split_rust_sloc(&source.text, test_regions)
+                .map_or(&[][..], |file| file.cfg_regions.as_slice());
+            let excluded = cfg_regions
+                .iter()
+                .map(|region| region.lines.clone())
+                .collect::<Vec<_>>();
+            let test = cfg_regions
+                .iter()
+                .filter(|region| region.kind == sources::SourceKind::Test)
+                .map(|region| region.lines.clone())
+                .collect::<Vec<_>>();
+            (
+                source_files::split_rust_sloc(&source.text, &excluded).0,
+                source_files::split_rust_sloc(&source.text, &test).1,
+            )
         };
         sizes.insert(source.path.clone(), FileSize { code, tests });
     }
     sizes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_sizes_exclude_test_support_and_count_tests_separately() {
+        let source = Source::new(
+            "src/lib.rs",
+            "fn production() {}\n#[cfg(test)]\nfn test_only() {}\n#[cfg(feature = \"testkit\")]\nfn support() {}\n",
+        );
+        let syntax = syntax::analyze_sources(std::slice::from_ref(&source), &BTreeSet::new());
+
+        let sizes = file_sizes(std::slice::from_ref(&source), &syntax);
+
+        assert_eq!(sizes[Path::new("src/lib.rs")].code, 1);
+        assert_eq!(sizes[Path::new("src/lib.rs")].tests, 2);
+    }
 }

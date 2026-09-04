@@ -128,11 +128,8 @@ pub(super) fn analyze(
         if source_files::is_test_file(&path) {
             continue;
         }
-        let test_regions = syntax_files
-            .iter()
-            .find(|file| file.path == path)
-            .map_or(&[][..], |file| file.test_regions.as_slice());
-        collect_functions(&space, &path, scope, test_regions, &mut functions);
+        let file_syntax = syntax_files.iter().find(|file| file.path == path);
+        collect_functions(&space, &path, scope, file_syntax, &mut functions);
     }
     let mut module_scores = BTreeMap::<String, f64>::new();
     for function in &functions {
@@ -182,14 +179,11 @@ fn collect_functions(
     space: &Space,
     path: &Path,
     scope: &Path,
-    test_regions: &[std::ops::Range<usize>],
+    file_syntax: Option<&FileSyntax>,
     output: &mut Vec<FunctionMetric>,
 ) {
     if matches!(space.kind.as_str(), "function" | "closure") {
-        if test_regions
-            .iter()
-            .any(|region| region.contains(&(space.start_line as usize)))
-        {
+        if file_syntax.is_some_and(|file| file.cfg_kind_at(space.start_line as usize).is_some()) {
             return;
         }
         let cyclomatic = space.metrics.cyclomatic.sum;
@@ -209,7 +203,7 @@ fn collect_functions(
         return;
     }
     for child in &space.spaces {
-        collect_functions(child, path, scope, test_regions, output);
+        collect_functions(child, path, scope, file_syntax, output);
     }
 }
 
@@ -329,7 +323,7 @@ mod tests {
             &root,
             Path::new("src/demo.rs"),
             Path::new("src"),
-            &[],
+            None,
             &mut functions,
         );
         assert_eq!(functions.len(), 2);
@@ -367,7 +361,7 @@ mod tests {
             &root,
             Path::new("src/example.rs"),
             Path::new("src"),
-            &[],
+            None,
             &mut functions,
         );
         assert_eq!(root.metrics.loc.sloc, 20.0);

@@ -229,7 +229,7 @@ fn module_declarations_do_not_collide_across_crates() {
 }
 
 #[test]
-fn inline_test_regions_cover_mid_file_trailing_and_multiple_modules() {
+fn inline_cfg_regions_cover_mid_file_trailing_and_multiple_modules() {
     let report = analyze_sources(&[source(
         r#"
 fn before() {}
@@ -244,7 +244,19 @@ mod second {
 }
 "#,
     )]);
-    assert_eq!(report.files[0].test_regions, [3..7, 8..12]);
+    assert_eq!(
+        report.files[0].cfg_regions,
+        [
+            CfgRegion {
+                lines: 3..7,
+                kind: SourceKind::Test,
+            },
+            CfgRegion {
+                lines: 8..12,
+                kind: SourceKind::Test,
+            }
+        ]
+    );
 }
 
 #[test]
@@ -446,6 +458,14 @@ mod tests {
         target();
     }
 }
+#[cfg(any(test, feature = "testkit"))]
+pub fn fixture() {
+    target();
+}
+#[cfg(feature = "testkit")]
+pub fn support() {
+    target();
+}
 struct View;
 impl View {
     #[cfg(test)]
@@ -469,15 +489,19 @@ impl View {
             .iter()
             .map(|function| function.label())
             .collect::<Vec<_>>(),
-        ["test_default", "check", "View::test_only"]
+        [
+            "test_default",
+            "check",
+            "fixture",
+            "support",
+            "View::test_only"
+        ]
     );
     assert_eq!(file.enclosing_fn(3).unwrap().label(), "run");
     for function in &file.test_fns {
         assert!(
-            file.test_regions
-                .iter()
-                .any(|region| region.contains(&function.line)),
-            "{} should be in a test region",
+            file.cfg_kind_at(function.line).is_some(),
+            "{} should be in a cfg region",
             function.label()
         );
     }
@@ -487,6 +511,25 @@ impl View {
             .pub_items
             .iter()
             .any(|item| item.name == "test_default")
+    );
+    assert!(!file.pub_items.iter().any(|item| item.name == "fixture"));
+    assert!(!file.pub_items.iter().any(|item| item.name == "support"));
+    assert!(!file.fns.iter().any(|function| function.name == "fixture"));
+    assert!(!file.fns.iter().any(|function| function.name == "support"));
+    let fixture = file
+        .test_fns
+        .iter()
+        .find(|function| function.name == "fixture")
+        .unwrap();
+    let support = file
+        .test_fns
+        .iter()
+        .find(|function| function.name == "support")
+        .unwrap();
+    assert_eq!(file.cfg_kind_at(fixture.line), Some(SourceKind::Test));
+    assert_eq!(
+        file.cfg_kind_at(support.line),
+        Some(SourceKind::TestSupport)
     );
 }
 

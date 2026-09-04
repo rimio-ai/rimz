@@ -172,6 +172,7 @@ Method keys are name-only within their module. If several public items share tha
 - **Siblings** — member files of one shape family that occupy the same role in sibling directories (`agents/adapters/*/spend.rs`): parallel implementations of one responsibility. Families with siblings rank first, then by SLOC in play (members × mean SLOC). Siblings exempt a family from the one-module gate only when they are most of its members.
 - **Verdict** — a durable, reasoned disposition of one item, pass-through, guard family, or shape family. Atlas reports stale verdict keys when their evidence disappears.
 - **Dependency site** — a syntax-derived internal dependency written as either a `use` or a qualified path. Sites are deduplicated per file by resolved module and item.
+- **Production SLOC** — code lines outside every `cfg` gated on `test` or the `testkit` feature, whether the gate sits on the item or on the `mod` line that reaches its file; `test`-gated lines are test SLOC and `testkit`-only lines count in neither column. Every other syntax measure (escaping items, dependency sites, functions) applies the same gate.
 
 ## Caveats
 
@@ -186,4 +187,3 @@ Method keys are name-only within their module. If several public items share tha
 9. A `pub use` path resolves by syntax: an explicit `crate`/`self`/`super` path once, a bare path first as a child of the declaring module and then from the crate root. A re-export chain deeper than eight hops, or one that passes through a module the crate does not define, reads as unresolved or foreign rather than guessed.
 10. `assemblers` resolves a callee through the file's `use` lines and explicit `crate`/`self`/`super` paths; a method call, a `Self::` call, or a name the file does not import is not attributed, so the count is a floor.
 11. `[[rehome]]` counts every `pub` item with the name under `to`, a `pub use` re-export included, so the destination declares the item once and re-exports it nowhere.
-12. Production SLOC includes a cfg-gated item inside a production file; only a file reached through a `mod` declaration gated on `test` or the `testkit` feature is excluded.

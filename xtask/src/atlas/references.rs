@@ -149,12 +149,11 @@ impl References {
                     }
                     continue;
                 }
-                let test = source.is_test()
-                    || file_syntax.is_some_and(|file| {
-                        file.test_regions
-                            .iter()
-                            .any(|region| region.contains(&line))
-                    });
+                let test = match file_syntax.and_then(|file| file.cfg_kind_at(line)) {
+                    Some(super::sources::SourceKind::TestSupport) => continue,
+                    Some(super::sources::SourceKind::Test) => true,
+                    Some(super::sources::SourceKind::Production) | None => source.is_test(),
+                };
                 occurrences
                     .entry(&occurrence.symbol)
                     .or_default()
