@@ -8,13 +8,12 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
 
 use jiff::Timestamp;
 use serde::Serialize;
 
-use crate::disk::paths::RuntimePaths;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
-use crate::store::active_time;
 use crate::transcript::{TranscriptEntry, TranscriptKind};
 
 use super::{AgentState, pricing, spending};
@@ -135,8 +134,8 @@ pub struct AttributionRequest<'a> {
     pub subagents: &'a [&'a AgentState],
     pub transcript: &'a [TranscriptEntry],
     pub me: Option<&'a AgentSessionId>,
-    pub runtime: &'a RuntimePaths,
-    pub active_grace_secs: u32,
+    pub active_secs: &'a BTreeMap<(AgentKind, AgentSessionId), u64>,
+    pub pricing_cache_path: &'a Path,
     pub require_contribution: bool,
     pub scope: AttributionScope,
     pub now: Timestamp,
@@ -169,18 +168,7 @@ pub fn build(request: AttributionRequest<'_>) -> Attribution {
     let folded = fold_seats(request.agents);
     let peer_representatives = representatives(request.peers);
     let conversation_counts = conversation_counts(request.transcript);
-    let active_records = active_time::read_for_keys(
-        request.runtime,
-        request
-            .agents
-            .iter()
-            .filter(|agent| !agent.is_launched_child())
-            .map(|agent| (agent.kind.as_str(), agent.agent_id.as_str())),
-    )
-    .into_iter()
-    .map(|record| ((record.kind.clone(), record.agent_id.clone()), record))
-    .collect::<BTreeMap<_, _>>();
-    let prices = pricing::cached_book(&request.runtime.shared_pricing_cache_path());
+    let prices = pricing::cached_book(request.pricing_cache_path);
 
     let mut members = folded
         .into_iter()
@@ -198,7 +186,6 @@ pub fn build(request: AttributionRequest<'_>) -> Attribution {
                 &seat,
                 &peer_representatives,
                 &request,
-                &active_records,
                 &prices,
                 &conversation_counts,
             );
@@ -383,7 +370,6 @@ fn member(
     seat: &SeatRecords<'_>,
     peers: &[&AgentState],
     request: &AttributionRequest<'_>,
-    active_records: &BTreeMap<(AgentKind, AgentSessionId), active_time::ActiveTimeRecord>,
     prices: &pricing::PriceBook,
     conversation_counts: &HashMap<(AgentKind, AgentSessionId), ConversationCounts>,
 ) -> AttributionMember {
@@ -466,9 +452,10 @@ fn member(
         .identity
         .iter()
         .filter_map(|agent| {
-            active_records
+            request
+                .active_secs
                 .get(&(agent.kind.clone(), agent.agent_id.clone()))
-                .map(|record| record.display_secs(request.now, request.active_grace_secs))
+                .copied()
         })
         .reduce(u64::saturating_add);
     AttributionMember {

@@ -2,7 +2,6 @@ use serde_json::json;
 use std::io::Write as _;
 
 use super::*;
-use crate::ids::WorkspaceId;
 
 fn at(seconds: i64) -> Timestamp {
     Timestamp::from_second(seconds).expect("test timestamp")
@@ -37,18 +36,18 @@ fn build_with(
     transcript: &[TranscriptEntry],
 ) -> Attribution {
     let dir = tempfile::tempdir().expect("tempdir");
-    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
-        .expect("runtime paths");
     let refs = agents.iter().collect::<Vec<_>>();
     let subagent_refs = subagents.iter().collect::<Vec<_>>();
+    let active_secs = BTreeMap::new();
+    let pricing_cache_path = dir.path().join("prices.json");
     build(AttributionRequest {
         agents: &refs,
         peers: &refs,
         subagents: &subagent_refs,
         transcript,
         me: None,
-        runtime: &runtime,
-        active_grace_secs: 180,
+        active_secs: &active_secs,
+        pricing_cache_path: &pricing_cache_path,
         require_contribution: false,
         scope: AttributionScope::default(),
         now: at(100),
@@ -328,12 +327,6 @@ fn launched_child_effort_folds_into_the_parent_seat() {
     child.compaction_count = 1;
 
     let parent_last_activity = parent.last_activity;
-    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
-        .expect("runtime paths");
-    active_time::record_progress(&runtime, "claude", "parent", at(0), 180).unwrap();
-    active_time::record_stop(&runtime, "claude", "parent", at(10), 180).unwrap();
-    active_time::record_progress(&runtime, "claude", "child", at(0), 180).unwrap();
-    active_time::record_stop(&runtime, "claude", "child", at(20), 180).unwrap();
     let transcript_entries = [
         TranscriptEntry::new(
             at(50),
@@ -359,14 +352,16 @@ fn launched_child_effort_folds_into_the_parent_seat() {
     ];
     let agents = [parent, child];
     let refs = agents.iter().collect::<Vec<_>>();
+    let active_secs = BTreeMap::from([((agents[0].kind.clone(), agents[0].agent_id.clone()), 10)]);
+    let pricing_cache_path = dir.path().join("prices.json");
     let report = build(AttributionRequest {
         agents: &refs,
         peers: &refs,
         subagents: &[],
         transcript: &transcript_entries,
         me: None,
-        runtime: &runtime,
-        active_grace_secs: 180,
+        active_secs: &active_secs,
+        pricing_cache_path: &pricing_cache_path,
         require_contribution: false,
         scope: AttributionScope::default(),
         now: at(100),
@@ -469,8 +464,8 @@ fn launched_only_delegation_keeps_the_member_with_all_in_cost() {
     child.transcript_path = Some(child_transcript.to_string_lossy().into_owned());
     let agents = [parent, child];
     let refs = agents.iter().collect::<Vec<_>>();
-    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
-        .expect("runtime paths");
+    let active_secs = BTreeMap::new();
+    let pricing_cache_path = dir.path().join("prices.json");
 
     let report = build(AttributionRequest {
         agents: &refs,
@@ -478,8 +473,8 @@ fn launched_only_delegation_keeps_the_member_with_all_in_cost() {
         subagents: &[],
         transcript: &[],
         me: None,
-        runtime: &runtime,
-        active_grace_secs: 180,
+        active_secs: &active_secs,
+        pricing_cache_path: &pricing_cache_path,
         require_contribution: true,
         scope: AttributionScope::default(),
         now: at(100),
@@ -777,17 +772,17 @@ fn agents_without_a_recorded_contribution_are_omitted() {
     assert_eq!(durable.cost_usd, None);
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
-        .expect("runtime paths");
     let refs = agents.iter().collect::<Vec<_>>();
+    let active_secs = BTreeMap::new();
+    let pricing_cache_path = dir.path().join("prices.json");
     let report = build(AttributionRequest {
         agents: &refs,
         peers: &refs,
         subagents: &[],
         transcript: &[],
         me: None,
-        runtime: &runtime,
-        active_grace_secs: 180,
+        active_secs: &active_secs,
+        pricing_cache_path: &pricing_cache_path,
         require_contribution: true,
         scope: AttributionScope::default(),
         now: at(100),
