@@ -136,7 +136,7 @@ const NOTIFY_LOG_NAME: &str = "notify.log.jsonl";
 const NOTIFY_LOG_MAX_BYTES: u64 = 1_048_576;
 
 pub(crate) fn append(state_root: &Path, record: &NotifyTraceEnvelope) {
-    super::rotating::append(
+    crate::disk::rotating::append(
         &state_root.join(NOTIFY_LOG_NAME),
         NOTIFY_LOG_MAX_BYTES,
         record,

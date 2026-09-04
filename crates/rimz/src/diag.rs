@@ -20,7 +20,6 @@ pub mod focus_repair;
 pub mod notify;
 pub mod plugin_presence;
 pub mod record;
-pub(crate) mod rotating;
 
 const DIAG_LOG_NAME: &str = "diag.log.jsonl";
 const DIAG_LOG_MAX_BYTES: u64 = 1_048_576;
@@ -292,7 +291,7 @@ impl Inner {
             event,
         );
         envelope.suppressed_since_last = suppressed_since_last;
-        rotating::append(&self.log_path(), DIAG_LOG_MAX_BYTES, &envelope);
+        crate::disk::rotating::append(&self.log_path(), DIAG_LOG_MAX_BYTES, &envelope);
     }
 
     fn suppression(&self, event: &DiagEvent, at_ms: u64) -> Option<u32> {
@@ -318,7 +317,7 @@ pub fn recent_records(
         .root
         .join(DIAG_LOG_NAME);
     let mut records = Vec::new();
-    for candidate in [rotating::rotated_path(&path), path.clone()] {
+    for candidate in [crate::disk::rotating::rotated_path(&path), path.clone()] {
         let Ok(text) = std::fs::read_to_string(&candidate) else {
             continue;
         };
@@ -551,7 +550,7 @@ mod tests {
         let encode = |record: DiagEnvelope| serde_json::to_string(&record).unwrap();
 
         std::fs::write(
-            rotating::rotated_path(&live_path),
+            crate::disk::rotating::rotated_path(&live_path),
             [
                 encode(record(40)),
                 "not-json".to_owned(),

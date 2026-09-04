@@ -17,5 +17,5 @@ fn path(runtime: &RuntimePaths) -> PathBuf {
 }
 
 pub fn append(runtime: &RuntimePaths, record: &impl serde::Serialize) {
-    super::rotating::append(&path(runtime), BINDING_LOG_MAX_BYTES, record);
+    crate::disk::rotating::append(&path(runtime), BINDING_LOG_MAX_BYTES, record);
 }

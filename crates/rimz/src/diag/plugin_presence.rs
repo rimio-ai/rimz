@@ -49,13 +49,13 @@ fn log_path(state_root: &Path) -> PathBuf {
 }
 
 pub(crate) fn append(state_root: &Path, sample: &PluginPresenceSample) {
-    super::rotating::append(&log_path(state_root), PLUGIN_PRESENCE_LOG_MAX_BYTES, sample);
+    crate::disk::rotating::append(&log_path(state_root), PLUGIN_PRESENCE_LOG_MAX_BYTES, sample);
 }
 
 /// Existing current and rotated telemetry logs, in display order.
 pub fn history_paths(state_root: &Path) -> Vec<PathBuf> {
     let current = log_path(state_root);
-    let rotated = super::rotating::rotated_path(&current);
+    let rotated = crate::disk::rotating::rotated_path(&current);
     [current, rotated]
         .into_iter()
         .filter(|path| path.is_file())
@@ -102,7 +102,7 @@ pub fn recent_generations(state_root: &Path, session_name: &str) -> Vec<PluginPr
 
 fn recent_samples(state_root: &Path, session_name: &str) -> Vec<PluginPresenceSample> {
     let mut samples = Vec::new();
-    super::rotating::visit_records(&log_path(state_root), |sample: PluginPresenceSample| {
+    crate::disk::rotating::visit_records(&log_path(state_root), |sample: PluginPresenceSample| {
         if sample.session_name.as_deref() == Some(session_name) {
             samples.push(sample);
         }
@@ -179,7 +179,7 @@ mod tests {
     fn generation_span_reads_rotated_and_current_and_ignores_malformed_tail() {
         let dir = tempfile::tempdir().unwrap();
         let current = log_path(dir.path());
-        let rotated = super::super::rotating::rotated_path(&current);
+        let rotated = crate::disk::rotating::rotated_path(&current);
         let sample = |at_ms, pages, failures| {
             serde_json::to_string(&PluginPresenceSample {
                 at_ms,
