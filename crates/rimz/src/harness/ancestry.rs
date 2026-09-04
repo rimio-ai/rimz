@@ -1,4 +1,8 @@
 //! Durable caller identity and launch-chain policy.
+//!
+//! RimZ-launched providers identify themselves through their launch
+//! environment. A provider running without that environment is identified by
+//! matching its process ancestry against a live durable runtime owner.
 
 use crate::ids::{AgentKind, AgentSessionId};
 
@@ -15,27 +19,25 @@ pub enum LaunchAncestry {
     },
 }
 
-/// Stable identity exported to a RimZ-launched agent process.
+/// Stable identity for the agent calling a RimZ command.
 ///
 /// A launch id is authoritative when present. Agents launched before that id
 /// was exported retain the legacy unambiguous-pane fallback.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LaunchCallerEnv {
+pub struct CallerIdentity {
     pub kind: AgentKind,
     pub launch_id: Option<AgentSessionId>,
     pub pane_id: Option<crate::ids::PaneId>,
+    pub name: Option<String>,
+    pub profile: Option<String>,
+    pub role: Option<String>,
 }
 
-impl LaunchCallerEnv {
+impl CallerIdentity {
     pub fn from_env() -> Option<Self> {
-        let kind = std::env::var(crate::harness::launch::ENV_AGENT_KIND)
-            .ok()
-            .filter(|value| !value.is_empty())
-            .map(AgentKind::new_unchecked)?;
-        let launch_id = std::env::var(crate::harness::launch::ENV_AGENT_ID)
-            .ok()
-            .filter(|value| !value.is_empty())
-            .map(AgentSessionId::from);
+        let kind =
+            env_string(crate::harness::launch::ENV_AGENT_KIND).map(AgentKind::new_unchecked)?;
+        let launch_id = env_string(crate::harness::launch::ENV_AGENT_ID).map(AgentSessionId::from);
         let pane_id = launch_id
             .is_none()
             .then(crate::mux::ambient_pane_id)
@@ -44,8 +46,82 @@ impl LaunchCallerEnv {
             kind,
             launch_id,
             pane_id,
+            name: env_string(crate::harness::launch::ENV_AGENT_NAME),
+            profile: env_string(crate::harness::launch::ENV_AGENT_PROFILE),
+            role: env_string(crate::harness::launch::ENV_AGENT_ROLE),
         })
     }
+
+    fn from_agent(agent: &crate::agents::AgentState) -> Self {
+        Self {
+            kind: agent.kind.clone(),
+            launch_id: agent.launch_id.clone(),
+            pane_id: agent
+                .launch_id
+                .is_none()
+                .then(crate::mux::ambient_pane_id)
+                .flatten(),
+            name: agent.name.clone(),
+            profile: agent.profile.clone(),
+            role: agent.role.clone(),
+        }
+    }
+
+    pub fn from_process_ancestry(agents: &[crate::agents::AgentState]) -> Option<Self> {
+        from_ancestors(
+            agents,
+            &crate::proc::ancestor_pids(),
+            crate::proc::process_start_token,
+        )
+    }
+}
+
+fn env_string(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|value| !value.is_empty())
+}
+
+fn from_ancestors(
+    agents: &[crate::agents::AgentState],
+    ancestors: &[u32],
+    start_token: impl Fn(u32) -> Option<String>,
+) -> Option<CallerIdentity> {
+    let ambient_pane = crate::mux::ambient_pane_id();
+    for &pid in ancestors {
+        let actual_start = start_token(pid);
+        let matches = agents
+            .iter()
+            .filter(|agent| agent.ended_at.is_none() && !agent.is_provider_subagent())
+            .filter(|agent| {
+                agent.runtime_owner.as_ref().is_some_and(|owner| {
+                    owner.kind == crate::pane::RuntimeOwnerKind::Agent
+                        && owner.pid == pid
+                        && owner.process_start.as_ref().is_none_or(|expected| {
+                            actual_start.as_deref() == Some(expected.as_str())
+                        })
+                })
+            })
+            .collect::<Vec<_>>();
+        let agent = matches
+            .iter()
+            .copied()
+            .find(|agent| {
+                ambient_pane.as_ref().is_some_and(|pane_id| {
+                    agent
+                        .pane
+                        .as_ref()
+                        .is_some_and(|pane| &pane.pane_id == pane_id)
+                })
+            })
+            .or_else(|| matches.first().copied());
+        if let Some(agent) = agent {
+            return Some(CallerIdentity::from_agent(agent));
+        }
+    }
+    None
+}
+
+pub fn resolve_caller(agents: &[crate::agents::AgentState]) -> Option<CallerIdentity> {
+    CallerIdentity::from_env().or_else(|| CallerIdentity::from_process_ancestry(agents))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -95,28 +171,20 @@ pub fn resolve_launch_ancestry(
     }))
 }
 
-/// Whether this process identifies itself as an agent caller. Human launches
-/// can skip the audit projection entirely.
-pub fn launch_ancestry_required() -> bool {
-    std::env::var(crate::harness::launch::ENV_AGENT_KIND)
-        .ok()
-        .is_some_and(|value| !value.is_empty())
-}
-
 /// Resolve the launching process through its stable launch id. Kind
 /// corroborates the match so stale cross-provider environment cannot attach a
 /// child to the wrong durable row. An agent process already running across an
 /// upgrade has no launch id; only that missing-id case may use an unambiguous
 /// live pane stamp as legacy identity.
-pub fn resolve_launch_ancestry_from_env(
+pub fn resolve_launch_ancestry_here(
     agents: &[crate::agents::AgentState],
     subagent: bool,
     max_chain_length: u8,
 ) -> Result<Option<LaunchAncestry>, LaunchAncestryError> {
-    if !launch_ancestry_required() {
+    let Some(caller) = resolve_caller(agents) else {
         return Ok(None);
-    }
-    let caller = resolve_launch_caller_from_env(agents)?;
+    };
+    let caller = resolve_launch_caller(agents, &caller)?;
     resolve_launch_ancestry(Some(caller), subagent, max_chain_length)
 }
 
@@ -125,16 +193,16 @@ pub fn resolve_launch_ancestry_from_env(
 /// Command doorways that operate on the caller's descendants use the same
 /// stable launch-id rules as ancestry stamping, so a stale pane environment
 /// cannot select another agent's children.
-pub fn resolve_launch_caller_from_env(
+pub fn resolve_calling_agent(
     agents: &[crate::agents::AgentState],
 ) -> Result<&crate::agents::AgentState, LaunchAncestryError> {
-    let caller = LaunchCallerEnv::from_env().ok_or(LaunchAncestryError::UnresolvedCaller)?;
+    let caller = resolve_caller(agents).ok_or(LaunchAncestryError::UnresolvedCaller)?;
     resolve_launch_caller(agents, &caller)
 }
 
 pub fn resolve_launch_caller<'a>(
     agents: &'a [crate::agents::AgentState],
-    caller: &LaunchCallerEnv,
+    caller: &CallerIdentity,
 ) -> Result<&'a crate::agents::AgentState, LaunchAncestryError> {
     let resolved = if let Some(launch_id) = caller.launch_id.as_ref() {
         agents.iter().find(|agent| {
@@ -230,15 +298,21 @@ mod tests {
         caller.launch_id = Some(AgentSessionId::from("launch-stable"));
         caller.pane = Some(crate::pane::PaneRef::from_id(pane_id.clone()));
         let agents = vec![caller];
-        let durable = LaunchCallerEnv {
+        let durable = CallerIdentity {
             kind: AgentKind::new_unchecked("claude"),
             launch_id: Some(AgentSessionId::from("launch-stable")),
             pane_id: None,
+            name: None,
+            profile: None,
+            role: None,
         };
-        let legacy = LaunchCallerEnv {
+        let legacy = CallerIdentity {
             kind: AgentKind::new_unchecked("claude"),
             launch_id: None,
             pane_id: Some(pane_id.clone()),
+            name: None,
+            profile: None,
+            role: None,
         };
 
         assert_eq!(
@@ -249,7 +323,7 @@ mod tests {
             resolve_launch_caller(&agents, &legacy).unwrap().agent_id,
             "provider-session"
         );
-        let stale = LaunchCallerEnv {
+        let stale = CallerIdentity {
             launch_id: Some(AgentSessionId::from("stale-launch")),
             pane_id: Some(pane_id.clone()),
             ..legacy.clone()
@@ -259,5 +333,76 @@ mod tests {
         let mut duplicate = agents[0].clone();
         duplicate.agent_id = AgentSessionId::from("duplicate");
         assert!(resolve_launch_caller(&[agents[0].clone(), duplicate], &legacy).is_err());
+    }
+
+    #[test]
+    fn caller_identity_matches_live_agent_owner_and_start_token() {
+        let mut agent = owned_agent("claude", "provider-session", 42, Some("start-42"));
+        agent.launch_id = Some(AgentSessionId::from("launch-stable"));
+        agent.name = Some("architect".to_owned());
+        agent.profile = Some("planner".to_owned());
+        agent.role = Some("lead".to_owned());
+
+        let identity = from_ancestors(&[agent], &[42], |pid| Some(format!("start-{pid}")))
+            .expect("matching owner");
+
+        assert_eq!(identity.kind, AgentKind::new_unchecked("claude"));
+        assert_eq!(
+            identity.launch_id,
+            Some(AgentSessionId::from("launch-stable"))
+        );
+        assert_eq!(identity.name.as_deref(), Some("architect"));
+        assert_eq!(identity.profile.as_deref(), Some("planner"));
+        assert_eq!(identity.role.as_deref(), Some("lead"));
+    }
+
+    #[test]
+    fn caller_identity_rejects_non_agent_and_stale_owners() {
+        let mut ended = owned_agent("claude", "ended", 10, None);
+        ended.ended_at = Some(jiff::Timestamp::now());
+
+        let mut provider_subagent = owned_agent("claude", "child", 11, None);
+        provider_subagent.parent_agent_id = Some(AgentSessionId::from("parent"));
+
+        let mut daemon = owned_agent("codex", "daemon", 12, None);
+        daemon.runtime_owner.as_mut().unwrap().kind = crate::pane::RuntimeOwnerKind::Daemon;
+
+        let mismatched = owned_agent("claude", "reused", 13, Some("old-start"));
+        let agents = [ended, provider_subagent, daemon, mismatched];
+
+        assert!(from_ancestors(&agents, &[99], |_| None).is_none());
+        assert!(
+            from_ancestors(&agents, &[10, 11, 12, 13], |pid| {
+                (pid == 13).then(|| "new-start".to_owned())
+            })
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn caller_identity_prefers_the_nearest_matching_ancestor() {
+        let farther = owned_agent("claude", "farther", 20, None);
+        let nearest = owned_agent("codex", "nearest", 10, None);
+
+        let identity =
+            from_ancestors(&[farther, nearest], &[10, 20], |_| None).expect("matching ancestor");
+
+        assert_eq!(identity.kind, AgentKind::new_unchecked("codex"));
+    }
+
+    fn owned_agent(
+        kind: &str,
+        id: &str,
+        pid: u32,
+        process_start: Option<&str>,
+    ) -> crate::agents::AgentState {
+        let mut agent = crate::agents::AgentState::stub(kind, id, AgentStatus::Running);
+        agent.runtime_owner = Some(crate::pane::RuntimeOwner::new(
+            crate::pane::RuntimeOwnerKind::Agent,
+            id,
+            pid,
+            process_start.map(ToOwned::to_owned),
+        ));
+        agent
     }
 }

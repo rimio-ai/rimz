@@ -93,16 +93,12 @@ pub(super) fn launch_layout(
         layout,
         team_name,
     } = resolved;
-    let ancestry = if rimz::harness::ancestry::launch_ancestry_required() {
-        let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-        rimz::harness::ancestry::resolve_launch_ancestry_from_env(
-            &projection.agents,
-            false,
-            machine_config.agents.max_chain_length,
-        )?
-    } else {
-        None
-    };
+    let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
+    let ancestry = rimz::harness::ancestry::resolve_launch_ancestry_here(
+        &projection.agents,
+        false,
+        machine_config.agents.max_chain_length,
+    )?;
     let prompt = args
         .launch
         .prompt

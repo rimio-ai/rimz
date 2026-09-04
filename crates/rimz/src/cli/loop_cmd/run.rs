@@ -299,7 +299,8 @@ fn execute_prepared_delivery(
     let workspace = WorkspaceResolver::resolve_participant(".", Some(prepared.root))?;
     let store = crate::cli::open_store(&workspace)?;
     let channel = crate::cli::current_channel(&workspace);
-    let sender = crate::cli::send::sender_from_env(channel.as_deref(), false);
+    let caller = crate::cli::send::resolve_caller(&store)?;
+    let sender = crate::cli::send::sender_for(caller.as_ref(), channel.as_deref(), false);
     tracing::debug!(
         kind = prepared.target.kind,
         session = prepared.target.session,

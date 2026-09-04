@@ -47,8 +47,10 @@ pub(super) fn send_message(
         json,
         any,
     } = flags;
+    let ctx = Ctx::open(globals)?;
+    let caller = send::resolve_caller(&ctx.store)?;
     let wait = send::WaitSpec {
-        mode: send::reply_wait(wait, send::agent_caller()),
+        mode: send::reply_wait(wait, caller.is_some()),
         any,
         json,
     };
@@ -63,10 +65,9 @@ pub(super) fn send_message(
     let text = resolve_message(&text, file.as_deref(), piped.as_deref())?;
     let mode = dispatch_mode(mode, !no_enter, force, create, smart_compact)?;
     rimz::harness::target::require_mention(&target)?;
-    let ctx = Ctx::open(globals)?;
     let (workspace, store) = (&ctx.workspace, &ctx.store);
     let current_channel = ctx.channel().map(ToOwned::to_owned);
-    let sender = send::sender_from_env(current_channel.as_deref(), no_from);
+    let sender = send::sender_for(caller.as_ref(), current_channel.as_deref(), no_from);
     let steer = matches!(mode, DispatchMode::Steer { .. });
     let wait_started = std::time::Instant::now();
     let request = DispatchRequest {
@@ -74,7 +75,7 @@ pub(super) fn send_message(
         text: text.clone(),
         target_scope: worktree.clone().or_else(|| channel_flag.clone()),
         current_channel: current_channel.clone(),
-        caller: rimz::harness::ancestry::LaunchCallerEnv::from_env(),
+        caller: caller.clone(),
         sender: sender.clone(),
         automated: false,
         allow_fanout: all,
@@ -84,7 +85,7 @@ pub(super) fn send_message(
             } else {
                 ReplyJoin::All
             },
-            caller_identity: send::agent_caller_identity(),
+            caller_identity: send::caller_identity(caller.as_ref()),
         }),
         mux: globals.mux,
         mode,
