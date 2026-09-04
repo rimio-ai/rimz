@@ -4,7 +4,6 @@ use crate::agents::AgentState;
 use crate::ids::{AgentSessionId, PaneId};
 use crate::pane;
 use crate::pane::PaneRef;
-use crate::pane::command_is_sidebar_chrome;
 use crate::store::session_death;
 use crate::store::snapshot::panes::is_daemon_owned;
 
@@ -181,10 +180,7 @@ impl SidebarSnapshot {
                 continue;
             };
             let entry = views.entry(view_id).or_default();
-            let is_sidebar = pane
-                .command
-                .as_deref()
-                .is_some_and(command_is_sidebar_chrome);
+            let is_sidebar = pane.is_rimz_sidebar();
             if is_sidebar {
                 continue;
             }
