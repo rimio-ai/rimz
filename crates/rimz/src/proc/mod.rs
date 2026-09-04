@@ -278,6 +278,30 @@ pub fn comm_and_ppid(_pid: u32) -> Option<(String, u32)> {
     None
 }
 
+/// Parent process ids from nearest to farthest, capped to avoid cycles in a
+/// malformed process table. Unsupported platforms return an empty list.
+#[cfg(unix)]
+pub fn ancestor_pids() -> Vec<u32> {
+    let mut ancestors = Vec::new();
+    let mut pid = std::os::unix::process::parent_id();
+    for _ in 0..32 {
+        if pid <= 1 {
+            break;
+        }
+        ancestors.push(pid);
+        let Some((_, parent)) = comm_and_ppid(pid) else {
+            break;
+        };
+        pid = parent;
+    }
+    ancestors
+}
+
+#[cfg(not(unix))]
+pub fn ancestor_pids() -> Vec<u32> {
+    Vec::new()
+}
+
 /// The value of environment variable `key` for `pid`, read from
 /// `/proc/<pid>/environ` (NUL-separated `key=value` pairs). A sidebar inherits
 /// its pane's `ZELLIJ_PANE_ID` / `TMUX_PANE`, so `rimz reload` reads it back to
