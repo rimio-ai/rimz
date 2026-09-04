@@ -560,24 +560,16 @@ pub(crate) fn classification_sample(hook: &HookEventSpec) -> super::Classificati
     )
 }
 
-pub(crate) fn decode_catalog_hook(
-    hooks: &[HookEventSpec],
+pub(crate) fn decode_catalog_hook<'a>(
+    hooks: impl IntoIterator<Item = &'a HookEventSpec>,
     event_name: &str,
     ask_kind: Option<AskKind>,
 ) -> HookOutput {
-    let hook = hooks.iter().find(|hook| hook.event == event_name);
+    let hook = hooks.into_iter().find(|hook| hook.event == event_name);
     HookOutput::new(classify_catalog_entry(hook, event_name, ask_kind)).with_policy(hook)
 }
 
-pub(crate) fn decode_catalog_entry(
-    hook: Option<&HookEventSpec>,
-    event_name: &str,
-    ask_kind: Option<AskKind>,
-) -> HookOutput {
-    HookOutput::new(classify_catalog_entry(hook, event_name, ask_kind)).with_policy(hook)
-}
-
-pub(crate) fn classify_catalog_entry(
+fn classify_catalog_entry(
     hook: Option<&HookEventSpec>,
     event_name: &str,
     ask_kind: Option<AskKind>,
