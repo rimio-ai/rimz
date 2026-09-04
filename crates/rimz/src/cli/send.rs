@@ -6,7 +6,6 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use clap::Args;
 
-use rimz::ids::AgentKind;
 use rimz::message::dispatch::{DispatchOutcome, ParkReason};
 use rimz::store::message::{AutoCompact, MessageSender};
 use rimz::utils::time::{DurationUnit, parse_duration_units};
@@ -198,33 +197,44 @@ pub(crate) fn warn_ignored_stdin() {
 }
 
 /// The caller identity for `message`. `--no-from` is deliberately unattributed
-/// system text so delivery stays verbatim. Otherwise RimZ-launched agents carry
-/// `RIMZ_AGENT_KIND`; ordinary room shells stay human-authored.
-pub(crate) fn sender_from_env(channel: Option<&str>, no_from: bool) -> MessageSender {
+/// system text so delivery stays verbatim. RimZ-launched agents carry their
+/// identity in the environment; a bare-resumed provider is recognised through
+/// its live durable owner in the process ancestry. Ordinary shells stay human.
+pub(crate) fn sender_for(
+    caller: Option<&rimz::harness::ancestry::CallerIdentity>,
+    channel: Option<&str>,
+    no_from: bool,
+) -> MessageSender {
     if no_from {
         return MessageSender::System;
     }
-    let Some(kind) = env_string(rimz::harness::launch::ENV_AGENT_KIND) else {
+    let Some(caller) = caller else {
         return MessageSender::Human;
     };
     MessageSender::Agent {
-        kind: AgentKind::new_unchecked(kind),
-        name: env_string(rimz::harness::launch::ENV_AGENT_NAME),
-        profile: env_string(rimz::harness::launch::ENV_AGENT_PROFILE),
-        role: env_string(rimz::harness::launch::ENV_AGENT_ROLE),
+        kind: caller.kind.clone(),
+        name: caller.name.clone(),
+        profile: caller.profile.clone(),
+        role: caller.role.clone(),
         channel: channel.map(ToOwned::to_owned),
     }
 }
 
-pub(crate) fn agent_caller() -> bool {
-    env_string(rimz::harness::launch::ENV_AGENT_KIND).is_some()
+pub(crate) fn resolve_caller(
+    store: &rimz::Store,
+) -> Result<Option<rimz::harness::ancestry::CallerIdentity>> {
+    if let Some(caller) = rimz::harness::ancestry::CallerIdentity::from_env() {
+        return Ok(Some(caller));
+    }
+    let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
+    Ok(rimz::harness::ancestry::CallerIdentity::from_process_ancestry(&projection.agents))
 }
 
-pub(crate) fn agent_caller_identity() -> Option<(AgentKind, String)> {
-    Some((
-        AgentKind::new_unchecked(env_string(rimz::harness::launch::ENV_AGENT_KIND)?),
-        env_string(rimz::harness::launch::ENV_AGENT_NAME)?,
-    ))
+pub(crate) fn caller_identity(
+    caller: Option<&rimz::harness::ancestry::CallerIdentity>,
+) -> Option<(rimz::ids::AgentKind, String)> {
+    let caller = caller?;
+    Some((caller.kind.clone(), caller.name.clone()?))
 }
 
 pub(crate) fn reply_wait(wait: Option<Option<Duration>>, agent_caller: bool) -> ReplyWait {
@@ -416,10 +426,6 @@ fn parse_wait_duration(raw: &str) -> std::result::Result<Duration, String> {
         ],
     )
     .map_err(|err| err.to_string())
-}
-
-fn env_string(key: &str) -> Option<String> {
-    std::env::var(key).ok().filter(|value| !value.is_empty())
 }
 
 /// Read a prompt file as-is, trimming only the trailing newline an editor adds so

@@ -425,13 +425,12 @@ fn prepare_supervised(
         &workspace.project_root,
         &rimz::disk::paths::config_home(),
     )?;
-    let projection = rimz::harness::ancestry::launch_ancestry_required()
-        .then(|| store.runtime_projection(rimz::RuntimeScope::Audit))
-        .transpose()?;
-    let caller = projection
+    let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
+    let caller_identity = rimz::harness::ancestry::resolve_caller(&projection.agents);
+    let caller = caller_identity
         .as_ref()
-        .map(|projection| {
-            rimz::harness::ancestry::resolve_launch_caller_from_env(&projection.agents)
+        .map(|identity| {
+            rimz::harness::ancestry::resolve_launch_caller(&projection.agents, identity)
         })
         .transpose()?;
     let ancestry = rimz::harness::ancestry::resolve_launch_ancestry(
