@@ -251,15 +251,11 @@ pub enum ControlError {
         #[source]
         source: std::io::Error,
     },
-    #[error(
-        "Codex remote-control {action} timed out after {}s using {}",
-        timeout.as_secs(),
-        program.display()
-    )]
+    #[error("Codex remote-control {action} timed out after {secs}s using {}", program.display())]
     Timeout {
         action: &'static str,
         program: PathBuf,
-        timeout: Duration,
+        secs: u64,
     },
     #[error(
         "Codex remote-control {action} failed with {status} using {}: {stderr}",
@@ -290,7 +286,7 @@ fn run_command(argv: &[String], enabled: bool, home: &Path) -> Result<(), Contro
         return Err(ControlError::Timeout {
             action: action(enabled),
             program,
-            timeout: CONTROL_TIMEOUT,
+            secs: CONTROL_TIMEOUT.as_secs(),
         });
     }
     if !output.status.success() {
