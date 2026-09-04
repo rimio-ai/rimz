@@ -526,7 +526,13 @@ impl<'a> TaskFire<'a> {
             return Ok(PreparedCheck::done(finished));
         }
         if !polarity_fires(self.entry.on, &outcome) {
-            if self.mode == LoopRunMode::Scheduled && self.ephemeral {
+            if self.mode == LoopRunMode::Scheduled
+                && self
+                    .task
+                    .trigger()
+                    .as_ref()
+                    .is_ok_and(|parsed| matches!(parsed.trigger, Trigger::Watch { .. }))
+            {
                 self.catalog.consume_scheduled(&self.name)?;
             }
             let finished = self.record_terminal_with(

@@ -310,6 +310,99 @@ fn check_polarity_truth_table() {
 }
 
 #[test]
+fn skipped_check_preserves_poll_until_and_consumes_watch() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let poll_name = "runner-skipped-poll-until";
+    let watch_name = "runner-skipped-watch";
+    let poll = TaskEntry {
+        agent: Some("claude".to_owned()),
+        prompt: Some("poll".to_owned()),
+        check: Some("false".to_owned()),
+        on: Some(CheckOn::Success),
+        root: dir.path().to_path_buf(),
+        every: Some("1m".to_owned()),
+        deadline: Some(
+            Timestamp::now()
+                .checked_add(jiff::SignedDuration::from_hours(1))
+                .expect("future deadline"),
+        ),
+        ..TaskEntry::default()
+    };
+    let watch = TaskEntry {
+        agent: Some("claude".to_owned()),
+        prompt: Some("watch".to_owned()),
+        on: Some(CheckOn::Success),
+        root: dir.path().to_path_buf(),
+        watch: Some("false".to_owned()),
+        ..TaskEntry::default()
+    };
+    crate::harness::schedule::instances::insert(poll_name, &poll).expect("insert poll");
+    crate::harness::schedule::instances::insert(watch_name, &watch).expect("insert watch");
+    let catalog = TaskCatalog::load(None).expect("load task catalog");
+
+    let mut poll_fire = skipped_fire(poll_name, &catalog, None);
+    let poll_check = poll_fire.prepare_check().expect("run poll check");
+    assert_eq!(
+        poll_check.done.expect("skipped poll result").record.result,
+        LoopRunResult::CheckSkipped
+    );
+
+    let signal = TriggerSignal {
+        name: "wake.runner-skipped-watch".parse().expect("signal name"),
+        payload: serde_json::Map::new(),
+        source: crate::harness::schedule::signal::SignalSource::Watch,
+        watch: Some(crate::harness::schedule::signal::WatchOutcome::Exited {
+            code: Some(1),
+            output: String::new(),
+        }),
+    };
+    let mut watch_fire = skipped_fire(watch_name, &catalog, Some(signal));
+    let watch_check = watch_fire.prepare_check().expect("read watch check");
+    assert_eq!(
+        watch_check
+            .done
+            .expect("skipped watch result")
+            .record
+            .result,
+        LoopRunResult::CheckSkipped
+    );
+
+    let instances = crate::harness::schedule::instances::load();
+    assert!(instances.0.contains_key(poll_name));
+    assert!(!instances.0.contains_key(watch_name));
+    crate::harness::schedule::instances::remove(poll_name).expect("remove poll fixture");
+}
+
+fn skipped_fire<'a>(
+    name: &str,
+    catalog: &'a TaskCatalog,
+    signal: Option<TriggerSignal>,
+) -> TaskFire<'a> {
+    let task = catalog.for_run(name).cloned().expect("loaded fixture");
+    let action = task.action().cloned().expect("valid fixture action");
+    let root = task.entry().resolved_root();
+    let mut fire = TaskFire::new(
+        name,
+        task,
+        catalog,
+        LoopRunMode::Scheduled,
+        false,
+        Timestamp::now(),
+        Arc::new(MachineConfig::default()),
+        signal,
+        CheckEcho::Capture,
+        Instant::now(),
+    )
+    .expect("construct task fire");
+    fire.context = Some(FireContext {
+        action,
+        root,
+        scope: None,
+    });
+    fire
+}
+
+#[test]
 fn run_check_captures_output_status_and_timeout() {
     let dir = tempfile::tempdir().expect("tempdir");
     let check = |cmd: &str, timeout| {
