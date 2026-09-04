@@ -71,10 +71,19 @@ fn fire_tasks(
                 fired.push(name);
             }
             Action::WatchLost => {
+                let signal_name = match format!("wake.{name}").parse() {
+                    Ok(signal_name) => signal_name,
+                    Err(err) => {
+                        tracing::debug!(
+                            task = %name,
+                            error = %err,
+                            "loop watcher with invalid derived signal skipped by elder fire"
+                        );
+                        continue;
+                    }
+                };
                 let signal = super::signal::Signal {
-                    name: format!("wake.{name}")
-                        .parse()
-                        .expect("task names produce valid internal signal names"),
+                    name: signal_name,
                     payload: serde_json::Map::new(),
                     source: super::signal::SignalSource::Watch,
                     watch: Some(super::signal::WatchOutcome::Lost {
@@ -444,6 +453,42 @@ mod tests {
         assert_eq!(
             Tick::armed(stale).run(&watch, &now),
             watch_lost(now.timestamp())
+        );
+    }
+
+    #[test]
+    fn invalid_renamed_watcher_signal_does_not_stop_elder_fire() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = RuntimePaths::for_workspace(WorkspaceId::from_project_root(root.path()))
+            .expect("watch runtime");
+        std::fs::create_dir_all(&runtime.root).expect("runtime root");
+        let now = zdt(2026, 6, 24, 8, 5, 0);
+        let stale = seconds_before(now.timestamp(), WATCH_LOST_GRACE_SECS + 1);
+        write_temp_then_rename_cache(
+            &state_path(&runtime),
+            &BTreeMap::from([("Renamed".to_owned(), stale), ("valid".to_owned(), stale)]),
+        )
+        .expect("fire state");
+        let watch = |name| {
+            LoadedTask::new(
+                name,
+                TaskEntry {
+                    agent: Some("claude".to_owned()),
+                    root: root.path().to_path_buf(),
+                    watch: Some("cargo test".to_owned()),
+                    ..TaskEntry::default()
+                },
+                TaskSource::Config,
+            )
+        };
+        let tasks = BTreeMap::from([
+            ("Renamed".to_owned(), watch("Renamed")),
+            ("valid".to_owned(), watch("valid")),
+        ]);
+
+        assert_eq!(
+            fire_tasks(&runtime, Some(root.path()), tasks, &now),
+            vec!["valid"]
         );
     }
 
