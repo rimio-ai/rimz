@@ -32,7 +32,7 @@ Managed panes are matched by their launch command. Zellij pane ids are positiona
 
 The markers are the taxonomy: `ContentSlot(n)`, `CodexAppServer`, `ClaudeRemoteControl`, and `LoopPanel`. A content slot matches on `daemon content` plus its `--slot` value, so slot 0 and slot 1 never collide. The Claude marker parses the command rather than substring-matching it: a token whose file name is `claude` must be followed by `remote-control`, which keeps `nvim remote-control.md` out of the managed set.
 
-Two similarly named predicates answer different questions, and the difference matters at call sites. `command_is_host` asks whether a command line is a managed *host* — the broker or the Claude host only, never a content supervisor or the loop panel. `pane_is_host` asks whether a *pane* belongs to the dashboard at all, and any pane in the `rimzd` view qualifies. The sidebar uses the second to tell a daemon view from a working one; the Zellij pane classifier uses the first to recognize a host that re-execs after launch.
+Two similarly named predicates in `pane` answer different questions, and the difference matters at call sites. `command_is_host` asks whether a command line is a managed *host* — the broker or the Claude host only, never a content supervisor or the loop panel. `pane_is_host` asks whether a *pane* belongs to the dashboard at all, and any pane in the `rimzd` view qualifies. The sidebar uses the second to tell a daemon view from a working one; the Zellij pane classifier uses the first to recognize a host that re-execs after launch.
 
 ## Building the specification
 
