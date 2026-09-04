@@ -72,7 +72,7 @@ upward-dependencies = [
     "mux",
     "worktree",
 ]
-surface-budget = 978
+surface-budget = 972
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -166,7 +166,7 @@ surface-budget = 9
 
 [[module]]
 path = "crates/rimz/src/lib.rs"
-surface-budget = 70
+surface-budget = 69
 
 [[module]]
 path = "crates/rimz/src/main.rs"
@@ -249,7 +249,7 @@ surface-budget = 48
 
 [[module]]
 path = "crates/rimz/src/sidebar"
-surface-budget = 438
+surface-budget = 437
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
@@ -277,7 +277,7 @@ upward-dependencies = [
     "sidebar::wakeup",
     "worktree",
 ]
-surface-budget = 321
+surface-budget = 318
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -624,8 +624,3 @@ baseline = 3
 kind = "item"
 key = "store::event::for_terminal_status"
 reason = "Mirrors MessageStatus::is_terminal on purpose: the event method names the wire event per terminal status, and a derived mapping would hide the audit vocabulary."
-
-[[verdict]]
-kind = "item"
-key = "store::agent_context::write_record"
-reason = "Fully-shaped sidecar fixture for integration tests; lives behind the testkit feature, not production API."
