@@ -73,6 +73,10 @@ rimz pane list                       # every pane, labelled with @handles
 rimz pane capture @coder             # what the agent's pane shows right now
 rimz loop show <task>                # schedule, next fire, run forensics
 rimz loop logs <task>                # full forensics for recent runs
+rimz wake --in 30m                   # wake me once, 30 minutes from now
+rimz wake -- cargo test              # wake me when the command exits
+rimz wake --signal pr.merged         # wake me when the room fires that signal
+rimz events emit deploy.done         # fire a signal for whoever is listening
 ```
 
 ## Implementation rules
@@ -101,7 +105,7 @@ This indexes what lives where; runtime shape and the single-binary rationale liv
 - `cli/` — command parsing, one `run(...)` per subcommand, shared `cli/render/` output, and the subagent fleet digest.
 - `agents/` — the provider-neutral `AgentDefinition` catalog, caller-aligned capability contracts and services, `state.rs` rollup, private `adapters/` implementations for every built-in and process plugin, and shared spend/pricing/account machinery including upstream pricing projection.
 - `room/` — private managed-room context, birth/reset/teardown lifecycle, sidebar/presence options, and health gating.
-- `harness/` — layout IR, teams, address grammar, launch argv, supervised runs and their wake socket, loop scheduling, resume planning, and rebirth recovery inspection/materialization.
+- `harness/` — layout IR, teams, address grammar, launch argv, supervised runs and their wake socket, loop scheduling over clock/signal/watch triggers, signal names and in-process firing, resume planning, and rebirth recovery inspection/materialization.
 - `message/` — message delivery: park-vs-live dispatch, live-pane send, reply waits, scheduled wakeups.
 - `store/` — durable state engine: `Store` handle, canonical snapshot schema, writer mutation vocabulary/choreography, framed event log, message record and queue codec, lifecycle follower, run store, GC.
 - `mux/` — Zellij/tmux seam: `MuxBackend`, subprocess engine, reconcile planner, recovery, focus-intent anchor, room width target, Zellij pane-topology and presence-desired caches.

@@ -280,11 +280,11 @@ Content:
 <message>
 ```
 
-`Type` is `AGENT_MESSAGE` for a send from an identified agent caller, `SUBAGENT_REPORT` for the status-only fleet digest sent after all of an agent's launched children settle, and `USER_MESSAGE` for a human's `rimz message`; a human header always uses `From: @user`, while the fleet digest uses `From: @rimz`. An agent handle gains `#channel` when the delivery crosses lanes. The recipient's lane comes from its registered channel, its live pane channel, or the addressed channel, so a just-launched same-lane teammate does not gain a spurious suffix before pane capture lands.
+`Type` is `AGENT_MESSAGE` for a send from an identified agent caller, `SUBAGENT_REPORT` for the status-only fleet digest sent after all of an agent's launched children settle, `WAKE` for a delivery the loop runner makes on behalf of a `rimz wake` or a `--wake` task, and `USER_MESSAGE` for a human's `rimz message`; a human header always uses `From: @user`, while the fleet digest and the wake both use `From: @rimz`. An agent handle gains `#channel` when the delivery crosses lanes. The recipient's lane comes from its registered channel, its live pane channel, or the addressed channel, so a just-launched same-lane teammate does not gain a spurious suffix before pane capture lands.
 
 The agent handle is the shortest unique selector over addressable agents: role when unique in scope, then explicit launch name, then profile when unique, else kind, else kind ordinal, else pet name. A session rebirth's co-resident audit row is not addressable, so it never pushes the live pane owner's handle down this ladder. System records and `--no-from` sends stay verbatim.
 
-The receiver's turn-start hook parses the header once. `AGENT_MESSAGE` becomes a first-class `Message` transcript entry, while `SUBAGENT_REPORT` becomes a `SubagentReport` entry; both carry structured `from`. Human transcript rendering hides `SubagentReport`, while `rimz transcript --json` includes it. `USER_MESSAGE` becomes a `Prompt` entry with the header removed and no `from`. When the agent has an open question, the first direct human `Prompt` segment instead becomes its id-stamped `Answer`; an attributed queue record never answers it. The queue record supplies the confirmed message id and parentage stamped onto that entry, while the parsed body stays the transcript content.
+The receiver's turn-start hook parses the header once. `AGENT_MESSAGE` becomes a first-class `Message` transcript entry, `SUBAGENT_REPORT` becomes a `SubagentReport` entry, and `WAKE` becomes a `Wake` entry; all three carry structured `from`. Human transcript rendering hides only `SubagentReport`, while `rimz transcript --json` includes it. `USER_MESSAGE` becomes a `Prompt` entry with the header removed and no `from`. When the agent has an open question, the first direct human `Prompt` segment instead becomes its id-stamped `Answer`; an attributed queue record never answers it. The queue record supplies the confirmed message id and parentage stamped onto that entry, while the parsed body stays the transcript content.
 
 ## Smart compaction
 
@@ -442,6 +442,8 @@ A ready `Queued` head arms the stamp even with no `not_before` at all, contribut
 An unmet `when` condition sets `retry_after` to the exact projected trip time rather than a flat window, so a 58-minute dwell wakes once at 58 minutes. An ended watched session archives every still-unmet record with the condition in `last_error`; the lifecycle hook is the realtime path and orphan GC is the durable backstop. A met stamp survives session end and receiver delay: latching is what lets a busy receiver still get the message at its next boundary.
 
 Durations accept `s`, `m`, `h`, `d`. Wall-clock `HH:MM` resolves to the next occurrence in the configured `timezone` (today if still future, else tomorrow), falling back to the system zone. Zero durations are rejected.
+
+`rimz message --schedule` and `rimz wake` are different mechanisms with a similar feel, and the split is worth keeping straight. A schedule is a floor on a record that already exists: the text is written now and held until its stamp. A wake is a loop task that holds no message at all until its trigger fires, and only then dispatches one, as an automated `Harness { notice: Wake }` send with fan-out disabled and no caller attribution. That is why a wake can wait on a signal or a command rather than only a clock, and why its text never appears in the queue until it lands ([loops.md](./loops.md#one-shot-wakes)).
 
 ## Storage and audit
 
