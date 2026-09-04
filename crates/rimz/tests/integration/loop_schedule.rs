@@ -12,7 +12,7 @@ use serde_json::json;
 
 use rimz::agents::PermissionMode;
 use rimz::agents::{AgentRateLimits, RateLimitCacheEntry, RateLimitWindow, RateLimitsCache};
-use rimz::config::{CheckOn, LoopConfig, MachineConfig, TaskEntry, TaskTarget, Tasks};
+use rimz::config::{CheckOn, LoopConfig, TaskEntry, TaskTarget, Tasks};
 use rimz::harness::budget::{BudgetLedger, DayBaseline, write_ledger};
 use rimz::harness::run::{RunRecord, RunStatus};
 use rimz::harness::schedule::arming::{self, Arming};
@@ -2007,8 +2007,10 @@ fn loop_add_persists_machine_and_project_signal_triggers() {
         added.contains("trigger: fires on ci.finished [conclusion=failure]"),
         "{added}"
     );
-    let machine = MachineConfig::load().expect("machine config");
-    let machine_task = &machine.r#loop.tasks.0["machine-signal"];
+    let machine: LoopConfig =
+        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).expect("read loop config"))
+            .expect("parse loop config");
+    let machine_task = &machine.tasks.0["machine-signal"];
     assert_eq!(machine_task.signal.as_deref(), Some("ci.finished"));
     assert_eq!(machine_task.on, Some(CheckOn::Any));
     assert_eq!(
@@ -2109,9 +2111,11 @@ fn loop_add_rejects_agent_signal_self_wakes() {
             "continue",
         ],
     );
-    let machine = MachineConfig::load().expect("machine config");
+    let machine: LoopConfig =
+        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).expect("read loop config"))
+            .expect("parse loop config");
     assert_eq!(
-        machine.r#loop.tasks.0["peer-wake"]
+        machine.tasks.0["peer-wake"]
             .matches
             .as_ref()
             .and_then(|matches| matches.get("handle"))
@@ -2224,7 +2228,7 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "--every",
                 "15m",
             ],
-            "--signal <NAME>",
+            "--match requires --signal",
         ),
         (
             vec![
