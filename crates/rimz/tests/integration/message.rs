@@ -1964,7 +1964,7 @@ fn sweep_holds_unconfirmed_prompt_while_compaction_bracket_is_open() {
     );
     observation.worktree_branch = Some("feature-compact-reconcile".to_owned());
     observation.worktree_path = Some(env.project_root.display().to_string());
-    observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "3"));
+    observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
     let mut event = EventEnvelope::agent_lifecycle(
         workspace.workspace_id,
         workspace.session_name,
