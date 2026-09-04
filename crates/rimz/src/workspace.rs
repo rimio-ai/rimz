@@ -21,6 +21,8 @@
 //! `rimz start` away from inside a parent room. See `docs/internals` and
 //! `DESIGN.md` for the rules this implements.
 
+pub mod record;
+
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::io;
@@ -704,8 +706,6 @@ fn session_name_for(project_root: &Path) -> String {
         .unwrap_or(workspace_id.as_str());
     format!("rimz-{slug}-{}", &hash[..6])
 }
-
-pub mod record;
 
 #[cfg(test)]
 mod tests;
