@@ -22,6 +22,8 @@ fn dashboard_row(name: &str, state: RowState, failed: bool) -> WatchRow {
             RowState::Due => "due".to_owned(),
             RowState::Held => "paused".to_owned(),
             RowState::Blocked => "blocked · trust".to_owned(),
+            RowState::Listening => "listening".to_owned(),
+            RowState::Watching => "watching".to_owned(),
             RowState::Upcoming(next) => ui::until_label(next, now),
             RowState::NeverRun => "—".to_owned(),
         },
@@ -272,7 +274,7 @@ fn interval_timing(
         ..TaskEntry::default()
     };
     schedule::TaskTiming::evaluate(
-        schedule::TaskShape::compile("task", &entry).schedule(),
+        schedule::TaskShape::compile("task", &entry).trigger(),
         blocked.map_or(TaskSource::Config, |state| TaskSource::Project { state }),
         last_fire,
         arming,
@@ -332,7 +334,7 @@ fn task_timing_maps_to_watch_labels() {
                         ..TaskEntry::default()
                     },
                 )
-                .schedule(),
+                .trigger(),
                 TaskSource::Project {
                     state: TrustState::Trusted,
                 },
@@ -355,7 +357,7 @@ fn task_timing_maps_to_watch_labels() {
         ),
         (
             schedule::TaskTiming::evaluate(
-                schedule::TaskShape::compile("task", &TaskEntry::default()).schedule(),
+                schedule::TaskShape::compile("task", &TaskEntry::default()).trigger(),
                 TaskSource::Config,
                 Some(now),
                 None,
@@ -371,6 +373,39 @@ fn task_timing_maps_to_watch_labels() {
         ),
     ];
     for (timing, state, label) in cases {
+        assert_eq!(row_state_for_timing(&timing), state);
+        assert_eq!(timing_next_text(&timing, now), label);
+    }
+}
+
+#[test]
+fn signal_and_watch_timing_map_to_live_watch_labels() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    for (entry, state, label) in [
+        (
+            TaskEntry {
+                signal: Some("ci.finished".to_owned()),
+                ..TaskEntry::default()
+            },
+            RowState::Listening,
+            "listening",
+        ),
+        (
+            TaskEntry {
+                watch: Some("cargo test".to_owned()),
+                ..TaskEntry::default()
+            },
+            RowState::Watching,
+            "watching",
+        ),
+    ] {
+        let timing = schedule::TaskTiming::evaluate(
+            schedule::TaskShape::compile("task", &entry).trigger(),
+            TaskSource::Config,
+            None,
+            None,
+            &now.to_zoned(jiff::tz::TimeZone::UTC),
+        );
         assert_eq!(row_state_for_timing(&timing), state);
         assert_eq!(timing_next_text(&timing, now), label);
     }

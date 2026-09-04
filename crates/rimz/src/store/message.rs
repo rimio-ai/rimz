@@ -57,6 +57,7 @@ pub enum MessageSender {
 #[serde(rename_all = "snake_case")]
 pub enum HarnessNotice {
     SubagentReport,
+    Wake,
 }
 
 impl MessageSender {

@@ -279,6 +279,7 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
                 stamp_compact_command(map.values_mut(), payload);
             }
             EventKind::SessionDeath(_) => {}
+            EventKind::Signal(_) => {}
             EventKind::Other {
                 method: "agent.lifecycle",
                 ..

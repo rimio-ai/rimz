@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use jiff::{Timestamp, Zoned};
 
 use super::{
+    Trigger,
     arming::{self, ArmState, Arming, TaskKey},
     catalog::{LoadedTask, TaskCatalog},
 };
@@ -26,28 +27,17 @@ use crate::workspace::record;
 enum Action {
     Arm,
     Fire,
+    WatchLost,
 }
+
+const WATCH_LOST_GRACE_SECS: i64 = 30;
 
 #[doc(hidden)]
 pub fn fire_due_tasks(runtime: &RuntimePaths, project_root: Option<&Path>, now: &Zoned) {
     let project_root = project_root
         .map(Path::to_path_buf)
         .or_else(|| workspace_project_root(runtime));
-    let tasks = workspace_tasks(
-        TaskCatalog::load_lenient(project_root.as_deref())
-            .runnable()
-            .iter()
-            .filter(|(_, task)| {
-                !matches!(
-                    task.source(),
-                    super::catalog::TaskSource::Project { state }
-                        if state != crate::trust::TrustState::Trusted
-                )
-            })
-            .map(|(name, task)| (name.clone(), task.clone()))
-            .collect(),
-        &runtime.workspace_id,
-    );
+    let tasks = runnable_tasks_for(runtime, project_root.as_deref());
     fire_tasks(runtime, project_root.as_deref(), tasks, now);
 }
 
@@ -74,15 +64,34 @@ fn fire_tasks(
     }
     let mut fired = Vec::new();
     for (name, action) in actions {
-        if action == Action::Fire {
-            spawn_loop_run(runtime, project_root, &name);
-            fired.push(name);
+        match action {
+            Action::Arm => {}
+            Action::Fire => {
+                spawn_loop_run(runtime, project_root, &name, None);
+                fired.push(name);
+            }
+            Action::WatchLost => {
+                let signal = super::signal::Signal {
+                    name: format!("wake.{name}")
+                        .parse()
+                        .expect("task names produce valid internal signal names"),
+                    payload: serde_json::Map::new(),
+                    source: super::signal::SignalSource::Watch,
+                    watch: Some(super::signal::WatchOutcome::Lost {
+                        detail: "watch process is no longer running".to_owned(),
+                    }),
+                };
+                if let Ok(encoded) = serde_json::to_string(&signal) {
+                    spawn_loop_run(runtime, project_root, &name, Some(&encoded));
+                    fired.push(name);
+                }
+            }
         }
     }
     fired
 }
 
-fn workspace_project_root(runtime: &RuntimePaths) -> Option<PathBuf> {
+pub(super) fn workspace_project_root(runtime: &RuntimePaths) -> Option<PathBuf> {
     let paths = StatePaths::for_workspace(runtime.workspace_id.clone()).ok()?;
     match record::read(&paths.workspace_record) {
         Ok(record) => Some(record.project_root),
@@ -106,7 +115,7 @@ fn plan(
     let mut actions = Vec::new();
     let mut next_state = BTreeMap::new();
     for (name, task) in tasks {
-        let parsed = match task.schedule() {
+        let parsed = match task.trigger() {
             Ok(parsed) => parsed,
             Err(err) => {
                 tracing::debug!(
@@ -129,12 +138,21 @@ fn plan(
                 next_state.insert(name.clone(), last_fire);
             }
             Some(last_fire)
-                if parsed.schedule.due(
+                if matches!(&parsed.trigger, Trigger::Schedule(schedule) if schedule.schedule.due(
                     arming::effective_last_fire(last_fire, arming, now.timestamp()),
                     now,
-                ) =>
+                )) =>
             {
                 actions.push((name.clone(), Action::Fire));
+                next_state.insert(name.clone(), now.timestamp());
+            }
+            Some(last_fire)
+                if matches!(&parsed.trigger, Trigger::Watch { .. })
+                    && now.timestamp().duration_since(last_fire).as_secs()
+                        > WATCH_LOST_GRACE_SECS
+                    && watcher_missing(task, name) =>
+            {
+                actions.push((name.clone(), Action::WatchLost));
                 next_state.insert(name.clone(), now.timestamp());
             }
             Some(last_fire) => {
@@ -143,6 +161,36 @@ fn plan(
         }
     }
     (actions, next_state)
+}
+
+fn watcher_missing(task: &LoadedTask, name: &str) -> bool {
+    let Ok(runtime) = RuntimePaths::for_workspace(WorkspaceId::from_project_root(
+        &task.entry().resolved_root(),
+    )) else {
+        return false;
+    };
+    super::signal::watcher_info(&runtime, name).is_ok_and(|info| info.is_none())
+}
+
+pub(super) fn runnable_tasks_for(
+    runtime: &RuntimePaths,
+    project_root: Option<&Path>,
+) -> BTreeMap<String, LoadedTask> {
+    workspace_tasks(
+        TaskCatalog::load_lenient(project_root)
+            .runnable()
+            .iter()
+            .filter(|(_, task)| {
+                !matches!(
+                    task.source(),
+                    super::catalog::TaskSource::Project { state }
+                        if state != crate::trust::TrustState::Trusted
+                )
+            })
+            .map(|(name, task)| (name.clone(), task.clone()))
+            .collect(),
+        &runtime.workspace_id,
+    )
 }
 
 fn workspace_tasks(
@@ -172,7 +220,12 @@ fn state_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join("loop-fire.json")
 }
 
-fn spawn_loop_run(runtime: &RuntimePaths, project_root: Option<&Path>, name: &str) {
+pub(super) fn spawn_loop_run(
+    runtime: &RuntimePaths,
+    project_root: Option<&Path>,
+    name: &str,
+    signal_json: Option<&str>,
+) {
     let mut args = Vec::<OsString>::new();
     if let Some(project_root) = project_root {
         args.extend([
@@ -181,6 +234,9 @@ fn spawn_loop_run(runtime: &RuntimePaths, project_root: Option<&Path>, name: &st
         ]);
     }
     args.extend([OsString::from("loop"), OsString::from("run"), name.into()]);
+    if let Some(signal_json) = signal_json {
+        args.extend([OsString::from("--signal-json"), signal_json.into()]);
+    }
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         task = name,
@@ -291,6 +347,10 @@ mod tests {
         (Some(Action::Fire), Some(stamp))
     }
 
+    fn watch_lost(stamp: Timestamp) -> (Option<Action>, Option<Timestamp>) {
+        (Some(Action::WatchLost), Some(stamp))
+    }
+
     fn carry(stamp: Timestamp) -> (Option<Action>, Option<Timestamp>) {
         (None, Some(stamp))
     }
@@ -347,6 +407,44 @@ mod tests {
         let (actions, next) = plan(&BTreeMap::new(), &one(due), &BTreeMap::new(), &now);
         assert!(actions.is_empty());
         assert!(next.is_empty());
+    }
+
+    #[test]
+    fn signal_tasks_only_arm_while_missing_watchers_fire_after_the_grace() {
+        let now = zdt(2026, 6, 24, 8, 5, 0);
+        let signal = loaded(TaskEntry {
+            agent: Some("claude".to_owned()),
+            signal: Some("ci.finished".to_owned()),
+            ..TaskEntry::default()
+        });
+        assert_eq!(Tick::default().run(&signal, &now), arm(now.timestamp()));
+        let prior = seconds_before(now.timestamp(), 300);
+        assert_eq!(Tick::armed(prior).run(&signal, &now), carry(prior));
+
+        let root = tempfile::tempdir().unwrap();
+        let watch = loaded(TaskEntry {
+            agent: Some("claude".to_owned()),
+            root: root.path().to_path_buf(),
+            watch: Some("cargo test".to_owned()),
+            ..TaskEntry::default()
+        });
+        assert_eq!(Tick::default().run(&watch, &now), arm(now.timestamp()));
+        let recent = seconds_before(now.timestamp(), WATCH_LOST_GRACE_SECS);
+        assert_eq!(Tick::armed(recent).run(&watch, &now), carry(recent));
+
+        let stale = seconds_before(now.timestamp(), WATCH_LOST_GRACE_SECS + 1);
+        let runtime = RuntimePaths::for_workspace(WorkspaceId::from_project_root(root.path()))
+            .expect("watch runtime");
+        std::fs::create_dir_all(&runtime.root).expect("runtime root");
+        let guard = super::super::signal::acquire_watch_lock(&runtime, NAME)
+            .unwrap()
+            .expect("watch lock");
+        assert_eq!(Tick::armed(stale).run(&watch, &now), carry(stale));
+        drop(guard);
+        assert_eq!(
+            Tick::armed(stale).run(&watch, &now),
+            watch_lost(now.timestamp())
+        );
     }
 
     /// An ended pause becomes the effective last-fire edge, so a lifted task

@@ -152,6 +152,8 @@ mod tests {
             duration_ms: Some(1),
             error: None,
             check,
+            signal: None,
+            message_id: None,
             run_id: None,
             transcript_path: None,
             last_message: None,

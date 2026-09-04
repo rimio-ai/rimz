@@ -151,7 +151,7 @@ pub(crate) fn loop_tasks() -> Vec<CompletionCandidate> {
         .iter()
         .map(|(name, task)| {
             let help = task
-                .schedule()
+                .trigger()
                 .as_ref()
                 .map(|schedule| schedule.describe())
                 .unwrap_or_else(|error| format!("invalid: {error}"));

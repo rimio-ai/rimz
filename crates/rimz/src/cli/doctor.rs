@@ -130,8 +130,8 @@ fn collect_loop() -> model::LoopTasks {
         .iter()
         .map(|(name, task)| {
             let entry = task.entry();
-            let (when, valid) = match task.schedule() {
-                Ok(schedule) => (schedule.describe(), true),
+            let (when, valid) = match task.trigger() {
+                Ok(trigger) => (trigger.describe(), true),
                 Err(err) => (format!("invalid: {err}"), false),
             };
             model::LoopTaskRow {

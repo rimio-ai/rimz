@@ -739,6 +739,9 @@ pub struct ProjectTask {
     pub at: Option<String>,
     pub every: Option<String>,
     pub cron: Option<String>,
+    pub signal: Option<String>,
+    #[serde(rename = "match")]
+    pub matches: Option<BTreeMap<String, String>>,
     pub deadline: Option<Timestamp>,
 }
 
@@ -834,6 +837,9 @@ struct ExecutableTask<'a> {
     at: Option<&'a str>,
     every: Option<&'a str>,
     cron: Option<&'a str>,
+    signal: Option<&'a str>,
+    #[serde(rename = "match")]
+    matches: Option<&'a BTreeMap<String, String>>,
 }
 
 fn permission_mode_name(mode: PermissionMode) -> &'static str {
@@ -945,6 +951,8 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                     at: task.at.as_deref(),
                     every: task.every.as_deref(),
                     cron: task.cron.as_deref(),
+                    signal: task.signal.as_deref(),
+                    matches: task.matches.as_ref(),
                 })
                 .collect(),
             hooks: config
@@ -1471,6 +1479,8 @@ mod tests {
             "[tasks.x]\nat = \"08:00\"\n",
             "[tasks.x]\nevery = \"15m\"\n",
             "[tasks.x]\ncron = \"0 8 * * 1\"\n",
+            "[tasks.x]\nsignal = \"ci.finished\"\n",
+            "[tasks.x]\nmatch = { conclusion = \"failure\" }\n",
             "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
             "[env]\nPATH_PREPEND = \"/opt/rimz/bin\"\n",
         ];

@@ -168,6 +168,22 @@ fn record_mapped_lifecycle_observation(
         }
     };
     log_lifecycle_receipt(agent.spec().kind, &observation, &receipt);
+    for event in &receipt.events {
+        let Some(signal) = rimz::harness::schedule::signal::lifecycle_signal(event) else {
+            continue;
+        };
+        if let Err(err) = rimz::harness::schedule::signal::fire_signal(
+            store.runtime_paths(),
+            Some(&workspace.project_root),
+            &signal,
+        ) {
+            warn!(
+                signal = %signal.name,
+                error = %err,
+                "lifecycle: failed to fire matching loop tasks",
+            );
+        }
+    }
     RecordedLifecycle {
         model_hint,
         observation,

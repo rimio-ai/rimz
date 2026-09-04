@@ -12,7 +12,7 @@ use serde_json::json;
 
 use rimz::agents::PermissionMode;
 use rimz::agents::{AgentRateLimits, RateLimitCacheEntry, RateLimitWindow, RateLimitsCache};
-use rimz::config::{CheckOn, LoopConfig, TaskEntry, TaskTarget, Tasks};
+use rimz::config::{CheckOn, LoopConfig, MachineConfig, TaskEntry, TaskTarget, Tasks};
 use rimz::harness::budget::{BudgetLedger, DayBaseline, write_ledger};
 use rimz::harness::run::{RunRecord, RunStatus};
 use rimz::harness::schedule::arming::{self, Arming};
@@ -283,6 +283,157 @@ fn loop_wake_workflow_pins_and_delivers_to_live_session() {
             && show.contains("machine"),
         "list/show smoke failed:\n{list}\n{show}"
     );
+}
+
+#[test]
+fn emitted_signal_reaches_the_matching_wake_consumer() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-signal-live", "feature-signal");
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "ci-wake",
+            "--wake",
+            "@claude",
+            "--signal",
+            "ci.finished",
+            "--match",
+            "conclusion=failure",
+            "--prompt",
+            "CI is {{conclusion}}",
+        ],
+    );
+
+    loop_ok(
+        &env,
+        &[
+            "events",
+            "emit",
+            "ci.finished",
+            "--json",
+            r#"{"conclusion":"success"}"#,
+        ],
+    );
+    assert!(read_loop_run_records(&env).is_empty());
+    assert!(env.store().list_pending_messages().unwrap().is_empty());
+
+    loop_ok(
+        &env,
+        &[
+            "events",
+            "emit",
+            "ci.finished",
+            "--json",
+            r#"{"conclusion":"failure"}"#,
+        ],
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while read_loop_run_records(&env).is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0].result, LoopRunResult::Delivered);
+    let signal = records[0].signal.as_ref().expect("signal forensics");
+    assert_eq!(signal.name.as_str(), "ci.finished");
+    assert_eq!(signal.payload["conclusion"], "failure");
+    let message = &env.store().list_pending_messages().unwrap()[0];
+    assert_eq!(records[0].message_id.as_ref(), Some(&message.message_id));
+    assert_eq!(message.agent_id.as_str(), "sess-signal-live");
+    assert_eq!(
+        message.sender,
+        rimz::store::message::MessageSender::Harness {
+            notice: rimz::store::message::HarnessNotice::Wake,
+        }
+    );
+    assert_eq!(
+        rimz::harness::target::message_header(&message.sender, &[], None).as_deref(),
+        Some("Type: WAKE\nFrom: @rimz\nContent:\n")
+    );
+    assert!(message.text.contains("CI is failure"), "{}", message.text);
+    assert!(message.text.contains("ci.finished"), "{}", message.text);
+
+    let show = loop_ok(&env, &["loop", "show", "ci-wake"]);
+    assert!(show.contains("signal: ci.finished"), "{show}");
+    assert!(
+        show.contains(&format!("message: {}", message.message_id)),
+        "{show}"
+    );
+}
+
+#[test]
+fn lifecycle_signal_wakes_only_for_the_matching_agent_session() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "planner-session", "feature-planner");
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "review-finished",
+            "--wake",
+            "@claude",
+            "--signal",
+            "agent.idle",
+            "--match",
+            "session=reviewer-session",
+            "--prompt",
+            "review finished",
+        ],
+    );
+
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "planner-session",
+            "last_assistant_message": "planning done",
+            "worktree_branch": "feature-planner",
+        }),
+        &env.project_root,
+    );
+    assert!(read_loop_run_records(&env).is_empty());
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "planner-session",
+            "prompt": "wait for review",
+            "worktree_branch": "feature-planner",
+        }),
+        &env.project_root,
+    );
+
+    register_running_agent(&env, "reviewer-session", "feature-reviewer");
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "reviewer-session",
+            "last_assistant_message": "review done",
+            "worktree_branch": "feature-reviewer",
+        }),
+        &env.project_root,
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while read_loop_run_records(&env).is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(
+        records[0]
+            .signal
+            .as_ref()
+            .map(|signal| signal.name.as_str()),
+        Some("agent.idle")
+    );
+    assert_pending_message(&env, "planner-session", "review finished");
 }
 
 #[test]
@@ -576,7 +727,7 @@ fn trusted_project_task_edits_repin_trust() {
         ],
     );
     assert!(
-        added.contains("trust: granted — task enabled and fires on schedule")
+        added.contains("trust: granted — task enabled and ready to fire")
             && !added.contains("stay inert")
             && !added.contains("grant trust now"),
         "{added}"
@@ -616,7 +767,7 @@ fn first_project_task_grants_fresh_config() {
         ],
     );
     assert!(
-        added.contains("trust: granted — task enabled and fires on schedule"),
+        added.contains("trust: granted — task enabled and ready to fire"),
         "{added}"
     );
     assert!(loop_ok(&env, &["trust"]).contains("trust: trusted"));
@@ -734,7 +885,7 @@ fn loop_task_storage_policy_and_manual_fire_preserve_one_shots() {
         ],
     );
     assert!(
-        error.contains("must repeat") && error.contains("--every or --cron"),
+        error.contains("need a trigger") && error.contains("--every, --cron, or --signal"),
         "{error}"
     );
 }
@@ -1819,6 +1970,142 @@ fn loop_stop_terminates_holder_and_records_cancellation() {
 }
 
 #[test]
+fn loop_add_persists_machine_and_project_signal_triggers() {
+    let env = Env::new();
+    let added = loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "machine-signal",
+            "--check",
+            "true",
+            "--on",
+            "any",
+            "--signal",
+            "ci.finished",
+            "--match",
+            "conclusion=failure",
+        ],
+    );
+    assert!(
+        added.contains("trigger: fires on ci.finished [conclusion=failure]"),
+        "{added}"
+    );
+    let machine = MachineConfig::load().expect("machine config");
+    let machine_task = &machine.r#loop.tasks.0["machine-signal"];
+    assert_eq!(machine_task.signal.as_deref(), Some("ci.finished"));
+    assert_eq!(machine_task.on, Some(CheckOn::Any));
+    assert_eq!(
+        machine_task
+            .matches
+            .as_ref()
+            .and_then(|matches| matches.get("conclusion"))
+            .map(String::as_str),
+        Some("failure")
+    );
+
+    let project_added = loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "project-signal",
+            "--project",
+            "--check",
+            "true",
+            "--signal",
+            "ci.finished",
+            "--match",
+            "conclusion=failure",
+        ],
+    );
+    assert!(
+        project_added.contains("fires on ci.finished"),
+        "{project_added}"
+    );
+    let config_path = env.project_root.join(".rimz/config.toml");
+    let project_text = std::fs::read_to_string(&config_path).expect("project config");
+    assert!(
+        project_text.contains("[tasks.project-signal]"),
+        "{project_text}"
+    );
+    assert!(
+        project_text.contains("signal = \"ci.finished\"")
+            && project_text.contains("[tasks.project-signal.match]")
+            && project_text.contains("conclusion = \"failure\""),
+        "{project_text}"
+    );
+    let trusted = rimz::trust::status_with_roots(&env.project_root, &env.config_root())
+        .expect("project trust after add");
+    assert_eq!(trusted.state, rimz::trust::TrustState::Trusted);
+    let trusted_hash = trusted.current_hash.expect("trusted surface hash");
+
+    std::fs::write(
+        &config_path,
+        project_text.replace("conclusion = \"failure\"", "conclusion = \"success\""),
+    )
+    .expect("change project signal match");
+    let stale = rimz::trust::status_with_roots(&env.project_root, &env.config_root())
+        .expect("project trust after signal change");
+    assert_eq!(stale.state, rimz::trust::TrustState::Stale);
+    assert_ne!(stale.current_hash.as_deref(), Some(trusted_hash.as_str()));
+}
+
+#[test]
+fn loop_add_rejects_agent_signal_self_wakes() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-loop-self-wake", "feature-loop");
+
+    for extra in [Vec::new(), vec!["--match", "handle=@claude"]] {
+        let mut args = vec![
+            "loop",
+            "add",
+            "self-wake",
+            "--wake",
+            "@claude",
+            "--signal",
+            "agent.idle",
+            "--prompt",
+            "continue",
+        ];
+        args.extend(extra);
+        let (_stdout, error) = loop_fail(&env, &args);
+        assert!(
+            error.contains("requires --match handle=<other> or --match session=<other>"),
+            "{error}"
+        );
+    }
+
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "peer-wake",
+            "--wake",
+            "@claude",
+            "--signal",
+            "agent.idle",
+            "--match",
+            "handle=@reviewer",
+            "--prompt",
+            "continue",
+        ],
+    );
+    let machine = MachineConfig::load().expect("machine config");
+    assert_eq!(
+        machine.r#loop.tasks.0["peer-wake"]
+            .matches
+            .as_ref()
+            .and_then(|matches| matches.get("handle"))
+            .map(String::as_str),
+        Some("@reviewer")
+    );
+}
+
+#[test]
 fn loop_add_rejects_invalid_action_shapes() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -1909,6 +2196,48 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "--prompt", "x",
             ],
             "--on requires --check",
+        ),
+        (
+            vec![
+                "loop",
+                "add",
+                "match",
+                "--check",
+                "true",
+                "--match",
+                "status=failed",
+                "--every",
+                "15m",
+            ],
+            "--signal <NAME>",
+        ),
+        (
+            vec![
+                "loop",
+                "add",
+                "bad-match",
+                "--check",
+                "true",
+                "--signal",
+                "ci.finished",
+                "--match",
+                "status",
+            ],
+            "invalid --match `status`; expected KEY=VALUE",
+        ),
+        (
+            vec![
+                "loop",
+                "add",
+                "signal-schedule",
+                "--check",
+                "true",
+                "--signal",
+                "ci.finished",
+                "--every",
+                "15m",
+            ],
+            "cannot be used with",
         ),
         (
             vec![
@@ -2040,7 +2369,21 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "--at",
                 "12:00",
             ],
-            "--project tasks must repeat; set --every or --cron",
+            "--project tasks need a trigger; set --every, --cron, or --signal",
+        ),
+        (
+            vec![
+                "loop",
+                "add",
+                "project-signal-once",
+                "--project",
+                "--check",
+                "true",
+                "--signal",
+                "ci.finished",
+                "--once",
+            ],
+            "--project tasks cannot use --once; one-shot subscriptions are machine state",
         ),
     ];
     for (args, expected) in cases {

@@ -10,6 +10,45 @@ use rimz::agents::{AgentLifecycleObservation, LifecycleEvent, LifecycleSignal};
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::store::writer::AgentLifecycleIntent;
 
+#[test]
+fn events_emit_is_durable_and_replayed_by_follow() {
+    let env = Env::new();
+    let emitted = env
+        .rimz()
+        .args([
+            "events",
+            "emit",
+            "deploy.finished",
+            "--json",
+            r#"{"revision":42}"#,
+        ])
+        .output()
+        .expect("emit signal");
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+
+    let mut child = env
+        .rimz()
+        .args(["events", "follow", "--replay", "--json"])
+        .env("RIMZ_EVENTS_POLL_MS", "5")
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn events follow");
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .expect("read signal event");
+    child.kill().expect("stop events follower");
+    child.wait().expect("reap events follower");
+    let event: serde_json::Value = serde_json::from_str(&line).expect("signal JSON");
+    assert_eq!(event["event"], "signal");
+    assert_eq!(event["name"], "deploy.finished");
+    assert_eq!(event["payload"]["revision"], 42);
+}
+
 fn append(env: &Env, signal: LifecycleSignal) {
     let store = env.store();
     let observation =

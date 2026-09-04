@@ -32,6 +32,7 @@ pub(super) fn run_one(
     name: &str,
     mode: LoopRunMode,
     keep: bool,
+    signal: Option<rimz::harness::schedule::signal::Signal>,
     globals: &GlobalFlags,
 ) -> Result<()> {
     let catalog = task_catalog(globals)?;
@@ -86,6 +87,7 @@ pub(super) fn run_one(
         keep,
         Timestamp::now(),
         config,
+        signal,
         check_echo,
         started,
     )?;
@@ -299,8 +301,9 @@ fn execute_prepared_delivery(
     let workspace = WorkspaceResolver::resolve_participant(".", Some(prepared.root))?;
     let store = crate::cli::open_store(&workspace)?;
     let channel = crate::cli::current_channel(&workspace);
-    let caller = crate::cli::send::resolve_caller(&store)?;
-    let sender = crate::cli::send::sender_for(caller.as_ref(), channel.as_deref(), false);
+    let sender = rimz::store::message::MessageSender::Harness {
+        notice: rimz::store::message::HarnessNotice::Wake,
+    };
     tracing::debug!(
         kind = prepared.target.kind,
         session = prepared.target.session,
@@ -334,13 +337,30 @@ fn execute_prepared_delivery(
     );
     match dispatched {
         Ok(result) => {
+            let message_id = result
+                .outcomes
+                .first()
+                .map(|outcome| match outcome {
+                    rimz::message::dispatch::DispatchOutcome::Sent { message_id, .. }
+                    | rimz::message::dispatch::DispatchOutcome::Queued { message_id, .. }
+                    | rimz::message::dispatch::DispatchOutcome::CompactionPending {
+                        message_id,
+                        ..
+                    }
+                    | rimz::message::dispatch::DispatchOutcome::SkippedWaiting {
+                        message_id, ..
+                    } => message_id.clone(),
+                })
+                .context("loop wake dispatch returned no outcome")?;
             crate::cli::send::report_dispatch(
                 crate::cli::send::ReportMode::Boundary,
                 &prepared.target.handle,
                 &result.outcomes,
                 &result.compacted,
             )?;
-            Ok(rimz::harness::schedule::runner::TaskFireEffect::Delivered)
+            Ok(rimz::harness::schedule::runner::TaskFireEffect::Delivered(
+                message_id,
+            ))
         }
         Err(rimz::message::dispatch::DispatchErr::Recipient(
             rimz::TargetErr::NoMatch { .. } | rimz::TargetErr::NoMatchInChannel { .. },

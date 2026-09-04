@@ -16,7 +16,10 @@ use crate::disk::paths::state_home;
 use crate::harness::run::RunStatus;
 use crate::harness::schedule::arming::{self, TaskKey};
 use crate::harness::schedule::catalog::LoadedTask;
+use crate::harness::schedule::signal::SignalName;
 use crate::harness::schedule::strikes;
+use crate::ids::MessageId;
+use serde_json::{Map, Value};
 
 const NAME: &str = "loop-runs.log.jsonl";
 const MAX_BYTES: u64 = 4 * 1_048_576;
@@ -85,6 +88,10 @@ pub struct LoopRunRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<CheckRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<SignalRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<MessageId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_path: Option<String>,
@@ -115,6 +122,8 @@ impl LoopRunRecord {
             duration_ms: Some(duration_ms),
             error: None,
             check: None,
+            signal: None,
+            message_id: None,
             run_id: None,
             transcript_path: None,
             last_message: None,
@@ -147,6 +156,12 @@ pub struct CheckRecord {
     pub code: Option<i32>,
     pub timed_out: bool,
     pub output: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignalRecord {
+    pub name: SignalName,
+    pub payload: Map<String, Value>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -383,6 +398,15 @@ fn capped_record(record: &LoopRunRecord) -> LoopRunRecord {
     if let Some(check) = &mut capped.check {
         check.output = tail_string(&check.output, CHECK_OUTPUT_CAP);
     }
+    if let Some(signal) = &mut capped.signal
+        && serde_json::to_vec(&signal.payload).is_ok_and(|bytes| bytes.len() > CHECK_OUTPUT_CAP)
+    {
+        let rendered = serde_json::to_string(&signal.payload).unwrap_or_default();
+        signal.payload = Map::from_iter([(
+            "_truncated".to_owned(),
+            Value::String(tail_string(&rendered, CHECK_OUTPUT_CAP)),
+        )]);
+    }
     if let Some(last_message) = &mut capped.last_message {
         *last_message = tail_string(last_message, LAST_MESSAGE_CAP);
     }
@@ -414,6 +438,8 @@ mod tests {
             duration_ms: None,
             error: None,
             check: None,
+            signal: None,
+            message_id: None,
             run_id: None,
             transcript_path: None,
             last_message: None,
@@ -733,6 +759,13 @@ mod tests {
             timed_out: false,
             output: "o".repeat(CHECK_OUTPUT_CAP + 20),
         });
+        record.signal = Some(SignalRecord {
+            name: "ci.finished".parse().unwrap(),
+            payload: Map::from_iter([(
+                "detail".to_owned(),
+                Value::String("s".repeat(CHECK_OUTPUT_CAP + 20)),
+            )]),
+        });
 
         append_to(dir.path(), &record);
         let stored = task_records(dir.path(), "wake")
@@ -741,5 +774,12 @@ mod tests {
         assert_eq!(stored.error.expect("error").len(), ERROR_CAP);
         assert_eq!(stored.last_message.expect("last").len(), LAST_MESSAGE_CAP);
         assert_eq!(stored.check.expect("check").output.len(), CHECK_OUTPUT_CAP);
+        assert!(
+            stored
+                .signal
+                .expect("signal")
+                .payload
+                .contains_key("_truncated")
+        );
     }
 }

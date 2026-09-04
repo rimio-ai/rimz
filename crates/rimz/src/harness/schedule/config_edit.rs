@@ -160,6 +160,16 @@ fn task_entry_table(entry: &TaskEntry, include_root: bool) -> Result<Table> {
             ),
         );
     }
+    if let Some(matches) = table.remove("match") {
+        table.insert(
+            "match",
+            Item::Table(
+                matches
+                    .into_table()
+                    .map_err(|_| anyhow::anyhow!("serialized loop match is not a table"))?,
+            ),
+        );
+    }
     Ok(table)
 }
 
@@ -208,6 +218,13 @@ mod tests {
             at: Some("07:00".to_owned()),
             every: Some("1h".to_owned()),
             cron: Some("0 * * * *".to_owned()),
+            signal: Some("ci.finished".to_owned()),
+            matches: Some(std::collections::BTreeMap::from([(
+                "conclusion".to_owned(),
+                "failure".to_owned(),
+            )])),
+            watch: None,
+            once: Some(true),
             deadline: Some(jiff::Timestamp::UNIX_EPOCH),
         };
 
@@ -223,6 +240,8 @@ mod tests {
         assert!(machine.contains_key("budget-per-day"));
         assert!(machine.contains_key("system-prompt-file"));
         assert!(machine_text.contains("[tasks.full.wake]"));
+        assert!(machine_text.contains("[tasks.full.match]"));
+        assert!(machine_text.contains("conclusion = \"failure\""));
         assert_eq!(
             toml_edit::de::from_document::<TaskEntry>(DocumentMut::from(machine))
                 .expect("machine round trip"),

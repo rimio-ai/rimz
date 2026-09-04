@@ -1131,6 +1131,7 @@ pub fn agent_handle(agent: &AgentState, peers: &[&AgentState], include_channel: 
 pub enum HeaderKind {
     Agent,
     Subagent,
+    Wake,
     User,
 }
 
@@ -1143,6 +1144,7 @@ pub fn parse_message_header(text: &str) -> Option<(HeaderKind, String, String)> 
     let kind = match kind {
         "Type: AGENT_MESSAGE" => HeaderKind::Agent,
         "Type: SUBAGENT_REPORT" => HeaderKind::Subagent,
+        "Type: WAKE" => HeaderKind::Wake,
         "Type: USER_MESSAGE" => HeaderKind::User,
         _ => return None,
     };
@@ -1170,7 +1172,7 @@ pub fn split_batched_prompt(text: &str) -> Vec<&str> {
         let first_line = text[next_start..].lines().next().unwrap_or_default();
         if matches!(
             first_line,
-            "Type: AGENT_MESSAGE" | "Type: SUBAGENT_REPORT" | "Type: USER_MESSAGE"
+            "Type: AGENT_MESSAGE" | "Type: SUBAGENT_REPORT" | "Type: WAKE" | "Type: USER_MESSAGE"
         ) {
             segments.push(&text[start..boundary]);
             start = next_start;
@@ -1206,6 +1208,9 @@ pub fn align_submitted_prompt<'a>(
         MessageSender::Harness {
             notice: HarnessNotice::SubagentReport,
         } => "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\n",
+        MessageSender::Harness {
+            notice: HarnessNotice::Wake,
+        } => "Type: WAKE\nFrom: @rimz\nContent:\n",
         MessageSender::Human => "Type: USER_MESSAGE\nFrom: @user\nContent:\n",
         MessageSender::System => {
             let (segments, trailing) = align_submitted_prompt_from(prompt, records)?;
@@ -1360,6 +1365,7 @@ pub fn agent_sender_handle(
 const fn harness_notice_type(notice: &HarnessNotice) -> &'static str {
     match notice {
         HarnessNotice::SubagentReport => "SUBAGENT_REPORT",
+        HarnessNotice::Wake => "WAKE",
     }
 }
 

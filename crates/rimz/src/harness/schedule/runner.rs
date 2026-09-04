@@ -29,12 +29,13 @@ use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
 use crate::disk::paths::{RuntimePaths, StatePaths, state_home};
 use crate::harness::plan::ResolvedSingleAgentLaunch;
 use crate::harness::run::{RunRecord, SupervisedRunOutcome, SupervisedRunRequest};
-use crate::harness::schedule::TaskAction;
 use crate::harness::schedule::catalog::{self, LoadedTask, TaskCatalog};
 use crate::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
-    RunTransition,
+    RunTransition, SignalRecord,
 };
+use crate::harness::schedule::signal::Signal as TriggerSignal;
+use crate::harness::schedule::{TaskAction, Trigger};
 use crate::ids::WorkspaceId;
 use crate::utils::time::{DurationUnit, parse_duration_units};
 use crate::workspace::WorkspaceResolver;
@@ -99,7 +100,7 @@ pub enum TaskFirePlan {
 #[derive(Debug)]
 pub enum TaskFireEffect {
     Spawn(SupervisedRunOutcome),
-    Delivered,
+    Delivered(crate::ids::MessageId),
     TargetGone,
 }
 
@@ -233,6 +234,7 @@ pub struct TaskFire<'a> {
     config: Arc<MachineConfig>,
     check_echo: Option<CheckEcho>,
     check_trip: Option<CheckTrip>,
+    signal: Option<TriggerSignal>,
     started: Instant,
     run_lock: Option<RunLockGuard>,
     pending: Option<PendingEffect>,
@@ -252,6 +254,7 @@ impl<'a> TaskFire<'a> {
         keep: bool,
         now: Timestamp,
         config: Arc<MachineConfig>,
+        signal: Option<TriggerSignal>,
         check_echo: CheckEcho,
         started: Instant,
     ) -> Result<Self> {
@@ -273,6 +276,7 @@ impl<'a> TaskFire<'a> {
             config,
             check_echo: Some(check_echo),
             check_trip: None,
+            signal,
             started,
             run_lock: None,
             pending: None,
@@ -422,7 +426,7 @@ impl<'a> TaskFire<'a> {
                     finish_spawn_effect(&mut record, outcome, check, stream);
                 Ok(self.finish_record(record, presentation, notice, None))
             }
-            (PendingEffect::Deliver { target, check }, TaskFireEffect::Delivered) => {
+            (PendingEffect::Deliver { target, check }, TaskFireEffect::Delivered(message_id)) => {
                 let handle = target.handle;
                 Ok(self.record_terminal_with(
                     LoopRunResult::Delivered,
@@ -432,6 +436,7 @@ impl<'a> TaskFire<'a> {
                     |record| {
                         record.target = Some(handle);
                         record.check = check;
+                        record.message_id = Some(message_id);
                     },
                 ))
             }
@@ -470,17 +475,34 @@ impl<'a> TaskFire<'a> {
     }
 
     fn prepare_check(&mut self) -> Result<PreparedCheck> {
-        let Some(command) = self.entry.check.clone() else {
+        let watch_command =
+            self.task
+                .trigger()
+                .as_ref()
+                .ok()
+                .and_then(|parsed| match &parsed.trigger {
+                    Trigger::Watch { command } => Some(command.clone()),
+                    Trigger::Schedule(_) | Trigger::Signal { .. } => None,
+                });
+        let supplied_watch = watch_command.as_ref().zip(
+            self.signal
+                .as_ref()
+                .and_then(|signal| signal.watch.as_ref()),
+        );
+        let (command, outcome, duration_ms) = if let Some((command, outcome)) = supplied_watch {
+            (command.clone(), outcome.to_check_outcome(), 0)
+        } else if let Some(command) = self.entry.check.clone() {
+            let check_started = Instant::now();
+            let outcome = run_check(
+                &self.entry.resolved_root(),
+                &command,
+                check_timeout(&self.entry)?.unwrap_or(CHECK_DEFAULT_TIMEOUT),
+                self.check_echo.take().unwrap_or(CheckEcho::Capture),
+            )?;
+            (command, outcome, elapsed_millis(check_started))
+        } else {
             return Ok(PreparedCheck::fire(None));
         };
-        let check_started = Instant::now();
-        let outcome = run_check(
-            &self.entry.resolved_root(),
-            &command,
-            check_timeout(&self.entry)?.unwrap_or(CHECK_DEFAULT_TIMEOUT),
-            self.check_echo.take().unwrap_or(CheckEcho::Capture),
-        )?;
-        let duration_ms = elapsed_millis(check_started);
         let record = check_record(&outcome);
         if self
             .context
@@ -671,15 +693,49 @@ impl<'a> TaskFire<'a> {
     }
 
     fn resolve_effect_prompt(&self, fired_check: Option<&FiredCheck>) -> Result<String> {
-        let prompt = resolve_task_prompt(&self.name, &self.entry)?;
-        Ok(match fired_check {
-            Some(check) => augment_prompt(prompt, &check.command, &check.outcome),
-            None => prompt,
-        })
+        let mut prompt = resolve_task_prompt(&self.name, &self.entry)?;
+        if let Some(signal) = &self.signal {
+            prompt = substitute_signal_fields(prompt, signal);
+        }
+        if let Some(check) = fired_check {
+            return Ok(
+                if self
+                    .signal
+                    .as_ref()
+                    .is_some_and(|signal| signal.watch.is_some())
+                {
+                    augment_watch_prompt(prompt, &check.command, &check.outcome)
+                } else {
+                    augment_prompt(prompt, &check.command, &check.outcome)
+                },
+            );
+        }
+        if let Some(signal) = &self.signal {
+            let payload = serde_json::to_string_pretty(&signal.payload)?;
+            return Ok(format!(
+                "{prompt}\n\n--- signal {} ---\n{payload}",
+                signal.name
+            ));
+        }
+        if self.task.trigger().as_ref().is_ok_and(|parsed| {
+            matches!(
+                parsed.trigger,
+                Trigger::Signal { .. } | Trigger::Watch { .. }
+            )
+        }) {
+            return Ok(format!("{prompt}\n\n--- manual fire ---"));
+        }
+        Ok(prompt)
     }
 
     fn terminal_record(&self, result: LoopRunResult) -> LoopRunRecord {
-        LoopRunRecord::new(&self.name, result, self.mode, elapsed_millis(self.started))
+        let mut record =
+            LoopRunRecord::new(&self.name, result, self.mode, elapsed_millis(self.started));
+        record.signal = self.signal.as_ref().map(|signal| SignalRecord {
+            name: signal.name.clone(),
+            payload: signal.payload.clone(),
+        });
+        record
     }
 
     fn record_gate(&mut self, result: LoopRunResult, reason: String) -> TaskFireFinished {
@@ -1190,6 +1246,15 @@ pub struct CheckOutcome {
 }
 
 impl CheckOutcome {
+    pub(crate) fn new(passed: bool, timed_out: bool, output: String, code: Option<i32>) -> Self {
+        Self {
+            passed,
+            timed_out,
+            output,
+            code,
+        }
+    }
+
     pub fn passed(&self) -> bool {
         self.passed
     }
@@ -1238,7 +1303,33 @@ pub fn polarity_fires(on: Option<CheckOn>, outcome: &CheckOutcome) -> bool {
     match on.unwrap_or_default() {
         CheckOn::Fail => !outcome.passed,
         CheckOn::Success => outcome.passed,
+        CheckOn::Any => true,
     }
+}
+
+fn augment_watch_prompt(base: String, cmd: &str, outcome: &CheckOutcome) -> String {
+    let status = if outcome.timed_out {
+        "timeout".to_owned()
+    } else {
+        outcome
+            .code
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "lost".to_owned())
+    };
+    format!(
+        "{base}\n\n--- watch `{cmd}` exited {status} ---\n{}",
+        outcome.output
+    )
+}
+
+fn substitute_signal_fields(mut prompt: String, signal: &TriggerSignal) -> String {
+    for (key, value) in &signal.payload {
+        prompt = prompt.replace(
+            &format!("{{{{{key}}}}}"),
+            &super::signal::match_value(value),
+        );
+    }
+    prompt
 }
 
 pub fn augment_prompt(base: String, cmd: &str, outcome: &CheckOutcome) -> String {

@@ -26,6 +26,7 @@ pub mod instances;
 mod overlay_store;
 pub mod run_log;
 pub mod runner;
+pub mod signal;
 pub mod strikes;
 
 pub use fire::last_stamps;
@@ -139,6 +140,20 @@ pub enum ScheduleErr {
         "schedule `{name}` sets conflicting schedule fields; use `cron`, `every`, or bare `at`"
     )]
     TimeConflict { name: String },
+    #[error(
+        "schedule `{name}` sets conflicting trigger fields; use one of `signal`, `watch`, `cron`, `every`, or bare `at`"
+    )]
+    TriggerConflict { name: String },
+    #[error("schedule `{name}` sets `match` without `signal`")]
+    MatchWithoutSignal { name: String },
+    #[error("schedule `{name}` sets `once` without `signal`")]
+    OnceWithoutSignal { name: String },
+    #[error("schedule `{name}` sets both `watch` and `check`; the watched command is the check")]
+    WatchWithCheck { name: String },
+    #[error("schedule `{name}` has an invalid signal name `{value}`")]
+    BadSignal { name: String, value: String },
+    #[error("schedule `{name}` has an empty watched command")]
+    BadWatch { name: String },
     #[error("schedule `{name}` sets a calendar `every` value without `at`; add `at = \"HH:MM\"`")]
     EveryNeedsAt { name: String },
     #[error("schedule `{name}` has an invalid time `{value}`; use 24-hour `HH:MM`")]
@@ -157,7 +172,7 @@ pub enum ScheduleErr {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskShape {
     action: Result<TaskAction, TaskActionErr>,
-    schedule: Result<ParsedSchedule, ScheduleErr>,
+    trigger: Result<ParsedTrigger, ScheduleErr>,
     ephemeral: bool,
 }
 
@@ -165,7 +180,7 @@ impl TaskShape {
     pub fn compile(name: &str, entry: &TaskEntry) -> Self {
         Self {
             action: TaskAction::from_entry(name, entry),
-            schedule: parse_schedule(name, entry),
+            trigger: parse_trigger(name, entry),
             ephemeral: ephemeral_lifetime(entry),
         }
     }
@@ -174,8 +189,8 @@ impl TaskShape {
         self.action.as_ref()
     }
 
-    pub fn schedule(&self) -> &Result<ParsedSchedule, ScheduleErr> {
-        &self.schedule
+    pub fn trigger(&self) -> &Result<ParsedTrigger, ScheduleErr> {
+        &self.trigger
     }
 
     pub const fn is_ephemeral(&self) -> bool {
@@ -184,7 +199,10 @@ impl TaskShape {
 }
 
 pub(super) fn ephemeral_lifetime(entry: &TaskEntry) -> bool {
-    (entry.every.is_none() && entry.cron.is_none()) || entry.deadline.is_some()
+    (entry.signal.is_none() && entry.every.is_none() && entry.cron.is_none())
+        || entry.deadline.is_some()
+        || entry.once == Some(true)
+        || entry.watch.is_some()
 }
 
 /// A weekday in Mon..Sun order.
@@ -328,6 +346,69 @@ pub struct ParsedSchedule {
     pub once: bool,
 }
 
+/// The event which makes a task eligible to fire.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Trigger {
+    Schedule(ParsedSchedule),
+    Signal {
+        name: signal::SignalName,
+        matches: std::collections::BTreeMap<String, String>,
+    },
+    Watch {
+        command: String,
+    },
+}
+
+impl Trigger {
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Schedule(schedule) => schedule.describe(),
+            Self::Signal { name, matches } => {
+                let filters = matches
+                    .iter()
+                    .map(|(key, value)| format!("{key}={value}"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                if filters.is_empty() {
+                    format!("on {name}")
+                } else {
+                    format!("on {name} [{filters}]")
+                }
+            }
+            Self::Watch { command } => format!("watch: {command}"),
+        }
+    }
+
+    pub fn accepts(&self, task_name: &str, signal: &signal::Signal) -> bool {
+        match self {
+            Self::Schedule(_) => false,
+            Self::Signal { name, matches } => {
+                name == &signal.name
+                    && matches.iter().all(|(key, expected)| {
+                        signal
+                            .payload
+                            .get(key)
+                            .is_some_and(|value| signal::match_value(value) == *expected)
+                    })
+            }
+            Self::Watch { .. } => signal.name.as_str() == format!("wake.{task_name}"),
+        }
+    }
+}
+
+/// A parsed task trigger plus its one-shot flag.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParsedTrigger {
+    pub trigger: Trigger,
+    pub once: bool,
+}
+
+impl ParsedTrigger {
+    pub fn describe(&self) -> String {
+        self.trigger.describe()
+    }
+}
+
 impl ParsedSchedule {
     /// A short human description for listings.
     pub fn describe(&self) -> String {
@@ -343,14 +424,14 @@ impl ParsedSchedule {
 /// One task's parsed schedule and current display timing classification.
 #[derive(Debug)]
 pub struct TaskTiming {
-    parsed: Result<ParsedSchedule, ScheduleErr>,
+    parsed: Result<ParsedTrigger, ScheduleErr>,
     state: TaskTimingState,
     arm_state: arming::ArmState,
     scheduled_next: Option<Timestamp>,
 }
 
 /// Current schedule state before CLI presentation and live run-lock overlays.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TaskTimingState {
     Blocked(crate::trust::TrustState),
     Disabled(arming::DisabledReason),
@@ -360,11 +441,13 @@ pub enum TaskTimingState {
     Upcoming(Timestamp),
     Due(Timestamp),
     NoOccurrence,
+    Listening { name: signal::SignalName },
+    Watching { command: String },
 }
 
 impl TaskTiming {
     pub fn evaluate(
-        parsed: &Result<ParsedSchedule, ScheduleErr>,
+        parsed: &Result<ParsedTrigger, ScheduleErr>,
         source: catalog::TaskSource,
         last_fire: Option<Timestamp>,
         arming: Option<&arming::Arming>,
@@ -373,10 +456,17 @@ impl TaskTiming {
         let parsed = parsed.clone();
         let arm_state = arming::ArmState::resolve(arming, source, now.timestamp());
         let scheduled_next = match (&parsed, last_fire) {
-            (Ok(parsed), Some(last_fire)) => parsed.schedule.next_after(
+            (
+                Ok(ParsedTrigger {
+                    trigger: Trigger::Schedule(parsed),
+                    ..
+                }),
+                Some(last_fire),
+            ) => parsed.schedule.next_after(
                 arming::effective_last_fire(last_fire, arming, now.timestamp()),
                 now,
             ),
+            (Ok(_), Some(_)) => None,
             (Ok(_), None) | (Err(_), _) => None,
         };
         let state = if let Some(state) = source.blocked_state() {
@@ -387,6 +477,40 @@ impl TaskTiming {
                 arming::ArmState::Paused(until) => TaskTimingState::Paused(until),
                 arming::ArmState::Live => match (&parsed, last_fire) {
                     (Err(_), _) => TaskTimingState::Invalid,
+                    (
+                        Ok(ParsedTrigger {
+                            trigger: Trigger::Signal { .. },
+                            ..
+                        }),
+                        _,
+                    ) => {
+                        let Ok(ParsedTrigger {
+                            trigger: Trigger::Signal { name, .. },
+                            ..
+                        }) = &parsed
+                        else {
+                            unreachable!("matched signal trigger")
+                        };
+                        TaskTimingState::Listening { name: name.clone() }
+                    }
+                    (
+                        Ok(ParsedTrigger {
+                            trigger: Trigger::Watch { .. },
+                            ..
+                        }),
+                        _,
+                    ) => {
+                        let Ok(ParsedTrigger {
+                            trigger: Trigger::Watch { command },
+                            ..
+                        }) = &parsed
+                        else {
+                            unreachable!("matched watch trigger")
+                        };
+                        TaskTimingState::Watching {
+                            command: command.clone(),
+                        }
+                    }
                     (Ok(_), None) => TaskTimingState::Unarmed,
                     (Ok(_), Some(_)) => match scheduled_next {
                         Some(next) if next <= now.timestamp() => TaskTimingState::Due(next),
@@ -404,11 +528,11 @@ impl TaskTiming {
         }
     }
 
-    pub const fn state(&self) -> TaskTimingState {
-        self.state
+    pub fn state(&self) -> TaskTimingState {
+        self.state.clone()
     }
 
-    pub fn parsed(&self) -> Result<&ParsedSchedule, &ScheduleErr> {
+    pub fn parsed(&self) -> Result<&ParsedTrigger, &ScheduleErr> {
         self.parsed.as_ref()
     }
 
@@ -417,8 +541,8 @@ impl TaskTiming {
     }
 
     pub const fn next_timestamp(&self) -> Option<Timestamp> {
-        match self.state {
-            TaskTimingState::Upcoming(next) | TaskTimingState::Due(next) => Some(next),
+        match &self.state {
+            TaskTimingState::Upcoming(next) | TaskTimingState::Due(next) => Some(*next),
             _ => None,
         }
     }
@@ -520,6 +644,57 @@ pub fn parse_schedule(name: &str, entry: &TaskEntry) -> Result<ParsedSchedule, S
     Ok(ParsedSchedule {
         schedule,
         once: entry.every.is_none() && entry.cron.is_none(),
+    })
+}
+
+/// Parse and validate the single trigger encoded by a task row.
+pub fn parse_trigger(name: &str, entry: &TaskEntry) -> Result<ParsedTrigger, ScheduleErr> {
+    let has_schedule = entry.at.is_some() || entry.every.is_some() || entry.cron.is_some();
+    let has_signal = entry.signal.is_some();
+    let has_watch = entry.watch.is_some();
+    if usize::from(has_schedule) + usize::from(has_signal) + usize::from(has_watch) > 1 {
+        return Err(ScheduleErr::TriggerConflict {
+            name: name.to_owned(),
+        });
+    }
+    if entry.matches.is_some() && !has_signal {
+        return Err(ScheduleErr::MatchWithoutSignal {
+            name: name.to_owned(),
+        });
+    }
+    if entry.once.is_some() && !has_signal {
+        return Err(ScheduleErr::OnceWithoutSignal {
+            name: name.to_owned(),
+        });
+    }
+    if has_watch && entry.check.is_some() {
+        return Err(ScheduleErr::WatchWithCheck {
+            name: name.to_owned(),
+        });
+    }
+    let trigger = if let Some(raw) = entry.signal.as_deref() {
+        Trigger::Signal {
+            name: raw.parse().map_err(|_| ScheduleErr::BadSignal {
+                name: name.to_owned(),
+                value: raw.to_owned(),
+            })?,
+            matches: entry.matches.clone().unwrap_or_default(),
+        }
+    } else if let Some(command) = entry.watch.as_deref() {
+        if command.trim().is_empty() {
+            return Err(ScheduleErr::BadWatch {
+                name: name.to_owned(),
+            });
+        }
+        Trigger::Watch {
+            command: command.to_owned(),
+        }
+    } else {
+        Trigger::Schedule(parse_schedule(name, entry)?)
+    };
+    Ok(ParsedTrigger {
+        once: matches!(trigger, Trigger::Watch { .. }) || entry.once == Some(true),
+        trigger,
     })
 }
 

@@ -566,6 +566,7 @@ fn conversation_counts(
                 }
             }
             TranscriptKind::SubagentReport
+            | TranscriptKind::Wake
             | TranscriptKind::Assistant
             | TranscriptKind::Answer
             | TranscriptKind::Error => {}
