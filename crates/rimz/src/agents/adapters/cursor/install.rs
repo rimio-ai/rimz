@@ -10,7 +10,7 @@ use crate::agents::{
     read_optional_file,
     settings_json::{self, PendingWrite},
 };
-use crate::store::atomic;
+use crate::disk::atomic;
 
 use super::{
     CURSOR_HOOKS, RETAINED_RENDERING_KEYS, RIMZ_HOOK_COMMAND, RIMZ_HOOK_MARKER,
@@ -94,7 +94,7 @@ pub(super) fn cursor_statusline_state_path() -> Result<PathBuf> {
     Ok(std::env::var_os("RIMZ_CURSOR_STATUSLINE_STATE")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| crate::store::paths::config_home().join("rimz/cursor-statusline.json")))
+        .unwrap_or_else(|| crate::disk::paths::config_home().join("rimz/cursor-statusline.json")))
 }
 
 pub(super) fn install_into(

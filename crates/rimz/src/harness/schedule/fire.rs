@@ -17,9 +17,9 @@ use super::{
     catalog::{LoadedTask, TaskCatalog},
 };
 use crate::RuntimePaths;
+use crate::disk::atomic::write_temp_then_rename_cache;
+use crate::disk::paths::StatePaths;
 use crate::ids::WorkspaceId;
-use crate::store::atomic::write_temp_then_rename_cache;
-use crate::store::paths::StatePaths;
 use crate::store::workspace_record;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

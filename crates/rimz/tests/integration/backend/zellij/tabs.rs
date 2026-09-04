@@ -185,7 +185,7 @@ fn open_tab_unfocused_routes_input_back_to_source() {
 
     client.assert_input_reaches(&source_pane, "source pane after unfocused tab open");
 
-    let runtime = rimz::store::RuntimePaths::under(workspace_id, xdg).expect("runtime");
+    let runtime = rimz::disk::paths::RuntimePaths::under(workspace_id, xdg).expect("runtime");
     let intent = rimz::sidebar::focus_anchor::load(&runtime).expect("applied focus intent");
     assert_eq!(intent.pane_id, source_pane);
     assert_eq!(

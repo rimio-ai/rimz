@@ -265,7 +265,7 @@ impl DiagSink {
             "prior": prior,
             "offending": offending,
         });
-        if let Err(err) = crate::store::atomic::write_temp_then_rename_cache(&path, &record) {
+        if let Err(err) = crate::disk::atomic::write_temp_then_rename_cache(&path, &record) {
             tracing::debug!(path = %path.display(), error = %err, "diagnostic frame capture failed");
             return None;
         }

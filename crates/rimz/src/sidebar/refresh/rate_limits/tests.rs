@@ -1100,7 +1100,7 @@ fn detached_merge_waits_for_lock_and_preserves_other_kinds() {
     let (_dir, _workspace, runtime) = runtime();
     write_claude_windows(&runtime, vec![rl_window(20, None)]);
     let held =
-        crate::store::lock::WorkspaceLock::acquire(&runtime.shared_rate_limits_lock()).unwrap();
+        crate::disk::lock::WorkspaceLock::acquire(&runtime.shared_rate_limits_lock()).unwrap();
     let worker_runtime = runtime.clone();
     let (finished_tx, finished_rx) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {

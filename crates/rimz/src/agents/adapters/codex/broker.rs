@@ -23,7 +23,7 @@
 //!   JSON-RPC on stdin, so when this process dies its stdin pipe closes and the
 //!   child exits — no orphan.
 //! - **Socket**: bound on a per-session path derived from the workspace id
-//!   ([`crate::store::paths::RuntimePaths::codex_app_server_socket_path`]); a
+//!   ([`crate::disk::paths::RuntimePaths::codex_app_server_socket_path`]); a
 //!   stale file is unlinked first, and a [`SocketGuard`] removes it on a graceful
 //!   exit. A leftover socket is harmless — the next broker unlinks it on bind.
 

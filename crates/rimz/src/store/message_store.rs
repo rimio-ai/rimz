@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use tracing::warn;
 
+use crate::disk::atomic;
 use crate::message::{MessageRecord, MessageStatus};
-use crate::store::atomic;
 
 const QUEUE_FILE: &str = "messages.jsonl";
 const HISTORY_FILE: &str = "history.jsonl";

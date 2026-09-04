@@ -471,9 +471,9 @@ mod tests {
     use super::*;
     use crate::agents::AgentStatus;
     use crate::agents::lifecycle::{LifecycleState, TurnPhase};
+    use crate::disk::paths::{RuntimePaths, StatePaths};
     use crate::ids::{AgentSessionId, MuxName, PaneId, WorkspaceId};
     use crate::store::event::EventKind;
-    use crate::store::{RuntimePaths, StatePaths};
 
     fn transition(kind: TransitionKind, compaction_closed: bool) -> Transition {
         Transition {

@@ -120,7 +120,7 @@ pub enum SourceErr {
     #[error("serializing pricing snapshot: {0}")]
     Serialize(#[source] serde_json::Error),
     #[error("writing pricing snapshot: {0}")]
-    Write(#[from] crate::store::atomic::AtomicErr),
+    Write(#[from] crate::disk::atomic::AtomicErr),
     #[error("pricing coverage check failed: {0}")]
     Coverage(String),
 }
@@ -167,7 +167,7 @@ pub fn refresh(out: Option<&Path>) -> Result<RefreshReport> {
         Some(out) => {
             let mut bytes = serde_json::to_vec(&snapshot).map_err(SourceErr::Serialize)?;
             bytes.push(b'\n');
-            crate::store::atomic::write_bytes_atomically(out, &bytes)?;
+            crate::disk::atomic::write_bytes_atomically(out, &bytes)?;
         }
         None => check_coverage(&snapshot, &report)?,
     }

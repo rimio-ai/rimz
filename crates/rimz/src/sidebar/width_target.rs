@@ -6,8 +6,8 @@ use std::num::NonZeroU16;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
+use crate::disk::{atomic, paths::RuntimePaths};
 use crate::mux::{SidebarWidth, WidthPermille};
-use crate::store::{RuntimePaths, atomic};
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 struct WidthTargetFile {

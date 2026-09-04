@@ -28,9 +28,9 @@ pub enum DeliverErr {
     #[error(transparent)]
     Store(#[from] crate::store::StoreErr),
     #[error(transparent)]
-    Path(#[from] crate::store::paths::PathErr),
+    Path(#[from] crate::disk::paths::PathErr),
     #[error(transparent)]
-    Atomic(#[from] crate::store::atomic::AtomicErr),
+    Atomic(#[from] crate::disk::atomic::AtomicErr),
     #[error(transparent)]
     Produce(#[from] crate::sidebar::produce::ProduceErr),
     #[error(transparent)]
@@ -924,7 +924,7 @@ fn refresh_wake_stamp(runtime: &RuntimePaths, store: &Store, now: Timestamp) -> 
     let next = store.earliest_message_wake(now)?;
     match next {
         Some(not_before) => {
-            crate::store::atomic::write_temp_then_rename_cache(&path, &Some(not_before))?;
+            crate::disk::atomic::write_temp_then_rename_cache(&path, &Some(not_before))?;
         }
         None => match std::fs::remove_file(&path) {
             Ok(()) => {}

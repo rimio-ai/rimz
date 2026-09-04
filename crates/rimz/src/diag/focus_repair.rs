@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::disk::paths::RuntimePaths;
+use crate::disk::paths::state_home;
 use crate::ids::{PaneId, WorkspaceId};
 use crate::mux::ClientPaneView;
-use crate::store::RuntimePaths;
-use crate::store::paths::state_home;
 
 const NAME: &str = "focus-repairs.log.jsonl";
 const MAX_BYTES: u64 = 4 * 1_048_576;

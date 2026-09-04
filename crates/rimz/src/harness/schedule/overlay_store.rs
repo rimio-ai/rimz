@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::store::atomic::{AtomicErr, write_temp_then_rename_cache};
-use crate::store::lock::{LockErr, WorkspaceLock};
+use crate::disk::atomic::{AtomicErr, write_temp_then_rename_cache};
+use crate::disk::lock::{LockErr, WorkspaceLock};
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum OverlayError {

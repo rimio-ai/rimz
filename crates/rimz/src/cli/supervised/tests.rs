@@ -1,12 +1,12 @@
 use super::*;
 use rimz::agents::PermissionMode;
 use rimz::agents::{AgentState, AgentStatus, LaunchParams};
+use rimz::disk::paths::{RuntimePaths, StatePaths};
 use rimz::harness::run::{RunCancellation, RunStatus, SupervisedRunRequest};
 use rimz::harness::run_wake::{self, ExpectedRunFrame, WakeupFrame};
 use rimz::harness::spec::Cell;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
 use rimz::pane::PaneRef;
-use rimz::store::{RuntimePaths, StatePaths};
 use tokio::net::UnixDatagram;
 
 #[test]
@@ -504,13 +504,13 @@ fn subagent_zone_lock_serializes_workspace_launches() {
 
     let held = super::pane::lock_subagent_zone(&fixture.store).unwrap();
     assert!(
-        rimz::store::lock::WorkspaceLock::try_acquire(&lock_path)
+        rimz::disk::lock::WorkspaceLock::try_acquire(&lock_path)
             .unwrap()
             .is_none()
     );
     drop(held);
     assert!(
-        rimz::store::lock::WorkspaceLock::try_acquire(&lock_path)
+        rimz::disk::lock::WorkspaceLock::try_acquire(&lock_path)
             .unwrap()
             .is_some()
     );

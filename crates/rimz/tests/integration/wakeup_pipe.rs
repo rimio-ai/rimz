@@ -27,9 +27,9 @@ use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use rimz::disk::paths::RuntimePaths;
 use rimz::ids::{MuxName, SidebarInstanceId, WorkspaceId};
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
-use rimz::store::RuntimePaths;
 use tempfile::TempDir;
 
 use crate::common::ScrubSessionEnvExt;

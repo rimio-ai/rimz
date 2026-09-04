@@ -71,7 +71,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         &request,
         &machine_config,
         &workspace.project_root,
-        &rimz::store::paths::config_home(),
+        &rimz::disk::paths::config_home(),
     );
     let stage = rimz::harness::launch::compile_agent_process_stage_with_extra_env(
         &workspace.project_root,

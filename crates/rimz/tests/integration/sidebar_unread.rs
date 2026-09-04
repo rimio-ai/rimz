@@ -169,7 +169,7 @@ fn publish_pane_frame(env: &Env, panes: &[rimz::pane::PaneRef]) {
         rimz::sidebar::timing::unix_now_ms(),
         workspace.session_name,
     );
-    rimz::store::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame)
+    rimz::disk::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame)
         .expect("publish pane frame");
 }
 

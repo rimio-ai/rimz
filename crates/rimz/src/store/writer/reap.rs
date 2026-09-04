@@ -9,7 +9,9 @@ use crate::store::event::EventEnvelope;
 use crate::store::runtime::{self, AgentLiveness, RuntimeScope};
 use crate::store::{live_roster, session_death};
 
-use super::super::{Result, StatePaths, Store, workspace_record};
+use crate::disk::paths::StatePaths;
+
+use super::super::{Result, Store, workspace_record};
 use super::debounce;
 
 const REAP_INTERVAL: Duration = Duration::from_secs(60);

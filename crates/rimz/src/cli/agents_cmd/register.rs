@@ -145,7 +145,7 @@ plan = []
 }
 
 fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
-    rimz::store::atomic::write_bytes_atomically(path, bytes)
+    rimz::disk::atomic::write_bytes_atomically(path, bytes)
         .with_context(|| format!("writing {}", path.display()))
 }
 

@@ -26,6 +26,7 @@ use crate::agents::{
     find_definition, preflight_hooks,
 };
 use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
+use crate::disk::paths::{RuntimePaths, StatePaths, state_home};
 use crate::harness::plan::ResolvedSingleAgentLaunch;
 use crate::harness::run::{RunRecord, SupervisedRunOutcome, SupervisedRunRequest};
 use crate::harness::schedule::TaskAction;
@@ -35,7 +36,6 @@ use crate::harness::schedule::run_log::{
     RunTransition,
 };
 use crate::ids::WorkspaceId;
-use crate::store::paths::{RuntimePaths, StatePaths, state_home};
 use crate::utils::time::{DurationUnit, parse_duration_units};
 use crate::workspace::WorkspaceResolver;
 

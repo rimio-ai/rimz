@@ -2,11 +2,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::RuntimePaths;
+use crate::disk::atomic;
 use crate::ids::WorkspaceId;
 use crate::sidebar::refresh::git_stats::{
     DiffStatsCache, WorktreeRootsCache, read_diff_stats_cache,
 };
-use crate::store::atomic;
 use crate::workspace::RootClass;
 
 use super::roots::{list_group_roots, list_worktree_roots, project_group_roots};

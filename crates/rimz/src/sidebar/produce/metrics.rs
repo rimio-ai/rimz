@@ -5,13 +5,13 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::disk::atomic;
 use crate::ids::PaneId;
 use crate::sidebar::frame::{PaneFrame, PaneMetrics, PaneState};
 use crate::sidebar::timing::unix_now_ms;
 use crate::sidebar::timing::{
     METRICS_BACKGROUND_SAMPLE_TTL, METRICS_FOCUSED_SAMPLE_TTL, PROCESS_D_STATE_STUCK_AFTER,
 };
-use crate::store::atomic;
 use crate::store::snapshot::ProcessState;
 
 mod zellij;

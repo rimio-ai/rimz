@@ -12,10 +12,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::{AgentLifecycleObservation, LifecycleSignal, PermissionMode, TurnPhase};
 use crate::agents::{AgentState, AgentStatus};
+use crate::disk::lock::WorkspaceLock;
+use crate::disk::paths::StatePaths;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, RunId, WorkspaceId};
-use crate::store::lock::WorkspaceLock;
 use crate::store::run_store;
-use crate::store::{StatePaths, Store, snapshot::SidebarSnapshot};
+use crate::store::{Store, snapshot::SidebarSnapshot};
 
 const FAILURE_TAIL_CAP: usize = 4 * 1024;
 
@@ -24,9 +25,9 @@ pub enum RunStoreErr {
     #[error("run {0} not found")]
     NotFound(RunId),
     #[error(transparent)]
-    Atomic(#[from] crate::store::atomic::AtomicErr),
+    Atomic(#[from] crate::disk::atomic::AtomicErr),
     #[error(transparent)]
-    Lock(#[from] crate::store::lock::LockErr),
+    Lock(#[from] crate::disk::lock::LockErr),
     #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,

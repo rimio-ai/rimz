@@ -21,9 +21,9 @@ use tracing::warn;
 
 use super::GlobalFlags;
 use crate::cli::render;
+use rimz::disk::paths::workspaces_dir;
 use rimz::ids::MuxName;
 use rimz::store::event::{LastDeathMarker, SessionDeathCause};
-use rimz::store::paths::workspaces_dir;
 
 /// Workspaces idle longer than this are hidden from the default view; `--all`
 /// reveals them.

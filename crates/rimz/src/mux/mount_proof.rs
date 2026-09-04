@@ -22,7 +22,8 @@ fn wait_for_sidebar_heartbeat(
     {
         return true;
     }
-    let Ok(runtime) = crate::store::RuntimePaths::for_workspace(opts.workspace_id.clone()) else {
+    let Ok(runtime) = crate::disk::paths::RuntimePaths::for_workspace(opts.workspace_id.clone())
+    else {
         return false;
     };
     let deadline = Instant::now() + Duration::from_secs(6);

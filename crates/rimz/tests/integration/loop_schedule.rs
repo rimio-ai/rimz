@@ -1071,7 +1071,7 @@ fn loop_qwen_exact_quota_skip_precedes_check_command() {
         .collect(),
         ..RateLimitsCache::default()
     };
-    rimz::store::atomic::write_temp_then_rename_cache(
+    rimz::disk::atomic::write_temp_then_rename_cache(
         &runtime.shared_rate_limits_path(),
         &rate_cache(20, 100),
     )
@@ -1157,7 +1157,7 @@ fn loop_qwen_exact_quota_skip_precedes_check_command() {
     assert!(!reason.contains("sentinel-loop-secret"), "{reason}");
     assert!(!reason.contains(&account_key), "{reason}");
 
-    rimz::store::atomic::write_temp_then_rename_cache(
+    rimz::disk::atomic::write_temp_then_rename_cache(
         &runtime.shared_rate_limits_path(),
         &rate_cache(80, 80),
     )

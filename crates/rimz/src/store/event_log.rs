@@ -12,7 +12,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use crate::store::atomic;
+use crate::disk::atomic;
 use crate::store::event::EventEnvelope;
 
 mod frame;
@@ -168,7 +168,7 @@ pub fn newest_archives(archive_dir: &Path, limit: usize) -> Result<Vec<PathBuf>>
 /// Always-on observability seam: bytes the row scan actually read, so the
 /// performance tier and sidebar tick meter can prove a warm fold is O(new
 /// bytes) rather than O(log) from the integration binary. Per-process and
-/// relaxed, like [`crate::store::atomic::testkit`] and
+/// relaxed, like [`crate::disk::atomic::testkit`] and
 /// [`crate::sidebar::meter`].
 #[doc(hidden)]
 pub mod testkit {

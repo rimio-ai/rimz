@@ -12,9 +12,9 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::disk::parse_cache::FileStamp;
+use crate::disk::paths::state_home;
 use crate::ids::AgentKind;
-use crate::store::parse_cache::FileStamp;
-use crate::store::paths::state_home;
 
 const NAME: &str = "user-inputs.log.jsonl";
 const MAX_BYTES: u64 = 1_048_576;

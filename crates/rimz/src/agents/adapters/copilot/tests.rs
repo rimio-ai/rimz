@@ -499,7 +499,7 @@ fn malformed_payloads_degrade_without_inventing_lifecycle_data() {
 #[test]
 fn room_env_uses_private_defaults_and_preserves_user_exporters() {
     let temp = tempfile::tempdir().unwrap();
-    let runtime = crate::store::RuntimePaths::under(
+    let runtime = crate::disk::paths::RuntimePaths::under(
         crate::ids::WorkspaceId::from_project_root(temp.path()),
         temp.path(),
     )

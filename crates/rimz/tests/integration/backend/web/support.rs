@@ -274,7 +274,7 @@ pub(super) struct SharedWeb {
 }
 
 pub(super) struct LiveWebFixture {
-    _guard: rimz::store::lock::WorkspaceLock,
+    _guard: rimz::disk::lock::WorkspaceLock,
     pub(super) env: Env,
     pub(super) workspace: rimz::ResolvedWorkspace,
     churn_pane: Mutex<Option<String>>,
@@ -572,7 +572,7 @@ fn tmux_display(server: &TmuxServer, target: &str, format: &str) -> String {
 }
 
 pub(super) struct LiveZellijWebFixture {
-    _guard: rimz::store::lock::WorkspaceLock,
+    _guard: rimz::disk::lock::WorkspaceLock,
     pub(super) env: Env,
     pub(super) workspace: rimz::ResolvedWorkspace,
     namespace: ZellijNamespace,

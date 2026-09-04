@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime};
 use tempfile::tempdir;
 
 use super::*;
-use crate::store::atomic;
+use crate::disk::atomic;
 
 #[test]
 fn rotate_skips_missing_or_below_threshold_logs() {

@@ -5,12 +5,12 @@
 //! fsyncs of its own — durability rides the off-lock write tail's group
 //! fdatasync, debounced to at most one per [`LOG_SYNC_INTERVAL`], which one
 //! writer pays for the whole fleet. Every fsync syscall funnels through
-//! `store::atomic` (CI grep), so its testkit counter sees them all.
+//! `disk::atomic` (CI grep), so its testkit counter sees them all.
 
 use std::time::{Duration, Instant, SystemTime};
 
 use rimz::EventEnvelope;
-use rimz::store::atomic::testkit::fsync_count;
+use rimz::disk::atomic::testkit::fsync_count;
 
 use crate::common::Harness;
 

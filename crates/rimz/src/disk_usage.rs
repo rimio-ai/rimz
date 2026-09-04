@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
-use crate::store::paths;
+use crate::disk::paths;
 
 const RIMZ_SUBDIR: &str = "rimz";
 

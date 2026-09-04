@@ -561,11 +561,9 @@ pub fn write_spending_cache(path: &Path, cache: &SpendingDiskCache) -> bool {
         );
         return true;
     }
-    let _ = crate::store::atomic::sweep_stale_temp_siblings(
-        path,
-        std::time::Duration::from_secs(3_600),
-    );
-    match crate::store::atomic::write_temp_then_rename_cache_compact(path, cache) {
+    let _ =
+        crate::disk::atomic::sweep_stale_temp_siblings(path, std::time::Duration::from_secs(3_600));
+    match crate::disk::atomic::write_temp_then_rename_cache_compact(path, cache) {
         Ok(()) => true,
         Err(err) => {
             warn!(

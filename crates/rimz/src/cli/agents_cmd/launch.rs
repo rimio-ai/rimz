@@ -23,7 +23,7 @@ pub(super) fn launch_layout(
         &machine_config.agents,
         &machine_config.subagents.profiles,
         &workspace.project_root,
-        &rimz::store::paths::config_home(),
+        &rimz::disk::paths::config_home(),
     )?;
     // Inside a team's lane, a bare role names that team's role: in `#forge`,
     // `reviewer` means `forge.reviewer`. The lane's agents carry the team, since

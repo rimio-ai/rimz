@@ -11,8 +11,8 @@ use sha2::{Digest, Sha256};
 use url::Url;
 
 use crate::config::{InlinePalette, MachineConfig, parse_hex};
+use crate::disk::{atomic, paths};
 use crate::mux::CommandSpec;
-use crate::store::{atomic, paths};
 
 use super::{
     START_TIMEOUT, WritableDaemonRecord, choose_ephemeral_port, random_secret, spawn_detached,

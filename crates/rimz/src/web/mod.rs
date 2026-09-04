@@ -11,12 +11,12 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::config::MachineConfig;
+use crate::disk::atomic;
 use crate::ids::MuxName;
 use crate::mux::CommandSpec;
 use crate::room::session::{
     LiveRoom, LiveSessions, room_inventory_with, workspace_record_for_session,
 };
-use crate::store::atomic;
 
 mod gate;
 mod ttyd;
@@ -115,7 +115,7 @@ pub enum WebErr {
     #[error(transparent)]
     Atomic(#[from] atomic::AtomicErr),
     #[error(transparent)]
-    DaemonLock(#[from] crate::store::lock::LockErr),
+    DaemonLock(#[from] crate::disk::lock::LockErr),
     #[error("the shared ttyd daemon is offline; run `rimz web start` or omit `--no-start`")]
     TtydOffline,
     #[error(

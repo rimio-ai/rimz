@@ -67,7 +67,7 @@ fn gc_removes_stale_sidebar_heartbeat_and_leaves_unknown_file() {
         None,
     );
     let heartbeat_path = rt.heartbeat_dir.join("sidebar.old.json");
-    rimz::store::atomic::write_temp_then_rename(&heartbeat_path, &heartbeat)
+    rimz::disk::atomic::write_temp_then_rename(&heartbeat_path, &heartbeat)
         .expect("write heartbeat");
     let unknown_file = rt.heartbeat_dir.join("unknown.opus-policy.json");
     std::fs::write(&unknown_file, br#"{"legacy":true}"#).expect("write unknown file");

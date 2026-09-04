@@ -64,7 +64,7 @@ pub(super) fn resume_lane(
             LaneRestoreConfig::load(
                 &machine_config,
                 &workspace.project_root,
-                &rimz::store::paths::config_home(),
+                &rimz::disk::paths::config_home(),
             )
             .map_err(|error| LaneResumeError::RestoreConfig {
                 message: error.to_string(),

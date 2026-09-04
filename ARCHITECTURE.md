@@ -63,7 +63,7 @@ The CLI and hook subprocesses are the only writers of product truth. The sidebar
 
 ### State on disk
 
-State is five tiers of plain files, scoped by what each one outlives. [`store/paths.rs`](./crates/rimz/src/store/paths.rs) (`StatePaths`, `RuntimePaths`) owns the path constants, and [store.md → What is on disk](./docs/internals/store.md#what-is-on-disk) is the file-by-file catalog; this is the map.
+State is five tiers of plain files, scoped by what each one outlives. [`disk/paths.rs`](./crates/rimz/src/disk/paths.rs) (`StatePaths`, `RuntimePaths`) owns the path constants, and [store.md → What is on disk](./docs/internals/store.md#what-is-on-disk) is the file-by-file catalog; this is the map.
 
 ```text
 workspace store         ~/.local/state/rimz/workspaces/<workspace_id>/

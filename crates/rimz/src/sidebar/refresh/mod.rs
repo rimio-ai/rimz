@@ -323,7 +323,7 @@ mod tests {
             ..WorkspaceSpendingCache::default()
         };
         cache.tally.year.usd = usd;
-        crate::store::atomic::write_temp_then_rename_cache(
+        crate::disk::atomic::write_temp_then_rename_cache(
             &runtime.workspace_spending_path(scope_hash),
             &cache,
         )

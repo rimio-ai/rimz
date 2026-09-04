@@ -56,7 +56,7 @@ pub enum ProduceErr {
     Rollup(#[from] SnapshotErr),
     /// State or runtime paths could not be prepared for the workspace.
     #[error(transparent)]
-    Path(#[from] crate::store::paths::PathErr),
+    Path(#[from] crate::disk::paths::PathErr),
     /// The cached store snapshot fallback could not be read.
     #[error(transparent)]
     Store(#[from] crate::store::StoreErr),
@@ -91,8 +91,8 @@ struct ProducerEnrich<'a> {
 pub(crate) fn publish_test_pane_frame(
     runtime: &RuntimePaths,
     frame: &PaneFrame,
-) -> crate::store::atomic::Result<()> {
-    crate::store::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), frame)
+) -> crate::disk::atomic::Result<()> {
+    crate::disk::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), frame)
 }
 
 /// Produce the full sidebar snapshot: rollup base + live pane frame + producer

@@ -12,10 +12,10 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 use uuid::Uuid;
 
+use crate::disk::{atomic, paths::RuntimePaths};
 use crate::ids::PaneId;
 use crate::mux::{ClientFocusOptions, ClientPaneView, MuxBackend};
 use crate::sidebar::timing::FOCUS_ANCHOR_FRESH;
-use crate::store::{RuntimePaths, atomic};
 
 const FOCUS_ANCHOR_VERSION: &str = "rimz.focus-anchor.v3";
 
@@ -149,7 +149,7 @@ pub enum FocusActionError {
     #[error("attached-client focus changed before repair dispatch")]
     PreObservationChanged,
     #[error("serializing focus action intent: {0}")]
-    Lock(#[from] crate::store::lock::LockErr),
+    Lock(#[from] crate::disk::lock::LockErr),
     #[error("writing focus action intent: {0}")]
     Store(#[from] atomic::AtomicErr),
     #[error("dispatching focus action: {0}")]
@@ -249,7 +249,7 @@ fn request_action_with_client_sample(
         offset,
         order,
     } = request;
-    let _guard = crate::store::lock::WorkspaceLock::acquire(&runtime.focus_anchor_lock())?;
+    let _guard = crate::disk::lock::WorkspaceLock::acquire(&runtime.focus_anchor_lock())?;
     let mut pre_action = sample()?;
     normalize_views(&mut pre_action);
     if let Some(expected) = expected_pre_action {
@@ -297,7 +297,7 @@ pub fn dispatch_action(
     nonce: FocusNonce,
     retries: FocusDispatchRetries,
 ) -> Result<bool, FocusActionError> {
-    let _guard = crate::store::lock::WorkspaceLock::acquire(&runtime.focus_anchor_lock())?;
+    let _guard = crate::disk::lock::WorkspaceLock::acquire(&runtime.focus_anchor_lock())?;
     let Some(mut anchor) = load(runtime).filter(|anchor| anchor.nonce == nonce) else {
         return Ok(false);
     };
@@ -428,8 +428,7 @@ fn observation_outcome(
 }
 
 pub fn clear_matching(runtime: &RuntimePaths, nonce: FocusNonce) -> bool {
-    let Ok(_guard) = crate::store::lock::WorkspaceLock::acquire(&runtime.focus_anchor_lock())
-    else {
+    let Ok(_guard) = crate::disk::lock::WorkspaceLock::acquire(&runtime.focus_anchor_lock()) else {
         return false;
     };
     if load(runtime).is_none_or(|anchor| anchor.nonce != nonce) {

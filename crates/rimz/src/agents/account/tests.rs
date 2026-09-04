@@ -26,7 +26,7 @@ fn runtime() -> (tempfile::TempDir, RuntimePaths) {
 }
 
 fn write_cache(runtime: &RuntimePaths, cache: &RateLimitsCache) {
-    crate::store::atomic::write_temp_then_rename_cache(&runtime.shared_rate_limits_path(), cache)
+    crate::disk::atomic::write_temp_then_rename_cache(&runtime.shared_rate_limits_path(), cache)
         .unwrap();
 }
 

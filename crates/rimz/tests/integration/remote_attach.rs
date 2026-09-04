@@ -478,7 +478,7 @@ fn link_stats_ingest_keeps_a_newer_publishers_sidecar() {
         "new-client-port new-server-port".to_owned(),
         rimz::remote::link::LinkStats::default(),
     );
-    rimz::store::atomic::write_temp_then_rename_cache(&path, &seeded)
+    rimz::disk::atomic::write_temp_then_rename_cache(&path, &seeded)
         .expect("seed newer link stats");
 
     let dir = env.project_root.to_string_lossy().into_owned();

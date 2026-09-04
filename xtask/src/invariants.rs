@@ -391,8 +391,8 @@ fn ensure_hook_stdio(root: &Path, files: &[PathBuf]) -> Result<()> {
 
 fn ensure_sidebar_renderer_boundaries(root: &Path, files: &[PathBuf]) -> Result<()> {
     for needle in [
-        "rimz::store::atomic",
-        "crate::store::atomic",
+        "rimz::disk::atomic",
+        "crate::disk::atomic",
         "rimz::store::writer",
         "crate::store::writer",
     ] {
@@ -564,10 +564,8 @@ fn ensure_store_durability(root: &Path, files: &[PathBuf]) -> Result<()> {
         ensure_no_match(
             files,
             needle,
-            |path| {
-                path.ends_with("crates/rimz/src/store/atomic.rs") || is_docs_or_xtask(root, path)
-            },
-            "fsync syscalls live in store/atomic.rs alone — route through its helpers",
+            |path| path.ends_with("crates/rimz/src/disk/atomic.rs") || is_docs_or_xtask(root, path),
+            "fsync syscalls live in disk/atomic.rs alone — route through its helpers",
         )?;
     }
     Ok(())

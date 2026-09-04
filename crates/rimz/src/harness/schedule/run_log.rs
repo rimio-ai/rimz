@@ -12,11 +12,11 @@ use std::path::{Path, PathBuf};
 use jiff::{Timestamp, Zoned};
 use serde::{Deserialize, Serialize};
 
+use crate::disk::paths::state_home;
 use crate::harness::run::RunStatus;
 use crate::harness::schedule::arming::{self, TaskKey};
 use crate::harness::schedule::catalog::LoadedTask;
 use crate::harness::schedule::strikes;
-use crate::store::paths::state_home;
 
 const NAME: &str = "loop-runs.log.jsonl";
 const MAX_BYTES: u64 = 4 * 1_048_576;

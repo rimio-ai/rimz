@@ -9,9 +9,9 @@
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::disk::atomic;
+use crate::disk::paths::RuntimePaths;
 use crate::ids::{AgentKind, AgentSessionId};
-use crate::store::atomic;
-use crate::store::paths::RuntimePaths;
 use crate::store::sidecar;
 
 /// One session's frozen credit and optional live working span.

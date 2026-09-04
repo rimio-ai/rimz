@@ -5,7 +5,7 @@
 //! only by exact ask ID; adapter-owned safe options supply the fallback shape.
 
 use crate::agents::{AgentErr, AgentState, AskKind, OpenAsk, definition_by_kind};
-use crate::store::StatePaths;
+use crate::disk::paths::StatePaths;
 use crate::transcript::{AskQuestion, TranscriptLogErr, latest_open_ask};
 
 #[derive(Clone, Debug, PartialEq, Eq)]

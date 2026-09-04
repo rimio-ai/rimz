@@ -164,14 +164,14 @@ fn compute_fleet_spending(
             }
         })
     };
-    match crate::store::single_flight::coalesce(
+    match crate::disk::single_flight::coalesce(
         &runtime.shared_spending_lock(),
         SPENDING_WAIT_STEP,
         SPENDING_WAIT_STEPS,
         fresh,
     ) {
-        crate::store::single_flight::Coalesced::Shared(cache) => cache,
-        crate::store::single_flight::Coalesced::Produce(_guard) => {
+        crate::disk::single_flight::Coalesced::Shared(cache) => cache,
+        crate::disk::single_flight::Coalesced::Produce(_guard) => {
             let provider = read_provider_spending_cache(&provider_path);
             let now_secs = crate::agents::spending::unix_secs_now();
             let files = walker.discover_spending_files(now_secs);
@@ -199,7 +199,7 @@ fn compute_fleet_spending(
                 )
             }
         }
-        crate::store::single_flight::Coalesced::ProduceLocal => {
+        crate::disk::single_flight::Coalesced::ProduceLocal => {
             let provider = read_provider_spending_cache(&provider_path);
             let now_secs = crate::agents::spending::unix_secs_now();
             let files = walker.discover_spending_files(now_secs);

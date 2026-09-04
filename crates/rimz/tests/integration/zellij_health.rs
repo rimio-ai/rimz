@@ -218,7 +218,7 @@ fn named_attach_preserves_recorded_room_owner() {
     let env = Env::new();
     let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
     let recorded_owner = env.project_root.join("previous-rimz");
-    rimz::store::atomic::write_executable_bytes_atomically(&recorded_owner, b"recorded build")
+    rimz::disk::atomic::write_executable_bytes_atomically(&recorded_owner, b"recorded build")
         .expect("write recorded room owner");
     let store = env.store();
     store

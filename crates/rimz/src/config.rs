@@ -24,8 +24,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::store::parse_cache::StampedPath;
-use crate::store::paths::{self, config_home};
+use crate::disk::parse_cache::StampedPath;
+use crate::disk::paths::{self, config_home};
 
 mod accounts;
 mod agents;

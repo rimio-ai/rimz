@@ -143,7 +143,7 @@ pub enum WorktreeErr {
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
-    Atomic(#[from] crate::store::atomic::AtomicErr),
+    Atomic(#[from] crate::disk::atomic::AtomicErr),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
 }
@@ -1255,7 +1255,7 @@ fn finish_worktree(
 }
 
 fn write_marker(path: &Path, marker: &WorktreeMarker) -> Result<()> {
-    crate::store::atomic::write_temp_then_rename(&marker_path(path)?, marker).map_err(Into::into)
+    crate::disk::atomic::write_temp_then_rename(&marker_path(path)?, marker).map_err(Into::into)
 }
 
 fn resolve_base_commit(repo_root: &Path, base_ref: &str) -> Result<String> {

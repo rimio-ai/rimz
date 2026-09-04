@@ -95,7 +95,7 @@ fn collect_machine_config() -> model::MachineConfigHealth {
     let broken_files = rimz::config::broken_machine_files()
         .into_iter()
         .map(|err| {
-            let kind = if err.path().starts_with(rimz::store::paths::agents_home()) {
+            let kind = if err.path().starts_with(rimz::disk::paths::agents_home()) {
                 model::MachineConfigProblemKind::Fragment
             } else if err.diagnosis().is_some() {
                 model::MachineConfigProblemKind::Parse
@@ -177,7 +177,7 @@ fn emit(report: &DoctorReport, json: bool, output: Option<&Path>) -> Result<()> 
             render::render_human(report, &mut stream)?;
             stream.into_inner()
         };
-        return rimz::store::atomic::write_bytes_atomically(path, &bytes)
+        return rimz::disk::atomic::write_bytes_atomically(path, &bytes)
             .with_context(|| format!("writing doctor report to {}", path.display()));
     }
 

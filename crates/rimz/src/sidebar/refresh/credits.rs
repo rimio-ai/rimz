@@ -219,7 +219,7 @@ pub(super) fn read_credits_cache(path: &Path) -> CreditsCache {
 }
 
 pub(super) fn write_credits_cache(path: &Path, cache: &CreditsCache) {
-    if let Err(err) = crate::store::atomic::write_temp_then_rename_cache(path, cache) {
+    if let Err(err) = crate::disk::atomic::write_temp_then_rename_cache(path, cache) {
         tracing::warn!(
             path = %path.display(),
             tags.operation = "cache.credits_write",
@@ -297,7 +297,7 @@ fn claim_provider_account_usage_locked(
     identity: impl FnOnce(&ProviderCreditsEntry) -> AccountUsageIdentity,
 ) -> Option<Uuid> {
     let path = runtime.shared_credits_path();
-    let _guard = crate::store::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
+    let _guard = crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
         .ok()
         .flatten()?;
     let mut cache = read_credits_cache(&path);
@@ -366,7 +366,7 @@ fn renew_provider_account_usage_claim_at(
 ) -> bool {
     let path = runtime.shared_credits_path();
     let Some(_guard) =
-        crate::store::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
+        crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
             .ok()
             .flatten()
     else {
@@ -394,7 +394,7 @@ pub(super) fn cancel_provider_account_usage_claim(
 ) -> bool {
     let path = runtime.shared_credits_path();
     let Some(_guard) =
-        crate::store::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
+        crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
             .ok()
             .flatten()
     else {
@@ -421,7 +421,7 @@ pub(super) fn complete_provider_account_usage(
 ) -> Option<AccountUsageCompletion> {
     let now_ms = unix_now_ms();
     let path = runtime.shared_credits_path();
-    let _guard = crate::store::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
+    let _guard = crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
         .ok()
         .flatten()?;
     let mut cache = read_credits_cache(&path);
@@ -451,7 +451,7 @@ pub(super) fn merge_provider_credits_entry(
 ) {
     let path = runtime.shared_credits_path();
     let Some(_guard) =
-        crate::store::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
+        crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
             .ok()
             .flatten()
     else {
@@ -496,7 +496,7 @@ pub(super) fn merge_provider_credits_entry(
 pub(super) fn invalidate_oauth_read(runtime: &RuntimePaths, kind: &str) {
     let path = runtime.shared_credits_path();
     let Some(_guard) =
-        crate::store::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
+        crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
             .ok()
             .flatten()
     else {

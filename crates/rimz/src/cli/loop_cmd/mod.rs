@@ -25,6 +25,7 @@ use clap::{Args, Subcommand};
 use jiff::Timestamp;
 
 use rimz::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
+use rimz::disk::paths::{RuntimePaths, StatePaths, state_home};
 use rimz::harness::plan::{ResolvedSingleAgentLaunch, resolve_single_agent_launch};
 use rimz::harness::run::RunRecord;
 use rimz::harness::schedule::run_log::{
@@ -46,7 +47,6 @@ use rimz::harness::schedule::{
 use rimz::ids::WorkspaceId;
 use rimz::message::DeliveryGate;
 use rimz::sidebar::fresh_sidebar_present;
-use rimz::store::paths::{RuntimePaths, StatePaths, state_home};
 use rimz::trust::{self, TrustState};
 use rimz::workspace::WorkspaceResolver;
 

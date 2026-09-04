@@ -86,7 +86,7 @@ pub(super) fn load_catalog(
         &machine.agents,
         &machine.subagents.profiles,
         &ctx.workspace.project_root,
-        &rimz::store::paths::config_home(),
+        &rimz::disk::paths::config_home(),
     )?;
     let snapshot = ctx.alive_snapshot()?;
     let audit = ctx
@@ -117,7 +117,7 @@ pub(super) fn effective_teams(globals: &GlobalFlags) -> Result<TeamsConfig> {
         &machine.agents,
         &machine.subagents.profiles,
         &workspace.project_root,
-        &rimz::store::paths::config_home(),
+        &rimz::disk::paths::config_home(),
     )?
     .teams)
 }
@@ -498,7 +498,7 @@ pub(super) fn roles_summary(roles: &[RoleReport]) -> String {
 }
 
 fn team_source(project_root: &Path, name: &str) -> Option<String> {
-    let config_root = rimz::store::paths::config_home();
+    let config_root = rimz::disk::paths::config_home();
     let repo = project_root.join(".rimz/config.toml");
     if rimz::trust::status_with_roots(project_root, &config_root)
         .is_ok_and(|report| report.state == rimz::trust::TrustState::Trusted)
@@ -510,7 +510,7 @@ fn team_source(project_root: &Path, name: &str) -> Option<String> {
     if file_defines_team(&machine, name) {
         return Some(machine.display().to_string());
     }
-    let fragment = rimz::store::paths::agents_home()
+    let fragment = rimz::disk::paths::agents_home()
         .join("teams")
         .join(name)
         .join("team.toml");

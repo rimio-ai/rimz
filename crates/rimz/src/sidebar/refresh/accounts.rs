@@ -146,14 +146,14 @@ fn query_provider_accounts_with(
             .then_some(cache)
     };
     let coordination_started = Instant::now();
-    match crate::store::single_flight::coordinate(
+    match crate::disk::single_flight::coordinate(
         &lock_path,
         ACCOUNTS_WAIT_STEP,
         ACCOUNTS_WAIT_STEPS,
         fresh,
     ) {
-        crate::store::single_flight::Coordination::Shared(cache) => cache,
-        crate::store::single_flight::Coordination::Produce(_guard) => {
+        crate::disk::single_flight::Coordination::Shared(cache) => cache,
+        crate::disk::single_flight::Coordination::Produce(_guard) => {
             let cache = read_accounts_cache(&path);
             let due = if force {
                 provider_kinds(snapshot)
@@ -169,7 +169,7 @@ fn query_provider_accounts_with(
         }
         // A missing coordination path cannot protect a shared publication.
         // Probe locally for this frame without writing the cache.
-        crate::store::single_flight::Coordination::Unavailable => {
+        crate::disk::single_flight::Coordination::Unavailable => {
             let cache = read_accounts_cache(&path);
             let due = if force {
                 provider_kinds(snapshot)
@@ -181,7 +181,7 @@ fn query_provider_accounts_with(
         // A live producer still owns publication. Serve current cache truth and
         // let the next tick observe its atomic write instead of duplicating the
         // cold subprocess batch.
-        crate::store::single_flight::Coordination::ContentionTimeout => {
+        crate::disk::single_flight::Coordination::ContentionTimeout => {
             let wait_ms = duration_ms(coordination_started.elapsed());
             trace::record(runtime, || TraceEvent::Contention {
                 outcome: "served_stale",
@@ -539,7 +539,7 @@ pub(in crate::sidebar) fn read_accounts_cache(path: &Path) -> AccountsCache {
 /// Publish the probed account cache atomically so readers never observe a
 /// partially merged provider map. A write failure leaves the prior cache live.
 pub(super) fn write_accounts_cache(path: &Path, cache: &AccountsCache) {
-    if let Err(err) = crate::store::atomic::write_temp_then_rename_cache(path, cache) {
+    if let Err(err) = crate::disk::atomic::write_temp_then_rename_cache(path, cache) {
         tracing::warn!(
             path = %path.display(),
             tags.operation = "cache.accounts_write",
@@ -680,13 +680,13 @@ mod tests {
         let runtime =
             RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
         runtime.ensure_dirs().unwrap();
-        let _producer = match crate::store::single_flight::coordinate::<()>(
+        let _producer = match crate::disk::single_flight::coordinate::<()>(
             &runtime.shared_accounts_lock(),
             Duration::ZERO,
             0,
             || None,
         ) {
-            crate::store::single_flight::Coordination::Produce(guard) => guard,
+            crate::disk::single_flight::Coordination::Produce(guard) => guard,
             _ => panic!("test must hold the account producer lock"),
         };
         let probes = AtomicUsize::new(0);

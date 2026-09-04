@@ -12,10 +12,10 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::agents::AgentStatus;
+use crate::disk::{atomic, paths::RuntimePaths};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::sidebar::read_marks::ReadMarks;
 use crate::store::snapshot::{SidebarRow, SidebarSnapshot};
-use crate::store::{RuntimePaths, atomic};
 
 pub const UNREAD_EPISODES_VERSION: &str = "rimz.unread.v1";
 

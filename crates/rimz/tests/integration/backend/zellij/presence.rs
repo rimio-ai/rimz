@@ -480,7 +480,7 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
         "the first poke carries the Zellij version: {:?}",
         lines[0],
     );
-    let runtime = rimz::store::RuntimePaths::under(workspace_id, room.path())
+    let runtime = rimz::disk::paths::RuntimePaths::under(workspace_id, room.path())
         .expect("presence runtime paths");
     let deadline = Instant::now() + SPAWN_TIMEOUT;
     let writer = loop {
@@ -577,7 +577,7 @@ fn presence_identity_transition_keeps_global_background_updates() {
         .ensure_presence_plugin(&opts)
         .expect("load initial presence identity");
     let runtime =
-        rimz::store::RuntimePaths::under(workspace_id, xdg).expect("presence runtime paths");
+        rimz::disk::paths::RuntimePaths::under(workspace_id, xdg).expect("presence runtime paths");
     let initial_cache = poll_until(
         SPAWN_TIMEOUT,
         || {
@@ -930,7 +930,7 @@ fn presence_plugin_keepalive_survives_deleted_launch_cwd() {
     let _client = AttachedClient::create_and_attach(&room, 80, 24);
     let launch_cwd = TempDir::new().expect("plugin launch cwd");
     let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id");
-    let runtime = rimz::store::RuntimePaths::under(workspace_id, room.path())
+    let runtime = rimz::disk::paths::RuntimePaths::under(workspace_id, room.path())
         .expect("presence runtime paths");
     let stamp_path = rimz::sidebar::cache::presence_stamp_path(&runtime);
     let plugin_url = format!("file:{}", wasm.display());

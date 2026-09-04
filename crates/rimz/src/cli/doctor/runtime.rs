@@ -919,7 +919,7 @@ pub(super) fn collect_socket_headroom(
     ws: &rimz::ResolvedWorkspace,
 ) -> model::Probe<model::SockBudget> {
     let runtime =
-        match RuntimePaths::under(ws.workspace_id.clone(), &rimz::store::paths::runtime_home()) {
+        match RuntimePaths::under(ws.workspace_id.clone(), &rimz::disk::paths::runtime_home()) {
             Ok(runtime) => runtime,
             Err(err) => {
                 return model::Probe::Unavailable {

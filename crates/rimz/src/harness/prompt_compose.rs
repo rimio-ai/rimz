@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use crate::agents::{PresetArgMatcher, PresetField};
+use crate::disk::paths::RuntimePaths;
 use crate::ids::AgentKind;
-use crate::store::RuntimePaths;
 
 const TEXT_PROMPT_LIMIT: usize = 120 * 1024;
 
@@ -63,7 +63,7 @@ pub enum PromptComposeErr {
         limit: usize,
     },
     #[error(transparent)]
-    Write(#[from] crate::store::atomic::AtomicErr),
+    Write(#[from] crate::disk::atomic::AtomicErr),
 }
 
 /// Materialize and render one complete replacement prompt.
@@ -200,7 +200,7 @@ fn write_artifact(runtime: &RuntimePaths, contents: &str) -> Result<PathBuf, Pro
     let path = runtime
         .system_prompt_dir()
         .join(format!("sys.{}.md", &digest[..32]));
-    crate::store::atomic::write_cache_bytes_atomically(&path, contents.as_bytes())?;
+    crate::disk::atomic::write_cache_bytes_atomically(&path, contents.as_bytes())?;
     Ok(path)
 }
 

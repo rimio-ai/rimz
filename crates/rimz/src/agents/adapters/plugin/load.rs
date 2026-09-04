@@ -63,7 +63,7 @@ pub fn loaded() -> &'static LoadedPlugins {
 }
 
 pub fn plugins_root() -> PathBuf {
-    crate::store::paths::config_home()
+    crate::disk::paths::config_home()
         .join("rimz")
         .join("agents.d")
 }

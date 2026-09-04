@@ -12,10 +12,10 @@ use clap::Args;
 use super::GlobalFlags;
 use super::loop_timer::{self, TimerStatus};
 use super::render::fmt_bytes;
+use rimz::disk::paths;
 use rimz::disk_usage::{RuntimeStorage, StorageKind, StorageRoot};
 use rimz::ids::{MuxName, WorkspaceId};
 use rimz::mux::{self, MuxErr};
-use rimz::store::paths;
 use rimz::uninstall::{RemovalOutcome, Removed};
 use rimz::workspace::{KnownWorkspace, known_workspaces};
 

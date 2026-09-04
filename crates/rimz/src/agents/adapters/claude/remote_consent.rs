@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::store::atomic::{self, AtomicErr};
+use crate::disk::atomic::{self, AtomicErr};
 
 const CONSENT_KEY: &str = "remoteDialogSeen";
 const GLOBAL_CONFIG_FILE: &str = ".claude.json";

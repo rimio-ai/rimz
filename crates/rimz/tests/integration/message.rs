@@ -555,7 +555,7 @@ fn scheduled_message_parks_and_sweep_delivers_due_work() {
     env.store()
         .queue_message(&due, "rimz-test")
         .expect("queue due message");
-    rimz::store::atomic::write_temp_then_rename_cache(&wake_stamp_path(&env), &Some(due_at))
+    rimz::disk::atomic::write_temp_then_rename_cache(&wake_stamp_path(&env), &Some(due_at))
         .expect("write wake stamp");
 
     let trace_log = env.project_root.join("zellij-sweep-trace.log");
@@ -3696,7 +3696,7 @@ fn seed_rate_limit_budget(env: &Env, used_percentage: u8) {
         .collect(),
         ..Default::default()
     };
-    rimz::store::atomic::write_temp_then_rename_cache(
+    rimz::disk::atomic::write_temp_then_rename_cache(
         &env.runtime_paths().shared_rate_limits_path(),
         &cache,
     )

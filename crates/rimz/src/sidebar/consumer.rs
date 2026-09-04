@@ -5,8 +5,8 @@
 //! Long-lived consumers use [`PublishedSnapshotReader`]; producer and test code
 //! may use the low-level cursor-taking functions directly.
 
+use crate::disk::parse_cache::StampedPath;
 use crate::ids::PaneId;
-use crate::store::parse_cache::StampedPath;
 use crate::store::snapshot::SidebarSnapshot;
 use crate::{RuntimePaths, StatePaths, Store};
 

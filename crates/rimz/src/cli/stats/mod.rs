@@ -39,7 +39,7 @@ use rimz::agents::spending::{
     read_provider_spending_cache, refresh_global_spending_direct, unix_secs_now, utc_date,
 };
 use rimz::config::{GlyphRole, MachineConfig, ThemeConfig};
-use rimz::store::paths::state_home;
+use rimz::disk::paths::state_home;
 use rimz::tui::{MouseCapture, Screen, TerminalModeGuard};
 
 const DAY_SECS: i64 = 86_400;

@@ -11,10 +11,10 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::disk::parse_cache::{ParseCache, StampedPath};
 use crate::sidebar::enrich::WorkspaceSnapshot;
 use crate::sidebar::frame::PaneFrame;
 use crate::store::event_log::LogExtent;
-use crate::store::parse_cache::{ParseCache, StampedPath};
 use crate::{RuntimePaths, StatePaths};
 
 pub const WORKSPACE_PROJECTION_SCHEMA_VERSION: u32 = 1;
@@ -104,7 +104,7 @@ impl WorkspaceProjectionPublisher {
         session: &str,
         workspace: &WorkspaceSnapshot,
         frame: &PaneFrame,
-    ) -> crate::store::atomic::Result<WorkspaceProjectionPublish> {
+    ) -> crate::disk::atomic::Result<WorkspaceProjectionPublish> {
         let Some(source) = WorkspaceProjectionSource::from_fold(workspace, frame)
             .filter(|source| source.is_matchable())
         else {
@@ -128,7 +128,7 @@ impl WorkspaceProjectionPublisher {
             self.last_content = Some((hash, bytes));
             return Ok(WorkspaceProjectionPublish::Unchanged);
         }
-        crate::store::atomic::write_cache_bytes_atomically(
+        crate::disk::atomic::write_cache_bytes_atomically(
             &workspace_projection_path(runtime),
             &bytes,
         )?;

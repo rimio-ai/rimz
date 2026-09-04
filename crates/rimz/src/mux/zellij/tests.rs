@@ -10,6 +10,8 @@ use self::support::{command_count, shim_log, zellij_shim};
 #[cfg(unix)]
 use crate::config::MultiplexerConfig;
 #[cfg(unix)]
+use crate::disk::paths::RuntimePaths;
+#[cfg(unix)]
 use crate::ids::{PaneId, WorkspaceId};
 #[cfg(unix)]
 use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane, TopologyClients};
@@ -23,8 +25,6 @@ use crate::mux::{
 use crate::sidebar::cache::write_pane_topology_cache;
 #[cfg(unix)]
 use crate::sidebar::timing::unix_now_ms;
-#[cfg(unix)]
-use crate::store::paths::RuntimePaths;
 
 #[test]
 fn tab_move_count_places_new_last_tab_after_anchor() {

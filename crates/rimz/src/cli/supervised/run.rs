@@ -73,7 +73,7 @@ pub(super) fn prepare_supervised_launch_layout(
         &machine_config.agents,
         &machine_config.subagents.profiles,
         &workspace.project_root,
-        &rimz::store::paths::config_home(),
+        &rimz::disk::paths::config_home(),
     )?;
     let mut resolved = rimz::harness::plan::resolve_launch(
         &effective,
@@ -423,7 +423,7 @@ fn prepare_supervised(
         &machine_config.agents,
         &machine_config.subagents.profiles,
         &workspace.project_root,
-        &rimz::store::paths::config_home(),
+        &rimz::disk::paths::config_home(),
     )?;
     let projection = rimz::harness::ancestry::launch_ancestry_required()
         .then(|| store.runtime_projection(rimz::RuntimeScope::Audit))

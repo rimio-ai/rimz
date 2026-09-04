@@ -46,7 +46,7 @@ fn ensure_excluded_patterns<'a>(checkout: &Path, patterns: impl IntoIterator<Ite
     if !changed {
         return;
     }
-    if let Err(err) = crate::store::atomic::write_bytes_atomically(&exclude, text.as_bytes()) {
+    if let Err(err) = crate::disk::atomic::write_bytes_atomically(&exclude, text.as_bytes()) {
         tracing::warn!(path = %exclude.display(), error = %err, "writing git info/exclude");
     }
 }

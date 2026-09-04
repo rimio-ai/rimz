@@ -11,13 +11,13 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
+use crate::disk::parse_cache::{ParseCache, StampedPath};
 use crate::ids::MuxName;
 use crate::mux::zellij::pane_topology::PaneTopologyCache;
 use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::timing::{
     EVENT_PANE_TTL, PRESENCE_STAMP_FRESH, SNAPSHOT_CACHE_TTL, unix_now_ms,
 };
-use crate::store::parse_cache::{ParseCache, StampedPath};
 
 // The shared pane frame cache is keyed to one `(workspace, session)`: the
 // per-workspace runtime root scopes the workspace, and `session_name` prevents
@@ -136,8 +136,8 @@ fn presence_probe_stamp_path(runtime: &RuntimePaths) -> PathBuf {
 pub fn write_presence_probe_stamp(
     runtime: &RuntimePaths,
     written_at_ms: u64,
-) -> crate::store::atomic::Result<()> {
-    crate::store::atomic::write_temp_then_rename_cache(
+) -> crate::disk::atomic::Result<()> {
+    crate::disk::atomic::write_temp_then_rename_cache(
         &presence_probe_stamp_path(runtime),
         &PresenceProbeStamp { written_at_ms },
     )
@@ -159,7 +159,7 @@ pub fn write_presence_stamp(runtime: &RuntimePaths, mux: MuxName, session_name: 
         session_name: session_name.map(ToOwned::to_owned),
     };
     let path = presence_stamp_path(runtime);
-    if let Err(err) = crate::store::atomic::write_temp_then_rename_cache(&path, &stamp) {
+    if let Err(err) = crate::disk::atomic::write_temp_then_rename_cache(&path, &stamp) {
         tracing::debug!(path = %path.display(), error = %err, "presence stamp write failed");
     }
 }
@@ -206,8 +206,8 @@ pub fn read_presence_desired(runtime: &RuntimePaths) -> Option<PresenceDesired> 
 pub fn write_presence_desired(
     runtime: &RuntimePaths,
     desired: &PresenceDesired,
-) -> crate::store::atomic::Result<()> {
-    crate::store::atomic::write_temp_then_rename_cache(&presence_desired_path(runtime), desired)
+) -> crate::disk::atomic::Result<()> {
+    crate::disk::atomic::write_temp_then_rename_cache(&presence_desired_path(runtime), desired)
 }
 
 /// The effective pane-cache TTL for one produce: the event-mode TTL while the
@@ -237,8 +237,8 @@ pub fn pane_topology_cache_path(runtime: &RuntimePaths) -> PathBuf {
 pub fn write_pane_topology_cache(
     runtime: &RuntimePaths,
     cache: &PaneTopologyCache,
-) -> crate::store::atomic::Result<()> {
-    crate::store::atomic::write_temp_then_rename_cache(&pane_topology_cache_path(runtime), cache)
+) -> crate::disk::atomic::Result<()> {
+    crate::disk::atomic::write_temp_then_rename_cache(&pane_topology_cache_path(runtime), cache)
 }
 
 /// Publish the sidebar supervisor's shared authoritative pane observation.
@@ -246,8 +246,8 @@ pub fn write_pane_topology_cache(
 pub fn write_authoritative_pane_probe<T: Serialize>(
     runtime: &RuntimePaths,
     probe: &T,
-) -> crate::store::atomic::Result<()> {
-    crate::store::atomic::write_temp_then_rename_cache(
+) -> crate::disk::atomic::Result<()> {
+    crate::disk::atomic::write_temp_then_rename_cache(
         &runtime.authoritative_pane_probe_path(),
         probe,
     )

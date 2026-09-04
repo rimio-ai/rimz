@@ -221,7 +221,7 @@ fn qwen_supervised_run_exits_125_before_recording_when_exact_quota_is_spent() {
         .to_owned();
     let runtime = env.runtime_paths();
     runtime.ensure_dirs().expect("runtime dirs");
-    rimz::store::atomic::write_temp_then_rename_cache(
+    rimz::disk::atomic::write_temp_then_rename_cache(
         &runtime.shared_rate_limits_path(),
         &RateLimitsCache {
             entries: [(
@@ -1912,7 +1912,7 @@ fn publish_pane_frame(env: &Env, session_name: &str, panes: Vec<rimz::pane::Pane
         rimz::sidebar::timing::unix_now_ms(),
         session_name,
     );
-    rimz::store::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame)
+    rimz::disk::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame)
         .expect("publish pane frame");
 }
 

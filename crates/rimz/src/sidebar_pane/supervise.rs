@@ -723,16 +723,16 @@ fn shared_authoritative_pane_probe(
         return pane_probe_for(&probe, &watchdog.pane);
     }
 
-    match crate::store::single_flight::coordinate(
+    match crate::disk::single_flight::coordinate(
         &runtime.authoritative_pane_probe_lock(),
         PANE_PROBE_WAIT_STEP,
         PANE_PROBE_WAIT_STEPS,
         read_fresh,
     ) {
-        crate::store::single_flight::Coordination::Shared(probe) => {
+        crate::disk::single_flight::Coordination::Shared(probe) => {
             pane_probe_for(&probe, &watchdog.pane)
         }
-        crate::store::single_flight::Coordination::Produce(_guard) => {
+        crate::disk::single_flight::Coordination::Produce(_guard) => {
             let Some(probe) = produce() else {
                 return PaneProbe::Unknown;
             };
@@ -741,8 +741,8 @@ fn shared_authoritative_pane_probe(
             }
             pane_probe_for(&probe, &watchdog.pane)
         }
-        crate::store::single_flight::Coordination::Unavailable
-        | crate::store::single_flight::Coordination::ContentionTimeout => PaneProbe::Unknown,
+        crate::disk::single_flight::Coordination::Unavailable
+        | crate::disk::single_flight::Coordination::ContentionTimeout => PaneProbe::Unknown,
     }
 }
 

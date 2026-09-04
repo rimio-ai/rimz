@@ -10,8 +10,9 @@ use crate::agents::runtime_control::{
     self, RuntimeControlError, RuntimeControlIssue, RuntimeControlReadiness,
 };
 use crate::config::RemoteControlConfig;
+use crate::disk::paths::StatePaths;
 use crate::room::session::LiveSessions;
-use crate::store::{paths::StatePaths, workspace_record};
+use crate::store::workspace_record;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RemoteControlHost {
@@ -192,7 +193,8 @@ pub fn apply_runtime_toggle(
     }
 
     for workspace in workspaces {
-        let Ok(runtime) = crate::store::RuntimePaths::for_workspace(workspace.workspace_id) else {
+        let Ok(runtime) = crate::disk::paths::RuntimePaths::for_workspace(workspace.workspace_id)
+        else {
             continue;
         };
         if let Err(err) = crate::sidebar::wakeup::wake_store_delta(&runtime, None, None) {

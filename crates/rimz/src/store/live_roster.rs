@@ -11,8 +11,8 @@ use std::path::Path;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::disk::atomic;
 use crate::ids::{AgentKind, AgentSessionId};
-use crate::store::atomic;
 
 const LIVE_ROSTER_VERSION: u32 = 1;
 

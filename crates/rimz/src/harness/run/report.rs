@@ -5,8 +5,9 @@
 //! may be canceled only after every listed run has been claimed this way,
 //! preserving the notice while any row remains unread.
 
+use crate::disk::paths::StatePaths;
 use crate::ids::{MessageId, RunId};
-use crate::store::{StatePaths, Store};
+use crate::store::Store;
 
 use super::{RecordMutation, Result, RunRecord, update_record};
 
@@ -46,7 +47,7 @@ pub fn record_report_messages(
     run_ids: &[RunId],
     message_id: Option<&MessageId>,
 ) -> Result<Vec<RunRecord>> {
-    let _guard = crate::store::lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
+    let _guard = crate::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
     let originals = run_ids
         .iter()
         .map(|run_id| super::load(paths, run_id))

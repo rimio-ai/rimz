@@ -8,7 +8,7 @@ use crate::agents::{
     AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
     HookUninstallReport, ManagedIntegration, Result, agent_config_path, read_optional_file,
 };
-use crate::store::atomic;
+use crate::disk::atomic;
 
 use super::super::hook_types::HookEventSpec;
 use super::{

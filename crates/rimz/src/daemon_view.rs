@@ -17,14 +17,15 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::config::DaemonConfig;
+use crate::disk::parse_cache::StampedPath;
+use crate::disk::paths::StatePaths;
 use crate::ids::{PaneId, WorkspaceId};
 use crate::mux::{
     DaemonView, HostPane, MuxBackend, PaneListOptions, PaneListing, PaneReadConsistency,
     SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget,
 };
 use crate::pane::PaneRef;
-use crate::store::parse_cache::StampedPath;
-use crate::store::{paths::StatePaths, workspace_record};
+use crate::store::workspace_record;
 
 /// View name for the managed daemon tab. Shared by the launcher and pane
 /// classifiers so every backend speaks the same name.

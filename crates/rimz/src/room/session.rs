@@ -365,8 +365,8 @@ pub fn retire_renamed_session(backend: &dyn MuxBackend, workspace: &crate::Resol
 pub fn workspace_record_for_session(session: &str) -> Result<Option<WorkspaceRecord>> {
     workspace_record_for_session_under(
         session,
-        &crate::store::paths::state_home(),
-        &crate::store::paths::runtime_home(),
+        &crate::disk::paths::state_home(),
+        &crate::disk::paths::runtime_home(),
     )
 }
 
@@ -375,7 +375,7 @@ fn workspace_record_for_session_under(
     state_root: &Path,
     runtime_root: &Path,
 ) -> Result<Option<WorkspaceRecord>> {
-    let root = crate::store::paths::workspaces_dir_under(state_root);
+    let root = crate::disk::paths::workspaces_dir_under(state_root);
     let entries = match std::fs::read_dir(&root) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),

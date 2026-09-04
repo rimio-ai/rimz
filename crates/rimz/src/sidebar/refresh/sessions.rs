@@ -25,7 +25,7 @@ use super::SidebarSnapshot;
 const CODEX_TURN_DEATH_CAPTURE_LINES: u16 = 60;
 const CODEX_TURN_DEATH_RETRY_WINDOW: Duration = Duration::from_secs(10 * 60);
 
-type SessionRefreshResult<T> = std::result::Result<T, crate::store::atomic::AtomicErr>;
+type SessionRefreshResult<T> = std::result::Result<T, crate::disk::atomic::AtomicErr>;
 
 /// Refresh every live root session's adapter-owned context sidecar from the
 /// producer. Inline transcript reads run first with their adapter stat gate;
@@ -228,7 +228,7 @@ fn refresh_session_transcript_context_core(
 fn warn_session_transcript_merge(
     kind: &str,
     session_id: &str,
-    err: &crate::store::atomic::AtomicErr,
+    err: &crate::disk::atomic::AtomicErr,
 ) {
     tracing::warn!(
         kind,

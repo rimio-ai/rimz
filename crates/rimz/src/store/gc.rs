@@ -23,7 +23,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::store::paths;
+use crate::disk::paths;
 
 mod collect;
 mod prune;

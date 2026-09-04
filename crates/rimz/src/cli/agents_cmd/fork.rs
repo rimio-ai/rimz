@@ -65,7 +65,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         &config.agents,
         &config.subagents.profiles,
         &workspace.project_root,
-        &rimz::store::paths::config_home(),
+        &rimz::disk::paths::config_home(),
     )?;
     let posture = fork_posture(&seed, &effective.profiles)?;
     if let Some(reason) = &posture.degraded {

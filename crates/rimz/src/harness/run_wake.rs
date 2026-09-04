@@ -17,10 +17,11 @@ use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+use crate::disk::paths::RuntimePaths;
 use crate::harness::run::{RunCancellation, RunRecord, RunStatus};
 use crate::ids::{RunId, WorkspaceId};
 use crate::sock;
-use crate::store::{RuntimePaths, Store};
+use crate::store::Store;
 
 const RUN_WAIT_POLL: Duration = Duration::from_millis(250);
 
@@ -262,9 +263,10 @@ async fn wait_for_run_completion(
 mod tests {
     use super::*;
     use crate::agents::PermissionMode;
+    use crate::disk::paths::StatePaths;
     use crate::harness::run::{RunCancellation, RunRecord};
     use crate::ids::{AgentKind, WorkspaceId};
-    use crate::store::{StatePaths, Store};
+    use crate::store::Store;
     use tokio::net::UnixDatagram;
 
     fn short_runtime_root() -> tempfile::TempDir {

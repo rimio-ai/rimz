@@ -4,10 +4,10 @@ use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use rimz::disk::paths::RuntimePaths;
 use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use rimz::mux::{MuxBackend, SidebarLiveness, SidebarPaneOptions, SidebarWidth};
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
-use rimz::store::RuntimePaths;
 use tempfile::TempDir;
 
 use crate::common::{CommandTimeoutExt, Env};
@@ -137,7 +137,7 @@ fn bare_reload_preserves_stale_sidebar_panes_and_geometry() {
     let workspace_id = WorkspaceId::from_project_root(&project_root);
     record_known_workspace_session(&env.state_root(), &workspace_id, &project_root, &name);
     assert!(
-        rimz::workspace::known_workspaces_under(&rimz::store::paths::workspaces_dir_under(
+        rimz::workspace::known_workspaces_under(&rimz::disk::paths::workspaces_dir_under(
             &env.state_root()
         ),)
         .expect("known workspaces")

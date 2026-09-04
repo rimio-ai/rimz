@@ -6,7 +6,7 @@ use crate::agents::{
     AgentErr, HookInstallPreview, HookInstallReport, HookUninstallReport, ManagedIntegration,
     Result, read_optional_file,
 };
-use crate::store::atomic;
+use crate::disk::atomic;
 
 use super::KIMI_HOOKS;
 

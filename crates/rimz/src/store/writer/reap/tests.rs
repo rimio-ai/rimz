@@ -5,11 +5,11 @@ use crate::agents::{
     AgentContext, AgentTurnError, LaunchParams, SessionOrigin, TurnErrorClass, TurnSettle,
     TurnSettleOutcome,
 };
+use crate::disk::paths::RuntimePaths;
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use crate::store::event::EventKind;
 use crate::store::event_log;
-use crate::store::paths::RuntimePaths;
 use serde_json::json;
 
 fn store() -> (tempfile::TempDir, Store, WorkspaceId) {

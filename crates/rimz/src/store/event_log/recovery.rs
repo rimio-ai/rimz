@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::store::atomic;
+use crate::disk::atomic;
 
 use super::{EventLogErr, Result, frame};
 

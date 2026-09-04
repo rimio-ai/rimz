@@ -82,9 +82,9 @@ pub(crate) fn managed_server_socket_dir_under(runtime_root: &Path) -> PathBuf {
 /// their own server for free: a disposable `XDG_RUNTIME_DIR` yields a
 /// different socket and therefore a different daemon.
 ///
-/// [`RuntimePaths`]: crate::store::RuntimePaths
+/// [`RuntimePaths`]: crate::disk::paths::RuntimePaths
 pub fn managed_server_socket_path() -> PathBuf {
-    managed_server_socket_path_under(&crate::store::paths::runtime_home())
+    managed_server_socket_path_under(&crate::disk::paths::runtime_home())
 }
 
 /// The managed endpoint for an explicit runtime domain. Socket identity and
@@ -255,7 +255,7 @@ impl TmuxBackend {
                 // Best-effort: tmux creates the socket but not its directory.
                 // A genuine failure surfaces with its fix in `ensure_session`,
                 // which owns the precondition.
-                let _ = crate::store::paths::ensure_private_runtime_dir(parent);
+                let _ = crate::disk::paths::ensure_private_runtime_dir(parent);
             }
         });
         tmux_cmd(&self.socket)
@@ -270,7 +270,7 @@ impl TmuxBackend {
         let Some(parent) = self.socket.parent() else {
             return Ok(());
         };
-        crate::store::paths::ensure_private_runtime_dir(parent).map_err(|err| MuxErr::Output {
+        crate::disk::paths::ensure_private_runtime_dir(parent).map_err(|err| MuxErr::Output {
             program: "tmux".to_owned(),
             reason: format!(
                 "cannot prepare the RimZ tmux socket directory {}: {err}",

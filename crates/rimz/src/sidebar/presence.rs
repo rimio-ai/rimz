@@ -104,11 +104,11 @@ pub enum ZellijWakeOutcome {
 #[derive(Debug, thiserror::Error)]
 pub enum ZellijWakeError {
     #[error("could not serialize topology writer selection: {0}")]
-    TopologyLock(#[from] crate::store::lock::LockErr),
+    TopologyLock(#[from] crate::disk::lock::LockErr),
     #[error("could not publish accepted topology: {0}")]
-    TopologyWrite(#[source] crate::store::atomic::AtomicErr),
+    TopologyWrite(#[source] crate::disk::atomic::AtomicErr),
     #[error("could not publish topology writer conflict: {0}")]
-    ConflictWrite(#[source] crate::store::atomic::AtomicErr),
+    ConflictWrite(#[source] crate::disk::atomic::AtomicErr),
     #[error("could not clear topology writer conflict {path}: {source}")]
     ConflictClear {
         path: std::path::PathBuf,
@@ -126,7 +126,7 @@ pub fn ingest_zellij_wake(
     let mut transitions = Vec::new();
     let mut accepted_topology = None;
     if let Some(incoming) = wake.topology.as_ref() {
-        let _guard = crate::store::lock::WorkspaceLock::acquire_with_timeout(
+        let _guard = crate::disk::lock::WorkspaceLock::acquire_with_timeout(
             &runtime.topology_writer_lock(),
             Duration::from_secs(1),
         )?;
@@ -709,8 +709,8 @@ pub fn read_topology_writer_conflict(runtime: &RuntimePaths) -> Option<TopologyW
 fn write_topology_writer_conflict(
     runtime: &RuntimePaths,
     conflict: &TopologyWriterConflict,
-) -> crate::store::atomic::Result<()> {
-    crate::store::atomic::write_temp_then_rename_cache(
+) -> crate::disk::atomic::Result<()> {
+    crate::disk::atomic::write_temp_then_rename_cache(
         &topology_writer_conflict_path(runtime),
         conflict,
     )

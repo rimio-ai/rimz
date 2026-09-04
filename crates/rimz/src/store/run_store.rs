@@ -8,9 +8,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::disk::atomic::write_temp_then_rename;
 use crate::harness::run::{RunRecord, RunStoreErr};
 use crate::ids::RunId;
-use crate::store::atomic::write_temp_then_rename;
 
 type Result<T> = std::result::Result<T, RunStoreErr>;
 

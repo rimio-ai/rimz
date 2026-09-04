@@ -17,9 +17,9 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::context::{SubagentContext, SubagentUsageCursor};
+use crate::disk::atomic;
+use crate::disk::paths::RuntimePaths;
 use crate::ids::{AgentKind, AgentSessionId};
-use crate::store::atomic;
-use crate::store::paths::RuntimePaths;
 use crate::store::sidecar;
 
 /// A child's context sidecar: the enrichment plus the `(kind, agent_id)` it is

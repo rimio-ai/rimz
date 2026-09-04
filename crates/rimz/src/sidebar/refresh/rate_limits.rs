@@ -44,7 +44,7 @@ const REFILL_FLOOR_PCT: u8 = 25;
 /// reader never observes a half-written file. Best-effort: a write failure logs
 /// and leaves the prior cache in place.
 fn write_rate_limits_cache(path: &Path, cache: &RateLimitsCache) {
-    if let Err(err) = crate::store::atomic::write_temp_then_rename_cache(path, cache) {
+    if let Err(err) = crate::disk::atomic::write_temp_then_rename_cache(path, cache) {
         tracing::warn!(
             path = %path.display(),
             tags.operation = "cache.rate_limits_write",
@@ -249,7 +249,7 @@ pub(super) fn refresh_rate_limits(snapshot: &mut SidebarSnapshot, runtime: &Runt
     let path = runtime.shared_rate_limits_path();
     let reset_kinds = {
         let Some(_guard) =
-            crate::store::lock::WorkspaceLock::try_acquire(&runtime.shared_rate_limits_lock())
+            crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_rate_limits_lock())
                 .ok()
                 .flatten()
         else {
@@ -276,7 +276,7 @@ pub(super) fn refresh_rate_limits(snapshot: &mut SidebarSnapshot, runtime: &Runt
 fn reset_logged_out_rate_limits_cache(runtime: &RuntimePaths) {
     let path = runtime.shared_rate_limits_path();
     let Some(_guard) =
-        crate::store::lock::WorkspaceLock::try_acquire(&runtime.shared_rate_limits_lock())
+        crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_rate_limits_lock())
             .ok()
             .flatten()
     else {
@@ -298,8 +298,8 @@ fn reset_logged_out_rate_limits_cache(runtime: &RuntimePaths) {
 fn acquire_rate_limits_cache_lock(
     path: &Path,
     operation: &'static str,
-) -> Option<crate::store::lock::WorkspaceLock> {
-    match crate::store::lock::WorkspaceLock::acquire(path) {
+) -> Option<crate::disk::lock::WorkspaceLock> {
+    match crate::disk::lock::WorkspaceLock::acquire(path) {
         Ok(guard) => Some(guard),
         Err(err) => {
             tracing::warn!(
