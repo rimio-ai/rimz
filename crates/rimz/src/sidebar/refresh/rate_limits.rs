@@ -401,9 +401,7 @@ fn project_rate_limits(
             .map(|limits| limits.windows.as_slice())
             .or_else(|| prior_entry.map(|entry| entry.limits.windows.as_slice()))
             .unwrap_or_default();
-        if !foreign_account {
-            complete_omitted_duration_windows(prior_authoritative, &mut live_limits);
-        }
+        complete_omitted_duration_windows(prior_authoritative, &mut live_limits);
         let index = WindowIndex::new(prior_entry, live_limits.windows);
 
         // Fuse each duration to its ground truth and carry or advance its
