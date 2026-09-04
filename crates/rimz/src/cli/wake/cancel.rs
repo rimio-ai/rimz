@@ -9,7 +9,7 @@ use super::*;
 
 pub(super) fn run(name: &str, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
-    let caller = caller(&ctx)?;
+    let caller_session = caller_session(&ctx)?;
     let catalog = TaskCatalog::load(Some(&ctx.workspace.project_root))?;
     let Some(task) = catalog.visible().get(name) else {
         bail!("no pending wake named `{name}`; see `rimz wake list`");
@@ -18,9 +18,8 @@ pub(super) fn run(name: &str, globals: &GlobalFlags) -> Result<()> {
     let belongs_here = task.source() == TaskSource::Instance
         && task.entry().resolved_root() == ctx.workspace.project_root
         && target.is_some();
-    let belongs_to_caller = caller
+    let belongs_to_caller = caller_session
         .as_ref()
-        .and_then(|caller| caller.launch_id.as_ref())
         .is_none_or(|session| target.is_some_and(|target| target.session == session.as_str()));
     if !belongs_here || !belongs_to_caller {
         bail!("no pending wake named `{name}`; see `rimz wake list`");

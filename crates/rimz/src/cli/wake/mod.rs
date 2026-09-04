@@ -9,6 +9,8 @@ use clap::{Args, Subcommand};
 
 use rimz::config::{CheckOn, TaskTarget};
 use rimz::harness::ancestry::CallerIdentity;
+use rimz::ids::AgentSessionId;
+use rimz::store::snapshot::SidebarSnapshot;
 
 use super::{Ctx, GlobalFlags};
 
@@ -121,16 +123,36 @@ fn caller(ctx: &Ctx) -> Result<Option<CallerIdentity>> {
     super::send::resolve_caller(&ctx.store)
 }
 
+fn caller_agent<'a>(
+    snapshot: &'a SidebarSnapshot,
+    caller: Option<&CallerIdentity>,
+) -> Result<Option<&'a rimz::agents::AgentState>> {
+    let Some(caller) = caller else {
+        return Ok(None);
+    };
+    let agent = rimz::harness::ancestry::resolve_launch_caller(&snapshot.agents, caller)?;
+    if agent.ended_at.is_some() {
+        bail!("RimZ identified the calling agent but its live session is unavailable");
+    }
+    Ok(Some(agent))
+}
+
+fn caller_session(ctx: &Ctx) -> Result<Option<AgentSessionId>> {
+    let caller = caller(ctx)?;
+    let snapshot = ctx.resolution_snapshot()?;
+    Ok(caller_agent(&snapshot, caller.as_ref())?.map(|agent| agent.agent_id.clone()))
+}
+
 fn delivery_target(
     ctx: &Ctx,
     caller: Option<&CallerIdentity>,
     address: Option<&str>,
 ) -> Result<TaskTarget> {
+    let snapshot = ctx.resolution_snapshot()?;
     if let Some(address) = address {
         if !address.starts_with('@') {
             bail!("wake target must start with `@`");
         }
-        let snapshot = ctx.cached_snapshot()?;
         let agent = super::resolve_agent_one(&snapshot, address, None, ctx.channel())
             .map_err(|_| anyhow::anyhow!("no live agent matches `{address}`"))?;
         if agent.agent_id.is_provisional() {
@@ -144,22 +166,22 @@ fn delivery_target(
         });
     }
 
-    let caller = caller.ok_or_else(|| {
+    let agent = caller_agent(&snapshot, caller)?.ok_or_else(|| {
         anyhow::anyhow!(
             "arming a wake without an explicit @target is only available to an agent RimZ can identify; from a user shell, pass the live agent address"
         )
     })?;
-    let session = caller.launch_id.as_ref().ok_or_else(|| {
-        anyhow::anyhow!("RimZ identified the calling agent but not its durable session")
-    })?;
-    let handle = caller
+    if agent.agent_id.is_provisional() {
+        bail!("the calling agent has not registered a real session yet");
+    }
+    let handle = agent
         .name
         .as_deref()
         .map(|name| format!("@{name}"))
-        .unwrap_or_else(|| format!("@{}", caller.kind));
+        .unwrap_or_else(|| format!("@{}", agent.kind));
     Ok(TaskTarget {
-        kind: caller.kind.as_str().to_owned(),
-        session: session.as_str().to_owned(),
+        kind: agent.kind.as_str().to_owned(),
+        session: agent.agent_id.as_str().to_owned(),
         handle,
     })
 }
