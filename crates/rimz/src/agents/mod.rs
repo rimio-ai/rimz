@@ -635,6 +635,8 @@ pub struct LocalSpendFold {
     /// duplicate row is skipped or, when richer, replaces its earlier form.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_request: Option<FoldedRequest>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    dedup_window_ready: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -661,6 +663,7 @@ impl LocalSpendFold {
     }
 
     pub fn absorb(&mut self, entries: &[spending::CachedEntry]) {
+        self.dedup_window_ready = true;
         for entry in entries {
             let request = FoldedRequest::from(entry);
             if let Some(previous) = self
@@ -687,7 +690,7 @@ impl LocalSpendFold {
     }
 
     fn needs_dedup_replay(&self) -> bool {
-        self.cursor.offset > 0 && self.last_request.is_none()
+        self.cursor.offset > 0 && !self.dedup_window_ready
     }
 
     fn add(&mut self, request: &FoldedRequest) {
@@ -1050,6 +1053,11 @@ mod tests {
             LocalSpendFold::resume(Some(&current), 9),
             LocalSpendFold::default()
         );
+
+        let mut empty = LocalSpendFold::default();
+        empty.absorb(&[]);
+        empty.cursor.offset = 10;
+        assert_eq!(LocalSpendFold::resume(Some(&empty), 10), empty);
     }
 
     #[test]
