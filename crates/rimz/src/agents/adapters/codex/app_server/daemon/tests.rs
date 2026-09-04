@@ -155,10 +155,13 @@ fn commands_anchor_descendants_to_codex_home() {
     let bin = Path::new("/home/u/.codex/packages/standalone/current/codex");
     let home = Path::new("/home/u/.codex");
     for argv in [command(bin, true), command(bin, false)] {
-        let spec = command_spec(&argv, home).expect("non-empty Codex command");
-        assert_eq!(spec.cwd.as_deref(), Some(home));
-        assert_eq!(spec.program, argv[0]);
-        assert_eq!(spec.args, argv[1..]);
+        let command = control_command(&argv, home).expect("non-empty Codex command");
+        assert_eq!(command.get_current_dir(), Some(home));
+        assert_eq!(command.get_program(), argv[0].as_str());
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            argv[1..].iter().map(OsStr::new).collect::<Vec<_>>()
+        );
     }
 }
 

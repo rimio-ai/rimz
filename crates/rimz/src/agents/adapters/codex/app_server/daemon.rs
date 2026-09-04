@@ -6,12 +6,10 @@
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
-
-use crate::mux::CommandSpec;
 
 use super::codex_home;
 
@@ -251,7 +249,17 @@ pub enum ControlError {
     Command {
         action: &'static str,
         #[source]
-        source: crate::mux::MuxErr,
+        source: std::io::Error,
+    },
+    #[error(
+        "Codex remote-control {action} timed out after {}s using {}",
+        timeout.as_secs(),
+        program.display()
+    )]
+    Timeout {
+        action: &'static str,
+        program: PathBuf,
+        timeout: Duration,
     },
     #[error(
         "Codex remote-control {action} failed with {status} using {}: {stderr}",
@@ -266,19 +274,29 @@ pub enum ControlError {
 }
 
 fn run_command(argv: &[String], enabled: bool, home: &Path) -> Result<(), ControlError> {
-    let Some(spec) = command_spec(argv, home) else {
+    let Some(mut command) = control_command(argv, home) else {
         return Ok(());
     };
-    let output = spec
-        .output_raw_with_timeout(CONTROL_TIMEOUT)
-        .map_err(|source| ControlError::Command {
-            action: action(enabled),
-            source,
+    command.stdin(Stdio::null());
+    let output =
+        crate::proc::run_bounded_output(&mut command, CONTROL_TIMEOUT).map_err(|source| {
+            ControlError::Command {
+                action: action(enabled),
+                source,
+            }
         })?;
+    let program = PathBuf::from(&argv[0]);
+    if output.timed_out {
+        return Err(ControlError::Timeout {
+            action: action(enabled),
+            program,
+            timeout: CONTROL_TIMEOUT,
+        });
+    }
     if !output.status.success() {
         return Err(ControlError::Exit {
             action: action(enabled),
-            program: PathBuf::from(&spec.program),
+            program,
             status: output.status,
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         });
@@ -298,21 +316,18 @@ fn command(bin: &Path, enabled: bool) -> Vec<String> {
     ]
 }
 
-fn command_spec(argv: &[String], home: &Path) -> Option<CommandSpec> {
+fn control_command(argv: &[String], home: &Path) -> Option<Command> {
     let (program, args) = argv.split_first()?;
-    Some(
-        CommandSpec::new(program)
-            .args(args.iter().cloned())
-            .cwd(home),
-    )
+    let mut command = Command::new(program);
+    command.args(args).current_dir(home);
+    Some(command)
 }
 
 fn spawn(bin: &Path, home: &Path) {
     let argv = command(bin, true);
-    let Some(spec) = command_spec(&argv, home) else {
+    let Some(mut cmd) = control_command(&argv, home) else {
         return;
     };
-    let mut cmd = spec.to_command();
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -468,11 +483,13 @@ fn updater_argv(home: &Path, argv: &[OsString]) -> bool {
 
 fn pid_record_matches(record: &PidRecord) -> bool {
     let pid = record.pid.to_string();
-    let output = CommandSpec::new("ps")
+    let mut command = Command::new("ps");
+    command
         .args(["-p", &pid, "-o", "lstart="])
-        .output_raw_with_timeout(PID_PROBE_TIMEOUT);
-    output.is_ok_and(|output| {
-        output.status.success()
+        .stdin(Stdio::null());
+    crate::proc::run_bounded_output(&mut command, PID_PROBE_TIMEOUT).is_ok_and(|output| {
+        !output.timed_out
+            && output.status.success()
             && String::from_utf8_lossy(&output.stdout).trim() == record.process_start_time
     })
 }
