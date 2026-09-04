@@ -11,7 +11,7 @@ use rimz::agents::AgentState;
 use rimz::harness::run::{self as run, RunRecord, RunStatus};
 use rimz::ids::{AgentSessionId, MessageId, RunId};
 use rimz::message::deliver::{DeliveryPolicy, deliver_one};
-use rimz::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
+use rimz::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
 use rimz::workspace::ResolvedWorkspace;
 use rimz::{RuntimeScope, Store};
 
@@ -324,7 +324,7 @@ mod tests {
     use rimz::agents::{AgentLifecycleObservation, AgentStatus, LifecycleSignal, PermissionMode};
     use rimz::disk::paths::{RuntimePaths, StatePaths};
     use rimz::ids::{AgentKind, WorkspaceId};
-    use rimz::message::MessageStatus;
+    use rimz::store::message::MessageStatus;
     use rimz::store::writer::AgentLifecycleIntent;
     use rimz::workspace::RootClass;
 

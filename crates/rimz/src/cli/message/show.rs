@@ -195,7 +195,7 @@ fn render_message_kv(
                             "{} {} {}",
                             condition.address,
                             condition.status.as_str(),
-                            rimz::message::format_dwell(condition.dwell_secs)
+                            rimz::store::message::format_dwell(condition.dwell_secs)
                         );
                         if met {
                             format!("{label} ✓")
@@ -475,12 +475,15 @@ fn when_detail(check: &deliver::DeliveryCheck, now: Timestamp) -> (bool, String)
                 "{} {} {}",
                 condition.address,
                 condition.expected.as_str(),
-                rimz::message::format_dwell(condition.dwell_secs)
+                rimz::store::message::format_dwell(condition.dwell_secs)
             );
             if condition.met {
                 format!("{wanted} ok")
             } else if let Some(elapsed) = condition.dwell_so_far_secs {
-                let progress = format!("{wanted}; {} so far", rimz::message::format_dwell(elapsed));
+                let progress = format!(
+                    "{wanted}; {} so far",
+                    rimz::store::message::format_dwell(elapsed)
+                );
                 condition.trip_at.map_or(progress.clone(), |trip_at| {
                     format!(
                         "{progress}; trips {}",
@@ -603,13 +606,13 @@ pub(super) fn render_verdict(
             dwell_secs,
             dwell_so_far_secs,
         } => {
-            let dwell = rimz::message::format_dwell(*dwell_secs);
+            let dwell = rimz::store::message::format_dwell(*dwell_secs);
             if let Some(elapsed) = dwell_so_far_secs {
                 format!(
                     "waiting for {address} {} ≥ {dwell} — {} {} so far",
                     expected.as_str(),
                     expected.as_str(),
-                    rimz::message::format_dwell(*elapsed)
+                    rimz::store::message::format_dwell(*elapsed)
                 )
             } else {
                 let current = current

@@ -411,7 +411,7 @@ pub(super) fn message_snippet(message: &MessageListRow, width: usize) -> String 
                 "when {} {} {}",
                 condition.address,
                 condition.status.as_str(),
-                rimz::message::format_dwell(condition.dwell_secs)
+                rimz::store::message::format_dwell(condition.dwell_secs)
             )
         })
         .collect::<Vec<_>>()

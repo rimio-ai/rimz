@@ -9,7 +9,7 @@ use super::{Ctx, GlobalFlags};
 use rimz::harness::budget::{
     BudgetLedger, BudgetSpec, BudgetWindow, DayBaseline, read_ledger, total_cost_usd, write_ledger,
 };
-use rimz::message::DeliveryGate;
+use rimz::store::message::DeliveryGate;
 
 #[derive(Debug, Args)]
 pub struct BudgetArgs {
@@ -107,7 +107,7 @@ pub fn run_budget(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
                 workspace,
                 store,
                 agent,
-                rimz::message::MessageSender::System,
+                rimz::store::message::MessageSender::System,
                 text,
                 DeliveryGate::Done,
                 None,

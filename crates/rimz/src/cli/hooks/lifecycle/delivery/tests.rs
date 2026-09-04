@@ -39,16 +39,16 @@ fn turn_started_records_only_unsupervised_user_inputs() {
     let workspace = workspace();
     let agent = rimz::agents::definition_by_kind("claude").unwrap();
     let agent_state = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::now());
-    let human = rimz::message::MessageRecord::new(
+    let human = rimz::store::message::MessageRecord::new(
         workspace_id(),
         &agent_state,
         "human prompt".to_owned(),
         true,
-        rimz::message::DeliveryGate::Done,
+        rimz::store::message::DeliveryGate::Done,
     );
     let agent_message = human
         .clone()
-        .with_sender(rimz::message::MessageSender::Agent {
+        .with_sender(rimz::store::message::MessageSender::Agent {
             kind: rimz::ids::AgentKind::new_unchecked("codex"),
             name: None,
             profile: None,

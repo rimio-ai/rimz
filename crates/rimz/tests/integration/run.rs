@@ -1344,7 +1344,7 @@ fn wait_for_message_count(
     store: &rimz::Store,
     child: &mut std::process::Child,
     expected: usize,
-) -> Vec<rimz::message::MessageRecord> {
+) -> Vec<rimz::store::message::MessageRecord> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let messages = store.list_messages().expect("list messages");
@@ -1352,7 +1352,7 @@ fn wait_for_message_count(
             && messages
                 .iter()
                 .take(expected)
-                .all(|message| message.status == rimz::message::MessageStatus::Sent)
+                .all(|message| message.status == rimz::store::message::MessageStatus::Sent)
         {
             return messages;
         }

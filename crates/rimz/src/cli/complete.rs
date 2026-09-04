@@ -123,7 +123,7 @@ pub(crate) fn all_message_ids() -> Vec<CompletionCandidate> {
         .collect()
 }
 
-fn message_target(message: &rimz::message::MessageRecord) -> String {
+fn message_target(message: &rimz::store::message::MessageRecord) -> String {
     message
         .address
         .clone()

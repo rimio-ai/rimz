@@ -10,11 +10,11 @@ use rimz::agents::{
     LifecycleSignal, RateLimitWindow, TurnErrorClass,
 };
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, MuxName, PaneId};
-use rimz::message::{
+use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope, MessageEventMethod};
+use rimz::store::message::{
     AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
     WhenCondition,
 };
-use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope, MessageEventMethod};
 
 use crate::common::Env;
 
@@ -2578,7 +2578,7 @@ fn steer_auto_compact_runs_before_a_full_window() {
             kind,
             agent_id,
             label: Some(label),
-            threshold: rimz::message::AutoCompact::Percent(70),
+            threshold: rimz::store::message::AutoCompact::Percent(70),
             occupied_tokens: None,
             ..
         } if kind.as_str() == "claude" && agent_id == "sess-ac" && label == "@claude"

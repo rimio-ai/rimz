@@ -5,8 +5,8 @@ use jiff::Timestamp;
 use super::*;
 use crate::agents::AgentStatus;
 use crate::ids::{AgentKind, AgentSessionId, MuxName, WorkspaceId};
-use crate::message::{HarnessNotice, MessageSender};
 use crate::pane::PaneRef;
+use crate::store::message::{HarnessNotice, MessageSender};
 
 #[test]
 fn resolve_prefers_name_ordinal_kind_then_session_prefix() {
@@ -676,7 +676,7 @@ fn align_submitted_prompt_consumes_human_header() {
         &recipient,
         "ship it".to_owned(),
         true,
-        crate::message::DeliveryGate::Done,
+        crate::store::message::DeliveryGate::Done,
     );
     let prompt = "Type: USER_MESSAGE\nFrom: @user\nContent:\nship it";
 
@@ -694,7 +694,7 @@ fn align_submitted_prompt_consumes_harness_report_header() {
         &recipient,
         "ship it".to_owned(),
         true,
-        crate::message::DeliveryGate::Done,
+        crate::store::message::DeliveryGate::Done,
     )
     .with_sender(MessageSender::Harness {
         notice: HarnessNotice::SubagentReport,
@@ -715,14 +715,14 @@ fn align_submitted_prompt_separates_stray_composer_text() {
         &recipient,
         "first".to_owned(),
         true,
-        crate::message::DeliveryGate::Done,
+        crate::store::message::DeliveryGate::Done,
     );
     let second = MessageRecord::new(
         first.workspace_id.clone(),
         &recipient,
         "second".to_owned(),
         true,
-        crate::message::DeliveryGate::Done,
+        crate::store::message::DeliveryGate::Done,
     );
     let first_prompt = "Type: USER_MESSAGE\nFrom: @user\nContent:\nfirst";
     let second_prompt = "Type: USER_MESSAGE\nFrom: @user\nContent:\nsecond";
@@ -750,7 +750,7 @@ fn align_submitted_prompt_rejects_a_truncated_record() {
         &recipient,
         "ship it".to_owned(),
         true,
-        crate::message::DeliveryGate::Done,
+        crate::store::message::DeliveryGate::Done,
     );
 
     assert_eq!(
@@ -770,7 +770,7 @@ fn align_submitted_prompt_requires_exact_system_text() {
         &recipient,
         "continue".to_owned(),
         true,
-        crate::message::DeliveryGate::Done,
+        crate::store::message::DeliveryGate::Done,
     )
     .with_sender(MessageSender::System);
 
@@ -1091,7 +1091,7 @@ fn message_header_uses_live_handle_and_channel_only_when_crossing_channels() {
     let target = agent("codex", "session-target", Some("docs"), "terminal_2");
     snapshot.agents = vec![sender, target];
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
-    let sender = crate::message::MessageSender::Agent {
+    let sender = crate::store::message::MessageSender::Agent {
         kind: AgentKind::new_unchecked("claude"),
         name: Some("lucid-atlas".to_owned()),
         profile: None,
@@ -1118,7 +1118,7 @@ fn message_header_uses_explicit_live_handle() {
     let target = agent("codex", "session-target", Some("docs"), "terminal_2");
     snapshot.agents = vec![sender, target];
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
-    let sender = crate::message::MessageSender::Agent {
+    let sender = crate::store::message::MessageSender::Agent {
         kind: AgentKind::new_unchecked("claude"),
         name: Some("writer".to_owned()),
         profile: None,
@@ -1197,7 +1197,7 @@ fn message_header_live_handle_disambiguates_same_kind_peers() {
     two.kind_ordinal = Some(2);
     snapshot.agents = vec![one, two];
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
-    let sender = crate::message::MessageSender::Agent {
+    let sender = crate::store::message::MessageSender::Agent {
         kind: AgentKind::new_unchecked("claude"),
         name: Some("bright-lark".to_owned()),
         profile: None,
@@ -1214,7 +1214,7 @@ fn message_header_live_handle_disambiguates_same_kind_peers() {
 #[test]
 fn message_header_falls_back_to_stored_identity_when_sender_is_absent() {
     let peers: Vec<&AgentState> = Vec::new();
-    let sender = crate::message::MessageSender::Agent {
+    let sender = crate::store::message::MessageSender::Agent {
         kind: AgentKind::new_unchecked("codex"),
         name: Some("lucid-atlas".to_owned()),
         profile: Some("reviewer".to_owned()),
@@ -1240,7 +1240,7 @@ fn message_header_fallback_uses_profile_before_petname() {
     other_planner.profile = Some("planner".to_owned());
     snapshot.agents = vec![other_planner];
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
-    let sender = crate::message::MessageSender::Agent {
+    let sender = crate::store::message::MessageSender::Agent {
         kind: AgentKind::new_unchecked("claude"),
         name: Some("calm-fox".to_owned()),
         profile: Some("planner".to_owned()),

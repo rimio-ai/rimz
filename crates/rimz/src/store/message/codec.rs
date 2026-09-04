@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use tracing::warn;
 
+use super::{MessageRecord, MessageStatus};
 use crate::disk::atomic;
-use crate::message::{MessageRecord, MessageStatus};
 
 const QUEUE_FILE: &str = "messages.jsonl";
 const HISTORY_FILE: &str = "history.jsonl";
@@ -35,16 +35,10 @@ pub enum MessageStoreErr {
 pub(super) type Result<T> = std::result::Result<T, MessageStoreErr>;
 
 #[must_use = "durability barrier; check the result"]
-pub(super) fn replace_all(messages_dir: &Path, messages: &[MessageRecord]) -> Result<()> {
-    write_queue(messages_dir, messages)
-}
-
-pub(super) fn list(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
-    read_queue(messages_dir)
-}
-
-#[must_use = "durability barrier; check the result"]
-pub(super) fn append_history_many(messages_dir: &Path, messages: &[MessageRecord]) -> Result<()> {
+pub(in crate::store) fn append_history_many(
+    messages_dir: &Path,
+    messages: &[MessageRecord],
+) -> Result<()> {
     if messages.is_empty() {
         return Ok(());
     }
@@ -70,18 +64,18 @@ pub(super) fn append_history_many(messages_dir: &Path, messages: &[MessageRecord
     Ok(())
 }
 
-pub(super) fn list_history(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
+pub(in crate::store) fn list_history(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
     read_queue_file(&history_path(messages_dir))
 }
 
-pub(super) fn list_pending(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
+pub(in crate::store) fn list_pending(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
     Ok(read_queue(messages_dir)?
         .into_iter()
         .filter(|message| message.status == MessageStatus::Queued)
         .collect())
 }
 
-fn read_queue(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
+pub(in crate::store) fn read_queue(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
     let path = queue_path(messages_dir);
     if !path.exists() {
         return Ok(Vec::new());
@@ -132,7 +126,8 @@ fn read_queue_file(path: &Path) -> Result<Vec<MessageRecord>> {
     Ok(messages)
 }
 
-fn write_queue(messages_dir: &Path, messages: &[MessageRecord]) -> Result<()> {
+#[must_use = "durability barrier; check the result"]
+pub(in crate::store) fn write_queue(messages_dir: &Path, messages: &[MessageRecord]) -> Result<()> {
     write_messages_file(&queue_path(messages_dir), messages)
 }
 
@@ -181,7 +176,7 @@ mod tests {
     use super::*;
     use crate::agents::AgentState;
     use crate::ids::{MessageId, WorkspaceId};
-    use crate::message::DeliveryGate;
+    use crate::store::message::DeliveryGate;
 
     #[test]
     fn missing_messages_dir_lists_empty() {
@@ -213,13 +208,13 @@ mod tests {
             DeliveryGate::Done,
         );
 
-        replace_all(&messages_dir, &[first.clone(), second.clone()]).unwrap();
+        write_queue(&messages_dir, &[first.clone(), second.clone()]).unwrap();
         assert_eq!(list_pending(&messages_dir).unwrap().len(), 2);
 
         first.status = MessageStatus::Sent;
-        replace_all(&messages_dir, &[first.clone(), second.clone()]).unwrap();
+        write_queue(&messages_dir, &[first.clone(), second.clone()]).unwrap();
 
-        let mut messages = list(&messages_dir).unwrap();
+        let mut messages = read_queue(&messages_dir).unwrap();
         assert_eq!(messages.len(), 2);
         assert_eq!(
             messages
@@ -233,8 +228,8 @@ mod tests {
         assert!(queue_path(&messages_dir).exists());
 
         messages.retain(|message| message.message_id != first.message_id);
-        replace_all(&messages_dir, &messages).unwrap();
-        let messages = list(&messages_dir).unwrap();
+        write_queue(&messages_dir, &messages).unwrap();
+        let messages = read_queue(&messages_dir).unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].message_id, second.message_id);
     }
@@ -324,12 +319,12 @@ mod tests {
             true,
             DeliveryGate::Done,
         );
-        replace_all(&messages_dir, std::slice::from_ref(&message)).unwrap();
+        write_queue(&messages_dir, std::slice::from_ref(&message)).unwrap();
         let mut bytes = std::fs::read(queue_path(&messages_dir)).unwrap();
         bytes.extend_from_slice(b"{\"message_id\"");
         std::fs::write(queue_path(&messages_dir), bytes).unwrap();
 
-        let messages = list(&messages_dir).unwrap();
+        let messages = read_queue(&messages_dir).unwrap();
 
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].message_id, message.message_id);

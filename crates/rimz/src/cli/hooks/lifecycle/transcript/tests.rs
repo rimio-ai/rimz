@@ -41,7 +41,7 @@ fn recorded(signal: LifecycleSignal) -> RecordedLifecycle {
 fn conversation_input<'a>(
     assistant_message: Option<&'a str>,
     questions: &'a [rimz::transcript::AskQuestion],
-    delivered: &'a [rimz::message::MessageRecord],
+    delivered: &'a [rimz::store::message::MessageRecord],
 ) -> ConversationInput<'a> {
     ConversationInput {
         assistant_message,
@@ -105,20 +105,20 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
     let workspace = workspace();
     let agent = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
     let parent = rimz::ids::MessageId::parse("msg_0123456789abcdef").unwrap();
-    let first = rimz::message::MessageRecord::new(
+    let first = rimz::store::message::MessageRecord::new(
         workspace.workspace_id.clone(),
         &agent,
         "first".to_owned(),
         true,
-        rimz::message::DeliveryGate::Done,
+        rimz::store::message::DeliveryGate::Done,
     )
     .with_in_reply_to(vec![parent.clone()]);
-    let second = rimz::message::MessageRecord::new(
+    let second = rimz::store::message::MessageRecord::new(
         workspace.workspace_id.clone(),
         &agent,
         "second".to_owned(),
         true,
-        rimz::message::DeliveryGate::Done,
+        rimz::store::message::DeliveryGate::Done,
     );
     let mut started = recorded(LifecycleSignal::TurnStarted);
     started.observation.prompt = Some(
@@ -242,14 +242,14 @@ fn subagent_report_records_as_a_hidden_harness_report() {
     let (_dir, store) = store();
     let workspace = workspace();
     let agent = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
-    let message = rimz::message::MessageRecord::new(
+    let message = rimz::store::message::MessageRecord::new(
         workspace.workspace_id.clone(),
         &agent,
         "child result".to_owned(),
         true,
-        rimz::message::DeliveryGate::Done,
+        rimz::store::message::DeliveryGate::Done,
     )
-    .with_sender(rimz::message::MessageSender::Subagent {
+    .with_sender(rimz::store::message::MessageSender::Subagent {
         kind: rimz::ids::AgentKind::new_unchecked("codex"),
         name: "lucid-atlas".to_owned(),
     });
@@ -282,14 +282,14 @@ fn mixed_submit_records_stray_text_as_direct_input() {
     let (_dir, store) = store();
     let workspace = workspace();
     let agent = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
-    let message = rimz::message::MessageRecord::new(
+    let message = rimz::store::message::MessageRecord::new(
         workspace.workspace_id.clone(),
         &agent,
         "child result".to_owned(),
         true,
-        rimz::message::DeliveryGate::Done,
+        rimz::store::message::DeliveryGate::Done,
     )
-    .with_sender(rimz::message::MessageSender::Subagent {
+    .with_sender(rimz::store::message::MessageSender::Subagent {
         kind: rimz::ids::AgentKind::new_unchecked("codex"),
         name: "lucid-atlas".to_owned(),
     });
@@ -325,12 +325,12 @@ fn user_message_header_records_prompt_without_envelope() {
     let (_dir, store) = store();
     let workspace = workspace();
     let agent = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
-    let message = rimz::message::MessageRecord::new(
+    let message = rimz::store::message::MessageRecord::new(
         workspace.workspace_id.clone(),
         &agent,
         "from a human".to_owned(),
         true,
-        rimz::message::DeliveryGate::Done,
+        rimz::store::message::DeliveryGate::Done,
     );
     let mut started = recorded(LifecycleSignal::TurnStarted);
     started.observation.prompt =
@@ -454,12 +454,12 @@ fn agent_message_does_not_answer_open_ask() {
     );
     ask.id = Some(rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap());
     rimz::transcript::append(store.paths(), &ask).unwrap();
-    let message = rimz::message::MessageRecord::new(
+    let message = rimz::store::message::MessageRecord::new(
         workspace.workspace_id.clone(),
         &agent,
         "new context".to_owned(),
         true,
-        rimz::message::DeliveryGate::Done,
+        rimz::store::message::DeliveryGate::Done,
     );
     let mut started = recorded(LifecycleSignal::TurnStarted);
     started.waiting_cleared = true;
@@ -617,22 +617,22 @@ fn unheadered_system_batch_keeps_each_confirmed_message_causal() {
     let (_dir, store) = store();
     let workspace = workspace();
     let agent = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
-    let first = rimz::message::MessageRecord::new(
+    let first = rimz::store::message::MessageRecord::new(
         workspace.workspace_id.clone(),
         &agent,
         "\nfirst\n".to_owned(),
         true,
-        rimz::message::DeliveryGate::Done,
+        rimz::store::message::DeliveryGate::Done,
     )
-    .with_sender(rimz::message::MessageSender::System);
-    let second = rimz::message::MessageRecord::new(
+    .with_sender(rimz::store::message::MessageSender::System);
+    let second = rimz::store::message::MessageRecord::new(
         workspace.workspace_id.clone(),
         &agent,
         "\nsecond\n".to_owned(),
         true,
-        rimz::message::DeliveryGate::Done,
+        rimz::store::message::DeliveryGate::Done,
     )
-    .with_sender(rimz::message::MessageSender::System);
+    .with_sender(rimz::store::message::MessageSender::System);
     let mut started = recorded(LifecycleSignal::TurnStarted);
     started.observation.prompt = Some("first\n\n\n\nsecond".to_owned());
 

@@ -8,7 +8,7 @@ use clap::Args;
 
 use rimz::ids::AgentKind;
 use rimz::message::dispatch::{DispatchOutcome, ParkReason};
-use rimz::message::{AutoCompact, MessageSender};
+use rimz::store::message::{AutoCompact, MessageSender};
 use rimz::utils::time::{DurationUnit, parse_duration_units};
 
 const AGENT_WAIT_DEADLINE: Duration = Duration::from_secs(3600);

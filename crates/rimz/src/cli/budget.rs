@@ -13,7 +13,7 @@ use rimz::harness::budget::{
     BudgetSpec, BudgetWindow, DailyBudgetScope, read_scope_state, scope_interrupted,
 };
 use rimz::ids::AgentKind;
-use rimz::message::DeliveryGate;
+use rimz::store::message::DeliveryGate;
 
 #[derive(Debug, Args)]
 pub struct BudgetArgs {
@@ -86,7 +86,7 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
                 workspace,
                 store,
                 agent,
-                rimz::message::MessageSender::System,
+                rimz::store::message::MessageSender::System,
                 continue_text.to_owned(),
                 DeliveryGate::Done,
                 None,

@@ -1,6 +1,6 @@
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
-use rimz::message::{DeliveryGate, MessageRecord};
 use rimz::store::event::EventEnvelope;
+use rimz::store::message::{DeliveryGate, MessageRecord};
 
 use crate::common::Env;
 

@@ -244,7 +244,7 @@ fn is_false(value: &bool) -> bool {
 #[derive(Clone, Debug, serde::Serialize)]
 struct ShowMessage {
     id: String,
-    status: rimz::message::MessageStatus,
+    status: rimz::store::message::MessageStatus,
     from: String,
     age: String,
     text: String,
@@ -694,7 +694,7 @@ fn show_messages(store: &rimz::Store, agent: &AgentState) -> Result<Vec<ShowMess
         let rimz::store::event::EventKind::Message { payload, .. } = event.kind() else {
             continue;
         };
-        if payload.status != rimz::message::MessageStatus::Delivered
+        if payload.status != rimz::store::message::MessageStatus::Delivered
             || !rimz::agents::AgentCardRef::new(
                 &payload.kind,
                 &payload.agent_id,
@@ -792,7 +792,7 @@ mod tests {
     fn show_message_status_serializes_as_its_existing_string() {
         let message = ShowMessage {
             id: "msg_1".to_owned(),
-            status: rimz::message::MessageStatus::TimedOut,
+            status: rimz::store::message::MessageStatus::TimedOut,
             from: "@planner".to_owned(),
             age: "2m ago".to_owned(),
             text: "check".to_owned(),

@@ -32,7 +32,7 @@ use std::path::Path;
 
 use crate::agents::AgentState;
 use crate::ids::PaneId;
-use crate::message::{HarnessNotice, MessageRecord, MessageSender, identity_handle};
+use crate::store::message::{HarnessNotice, MessageRecord, MessageSender, identity_handle};
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 
 pub use crate::store::snapshot::compose_channel;

@@ -2,7 +2,7 @@
 
 use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
-use rimz::message::MessageStatus;
+use rimz::store::message::MessageStatus;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::Command;

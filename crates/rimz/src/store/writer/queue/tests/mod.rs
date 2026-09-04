@@ -5,8 +5,10 @@ use crate::agents::AgentLifecycleObservation;
 use crate::agents::lifecycle::LifecycleSignal;
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
-use crate::message::{AfterCondition, AutoCompact, DeliveryGate, MessageSender, WhenCondition};
 use crate::store::event_log;
+use crate::store::message::{
+    AfterCondition, AutoCompact, DeliveryGate, MessageSender, WhenCondition,
+};
 use crate::{RuntimePaths, StatePaths};
 
 /// A durable store over a disposable root, plus the queue-shaped readers every

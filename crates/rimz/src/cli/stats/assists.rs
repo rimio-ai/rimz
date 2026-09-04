@@ -4,8 +4,8 @@ use super::*;
 use rimz::harness::assist_log::{self, Assist, AssistRecord, AssistWindowReset};
 use rimz::harness::auto_redeem::RedeemReason;
 use rimz::ids::{AgentKind, AgentSessionId};
-use rimz::message::AutoCompact;
 use rimz::store::event::SessionDeathCause;
+use rimz::store::message::AutoCompact;
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub(super) struct AssistStats {

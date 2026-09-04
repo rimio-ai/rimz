@@ -1034,7 +1034,7 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
         let Some(threshold) = value.as_str() else {
             invalid_value!("harness.smart_compact must be a string");
         };
-        if let Err(err) = crate::message::AutoCompact::parse(threshold) {
+        if let Err(err) = crate::store::message::AutoCompact::parse(threshold) {
             invalid_value!("{err}");
         }
     }

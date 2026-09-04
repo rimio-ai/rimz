@@ -7,7 +7,8 @@ use anyhow::{Context, Result, bail};
 
 use rimz::harness::run::RunRecord;
 use rimz::harness::schedule::runner::{CheckEcho, CheckOutcome, run_check};
-use rimz::message::{DeliveryGate, deliver};
+use rimz::message::deliver;
+use rimz::store::message::DeliveryGate;
 
 use super::pane;
 

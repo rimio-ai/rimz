@@ -12,9 +12,8 @@ use rimz::harness::assist_log::{Assist, AssistRecord};
 use rimz::harness::idle_compact::IdleCompactRequest;
 #[cfg(test)]
 use rimz::ids::WorkspaceId;
-use rimz::message::{
-    DeliveryGate, MessageBody, MessageRecord, MessageSender, deliver, send::already_compacted_at,
-};
+use rimz::message::{deliver, send::already_compacted_at};
+use rimz::store::message::{DeliveryGate, MessageBody, MessageRecord, MessageSender};
 
 use super::Ctx;
 
@@ -187,7 +186,7 @@ fn latest_delivered_was_compaction(
     history
         .iter()
         .filter(|message| {
-            message.status == rimz::message::MessageStatus::Delivered
+            message.status == rimz::store::message::MessageStatus::Delivered
                 && message.same_agent_card(agent)
         })
         .max_by(|left, right| left.message_id.as_str().cmp(right.message_id.as_str()))
@@ -240,7 +239,7 @@ mod tests {
             DeliveryGate::Done,
         )
         .with_body(body);
-        message.status = rimz::message::MessageStatus::Delivered;
+        message.status = rimz::store::message::MessageStatus::Delivered;
         message.compacted_context_tokens = tokens;
         message
     }

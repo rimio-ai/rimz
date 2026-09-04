@@ -11,9 +11,12 @@ use serde::Serialize;
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{MessageId, MuxName, PaneId};
 use crate::message::{
-    AfterCondition, DeliveryGate, MessageRecord, MessageSender, MessageStatus, WhenCondition,
-    command_submit_delay_from_env, delivery_window_from_env, gate_open_for_agent,
-    max_delivery_attempts_from_env, message_interval_from_env, older_ready_blocker, queue_head,
+    command_submit_delay_from_env, gate_open_for_agent, max_delivery_attempts_from_env,
+    message_interval_from_env,
+};
+use crate::store::message::{
+    AfterCondition, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
+    WhenCondition, older_ready_blocker, queue_head,
 };
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::workspace::ResolvedWorkspace;
@@ -365,7 +368,7 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
         return Ok(());
     };
     let now = Timestamp::now();
-    let delivery_window = delivery_window_from_env();
+    let delivery_window = MessageBody::Prompt.delivery_window();
     let live = store.list_messages()?;
     let needs_snapshot = live
         .iter()
@@ -673,7 +676,14 @@ pub fn explain(
     snapshot: &SidebarSnapshot,
     now: Timestamp,
 ) -> DeliveryCheck {
-    evaluate_delivery(message, pending, snapshot, now, delivery_window_from_env()).check
+    evaluate_delivery(
+        message,
+        pending,
+        snapshot,
+        now,
+        MessageBody::Prompt.delivery_window(),
+    )
+    .check
 }
 
 fn evaluate_delivery<'a>(
@@ -889,8 +899,13 @@ fn delivery_candidate<'a>(
         .iter()
         .find(|message| message.message_id == *message_id)
         .cloned()?;
-    let evaluation =
-        evaluate_delivery(&message, pending, snapshot, now, delivery_window_from_env());
+    let evaluation = evaluate_delivery(
+        &message,
+        pending,
+        snapshot,
+        now,
+        MessageBody::Prompt.delivery_window(),
+    );
     let check = &evaluation.check;
     if matches!(policy, DeliveryPolicy::Boundary)
         && (!message.is_deliverable(now) || !check.fifo.head || !check.gate_ready())
@@ -980,7 +995,7 @@ mod tests {
         );
         // A resume nudge is system-initiated and stays verbatim; its gate keeps
         // it out of `is_user_input`.
-        assert_eq!(resume.sender, crate::message::MessageSender::System);
+        assert_eq!(resume.sender, crate::store::message::MessageSender::System);
         assert!(!resume.is_user_input());
         assert!(resume.enter, "a nudge always submits");
         assert_eq!(resume.gate, DeliveryGate::Resume);

@@ -59,7 +59,7 @@ pub enum Assist {
         agent_id: AgentSessionId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
-        threshold: crate::message::AutoCompact,
+        threshold: crate::store::message::AutoCompact,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         occupied_tokens: Option<u64>,
         message_id: String,
@@ -168,7 +168,7 @@ mod tests {
                 kind: AgentKind::new_unchecked("codex"),
                 agent_id: AgentSessionId::from("session-1"),
                 label: Some("@coder".to_owned()),
-                threshold: crate::message::AutoCompact::Percent(70),
+                threshold: crate::store::message::AutoCompact::Percent(70),
                 occupied_tokens: Some(210_000),
                 message_id: "msg_2".to_owned(),
             },

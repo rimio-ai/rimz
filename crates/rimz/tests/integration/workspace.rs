@@ -10,8 +10,8 @@ use rimz::agents::AgentState;
 use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams};
 use rimz::ids::AgentSessionId;
-use rimz::message::{DeliveryGate, MessageRecord, MessageStatus};
 use rimz::store::event::EventEnvelope;
+use rimz::store::message::{DeliveryGate, MessageRecord, MessageStatus};
 
 use crate::common::{Env, canonical};
 
