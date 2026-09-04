@@ -43,10 +43,10 @@ pub(crate) use panes::{
 pub use panes::{SidebarOwnView, pane_start_allows_bind, stamped_agent_for_pane};
 pub use process::pane_agent_kind;
 pub(crate) use process::pane_worktree_path;
-pub(crate) use process::{command_is_sidebar_chrome, process_is_active};
+pub(crate) use process::process_is_active;
 pub use row::{
     AgentCard, PaneAgent, ProcessCard, ProcessState, RowCallSplit, RowCard, SidebarRow,
-    SidebarSubAgent, compose_channel,
+    SidebarSubAgent,
 };
 pub use view::{AgentWorktreeGroup, group_live_agents_by_worktree};
 pub use view::{

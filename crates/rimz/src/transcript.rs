@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::disk::{atomic, lock, paths::StatePaths};
-use crate::ids::AskId;
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
+use crate::ids::{AskId, compose_channel};
 
 const FILE_DAYS: u32 = 7;
 const SECONDS_PER_DAY: i64 = 86_400;
@@ -120,7 +120,7 @@ impl TranscriptEntry {
 /// Chat transcript lane: launch-stamped channel when known, else worktree
 /// basename fallback for older agent payloads that carry only a path.
 pub fn entry_channel(stamped: Option<&str>, worktree_path: Option<&str>) -> Option<String> {
-    crate::store::snapshot::compose_channel(
+    compose_channel(
         stamped,
         worktree_path.and_then(|path| path.rsplit('/').next().filter(|value| !value.is_empty())),
     )

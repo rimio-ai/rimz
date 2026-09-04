@@ -4,9 +4,9 @@ use crate::agents::AgentState;
 use crate::ids::{AgentSessionId, PaneId};
 use crate::pane;
 use crate::pane::PaneRef;
+use crate::pane::command_is_sidebar_chrome;
 use crate::store::session_death;
 use crate::store::snapshot::panes::is_daemon_owned;
-use crate::store::snapshot::process::command_is_sidebar_chrome;
 
 use super::SidebarSnapshot;
 

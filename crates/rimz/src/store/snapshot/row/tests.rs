@@ -6,16 +6,6 @@ fn row_time() -> Timestamp {
 }
 
 #[test]
-fn compose_channel_uses_explicit_then_worktree_basename() {
-    assert_eq!(
-        compose_channel(Some("design"), Some("auth")).as_deref(),
-        Some("design")
-    );
-    assert_eq!(compose_channel(None, Some("auth")).as_deref(), Some("auth"));
-    assert_eq!(compose_channel(None, None), None);
-}
-
-#[test]
 fn serde_keeps_cards_flat_with_row_kind_key() {
     let agent = SidebarRow {
         id: "agent:s1".to_owned(),

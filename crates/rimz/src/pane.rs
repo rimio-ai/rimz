@@ -57,6 +57,13 @@ pub fn pane_is_host(pane: &PaneRef) -> bool {
         || pane.view_name.as_deref() == Some(VIEW_NAME)
 }
 
+/// Whether a pane's foreground command is RimZ's own sidebar — chrome to filter
+/// from rows, sibling counts, and view classification, never to render. One
+/// predicate so the frame's own-view derivation and the daemon-view fold agree.
+pub(crate) fn command_is_sidebar_chrome(command: &str) -> bool {
+    crate::proc::program_label(command) == SIDEBAR_CHROME_TITLE
+}
+
 /// Runtime owner class for records that should appear in live views.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -227,7 +234,7 @@ impl PaneRef {
     pub fn is_rimz_sidebar(&self) -> bool {
         self.command
             .as_deref()
-            .is_some_and(crate::store::snapshot::command_is_sidebar_chrome)
+            .is_some_and(command_is_sidebar_chrome)
     }
 }
 

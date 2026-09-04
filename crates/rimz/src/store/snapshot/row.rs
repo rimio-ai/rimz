@@ -10,7 +10,7 @@ use crate::agents::lifecycle::TurnPhase;
 use crate::agents::state::select_activity_description;
 use crate::agents::{AgentContext, AgentTokenUsage, AgentUsageSummary};
 use crate::agents::{AgentStatus, ContextSeverity};
-use crate::ids::{AgentKind, AgentSessionId, PaneId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, compose_channel};
 use crate::pane::PaneRef;
 
 /// One frame-admitted sidebar row. The base names the row and pane; [`RowCard`]
@@ -282,18 +282,6 @@ impl PaneAgent {
                 .and_then(|path| path.rsplit('/').next()),
         )
     }
-}
-
-/// Compose a routing channel for read-side fallback. A launch-stamped lane
-/// wins; otherwise the worktree directory basename is the fallback for agents
-/// not launched by this RimZ binary.
-pub fn compose_channel(explicit: Option<&str>, dir_basename: Option<&str>) -> Option<String> {
-    if let Some(channel) = explicit.filter(|channel| !channel.is_empty()) {
-        return Some(channel.to_owned());
-    }
-    dir_basename
-        .filter(|dir| !dir.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -535,7 +535,7 @@ fn unbound_entry(command: Option<String>, sampled_at_ms: u64) -> MetricsSampleEn
 /// sample or match.
 fn pane_sampleable(pane: &PaneState) -> bool {
     match pane.current.command.as_deref() {
-        Some(command) => !crate::store::snapshot::command_is_sidebar_chrome(command),
+        Some(command) => !crate::pane::command_is_sidebar_chrome(command),
         None => pane.current.pid.is_some(),
     }
 }
