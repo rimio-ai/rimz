@@ -144,7 +144,7 @@ upward-dependencies = [
     "sidebar::refresh",
     "sidebar::refresh::pr",
 ]
-surface-budget = 591
+surface-budget = 617
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -245,12 +245,13 @@ upward-dependencies = [
     "harness::petname",
     "harness::run",
     "harness::run_wake",
+    "harness::schedule::signal",
     "harness::target",
     "mux",
     "remote::link",
     "wakeup",
 ]
-surface-budget = 310
+surface-budget = 314
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -580,7 +581,7 @@ allowed-dependencies = [
     "utils::time",
     "workspace",
 ]
-surface-budget = 48
+surface-budget = 49
 
 [[strangler]]
 symbol = "purge_zellij_session_cache_in"
