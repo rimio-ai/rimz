@@ -1541,7 +1541,8 @@ pub fn refresh_app_server_enrichment(
 }
 
 /// The thread ids the per-user Codex app-server daemon currently holds in memory,
-/// for the sidebar's daemon-mode ghost reap through the snapshot runtime reaper.
+/// for the sidebar's daemon-mode ghost reap
+/// ([`crate::store::snapshot::SidebarSnapshot::reap_runtime`]).
 /// Connects to the daemon **specifically** — never a cold-spawn, whose empty set
 /// would mass-reap — and reads `thread/loaded/list`. `None` when there is no daemon
 /// to ask or its list cannot be trusted, which the caller reads as "unknown, keep
