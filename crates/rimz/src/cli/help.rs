@@ -23,6 +23,7 @@ pub(crate) const GROUPS: [(&str, &[&str]); 4] = [
         &[
             "agents",
             "subagents",
+            "wake",
             "teams",
             "asks",
             "answer",
