@@ -752,6 +752,9 @@ pub(crate) fn open_store(workspace: &rimz::ResolvedWorkspace) -> Result<Store> {
 pub(crate) fn open_existing_store(workspace: &rimz::ResolvedWorkspace) -> Result<Option<Store>> {
     let paths = StatePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing store paths")?;
+    if !paths.root.is_dir() {
+        return Ok(None);
+    }
     let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing runtime paths")?;
     Ok(Store::open_existing(paths, runtime))
