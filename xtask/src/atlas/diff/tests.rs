@@ -357,6 +357,50 @@ fn diff_expect_accepts_moved_rehome_item() {
 }
 
 #[test]
+fn diff_expect_lists_every_site_of_a_rehome_defined_twice() {
+    let mut contract = contract(-1);
+    contract.rehome.push(RehomeExpectation {
+        item: "message::Thing".to_owned(),
+        to: "store".to_owned(),
+    });
+    let checks = [RehomeCheck {
+        expectation: contract.rehome[0].clone(),
+        old: None,
+        destinations: vec![
+            DefinitionSite {
+                path: PathBuf::from("src/store/record.rs"),
+                line: 12,
+            },
+            DefinitionSite {
+                path: PathBuf::from("src/store.rs"),
+                line: 4,
+            },
+        ],
+    }];
+
+    let rows = expectation_rows(
+        &contract,
+        -2,
+        ExpectationChecks {
+            rehome: &checks,
+            ..ExpectationChecks::default()
+        },
+        &[],
+        true,
+    );
+    let row = rows
+        .iter()
+        .find(|row| row.assertion == "rehome message::Thing → store")
+        .unwrap();
+
+    assert!(!row.landed);
+    assert_eq!(
+        row.detail,
+        "defined 2 times under store: src/store/record.rs:12, src/store.rs:4"
+    );
+}
+
+#[test]
 fn diff_expect_rejects_dependency_excess() {
     let base = two_file_dependency_facts("use crate::agents::Thing;");
     let current = two_file_dependency_facts("use crate::agents::Thing;");
