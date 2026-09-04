@@ -237,6 +237,13 @@ its authoritative windows for bound managed-launch controls; that copy is not
 read by the sidebar or `rimz providers`, so a scope-only live reading cannot
 acquire the cached credential identity.
 
+Admission into that fusion is by account: a live panel reading joins the
+cached entry when the panel's birth account key equals the entry's bound key,
+or when either side is keyless, and a keyed mismatch drops the live reading for
+that frame rather than mixing two logins into one bar. Only an authoritative
+account read binds an entry's key, and it fuses onto a prior entry only when
+scope and key both match ([providers.md](../agents/providers.md#persistence-across-idle-sessions)).
+
 ### Sidecars
 
 Per-session sidecars (`agent_context/`, `subagent_context/`, `agent-activity/`, `active-time/`) are the one exception to producer ownership: CLI hook and statusline runs write the context and activity records, the hook updates active-time accumulators under per-record locks, and the elder's transcript watcher refreshes transcript-tail context between hooks ([push channels](#push-channels)). Every renderer reads them fresh behind stat-gated parse caches.

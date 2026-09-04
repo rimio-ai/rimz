@@ -67,6 +67,7 @@ Each event is a *partial* update. How the reducer treats a field the event omits
 | Lifetime | Rule | Fields |
 | --- | --- | --- |
 | identity | set once when the session registers, stable thereafter | `agent_id`, `kind`, `parent_agent_id` |
+| registration | replaced when a keyed registration arrives, then carried | `account_key` |
 | placement | replaced when the session moves into a resumed pane or a newer observation re-owns it | `pane`, `runtime_owner` |
 | set-once | fills from the first usable observation, then stays stable | `first_prompt` |
 | activity | replaced by the latest event, where *clearing* it is meaningful: an idle agent has no `task` | `status`, `task`, `last_activity` |
@@ -75,11 +76,12 @@ Each event is a *partial* update. How the reducer treats a field the event omits
 | live-derived | computed at snapshot time from the live pane or git over the stored fallback | `worktree_path`, `worktree_branch` |
 | transient heads | opened and closed by signals, painted over the base status | the turn [phase](#turn-phase), the [compaction bracket](#the-compaction-bracket) |
 
-[`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs) and [`AgentState`](../../../crates/rimz/src/agents/state.rs) are the field catalog. Four rules earn a note:
+[`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs) and [`AgentState`](../../../crates/rimz/src/agents/state.rs) are the field catalog. Five rules earn a note:
 
 - A subagent's `task` is the one activity-lifetime exception: it holds the child's type (`Explore`, and so on) and carries forward as identity, so a finished child stays labeled when its `SubagentStop` omits the type.
 - `first_prompt` accepts the first user prompt that is neither blank nor a harness control turn. It labels an unnamed session ahead of the changing latest `prompt`; an adapter-emitted `description`, such as a native title or child task description, supersedes it through the normal carry-forward path.
 - The live-derived fields follow the pane, which knows its current directory every tick, so `worktree_path` and `worktree_branch` track a `git checkout`. Pinning them at registration would be the branch-tracking bug.
+- `account_key` is the opaque provider account fingerprint an adapter stamps when a root session registers, so a row records the login it was born on; it is never the credential. Only a registration observation carries it: the event projection strips the field from every other event and the reducer carries the stamped value forward, so a re-registration of the same session id (a Claude `--resume`) rebinds the row to the login in force at that moment. It is durable rollup state rather than [rich context](#rich-context-agentcontext), because the provider dashboard partitions live budget readings by it ([providers.md](./providers.md#producer-aggregation)).
 - `model` is stored canonicalized: a trailing capability tag is stripped (`claude-opus-4-8[1m]` becomes `claude-opus-4-8`). The tag rides only the fresh-launch payload, so without canonicalization the carry-forward would flip the label the first time a suffix-less event arrived. Canonicalizing at reduce time pins one stable label while the event log stays faithful to the raw payload.
 
 ### Instance identity and age
@@ -318,7 +320,7 @@ Where those numbers come from is the adapter's business: the three context sourc
 
 ### Rich context (`AgentContext`)
 
-Some agents publish far richer per-session data out of band than their hooks carry: context-window accounting, the latest message's usage breakdown, cost, rate-limit windows, model display name, thread preview, PR info, version, effort. The transport differs per agent and lives in its adapter doc; `observe_context` normalizes transport payloads into the agent-agnostic [`AgentContext`](../../../crates/rimz/src/agents/context.rs). Every field is `Option` and tolerantly parsed, so a sparse or evolved payload always parses and the renderer draws whatever subset is present. The account and balance subset (plan, metered, rate-limit windows) folds into the provider dashboard; its mapping and aggregation are [providers.md](./providers.md).
+Some agents publish far richer per-session data out of band than their hooks carry: context-window accounting, the latest message's usage breakdown, cost, rate-limit windows, model display name, thread preview, PR info, version, effort. The transport differs per agent and lives in its adapter doc; `observe_context` normalizes transport payloads into the agent-agnostic [`AgentContext`](../../../crates/rimz/src/agents/context.rs). Every field is `Option` and tolerantly parsed, so a sparse or evolved payload always parses and the renderer draws whatever subset is present. The account and balance subset (plan, metered, rate-limit windows) folds into the provider dashboard; its mapping and aggregation are [providers.md](./providers.md). `AgentContext` carries no account fingerprint: the session's birth `account_key` is identity-lifetime rollup state, so a sidecar rewritten every render can never change which account a session's windows are attributed to.
 
 This is high-frequency display-only enrichment, so it does **not** ride the event log. RimZ writes a latest-wins per-session sidecar, one atomic file per `(kind, agent_id)` under the runtime `agent_context/` directory, from CLI producer paths (statusline feed, hook ingestion, detached refresh helpers, the Codex stat-gated backstop). `rimz sidebar snapshot` folds each record onto its `AgentState`.
 
