@@ -21,10 +21,10 @@
 //!
 //! Fast pre-filter: skip lines without `"usage":{` and lines where certain
 //! fields carry `:null` (rejected by the upstream TypeScript/Zod schema).
-//! Entries are returned raw — all `(message.id, requestId)` dedup, including
-//! the btw/subagent sidechain-replay suppression, lives in one place,
-//! the spending walk, so an incremental suffix parse never has to
-//! see the lines before its resume point.
+//! Entries are returned raw. Batch consumers apply the shared
+//! `SidechainDedup` policy in the fleet walk, seat fold, or per-session
+//! selector; live folds retain a contiguous-duplicate window. An incremental
+//! suffix parse therefore never has to see the lines before its resume point.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -296,12 +296,11 @@ fn is_semver_prefix(value: &str) -> bool {
 /// Lines with unsupported null fields are also rejected before deserialization.
 ///
 /// ### Dedup lives downstream
-/// Entries are returned raw, duplicates and sidechain replays included: every
-/// `(message.id, requestId)` rule — the retry-write duplicate, the btw tool
-/// replaying a parent message into the subagent file with inflated context
-/// tokens — is applied once, over all files and cache generations, in
-/// the spending walk. A suffix parse therefore never needs the
-/// lines before its resume point.
+/// Entries are returned raw, duplicates and sidechain replays included. Batch
+/// consumers apply the shared `(message.id, requestId)` policy in the fleet
+/// walk, seat fold, or per-session selector; live folds retain a
+/// contiguous-duplicate window. A suffix parse therefore never needs the lines
+/// before its resume point.
 pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> SpendParse {
     let Some((content, next_offset)) = read_transcript_lines(path, from_offset) else {
         return SpendParse {
@@ -805,9 +804,8 @@ mod tests {
 
     #[test]
     fn parse_is_raw_and_dedup_lives_downstream() {
-        // All (msg, req) dedup and sidechain suppression live in
-        // the spending walk, so an incremental suffix parse never has
-        // to see earlier lines; the raw parse keeps every copy.
+        // Downstream batch consumers and live folds own dedup, so an
+        // incremental suffix parse keeps every copy without earlier lines.
         let dir = TempDir::new().unwrap();
 
         // Byte-identical exact-key duplicate: both kept.

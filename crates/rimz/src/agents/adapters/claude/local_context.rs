@@ -25,14 +25,8 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
         return None;
     }
 
-    let mut fold = if reuses_prior_path {
-        ctx.prior_spend_fold.cloned().unwrap_or_default()
-    } else {
-        LocalSpendFold::default()
-    };
-    if fold.cursor.offset > stat.len {
-        fold = LocalSpendFold::default();
-    }
+    let prior_fold = reuses_prior_path.then_some(ctx.prior_spend_fold).flatten();
+    let mut fold = LocalSpendFold::resume(prior_fold, stat.len);
     let prices = pricing::cached_book(ctx.shared_pricing_cache_path);
     let prices = managed_pricing::overlay(&prices);
     let parsed = parse_claude_spend(&path, fold.cursor.offset, &prices);

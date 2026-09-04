@@ -631,17 +631,79 @@ pub struct LocalSpendFold {
     pub cache_write: u64,
     #[serde(default)]
     pub cache_read: u64,
+    /// Last absorbed request, retained across suffix parses so a contiguous
+    /// duplicate row is skipped or, when richer, replaces its earlier form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_request: Option<FoldedRequest>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FoldedRequest {
+    key: Option<(String, Option<String>)>,
+    cost_usd: f64,
+    input: u64,
+    output: u64,
+    cache_write: u64,
+    cache_read: u64,
+    #[serde(default, skip_serializing_if = "is_false")]
+    has_speed: bool,
 }
 
 impl LocalSpendFold {
+    /// Resume a persisted fold when its cursor and duplicate window are valid.
+    /// Folds written before the window existed replay once from byte zero.
+    pub fn resume(prior: Option<&Self>, file_len: u64) -> Self {
+        let fold = prior.cloned().unwrap_or_default();
+        if fold.cursor.offset > file_len || fold.needs_dedup_replay() {
+            return Self::default();
+        }
+        fold
+    }
+
     pub fn absorb(&mut self, entries: &[spending::CachedEntry]) {
         for entry in entries {
-            self.total_usd += entry.cost_usd;
-            self.input = self.input.saturating_add(entry.input);
-            self.output = self.output.saturating_add(entry.output);
-            self.cache_write = self.cache_write.saturating_add(entry.cache_write);
-            self.cache_read = self.cache_read.saturating_add(entry.cache_read);
+            let request = FoldedRequest::from(entry);
+            if let Some(previous) = self
+                .last_request
+                .as_ref()
+                .filter(|previous| request.key.is_some() && previous.key == request.key)
+            {
+                if spending::should_replace_usage_duplicate(
+                    request.token_total(),
+                    request.has_speed,
+                    previous.token_total(),
+                    previous.has_speed,
+                ) {
+                    let previous = previous.clone();
+                    self.subtract(&previous);
+                    self.add(&request);
+                    self.last_request = Some(request);
+                }
+                continue;
+            }
+            self.add(&request);
+            self.last_request = Some(request);
         }
+    }
+
+    fn needs_dedup_replay(&self) -> bool {
+        self.cursor.offset > 0 && self.last_request.is_none()
+    }
+
+    fn add(&mut self, request: &FoldedRequest) {
+        self.total_usd += request.cost_usd;
+        self.input = self.input.saturating_add(request.input);
+        self.output = self.output.saturating_add(request.output);
+        self.cache_write = self.cache_write.saturating_add(request.cache_write);
+        self.cache_read = self.cache_read.saturating_add(request.cache_read);
+    }
+
+    fn subtract(&mut self, request: &FoldedRequest) {
+        self.total_usd -= request.cost_usd;
+        self.input = self.input.saturating_sub(request.input);
+        self.output = self.output.saturating_sub(request.output);
+        self.cache_write = self.cache_write.saturating_sub(request.cache_write);
+        self.cache_read = self.cache_read.saturating_sub(request.cache_read);
     }
 
     pub fn session_usage(&self) -> Option<AgentSessionUsage> {
@@ -653,6 +715,32 @@ impl LocalSpendFold {
                 cache_read_input_tokens: Some(self.cache_read),
                 thinking_tokens: None,
             })
+    }
+}
+
+impl From<&spending::CachedEntry> for FoldedRequest {
+    fn from(entry: &spending::CachedEntry) -> Self {
+        Self {
+            key: entry
+                .message_id
+                .clone()
+                .map(|message_id| (message_id, entry.request_id.clone())),
+            cost_usd: entry.cost_usd,
+            input: entry.input,
+            output: entry.output,
+            cache_write: entry.cache_write,
+            cache_read: entry.cache_read,
+            has_speed: entry.has_speed,
+        }
+    }
+}
+
+impl FoldedRequest {
+    fn token_total(&self) -> u64 {
+        self.input
+            .saturating_add(self.output)
+            .saturating_add(self.cache_write)
+            .saturating_add(self.cache_read)
     }
 }
 
@@ -701,6 +789,10 @@ impl From<TranscriptStat> for TranscriptCompanionStat {
 
 fn is_zero_u32(value: &u32) -> bool {
     *value == 0
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Context for [`AgentDefinition::local_context_refresh`]: the session to refresh,
@@ -900,6 +992,65 @@ pub fn hook_trust_fix(kind: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn spend_entry(key: Option<(&str, &str)>, input: u64, cost_usd: f64) -> spending::CachedEntry {
+        spending::CachedEntry {
+            input,
+            cost_usd,
+            message_id: key.map(|(message_id, _)| message_id.to_owned()),
+            request_id: key.map(|(_, request_id)| request_id.to_owned()),
+            ..spending::CachedEntry::default()
+        }
+    }
+
+    #[test]
+    fn local_spend_fold_replaces_richer_duplicates_and_keeps_keyless_rows() {
+        let entries = [
+            spend_entry(Some(("message-1", "request-1")), 10, 1.0),
+            spend_entry(Some(("message-1", "request-1")), 12, 2.0),
+            spend_entry(Some(("message-1", "request-1")), 12, 3.0),
+            spend_entry(None, 4, 4.0),
+            spend_entry(None, 5, 5.0),
+            spend_entry(Some(("message-2", "request-2")), 6, 6.0),
+        ];
+        let mut fold = LocalSpendFold::default();
+
+        fold.absorb(&entries);
+
+        assert_eq!(fold.input, 27);
+        assert_eq!(fold.total_usd, 17.0);
+        assert_eq!(
+            fold.last_request
+                .as_ref()
+                .and_then(|request| request.key.as_ref()),
+            Some(&("message-2".to_owned(), Some("request-2".to_owned())))
+        );
+    }
+
+    #[test]
+    fn local_spend_fold_resume_replays_legacy_and_truncated_folds() {
+        let legacy = LocalSpendFold {
+            cursor: spending::SpendCursor {
+                offset: 10,
+                ..spending::SpendCursor::default()
+            },
+            input: 99,
+            ..LocalSpendFold::default()
+        };
+        assert_eq!(
+            LocalSpendFold::resume(Some(&legacy), 10),
+            LocalSpendFold::default()
+        );
+
+        let mut current = LocalSpendFold::default();
+        current.absorb(&[spend_entry(Some(("message-1", "request-1")), 10, 1.0)]);
+        current.cursor.offset = 10;
+        assert_eq!(LocalSpendFold::resume(Some(&current), 10), current);
+        assert_eq!(
+            LocalSpendFold::resume(Some(&current), 9),
+            LocalSpendFold::default()
+        );
+    }
 
     #[test]
     fn transcript_stat_from_path_preserves_metadata() {
