@@ -541,7 +541,7 @@ pub trait ContextCapability: CoreCapability {
     /// returns [`SessionContextRefresh::observed`] implements this.
     fn merge_session_context(
         &self,
-        _record: &mut crate::store::agent_context::AgentContextRecord,
+        _record: &mut crate::agents::context::AgentContextRecord,
         _observed: &AgentContext,
     ) -> bool {
         false

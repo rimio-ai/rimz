@@ -11,7 +11,8 @@ use crate::agents::{
 fn droid_local_merge_replaces_current_call_and_keeps_session_usage_monotonic() {
     let (_dir, runtime) = runtime();
     let observed_at = observed_at();
-    let mut prior = new_record("droid", "sess-1", AgentContext::new("droid", observed_at));
+    let mut prior =
+        AgentContextRecord::new("droid", "sess-1", AgentContext::new("droid", observed_at));
     prior.context.model_id = Some("deepseek-v4-pro".to_owned());
     prior.context.model_display_name = Some("DeepSeek V4 Pro".to_owned());
     prior.context.cost = Some(AgentCost {
@@ -418,7 +419,7 @@ fn non_codex_local_refresh_preserves_turn_error_marker() {
         "provider parked",
         1_700_000_000,
     );
-    let mut prior = new_record("pi", "sess-1", ctx(observed_at));
+    let mut prior = AgentContextRecord::new("pi", "sess-1", ctx(observed_at));
     prior.context.source = "pi".to_owned();
     prior.context.turn_error = Some(marker.clone());
     write_record(&runtime, &prior).unwrap();
@@ -591,7 +592,7 @@ fn observed_context_merge_replaces_authoritative_scalar_including_zero() {
 fn codex_record(observed_at: Timestamp) -> AgentContextRecord {
     let mut context = ctx(observed_at);
     context.source = "codex".to_owned();
-    new_record("codex", "sess-1", context)
+    AgentContextRecord::new("codex", "sess-1", context)
 }
 
 fn prior_app_server_fields(observed_at: Timestamp) -> AgentContextRecord {

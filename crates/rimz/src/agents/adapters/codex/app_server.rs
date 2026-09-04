@@ -76,7 +76,7 @@ const REFRESH_THROTTLE_SECS: i64 = 20;
 
 /// Whether app-server-owned context fields need another refresh.
 pub fn app_server_due(
-    record: Option<&crate::store::agent_context::AgentContextRecord>,
+    record: Option<&crate::agents::context::AgentContextRecord>,
     within: i64,
 ) -> bool {
     let now = Timestamp::now().as_second();
@@ -89,7 +89,7 @@ pub fn app_server_due(
 /// transcript-owned context. Pure over the record value: the caller owns the
 /// lock and the durable write.
 pub fn merge_app_server_context(
-    record: &mut crate::store::agent_context::AgentContextRecord,
+    record: &mut crate::agents::context::AgentContextRecord,
     context: &AgentContext,
 ) -> bool {
     let observed_at = context.observed_at;

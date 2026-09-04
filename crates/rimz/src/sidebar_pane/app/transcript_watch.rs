@@ -24,8 +24,8 @@ use notify::{RecursiveMode, Watcher};
 use tracing::debug;
 
 use crate::RuntimePaths;
+use crate::agents::context::AgentContextRecord;
 use crate::sidebar::ProducerElectionTracker;
-use crate::store::agent_context::AgentContextRecord;
 
 /// Idle cadence for the producer-election re-check while not elected.
 const ELECTION_POLL: Duration = Duration::from_secs(5);
@@ -215,7 +215,6 @@ fn is_producer(election: &ProducerElectionTracker) -> bool {
 mod tests {
     use super::*;
     use crate::agents::context::AgentContext;
-    use crate::store::agent_context::new_record;
 
     fn context(kind: &str) -> AgentContext {
         AgentContext::new(kind, jiff::Timestamp::UNIX_EPOCH)
@@ -292,15 +291,15 @@ mod tests {
 
     #[test]
     fn targets_keep_capable_records_that_name_a_transcript() {
-        let mut with_path = new_record("codex", "sess-a", context("codex"));
+        let mut with_path = AgentContextRecord::new("codex", "sess-a", context("codex"));
         with_path.transcript_path = Some("/t/a.jsonl".to_owned());
         with_path.context.model_id = Some("gpt-5.5-codex".to_owned());
-        let pathless = new_record("codex", "sess-b", context("codex"));
-        let mut copilot = new_record("copilot", "sess-g", context("copilot"));
+        let pathless = AgentContextRecord::new("codex", "sess-b", context("codex"));
+        let mut copilot = AgentContextRecord::new("copilot", "sess-g", context("copilot"));
         copilot.transcript_path = Some("/t/g.jsonl".to_owned());
-        let mut droid = new_record("droid", "sess-d", context("droid"));
+        let mut droid = AgentContextRecord::new("droid", "sess-d", context("droid"));
         droid.transcript_path = Some("/t/d.settings.json".to_owned());
-        let mut claude = new_record("claude", "sess-c", context("claude"));
+        let mut claude = AgentContextRecord::new("claude", "sess-c", context("claude"));
         claude.transcript_path = Some("/t/c.jsonl".to_owned());
 
         let targets = transcript_targets(&[with_path, pathless, copilot, droid, claude]);
