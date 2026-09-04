@@ -161,11 +161,10 @@ fn statusline_refresh_keeps_the_local_fold_bound_to_its_transcript() {
         len: 3,
         companion: None,
     });
-    record.spend_fold = Some(crate::agents::LocalSpendFold {
-        input: 10,
-        cache_read: 90,
-        ..Default::default()
-    });
+    let mut spend_fold = crate::agents::LocalSpendFold::default();
+    spend_fold.input = 10;
+    spend_fold.cache_read = 90;
+    record.spend_fold = Some(spend_fold);
     write_record(&runtime, &record).unwrap();
 
     write(&runtime, "claude", "sess-1", &ctx(now)).unwrap();
