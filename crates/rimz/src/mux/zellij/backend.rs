@@ -20,14 +20,14 @@ use super::{HEALTH_PROBE_RETRY_DELAY, ZellijBackend};
 use crate::disk::paths::RuntimePaths;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::{
-    BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch, BackgroundViewOptions,
-    CachedPaneRoster, ClientFocusOptions, ClientView, CommandSpec, DaemonView, MuxBackend, MuxErr,
-    NamedKey, PaneCapture, PaneListOptions, PaneListing, ReconcileAddOutcome, ReconcilePane,
-    ReconcilePaneRole, Result, SessionHealth, SessionLiveness, SessionOptions, SidebarLiveness,
-    SidebarPaneOptions, SidebarRecovery, SplitDirection, SplitPaneOptions, SplitPlacement,
-    SplitTarget, TabOptions, WidthStep, ensure_pane_backend, execute_reconcile_plan,
-    group_reconcile_panes, memoized_version, paste_payload,
+    BackgroundViewLaunch, BackgroundViewOptions, CachedPaneRoster, ClientFocusOptions, ClientView,
+    CommandSpec, DaemonView, MuxBackend, MuxErr, PaneCapture, PaneListOptions, PaneListing,
+    ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, Result, SessionHealth, SessionLiveness,
+    SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitDirection,
+    SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions, WidthStep, ensure_pane_backend,
+    execute_reconcile_plan, group_reconcile_panes, memoized_version,
 };
+use crate::pane::keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, paste_payload};
 use serde::Deserialize;
 
 /// Prefix `command` with an `env KEY=VALUE …` shim so a freshly split Zellij

@@ -121,7 +121,7 @@ fn open_sidebar_births_native_layout_and_template() {
         .send_keys(&work_pane, copilot.to_string_lossy().as_ref())
         .expect("type direct copilot shim");
     backend
-        .send_key(&work_pane, rimz::mux::NamedKey::Enter)
+        .send_key(&work_pane, rimz::pane::keys::NamedKey::Enter)
         .expect("run direct copilot shim");
     let expected_marker = format!("{}\nfalse\n", runtime.copilot_otel_path().display());
     let marker_text = poll_until(

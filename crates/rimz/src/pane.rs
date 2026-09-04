@@ -8,6 +8,7 @@
 //! adapter uses the same pane identity rules.
 
 pub mod bandwidth;
+pub mod keys;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};

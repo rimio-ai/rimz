@@ -3,7 +3,8 @@
 use anyhow::{Context, Result};
 
 use rimz::harness::budget::BudgetParkRequest;
-use rimz::mux::{NamedKey, press_pane_key};
+use rimz::mux::press_pane_key;
+use rimz::pane::keys::NamedKey;
 
 use super::Ctx;
 

@@ -1,7 +1,7 @@
 use super::*;
 
 use crate::agents::{AnswerStep, AskReply};
-use crate::mux::NamedKey;
+use crate::pane::keys::NamedKey;
 use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 
 fn ask_payload() -> Value {

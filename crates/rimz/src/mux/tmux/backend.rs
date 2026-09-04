@@ -16,14 +16,14 @@ use crate::ids::{MuxName, PaneId};
 use crate::mux::LayoutPanes;
 use crate::mux::width::sidebar_width_off_spec;
 use crate::mux::{
-    BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch, BackgroundViewOptions,
-    ClientFocusOptions, ClientView, CommandSpec, DaemonView, MuxBackend, MuxErr, NamedKey,
-    PaneCapture, PaneListOptions, PaneListing, ReconcileAddOutcome, ReconcilePane,
-    ReconcilePaneRole, Result, SessionOptions, SidebarLiveness, SidebarPaneOptions,
+    BackgroundViewLaunch, BackgroundViewOptions, ClientFocusOptions, ClientView, CommandSpec,
+    DaemonView, MuxBackend, MuxErr, PaneCapture, PaneListOptions, PaneListing, ReconcileAddOutcome,
+    ReconcilePane, ReconcilePaneRole, Result, SessionOptions, SidebarLiveness, SidebarPaneOptions,
     SidebarRecovery, SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions,
     WidthStep, WidthSyncOptions, ensure_pane_backend, execute_reconcile_plan,
-    group_reconcile_panes, memoized_version, paste_payload,
+    group_reconcile_panes, memoized_version,
 };
+use crate::pane::keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, paste_payload};
 
 /// tmux per-keypress sidebar resize step, in columns. Zellij has no CLI
 /// column amount — its step is Zellij's own ~5%-of-view increment.

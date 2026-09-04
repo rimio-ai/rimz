@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
-use rimz::mux::{MuxBackend, NamedKey, ZellijBackend};
+use rimz::mux::{MuxBackend, ZellijBackend};
+use rimz::pane::keys::NamedKey;
 use tempfile::TempDir;
 
 use super::support::*;
