@@ -40,6 +40,9 @@ pub struct SidebarProviderPanel {
     /// Account cache identity selected by the adapter for this panel.
     #[serde(default, skip_serializing_if = "ProviderAccountScope::is_kind_wide")]
     pub account_scope: ProviderAccountScope,
+    /// Opaque account fingerprint whose live windows this panel represents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_key: Option<String>,
     /// Header display name (`Claude`, `Codex`, …).
     pub product_name: String,
     /// Multi-line ASCII emblem, painted brand-colored at the block's left.

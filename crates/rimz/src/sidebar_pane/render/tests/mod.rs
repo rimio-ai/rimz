@@ -644,6 +644,7 @@ fn provider_panel(
     SidebarProviderPanel {
         kind: kind.to_owned(),
         account_scope: Default::default(),
+        account_key: None,
         product_name: product_name.to_owned(),
         art: vec![
             " ▐▛███▜▌".to_owned(),

@@ -114,6 +114,7 @@ fn provider_panel(index: usize) -> SidebarProviderPanel {
     SidebarProviderPanel {
         kind: format!("provider{index}"),
         account_scope: Default::default(),
+        account_key: None,
         product_name: format!("Provider {index}"),
         art: vec!["▐███▌".to_owned(), "▝▜█▛▘".to_owned(), " ▘▝ ".to_owned()],
         art_tints: Vec::new(),

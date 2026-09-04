@@ -662,6 +662,91 @@ fn account_merge_preserves_other_kinds() {
 }
 
 #[test]
+fn old_account_panel_cannot_reenter_bound_claude_limits() {
+    let (dir, workspace, runtime) = runtime();
+    let other_workspace = WorkspaceId::from_project_root(&dir.path().join("other-workspace"));
+    let other_runtime = RuntimePaths::under(other_workspace.clone(), dir.path()).unwrap();
+    other_runtime.ensure_dirs().unwrap();
+    let now = Timestamp::now();
+    let reset = now + SignedDuration::from_secs(3_600);
+    let authoritative_limits = AgentRateLimits {
+        windows: vec![
+            auth(0, reset, now),
+            RateLimitWindow {
+                duration_mins: Some(10_080),
+                ..auth(0, reset, now)
+            },
+        ],
+    };
+    super::merge_account_rate_limits(
+        &runtime,
+        "claude",
+        AccountUsageIdentity {
+            account_key: Some("new-account".to_owned()),
+            ..Default::default()
+        },
+        authoritative_limits.clone(),
+    );
+
+    let mut old_panel = provider_panel(
+        "claude",
+        vec![
+            be(88, reset, now),
+            RateLimitWindow {
+                duration_mins: Some(10_080),
+                ..be(19, reset, now)
+            },
+        ],
+    );
+    old_panel.account_key = Some("old-account".to_owned());
+    let mut old_workspace = snapshot_with_panels(other_workspace, vec![old_panel]);
+    refresh_rate_limits(&mut old_workspace, &other_runtime);
+
+    let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    let entry = &cache.entries["claude"];
+    assert_eq!(entry.account_key.as_deref(), Some("new-account"));
+    assert_eq!(entry.limits, authoritative_limits);
+    assert_eq!(entry.bound_limits.as_ref(), Some(&authoritative_limits));
+    assert!(entry.pending.is_empty());
+
+    let mut providers_snapshot =
+        snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
+    apply_cached_rate_limits(&mut providers_snapshot, &runtime);
+    assert_eq!(
+        providers_snapshot.providers[0].windows,
+        authoritative_limits.windows
+    );
+}
+
+#[test]
+fn matching_birth_account_panel_keeps_instant_climbs() {
+    let (_dir, workspace, runtime) = runtime();
+    let now = Timestamp::now();
+    let reset = now + SignedDuration::from_secs(3_600);
+    super::merge_account_rate_limits(
+        &runtime,
+        "claude",
+        AccountUsageIdentity {
+            account_key: Some("same-account".to_owned()),
+            ..Default::default()
+        },
+        AgentRateLimits {
+            windows: vec![auth(0, reset, now)],
+        },
+    );
+    let mut panel = provider_panel("claude", vec![be(40, reset, now)]);
+    panel.account_key = Some("same-account".to_owned());
+    let mut producer = snapshot_with_panels(workspace, vec![panel]);
+    refresh_rate_limits(&mut producer, &runtime);
+
+    let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    assert_eq!(
+        cache.entries["claude"].limits.windows[0].used_percentage,
+        Some(40)
+    );
+}
+
+#[test]
 fn account_merge_fuses_authoritative_drops_and_confirms_persistent_readings() {
     let (_dir, workspace, runtime) = runtime();
     let now = Timestamp::now();

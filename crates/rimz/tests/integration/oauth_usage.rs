@@ -18,6 +18,155 @@ fn refresh_usage_argv(env: &Env, kind: &str, claim_id: &str) -> Vec<String> {
 }
 
 #[test]
+fn claude_old_workspace_session_cannot_repaint_switched_account_limits() {
+    let env = Env::new();
+    let old_project = env.home_root.join("old-project");
+    std::fs::create_dir_all(&old_project).expect("mkdir old project");
+    let old_workspace_id = rimz::WorkspaceId::from_project_root(&old_project);
+    let claude_home = env.home_root.join(".claude");
+    std::fs::create_dir_all(&claude_home).expect("mkdir claude home");
+    write_claude_credentials(&claude_home, "old");
+
+    let old_start = serde_json::json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "old-account-session",
+        "source": "startup"
+    })
+    .to_string();
+    let mut old_hook = env.hook_command("claude");
+    old_hook.current_dir(&old_project);
+    let output = env
+        .spawn_payload(old_hook, &old_start)
+        .wait_with_output()
+        .expect("wait old-account SessionStart");
+    assert!(
+        output.status.success(),
+        "old-account hook stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut old_statusline = env.statusline_feed_command("claude");
+    old_statusline.current_dir(&old_project);
+    let output = env
+        .spawn_payload(
+            old_statusline,
+            &claude_statusline("old-account-session", 88, 19),
+        )
+        .wait_with_output()
+        .expect("wait old-account statusline");
+    assert!(
+        output.status.success(),
+        "old-account statusline stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    write_claude_credentials(&claude_home, "new");
+    let new_start = serde_json::json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "new-account-session",
+        "source": "startup"
+    })
+    .to_string();
+    let output = env.run_hook("claude", &new_start);
+    assert!(
+        output.status.success(),
+        "new-account hook stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = env.run_statusline_feed("claude", &claude_statusline("new-account-session", 0, 0));
+    assert!(
+        output.status.success(),
+        "new-account statusline stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let (origin, server) = serve_after_failures(
+        0,
+        r#"{
+            "five_hour": { "utilization": 0, "resets_at": "2026-09-21T14:13:20Z" },
+            "seven_day": { "utilization": 0, "resets_at": "2026-09-27T09:06:40Z" }
+        }"#,
+    );
+    let bin_dir = env.home_root.join("bin");
+    write_fake_claude(&bin_dir);
+    let panes = env.write_pane_fixture(&[]);
+    run_sidebar_snapshot(
+        &env,
+        &env.project_root,
+        env.workspace_id.as_str(),
+        &bin_dir,
+        &panes,
+        Some(&origin),
+    );
+
+    let runtime = env.runtime_paths();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let switched_key = loop {
+        let limits = std::fs::read(runtime.shared_rate_limits_path())
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+        let entry = limits.as_ref().map(|limits| &limits["entries"]["claude"]);
+        let settled = entry.is_some_and(|entry| {
+            entry["account_key"].as_str().is_some()
+                && entry["bound_limits"]["windows"]
+                    .as_array()
+                    .is_some_and(|windows| {
+                        windows.len() == 2
+                            && windows.iter().all(|window| window["used_percentage"] == 0)
+                    })
+        });
+        if settled {
+            break entry
+                .and_then(|entry| entry["account_key"].as_str())
+                .expect("settled account key")
+                .to_owned();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "switched account usage did not settle: limits={limits:?}"
+        );
+        thread::sleep(Duration::from_millis(20));
+    };
+
+    run_sidebar_snapshot(
+        &env,
+        &old_project,
+        old_workspace_id.as_str(),
+        &bin_dir,
+        &panes,
+        None,
+    );
+    let limits = read_json(runtime.shared_rate_limits_path());
+    let entry = &limits["entries"]["claude"];
+    assert_eq!(entry["account_key"], switched_key);
+    assert!(
+        entry["limits"]["windows"]
+            .as_array()
+            .is_some_and(|windows| windows.len() == 2
+                && windows.iter().all(|window| window["used_percentage"] == 0)),
+        "old workspace repainted switched-account limits: {entry}"
+    );
+
+    let output = env
+        .rimz()
+        .args(["providers", "claude", "--json"])
+        .bounded_output()
+        .expect("rimz providers claude");
+    assert!(
+        output.status.success(),
+        "providers stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("providers json");
+    assert!(
+        report[0]["windows"].as_array().is_some_and(|windows| {
+            windows.len() == 2 && windows.iter().all(|window| window["used_percentage"] == 0)
+        }),
+        "providers reported old-account limits: {report}"
+    );
+    assert_eq!(server.join().expect("server request").len(), 1);
+}
+
+#[test]
 fn one_cold_snapshot_discovers_claude_and_publishes_first_usage_windows() {
     let env = Env::new();
     let (origin, server) = serve_after_failures(
@@ -453,4 +602,93 @@ fn serve_after_failures(
 
 fn read_json(path: std::path::PathBuf) -> Value {
     serde_json::from_slice(&std::fs::read(path).expect("read json")).expect("parse json")
+}
+
+fn write_claude_credentials(claude_home: &std::path::Path, refresh_token: &str) {
+    std::fs::write(
+        claude_home.join(".credentials.json"),
+        serde_json::json!({
+            "claudeAiOauth": {
+                "accessToken": format!("access-{refresh_token}"),
+                "refreshToken": refresh_token,
+                "expiresAt": 4102444800000_u64,
+                "scopes": ["user:profile"]
+            }
+        })
+        .to_string(),
+    )
+    .expect("write claude credentials");
+}
+
+fn write_fake_claude(bin_dir: &std::path::Path) {
+    std::fs::create_dir_all(bin_dir).expect("mkdir fake bin");
+    let claude = bin_dir.join("claude");
+    std::fs::write(
+        &claude,
+        "#!/bin/sh\n\
+         if [ \"${1:-}\" = \"auth\" ] && [ \"${2:-}\" = \"status\" ]; then\n\
+           printf '%s\\n' '{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"subscriptionType\":\"max\"}'\n\
+           exit 0\n\
+         fi\n\
+         if [ \"${1:-}\" = \"--version\" ]; then\n\
+           printf '%s\\n' '2.1.173 (Claude Code)'\n\
+           exit 0\n\
+         fi\n\
+         exit 1\n",
+    )
+    .expect("write fake claude");
+    let mut permissions = std::fs::metadata(&claude).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&claude, permissions).expect("chmod fake claude");
+}
+
+fn claude_statusline(session_id: &str, five_hour: u8, seven_day: u8) -> String {
+    serde_json::json!({
+        "session_id": session_id,
+        "model": { "id": "claude-opus-4-6", "display_name": "Opus" },
+        "version": "2.1.173",
+        "rate_limits": {
+            "five_hour": { "used_percentage": five_hour, "resets_at": 4102444800_u64 },
+            "seven_day": { "used_percentage": seven_day, "resets_at": 4102444800_u64 }
+        }
+    })
+    .to_string()
+}
+
+fn run_sidebar_snapshot(
+    env: &Env,
+    project_root: &std::path::Path,
+    workspace_id: &str,
+    bin_dir: &std::path::Path,
+    panes: &std::path::Path,
+    oauth_origin: Option<&str>,
+) {
+    let mut command = env.rimz();
+    command
+        .args([
+            "sidebar",
+            "snapshot",
+            "--workspace-id",
+            workspace_id,
+            "--mux",
+            "tmux",
+            "--session-name",
+            "rimz-test",
+            "--json",
+        ])
+        .current_dir(project_root)
+        .env("RIMZ_TEST_PANE_LIST", panes)
+        .env("PATH", path_with_front(bin_dir));
+    if let Some(origin) = oauth_origin {
+        command.env(
+            "RIMZ_CLAUDE_OAUTH_USAGE_URL",
+            format!("{origin}/api/oauth/usage"),
+        );
+    }
+    let output = command.bounded_output().expect("rimz sidebar snapshot");
+    assert!(
+        output.status.success(),
+        "sidebar snapshot stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

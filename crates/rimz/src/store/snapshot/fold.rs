@@ -113,7 +113,7 @@ fn merge_agent_rollups(base: &[AgentState], live: &[AgentState]) -> Vec<AgentSta
 
 /// Bump when [`RollupCache`]'s shape changes — a mismatched cache reads as
 /// absent and cold-rebuilds.
-const ROLLUP_CACHE_VERSION: u32 = 14;
+const ROLLUP_CACHE_VERSION: u32 = 15;
 
 /// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
 /// the raw pre-projection fold map stamped with the log extent folded so far.

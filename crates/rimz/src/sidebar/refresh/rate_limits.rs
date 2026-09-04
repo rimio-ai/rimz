@@ -383,15 +383,27 @@ fn project_rate_limits(
             .entries
             .get(&panel.kind)
             .filter(|entry| entry.scope == panel.account_scope);
+        let foreign_account = matches!(
+            (
+                prior_entry.and_then(|entry| entry.account_key.as_deref()),
+                panel.account_key.as_deref(),
+            ),
+            (Some(bound), Some(live)) if bound != live
+        );
         let mut live_limits = AgentRateLimits {
             windows: std::mem::take(&mut panel.windows),
         };
+        if foreign_account {
+            live_limits.windows.clear();
+        }
         let prior_authoritative = prior_entry
             .and_then(|entry| entry.bound_limits.as_ref())
             .map(|limits| limits.windows.as_slice())
             .or_else(|| prior_entry.map(|entry| entry.limits.windows.as_slice()))
             .unwrap_or_default();
-        complete_omitted_duration_windows(prior_authoritative, &mut live_limits);
+        if !foreign_account {
+            complete_omitted_duration_windows(prior_authoritative, &mut live_limits);
+        }
         let index = WindowIndex::new(prior_entry, live_limits.windows);
 
         // Fuse each duration to its ground truth and carry or advance its
@@ -484,9 +496,9 @@ fn project_rate_limits(
             };
             let mut entry = if let Some(prior) = prior_entry {
                 let mut entry = prior.clone();
-                // A provider panel carries display scope but no credential
-                // identity. Preserve a bound authoritative copy for exact-account
-                // controls while publishing the fused truth for every reader.
+                // Only the authoritative writer binds credential identity.
+                // Preserve its copy while publishing admitted fused truth for
+                // every reader.
                 if entry.account_key.is_some() && entry.bound_limits.is_none() {
                     entry.bound_limits = Some(entry.limits.clone());
                 }

@@ -1,5 +1,6 @@
 use super::*;
 use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output};
+use crate::ids::AgentSessionId;
 
 #[test]
 fn cursor_compatibility_hooks_are_quarantined() {
@@ -567,6 +568,46 @@ fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
     assert!(
         !hook_output(&ClaudeAdapter, "Stop", &json!({ "session_id": "sess-1" })).ends_session()
     );
+}
+
+#[test]
+fn root_registration_stamps_birth_account_key_only_on_registration() {
+    for source in ["startup", "resume"] {
+        let payload = json!({ "session_id": "sess-1", "source": source });
+        let parts = ClaudeLifecycleParts::parse("SessionStart", &payload);
+        let mut observation = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from("sess-1")),
+            LifecycleSignal::Registered,
+        );
+        enrich_root_registration(&mut observation, &parts, || Some("fixture-key".to_owned()));
+        assert_eq!(observation.account_key.as_deref(), Some("fixture-key"));
+    }
+
+    let compact_payload = json!({ "session_id": "sess-1", "source": "compact" });
+    let compact_parts = ClaudeLifecycleParts::parse("SessionStart", &compact_payload);
+    let mut compact = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("sess-1")),
+        LifecycleSignal::CompactionEnded {
+            auto: None,
+            failed: false,
+        },
+    );
+    enrich_root_registration(&mut compact, &compact_parts, || {
+        Some("fixture-key".to_owned())
+    });
+    assert_eq!(compact.account_key, None);
+
+    let startup_payload = json!({ "session_id": "child", "source": "startup" });
+    let startup_parts = ClaudeLifecycleParts::parse("SessionStart", &startup_payload);
+    let mut subagent = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("child")),
+        LifecycleSignal::Registered,
+    );
+    subagent.parent_agent_id = Some(AgentSessionId::from("parent"));
+    enrich_root_registration(&mut subagent, &startup_parts, || {
+        Some("fixture-key".to_owned())
+    });
+    assert_eq!(subagent.account_key, None);
 }
 
 #[test]

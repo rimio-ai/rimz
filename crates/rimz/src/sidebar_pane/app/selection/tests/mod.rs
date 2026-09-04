@@ -149,6 +149,7 @@ fn provider(kind: &str) -> crate::store::snapshot::SidebarProviderPanel {
     crate::store::snapshot::SidebarProviderPanel {
         kind: kind.to_owned(),
         account_scope: Default::default(),
+        account_key: None,
         product_name: kind.to_owned(),
         art: Vec::new(),
         art_tints: Vec::new(),

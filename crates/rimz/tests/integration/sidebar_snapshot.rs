@@ -40,6 +40,7 @@ fn inject_lifecycle(env: &Env, agent_kind: &str, agent_id: &str) {
         launch: LaunchParams::default(),
         signal: LifecycleSignal::Registered,
         agent_pid: None,
+        account_key: None,
         agent_process_start: None,
         runtime_owner: None,
         worktree_path: Some(env.project_root.display().to_string()),
