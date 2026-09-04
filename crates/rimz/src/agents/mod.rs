@@ -631,10 +631,10 @@ pub struct LocalSpendFold {
     pub cache_write: u64,
     #[serde(default)]
     pub cache_read: u64,
-    /// Last absorbed request, retained across suffix parses so a contiguous
-    /// duplicate row is skipped or, when richer, replaces its earlier form.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    last_request: Option<FoldedRequest>,
+    /// Last absorbed response group, retained across suffix parses so
+    /// contiguous duplicate rows are skipped or replace their earlier forms.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    last_requests: Vec<FoldedRequest>,
     #[serde(default, skip_serializing_if = "is_false")]
     dedup_window_ready: bool,
 }
@@ -642,6 +642,7 @@ pub struct LocalSpendFold {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct FoldedRequest {
     key: Option<(String, Option<String>)>,
+    group: Option<FoldedRequestGroup>,
     cost_usd: f64,
     input: u64,
     output: u64,
@@ -649,6 +650,12 @@ struct FoldedRequest {
     cache_read: u64,
     #[serde(default, skip_serializing_if = "is_false")]
     has_speed: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+enum FoldedRequestGroup {
+    Request(String),
+    Message(String),
 }
 
 impl LocalSpendFold {
@@ -666,11 +673,25 @@ impl LocalSpendFold {
         self.dedup_window_ready = true;
         for entry in entries {
             let request = FoldedRequest::from(entry);
-            if let Some(previous) = self
-                .last_request
-                .as_ref()
-                .filter(|previous| request.key.is_some() && previous.key == request.key)
+            let Some(group) = request.group.as_ref() else {
+                self.last_requests.clear();
+                self.add(&request);
+                continue;
+            };
+            if self
+                .last_requests
+                .first()
+                .and_then(|previous| previous.group.as_ref())
+                != Some(group)
             {
+                self.last_requests.clear();
+            }
+            if let Some(index) = self
+                .last_requests
+                .iter()
+                .position(|previous| previous.key == request.key)
+            {
+                let previous = &self.last_requests[index];
                 if spending::should_replace_usage_duplicate(
                     request.token_total(),
                     request.has_speed,
@@ -680,12 +701,12 @@ impl LocalSpendFold {
                     let previous = previous.clone();
                     self.subtract(&previous);
                     self.add(&request);
-                    self.last_request = Some(request);
+                    self.last_requests[index] = request;
                 }
                 continue;
             }
             self.add(&request);
-            self.last_request = Some(request);
+            self.last_requests.push(request);
         }
     }
 
@@ -728,6 +749,16 @@ impl From<&spending::CachedEntry> for FoldedRequest {
                 .message_id
                 .clone()
                 .map(|message_id| (message_id, entry.request_id.clone())),
+            group: entry.message_id.as_deref().map(|message_id| {
+                entry.request_id.clone().map_or_else(
+                    || {
+                        FoldedRequestGroup::Message(
+                            advisor_parent_message_id(message_id).to_owned(),
+                        )
+                    },
+                    FoldedRequestGroup::Request,
+                )
+            }),
             cost_usd: entry.cost_usd,
             input: entry.input,
             output: entry.output,
@@ -736,6 +767,13 @@ impl From<&spending::CachedEntry> for FoldedRequest {
             has_speed: entry.has_speed,
         }
     }
+}
+
+fn advisor_parent_message_id(message_id: &str) -> &str {
+    message_id
+        .rsplit_once(":advisor:")
+        .filter(|(_, index)| index.parse::<usize>().is_ok())
+        .map_or(message_id, |(parent, _)| parent)
 }
 
 impl FoldedRequest {
@@ -1023,8 +1061,8 @@ mod tests {
         assert_eq!(fold.input, 27);
         assert_eq!(fold.total_usd, 17.0);
         assert_eq!(
-            fold.last_request
-                .as_ref()
+            fold.last_requests
+                .first()
                 .and_then(|request| request.key.as_ref()),
             Some(&("message-2".to_owned(), Some("request-2".to_owned())))
         );
