@@ -52,14 +52,17 @@ impl CallerIdentity {
         })
     }
 
-    fn from_agent(agent: &crate::agents::AgentState) -> Self {
+    fn from_agent(
+        agent: &crate::agents::AgentState,
+        ambient_pane: Option<&crate::ids::PaneId>,
+    ) -> Self {
         Self {
             kind: agent.kind.clone(),
             launch_id: agent.launch_id.clone(),
             pane_id: agent
                 .launch_id
                 .is_none()
-                .then(crate::mux::ambient_pane_id)
+                .then(|| ambient_pane.cloned())
                 .flatten(),
             name: agent.name.clone(),
             profile: agent.profile.clone(),
@@ -68,9 +71,11 @@ impl CallerIdentity {
     }
 
     pub fn from_process_ancestry(agents: &[crate::agents::AgentState]) -> Option<Self> {
+        let ambient_pane = crate::mux::ambient_pane_id();
         from_ancestors(
             agents,
             &crate::proc::ancestor_pids(),
+            ambient_pane.as_ref(),
             crate::proc::process_start_token,
         )
     }
@@ -83,9 +88,9 @@ fn env_string(key: &str) -> Option<String> {
 fn from_ancestors(
     agents: &[crate::agents::AgentState],
     ancestors: &[u32],
+    ambient_pane: Option<&crate::ids::PaneId>,
     start_token: impl Fn(u32) -> Option<String>,
 ) -> Option<CallerIdentity> {
-    let ambient_pane = crate::mux::ambient_pane_id();
     for &pid in ancestors {
         let actual_start = start_token(pid);
         let matches = agents
@@ -105,7 +110,7 @@ fn from_ancestors(
             .iter()
             .copied()
             .find(|agent| {
-                ambient_pane.as_ref().is_some_and(|pane_id| {
+                ambient_pane.is_some_and(|pane_id| {
                     agent
                         .pane
                         .as_ref()
@@ -114,7 +119,7 @@ fn from_ancestors(
             })
             .or_else(|| matches.first().copied());
         if let Some(agent) = agent {
-            return Some(CallerIdentity::from_agent(agent));
+            return Some(CallerIdentity::from_agent(agent, ambient_pane));
         }
     }
     None
@@ -343,7 +348,7 @@ mod tests {
         agent.profile = Some("planner".to_owned());
         agent.role = Some("lead".to_owned());
 
-        let identity = from_ancestors(&[agent], &[42], |pid| Some(format!("start-{pid}")))
+        let identity = from_ancestors(&[agent], &[42], None, |pid| Some(format!("start-{pid}")))
             .expect("matching owner");
 
         assert_eq!(identity.kind, AgentKind::new_unchecked("claude"));
@@ -370,9 +375,9 @@ mod tests {
         let mismatched = owned_agent("claude", "reused", 13, Some("old-start"));
         let agents = [ended, provider_subagent, daemon, mismatched];
 
-        assert!(from_ancestors(&agents, &[99], |_| None).is_none());
+        assert!(from_ancestors(&agents, &[99], None, |_| None).is_none());
         assert!(
-            from_ancestors(&agents, &[10, 11, 12, 13], |pid| {
+            from_ancestors(&agents, &[10, 11, 12, 13], None, |pid| {
                 (pid == 13).then(|| "new-start".to_owned())
             })
             .is_none()
@@ -384,10 +389,28 @@ mod tests {
         let farther = owned_agent("claude", "farther", 20, None);
         let nearest = owned_agent("codex", "nearest", 10, None);
 
-        let identity =
-            from_ancestors(&[farther, nearest], &[10, 20], |_| None).expect("matching ancestor");
+        let identity = from_ancestors(&[farther, nearest], &[10, 20], None, |_| None)
+            .expect("matching ancestor");
 
         assert_eq!(identity.kind, AgentKind::new_unchecked("codex"));
+    }
+
+    #[test]
+    fn caller_identity_prefers_the_ambient_pane_for_a_shared_owner() {
+        let first_pane = crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%1");
+        let ambient_pane = crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%2");
+        let mut first = owned_agent("claude", "first", 42, None);
+        first.name = Some("first".to_owned());
+        first.pane = Some(crate::pane::PaneRef::from_id(first_pane));
+        let mut ambient = owned_agent("claude", "ambient", 42, None);
+        ambient.name = Some("ambient".to_owned());
+        ambient.pane = Some(crate::pane::PaneRef::from_id(ambient_pane.clone()));
+
+        let identity = from_ancestors(&[first, ambient], &[42], Some(&ambient_pane), |_| None)
+            .expect("shared owner");
+
+        assert_eq!(identity.name.as_deref(), Some("ambient"));
+        assert_eq!(identity.pane_id.as_ref(), Some(&ambient_pane));
     }
 
     fn owned_agent(
