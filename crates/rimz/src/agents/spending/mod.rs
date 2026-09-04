@@ -34,6 +34,7 @@ use std::time::{Duration, Instant};
 
 use super::pricing::PriceBook;
 use super::{AgentCost, AgentDefinition};
+use aggregate::{DedupPayload, SidechainDedup};
 
 /// How long a published fleet-spending walk remains fresh.
 pub const SPENDING_TTL: Duration = Duration::from_secs(15);
@@ -537,9 +538,10 @@ impl Default for SpendingWalker {
 /// adapter already parses for historical spending. Native thread ids select the
 /// requested session in multi-session stores; id-free entries are included only
 /// when the parsed file has no thread ids at all, which is the one-file-per-session
-/// shape used by JSONL transcript providers. This fallback intentionally reads
-/// only the supplied primary file; Claude's statusline self-report remains the
-/// source that includes subagent companions for live session-scoped cost.
+/// shape used by JSONL transcript providers. The selected rows are counted under
+/// the shared dedup policy before they are summed. This fallback intentionally
+/// reads only the supplied primary file; Claude's statusline self-report remains
+/// the source that includes subagent companions for live session-scoped cost.
 pub fn session_cost_usd(
     adapter: &AgentDefinition,
     session_id: &str,
@@ -603,9 +605,10 @@ pub fn session_token_totals(
     (totals.input > 0 || totals.output > 0).then_some(totals)
 }
 
-/// Select one provider session from parsed spend rows. A file with no native
-/// thread ids is already session-scoped, so every row belongs to the requested
-/// session.
+/// Select one provider session's counted rows. A file with no native thread ids
+/// is already session-scoped, so every row belongs to the requested session.
+/// The shared dedup policy then counts a response, retry rewrite, or sidechain
+/// replay once while preserving transcript order.
 pub fn session_entries<'a>(entries: &'a [CachedEntry], session_id: &str) -> Vec<&'a CachedEntry> {
     let session_id = session_id.trim();
     let has_thread_ids = entries.iter().any(|entry| {
@@ -615,17 +618,32 @@ pub fn session_entries<'a>(entries: &'a [CachedEntry], session_id: &str) -> Vec<
             .map(str::trim)
             .is_some_and(|thread_id| !thread_id.is_empty())
     });
-    entries
-        .iter()
-        .filter(|entry| {
-            entry
-                .thread_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|thread_id| !thread_id.is_empty())
-                .map_or(!has_thread_ids, |thread_id| thread_id == session_id)
-        })
-        .collect()
+    let mut deduped = SidechainDedup::default();
+    for (index, entry) in entries.iter().enumerate().filter(|entry| {
+        entry
+            .1
+            .thread_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|thread_id| !thread_id.is_empty())
+            .map_or(!has_thread_ids, |thread_id| thread_id == session_id)
+    }) {
+        deduped.insert(IndexedSessionEntry { index, entry });
+    }
+    let mut counted = deduped.into_counted();
+    counted.sort_by_key(|entry| entry.index);
+    counted.into_iter().map(|entry| entry.entry).collect()
+}
+
+struct IndexedSessionEntry<'a> {
+    index: usize,
+    entry: &'a CachedEntry,
+}
+
+impl DedupPayload for IndexedSessionEntry<'_> {
+    fn entry(&self) -> &CachedEntry {
+        self.entry
+    }
 }
 
 pub(crate) fn aggregate_walk_publish(

@@ -424,6 +424,55 @@ fn session_token_totals_sum_and_scope_fresh_tokens() {
     );
 }
 
+#[test]
+fn session_entries_dedup_exact_keys_and_sidechain_replays_in_file_order() {
+    let mut first = cached_entry(100, 1.0, "sess-1");
+    first.message_id = Some("msg-a".to_owned());
+    first.request_id = Some("req-a".to_owned());
+    let mut richer = first.clone();
+    richer.ts_secs = 101;
+    richer.cost_usd = 2.0;
+    richer.input = 20;
+    let mut sidechain = first.clone();
+    sidechain.ts_secs = 102;
+    sidechain.request_id = Some("req-sidechain".to_owned());
+    sidechain.is_sidechain = true;
+    sidechain.input = 50_000;
+    let mut second = cached_entry(103, 3.0, "sess-1");
+    second.message_id = Some("msg-b".to_owned());
+    second.request_id = Some("req-b".to_owned());
+    let entries = vec![first, richer, sidechain, second];
+
+    let counted = session_entries(&entries, "sess-1");
+
+    assert_eq!(counted, vec![&entries[1], &entries[3]]);
+    assert_eq!(
+        session_cost_from_entries(&entries, "sess-1")
+            .unwrap()
+            .total_cost_usd,
+        Some(5.0)
+    );
+
+    let mut other_session = entries[1].clone();
+    other_session.thread_id = Some("sess-2".to_owned());
+    other_session.input = 100;
+    let mut selected = entries[0].clone();
+    selected.input = 15;
+    let scoped = vec![other_session, selected];
+    assert_eq!(session_entries(&scoped, "sess-1"), vec![&scoped[1]]);
+
+    let dir = TempDir::new().unwrap();
+    let line = claude_line_ts("2026-01-01T10:00:00.000Z", 1.0, "msg-a", "req-a");
+    let path = write_jsonl(dir.path(), "session.jsonl", &[&line, &line]);
+    assert_eq!(
+        session_token_totals(claude_adapter(), "sess-1", &path, &PriceBook::default()),
+        Some(SessionTokenTotals {
+            input: 10,
+            output: 5,
+        })
+    );
+}
+
 /// A file that cannot be read makes no progress: the resume offset holds and no
 /// entries appear. An adapter that also carries cross-line state keeps it, so
 /// the next pass resumes its fold instead of restarting it from a default at an
