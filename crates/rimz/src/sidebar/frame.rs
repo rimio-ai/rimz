@@ -483,7 +483,7 @@ fn pane_is_sidebar_chrome(pane: &PaneState) -> bool {
     pane.current
         .command
         .as_deref()
-        .is_some_and(crate::store::snapshot::command_is_sidebar_chrome)
+        .is_some_and(crate::pane::command_is_sidebar_chrome)
 }
 
 #[cfg(test)]

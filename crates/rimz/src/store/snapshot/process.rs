@@ -168,13 +168,6 @@ pub(crate) fn process_is_active(command: &str) -> bool {
     !IDLE.contains(&program_label(command).as_str())
 }
 
-/// Whether a pane's foreground command is RimZ's own sidebar — chrome to filter
-/// from rows, sibling counts, and view classification, never to render. One
-/// predicate so the frame's own-view derivation and the daemon-view fold agree.
-pub(crate) fn command_is_sidebar_chrome(command: &str) -> bool {
-    program_label(command) == crate::pane::SIDEBAR_CHROME_TITLE
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

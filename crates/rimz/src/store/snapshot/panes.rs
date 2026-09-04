@@ -398,7 +398,7 @@ pub(super) fn pane_admits_card(pane: &PaneRef, exclude: Option<&PaneId>) -> Card
     if pane
         .command
         .as_deref()
-        .is_some_and(super::process::command_is_sidebar_chrome)
+        .is_some_and(crate::pane::command_is_sidebar_chrome)
     {
         return CardAdmission::SidebarChrome;
     }

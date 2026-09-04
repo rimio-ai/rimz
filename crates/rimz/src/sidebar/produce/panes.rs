@@ -445,7 +445,7 @@ fn reconcile_active_commands(
         // foreground claim: the renderer process is labelled `rimz`, so a
         // process probe for `rimz-sidebar` would always clear it and break
         // chrome admission and sibling classification downstream.
-        if crate::store::snapshot::command_is_sidebar_chrome(command) {
+        if crate::pane::command_is_sidebar_chrome(command) {
             continue;
         }
         if !crate::store::snapshot::process_is_active(command) {

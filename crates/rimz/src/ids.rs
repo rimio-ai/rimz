@@ -715,6 +715,18 @@ impl<'de> Deserialize<'de> for PaneId {
     }
 }
 
+/// Compose a routing channel for read-side fallback. A launch-stamped lane
+/// wins; otherwise the worktree directory basename is the fallback for agents
+/// not launched by this RimZ binary.
+pub fn compose_channel(explicit: Option<&str>, dir_basename: Option<&str>) -> Option<String> {
+    if let Some(channel) = explicit.filter(|channel| !channel.is_empty()) {
+        return Some(channel.to_owned());
+    }
+    dir_basename
+        .filter(|dir| !dir.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -723,6 +735,16 @@ mod tests {
     fn mux_name_other_flips_backend() {
         assert_eq!(MuxName::Zellij.other(), MuxName::Tmux);
         assert_eq!(MuxName::Tmux.other(), MuxName::Zellij);
+    }
+
+    #[test]
+    fn compose_channel_uses_explicit_then_worktree_basename() {
+        assert_eq!(
+            compose_channel(Some("design"), Some("auth")).as_deref(),
+            Some("design")
+        );
+        assert_eq!(compose_channel(None, Some("auth")).as_deref(), Some("auth"));
+        assert_eq!(compose_channel(None, None), None);
     }
 
     #[test]

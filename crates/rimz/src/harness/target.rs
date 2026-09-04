@@ -31,11 +31,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::agents::AgentState;
-use crate::ids::PaneId;
+use crate::ids::{PaneId, compose_channel};
 use crate::store::message::{HarnessNotice, MessageRecord, MessageSender, identity_handle};
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
-
-pub use crate::store::snapshot::compose_channel;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum TargetErr {
