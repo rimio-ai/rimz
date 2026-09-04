@@ -31,6 +31,8 @@ A plain query uses the sidebar's refresh semantics: each successful or logged-ou
 
 `--refresh` makes every registered account probe due and invalidates the selected logged-in providers' direct-usage cadence before reading them. It still uses the same single-flight claims and cache publications, so concurrent refreshes do not stampede a provider.
 
+Rate-limit windows are the fused shared cache the sidebar paints, including the out-of-band authoritative usage reads, so both surfaces agree on one account picture. RimZ separates that cache by account using an opaque fingerprint of your local credentials: when a usage read finds a different account than the cached one, the provider's cached windows are dropped and refetched for the new account instead of carried over. Claude sessions already running when RimZ is upgraded remain keyless until they restart.
+
 Provider spend is always the last published `provider-spending.json` value. This command does not start the transcript spending walk; a cold cache leaves `spending` absent until `rimz stats` or a room producer publishes it.
 
 ## JSON fields
