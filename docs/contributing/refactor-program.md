@@ -53,7 +53,7 @@ The pass follows the review workflow atlas documents, with these rules on top.
 
 **Present.** In the conversation, biggest win first, for an engineer who knows the repo. Close with the proposed pick: every `Strong` candidate plus the cheap `Worth exploring` ones, bundled per module. The user confirms, strikes, or adds; the plan is written only after that reply.
 
-**Plan.** One self-standing ordered plan for a coder who has only the plan: title, the target in full, the contract (behaviour-preserving, net-subtractive, bugs found are reported rather than fixed), the line budget, prerequisites (tests to pin, landed as the first commit and green on the base), tests that move, per-file steps led by their verb, and verification commands. The pass contract goes in the plan verbatim as TOML, written to a scratch path outside the worktree:
+**Plan.** One self-standing ordered plan for a coder who has only the plan: title, the target in full, the contract (behaviour-preserving, net-subtractive, bugs found are reported rather than fixed), the line budget, prerequisites (tests to pin, landed as the first commit and green on the base), tests that move, per-file steps led by their verb, and verification commands. The line budget prices what a no-shim move adds as well as what it deletes: one line per file that imported the old and new homes together, and a header, imports, and `mod` lines per new module file; measure the largest move on a spike with `cargo xtask atlas diff --base main --path <scope>` before locking the ceiling, which the contract requires to be negative. The pass contract goes in the plan verbatim as TOML, written to a scratch path outside the worktree:
 
 ```toml
 version = 2
@@ -73,7 +73,7 @@ max-items = 3
 
 `paths` names every module the pass edits, callers included; `diff --expect` fails on a change outside them, which is what makes the pass reviewable and what makes concurrent passes safe.
 
-**Execute.** In a worktree on a branch named for the pass. Pin first: the prerequisite tests land as the first commit and pass on the base before any structural change. Then the per-file steps in plan order, one commit per step or per bundled module. `cargo xtask check` while iterating, `cargo xtask gate` before the hand-off, and the reach judgement in [AGENTS.md → Testing](../../AGENTS.md#testing) for whether the pass touches a surface that needs the journey, live-backend, or performance tiers.
+**Execute.** In a worktree on a branch named for the pass. Pin first: the prerequisite tests land as the first commit and pass on the base before any structural change. Then the per-file steps in plan order, one commit per step or per bundled module. `cargo xtask check` while iterating, `cargo xtask gate` before the hand-off, and the reach judgement in [AGENTS.md → Testing](../../AGENTS.md#testing) for whether the pass touches a surface that needs the journey, live-backend, or performance tiers. `cargo xtask atlas conform --ratchet` passes at every commit; `--tighten` only lowers, so a new rule's budget and a repointed rule's admissions are written by hand at their measured values.
 
 **Prove.** `cargo xtask atlas diff --expect <contract>` exits zero or the pass has drifted; drift is fixed or the contract is loosened with the reason written in the pass log, never silently. Then `cargo xtask atlas conform --tighten` so the ceilings the pass earned stay earned.
 

@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::agents::LaunchParams;
+use crate::disk::{lock, paths::StatePaths};
 use crate::ids::{AgentKind, AgentSessionId, RunId, WorkspaceId};
 use crate::pane::RuntimeOwnerKind;
 use crate::store::event::{
@@ -17,10 +18,7 @@ use crate::store::event::{
 };
 use crate::workspace::ResolvedWorkspace;
 
-use super::{
-    Result, StatePaths, Store, StoreErr, event_log, lock, message, runtime, snapshot,
-    workspace_record,
-};
+use super::{Result, Store, StoreErr, event_log, message, runtime, snapshot, workspace_record};
 
 mod debounce;
 mod lifecycle;
