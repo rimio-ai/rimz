@@ -29,8 +29,7 @@ use rimz::sidebar::produce::{
     produce_snapshot_with_refresh,
 };
 use rimz::store::snapshot::{PaneAgent, SidebarRow, SidebarSnapshot};
-use rimz::store::workspace_record;
-use rimz::workspace::WorkspaceResolver;
+use rimz::workspace::{WorkspaceResolver, record};
 use rimz::{RuntimePaths, StatePaths};
 
 #[cfg(feature = "testkit")]
@@ -735,7 +734,7 @@ fn resolve_snapshot_context(
         .clone()
         .or(resolved_session)
         .or_else(|| {
-            workspace_record::read(&state.workspace_record)
+            record::read(&state.workspace_record)
                 .ok()
                 .map(|record| record.session_name)
         });

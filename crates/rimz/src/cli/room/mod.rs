@@ -17,7 +17,7 @@ use rimz::room::session::{
     session_probe_retry_timeout, session_probe_timeout, workspace_record_for_session,
 };
 use rimz::room::{AttendedRecovery, NormalRebirth, RoomBirth, RoomContext, RoomSizing};
-use rimz::{RuntimePaths, store::workspace_record::WorkspaceRecord};
+use rimz::{RuntimePaths, workspace::record::WorkspaceRecord};
 
 use crate::cli::hooks::ensure_detected_agent_hooks;
 use crate::cli::{

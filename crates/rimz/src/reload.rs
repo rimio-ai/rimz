@@ -33,8 +33,7 @@ use crate::sidebar::heartbeat::SidebarHeartbeat;
 use crate::sidebar::timing::{
     RECONCILE_LIST_TIMEOUT, RELOAD_CONVERGE_POLL, RELOAD_CONVERGE_TIMEOUT, unix_now_ms,
 };
-use crate::store::workspace_record;
-use crate::workspace::{self, KnownWorkspace};
+use crate::workspace::{self, KnownWorkspace, record};
 
 /// Immutable executable generation shared by every long-lived process in a room.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -98,7 +97,7 @@ fn sweep_unreferenced_builds(state_root: &Path, builds_dir: &Path, keep: &str) {
     if let Ok(entries) = fs::read_dir(workspaces) {
         for entry in entries.flatten() {
             let record_path = entry.path().join("workspace.json");
-            if let Ok(record) = workspace_record::read(&record_path)
+            if let Ok(record) = record::read(&record_path)
                 && let Some(build) = record.rimz_build
             {
                 referenced.insert(build);
@@ -145,9 +144,9 @@ pub(crate) fn recorded_reexec_target(
     let Ok(paths) = StatePaths::for_workspace(workspace_id.clone()) else {
         return WorkspaceReexecTarget::Invalid;
     };
-    let record = match workspace_record::read(&paths.workspace_record) {
+    let record = match record::read(&paths.workspace_record) {
         Ok(record) => record,
-        Err(workspace_record::WorkspaceRecordErr::Io { source, .. })
+        Err(record::WorkspaceRecordErr::Io { source, .. })
             if source.kind() == io::ErrorKind::NotFound =>
         {
             return WorkspaceReexecTarget::Absent;
@@ -724,7 +723,7 @@ fn record_live_room_bin_at(
     paths: &StatePaths,
     runtime: &RuntimePaths,
 ) -> Option<PathBuf> {
-    let Ok(record) = workspace_record::read(&paths.workspace_record) else {
+    let Ok(record) = record::read(&paths.workspace_record) else {
         return None;
     };
     let workspace = crate::workspace::ResolvedWorkspace {
@@ -1160,10 +1159,10 @@ mod tests {
         let workspace = crate::workspace::WorkspaceResolver::resolve(&project, None).unwrap();
         let paths = StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
         let runtime = RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
-        let mut record = crate::store::workspace_record::WorkspaceRecord::from_resolved(&workspace);
+        let mut record = crate::workspace::record::WorkspaceRecord::from_resolved(&workspace);
         record.rimz_bin = Some(first.path.clone());
         record.rimz_build = Some(first.build.clone());
-        workspace_record::write(&paths, &record).unwrap();
+        record::write(&paths, &record).unwrap();
         let known = KnownWorkspace {
             workspace_id: workspace.workspace_id.clone(),
             project_root: workspace.project_root.clone(),
@@ -1192,7 +1191,7 @@ mod tests {
         assert!(second.path.is_file(), "new build remains staged");
         assert!(!unreferenced.exists(), "unreferenced build is swept");
         assert_eq!(std::fs::read(room_bin).unwrap(), b"second build");
-        let updated = workspace_record::read(&paths.workspace_record).unwrap();
+        let updated = record::read(&paths.workspace_record).unwrap();
         assert_eq!(updated.rimz_bin.as_deref(), Some(second.path.as_path()));
         assert_eq!(updated.rimz_build.as_deref(), Some(second.build.as_str()));
     }

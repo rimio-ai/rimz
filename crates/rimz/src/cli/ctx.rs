@@ -10,8 +10,8 @@ use anyhow::{Context, Result};
 
 use rimz::ids::{MuxName, WorkspaceId};
 use rimz::store::snapshot::SidebarSnapshot;
-use rimz::store::workspace_record;
 use rimz::workspace::WorkspaceResolver;
+use rimz::workspace::record;
 use rimz::{ResolvedWorkspace, RuntimePaths, StatePaths, Store};
 
 use super::GlobalFlags;
@@ -49,7 +49,7 @@ impl Ctx {
             StatePaths::for_workspace(workspace_id.clone()).context("preparing store paths")?;
         let runtime =
             RuntimePaths::for_workspace(workspace_id.clone()).context("preparing runtime paths")?;
-        let record = workspace_record::read(&paths.workspace_record).with_context(|| {
+        let record = record::read(&paths.workspace_record).with_context(|| {
             format!(
                 "reading workspace record `{}`",
                 paths.workspace_record.display()

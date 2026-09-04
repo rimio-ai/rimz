@@ -502,11 +502,11 @@ fn make_executable(path: &Path) {
 #[cfg(target_os = "linux")]
 fn record_target(env: &Env, target: &Path) {
     let paths = env.state_path_for(&env.project_root);
-    let mut record = rimz::store::workspace_record::read(&paths.workspace_record).unwrap();
+    let mut record = rimz::workspace::record::read(&paths.workspace_record).unwrap();
     record.rimz_bin = Some(target.to_path_buf());
     record.rimz_build = Some(rimz::build_id::of_file(target).unwrap());
     record.updated_at = jiff::Timestamp::now();
-    rimz::store::workspace_record::write(&paths, &record).unwrap();
+    rimz::workspace::record::write(&paths, &record).unwrap();
 }
 
 #[cfg(target_os = "linux")]

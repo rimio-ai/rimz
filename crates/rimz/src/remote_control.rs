@@ -12,7 +12,7 @@ use crate::agents::runtime_control::{
 use crate::config::RemoteControlConfig;
 use crate::disk::paths::StatePaths;
 use crate::room::session::LiveSessions;
-use crate::store::workspace_record;
+use crate::workspace::record;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RemoteControlHost {
@@ -169,7 +169,7 @@ pub fn apply_runtime_toggle(
                     continue;
                 }
             };
-            let record = match workspace_record::read(&paths.workspace_record) {
+            let record = match record::read(&paths.workspace_record) {
                 Ok(record) => record,
                 Err(err) => {
                     tracing::debug!(

@@ -42,7 +42,7 @@ fn session_name_hash_matches_workspace_id_prefix() {
 #[test]
 fn known_workspaces_reads_records_and_skips_recordless_dirs() {
     use crate::disk::paths::{StatePaths, workspaces_dir_under};
-    use crate::store::workspace_record::{self, WorkspaceRecord};
+    use crate::workspace::record::{self, WorkspaceRecord};
 
     let dir = tempfile::TempDir::new().expect("tempdir");
     let state_root = dir.path();
@@ -54,7 +54,7 @@ fn known_workspaces_reads_records_and_skips_recordless_dirs() {
         let workspace_id = WorkspaceId::from_project_root(&project_root);
         let paths = StatePaths::under(workspace_id.clone(), state_root).expect("state paths");
         std::fs::create_dir_all(&paths.root).expect("mkdir workspace");
-        workspace_record::write(
+        record::write(
             &paths,
             &WorkspaceRecord {
                 workspace_id,
@@ -91,7 +91,7 @@ fn known_workspaces_reads_records_and_skips_recordless_dirs() {
 #[test]
 fn known_workspaces_repairs_record_fields_for_the_canonical_workspace_dir() {
     use crate::disk::paths::{StatePaths, workspaces_dir_under};
-    use crate::store::workspace_record::{self, WorkspaceRecord};
+    use crate::workspace::record::{self, WorkspaceRecord};
 
     let dir = tempfile::TempDir::new().expect("tempdir");
     let state_root = dir.path().join("state");
@@ -103,7 +103,7 @@ fn known_workspaces_repairs_record_fields_for_the_canonical_workspace_dir() {
     let workspace_id = WorkspaceId::from_project_root(&canonical_root);
     let paths = StatePaths::under(workspace_id.clone(), &state_root).expect("state paths");
     std::fs::create_dir_all(&paths.root).expect("mkdir workspace");
-    workspace_record::write(
+    record::write(
         &paths,
         &WorkspaceRecord {
             workspace_id: workspace_id.clone(),
@@ -124,7 +124,7 @@ fn known_workspaces_repairs_record_fields_for_the_canonical_workspace_dir() {
     assert_eq!(known[0].project_root, canonical_root);
     assert_eq!(known[0].session_name, session_name_for(&canonical_root));
 
-    let repaired = workspace_record::read(&paths.workspace_record).expect("read repaired");
+    let repaired = record::read(&paths.workspace_record).expect("read repaired");
     assert_eq!(repaired.workspace_id, workspace_id);
     assert_eq!(repaired.project_root, project_root.canonicalize().unwrap());
     assert_eq!(repaired.session_name, session_name_for(&canonical_root));
@@ -133,7 +133,7 @@ fn known_workspaces_repairs_record_fields_for_the_canonical_workspace_dir() {
 #[test]
 fn known_workspaces_skips_obsolete_noncanonical_duplicate_records() {
     use crate::disk::paths::{StatePaths, workspaces_dir_under};
-    use crate::store::workspace_record::{self, WorkspaceRecord};
+    use crate::workspace::record::{self, WorkspaceRecord};
 
     let dir = tempfile::TempDir::new().expect("tempdir");
     let state_root = dir.path().join("state");
@@ -145,7 +145,7 @@ fn known_workspaces_skips_obsolete_noncanonical_duplicate_records() {
     let canonical_paths =
         StatePaths::under(canonical_id.clone(), &state_root).expect("canonical paths");
     std::fs::create_dir_all(&canonical_paths.root).expect("mkdir canonical");
-    workspace_record::write(
+    record::write(
         &canonical_paths,
         &WorkspaceRecord {
             workspace_id: canonical_id.clone(),
@@ -165,7 +165,7 @@ fn known_workspaces_skips_obsolete_noncanonical_duplicate_records() {
     assert_ne!(stale_id, canonical_id);
     let stale_paths = StatePaths::under(stale_id.clone(), &state_root).expect("stale paths");
     std::fs::create_dir_all(&stale_paths.root).expect("mkdir stale");
-    workspace_record::write(
+    record::write(
         &stale_paths,
         &WorkspaceRecord {
             workspace_id: stale_id,

@@ -197,7 +197,7 @@ fn workspace_migrate_moves_store_and_rewrites_workspace_ids() {
     );
 
     let record =
-        rimz::store::workspace_record::read(&new_paths.workspace_record).expect("workspace record");
+        rimz::workspace::record::read(&new_paths.workspace_record).expect("workspace record");
     assert_eq!(record.workspace_id, new_id);
     assert_eq!(record.project_root, canonical(&new_root));
 }

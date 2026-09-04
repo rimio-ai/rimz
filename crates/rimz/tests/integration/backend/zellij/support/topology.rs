@@ -175,7 +175,7 @@ pub(in crate::backend::zellij) fn record_known_workspace_session(
 ) {
     let state = rimz::StatePaths::under(workspace_id.clone(), state_root).expect("state paths");
     state.ensure_dirs().expect("workspace state dirs");
-    let record = rimz::store::workspace_record::WorkspaceRecord {
+    let record = rimz::workspace::record::WorkspaceRecord {
         workspace_id: workspace_id.clone(),
         project_root: project_root.to_path_buf(),
         worktree_root: None,
@@ -185,5 +185,5 @@ pub(in crate::backend::zellij) fn record_known_workspace_session(
         rimz_build: None,
         updated_at: jiff::Timestamp::now(),
     };
-    rimz::store::workspace_record::write(&state, &record).expect("workspace record");
+    rimz::workspace::record::write(&state, &record).expect("workspace record");
 }

@@ -8,10 +8,11 @@ use crate::agents::{AgentLifecycleObservation, LifecycleSignal};
 use crate::store::event::EventEnvelope;
 use crate::store::runtime::{self, AgentLiveness, RuntimeScope};
 use crate::store::{live_roster, session_death};
+use crate::workspace::record;
 
 use crate::disk::paths::StatePaths;
 
-use super::super::{Result, Store, workspace_record};
+use super::super::{Result, Store};
 use super::debounce;
 
 const REAP_INTERVAL: Duration = Duration::from_secs(60);
@@ -25,7 +26,7 @@ pub(super) fn reap_due(paths: &StatePaths) -> bool {
 }
 
 fn reap_session_name(paths: &StatePaths) -> String {
-    workspace_record::read(&paths.workspace_record)
+    record::read(&paths.workspace_record)
         .map(|record| record.session_name)
         .unwrap_or_else(|_| "rimz-reap".to_owned())
 }

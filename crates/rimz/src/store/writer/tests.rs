@@ -459,7 +459,7 @@ fn record_room_bin_publishes_a_sweep_safe_spawn_path() {
         .record_workspace(&workspace)
         .expect("generic rerecord preserves owner bin");
 
-    let preserved = workspace_record::read(&paths.workspace_record).expect("read record");
+    let preserved = record::read(&paths.workspace_record).expect("read record");
     assert_eq!(preserved.rimz_bin.as_deref(), Some(first.as_path()));
     assert_eq!(preserved.rimz_build.as_deref(), Some("build-1"));
 
@@ -471,7 +471,7 @@ fn record_room_bin_publishes_a_sweep_safe_spawn_path() {
         .expect("replace owner bin");
 
     assert_eq!(std::fs::read(&paths.room_bin).unwrap(), b"second build");
-    let replaced = workspace_record::read(&paths.workspace_record).expect("read replacement");
+    let replaced = record::read(&paths.workspace_record).expect("read replacement");
     assert_eq!(replaced.rimz_bin.as_deref(), Some(second.as_path()));
     assert_eq!(replaced.rimz_build.as_deref(), Some("build-2"));
 }

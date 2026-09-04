@@ -16,8 +16,8 @@ use crate::disk::parse_cache::ParseCache;
 use crate::disk::paths::StatePaths;
 use crate::store::event_log::{self};
 use crate::store::runtime::{RuntimeProjection, RuntimeScope};
-use crate::store::workspace_record::{self, WorkspaceRecordErr};
 use crate::workspace::RootClass;
+use crate::workspace::record::{self, WorkspaceRecordErr};
 
 /// Rebuild the snapshot caches from the live store and persist both: the
 /// rollup fold base (`rollup.json`) and the derived view (`latest.json`).
@@ -171,7 +171,7 @@ impl WorkspaceSnapshotIdentity {
     }
 
     fn from_paths(paths: &StatePaths) -> Self {
-        let record = match workspace_record::read(&paths.workspace_record) {
+        let record = match record::read(&paths.workspace_record) {
             Ok(record) => record,
             Err(WorkspaceRecordErr::Io { source, .. })
                 if source.kind() == std::io::ErrorKind::NotFound =>
@@ -222,9 +222,9 @@ mod tests {
     use crate::store::event::EventEnvelope;
 
     fn write_workspace_record(paths: &StatePaths, project_root: PathBuf, root_class: RootClass) {
-        workspace_record::write(
+        record::write(
             paths,
-            &workspace_record::WorkspaceRecord {
+            &record::WorkspaceRecord {
                 workspace_id: paths.workspace_id.clone(),
                 project_root,
                 worktree_root: None,

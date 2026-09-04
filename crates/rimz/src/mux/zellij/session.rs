@@ -303,7 +303,7 @@ impl ZellijBackend {
 
     fn recorded_rimz_bin(&self, workspace_id: &WorkspaceId) -> Option<std::path::PathBuf> {
         let paths = self.state_paths_for_workspace(workspace_id.clone()).ok()?;
-        crate::store::workspace_record::read(&paths.workspace_record)
+        crate::workspace::record::read(&paths.workspace_record)
             .ok()
             .and_then(|record| record.rimz_bin)
     }

@@ -242,7 +242,7 @@ fn named_attach_preserves_recorded_room_owner() {
         "named attach should succeed: {}",
         String::from_utf8_lossy(&output.stderr),
     );
-    let record = rimz::store::workspace_record::read(&store.paths().workspace_record)
+    let record = rimz::workspace::record::read(&store.paths().workspace_record)
         .expect("read workspace record");
     assert_eq!(record.rimz_bin, Some(recorded_owner));
 }
