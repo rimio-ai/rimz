@@ -168,7 +168,15 @@ fn handle_attach() {
     std::fs::write(state.with_extension("pid"), std::process::id().to_string())
         .expect("record attached client pid");
     if env::var_os("RIMZ_TEST_ZELLIJ_WATCHDOG_ATTACH_EXIT").is_some() {
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        let observed_live = state.with_extension("observed-live");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !observed_live.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "watchdog did not observe the attached session before the deadline"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         return;
     }
     std::thread::park_timeout(std::time::Duration::from_secs(60));
