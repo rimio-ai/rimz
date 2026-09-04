@@ -400,7 +400,7 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
         let snapshot = snapshot
             .as_ref()
             .expect("unmet delivery conditions require a resolution snapshot");
-        evaluate_delivery_conditions(workspace, store, snapshot, &live, now, delivery_window)?;
+        evaluate_delivery_conditions(workspace, store, snapshot, &live, now)?;
     }
     let pending = store.list_pending_messages()?;
     let snapshot = snapshot.as_ref();
@@ -439,14 +439,13 @@ fn evaluate_delivery_conditions(
     snapshot: &SidebarSnapshot,
     pending: &[MessageRecord],
     now: Timestamp,
-    delivery_window: Duration,
 ) -> Result<()> {
     let mut updates = Vec::new();
     for message in pending
         .iter()
         .filter(|message| message.status == MessageStatus::Queued && !message.conditions_met())
     {
-        let evaluation = evaluate_delivery(message, pending, snapshot, now, delivery_window);
+        let evaluation = evaluate_delivery(message, pending, snapshot, now);
         updates.push(crate::store::writer::DeliverySweepUpdate {
             message_id: message.message_id.clone(),
             after_indices: evaluation.after_stamps,
@@ -676,14 +675,7 @@ pub fn explain(
     snapshot: &SidebarSnapshot,
     now: Timestamp,
 ) -> DeliveryCheck {
-    evaluate_delivery(
-        message,
-        pending,
-        snapshot,
-        now,
-        MessageBody::Prompt.delivery_window(),
-    )
-    .check
+    evaluate_delivery(message, pending, snapshot, now).check
 }
 
 fn evaluate_delivery<'a>(
@@ -691,8 +683,8 @@ fn evaluate_delivery<'a>(
     pending: &[MessageRecord],
     snapshot: &'a SidebarSnapshot,
     now: Timestamp,
-    delivery_window: Duration,
 ) -> DeliveryEvaluation<'a> {
+    let delivery_window = MessageBody::Prompt.delivery_window();
     let schedule = ScheduleCheck {
         ready: message.is_ready(now),
         not_before: message.not_before,
@@ -899,13 +891,7 @@ fn delivery_candidate<'a>(
         .iter()
         .find(|message| message.message_id == *message_id)
         .cloned()?;
-    let evaluation = evaluate_delivery(
-        &message,
-        pending,
-        snapshot,
-        now,
-        MessageBody::Prompt.delivery_window(),
-    );
+    let evaluation = evaluate_delivery(&message, pending, snapshot, now);
     let check = &evaluation.check;
     if matches!(policy, DeliveryPolicy::Boundary)
         && (!message.is_deliverable(now) || !check.fifo.head || !check.gate_ready())

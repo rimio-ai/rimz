@@ -18,11 +18,10 @@
 //! durable truth: nothing here reaches the event log, and the
 //! `cargo xtask invariants` greps enforce that boundary.
 
-use std::path::PathBuf;
-
 use jiff::Timestamp;
 
-use crate::agents::context::{AgentContext, AgentContextRecord, AgentTurnError};
+use crate::agents::context::record::AgentContextRecord;
+use crate::agents::context::{AgentContext, AgentTurnError};
 use crate::agents::{
     AgentSpec, AgentState, AgentStatus, LocalContextRefresh, LocallyPricedTurnCost,
 };
@@ -30,6 +29,11 @@ use crate::disk::atomic;
 use crate::disk::paths::RuntimePaths;
 use crate::ids::MessageId;
 use crate::store::sidecar;
+
+#[cfg(any(test, feature = "testkit"))]
+pub mod fixture;
+#[cfg(any(test, feature = "testkit"))]
+pub use fixture::{path_for, write_record};
 
 impl sidecar::SidecarRecord for AgentContextRecord {
     const FILE_PREFIX: &'static str = "ctx";
@@ -41,17 +45,6 @@ impl sidecar::SidecarRecord for AgentContextRecord {
     fn agent_id(&self) -> &str {
         self.agent_id.as_str()
     }
-}
-
-/// Sidecar file for one session's record; test fixture access only.
-#[cfg(any(test, feature = "testkit"))]
-pub fn path_for(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> PathBuf {
-    sidecar::path(
-        &runtime.agent_context_dir,
-        <AgentContextRecord as sidecar::SidecarRecord>::FILE_PREFIX,
-        kind,
-        agent_id,
-    )
 }
 
 /// Persist (latest-wins) one session's context from a CLI producer.
@@ -87,25 +80,6 @@ pub(crate) fn attach_rest_certificates<'a>(
         agent.context = read_one(runtime, agent.kind.as_str(), agent.agent_id.as_str())
             .map(|record| record.context);
     }
-}
-
-/// Persist a fully-shaped sidecar fixture while preserving concurrently owned
-/// cost and spend state. Production mutations use [`update_record`].
-#[doc(hidden)]
-#[cfg(any(test, feature = "testkit"))]
-pub fn write_record(
-    runtime: &RuntimePaths,
-    record: &AgentContextRecord,
-) -> Result<(), atomic::AtomicErr> {
-    let observed_at = record.context.observed_at;
-    update_record(
-        runtime,
-        record.kind.as_str(),
-        record.agent_id.as_str(),
-        observed_at,
-        |current, existed| current.apply_fixture(record.clone(), existed),
-    )
-    .map(|_| ())
 }
 
 /// Mutate one session record against the latest published bytes while holding

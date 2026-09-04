@@ -283,7 +283,7 @@ pub(super) fn supplement_realtime_cost(
     context_agent_id: &str,
     pricing_cache_path: &Path,
     turn_ended: bool,
-    prior: Option<&rimz::agents::context::AgentContextRecord>,
+    prior: Option<&rimz::agents::context::record::AgentContextRecord>,
     refresh: &mut Option<rimz::agents::LocalContextRefresh>,
 ) {
     if !turn_ended || refresh_total_cost(refresh.as_ref()).is_some() {
@@ -360,7 +360,7 @@ pub(super) fn refresh_total_cost(
 }
 
 pub(super) fn prior_total_cost(
-    prior: Option<&rimz::agents::context::AgentContextRecord>,
+    prior: Option<&rimz::agents::context::record::AgentContextRecord>,
 ) -> Option<f64> {
     prior
         .and_then(|record| record.context.cost.as_ref())

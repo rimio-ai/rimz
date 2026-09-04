@@ -24,7 +24,7 @@ use notify::{RecursiveMode, Watcher};
 use tracing::debug;
 
 use crate::RuntimePaths;
-use crate::agents::context::AgentContextRecord;
+use crate::agents::context::record::AgentContextRecord;
 use crate::sidebar::ProducerElectionTracker;
 
 /// Idle cadence for the producer-election re-check while not elected.
