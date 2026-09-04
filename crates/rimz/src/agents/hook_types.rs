@@ -12,7 +12,7 @@ use crate::transcript::{AskAnswer, AskQuestion};
 
 use super::{
     AgentHookClass, AgentLifecycleObservation, AgentTurnError, AskKind, ClassifiedHook,
-    ContextObservation,
+    ContextObservation, LifecycleSignal,
 };
 
 /// Provider-neutral result of decoding one native hook payload.
@@ -610,6 +610,18 @@ pub enum SessionSource {
     Unknown,
 }
 
+impl SessionSource {
+    pub(super) fn session_start_signal(&self) -> LifecycleSignal {
+        match self {
+            Self::Compact => LifecycleSignal::CompactionEnded {
+                auto: None,
+                failed: false,
+            },
+            _ => LifecycleSignal::Registered,
+        }
+    }
+}
+
 /// `trigger` field on `PreCompact` and `PostCompact` events.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -684,6 +696,26 @@ mod tests {
         let t: BackgroundTask = serde_json::from_value(json!({})).unwrap();
         assert!(t.id.is_none());
         assert!(t.status.is_none());
+    }
+
+    #[test]
+    fn session_start_source_maps_to_one_lifecycle_rule() {
+        for (source, signal) in [
+            (SessionSource::Startup, LifecycleSignal::Registered),
+            (SessionSource::Resume, LifecycleSignal::Registered),
+            (SessionSource::Clear, LifecycleSignal::Registered),
+            (
+                SessionSource::Compact,
+                LifecycleSignal::CompactionEnded {
+                    auto: None,
+                    failed: false,
+                },
+            ),
+            (SessionSource::Fork, LifecycleSignal::Registered),
+            (SessionSource::Unknown, LifecycleSignal::Registered),
+        ] {
+            assert_eq!(source.session_start_signal(), signal);
+        }
     }
 
     #[test]

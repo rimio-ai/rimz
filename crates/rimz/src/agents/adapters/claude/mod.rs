@@ -967,16 +967,7 @@ fn map_claude_lifecycle_signal(
     parts: &ClaudeLifecycleParts,
 ) -> Option<LifecycleSignal> {
     match event_name {
-        "SessionStart" => {
-            let p = parts.session_start.as_ref()?;
-            Some(match p.source {
-                SessionSource::Compact => LifecycleSignal::CompactionEnded {
-                    auto: None,
-                    failed: false,
-                },
-                _ => LifecycleSignal::Registered,
-            })
-        }
+        "SessionStart" => Some(parts.session_start.as_ref()?.source.session_start_signal()),
         "UserPromptSubmit" => Some(LifecycleSignal::TurnStarted),
         "SubagentStart" => Some(LifecycleSignal::SubagentStarted),
         // The published SubagentStop payload has no outcome or exit-code
