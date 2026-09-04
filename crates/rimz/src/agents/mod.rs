@@ -634,11 +634,11 @@ pub struct LocalSpendFold {
     /// Last absorbed request, retained across suffix parses so a contiguous
     /// duplicate row is skipped or, when richer, replaces its earlier form.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_request: Option<FoldedRequest>,
+    last_request: Option<FoldedRequest>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct FoldedRequest {
+struct FoldedRequest {
     key: Option<(String, Option<String>)>,
     cost_usd: f64,
     input: u64,
@@ -652,7 +652,7 @@ pub struct FoldedRequest {
 impl LocalSpendFold {
     /// Resume a persisted fold when its cursor and duplicate window are valid.
     /// Folds written before the window existed replay once from byte zero.
-    pub fn resume(prior: Option<&Self>, file_len: u64) -> Self {
+    fn resume(prior: Option<&Self>, file_len: u64) -> Self {
         let fold = prior.cloned().unwrap_or_default();
         if fold.cursor.offset > file_len || fold.needs_dedup_replay() {
             return Self::default();

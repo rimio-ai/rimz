@@ -207,14 +207,13 @@ fn stale_provider_observation_updates_latest_locked_record() {
 
     let local_at = Timestamp::from_second(1_700_000_100).unwrap();
     let mut refresh = full_local_refresh();
-    refresh.spend_fold = FieldPatch::Set(LocalSpendFold {
-        cursor: crate::agents::spending::SpendCursor {
-            offset: 42,
-            state: None,
-        },
-        total_usd: 0.12,
-        ..LocalSpendFold::default()
-    });
+    let mut spend_fold = LocalSpendFold::default();
+    spend_fold.cursor = crate::agents::spending::SpendCursor {
+        offset: 42,
+        state: None,
+    };
+    spend_fold.total_usd = 0.12;
+    refresh.spend_fold = FieldPatch::Set(spend_fold);
     merge_local_context(&runtime, spec("codex"), "sess-1", refresh, local_at).unwrap();
     let opener = crate::ids::MessageId::parse("msg_0123456789abcdef").unwrap();
     merge_turn_opened_by(&runtime, "codex", "sess-1", vec![opener.clone()]).unwrap();
@@ -259,14 +258,13 @@ fn foldless_local_refresh_preserves_prior_spend_fold() {
     let (_dir, runtime) = runtime();
     let observed_at = observed_at();
     let mut prior = codex_record(observed_at);
-    prior.spend_fold = Some(LocalSpendFold {
-        cursor: crate::agents::spending::SpendCursor {
-            offset: 42,
-            state: None,
-        },
-        total_usd: 1.25,
-        ..LocalSpendFold::default()
-    });
+    let mut spend_fold = LocalSpendFold::default();
+    spend_fold.cursor = crate::agents::spending::SpendCursor {
+        offset: 42,
+        state: None,
+    };
+    spend_fold.total_usd = 1.25;
+    prior.spend_fold = Some(spend_fold);
     write_record(&runtime, &prior).unwrap();
 
     merge_local_context(
