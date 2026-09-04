@@ -395,11 +395,7 @@ pub(super) fn pane_admits_card(pane: &PaneRef, exclude: Option<&PaneId>) -> Card
     if exclude.is_some_and(|excluded| pane.pane_id == *excluded) {
         return CardAdmission::ExcludedPaneId;
     }
-    if pane
-        .command
-        .as_deref()
-        .is_some_and(crate::pane::command_is_sidebar_chrome)
-    {
+    if pane.is_rimz_sidebar() {
         return CardAdmission::SidebarChrome;
     }
     if crate::pane::pane_is_host(pane) {
