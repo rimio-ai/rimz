@@ -161,8 +161,8 @@ pub(crate) fn resume_live_fold(
     file_len: u64,
     prices: &PriceBook,
 ) -> LocalSpendFold {
-    let mut fold = prior.cloned().unwrap_or_default();
-    if fold.cursor.offset > file_len || live_fold_needs_token_counter_backfill(&fold) {
+    let mut fold = LocalSpendFold::resume(prior, file_len);
+    if live_fold_needs_token_counter_backfill(&fold) {
         fold = LocalSpendFold::default();
     }
     let parsed = parse_codex_spend(path, Some(&fold.cursor), prices);
