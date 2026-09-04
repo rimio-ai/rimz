@@ -864,7 +864,7 @@ impl Store {
                 self.snapshot()?
                     .agents
                     .into_iter()
-                    .filter(crate::agents::AgentState::compaction_open)
+                    .filter(|agent| agent.compacting_since.is_some())
                     .collect::<Vec<_>>()
             } else {
                 Vec::new()
