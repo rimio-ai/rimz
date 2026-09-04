@@ -46,7 +46,7 @@ fn follow(replay: bool, globals: &GlobalFlags) -> Result<()> {
         .context("resolving current workspace")?;
     let paths = rimz::StatePaths::for_workspace(workspace.workspace_id)
         .context("resolving lifecycle event-log paths")?;
-    let mut follower = rimz::agents::LifecycleFollower::open(paths, replay)
+    let mut follower = rimz::store::follow::LifecycleFollower::open(paths, replay)
         .context("opening lifecycle event stream")?;
     let stop = Arc::new(AtomicBool::new(false));
     register_stop_signals(Arc::clone(&stop))?;
