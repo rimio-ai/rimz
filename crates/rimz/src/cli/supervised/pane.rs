@@ -185,8 +185,8 @@ pub(super) fn subagent_companion_title(store: &rimz::Store) -> String {
 
 pub(super) fn lock_subagent_zone(
     store: &rimz::Store,
-) -> rimz::store::lock::Result<rimz::store::lock::WorkspaceLock> {
-    rimz::store::lock::WorkspaceLock::acquire(&store.paths().locks_dir.join("subagent-zone.lock"))
+) -> rimz::disk::lock::Result<rimz::disk::lock::WorkspaceLock> {
+    rimz::disk::lock::WorkspaceLock::acquire(&store.paths().locks_dir.join("subagent-zone.lock"))
 }
 
 /// Open a supervised child in the caller's durable subagent zone, or select

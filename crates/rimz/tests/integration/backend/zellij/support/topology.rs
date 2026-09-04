@@ -75,7 +75,7 @@ fn write_topology_cache(
         .join("pane-topology.json");
     std::fs::create_dir_all(path.parent().expect("topology parent"))
         .expect("create topology parent");
-    rimz::store::atomic::write_temp_then_rename_cache_compact(&path, &topology)
+    rimz::disk::atomic::write_temp_then_rename_cache_compact(&path, &topology)
         .expect("write topology cache");
 }
 

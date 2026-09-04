@@ -322,10 +322,10 @@ mod tests {
     use jiff::Timestamp;
 
     use rimz::agents::{AgentLifecycleObservation, AgentStatus, LifecycleSignal, PermissionMode};
+    use rimz::disk::paths::{RuntimePaths, StatePaths};
     use rimz::ids::{AgentKind, WorkspaceId};
     use rimz::message::MessageStatus;
     use rimz::store::writer::AgentLifecycleIntent;
-    use rimz::store::{RuntimePaths, StatePaths};
     use rimz::workspace::RootClass;
 
     use super::*;

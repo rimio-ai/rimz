@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime};
 
 use tracing::warn;
 
-use super::super::{StatePaths, atomic};
+use crate::disk::{atomic, paths::StatePaths};
 
 /// Whether a debounce stamp is missing, unreadable, future-dated, or at least
 /// `interval` old. Clock and I/O uncertainty err toward one redundant run.

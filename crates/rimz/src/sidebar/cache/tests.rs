@@ -1,4 +1,5 @@
 use super::*;
+use crate::disk::atomic;
 use crate::ids::WorkspaceId;
 use crate::sidebar::FRESH_PANE_GRACE;
 use crate::sidebar::frame::assemble_frame;
@@ -8,7 +9,6 @@ use crate::sidebar::timing::{
     DIFF_STATS_IDLE_TTL, DIFF_STATS_TTL, EVENT_PANE_TTL, PRESENCE_STAMP_FRESH, SNAPSHOT_CACHE_TTL,
     WORKTREE_ROOTS_TTL, unix_now_ms,
 };
-use crate::store::atomic;
 #[test]
 fn pane_topology_cache_freshness_honors_requested_floor() {
     let cache = PaneTopologyCache {

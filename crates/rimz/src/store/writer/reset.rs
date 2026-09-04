@@ -6,7 +6,9 @@ use jiff::Timestamp;
 
 use crate::harness::run::{RunRecord, RunStatus};
 
-use super::super::{Result, Store, StoreErr, event_log, lock, run_store, snapshot};
+use crate::disk::lock;
+
+use super::super::{Result, Store, StoreErr, event_log, run_store, snapshot};
 use super::ResetRecordsOutcome;
 
 fn remove_file_if_exists(path: &Path) -> Result<bool> {
@@ -216,9 +218,9 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::disk::paths::{RuntimePaths, StatePaths};
     use crate::ids::WorkspaceId;
     use crate::store::event::EventEnvelope;
-    use crate::store::paths::{RuntimePaths, StatePaths};
 
     #[test]
     fn soft_reset_writes_carryover_before_archiving_active_log() {

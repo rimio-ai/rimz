@@ -17,10 +17,10 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::config::ConfigFileDiagnosis;
+use crate::disk::atomic;
+use crate::disk::paths::config_home;
 use crate::ids::MuxName;
 use crate::remote::{RemoteTarget, RemoteTargetError};
-use crate::store::atomic;
-use crate::store::paths::config_home;
 
 const REMOTE_FILE: &str = "remote.toml";
 const REMOTE_TEMPLATE: &str = include_str!("../config/templates/remote.template.toml");

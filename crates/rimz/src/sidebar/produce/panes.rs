@@ -10,6 +10,8 @@ use super::Result;
 use crate::diag::record::{
     DiagEvent, FrameRejectReason, ManagedPaneEvidence, PaneDropEvidence, PaneDropViewEvidence,
 };
+use crate::disk::atomic;
+use crate::disk::single_flight::{self, Coalesced};
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use crate::mux::{ClientFocusOptions, PaneListOptions, PaneListing, PaneReadConsistency};
 use crate::sidebar::cache::{
@@ -19,8 +21,6 @@ use crate::sidebar::cache::{
 };
 use crate::sidebar::frame::{FrameInputs, PaneFrame, PaneMetrics};
 use crate::sidebar::timing::{PRESENCE_SAMPLE_TTL, SNAPSHOT_CACHE_TTL, unix_now_ms};
-use crate::store::atomic;
-use crate::store::single_flight::{self, Coalesced};
 use crate::store::snapshot::PresenceSample;
 
 mod carry;

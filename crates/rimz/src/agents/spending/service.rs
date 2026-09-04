@@ -20,8 +20,8 @@ use super::{
     HeadlineSpec, PROVIDER_SPENDING_VERSION, SPENDING_CACHE_VERSION, SpendingCaches,
     SpendingWalker, WORKSPACE_SPENDING_VERSION,
 };
+use crate::disk::paths::RuntimePaths;
 use crate::ids::WorkspaceId;
-use crate::store::paths::RuntimePaths;
 
 pub const SPENDING_SERVICE_PROTOCOL_VERSION: u32 = 1;
 const CONNECT_WAIT_STEP: Duration = Duration::from_millis(20);
@@ -451,9 +451,8 @@ fn connect_or_start(
         WORKSPACE_SPENDING_VERSION,
         namespace.as_str(),
     );
-    match crate::store::single_flight::coordinate::<()>(&owner_lock, CONNECT_WAIT_STEP, 0, || None)
-    {
-        crate::store::single_flight::Coordination::Produce(owner) => {
+    match crate::disk::single_flight::coordinate::<()>(&owner_lock, CONNECT_WAIT_STEP, 0, || None) {
+        crate::disk::single_flight::Coordination::Produce(owner) => {
             // The lifetime-lock winner alone may distinguish a stale socket
             // from a live listener and unlink it.
             match std::fs::remove_file(&socket) {
@@ -472,15 +471,15 @@ fn connect_or_start(
                 .spawn(move || serve(listener, owner, server_runtime, server_namespace))?;
             tracing::debug!(socket = %socket.display(), "elected spending service owner");
         }
-        crate::store::single_flight::Coordination::ContentionTimeout => {}
-        crate::store::single_flight::Coordination::Unavailable => {
+        crate::disk::single_flight::Coordination::ContentionTimeout => {}
+        crate::disk::single_flight::Coordination::Unavailable => {
             return Err(SpendingServiceFailure::new(
                 SpendingServiceErrorCode::Unavailable,
                 "spending service owner lock unavailable",
             )
             .into());
         }
-        crate::store::single_flight::Coordination::Shared(()) => {
+        crate::disk::single_flight::Coordination::Shared(()) => {
             return Err(SpendingServiceFailure::new(
                 SpendingServiceErrorCode::Internal,
                 "spending service election returned an unexpected shared value",
@@ -504,7 +503,7 @@ fn connect_or_start(
 
 fn serve(
     listener: UnixListener,
-    _owner: crate::store::single_flight::ProducerGuard,
+    _owner: crate::disk::single_flight::ProducerGuard,
     runtime: RuntimePaths,
     namespace: SpendingServiceNamespace,
 ) {
@@ -1009,13 +1008,10 @@ mod tests {
             namespace.as_str(),
         );
         assert!(matches!(
-            crate::store::single_flight::coordinate::<()>(
-                &owner_lock,
-                CONNECT_WAIT_STEP,
-                0,
-                || None
-            ),
-            crate::store::single_flight::Coordination::ContentionTimeout
+            crate::disk::single_flight::coordinate::<()>(&owner_lock, CONNECT_WAIT_STEP, 0, || {
+                None
+            }),
+            crate::disk::single_flight::Coordination::ContentionTimeout
         ));
     }
 
@@ -1041,13 +1037,13 @@ mod tests {
             WORKSPACE_SPENDING_VERSION,
             namespace.as_str(),
         );
-        let held = match crate::store::single_flight::coordinate::<()>(
+        let held = match crate::disk::single_flight::coordinate::<()>(
             &owner_lock,
             CONNECT_WAIT_STEP,
             0,
             || None,
         ) {
-            crate::store::single_flight::Coordination::Produce(guard) => guard,
+            crate::disk::single_flight::Coordination::Produce(guard) => guard,
             _ => panic!("test owns the lifetime lock"),
         };
 

@@ -16,19 +16,19 @@ A reader that finds a cache stale, corrupt, or absent folds the log itself and m
 
 Two habits follow from the rule and are worth knowing before you add anything here.
 
-Cache the parse, never a verdict. [`parse_cache.rs`](../../crates/rimz/src/store/parse_cache.rs) memoizes one thread's last deserialization of a JSON cache file, keyed by `(mtime, len)` plus the device and inode pair. That identity is deliberately not airtight: two republishes inside one mtime tick at equal length can serve the older parse. Every caller therefore re-validates against live truth, so a stale serve costs a re-read and never a wrong result.
+Cache the parse, never a verdict. [`disk/parse_cache.rs`](../../crates/rimz/src/disk/parse_cache.rs) memoizes one thread's last deserialization of a JSON cache file, keyed by `(mtime, len)` plus the device and inode pair. That identity is deliberately not airtight: two republishes inside one mtime tick at equal length can serve the older parse. Every caller therefore re-validates against live truth, so a stale serve costs a re-read and never a wrong result.
 
 Freshness is an extent, not a timestamp. A derived rollup records the `LogExtent` it reflects, a `(generation, offset)` pair naming the rotation generation and the byte offset after the last folded frame. Comparing that against the live log is one `stat`, with none of mtime's granularity or write-ordering hazards.
 
 ## Where the code lives
 
-`Store` is a cloneable handle around an `Arc`. [`mod.rs`](../../crates/rimz/src/store/mod.rs) holds the handle, core errors, and lock-free reads; store mutations and their intent/outcome vocabulary live under [`writer.rs`](../../crates/rimz/src/store/writer.rs). Supervised runs are the exception: `harness::run` owns their schema, transitions, and workspace lock while the private run codec supplies durable temp-and-rename writes. Store reset crosses that boundary to cancel active runs before rotating room state. Snapshot schema is consumed through [`store::snapshot`](../../crates/rimz/src/store/snapshot/mod.rs), and workspace metadata through [`store::workspace_record`](../../crates/rimz/src/store/workspace_record.rs). There is no in-process actor: cross-process serialization is the workspace lock's whole job.
+`Store` is a cloneable handle around an `Arc`. [`mod.rs`](../../crates/rimz/src/store/mod.rs) holds the handle, core errors, and lock-free reads; store mutations and their intent/outcome vocabulary live under [`writer.rs`](../../crates/rimz/src/store/writer.rs). The file primitives those paths share live under [`disk/`](../../crates/rimz/src/disk/mod.rs). Supervised runs are the exception: `harness::run` owns their schema, transitions, and workspace lock while the private run codec supplies durable temp-and-rename writes. Store reset crosses that boundary to cancel active runs before rotating room state. Snapshot schema is consumed through [`store::snapshot`](../../crates/rimz/src/store/snapshot/mod.rs), and workspace metadata through [`store::workspace_record`](../../crates/rimz/src/store/workspace_record.rs). There is no in-process actor: cross-process serialization is the workspace lock's whole job.
 
 | Module | What it owns |
 | --- | --- |
-| [`paths.rs`](../../crates/rimz/src/store/paths.rs) | `StatePaths` and `RuntimePaths`: every filename in this doc, and the XDG resolution behind them. |
-| [`atomic.rs`](../../crates/rimz/src/store/atomic.rs) | Whole-file publication and sync discipline, plus cache-local temp cleanup. Every fsync syscall in the project is in this file, enforced by a CI grep. |
-| [`lock.rs`](../../crates/rimz/src/store/lock.rs) | The workspace advisory lock, bounded at 30 seconds and naming the holder-hunting command on timeout. |
+| [`disk/paths.rs`](../../crates/rimz/src/disk/paths.rs) | `StatePaths` and `RuntimePaths`: every filename in this doc, and the XDG resolution behind them. |
+| [`disk/atomic.rs`](../../crates/rimz/src/disk/atomic.rs) | Whole-file publication and sync discipline, plus cache-local temp cleanup. Every fsync syscall in the project is in this file, enforced by a CI grep. |
+| [`disk/lock.rs`](../../crates/rimz/src/disk/lock.rs) | The workspace advisory lock, bounded at 30 seconds and naming the holder-hunting command on timeout. |
 | [`event.rs`](../../crates/rimz/src/store/event.rs) | `EventEnvelope`, the typed `EventKind` decode, and the schema version. |
 | [`event_log.rs`](../../crates/rimz/src/store/event_log.rs) | The framed append log: `frame.rs` codec, `recovery.rs` repair, `rotation.rs` archive publication and retention. |
 | [`writer.rs`](../../crates/rimz/src/store/writer.rs) | Public mutation intents/outcomes, the `commit` primitive, and the off-lock tail. `writer/` splits implementation into `debounce`, `lifecycle`, `publish`, `queue`, `reap`, and `reset`. |
@@ -38,9 +38,9 @@ Freshness is an extent, not a timestamp. A derived rollup records the `LogExtent
 | [`sidecar.rs`](../../crates/rimz/src/store/sidecar.rs) | The shared latest-wins enrichment sidecar store behind `agent_context/` and `subagent_context/`. |
 | [`active_time.rs`](../../crates/rimz/src/store/active_time.rs) | The per-session estimated active-time accumulator, serialized by per-record flocks. |
 | [`gc.rs`](../../crates/rimz/src/store/gc.rs) | Global maintenance: stale runtime hints, recursive orphan-write-temp collection, and dead workspaces. |
-| [`single_flight.rs`](../../crates/rimz/src/store/single_flight.rs) | Cross-process producer election, imported by the sidebar and so free of every writer module. |
+| [`disk/single_flight.rs`](../../crates/rimz/src/disk/single_flight.rs) | Cross-process producer election, imported by the sidebar and so free of every writer module. |
 
-Start at `writer.rs` for how a fact gets in, at `snapshot/fold.rs` for how it comes back out, and at `atomic.rs` for what durability actually costs.
+Start at `writer.rs` for how a fact gets in, at `snapshot/fold.rs` for how it comes back out, and at `disk/atomic.rs` for what durability actually costs.
 
 ## What is on disk
 
@@ -194,7 +194,7 @@ Every disk write falls into one of four classes, and one line classifies them: *
 | Cache | `snapshots/*.json`, `live-roster.json`, heartbeats, sidecars, the sidebar's published lanes | Temp file plus atomic rename, no fsync. | Rebuilt from the log or refreshed from live producers on the next read. |
 | Durable records | `messages/messages.jsonl`, `runs/<run_id>.json`, `workspace.json`, `agents.carryover.json`, `channels.json`, trust grants, notification handlers, hook installs | Temp file, fsync, rename, parent-directory sync. | Survives. |
 
-Every fsync syscall funnels through [`atomic.rs`](../../crates/rimz/src/store/atomic.rs), checked by a CI grep, so the discipline is enforced rather than reviewed. No module hand-rolls its own atomic dance.
+Every fsync syscall funnels through [`disk/atomic.rs`](../../crates/rimz/src/disk/atomic.rs), checked by a CI grep, so the discipline is enforced rather than reviewed. No module hand-rolls its own atomic dance.
 
 ### Wakeups
 

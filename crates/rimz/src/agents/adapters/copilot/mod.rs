@@ -578,7 +578,7 @@ impl crate::agents::capabilities::LaunchCapability for CopilotAdapter {
         )]
     }
 
-    fn room_env(&self, runtime: &crate::store::RuntimePaths) -> BTreeMap<String, String> {
+    fn room_env(&self, runtime: &crate::disk::paths::RuntimePaths) -> BTreeMap<String, String> {
         room_env_from(
             runtime,
             std::env::var_os("COPILOT_OTEL_FILE_EXPORTER_PATH").as_deref(),
@@ -696,7 +696,7 @@ fn local_context_refresh_with_statusline(
 }
 
 fn room_env_from(
-    runtime: &crate::store::RuntimePaths,
+    runtime: &crate::disk::paths::RuntimePaths,
     explicit_file: Option<&OsStr>,
     otlp_endpoint: Option<&OsStr>,
     exporter_type: Option<&OsStr>,

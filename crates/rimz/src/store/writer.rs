@@ -275,7 +275,7 @@ impl Store {
                 txn.force_publish();
             }
             workspace_record::write(txn.paths, &record)?;
-            crate::store::atomic::link_executable_atomically(&room_bin_target, &txn.paths.room_bin)
+            crate::disk::atomic::link_executable_atomically(&room_bin_target, &txn.paths.room_bin)
                 .map_err(workspace_record::WorkspaceRecordErr::from)?;
             Ok(())
         })

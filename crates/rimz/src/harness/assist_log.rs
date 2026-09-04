@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::disk::paths::state_home;
 use crate::harness::auto_redeem::RedeemReason;
 use crate::ids::{AgentKind, AgentSessionId};
-use crate::store::paths::state_home;
 
 const NAME: &str = "assists.log.jsonl";
 const MAX_BYTES: u64 = 4 * 1_048_576;

@@ -9,12 +9,12 @@ use super::pane_topology::PaneTopologyPane;
 use super::parse::{is_no_active_sessions, session_state_from_line};
 use super::{TOPOLOGY_CACHE_POLL_STEP, ZellijBackend, health_probe_timeout};
 use crate::config::{MachineConfig, MultiplexerConfig};
+use crate::disk::paths::{self, RuntimePaths, StatePaths};
 use crate::ids::WorkspaceId;
 use crate::mux::{MuxErr, Result, SessionLiveness};
 use crate::mux::{PaneReadConsistency, PresencePluginOptions};
 use crate::sidebar::cache::{pane_topology_cache_is_fresh, read_pane_topology_cache};
 use crate::sidebar::timing::unix_now_ms;
-use crate::store::paths::{self, RuntimePaths, StatePaths};
 use crate::workspace::{self, KnownWorkspace};
 
 /// Remove Zellij's serialized-session cache for `name` under `cache_root`, across

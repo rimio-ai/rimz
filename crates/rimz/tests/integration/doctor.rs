@@ -914,7 +914,7 @@ fn write_last_death_marker(
         at: Timestamp::UNIX_EPOCH,
         recovered,
     };
-    rimz::store::atomic::write_temp_then_rename(&paths.last_death_marker, &marker)
+    rimz::disk::atomic::write_temp_then_rename(&paths.last_death_marker, &marker)
         .expect("write last death marker");
     (cause == SessionDeathCause::Crash).then(|| {
         std::fs::create_dir_all(paths.crashes_dir.join("20260708T082717Z"))
@@ -938,7 +938,7 @@ fn write_diag_record(env: &Env, at_ms: u64, build: Option<&str>) {
     record.build = build.map(ToOwned::to_owned);
     let mut line = serde_json::to_vec(&record).expect("encode diagnostic record");
     line.push(b'\n');
-    rimz::store::atomic::append_record_bytes(&diag_log_path(env), &line)
+    rimz::disk::atomic::append_record_bytes(&diag_log_path(env), &line)
         .expect("append diagnostic record");
 }
 
@@ -1128,7 +1128,7 @@ fn write_presence_stamp(env: &Env, mux: Option<MuxName>, session_name: Option<&s
         mux,
         session_name: session_name.map(ToOwned::to_owned),
     };
-    rimz::store::atomic::write_temp_then_rename_cache(
+    rimz::disk::atomic::write_temp_then_rename_cache(
         &rimz::sidebar::cache::presence_stamp_path(&runtime),
         &stamp,
     )
@@ -1211,7 +1211,7 @@ fn doctor_reports_cross_backend_room_conflicts_and_duplicate_groups() {
             runtime.sock_dir.join(format!("sidebar.{name}.sock")),
             Some(PaneId::parse(pane).expect("pane id")),
         );
-        rimz::store::atomic::write_temp_then_rename(
+        rimz::disk::atomic::write_temp_then_rename(
             &runtime.heartbeat_dir.join(format!("sidebar.{name}.json")),
             &heartbeat,
         )
@@ -1375,7 +1375,7 @@ fn doctor_json_reports_protocol_version_mismatches() {
         None,
     );
     sidebar.protocol_version = "rimz.plugin.v0".to_owned();
-    rimz::store::atomic::write_temp_then_rename(
+    rimz::disk::atomic::write_temp_then_rename(
         &rt.heartbeat_dir.join("sidebar.old.json"),
         &sidebar,
     )
@@ -1426,7 +1426,7 @@ fn doctor_reports_mixed_build_writers() {
             Some(PaneId::from_parts(MuxName::Tmux, pane)),
         );
         sidebar.build = Some(build.to_owned());
-        rimz::store::atomic::write_temp_then_rename(
+        rimz::disk::atomic::write_temp_then_rename(
             &rt.heartbeat_dir.join(format!("sidebar.{name}.json")),
             &sidebar,
         )

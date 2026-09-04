@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime};
 #[cfg(unix)]
 use std::{collections::HashMap, os::unix::fs::MetadataExt};
 
-use crate::store::atomic;
+use crate::disk::atomic;
 
 /// Recursively remove orphaned whole-file-write temps under `root`.
 ///

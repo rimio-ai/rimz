@@ -20,14 +20,12 @@ pub(super) fn read(paths: &StatePaths) -> Option<Timestamp> {
 pub(super) fn stamp(paths: &StatePaths, now: Timestamp) -> Result<()> {
     let bytes = serde_json::to_vec(&Watermark { cleared_at: now })
         .context("serializing doctor history watermark")?;
-    rimz::store::atomic::write_bytes_atomically(&paths.doctor_watermark, &bytes).with_context(
-        || {
-            format!(
-                "writing doctor watermark to {}",
-                paths.doctor_watermark.display()
-            )
-        },
-    )
+    rimz::disk::atomic::write_bytes_atomically(&paths.doctor_watermark, &bytes).with_context(|| {
+        format!(
+            "writing doctor watermark to {}",
+            paths.doctor_watermark.display()
+        )
+    })
 }
 
 #[cfg(test)]

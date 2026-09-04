@@ -623,7 +623,7 @@ fn list_profiles(json: bool, path: bool, globals: &GlobalFlags) -> Result<()> {
         &config.agents,
         &config.subagents.profiles,
         &project_root,
-        &rimz::store::paths::config_home(),
+        &rimz::disk::paths::config_home(),
     )?;
     effective.overlay_profile_sources(&mut sources);
     let catalog = rimz::harness::subagent_policy::catalog(

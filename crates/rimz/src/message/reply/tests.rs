@@ -3,10 +3,10 @@ use std::io::Write;
 use jiff::Timestamp;
 
 use super::*;
+use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::ids::WorkspaceId;
 use crate::message::DeliveryGate;
 use crate::store::event::{EventEnvelope, MessageEventMethod};
-use crate::store::{RuntimePaths, StatePaths};
 
 fn card(status: AgentStatus, started: i64) -> Option<CardView> {
     Some(CardView {

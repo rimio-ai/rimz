@@ -72,7 +72,7 @@ Adapter built-ins apply after the project env so a trusted config tunes an agent
 
 ## Storage
 
-The committed **project config** is `<project_root>/.rimz/config.toml`. The **trust record** is per-machine, at `$XDG_CONFIG_HOME/rimz/projects/<workspace_id>/trust.toml`, written with atomic temp-plus-rename through [`store::atomic::write_bytes_atomically`](../../../crates/rimz/src/store/atomic.rs). Its schema:
+The committed **project config** is `<project_root>/.rimz/config.toml`. The **trust record** is per-machine, at `$XDG_CONFIG_HOME/rimz/projects/<workspace_id>/trust.toml`, written with atomic temp-plus-rename through [`disk::atomic::write_bytes_atomically`](../../../crates/rimz/src/disk/atomic.rs). Its schema:
 
 ```toml
 project_root = "/home/me/code/query-engine"

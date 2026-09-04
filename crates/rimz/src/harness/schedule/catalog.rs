@@ -12,7 +12,7 @@ use super::{
 };
 use crate::Store;
 use crate::config::{MachineConfig, TaskEntry, Tasks};
-use crate::store::paths::{RuntimePaths, StatePaths, config_home, state_home};
+use crate::disk::paths::{RuntimePaths, StatePaths, config_home, state_home};
 use crate::trust::TrustState;
 use crate::workspace::WorkspaceResolver;
 

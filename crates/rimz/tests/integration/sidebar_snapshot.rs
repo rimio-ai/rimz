@@ -183,7 +183,7 @@ fn frame_emits_plain_text_over_a_pipe() {
         rimz::sidebar::timing::unix_now_ms(),
         session,
     );
-    rimz::store::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &published)
+    rimz::disk::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &published)
         .expect("publish pane frame");
 
     let output = env
@@ -476,7 +476,7 @@ fn kiro_local_store_bootstraps_live_state_and_history_without_events() {
         rimz::sidebar::timing::unix_now_ms(),
         &session_name,
     );
-    rimz::store::atomic::write_temp_then_rename_cache(
+    rimz::disk::atomic::write_temp_then_rename_cache(
         &env.runtime_paths().pane_frame_path(),
         &frame,
     )

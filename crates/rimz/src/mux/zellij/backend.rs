@@ -17,6 +17,7 @@ use super::raw_pane::{
 };
 use super::sidebar::DockOutcome;
 use super::{HEALTH_PROBE_RETRY_DELAY, ZellijBackend};
+use crate::disk::paths::RuntimePaths;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::{
     BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch, BackgroundViewOptions,
@@ -27,7 +28,6 @@ use crate::mux::{
     SplitTarget, TabOptions, WidthStep, ensure_pane_backend, execute_reconcile_plan,
     group_reconcile_panes, memoized_version, paste_payload,
 };
-use crate::store::RuntimePaths;
 use serde::Deserialize;
 
 /// Prefix `command` with an `env KEY=VALUE …` shim so a freshly split Zellij
@@ -291,10 +291,10 @@ impl ZellijBackend {
     fn runtime_paths_for_authoritative(
         &self,
         workspace_id: &WorkspaceId,
-    ) -> Option<crate::store::RuntimePaths> {
+    ) -> Option<crate::disk::paths::RuntimePaths> {
         match &self.runtime_dir {
-            Some(dir) => crate::store::RuntimePaths::under(workspace_id.clone(), dir),
-            None => crate::store::RuntimePaths::for_workspace(workspace_id.clone()),
+            Some(dir) => crate::disk::paths::RuntimePaths::under(workspace_id.clone(), dir),
+            None => crate::disk::paths::RuntimePaths::for_workspace(workspace_id.clone()),
         }
         .ok()
     }
@@ -1091,11 +1091,11 @@ impl MuxBackend for ZellijBackend {
         // `delete-session --force` already drops the serialized session, but a
         // crashed server can leave the cache behind with no live session to
         // delete, so reset removes it directly as well.
-        super::session::purge_zellij_session_cache_in(&crate::store::paths::cache_home(), name)
+        super::session::purge_zellij_session_cache_in(&crate::disk::paths::cache_home(), name)
     }
 
     fn resurrection_cache_paths(&self, name: &str) -> Vec<PathBuf> {
-        super::session::zellij_session_cache_paths_in(&crate::store::paths::cache_home(), name)
+        super::session::zellij_session_cache_paths_in(&crate::disk::paths::cache_home(), name)
     }
 
     fn reconcile_sidebars(
@@ -1289,9 +1289,11 @@ impl MuxBackend for ZellijBackend {
         })();
         let runtime = match self.runtime_dir.as_deref() {
             Some(root) => {
-                crate::store::RuntimePaths::under(opts.sidebar.workspace_id.clone(), root)
+                crate::disk::paths::RuntimePaths::under(opts.sidebar.workspace_id.clone(), root)
             }
-            None => crate::store::RuntimePaths::for_workspace(opts.sidebar.workspace_id.clone()),
+            None => {
+                crate::disk::paths::RuntimePaths::for_workspace(opts.sidebar.workspace_id.clone())
+            }
         }
         .map_err(|err| MuxErr::Output {
             program: "zellij".to_owned(),
@@ -1519,7 +1521,7 @@ fn restore_client_view(
 
 fn execute_focus_restoration(
     backend: &ZellijBackend,
-    runtime: &crate::store::RuntimePaths,
+    runtime: &crate::disk::paths::RuntimePaths,
     session_name: &str,
     pane: &PaneId,
     tab_position: u64,

@@ -6,8 +6,8 @@
 
 pub mod sandbox;
 
+pub use crate::disk::atomic::testkit::fsync_count;
 pub use crate::proc::testkit::spawn_count;
-pub use crate::store::atomic::testkit::fsync_count;
 pub use crate::store::event_log::testkit::{bytes_read, bytes_written};
 
 /// Constants shared with the real ttyd pixel layer, serialized for its Node harness.
@@ -164,12 +164,13 @@ pub fn changed_droid_session_fixture(
 pub mod fleet {
     use crate::agents::lifecycle::LifecycleSignal;
     use crate::agents::{AgentLifecycleObservation, LaunchParams};
+    use crate::disk::paths::StatePaths;
     use crate::ids::{AgentSessionId, MuxName, PaneId, ViewKind, WorkspaceId};
     use crate::pane::PaneRef;
     use crate::sidebar::produce::ProduceOptions;
     use crate::sidebar::refresh::{AccountsCache, ProviderRecord};
     use crate::store::event::EventEnvelope;
-    use crate::store::{StatePaths, event_log};
+    use crate::store::event_log;
     use crate::{RuntimePaths, agents, sidebar};
 
     use std::io;

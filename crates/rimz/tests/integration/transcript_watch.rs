@@ -77,9 +77,15 @@ fn simulated_rollout_event_merges_fresh_tokens_into_the_sidecar() {
 
     // A redundant trigger — the same watcher event firing again with no new
     // write — is a stat-gated no-op: the sidecar bytes do not change.
-    let before = std::fs::read(runtime.agent_context_path("codex", SESSION_ID)).expect("sidecar");
+    let before = std::fs::read(rimz::store::agent_context::path_for(
+        &runtime, "codex", SESSION_ID,
+    ))
+    .expect("sidecar");
     refresh_session_transcript_context(runtime, "codex", SESSION_ID, Some("gpt-5"));
-    let after = std::fs::read(runtime.agent_context_path("codex", SESSION_ID)).expect("sidecar");
+    let after = std::fs::read(rimz::store::agent_context::path_for(
+        &runtime, "codex", SESSION_ID,
+    ))
+    .expect("sidecar");
     assert_eq!(before, after, "unchanged rollout tail refreshes nothing");
 }
 
@@ -147,8 +153,14 @@ fn cursor_transcript_event_recovers_terminal_state_without_content() {
     let serialized = serde_json::to_string(&merged).unwrap();
     assert!(!serialized.contains("THINKING_SENTINEL_DO_NOT_INGEST"));
 
-    let before = std::fs::read(runtime.agent_context_path("cursor", SESSION_ID)).unwrap();
+    let before = std::fs::read(rimz::store::agent_context::path_for(
+        &runtime, "cursor", SESSION_ID,
+    ))
+    .unwrap();
     refresh_session_transcript_context(runtime, "cursor", SESSION_ID, Some("cursor/model"));
-    let after = std::fs::read(runtime.agent_context_path("cursor", SESSION_ID)).unwrap();
+    let after = std::fs::read(rimz::store::agent_context::path_for(
+        &runtime, "cursor", SESSION_ID,
+    ))
+    .unwrap();
     assert_eq!(before, after, "unchanged Cursor tail is stat-gated");
 }

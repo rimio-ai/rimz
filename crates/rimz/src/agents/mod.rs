@@ -153,7 +153,7 @@ pub enum AgentErr {
         source: Box<dyn std::error::Error + Send + Sync>,
     },
     #[error("writing hook config: {0}")]
-    WriteHookConfig(#[from] crate::store::atomic::AtomicErr),
+    WriteHookConfig(#[from] crate::disk::atomic::AtomicErr),
 }
 
 pub type Result<T> = std::result::Result<T, AgentErr>;

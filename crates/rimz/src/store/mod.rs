@@ -5,10 +5,7 @@
 //! Module split (the local contract lives in `AGENTS.md` beside this file):
 //!
 //! ```text
-//! store/
-//!   paths.rs        StatePaths, RuntimePaths, XDG resolution
-//!   atomic.rs       temp+rename, length-framed append
-//!   lock.rs         workspace advisory lock
+//! store/            file primitives live in sibling module `disk/`
 //!   event_log.rs    framed append-log façade
 //!   event_log/      frame codec, rotation, recovery, unit tests
 //!   message_store.rs live message queue JSONL store
@@ -37,20 +34,15 @@
 
 pub mod active_time;
 pub mod agent_context;
-pub mod atomic;
 pub mod event;
 pub mod event_log;
 pub mod gc;
 pub mod live_roster;
-pub mod lock;
 mod message_store;
-pub(crate) mod parse_cache;
-pub mod paths;
 pub(crate) mod run_store;
 pub mod runtime;
 pub(crate) mod session_death;
 pub(crate) mod sidecar;
-pub mod single_flight;
 pub mod snapshot;
 pub mod subagent_context;
 pub mod workspace_record;
@@ -61,10 +53,11 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::disk::paths::{RuntimePaths, StatePaths};
+use crate::disk::{lock, paths};
 use crate::store::event::EventEnvelope;
 use crate::store::snapshot::SidebarSnapshot;
 
-pub use crate::store::paths::{RuntimePaths, StatePaths};
 pub use crate::store::runtime::{RuntimeProjection, RuntimeScope};
 pub use message_store::MessageStoreErr;
 

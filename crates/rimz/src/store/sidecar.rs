@@ -17,7 +17,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 
-use crate::store::atomic;
+use crate::disk::atomic;
 
 #[cfg(test)]
 pub(crate) mod testkit {

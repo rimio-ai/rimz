@@ -86,7 +86,7 @@ fn write_rimz_worktree_marker_with_pr(
     let git_dir = crate::worktree::git_admin_dir_from_checkout_metadata(repo.path())
         .unwrap()
         .expect("git admin dir");
-    crate::store::atomic::write_temp_then_rename(&git_dir.join("rimz-worktree.json"), &marker)
+    crate::disk::atomic::write_temp_then_rename(&git_dir.join("rimz-worktree.json"), &marker)
         .unwrap();
 }
 

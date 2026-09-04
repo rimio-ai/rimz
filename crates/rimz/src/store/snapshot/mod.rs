@@ -22,7 +22,7 @@ mod view;
 use std::io;
 use std::path::PathBuf;
 
-use crate::store::atomic;
+use crate::disk::atomic;
 use crate::store::event_log::EventLogErr;
 
 pub(crate) use assemble::{build_from, rebuild};

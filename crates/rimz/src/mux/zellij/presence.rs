@@ -16,11 +16,11 @@ use super::{
     PRESENCE_BOOT_PIPE, PRESENCE_PIPE_TIMEOUT, PRESENCE_RETIRE_PIPE, PRESENCE_RETIRE_PROOF_TIMEOUT,
     PRESENCE_TOPOLOGY_PIPE, TOPOLOGY_CACHE_POLL_STEP, ZellijBackend,
 };
+use crate::disk::{atomic, paths};
 use crate::ids::PaneId;
 use crate::mux::{MuxErr, Result};
 use crate::sidebar::cache::{PresenceDesired, read_pane_topology_cache, write_presence_desired};
 use crate::sidebar::timing::unix_now_ms;
-use crate::store::{atomic, paths};
 
 const EMBEDDED_PRESENCE_PLUGIN: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/rimz-presence-zellij.wasm"));
@@ -505,7 +505,7 @@ fn is_presence_plugin_pane(pane: &RawListedPane) -> bool {
 }
 
 fn wait_for_presence_replacement(
-    runtime: &crate::store::RuntimePaths,
+    runtime: &crate::disk::paths::RuntimePaths,
     session_name: &str,
     floor_ms: u64,
     expected_build: &str,

@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use super::catalog::TaskSource;
 use super::overlay_store::{OverlayError, OverlayStore};
+use crate::disk::paths::state_home;
 use crate::ids::WorkspaceId;
-use crate::store::paths::state_home;
 
 const STORE: OverlayStore = OverlayStore::new("loop-arming.json", "loop-arming.lock");
 const LEGACY_PAUSE_STORE: OverlayStore = OverlayStore::new("loop-pauses.json", "loop-pauses.lock");

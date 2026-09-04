@@ -12,7 +12,7 @@ use crate::cli::render;
 fn broken_config_notice(err: &rimz::config::ConfigErr) -> String {
     broken_config_notice_for(
         err,
-        err.path().starts_with(rimz::store::paths::agents_home()),
+        err.path().starts_with(rimz::disk::paths::agents_home()),
     )
 }
 

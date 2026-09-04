@@ -6,8 +6,8 @@ use anyhow::{Context, Result, bail};
 use toml_edit::{DocumentMut, Item, Table};
 
 use crate::config::{MachineConfig, TaskEntry};
-use crate::store::atomic::write_bytes_atomically;
-use crate::store::paths::agents_home;
+use crate::disk::atomic::write_bytes_atomically;
+use crate::disk::paths::agents_home;
 use crate::trust::TrustState;
 
 const PROJECT_CONFIG_REL: &str = ".rimz/config.toml";

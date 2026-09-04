@@ -212,7 +212,7 @@ fn restart_posture(
         &machine_config.agents,
         &machine_config.subagents.profiles,
         &workspace.project_root,
-        &rimz::store::paths::config_home(),
+        &rimz::disk::paths::config_home(),
     )?;
     let posture = rimz::harness::resume::resolve_posture(
         rimz::harness::resume::PostureRequest {

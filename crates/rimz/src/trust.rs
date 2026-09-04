@@ -20,9 +20,9 @@ use sha2::{Digest, Sha256};
 
 use crate::agents::PermissionMode;
 use crate::config::{CheckOn, ConfigFileDiagnosis, Team};
+use crate::disk::atomic::{self, write_bytes_atomically};
+use crate::disk::paths::config_home;
 use crate::ids::WorkspaceId;
-use crate::store::atomic::{self, write_bytes_atomically};
-use crate::store::paths::config_home;
 
 const CONFIG_REL: &str = ".rimz/config.toml";
 const PROJECTS_SUBDIR: [&str; 2] = ["rimz", "projects"];

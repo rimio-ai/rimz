@@ -81,7 +81,7 @@ pub(super) fn refresh_cohort_spend_for(
         refreshed_at_ms: now_ms,
         groups,
     };
-    if let Err(error) = crate::store::atomic::write_temp_then_rename_cache(&path, &refreshed) {
+    if let Err(error) = crate::disk::atomic::write_temp_then_rename_cache(&path, &refreshed) {
         tracing::debug!(
             path = %path.display(),
             %error,
@@ -203,12 +203,12 @@ mod tests {
                 },
             )]),
         };
-        crate::store::atomic::write_temp_then_rename_cache(&path, &cache).unwrap();
+        crate::disk::atomic::write_temp_then_rename_cache(&path, &cache).unwrap();
         assert_eq!(read_cohort_spend_cache(&path), cache);
 
         let mut stale = cache;
         stale.version += 1;
-        crate::store::atomic::write_temp_then_rename_cache(&path, &stale).unwrap();
+        crate::disk::atomic::write_temp_then_rename_cache(&path, &stale).unwrap();
         assert_eq!(read_cohort_spend_cache(&path), CohortSpendCache::default());
     }
 

@@ -134,7 +134,7 @@ pub struct KnownWorkspace {
 /// maintenance commands operate on the current workspace record only. Errors only
 /// when the state root itself cannot be read.
 pub fn known_workspaces() -> io::Result<Vec<KnownWorkspace>> {
-    known_workspaces_under(&crate::store::paths::workspaces_dir())
+    known_workspaces_under(&crate::disk::paths::workspaces_dir())
 }
 
 /// [`known_workspaces`] over an explicit state root, for tests against a tempdir.
@@ -265,7 +265,7 @@ fn normalize_known_workspace_record(
 /// Legacy rooms without that link use their recorded build while it exists,
 /// then fall back to the current executable.
 pub fn resolve_recorded_rimz_bin(workspace_id: &WorkspaceId, recorded: Option<&Path>) -> PathBuf {
-    if let Ok(paths) = crate::store::StatePaths::for_workspace(workspace_id.clone())
+    if let Ok(paths) = crate::disk::paths::StatePaths::for_workspace(workspace_id.clone())
         && paths.room_bin.is_file()
     {
         return paths.room_bin;

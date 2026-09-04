@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime};
 
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::store::atomic;
+use crate::disk::atomic;
 
 const ROTATE_LOCK_STALE: Duration = Duration::from_secs(60);
 

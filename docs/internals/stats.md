@@ -59,7 +59,7 @@ Each heatmap cell is one UTC day on a five-step ramp that reserves `·` for a da
 
 ## Where the figures come from
 
-This module owns no spend arithmetic. Walking transcripts, pricing models, and publishing the aggregate all belong to the spending producer described in [providers.md](./agents/providers.md). Stats is a reader over one artifact: `provider-spending.json` under the shared state root (`RuntimePaths::shared_provider_spending_path`), which carries the per-day buckets, the per-model and per-agent tallies, and the trailing windows. `Stats::from_provider` is the whole translation.
+This module owns no spend arithmetic. Walking transcripts, pricing models, and publishing the aggregate all belong to the spending producer described in [providers.md](./agents/providers.md). Stats is a reader over one artifact: `provider-spending.json` under the shared state root (`disk::paths::RuntimePaths::shared_provider_spending_path`), which carries the per-day buckets, the per-model and per-agent tallies, and the trailing windows. `Stats::from_provider` is the whole translation.
 
 Three load paths in `mod.rs` answer a run, in order of preference:
 
@@ -142,7 +142,7 @@ The line this draws is what counts as an assist. Automation that benefits the us
 
 ## Tests
 
-`tests.rs` covers this module as pure unit tests over rendered strings. There are no golden `.snap` frames here — that pattern belongs to the sidebar pane. The load paths run against temporary `RuntimePaths` (a published cache served without a walk, a cold refresh publishing the rollups the sidebar then reads), the panel is asserted through `strip_ansi` on layout, ranking, folding, and the fit ladder, and the held loop is driven through `key_outcome` and `HeldStats` without a terminal.
+`tests.rs` covers this module as pure unit tests over rendered strings. There are no golden `.snap` frames here — that pattern belongs to the sidebar pane. The load paths run against temporary `disk::paths::RuntimePaths` (a published cache served without a walk, a cold refresh publishing the rollups the sidebar then reads), the panel is asserted through `strip_ansi` on layout, ranking, folding, and the fit ladder, and the held loop is driven through `key_outcome` and `HeldStats` without a terminal.
 
 ```sh
 cargo xtask test stats

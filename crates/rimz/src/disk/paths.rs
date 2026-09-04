@@ -14,7 +14,6 @@ use std::path::{Path, PathBuf};
 
 use crate::ids::{SidebarInstanceId, WorkspaceId};
 use crate::sock::SockBudget;
-use crate::store::sidecar;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PathErr {
@@ -284,13 +283,6 @@ impl RuntimePaths {
         let mut paths = Self::validated_under(workspace_id, runtime_root)?;
         paths.persistent_shared_root = persistent_shared_root;
         Ok(paths)
-    }
-
-    /// Sidecar file for one agent session's rich context, keyed by
-    /// `(kind, agent_id)`. The filename is a digest so an arbitrary session id
-    /// (a free string, possibly path-hostile) maps to a safe, fixed-width name.
-    pub fn agent_context_path(&self, kind: &str, agent_id: &str) -> PathBuf {
-        sidecar::path(&self.agent_context_dir, "ctx", kind, agent_id)
     }
 
     /// Content-addressed replacement prompts generated for provider launches.

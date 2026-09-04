@@ -50,7 +50,7 @@ That turns N tabs into one external-read cost plus N-1 in-process folds, which i
 
 The eldest-UUIDv7 rule looks like a distributed-consensus problem and is not one, because **the flock is the real election and the eldest rule is only an optimization.**
 
-- **The flock decides.** Every shared external read single-flights through [`store::single_flight::coalesce`](../../crates/rimz/src/store/single_flight.rs). Two renderers that both believe they are the producer still collapse to one pane-roster read per TTL window. The system is correct with zero, one, or many self-declared producers.
+- **The flock decides.** Every shared external read single-flights through [`disk::single_flight::coalesce`](../../crates/rimz/src/disk/single_flight.rs). Two renderers that both believe they are the producer still collapse to one pane-roster read per TTL window. The system is correct with zero, one, or many self-declared producers.
 - **The eldest rule saves the contention.** Sorting by birth lets a younger renderer skip production before ever touching the lock, so the common case never contends at all. A wrong pick costs nothing, because the flock bounds it.
 - **The heartbeat TTL carries liveness.** On a producer death the next eldest flips within one `SIDEBAR_HEARTBEAT_TTL` (5s) and produces on its next cycle. Pane discovery lags a few seconds; agent status keeps flowing the entire time through the rollup fast lane, which needs no producer.
 
@@ -247,7 +247,7 @@ Every writer that knows about a change pushes: store and sidecar writers post a 
 
 ### Incremental everything
 
-No reader pays O(history). The rollup persists a raw fold base plus its `(generation, offset)` stamp, and catch-up seeks to the offset and folds only new frames ([`fold.rs`](../../crates/rimz/src/store/snapshot/fold.rs)). Runtime projection, resume outcomes, and smart-compact dedupe ride the same fold instead of rescanning `events.log.jsonl`. A `(path, mtime, len)` parse cache on `snapshot.json`, `latest.json`, and `rollup.json` returns `Arc<T>` handles, so unchanged files skip both re-parse and cache-hit deep clone ([`parse_cache.rs`](../../crates/rimz/src/store/parse_cache.rs)).
+No reader pays O(history). The rollup persists a raw fold base plus its `(generation, offset)` stamp, and catch-up seeks to the offset and folds only new frames ([`fold.rs`](../../crates/rimz/src/store/snapshot/fold.rs)). Runtime projection, resume outcomes, and smart-compact dedupe ride the same fold instead of rescanning `events.log.jsonl`. A `(path, mtime, len)` parse cache on `snapshot.json`, `latest.json`, and `rollup.json` returns `Arc<T>` handles, so unchanged files skip both re-parse and cache-hit deep clone ([`disk/parse_cache.rs`](../../crates/rimz/src/disk/parse_cache.rs)).
 
 The fleet spend walk is incremental in three layers: the walker-owned directory index stats only active frontiers and reconciles fully every 15 minutes; the disk cache stores `(mtime, len, cursor)` per file so a grown file parses only its appended suffix; and the elected walker holds the sole parsed cache plus a generation-keyed slice of dedup winner locations, so serialized workspace requests borrow rather than clone. Session uniqueness uses fast hash collections while the published maps retain deterministic ordering, so a 102k-entry aggregation does not repeatedly order filesystem paths. Workspace membership reuses normalized cache origins without allocating a `PathBuf` per entry, retaining a defensive normalization path for origins containing parent components. Rows older than 8 days compact into per-day rollups inside the same stream.
 
@@ -257,7 +257,7 @@ Every display figure is display-only by invariant ([DESIGN.md](../../DESIGN.md#t
 
 ### The zero-fsync write path
 
-The critical section covers durable truth only, and the flock hold drops to microseconds. The off-lock tail issues a group fdatasync debounced to at most 1/s, so one writer per interval makes the whole fleet's appends durable. Length-plus-CRC32 framing makes a lost suffix deterministic corruption that the next write tail self-heals. The full contract, including the CI grep that funnels every fsync through `store/atomic.rs`, lives in [store.md](./store.md#write-classes).
+The critical section covers durable truth only, and the flock hold drops to microseconds. The off-lock tail issues a group fdatasync debounced to at most 1/s, so one writer per interval makes the whole fleet's appends durable. Length-plus-CRC32 framing makes a lost suffix deterministic corruption that the next write tail self-heals. The full contract, including the CI grep that funnels every fsync through `disk/atomic.rs`, lives in [store.md](./store.md#write-classes).
 
 ### Keep helper processes cheap
 

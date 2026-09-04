@@ -18,6 +18,8 @@
 //! durable truth: nothing here reaches the event log, and the
 //! `cargo xtask invariants` greps enforce that boundary.
 
+use std::path::PathBuf;
+
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -26,9 +28,9 @@ use crate::agents::{
     AgentCost, AgentSpec, AgentState, AgentStatus, AgentTokenUsage, LocalContextRefresh,
     LocalSpendFold, TranscriptStat,
 };
+use crate::disk::atomic;
+use crate::disk::paths::RuntimePaths;
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
-use crate::store::atomic;
-use crate::store::paths::RuntimePaths;
 use crate::store::sidecar;
 
 /// A session's context sidecar: the normalized record plus the
@@ -96,6 +98,17 @@ impl sidecar::SidecarRecord for AgentContextRecord {
     fn agent_id(&self) -> &str {
         self.agent_id.as_str()
     }
+}
+
+/// Sidecar file for one session's record; test fixture access only.
+#[cfg(any(test, feature = "testkit"))]
+pub fn path_for(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> PathBuf {
+    sidecar::path(
+        &runtime.agent_context_dir,
+        <AgentContextRecord as sidecar::SidecarRecord>::FILE_PREFIX,
+        kind,
+        agent_id,
+    )
 }
 
 /// Persist (latest-wins) one session's context from a CLI producer.

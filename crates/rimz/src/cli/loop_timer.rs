@@ -6,10 +6,10 @@ use std::process::{Command, Output, Stdio};
 
 use jiff::Zoned;
 
+use rimz::disk::atomic::write_bytes_atomically;
+use rimz::disk::paths::{RuntimePaths, config_home, env_path};
 use rimz::harness::schedule::catalog::TaskCatalog;
 use rimz::ids::WorkspaceId;
-use rimz::store::atomic::write_bytes_atomically;
-use rimz::store::paths::{RuntimePaths, config_home, env_path};
 
 const SYSTEMD_SERVICE: &str = "rimz-loop.service";
 const SYSTEMD_TIMER: &str = "rimz-loop.timer";
@@ -61,7 +61,7 @@ pub(super) enum TimerErr {
     Write {
         path: PathBuf,
         #[source]
-        source: rimz::store::atomic::AtomicErr,
+        source: rimz::disk::atomic::AtomicErr,
     },
     #[error("cannot remove loop timer file {path}: {source}")]
     Remove {

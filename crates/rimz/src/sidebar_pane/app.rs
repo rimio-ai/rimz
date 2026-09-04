@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use crate::config::NotificationsPrefs;
 use crate::diag::record::DiagEvent;
+use crate::disk::paths::PathErr;
 use crate::ids::PaneId;
 use crate::sidebar::events::{EventStore, SidebarEvent, SidebarEventEnvelope};
 use crate::sidebar::focus_anchor::{
@@ -30,7 +31,6 @@ use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL, TAB_READ_DWELL};
 use crate::sidebar_pane::pixel::probe::escalate_own_pane_passthrough;
 use crate::sidebar_pane::pixel::{PixelRenderCaps, detect_pixel_render_caps};
-use crate::store::paths::PathErr;
 use crate::store::snapshot::SidebarSnapshot;
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, WorkspaceId};
 use ratatui::Terminal;
@@ -543,7 +543,7 @@ pub(crate) static PANIC_HOOK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex:
 fn spawn_pane_focus(
     pane_id: PaneId,
     session_name: &str,
-    runtime: crate::store::RuntimePaths,
+    runtime: crate::disk::paths::RuntimePaths,
     origin: crate::sidebar::focus_anchor::FocusOrigin,
     expected_pre_action: Option<Vec<crate::mux::ClientPaneView>>,
     presentation: (usize, Option<crate::sidebar::focus_anchor::FrozenOrder>),

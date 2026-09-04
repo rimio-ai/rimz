@@ -101,7 +101,7 @@ impl MuxBackend for TmuxBackend {
         // The runtime domain goes in first so the pin and any caller override
         // win on conflict: a pane inherits concrete HOME/XDG values naming the
         // same store and mux endpoint this client resolved.
-        let mut env = crate::store::paths::runtime_domain_env();
+        let mut env = crate::disk::paths::runtime_domain_env();
         env.extend(crate::workspace::pin_env(
             &opts.workspace_id,
             &opts.project_root,
@@ -356,7 +356,7 @@ impl MuxBackend for TmuxBackend {
 
     fn sidebar_width_step(
         &self,
-        _runtime: &crate::store::RuntimePaths,
+        _runtime: &crate::disk::paths::RuntimePaths,
         _session: &str,
         pane: &PaneId,
         _min_observed_at_ms: Option<u64>,

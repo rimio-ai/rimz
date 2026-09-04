@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
-use crate::store::atomic::write_bytes_atomically;
+use crate::disk::atomic::write_bytes_atomically;
 
 use super::{
     AnimationRole, ConfigFileDiagnosis, GlyphRole, MachineConfig, MachineConfigFile,
@@ -71,7 +71,7 @@ pub enum ConfigEditErr {
     Write {
         path: PathBuf,
         #[source]
-        source: crate::store::atomic::AtomicErr,
+        source: crate::disk::atomic::AtomicErr,
     },
     #[error("config key `{key}` is unset")]
     UnsetKey { key: String },

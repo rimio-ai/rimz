@@ -185,7 +185,7 @@ fn adapter_for_comm(comm: &str) -> Option<&'static AgentDefinition> {
 
 /// Adapter-owned enrichment environment for a new room. Backends receive one
 /// opaque map and remain independent of provider protocols.
-pub fn room_env(runtime: &crate::store::RuntimePaths) -> BTreeMap<String, String> {
+pub fn room_env(runtime: &crate::disk::paths::RuntimePaths) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
     for adapter in all_definitions() {
         env.extend(adapter.room_env(runtime));

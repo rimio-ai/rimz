@@ -56,7 +56,7 @@ fn ingest_probes(path: &Path, client: &str) -> Result<()> {
             client.to_owned(),
             probe.stats.clone(),
         );
-        rimz::store::atomic::write_temp_then_rename_cache(path, &file)
+        rimz::disk::atomic::write_temp_then_rename_cache(path, &file)
             .with_context(|| format!("writing {}", path.display()))?;
         let ack = match ports.report() {
             Some(ports) => LinkAck::with_ports(probe.seq, ports),

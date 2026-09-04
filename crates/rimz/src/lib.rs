@@ -29,6 +29,7 @@ pub mod config;
 pub mod daemon_content;
 pub mod daemon_view;
 pub mod diag;
+pub mod disk;
 pub mod disk_usage;
 pub mod forge;
 pub mod harness;
@@ -66,6 +67,7 @@ pub use crate::agents::{
     AccountUsageSnapshot, ExtraCredits, HeadlineSpec, ProviderAccountScope, ResetCredits,
     SpendTally, SpendWindow, SpendWindowMode,
 };
+pub use crate::disk::paths::{RuntimePaths, StatePaths};
 pub use crate::harness::run_wake::RunWakeErr;
 pub use crate::harness::target::TargetErr;
 pub use crate::ids::{
@@ -73,5 +75,5 @@ pub use crate::ids::{
 };
 pub use crate::pane::{ElevatedAgent, RuntimeOwner, RuntimeOwnerKind};
 pub use crate::store::event::EventEnvelope;
-pub use crate::store::{RuntimePaths, RuntimeProjection, RuntimeScope, StatePaths, Store};
+pub use crate::store::{RuntimeProjection, RuntimeScope, Store};
 pub use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};

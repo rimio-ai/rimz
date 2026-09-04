@@ -12,8 +12,8 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::config::MachineConfig;
+use crate::disk::{atomic, paths};
 use crate::mux::CommandSpec;
-use crate::store::{atomic, paths};
 
 use super::{
     CredentialRotation, CredentialSummary, Result, WebAuth, WebCredential, WebDaemonOutcome,
@@ -1094,8 +1094,8 @@ fn state_path(file: &str) -> PathBuf {
     paths::state_home().join("rimz").join(file)
 }
 
-fn acquire_lock(file: &str) -> Result<crate::store::lock::WorkspaceLock> {
-    Ok(crate::store::lock::WorkspaceLock::acquire(&state_path(
+fn acquire_lock(file: &str) -> Result<crate::disk::lock::WorkspaceLock> {
+    Ok(crate::disk::lock::WorkspaceLock::acquire(&state_path(
         file,
     ))?)
 }

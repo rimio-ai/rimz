@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use crate::store::paths::RuntimePaths;
+use crate::disk::paths::RuntimePaths;
 
 const BINDING_LOG_NAME: &str = "binding.log.jsonl";
 const BINDING_LOG_MAX_BYTES: u64 = 1_048_576;

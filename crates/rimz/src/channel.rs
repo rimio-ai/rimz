@@ -13,9 +13,9 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::store::atomic::{self, write_temp_then_rename};
-use crate::store::lock::{self, WorkspaceLock};
-use crate::store::paths::StatePaths;
+use crate::disk::atomic::{self, write_temp_then_rename};
+use crate::disk::lock::{self, WorkspaceLock};
+use crate::disk::paths::StatePaths;
 use crate::workspace::{ResolvedWorkspace, RootClass};
 
 #[derive(Debug, thiserror::Error)]

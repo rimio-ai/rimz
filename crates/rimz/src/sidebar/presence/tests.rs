@@ -560,15 +560,14 @@ fn topology_write_failure_returns_error_before_accepted_side_effects() {
 #[test]
 fn topology_writer_lock_contention_returns_typed_timeout() {
     let (_dir, state, runtime) = paths();
-    let _held =
-        crate::store::lock::WorkspaceLock::acquire(&runtime.topology_writer_lock()).unwrap();
+    let _held = crate::disk::lock::WorkspaceLock::acquire(&runtime.topology_writer_lock()).unwrap();
     let mut incoming = wake(ZellijWakeReason::Alive);
     incoming.topology = Some(topology(unix_now_ms(), Some(writer(2, 200))));
 
     assert!(matches!(
         ingest_zellij_wake(&state, &runtime, &incoming),
         Err(ZellijWakeError::TopologyLock(
-            crate::store::lock::LockErr::Timeout { .. }
+            crate::disk::lock::LockErr::Timeout { .. }
         ))
     ));
 }

@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use crate::RuntimePaths;
 use crate::agents::{AgentState, AgentStatus};
 use crate::config::{HarnessConfig, IdleCompactMode};
+use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
-use crate::store::atomic::write_temp_then_rename_cache;
 use crate::store::snapshot::{SidebarSnapshot, WorktreePrState};
 
 /// Below this fill, re-caching costs less than an extra compaction turn.

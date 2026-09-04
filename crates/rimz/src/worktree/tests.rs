@@ -507,7 +507,7 @@ fn checkout_metadata_marker_reader_follows_relative_gitdir_file() {
         worktree_path: worktree.clone(),
         created_at: jiff::Timestamp::now(),
     };
-    crate::store::atomic::write_temp_then_rename(&admin.join(MARKER_FILE), &marker).unwrap();
+    crate::disk::atomic::write_temp_then_rename(&admin.join(MARKER_FILE), &marker).unwrap();
 
     assert_eq!(
         read_marker_from_checkout_metadata(&worktree)

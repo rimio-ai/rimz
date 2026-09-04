@@ -386,7 +386,7 @@ pub fn stats_path(runtime: &crate::RuntimePaths) -> PathBuf {
 }
 
 pub fn validated_control_path() -> std::result::Result<PathBuf, sock::SocketPathTooLong> {
-    validated_control_path_under(&crate::store::paths::runtime_home(), std::process::id())
+    validated_control_path_under(&crate::disk::paths::runtime_home(), std::process::id())
 }
 
 fn validated_control_path_under(

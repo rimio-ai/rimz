@@ -522,10 +522,11 @@ fn default_wait_keeps_finished_supervised_children() {
 fn stop_preparation_stamps_entire_selected_fleet_before_cancellation() {
     let dir = tempfile::tempdir().expect("state tempdir");
     let workspace_id = rimz::WorkspaceId::from_project_root(dir.path());
-    let state = rimz::store::StatePaths::under(workspace_id.clone(), &dir.path().join("state"))
-        .expect("state paths");
+    let state =
+        rimz::disk::paths::StatePaths::under(workspace_id.clone(), &dir.path().join("state"))
+            .expect("state paths");
     let runtime =
-        rimz::store::RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime"))
+        rimz::disk::paths::RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime"))
             .expect("runtime paths");
     let store = rimz::Store::open(state, runtime).expect("store");
     let mut first =

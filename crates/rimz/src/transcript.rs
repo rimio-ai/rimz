@@ -12,9 +12,9 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::disk::{atomic, lock, paths::StatePaths};
 use crate::ids::AskId;
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
-use crate::store::{StatePaths, atomic, lock};
 
 const FILE_DAYS: u32 = 7;
 const SECONDS_PER_DAY: i64 = 86_400;

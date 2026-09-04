@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 
 use super::overlay_store::{OverlayError, OverlayStore};
 use crate::config::TaskEntry;
+use crate::disk::paths::state_home;
 use crate::harness::schedule::run_log::{LoopRunRecord, LoopRunResult};
-use crate::store::paths::state_home;
 
 const STORE: OverlayStore = OverlayStore::new("loop-strikes.json", "loop-strikes.lock");
 pub(super) const DEFAULT_MAX_STRIKES: u32 = 3;

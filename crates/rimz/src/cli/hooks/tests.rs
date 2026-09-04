@@ -51,8 +51,8 @@ fn hooks_test_store() -> (tempfile::TempDir, rimz::Store) {
     let dir = tempfile::TempDir::new().unwrap();
     let workspace_id =
         rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/hooks-test"));
-    let paths = rimz::store::StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
-    let runtime = rimz::store::RuntimePaths::under(workspace_id, dir.path()).unwrap();
+    let paths = rimz::disk::paths::StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
+    let runtime = rimz::disk::paths::RuntimePaths::under(workspace_id, dir.path()).unwrap();
     let store = rimz::Store::open(paths, runtime).unwrap();
     (dir, store)
 }

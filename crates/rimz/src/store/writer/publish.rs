@@ -5,7 +5,9 @@ use tracing::warn;
 use crate::harness::run::RunRecord;
 use crate::store::event::{EventEnvelope, EventKind};
 
-use super::super::{Result, StatePaths, Store, StoreErr, event_log, lock, snapshot};
+use crate::disk::{lock, paths::StatePaths};
+
+use super::super::{Result, Store, StoreErr, event_log, snapshot};
 use super::debounce::sync_log_debounced;
 
 /// A publish failure caused by a corrupt event-log frame — the one failure

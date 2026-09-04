@@ -215,7 +215,7 @@ pub struct PaneListOptions {
     /// Exact runtime paths to consult for backend-specific latency hints.
     /// Backends that do not have such a hint ignore it. When absent, backends
     /// resolve paths from `workspace_id`.
-    pub runtime_paths: Option<crate::store::RuntimePaths>,
+    pub runtime_paths: Option<crate::disk::paths::RuntimePaths>,
     /// Workspace identity used when `runtime_paths` is absent or when the
     /// backend must ask a room-owned helper to refresh a hint.
     pub workspace_id: Option<WorkspaceId>,
@@ -851,7 +851,7 @@ pub trait MuxBackend: Send + Sync {
     /// geometry read is always live may ignore the floor.
     fn sidebar_width_step(
         &self,
-        runtime: &crate::store::RuntimePaths,
+        runtime: &crate::disk::paths::RuntimePaths,
         session: &str,
         pane: &PaneId,
         min_observed_at_ms: Option<u64>,

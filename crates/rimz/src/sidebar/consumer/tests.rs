@@ -1,5 +1,6 @@
 use super::*;
 use crate::agents::{AgentContext, AgentStatus, AgentTurnError, TurnErrorClass};
+use crate::disk::atomic;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::sidebar::enrich::{FoldOpts, WorkspaceSnapshot, enrich};
 use crate::sidebar::frame::{CarriedPane, assemble_frame};
@@ -7,7 +8,6 @@ use crate::sidebar::refresh::PrStateCache;
 use crate::sidebar::refresh::git_stats::{DiffStatsCache, DiffStatsCacheEntry};
 use crate::sidebar::test_support::{child_agent, pane, pane_in_tab, root_agent};
 use crate::sidebar::timing::unix_now_ms;
-use crate::store::atomic;
 use crate::store::snapshot::{SidebarSnapshot, SidebarWorktreeKind};
 use crate::{RuntimePaths, StatePaths};
 use jiff::Timestamp;

@@ -965,7 +965,7 @@ pub(crate) fn create_on_miss(
         &machine_config.agents,
         &machine_config.subagents.profiles,
         &workspace.project_root,
-        &rimz::store::paths::config_home(),
+        &rimz::disk::paths::config_home(),
     )?;
     if !is_launchable_type(&create.selector, &launch.profiles) {
         launch.block_untrusted_reference(

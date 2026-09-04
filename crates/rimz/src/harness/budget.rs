@@ -21,10 +21,10 @@ use sha2::{Digest, Sha256};
 use crate::RuntimePaths;
 use crate::agents::{AgentState, AgentStatus};
 use crate::config::MachineConfig;
+use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::message::{DeliveryGate, MessageRecord, MessageSender, MessageStatus};
 use crate::store::Store;
-use crate::store::atomic::write_temp_then_rename_cache;
 use crate::store::snapshot::SidebarSnapshot;
 
 pub use crate::harness::auto_continue::clear_budget_park;
@@ -393,9 +393,9 @@ impl DailyBudgetScope {
 #[derive(Debug, thiserror::Error)]
 pub enum ScopeLedgerWriteError {
     #[error(transparent)]
-    Lock(#[from] crate::store::lock::LockErr),
+    Lock(#[from] crate::disk::lock::LockErr),
     #[error(transparent)]
-    Write(#[from] crate::store::atomic::AtomicErr),
+    Write(#[from] crate::disk::atomic::AtomicErr),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1521,7 +1521,7 @@ pub fn write_ledger(
     kind: &AgentKind,
     agent_id: &AgentSessionId,
     ledger: &BudgetLedger,
-) -> crate::store::atomic::Result<()> {
+) -> crate::disk::atomic::Result<()> {
     let path = budget_ledger_path(runtime, kind, agent_id);
     write_temp_then_rename_cache(&path, ledger)
 }
@@ -1554,7 +1554,7 @@ impl ScopeLedgerFile {
     }
 
     fn write<T: Serialize>(&self, value: &T) -> Result<(), ScopeLedgerWriteError> {
-        let _guard = crate::store::lock::WorkspaceLock::acquire(&self.lock_path)?;
+        let _guard = crate::disk::lock::WorkspaceLock::acquire(&self.lock_path)?;
         self.write_unlocked(value)?;
         Ok(())
     }
@@ -1564,7 +1564,7 @@ impl ScopeLedgerFile {
         scope: &DailyBudgetScope,
         parked: Option<BudgetParkStamp>,
     ) -> Result<(), ScopeLedgerWriteError> {
-        let _guard = crate::store::lock::WorkspaceLock::acquire(&self.lock_path)?;
+        let _guard = crate::disk::lock::WorkspaceLock::acquire(&self.lock_path)?;
         let mut current: DailyBudgetLedger = self.read();
         if matches!(scope, DailyBudgetScope::Account(_)) {
             current.override_spec = None;
@@ -1574,7 +1574,7 @@ impl ScopeLedgerFile {
         Ok(())
     }
 
-    fn write_unlocked<T: Serialize>(&self, value: &T) -> crate::store::atomic::Result<()> {
+    fn write_unlocked<T: Serialize>(&self, value: &T) -> crate::disk::atomic::Result<()> {
         write_temp_then_rename_cache(&self.path, value)
     }
 }
@@ -1593,7 +1593,7 @@ pub fn read_scope_state(runtime: &RuntimePaths) -> BudgetScopeState {
 pub fn write_scope_state(
     runtime: &RuntimePaths,
     state: &BudgetScopeState,
-) -> crate::store::atomic::Result<()> {
+) -> crate::disk::atomic::Result<()> {
     write_temp_then_rename_cache(&scope_state_path(runtime), state)
 }
 

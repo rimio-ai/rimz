@@ -177,11 +177,9 @@ pub(crate) fn write_provider_spending_cache_value(
         );
         return true;
     }
-    let _ = crate::store::atomic::sweep_stale_temp_siblings(
-        path,
-        std::time::Duration::from_secs(3_600),
-    );
-    match crate::store::atomic::write_temp_then_rename_cache(path, &cache) {
+    let _ =
+        crate::disk::atomic::sweep_stale_temp_siblings(path, std::time::Duration::from_secs(3_600));
+    match crate::disk::atomic::write_temp_then_rename_cache(path, &cache) {
         Ok(()) => true,
         Err(err) => {
             warn!(
@@ -255,7 +253,7 @@ pub fn write_workspace_spending_cache(path: &Path, cache: &WorkspaceSpendingCach
         );
         return;
     }
-    let _ = crate::store::atomic::write_temp_then_rename_cache(path, &cache);
+    let _ = crate::disk::atomic::write_temp_then_rename_cache(path, &cache);
 }
 
 pub fn read_workspace_spending_cache(path: &Path) -> WorkspaceSpendingCache {

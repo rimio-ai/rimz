@@ -8,6 +8,7 @@ use std::time::Instant;
 
 use crate::diag::DiagSink;
 use crate::diag::record::DiagEvent;
+use crate::disk::paths::RuntimePaths;
 use crate::sidebar::ProducerElectionTracker;
 use crate::sidebar::cache::read_snapshot_cache;
 use crate::sidebar::frame::PaneFrame;
@@ -15,7 +16,6 @@ use crate::sidebar::timing::unix_now_ms;
 use crate::sidebar::timing::{
     OBSERVE_CROSSCHECK_TTL, OBSERVE_DEADPID_CONFIRMATIONS, OBSERVE_HOSTLESS_AGENT_CONFIRMATIONS,
 };
-use crate::store::paths::RuntimePaths;
 use jiff::Timestamp;
 
 use super::{AnomalyDraft, AnomalyKind, ObserveMsg, ObserveRole, RosterSig, cap_vec};

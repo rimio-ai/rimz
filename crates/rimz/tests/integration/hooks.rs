@@ -1266,9 +1266,8 @@ fn cursor_concurrent_subagents_fold_independently_without_context_sidecars() {
     let parent_context = rimz::store::agent_context::new_record("cursor", "cursor-parent", context);
     rimz::store::agent_context::write_record(&env.runtime_paths(), &parent_context)
         .expect("seed parent context");
-    let parent_context_path = env
-        .runtime_paths()
-        .agent_context_path("cursor", "cursor-parent");
+    let parent_context_path =
+        rimz::store::agent_context::path_for(&env.runtime_paths(), "cursor", "cursor-parent");
     let parent_context_before = std::fs::read(&parent_context_path).expect("parent context bytes");
 
     for (id, task, model, branch) in [
@@ -1380,9 +1379,7 @@ fn cursor_concurrent_subagents_fold_independently_without_context_sidecars() {
             "missing child-keyed activity for {id}: {activity:?}",
         );
         assert!(
-            !env.runtime_paths()
-                .agent_context_path("cursor", id)
-                .exists(),
+            !rimz::store::agent_context::path_for(&env.runtime_paths(), "cursor", id).exists(),
             "child lifecycle must not create an agent-context sidecar",
         );
     }
@@ -1880,9 +1877,8 @@ fn codex_subagent_lifecycle_uses_child_agent_identity() {
         rimz::store::agent_context::new_record("codex", "sess-codex-parent", context);
     rimz::store::agent_context::write_record(&env.runtime_paths(), &parent_context)
         .expect("seed parent context");
-    let parent_context_path = env
-        .runtime_paths()
-        .agent_context_path("codex", "sess-codex-parent");
+    let parent_context_path =
+        rimz::store::agent_context::path_for(&env.runtime_paths(), "codex", "sess-codex-parent");
     let parent_context_before = std::fs::read(&parent_context_path).expect("parent context bytes");
 
     let sessions = env.home_root.join(".codex/sessions/2026/06/26");

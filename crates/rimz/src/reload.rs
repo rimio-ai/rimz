@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use crate::config::{MachineConfig, MultiplexerConfig};
 use crate::diag::record::DiagEvent;
+use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::ids::{MuxName, PaneId};
 use crate::mux::recovery;
 use crate::mux::{
@@ -32,7 +33,7 @@ use crate::sidebar::heartbeat::SidebarHeartbeat;
 use crate::sidebar::timing::{
     RECONCILE_LIST_TIMEOUT, RELOAD_CONVERGE_POLL, RELOAD_CONVERGE_TIMEOUT, unix_now_ms,
 };
-use crate::store::{RuntimePaths, StatePaths, workspace_record};
+use crate::store::workspace_record;
 use crate::workspace::{self, KnownWorkspace};
 
 /// Immutable executable generation shared by every long-lived process in a room.
@@ -56,13 +57,13 @@ pub enum StageBuildErr {
         source: io::Error,
     },
     #[error(transparent)]
-    Atomic(#[from] crate::store::atomic::AtomicErr),
+    Atomic(#[from] crate::disk::atomic::AtomicErr),
 }
 
 /// Copy the invoking build into the durable user-scoped build store.
 pub fn stage_current_build() -> Result<StagedBuild, StageBuildErr> {
     let source = current_reexec_target().ok_or(StageBuildErr::MissingSource)?;
-    stage_build_under(&source, &crate::store::paths::state_home())
+    stage_build_under(&source, &crate::disk::paths::state_home())
 }
 
 fn stage_build_under(source: &Path, state_root: &Path) -> Result<StagedBuild, StageBuildErr> {
@@ -71,12 +72,12 @@ fn stage_build_under(source: &Path, state_root: &Path) -> Result<StagedBuild, St
         source: source_err,
     })?;
     let build = crate::build_id::of_bytes(&bytes);
-    let builds_dir = crate::store::paths::builds_dir_under(state_root);
+    let builds_dir = crate::disk::paths::builds_dir_under(state_root);
     let path = builds_dir.join(&build).join("rimz");
     let reusable = path.is_file()
         && crate::build_id::of_file(&path).is_ok_and(|staged_build| staged_build == build);
     if !reusable {
-        crate::store::atomic::write_executable_bytes_atomically(&path, &bytes)?;
+        crate::disk::atomic::write_executable_bytes_atomically(&path, &bytes)?;
     }
     #[cfg(unix)]
     if reusable {
@@ -93,7 +94,7 @@ fn stage_build_under(source: &Path, state_root: &Path) -> Result<StagedBuild, St
 
 fn sweep_unreferenced_builds(state_root: &Path, builds_dir: &Path, keep: &str) {
     let mut referenced = HashSet::from([keep.to_owned()]);
-    let workspaces = crate::store::paths::workspaces_dir_under(state_root);
+    let workspaces = crate::disk::paths::workspaces_dir_under(state_root);
     if let Ok(entries) = fs::read_dir(workspaces) {
         for entry in entries.flatten() {
             let record_path = entry.path().join("workspace.json");
@@ -1172,7 +1173,7 @@ mod tests {
             updated_at: record.updated_at,
         };
 
-        let unreferenced = crate::store::paths::builds_dir_under(dir.path()).join("unused");
+        let unreferenced = crate::disk::paths::builds_dir_under(dir.path()).join("unused");
         std::fs::create_dir_all(&unreferenced).unwrap();
         std::fs::write(unreferenced.join("rimz"), b"unused").unwrap();
         std::fs::File::open(&unreferenced)

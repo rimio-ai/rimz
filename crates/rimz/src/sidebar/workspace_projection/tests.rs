@@ -26,7 +26,7 @@ fn fixture() -> (
     };
     let mut snapshot = SidebarSnapshot::build(workspace_id, Vec::new(), Timestamp::now());
     snapshot.reflects_log = Some(extent);
-    crate::store::atomic::write_temp_then_rename_cache(&state.latest_snapshot, &snapshot).unwrap();
+    crate::disk::atomic::write_temp_then_rename_cache(&state.latest_snapshot, &snapshot).unwrap();
     let mut frame = crate::sidebar::frame::assemble_frame(Vec::new(), 10, "rimz-test");
     frame.topology_stamp_ms = Some(11);
     frame.metrics_stamp_ms = Some(12);
@@ -151,7 +151,7 @@ fn quiet_time_transition_republishes_and_reaches_a_cached_adopter() {
     let mut frame = crate::sidebar::frame::assemble_frame(vec![pane.clone()], 10, "rimz-test");
     frame.topology_stamp_ms = Some(11);
     frame.metrics_stamp_ms = Some(12);
-    crate::store::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame).unwrap();
+    crate::disk::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame).unwrap();
 
     let fold_at = |now: Timestamp| {
         let mut agent = crate::testkit::agent_state("claude", "quiet-agent", last_activity);

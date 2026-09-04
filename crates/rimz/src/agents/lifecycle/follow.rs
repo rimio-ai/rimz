@@ -6,9 +6,10 @@ use std::io;
 
 use super::{LifecycleEvent, LifecycleSignal, LifecycleState, step};
 use crate::agents::AgentState;
+use crate::disk::paths::StatePaths;
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::event::EventKind;
-use crate::store::{StatePaths, event_log, snapshot};
+use crate::store::{event_log, snapshot};
 
 type AgentKey = (AgentKind, AgentSessionId);
 
@@ -231,8 +232,9 @@ fn file_len(path: &std::path::Path) -> Result<u64, LifecycleFollowErr> {
 mod tests {
     use super::*;
     use crate::agents::LifecycleSignal;
+    use crate::disk::paths::RuntimePaths;
     use crate::ids::WorkspaceId;
-    use crate::store::{RuntimePaths, Store, writer::AgentLifecycleIntent};
+    use crate::store::{Store, writer::AgentLifecycleIntent};
 
     fn fixture() -> (tempfile::TempDir, Store, StatePaths) {
         let dir = tempfile::tempdir().unwrap();

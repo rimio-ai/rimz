@@ -231,7 +231,7 @@ fn recover_orders_death_ended_stamp_and_rebirth_then_consumes_roster() {
         serde_json::from_slice(&std::fs::read(&fixture.paths.last_death_marker).unwrap())
             .expect("marker");
     assert_eq!(marker.recovered, Some(1));
-    let assist = crate::harness::assist_log::recent(&crate::store::paths::state_home(), None)
+    let assist = crate::harness::assist_log::recent(&crate::disk::paths::state_home(), None)
         .into_iter()
         .find(|record| {
             matches!(

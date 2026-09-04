@@ -379,10 +379,9 @@ fn lane_recovery_materializes_team_first_and_fails_strictly() {
         panic!("expected closed restore");
     };
     let workspace = crate::ids::WorkspaceId::from_project_root(dir.path());
-    let paths =
-        crate::store::paths::StatePaths::under(workspace.clone(), &dir.path().join("state"))
-            .expect("state paths");
-    let runtime = crate::store::paths::RuntimePaths::under(workspace, &dir.path().join("runtime"))
+    let paths = crate::disk::paths::StatePaths::under(workspace.clone(), &dir.path().join("state"))
+        .expect("state paths");
+    let runtime = crate::disk::paths::RuntimePaths::under(workspace, &dir.path().join("runtime"))
         .expect("runtime paths");
     let store = Store::open(paths, runtime).expect("store");
 

@@ -158,7 +158,7 @@ pub fn resolve_single_agent_launch(
         &machine_config.agents,
         &machine_config.subagents.profiles,
         &workspace.project_root,
-        &crate::store::paths::config_home(),
+        &crate::disk::paths::config_home(),
     )?;
     let layout = match crate::harness::spec::resolve_spec(
         Some(spec),

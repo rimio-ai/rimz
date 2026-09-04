@@ -32,8 +32,8 @@ pub(in crate::sidebar) fn codex_daemon_reap_path(runtime: &RuntimePaths) -> Path
 pub(in crate::sidebar) fn write_codex_daemon_reap(
     runtime: &RuntimePaths,
     cache: &CodexDaemonReap,
-) -> crate::store::atomic::Result<()> {
-    crate::store::atomic::write_temp_then_rename_cache(&codex_daemon_reap_path(runtime), cache)
+) -> crate::disk::atomic::Result<()> {
+    crate::disk::atomic::write_temp_then_rename_cache(&codex_daemon_reap_path(runtime), cache)
 }
 
 pub fn read_codex_daemon_reap(runtime: &RuntimePaths) -> Option<CodexDaemonReap> {

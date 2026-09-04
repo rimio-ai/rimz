@@ -10,6 +10,7 @@ layers = [
     "osc",
     "testkit",
     "update",
+    "disk",
 ],
     [
     "workspace",
@@ -130,6 +131,11 @@ upward-dependencies = [
 surface-budget = 83
 
 [[module]]
+path = "crates/rimz/src/disk"
+allowed-dependencies = ["ids", "sock"]
+surface-budget = 111
+
+[[module]]
 path = "crates/rimz/src/disk_usage.rs"
 surface-budget = 7
 
@@ -155,7 +161,7 @@ surface-budget = 9
 
 [[module]]
 path = "crates/rimz/src/lib.rs"
-surface-budget = 69
+surface-budget = 70
 
 [[module]]
 path = "crates/rimz/src/main.rs"
@@ -325,7 +331,7 @@ allowed-dependencies = [
     "remote",
     "sidebar::notify",
     "sidebar::timing",
-    "store::paths",
+    "disk::paths",
     "tui",
 ]
 surface-budget = 9
@@ -387,6 +393,7 @@ surface-budget = 9
 path = "crates/rimz/src/mux/mount_proof.rs"
 allowed-dependencies = [
     "build_id",
+    "disk::paths",
     "ids",
     "mux",
     "sidebar",
@@ -421,7 +428,7 @@ allowed-dependencies = [
     "mux",
     "sidebar::cache",
     "sidebar::timing",
-    "store::paths",
+    "disk::paths",
     "store::workspace_record",
     "workspace",
 ]
@@ -437,13 +444,14 @@ allowed-dependencies = [
 surface-budget = 26
 
 [[module]]
-path = "crates/rimz/src/store/atomic.rs"
+path = "crates/rimz/src/disk/atomic.rs"
 allowed-dependencies = []
 surface-budget = 18
 
 [[module]]
 path = "crates/rimz/src/store/gc"
 allowed-dependencies = [
+    "disk",
     "disk_usage",
     "ids",
     "sidebar::heartbeat",
@@ -454,7 +462,7 @@ surface-budget = 10
 
 [[module]]
 path = "crates/rimz/src/store/mod.rs"
-allowed-dependencies = ["harness::run"]
+allowed-dependencies = ["disk", "disk::paths", "harness::run"]
 surface-budget = 37
 
 [[module]]
@@ -486,7 +494,7 @@ allowed-dependencies = [
     "ids",
     "mux",
     "proc",
-    "store::paths",
+    "disk::paths",
     "store::writer",
     "workspace",
 ]
@@ -527,6 +535,9 @@ surface-budget = 48
 path = "crates/rimz/src/harness/run.rs"
 allowed-dependencies = [
     "agents",
+    "disk::atomic",
+    "disk::lock",
+    "disk::paths",
     "forge",
     "harness::budget",
     "harness::run_wake",
@@ -539,6 +550,8 @@ surface-budget = 42
 [[module]]
 path = "crates/rimz/src/harness/run/report.rs"
 allowed-dependencies = [
+    "disk::lock",
+    "disk::paths",
     "harness::run",
     "ids",
     "store",
@@ -548,6 +561,7 @@ surface-budget = 2
 [[module]]
 path = "crates/rimz/src/harness/run_wake.rs"
 allowed-dependencies = [
+    "disk::paths",
     "harness::run",
     "ids",
     "sock",
@@ -559,6 +573,8 @@ surface-budget = 11
 path = "crates/rimz/src/harness/prompt_compose.rs"
 allowed-dependencies = [
     "agents",
+    "disk::atomic",
+    "disk::paths",
     "harness::spec",
     "ids",
     "proc",
@@ -578,7 +594,7 @@ allowed-dependencies = [
     "harness::schedule",
     "ids",
     "proc",
-    "store::paths",
+    "disk::paths",
     "utils::time",
     "workspace",
 ]

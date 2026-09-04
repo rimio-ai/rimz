@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::store::atomic;
+use crate::disk::atomic;
 
 use super::hook_types::HookEventSpec;
 use super::managed_json_hooks::ManagedJsonHookSpec;

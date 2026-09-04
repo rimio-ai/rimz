@@ -305,7 +305,7 @@ pub trait LaunchCapability: CoreCapability {
 
     /// Environment a newly-born room exports for direct agent launches. The
     /// mux layer carries this opaque map; provider policy stays in adapters.
-    fn room_env(&self, _runtime: &crate::store::RuntimePaths) -> BTreeMap<String, String> {
+    fn room_env(&self, _runtime: &crate::disk::paths::RuntimePaths) -> BTreeMap<String, String> {
         BTreeMap::new()
     }
 }

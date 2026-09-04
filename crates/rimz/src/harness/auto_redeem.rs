@@ -20,9 +20,9 @@ use crate::agents::account::{
 };
 use crate::agents::{AccountUsageSnapshot, RateLimitWindow, ResetCredits};
 use crate::config::ResumeConfig;
+use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::harness::assist_log::AssistWindowReset;
 use crate::ids::{AgentKind, WorkspaceId};
-use crate::store::atomic::write_temp_then_rename_cache;
 use crate::store::snapshot::SidebarProviderPanel;
 
 const CODEX_KIND: &str = "codex";
@@ -85,9 +85,9 @@ pub enum AutoRedeemErr {
     #[error("auto-redeem supports only the `codex` provider, not `{0}`")]
     UnsupportedKind(String),
     #[error("locking the shared auto-redeem attempt: {0}")]
-    Lock(#[from] crate::store::lock::LockErr),
+    Lock(#[from] crate::disk::lock::LockErr),
     #[error("writing the shared auto-redeem stamp: {0}")]
-    Stamp(#[from] crate::store::atomic::AtomicErr),
+    Stamp(#[from] crate::disk::atomic::AtomicErr),
     #[error("Codex auto-redeem request failed: {0}")]
     Codex(String),
     #[error("{error}")]
@@ -339,11 +339,11 @@ fn reserve_attempt(
     now: Timestamp,
     request_id: &str,
 ) -> bool {
-    let Some(_guard) = crate::store::lock::WorkspaceLock::try_acquire(
-        &runtime.shared_auto_redeem_lock(CODEX_KIND),
-    )
-    .ok()
-    .flatten() else {
+    let Some(_guard) =
+        crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_auto_redeem_lock(CODEX_KIND))
+            .ok()
+            .flatten()
+    else {
         return false;
     };
     let stamp_path = runtime.shared_auto_redeem_path(CODEX_KIND);
@@ -363,11 +363,11 @@ fn reserve_attempt(
 }
 
 fn cancel_attempt_reservation(runtime: &RuntimePaths, request_id: &str) {
-    let Some(_guard) = crate::store::lock::WorkspaceLock::try_acquire(
-        &runtime.shared_auto_redeem_lock(CODEX_KIND),
-    )
-    .ok()
-    .flatten() else {
+    let Some(_guard) =
+        crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_auto_redeem_lock(CODEX_KIND))
+            .ok()
+            .flatten()
+    else {
         return;
     };
     let stamp_path = runtime.shared_auto_redeem_path(CODEX_KIND);
@@ -437,7 +437,7 @@ pub fn execute_auto_redeem(
     let request_id = request_id.to_string();
 
     let _guard =
-        crate::store::lock::WorkspaceLock::acquire(&runtime.shared_auto_redeem_lock(CODEX_KIND))?;
+        crate::disk::lock::WorkspaceLock::acquire(&runtime.shared_auto_redeem_lock(CODEX_KIND))?;
     let stamp_path = runtime.shared_auto_redeem_path(CODEX_KIND);
     let now = Timestamp::now();
     let prior_stamp = read_stamp(&stamp_path);

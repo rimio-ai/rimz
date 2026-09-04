@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use super::overlay_store::{OverlayStore, Result};
 use crate::config::{TaskEntry, Tasks};
-use crate::store::paths::state_home;
+use crate::disk::paths::state_home;
 use anyhow::Context;
 
 const STORE: OverlayStore = OverlayStore::new("loop-instances.json", "loop-instances.lock");

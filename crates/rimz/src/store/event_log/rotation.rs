@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime};
 
 use uuid::Uuid;
 
-use crate::store::atomic::{self, sync_dir};
+use crate::disk::atomic::{self, sync_dir};
 
 use super::{EventLogErr, Result};
 

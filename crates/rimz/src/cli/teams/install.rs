@@ -82,7 +82,7 @@ pub(super) fn run(args: InstallArgs) -> Result<()> {
         }
     })?;
     let files = download_bundle(&agent, entries)?;
-    let dir = rimz::store::paths::agents_home().join("teams").join(name);
+    let dir = rimz::disk::paths::agents_home().join("teams").join(name);
     write_bundle(&dir, &files, args.force)?;
 
     let mut out = render::out();
@@ -271,7 +271,7 @@ fn write_bundle(dir: &Path, files: &[(String, String)], force: bool) -> Result<(
         }
     }
     for (name, contents) in files {
-        rimz::store::atomic::write_bytes_atomically(&dir.join(name), contents.as_bytes())
+        rimz::disk::atomic::write_bytes_atomically(&dir.join(name), contents.as_bytes())
             .with_context(|| format!("writing team bundle file {name}"))?;
     }
     Ok(())

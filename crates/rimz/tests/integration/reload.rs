@@ -11,11 +11,11 @@ use std::process::Command;
 use std::time::Duration;
 
 use jiff::Timestamp;
+use rimz::disk::paths::RuntimePaths;
 use rimz::ids::{MuxName, SidebarInstanceId, WorkspaceId};
 use rimz::sidebar::events::RELOAD_CONTROL_WORD;
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use rimz::sidebar::wakeup::reload_all;
-use rimz::store::RuntimePaths;
 
 use crate::common::Env;
 

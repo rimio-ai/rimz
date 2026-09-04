@@ -71,12 +71,12 @@ impl ProcessDomain {
         let path = |key| get(key).map(PathBuf::from);
         let tmpdir = path("TMPDIR").unwrap_or_else(|| PathBuf::from("/tmp"));
         let xdg_runtime = path("XDG_RUNTIME_DIR");
-        let state_home = crate::store::paths::state_home_from(
+        let state_home = crate::disk::paths::state_home_from(
             path("XDG_STATE_HOME").as_deref(),
             path("HOME").as_deref(),
             &tmpdir,
         );
-        let runtime_home = crate::store::paths::runtime_home_from(xdg_runtime.as_deref(), uid);
+        let runtime_home = crate::disk::paths::runtime_home_from(xdg_runtime.as_deref(), uid);
         let zellij_socket_base = crate::mux::zellij::socket::socket_base_from(
             path("ZELLIJ_SOCKET_DIR").as_deref(),
             xdg_runtime.as_deref(),
@@ -173,7 +173,7 @@ mod tests {
         // process outside any tmux falls back to the same endpoint, so the
         // sweep recognizes both as its own.
         let managed = crate::mux::tmux::managed_server_socket_path_under(
-            &crate::store::paths::runtime_home_from(Some(Path::new("/run/user/1000")), UID),
+            &crate::disk::paths::runtime_home_from(Some(Path::new("/run/user/1000")), UID),
         );
         let explicit = domain(&[
             ("XDG_RUNTIME_DIR", "/run/user/1000"),

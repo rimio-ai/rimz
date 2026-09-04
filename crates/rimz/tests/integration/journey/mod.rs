@@ -237,7 +237,7 @@ impl<'a> RoomHarness<'a> {
     pub fn publish_link_stats(&self, stats: &rimz::remote::link::LinkStatsFile) {
         let paths = rimz::RuntimePaths::under(self.env.workspace_id.clone(), self.runtime.path())
             .expect("runtime paths");
-        rimz::store::atomic::write_temp_then_rename_cache(
+        rimz::disk::atomic::write_temp_then_rename_cache(
             &rimz::remote::link::stats_path(&paths),
             stats,
         )

@@ -12,9 +12,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use jiff::Timestamp;
 use serde::Serialize;
 
+use crate::disk::paths::RuntimePaths;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::store::active_time;
-use crate::store::paths::RuntimePaths;
 use crate::transcript::{TranscriptEntry, TranscriptKind};
 
 use super::{AgentState, pricing, spending};

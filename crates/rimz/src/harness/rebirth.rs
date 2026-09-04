@@ -9,6 +9,7 @@ use jiff::Timestamp;
 
 use crate::agents::AgentState;
 use crate::config::{MachineConfig, ProfilesConfig, TeamsConfig};
+use crate::disk::paths::{RuntimePaths, StatePaths, cache_home, config_home};
 use crate::harness::resume::{
     MaterializedRecovery, RecoveryMaterializer, RecoveryPlan, ResumePlan, plan_resume_detailed,
     resume_session_present, split_team_and_flat,
@@ -16,7 +17,6 @@ use crate::harness::resume::{
 use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
 use crate::mux::{MuxBackend, ResumeTab};
 use crate::store::event::{LastDeathMarker, SessionDeathAgent, SessionDeathCause};
-use crate::store::paths::{RuntimePaths, StatePaths, cache_home, config_home};
 use crate::{Store, channel};
 
 const CRASH_ARCHIVE_RETENTION: usize = 5;
@@ -536,7 +536,7 @@ fn append_session_death(
 }
 
 fn write_last_death_marker(paths: &StatePaths, marker: &LastDeathMarker) {
-    if let Err(err) = crate::store::atomic::write_temp_then_rename(&paths.last_death_marker, marker)
+    if let Err(err) = crate::disk::atomic::write_temp_then_rename(&paths.last_death_marker, marker)
     {
         tracing::debug!(path = %paths.last_death_marker.display(), error = %err, "last death marker write skipped");
     }
@@ -606,7 +606,7 @@ fn archive_crash(
     std::fs::create_dir_all(&mux_cache)
         .with_context(|| format!("creating crash archive {}", mux_cache.display()))?;
     write_cache_snapshot(cache, &mux_cache)?;
-    crate::store::atomic::write_temp_then_rename(&archive.join("roster.json"), &roster)
+    crate::disk::atomic::write_temp_then_rename(&archive.join("roster.json"), &roster)
         .with_context(|| format!("writing crash roster {}", archive.display()))?;
     prune_crash_archives(&paths.crashes_dir)
 }
@@ -793,7 +793,7 @@ fn write_boot_marker(path: &Path, boot_id: &str) {
     let marker = BootMarker {
         boot_id: boot_id.to_owned(),
     };
-    if let Err(err) = crate::store::atomic::write_temp_then_rename_cache(path, &marker) {
+    if let Err(err) = crate::disk::atomic::write_temp_then_rename_cache(path, &marker) {
         tracing::debug!(path = %path.display(), error = %err, "boot marker write skipped");
     }
 }

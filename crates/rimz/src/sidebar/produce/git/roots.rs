@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::disk::atomic;
 use crate::sidebar::refresh::git_stats::{WorktreeRootsCache, read_diff_stats_cache};
 use crate::sidebar::timing::unix_now_ms;
-use crate::store::atomic;
 use crate::workspace::RootClass;
 
 /// The room's enumerated group roots, so a repo checkout parked outside the

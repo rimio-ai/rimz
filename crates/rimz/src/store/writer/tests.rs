@@ -4,10 +4,10 @@ use serde_json::json;
 
 use super::*;
 use crate::agents::{AgentLifecycleObservation, AgentState, LifecycleSignal};
+use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
 use crate::message::{DeliveryGate, MessageRecord, MessageStatus};
 use crate::store::event::MessageEventMethod;
-use crate::store::paths::{RuntimePaths, StatePaths};
 use crate::workspace::WorkspaceResolver;
 
 #[derive(Default, serde::Deserialize, serde::Serialize)]
@@ -23,7 +23,7 @@ fn read_test_carryover(path: &Path) -> CarryoverJson {
 }
 
 fn write_test_carryover(path: &Path, agents: Vec<AgentState>) {
-    crate::store::atomic::write_temp_then_rename(
+    crate::disk::atomic::write_temp_then_rename(
         path,
         &CarryoverJson {
             agents,
@@ -445,7 +445,7 @@ fn record_room_bin_publishes_a_sweep_safe_spawn_path() {
     let store = Store::open(paths.clone(), runtime).expect("open store");
     let first_dir = dir.path().join("builds/first");
     let first = first_dir.join("rimz");
-    crate::store::atomic::write_executable_bytes_atomically(&first, b"first build")
+    crate::disk::atomic::write_executable_bytes_atomically(&first, b"first build")
         .expect("write first build");
 
     store
@@ -464,7 +464,7 @@ fn record_room_bin_publishes_a_sweep_safe_spawn_path() {
     assert_eq!(preserved.rimz_build.as_deref(), Some("build-1"));
 
     let second = dir.path().join("builds/second/rimz");
-    crate::store::atomic::write_executable_bytes_atomically(&second, b"second build")
+    crate::disk::atomic::write_executable_bytes_atomically(&second, b"second build")
         .expect("write second build");
     store
         .record_room_bin(&workspace, second.clone(), "build-2".to_owned())

@@ -65,7 +65,7 @@ fn bin_name(stem: &str) -> String {
 /// replacement at the stripped path instead of failing until the process
 /// restarts.
 pub fn rimz_exe() -> PathBuf {
-    crate::store::paths::env_path("RIMZ_BIN")
+    crate::disk::paths::env_path("RIMZ_BIN")
         .or_else(|| {
             std::env::current_exe()
                 .ok()

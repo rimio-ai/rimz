@@ -491,9 +491,9 @@ fn is_older_than(path: &Path, older_than: Duration) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::disk::paths::RuntimePaths;
     use crate::ids::{MuxName, SidebarInstanceId};
     use crate::sidebar::heartbeat::SidebarHeartbeat;
-    use crate::store::RuntimePaths;
     use tempfile::tempdir;
 
     #[test]

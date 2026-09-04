@@ -15,9 +15,9 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+use crate::disk::parse_cache::StampedPath;
+use crate::disk::{atomic, paths::RuntimePaths};
 use crate::ids::SidebarInstanceId;
-use crate::store::parse_cache::StampedPath;
-use crate::store::{RuntimePaths, atomic};
 
 const MANUAL_READ_MARKS_FILE: &str = "manual.json";
 const READ_MARKS_GENERATION_FILE: &str = "generation.json";

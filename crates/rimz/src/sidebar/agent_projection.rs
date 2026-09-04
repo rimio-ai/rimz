@@ -11,10 +11,10 @@ use std::time::UNIX_EPOCH;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::LocalSessionObservation;
+use crate::disk::parse_cache::ParseCache;
+use crate::disk::paths::RuntimePaths;
 use crate::ids::AgentKind;
 use crate::pane::PaneRef;
-use crate::store::RuntimePaths;
-use crate::store::parse_cache::ParseCache;
 
 /// Agent kinds admitted for sessionless idle synthesis and their launch-model
 /// fallbacks, in adapter display order.
@@ -343,7 +343,7 @@ fn publish_if_changed(
     path: &Path,
     published: &AgentProjectionPublication,
     on_changed: impl FnOnce(),
-) -> crate::store::atomic::Result<bool> {
+) -> crate::disk::atomic::Result<bool> {
     if std::fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<AgentProjectionPublication>(&bytes).ok())
@@ -352,7 +352,7 @@ fn publish_if_changed(
     {
         return Ok(false);
     }
-    crate::store::atomic::write_temp_then_rename_cache(path, published)?;
+    crate::disk::atomic::write_temp_then_rename_cache(path, published)?;
     on_changed();
     Ok(true)
 }
@@ -560,7 +560,7 @@ mod tests {
                 .kinds
                 .is_empty()
         );
-        crate::store::atomic::write_temp_then_rename_cache(
+        crate::disk::atomic::write_temp_then_rename_cache(
             &runtime.agent_projection_path(),
             &AgentProjectionPublication {
                 session_name: "other".to_owned(),

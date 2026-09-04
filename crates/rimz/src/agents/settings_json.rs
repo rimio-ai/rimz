@@ -4,7 +4,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
-use crate::store::atomic;
+use crate::disk::atomic;
 
 use super::{AgentErr, Result};
 

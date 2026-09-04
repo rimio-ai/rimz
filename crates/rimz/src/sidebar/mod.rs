@@ -46,15 +46,15 @@ use std::time::{Duration, SystemTime};
 
 use tracing::debug;
 
+use crate::disk::atomic;
+use crate::disk::paths::RuntimePaths;
+use crate::disk::single_flight::{self, Coalesced};
 use crate::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use crate::mux::{DaemonView, MuxBackend, SidebarLiveness, SidebarPaneOptions};
 use crate::sidebar::heartbeat::{
     SIDEBAR_PROTOCOL_VERSION, SidebarHeartbeat, read_current_heartbeats,
 };
 use crate::sidebar::timing::{HEARTBEAT_WRITE_INTERVAL, SIDEBAR_HEARTBEAT_TTL};
-use crate::store::RuntimePaths;
-use crate::store::atomic;
-use crate::store::single_flight::{self, Coalesced};
 
 /// Launch-lock poll cadence: the producer holds the election lock while the
 /// daemon it spawned starts and publishes its first heartbeat, and a peer queued

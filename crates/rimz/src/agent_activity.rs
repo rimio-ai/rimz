@@ -27,9 +27,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::debug;
 
+use crate::disk::atomic;
+use crate::disk::paths::RuntimePaths;
 use crate::ids::{AgentKind, AgentSessionId};
-use crate::store::RuntimePaths;
-use crate::store::atomic;
 
 /// One agent's most recent progress timestamp. The identity rides inside the
 /// file so the reader can fold it onto the rollup; the filename is a digest of
