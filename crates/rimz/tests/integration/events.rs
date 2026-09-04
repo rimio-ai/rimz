@@ -49,6 +49,24 @@ fn events_emit_is_durable_and_replayed_by_follow() {
     assert_eq!(event["payload"]["revision"], 42);
 }
 
+#[test]
+fn events_emit_rejects_reserved_names_and_non_object_payloads() {
+    let env = Env::new();
+    for (args, expected) in [
+        (vec!["events", "emit", "agent.idle"], "reserved for RimZ"),
+        (vec!["events", "emit", "wake.task"], "reserved for RimZ"),
+        (
+            vec!["events", "emit", "deploy.finished", "--json", "[]"],
+            "must be a JSON object",
+        ),
+    ] {
+        let output = env.rimz().args(args).output().expect("emit invalid signal");
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(expected), "{stderr}");
+    }
+}
+
 fn append(env: &Env, signal: LifecycleSignal) {
     let store = env.store();
     let observation =

@@ -362,6 +362,21 @@ fn emitted_signal_reaches_the_matching_wake_consumer() {
         show.contains(&format!("message: {}", message.message_id)),
         "{show}"
     );
+
+    loop_ok(&env, &["loop", "disable", "ci-wake"]);
+    loop_ok(
+        &env,
+        &[
+            "events",
+            "emit",
+            "ci.finished",
+            "--json",
+            r#"{"conclusion":"failure"}"#,
+        ],
+    );
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(read_loop_run_records(&env).len(), 1);
+    assert_eq!(env.store().list_pending_messages().unwrap().len(), 1);
 }
 
 #[test]
