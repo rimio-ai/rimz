@@ -1490,6 +1490,119 @@ fn message_warns_when_ignoring_buffered_stdin() {
 }
 
 #[test]
+fn bare_resumed_agent_message_is_attributed_by_process_ancestry() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    env.install_agent_hooks("codex");
+    trust_codex_hooks(&env);
+    let receiver_owner = dummy_agent_process();
+    let receiver_owner_pid = receiver_owner.id();
+    reap_later(receiver_owner);
+    register_running_agent_owned_by(
+        &env,
+        "codex",
+        "sess-codex-bare-receiver",
+        "project",
+        &[("ZELLIJ_PANE_ID", TRACE_PANE)],
+        receiver_owner_pid,
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "codex")]);
+
+    let trace_name = "zellij-bare-resumed-agent-trace.log";
+    let mut traced = traced_rimz(&env, trace_name);
+    traced.env("RIMZ_TEST_PANE_LIST", pane_fixture);
+    let mut provider = std::process::Command::new("sh");
+    provider
+        .args([
+            "-c",
+            "read _; \"$0\" message --steer @sess-codex-bare-receiver -- ping",
+        ])
+        .arg(env.rimz_bin());
+    for (key, value) in traced.get_envs() {
+        if let Some(value) = value {
+            provider.env(key, value);
+        } else {
+            provider.env_remove(key);
+        }
+    }
+    if let Some(dir) = traced.get_current_dir() {
+        provider.current_dir(dir);
+    }
+    scrub_bare_agent_identity(&mut provider);
+    let mut provider = provider
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn stand-in provider");
+
+    register_running_agent_owned_by(
+        &env,
+        "claude",
+        "sess-claude-bare",
+        "project",
+        &[("ZELLIJ_PANE_ID", "terminal_4")],
+        provider.id(),
+    );
+    provider
+        .stdin
+        .take()
+        .expect("provider stdin")
+        .write_all(b"\n")
+        .expect("signal provider");
+    let output = wait_with_output_bounded(provider, Duration::from_secs(2));
+    assert!(
+        output.status.success(),
+        "stand-in provider failed\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let delivered = "Type: AGENT_MESSAGE\nFrom: @claude\nContent:\nping";
+    let trace_log = env.project_root.join(trace_name);
+    assert_text_then_enter(&trace_log, delivered);
+    let sent = env
+        .read_events()
+        .into_iter()
+        .rev()
+        .find(|event| event.method == "message.sent")
+        .expect("sent event");
+    let params = sent.params_value();
+    assert_eq!(params["sender"]["origin"], "agent");
+    assert_eq!(params["sender"]["kind"], "claude");
+
+    run_hook_for_owner(
+        &env,
+        "codex",
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-codex-bare-receiver",
+            "prompt": delivered,
+            "worktree_branch": "project",
+        }),
+        &[("ZELLIJ_PANE_ID", TRACE_PANE)],
+        receiver_owner_pid,
+    );
+    let entries = rimz::transcript::read_all(env.store().paths()).expect("read transcript");
+    let message = entries
+        .iter()
+        .find(|entry| {
+            entry.agent_id.as_str() == "sess-codex-bare-receiver"
+                && entry.entry == rimz::transcript::TranscriptKind::Message
+        })
+        .expect("receiver message entry");
+    assert_eq!(message.from.as_deref(), Some("@claude"));
+    assert_eq!(message.text, "ping");
+
+    let rendered = run_success(
+        env.rimz().args(["transcript", "#project"]),
+        "receiver transcript",
+    );
+    let rendered = String::from_utf8_lossy(&rendered.stdout);
+    assert!(rendered.contains("@claude → @codex"), "{rendered}");
+}
+
+#[test]
 fn steer_formats_human_and_agent_senders_and_no_from_stays_verbatim() {
     let env = Env::new();
     register_running_agent(
@@ -3558,6 +3671,42 @@ fn register_running_agent(env: &Env, session_id: &str, branch: &str, pane_env: &
     );
 }
 
+fn register_running_agent_owned_by(
+    env: &Env,
+    kind: &str,
+    session_id: &str,
+    branch: &str,
+    pane_env: &[(&str, &str)],
+    owner_pid: u32,
+) {
+    let worktree_path = env.home_root.join(branch).display().to_string();
+    run_hook_for_owner(
+        env,
+        kind,
+        json!({
+            "hook_event_name": "SessionStart",
+            "session_id": session_id,
+            "worktree_branch": branch,
+            "worktree_path": worktree_path.as_str(),
+        }),
+        pane_env,
+        owner_pid,
+    );
+    run_hook_for_owner(
+        env,
+        kind,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": session_id,
+            "prompt": "work",
+            "worktree_branch": branch,
+            "worktree_path": worktree_path.as_str(),
+        }),
+        pane_env,
+        owner_pid,
+    );
+}
+
 fn register_role_agent(
     env: &Env,
     kind: &str,
@@ -3853,14 +4002,24 @@ fn seed_rate_limit_budget(env: &Env, used_percentage: u8) {
 }
 
 fn run_hook(env: &Env, payload: serde_json::Value, pane_env: &[(&str, &str)]) {
-    let mut payload = payload;
-    stamp_worktree_path(env, &mut payload);
-    let payload = serde_json::to_string(&payload).expect("payload");
-    let mut cmd = env.hook_command("claude");
-    scrub_launch_identity(&mut cmd);
     let owner = dummy_agent_process();
     let owner_pid = owner.id();
     reap_later(owner);
+    run_hook_for_owner(env, "claude", payload, pane_env, owner_pid);
+}
+
+fn run_hook_for_owner(
+    env: &Env,
+    source: &str,
+    payload: serde_json::Value,
+    pane_env: &[(&str, &str)],
+    owner_pid: u32,
+) {
+    let mut payload = payload;
+    stamp_worktree_path(env, &mut payload);
+    let payload = serde_json::to_string(&payload).expect("payload");
+    let mut cmd = env.hook_command(source);
+    scrub_launch_identity(&mut cmd);
     cmd.env("RIMZ_AGENT_PID", owner_pid.to_string());
     for (key, value) in pane_env {
         cmd.env(key, value);
@@ -3902,6 +4061,17 @@ fn scrub_launch_identity(cmd: &mut std::process::Command) {
         rimz::harness::launch::ENV_AGENT_EFFORT,
     ] {
         cmd.env(key, "");
+    }
+}
+
+fn scrub_bare_agent_identity(cmd: &mut std::process::Command) {
+    scrub_launch_identity(cmd);
+    for key in [
+        rimz::harness::launch::ENV_AGENT_ID,
+        rimz::harness::launch::ENV_AGENT_KIND,
+        "RIMZ_AGENT_PID",
+    ] {
+        cmd.env_remove(key);
     }
 }
 
