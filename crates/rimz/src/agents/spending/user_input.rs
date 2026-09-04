@@ -39,7 +39,7 @@ pub fn append_in(state_root: &Path, record: &UserInputRecord) {
         let origin = crate::worktree::normalize_path_lexical(origin);
         origin.is_absolute().then_some(origin)
     });
-    crate::diag::rotating::append(&log_path(state_root), MAX_BYTES, &record);
+    crate::disk::rotating::append(&log_path(state_root), MAX_BYTES, &record);
 }
 
 pub fn load() -> Vec<UserInputRecord> {
@@ -49,7 +49,7 @@ pub fn load() -> Vec<UserInputRecord> {
 pub fn load_in(state_root: &Path) -> Vec<UserInputRecord> {
     let path = log_path(state_root);
     let mut records = Vec::new();
-    crate::diag::rotating::visit_records(&path, |record: UserInputRecord| {
+    crate::disk::rotating::visit_records(&path, |record: UserInputRecord| {
         records.push(record);
     });
     records
@@ -62,7 +62,7 @@ pub fn signature() -> u64 {
 pub fn signature_in(state_root: &Path) -> u64 {
     let path = log_path(state_root);
     let mut hasher = DefaultHasher::new();
-    FileStamp::of(&crate::diag::rotating::rotated_path(&path)).hash(&mut hasher);
+    FileStamp::of(&crate::disk::rotating::rotated_path(&path)).hash(&mut hasher);
     FileStamp::of(&path).hash(&mut hasher);
     hasher.finish()
 }
@@ -102,7 +102,7 @@ mod tests {
         let path = log_path(dir.path());
         std::fs::create_dir_all(path.parent().expect("log parent")).expect("mkdir log parent");
         std::fs::write(
-            crate::diag::rotating::rotated_path(&path),
+            crate::disk::rotating::rotated_path(&path),
             serde_json::to_string(&record(10, Some("/tmp/one"))).expect("json") + "\n",
         )
         .expect("write rotated");

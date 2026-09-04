@@ -104,7 +104,7 @@ pub fn append(record: &AssistRecord) {
 
 pub fn recent(state_root: &Path, since: Option<Timestamp>) -> Vec<AssistRecord> {
     let mut records = Vec::new();
-    crate::diag::rotating::visit_records(&log_path(state_root), |record: AssistRecord| {
+    crate::disk::rotating::visit_records(&log_path(state_root), |record: AssistRecord| {
         if since.is_none_or(|since| record.at >= since) {
             records.push(record);
         }
@@ -114,7 +114,7 @@ pub fn recent(state_root: &Path, since: Option<Timestamp>) -> Vec<AssistRecord> 
 }
 
 fn append_to(state_root: &Path, record: &AssistRecord, max_bytes: u64) {
-    crate::diag::rotating::append(&log_path(state_root), max_bytes, record);
+    crate::disk::rotating::append(&log_path(state_root), max_bytes, record);
 }
 
 #[cfg(test)]

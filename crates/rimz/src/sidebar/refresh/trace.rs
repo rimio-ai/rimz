@@ -66,7 +66,7 @@ pub(super) fn record<'a>(runtime: &RuntimePaths, event: impl FnOnce() -> TraceEv
     let Some(path) = trace_path(runtime) else {
         return;
     };
-    crate::diag::rotating::append(
+    crate::disk::rotating::append(
         &path,
         TRACE_MAX_BYTES,
         &TraceRecord {

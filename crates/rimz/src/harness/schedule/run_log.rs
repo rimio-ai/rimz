@@ -229,12 +229,12 @@ fn append(record: &LoopRunRecord) {
 
 fn append_to(state_root: &Path, record: &LoopRunRecord) {
     let capped = capped_record(record);
-    crate::diag::rotating::append(&log_path(state_root), MAX_BYTES, &capped);
+    crate::disk::rotating::append(&log_path(state_root), MAX_BYTES, &capped);
 }
 
 pub fn stats(state_root: &Path, now: &Zoned) -> BTreeMap<String, LoopRunStats> {
     let mut stats = BTreeMap::new();
-    crate::diag::rotating::visit_records(&log_path(state_root), |record: LoopRunRecord| {
+    crate::disk::rotating::visit_records(&log_path(state_root), |record: LoopRunRecord| {
         fold_record(record, now, &mut stats);
     });
     stats
@@ -242,7 +242,7 @@ pub fn stats(state_root: &Path, now: &Zoned) -> BTreeMap<String, LoopRunStats> {
 
 pub fn task_records(state_root: &Path, task: &str) -> Vec<LoopRunRecord> {
     let mut records = Vec::new();
-    crate::diag::rotating::visit_records(&log_path(state_root), |record: LoopRunRecord| {
+    crate::disk::rotating::visit_records(&log_path(state_root), |record: LoopRunRecord| {
         if record.task == task {
             records.push(record);
         }
@@ -537,8 +537,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let old = record("morning", 10, LoopRunResult::Completed);
         let new = record("other", 30, LoopRunResult::Completed);
-        crate::diag::rotating::append(&log_path(dir.path()), 1, &old);
-        crate::diag::rotating::append(&log_path(dir.path()), 1, &new);
+        crate::disk::rotating::append(&log_path(dir.path()), 1, &old);
+        crate::disk::rotating::append(&log_path(dir.path()), 1, &new);
 
         assert_eq!(task_records(dir.path(), "morning"), vec![old]);
         assert_eq!(task_records(dir.path(), "other"), vec![new]);
@@ -639,12 +639,12 @@ mod tests {
     #[test]
     fn stats_folds_rotated_sibling_and_keeps_newest_last() {
         let dir = tempfile::tempdir().expect("tempdir");
-        crate::diag::rotating::append(
+        crate::disk::rotating::append(
             &log_path(dir.path()),
             1,
             &record("wake", 20, LoopRunResult::Completed),
         );
-        crate::diag::rotating::append(
+        crate::disk::rotating::append(
             &log_path(dir.path()),
             1,
             &record("wake", 10, LoopRunResult::Failed),
@@ -669,12 +669,12 @@ mod tests {
     #[test]
     fn stats_tracks_matching_result_streak_across_rotated_and_current_files() {
         let dir = tempfile::tempdir().expect("tempdir");
-        crate::diag::rotating::append(
+        crate::disk::rotating::append(
             &log_path(dir.path()),
             1,
             &record("wake", 10, LoopRunResult::Failed),
         );
-        crate::diag::rotating::append(
+        crate::disk::rotating::append(
             &log_path(dir.path()),
             1,
             &record("wake", 20, LoopRunResult::Failed),

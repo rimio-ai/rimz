@@ -43,7 +43,7 @@ fn log_path(state_root: &Path) -> PathBuf {
 }
 
 fn append_to(state_root: &Path, record: &FocusRepairRecord) {
-    crate::diag::rotating::append(&log_path(state_root), MAX_BYTES, record);
+    crate::disk::rotating::append(&log_path(state_root), MAX_BYTES, record);
 }
 
 /// Hand focus-repair evidence to a detached CLI writer so the renderer stays
@@ -88,7 +88,7 @@ pub enum FocusRepairParseError {
 
 pub fn recent(state_root: &Path) -> Vec<FocusRepairRecord> {
     let mut records = Vec::new();
-    crate::diag::rotating::visit_records(&log_path(state_root), |record: FocusRepairRecord| {
+    crate::disk::rotating::visit_records(&log_path(state_root), |record: FocusRepairRecord| {
         records.push(record);
     });
     records.sort_by_key(|record| record.at);
