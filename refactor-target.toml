@@ -72,7 +72,7 @@ upward-dependencies = [
     "mux",
     "worktree",
 ]
-surface-budget = 972
+surface-budget = 970
 
 [[module]]
 path = "crates/rimz/src/bin"
