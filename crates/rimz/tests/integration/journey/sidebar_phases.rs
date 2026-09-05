@@ -12,13 +12,12 @@ use super::{
 };
 use crate::common::Env;
 
-/// Phase 0 → 1 onboarding. Running a provider-store-discoverable agent before
-/// wiring its hooks is not invisible: the pane is live, so local discovery
-/// synthesizes an identity-less `○ codex` agent row with the default model. The
-/// provider store supplies session existence, while the missing hook means no
-/// durable role or lifecycle reaches the store. After `rimz hooks install`, a
-/// fresh `SessionStart` stamps the row with its configured role. The room is
-/// deliberately correct to require explicit hook installation (RimZ never
+/// Phase 0 → 1 onboarding. Running a discovery-capable agent before wiring its
+/// hooks is not invisible: the live pane synthesizes an identity-less `○ codex`
+/// agent row. With no configured model or installed hook, the row has no guessed
+/// model, durable role, or lifecycle. After `rimz hooks install`, a fresh
+/// `SessionStart` stamps the row with its configured role and observed model.
+/// The room deliberately requires explicit hook installation (RimZ never
 /// silently rewrites the user's agent config).
 ///
 /// The harness fires agents through their *installed* hook, so an un-onboarded
@@ -36,19 +35,18 @@ fn phase0_provider_discovery_then_hook_wires_role() {
     let _screen = room.wait_for(|s| s.contains("◎ 0"), SETTLE);
 
     // The user runs codex before wiring it. The pane is live, so it shows as a
-    // synthesized idle agent row and the first-run hint steps aside. Local
-    // discovery makes the adapter's default model visible, but without an
-    // installed hook no durable identity reaches the store, so the row keeps
-    // the provider-kind label instead of the configured `coder` role.
+    // synthesized idle agent row and the first-run hint steps aside. Without
+    // an installed hook, the payload's model and durable identity never reach
+    // the store. Keep the provider-kind label and do not guess a model.
     room.agent_hook("codex", &session_start("sess-1", "GPT-5.5", "high", "main"));
-    let screen = room.wait_for(|s| s.contains("○ codex") && s.contains("GPT 5.5"), SETTLE);
+    let screen = room.wait_for(|s| s.contains("○ codex"), SETTLE);
     assert!(
         screen.contains("○ codex"),
         "provider discovery synthesizes an identity-less agent row before hooks are wired:\n{screen}"
     );
     assert!(
-        screen.contains("GPT 5.5"),
-        "the synthesized row carries the adapter's default model:\n{screen}"
+        !screen.contains("GPT 5.5"),
+        "the unconfigured row must not guess a model before hooks supply it:\n{screen}"
     );
     assert!(
         !screen.contains("○ coder"),
@@ -60,10 +58,14 @@ fn phase0_provider_discovery_then_hook_wires_role() {
     // into an idle agent row addressed by its team role.
     room.onboard(&["codex"]);
     room.agent_hook("codex", &session_start("sess-1", "GPT-5.5", "high", "main"));
-    let screen = room.wait_for(|s| s.contains("○ coder"), SETTLE);
+    let screen = room.wait_for(|s| s.contains("○ coder") && s.contains("GPT 5.5"), SETTLE);
     assert!(
         screen.contains("○ coder"),
         "a wired agent registers idle the moment its SessionStart lands:\n{screen}"
+    );
+    assert!(
+        screen.contains("GPT 5.5"),
+        "the wired row carries the model observed in SessionStart:\n{screen}"
     );
 }
 
