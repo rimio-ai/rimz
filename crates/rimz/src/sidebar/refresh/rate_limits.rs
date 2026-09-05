@@ -563,6 +563,9 @@ fn fuse_window(
     }
     // Trust precedes direction: a pull anchors the window, and only a newer
     // best-effort reading can overlay it. Authoritative truth wins stamp ties.
+    // Climb-first fusion was stable against parallel sessions reporting the
+    // same budget at different instants. The anchor now holds even an
+    // out-of-order authoritative climb until the next current read.
     if live.source.is_authoritative() {
         return if observed_no_earlier(live, prior) {
             (Some(live.clone()), None)
@@ -570,9 +573,7 @@ fn fuse_window(
             (Some(prior.clone()), pending.cloned())
         };
     }
-    if prior.source.is_authoritative()
-        && (!observed_no_earlier(live, prior) || live.observed_at == prior.observed_at)
-    {
+    if prior.source.is_authoritative() && !observed_strictly_after(live, prior) {
         return (Some(prior.clone()), pending.cloned());
     }
 
@@ -636,6 +637,15 @@ fn reset_advanced(prior: Option<Timestamp>, live: Option<Timestamp>) -> bool {
 fn observed_no_earlier(live: &RateLimitWindow, prior: &RateLimitWindow) -> bool {
     match (live.observed_at, prior.observed_at) {
         (Some(live_at), Some(prior_at)) => live_at >= prior_at,
+        (Some(_), None) => true,
+        (None, _) => false,
+    }
+}
+
+/// Strict counterpart to [`observed_no_earlier`], with the same unstamped rules.
+fn observed_strictly_after(live: &RateLimitWindow, prior: &RateLimitWindow) -> bool {
+    match (live.observed_at, prior.observed_at) {
+        (Some(live_at), Some(prior_at)) => live_at > prior_at,
         (Some(_), None) => true,
         (None, _) => false,
     }
