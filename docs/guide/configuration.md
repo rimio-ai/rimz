@@ -396,7 +396,7 @@ mode = "plan"
 
 #### Profiles
 
-A profile is a named agent preset. `[agents.profiles]` entries belong to `rimz agents` and become addressable type handles; `[subagents.profiles]` entries belong only to `rimz subagents`. `agent` is the base, a built-in kind (`claude`, `codex`, …) or another profile in the same namespace, and the remaining **override fields** layer on top: `mode` (`auto` | `ask` | `plan` | `yolo`), `model`, `effort`, `budget`, `system-prompt-file`, `append-system-prompt-files`, and raw `args`. Optional `description` is listing metadata shown by `rimz agents profiles` or `rimz subagents profiles`; it is not inherited. `budget = "5"` caps the session and `budget = "20/day"` resets at the configured local day boundary. Team roles expose the launch fields; loop tasks expose the subset relevant to scheduled work.
+A profile is a named agent preset. `[agents.profiles]` entries belong to `rimz agents` and become addressable type handles; `[subagents.profiles]` entries belong only to `rimz subagents`. `agent` is the base, a built-in kind (`claude`, `codex`, …) or another profile in the same namespace, and the remaining **override fields** layer on top: `mode` (`auto` | `ask` | `plan` | `yolo`), `model`, `effort`, `budget`, `system-prompt-file`, `append-system-prompt-files`, and raw `args`. Optional `description` is listing metadata shown by `rimz agents profiles` or `rimz subagents profiles`; it is not inherited, and neither is `model-reminder`, the switch for the launch line described below. `budget = "5"` caps the session and `budget = "20/day"` resets at the configured local day boundary. Team roles expose the launch fields; loop tasks expose the subset relevant to scheduled work.
 
 An `[agents.profiles]` entry may restrict delegation by listing the only profiles its agents may launch through `rimz subagents`:
 
@@ -410,9 +410,19 @@ With no `subagents` field, every subagent profile is allowed; an empty list allo
 
 At launch, RimZ tells a supported agent which subagent profiles it may use; an empty list instead tells it that delegation is off. When no subagent profiles or commands are configured, the reminder says that `Skill(rimz-subagents)` has nothing configured to launch and points at `[subagents.profiles]`.
 
+The same reminder tells the agent which model and effort the launch selected: `You are @planner, running on Opus 4.8 at high effort.` It uses the role or profile handle and omits unknown values; when neither model nor effort is known, there is no model line. To remove only that line:
+
+```toml
+[agents.profiles.planner]
+agent = "claude"
+model-reminder = false
+```
+
+`model-reminder` defaults to on in both `[agents.profiles]` and `[subagents.profiles]`. Set it on the profile you launch: it is not inherited from a base profile, and launches without a profile keep the default. RimZ combines team context, the model line, and delegation guidance into one `<system_reminder>` block. Claude, Codex, Qwen, and Droid support this launch reminder; other adapters receive no model line.
+
 Drop-ins under `~/.agents/profiles/<name>/agent.toml` may declare either or both profile namespaces. Their relative prompt paths root at the drop-in directory, and same-named entries in the machine `agents.toml` take precedence.
 
-Inheritance flattens at launch to one concrete adapter kind, and **the nearest set value wins for every field except prompt fragments**: a child that sets `args` replaces the base `args`, while `append-system-prompt-files` concatenates parent-first through the profile chain and a team role appends last. Fragments require a resolved `system-prompt-file` base. RimZ reads the pieces, separates them with blank lines, materializes one content-addressed replacement, and passes that complete value through the adapter's existing replacement channel. A `~` expands to home and a relative path roots at the declaring config file. Every source file must exist at launch; a missing one fails with the path to fix.
+Inheritance flattens at launch to one concrete adapter kind, and **the nearest set value wins for every launch override except prompt fragments**: a child that sets `args` replaces the base `args`, while `append-system-prompt-files` concatenates parent-first through the profile chain and a team role appends last. Fragments require a resolved `system-prompt-file` base. RimZ reads the pieces, separates them with blank lines, materializes one content-addressed replacement, and passes that complete value through the adapter's existing replacement channel. A `~` expands to home and a relative path roots at the declaring config file. Every source file must exist at launch; a missing one fails with the path to fix.
 
 Model, effort, and adapter-declared system-prompt path flags repeated in raw `args` are reconciled at launch: the typed field or launch flag wins and RimZ warns when its value differs, while a model set only in `args` becomes the launch model and suppresses the adapter default. Qwen's typed replacement is an environment variable rather than an argv flag, so a raw provider `--system-prompt` remains an explicit provider-specific override.
 
