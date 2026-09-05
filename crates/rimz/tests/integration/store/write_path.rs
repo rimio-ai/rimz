@@ -16,6 +16,80 @@ fn lifecycle(h: &crate::common::Harness, event_name: &str, agent_id: &str) -> Ev
     crate::common::lifecycle_event(h, "rimz-test", event_name, agent_id)
 }
 
+#[test]
+fn cancel_survives_oversized_undecodable_history() {
+    let h = crate::common::Harness::new();
+    let message = queued_cancel_message(&h);
+    let history_path = h.store.paths().messages_dir.join("history.jsonl");
+    let mut invalid = serde_json::to_value(&message).expect("message JSON");
+    invalid["status"] = json!("future_status");
+    invalid["text"] = json!("x".repeat(512 * 1024));
+    std::fs::write(&history_path, format!("{invalid}\n")).expect("poison history");
+
+    assert_cancel_committed(&h, &message);
+    let history = std::fs::read_to_string(history_path).expect("history");
+    let terminal: rimz::store::message::MessageRecord =
+        serde_json::from_str(history.lines().last().expect("terminal row")).expect("terminal JSON");
+    assert_eq!(terminal.message_id, message.message_id);
+    assert_eq!(
+        terminal.status,
+        rimz::store::message::MessageStatus::Canceled
+    );
+}
+
+#[test]
+fn cancel_survives_history_append_failure() {
+    let h = crate::common::Harness::new();
+    let message = queued_cancel_message(&h);
+    std::fs::create_dir(h.store.paths().messages_dir.join("history.jsonl"))
+        .expect("block history append");
+
+    assert_cancel_committed(&h, &message);
+}
+
+fn queued_cancel_message(h: &crate::common::Harness) -> rimz::store::message::MessageRecord {
+    h.store
+        .append_event(&lifecycle(h, "SessionStart", "recipient"))
+        .expect("register recipient");
+    let projection = h
+        .store
+        .runtime_projection(RuntimeScope::Audit)
+        .expect("agents");
+    let message = rimz::store::message::MessageRecord::new(
+        h.workspace_id.clone(),
+        &projection.agents[0],
+        "cancel despite broken audit".to_owned(),
+        true,
+        rimz::store::message::DeliveryGate::Done,
+    );
+    h.store.queue_message(&message, "rimz-test").expect("queue");
+    message
+}
+
+fn assert_cancel_committed(
+    h: &crate::common::Harness,
+    message: &rimz::store::message::MessageRecord,
+) {
+    assert!(
+        h.store
+            .cancel_message(&message.message_id, "rimz-test", "joined inline")
+            .expect("cancel must not depend on history")
+    );
+    let reopened =
+        rimz::Store::open(h.store.paths().clone(), h.runtime_paths.clone()).expect("reopen store");
+    assert!(
+        reopened
+            .list_pending_messages()
+            .expect("live queue")
+            .is_empty()
+    );
+    assert!(reopened.read_events().expect("events").iter().any(|event| {
+        matches!(event.kind(), EventKind::Message { method, payload }
+            if method == rimz::store::event::MessageEventMethod::Canceled
+                && payload.message_id == message.message_id)
+    }));
+}
+
 fn lifecycle_for_workspace(
     workspace_id: rimz::WorkspaceId,
     event_name: &str,

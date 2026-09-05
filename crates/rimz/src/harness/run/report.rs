@@ -96,7 +96,7 @@ pub fn record_report_messages(
     Ok(records)
 }
 
-fn digest_fully_joined(paths: &StatePaths, message_id: &MessageId) -> Result<bool> {
+pub fn digest_fully_joined(paths: &StatePaths, message_id: &MessageId) -> Result<bool> {
     let mut found = false;
     for record in super::list(paths)?
         .into_iter()

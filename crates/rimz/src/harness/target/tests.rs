@@ -687,6 +687,29 @@ fn align_submitted_prompt_consumes_human_header() {
 }
 
 #[test]
+fn unknown_harness_notice_header_and_ack_agree() {
+    let sender: MessageSender = serde_json::from_value(serde_json::json!({
+        "origin": "harness", "notice": "future_notice"
+    }))
+    .expect("future harness notice");
+    let recipient = agent("claude", "session-recipient", Some("main"), "terminal_1");
+    let record = MessageRecord::new(
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
+        &recipient,
+        "ship it".to_owned(),
+        true,
+        crate::store::message::DeliveryGate::Done,
+    )
+    .with_sender(sender);
+    let prompt = message_header(&record.sender, &[], None).expect("harness header") + &record.text;
+    assert_eq!(prompt, "Type: FUTURE_NOTICE\nFrom: @rimz\nContent:\nship it");
+    let (leading, segments, trailing) =
+        align_submitted_prompt(&prompt, &[&record]).expect("aligned notice");
+    assert_eq!((leading, trailing), (None, None));
+    assert_eq!(segments, vec![prompt.as_str()]);
+}
+
+#[test]
 fn align_submitted_prompt_consumes_harness_report_header() {
     let recipient = agent("claude", "session-recipient", Some("main"), "terminal_1");
     let record = MessageRecord::new(

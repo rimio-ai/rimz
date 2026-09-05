@@ -15,8 +15,8 @@ use crate::message::{
     message_interval_from_env,
 };
 use crate::store::message::{
-    AfterCondition, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
-    WhenCondition, older_ready_blocker, queue_head,
+    AfterCondition, DeliveryGate, HarnessNotice, MessageBody, MessageRecord, MessageSender,
+    MessageStatus, WhenCondition, older_ready_blocker, queue_head,
 };
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::workspace::ResolvedWorkspace;
@@ -237,6 +237,22 @@ fn attempt_delivery(
     pending: &[MessageRecord],
     snapshot: &SidebarSnapshot,
 ) -> Result<bool> {
+    if let Some(message) = pending
+        .iter()
+        .find(|message| &message.message_id == message_id)
+    {
+        match cancel_joined_subagent_report(workspace, store, message) {
+            Ok(false) => {}
+            Ok(true) => {
+                register_message_wake(workspace, store)?;
+                return Ok(false);
+            }
+            Err(error) => {
+                tracing::warn!(%message_id, %error, "deferring subagent digest: cannot check or settle joined runs");
+                return Ok(false);
+            }
+        }
+    }
     let now = Timestamp::now();
     let Some(candidate) = delivery_candidate(pending, snapshot, message_id, policy, now) else {
         return Ok(false);
@@ -280,6 +296,28 @@ fn attempt_delivery(
     )?;
     register_message_wake(workspace, store)?;
     Ok(matches!(outcome, AttemptOutcome::Sent { .. }))
+}
+
+fn cancel_joined_subagent_report(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    message: &MessageRecord,
+) -> crate::store::Result<bool> {
+    if !matches!(
+        message.sender,
+        MessageSender::Harness {
+            notice: HarnessNotice::SubagentReport
+        }
+    ) || !crate::harness::run::report::digest_fully_joined(store.paths(), &message.message_id)?
+    {
+        return Ok(false);
+    }
+    store.cancel_message(
+        &message.message_id,
+        &workspace.session_name,
+        "joined before delivery",
+    )?;
+    Ok(true)
 }
 
 pub(crate) fn execute_attempt(

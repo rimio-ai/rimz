@@ -34,7 +34,6 @@ pub enum MessageStoreErr {
 
 pub(super) type Result<T> = std::result::Result<T, MessageStoreErr>;
 
-#[must_use = "durability barrier; check the result"]
 pub(in crate::store) fn append_history_many(
     messages_dir: &Path,
     messages: &[MessageRecord],
@@ -52,16 +51,23 @@ pub(in crate::store) fn append_history_many(
         bytes.push(b'\n');
     }
     atomic::append_record_bytes(&path, &bytes)?;
-    let size = fs::metadata(&path)
-        .map_err(|source| MessageStoreErr::Io {
-            path: path.clone(),
-            source,
-        })?
-        .len();
-    if size > HISTORY_MAX_BYTES {
-        prune_history(&path)?;
-    }
     Ok(())
+}
+
+pub(in crate::store) fn maintain_history(messages_dir: &Path) {
+    let path = history_path(messages_dir);
+    let metadata = match fs::metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            warn!(path = %path.display(), %error, "cannot inspect message history for retention");
+            return;
+        }
+    };
+    if metadata.len() > HISTORY_MAX_BYTES
+        && let Err(error) = prune_history(&path)
+    {
+        warn!(path = %path.display(), %error, "cannot prune message history");
+    }
 }
 
 pub(in crate::store) fn list_history(messages_dir: &Path) -> Result<Vec<MessageRecord>> {
@@ -297,6 +303,8 @@ mod tests {
             append_history_many(&messages_dir, std::slice::from_ref(&message)).unwrap();
         }
 
+        maintain_history(&messages_dir);
+
         let history = list_history(&messages_dir).unwrap();
 
         assert_eq!(history.len(), HISTORY_KEEP_RECORDS);
@@ -305,6 +313,47 @@ mod tests {
             history[HISTORY_KEEP_RECORDS - 1].message_id,
             fixed_message_id(HISTORY_KEEP_RECORDS as u64)
         );
+    }
+
+    #[test]
+    fn unknown_harness_notice_round_trips() {
+        let dir = tempdir().unwrap();
+        let messages_dir = dir.path().join("messages");
+        let message = MessageRecord::new(
+            WorkspaceId::from_project_root(dir.path()),
+            &agent(),
+            "x".repeat(2048),
+            true,
+            DeliveryGate::Done,
+        );
+        let mut value = serde_json::to_value(message).unwrap();
+        value["sender"] = serde_json::json!({"origin": "harness", "notice": "future_notice"});
+        let message: MessageRecord = serde_json::from_value(value.clone()).unwrap();
+        write_queue(&messages_dir, std::slice::from_ref(&message)).unwrap();
+        let queued = read_queue(&messages_dir).unwrap();
+        write_queue(&messages_dir, &queued).unwrap();
+        assert_eq!(
+            serde_json::to_value(&read_queue(&messages_dir).unwrap()[0]).unwrap(),
+            value
+        );
+
+        for index in 0..=HISTORY_KEEP_RECORDS {
+            let mut terminal = message.clone();
+            terminal.message_id = fixed_message_id(index as u64);
+            terminal.status = MessageStatus::Delivered;
+            append_history_many(&messages_dir, &[terminal]).unwrap();
+        }
+        maintain_history(&messages_dir);
+        let history = list_history(&messages_dir).unwrap();
+        assert_eq!(history.len(), HISTORY_KEEP_RECORDS);
+        for record in history {
+            assert_eq!(
+                serde_json::to_value(record).unwrap()["sender"]["notice"],
+                "future_notice"
+            );
+        }
+        value["sender"]["notice"] = serde_json::json!(42);
+        assert!(serde_json::from_value::<MessageRecord>(value).is_err());
     }
 
     #[test]

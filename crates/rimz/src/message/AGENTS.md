@@ -13,7 +13,8 @@ Topic detail lives in [messaging.md](../../../../docs/internals/harness/messagin
 - **Commands reach the pane at most once.** An unconfirmed command times out without a resend because duplicate commands such as `/compact` can destroy context.
 - **A write inside an open compaction bracket is late, not lost.** The composer queues it; reconciliation holds the `Sent` record until the bracket closes and never resends inside it.
 - **Two counters, two caps.** `attempts` guards pre-send claim failures (`MAX_DELIVERY_ATTEMPTS`); for prompts, `unconfirmed_sends` guards writes a lifecycle hook never confirmed (`DEFAULT_MAX_DELIVERY_ATTEMPTS`, overridable per run through the `RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS` environment variable). Keep them separate.
-- **Delivery reads store state.** Gates evaluate the rollup and the message queue. Focused-pane state and captured composer contents never decide a delivery.
+- **Delivery reads store state.** Gates evaluate the rollup and the message queue; a subagent digest additionally reads the run rows linked to it. Focused-pane state and captured composer contents never decide a delivery.
+- **Joined digests are checked before claim.** `deliver.rs` scans the run rows carrying a `Harness { SubagentReport }` record's `report_message_id` before it claims, and cancels the record when at least one exists and every one of them is joined. The producer-side cancel in `subagents wait` and `subagents stop` is cleanup, not the guarantee. A guard that errors skips the claim instead of sending, digests claim alone so no batch member slips past the head's guard, and the check-to-claim window is residual: a join landing inside it settles the `Claimed` record but cannot retract a paste in flight. Other harness notices, including ones this binary cannot name, take ordinary delivery.
 - **`retry_after` is a wake hint.** It schedules the elder's next look and never affects `is_ready`, FIFO position, claim leases, or hook-driven delivery.
 
 ## Boundaries
@@ -21,7 +22,7 @@ Topic detail lives in [messaging.md](../../../../docs/internals/harness/messagin
 - Layering runs one way: `dispatch` calls `deliver` and `send`; `deliver` calls `send`; `send` calls the store and the mux. Nothing calls back up.
 - `message.rs` owns delivery assembly and parsing. The record schema and FIFO/claim/batch selection live in `store::message`, while I/O delivery belongs in the submodules.
 - Status transitions stay in `store/writer/queue.rs`, under the workspace lock, each with its audit event. The status enum carries vocabulary, not rules.
-- Message content never enters the event log. Terminal text lives in `messages/history.jsonl`.
+- Message content never enters the event log. Terminal text lives in `messages/history.jsonl`, which is audit: the live queue commits ahead of it, and a failed history append or retention pass warns without undoing the transition.
 - `fire.rs` runs on the renderer's cache-refresh tick, so keep it as light as that path demands. It reads the wake stamp and spawns `message sweep`; store reads and writes stay in that helper.
 - Address grammar, handle rendering, and channel resolution live in `harness/target.rs`. This module resolves targets through it and never parses addresses itself.
 - CLI handlers own flag parsing, rendering, and exit codes. Dispatch conditions, delivery causality, and reply-wait state live here.

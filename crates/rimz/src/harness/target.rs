@@ -1202,22 +1202,20 @@ pub fn align_submitted_prompt<'a>(
         return None;
     }
     let prompt = prompt.trim();
-    let anchor = match records[0].sender {
-        MessageSender::Agent { .. } => "Type: AGENT_MESSAGE\nFrom: @",
-        MessageSender::Subagent { .. } => "Type: SUBAGENT_REPORT\nFrom: @",
-        MessageSender::Harness {
-            notice: HarnessNotice::SubagentReport,
-        } => "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\n",
-        MessageSender::Harness {
-            notice: HarnessNotice::Wake,
-        } => "Type: WAKE\nFrom: @rimz\nContent:\n",
-        MessageSender::Human => "Type: USER_MESSAGE\nFrom: @user\nContent:\n",
+    let anchor = match &records[0].sender {
+        MessageSender::Agent { .. } => "Type: AGENT_MESSAGE\nFrom: @".to_owned(),
+        MessageSender::Subagent { .. } => "Type: SUBAGENT_REPORT\nFrom: @".to_owned(),
+        MessageSender::Harness { notice } => format!(
+            "Type: {}\nFrom: @rimz\nContent:\n",
+            harness_notice_type(notice)
+        ),
+        MessageSender::Human => "Type: USER_MESSAGE\nFrom: @user\nContent:\n".to_owned(),
         MessageSender::System => {
             let (segments, trailing) = align_submitted_prompt_from(prompt, records)?;
             return trailing.is_empty().then_some((None, segments, None));
         }
     };
-    for (start, _) in prompt.match_indices(anchor) {
+    for (start, _) in prompt.match_indices(&anchor) {
         let Some((segments, trailing)) = align_submitted_prompt_from(&prompt[start..], records)
         else {
             continue;
@@ -1240,7 +1238,7 @@ fn align_submitted_prompt_from<'a>(
     for (index, record) in records.iter().enumerate() {
         let segment = remaining;
         let mut body = segment;
-        match record.sender {
+        match &record.sender {
             MessageSender::Agent { .. } => {
                 let attributed = body.strip_prefix("Type: AGENT_MESSAGE\nFrom: @")?;
                 let (handle, text) = attributed.split_once("\nContent:\n")?;
@@ -1260,7 +1258,7 @@ fn align_submitted_prompt_from<'a>(
             MessageSender::Harness { notice } => {
                 let header = format!(
                     "Type: {}\nFrom: @rimz\nContent:\n",
-                    harness_notice_type(&notice)
+                    harness_notice_type(notice)
                 );
                 body = body.strip_prefix(&header)?;
             }
@@ -1362,10 +1360,11 @@ pub fn agent_sender_handle(
     Some(handle)
 }
 
-const fn harness_notice_type(notice: &HarnessNotice) -> &'static str {
+fn harness_notice_type(notice: &HarnessNotice) -> String {
     match notice {
-        HarnessNotice::SubagentReport => "SUBAGENT_REPORT",
-        HarnessNotice::Wake => "WAKE",
+        HarnessNotice::SubagentReport => "SUBAGENT_REPORT".to_owned(),
+        HarnessNotice::Wake => "WAKE".to_owned(),
+        HarnessNotice::Other(notice) => notice.to_ascii_uppercase(),
     }
 }
 

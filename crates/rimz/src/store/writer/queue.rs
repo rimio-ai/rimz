@@ -1,3 +1,6 @@
+//! Queue truth commits before terminal-history audit and event frames.
+//! History append and retention failures never fail a queue commit.
+
 use std::collections::BTreeSet;
 #[cfg(test)]
 use std::time::Duration;
@@ -329,12 +332,19 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
     }
 
     fn finish(self) -> Result<()> {
-        message::append_history_many(&self.txn.paths.messages_dir, &self.history)?;
         if self.live_changed {
             message::write_queue(&self.txn.paths.messages_dir, &self.live)?;
         }
+        if let Err(error) =
+            message::append_history_many(&self.txn.paths.messages_dir, &self.history)
+        {
+            tracing::warn!(%error, "cannot append terminal message history");
+        }
         for event in &self.events {
             self.txn.append(event)?;
+        }
+        if !self.history.is_empty() {
+            message::maintain_history(&self.txn.paths.messages_dir);
         }
         Ok(())
     }
