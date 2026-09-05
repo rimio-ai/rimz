@@ -241,6 +241,7 @@ fn reject_launch_flags_without_name(
         || launch.channel.is_some()
         || launch.from_pr.is_some()
         || launch.resume
+        || launch.fresh
         || launch.budget.is_some()
         || launch.bg
         || launch.new_tab
@@ -320,15 +321,15 @@ mod tests {
     #[test]
     fn all_team_launch_doorways_parse_the_same_cohort_payload() {
         let agents = AgentsHarness::try_parse_from([
-            "rimz", "forge", "ship", "-w", "feat-x", "--budget", "20", "--bg",
+            "rimz", "forge", "ship", "-w", "feat-x", "--budget", "20", "--bg", "--fresh",
         ])
         .expect("parse agents launch")
         .args;
         let bare = parse_teams(&[
-            "rimz", "forge", "ship", "-w", "feat-x", "--budget", "20", "--bg",
+            "rimz", "forge", "ship", "-w", "feat-x", "--budget", "20", "--bg", "--fresh",
         ]);
         let verb = parse_teams(&[
-            "rimz", "launch", "forge", "ship", "-w", "feat-x", "--budget", "20", "--bg",
+            "rimz", "launch", "forge", "ship", "-w", "feat-x", "--budget", "20", "--bg", "--fresh",
         ]);
 
         assert_eq!(agents.launch.spec.as_deref(), Some("forge"));
@@ -346,12 +347,12 @@ mod tests {
 
     #[test]
     fn launch_flags_without_a_team_name_are_rejected() {
-        let args = parse_teams(&["rimz", "-w", "feat-x"]);
-
-        let error =
-            reject_launch_flags_without_name(&args.prompt, &args.launch).expect_err("missing team");
-
-        assert!(error.to_string().contains("require a team name"));
+        for argv in [vec!["rimz", "-w", "feat-x"], vec!["rimz", "--fresh"]] {
+            let args = parse_teams(&argv);
+            let error = reject_launch_flags_without_name(&args.prompt, &args.launch)
+                .expect_err("missing team");
+            assert!(error.to_string().contains("require a team name"));
+        }
     }
 
     #[test]
@@ -359,7 +360,8 @@ mod tests {
         let show = parse_teams(&["rimz", "show", "forge#feat-x"]);
         let stop = parse_teams(&["rimz", "stop", "forge#feat-x"]);
         let resume = parse_teams(&["rimz", "resume", "forge#feat-x"]);
-        let bare = parse_teams(&["rimz", "forge#feat-x", "ship"]);
+        let bare = parse_teams(&["rimz", "forge#feat-x", "ship", "--fresh"]);
+        assert!(bare.launch.fresh);
 
         let Some(TeamsSubcmd::Show { name, worktree, .. }) = show.command else {
             panic!("show verb");

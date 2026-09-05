@@ -727,6 +727,24 @@ fn invalid_new_pane_refuses_an_agents_launch_before_side_effects() {
 
 #[cfg(unix)]
 #[test]
+fn fresh_launch_requires_a_named_worktree_before_side_effects() {
+    let env = Env::new();
+    for args in [
+        vec!["agents", "claude,codex", "--fresh"],
+        vec!["agents", "claude,codex", "--fresh", "-w"],
+    ] {
+        env.rimz()
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(contains("--fresh needs a named worktree (-w NAME)"));
+    }
+    assert!(!env.state_path_for(&env.project_root).events_log.exists());
+    assert!(!env.home_root.join("project-worktrees").exists());
+}
+
+#[cfg(unix)]
+#[test]
 fn supervised_cross_repo_worktree_refuses_non_terminal_input() {
     let env = Env::new();
     let current_root = env.home_root.join("current");

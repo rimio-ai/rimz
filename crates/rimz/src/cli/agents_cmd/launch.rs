@@ -13,6 +13,18 @@ pub(super) fn launch_layout(
     globals: &GlobalFlags,
     allow_in_place: bool,
 ) -> Result<()> {
+    let explicit_worktree_name = args
+        .launch
+        .cohort
+        .worktree
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| rimz::worktree::parse_requested_name(name).map(|requested| requested.name))
+        .transpose()?;
+    if args.launch.cohort.fresh && explicit_worktree_name.is_none() {
+        bail!("--fresh needs a named worktree (-w NAME) whose prior cohort it replaces");
+    }
     let ctx = Ctx::open(globals)?;
     let workspace = &ctx.workspace;
     let store = &ctx.store;
@@ -181,15 +193,6 @@ pub(super) fn launch_layout(
         return Ok(());
     }
 
-    let explicit_worktree_name = args
-        .launch
-        .cohort
-        .worktree
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(|name| rimz::worktree::parse_requested_name(name).map(|requested| requested.name))
-        .transpose()?;
     let cells = cohort_cells(&layout);
     if let Some(name) = explicit_worktree_name.as_deref()
         && args.launch.cohort.from_pr.is_none()
@@ -205,6 +208,7 @@ pub(super) fn launch_layout(
             spec_display,
             team_name.as_deref(),
             &cells,
+            args.launch.cohort.fresh,
         )? {
             reconcile::Reconciled::Done => return Ok(()),
             reconcile::Reconciled::Resume(path) => {
@@ -810,6 +814,7 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
         || args.launch.new_pane
         || args.launch.cohort.new_tab
         || args.launch.cohort.resume
+        || args.launch.cohort.fresh
         || args.launch.ask
         || args.launch.yolo
         || args.launch.print

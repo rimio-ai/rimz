@@ -17,6 +17,7 @@ pub(super) fn reconcile_cohort_launch(
     spec_display: &str,
     team: Option<&str>,
     cells: &[rimz::harness::plan::CohortCell],
+    fresh: bool,
 ) -> Result<Reconciled> {
     let path = cohort_worktree_path(workspace, &machine_config.agents.worktree, name)?;
     if !path.exists() {
@@ -52,6 +53,10 @@ pub(super) fn reconcile_cohort_launch(
             Ok(Reconciled::Done)
         }
         rimz::harness::resume::CohortRelaunchState::Closed => {
+            if fresh {
+                return launch_fresh(name, &subject);
+            }
+            let (resume_command, fresh_command) = relaunch_commands(name, spec_display, team);
             let status = rimz::worktree::status(&path, &marker)?;
             // Cohort liveness was already decided above, so Git state alone
             // separates "recreate it" from "resume into it". A concurrent
@@ -65,9 +70,10 @@ pub(super) fn reconcile_cohort_launch(
                     name,
                     &subject,
                     &protections,
+                    &fresh_command,
                 )
             } else {
-                resume_or_done(name, spec_display, team, &subject, &path)
+                resume_or_done(name, &subject, &path, &resume_command, &fresh_command)
             }
         }
     }
@@ -90,29 +96,28 @@ fn cohort_subject(spec_display: &str, team: Option<&str>) -> String {
 
 fn resume_or_done(
     name: &str,
-    spec_display: &str,
-    team: Option<&str>,
     subject: &str,
     path: &Path,
+    resume_command: &str,
+    fresh_command: &str,
 ) -> Result<Reconciled> {
     if !std::io::stdin().is_terminal() {
-        let command = team.map_or_else(
-            || format!("rimz agents {spec_display} -w {name} --resume"),
-            |team| format!("rimz teams resume {team} -w {name}"),
-        );
         writeln!(
             std::io::stderr().lock(),
-            "worktree `{name}` has work in progress; resume with `{command}`"
+            "worktree `{name}` has work in progress; resume with `{resume_command}` or launch fresh with `{fresh_command}`"
         )?;
         return Ok(Reconciled::Done);
     }
-    if crate::cli::confirm_with_default(
-        &format!("worktree `{name}` has work in progress; resume {subject}?"),
-        true,
+    match crate::cli::choose(
+        &format!(
+            "worktree `{name}` has work in progress; resume {subject}, launch it fresh, or cancel?"
+        ),
+        &["resume", "fresh", "cancel"],
+        0,
     )? {
-        Ok(Reconciled::Resume(path.to_owned()))
-    } else {
-        Ok(Reconciled::Done)
+        Some(0) => Ok(Reconciled::Resume(path.to_owned())),
+        Some(1) => launch_fresh(name, subject),
+        _ => canceled(),
     }
 }
 
@@ -123,19 +128,25 @@ fn recreate_or_done(
     name: &str,
     subject: &str,
     protections: &rimz::worktree::ProtectionSet,
+    fresh_command: &str,
 ) -> Result<Reconciled> {
     if !std::io::stdin().is_terminal() {
         writeln!(
             std::io::stderr().lock(),
-            "worktree `{name}` is clean and merged; recreate {subject} with `rimz worktree remove {name}` then relaunch"
+            "worktree `{name}` is clean and merged; recreate {subject} with `rimz worktree remove {name}` then relaunch, or launch fresh into it with `{fresh_command}`"
         )?;
         return Ok(Reconciled::Done);
     }
-    if !crate::cli::confirm_with_default(
-        &format!("worktree `{name}` is clean and merged; gc it and recreate {subject} fresh?"),
-        false,
+    match crate::cli::choose(
+        &format!(
+            "worktree `{name}` is clean and merged; remove it and recreate {subject}, launch it fresh, or cancel?"
+        ),
+        &["remove", "fresh", "cancel"],
+        2,
     )? {
-        return Ok(Reconciled::Done);
+        Some(0) => {}
+        Some(1) => return launch_fresh(name, subject),
+        _ => return canceled(),
     }
     let removed = match rimz::worktree::remove(
         workspace.launch_repo_root(),
@@ -170,9 +181,53 @@ fn recreate_or_done(
     Ok(Reconciled::Continue)
 }
 
+fn launch_fresh(name: &str, subject: &str) -> Result<Reconciled> {
+    writeln!(
+        std::io::stderr().lock(),
+        "launching {subject} fresh in worktree `{name}`"
+    )?;
+    Ok(Reconciled::Continue)
+}
+
+fn canceled() -> Result<Reconciled> {
+    writeln!(std::io::stderr().lock(), "canceled; nothing launched")?;
+    Ok(Reconciled::Done)
+}
+
+fn relaunch_commands(name: &str, spec_display: &str, team: Option<&str>) -> (String, String) {
+    match team {
+        Some(team) => (
+            format!("rimz teams resume {team} -w {name}"),
+            format!("rimz teams {team} -w {name} --fresh"),
+        ),
+        None => (
+            format!("rimz agents {spec_display} -w {name} --resume"),
+            format!("rimz agents {spec_display} -w {name} --fresh"),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relaunch_commands_cover_teams_and_inline_specs() {
+        assert_eq!(
+            relaunch_commands("topic", "forge", Some("forge")),
+            (
+                "rimz teams resume forge -w topic".to_owned(),
+                "rimz teams forge -w topic --fresh".to_owned(),
+            )
+        );
+        assert_eq!(
+            relaunch_commands("topic", "claude,codex", None),
+            (
+                "rimz agents claude,codex -w topic --resume".to_owned(),
+                "rimz agents claude,codex -w topic --fresh".to_owned(),
+            )
+        );
+    }
 
     #[test]
     fn cohort_reconciliation_resolves_worktree_from_current_repo() {
