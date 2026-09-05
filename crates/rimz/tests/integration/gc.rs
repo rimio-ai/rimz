@@ -9,7 +9,7 @@ use predicates::str::contains;
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 use rimz::ids::AgentSessionId;
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
-use rimz::sidebar::timing::{SESSION_PROBE_MARKER_PREFIX, SESSION_PROBE_MARKER_TTL};
+use rimz::store::gc::{SESSION_PROBE_MARKER_PREFIX, SESSION_PROBE_MARKER_TTL};
 use rimz::store::message::{DeliveryGate, MessageRecord};
 use rimz::{MuxName, RuntimePaths, SidebarInstanceId, WorkspaceId};
 use serde_json::json;

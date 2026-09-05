@@ -247,15 +247,6 @@ pub const UNWATCHED_METRICS_FOLD_CLAMP: Duration = METRICS_BACKGROUND_SAMPLE_TTL
 /// minutes.
 pub const SESSION_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
-/// Reap grace for the per-session context-refresh throttle stamp. A live
-/// session re-touches its stamp within [`SESSION_REFRESH_INTERVAL`] plus the
-/// producer fold cadence, so a stamp older than this is dead.
-pub const SESSION_PROBE_MARKER_TTL: Duration = Duration::from_secs(5 * 60);
-
-/// Runtime `shared/` filename prefix for per-session context-refresh throttle
-/// stamps.
-pub const SESSION_PROBE_MARKER_PREFIX: &str = "session-context-probe.";
-
 /// Minimum gap between Codex daemon ghost-reap probes. A failed daemon control
 /// socket attempt can burn the full 2s deadline, so success and failure share
 /// one coarse cache stamp and the fetch lane only reads it.
