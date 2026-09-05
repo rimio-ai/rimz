@@ -29,6 +29,14 @@ fn pricing_refresh_uses_local_documents_and_writes_the_projected_snapshot() {
         snapshot["gpt-5.6-sol"]["long_context_threshold"].as_u64(),
         Some(272_000)
     );
+    let astra = &snapshot["gpt-6-astra"];
+    assert_eq!(astra["long_context_threshold"].as_u64(), Some(272_000));
+    assert_eq!(astra["max_input_tokens"].as_u64(), Some(922_000));
+    assert_eq!(astra["input_cost_per_token"].as_f64(), Some(10e-6));
+    assert_eq!(
+        astra["cache_creation_input_token_cost_above_200k_tokens"].as_f64(),
+        Some(25e-6)
+    );
 }
 
 #[test]

@@ -4,6 +4,12 @@
   }},
   "openai": {
     "models": {
+      "gpt-6-astra": {
+        "limit": {"context": 1050000, "input": 922000, "output": 128000},
+        "cost": {"input": 10, "output": 50, "cache_read": 1, "cache_write": 12.5, "tiers": [
+          {"input": 20, "output": 75, "cache_read": 2, "cache_write": 25, "tier": {"type": "context", "size": 272000}}
+        ]}
+      },
       "gpt-5.6-sol": {
         "limit": {"context": 1050000},
         "cost": {"input": 5, "output": 30, "cache_read": 0.5, "cache_write": 6.25, "tiers": [

@@ -87,6 +87,7 @@ mod tests {
         assert_eq!(display_model("anthropic-claude-4-8"), "Claude 4.8");
         assert_eq!(display_model("gpt-5-codex"), "GPT 5 Codex");
         assert_eq!(display_model("gpt-5.5-codex"), "GPT 5.5 Codex");
+        assert_eq!(display_model("gpt-6-astra"), "GPT 6 Astra");
         assert_eq!(display_model("claude-opus-4-7-20260101"), "Opus 4.7");
         assert_eq!(display_model("gpt-5-codex-20260101"), "GPT 5 Codex");
         assert_eq!(display_model("deepseek-v4-pro"), "DeepSeek V4 Pro");

@@ -83,9 +83,8 @@ const OFFICIAL_PREFIXES: [&str; 18] = [
     "moonshot/",
 ];
 
-/// Models that carried hardcoded request-tier rates before the source
-/// projection learned models.dev's context tiers.
-const LONG_CONTEXT_CANARIES: [&str; 10] = [
+/// Models whose request-tier rates the source projection must preserve.
+const LONG_CONTEXT_CANARIES: [&str; 11] = [
     "claude-sonnet-4",
     "gpt-5.4",
     "gpt-5.4-pro",
@@ -95,6 +94,7 @@ const LONG_CONTEXT_CANARIES: [&str; 10] = [
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
+    "gpt-6-astra",
     "grok-4.5",
 ];
 
@@ -800,5 +800,46 @@ mod tests {
         assert_eq!(grok.input_above_200k, Some(4e-6));
         assert_eq!(grok.output_above_200k, Some(12e-6));
         assert_eq!(grok.max_input_tokens, Some(500_000));
+    }
+
+    #[test]
+    fn astra_sources_preserve_standard_cache_rates_and_request_tier_boundary() {
+        use super::super::TokenSplit;
+
+        let (combined, _) = project_sources(LITELLM_FIXTURE, Some(MODELS_DEV_FIXTURE)).unwrap();
+        // Each upstream can supply Astra independently; their capacity fields
+        // differ, but the request prices and tier boundary must agree.
+        for (table, capacity) in [
+            (compact_litellm(LITELLM_FIXTURE).unwrap(), 922_000),
+            (
+                compact_models_dev(MODELS_DEV_FIXTURE).unwrap().models,
+                1_050_000,
+            ),
+            (combined, 922_000),
+        ] {
+            let book = PriceBook::from_litellm_json(&serde_json::to_string(&table).unwrap());
+            let price = book.price("gpt-6-astra").unwrap();
+            assert_eq!(price.max_input_tokens, Some(capacity));
+            assert_eq!(price.long_context_threshold, Some(272_000));
+            for (actual, expected) in [
+                (price.input, 10e-6),
+                (price.output, 50e-6),
+                (price.cache_read, 1e-6),
+                (price.cache_create, 12.5e-6),
+                (price.input_above_200k.unwrap(), 20e-6),
+                (price.output_above_200k.unwrap(), 75e-6),
+                (price.cache_read_above_200k.unwrap(), 2e-6),
+                (price.cache_create_above_200k.unwrap(), 25e-6),
+            ] {
+                assert!((actual - expected).abs() < 1e-18);
+            }
+            assert!(price.cache_read_explicit);
+            // The threshold counts all input slices and switches the whole
+            // request only above 272k, including cached input and output.
+            let boundary = TokenSplit::new(270_000, 1_000).cached(1_000, 1_000);
+            assert!((price.cost_of(boundary) - 2.7635).abs() < 1e-12);
+            let above = TokenSplit::new(270_001, 1_000).cached(1_000, 1_000);
+            assert!((price.cost_of(above) - 5.50202).abs() < 1e-12);
+        }
     }
 }
