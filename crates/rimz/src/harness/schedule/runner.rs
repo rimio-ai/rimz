@@ -20,6 +20,7 @@ use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 
+use super::fire::deadline_expired_at;
 use crate::agents::PermissionMode;
 use crate::agents::{
     HookPreflightErr, ManagedLaunchState, ProviderCapacity, TurnLifecycleNeed, WindowSurplus,
@@ -227,6 +228,7 @@ pub struct TaskFire<'a> {
     catalog: &'a TaskCatalog,
     action: Option<TaskAction>,
     ephemeral: bool,
+    expired: bool,
     context: Option<FireContext>,
     mode: LoopRunMode,
     keep: bool,
@@ -269,6 +271,7 @@ impl<'a> TaskFire<'a> {
             catalog,
             action: Some(action),
             ephemeral,
+            expired: false,
             context: None,
             mode,
             keep,
@@ -300,6 +303,50 @@ impl<'a> TaskFire<'a> {
         self.check_trip.take()
     }
 
+    pub fn prepare_expired(&mut self) -> Result<Option<TaskFirePlan>> {
+        if self.task.source() != catalog::TaskSource::Instance
+            || self.entry.signal.is_none()
+            || self.entry.wake_meta.is_none()
+        {
+            return Ok(None);
+        }
+        let Some(entry) =
+            super::instances::claim_expired(&self.name, &self.entry, Timestamp::now())?
+        else {
+            return Ok(None);
+        };
+        self.entry = entry;
+        self.expired = true;
+        if self
+            .entry
+            .wake_meta
+            .as_ref()
+            .is_some_and(|meta| meta.last_observed_at.is_some())
+        {
+            return Ok(Some(TaskFirePlan::Done(self.record_terminal(
+                LoopRunResult::Expired,
+                LoopRunPresentation::default(),
+                TaskFireNotice::Gate {
+                    reason: "retired quiet".to_owned(),
+                },
+                None,
+            ))));
+        }
+        let action = self
+            .action
+            .take()
+            .context("expiry action already prepared")?;
+        self.context = Some(FireContext::resolve(
+            &self.entry,
+            action.clone(),
+            &self.config,
+        )?);
+        let TaskAction::Deliver(target) = action else {
+            anyhow::bail!("signal wake has no delivery target");
+        };
+        self.prepare_delivery(target, None).map(Some)
+    }
+
     pub fn prepare(&mut self) -> Result<TaskFirePlan> {
         if let Some(done) = self.prepare_scope_gates()? {
             return Ok(TaskFirePlan::Done(done));
@@ -308,9 +355,11 @@ impl<'a> TaskFire<'a> {
             return Ok(TaskFirePlan::Done(done));
         }
 
-        if deadline_expired_at(&self.entry, self.now) {
-            if self.mode == LoopRunMode::Scheduled {
-                self.catalog.consume_scheduled(&self.name)?;
+        if deadline_expired_at(&self.entry, self.now)
+            && !(self.entry.wake_meta.is_some() && self.entry.signal.is_some())
+        {
+            if self.mode == LoopRunMode::Scheduled && !self.expired {
+                self.remove_schedule()?;
             }
             return Ok(TaskFirePlan::Done(self.record_terminal(
                 LoopRunResult::Expired,
@@ -429,7 +478,11 @@ impl<'a> TaskFire<'a> {
             (PendingEffect::Deliver { target, check }, TaskFireEffect::Delivered(message_id)) => {
                 let handle = target.handle;
                 Ok(self.record_terminal_with(
-                    LoopRunResult::Delivered,
+                    if self.expired {
+                        LoopRunResult::Expired
+                    } else {
+                        LoopRunResult::Delivered
+                    },
                     LoopRunPresentation::default(),
                     TaskFireNotice::None,
                     None,
@@ -441,8 +494,8 @@ impl<'a> TaskFire<'a> {
                 ))
             }
             (PendingEffect::Deliver { target, check }, TaskFireEffect::TargetGone) => {
-                if self.mode == LoopRunMode::Scheduled {
-                    self.catalog.consume_scheduled(&self.name)?;
+                if self.mode == LoopRunMode::Scheduled && !self.expired {
+                    self.remove_schedule()?;
                 }
                 let handle = target.handle;
                 Ok(self.record_terminal_with(
@@ -510,7 +563,7 @@ impl<'a> TaskFire<'a> {
             .is_some_and(|context| context.action.is_check_only())
         {
             if self.mode == LoopRunMode::Scheduled && self.ephemeral {
-                self.catalog.consume_scheduled(&self.name)?;
+                self.remove_schedule()?;
             }
             let result = check_only_result(&outcome);
             let finished = self.record_terminal_with(
@@ -533,7 +586,7 @@ impl<'a> TaskFire<'a> {
                     .as_ref()
                     .is_ok_and(|parsed| matches!(parsed.trigger, Trigger::Watch { .. }))
             {
-                self.catalog.consume_scheduled(&self.name)?;
+                self.remove_schedule()?;
             }
             let finished = self.record_terminal_with(
                 LoopRunResult::CheckSkipped,
@@ -657,8 +710,8 @@ impl<'a> TaskFire<'a> {
     ) -> Result<TaskFirePlan> {
         let check = fired_check.as_ref().map(|check| check.record.clone());
         if !catalog::delivery_target_alive(&self.entry, &target)? {
-            if self.mode == LoopRunMode::Scheduled {
-                self.catalog.consume_scheduled(&self.name)?;
+            if self.mode == LoopRunMode::Scheduled && !self.expired {
+                self.remove_schedule()?;
             }
             let handle = target.handle;
             return Ok(TaskFirePlan::Done(self.record_terminal_with(
@@ -674,7 +727,16 @@ impl<'a> TaskFire<'a> {
                 },
             )));
         }
-        let prompt = self.resolve_effect_prompt(fired_check.as_ref())?;
+        let prompt = if self.expired {
+            format!(
+                "{} expired: no {} in {}",
+                self.name,
+                self.entry.signal.as_deref().unwrap_or_default(),
+                self.entry.timeout.as_deref().unwrap_or_default()
+            )
+        } else {
+            self.resolve_effect_prompt(fired_check.as_ref())?
+        };
         self.consume_ephemeral()?;
         self.pending = Some(PendingEffect::Deliver {
             target: target.clone(),
@@ -687,9 +749,21 @@ impl<'a> TaskFire<'a> {
         }))
     }
 
+    fn remove_schedule(&self) -> Result<()> {
+        if self.task.source() == catalog::TaskSource::Instance
+            && self.entry.wake_meta.is_some()
+            && self.entry.signal.is_some()
+        {
+            super::instances::remove_signal_wake(&self.name, &self.entry)?;
+        } else {
+            self.catalog.consume_scheduled(&self.name)?;
+        }
+        Ok(())
+    }
+
     fn consume_ephemeral(&self) -> Result<()> {
         if self.mode == LoopRunMode::Scheduled && self.ephemeral {
-            self.catalog.consume_scheduled(&self.name)?;
+            self.remove_schedule()?;
         }
         Ok(())
     }
@@ -1283,10 +1357,6 @@ pub fn check_record(outcome: &CheckOutcome) -> CheckRecord {
         timed_out: outcome.timed_out,
         output: outcome.output.clone(),
     }
-}
-
-fn deadline_expired_at(entry: &TaskEntry, now: Timestamp) -> bool {
-    entry.deadline.is_some_and(|deadline| now >= deadline)
 }
 
 pub fn check_timeout(entry: &TaskEntry) -> Result<Option<Duration>> {

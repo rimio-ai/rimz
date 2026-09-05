@@ -54,6 +54,7 @@ pub(super) fn classify(record: &LoopRunRecord) -> Signal {
         | LoopRunResult::SurplusSkipped
         | LoopRunResult::Overlapped
         | LoopRunResult::Canceled
+        | LoopRunResult::SignalSkipped
         | LoopRunResult::Expired
         | LoopRunResult::TargetGone => Signal::Neutral,
     }
