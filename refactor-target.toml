@@ -144,7 +144,7 @@ upward-dependencies = [
     "sidebar::refresh",
     "sidebar::refresh::pr",
 ]
-surface-budget = 618
+surface-budget = 620
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -509,6 +509,7 @@ allowed-dependencies = [
     "agents::capabilities",
     "config",
     "harness::launch_context",
+    "harness::launch_reminders",
     "harness::subagent_policy",
     "ids",
     "trust",
