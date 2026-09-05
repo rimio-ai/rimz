@@ -21,11 +21,11 @@ use crate::config::NotificationsPrefs;
 use crate::diag::record::DiagEvent;
 use crate::disk::paths::PathErr;
 use crate::ids::PaneId;
-use crate::sidebar::event_store::EventStore;
-use crate::sidebar::events::{SidebarEvent, SidebarEventEnvelope};
-use crate::sidebar::focus_anchor::{
+use crate::mux::focus_anchor::{
     FocusObservation, FocusObservationOutcome, FocusOrigin, FocusPresentation,
 };
+use crate::sidebar::event_store::EventStore;
+use crate::sidebar::events::{SidebarEvent, SidebarEventEnvelope};
 use crate::sidebar::fuse::{focus_intent_confirmed_from, fuse, fuse_owned};
 use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::ReadMarkStore;
@@ -545,19 +545,19 @@ fn spawn_pane_focus(
     pane_id: PaneId,
     session_name: &str,
     runtime: crate::disk::paths::RuntimePaths,
-    origin: crate::sidebar::focus_anchor::FocusOrigin,
+    origin: crate::mux::focus_anchor::FocusOrigin,
     expected_pre_action: Option<Vec<crate::mux::ClientPaneView>>,
-    presentation: (usize, Option<crate::sidebar::focus_anchor::FrozenOrder>),
+    presentation: (usize, Option<crate::mux::focus_anchor::FrozenOrder>),
     repair_generation: Option<u64>,
 ) {
     let session_name = session_name.to_owned();
     std::thread::spawn(move || {
         let backend = crate::mux::backend_for(pane_id.mux());
-        let requested = crate::sidebar::focus_anchor::request_action(
+        let requested = crate::mux::focus_anchor::request_action(
             backend.as_ref(),
             &runtime,
             &session_name,
-            crate::sidebar::focus_anchor::FocusActionRequest {
+            crate::mux::focus_anchor::FocusActionRequest {
                 pane_id: pane_id.clone(),
                 origin,
                 repair_generation,
@@ -567,7 +567,7 @@ fn spawn_pane_focus(
             },
         );
         let outcome = match requested {
-            Ok(nonce) => match crate::sidebar::focus_anchor::dispatch_action(
+            Ok(nonce) => match crate::mux::focus_anchor::dispatch_action(
                 backend.as_ref(),
                 &runtime,
                 &session_name,

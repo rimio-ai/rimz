@@ -752,7 +752,7 @@ impl LoopState {
                 target,
                 &config.session_name,
                 self.read_marks.runtime().clone(),
-                crate::sidebar::focus_anchor::FocusOrigin::AutomaticRepair,
+                crate::mux::focus_anchor::FocusOrigin::AutomaticRepair,
                 expected,
                 (self.ui.scroll_offset, Some(self.ui.last_order.clone())),
                 Some(repair.generation),
@@ -979,7 +979,7 @@ impl LoopState {
                     pane,
                     &config.session_name,
                     self.read_marks.runtime().clone(),
-                    crate::sidebar::focus_anchor::FocusOrigin::User,
+                    crate::mux::focus_anchor::FocusOrigin::User,
                     None,
                     (self.ui.scroll_offset, Some(self.ui.last_order.clone())),
                     None,
@@ -1723,14 +1723,14 @@ impl LoopState {
     }
 
     fn apply_focus_anchor(&mut self) {
-        let Some(anchor) = crate::sidebar::focus_anchor::load(self.read_marks.runtime()) else {
+        let Some(anchor) = crate::mux::focus_anchor::load(self.read_marks.runtime()) else {
             return;
         };
         let now_ms = crate::utils::time::unix_now_ms();
         let presentation_at_ms = anchor.applied_at_ms.unwrap_or(anchor.issued_at_ms);
         if self.ui.selected_pane.as_ref() == Some(&anchor.pane_id)
             && anchor.issued_at_ms > self.ui.last_focus_anchor_ms
-            && crate::sidebar::focus_anchor::is_fresh(presentation_at_ms, now_ms)
+            && crate::mux::focus_anchor::is_fresh(presentation_at_ms, now_ms)
         {
             self.ui.scroll_offset = anchor.offset;
             self.ui.manual_scroll = None;
@@ -1748,13 +1748,13 @@ impl LoopState {
             self.ui.last_focus_anchor_ms = anchor.issued_at_ms;
         }
         if self.confirmed_focus_intent_ms == anchor.issued_at_ms {
-            crate::sidebar::focus_anchor::clear_matching(self.read_marks.runtime(), anchor.nonce);
+            crate::mux::focus_anchor::clear_matching(self.read_marks.runtime(), anchor.nonce);
             self.confirmed_focus_intent_ms = 0;
         }
     }
 
     fn pending_focus_intent(&mut self, now_ms: u64) -> Option<FocusPresentation> {
-        let anchor = crate::sidebar::focus_anchor::load(self.read_marks.runtime())?;
+        let anchor = crate::mux::focus_anchor::load(self.read_marks.runtime())?;
         let outcome = if focus_intent_confirmed_from(
             &self.last_focus_observation,
             &self.event_store,
@@ -1763,7 +1763,7 @@ impl LoopState {
         ) {
             FocusObservationOutcome::Confirmed
         } else {
-            crate::sidebar::focus_anchor::observation_outcome_from(
+            crate::mux::focus_anchor::observation_outcome_from(
                 &anchor,
                 &self.last_focus_observation,
                 now_ms,
@@ -1781,10 +1781,8 @@ impl LoopState {
                     self.confirmed_focus_intent_ms = anchor.issued_at_ms;
                     return None;
                 }
-                if crate::sidebar::focus_anchor::clear_matching(
-                    self.read_marks.runtime(),
-                    anchor.nonce,
-                ) {
+                if crate::mux::focus_anchor::clear_matching(self.read_marks.runtime(), anchor.nonce)
+                {
                     if self.confirmed_focus_intent_ms == anchor.issued_at_ms {
                         self.confirmed_focus_intent_ms = 0;
                     }
@@ -1797,7 +1795,7 @@ impl LoopState {
 
     fn record_focus_resolution(
         &self,
-        anchor: &crate::sidebar::focus_anchor::FocusAnchor,
+        anchor: &crate::mux::focus_anchor::FocusAnchor,
         outcome: FocusObservationOutcome,
     ) {
         if anchor.origin != FocusOrigin::AutomaticRepair {

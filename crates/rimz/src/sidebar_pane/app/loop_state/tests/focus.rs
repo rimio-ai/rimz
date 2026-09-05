@@ -12,16 +12,16 @@ fn applied_focus_anchor(
     offset: usize,
     stamp_ms: u64,
     order: Option<crate::sidebar_pane::render::FrozenOrder>,
-) -> crate::sidebar::focus_anchor::FocusAnchor {
-    crate::sidebar::focus_anchor::FocusAnchor {
-        nonce: crate::sidebar::focus_anchor::FocusNonce::new(),
+) -> crate::mux::focus_anchor::FocusAnchor {
+    crate::mux::focus_anchor::FocusAnchor {
+        nonce: crate::mux::focus_anchor::FocusNonce::new(),
         session_name: "rimz-test".to_owned(),
         pane_id,
-        origin: crate::sidebar::focus_anchor::FocusOrigin::User,
+        origin: crate::mux::focus_anchor::FocusOrigin::User,
         repair_generation: None,
         issued_at_ms: stamp_ms,
         applied_at_ms: Some(stamp_ms),
-        state: crate::sidebar::focus_anchor::FocusIntentState::Applied,
+        state: crate::mux::focus_anchor::FocusIntentState::Applied,
         pre_action: Vec::new(),
         offset,
         order,
@@ -33,10 +33,10 @@ fn requested_focus_anchor(
     offset: usize,
     stamp_ms: u64,
     order: Option<crate::sidebar_pane::render::FrozenOrder>,
-) -> crate::sidebar::focus_anchor::FocusAnchor {
+) -> crate::mux::focus_anchor::FocusAnchor {
     let mut anchor = applied_focus_anchor(pane_id, offset, stamp_ms, order);
     anchor.applied_at_ms = None;
-    anchor.state = crate::sidebar::focus_anchor::FocusIntentState::Requested;
+    anchor.state = crate::mux::focus_anchor::FocusIntentState::Requested;
     anchor
 }
 
@@ -45,7 +45,7 @@ fn fresh_focus_anchor_seeds_scroll_on_matching_fold() {
     let mut rig = Rig::new();
     let target = zellij("terminal_2");
     let stamp_ms = crate::utils::time::unix_now_ms();
-    crate::sidebar::focus_anchor::store(
+    crate::mux::focus_anchor::store(
         &rig.runtime,
         &applied_focus_anchor(target.clone(), 7, stamp_ms, None),
     )
@@ -93,7 +93,7 @@ fn fresh_requested_focus_anchor_installs_shared_hold_once() {
             visible: HashSet::from([target.to_string()]),
         }),
     );
-    crate::sidebar::focus_anchor::store(&rig.runtime, &anchor).expect("store anchor");
+    crate::mux::focus_anchor::store(&rig.runtime, &anchor).expect("store anchor");
 
     let snapshot = snapshot_with_focused_pane(&rig.ws, target.clone());
     rig.fold(snapshot, PaneFrame::Fresh, SnapshotSource::Produced);
@@ -120,9 +120,9 @@ fn fresh_requested_focus_anchor_installs_shared_hold_once() {
     rig.state.ui.manual_scroll = Some(crate::sidebar_pane::render::ManualScroll {
         selection_at_start: Some(target.clone()),
     });
-    anchor.state = crate::sidebar::focus_anchor::FocusIntentState::Applied;
+    anchor.state = crate::mux::focus_anchor::FocusIntentState::Applied;
     anchor.applied_at_ms = Some(crate::utils::time::unix_now_ms());
-    crate::sidebar::focus_anchor::store(&rig.runtime, &anchor).expect("apply anchor");
+    crate::mux::focus_anchor::store(&rig.runtime, &anchor).expect("apply anchor");
     let snapshot = snapshot_with_focused_pane(&rig.ws, target);
     rig.fold(snapshot, PaneFrame::Fresh, SnapshotSource::Produced);
 
@@ -136,7 +136,7 @@ fn focus_anchor_stamp_applies_once() {
     let mut rig = Rig::new();
     let target = zellij("terminal_2");
     let stamp_ms = crate::utils::time::unix_now_ms();
-    crate::sidebar::focus_anchor::store(
+    crate::mux::focus_anchor::store(
         &rig.runtime,
         &applied_focus_anchor(target.clone(), 7, stamp_ms, None),
     )
@@ -161,9 +161,9 @@ fn focus_anchor_stamp_applies_once() {
 fn stale_focus_anchor_fences_unchanged_observation_to_unknown() {
     let mut rig = Rig::new();
     let target = zellij("terminal_2");
-    let ttl_ms = crate::sidebar::timing::FOCUS_ANCHOR_FRESH.as_millis() as u64;
+    let ttl_ms = crate::mux::focus_anchor::FOCUS_ANCHOR_FRESH.as_millis() as u64;
     let stale_stamp = crate::utils::time::unix_now_ms().saturating_sub(ttl_ms + 1);
-    crate::sidebar::focus_anchor::store(
+    crate::mux::focus_anchor::store(
         &rig.runtime,
         &applied_focus_anchor(target.clone(), 7, stale_stamp, None),
     )
@@ -188,7 +188,7 @@ fn superseding_client_observation_leaves_scroll_untouched() {
         client_id: crate::mux::MuxClientId::Zellij(7),
         pane_id: anchor.pane_id.clone(),
     }];
-    crate::sidebar::focus_anchor::store(&rig.runtime, &anchor).expect("store anchor");
+    crate::mux::focus_anchor::store(&rig.runtime, &anchor).expect("store anchor");
     rig.state.ui.scroll_offset = 3;
 
     let mut snapshot = snapshot_with_focused_pane(&rig.ws, selected.clone());

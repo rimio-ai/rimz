@@ -33,12 +33,12 @@ pub(super) fn reconcile_cohort_launch(
         rimz::harness::resume::CohortRelaunchState::Present { focus_pane } => {
             if let Some(pane_id) = focus_pane {
                 let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
-                rimz::sidebar::focus_anchor::execute_action(
+                rimz::mux::focus_anchor::execute_action(
                     backend,
                     &runtime,
                     &workspace.session_name,
                     pane_id,
-                    rimz::sidebar::focus_anchor::FocusOrigin::User,
+                    rimz::mux::focus_anchor::FocusOrigin::User,
                     None,
                     Default::default(),
                 )?;

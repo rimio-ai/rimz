@@ -149,12 +149,12 @@ pub(in crate::cli) fn restart_resolved(
         .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
         .unwrap_or_default();
 
-    if let Err(err) = rimz::sidebar::focus_anchor::execute_action(
+    if let Err(err) = rimz::mux::focus_anchor::execute_action(
         backend.as_ref(),
         ctx.runtime(),
         &workspace.session_name,
         old_pane.clone(),
-        rimz::sidebar::focus_anchor::FocusOrigin::User,
+        rimz::mux::focus_anchor::FocusOrigin::User,
         None,
         Default::default(),
     )
