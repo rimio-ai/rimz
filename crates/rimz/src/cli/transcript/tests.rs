@@ -424,7 +424,7 @@ fn flat_and_last_apply_to_display_order() {
 }
 
 #[test]
-fn subagent_reports_are_json_only_and_do_not_consume_the_human_last_slot() {
+fn subagent_reports_and_wakes_are_json_only_and_do_not_consume_the_human_last_slot() {
     let project = tempfile::TempDir::new().expect("project tempdir");
     let workspace_id = rimz::WorkspaceId::from_project_root(project.path());
     let workspace = rimz::ResolvedWorkspace {
@@ -453,25 +453,47 @@ fn subagent_reports_are_json_only_and_do_not_consume_the_human_last_slot() {
         "hidden report",
     );
     report.at = ts("2026-06-01T00:00:01Z");
+    let mut wake = log_entry(
+        "claude",
+        "receiver",
+        TranscriptKind::Wake,
+        Some("@rimz"),
+        "hidden wake",
+    );
+    wake.at = ts("2026-06-01T00:00:02Z");
     rimz::transcript::append(&paths, &prompt).expect("append prompt");
     rimz::transcript::append(&paths, &report).expect("append report");
+    rimz::transcript::append(&paths, &wake).expect("append wake");
 
-    let human = chat_view_with_mode(
-        &workspace,
-        &paths,
-        Some("@all"),
-        None,
-        Some(1),
-        false,
-        ViewMode {
-            hidden: Hidden::for_json(false),
-            flat: true,
-        },
-    )
-    .expect("human view");
-    let human_lines = selected_lines(&human);
-    assert_eq!(human_lines.len(), 1);
-    assert_eq!(human_lines[0].text, "visible prompt");
+    for (flat, last) in [
+        (true, None),
+        (true, Some(1)),
+        (false, None),
+        (false, Some(1)),
+    ] {
+        let human = chat_view_with_mode(
+            &workspace,
+            &paths,
+            Some("@all"),
+            None,
+            last,
+            false,
+            ViewMode {
+                hidden: Hidden::for_json(false),
+                flat,
+            },
+        )
+        .expect("human view");
+        let human_lines = selected_lines(&human);
+        assert_eq!(human_lines.len(), 1);
+        assert_eq!(human_lines[0].text, "visible prompt");
+        let mut out = Vec::new();
+        render_lines_to(&mut out, &human, &TimeZone::UTC, Prose::Raw).expect("render human view");
+        let rendered = String::from_utf8(out).expect("utf8");
+        assert!(rendered.contains("visible prompt"));
+        assert!(!rendered.contains("hidden report"));
+        assert!(!rendered.contains("hidden wake"));
+    }
 
     let json = chat_view_with_mode(
         &workspace,
@@ -487,13 +509,14 @@ fn subagent_reports_are_json_only_and_do_not_consume_the_human_last_slot() {
     )
     .expect("json view");
     let lines = selected_lines(&json);
-    assert_eq!(lines.len(), 2);
+    assert_eq!(lines.len(), 3);
     assert_eq!(lines[1].from, "@rimz");
     assert_eq!(lines[1].text, "hidden report");
-    assert_eq!(
-        serde_json::to_value(&lines).unwrap()[1]["text"],
-        "hidden report"
-    );
+    assert_eq!(lines[2].from, "@rimz");
+    assert_eq!(lines[2].text, "hidden wake");
+    let serialized = serde_json::to_value(&lines).unwrap();
+    assert_eq!(serialized[1]["text"], "hidden report");
+    assert_eq!(serialized[2]["text"], "hidden wake");
 }
 
 #[test]
