@@ -10,11 +10,13 @@
 //! root process; targeted `/proc` reads supply cwd and resource enrichment.
 
 use std::collections::{BTreeSet, HashSet};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::RuntimePaths;
 use crate::ids::{MuxName, PaneId};
-use crate::mux::{ClientPaneView, ClientView, MuxClientId, PaneListing};
+use crate::mux::{ClientPaneView, ClientView, MuxClientId, PRESENCE_STAMP_FRESH, PaneListing};
 use crate::pane::{PaneRef, SIDEBAR_CHROME_TITLE};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -328,9 +330,135 @@ impl PaneTopologyPane {
     }
 }
 
+/// The plugin identity owner flows most recently asked Zellij to run. The
+/// topology writer gate uses it to converge overlapping build generations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresenceDesired {
+    pub build: String,
+    pub config: String,
+    pub recorded_at_ms: u64,
+}
+
+fn presence_desired_path(runtime: &RuntimePaths) -> PathBuf {
+    runtime.root.join("presence-desired.json")
+}
+
+pub fn read_presence_desired(runtime: &RuntimePaths) -> Option<PresenceDesired> {
+    let bytes = std::fs::read(presence_desired_path(runtime)).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+pub fn write_presence_desired(
+    runtime: &RuntimePaths,
+    desired: &PresenceDesired,
+) -> crate::disk::atomic::Result<()> {
+    crate::disk::atomic::write_temp_then_rename_cache(&presence_desired_path(runtime), desired)
+}
+
+/// Path of the Zellij presence-plugin topology cache, beside the producer's
+/// `snapshot.json` pane frame. The topology cache is Zellij's pane roster; the
+/// normal producer frame still carries the rendered view-model.
+pub fn pane_topology_cache_path(runtime: &RuntimePaths) -> PathBuf {
+    runtime.root.join("pane-topology.json")
+}
+
+/// Publish the plugin-provided pane topology. Cache-class: rename atomic, no
+/// fsync, rebuilt by the next presence event or by the CLI fallback.
+pub fn write_pane_topology_cache(
+    runtime: &RuntimePaths,
+    cache: &PaneTopologyCache,
+) -> crate::disk::atomic::Result<()> {
+    crate::disk::atomic::write_temp_then_rename_cache(&pane_topology_cache_path(runtime), cache)
+}
+
+/// Read a same-session topology cache regardless of freshness. `None` means
+/// absent, unreadable, or for another session.
+pub fn read_pane_topology_cache(
+    runtime: &RuntimePaths,
+    session: &str,
+) -> Option<PaneTopologyCache> {
+    let bytes = std::fs::read(pane_topology_cache_path(runtime)).ok()?;
+    let cache: PaneTopologyCache = serde_json::from_slice(&bytes).ok()?;
+    (cache.session_name == session).then_some(cache)
+}
+
+/// Whether a same-session plugin topology payload is young enough to use as
+/// Zellij's roster. The window matches the presence liveness window so one
+/// normal keepalive jitter does not fail a read. Normal verification pulls use
+/// no topology floor: the wake that asks for verification has already written
+/// the topology payload it carries. The optional floor is reserved for explicit
+/// structural repair after a local mux mutation.
+pub fn pane_topology_cache_is_fresh(
+    cache: &PaneTopologyCache,
+    now_ms: u64,
+    min_produced_at_ms: Option<u64>,
+) -> bool {
+    let fresh =
+        now_ms.saturating_sub(cache.produced_at_ms) <= PRESENCE_STAMP_FRESH.as_millis() as u64;
+    let new_enough = min_produced_at_ms.is_none_or(|min| cache.produced_at_ms >= min);
+    fresh && new_enough
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ids::WorkspaceId;
+    use crate::sidebar::FRESH_PANE_GRACE;
+    use crate::utils::time::unix_now_ms;
+
+    #[test]
+    fn pane_topology_cache_freshness_honors_requested_floor() {
+        let cache = PaneTopologyCache {
+            session_name: "rimz-test".to_owned(),
+            produced_at_ms: 100,
+            writer: None,
+            focused_pane: None,
+            clients: None,
+            panes: Vec::new(),
+        };
+
+        assert!(pane_topology_cache_is_fresh(&cache, 101, Some(100)));
+        assert!(!pane_topology_cache_is_fresh(&cache, 101, Some(101)));
+    }
+
+    #[test]
+    fn pane_topology_reap_floor_rejects_cache_older_than_fresh_pane_grace() {
+        let now = unix_now_ms();
+        let grace_ms = FRESH_PANE_GRACE.as_millis() as u64;
+        let floor = now.saturating_sub(grace_ms);
+        let old_cache = PaneTopologyCache {
+            session_name: "rimz-test".to_owned(),
+            produced_at_ms: floor.saturating_sub(1),
+            writer: None,
+            focused_pane: None,
+            clients: None,
+            panes: Vec::new(),
+        };
+        let fresh_cache = PaneTopologyCache {
+            produced_at_ms: floor,
+            ..old_cache.clone()
+        };
+
+        assert!(!pane_topology_cache_is_fresh(&old_cache, now, Some(floor)));
+        assert!(pane_topology_cache_is_fresh(&fresh_cache, now, Some(floor)));
+    }
+
+    #[test]
+    fn desired_presence_identity_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let desired = PresenceDesired {
+            build: "wasm-build".to_owned(),
+            config: "config-hash".to_owned(),
+            recorded_at_ms: 42,
+        };
+
+        write_presence_desired(&runtime, &desired).unwrap();
+
+        assert_eq!(read_presence_desired(&runtime), Some(desired));
+    }
 
     fn test_pane(id: u64, tab_position: u64, title: &str) -> PaneTopologyPane {
         PaneTopologyPane {

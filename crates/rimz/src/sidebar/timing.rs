@@ -1,9 +1,8 @@
-//! Sidebar timing constants.
+//! Sidebar-owned cadences and TTLs only.
 //!
-//! This module owns every sidebar cadence and TTL so the runtime, tests, and
-//! docs answer "how fresh is this lane?" from named constants. Callers may still
-//! re-export values through their local facades when that keeps older paths
-//! stable.
+//! Runtime, tests, and docs answer "how fresh is this lane?" from named
+//! constants. Bounds on other modules' behaviour live with those modules,
+//! without compatibility re-exports here.
 
 use std::time::Duration;
 
@@ -111,15 +110,6 @@ pub(crate) fn pane_carry_ttl() -> Duration {
 /// `/proc` start. The check works at whole-second granularity, so this absorbs
 /// timestamp-source rounding without letting reused pids keep stale identity.
 pub const PROCESS_START_MATCH_TOLERANCE: Duration = Duration::from_secs(2);
-
-/// How young the presence stamp must be for the producer to trust the push
-/// channel and use [`EVENT_PANE_TTL`]. 2.5× the plugin's 60s keepalive — two
-/// missed keepalives of slack, the same ratio the sidebar heartbeat TTL keeps
-/// over its write cadence. Past this the channel reads as dead and the
-/// producer reverts to [`SNAPSHOT_CACHE_TTL`] poll mode, byte-identical to a
-/// session with no push channel. tmux's control-mode watch writes the stamp
-/// while attached and lapses back to poll mode after true silence.
-pub const PRESENCE_STAMP_FRESH: Duration = Duration::from_secs(150);
 
 /// How long a *hot* worktree's git diff-stats stay cached before the
 /// per-worktree `git` forks behind them are re-run. A working-tree edit fires
@@ -259,16 +249,13 @@ pub const LINK_STATS_EXPIRE: Duration = Duration::from_secs(120);
 
 /// How often a renderer re-stamps its heartbeat. 2s keeps two missed writes of
 /// slack under [`SIDEBAR_HEARTBEAT_TTL`](crate::wakeup::heartbeat::SIDEBAR_HEARTBEAT_TTL) — the same 2.5× ratio
-/// [`PRESENCE_STAMP_FRESH`] keeps over the plugin keepalive — while avoiding an
+/// [`PRESENCE_STAMP_FRESH`](crate::mux::PRESENCE_STAMP_FRESH) keeps over the plugin keepalive — while avoiding an
 /// atomic file write for every store-delta fetch in a busy fleet.
 pub const HEARTBEAT_WRITE_INTERVAL: Duration = Duration::from_secs(2);
 
 /// How long `rimz reload` waits for signaled renderers to publish a heartbeat
 /// stamped with the staged build before reporting them unconverged.
 pub const RELOAD_CONVERGE_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Per-call bound for reload's best-effort convergence pane/layout reads.
-pub const RECONCILE_LIST_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Poll cadence while `rimz reload` waits for build-stamped heartbeats.
 pub const RELOAD_CONVERGE_POLL: Duration = Duration::from_millis(150);

@@ -104,7 +104,7 @@ fn seed_presence_permissions_is_noop_when_complete() {
 fn presence_convergence_log(writer: Option<TopologyWriter>) -> String {
     use crate::disk::paths::RuntimePaths;
     use crate::mux::zellij::pane_topology::PaneTopologyCache;
-    use crate::sidebar::cache::write_pane_topology_cache;
+    use crate::mux::zellij::pane_topology::write_pane_topology_cache;
 
     let (temp, shim) = pane_roster_shim(MIXED_PLUGIN_ROSTER);
     let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, temp.path());
@@ -248,7 +248,7 @@ fn topology_dumps_broadcast_without_launching_plugins() {
 #[test]
 fn owner_launch_records_the_desired_writer_identity() {
     use crate::disk::paths::RuntimePaths;
-    use crate::sidebar::cache::read_presence_desired;
+    use crate::mux::zellij::pane_topology::read_presence_desired;
 
     let (temp, shim) = logging_shim();
     let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, temp.path());
@@ -336,7 +336,7 @@ fn presence_convergence_retires_only_on_a_proven_replacement_writer() {
 fn presence_force_sweep_listing_failure_keeps_retire_best_effort() {
     use crate::disk::paths::RuntimePaths;
     use crate::mux::zellij::pane_topology::PaneTopologyCache;
-    use crate::sidebar::cache::write_pane_topology_cache;
+    use crate::mux::zellij::pane_topology::write_pane_topology_cache;
 
     let (temp, shim) = failing_roster_shim();
     let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, temp.path());

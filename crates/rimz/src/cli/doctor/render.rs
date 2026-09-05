@@ -751,8 +751,7 @@ fn presence_plugin_verdict(tally: &mut Tally, row: &PresencePluginRow) -> Cell {
 fn failing_recently(telemetry: &PresencePluginTelemetry) -> bool {
     let topology = telemetry.topology_failures_delta.unwrap_or_default();
     let other = telemetry.other_failures_delta.unwrap_or_default();
-    let fresh =
-        telemetry.last_seen_age_secs <= rimz::sidebar::timing::PRESENCE_STAMP_FRESH.as_secs();
+    let fresh = telemetry.last_seen_age_secs <= rimz::mux::PRESENCE_STAMP_FRESH.as_secs();
     fresh && (topology > 0 || other > 0)
 }
 

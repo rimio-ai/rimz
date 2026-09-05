@@ -44,20 +44,21 @@ fn write_zellij_topology_for_view(runtime: &RuntimePaths, view_cols: u16) {
 }
 
 fn write_zellij_fullscreen_topology(runtime: &RuntimePaths, active: bool) -> u64 {
-    let mut cache = match crate::sidebar::cache::read_pane_topology_cache(runtime, "rimz-test") {
-        Some(cache) => cache,
-        None => {
-            write_zellij_topology(runtime);
-            crate::sidebar::cache::read_pane_topology_cache(runtime, "rimz-test")
-                .expect("topology cache")
-        }
-    };
+    let mut cache =
+        match crate::mux::zellij::pane_topology::read_pane_topology_cache(runtime, "rimz-test") {
+            Some(cache) => cache,
+            None => {
+                write_zellij_topology(runtime);
+                crate::mux::zellij::pane_topology::read_pane_topology_cache(runtime, "rimz-test")
+                    .expect("topology cache")
+            }
+        };
     cache.produced_at_ms = cache
         .produced_at_ms
         .saturating_add(1)
         .max(crate::utils::time::unix_now_ms());
     cache.panes[1].is_fullscreen = active;
-    crate::sidebar::cache::write_pane_topology_cache(runtime, &cache)
+    crate::mux::zellij::pane_topology::write_pane_topology_cache(runtime, &cache)
         .expect("write fullscreen topology");
     cache.produced_at_ms
 }
@@ -92,7 +93,7 @@ fn write_zellij_topology_panes(
         pane_pid: None,
         terminal_command: None,
     };
-    crate::sidebar::cache::write_pane_topology_cache(
+    crate::mux::zellij::pane_topology::write_pane_topology_cache(
         runtime,
         &PaneTopologyCache {
             session_name: "rimz-test".to_owned(),

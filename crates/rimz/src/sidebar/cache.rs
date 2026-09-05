@@ -13,9 +13,9 @@ use serde::{Deserialize, Serialize};
 use crate::RuntimePaths;
 use crate::disk::parse_cache::{ParseCache, StampedPath};
 use crate::ids::MuxName;
-use crate::mux::zellij::pane_topology::PaneTopologyCache;
+use crate::mux::PRESENCE_STAMP_FRESH;
 use crate::sidebar::frame::PaneFrame;
-use crate::sidebar::timing::{EVENT_PANE_TTL, PRESENCE_STAMP_FRESH, SNAPSHOT_CACHE_TTL};
+use crate::sidebar::timing::{EVENT_PANE_TTL, SNAPSHOT_CACHE_TTL};
 use crate::utils::time::unix_now_ms;
 
 // The shared pane frame cache is keyed to one `(workspace, session)`: the
@@ -184,31 +184,6 @@ pub fn presence_event_mode(stamp_age_ms: Option<u64>) -> bool {
     stamp_age_ms.is_some_and(|age| age <= PRESENCE_STAMP_FRESH.as_millis() as u64)
 }
 
-/// The plugin identity owner flows most recently asked Zellij to run. The
-/// topology writer gate uses it to converge overlapping build generations.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PresenceDesired {
-    pub build: String,
-    pub config: String,
-    pub recorded_at_ms: u64,
-}
-
-fn presence_desired_path(runtime: &RuntimePaths) -> PathBuf {
-    runtime.root.join("presence-desired.json")
-}
-
-pub fn read_presence_desired(runtime: &RuntimePaths) -> Option<PresenceDesired> {
-    let bytes = std::fs::read(presence_desired_path(runtime)).ok()?;
-    serde_json::from_slice(&bytes).ok()
-}
-
-pub fn write_presence_desired(
-    runtime: &RuntimePaths,
-    desired: &PresenceDesired,
-) -> crate::disk::atomic::Result<()> {
-    crate::disk::atomic::write_temp_then_rename_cache(&presence_desired_path(runtime), desired)
-}
-
 /// The effective pane-cache TTL for one produce: the event-mode TTL while the
 /// presence channel is alive or the published frame is unwatched, else the
 /// poll-mode TTL. Computed once per `cached_panes_or_produce` call and threaded
@@ -224,22 +199,6 @@ pub fn effective_pane_ttl(stamp_age_ms: Option<u64>, unwatched: bool) -> Duratio
     }
 }
 
-/// Path of the Zellij presence-plugin topology cache, beside the producer's
-/// `snapshot.json` pane frame. The topology cache is Zellij's pane roster; the
-/// normal producer frame still carries the rendered view-model.
-pub fn pane_topology_cache_path(runtime: &RuntimePaths) -> PathBuf {
-    runtime.root.join("pane-topology.json")
-}
-
-/// Publish the plugin-provided pane topology. Cache-class: rename atomic, no
-/// fsync, rebuilt by the next presence event or by the CLI fallback.
-pub fn write_pane_topology_cache(
-    runtime: &RuntimePaths,
-    cache: &PaneTopologyCache,
-) -> crate::disk::atomic::Result<()> {
-    crate::disk::atomic::write_temp_then_rename_cache(&pane_topology_cache_path(runtime), cache)
-}
-
 /// Publish the sidebar supervisor's shared authoritative pane observation.
 /// Cache-class: rename atomic, no fsync, and safe to discard between probes.
 pub fn write_authoritative_pane_probe<T: Serialize>(
@@ -250,34 +209,6 @@ pub fn write_authoritative_pane_probe<T: Serialize>(
         &runtime.authoritative_pane_probe_path(),
         probe,
     )
-}
-
-/// Read a same-session topology cache regardless of freshness. `None` means
-/// absent, unreadable, or for another session.
-pub fn read_pane_topology_cache(
-    runtime: &RuntimePaths,
-    session: &str,
-) -> Option<PaneTopologyCache> {
-    let bytes = std::fs::read(pane_topology_cache_path(runtime)).ok()?;
-    let cache: PaneTopologyCache = serde_json::from_slice(&bytes).ok()?;
-    (cache.session_name == session).then_some(cache)
-}
-
-/// Whether a same-session plugin topology payload is young enough to use as
-/// Zellij's roster. The window matches the presence liveness window so one
-/// normal keepalive jitter does not fail a read. Normal verification pulls use
-/// no topology floor: the wake that asks for verification has already written
-/// the topology payload it carries. The optional floor is reserved for explicit
-/// structural repair after a local mux mutation.
-pub fn pane_topology_cache_is_fresh(
-    cache: &PaneTopologyCache,
-    now_ms: u64,
-    min_produced_at_ms: Option<u64>,
-) -> bool {
-    let fresh =
-        now_ms.saturating_sub(cache.produced_at_ms) <= PRESENCE_STAMP_FRESH.as_millis() as u64;
-    let new_enough = min_produced_at_ms.is_none_or(|min| cache.produced_at_ms >= min);
-    fresh && new_enough
 }
 
 #[cfg(test)]

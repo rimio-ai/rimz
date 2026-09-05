@@ -49,6 +49,9 @@ const MIN_NO_FOCUS_ZELLIJ_VERSION: (u32, u32, u32) = (0, 45, 0);
 /// Total budget for the pre-attach responsiveness verdict.
 const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 
+/// Per-call bound for reload's best-effort convergence pane/layout reads.
+pub(crate) const RECONCILE_LIST_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Pause between failed native responsiveness probes.
 const HEALTH_PROBE_RETRY_DELAY: Duration = Duration::from_millis(250);
 

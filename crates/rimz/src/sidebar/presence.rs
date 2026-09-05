@@ -16,13 +16,12 @@ use crate::diag::plugin_presence::{PluginPresenceSample, WASM_PAGE_BYTES};
 use crate::diag::record::{DiagEvent, WorkPaneBoundaryMove};
 use crate::ids::{MuxName, PaneId, ViewId};
 use crate::mux::zellij::pane_topology::{
-    PaneTopologyCache, PaneTopologyPane, TopologyWriter, ZellijPaneId,
+    PaneTopologyCache, PaneTopologyPane, PresenceDesired, TopologyWriter, ZellijPaneId,
+    pane_topology_cache_is_fresh, read_pane_topology_cache, read_presence_desired,
+    write_pane_topology_cache,
 };
 use crate::pane::SIDEBAR_CHROME_TITLE;
-use crate::sidebar::cache::{
-    PresenceDesired, pane_topology_cache_is_fresh, read_pane_topology_cache, read_presence_desired,
-    write_pane_topology_cache, write_presence_stamp,
-};
+use crate::sidebar::cache::write_presence_stamp;
 use crate::utils::time::unix_now_ms;
 use crate::wakeup::events::SidebarEvent;
 use crate::{RuntimePaths, StatePaths};

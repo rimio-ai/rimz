@@ -9,7 +9,7 @@ use rimz::ids::MuxName;
 use rimz::mux::{
     MuxBackend, SessionHealth, binaries,
     tmux::{self as tmux_mod, MIN_TMUX_VERSION},
-    zellij::{self as zellij_mod, MIN_ZELLIJ_VERSION},
+    zellij::{self as zellij_mod, MIN_ZELLIJ_VERSION, pane_topology},
 };
 use rimz::sidebar_pane::ZellijKittySupport;
 use rimz::store::event::SessionDeathCause;
@@ -272,10 +272,10 @@ fn collect_plugin_presence(
     let runtime = RuntimePaths::for_workspace(ws.workspace_id.clone()).ok()?;
     let state = StatePaths::for_workspace(ws.workspace_id.clone()).ok()?;
     let now_ms = rimz::utils::time::unix_now_ms();
-    let cache = rimz::sidebar::cache::read_pane_topology_cache(&runtime, &ws.session_name);
+    let cache = pane_topology::read_pane_topology_cache(&runtime, &ws.session_name);
     let cache_writer = cache.as_ref().and_then(|cache| cache.writer.as_ref());
     let conflict = fresh_topology_writer_conflict(&runtime, cache_writer, now_ms);
-    let desired = rimz::sidebar::cache::read_presence_desired(&runtime);
+    let desired = pane_topology::read_presence_desired(&runtime);
     presence_plugins_view(
         zellij_mod::live_presence_plugin_ids(&ws.session_name).map_err(|err| err.to_string()),
         rimz::diag::plugin_presence::recent_generations(&state.root, &ws.session_name),
@@ -293,9 +293,9 @@ fn collect_plugin_presence(
 fn presence_plugins_view(
     live: Result<Vec<u32>, String>,
     spans: Vec<rimz::diag::plugin_presence::PluginPresenceSpan>,
-    cache: Option<&rimz::mux::zellij::pane_topology::PaneTopologyCache>,
+    cache: Option<&pane_topology::PaneTopologyCache>,
     conflict: Option<&rimz::sidebar::presence::TopologyWriterConflict>,
-    desired: Option<&rimz::sidebar::cache::PresenceDesired>,
+    desired: Option<&pane_topology::PresenceDesired>,
     history: Vec<String>,
     now_ms: u64,
 ) -> Option<model::Probe<model::PresencePlugins>> {
@@ -304,7 +304,7 @@ fn presence_plugins_view(
         Err(error) => return Some(model::Probe::Unavailable { error }),
     };
     let active_writer = cache
-        .filter(|cache| rimz::sidebar::cache::pane_topology_cache_is_fresh(cache, now_ms, None))
+        .filter(|cache| pane_topology::pane_topology_cache_is_fresh(cache, now_ms, None))
         .and_then(|cache| cache.writer.as_ref());
     let rejected_writer = conflict.and_then(|conflict| conflict.stale_writer.as_ref());
     let mut spans_by_id = HashMap::<u32, Vec<_>>::new();
@@ -772,9 +772,8 @@ fn collect_topology_writer(ws: &rimz::ResolvedWorkspace) -> Option<model::Topolo
         .ok()
         .and_then(|runtime| {
             let now_ms = rimz::utils::time::unix_now_ms();
-            let cache_writer =
-                rimz::sidebar::cache::read_pane_topology_cache(&runtime, &ws.session_name)
-                    .and_then(|cache| cache.writer);
+            let cache_writer = pane_topology::read_pane_topology_cache(&runtime, &ws.session_name)
+                .and_then(|cache| cache.writer);
             fresh_topology_writer_conflict(&runtime, cache_writer.as_ref(), now_ms).map(
                 |conflict| model::TopologyWriterConflict {
                     stale: conflict.stale_writer.map(topology_writer_id),
@@ -796,7 +795,7 @@ fn collect_topology_writer(ws: &rimz::ResolvedWorkspace) -> Option<model::Topolo
 
 fn fresh_topology_writer_conflict(
     runtime: &RuntimePaths,
-    cache_writer: Option<&rimz::mux::zellij::pane_topology::TopologyWriter>,
+    cache_writer: Option<&pane_topology::TopologyWriter>,
     now_ms: u64,
 ) -> Option<rimz::sidebar::presence::TopologyWriterConflict> {
     let conflict = rimz::sidebar::presence::read_topology_writer_conflict(runtime)?;
@@ -809,18 +808,16 @@ fn fresh_topology_writer_conflict(
 }
 
 fn topology_conflict_superseded(
-    cache_writer: Option<&rimz::mux::zellij::pane_topology::TopologyWriter>,
-    accepted_writer: Option<&rimz::mux::zellij::pane_topology::TopologyWriter>,
+    cache_writer: Option<&pane_topology::TopologyWriter>,
+    accepted_writer: Option<&pane_topology::TopologyWriter>,
 ) -> bool {
-    let generation = |writer: Option<&rimz::mux::zellij::pane_topology::TopologyWriter>| {
+    let generation = |writer: Option<&pane_topology::TopologyWriter>| {
         writer.map_or((0, 0), |writer| writer.generation())
     };
     generation(cache_writer) > generation(accepted_writer)
 }
 
-fn topology_writer_id(
-    writer: rimz::mux::zellij::pane_topology::TopologyWriter,
-) -> model::TopologyWriterId {
+fn topology_writer_id(writer: pane_topology::TopologyWriter) -> model::TopologyWriterId {
     model::TopologyWriterId {
         plugin_id: writer.plugin_id,
         loaded_at_ms: writer.loaded_at_ms,

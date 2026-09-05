@@ -6,7 +6,9 @@ use std::time::{Duration, Instant};
 
 use super::super::mount_proof::{prove_sidebar_mount, sidebar_build_identity};
 use super::layout::{TempLayoutFile, render_background_view_layout, render_tab_layout};
-use super::pane_topology::{PaneTopologyCache, PaneTopologyPane, ZellijPaneId};
+use super::pane_topology::{
+    PaneTopologyCache, PaneTopologyPane, ZellijPaneId, read_pane_topology_cache,
+};
 use super::parse::{
     classify_session_not_found, is_no_active_sessions, is_session_not_found, is_transient_empty,
     live_session_name_from_line, parse_client_view, trim_capture,
@@ -16,7 +18,7 @@ use super::raw_pane::{
     tab_fullscreen_active, tab_view_cols,
 };
 use super::sidebar::DockOutcome;
-use super::{HEALTH_PROBE_RETRY_DELAY, ZellijBackend};
+use super::{HEALTH_PROBE_RETRY_DELAY, RECONCILE_LIST_TIMEOUT, ZellijBackend};
 use crate::disk::paths::RuntimePaths;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::{
@@ -279,8 +281,7 @@ impl ZellijBackend {
             .cloned()
             .or_else(|| workspace_id.and_then(|id| self.runtime_paths_for_authoritative(id)));
         if let Some(runtime) = runtime
-            && let Some(prior) =
-                crate::sidebar::cache::read_pane_topology_cache(&runtime, session_name)
+            && let Some(prior) = read_pane_topology_cache(&runtime, session_name)
         {
             merge_topology_enrichment(&mut cache, prior);
         }
@@ -370,7 +371,7 @@ impl ZellijBackend {
     fn move_new_tab_after(&self, session: &str, anchor: &PaneId) -> Result<()> {
         ensure_pane_backend(anchor, MuxName::Zellij)?;
         let panes: Vec<PaneTopologyPane> = self
-            .raw_listed_panes(session, crate::sidebar::timing::RECONCILE_LIST_TIMEOUT)?
+            .raw_listed_panes(session, RECONCILE_LIST_TIMEOUT)?
             .into_iter()
             .map(Into::into)
             .collect();
@@ -433,7 +434,7 @@ impl ZellijBackend {
             let expected_position = last_position - completed - 1;
             for attempt in 0..super::FOCUS_RESTORE_ATTEMPTS {
                 let moved = self
-                    .raw_listed_panes(session, crate::sidebar::timing::RECONCILE_LIST_TIMEOUT)?
+                    .raw_listed_panes(session, RECONCILE_LIST_TIMEOUT)?
                     .into_iter()
                     .map(PaneTopologyPane::from)
                     .find(|pane| pane.id == new_pane_id && pane.is_live_terminal())
@@ -1125,7 +1126,7 @@ impl MuxBackend for ZellijBackend {
             None,
             Some(&opts.workspace_id),
             live.topology_floor_ms,
-            crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
+            RECONCILE_LIST_TIMEOUT,
         )?;
         let panes = listing.panes;
         let views = group_reconcile_panes(panes.iter().filter_map(reconcile_pane));
@@ -1145,7 +1146,7 @@ impl MuxBackend for ZellijBackend {
         let restoration = self
             .client_view(ClientFocusOptions {
                 session_name: Some(opts.session_name.clone()),
-                command_timeout: Some(crate::sidebar::timing::RECONCILE_LIST_TIMEOUT),
+                command_timeout: Some(RECONCILE_LIST_TIMEOUT),
             })
             .ok()
             .and_then(|view| client_restoration_target(&panes, &view));
@@ -1285,11 +1286,7 @@ impl MuxBackend for ZellijBackend {
             .flatten();
         let view_cols = (|| {
             let panes = self
-                .topology_panes(
-                    &opts.sidebar.session_name,
-                    None,
-                    crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
-                )
+                .topology_panes(&opts.sidebar.session_name, None, RECONCILE_LIST_TIMEOUT)
                 .ok()?;
             let tab = panes
                 .iter()
@@ -1506,7 +1503,7 @@ fn restore_client_view(
         &opts.session_name,
         &opts.workspace_id,
         None,
-        crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
+        RECONCILE_LIST_TIMEOUT,
     ) else {
         return;
     };

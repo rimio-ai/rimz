@@ -13,8 +13,8 @@ use super::raw_pane::{
 };
 use super::socket::{socket_headroom_with_xdg_override, stderr_reports_socket_overflow};
 use super::{
-    MOUNT_POLL_STEP, MOUNT_POLL_TIMEOUT, SIDEBAR_LAYOUT_TIMEOUT, TOPOLOGY_CACHE_POLL_STEP,
-    ZellijBackend,
+    MOUNT_POLL_STEP, MOUNT_POLL_TIMEOUT, RECONCILE_LIST_TIMEOUT, SIDEBAR_LAYOUT_TIMEOUT,
+    TOPOLOGY_CACHE_POLL_STEP, ZellijBackend,
 };
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::width::{
@@ -25,7 +25,6 @@ use crate::mux::{
     SessionLiveness, SidebarPaneOptions, WidthSyncOptions, sidebar_serve_args,
 };
 use crate::pane::SIDEBAR_CHROME_TITLE;
-use crate::sidebar::timing::RECONCILE_LIST_TIMEOUT;
 use crate::utils::time::unix_now_ms;
 
 const ADD_DOCK_ATTEMPTS: u32 = 2;

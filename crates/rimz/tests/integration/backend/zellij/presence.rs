@@ -54,7 +54,7 @@ fn live_work_boundary_resize_is_audited() {
     state.ensure_dirs().expect("state dirs");
     runtime.ensure_dirs().expect("runtime dirs");
     let mut baseline = topology_cache_from_list_panes(xdg, &name);
-    let writer = rimz::sidebar::cache::read_pane_topology_cache(&runtime, &name)
+    let writer = rimz::mux::zellij::pane_topology::read_pane_topology_cache(&runtime, &name)
         .and_then(|cache| cache.writer);
     baseline.writer = writer.clone();
     rimz::sidebar::presence::ingest_zellij_wake(
@@ -484,8 +484,9 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
         .expect("presence runtime paths");
     let deadline = Instant::now() + SPAWN_TIMEOUT;
     let writer = loop {
-        if let Some(writer) = rimz::sidebar::cache::read_pane_topology_cache(&runtime, &name)
-            .and_then(|cache| cache.writer)
+        if let Some(writer) =
+            rimz::mux::zellij::pane_topology::read_pane_topology_cache(&runtime, &name)
+                .and_then(|cache| cache.writer)
         {
             break writer;
         }
@@ -528,9 +529,10 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
     let plugins_after =
         presence_plugin_panes(room.path(), &name).expect("presence plugin roster after converge");
     assert_eq!(plugins_after.len(), 1);
-    let current_writer = rimz::sidebar::cache::read_pane_topology_cache(&runtime, &name)
-        .and_then(|cache| cache.writer)
-        .expect("writer after same-identity converge");
+    let current_writer =
+        rimz::mux::zellij::pane_topology::read_pane_topology_cache(&runtime, &name)
+            .and_then(|cache| cache.writer)
+            .expect("writer after same-identity converge");
     assert_eq!(current_writer, writer);
 }
 
@@ -581,7 +583,7 @@ fn presence_identity_transition_keeps_global_background_updates() {
     let initial_cache = poll_until(
         SPAWN_TIMEOUT,
         || {
-            Ok(rimz::sidebar::cache::read_pane_topology_cache(
+            Ok(rimz::mux::zellij::pane_topology::read_pane_topology_cache(
                 &runtime, &name,
             ))
         },
@@ -623,7 +625,7 @@ fn presence_identity_transition_keeps_global_background_updates() {
     let changed_cache = poll_until(
         SPAWN_TIMEOUT,
         || {
-            Ok(rimz::sidebar::cache::read_pane_topology_cache(
+            Ok(rimz::mux::zellij::pane_topology::read_pane_topology_cache(
                 &runtime, &name,
             ))
         },
@@ -675,7 +677,7 @@ fn presence_identity_transition_keeps_global_background_updates() {
     let updated = poll_until(
         SPAWN_TIMEOUT,
         || {
-            Ok(rimz::sidebar::cache::read_pane_topology_cache(
+            Ok(rimz::mux::zellij::pane_topology::read_pane_topology_cache(
                 &runtime, &name,
             ))
         },
