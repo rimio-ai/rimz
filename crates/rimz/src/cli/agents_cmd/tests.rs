@@ -450,6 +450,34 @@ mod parse {
     }
 
     #[test]
+    fn fresh_launch_parses_and_conflicts_with_resume_and_from_pr() {
+        for argv in [
+            vec!["rimz", "forge", "--fresh"],
+            vec!["rimz", "forge", "--worktree=topic", "--fresh"],
+        ] {
+            assert!(parse_agents(&argv).launch.cohort.fresh);
+        }
+        for conflicting in ["--resume", "--continue"] {
+            assert_clap_error(
+                &["rimz", "forge", "-w", "topic", "--fresh", conflicting],
+                clap::error::ErrorKind::ArgumentConflict,
+            );
+        }
+        assert_clap_error(
+            &["rimz", "forge", "--fresh", "--from-pr", "1"],
+            clap::error::ErrorKind::ArgumentConflict,
+        );
+        let supervised = parse_agents(&["rimz", "claude", "ship", "-w", "topic", "--fresh", "-p"]);
+        assert!(
+            into_supervised_request(supervised)
+                .err()
+                .expect("fresh is interactive-only")
+                .to_string()
+                .contains("not -p")
+        );
+    }
+
+    #[test]
     fn lane_resume_forms_parse_public_contract() {
         let scoped = parse_agents(&["rimz", "resume", "#docs"]);
         let pr = parse_agents(&[
@@ -604,6 +632,7 @@ mod parse {
             (&["rimz", "--from-pr", "1"], "--from-pr requires"),
             (&["rimz", "--", "term"], "missing agent spec"),
             (&["rimz", "--model", "opus"], "require an agent spec"),
+            (&["rimz", "--fresh"], "require an agent spec"),
             (&["rimz", "-p", "--max-turns", "3"], "require an agent spec"),
         ] {
             let args = parse_agents(argv);

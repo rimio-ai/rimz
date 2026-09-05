@@ -159,6 +159,9 @@ pub(crate) struct CohortLaunchArgs {
         conflicts_with_all = ["prompt", "channel", "from_pr", "description", "budget"]
     )]
     pub(crate) resume: bool,
+    /// Launch new sessions in a named worktree instead of resuming its closed cohort.
+    #[arg(long, conflicts_with_all = ["resume", "from_pr"])]
+    pub(crate) fresh: bool,
     /// Cap each member's spend for the session (`5`) or local day (`20/day`).
     #[arg(long, value_name = "AMOUNT[/day]")]
     pub(crate) budget: Option<rimz::harness::budget::BudgetSpec>,
@@ -764,6 +767,9 @@ fn into_supervised_request(
     rimz::harness::run::SupervisedRunRequest,
     supervised::SupervisedPresentation,
 )> {
+    if args.launch.cohort.fresh {
+        bail!("--fresh is only supported for interactive cohort launches, not -p");
+    }
     if args.json {
         bail!("on `-p`, choose output with `--output-format json` (`--json` is for `list`)");
     }

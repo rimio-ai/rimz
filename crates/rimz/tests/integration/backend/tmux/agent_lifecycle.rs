@@ -420,6 +420,320 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
 }
 
 #[test]
+fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_agents() {
+    use std::io::Write;
+    use std::os::unix::fs::MetadataExt;
+
+    require_tmux!();
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    std::fs::write(env.home_root.join(".zshrc"), "").expect("disable zsh first-run menu");
+    init_repo(&env.project_root);
+    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let agent_bin = write_sleeping_agent_shim(&env, "claude");
+    let ready = env.home_root.join("cohort-ready");
+    std::fs::create_dir(&ready).expect("mkdir readiness records");
+    std::fs::write(
+        agent_bin.join("claude"),
+        format!(
+            "#!/bin/bash\nprintf ready > '{}/'$$\nexec -a claude sleep 300\n",
+            ready.display()
+        ),
+    )
+    .expect("write cohort sleeping shim");
+    let launch_command = || {
+        let mut command = env.rimz();
+        command
+            .env("PATH", path_with_front(&agent_bin))
+            .env("SHELL", "/definitely/not/a/shell")
+            .args(["--mux", "tmux", "agents", "claude,claude", "-w", "fresh"]);
+        command
+    };
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
+    let mut options = session_opts(
+        &workspace.session_name,
+        workspace.workspace_id.clone(),
+        &workspace.project_root,
+        &workspace.worktree_root,
+        Some((160, 40)),
+    );
+    options
+        .extra_env
+        .extend(launch_command().get_envs().filter_map(|(key, value)| {
+            value.map(|value| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.to_string_lossy().into_owned(),
+                )
+            })
+        }));
+    server
+        .backend
+        .ensure_session(&options)
+        .expect("ensure room");
+    let run_launch = |fresh: bool| {
+        let mut command = launch_command();
+        if fresh {
+            command.arg("--fresh");
+        }
+        let output = command
+            .stdin(std::process::Stdio::null())
+            .bounded_output()
+            .expect("run cohort launch");
+        assert!(
+            output.status.success(),
+            "cohort launch failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stderr).into_owned()
+    };
+    let run_prompt = |answer: &str| {
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 40,
+                cols: 160,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("open launch PTY");
+        let command = launch_command();
+        let mut cmd = CommandBuilder::new(env.rimz_bin());
+        env.pin_pty_command(&mut cmd);
+        cmd.args(command.get_args());
+        cmd.cwd(&env.project_root);
+        for (key, value) in command.get_envs() {
+            match value {
+                Some(value) => cmd.env(key, value),
+                None => cmd.env_remove(key),
+            }
+        }
+        let mut child = pair.slave.spawn_command(cmd).expect("spawn launch prompt");
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().expect("prompt reader");
+        let output = thread::spawn(move || {
+            let mut output = Vec::new();
+            let _ = reader.read_to_end(&mut output);
+            output
+        });
+        let mut writer = pair.master.take_writer().expect("prompt writer");
+        writer.write_all(answer.as_bytes()).expect("answer prompt");
+        writer.flush().expect("flush answer");
+        drop(writer);
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let status = loop {
+            if let Some(status) = child.try_wait().expect("poll prompt") {
+                break Some(status);
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            thread::sleep(Duration::from_millis(25));
+        };
+        drop(pair.master);
+        let output =
+            String::from_utf8_lossy(&output.join().expect("join prompt reader")).into_owned();
+        assert!(status.is_some_and(|status| status.success()), "{output}");
+        output
+    };
+    let agents = || {
+        env.store()
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .expect("audit cohort")
+            .agents
+    };
+    let wait_for_launch = |count: usize| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let rows = agents();
+            let ready_count = std::fs::read_dir(&ready)
+                .expect("read readiness records")
+                .count();
+            if ready_count == count
+                && rows.iter().filter(|agent| agent.ended_at.is_none()).count() == 2
+            {
+                return rows;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "cohort did not launch: ready={ready_count}, expected={count}, panes={}",
+                server.stdout(&[
+                    "capture-pane",
+                    "-p",
+                    "-t",
+                    &format!("{}:#fresh", workspace.session_name)
+                ])
+            );
+            thread::sleep(Duration::from_millis(25));
+        }
+    };
+
+    run_launch(false);
+    let original = wait_for_launch(2);
+    assert_eq!(original.len(), 2);
+    let worktree = env.home_root.join("project-worktrees/fresh");
+    std::fs::write(worktree.join("README.md"), "unfinished work\n").expect("dirty checkout");
+    std::fs::write(worktree.join("board.md"), "keep this scratch memory\n").expect("write scratch");
+    let checkout_inode = std::fs::metadata(&worktree)
+        .expect("checkout metadata")
+        .ino();
+    let git_file = std::fs::read(worktree.join(".git")).expect("checkout git pointer");
+    let target = format!("{}:#fresh", workspace.session_name);
+    server.tmux(&["kill-window", "-t", &target]);
+    for agent in &original {
+        wait_for_agent_end_observation(&env, agent.agent_id.as_str());
+    }
+    let closed = agents();
+    assert!(closed.iter().all(|agent| agent.ended_at.is_some()));
+    let windows = server.window_names(&workspace.session_name);
+
+    let hint = run_launch(false);
+    assert!(hint.contains("has work in progress"), "{hint}");
+    assert!(
+        hint.contains("rimz agents claude,claude -w fresh --resume"),
+        "{hint}"
+    );
+    assert!(
+        hint.contains("rimz agents claude,claude -w fresh --fresh"),
+        "{hint}"
+    );
+    assert_eq!(agents().len(), closed.len(), "hint must not launch agents");
+    assert_eq!(server.window_names(&workspace.session_name), windows);
+
+    for answer in ["c\n", "n\n"] {
+        let canceled = run_prompt(answer);
+        assert!(
+            canceled.contains("(resume/fresh/cancel) [resume]"),
+            "{canceled}"
+        );
+        assert!(
+            canceled.contains("canceled; nothing launched"),
+            "{canceled}"
+        );
+        assert_eq!(agents().len(), closed.len());
+        assert_eq!(server.window_names(&workspace.session_name), windows);
+    }
+
+    let fresh = run_prompt("f\n");
+    assert!(fresh.contains("fresh in worktree `fresh`"), "{fresh}");
+    let relaunched = wait_for_launch(4);
+    let live: Vec<_> = relaunched
+        .iter()
+        .filter(|agent| agent.ended_at.is_none())
+        .collect();
+    assert_eq!(relaunched.len(), 4, "closed identities remain in the store");
+    for agent in &live {
+        assert!(!agent.agent_id.is_empty());
+        assert!(agent.name.is_some());
+        assert!(
+            original
+                .iter()
+                .all(|old| old.agent_id != agent.agent_id && old.name != agent.name)
+        );
+        let cwd = Path::new(agent.worktree_path.as_deref().expect("agent checkout"));
+        assert_eq!(
+            cwd.canonicalize().expect("agent cwd"),
+            worktree.canonicalize().expect("checkout")
+        );
+    }
+    for old in &closed {
+        let retained = relaunched
+            .iter()
+            .find(|agent| agent.agent_id == old.agent_id)
+            .expect("retained closed identity");
+        assert_eq!(retained.ended_at, old.ended_at);
+    }
+    assert_eq!(
+        std::fs::metadata(&worktree)
+            .expect("checkout metadata")
+            .ino(),
+        checkout_inode
+    );
+    assert_eq!(
+        std::fs::read(worktree.join(".git")).expect("git pointer"),
+        git_file
+    );
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("README.md")).expect("dirty file"),
+        "unfinished work\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("board.md")).expect("scratch file"),
+        "keep this scratch memory\n"
+    );
+
+    let panes_before = server.stdout(&[
+        "list-panes",
+        "-s",
+        "-t",
+        &workspace.session_name,
+        "-F",
+        "#{pane_id}",
+    ]);
+    let already_live = run_launch(true);
+    assert!(already_live.contains("already running"), "{already_live}");
+    assert_eq!(
+        server.stdout(&[
+            "list-panes",
+            "-s",
+            "-t",
+            &workspace.session_name,
+            "-F",
+            "#{pane_id}"
+        ]),
+        panes_before
+    );
+    let identities = |rows: &[rimz::agents::AgentState]| {
+        rows.iter()
+            .map(|agent| (agent.agent_id.clone(), agent.ended_at))
+            .collect::<BTreeMap<_, _>>()
+    };
+    assert_eq!(identities(&agents()), identities(&relaunched));
+
+    server.tmux(&["kill-window", "-t", &target]);
+    for agent in live {
+        wait_for_agent_end_observation(&env, agent.agent_id.as_str());
+    }
+    let fresh = run_launch(true);
+    assert!(fresh.contains("fresh in worktree `fresh`"), "{fresh}");
+    let relaunched = wait_for_launch(6);
+    assert_eq!(relaunched.len(), 6);
+
+    server.tmux(&["kill-window", "-t", &target]);
+    for agent in relaunched.iter().filter(|agent| agent.ended_at.is_none()) {
+        wait_for_agent_end_observation(&env, agent.agent_id.as_str());
+    }
+    std::fs::copy(
+        env.project_root.join("README.md"),
+        worktree.join("README.md"),
+    )
+    .expect("restore clean checkout");
+    std::fs::remove_file(worktree.join("board.md")).expect("remove test scratch");
+    let canceled = run_prompt("\n");
+    assert!(
+        canceled.contains("(remove/fresh/cancel) [cancel]"),
+        "{canceled}"
+    );
+    assert!(
+        canceled.contains("canceled; nothing launched"),
+        "{canceled}"
+    );
+    assert_eq!(agents().len(), 6);
+    let fresh = run_prompt("f\n");
+    assert!(fresh.contains("fresh in worktree `fresh`"), "{fresh}");
+    assert_eq!(wait_for_launch(8).len(), 8);
+    assert_eq!(
+        std::fs::metadata(&worktree)
+            .expect("checkout metadata")
+            .ino(),
+        checkout_inode
+    );
+}
+
+#[test]
 fn closing_agent_tab_records_end_and_disposes_clean_worktree() {
     require_tmux!();
     if git_missing() {
