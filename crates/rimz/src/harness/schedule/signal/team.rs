@@ -295,18 +295,23 @@ mod tests {
     }
 
     #[test]
-    fn team_ended_uses_the_final_audit_member_for_ignored_terminal_events() {
-        for terminal in [LifecycleSignal::Ended, LifecycleSignal::Lost] {
+    fn team_ended_uses_the_final_audit_member_for_terminal_events() {
+        for (terminal, status) in [
+            (LifecycleSignal::Ended, "failed"),
+            (LifecycleSignal::Lost, "running"),
+        ] {
             let mut coder = member("coder", "auth", AgentStatus::Running);
             let mut reviewer = member("reviewer", "auth", AgentStatus::Success);
             reviewer.ended_at = Some(jiff::Timestamp::UNIX_EPOCH);
             let event = event(&coder, AgentStatus::Running, terminal.clone());
-            assert!(matches!(
-                event.transition,
-                LifecycleTransition::Ignored { .. }
-            ));
             if matches!(terminal, LifecycleSignal::Ended) {
+                assert!(matches!(event.transition, LifecycleTransition::Normal));
                 coder.ended_at = Some(event.at);
+            } else {
+                assert!(matches!(
+                    event.transition,
+                    LifecycleTransition::Ignored { .. }
+                ));
             }
             let rows = [coder, reviewer];
             let cohorts = team_cohorts(&rows);
@@ -324,7 +329,7 @@ mod tests {
             assert_eq!(
                 signals[0].payload["members"],
                 json!([
-                    {"handle": "@coder#auth", "status": "running"}
+                    {"handle": "@coder#auth", "status": status}
                 ])
             );
         }
