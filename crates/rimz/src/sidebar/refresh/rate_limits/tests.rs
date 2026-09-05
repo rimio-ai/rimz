@@ -1405,6 +1405,31 @@ fn fuse_window_selects_truth_by_source_freshness_and_epoch() {
             None,
         ),
         (
+            "newer best-effort refill parks against authoritative truth",
+            Some(auth(80, reset, older)),
+            Some(be(2, reset, now)),
+            None,
+            true,
+            Some(auth(80, reset, older)),
+            Some(parked.clone()),
+        ),
+        (
+            "newer best-effort refill confirms against authoritative truth",
+            Some(auth(
+                80,
+                reset,
+                now - SignedDuration::from_secs(REFILL_CONFIRM_SECS + 1),
+            )),
+            Some(be(2, reset, now)),
+            Some(PendingRefill {
+                first_seen_at: now - SignedDuration::from_secs(REFILL_CONFIRM_SECS),
+                ..parked.clone()
+            }),
+            true,
+            Some(be(2, reset, now)),
+            None,
+        ),
+        (
             "authoritative truth wins equal stamps",
             Some(auth(4, reset, now)),
             Some(be(19, reset, now)),
