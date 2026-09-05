@@ -8,9 +8,10 @@
 //! caches. An adapter may expose a pollable realtime account channel; the helper
 //! reads it first, then runs the direct channel on its own shared cadence. When
 //! direct-query windows are available, they merge after the realtime fold, so a
-//! fresh credential read can replace a stale warm realtime process. Climbs land
-//! immediately, while a same-epoch drop contested by stamped statusline truth
-//! waits for confirmation.
+//! fresh credential read can replace a stale warm realtime process. Each merged
+//! direct read anchors its windows: it supersedes any reading stamped no later
+//! than itself, climb or drop, and a best-effort reading overlays it only when
+//! stamped later.
 //! Best-effort and quiet: every provider-side failure exits successfully with
 //! the shared cache recording the retry state.
 

@@ -1013,21 +1013,19 @@ fn is_false(value: &bool) -> bool {
 }
 
 /// Where a [`RateLimitWindow`] reading came from, deciding how far the fusion
-/// trusts it. Usage only climbs within a live window, so a reading that lowers
-/// the bar is a refill that must be earned. An official-API climb is adopted at
-/// once, while its same-epoch drop is confirmed when fresh statusline-derived
-/// truth contests it.
+/// trusts it. A current official-API reading anchors the window in either
+/// direction; only a later best-effort reading may overlay it, with a refill
+/// requiring confirmation unless the reset timer advances.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WindowSource {
     /// Queried from the provider's official usage API (Claude OAuth usage,
     /// Codex app-server `account/rateLimits/read`). Truth at its `observed_at`:
-    /// it overrides older readings, while a same-epoch drop against stamped
-    /// best-effort truth waits for confirmation.
+    /// it overrides readings observed no later than itself, climb or drop.
     Authoritative,
     /// Derived from the agent's statusline payload. Current while the agent
     /// works, but an idle session re-emits a stale payload, so a downward move
-    /// is trusted only once confirmed across the sliding window.
+    /// requires a reset-timer advance or a confirmed near-full refill.
     #[default]
     BestEffort,
 }

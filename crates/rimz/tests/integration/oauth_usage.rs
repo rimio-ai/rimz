@@ -369,6 +369,71 @@ fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint(
         limits["entries"]["claude"]["limits"]["windows"][1]["duration_mins"],
         10080
     );
+
+    let mut session_limits = limits;
+    for window in session_limits["entries"]["claude"]["limits"]["windows"]
+        .as_array_mut()
+        .expect("cached windows")
+    {
+        window["used_percentage"] = serde_json::json!(19);
+        window["resets_at"] = serde_json::json!("2100-01-01T00:00:00Z");
+        window["observed_at"] =
+            serde_json::json!(jiff::Timestamp::now() - jiff::SignedDuration::from_secs(60));
+        window["source"] = serde_json::json!("best_effort");
+    }
+    std::fs::write(
+        runtime.shared_rate_limits_path(),
+        serde_json::to_vec(&session_limits).expect("serialize session limits"),
+    )
+    .expect("publish conflicting session limits");
+    let claim_id = env.seed_usage_claim("claude");
+    let (origin, server) = serve_after_failures(
+        0,
+        r#"{
+            "five_hour": { "utilization": 13, "resets_at": "2100-01-01T00:00:00Z" },
+            "seven_day": { "utilization": 4, "resets_at": "2100-01-01T00:00:00Z" }
+        }"#,
+    );
+    let output = env
+        .rimz()
+        .args(refresh_usage_argv(&env, "claude", &claim_id))
+        .env(
+            "RIMZ_CLAUDE_OAUTH_USAGE_URL",
+            format!("{origin}/api/oauth/usage"),
+        )
+        .bounded_output()
+        .expect("refresh conflicting usage");
+    assert!(
+        output.status.success(),
+        "refresh stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(server.join().expect("correction request").len(), 1);
+
+    let bin_dir = env.home_root.join("bin");
+    write_fake_claude(&bin_dir);
+    let output = env
+        .rimz()
+        .args(["providers", "claude", "--json"])
+        .env("PATH", path_with_front(&bin_dir))
+        .bounded_output()
+        .expect("read corrected provider usage");
+    assert!(
+        output.status.success(),
+        "providers stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("providers json");
+    let weekly = report[0]["windows"]
+        .as_array()
+        .expect("provider windows")
+        .iter()
+        .find(|window| window["duration_mins"] == 10_080)
+        .expect("weekly window");
+    assert_eq!(
+        weekly["used_percentage"], 4,
+        "providers retained session usage: {report}"
+    );
 }
 
 #[test]

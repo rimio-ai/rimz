@@ -31,10 +31,7 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    AgentRateLimits, ProviderAccountScope, RateLimitWindow,
-    context::{RateLimitWindowKey, WindowSource},
-};
+use super::{AgentRateLimits, ProviderAccountScope, RateLimitWindow, context::RateLimitWindowKey};
 use crate::RuntimePaths;
 use crate::ids::AgentKind;
 
@@ -414,18 +411,13 @@ impl std::fmt::Debug for RateLimitCacheEntry {
     }
 }
 
-/// An uncorroborated drop awaiting confirmation by rate-limit fusion.
+/// A best-effort refill awaiting confirmation by rate-limit fusion.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PendingRefill {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_mins: Option<u32>,
-    /// Source whose repeated drop owns the confirmation clock. Existing cache
-    /// records predate authoritative candidates and therefore default safely to
-    /// best-effort.
-    #[serde(default, skip_serializing_if = "WindowSource::is_best_effort")]
-    pub source: WindowSource,
     pub used_percentage: u8,
     pub first_seen_at: Timestamp,
 }
