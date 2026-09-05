@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
 use serde::Serialize;
 
-use rimz::config::TaskEntry;
+use rimz::config::{TaskEntry, WakeArmer, WakeMeta};
 use rimz::harness::schedule::catalog::TaskCatalog;
 
 use super::*;
@@ -27,13 +27,28 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
     self_wake_guard(args.signal.as_deref(), &matches, &target)?;
 
     let catalog = TaskCatalog::load(Some(&ctx.workspace.project_root))?;
-    let petname = rimz::harness::petname::mint(
-        catalog
-            .visible()
-            .keys()
-            .filter_map(|name| name.strip_prefix("wake-")),
-    );
-    let name = format!("wake-{petname}");
+    let mut name = if args.signal.is_some() {
+        "wake".to_owned()
+    } else {
+        let petname = rimz::harness::petname::mint(
+            catalog
+                .visible()
+                .keys()
+                .filter_map(|name| name.strip_prefix("wake-")),
+        );
+        format!("wake-{petname}")
+    };
+    let created = Timestamp::now();
+    let snapshot = ctx.resolution_snapshot()?;
+    let armed_by = caller_agent(&snapshot, caller.as_ref())?.map_or(WakeArmer::Human, |agent| {
+        WakeArmer::Agent {
+            handle: rimz::harness::target::agent_handle(
+                agent,
+                &rimz::harness::target::addressable_agents(&snapshot),
+                true,
+            ),
+        }
+    });
     let prompt = args.prompt.or_else(|| {
         args.prompt_file
             .is_none()
@@ -41,6 +56,12 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
     });
     let mut entry = TaskEntry {
         wake: Some(target.clone()),
+        wake_meta: Some(WakeMeta {
+            armed_by,
+            armed_at: created,
+            delay: args.in_after.map(duration_label),
+            last_observed_at: None,
+        }),
         prompt,
         prompt_file: args.prompt_file,
         root: ctx.workspace.project_root.clone(),
@@ -55,7 +76,13 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
             .map_err(anyhow::Error::msg)?;
         entry.signal = Some(signal.clone());
         entry.matches = (!matches.is_empty()).then_some(matches);
-        entry.once = Some(true);
+        let timeout = args.timeout.unwrap_or(Duration::from_secs(59 * 60));
+        entry.timeout = Some(duration_label(timeout));
+        entry.deadline = Some(
+            created
+                .checked_add(timeout)
+                .context("resolving signal quiet window")?,
+        );
         rimz::harness::schedule::TaskShape::compile(&name, &entry)
             .trigger()
             .as_ref()
@@ -65,7 +92,9 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
         let command = command_string(&args.command)?;
         entry.watch = Some(command.clone());
         entry.on = Some(parse_on(args.on.as_deref()));
-        entry.timeout = args.timeout.map(duration_label);
+        entry.timeout = Some(duration_label(
+            args.timeout.unwrap_or(Duration::from_secs(59 * 60)),
+        ));
         format!("watch: {command}")
     };
     rimz::harness::schedule::TaskShape::compile(&name, &entry)
@@ -73,8 +102,15 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
         .as_ref()
         .map_err(Clone::clone)?;
 
-    let created = Timestamp::now();
-    catalog.replace_machine(&name, &entry)?;
+    let already_listening = if entry.signal.is_some() {
+        let (armed_name, armed_entry, existing) = catalog.arm_signal_wake(&entry, created)?;
+        name = armed_name;
+        entry = armed_entry;
+        existing
+    } else {
+        catalog.replace_machine(&name, &entry)?;
+        false
+    };
     if entry.watch.is_some() {
         spawn_watcher(&ctx, &name)?;
     }
@@ -85,6 +121,15 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
             trigger: &trigger,
             target: &target.handle,
         })?;
+    } else if !args.json && already_listening {
+        writeln!(
+            super::super::render::out(),
+            "already listening: {name} ({} left)",
+            entry
+                .timeout
+                .as_deref()
+                .expect("signal wakes have a timeout")
+        )?;
     } else if !args.json {
         writeln!(
             super::super::render::out(),
@@ -110,8 +155,11 @@ fn validate_shape(args: &WakeArgs) -> Result<()> {
     if args.wait.is_some() && args.command.is_empty() {
         bail!("--wait requires a command after --");
     }
-    if (args.on.is_some() || args.timeout.is_some()) && args.command.is_empty() {
-        bail!("--on and --timeout require a command after --");
+    if args.on.is_some() && args.command.is_empty() {
+        bail!("--on requires a command after --");
+    }
+    if args.timeout.is_some() && args.command.is_empty() && args.signal.is_none() {
+        bail!("--timeout requires --signal or a command after --");
     }
     if args.in_after.is_some_and(|duration| duration.is_zero()) {
         bail!("--in must be greater than zero");

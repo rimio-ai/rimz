@@ -85,7 +85,9 @@ pub use harness::{
     DEFAULT_COMPACT_INSTRUCTION, DEFAULT_IDLE_COMPACT_AFTER, DayCap, DayCapParseError,
     HarnessConfig, IdleCompactMode, RtkMode, TurnCap, TurnCapParseError,
 };
-pub use loop_::{CheckOn, LoopConfig, TaskBudgetError, TaskEntry, TaskTarget, Tasks};
+pub use loop_::{
+    CheckOn, LoopConfig, TaskBudgetError, TaskEntry, TaskTarget, Tasks, WakeArmer, WakeMeta,
+};
 pub use mux::{
     MultiplexerConfig, MuxConfig, TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderLines,
     TmuxPaneBorderStatus, TmuxSetClipboard, ZellijClipboard, ZellijConfig, ZellijForceClose,

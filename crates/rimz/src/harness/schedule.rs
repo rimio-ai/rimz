@@ -203,6 +203,9 @@ impl TaskShape {
 }
 
 pub(super) fn ephemeral_lifetime(entry: &TaskEntry) -> bool {
+    if entry.wake_meta.is_some() && entry.signal.is_some() {
+        return false;
+    }
     (entry.signal.is_none() && entry.every.is_none() && entry.cron.is_none())
         || entry.deadline.is_some()
         || entry.once == Some(true)

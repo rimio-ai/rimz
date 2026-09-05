@@ -66,7 +66,23 @@ fn row(ctx: &Ctx, name: &str, task: &LoadedTask) -> Result<WakeRow> {
             "-".to_owned(),
             format!("due {}", task.entry().at.as_deref().unwrap_or("now")),
         ),
-        Trigger::Signal { .. } => ("-".to_owned(), "listening".to_owned()),
+        Trigger::Signal { .. } => {
+            let now = jiff::Timestamp::now();
+            let state = task.entry().deadline.map_or_else(
+                || "listening".to_owned(),
+                |deadline| {
+                    format!(
+                        "listening · {} left",
+                        super::super::render::age_short(now, deadline.max(now))
+                    )
+                },
+            );
+            let age = task.entry().wake_meta.as_ref().map_or_else(
+                || "-".to_owned(),
+                |meta| super::super::render::age_short(meta.armed_at, now),
+            );
+            (age, state)
+        }
         Trigger::Watch { .. } => match watcher_info(ctx.runtime(), name)? {
             Some(info) => (
                 super::super::render::age_short(info.started_at, jiff::Timestamp::now()),

@@ -66,6 +66,8 @@ pub struct TaskEntry {
     pub agent: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wake: Option<TaskTarget>,
+    #[serde(rename = "wake-meta", skip_serializing_if = "Option::is_none")]
+    pub wake_meta: Option<WakeMeta>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
     #[serde(rename = "prompt-file", skip_serializing_if = "Option::is_none")]
@@ -115,6 +117,23 @@ pub struct TaskEntry {
     pub once: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deadline: Option<Timestamp>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WakeMeta {
+    pub armed_by: WakeArmer,
+    pub armed_at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delay: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_observed_at: Option<Timestamp>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WakeArmer {
+    Human,
+    Agent { handle: String },
 }
 
 impl TaskEntry {
@@ -275,6 +294,14 @@ mod tests {
                 session: "sess-1".to_owned(),
                 handle: "@claude".to_owned(),
             }),
+            wake_meta: Some(WakeMeta {
+                armed_by: WakeArmer::Agent {
+                    handle: "@planner".to_owned(),
+                },
+                armed_at: deadline,
+                delay: Some("30m".to_owned()),
+                last_observed_at: Some(deadline),
+            }),
             prompt: Some("wake".to_owned()),
             check: Some("cargo test".to_owned()),
             verify: Some("cargo xtask gate".to_owned()),
@@ -305,6 +332,7 @@ mod tests {
 
         let toml = toml::to_string(&loop_config).expect("toml");
         let toml_round: LoopConfig = toml::from_str(&toml).expect("toml round trip");
+        assert_eq!(toml_round.tasks.0["ci"].wake_meta, entry.wake_meta);
         assert_eq!(
             toml_round
                 .tasks
