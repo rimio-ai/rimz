@@ -5,7 +5,7 @@
 //! ([`process_start`]), and matches a process to a pane by working directory
 //! ([`cwd`]). Unsupported platforms return an empty list / `None`, so callers
 //! fall back rather than guessing. It also owns the hot-path subprocess spawn
-//! seams the perf guards count.
+//! seams the perf guards count and the user's login-shell selection.
 
 pub(crate) mod command;
 #[cfg(target_os = "macos")]
@@ -76,6 +76,74 @@ pub fn rimz_exe() -> PathBuf {
                 .and_then(|exe| resolve_existing_or_replacement(&exe))
         })
         .unwrap_or_else(|| PathBuf::from(bin_name("rimz")))
+}
+
+/// Resolve the user's configured shell for launches that should match a
+/// normal terminal. A set `$SHELL` wins; an unlaunchable value returns `None`.
+/// The passwd shell is consulted only when `$SHELL` is unset or empty.
+/// Sentinels such as `false` and `nologin`, and missing absolute paths, are rejected.
+pub(crate) fn user_shell() -> Option<PathBuf> {
+    match env_shell() {
+        Some(shell) => launchable_shell(&shell).then_some(shell),
+        None => passwd_shell().filter(|shell| launchable_shell(shell)),
+    }
+}
+
+/// Resolve the user's shell program for an ordinary shell pane.
+pub fn user_shell_program() -> String {
+    user_shell()
+        .unwrap_or_else(|| PathBuf::from("sh"))
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Short, stable identity for an ordinary shell pane.
+pub fn shell_pane_name() -> String {
+    let shell = user_shell_program();
+    Path::new(&shell)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "sh".to_owned())
+}
+
+fn env_shell() -> Option<PathBuf> {
+    std::env::var_os("SHELL")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+#[cfg(unix)]
+fn passwd_shell() -> Option<PathBuf> {
+    let user = nix::unistd::User::from_uid(nix::unistd::Uid::current())
+        .ok()
+        .flatten()?;
+    Some(user.shell)
+}
+
+#[cfg(not(unix))]
+fn passwd_shell() -> Option<PathBuf> {
+    None
+}
+
+fn launchable_shell(shell: &Path) -> bool {
+    !is_login_disabled_shell(shell) && shell_exists(shell)
+}
+
+fn is_login_disabled_shell(shell: &Path) -> bool {
+    shell
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| matches!(name, "false" | "nologin"))
+        .unwrap_or(false)
+}
+
+fn shell_exists(shell: &Path) -> bool {
+    if shell.is_absolute() {
+        return shell.is_file();
+    }
+    which::which(shell).is_ok()
 }
 
 /// Resolve an executable path reported by the OS to a real file on disk.
@@ -911,359 +979,384 @@ pub fn clk_tck() -> u64 {
     100
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn output_tail_caps_bytes_and_preserves_lossy_boundary_behavior() {
-        assert_eq!(tail_output(b"abcdef", 4), "cdef");
-        assert_eq!(tail_output("éabc".as_bytes(), 4), "�abc");
-        assert_eq!(tail_output(b"abc", 0), "");
-        assert_eq!(tail_output(b"abc", 8), "abc");
+    fn launchable_shell_rejects_missing_and_disabled_shells() {
+        assert!(!launchable_shell(Path::new("/definitely/not/a/shell")));
+        assert!(!launchable_shell(Path::new("/usr/sbin/nologin")));
+        assert!(!launchable_shell(Path::new("/bin/false")));
     }
 
     #[test]
-    fn parse_comm_trims_trailing_newline() {
-        assert_eq!(parse_comm("zsh\n").as_deref(), Some("zsh"));
-        assert_eq!(parse_comm("bash").as_deref(), Some("bash"));
+    fn shell_pane_name_uses_configured_shell_basename() {
+        let shell = user_shell_program();
+        let expected = Path::new(&shell)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("shell basename");
+        assert_eq!(shell_pane_name(), expected);
     }
 
-    #[test]
-    fn parse_comm_rejects_blank() {
-        assert_eq!(parse_comm("\n"), None);
-        assert_eq!(parse_comm("   "), None);
-    }
+    #[cfg(target_os = "linux")]
+    mod procfs {
+        use super::super::*;
 
-    #[test]
-    fn parse_environ_reads_a_present_key() {
-        let blob = b"PATH=/usr/bin\0ZELLIJ_PANE_ID=3\0TERM=xterm\0";
-        assert_eq!(parse_environ(blob, "ZELLIJ_PANE_ID").as_deref(), Some("3"));
-        assert_eq!(parse_environ(blob, "PATH").as_deref(), Some("/usr/bin"));
-    }
+        #[test]
+        fn output_tail_caps_bytes_and_preserves_lossy_boundary_behavior() {
+            assert_eq!(tail_output(b"abcdef", 4), "cdef");
+            assert_eq!(tail_output("éabc".as_bytes(), 4), "�abc");
+            assert_eq!(tail_output(b"abc", 0), "");
+            assert_eq!(tail_output(b"abc", 8), "abc");
+        }
 
-    #[test]
-    fn parse_environ_missing_key_is_none() {
-        let blob = b"PATH=/usr/bin\0TERM=xterm\0";
-        assert_eq!(parse_environ(blob, "ZELLIJ_PANE_ID"), None);
-        // A bare key with no `=` never matches the `key=` prefix.
-        assert_eq!(parse_environ(b"ZELLIJ_PANE_ID\0", "ZELLIJ_PANE_ID"), None);
-    }
+        #[test]
+        fn parse_comm_trims_trailing_newline() {
+            assert_eq!(parse_comm("zsh\n").as_deref(), Some("zsh"));
+            assert_eq!(parse_comm("bash").as_deref(), Some("bash"));
+        }
 
-    #[test]
-    fn parse_environ_pairs_preserves_empty_and_equals_values() {
-        assert_eq!(
-            parse_environ_pairs(b"EMPTY=\0TOKEN=left=right\0BARE\0"),
-            vec![
-                ("EMPTY".to_owned(), String::new()),
-                ("TOKEN".to_owned(), "left=right".to_owned()),
-            ]
-        );
-    }
+        #[test]
+        fn parse_comm_rejects_blank() {
+            assert_eq!(parse_comm("\n"), None);
+            assert_eq!(parse_comm("   "), None);
+        }
 
-    #[test]
-    fn rimz_exe_resolution_keeps_existing_path() {
-        let path = Path::new("/opt/rimz/bin/rimz");
-        let resolved = resolve_existing_or_replacement_with(path, |candidate| candidate == path);
+        #[test]
+        fn parse_environ_reads_a_present_key() {
+            let blob = b"PATH=/usr/bin\0ZELLIJ_PANE_ID=3\0TERM=xterm\0";
+            assert_eq!(parse_environ(blob, "ZELLIJ_PANE_ID").as_deref(), Some("3"));
+            assert_eq!(parse_environ(blob, "PATH").as_deref(), Some("/usr/bin"));
+        }
 
-        assert_eq!(resolved.as_deref(), Some(path));
-    }
+        #[test]
+        fn parse_environ_missing_key_is_none() {
+            let blob = b"PATH=/usr/bin\0TERM=xterm\0";
+            assert_eq!(parse_environ(blob, "ZELLIJ_PANE_ID"), None);
+            // A bare key with no `=` never matches the `key=` prefix.
+            assert_eq!(parse_environ(b"ZELLIJ_PANE_ID\0", "ZELLIJ_PANE_ID"), None);
+        }
 
-    #[test]
-    fn rimz_exe_resolution_strips_deleted_suffix_when_replacement_exists() {
-        let real = Path::new("/opt/rimz/bin/rimz");
-        let deleted = PathBuf::from(format!("{} (deleted)", real.display()));
-        let resolved =
-            resolve_existing_or_replacement_with(&deleted, |candidate| candidate == real);
+        #[test]
+        fn parse_environ_pairs_preserves_empty_and_equals_values() {
+            assert_eq!(
+                parse_environ_pairs(b"EMPTY=\0TOKEN=left=right\0BARE\0"),
+                vec![
+                    ("EMPTY".to_owned(), String::new()),
+                    ("TOKEN".to_owned(), "left=right".to_owned()),
+                ]
+            );
+        }
 
-        assert_eq!(resolved.as_deref(), Some(real));
-    }
+        #[test]
+        fn rimz_exe_resolution_keeps_existing_path() {
+            let path = Path::new("/opt/rimz/bin/rimz");
+            let resolved =
+                resolve_existing_or_replacement_with(path, |candidate| candidate == path);
 
-    #[test]
-    fn rimz_exe_resolution_returns_none_when_deleted_and_replacement_missing() {
-        let deleted = Path::new("/opt/rimz/bin/rimz (deleted)");
+            assert_eq!(resolved.as_deref(), Some(path));
+        }
 
-        assert!(resolve_existing_or_replacement_with(deleted, |_| false).is_none());
-    }
+        #[test]
+        fn rimz_exe_resolution_strips_deleted_suffix_when_replacement_exists() {
+            let real = Path::new("/opt/rimz/bin/rimz");
+            let deleted = PathBuf::from(format!("{} (deleted)", real.display()));
+            let resolved =
+                resolve_existing_or_replacement_with(&deleted, |candidate| candidate == real);
 
-    #[test]
-    fn bounded_output_captures_both_streams() {
-        let mut cmd = Command::new("sh");
-        cmd.args(["-c", "printf rimz; printf trace >&2"]);
+            assert_eq!(resolved.as_deref(), Some(real));
+        }
 
-        let output = run_bounded_output(&mut cmd, Duration::from_secs(1)).expect("bounded output");
+        #[test]
+        fn rimz_exe_resolution_returns_none_when_deleted_and_replacement_missing() {
+            let deleted = Path::new("/opt/rimz/bin/rimz (deleted)");
 
-        assert!(output.status.success());
-        assert!(!output.timed_out);
-        assert_eq!(output.stdout, b"rimz");
-        assert_eq!(output.stderr, b"trace");
-    }
+            assert!(resolve_existing_or_replacement_with(deleted, |_| false).is_none());
+        }
 
-    #[test]
-    fn bounded_output_kills_and_reaps_on_timeout() {
-        let mut cmd = Command::new("sh");
-        cmd.args(["-c", "sleep 5"]);
+        #[test]
+        fn bounded_output_captures_both_streams() {
+            let mut cmd = Command::new("sh");
+            cmd.args(["-c", "printf rimz; printf trace >&2"]);
 
-        let output =
-            run_bounded_output(&mut cmd, Duration::from_millis(20)).expect("bounded output");
+            let output =
+                run_bounded_output(&mut cmd, Duration::from_secs(1)).expect("bounded output");
 
-        assert!(output.timed_out);
-        assert!(!output.status.success());
-    }
+            assert!(output.status.success());
+            assert!(!output.timed_out);
+            assert_eq!(output.stdout, b"rimz");
+            assert_eq!(output.stderr, b"trace");
+        }
 
-    #[cfg(unix)]
-    #[test]
-    fn bounded_output_kills_pipe_holding_grandchildren_on_timeout() {
-        let mut cmd = Command::new("sh");
-        cmd.args(["-c", "sleep 30 & exec sleep 30"]);
-        let started = Instant::now();
+        #[test]
+        fn bounded_output_kills_and_reaps_on_timeout() {
+            let mut cmd = Command::new("sh");
+            cmd.args(["-c", "sleep 5"]);
 
-        let output =
-            run_bounded_output(&mut cmd, Duration::from_millis(100)).expect("bounded output");
+            let output =
+                run_bounded_output(&mut cmd, Duration::from_millis(20)).expect("bounded output");
 
-        assert!(output.timed_out);
-        assert!(started.elapsed() < Duration::from_secs(1));
-    }
+            assert!(output.timed_out);
+            assert!(!output.status.success());
+        }
 
-    #[test]
-    fn parse_status_identity_reads_ppid_and_real_uid() {
-        let status = "\
+        #[cfg(unix)]
+        #[test]
+        fn bounded_output_kills_pipe_holding_grandchildren_on_timeout() {
+            let mut cmd = Command::new("sh");
+            cmd.args(["-c", "sleep 30 & exec sleep 30"]);
+            let started = Instant::now();
+
+            let output =
+                run_bounded_output(&mut cmd, Duration::from_millis(100)).expect("bounded output");
+
+            assert!(output.timed_out);
+            assert!(started.elapsed() < Duration::from_secs(1));
+        }
+
+        #[test]
+        fn parse_status_identity_reads_ppid_and_real_uid() {
+            let status = "\
 Name:\tclaude
 State:\tS (sleeping)
 PPid:\t42
 Uid:\t0\t0\t0\t0
 ";
-        assert_eq!(parse_status_identity(status), Some((42, 0)));
-    }
+            assert_eq!(parse_status_identity(status), Some((42, 0)));
+        }
 
-    #[test]
-    fn parse_argv_preserves_argument_boundaries() {
-        use std::ffi::OsStr;
+        #[test]
+        fn parse_argv_preserves_argument_boundaries() {
+            use std::ffi::OsStr;
 
-        let args = parse_argv(b"droid\0exec\0--input-format\0stream-jsonrpc\0").unwrap();
-        assert_eq!(
-            args.iter()
-                .map(std::ffi::OsString::as_os_str)
-                .collect::<Vec<_>>(),
-            [
-                OsStr::new("droid"),
-                OsStr::new("exec"),
-                OsStr::new("--input-format"),
-                OsStr::new("stream-jsonrpc"),
-            ]
-        );
-        assert_eq!(parse_argv(b""), None);
-    }
+            let args = parse_argv(b"droid\0exec\0--input-format\0stream-jsonrpc\0").unwrap();
+            assert_eq!(
+                args.iter()
+                    .map(std::ffi::OsString::as_os_str)
+                    .collect::<Vec<_>>(),
+                [
+                    OsStr::new("droid"),
+                    OsStr::new("exec"),
+                    OsStr::new("--input-format"),
+                    OsStr::new("stream-jsonrpc"),
+                ]
+            );
+            assert_eq!(parse_argv(b""), None);
+        }
 
-    #[test]
-    fn parse_status_name_ppid_reads_name_and_parent() {
-        let status = "\
+        #[test]
+        fn parse_status_name_ppid_reads_name_and_parent() {
+            let status = "\
 Name:\tcodex
 State:\tS (sleeping)
 PPid:\t42
 Uid:\t1000\t1000\t1000\t1000
 ";
-        assert_eq!(
-            parse_status_name_ppid(status),
-            Some(("codex".to_owned(), 42))
-        );
-    }
+            assert_eq!(
+                parse_status_name_ppid(status),
+                Some(("codex".to_owned(), 42))
+            );
+        }
 
-    #[test]
-    fn parse_status_identity_rejects_missing_fields() {
-        assert_eq!(parse_status_identity("PPid:\t42\n"), None);
-        assert_eq!(
-            parse_status_identity("Uid:\t1000\t1000\t1000\t1000\n"),
-            None
-        );
-    }
+        #[test]
+        fn parse_status_identity_rejects_missing_fields() {
+            assert_eq!(parse_status_identity("PPid:\t42\n"), None);
+            assert_eq!(
+                parse_status_identity("Uid:\t1000\t1000\t1000\t1000\n"),
+                None
+            );
+        }
 
-    #[test]
-    fn parse_starttime_ticks_reads_field_22() {
-        // pid (comm) state ppid … starttime(field 22) …
-        let stat = "1234 (codex) S 1 1234 1234 0 -1 0 0 0 0 0 1 2 3 4 20 0 5 0 646245020 …";
-        assert_eq!(parse_starttime_ticks(stat), Some(646_245_020));
-    }
+        #[test]
+        fn parse_starttime_ticks_reads_field_22() {
+            // pid (comm) state ppid … starttime(field 22) …
+            let stat = "1234 (codex) S 1 1234 1234 0 -1 0 0 0 0 0 1 2 3 4 20 0 5 0 646245020 …";
+            assert_eq!(parse_starttime_ticks(stat), Some(646_245_020));
+        }
 
-    #[test]
-    fn parse_starttime_ticks_handles_comm_with_spaces_and_parens() {
-        // `comm` can carry spaces and nested parens; anchoring on the last `)`
-        // keeps field 22 correct.
-        let stat = "1234 (codex (1) :)) S 1 1234 1234 0 -1 0 0 0 0 0 1 2 3 4 20 0 5 0 777 0";
-        assert_eq!(parse_starttime_ticks(stat), Some(777));
-    }
+        #[test]
+        fn parse_starttime_ticks_handles_comm_with_spaces_and_parens() {
+            // `comm` can carry spaces and nested parens; anchoring on the last `)`
+            // keeps field 22 correct.
+            let stat = "1234 (codex (1) :)) S 1 1234 1234 0 -1 0 0 0 0 0 1 2 3 4 20 0 5 0 777 0";
+            assert_eq!(parse_starttime_ticks(stat), Some(777));
+        }
 
-    #[test]
-    fn parse_starttime_ticks_rejects_malformed() {
-        assert_eq!(parse_starttime_ticks("no parens here"), None);
-        // Too few fields after `comm` to reach field 22.
-        assert_eq!(parse_starttime_ticks("1 (sh) S 1 2 3"), None);
-    }
+        #[test]
+        fn parse_starttime_ticks_rejects_malformed() {
+            assert_eq!(parse_starttime_ticks("no parens here"), None);
+            // Too few fields after `comm` to reach field 22.
+            assert_eq!(parse_starttime_ticks("1 (sh) S 1 2 3"), None);
+        }
 
-    #[test]
-    fn parse_stat_metrics_reads_cpu_rss_and_start_from_one_line() {
-        // Indexed past the closing `)`:
-        // state ppid pgrp session ttyno tpgid flags minflt cminflt majflt cmajflt utime stime
-        //   0    1    2    3       4     5     6     7      8       9      10      11    12
-        // cutime cstime priority nice threads itreal starttime vsize rss
-        //   13     14      15     16    17      18      19       20   21
-        let stat =
-            "1234 (codex) S 1 1234 1234 0 -1 0 0 0 0 0 42 17 0 0 20 0 1 0 646245020 9000000 2048 …";
-        assert_eq!(
-            parse_stat_metrics(stat, 4),
-            Some(StatMetrics {
-                state: 'S',
-                cpu_ticks: 59, // 42 + 17
-                child_cpu_ticks: 0,
-                rss_kb: 8192, // 2048 pages × 4 KiB
-                start_ticks: 646_245_020,
-            })
-        );
-    }
+        #[test]
+        fn parse_stat_metrics_reads_cpu_rss_and_start_from_one_line() {
+            // Indexed past the closing `)`:
+            // state ppid pgrp session ttyno tpgid flags minflt cminflt majflt cmajflt utime stime
+            //   0    1    2    3       4     5     6     7      8       9      10      11    12
+            // cutime cstime priority nice threads itreal starttime vsize rss
+            //   13     14      15     16    17      18      19       20   21
+            let stat = "1234 (codex) S 1 1234 1234 0 -1 0 0 0 0 0 42 17 0 0 20 0 1 0 646245020 9000000 2048 …";
+            assert_eq!(
+                parse_stat_metrics(stat, 4),
+                Some(StatMetrics {
+                    state: 'S',
+                    cpu_ticks: 59, // 42 + 17
+                    child_cpu_ticks: 0,
+                    rss_kb: 8192, // 2048 pages × 4 KiB
+                    start_ticks: 646_245_020,
+                })
+            );
+        }
 
-    #[test]
-    fn parse_stat_metrics_handles_comm_with_spaces_and_parens() {
-        // `comm` can carry spaces and nested parens; anchoring on the last `)`
-        // keeps every field index correct.
-        let stat = "1 (rust (1) :)) S 1 1 1 0 -1 0 0 0 0 0 10 5 0 0 20 0 1 0 100 500 3 0";
-        let metrics = parse_stat_metrics(stat, 4).expect("stat metrics");
-        assert_eq!(
-            metrics,
-            StatMetrics {
-                state: 'S',
-                cpu_ticks: 15, // 10 + 5
-                child_cpu_ticks: 0,
-                rss_kb: 12, // 3 pages × 4 KiB
-                start_ticks: 100,
-            }
-        );
-        assert!(stat_metrics_is_live(metrics, Some("100")));
-        assert!(!stat_metrics_is_live(metrics, Some("101")));
-    }
+        #[test]
+        fn parse_stat_metrics_handles_comm_with_spaces_and_parens() {
+            // `comm` can carry spaces and nested parens; anchoring on the last `)`
+            // keeps every field index correct.
+            let stat = "1 (rust (1) :)) S 1 1 1 0 -1 0 0 0 0 0 10 5 0 0 20 0 1 0 100 500 3 0";
+            let metrics = parse_stat_metrics(stat, 4).expect("stat metrics");
+            assert_eq!(
+                metrics,
+                StatMetrics {
+                    state: 'S',
+                    cpu_ticks: 15, // 10 + 5
+                    child_cpu_ticks: 0,
+                    rss_kb: 12, // 3 pages × 4 KiB
+                    start_ticks: 100,
+                }
+            );
+            assert!(stat_metrics_is_live(metrics, Some("100")));
+            assert!(!stat_metrics_is_live(metrics, Some("101")));
+        }
 
-    #[test]
-    fn process_start_liveness_rejects_zombie_and_dead_states() {
-        let stat = |state| {
-            format!("1 (rust (1) :)) {state} 1 1 1 0 -1 0 0 0 0 0 10 5 0 0 20 0 1 0 100 500 3 0")
-        };
+        #[test]
+        fn process_start_liveness_rejects_zombie_and_dead_states() {
+            let stat = |state| {
+                format!(
+                    "1 (rust (1) :)) {state} 1 1 1 0 -1 0 0 0 0 0 10 5 0 0 20 0 1 0 100 500 3 0"
+                )
+            };
 
-        let running = parse_stat_metrics(&stat('S'), 4).expect("running stat");
-        let zombie = parse_stat_metrics(&stat('Z'), 4).expect("zombie stat");
-        let dead = parse_stat_metrics(&stat('X'), 4).expect("dead stat");
-        assert!(stat_metrics_is_live(running, None));
-        assert!(!stat_metrics_is_live(zombie, Some("100")));
-        assert!(!stat_metrics_is_live(dead, Some("100")));
-    }
+            let running = parse_stat_metrics(&stat('S'), 4).expect("running stat");
+            let zombie = parse_stat_metrics(&stat('Z'), 4).expect("zombie stat");
+            let dead = parse_stat_metrics(&stat('X'), 4).expect("dead stat");
+            assert!(stat_metrics_is_live(running, None));
+            assert!(!stat_metrics_is_live(zombie, Some("100")));
+            assert!(!stat_metrics_is_live(dead, Some("100")));
+        }
 
-    #[test]
-    fn parse_stat_metrics_reads_waited_child_cpu() {
-        let stat = "1234 (cargo) S 1 1234 1234 0 -1 0 0 0 0 0 42 17 300 25 20 0 1 0 646245020 9000000 2048 …";
+        #[test]
+        fn parse_stat_metrics_reads_waited_child_cpu() {
+            let stat = "1234 (cargo) S 1 1234 1234 0 -1 0 0 0 0 0 42 17 300 25 20 0 1 0 646245020 9000000 2048 …";
 
-        assert_eq!(
-            parse_stat_metrics(stat, 4).map(|metrics| metrics.child_cpu_ticks),
-            Some(325)
-        );
-    }
+            assert_eq!(
+                parse_stat_metrics(stat, 4).map(|metrics| metrics.child_cpu_ticks),
+                Some(325)
+            );
+        }
 
-    #[test]
-    fn parse_stat_metrics_rejects_truncated_lines() {
-        // Enough fields for CPU but not for rss: the whole read abstains
-        // rather than reporting a partial metric set.
-        let stat = "1 (sh) S 1 1 1 0 -1 0 0 0 0 0 10 5 0 0 20 0 1 0 100";
-        assert_eq!(parse_stat_metrics(stat, 4), None);
-        assert_eq!(parse_stat_metrics("no parens here", 4), None);
-    }
+        #[test]
+        fn parse_stat_metrics_rejects_truncated_lines() {
+            // Enough fields for CPU but not for rss: the whole read abstains
+            // rather than reporting a partial metric set.
+            let stat = "1 (sh) S 1 1 1 0 -1 0 0 0 0 0 10 5 0 0 20 0 1 0 100";
+            assert_eq!(parse_stat_metrics(stat, 4), None);
+            assert_eq!(parse_stat_metrics("no parens here", 4), None);
+        }
 
-    #[test]
-    fn parse_children_reads_the_space_separated_pid_list() {
-        assert_eq!(parse_children("123 456 789 "), vec![123, 456, 789]);
-        assert_eq!(parse_children(""), Vec::<u32>::new());
-        // Garbage tokens are skipped rather than poisoning the list.
-        assert_eq!(parse_children("12 x 34"), vec![12, 34]);
-    }
+        #[test]
+        fn parse_children_reads_the_space_separated_pid_list() {
+            assert_eq!(parse_children("123 456 789 "), vec![123, 456, 789]);
+            assert_eq!(parse_children(""), Vec::<u32>::new());
+            // Garbage tokens are skipped rather than poisoning the list.
+            assert_eq!(parse_children("12 x 34"), vec![12, 34]);
+        }
 
-    #[test]
-    fn parse_io_bytes_sums_rchar_and_wchar() {
-        let io = "rchar: 1000\nwchar: 500\nsyscr: 12\nsyscw: 8\nread_bytes: 0\nwrite_bytes: 512\n";
-        assert_eq!(parse_io_bytes(io), Some(1500));
-    }
+        #[test]
+        fn parse_io_bytes_sums_rchar_and_wchar() {
+            let io =
+                "rchar: 1000\nwchar: 500\nsyscr: 12\nsyscw: 8\nread_bytes: 0\nwrite_bytes: 512\n";
+            assert_eq!(parse_io_bytes(io), Some(1500));
+        }
 
-    #[test]
-    fn parse_write_bytes_reads_wchar_only() {
-        let io =
-            "rchar: 1000\nwchar: 500\nsyscr: 12\nsyscw: 9000\nread_bytes: 0\nwrite_bytes: 8192\n";
-        assert_eq!(parse_write_bytes(io), Some(500));
-    }
+        #[test]
+        fn parse_write_bytes_reads_wchar_only() {
+            let io = "rchar: 1000\nwchar: 500\nsyscr: 12\nsyscw: 9000\nread_bytes: 0\nwrite_bytes: 8192\n";
+            assert_eq!(parse_write_bytes(io), Some(500));
+        }
 
-    #[test]
-    fn parse_io_bytes_rejects_incomplete() {
-        // Only rchar present: returns None (wchar is missing).
-        let io = "rchar: 1000\n";
-        assert_eq!(parse_io_bytes(io), None);
-    }
+        #[test]
+        fn parse_io_bytes_rejects_incomplete() {
+            // Only rchar present: returns None (wchar is missing).
+            let io = "rchar: 1000\n";
+            assert_eq!(parse_io_bytes(io), None);
+        }
 
-    #[test]
-    fn tree_totals_walks_descendants_and_dedupes_cycles() {
-        let stat = |pid| {
-            Some(StatMetrics {
-                state: 'S',
-                cpu_ticks: u64::from(pid),
-                child_cpu_ticks: 10,
-                rss_kb: u64::from(pid * 100),
-                start_ticks: 1,
-            })
-        };
-        let children = |pid| match pid {
-            1 => vec![2, 3],
-            2 => vec![3],
-            _ => Vec::new(),
-        };
-        let io = |pid| Some(u64::from(pid * 1_000));
+        #[test]
+        fn tree_totals_walks_descendants_and_dedupes_cycles() {
+            let stat = |pid| {
+                Some(StatMetrics {
+                    state: 'S',
+                    cpu_ticks: u64::from(pid),
+                    child_cpu_ticks: 10,
+                    rss_kb: u64::from(pid * 100),
+                    start_ticks: 1,
+                })
+            };
+            let children = |pid| match pid {
+                1 => vec![2, 3],
+                2 => vec![3],
+                _ => Vec::new(),
+            };
+            let io = |pid| Some(u64::from(pid * 1_000));
 
-        assert_eq!(
-            tree_totals_with(1, &stat, &children, &io),
-            Some(TreeTotals {
-                cpu_ticks: 36,
-                rss_kb: 600,
-                io_bytes: Some(6_000),
-                process_count: 3,
-            })
-        );
-    }
+            assert_eq!(
+                tree_totals_with(1, &stat, &children, &io),
+                Some(TreeTotals {
+                    cpu_ticks: 36,
+                    rss_kb: 600,
+                    io_bytes: Some(6_000),
+                    process_count: 3,
+                })
+            );
+        }
 
-    #[test]
-    fn tree_totals_returns_none_when_root_is_missing() {
-        let stat = |_pid| None;
-        let children = |_pid| Vec::new();
-        let io = |_pid| Some(0);
+        #[test]
+        fn tree_totals_returns_none_when_root_is_missing() {
+            let stat = |_pid| None;
+            let children = |_pid| Vec::new();
+            let io = |_pid| Some(0);
 
-        assert_eq!(tree_totals_with(1, &stat, &children, &io), None);
-    }
+            assert_eq!(tree_totals_with(1, &stat, &children, &io), None);
+        }
 
-    #[test]
-    fn tree_totals_missing_child_io_makes_tree_io_unknown() {
-        let stat = |pid| {
-            Some(StatMetrics {
-                state: 'S',
-                cpu_ticks: u64::from(pid),
-                child_cpu_ticks: 0,
-                rss_kb: 1,
-                start_ticks: 1,
-            })
-        };
-        let children = |pid| if pid == 1 { vec![2] } else { Vec::new() };
-        let io = |pid| (pid == 1).then_some(10);
+        #[test]
+        fn tree_totals_missing_child_io_makes_tree_io_unknown() {
+            let stat = |pid| {
+                Some(StatMetrics {
+                    state: 'S',
+                    cpu_ticks: u64::from(pid),
+                    child_cpu_ticks: 0,
+                    rss_kb: 1,
+                    start_ticks: 1,
+                })
+            };
+            let children = |pid| if pid == 1 { vec![2] } else { Vec::new() };
+            let io = |pid| (pid == 1).then_some(10);
 
-        assert_eq!(
-            tree_totals_with(1, &stat, &children, &io).map(|totals| totals.io_bytes),
-            Some(None)
-        );
-    }
+            assert_eq!(
+                tree_totals_with(1, &stat, &children, &io).map(|totals| totals.io_bytes),
+                Some(None)
+            );
+        }
 
-    #[test]
-    fn parse_btime_reads_the_btime_line() {
-        let stat = "cpu  1 2 3\nintr 99\nbtime 1773993132\nprocesses 42\n";
-        assert_eq!(parse_btime(stat), Some(1_773_993_132));
-        assert_eq!(parse_btime("cpu 1 2 3\nprocesses 42\n"), None);
+        #[test]
+        fn parse_btime_reads_the_btime_line() {
+            let stat = "cpu  1 2 3\nintr 99\nbtime 1773993132\nprocesses 42\n";
+            assert_eq!(parse_btime(stat), Some(1_773_993_132));
+            assert_eq!(parse_btime("cpu 1 2 3\nprocesses 42\n"), None);
+        }
     }
 }

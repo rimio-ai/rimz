@@ -67,7 +67,7 @@ pub(super) fn after_new_window_hook_set_cmd(opts: &SidebarPaneOptions) -> Vec<St
     // a prompt and surface PROMPT_SP's `%` marker. Respawn only that plain work
     // pane as a fresh shell at the post-split width. Explicit-command windows
     // keep their process and layout.
-    let shell = crate::harness::launch::user_shell_program();
+    let shell = crate::proc::user_shell_program();
     hook_commands.push(format!(
         "if-shell -F '#{{pane_start_command}}' '' 'respawn-pane -k \"{shell}\"'"
     ));
@@ -363,7 +363,7 @@ mod tests {
         let opts = sidebar_opts(Some(75));
         let command = after_new_window_hook_set_cmd(&opts);
         let serve = sidebar_serve_command(&opts).join(" ");
-        let shell = crate::harness::launch::user_shell_program();
+        let shell = crate::proc::user_shell_program();
 
         assert_eq!(
             command,

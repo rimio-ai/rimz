@@ -174,7 +174,6 @@ surface-budget = 90
 
 [[module]]
 path = "crates/rimz/src/mux"
-upward-dependencies = ["harness::launch"]
 surface-budget = 277
 
 [[module]]
@@ -199,7 +198,7 @@ upward-dependencies = [
     "agents",
     "agents::registry",
 ]
-surface-budget = 98
+surface-budget = 101
 
 [[module]]
 path = "crates/rimz/src/reload.rs"
@@ -285,7 +284,7 @@ surface-budget = 48
 
 [[module]]
 path = "crates/rimz/src/workspace.rs"
-surface-budget = 22
+surface-budget = 26
 
 [[module]]
 path = "crates/rimz/src/wakeup"
@@ -508,7 +507,9 @@ allowed-dependencies = [
     "harness::launch_reminders",
     "harness::subagent_policy",
     "ids",
+    "proc",
     "trust",
+    "workspace",
 ]
 surface-budget = 48
 

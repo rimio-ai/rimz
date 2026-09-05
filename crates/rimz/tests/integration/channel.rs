@@ -188,7 +188,7 @@ fn bare_role_spawn_resolves_against_the_lane_team() {
     let inside = env
         .rimz()
         .args(["agents", "planner"])
-        .env(rimz::harness::launch::ENV_CHANNEL, "forge")
+        .env(rimz::workspace::ENV_CHANNEL, "forge")
         .output()
         .expect("spawn agents");
     let stderr = String::from_utf8_lossy(&inside.stderr).into_owned();
@@ -210,7 +210,7 @@ fn bare_role_colliding_with_a_cell_word_refuses() {
     let out = env
         .rimz()
         .args(["agents", "reviewer"])
-        .env(rimz::harness::launch::ENV_CHANNEL, "forge")
+        .env(rimz::workspace::ENV_CHANNEL, "forge")
         .output()
         .expect("spawn agents");
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
@@ -264,7 +264,7 @@ fn register_idle_lane_agent(env: &Env, session_id: &str, channel: &str, team: Op
     })
     .to_string();
     let mut cmd = env.hook_command("claude");
-    cmd.env(rimz::harness::launch::ENV_CHANNEL, channel)
+    cmd.env(rimz::workspace::ENV_CHANNEL, channel)
         .env("ZELLIJ_PANE_ID", "3");
     if let Some(team) = team {
         cmd.env(rimz::harness::launch::ENV_TEAM, team);

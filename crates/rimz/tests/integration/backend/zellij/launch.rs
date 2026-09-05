@@ -144,7 +144,7 @@ fn open_sidebar_births_native_layout_and_template() {
         template.contains("rimz-sidebar"),
         "new tab template should carry the sidebar pane:\n{template}",
     );
-    let shell = rimz::harness::launch::shell_pane_name();
+    let shell = rimz::proc::shell_pane_name();
     assert!(
         template.contains(&format!(r#"pane name="{shell}" focus=true"#)),
         "new tab template should carry a named, focused right terminal:\n{template}",

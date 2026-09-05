@@ -148,7 +148,7 @@ pub(super) fn render_session_layout(
     for (index, tab) in resume.iter().enumerate() {
         let tab_name = kdl_string(&tab.label)?;
         let agent_panes = if tab.layout.columns.is_empty() {
-            let argv = crate::harness::launch::channel_label_shell_argv(
+            let argv = crate::workspace::channel_label_shell_argv(
                 &opts.workspace_id,
                 &opts.project_root,
                 &tab.cwd,
@@ -402,7 +402,7 @@ fn render_sidebar_work_area(sidebar: &str, work_panes: &str, indent: usize) -> S
 }
 
 fn render_plain_terminal_pane(indent: usize) -> Result<String> {
-    let name = crate::harness::launch::shell_pane_name();
+    let name = crate::proc::shell_pane_name();
     Ok(format!(
         "{}pane focus=true name={}\n",
         " ".repeat(indent),

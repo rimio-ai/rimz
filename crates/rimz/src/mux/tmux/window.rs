@@ -743,7 +743,7 @@ impl TmuxBackend {
             {
                 (&first.argv, first.name.as_deref())
             } else {
-                fallback_shell = crate::harness::launch::channel_label_shell_argv(
+                fallback_shell = crate::workspace::channel_label_shell_argv(
                     &opts.workspace_id,
                     &opts.project_root,
                     &tab.cwd,

@@ -649,6 +649,8 @@ fn participants_never_refuse_a_pathological_root() {
 
 #[test]
 fn pin_env_carries_both_identity_keys() {
+    assert_eq!(ENV_CHANNEL, "RIMZ_CHANNEL");
+    assert_eq!(ENV_WORKTREE_PATH, "RIMZ_WORKTREE_PATH");
     let root = Path::new("/repo");
     let env = pin_env(&WorkspaceId::from_project_root(root), root);
     assert_eq!(
@@ -656,6 +658,50 @@ fn pin_env_carries_both_identity_keys() {
         Some(&WorkspaceId::from_project_root(root).to_string()),
     );
     assert_eq!(env.get(ENV_PROJECT_ROOT), Some(&"/repo".to_owned()));
+}
+
+#[test]
+fn channel_shell_argv_pins_room_identity_order_and_label_fallback() {
+    let shell = crate::proc::user_shell_program();
+    let project_root = Path::new("/proj root");
+    let worktree_path = Path::new("/proj root/wt");
+    let ws = WorkspaceId::from_project_root(project_root);
+    let expected_argv = |channel: &str| {
+        vec![
+            "env".to_owned(),
+            "RIMZ=1".to_owned(),
+            format!("RIMZ_WORKSPACE_ID={ws}"),
+            "RIMZ_PROJECT_ROOT=/proj root".to_owned(),
+            "RIMZ_WORKTREE_PATH=/proj root/wt".to_owned(),
+            format!("RIMZ_CHANNEL={channel}"),
+            shell.clone(),
+        ]
+    };
+    for channel in ["feature", ""] {
+        assert_eq!(
+            channel_shell_argv(&ws, project_root, worktree_path, channel),
+            expected_argv(channel),
+            "channel {channel:?}"
+        );
+    }
+    for (label, channel) in [
+        ("", None),
+        ("plain", None),
+        ("#", None),
+        ("#feature", Some("feature")),
+        ("##x", Some("#x")),
+        ("# ", Some(" ")),
+    ] {
+        let expected = match channel {
+            Some(channel) => expected_argv(channel),
+            None => vec![shell.clone()],
+        };
+        assert_eq!(
+            channel_label_shell_argv(&ws, project_root, worktree_path, label),
+            expected,
+            "label {label:?}"
+        );
+    }
 }
 
 /// The scan-side twin of [`pin_of`]: a sibling agent process carrying the

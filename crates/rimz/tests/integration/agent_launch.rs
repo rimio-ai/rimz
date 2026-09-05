@@ -253,7 +253,7 @@ fn user_shell_subagents_list_inspects_the_channel() {
     let output = env
         .rimz()
         .args(["subagents", "list", "--json"])
-        .env(rimz::harness::launch::ENV_CHANNEL, "feat-x")
+        .env(rimz::workspace::ENV_CHANNEL, "feat-x")
         .output()
         .expect("list current channel subagents");
     assert!(

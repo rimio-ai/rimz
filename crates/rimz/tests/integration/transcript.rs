@@ -1126,7 +1126,7 @@ fn scrub_launch_identity(cmd: &mut std::process::Command) {
         rimz::harness::launch::ENV_TEAM,
         rimz::harness::launch::ENV_LAUNCH_GROUP,
         rimz::harness::launch::ENV_LAUNCH_ORDINAL,
-        rimz::harness::launch::ENV_CHANNEL,
+        rimz::workspace::ENV_CHANNEL,
         rimz::harness::launch::ENV_AGENT_MODEL,
         rimz::harness::launch::ENV_AGENT_EFFORT,
     ] {

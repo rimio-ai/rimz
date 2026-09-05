@@ -205,7 +205,7 @@ fn open_channel_tab(workspace: &rimz::ResolvedWorkspace, globals: &GlobalFlags, 
         panes: LayoutPanes {
             columns: vec![LayoutColumn {
                 panes: vec![PaneCmd {
-                    argv: rimz::harness::launch::channel_shell_argv(
+                    argv: rimz::workspace::channel_shell_argv(
                         &workspace.workspace_id,
                         &workspace.project_root,
                         &workspace.worktree_root,

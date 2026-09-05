@@ -383,7 +383,7 @@ exit 0
         .expect("anchored stack");
 
     let log = shim_log(&temp);
-    let shell = crate::harness::launch::shell_pane_name();
+    let shell = crate::proc::shell_pane_name();
     for command in [
         "action new-pane --direction right --name rimz managed pane",
         "action new-pane --direction down --name rimz managed pane",
@@ -446,7 +446,7 @@ exit 0
         .expect("anchored stack");
 
     let log = shim_log(&temp);
-    let shell = crate::harness::launch::shell_pane_name();
+    let shell = crate::proc::shell_pane_name();
     assert!(
         log.contains(&format!(
             "action new-pane --stacked --near-current-pane --name {shell} | pane=7"

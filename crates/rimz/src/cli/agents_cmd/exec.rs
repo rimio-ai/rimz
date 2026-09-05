@@ -502,7 +502,7 @@ fn drop_to_shell_after_agent_exit(
         resumable,
     );
     let _ = write!(std::io::stderr().lock(), "{hint}");
-    let shell = rimz::harness::launch::user_shell_program();
+    let shell = rimz::proc::user_shell_program();
     let err = Command::new(&shell).exec();
     tracing::debug!(shell = %shell, error = %err, "could not exec idle shell after agent exit");
 }
