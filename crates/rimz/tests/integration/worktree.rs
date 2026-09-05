@@ -721,6 +721,10 @@ fn worktree_remove_survives_history_append_failure() {
 
 #[cfg(unix)]
 #[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "test skip without a tracing subscriber"
+)]
 fn worktree_remove_reports_live_queue_write_failure_after_removal() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -744,7 +748,7 @@ fn worktree_remove_reports_live_queue_write_failure_after_removal() {
     let probe = messages_dir.join("write-probe");
     if std::fs::write(&probe, b"").is_ok() {
         std::fs::set_permissions(&messages_dir, permissions).expect("restore permissions");
-        tracing::warn!("skipping: this user bypasses directory write permissions");
+        eprintln!("skipping: this user bypasses directory write permissions");
         return;
     }
     let output = env.rimz().args(["worktree", "remove", "demo"]).output();
