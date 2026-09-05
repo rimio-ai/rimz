@@ -257,6 +257,8 @@ fn attempt_delivery(
     let Some(candidate) = delivery_candidate(pending, snapshot, message_id, policy, now) else {
         return Ok(false);
     };
+    #[cfg(feature = "testkit")]
+    crate::testkit::rendezvous("RIMZ_TEST_DELIVERY_BEFORE_CLAIM");
     let claimed = match policy {
         DeliveryPolicy::Boundary => {
             store.claim_delivery_batch(&candidate.message.message_id, candidate.status, now)?
@@ -268,6 +270,25 @@ fn attempt_delivery(
     let Some(claimed) = claimed else {
         return Ok(false);
     };
+    #[cfg(feature = "testkit")]
+    crate::testkit::rendezvous("RIMZ_TEST_DELIVERY_AFTER_CLAIM");
+    match cancel_joined_subagent_report(workspace, store, &claimed[0]) {
+        Ok(false) => {}
+        Ok(true) => {
+            register_message_wake(workspace, store)?;
+            return Ok(false);
+        }
+        Err(error) => {
+            tracing::warn!(%message_id, %error, "deferring subagent digest: cannot check or settle joined runs");
+            store.release_message_claims(
+                std::slice::from_ref(message_id),
+                "deferred: cannot check or settle joined runs",
+                &workspace.session_name,
+            )?;
+            register_message_wake(workspace, store)?;
+            return Ok(false);
+        }
+    }
     // Hook delivery handles one claimed batch; settle above owns any
     // pre-delivery spacing, so this pacer's first tick stays a no-op.
     let mut live_send = send::LiveSend {

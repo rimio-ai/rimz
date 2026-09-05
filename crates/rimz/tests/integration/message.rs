@@ -1968,6 +1968,198 @@ fn sweep_delivers_unjoined_subagent_report() {
 }
 
 #[test]
+fn delivery_rechecks_digest_joined_between_scan_and_claim() {
+    assert_digest_joined_during_claim(false);
+}
+
+#[test]
+fn delivery_does_not_revive_digest_canceled_after_claim() {
+    assert_digest_joined_during_claim(true);
+}
+
+fn assert_digest_joined_during_claim(cancel: bool) {
+    for command in ["sweep", "deliver", "steer"] {
+        let (env, digest, pane_fixture) = subagent_report_fixture(&[false]);
+        queue_messages(&env, &[&digest]);
+        let before = DeliveryRendezvous::new(&env, "before");
+        let after = DeliveryRendezvous::new(&env, "after");
+        let trace_log = env.project_root.join("digest-race-trace.log");
+        let mut delivery = traced_rimz(&env, &trace_log);
+        delivery
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .env("RIMZ_TEST_DELIVERY_BEFORE_CLAIM", &before.path)
+            .env("RIMZ_TEST_DELIVERY_AFTER_CLAIM", &after.path)
+            .args(["message", command]);
+        if command == "deliver" {
+            delivery.arg("--message-id");
+        }
+        if command != "sweep" {
+            delivery.arg(digest.message_id.as_str());
+        }
+        let child = delivery
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut before_release = before.arrive();
+        assert_eq!(message_by_id(&env, &digest.message_id).attempts, 0);
+        let store = env.store();
+        let mut run = rimz::harness::run::list(store.paths()).unwrap().remove(0);
+        // Persist the final join under the real workspace lock, leaving its
+        // separate queue cleanup pending until the consumer has claimed.
+        run.joined_at = Some(jiff::Timestamp::from_second(1_001).unwrap());
+        rimz::harness::run::create(store.paths(), &run).unwrap();
+        before_release.write_all(&[1]).unwrap();
+        let mut after_release = after.arrive();
+        assert_eq!(
+            message_by_id(&env, &digest.message_id).status,
+            MessageStatus::Claimed
+        );
+        if cancel {
+            rimz::harness::run::report::join_and_settle_digest(
+                &store,
+                "session",
+                &run.run_id,
+                "joined before delivery",
+            )
+            .unwrap();
+            assert!(store.list_messages().unwrap().is_empty());
+        }
+        assert_no_report_pane_write(&trace_log);
+        after_release.write_all(&[1]).unwrap();
+        let output = child.wait_with_output().unwrap();
+        if command == "steer" {
+            assert_eq!(output.status.code(), Some(1), "{output:?}");
+            assert!(String::from_utf8_lossy(&output.stderr).contains("is no longer queued"));
+        } else {
+            assert!(output.status.success(), "{output:?}");
+        }
+        assert_no_report_pane_write(&trace_log);
+        assert!(
+            store.list_messages().unwrap().is_empty(),
+            "canceled digest must not revive"
+        );
+        let history = store.list_message_history().unwrap();
+        let row = history
+            .iter()
+            .find(|row| row.message_id == digest.message_id)
+            .unwrap();
+        assert_eq!(row.status, MessageStatus::Canceled);
+        assert_eq!(row.attempts, 1);
+        assert_eq!(row.last_sent_at, None);
+        assert!(
+            env.read_events()
+                .iter()
+                .all(|event| event.method != "message.sent")
+        );
+    }
+}
+
+#[test]
+fn delivery_releases_digest_claim_when_post_claim_run_scan_fails() {
+    let (env, digest, pane_fixture) = subagent_report_fixture(&[false]);
+    queue_messages(&env, &[&digest]);
+    let after = DeliveryRendezvous::new(&env, "after");
+    let trace_log = env.project_root.join("digest-scan-race-trace.log");
+    let child = traced_rimz(&env, &trace_log)
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+        .env("RIMZ_TEST_DELIVERY_AFTER_CLAIM", &after.path)
+        .args([
+            "message",
+            "deliver",
+            "--message-id",
+            digest.message_id.as_str(),
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release = after.arrive();
+    assert_eq!(
+        message_by_id(&env, &digest.message_id).status,
+        MessageStatus::Claimed
+    );
+    let store = env.store();
+    let run = rimz::harness::run::list(store.paths()).unwrap().remove(0);
+    let path = store.paths().runs_dir.join(format!("{}.json", run.run_id));
+    std::fs::write(&path, b"{not a run}\n").unwrap();
+    release.write_all(&[1]).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_no_report_pane_write(&trace_log);
+    let queued = message_by_id(&env, &digest.message_id);
+    assert_eq!(queued.status, MessageStatus::Queued);
+    assert_eq!(queued.attempts, 0);
+    assert_eq!(queued.last_attempt_at, None);
+    assert_eq!(queued.last_sent_at, None);
+    assert!(
+        queued
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("cannot check or settle joined runs"))
+    );
+
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    run_success(
+        traced_rimz(&env, &trace_log)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args([
+                "message",
+                "deliver",
+                "--message-id",
+                digest.message_id.as_str(),
+            ]),
+        "retry digest after run repair",
+    );
+    assert_text_then_enter(
+        &trace_log,
+        &format!(
+            "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\n{}",
+            digest.text
+        ),
+    );
+    assert_eq!(
+        message_by_id(&env, &digest.message_id).status,
+        MessageStatus::Sent
+    );
+}
+
+struct DeliveryRendezvous {
+    path: PathBuf,
+    listener: std::os::unix::net::UnixListener,
+}
+
+impl DeliveryRendezvous {
+    fn new(env: &Env, name: &str) -> Self {
+        let path = env.project_root.join(format!("{name}.sock"));
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        Self { path, listener }
+    }
+
+    fn arrive(&self) -> std::os::unix::net::UnixStream {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match self.listener.accept() {
+                Ok((stream, _)) => return stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "delivery never reached {:?}",
+                        self.path
+                    );
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("delivery rendezvous: {error}"),
+            }
+        }
+    }
+}
+
+#[test]
 fn sweep_delivers_partially_joined_subagent_report() {
     assert_subagent_report_delivered(&[true, false]);
 }
