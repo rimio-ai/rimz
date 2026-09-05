@@ -10,6 +10,23 @@ pub use crate::disk::atomic::testkit::fsync_count;
 pub use crate::proc::testkit::spawn_count;
 pub use crate::store::event_log::testkit::{bytes_read, bytes_written};
 
+/// Stop a test subprocess at an I/O boundary until its controller releases it.
+pub(crate) fn rendezvous(env: &str) {
+    use std::io::Read as _;
+    use std::os::unix::net::UnixStream;
+
+    let Some(path) = std::env::var_os(env) else {
+        return;
+    };
+    let mut stream = UnixStream::connect(path).expect("test rendezvous socket");
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .expect("test rendezvous deadline");
+    stream
+        .read_exact(&mut [0])
+        .expect("test rendezvous release");
+}
+
 /// Constants shared with the real ttyd pixel layer, serialized for its Node harness.
 pub fn pixel_layer_config_json() -> String {
     serde_json::json!({
