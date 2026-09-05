@@ -445,25 +445,38 @@ fn subagent_and_terminal_edges_follow_the_contract() {
     );
     assert_eq!(running_start.next, reasoning);
     assert!(running_start.opened_turn);
-    for (label, signal, reason) in [
-        (
-            "ended",
-            LifecycleSignal::Ended,
-            "session ended (handled as removal)",
-        ),
-        (
-            "lost",
-            LifecycleSignal::Lost,
-            "session lost (legacy replay marker)",
-        ),
+    for prior in [
+        reasoning,
+        state(AgentStatus::Running, TurnPhase::Acting, true),
+        state(AgentStatus::Running, TurnPhase::Parked, false),
+        state(AgentStatus::Waiting, TurnPhase::Idle, false),
+        state(AgentStatus::Success, TurnPhase::Idle, false),
+        state(AgentStatus::Idle, TurnPhase::Idle, false),
+        state(AgentStatus::Failed, TurnPhase::Idle, false),
+        state(AgentStatus::Paused, TurnPhase::Idle, false),
     ] {
-        let transition = assert_next(label, Some(reasoning), signal, reasoning);
-        assert_eq!(
-            transition.kind,
-            TransitionKind::Ignored { reason },
-            "{label}"
+        let status = match prior.status {
+            AgentStatus::Running | AgentStatus::Waiting => AgentStatus::Failed,
+            resting => resting,
+        };
+        let ended = assert_next(
+            "ended",
+            Some(prior),
+            LifecycleSignal::Ended,
+            state(status, TurnPhase::Idle, false),
         );
+        assert_eq!(ended.kind, TransitionKind::Normal);
+        assert_eq!(ended.compaction_closed, prior.compacting);
+        assert_eq!(ended.waiting_cleared, prior.status == AgentStatus::Waiting);
+        assert!(!ended.opened_turn);
     }
+    let lost = assert_next("lost", Some(reasoning), LifecycleSignal::Lost, reasoning);
+    assert_eq!(
+        lost.kind,
+        TransitionKind::Ignored {
+            reason: "session lost (legacy replay marker)",
+        },
+    );
 }
 
 #[test]
@@ -729,7 +742,7 @@ fn all_state_signal_pairs_preserve_machine_invariants() {
     for prev in states {
         for signal in &signals {
             let transition = step(prev.as_ref(), None, None, signal);
-            if !matches!(signal, LifecycleSignal::Ended | LifecycleSignal::Lost)
+            if !matches!(signal, LifecycleSignal::Lost)
                 && transition.next.status != AgentStatus::Running
             {
                 assert_eq!(

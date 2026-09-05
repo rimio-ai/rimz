@@ -1,6 +1,88 @@
 use super::*;
 
 #[test]
+fn reaper_ends_rest_active_sessions_without_erasing_failed_verdicts() {
+    for event_name in [
+        "ReapedSuperseded",
+        "ReapedDead",
+        "ReapedStale",
+        "WorktreeRemoved",
+    ] {
+        for (signal, ended_status, recovered_status) in [
+            (
+                json!({ "signal": "turn_started" }),
+                AgentStatus::Idle,
+                AgentStatus::Running,
+            ),
+            (
+                json!({ "signal": "awaiting_input", "kind": "permission" }),
+                AgentStatus::Idle,
+                AgentStatus::Running,
+            ),
+            (
+                json!({ "signal": "turn_ended", "errored": true, "parked_on_background": false }),
+                AgentStatus::Failed,
+                AgentStatus::Failed,
+            ),
+        ] {
+            let mut events = vec![
+                raw_lifecycle_at(
+                    "codex",
+                    0,
+                    json!({ "agent_id": "s1", "signal": { "signal": "registered" } }),
+                ),
+                raw_lifecycle_at("codex", 10, json!({ "agent_id": "s1", "signal": signal })),
+                raw_lifecycle_at(
+                    "codex",
+                    20,
+                    json!({ "event_name": event_name, "agent_id": "s1", "signal": { "signal": "ended" } }),
+                ),
+            ];
+            let ended = reduce_agent_states(&events);
+            assert_eq!(ended[0].status, ended_status, "{event_name}");
+            assert_eq!(ended[0].phase, TurnPhase::Idle);
+            assert_eq!(ended[0].ended_at, Some(events[2].timestamp));
+            assert!(ended[0].waiting_since.is_none());
+
+            events.push(raw_lifecycle_at("codex", 30, json!({ "agent_id": "s1", "signal": { "signal": "tool_used", "mutates": false, "edits": false } })));
+            let recovered = reduce_agent_states(&events);
+            assert_eq!(recovered[0].status, recovered_status, "{event_name}");
+            assert_eq!(recovered[0].ended_at, None);
+        }
+    }
+}
+
+#[test]
+fn authoritative_ends_stay_failed_through_trailing_tool_hooks() {
+    for event_name in [
+        Some("rimz.agent-ended"),
+        Some("SessionEnd"),
+        Some("unknown"),
+        None,
+    ] {
+        let mut events = vec![
+            raw_lifecycle_at(
+                "codex",
+                0,
+                json!({ "agent_id": "s1", "signal": { "signal": "turn_started" } }),
+            ),
+            raw_lifecycle_at(
+                "codex",
+                10,
+                json!({ "event_name": event_name, "agent_id": "s1", "signal": { "signal": "ended" } }),
+            ),
+        ];
+        let ended = reduce_agent_states(&events);
+        assert_eq!(ended[0].status, AgentStatus::Failed, "{event_name:?}");
+        assert_eq!(ended[0].ended_at, Some(events[1].timestamp));
+        events.push(raw_lifecycle_at("codex", 20, json!({ "agent_id": "s1", "signal": { "signal": "tool_used", "mutates": false, "edits": false } })));
+        let trailing = reduce_agent_states(&events);
+        assert_eq!(trailing[0].status, AgentStatus::Failed, "{event_name:?}");
+        assert_eq!(trailing[0].ended_at, None);
+    }
+}
+
+#[test]
 fn thinking_phase_follows_the_turn_through_the_reducer() {
     // A legacy `permission_posture` param rides along unread — replay of an
     // old log never errors on it.
