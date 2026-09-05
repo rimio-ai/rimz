@@ -527,7 +527,7 @@ impl ConsumerFixture {
         runtime.ensure_dirs().unwrap();
         let elder = SidebarInstanceId::parse("sb_019e8c565bbd708097fce9514f79da04").unwrap();
         let younger = SidebarInstanceId::parse("sb_019e8c565bbd7b22854f93a905e1034c").unwrap();
-        crate::sidebar::heartbeat::write_heartbeat(
+        crate::wakeup::heartbeat::write_heartbeat(
             &runtime,
             workspace_id.clone(),
             &elder,

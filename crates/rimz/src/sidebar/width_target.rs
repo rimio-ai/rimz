@@ -138,10 +138,10 @@ pub fn pin(
 
 fn write_and_broadcast(runtime: &RuntimePaths, file: WidthTargetFile) -> atomic::Result<()> {
     atomic::write_temp_then_rename_cache(&runtime.sidebar_width_path(), &file)?;
-    if let Err(err) = crate::sidebar::wakeup::broadcast(
+    if let Err(err) = crate::wakeup::broadcast(
         runtime,
         None,
-        crate::sidebar::events::SidebarEvent::WidthTargetChanged,
+        crate::wakeup::events::SidebarEvent::WidthTargetChanged,
     ) {
         debug!(error = %err, "sidebar width target broadcast failed");
     }

@@ -59,6 +59,7 @@ pub mod tui;
 pub mod uninstall;
 pub mod update;
 pub mod utils;
+pub mod wakeup;
 pub mod web;
 pub mod workspace;
 pub mod worktree;

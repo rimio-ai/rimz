@@ -258,7 +258,7 @@ pub const LINK_STATS_STALE: Duration = Duration::from_secs(10);
 pub const LINK_STATS_EXPIRE: Duration = Duration::from_secs(120);
 
 /// How often a renderer re-stamps its heartbeat. 2s keeps two missed writes of
-/// slack under [`SIDEBAR_HEARTBEAT_TTL`](super::heartbeat::SIDEBAR_HEARTBEAT_TTL) — the same 2.5× ratio
+/// slack under [`SIDEBAR_HEARTBEAT_TTL`](crate::wakeup::heartbeat::SIDEBAR_HEARTBEAT_TTL) — the same 2.5× ratio
 /// [`PRESENCE_STAMP_FRESH`] keeps over the plugin keepalive — while avoiding an
 /// atomic file write for every store-delta fetch in a busy fleet.
 pub const HEARTBEAT_WRITE_INTERVAL: Duration = Duration::from_secs(2);

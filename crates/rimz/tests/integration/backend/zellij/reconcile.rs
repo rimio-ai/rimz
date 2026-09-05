@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use rimz::disk::paths::RuntimePaths;
 use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use rimz::mux::{MuxBackend, SidebarLiveness, SidebarPaneOptions, SidebarWidth};
-use rimz::sidebar::heartbeat::SidebarHeartbeat;
+use rimz::wakeup::heartbeat::SidebarHeartbeat;
 use tempfile::TempDir;
 
 use crate::common::{CommandTimeoutExt, Env};

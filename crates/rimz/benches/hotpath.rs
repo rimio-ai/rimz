@@ -140,7 +140,7 @@ fn fuse_fixture() -> FuseFixture {
         .unwrap_or_else(rimz::utils::time::unix_now_ms)
         .saturating_add(1);
     events.append(
-        rimz::sidebar::events::SidebarEvent::CommandChanged {
+        rimz::wakeup::events::SidebarEvent::CommandChanged {
             pane_id,
             command: "claude".to_owned(),
         },

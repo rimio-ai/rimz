@@ -1,6 +1,6 @@
 use super::*;
-use crate::sidebar::events::SidebarEvent;
 use crate::sidebar::presence::projector::project_presence;
+use crate::wakeup::events::SidebarEvent;
 
 fn project_apply(
     state: &mut TmuxPresenceState,

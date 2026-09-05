@@ -2,9 +2,9 @@
 
 use crate::agents::LifecycleSignal;
 use crate::ids::PaneId;
-use crate::sidebar::events::SidebarEvent;
 use crate::sidebar::timing::EVENT_STORE_TTL;
 use crate::store::event::AGENT_LIFECYCLE_METHOD;
+use crate::wakeup::events::SidebarEvent;
 
 const AGENT_REGISTERED_SIGNAL: &str = LifecycleSignal::Registered.tag();
 const AGENT_ENDED_SIGNAL: &str = LifecycleSignal::Ended.tag();

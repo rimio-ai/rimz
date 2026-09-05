@@ -14,7 +14,7 @@ fn heartbeat(
     session_name: &str,
     instance_id: &str,
     pane: Option<&str>,
-) -> rimz::sidebar::heartbeat::SidebarHeartbeat {
+) -> rimz::wakeup::heartbeat::SidebarHeartbeat {
     heartbeat_on(rimz::MuxName::Zellij, session_name, instance_id, pane)
 }
 
@@ -23,8 +23,8 @@ fn heartbeat_on(
     session_name: &str,
     instance_id: &str,
     pane: Option<&str>,
-) -> rimz::sidebar::heartbeat::SidebarHeartbeat {
-    rimz::sidebar::heartbeat::SidebarHeartbeat::new(
+) -> rimz::wakeup::heartbeat::SidebarHeartbeat {
+    rimz::wakeup::heartbeat::SidebarHeartbeat::new(
         rimz::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
         sidebar(instance_id),
         mux,

@@ -19,7 +19,6 @@ use super::{GlobalFlags, current_channel, open_store};
 use crate::cli::render;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
 use rimz::sidebar::consumer::{PublishedSnapshotReader, RollupCursor, published_frame_exists};
-use rimz::sidebar::events::SidebarEvent;
 use rimz::sidebar::notify::{Notification, NotificationAgent, NotificationKind};
 use rimz::sidebar::presence::{
     ZellijPluginTelemetry, ZellijWake, ZellijWakeOutcome, ZellijWakeReason, ingest_zellij_wake,
@@ -29,6 +28,7 @@ use rimz::sidebar::produce::{
     produce_snapshot_with_refresh,
 };
 use rimz::store::snapshot::{PaneAgent, SidebarRow, SidebarSnapshot};
+use rimz::wakeup::events::SidebarEvent;
 use rimz::workspace::{WorkspaceResolver, record};
 use rimz::{RuntimePaths, StatePaths};
 
@@ -1095,7 +1095,7 @@ fn wake(globals: &GlobalFlags, workspace_id: Option<String>, wake: ZellijWake) -
 }
 
 fn broadcast_wake_event(runtime: &RuntimePaths, session_name: Option<&str>, event: SidebarEvent) {
-    if let Err(err) = rimz::sidebar::wakeup::broadcast(runtime, session_name, event) {
+    if let Err(err) = rimz::wakeup::broadcast(runtime, session_name, event) {
         tracing::debug!(error = %err, "presence poke: event datagram failed");
     }
 }
@@ -1320,7 +1320,7 @@ fn notify_test(globals: &GlobalFlags, command: NotifyTestCommand) -> Result<()> 
         .iter()
         .filter_map(|row| row.pane.as_ref().map(|pane| pane.pane_id.clone()))
         .collect::<Vec<_>>();
-    rimz::sidebar::wakeup::broadcast(
+    rimz::wakeup::broadcast(
         &resolved.runtime,
         Some(&resolved.workspace.session_name),
         SidebarEvent::Notify {
@@ -1429,7 +1429,7 @@ fn diag_for_workspace(workspace: &rimz::ResolvedWorkspace) -> rimz::diag::DiagSi
 }
 
 fn wake_sidebars(runtime: &RuntimePaths) {
-    if let Err(err) = rimz::sidebar::wakeup::wake_store_delta(runtime, None, None) {
+    if let Err(err) = rimz::wakeup::wake_store_delta(runtime, None, None) {
         tracing::debug!(error = %err, "sidebar unread wake failed");
     }
 }

@@ -614,7 +614,7 @@ impl LoopState {
             // the changed input, while presence remains immediate because it
             // establishes whether the tab is watched.
             SidebarEvent::PaneFramePublished { publication } => {
-                use crate::sidebar::events::PaneFramePublicationKind;
+                use crate::wakeup::events::PaneFramePublicationKind;
 
                 match publication {
                     PaneFramePublicationKind::Presence => {
@@ -1011,7 +1011,7 @@ impl LoopState {
             debug!(error = %err, "sidebar body filter write failed");
             return;
         }
-        if let Err(err) = crate::sidebar::wakeup::broadcast(
+        if let Err(err) = crate::wakeup::broadcast(
             self.read_marks.runtime(),
             Some(&self.session_name),
             SidebarEvent::BodyFilterChanged,
@@ -1901,7 +1901,7 @@ fn reload_or_refetch(
 /// Ping every sidebar in the room to refold after a mark read/unread — the
 /// elder prunes or keeps the episode and peer tabs converge on the new state.
 fn wake_room(runtime: &RuntimePaths) {
-    if let Err(err) = crate::sidebar::wakeup::wake_store_delta(runtime, None, None) {
+    if let Err(err) = crate::wakeup::wake_store_delta(runtime, None, None) {
         debug!(error = %err, "mark read/unread sidebar wake failed");
     }
 }

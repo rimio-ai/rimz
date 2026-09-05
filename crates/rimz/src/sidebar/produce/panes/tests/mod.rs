@@ -275,7 +275,7 @@ fn unchanged_presence_preserves_pane_frame_and_sends_no_wakeup() {
     let socket = UnixDatagram::bind(&socket_path).unwrap();
     socket.set_nonblocking(true).unwrap();
     let instance = crate::SidebarInstanceId::new();
-    crate::sidebar::heartbeat::write_heartbeat(
+    crate::wakeup::heartbeat::write_heartbeat(
         &runtime,
         workspace,
         &instance,
@@ -321,7 +321,7 @@ fn unchanged_presence_preserves_pane_frame_and_sends_no_wakeup() {
 
 #[test]
 fn publication_stamps_only_workspace_affecting_sections() {
-    use crate::sidebar::events::PaneFramePublicationKind;
+    use crate::wakeup::events::PaneFramePublicationKind;
 
     let mut frame = frame(Vec::new());
     stamp_publication(&mut frame, PaneFramePublicationKind::Topology);

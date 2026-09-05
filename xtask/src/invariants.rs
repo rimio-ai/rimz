@@ -450,6 +450,7 @@ fn ensure_spend_parser_boundaries(root: &Path, files: &[PathBuf]) -> Result<()> 
 
 fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<()> {
     let sidebar_root = root.join("crates/rimz/src/sidebar");
+    let wakeup_root = root.join("crates/rimz/src/wakeup");
     let harness_root = root.join("crates/rimz/src/harness");
     let sidebar_graph_harness = [
         "auto_continue.rs",
@@ -472,6 +473,7 @@ fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<(
             needle,
             |path| {
                 !path.starts_with(&sidebar_root)
+                    && !path.starts_with(&wakeup_root)
                     && !sidebar_graph_harness
                         .iter()
                         .any(|candidate| candidate == path)

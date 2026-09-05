@@ -517,11 +517,11 @@ struct SidebarSessionGroup {
 }
 
 fn duplicate_sidebar_session_groups(
-    heartbeats: &[rimz::sidebar::heartbeat::SidebarHeartbeat],
+    heartbeats: &[rimz::wakeup::heartbeat::SidebarHeartbeat],
 ) -> Vec<SidebarSessionGroup> {
     let mut by_session: BTreeMap<
         (MuxName, String),
-        Vec<&rimz::sidebar::heartbeat::SidebarHeartbeat>,
+        Vec<&rimz::wakeup::heartbeat::SidebarHeartbeat>,
     > = BTreeMap::new();
     for heartbeat in heartbeats {
         by_session
@@ -556,8 +556,8 @@ fn duplicate_sidebar_session_groups(
 
 pub(super) fn fresh_sidebar_heartbeats_for_doctor(
     runtime: &RuntimePaths,
-) -> std::io::Result<Vec<rimz::sidebar::heartbeat::SidebarHeartbeat>> {
-    let current = rimz::sidebar::heartbeat::read_current_heartbeats(&runtime.heartbeat_dir)?;
+) -> std::io::Result<Vec<rimz::wakeup::heartbeat::SidebarHeartbeat>> {
+    let current = rimz::wakeup::heartbeat::read_current_heartbeats(&runtime.heartbeat_dir)?;
     let mut heartbeats = Vec::new();
     for (path, heartbeat) in current {
         if !heartbeat_mtime_is_fresh(&path) {
@@ -577,7 +577,7 @@ fn heartbeat_mtime_is_fresh(path: &Path) -> bool {
         Err(_) => return false,
     };
     match SystemTime::now().duration_since(modified) {
-        Ok(age) => age <= rimz::sidebar::heartbeat::SIDEBAR_HEARTBEAT_TTL,
+        Ok(age) => age <= rimz::wakeup::heartbeat::SIDEBAR_HEARTBEAT_TTL,
         Err(_) => true,
     }
 }

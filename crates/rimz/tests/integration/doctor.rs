@@ -8,11 +8,11 @@ use rimz::agents::{AgentLifecycleObservation, LaunchParams};
 use rimz::diag::DiagSink;
 use rimz::diag::record::{DiagEnvelope, DiagEvent, RendererExitCause};
 use rimz::ids::{AgentKind, MuxName, PaneId, SidebarInstanceId};
-use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use rimz::store::event::{
     EventEnvelope, LastDeathMarker, MessageEventMethod, SessionDeathAgent, SessionDeathCause,
 };
 use rimz::store::message::{DeliveryGate, MessageRecord, MessageSender, MessageStatus};
+use rimz::wakeup::heartbeat::SidebarHeartbeat;
 use serde_json::{Value, json};
 
 use crate::common::Env;

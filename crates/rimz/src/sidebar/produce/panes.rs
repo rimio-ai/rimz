@@ -126,7 +126,7 @@ impl<'a> PaneFrameCache<'a> {
     fn publish(
         &self,
         frame: &mut PaneFrame,
-        publication: crate::sidebar::events::PaneFramePublicationKind,
+        publication: crate::wakeup::events::PaneFramePublicationKind,
     ) {
         publish_frame(self.runtime, &self.cache_path, frame, publication);
     }
@@ -1014,7 +1014,7 @@ fn validate_frame_for_publish(
                     runtime,
                     cache_path,
                     &mut frame,
-                    crate::sidebar::events::PaneFramePublicationKind::Topology,
+                    crate::wakeup::events::PaneFramePublicationKind::Topology,
                 );
             }
             Ok(frame)
@@ -1032,7 +1032,7 @@ fn validate_frame_for_publish(
                                 runtime,
                                 cache_path,
                                 &mut frame,
-                                crate::sidebar::events::PaneFramePublicationKind::Topology,
+                                crate::wakeup::events::PaneFramePublicationKind::Topology,
                             );
                         }
                         Ok(frame)
@@ -1278,7 +1278,7 @@ fn refresh_cached_metrics(frame: PaneFrame, cache: &PaneFrameCache<'_>) -> PaneF
                 annotate_elevated_agents(&mut latest, &crate::proc::elevated_in_pane_agent);
                 cache.publish(
                     &mut latest,
-                    crate::sidebar::events::PaneFramePublicationKind::Metrics,
+                    crate::wakeup::events::PaneFramePublicationKind::Metrics,
                 );
             }
             latest
@@ -1322,7 +1322,7 @@ fn apply_presence_sample_and_publish(
     if apply_presence_sample(frame, sample) {
         cache.publish(
             frame,
-            crate::sidebar::events::PaneFramePublicationKind::Presence,
+            crate::wakeup::events::PaneFramePublicationKind::Presence,
         );
     }
 }
@@ -1377,15 +1377,15 @@ fn publish_frame(
     runtime: &crate::RuntimePaths,
     cache_path: &Path,
     frame: &mut PaneFrame,
-    publication: crate::sidebar::events::PaneFramePublicationKind,
+    publication: crate::wakeup::events::PaneFramePublicationKind,
 ) {
     stamp_publication(frame, publication);
     if let Err(err) = atomic::write_temp_then_rename_cache(cache_path, frame) {
         tracing::warn!(path = %cache_path.display(), error = %err, "sidebar snapshot cache write failed");
-    } else if let Err(err) = crate::sidebar::wakeup::broadcast(
+    } else if let Err(err) = crate::wakeup::broadcast(
         runtime,
         None,
-        crate::sidebar::events::SidebarEvent::PaneFramePublished { publication },
+        crate::wakeup::events::SidebarEvent::PaneFramePublished { publication },
     ) {
         tracing::debug!(error = %err, "sidebar pane-frame publication wakeup failed");
     }
@@ -1393,9 +1393,9 @@ fn publish_frame(
 
 fn stamp_publication(
     frame: &mut PaneFrame,
-    publication: crate::sidebar::events::PaneFramePublicationKind,
+    publication: crate::wakeup::events::PaneFramePublicationKind,
 ) {
-    use crate::sidebar::events::PaneFramePublicationKind;
+    use crate::wakeup::events::PaneFramePublicationKind;
 
     let next =
         |current: Option<u64>| unix_now_ms().max(current.unwrap_or_default().saturating_add(1));

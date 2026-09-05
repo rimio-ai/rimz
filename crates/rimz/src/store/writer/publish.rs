@@ -176,7 +176,7 @@ impl Store {
             | EventKind::SessionDeath(_)
             | EventKind::Other { .. } => None,
         };
-        if let Err(err) = crate::sidebar::wakeup::wake_store_delta(
+        if let Err(err) = crate::wakeup::wake_store_delta(
             &self.inner.runtime,
             Some(event.method.clone()),
             agent_signal,

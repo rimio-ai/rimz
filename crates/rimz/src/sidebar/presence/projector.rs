@@ -2,7 +2,7 @@
 
 use crate::ids::PaneId;
 use crate::mux::ClientPaneView;
-use crate::sidebar::events::SidebarEvent;
+use crate::wakeup::events::SidebarEvent;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PresencePaneRole {

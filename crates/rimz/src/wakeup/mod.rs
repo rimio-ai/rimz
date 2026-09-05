@@ -6,6 +6,9 @@
 //! directory reads and envelope serialization propagate. Wakeups cut latency
 //! but never carry truth.
 
+pub mod events;
+pub mod heartbeat;
+
 use std::fs;
 use std::io;
 use std::os::unix::net::UnixDatagram;
@@ -15,11 +18,11 @@ use std::time::Duration;
 use jiff::Timestamp;
 use tracing::debug;
 
-use crate::disk::paths::RuntimePaths;
-use crate::sidebar::events::{
+use self::events::{
     RELOAD_CONTROL_WORD, SUPERVISOR_HANDOFF_CONTROL_WORD, SidebarEvent, SidebarEventEnvelope,
 };
-use crate::sidebar::heartbeat::{SIDEBAR_HEARTBEAT_TTL, SidebarHeartbeat, read_current_heartbeats};
+use self::heartbeat::{SIDEBAR_HEARTBEAT_TTL, SidebarHeartbeat, read_current_heartbeats};
+use crate::disk::paths::RuntimePaths;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WakeupErr {

@@ -4,7 +4,7 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::ids::{MuxName, SidebarInstanceId, WorkspaceId};
-use crate::sidebar::heartbeat::{SIDEBAR_PROTOCOL_VERSION, write_heartbeat};
+use crate::wakeup::heartbeat::{SIDEBAR_PROTOCOL_VERSION, write_heartbeat};
 
 mod launch;
 

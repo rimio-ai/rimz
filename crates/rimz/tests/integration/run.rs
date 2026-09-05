@@ -328,7 +328,7 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
     let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
     let runtime = env.runtime_paths();
     runtime.ensure_dirs().expect("runtime dirs");
-    let heartbeat = rimz::sidebar::heartbeat::SidebarHeartbeat::new(
+    let heartbeat = rimz::wakeup::heartbeat::SidebarHeartbeat::new(
         env.workspace_id.clone(),
         rimz::ids::SidebarInstanceId::new(),
         MuxName::Zellij,
@@ -1084,7 +1084,7 @@ fn spawn_retrying_print(env: &Env, trace_name: &str, use_worktree: bool) -> std:
         },
     )
     .expect("write pane topology");
-    let heartbeat = rimz::sidebar::heartbeat::SidebarHeartbeat::new(
+    let heartbeat = rimz::wakeup::heartbeat::SidebarHeartbeat::new(
         env.workspace_id.clone(),
         rimz::ids::SidebarInstanceId::new(),
         MuxName::Zellij,
