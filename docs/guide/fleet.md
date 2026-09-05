@@ -275,7 +275,7 @@ rimz agents claude-planner    # the planning specialist, as @claude-planner
 
 For Codex, leaving `model` unset preserves your Codex configuration; if no model is configured there either, Codex chooses its own default. RimZ does not pin a fallback model.
 
-Each field renders into the base CLI's own flag, so a profile can pin anything the CLI can pin from its command line, and nothing it can't. The one exception is `budget`, which RimZ itself enforces:
+Each field renders into the base CLI's own flag, so a profile can pin anything the CLI can pin from its command line, and nothing it can't. Two fields are RimZ's own: `budget`, which it enforces itself, and `model-reminder`, which shapes what it tells the agent at launch.
 
 | Field | What it sets | Renders as (Claude) |
 | --- | --- | --- |
@@ -286,6 +286,7 @@ Each field renders into the base CLI's own flag, so a profile can pin anything t
 | `append-system-prompt-files` | ordered pieces composed after the base | repeat `--append-system-prompt-file …` |
 | `mode` | the permission posture (`auto` \| `ask` \| `plan` \| `yolo`) | see [permission modes](#set-a-permission-mode) |
 | `args` | raw flags handed to the stock CLI | verbatim |
+| `model-reminder` | whether RimZ's launch reminder names the model and effort the agent runs on; default on | reminder text inside `--append-system-prompt` |
 
 The system prompt and `args` are what make a profile targeted. RimZ separates prompt pieces with blank lines and sends the complete composition through the adapter's single replacement mechanism. Parent fragments come first, child fragments follow, and team-role fragments come last. Claude, Codex, Qwen, and Pi support this typed surface; other agents fail fast rather than silently ignoring it.
 
