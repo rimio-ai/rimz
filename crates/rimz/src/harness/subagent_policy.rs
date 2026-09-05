@@ -64,7 +64,7 @@ pub fn catalog(
 }
 
 pub fn reminder(catalog: &SubagentCatalog) -> String {
-    let body = match catalog {
+    match catalog {
         SubagentCatalog::Disabled => "Subagents are disabled for this agent: its profile allows none, so any `rimz subagents` launch is refused. Do the work yourself with your direct tools.".to_owned(),
         SubagentCatalog::Available(specs) if specs.is_empty() => "No subagent profiles are configured for this agent; Skill(rimz-subagents) has nothing configured to launch. The user enables subagents by adding `[subagents.profiles]` entries to agents.toml.".to_owned(),
         SubagentCatalog::Available(specs) => {
@@ -77,8 +77,7 @@ pub fn reminder(catalog: &SubagentCatalog) -> String {
                 "Subagents are available to you; launch them with Skill(rimz-subagents). Use them to run independent work in parallel, fan out searches or audits, or keep a large exploration out of your own context: delegate it and keep the conclusion, not the file dumps.\n\nWhen every subagent you launched has settled, one `SUBAGENT_REPORT` message from `@rimz` lists their outcomes; read the results with `rimz subagents wait`. Calling `rimz subagents wait` earlier blocks until they settle (`--any` returns the first).\n\nAvailable subagent profiles you may launch:\n{list}"
             )
         }
-    };
-    format!("<system_reminder>\n{body}\n</system_reminder>")
+    }
 }
 
 fn reminder_profile(profile: &SubagentProfile) -> String {
@@ -151,6 +150,7 @@ mod tests {
             Profile {
                 agent: "claude".to_owned(),
                 description: None,
+                model_reminder: None,
                 subagents: allowed.map(|values| values.into_iter().map(str::to_owned).collect()),
                 mode: None,
                 model: None,
@@ -198,6 +198,7 @@ mod tests {
                 agent: "claude".to_owned(),
                 description: Some("Finds files and traces code paths".to_owned()),
                 subagents: None,
+                model_reminder: None,
                 mode: None,
                 model: Some("sonnet".to_owned()),
                 effort: Some("low".to_owned()),
@@ -286,25 +287,19 @@ mod tests {
         let text = reminder(&available);
         assert_eq!(
             text,
-            "<system_reminder>\n\
-             Subagents are available to you; launch them with Skill(rimz-subagents). Use them to run independent work in parallel, fan out searches or audits, or keep a large exploration out of your own context: delegate it and keep the conclusion, not the file dumps.\n\n\
+            "Subagents are available to you; launch them with Skill(rimz-subagents). Use them to run independent work in parallel, fan out searches or audits, or keep a large exploration out of your own context: delegate it and keep the conclusion, not the file dumps.\n\n\
              When every subagent you launched has settled, one `SUBAGENT_REPORT` message from `@rimz` lists their outcomes; read the results with `rimz subagents wait`. Calling `rimz subagents wait` earlier blocks until they settle (`--any` returns the first).\n\n\
              Available subagent profiles you may launch:\n\
              - `explorer` (claude · sonnet · low): Finds files and traces code paths\n\
-             - `lint`\n\
-             </system_reminder>"
+             - `lint`"
         );
         assert_eq!(
             reminder(&SubagentCatalog::Disabled),
-            "<system_reminder>\n\
-             Subagents are disabled for this agent: its profile allows none, so any `rimz subagents` launch is refused. Do the work yourself with your direct tools.\n\
-             </system_reminder>"
+            "Subagents are disabled for this agent: its profile allows none, so any `rimz subagents` launch is refused. Do the work yourself with your direct tools."
         );
         assert_eq!(
             reminder(&SubagentCatalog::Available(Vec::new())),
-            "<system_reminder>\n\
-             No subagent profiles are configured for this agent; Skill(rimz-subagents) has nothing configured to launch. The user enables subagents by adding `[subagents.profiles]` entries to agents.toml.\n\
-             </system_reminder>"
+            "No subagent profiles are configured for this agent; Skill(rimz-subagents) has nothing configured to launch. The user enables subagents by adding `[subagents.profiles]` entries to agents.toml."
         );
     }
 }

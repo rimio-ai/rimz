@@ -1,5 +1,6 @@
 use super::*;
 use crate::cli::{open_store, worktree};
+use rimz::harness::launch_reminders::LaunchReminders;
 use std::cell::RefCell;
 use std::sync::mpsc;
 
@@ -80,7 +81,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         &provider_cwd,
         &rimz::proc::rimz_exe(),
         &materialized_prompt.env,
-        (reminders.subagent_catalog.as_ref(), reminders.team.as_ref()),
+        &reminders,
     );
     let stage = match stage {
         Ok(stage) => stage,
@@ -191,21 +192,12 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     )
 }
 
-#[derive(Default)]
-struct ExecLaunchReminders {
-    subagent_catalog: Option<rimz::harness::subagent_policy::SubagentCatalog>,
-    team: Option<rimz::config::Team>,
-}
-
 fn exec_launch_reminders(
     request: &rimz::harness::launch::ExecRequest,
     machine_config: &rimz::config::MachineConfig,
     project_root: &std::path::Path,
     config_root: &std::path::Path,
-) -> ExecLaunchReminders {
-    if request.subagent {
-        return ExecLaunchReminders::default();
-    }
+) -> LaunchReminders {
     let effective = match rimz::config::effective::load(
         &machine_config.agents,
         &machine_config.subagents.profiles,
@@ -216,11 +208,30 @@ fn exec_launch_reminders(
         Err(err) => {
             let _ = writeln!(
                 std::io::stderr().lock(),
-                "rimz: {err}; launching without RimZ launch reminders"
+                "rimz: {err}; launching with default RimZ launch reminders"
             );
-            return ExecLaunchReminders::default();
+            return LaunchReminders::default();
         }
     };
+    let profiles = if request.subagent {
+        &effective.subagent_profiles
+    } else {
+        &effective.profiles
+    };
+    let model = request
+        .identity
+        .params
+        .profile
+        .as_deref()
+        .and_then(|name| profiles.0.get(name))
+        .and_then(|profile| profile.model_reminder)
+        .unwrap_or(true);
+    if request.subagent {
+        return LaunchReminders {
+            model,
+            ..LaunchReminders::default()
+        };
+    }
     let subagent_catalog = Some(rimz::harness::subagent_policy::catalog(
         request.identity.params.profile.as_deref(),
         &effective.profiles,
@@ -242,7 +253,8 @@ fn exec_launch_reminders(
                 None
             }
         });
-    ExecLaunchReminders {
+    LaunchReminders {
+        model,
         subagent_catalog,
         team,
     }
@@ -1427,6 +1439,53 @@ mod tests {
             exec_launch_reminders(&request, &machine_config, project.path(), config.path());
         assert!(reminders.subagent_catalog.is_none());
         assert!(reminders.team.is_none());
+        assert!(reminders.model);
+    }
+
+    #[test]
+    fn profile_model_reminder_flag_reaches_launch_reminders() {
+        let project = tempfile::tempdir().expect("project");
+        let config = tempfile::tempdir().expect("config");
+        let machine_config: rimz::config::MachineConfig = toml::from_str(
+            r#"
+            [agents.profiles.quiet]
+            agent = "claude"
+            model-reminder = false
+            [agents.profiles.loud]
+            agent = "quiet"
+            [subagents.profiles.quiet]
+            agent = "claude"
+            model-reminder = true
+            [subagents.profiles.child]
+            agent = "claude"
+            model-reminder = false
+        "#,
+        )
+        .expect("config");
+        for (profile, subagent, expected) in [
+            (Some("quiet"), false, false),
+            (Some("loud"), false, true),
+            (Some("quiet"), true, true),
+            (Some("child"), true, false),
+            (None, false, true),
+            (None, true, true),
+        ] {
+            let mut request = request(
+                "claude",
+                ExecAction::Launch {
+                    prompt: None,
+                    extra_args: Vec::new(),
+                },
+            );
+            request.identity.params.profile = profile.map(str::to_owned);
+            request.subagent = subagent;
+            let reminders =
+                exec_launch_reminders(&request, &machine_config, project.path(), config.path());
+            assert_eq!(
+                reminders.model, expected,
+                "{profile:?}, subagent={subagent}"
+            );
+        }
     }
 
     #[test]
@@ -1495,7 +1554,7 @@ mod tests {
     }
 
     #[test]
-    fn omits_team_context_without_team_identity_and_all_reminders_for_children() {
+    fn omits_team_context_without_team_identity_and_catalog_for_children() {
         let project = tempfile::tempdir().expect("project");
         let config = tempfile::tempdir().expect("config");
         let machine_config = rimz::config::MachineConfig::default();
@@ -1510,6 +1569,7 @@ mod tests {
             exec_launch_reminders(&request, &machine_config, project.path(), config.path());
         assert!(reminders.subagent_catalog.is_some());
         assert!(reminders.team.is_none());
+        assert!(reminders.model);
 
         let mut child = request;
         child.subagent = true;
@@ -1517,6 +1577,7 @@ mod tests {
             exec_launch_reminders(&child, &machine_config, project.path(), config.path());
         assert!(reminders.subagent_catalog.is_none());
         assert!(reminders.team.is_none());
+        assert!(reminders.model);
     }
 
     #[test]
@@ -1642,7 +1703,7 @@ mod tests {
             project.path(),
             Path::new("/bin/rimz"),
             &materialized.env,
-            (None, None),
+            &LaunchReminders::default(),
         )
         .expect("compile qwen process");
         let AgentProcessStage::Ready(process) = stage else {

@@ -54,7 +54,7 @@ pub(super) fn supervised_prompt<'a>(
         Cow::Owned(format!(
             "{}\n\n{}",
             request.prompt,
-            rimz::harness::launch::SUBAGENT_REMINDER
+            rimz::harness::launch_reminders::subagent_reminder()
         ))
     } else {
         Cow::Borrowed(&request.prompt)

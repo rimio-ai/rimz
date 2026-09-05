@@ -968,6 +968,7 @@ const PROFILE_FIELDS: &[&str] = &[
     "agent",
     "description",
     "subagents",
+    "model-reminder",
     "mode",
     "model",
     "effort",

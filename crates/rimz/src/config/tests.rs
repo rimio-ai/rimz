@@ -982,6 +982,7 @@ fn agents_toml_entries_override_agents_home_fragments() {
             agent: "claude".to_owned(),
             description: None,
             subagents: None,
+            model_reminder: None,
             mode: None,
             model: Some("opus".to_owned()),
             effort: None,
@@ -1116,6 +1117,7 @@ fn absent_agents_home_is_noop_and_malformed_fragment_leaves_config_unchanged() {
             agent: "claude".to_owned(),
             description: None,
             subagents: None,
+            model_reminder: None,
             mode: None,
             model: None,
             effort: None,
@@ -1381,6 +1383,7 @@ fn agent_profiles_commands_and_teams_parse() {
             agent: "codex".to_owned(),
             description: None,
             subagents: None,
+            model_reminder: None,
             mode: Some(PermissionMode::Yolo),
             model: Some("gpt-5-codex".to_owned()),
             effort: Some("high".to_owned()),
@@ -1396,6 +1399,7 @@ fn agent_profiles_commands_and_teams_parse() {
             agent: "claude".to_owned(),
             description: None,
             subagents: None,
+            model_reminder: None,
             mode: None,
             model: None,
             effort: None,
@@ -1516,6 +1520,44 @@ fn agent_and_subagent_profiles_parse_in_separate_namespaces_with_descriptions() 
         toml::from_str::<Profile>(&encoded).expect("round-trip profile"),
         *subagent
     );
+}
+
+#[test]
+fn profile_model_reminder_parses_and_round_trips_in_both_namespaces() {
+    let dir = tempdir().expect("tempdir");
+    for namespace in ["agents", "subagents"] {
+        for (field, expected) in [
+            ("", None),
+            ("model-reminder = true\n", Some(true)),
+            ("model-reminder = false\n", Some(false)),
+        ] {
+            let config = load_no_fragments(&write_named(
+                &dir,
+                "agents.toml",
+                &format!("[{namespace}.profiles.planner]\nagent = \"claude\"\n{field}"),
+            ))
+            .expect("load model reminder");
+            let profiles = if namespace == "agents" {
+                &config.agents.profiles
+            } else {
+                &config.subagents.profiles
+            };
+            let profile = profiles.0.get("planner").expect("profile");
+            assert_eq!(profile.model_reminder, expected);
+            let encoded = toml::to_string(profile).expect("serialize profile");
+            let serialized: toml::Value = toml::from_str(&encoded).expect("profile table");
+            assert_eq!(
+                serialized
+                    .get("model-reminder")
+                    .and_then(toml::Value::as_bool),
+                expected
+            );
+            assert_eq!(
+                toml::from_str::<Profile>(&encoded).expect("round-trip profile"),
+                *profile
+            );
+        }
+    }
 }
 
 #[test]

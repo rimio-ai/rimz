@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::agents::capabilities::SystemTextChannel;
+use crate::harness::launch_reminders::LaunchReminders;
 use crate::ids::{AgentKind, RunId, WorkspaceId};
 
 const ENV_BIN: &str = "/usr/bin/env";
@@ -67,16 +68,6 @@ pub const ENV_AGENT_BUDGET: &str = "RIMZ_AGENT_BUDGET";
 /// agent launch so `cargo xtask` can route recognized cargo commands through
 /// `rtk`. Read by xtask, never by rimz itself.
 pub(super) const ENV_RTK: &str = "RIMZ_RTK";
-
-pub const SUBAGENT_REMINDER: &str = concat!(
-    "<system_reminder>\n",
-    "You are a subagent: a supervised child launched by another agent to ",
-    "complete the task you were given. You must not spawn agents or subagents of any kind — do not use ",
-    "agent, task, or spawn tools, and do not launch `rimz subagents`, `rimz agents`, or ",
-    "`rimz teams`. Do the work yourself with your direct tools and report the result; your final ",
-    "message is delivered to your caller as a message when you exit.\n",
-    "</system_reminder>"
-);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProgramLookupErr {
@@ -564,8 +555,7 @@ pub fn compile_agent_process(
         request,
         cwd,
         &BTreeMap::new(),
-        None,
-        None,
+        &LaunchReminders::default(),
     )
 }
 
@@ -575,8 +565,7 @@ fn compile_agent_process_with_extra_env(
     request: &ExecRequest,
     cwd: &Path,
     extra_env: &BTreeMap<String, String>,
-    subagent_catalog: Option<&crate::harness::subagent_policy::SubagentCatalog>,
-    team: Option<&crate::config::Team>,
+    reminders: &LaunchReminders,
 ) -> AgentProcessResult<CompiledAgentProcess> {
     let kind = request.kind.as_str();
     let adapter = crate::agents::find_definition(kind).ok_or_else(|| {
@@ -587,31 +576,11 @@ fn compile_agent_process_with_extra_env(
     let mut action = request.action.clone();
     if request.subagent {
         adapter.lockdown_subagent_args(action.extra_args_mut());
-        if let Some(channel) = adapter.append_system_text_channel() {
-            merge_appended_system_text(action.extra_args_mut(), &channel, SUBAGENT_REMINDER);
-        }
-    } else if let (Some(catalog), Some(channel)) =
-        (subagent_catalog, adapter.append_system_text_channel())
-    {
-        merge_appended_system_text(
-            action.extra_args_mut(),
-            &channel,
-            &crate::harness::subagent_policy::reminder(catalog),
-        );
     }
-    if let (Some(team), Some(channel)) = (team, adapter.append_system_text_channel())
-        && let Some(context) = crate::harness::launch_context::team_launch_context(
-            &request.identity.params,
-            &request.action,
-            team,
-            cwd,
-        )
+    if let Some(channel) = adapter.append_system_text_channel()
+        && let Some(text) = crate::harness::launch_reminders::render(request, reminders, cwd)
     {
-        merge_appended_system_text(
-            action.extra_args_mut(),
-            &channel,
-            &crate::harness::launch_context::reminder(&context),
-        );
+        merge_appended_system_text(action.extra_args_mut(), &channel, &text);
     }
     let provider_argv = compile_provider_argv(adapter, kind, &action, cwd)?;
     let provider_program =
@@ -719,7 +688,7 @@ pub fn compile_managed_agent_process(
 /// Compile the serialized wrapper stage for a proven managed provider binding.
 /// Pending stages re-enter through the login shell once; finalized stages
 /// execute raw provider argv after the adapter verifies the effective binding.
-/// `reminders` carries the optional subagent catalog and team, in that order.
+/// `reminders` controls model identity, team context, and subagent policy text.
 pub fn compile_agent_process_stage_with_extra_env(
     project_root: &Path,
     rtk: crate::config::RtkMode,
@@ -727,10 +696,7 @@ pub fn compile_agent_process_stage_with_extra_env(
     cwd: &Path,
     rimz_bin: &Path,
     extra_env: &BTreeMap<String, String>,
-    reminders: (
-        Option<&crate::harness::subagent_policy::SubagentCatalog>,
-        Option<&crate::config::Team>,
-    ),
+    reminders: &LaunchReminders,
 ) -> Result<AgentProcessStage, AgentProcessStageErr> {
     let bound = !matches!(&request.provider_account, ProviderAccountState::Unbound);
     if bound && !matches!(&request.action, ExecAction::Launch { .. }) {
@@ -743,8 +709,7 @@ pub fn compile_agent_process_stage_with_extra_env(
         request,
         cwd,
         extra_env,
-        reminders.0,
-        reminders.1,
+        reminders,
     )?;
     let managed_launch = if bound {
         let adapter = crate::agents::find_definition(request.kind.as_str()).ok_or_else(|| {
