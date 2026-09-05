@@ -14,6 +14,7 @@ enum AddTaskAction {
     },
     Deliver {
         target: TaskTarget,
+        matches: BTreeMap<String, String>,
     },
     CheckOnly,
 }
@@ -22,7 +23,7 @@ impl AddTaskAction {
     fn provider_kind(&self) -> Option<&str> {
         match self {
             Self::Spawn { resolved, .. } => Some(resolved.kind()),
-            Self::Deliver { target } => Some(&target.kind),
+            Self::Deliver { target, .. } => Some(&target.kind),
             Self::CheckOnly => None,
         }
     }
@@ -206,9 +207,9 @@ fn resolve_add_action(
         }
         TaskActionKind::Deliver => {
             let address = args.wake.as_deref().unwrap_or_default();
-            let target = resolve_delivery_target(workspace, args, address)?;
+            let (target, matches) = resolve_delivery_target(workspace, args, address)?;
             validate_self_wake(args, &target)?;
-            AddTaskAction::Deliver { target }
+            AddTaskAction::Deliver { target, matches }
         }
         TaskActionKind::CheckOnly => AddTaskAction::CheckOnly,
     };
@@ -305,8 +306,9 @@ fn build_task_entry(
             entry.system_prompt_file = args.system_prompt_file.clone();
             entry.timeout = args.timeout.clone();
         }
-        AddTaskAction::Deliver { target } => {
+        AddTaskAction::Deliver { target, matches } => {
             entry.wake = Some(target);
+            entry.matches = (!matches.is_empty()).then_some(matches);
             entry.timeout = uses_check_timeout.then(|| args.timeout.clone()).flatten();
         }
         AddTaskAction::CheckOnly => {
@@ -462,7 +464,7 @@ fn resolve_delivery_target(
     workspace: &rimz::ResolvedWorkspace,
     args: &AddArgs,
     address: &str,
-) -> Result<TaskTarget> {
+) -> Result<(TaskTarget, BTreeMap<String, String>)> {
     let store = crate::cli::open_store(workspace)?;
     let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     let channel = crate::cli::current_channel(workspace);
@@ -483,11 +485,28 @@ fn resolve_delivery_target(
         );
     }
     let peers = rimz::harness::target::addressable_agents(&snapshot);
-    Ok(TaskTarget {
-        kind: agent.kind.as_str().to_owned(),
-        session: agent.agent_id.as_str().to_owned(),
-        handle: rimz::harness::target::agent_handle(agent, &peers, true),
-    })
+    let caller = crate::cli::send::resolve_caller(&store)?;
+    let scope = caller
+        .as_ref()
+        .map(|caller| rimz::harness::ancestry::resolve_launch_caller(&snapshot.agents, caller))
+        .transpose()?
+        .unwrap_or(agent);
+    let mut matches = parse_matches(&args.matches)?;
+    crate::cli::wake::default_signal_matches(
+        workspace,
+        &snapshot.agents,
+        scope,
+        args.signal.as_deref(),
+        &mut matches,
+    )?;
+    Ok((
+        TaskTarget {
+            kind: agent.kind.as_str().to_owned(),
+            session: agent.agent_id.as_str().to_owned(),
+            handle: rimz::harness::target::agent_handle(agent, &peers, true),
+        },
+        matches,
+    ))
 }
 
 fn parse_matches(raw: &[String]) -> Result<BTreeMap<String, String>> {

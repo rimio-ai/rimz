@@ -22,8 +22,24 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
     let waits_inline = args.wait.is_some();
     let ctx = Ctx::open(globals)?;
     let caller = caller(&ctx)?;
-    let target = delivery_target(&ctx, caller.as_ref(), args.target.as_deref())?;
-    let matches = parse_matches(&args.matches)?;
+    let snapshot = ctx.resolution_snapshot()?;
+    let caller_agent = caller_agent(&snapshot, caller.as_ref())?;
+    let target = delivery_target(&ctx, &snapshot, caller_agent, args.target.as_deref())?;
+    let scope = caller_agent
+        .or_else(|| {
+            snapshot.agents.iter().find(|agent| {
+                agent.kind.as_str() == target.kind && agent.agent_id.as_str() == target.session
+            })
+        })
+        .context("wake target disappeared from its resolution snapshot")?;
+    let mut matches = parse_matches(&args.matches)?;
+    default_signal_matches(
+        &ctx.workspace,
+        &snapshot.agents,
+        scope,
+        args.signal.as_deref(),
+        &mut matches,
+    )?;
     self_wake_guard(args.signal.as_deref(), &matches, &target)?;
 
     let catalog = TaskCatalog::load(Some(&ctx.workspace.project_root))?;
@@ -39,15 +55,12 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
         format!("wake-{petname}")
     };
     let created = Timestamp::now();
-    let snapshot = ctx.resolution_snapshot()?;
-    let armed_by = caller_agent(&snapshot, caller.as_ref())?.map_or(WakeArmer::Human, |agent| {
-        WakeArmer::Agent {
-            handle: rimz::harness::target::agent_handle(
-                agent,
-                &rimz::harness::target::addressable_agents(&snapshot),
-                true,
-            ),
-        }
+    let armed_by = caller_agent.map_or(WakeArmer::Human, |agent| WakeArmer::Agent {
+        handle: rimz::harness::target::agent_handle(
+            agent,
+            &rimz::harness::target::addressable_agents(&snapshot),
+            true,
+        ),
     });
     let prompt = args.prompt.or_else(|| {
         args.prompt_file

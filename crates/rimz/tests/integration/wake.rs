@@ -450,7 +450,110 @@ fn wait_for_wake_records(
     }
 }
 
+#[test]
+fn wake_defaults_scope_from_caller_worktree() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let worktree = env.project_root.join("feature");
+    register_calling_agent_in(&env, &worktree, LaunchParams::default());
+    wake_ok(&env, &["wake", "--signal", "ci.*"]);
+    let tasks = wake_instances(&env);
+    let entry = tasks.0.values().next().unwrap();
+    assert_eq!(
+        entry.matches.as_ref().unwrap()["path"],
+        worktree.display().to_string()
+    );
+    let output = env
+        .rimz()
+        .args(["wake", "@planner", "--signal", "pr.merged"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        wake_instances(&env)
+            .0
+            .values()
+            .all(|entry| entry.matches.as_ref().unwrap()["path"] == worktree.display().to_string())
+    );
+    wake_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "ci-loop",
+            "--wake",
+            "@planner",
+            "--signal",
+            "ci.failed",
+            "--prompt",
+            "inspect CI",
+        ],
+    );
+    let listed = wake_ok(&env, &["loop", "show", "ci-loop"]);
+    assert!(
+        listed.contains(&format!("path={}", worktree.display())),
+        "{listed}"
+    );
+}
+
+#[test]
+fn wake_on_ci_from_root_checkout_refuses_with_fixes() {
+    let env = Env::new();
+    register_calling_agent(&env);
+    let output = agent_wake(&env)
+        .args(["wake", "--signal", "ci.failed"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("root checkout is not watched"), "{error}");
+    assert!(error.contains("--match branch=<name>"), "{error}");
+    assert!(
+        error.contains("rimz wake -- gh run watch --exit-status"),
+        "{error}"
+    );
+    wake_ok(
+        &env,
+        &["wake", "--signal", "ci.failed", "--match", "branch=feature"],
+    );
+    let output = agent_wake(&env)
+        .args(["wake", "--signal", "ci.finished"])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("was replaced by ci.passed, ci.failed")
+    );
+}
+
+#[test]
+fn wake_on_team_defaults_to_own_instance() {
+    let env = Env::new();
+    register_calling_agent_in(
+        &env,
+        &env.project_root,
+        LaunchParams {
+            team: Some("forge".to_owned()),
+            channel: Some("feature".to_owned()),
+            ..LaunchParams::default()
+        },
+    );
+    wake_ok(&env, &["wake", "--signal", "team.idle"]);
+    let tasks = wake_instances(&env);
+    assert_eq!(
+        tasks.0.values().next().unwrap().matches.as_ref().unwrap()["instance"],
+        "forge#feature"
+    );
+}
+
 fn register_calling_agent(env: &Env) {
+    register_calling_agent_in(env, &env.project_root, LaunchParams::default());
+}
+
+fn register_calling_agent_in(env: &Env, worktree: &std::path::Path, launch: LaunchParams) {
     let store = env.store();
     let workspace =
         rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
@@ -464,12 +567,12 @@ fn register_calling_agent(env: &Env) {
                 launch_id: Some(AgentSessionId::from("launch-session")),
                 agent_name: "planner".to_owned(),
                 agent_name_explicit: true,
-                launch: LaunchParams::default(),
+                launch,
                 state: AgentLaunchState::Bound,
                 run_id: None,
                 pane_id: None,
                 runtime_owner: None,
-                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_path: Some(worktree.display().to_string()),
                 worktree_branch: Some("main".to_owned()),
                 prompt: None,
                 description: None,

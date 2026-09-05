@@ -145,20 +145,20 @@ fn caller_session(ctx: &Ctx) -> Result<Option<AgentSessionId>> {
 
 fn delivery_target(
     ctx: &Ctx,
-    caller: Option<&CallerIdentity>,
+    snapshot: &SidebarSnapshot,
+    caller: Option<&rimz::agents::AgentState>,
     address: Option<&str>,
 ) -> Result<TaskTarget> {
-    let snapshot = ctx.resolution_snapshot()?;
     if let Some(address) = address {
         if !address.starts_with('@') {
             bail!("wake target must start with `@`");
         }
-        let agent = super::resolve_agent_one(&snapshot, address, None, ctx.channel())
+        let agent = super::resolve_agent_one(snapshot, address, None, ctx.channel())
             .map_err(|_| anyhow::anyhow!("no live agent matches `{address}`"))?;
         if agent.agent_id.is_provisional() {
             bail!("`{address}` has not registered a real session yet");
         }
-        let peers = rimz::harness::target::addressable_agents(&snapshot);
+        let peers = rimz::harness::target::addressable_agents(snapshot);
         return Ok(TaskTarget {
             kind: agent.kind.as_str().to_owned(),
             session: agent.agent_id.as_str().to_owned(),
@@ -166,7 +166,7 @@ fn delivery_target(
         });
     }
 
-    let agent = caller_agent(&snapshot, caller)?.ok_or_else(|| {
+    let agent = caller.ok_or_else(|| {
         anyhow::anyhow!(
             "arming a wake without an explicit @target is only available to an agent RimZ can identify; from a user shell, pass the live agent address"
         )
@@ -174,16 +174,68 @@ fn delivery_target(
     if agent.agent_id.is_provisional() {
         bail!("the calling agent has not registered a real session yet");
     }
-    let handle = agent
-        .name
-        .as_deref()
-        .map(|name| format!("@{name}"))
-        .unwrap_or_else(|| format!("@{}", agent.kind));
+    let handle = rimz::harness::target::agent_handle(
+        agent,
+        &rimz::harness::target::addressable_agents(snapshot),
+        true,
+    );
     Ok(TaskTarget {
         kind: agent.kind.as_str().to_owned(),
         session: agent.agent_id.as_str().to_owned(),
         handle,
     })
+}
+
+pub(super) fn default_signal_matches(
+    workspace: &rimz::ResolvedWorkspace,
+    agents: &[rimz::agents::AgentState],
+    scope: &rimz::agents::AgentState,
+    signal: Option<&str>,
+    matches: &mut BTreeMap<String, String>,
+) -> Result<()> {
+    let Some(signal) = signal else { return Ok(()) };
+    let parsed = rimz::harness::schedule::parse_trigger(
+        "wake",
+        &rimz::config::TaskEntry {
+            signal: Some(signal.to_owned()),
+            matches: Some(matches.clone()),
+            ..rimz::config::TaskEntry::default()
+        },
+    )?;
+    let rimz::harness::schedule::Trigger::Signal { selector, .. } = parsed.trigger else {
+        unreachable!("the entry has only a signal trigger")
+    };
+    match selector.family() {
+        "ci" | "pr" if !matches.contains_key("path") && !matches.contains_key("branch") => {
+            let path = scope
+                .worktree_path
+                .as_deref()
+                .map(std::path::Path::new)
+                .unwrap_or(&workspace.worktree_root);
+            if path == workspace.project_root {
+                bail!(
+                    "CI on the root checkout is not watched: RimZ polls the forge for worktree branches. Pass --match branch=<name>, or watch it with: rimz wake -- gh run watch --exit-status"
+                );
+            }
+            matches.insert("path".to_owned(), path.display().to_string());
+        }
+        "team" if !matches.contains_key("team") && !matches.contains_key("instance") => {
+            let cohort = rimz::harness::target::team_cohorts(agents)
+                .into_iter()
+                .find(|cohort| {
+                    cohort.members.iter().any(|member| {
+                        member.kind == scope.kind && member.agent_id == scope.agent_id
+                    })
+                })
+                .context("team.* wakes need a team member; pass --match instance=<team#channel>")?;
+            matches.insert(
+                "instance".to_owned(),
+                format!("{}#{}", cohort.team, cohort.channel),
+            );
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn parse_matches(raw: &[String]) -> Result<BTreeMap<String, String>> {
