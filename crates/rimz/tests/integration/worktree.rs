@@ -695,7 +695,7 @@ fn worktree_remove_refuses_while_a_live_agent_works_there() {
 }
 
 #[test]
-fn worktree_remove_reports_archive_failure_after_removal() {
+fn worktree_remove_survives_history_append_failure() {
     if git_missing() {
         return;
     }
@@ -707,15 +707,16 @@ fn worktree_remove_reports_archive_failure_after_removal() {
         .success();
     let path = env.home_root.join("project-worktrees").join("demo");
     queue_channel_message(&env, "demo", "old work");
-    block_message_archive(&env);
+    block_message_history(&env);
 
     env.rimz()
         .args(["worktree", "remove", "demo"])
         .assert()
-        .failure()
-        .stderr(contains("archiving messages for removed worktree channel"));
+        .success()
+        .stderr(contains("cannot append terminal message history"));
 
-    assert!(!path.exists(), "removal completes before archive failure");
+    assert!(!path.exists(), "removal survives history failure");
+    assert_messages_archived_without_history(&env);
 }
 
 #[cfg(unix)]
@@ -796,7 +797,7 @@ fn worktree_cleanup_retires_sessions_and_archives_messages_after_removal() {
 }
 
 #[test]
-fn worktree_cleanup_downgrades_archive_failure_after_removal() {
+fn worktree_cleanup_survives_history_append_failure() {
     if git_missing() {
         return;
     }
@@ -808,7 +809,7 @@ fn worktree_cleanup_downgrades_archive_failure_after_removal() {
         .success();
     let path = env.home_root.join("project-worktrees").join("demo");
     queue_channel_message(&env, "demo", "old work");
-    block_message_archive(&env);
+    block_message_history(&env);
 
     env.rimz()
         .args([
@@ -820,11 +821,12 @@ fn worktree_cleanup_downgrades_archive_failure_after_removal() {
         .assert()
         .success();
 
-    assert!(!path.exists(), "cleanup survives archive failure");
+    assert!(!path.exists(), "cleanup survives history failure");
+    assert_messages_archived_without_history(&env);
 }
 
 #[test]
-fn worktree_gc_reports_archive_failure_after_removal() {
+fn worktree_gc_survives_history_append_failure() {
     if git_missing() {
         return;
     }
@@ -836,19 +838,17 @@ fn worktree_gc_reports_archive_failure_after_removal() {
         .success();
     let path = env.home_root.join("project-worktrees").join("demo");
     queue_channel_message(&env, "demo", "old work");
-    block_message_archive(&env);
+    block_message_history(&env);
 
     env.rimz()
         .args(["gc", "--older-than", "1h"])
         .assert()
         .success()
         .stdout(contains("removed: demo"))
-        .stdout(contains("message archive failed"));
+        .stderr(contains("cannot append terminal message history"));
 
-    assert!(
-        !path.exists(),
-        "gc removal completes before archive failure"
-    );
+    assert!(!path.exists(), "gc removal survives history failure");
+    assert_messages_archived_without_history(&env);
 }
 
 #[cfg(unix)]
@@ -2246,7 +2246,21 @@ fn queue_channel_message(env: &Env, channel: &str, text: &str) -> rimz::MessageI
     message_id
 }
 
-fn block_message_archive(env: &Env) {
+fn assert_messages_archived_without_history(env: &Env) {
+    assert!(
+        env.store()
+            .list_messages()
+            .expect("live messages")
+            .is_empty()
+    );
+    assert!(
+        env.read_events()
+            .iter()
+            .any(|event| event.method == "message.archived")
+    );
+}
+
+fn block_message_history(env: &Env) {
     let history = env
         .state_path_for(&env.project_root)
         .messages_dir
