@@ -300,9 +300,9 @@ fn parse_schedule_rejects_invalid_timing_fields() {
 #[test]
 fn parse_trigger_accepts_signal_and_watch_forms() {
     let signal = TaskEntry {
-        signal: Some("ci.finished".to_owned()),
+        signal: Some("ci.failed".to_owned()),
         matches: Some(std::collections::BTreeMap::from([
-            ("conclusion".to_owned(), "failure".to_owned()),
+            ("result".to_owned(), "failure".to_owned()),
             ("attempt".to_owned(), "2".to_owned()),
         ])),
         once: Some(true),
@@ -312,7 +312,7 @@ fn parse_trigger_accepts_signal_and_watch_forms() {
         parse_trigger("ci", &signal),
         Ok(ParsedTrigger {
             trigger: Trigger::Signal {
-                name: "ci.finished".parse().unwrap(),
+                selector: "ci.failed".parse().unwrap(),
                 matches: signal.matches.clone().unwrap(),
             },
             once: true,
@@ -341,7 +341,7 @@ fn parse_trigger_rejects_conflicting_fields() {
     for (entry, expected) in [
         (
             TaskEntry {
-                signal: Some("ci.finished".to_owned()),
+                signal: Some("ci.failed".to_owned()),
                 every: Some("5m".to_owned()),
                 ..spawn_entry()
             },
@@ -406,58 +406,145 @@ fn parse_trigger_rejects_conflicting_fields() {
 #[test]
 fn triggers_match_names_and_top_level_payload_values() {
     let signal = signal::Signal {
-        name: "ci.finished".parse().unwrap(),
+        name: "ci.failed".parse().unwrap(),
         payload: serde_json::Map::from_iter([
-            ("conclusion".to_owned(), serde_json::json!("failure")),
+            ("result".to_owned(), serde_json::json!("failure")),
             ("attempt".to_owned(), serde_json::json!(2)),
         ]),
         source: signal::SignalSource::Cli,
         watch: None,
     };
     let matching = Trigger::Signal {
-        name: "ci.finished".parse().unwrap(),
+        selector: "ci.failed".parse().unwrap(),
         matches: std::collections::BTreeMap::from([
             ("attempt".to_owned(), "2".to_owned()),
-            ("conclusion".to_owned(), "failure".to_owned()),
+            ("result".to_owned(), "failure".to_owned()),
         ]),
     };
-    assert!(matching.accepts("task", &signal));
-    assert!(
-        !Trigger::Schedule(parse_schedule("task", &entry(None, Some("5m"), None)).unwrap())
-            .accepts("task", &signal)
+    use signal::SignalResolution::{Deliver, Ignore, Skip};
+    assert_eq!(matching.resolve("task", &signal), Deliver);
+    assert_eq!(
+        Trigger::Schedule(parse_schedule("task", &entry(None, Some("5m"), None)).unwrap())
+            .resolve("task", &signal),
+        Ignore
     );
-    assert!(
-        Trigger::Watch {
-            command: "true".to_owned()
-        }
-        .accepts(
+    let watch = Trigger::Watch {
+        command: "true".to_owned(),
+    };
+    assert_eq!(watch.resolve("task", &signal), Ignore);
+    assert_eq!(
+        watch.resolve(
             "task",
             &signal::Signal {
                 name: "wake.task".parse().unwrap(),
                 ..signal.clone()
             }
-        )
+        ),
+        Deliver
     );
-
-    for nonmatching in [
-        Trigger::Signal {
-            name: "ci.started".parse().unwrap(),
-            matches: std::collections::BTreeMap::new(),
-        },
-        Trigger::Signal {
-            name: "ci.finished".parse().unwrap(),
-            matches: std::collections::BTreeMap::from([(
-                "conclusion".to_owned(),
-                "success".to_owned(),
-            )]),
-        },
-        Trigger::Signal {
-            name: "ci.finished".parse().unwrap(),
-            matches: std::collections::BTreeMap::from([("missing".to_owned(), "value".to_owned())]),
-        },
+    assert_eq!(
+        watch.resolve(
+            "other",
+            &signal::Signal {
+                name: "wake.task".parse().unwrap(),
+                ..signal.clone()
+            }
+        ),
+        Ignore
+    );
+    for (selector, matches, expected) in [
+        ("ci.started", std::collections::BTreeMap::new(), Skip),
+        (
+            "ci.failed",
+            std::collections::BTreeMap::from([("result".to_owned(), "success".to_owned())]),
+            Ignore,
+        ),
+        (
+            "ci.failed",
+            std::collections::BTreeMap::from([("missing".to_owned(), "value".to_owned())]),
+            Ignore,
+        ),
     ] {
-        assert!(!nonmatching.accepts("task", &signal));
+        assert_eq!(
+            Trigger::Signal {
+                selector: selector.parse().unwrap(),
+                matches
+            }
+            .resolve("task", &signal),
+            expected
+        );
     }
+}
+
+#[test]
+fn signal_selectors_observe_only_matching_family_payloads() {
+    use signal::SignalResolution::{Deliver, Ignore, Skip};
+    for (selector, emitted, path, expected) in [
+        ("ci.failed", "ci.failed", "/worktree", Deliver),
+        ("ci.failed", "ci.passed", "/worktree", Skip),
+        ("ci.*", "ci.passed", "/worktree", Deliver),
+        ("ci.*", "ci.failed", "/elsewhere", Ignore),
+        ("ci.failed", "ci.passed", "/elsewhere", Ignore),
+        ("ci.*", "pr.merged", "/worktree", Ignore),
+        ("deploy.finished", "deploy.started", "/worktree", Skip),
+        ("deploy.*", "deploy.started", "/worktree", Deliver),
+        ("deploy.*", "deployment.finished", "/worktree", Ignore),
+    ] {
+        let trigger = Trigger::Signal {
+            selector: selector.parse().unwrap(),
+            matches: std::collections::BTreeMap::from([(
+                "path".to_owned(),
+                "/worktree".to_owned(),
+            )]),
+        };
+        let signal = signal::Signal {
+            name: emitted.parse().unwrap(),
+            payload: serde_json::Map::from_iter([("path".to_owned(), serde_json::json!(path))]),
+            source: signal::SignalSource::Cli,
+            watch: None,
+        };
+        assert_eq!(
+            trigger.resolve("task", &signal),
+            expected,
+            "{selector}: {emitted} {path}"
+        );
+        assert_eq!(
+            trigger.describe(),
+            format!("on {selector} [path=/worktree]")
+        );
+    }
+}
+
+#[test]
+fn obsolete_ci_finished_subscription_is_rejected_with_replacement() {
+    for (selector, conclusion) in [("ci.finished", false), ("ci.failed", true), ("ci.*", true)] {
+        let task = TaskEntry {
+            signal: Some(selector.to_owned()),
+            matches: conclusion.then(|| {
+                std::collections::BTreeMap::from([("conclusion".to_owned(), "failure".to_owned())])
+            }),
+            ..spawn_entry()
+        };
+        let err = parse_trigger("ci", &task).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("ci.finished was replaced by ci.passed, ci.failed, or 'ci.*'")
+        );
+    }
+    assert!(
+        parse_trigger(
+            "custom",
+            &TaskEntry {
+                signal: Some("deploy.*".to_owned()),
+                matches: Some(std::collections::BTreeMap::from([(
+                    "conclusion".to_owned(),
+                    "failure".to_owned()
+                )])),
+                ..spawn_entry()
+            }
+        )
+        .is_ok()
+    );
 }
 
 /// `due` on both sides of every occurrence edge, so a one-second slip in either
@@ -679,13 +766,13 @@ fn task_timing_state_precedence_and_classification() {
     assert_eq!(
         Timing::default().state(
             &TaskEntry {
-                signal: Some("ci.finished".to_owned()),
+                signal: Some("ci.failed".to_owned()),
                 ..spawn_entry()
             },
             &now
         ),
         Listening {
-            name: "ci.finished".parse().unwrap()
+            name: "ci.failed".parse().unwrap()
         }
     );
     assert_eq!(

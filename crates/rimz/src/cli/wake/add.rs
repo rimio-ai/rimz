@@ -51,7 +51,7 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
         format!("in {}", duration_label(delay))
     } else if let Some(signal) = args.signal {
         signal
-            .parse::<rimz::harness::schedule::signal::SignalName>()
+            .parse::<rimz::harness::schedule::signal::SignalSelector>()
             .map_err(anyhow::Error::msg)?;
         entry.signal = Some(signal.clone());
         entry.matches = (!matches.is_empty()).then_some(matches);
