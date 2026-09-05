@@ -63,9 +63,7 @@ surface-budget = 6
 
 [[module]]
 path = "crates/rimz/src/agents"
-upward-dependencies = [
-    "harness::target",
-]
+upward-dependencies = ["harness::target"]
 surface-budget = 982
 
 [[module]]
@@ -142,7 +140,7 @@ upward-dependencies = [
     "sidebar::refresh",
     "sidebar::refresh::pr",
 ]
-surface-budget = 620
+surface-budget = 605
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -174,7 +172,7 @@ surface-budget = 90
 
 [[module]]
 path = "crates/rimz/src/mux"
-surface-budget = 277
+surface-budget = 273
 
 [[module]]
 path = "crates/rimz/src/observability"
@@ -511,7 +509,7 @@ allowed-dependencies = [
     "trust",
     "workspace",
 ]
-surface-budget = 48
+surface-budget = 41
 
 [[module]]
 path = "crates/rimz/src/harness/run.rs"
@@ -527,7 +525,7 @@ allowed-dependencies = [
     "proc",
     "store",
 ]
-surface-budget = 42
+surface-budget = 41
 
 [[module]]
 path = "crates/rimz/src/harness/run/report.rs"
@@ -645,3 +643,13 @@ reason = "mtime-only launch/election/reload liveness; the fanout collector adds 
 kind = "item"
 key = "sidebar::timing::EVENT_PANE_TTL"
 reason = "sidebar's event-mode cadence; daemon_view reaches up for it deliberately"
+
+[[verdict]]
+kind = "guard"
+key = "$0.window!=BudgetWindow::Session"
+reason = "Two decisions, not one rule: the CLI sites enforce the relative-raise grammar (a `+AMOUNT` delta keeps the existing window) and config requires a plain per-turn amount; a shared predicate would rename equality and hide neither (pass 5)"
+
+[[verdict]]
+kind = "item"
+key = "agents::lifecycle::TerminalDisposition"
+reason = "Supervised-run terminal classification kept beside the signal; the reducer's error-first rule is a different decision (pass 5)"
