@@ -6,14 +6,34 @@
 //! edits. Readers merge both backings here; durable config wins when both
 //! stores contain a name.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use super::overlay_store::{OverlayStore, Result};
+use super::overlay_store::OverlayStore;
 use crate::config::{TaskEntry, Tasks};
+use crate::disk::atomic::{AtomicErr, write_temp_then_rename};
+use crate::disk::lock::{LockErr, WorkspaceLock};
 use crate::disk::paths::state_home;
 use anyhow::Context;
+use jiff::Timestamp;
 
 const STORE: OverlayStore = OverlayStore::new("loop-instances.json", "loop-instances.lock");
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum InstanceErr {
+    #[error(transparent)]
+    Lock(#[from] LockErr),
+    #[error(transparent)]
+    Write(#[from] AtomicErr),
+    #[error("signal wake has no timeout")]
+    MissingTimeout,
+    #[error("invalid signal wake timeout: {0}")]
+    Timeout(String),
+    #[error("resolving signal wake deadline: {0}")]
+    Deadline(#[from] jiff::Error),
+}
+
+type Result<T> = std::result::Result<T, InstanceErr>;
 
 pub(super) fn path(state_root: &Path) -> PathBuf {
     STORE.path(state_root)
@@ -51,23 +71,203 @@ pub(super) fn load_strict_from(state_root: &Path) -> anyhow::Result<Tasks> {
 }
 
 fn insert_into(state_root: &Path, name: &str, entry: &TaskEntry) -> Result<()> {
-    STORE.mutate(state_root, |tasks| {
+    mutate(state_root, |tasks| {
         tasks.insert(name.to_owned(), entry.clone());
-        ((), true)
+        Ok(((), true))
     })
 }
 
 fn remove_from(state_root: &Path, name: &str) -> Result<bool> {
-    STORE.remove::<TaskEntry>(state_root, name)
+    mutate(state_root, |tasks| {
+        let removed = tasks.remove(name).is_some();
+        Ok((removed, removed))
+    })
 }
 
 fn rename_from(state_root: &Path, old: &str, new: &str) -> Result<bool> {
-    STORE.rename::<TaskEntry>(state_root, old, new)
+    mutate(state_root, |tasks| {
+        let Some(entry) = tasks.remove(old) else {
+            return Ok((false, false));
+        };
+        tasks.insert(new.to_owned(), entry);
+        Ok((true, true))
+    })
+}
+
+fn mutate<T>(
+    state_root: &Path,
+    edit: impl FnOnce(&mut BTreeMap<String, TaskEntry>) -> Result<(T, bool)>,
+) -> Result<T> {
+    let _guard = WorkspaceLock::acquire(&STORE.lock_path(state_root))?;
+    let mut entries = STORE.load(state_root);
+    let (result, changed) = edit(&mut entries)?;
+    if changed {
+        write_temp_then_rename(&path(state_root), &entries)?;
+    }
+    Ok(result)
+}
+
+pub(super) fn arm_signal_wake(
+    entry: &TaskEntry,
+    taken: &BTreeSet<String>,
+    now: Timestamp,
+) -> Result<(String, TaskEntry, bool)> {
+    arm_signal_wake_in(&state_home(), entry, taken, now)
+}
+
+fn arm_signal_wake_in(
+    state_root: &Path,
+    entry: &TaskEntry,
+    taken: &BTreeSet<String>,
+    now: Timestamp,
+) -> Result<(String, TaskEntry, bool)> {
+    mutate(state_root, |tasks| {
+        if let Some((name, current)) = tasks.iter_mut().find(|(name, current)| {
+            !taken.contains(*name)
+                && current.wake_meta.is_some()
+                && current.deadline.is_some_and(|deadline| deadline > now)
+                && current.wake.as_ref().zip(entry.wake.as_ref()).is_some_and(
+                    |(current, target)| {
+                        current.kind == target.kind && current.session == target.session
+                    },
+                )
+                && current.signal == entry.signal
+                && current
+                    .matches
+                    .iter()
+                    .flatten()
+                    .eq(entry.matches.iter().flatten())
+                && current.resolved_root() == entry.resolved_root()
+        }) {
+            let timeout = super::runner::parse_task_timeout(
+                current
+                    .timeout
+                    .as_deref()
+                    .ok_or(InstanceErr::MissingTimeout)?,
+            )
+            .map_err(InstanceErr::Timeout)?;
+            current.deadline = Some(now.checked_add(timeout)?);
+            return Ok(((name.clone(), current.clone(), true), true));
+        }
+        let petname = crate::harness::petname::mint(
+            tasks
+                .keys()
+                .chain(taken)
+                .filter_map(|name| name.strip_prefix("wake-")),
+        );
+        let name = format!("wake-{petname}");
+        tasks.insert(name.clone(), entry.clone());
+        Ok(((name, entry.clone(), false), true))
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn signal_wake() -> TaskEntry {
+        TaskEntry {
+            wake: Some(crate::config::TaskTarget {
+                kind: "claude".to_owned(),
+                session: "session-1".to_owned(),
+                handle: "@claude".to_owned(),
+            }),
+            wake_meta: Some(crate::config::WakeMeta {
+                armed_by: crate::config::WakeArmer::Human,
+                armed_at: Timestamp::UNIX_EPOCH,
+                delay: None,
+                last_observed_at: None,
+            }),
+            root: PathBuf::from("/repo"),
+            prompt: Some("original note".to_owned()),
+            signal: Some("ci.failed".to_owned()),
+            timeout: Some("59m".to_owned()),
+            deadline: Some(Timestamp::from_second(3540).expect("deadline")),
+            ..TaskEntry::default()
+        }
+    }
+
+    #[test]
+    fn identical_signal_wake_arm_restarts_clock_preserving_note_and_timeout() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let entry = signal_wake();
+        let (name, _, reused) =
+            arm_signal_wake_in(dir.path(), &entry, &BTreeSet::new(), Timestamp::UNIX_EPOCH)
+                .expect("first arm");
+        assert!(!reused);
+        let mut replacement = entry.clone();
+        replacement.prompt = Some("replacement note".to_owned());
+        replacement.timeout = Some("1m".to_owned());
+        replacement.matches = Some(BTreeMap::new());
+        replacement.wake.as_mut().expect("target").handle = "@renamed".to_owned();
+        let now = Timestamp::from_second(120).expect("now");
+        let (reused_name, rearmed, reused) =
+            arm_signal_wake_in(dir.path(), &replacement, &BTreeSet::new(), now).expect("rearm");
+        assert!(reused);
+        assert_eq!(reused_name, name);
+        let mut expected = entry;
+        expected.deadline = Some(Timestamp::from_second(3660).expect("new deadline"));
+        assert_eq!(rearmed, expected);
+        assert_eq!(load_from(dir.path()).0, BTreeMap::from([(name, expected)]));
+    }
+
+    #[test]
+    fn concurrent_signal_wake_arms_publish_one_instance() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let writers = [0, 1].map(|_| {
+            let root = dir.path().to_path_buf();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                arm_signal_wake_in(
+                    &root,
+                    &signal_wake(),
+                    &BTreeSet::new(),
+                    Timestamp::UNIX_EPOCH,
+                )
+                .expect("atomic arm")
+            })
+        });
+        barrier.wait();
+        let results = writers.map(|writer| writer.join().expect("writer"));
+        assert_eq!(results[0].0, results[1].0);
+        assert_ne!(results[0].2, results[1].2);
+        assert_eq!(load_from(dir.path()).0.len(), 1);
+    }
+
+    #[test]
+    fn signal_wake_arm_does_not_reuse_expired_removed_or_different_subscriptions() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let entry = signal_wake();
+        let taken = BTreeSet::new();
+        for field in ["deadline", "root", "target", "selector", "match", "meta"] {
+            let mut old = entry.clone();
+            match field {
+                "deadline" => old.deadline = Some(Timestamp::UNIX_EPOCH),
+                "root" => old.root = PathBuf::from("/other"),
+                "target" => old.wake.as_mut().expect("target").session = "other".to_owned(),
+                "selector" => old.signal = Some("ci.*".to_owned()),
+                "match" => {
+                    old.matches = Some(BTreeMap::from([("branch".to_owned(), "main".to_owned())]))
+                }
+                "meta" => old.wake_meta = None,
+                _ => unreachable!("fixed test cases"),
+            }
+            insert_into(dir.path(), "wake-old", &old).expect("old subscription");
+            let (name, _, reused) =
+                arm_signal_wake_in(dir.path(), &entry, &taken, Timestamp::UNIX_EPOCH)
+                    .expect("distinct arm");
+            assert!(!reused, "{field}");
+            assert_ne!(name, "wake-old");
+            assert_eq!(load_from(dir.path()).0["wake-old"], old);
+            remove_from(dir.path(), &name).expect("remove fresh");
+            remove_from(dir.path(), "wake-old").expect("remove old");
+        }
+        let (_, _, reused) = arm_signal_wake_in(dir.path(), &entry, &taken, Timestamp::UNIX_EPOCH)
+            .expect("arm after retirement");
+        assert!(!reused);
+    }
 
     fn task() -> TaskEntry {
         TaskEntry {

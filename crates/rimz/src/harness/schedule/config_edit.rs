@@ -198,6 +198,7 @@ mod tests {
                 session: "session-1".to_owned(),
                 handle: "@claude".to_owned(),
             }),
+            wake_meta: None,
             prompt: Some("wake".to_owned()),
             prompt_file: Some(PathBuf::from("prompts/wake.md")),
             check: Some("cargo check".to_owned()),

@@ -1,4 +1,4 @@
-//! `rimz wake` — one-shot, caller-pinned wakeups for agents.
+//! `rimz wake` — caller-pinned wakeups and signal subscriptions for agents.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -65,7 +65,7 @@ struct WakeArgs {
     /// Wake once after this duration.
     #[arg(long = "in", value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
     in_after: Option<Duration>,
-    /// Wake when this signal is emitted.
+    /// Listen for this signal or family selector (for example, ci.failed or ci.*).
     #[arg(long, value_name = "NAME")]
     signal: Option<String>,
     /// Require a top-level signal payload field to equal this value.
@@ -74,7 +74,7 @@ struct WakeArgs {
     /// Deliver for a failed, successful, or any command outcome (default: any).
     #[arg(long, value_name = "fail|success|any", value_parser = ["fail", "success", "any"])]
     on: Option<String>,
-    /// Stop watching the command after this duration.
+    /// Signal quiet window or command watch timeout (default: 59m).
     #[arg(long, value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
     timeout: Option<Duration>,
     /// Wait inline for the command outcome; use `--wait=5m` for a deadline.

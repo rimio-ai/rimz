@@ -8,16 +8,16 @@ use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 use rimz::store::writer::AgentLifecycleIntent;
 
 #[test]
-fn wake_signal_arms_one_shot_instance_for_the_calling_agent() {
+fn wake_signal_arms_standing_instance_for_the_calling_agent() {
     let env = Env::new();
     register_calling_agent(&env);
     let output = agent_wake(&env)
         .args([
             "wake",
             "--signal",
-            "ci.finished",
+            "deploy.failed",
             "--match",
-            "conclusion=failure",
+            "branch=feature",
             "--prompt",
             "inspect CI",
         ])
@@ -30,7 +30,7 @@ fn wake_signal_arms_one_shot_instance_for_the_calling_agent() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.starts_with("armed wake-"), "{stdout}");
-    assert!(stdout.contains("on ci.finished [conclusion=failure]"));
+    assert!(stdout.contains("on deploy.failed [branch=feature]"));
     assert!(stdout.contains("→ @planner"));
 
     let tasks: Tasks = serde_json::from_slice(
@@ -42,16 +42,27 @@ fn wake_signal_arms_one_shot_instance_for_the_calling_agent() {
     .expect("wake instances JSON");
     let (name, entry) = tasks.0.iter().next().expect("one wake row");
     assert!(name.starts_with("wake-"));
-    assert_eq!(entry.signal.as_deref(), Some("ci.finished"));
+    assert_eq!(entry.signal.as_deref(), Some("deploy.failed"));
     assert_eq!(
         entry
             .matches
             .as_ref()
-            .and_then(|matches| matches.get("conclusion"))
+            .and_then(|matches| matches.get("branch"))
             .map(String::as_str),
-        Some("failure")
+        Some("feature")
     );
-    assert_eq!(entry.once, Some(true));
+    assert_eq!(entry.once, None);
+    assert_eq!(entry.timeout.as_deref(), Some("59m"));
+    let meta = entry.wake_meta.as_ref().expect("wake provenance");
+    assert!(meta.last_observed_at.is_none());
+    assert_eq!(
+        entry
+            .deadline
+            .unwrap()
+            .duration_since(meta.armed_at)
+            .as_secs(),
+        59 * 60
+    );
     assert_eq!(entry.prompt.as_deref(), Some("inspect CI"));
     let target = entry.wake.as_ref().expect("pinned wake target");
     assert_eq!(target.kind, "claude");
@@ -65,7 +76,7 @@ fn calling_agent_can_list_and_cancel_human_armed_wake_by_launch_identity() {
     register_calling_agent(&env);
     let armed = env
         .rimz()
-        .args(["wake", "@planner", "--signal", "ci.finished"])
+        .args(["wake", "@planner", "--signal", "deploy.failed"])
         .output()
         .expect("arm wake from human shell");
     assert!(

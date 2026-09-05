@@ -211,7 +211,7 @@ impl TaskCatalog {
                     .display()
             );
         }
-        if super::ephemeral_lifetime(entry) {
+        if entry.wake_meta.is_some() || super::ephemeral_lifetime(entry) {
             config_edit::remove(config_edit::TaskStore::Machine, name)?;
             instances::insert(name, entry)?;
         } else {
@@ -223,6 +223,29 @@ impl TaskCatalog {
             &TaskKey::for_task(name, source, &entry.resolved_root()),
             source,
         )
+    }
+
+    /// Atomically reuse a live signal wake or mint a new instance.
+    pub fn arm_signal_wake(
+        &self,
+        entry: &TaskEntry,
+        now: jiff::Timestamp,
+    ) -> Result<(String, TaskEntry, bool)> {
+        let arming_entries = arming::load();
+        let taken = self
+            .visible
+            .iter()
+            .filter(|(name, task)| {
+                task.source() != TaskSource::Instance
+                    || arming::ArmState::resolve(
+                        arming_entries.get(&task_key(name, task)),
+                        task.source(),
+                        now,
+                    ) != arming::ArmState::Live
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        Ok(instances::arm_signal_wake(entry, &taken, now)?)
     }
 
     pub fn replace_project(
@@ -349,7 +372,7 @@ impl TaskCatalog {
 
 impl TaskSource {
     fn from_entry(entry: &TaskEntry) -> Self {
-        if super::ephemeral_lifetime(entry) {
+        if entry.wake_meta.is_some() || super::ephemeral_lifetime(entry) {
             Self::Instance
         } else {
             Self::Config
@@ -594,6 +617,17 @@ mod tests {
         entry.every = Some("15m".to_owned());
         entry.deadline = Some(jiff::Timestamp::UNIX_EPOCH);
         assert!(super::super::TaskShape::compile("task", &entry).is_ephemeral());
+
+        entry.every = None;
+        entry.signal = Some("ci.failed".to_owned());
+        entry.wake_meta = Some(crate::config::WakeMeta {
+            armed_by: crate::config::WakeArmer::Human,
+            armed_at: jiff::Timestamp::UNIX_EPOCH,
+            delay: None,
+            last_observed_at: None,
+        });
+        assert!(!super::super::TaskShape::compile("task", &entry).is_ephemeral());
+        assert_eq!(TaskSource::from_entry(&entry), TaskSource::Instance);
     }
 
     #[test]
