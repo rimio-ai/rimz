@@ -172,14 +172,14 @@ A candidate checkout is protected when any of those normalized paths lies inside
 
 | Verdict | `worktree remove` | Wrapper cleanup | `rimz gc` | Cohort relaunch |
 | --- | --- | --- | --- | --- |
-| Removable | Remove and delete the branch | Remove, log to stderr | Remove, count the bytes | Offer to remove, then relaunch fresh |
-| Dirty | Refuse; `--force` overrides | Prompt `keep / remove / shell` on a TTY, keep otherwise | Keep, reported as "uncommitted changes" | Offer a worktree-scoped resume |
-| NotLanded | Refuse; `--force` overrides | Same prompt | Keep, reported as "not merged yet" | Offer a worktree-scoped resume |
+| Removable | Remove and delete the branch | Remove, log to stderr | Remove, count the bytes | Offer `remove / fresh / cancel`, default cancel |
+| Dirty | Refuse; `--force` overrides | Prompt `keep / remove / shell` on a TTY, keep otherwise | Keep, reported as "uncommitted changes" | Offer `resume / fresh / cancel`, default resume |
+| NotLanded | Refuse; `--force` overrides | Same prompt | Keep, reported as "not merged yet" | Offer `resume / fresh / cancel`, default resume |
 | InUse | Refuse, naming who holds it; `--force` warns and proceeds | Skip silently | Keep, reported as "in use" | Focus the live pane instead |
 
 The domain owns every one of those refusals. `cli/worktree.rs` only adds the handles to the message, by matching the typed `WorktreeErr::InUse` and asking `agents_in_worktree` who is bound to the checkout; when no agent matches, the holder is a bare pane and the message says so.
 
-Cohort relaunch is the one caller that assesses against an empty protection set, because it has already established that the cohort's own panes are closed, and Git state alone decides between recreating the tree and resuming into it.
+Cohort relaunch is the one caller that assesses against an empty protection set, because it has already established that the cohort's own panes are closed, and Git state alone decides which pair of offers the user sees. Only its `remove` choice enters the removal path below; `fresh` launches new sessions into the checkout as it stands, and `--fresh` takes that outcome without an assessment at all ([fleet.md → Cohort relaunch reconciliation](./fleet.md#cohort-relaunch-reconciliation)).
 
 ### Branch deletion and retirement
 
@@ -188,6 +188,8 @@ Removal is `git worktree remove` followed by branch deletion, both from the repo
 Branch deletion re-runs the same proof rather than trusting Git's merge check. `git branch -d` first; a branch already gone counts as deleted; a "not fully merged" refusal escalates to `-D` only when `content_landed` passes again, and otherwise returns `KeptUnmerged` so the CLI can tell the user their branch survived.
 
 After Git removal succeeds, `retire_removal` runs two independent durable effects: ending the store sessions bound to that path or branch, and archiving the worktree channel's messages. They run independently and both results come back in a `#[must_use]` struct, because Git removal is already irreversible by that point and one failure must not swallow the other. Explicit removal and cohort reconciliation surface these failures; wrapper cleanup and `gc` log them and move on.
+
+Cohort reconciliation calls `retire_removal` only through the `remove` choice. The fresh choice removes nothing and leaves prior session rows and messages unchanged; orphan message archival stays with `rimz gc`, rather than a channel-wide sweep that could affect a separately launched live agent in the same lane.
 
 ## Who triggers removal
 

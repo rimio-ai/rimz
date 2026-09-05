@@ -132,6 +132,14 @@ A single-cell resume run from the cohort's own directory takes over the launchin
 
 Because resume takes identity from the store, it conflicts with `PROMPT`, `--from-pr`, `--channel`, `--name`, `--description`, `--model`, `--effort`, `--ask`, `--yolo`, `-p`, system-prompt flags, and passthrough args after `--`.
 
+`--fresh` is the other answer to the same situation: it starts new sessions in a named worktree whose cohort has closed, keeping the checkout and its files as they are.
+
+```sh
+rimz agents forge -w restore-living-team --fresh   # new sessions in that worktree, same files
+```
+
+It conflicts with `--resume` and `--from-pr`, is unsupported with `-p`, and needs a named worktree (`-w NAME`, not bare `-w`). It answers the relaunch reconciliation described under [Channel, worktree, and placement](#channel-worktree-and-placement); a standalone single-agent spec already launches fresh and does not reconcile a cohort.
+
 ### Resume a lane by place
 
 `resume [SCOPE]` makes one lane whole from its durable agent records without retyping the team or layout. Scope accepts the same `#channel`, worktree name, branch, directory name, and path spellings as `agents list`; `--from-pr <number|url>` resolves a RimZ worktree's recorded PR provenance first and the legacy `pr-<N>` name second. Resolution is local and performs no network request or worktree creation.
@@ -173,7 +181,11 @@ These broadcast to every agent cell, and each adapter renders them into its own 
 
 Creation uses the current directory's main Git repository, including when the command runs from one of its linked worktrees. If that repository differs from the room root, RimZ shows both paths and asks before proceeding. The room's `worktree list`, `worktree remove`, and `gc` commands do not cross that repository boundary: run removal from the worktree's own repository, or use plain `git worktree remove`. A non-interactive launch refuses the ambiguity; pass `--root <current-git-root>` to name the intended repository explicitly, or run the command from the room's checkout. When the current directory is not in a Git repository, the room root remains the creation root.
 
-Relaunching a named team into the same named worktree reconciles with existing state before it creates anything: a live team focuses its current tab, a closed tab with work in progress offers to resume that team in the worktree, and a closed clean merged worktree offers to remove it and launch fresh. Add `--resume` or `--continue` to force a resume of the named worktree's prior cohort even when the worktree is clean or merged.
+Relaunching a named team, or an inline spec of at least two cells, into the same named worktree reconciles with existing state before it creates anything. A live cohort focuses its current tab and exits. A closed cohort whose tree has work in progress prompts `(resume/fresh/cancel)` with `resume` as the default; a closed cohort whose tree is clean and merged prompts `(remove/fresh/cancel)` with `cancel` as the default, where `remove` deletes the worktree and its branch before launching. Enter takes the default, an unrecognized answer cancels, and canceling prints `canceled; nothing launched`. Without a terminal on stdin, both cases print the resume-or-remove command and the `--fresh` command instead of prompting.
+
+`fresh` starts new sessions in the checkout that is already there. It removes nothing: the worktree, the branch, and every file in the tree survive, so the previous run's team scratch files are still on disk and appear in the launch reminder of every member whose adapter takes one. It retires nothing in the store either; the closed members keep their rows, the new members mint new handles in the same channel, and messages still waiting for the old members are archived by the next `rimz gc`.
+
+Add `--resume` or `--continue` to force a resume of the named worktree's prior cohort even when the worktree is clean or merged, or `--fresh` to take the fresh choice with no prompt. `--fresh` never duplicates a live cohort: that case still focuses the running tab.
 
 `--channel <NAME>` launches into a durable named channel, registering it when missing and naming the backend tab `#<NAME>`. Named channels run in the room root and are managed with [`rimz channel`](./channel.md).
 

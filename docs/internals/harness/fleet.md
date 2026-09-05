@@ -26,7 +26,7 @@ Four rules explain most of the design. When a piece of the code surprises you, o
 
 1. **Resolve the spec.** `claude,codex` parses into a `LayoutSpec` of two agent cells, with profiles and teams resolved from the effective config ([The layout IR](#the-layout-ir)).
 2. **Finalize the launch.** Permission posture, presets, budget, and passthrough argv fold into each cell ([From spec to panes](#from-spec-to-panes)).
-3. **Reconcile a prior cohort.** Because this is a multi-cell launch with an explicit `-w`, RimZ checks whether `feat-a` already held these agents, and may focus, resume, or offer to clear it instead of launching ([Cohort relaunch reconciliation](#cohort-relaunch-reconciliation)).
+3. **Reconcile a prior cohort.** Because this is a multi-cell launch with an explicit `-w`, RimZ checks whether `feat-a` already held these agents, and may focus, resume, launch fresh into it, or offer to clear it instead of launching ([Cohort relaunch reconciliation](#cohort-relaunch-reconciliation)).
 4. **Choose where it lands.** Two cells plus a worktree means a new tab. Placement is decided now, before anything durable exists, so a rejected placement leaves no debris ([Placement](#placement)).
 5. **Create the worktree.** A marked Git worktree is added and seeded, and its name `feat-a` becomes the channel every cell is stamped with ([worktrees.md](./worktrees.md)).
 6. **Mint identities.** The store writes a provisional row per cell with its name, channel, and cohort stamps, so both agents are addressable as `@claude#feat-a` and `@codex#feat-a` before either has run a turn ([The address](#the-address)).
@@ -204,8 +204,14 @@ It derives the named worktree path without creating it, reads the audit rollup f
 | --- | --- |
 | none | continue into the ordinary launch path |
 | live members | focus the newest bound member and exit |
-| closed, with dirty or unproven work | offer a worktree-scoped resume |
-| closed, clean and content-landed | offer to remove the worktree, then continue into a fresh launch |
+| closed, with dirty or unproven work | offer resume / fresh / cancel, default resume |
+| closed, clean and content-landed | offer remove / fresh / cancel, default cancel |
+
+Both offers read one line through `cli::choose`, which takes the default on Enter and returns `None` for an ambiguous prefix, an unknown word, or EOF; the caller maps `None` and the explicit `cancel` to the same no-op, printing `canceled; nothing launched` so a declined relaunch is never silent. Without a terminal on stdin neither offer prompts: each prints the command that would resume or remove and the `--fresh` command beside it, both built by `relaunch_commands` so the team and inline spellings live in one place ([`reconcile.rs`](../../../crates/rimz/src/cli/agents_cmd/reconcile.rs)).
+
+The fresh outcome is `Reconciled::Continue`. Launch then resolves the checkout with `reuse_existing`, the same path `Absent` takes into an existing marked worktree: no worktree or branch is removed or recreated, and `retire_removal` (session retirement plus channel message archival) fires only on the remove choice. Prior rows stay unchanged with their names reserved, and the fresh members mint new petnames in the same channel. Reconciliation treats both ended and confirmed-dead members as closed; fresh does not retire either. Orphan message archival remains the responsibility of `rimz gc`.
+
+`--fresh` on `CohortLaunchArgs` takes that outcome without prompting: the `Closed` arm returns `Continue` before the Git assessment, so it works on a dirty tree and on a clean landed one alike, and it leaves a clean landed tree standing. `Present` is checked first and is unaffected, so `--fresh` cannot duplicate a live cohort. `launch_layout` requires an explicit worktree name before it opens the store; the check lives there because `team#lane` fills `worktree` only after clap parsing, so a clap `requires` would reject the fused spelling.
 
 Named-team reconciliation considers every member of that team in the target worktree, including sibling roles when a single-role spec relaunches. Inline membership matches by launch group, then ordinal, then kind and role, with a final kind-only fallback for legacy role-less records.
 

@@ -47,6 +47,7 @@ The report ends with copy-ready launch and resume forms when no instance is live
 rimz teams forge
 rimz teams forge#feat-rate-limits "add rate limiting"
 rimz teams forge -w feat-rate-limits "add rate limiting"
+rimz teams forge#feat-rate-limits --fresh
 rimz teams forge --channel triage
 rimz teams forge --from-pr 91 --bg
 rimz teams launch forge
@@ -68,11 +69,12 @@ The team surface carries these cohort-level controls:
 - `--from-pr PR` creates or reuses a worktree from a pull-request number or URL.
 - `--description TEXT` seeds the member-card description until agents name their sessions.
 - `--resume` reopens a matching closed cohort instead of launching a fresh one.
+- `--fresh` launches new sessions into a named worktree instead of resuming or removing it, keeping the checkout and its files. It needs the worktree named, as `team#worktree` or `-w NAME`.
 - `--budget AMOUNT[/day]` caps each member separately; it is not a pooled team cap.
 - `--bg` leaves focus where it is.
 - `--new-tab` opens the launch in a new tab or window.
 
-Because resume takes identity from the store, it conflicts with `PROMPT`, `--from-pr`, `--channel`, `--description`, and `--budget`.
+Because resume takes identity from the store, it conflicts with `PROMPT`, `--from-pr`, `--channel`, `--description`, and `--budget`. `--fresh` answers the same reconciliation the other way, so it conflicts with `--resume` and `--from-pr`; the reconciliation it answers is described in [`rimz agents`](./agents.md#channel-worktree-and-placement).
 
 Per-agent model, prompt-file, permission, supervised-run, and pane-placement overrides stay on [`rimz agents`](./agents.md).
 Put stable role-specific choices in the team definition.
