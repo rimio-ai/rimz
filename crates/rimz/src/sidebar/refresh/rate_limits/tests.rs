@@ -764,7 +764,10 @@ fn matching_birth_account_panel_keeps_instant_climbs() {
             windows: vec![auth(0, reset, now)],
         },
     );
-    let mut panel = provider_panel("claude", vec![be(40, reset, now)]);
+    let mut panel = provider_panel(
+        "claude",
+        vec![be(40, reset, now + SignedDuration::from_secs(1))],
+    );
     panel.account_key = Some("same-account".to_owned());
     let mut producer = snapshot_with_panels(workspace, vec![panel]);
     refresh_rate_limits(&mut producer, &runtime);
@@ -777,112 +780,85 @@ fn matching_birth_account_panel_keeps_instant_climbs() {
 }
 
 #[test]
-fn account_merge_fuses_authoritative_drops_and_confirms_persistent_readings() {
-    let (_dir, workspace, runtime) = runtime();
-    let now = Timestamp::now();
-    let reset = now + SignedDuration::from_secs(3_600);
-    let identity = AccountUsageIdentity {
-        account_key: Some("claude-account".to_owned()),
-        ..Default::default()
-    };
-    super::merge_account_rate_limits(
-        &runtime,
-        "claude",
-        identity.clone(),
-        AgentRateLimits {
-            windows: vec![
-                auth(18, reset, now),
-                RateLimitWindow {
+fn authoritative_read_supersedes_older_session_reading_and_holds() {
+    for account_key in [None, Some("claude-account".to_owned())] {
+        let (_dir, workspace, runtime) = runtime();
+        let now = Timestamp::now();
+        let older = now - SignedDuration::from_secs(60);
+        let reset = now + SignedDuration::from_secs(172_800);
+        let identity = AccountUsageIdentity {
+            account_key,
+            ..Default::default()
+        };
+        let session = RateLimitWindow {
+            duration_mins: Some(10_080),
+            ..be(19, reset, older)
+        };
+        super::merge_account_rate_limits(
+            &runtime,
+            "claude",
+            identity.clone(),
+            AgentRateLimits {
+                windows: vec![RateLimitWindow {
                     duration_mins: Some(10_080),
-                    ..auth(80, reset, now)
-                },
-            ],
-        },
-    );
+                    ..auth(18, reset, older - SignedDuration::from_secs(1))
+                }],
+            },
+        );
+        let mut producer = snapshot_with_panels(
+            workspace.clone(),
+            vec![provider_panel("claude", vec![session.clone()])],
+        );
+        refresh_rate_limits(&mut producer, &runtime);
+        assert_eq!(producer.providers[0].windows, vec![session.clone()]);
 
-    let mut producer = snapshot_with_panels(
-        workspace,
-        vec![provider_panel(
-            "claude",
-            vec![
-                be(100, reset, now),
-                RateLimitWindow {
-                    duration_mins: Some(43_200),
-                    ..be(70, reset, now)
-                },
-            ],
-        )],
-    );
-    refresh_rate_limits(&mut producer, &runtime);
-    let climbed = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    assert_eq!(climbed.entries["claude"].account_key, identity.account_key);
-    assert_eq!(
-        cache_window(&climbed, "claude", RateLimitWindowKey::Duration(Some(300))).used_percentage,
-        Some(100),
-        "the producer must persist fused truth for account-bound entries"
-    );
-    assert_eq!(
-        climbed.entries["claude"]
-            .bound_limits
-            .as_ref()
-            .unwrap()
-            .windows[0]
-            .used_percentage,
-        Some(18),
-        "scope-only fusion cannot rewrite exact-account control truth"
-    );
+        let reading = AgentRateLimits {
+            windows: vec![RateLimitWindow {
+                duration_mins: Some(10_080),
+                ..auth(4, reset + SignedDuration::from_secs(1), now)
+            }],
+        };
+        super::merge_account_rate_limits(&runtime, "claude", identity.clone(), reading.clone());
+        let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+        let entry = &cache.entries["claude"];
+        assert_eq!(entry.limits, reading);
+        assert!(entry.pending.is_empty());
+        assert_eq!(entry.account_key, identity.account_key);
+        assert_eq!(
+            entry.bound_limits.as_ref(),
+            identity.account_key.as_ref().map(|_| &reading)
+        );
 
-    let reading = AgentRateLimits {
-        windows: vec![auth(36, reset, now)],
-    };
+        let mut consumer = snapshot_with_panels(
+            workspace,
+            vec![provider_panel("claude", vec![session.clone()])],
+        );
+        apply_cached_rate_limits(&mut consumer, &runtime);
+        assert_eq!(consumer.providers[0].windows, reading.windows);
+        for _ in 0..3 {
+            producer.providers[0].windows = vec![session.clone()];
+            refresh_rate_limits(&mut producer, &runtime);
+            assert_eq!(producer.providers[0].windows, reading.windows);
+        }
+        consumer.providers[0].windows = vec![session];
+        apply_cached_rate_limits(&mut consumer, &runtime);
+        assert_eq!(consumer.providers[0].windows, reading.windows);
 
-    super::merge_account_rate_limits(&runtime, "claude", identity.clone(), reading.clone());
-    let mut cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    assert_eq!(
-        cache_window(&cache, "claude", RateLimitWindowKey::Duration(Some(300))).used_percentage,
-        Some(100),
-        "a lone authoritative drop cannot clobber corroborated truth"
-    );
-    assert_eq!(cache.entries["claude"].pending[0].used_percentage, 36);
-    assert_eq!(
-        cache.entries["claude"].pending[0].source,
-        WindowSource::Authoritative
-    );
-    assert_eq!(
-        cache.entries["claude"]
-            .bound_limits
-            .as_ref()
-            .unwrap()
-            .windows[0]
-            .used_percentage,
-        Some(36),
-        "exact-account controls retain the matching authoritative reading"
-    );
-    assert!(
-        cache.entries["claude"]
-            .limits
-            .windows
-            .iter()
-            .all(|window| window.duration_mins != Some(43_200)),
-        "a prior best-effort window omitted by the full reading is dropped"
-    );
-
-    cache.entries.get_mut("claude").unwrap().pending[0].first_seen_at =
-        now - SignedDuration::from_secs(REFILL_CONFIRM_SECS + 1);
-    write_rate_limits_cache(&runtime.shared_rate_limits_path(), &cache);
-    super::merge_account_rate_limits(&runtime, "claude", identity, reading);
-
-    let confirmed = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    assert_eq!(
-        cache_window(
-            &confirmed,
-            "claude",
-            RateLimitWindowKey::Duration(Some(300)),
-        )
-        .used_percentage,
-        Some(36)
-    );
-    assert!(confirmed.entries["claude"].pending.is_empty());
+        let overlay = RateLimitWindow {
+            duration_mins: Some(10_080),
+            ..be(21, reset, now + SignedDuration::from_secs(1))
+        };
+        producer.providers[0].windows = vec![overlay.clone()];
+        refresh_rate_limits(&mut producer, &runtime);
+        assert_eq!(producer.providers[0].windows, vec![overlay.clone()]);
+        let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+        assert_eq!(cache.entries["claude"].limits.windows, vec![overlay]);
+        assert_eq!(
+            cache.entries["claude"].bound_limits.as_ref(),
+            identity.account_key.as_ref().map(|_| &reading)
+        );
+        assert!(cache.entries["claude"].pending.is_empty());
+    }
 }
 
 #[test]
@@ -1136,7 +1112,6 @@ fn drop_kind_removes_only_target_entry() {
         vec![PendingRefill {
             scope_id: None,
             duration_mins: Some(300),
-            source: WindowSource::BestEffort,
             used_percentage,
             first_seen_at,
         }]
@@ -1277,7 +1252,6 @@ fn fuse_window_selects_truth_by_source_freshness_and_epoch() {
     let parked = PendingRefill {
         scope_id: None,
         duration_mins: Some(300),
-        source: WindowSource::BestEffort,
         used_percentage: 2,
         first_seen_at: now,
     };
@@ -1395,12 +1369,81 @@ fn fuse_window_selects_truth_by_source_freshness_and_epoch() {
             None,
         ),
         (
-            "consumer cannot confirm an authoritative same-epoch drop",
-            Some(be(75, reset, now)),
+            "producer adopts newer authoritative drop and clears pending",
+            Some(be(75, reset, older)),
+            Some(auth(1, reset, now)),
+            Some(parked.clone()),
+            true,
             Some(auth(1, reset, now)),
             None,
+        ),
+        (
+            "consumer adopts newer authoritative drop and clears pending",
+            Some(be(75, reset, older)),
+            Some(auth(1, reset, now)),
+            Some(parked.clone()),
             false,
-            Some(be(75, reset, now)),
+            Some(auth(1, reset, now)),
+            None,
+        ),
+        (
+            "older best-effort climb cannot overwrite authoritative truth",
+            Some(auth(4, reset, now)),
+            Some(be(19, reset, older)),
+            None,
+            true,
+            Some(auth(4, reset, now)),
+            None,
+        ),
+        (
+            "newer best-effort climb overlays authoritative truth",
+            Some(auth(4, reset, older)),
+            Some(be(19, reset, now)),
+            None,
+            true,
+            Some(be(19, reset, now)),
+            None,
+        ),
+        (
+            "authoritative truth wins equal stamps",
+            Some(auth(4, reset, now)),
+            Some(be(19, reset, now)),
+            None,
+            true,
+            Some(auth(4, reset, now)),
+            None,
+        ),
+        (
+            "unstamped best-effort cannot overwrite authoritative truth",
+            Some(auth(4, reset, now)),
+            Some(RateLimitWindow {
+                observed_at: None,
+                ..be(19, reset, now)
+            }),
+            None,
+            true,
+            Some(auth(4, reset, now)),
+            None,
+        ),
+        (
+            "older authoritative climb cannot overwrite newer truth",
+            Some(be(4, reset, now)),
+            Some(auth(19, reset, older)),
+            None,
+            true,
+            Some(be(4, reset, now)),
+            None,
+        ),
+        (
+            "unstamped authoritative climb cannot overwrite prior truth",
+            Some(be(4, reset, now)),
+            Some(RateLimitWindow {
+                observed_at: None,
+                ..auth(19, reset, now)
+            }),
+            None,
+            true,
+            Some(be(4, reset, now)),
             None,
         ),
         (
@@ -1442,93 +1485,6 @@ fn fuse_window_selects_truth_by_source_freshness_and_epoch() {
         );
         assert_eq!(actual, (expected_truth, expected_pending), "{name}");
     }
-}
-
-#[test]
-fn authoritative_same_epoch_drop_requires_confirmation() {
-    let now = fuse_now();
-    let reset = now + SignedDuration::from_secs(3_600);
-    let prior = be(75, reset, now);
-    let candidate = auth(36, reset, now);
-    let (truth, pending) = fuse_window(Some(&prior), Some(&candidate), None, now, true);
-    assert_eq!(truth.unwrap().used_percentage, Some(75));
-    let parked = pending.unwrap();
-    assert_eq!(parked.used_percentage, 36);
-
-    let before = now + SignedDuration::from_secs(REFILL_CONFIRM_SECS - 1);
-    let (truth, pending) = fuse_window(
-        Some(&prior),
-        Some(&auth(35, reset, before)),
-        Some(&parked),
-        before,
-        true,
-    );
-    assert_eq!(truth.unwrap().used_percentage, Some(75));
-    assert_eq!(
-        pending.as_ref().map(|pending| pending.first_seen_at),
-        Some(now)
-    );
-
-    let (truth, pending) = fuse_window(
-        Some(&prior),
-        Some(&be(76, reset, before)),
-        pending.as_ref(),
-        before,
-        true,
-    );
-    assert_eq!(truth.unwrap().used_percentage, Some(76));
-    assert!(pending.is_none(), "a corroborating climb cancels the drop");
-
-    let after = now + SignedDuration::from_secs(REFILL_CONFIRM_SECS + 1);
-    let (truth, pending) = fuse_window(
-        Some(&prior),
-        Some(&auth(34, reset, after)),
-        Some(&parked),
-        after,
-        true,
-    );
-    assert_eq!(truth.unwrap().used_percentage, Some(34));
-    assert!(pending.is_none());
-
-    let (truth, pending) = fuse_window(Some(&prior), Some(&candidate), Some(&parked), after, false);
-    assert_eq!(truth.unwrap().used_percentage, Some(75));
-    assert_eq!(pending, Some(parked));
-}
-
-#[test]
-fn drop_confirmation_clock_is_source_specific() {
-    let now = fuse_now();
-    let reset = now + SignedDuration::from_secs(3_600);
-    let prior = be(95, reset, now);
-    let after = now + SignedDuration::from_secs(REFILL_CONFIRM_SECS + 1);
-
-    let (_, best_effort_pending) =
-        fuse_window(Some(&prior), Some(&be(5, reset, now)), None, now, true);
-    let (truth, authoritative_pending) = fuse_window(
-        Some(&prior),
-        Some(&auth(90, reset, after)),
-        best_effort_pending.as_ref(),
-        after,
-        true,
-    );
-    assert_eq!(truth.unwrap().used_percentage, Some(95));
-    let authoritative_pending = authoritative_pending.unwrap();
-    assert_eq!(authoritative_pending.source, WindowSource::Authoritative);
-    assert_eq!(authoritative_pending.first_seen_at, after);
-
-    let (_, authoritative_pending) =
-        fuse_window(Some(&prior), Some(&auth(90, reset, now)), None, now, true);
-    let (truth, best_effort_pending) = fuse_window(
-        Some(&prior),
-        Some(&be(5, reset, after)),
-        authoritative_pending.as_ref(),
-        after,
-        true,
-    );
-    assert_eq!(truth.unwrap().used_percentage, Some(95));
-    let best_effort_pending = best_effort_pending.unwrap();
-    assert_eq!(best_effort_pending.source, WindowSource::BestEffort);
-    assert_eq!(best_effort_pending.first_seen_at, after);
 }
 
 #[test]

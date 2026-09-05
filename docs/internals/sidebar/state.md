@@ -227,18 +227,7 @@ The fetch worker publishes process metrics and group roots alongside pane produc
 | `rate_limits.json` | Account-global | Per-account budget windows. |
 | `credits.json` | Account-global | Provider-reported paid and extra usage. |
 
-`rate_limits.json` is the single fused source of truth for every sidebar and
-`rimz providers` reader. Every writer, including out-of-band OAuth usage reads,
-fuses by stable window identity before publishing. Usage climbs are adopted at
-once. A reset-timer advance proves a new epoch; within the same epoch, an
-authoritative drop against stamped best-effort truth must persist through the
-two-minute refill confirmation before it replaces the higher reading. Newer
-authoritative truth still replaces an authoritative, unprovenanced, or
-epoch-less prior immediately, and consumers only mirror the producer's
-persisted confirmation state. An exact-account entry may additionally retain
-its authoritative windows for bound managed-launch controls; that copy is not
-read by the sidebar or `rimz providers`, so a scope-only live reading cannot
-acquire the cached credential identity.
+`rate_limits.json` is the single fused source of truth for every sidebar and `rimz providers` reader. Every writer, including out-of-band OAuth usage reads, fuses by stable window identity before publishing. The newest authoritative reading anchors a window: it supersedes any prior stamped no later than itself, climb or drop, and an unstamped prior yields to it, while an authoritative reading carrying no stamp of its own cannot prove it is current and holds. A best-effort reading overlays that anchor only when it is stamped strictly later, so equal stamps keep the authoritative value and an unstamped best-effort reading holds. Between best-effort readings the older rules stand: a climb is adopted at once, a reset-timer advance proves a new epoch and lowers the bar immediately, a drop at or below the reset floor is held until the low reading has stood for two minutes, and a mid-range drop reads as jitter and holds the most-drained prior. Consumers share these rules but never confirm a best-effort refill on their own. One disagreement survives this: while a live session keeps reporting a fresh reading that contradicts the provider's API for the same account, the bar alternates between the two on every direct usage poll, five minutes apart while the probe is answering. That is upstream disagreement RimZ cannot adjudicate, and the authoritative value is never more than one poll away. An exact-account entry may additionally retain its authoritative windows for bound managed-launch controls; that copy is not read by the sidebar or `rimz providers`, so a scope-only live reading cannot acquire the cached credential identity.
 
 Admission into that fusion is by account: a live panel reading joins the
 cached entry when the panel's birth account key equals the entry's bound key,

@@ -18,11 +18,10 @@ use crate::utils::time::unix_now_ms;
 #[cfg(test)]
 mod tests;
 
-/// How long an uncorroborated drop must persist before the bar follows it down.
-/// This covers a best-effort free-reset candidate and an authoritative
-/// same-epoch drop contested by stamped best-effort truth. Shorter, a single
-/// lagging or garbled sample could dip the bar; longer is needless lag on a real
-/// refill. Tuned against captured reset traces (see [`trace_rate_limits`]).
+/// How long a best-effort free-reset candidate must persist before the bar
+/// follows it down. Shorter, a single garbled sample could dip the bar; longer
+/// is needless lag on a real refill. Tuned against captured reset traces
+/// (see [`trace_rate_limits`]).
 const REFILL_CONFIRM_SECS: i64 = 120;
 /// Coarse backstop: a live candidate captured longer ago than this is ignored.
 /// Content-staleness is already caught upstream — the snapshot view drops a
@@ -103,8 +102,8 @@ pub(crate) fn merge_account_rate_limits(
     let mut cache = read_rate_limits_cache(&path);
     cache.refreshed_at_ms = unix_now_ms();
     // Stamp the authoritative capture instant, then pass every reported window
-    // through the same fusion used by the sidebar producer. A same-epoch drop
-    // against stamped best-effort truth must survive the shared debounce.
+    // through the same fusion used by the sidebar producer. A current reading
+    // supersedes older best-effort truth outright, even within the same epoch.
     let observed_at = Timestamp::now();
     let mut windows = windows.stamped_at(observed_at);
     let prior_entry = cache
@@ -525,26 +524,20 @@ fn project_rate_limits(
 }
 
 /// Fuse one stable window identity's prior truth with this frame's live reading
-/// into the new ground truth, carrying or advancing the debounce marker that
-/// guards an uncorroborated drop.
+/// into the new ground truth, carrying or advancing a best-effort refill marker.
 ///
-/// Usage only climbs within a live window, so a reading at or above the prior is
-/// real consumption and is adopted at once — stable against parallel sessions
-/// reporting the same budget at different instants. A *drop* is a refill, earned
-/// rather than assumed, in order:
-/// - an out-of-order authoritative reading cannot undo newer truth;
+/// A current authoritative reading supersedes the prior in either direction.
+/// A best-effort reading may overlay authoritative truth only when observed
+/// strictly later; unstamped readings cannot prove freshness at this boundary.
+/// Among admitted best-effort readings:
+/// - a climb or steady value is adopted immediately;
 /// - a later reset instant (a new window epoch) lowers the bar immediately;
-/// - a current authoritative reading lowers authoritative, unprovenanced, or
-///   epoch-less truth immediately;
-/// - a same-epoch authoritative drop against stamped best-effort truth is parked
-///   until it has stood for [`REFILL_CONFIRM_SECS`];
-/// - a best-effort drop toward full (at or below [`REFILL_FLOOR_PCT`], the
-///   free-reset signature) is parked and the higher bar held until the drop has
-///   stood for [`REFILL_CONFIRM_SECS`]; a mid-range best-effort drop is jitter
-///   and holds the most-drained prior.
+/// - a drop toward full (at or below [`REFILL_FLOOR_PCT`], the free-reset
+///   signature) must stand for [`REFILL_CONFIRM_SECS`];
+/// - a mid-range drop is jitter and holds the most-drained prior.
 ///
-/// `allow_confirm` is the producer flag — a consumer never lowers the bar on its
-/// own, it mirrors the producer's persisted truth.
+/// `allow_confirm` is the producer flag — a consumer never confirms a
+/// best-effort refill on its own, but mirrors the producer's persisted truth.
 fn fuse_window(
     prior: Option<&RateLimitWindow>,
     live: Option<&RateLimitWindow>,
@@ -568,6 +561,21 @@ fn fuse_window(
     {
         return (Some(prior.clone()), pending.cloned());
     }
+    // Trust precedes direction: a pull anchors the window, and only a newer
+    // best-effort reading can overlay it. Authoritative truth wins stamp ties.
+    if live.source.is_authoritative() {
+        return if observed_no_earlier(live, prior) {
+            (Some(live.clone()), None)
+        } else {
+            (Some(prior.clone()), pending.cloned())
+        };
+    }
+    if prior.source.is_authoritative()
+        && (!observed_no_earlier(live, prior) || live.observed_at == prior.observed_at)
+    {
+        return (Some(prior.clone()), pending.cloned());
+    }
+
     let prior_used = prior.used_percentage.unwrap_or(0);
     let live_used = live.used_percentage.unwrap_or(0);
 
@@ -576,36 +584,15 @@ fn fuse_window(
         return (Some(live.clone()), None);
     }
 
-    // --- a drop is a refill, earned not assumed ---
+    // A best-effort reading whose reset instant advanced is a free reset with
+    // a moved timer — a new window epoch, trusted at once.
+    if reset_advanced(prior.resets_at, live.resets_at) {
+        return (Some(live.clone()), None);
+    }
 
-    // An out-of-order authoritative sidecar cannot lower newer truth. A current
-    // reading settles an authoritative, unprovenanced, or epoch-less prior at
-    // once; against stamped best-effort truth in the same epoch it must earn the
-    // drop through the shared confirmation below.
-    if live.source.is_authoritative() {
-        if !authoritative_supersedes(live, prior) {
-            return (Some(prior.clone()), pending.cloned());
-        }
-        if reset_advanced(prior.resets_at, live.resets_at)
-            || prior.source.is_authoritative()
-            || prior.observed_at.is_none()
-            || prior.resets_at.is_none()
-        {
-            return (Some(live.clone()), None);
-        }
-    } else {
-        // A best-effort reading whose reset instant advanced is a free reset with
-        // a moved timer — a new window epoch, trusted at once.
-        if reset_advanced(prior.resets_at, live.resets_at) {
-            return (Some(live.clone()), None);
-        }
-
-        // A best-effort drop is a refill candidate only when it lands at or below
-        // the reset floor (near-full). A mid-range drop is jitter — hold the
-        // most-drained prior, carrying any in-flight marker untouched.
-        if live_used > REFILL_FLOOR_PCT {
-            return (Some(prior.clone()), pending.cloned());
-        }
+    // A mid-range best-effort drop is jitter, not a refill candidate.
+    if live_used > REFILL_FLOOR_PCT {
+        return (Some(prior.clone()), pending.cloned());
     }
 
     // Uncorroborated refill candidate.
@@ -617,9 +604,7 @@ fn fuse_window(
     // the current low reading. A drop that vanishes (a climb back to/above prior)
     // takes the branch above and clears the marker, so one stray sample can't
     // dip the bar.
-    let first_seen_at = pending
-        .filter(|parked| parked.source == live.source)
-        .map_or(now, |parked| parked.first_seen_at);
+    let first_seen_at = pending.map_or(now, |parked| parked.first_seen_at);
     if now.duration_since(first_seen_at).as_secs() >= REFILL_CONFIRM_SECS {
         (Some(live.clone()), None)
     } else {
@@ -628,7 +613,6 @@ fn fuse_window(
             Some(PendingRefill {
                 scope_id: live.scope.as_ref().map(|scope| scope.id.clone()),
                 duration_mins: live.duration_mins,
-                source: live.source,
                 used_percentage: live_used,
                 first_seen_at,
             }),
@@ -646,13 +630,10 @@ fn reset_advanced(prior: Option<Timestamp>, live: Option<Timestamp>) -> bool {
     }
 }
 
-/// Whether an authoritative live reading may supersede the prior truth on a
-/// drop. The official API is trusted only when its capture instant is no older
-/// than the prior's — an out-of-order sidecar must not lower a newer bar. An
-/// unprovenanced prior (a cold cache, or a best-effort reading that predates
-/// stamping) yields to the authoritative reading; an authoritative reading with
-/// no stamp of its own can't prove it is current, so it holds.
-fn authoritative_supersedes(live: &RateLimitWindow, prior: &RateLimitWindow) -> bool {
+/// Whether `live` was observed no earlier than `prior`. An unstamped prior
+/// yields to any stamped reading; an unstamped live reading cannot prove it is
+/// current.
+fn observed_no_earlier(live: &RateLimitWindow, prior: &RateLimitWindow) -> bool {
     match (live.observed_at, prior.observed_at) {
         (Some(live_at), Some(prior_at)) => live_at >= prior_at,
         (Some(_), None) => true,
