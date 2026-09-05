@@ -32,11 +32,12 @@ error: codex hooks are not installed, so a scheduled turn cannot report completi
   install them with `rimz hooks install codex`
 ```
 
-`rimz hooks install claude` is enough for Claude. Codex also has to trust the installed hooks once, from inside Codex (`/hooks`), and the same error names that step when it is the one missing; there is no non-interactive way to grant it. [Set up your machine](./setup.md) covers hooks for every agent.
+`rimz hooks install claude` is enough for Claude. Codex also has to trust the installed hooks once, from inside Codex (`/hooks`), and the same error names that step when it is the one missing; there is no non-interactive way to grant it. [Set up your machine](./setup.md) covers hooks for every agent. The examples on this page use Claude and Codex interchangeably; swap in the kind you have set up.
 
-With hooks in place, run the add from the project the task belongs to:
+Install the hooks, then run the add from the project the task belongs to:
 
 ```sh
+rimz hooks install claude
 cd ~/code/app
 rimz loop add deps --agent claude --worktree deps --every mon --at 09:00 \
     --prompt "Check for outdated dependencies. Open a PR for the safe minor and patch bumps, and list any majors that need review."
@@ -51,7 +52,7 @@ live while a room for /home/you/code/app is open
 no room is open there; start one with `rimz start`, or use `rimz loop timer install` to fire without one
 ```
 
-The receipt reads back the action, the schedule in plain words, and, for a clock, the concrete next fire. Two facts in it matter before your first task. A task is bound to the project you ran the command in (`--root <path>` picks another), and it fires only while a room for that project is open: with no room, nothing fires until you start one or install the timer ([who keeps time](#who-keeps-time)).
+The receipt reads back the action, the schedule in plain words, and, for a clock, the concrete next fire. Two facts in it matter before your first task. A task is bound to the project you ran the command in (`--root <path>` picks another), and it fires only while a room for that project is open: with no room, nothing fires until you start one or install the timer ([who keeps time](#who-keeps-time)). Until then `rimz loop list` shows the task with `-` in its NEXT column, because no clock has picked it up yet.
 
 That one command stands in for a cron entry, the guard script around it, and the terminal you would have left open to watch it. It runs Claude in an isolated [worktree](./worktrees.md) every Monday at 09:00, and if a bump breaks the build the agent stops and asks instead of forcing it through: the question reaches you like any other waiting card. A scheduled turn takes the launch flags you know from [the agents guide](./fleet.md): `--worktree`, `--mode`, `--effort`, `--system-prompt-file`, and `--timeout` shape it the same way they shape an interactive one. What the agent does with the turn is bounded only by the prompt: a one-line check, or the whole [fleet that works nights](#a-fleet-that-works-nights).
 
@@ -135,7 +136,7 @@ rimz loop add ci-green --check "gh run watch --exit-status" --on success \
 
 The check runs at the project root before any agent action, every fire, and costs nothing. Only its result spends a turn: `--on fail` (the default) wakes the agent on a non-zero exit or a timeout, `--on success` on a zero exit. When the guard fires, RimZ appends the command, its exit status, and its output tail to the prompt, so the agent wakes already reading the evidence. That adds a rung to the escalation ladder: the script handles the routine, the agent handles the failure, and you hear about it only when the agent itself gets stuck. Its turn is supervised like any other, so a stuck fix goes `? waiting` and a [notification](./notifications.md) reaches you. `--until 30m` is the poll-until deadline: the task retires when the check trips or the deadline passes, whichever comes first. A one-shot guarded by a check retires only when the guard fires; a skipped check leaves a bare `--at` task armed for the same time next day.
 
-A check is killed after five minutes unless the task's `--timeout` says otherwise (the same flag caps the agent turn), and a killed check counts as a failure. `gh run watch` on a long pipeline is the case to watch: give the task a `--timeout` longer than the pipeline, or poll it on `--every` and let each short check report the current state.
+A check is killed after five minutes unless the task's `--timeout` says otherwise (the same flag caps the agent turn), and a killed check counts as a failure. `gh run watch` on a long pipeline is the case to watch: give the task a `--timeout` longer than the pipeline, or poll on `--every` with a command that returns at once.
 
 A `--check` with no agent action is still worth having. It is a scheduled command that logs `completed`, `failed`, or `timed out`, each with the exit code and output tail, into the run history, and it keeps recurring. It needs no prompt.
 
@@ -180,7 +181,7 @@ every = "mon"
 
 A task that retires itself (a bare `--at`, `--in`, anything with a `--until` deadline, a `--once` subscription, or any `rimz wake`) is stored as state in `~/.local/state/rimz/loop-instances.json` instead, so an agent scheduling its own wake never touches your `loop.toml`, and the entry disappears when it fires. `rimz loop list` shows the source of each task as `machine` or `state`.
 
-`--project` writes the entry to `<root>/.rimz/config.toml`: shared automation that travels with the repo, so it has to be a repeating task, and it cannot use `--wake` (a session pinned on your machine means nothing on someone else's). A committed task runs commands on whoever pulls it, so it enters the [project trust hash](./security.md) and stays inert until each user approves it. Trust and enablement answer different questions: trust says the project config contains commands you accept as yours to run, and `rimz loop enable <name>` says this particular task may run unattended on this machine. A project task pulled from a repo starts disabled even after trust is granted; a task you create with `rimz loop add --project` starts enabled on your machine. A trusted project task wins over a same-named machine task without double-firing.
+`--project` writes the entry to `<root>/.rimz/config.toml`: shared automation that travels with the repo, so it has to be a standing task (`--every`, `--cron`, or `--signal`), and it cannot use `--wake` (a session pinned on your machine means nothing on someone else's). A committed task runs commands on whoever pulls it, so it enters the [project trust hash](./security.md) and stays inert until each user approves it. Trust and enablement answer different questions: trust says the project config contains commands you accept as yours to run, and `rimz loop enable <name>` says this particular task may run unattended on this machine. A project task pulled from a repo starts disabled even after trust is granted; a task you create with `rimz loop add --project` starts enabled on your machine. A trusted project task wins over a same-named machine task without double-firing.
 
 ### Who keeps time
 
