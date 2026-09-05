@@ -68,7 +68,7 @@ upward-dependencies = [
     "harness::run",
     "harness::target",
 ]
-surface-budget = 970
+surface-budget = 969
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -100,7 +100,6 @@ upward-dependencies = [
     "harness::schedule",
     "harness::spec",
     "store::message",
-    "sidebar::timing",
 ]
 surface-budget = 185
 
@@ -120,10 +119,7 @@ surface-budget = 14
 
 [[module]]
 path = "crates/rimz/src/diag"
-upward-dependencies = [
-    "sidebar::presence",
-    "sidebar::timing",
-]
+upward-dependencies = ["sidebar::presence"]
 surface-budget = 79
 
 [[module]]
@@ -213,7 +209,7 @@ surface-budget = 11
 
 [[module]]
 path = "crates/rimz/src/remote"
-surface-budget = 179
+surface-budget = 178
 
 [[module]]
 path = "crates/rimz/src/remote_control.rs"
@@ -225,15 +221,12 @@ upward-dependencies = [
     "reload",
     "sidebar",
     "sidebar::body_filter",
-    "sidebar::heartbeat",
-    "sidebar::timing",
-    "sidebar::width_target",
 ]
 surface-budget = 51
 
 [[module]]
 path = "crates/rimz/src/sidebar"
-surface-budget = 437
+surface-budget = 367
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
@@ -299,7 +292,7 @@ surface-budget = 22
 
 [[module]]
 path = "crates/rimz/src/wakeup"
-surface-budget = 200
+surface-budget = 26
 
 [[module]]
 path = "crates/rimz/src/worktree"
@@ -317,7 +310,6 @@ allowed-dependencies = [
     "osc",
     "remote",
     "sidebar::notify",
-    "sidebar::timing",
     "disk::paths",
     "tui",
     "utils::time",
@@ -400,12 +392,11 @@ surface-budget = 19
 [[module]]
 path = "crates/rimz/src/mux/recovery.rs"
 allowed-dependencies = [
-    "(crate)",
     "ids",
     "mux",
     "proc",
 ]
-surface-budget = 16
+surface-budget = 14
 
 [[module]]
 path = "crates/rimz/src/mux/zellij/session.rs"
