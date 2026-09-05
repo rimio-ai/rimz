@@ -27,4 +27,6 @@ rimz worktree remove experiment --force                  # remove anyway
 
 `remove` refuses a dirty worktree, one whose content is not proven landed on its base, and one an agent or an open pane is still working in, naming what holds it. `--force` removes anyway, printing a warning first when the tree was in use. A stale session record from a crashed agent does not block the removal that retires it. This is the reverse of a `--worktree` launch: it deletes the checkout and prunes the branch registration after the safety checks pass.
 
+After removal, RimZ retires the worktree's sessions and archives its queued messages. If the live queue update succeeds but message-history append or retention fails, RimZ warns on stderr; that audit failure alone does not change a successful exit code of 0. A live queue write failure still makes `remove` exit 1, even though the checkout has already been removed. See the [store durability contract](../../internals/store.md#write-classes) for the distinction between queue state and audit history.
+
 RimZ marks only worktrees it creates, so it manages agent workspaces without claiming arbitrary checkouts. The marker, `.worktreeinclude` seeding, `.worktreelink` symlinks, and the shared `sweep` / `rimz gc` policy are in [worktrees.md](../../internals/harness/worktrees.md).
