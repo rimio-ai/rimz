@@ -12,10 +12,10 @@ Local contract for `crates/rimz/src/sidebar/` — the view-model the renderer dr
 ## Truth and latency
 
 - **Pulled truth is authoritative.** The store rollup plus the producer's pane frame decide what is true.
-- **Events are latency.** [`events.rs`](./events.rs) wakeups and [`presence.rs`](./presence.rs) plugin pushes overlay pulled truth in [`fuse.rs`](./fuse.rs) until the next pull supersedes them. A missed event costs a tick, never correctness.
-- **Pending focus intent outranks both** until the mux confirms the jump or the anchor in [`focus_anchor.rs`](./focus_anchor.rs) expires, so a click never appears to bounce back.
-- **One producer per workspace.** The eldest live instance by UUIDv7 wins the election in [`mod.rs`](./mod.rs); younger renderers read the cache. The heartbeat is a latency hint and never blocks a fresh launch.
-- Cadence constants live in [`timing.rs`](./timing.rs) alone. Tune a TTL there so poll mode, push mode, and the heavy lanes stay legible against each other.
+- **Events are latency.** Wakeup datagrams carrying the [`wakeup::events`](../wakeup/events.rs) vocabulary and [`presence.rs`](./presence.rs) plugin pushes land in the receiver's overlay store [`event_store.rs`](./event_store.rs) and overlay pulled truth in [`fuse.rs`](./fuse.rs) until the next pull supersedes them. A missed event costs a tick, never correctness. The wire is shared; which events overlay, how they supersede, and when they expire are this module's policy.
+- **Pending focus intent outranks both** until the mux confirms the jump or the anchor in [`mux::focus_anchor`](../mux/focus_anchor.rs) expires, so a click never appears to bounce back. This subsystem only reads and folds the anchor; the renderer requests, applies, and clears intents through that module's API.
+- **One producer per workspace.** The eldest live instance by UUIDv7 wins the election in [`mod.rs`](./mod.rs); younger renderers read the cache. The heartbeat is a latency hint and never blocks a fresh launch. Its record, TTL, and freshness scans are wire, in [`wakeup::heartbeat`](../wakeup/heartbeat.rs); the election and launch policy over them is this module's.
+- Sidebar cadence constants live in [`timing.rs`](./timing.rs) alone, so poll mode, push mode, and the heavy lanes stay legible against each other. A bound that defines another module's behaviour lives with that module: mux command deadlines in [`mux/`](../mux/AGENTS.md), the paint grid in `config`, GC marker lifetimes in `store::gc`.
 
 ## Lanes
 
@@ -26,7 +26,8 @@ Local contract for `crates/rimz/src/sidebar/` — the view-model the renderer dr
 
 ## Boundaries
 
-- [`mux/`](../mux/AGENTS.md) supplies the pane roster behind the `PaneRef` seam in [`frame.rs`](./frame.rs); backend knowledge stops there.
+- [`mux/`](../mux/AGENTS.md) supplies the pane roster behind the `PaneRef` seam in [`frame.rs`](./frame.rs); backend knowledge stops there. It also owns the runtime files the multiplexer writes or dispatches on: the focus anchor, the room width target, and the Zellij topology and presence-desired caches.
+- [`wakeup/`](../wakeup/mod.rs) is the shared wire below this module: the heartbeat record, the event vocabulary, and the best-effort datagram send. `mux`, `store`, and `remote_control` send through it too, so a wire-visible change there carries the envelope or heartbeat protocol version with it.
 - [`sidebar_pane/`](../sidebar_pane/AGENTS.md) renders the snapshot and holds no data-plane policy.
 - [`agents/`](../agents/AGENTS.md) never imports `crate::sidebar`; the invariant enforces the direction, and workspace inputs flow outward through `agents::spending`.
 

@@ -19,7 +19,7 @@ Three rules follow from that split, and they are the ones to internalize before 
 
 **Parity is the rule; fast paths are the exception.** A backend-only capability is always a latency hint layered over shared truth. The Zellij presence plugin and the tmux control-mode watch both push topology, and both are optional: with either channel dead, its backend falls back to polling and passes the same test matrix. Correctness never reads from a push channel.
 
-**Cross-backend policy stays pure and above the backends.** [`reconcile.rs`](../../crates/rimz/src/mux/reconcile.rs) owns the one-sidebar-per-view structural planner and its execution accounting, [`width.rs`](../../crates/rimz/src/mux/width.rs) owns sizing arithmetic, and [`sidebar/presence/projector.rs`](../../crates/rimz/src/sidebar/presence/projector.rs) owns the event taxonomy. Each backend collects native facts and executes native effects. Geometry convergence remains adapter-side because Zellij repairs before structural execution and tmux repairs only after structural success. These policy modules unit-test with no multiplexer installed.
+**Cross-backend policy stays pure and above the backends.** [`reconcile.rs`](../../crates/rimz/src/mux/reconcile.rs) owns the one-sidebar-per-view structural planner and its execution accounting, [`width.rs`](../../crates/rimz/src/mux/width.rs) owns sizing arithmetic, and [`sidebar/presence/projector.rs`](../../crates/rimz/src/sidebar/presence/projector.rs) owns the policy that turns normalized presence transitions into typed events, over the vocabulary [`wakeup/events.rs`](../../crates/rimz/src/wakeup/events.rs) defines. Each backend collects native facts and executes native effects. Geometry convergence remains adapter-side because Zellij repairs before structural execution and tmux repairs only after structural success. These policy modules unit-test with no multiplexer installed.
 
 **Backends stay ignorant of agents.** The CLI hands `open_tab` backend-neutral pane argv and layout geometry. Agent resolution, prompts, and worktree cleanup are already compiled into that argv (`rimz agents exec …`), so no backend knows what an agent kind or a worktree is. The layout IR is in [fleet.md](./harness/fleet.md#the-layout-ir); worktree cleanup is in [worktrees.md](./harness/worktrees.md#who-triggers-removal).
 
@@ -35,7 +35,9 @@ Shared seam, `crates/rimz/src/mux/`:
 | [`reconcile.rs`](../../crates/rimz/src/mux/reconcile.rs) | The structural sidebar repair planner, pane-role precedence, and transaction executor. |
 | [`mount_proof.rs`](../../crates/rimz/src/mux/mount_proof.rs) | Current-build heartbeat proof for panes mounted during repair. |
 | [`width.rs`](../../crates/rimz/src/mux/width.rs) | Sidebar sizing: share resolution, native steps, and target spellings. |
-| [`recovery.rs`](../../crates/rimz/src/mux/recovery.rs) | Destructive teardown and guarded process sweep shared by `rimz reset` and attended auto-reset. |
+| [`width_target.rs`](../../crates/rimz/src/mux/width_target.rs) | The room-runtime width record every renderer resolves against: its file, its pin flag, and the change broadcast. |
+| [`focus_anchor.rs`](../../crates/rimz/src/mux/focus_anchor.rs) | The durable two-phase intent behind every RimZ-initiated focus action: nonce, anchor file, pre-action fence, and the five observation verdicts. |
+| [`recovery.rs`](../../crates/rimz/src/mux/recovery.rs) | The guarded process sweep behind room teardown: heuristic kills scoped by uid, session name, ancestry, and process domain. |
 | [`domain.rs`](../../crates/rimz/src/mux/domain.rs) | `ProcessDomain`: the guard every heuristic process kill passes. |
 | [`focus_key.rs`](../../crates/rimz/src/mux/focus_key.rs) | Parsing and rendering the `[sidebar] focus_key` and `zoom_key` chords both backends bind. |
 | [`capabilities.rs`](../../crates/rimz/src/mux/capabilities.rs) | Static backend facts, such as whether a view is a tab or a window. |
@@ -51,7 +53,7 @@ Zellij, `crates/rimz/src/mux/zellij/` plus [`zellij.rs`](../../crates/rimz/src/m
 | [`layout.rs`](../../crates/rimz/src/mux/zellij/layout.rs) | KDL layout rendering: birth, daemon view, resumed agents, background tabs. Pure `&options → String`. |
 | [`sidebar.rs`](../../crates/rimz/src/mux/zellij/sidebar.rs) | Sidebar birth, in-place recovery, and geometry convergence. |
 | [`presence.rs`](../../crates/rimz/src/mux/zellij/presence.rs) | Plugin materialization, identity, load and retire pipes. |
-| [`pane_topology.rs`](../../crates/rimz/src/mux/zellij/pane_topology.rs) | The topology cache the plugin publishes. |
+| [`pane_topology.rs`](../../crates/rimz/src/mux/zellij/pane_topology.rs) | The topology cache the plugin publishes: schema, path, freshness window, and the desired-presence record beside it. |
 | [`raw_pane.rs`](../../crates/rimz/src/mux/zellij/raw_pane.rs) | Topology projection and sidebar classification. |
 | [`session.rs`](../../crates/rimz/src/mux/zellij/session.rs) | Session discovery, topology-cache reads, and serialized-session cache discovery and purge. |
 | [`socket.rs`](../../crates/rimz/src/mux/zellij/socket.rs) | IPC socket path budgeting, which is tight on macOS. |
@@ -70,7 +72,7 @@ tmux, `crates/rimz/src/mux/tmux/` plus [`tmux.rs`](../../crates/rimz/src/mux/tmu
 
 The presence plugin is its own crate; see [the Zellij presence plugin](#the-zellij-presence-plugin).
 
-Two modules outside `mux/` complete the picture. [`room/`](../../crates/rimz/src/room/mod.rs) sits above the trait and owns managed identity, birth and reset, the pre-attach health gate, and presence-load ordering. [`sidebar/presence/`](../../crates/rimz/src/sidebar/presence/projector.rs) sits beside it and turns normalized transitions from either backend into typed `SidebarEvent`s.
+Three modules outside `mux/` complete the picture. [`room/`](../../crates/rimz/src/room/mod.rs) sits above the trait and owns managed identity, birth and reset, the pre-attach health gate, and presence-load ordering. [`sidebar/presence/`](../../crates/rimz/src/sidebar/presence/projector.rs) sits beside it and turns normalized transitions from either backend into typed `SidebarEvent`s. [`wakeup/`](../../crates/rimz/src/wakeup/mod.rs) sits below both and is the wire those events travel on: the renderer heartbeat record, the versioned envelope, and the best-effort datagram send this seam uses without importing the sidebar.
 
 ## Choosing a backend
 
@@ -217,7 +219,7 @@ Hidden tabs carry no RimZ focus state, and the renderer's `UiState::baseline_pan
 
 `focus_pane` is the one-way jump primitive, and it lands cross-view on both backends: Zellij switches to the containing tab directly, tmux selects the window then the pane.
 
-Every attached-client jump is wrapped in a two-phase global intent. `Requested` is durable before dispatch, command acceptance moves the same nonce to `Applied`, and a failure clears it. An applied intent supplies a short presentation target without fabricating an attached-client observation.
+Every attached-client jump is wrapped in a two-phase global intent, owned by [`focus_anchor.rs`](../../crates/rimz/src/mux/focus_anchor.rs). `Requested` is durable before dispatch and wakes every renderer before the one-way command, command acceptance moves the same nonce to `Applied`, and a failure clears it. An applied intent supplies a short presentation target without fabricating an attached-client observation.
 
 Native observations then resolve it. The exact unchanged pre-action client map is fenced after the short presentation window and yields unknown rather than snapping selection back to stale evidence. A target observation confirms the intent, a different pane supersedes it, and client replacement, detach, session replacement, or pane closure invalidates it. This separation matters on Zellij, where `action focus-pane-id` can move the visible pane and routed input without a causally matching `ListClients` update.
 
@@ -260,7 +262,7 @@ Replacement is add-before-close on purpose. [`mount_proof.rs`](../../crates/rimz
 
 [`width.rs`](../../crates/rimz/src/mux/width.rs) resolves one room target from configured policy and live geometry.
 
-The room-runtime record always contains `WidthPermille`, tenths of a percent of the full view, plus a pin flag. An unpinned target follows `theme.display.width_percent` and applies `theme.display.max_cols` whenever live view geometry is known. An `a`/`d` keypress or mouse drag pins the resulting share verbatim, so the explicit choice may exceed the configured cap and keeps its proportion when the terminal changes size. A genuinely new session clears the record and returns to configured policy.
+The room-runtime record lives in [`width_target.rs`](../../crates/rimz/src/mux/width_target.rs) and always contains `WidthPermille`, tenths of a percent of the full view, plus a pin flag. An unpinned target follows `theme.display.width_percent` and applies `theme.display.max_cols` whenever live view geometry is known. An `a`/`d` keypress or mouse drag pins the resulting share verbatim, so the explicit choice may exceed the configured cap and keeps its proportion when the terminal changes size. A genuinely new session clears the record and returns to configured policy.
 
 Resolution produces `SidebarTarget`: one share, the configured cap, and whether the user pinned it. That resolved answer crosses the backend seam; `SidebarWidth` policy does not. A width repair renders columns against the proven view geometry it measured, rounding fractional shares up and clamping an unpinned default to the cap, while Zellij layouts spell the same share as a whole percentage. Resolution itself is read-only: only birth geometry from a real terminal probe or a live backend viewport proven for the current event may adopt and rewrite the room share. A geometry-free resolve preserves an existing share rather than blindly re-evaluating the width-keyed default; with no record it returns the narrow policy fallback for that call without persisting it. Columns without geometry use the bare cap because a detached layout's eventual view width is not known yet.
 
@@ -301,7 +303,7 @@ A Zellij IPC socket-path overflow is a separate environment precondition rather 
 
 ### Reset
 
-A `Stuck` room needs destructive reset. [`RoomContext::reset`](../../crates/rimz/src/room/mod.rs) gives explicit `rimz reset` and attended stuck recovery the same teardown plus store-reset runtime, while the CLI keeps confirmation and report rendering. Both paths purge the serialized-session cache, reap stale sidebar runtime files, sweep orphaned servers and leaked daemons, then rebirth.
+A `Stuck` room needs destructive reset. [`RoomContext::reset`](../../crates/rimz/src/room/mod.rs) gives explicit `rimz reset` and attended stuck recovery the same teardown plus store-reset runtime, while the CLI keeps confirmation and report rendering. Both paths purge the serialized-session cache, reap stale sidebar runtime files, sweep orphaned servers and leaked daemons, then rebirth. That routine is the room's, in [`room/teardown.rs`](../../crates/rimz/src/room/teardown.rs): it drives the backend for the session kill and cache purge, reaps the sidebar's runtime files, and calls the mux process sweep. Every step is best-effort and independent, so a failure in one never blocks the others.
 
 The dangerous step is the process sweep in [`recovery.rs`](../../crates/rimz/src/mux/recovery.rs), which signals processes by heuristic. It is scoped four ways: the real uid, the exact path-derived session name in the command line, an explicit exclusion of this process and its ancestors, and the inherited environment domain. [`ProcessDomain`](../../crates/rimz/src/mux/domain.rs) is that last guard. A process in a foreign domain (a `cargo xtask sandbox`, another runtime root) is not RimZ's to signal, and an unreadable process environment is spared.
 
