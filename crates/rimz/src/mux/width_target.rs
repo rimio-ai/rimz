@@ -43,7 +43,7 @@ pub(crate) fn pinned(runtime: &RuntimePaths) -> Option<WidthPermille> {
 }
 
 /// Resolve the room target against the current backend geometry without changing it.
-pub fn resolve(
+pub(crate) fn resolve(
     runtime: &RuntimePaths,
     width: SidebarWidth,
     view_cols: Option<u16>,
@@ -113,7 +113,7 @@ pub(crate) fn adopt(
 }
 
 /// Pin a user-selected room target as its exact measured share of the view.
-pub fn pin(
+pub(crate) fn pin(
     runtime: &RuntimePaths,
     cols: NonZeroU16,
     view_cols: u16,
@@ -150,7 +150,7 @@ fn write_and_broadcast(runtime: &RuntimePaths, file: WidthTargetFile) -> atomic:
 
 /// Drop the room-runtime target so the next birth starts from config
 /// defaults. Idempotent: a missing file is success.
-pub fn clear(runtime: &RuntimePaths) -> std::io::Result<()> {
+pub(crate) fn clear(runtime: &RuntimePaths) -> std::io::Result<()> {
     match fs::remove_file(runtime.sidebar_width_path()) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
