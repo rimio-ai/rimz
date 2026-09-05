@@ -14,7 +14,7 @@ mod codec;
 
 pub use codec::MessageStoreErr;
 pub(in crate::store) use codec::{
-    append_history_many, list_history, list_pending, read_queue, write_queue,
+    append_history_many, list_history, list_pending, maintain_history, read_queue, write_queue,
 };
 
 pub const DEFAULT_DELIVERY_WINDOW: Duration = Duration::from_secs(30);
@@ -53,11 +53,14 @@ pub enum MessageSender {
     System,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HarnessNotice {
     SubagentReport,
     Wake,
+    /// Preserve newer notices verbatim through older queue rewrites and history pruning.
+    #[serde(untagged)]
+    Other(String),
 }
 
 impl MessageSender {
@@ -703,7 +706,15 @@ impl MessageRecord {
     }
 
     pub fn batchable(&self) -> bool {
-        self.body == MessageBody::Prompt && self.enter && !self.text.trim_start().starts_with('/')
+        self.body == MessageBody::Prompt
+            && self.enter
+            && !self.text.trim_start().starts_with('/')
+            && !matches!(
+                self.sender,
+                MessageSender::Harness {
+                    notice: HarnessNotice::SubagentReport
+                }
+            )
     }
 }
 

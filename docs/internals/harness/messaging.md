@@ -98,7 +98,7 @@ Queued ──► Claimed ──► Sent ──► Delivered
 
 `Delivered` means the agent acknowledged: `TurnStarted` for a `Prompt`, `Compacting` for a `Command`. One body cannot confirm the other.
 
-The six terminal states are final. A terminal transition appends the full record to `messages/history.jsonl`, removes it from `messages/messages.jsonl`, and appends a `message.*` audit event carrying no text.
+The six terminal states are final. A terminal transition removes the record from `messages/messages.jsonl`, appends the full record to `messages/history.jsonl`, and appends a `message.*` audit event carrying no text. The queue file commits first because it is the truth; history and its retention are audit and cannot undo a transition ([Storage and audit](#storage-and-audit)).
 
 | Trigger | Terminal status |
 | --- | --- |
@@ -213,11 +213,29 @@ The same reactor separately nudges the sweep when this agent is *referenced* by 
 
 `rimz message steer <id>` reuses the helper with a steer policy: it still requires the named record, a receiver card, and a live pane, but ignores `not_before`, FIFO position, the ordinary gate, and the resume-recovery check. It claims only the named record through `claim_message_for_steer`, keeping the TTL guard and skipping the FIFO compare. This is the manual escape hatch for a dependency cycle or a vanished upstream agent. A waiting ask still defers unless the record or the command carries `--force`.
 
+### The subagent-digest join guard
+
+A `SUBAGENT_REPORT` digest tells a parent to run `rimz subagents wait` for children that have settled. A parent that already joined those children inline has read the results, so the digest costs it a turn and tells it to repeat work. The producer cancels the digest at that point: an inline `rimz subagents wait` and a `rimz subagents stop` stamp `joined_at` and then cancel a digest whose every listed row is joined; the composer also rechecks for fully joined rows after queueing ([subagents.md § The lifecycle, end to end](./subagents.md#the-lifecycle-end-to-end)). Those cancels are eager cleanup. Delivery does not depend on them, because any of them can fail after the run record is stamped and before the queue changes.
+
+[`attempt_delivery`](../../../crates/rimz/src/message/deliver.rs) reads the same durable truth before it claims. When the record's sender is `Harness { notice: SubagentReport }` it scans the run records whose `report_message_id` is this digest's id:
+
+> **A digest with linked run rows is claimable only if the pre-claim scan finds at least one unjoined row.**
+
+Fully joined means at least one linked row and `joined_at` stamped on every one of them, through the same `harness::run::report::digest_fully_joined` scan the producer uses. A fully joined digest is canceled with reason `joined before delivery`, and no byte reaches the pane. A digest whose rows are partly joined delivers with its full text, and so does one with no linked rows at all, which is what keeps a genuinely unread result on its way to the parent. Only `SubagentReport` takes this path; any other harness notice gets ordinary delivery.
+
+The guard sits in `attempt_delivery`, ahead of the store call: delivery causality belongs to `message/`, while `store/writer/queue.rs` carries the status vocabulary. Both trigger paths converge there, so one check covers the hook-spawned helper and the elder sweep.
+
+A guard that cannot answer never sends. A failed run scan or a failed cancel warns with the message id, skips the claim, and leaves the record `Queued` for the next sweep. Failing the sweep outright on one unreadable run file would spread a single bad file across the whole queue; claiming anyway would send exactly the duplicate the guard exists to stop. While the record sits there it still holds FIFO head position on its own card, like any head that cannot deliver.
+
+The scan and the claim are separate transactions, and that leaves one residual window: a join can stamp `joined_at` after the scan while the claim wins the race against cancellation. The join-side cancel still accepts the record, because `settle_message` settles `Queued`, `Claimed`, and `Sent` alike, but a cancel cannot retract a paste already on its way to the pane.
+
 ### Batching
 
 When a queued head delivers, the helper extends the claim through the contiguous ready prefix of that head's lane, so a run of messages that piled up during one turn arrives as one interaction instead of several.
 
 A member joins the batch only if it is a `Prompt` that submits with Enter, does not start with `/`, has its own gate open, matches the head's `force` flag, and shares the head's batch key. That key is the sender's channel for an `Agent` and the receiver's channel for a `Human`, legacy `Subagent`, or `System` sender; a `Harness` sender has no batch channel. A `Command` body, slash text, a no-enter draft, a force mismatch, a closed gate, or a cross-channel sender stops the batch. Resume control messages never batch.
+
+A `SUBAGENT_REPORT` digest never batches either, and that is a delivery rule rather than a formatting one. A digest is a `Prompt` that submits with Enter and carries no batch key, so nothing else would stop it riding behind a channel-less human message, and a member joins a claim without passing the head's [join guard](#the-subagent-digest-join-guard). Digests are therefore claimed alone, as their own head. Other harness notices batch as before.
 
 The batch lands as one paste and one submit. Agent- and human-authored members keep their own structured message header, system members stay verbatim, and sections are separated by a blank line. Claim, `Sent` recording, release, and pre-send failure each mutate the whole batch in one queue transaction, while audit events stay one per message in message order.
 
@@ -280,7 +298,7 @@ Content:
 <message>
 ```
 
-`Type` is `AGENT_MESSAGE` for a send from an identified agent caller, `SUBAGENT_REPORT` for the status-only fleet digest sent after all of an agent's launched children settle, `WAKE` for a delivery the loop runner makes on behalf of a `rimz wake` or a `--wake` task, and `USER_MESSAGE` for a human's `rimz message`; a human header always uses `From: @user`, while the fleet digest and the wake both use `From: @rimz`. An agent handle gains `#channel` when the delivery crosses lanes. The recipient's lane comes from its registered channel, its live pane channel, or the addressed channel, so a just-launched same-lane teammate does not gain a spurious suffix before pane capture lands.
+`Type` is `AGENT_MESSAGE` for a send from an identified agent caller, `SUBAGENT_REPORT` for the status-only fleet digest sent after all of an agent's launched children settle, `WAKE` for a delivery the loop runner makes on behalf of a `rimz wake` or a `--wake` task, and `USER_MESSAGE` for a human's `rimz message`; a human header always uses `From: @user`, while the fleet digest and the wake both use `From: @rimz`. A harness notice this binary does not know, minted by a newer one, decodes as `HarnessNotice::Other` with its string intact, renders that name upper-cased as its `Type`, and takes ordinary harness delivery ([store.md § What is in it](../store.md#what-is-in-it) covers why the string survives). An agent handle gains `#channel` when the delivery crosses lanes. The recipient's lane comes from its registered channel, its live pane channel, or the addressed channel, so a just-launched same-lane teammate does not gain a spurious suffix before pane capture lands.
 
 The agent handle is the shortest unique selector over addressable agents: role when unique in scope, then explicit launch name, then profile when unique, else kind, else kind ordinal, else pet name. A session rebirth's co-resident audit row is not addressable, so it never pushes the live pane owner's handle down this ladder. System records and `--no-from` sends stay verbatim.
 
@@ -453,7 +471,9 @@ messages/history.jsonl    terminal records, with text, newest 500 kept
 events.log.jsonl          terminal message.* audit events, without text
 ```
 
-The queue file holds only live records. A terminal transition appends the final record to history, removes it from the queue, then appends the audit event. History is pruned after append once it passes 512 KiB, rewriting the newest 500 records in `msg_` order. All writes hold the workspace lock; queue rewrites use temp-file-plus-rename, history uses the append helper. The queue file is created lazily, so an empty workspace costs the hook path one missing-file stat.
+The queue file holds only live records, and it is the file a transaction commits first. One queue transaction rewrites `messages.jsonl` when the live set changed, appends the terminal records to history, appends the audit events, and last runs history retention: past 512 KiB the file is rewritten to the newest 500 records in `msg_` order. All writes hold the workspace lock; queue rewrites use temp-file-plus-rename, history uses the append helper. The queue file is created lazily, so an empty workspace costs the hook path one missing-file stat.
+
+History and retention are audit, so a failure in either warns and leaves the queue transition standing. Ordered the other way, a history file an older binary cannot parse fails the whole transaction after the terminal record is appended: the queue keeps a record its caller believes it settled, and the next sweep delivers it. Retention still runs synchronously under the workspace lock, since an unlocked rewrite could drop a concurrent append; off the transactional path means only that its failure cannot fail the commit. A crash between the queue rewrite and the appends behind it costs the terminal text and its audit event, never the queue state.
 
 The store exposes `list()` (live), `list_history()` (terminal, with text), and `list_pending()` (`Queued` only). A missing queue file means no live records, not an error.
 

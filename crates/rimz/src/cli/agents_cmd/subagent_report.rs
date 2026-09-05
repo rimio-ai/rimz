@@ -109,7 +109,7 @@ pub(super) fn report_fleet(
         let _ = run::report::record_report_messages(store.paths(), &run_ids, None);
         return Err(err.into());
     }
-    if digest_fully_joined(store, &message_id)? {
+    if run::report::digest_fully_joined(store.paths(), &message_id)? {
         store.cancel_message(&message_id, &workspace.session_name, "joined inline")?;
         return Ok(ReportOutcome::Queued {
             message_id,
@@ -182,14 +182,6 @@ pub(super) fn backstop_digest(request: super::SubagentDigestRequest) -> anyhow::
         message_id,
     });
     Ok(())
-}
-
-fn digest_fully_joined(store: &Store, message_id: &MessageId) -> Result<bool, run::RunStoreErr> {
-    let rows = run::list(store.paths())?
-        .into_iter()
-        .filter(|run| run.report_message_id.as_ref() == Some(message_id))
-        .collect::<Vec<_>>();
-    Ok(!rows.is_empty() && rows.iter().all(|run| run.joined_at.is_some()))
 }
 
 fn compose_digest(rows: &[(&AgentState, &RunRecord)]) -> String {

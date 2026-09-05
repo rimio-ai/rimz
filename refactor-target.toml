@@ -540,7 +540,7 @@ allowed-dependencies = [
     "ids",
     "store",
 ]
-surface-budget = 2
+surface-budget = 3
 
 [[module]]
 path = "crates/rimz/src/harness/run_wake.rs"

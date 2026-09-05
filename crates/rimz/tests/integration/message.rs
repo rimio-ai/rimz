@@ -12,8 +12,8 @@ use rimz::agents::{
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, MuxName, PaneId};
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope, MessageEventMethod};
 use rimz::store::message::{
-    AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus,
-    WhenCondition,
+    AutoCompact, DeliveryGate, HarnessNotice, MessageBody, MessageRecord, MessageSender,
+    MessageStatus, WhenCondition,
 };
 
 use crate::common::Env;
@@ -1950,6 +1950,286 @@ fn busy_queue_confirmation_points_to_the_record_steer_command() {
         format!("sent to @claude ({message_id})")
     );
     assert_text_then_enter(&trace_log, &user_message("send this exact record"));
+}
+
+#[test]
+fn sweep_cancels_joined_subagent_report_without_pane_write() {
+    assert_joined_subagent_report_canceled(false);
+}
+
+#[test]
+fn deliver_cancels_joined_subagent_report_without_pane_write() {
+    assert_joined_subagent_report_canceled(true);
+}
+
+#[test]
+fn sweep_delivers_unjoined_subagent_report() {
+    assert_subagent_report_delivered(&[false]);
+}
+
+#[test]
+fn sweep_delivers_partially_joined_subagent_report() {
+    assert_subagent_report_delivered(&[true, false]);
+}
+
+#[test]
+fn sweep_delivers_unlinked_subagent_report() {
+    assert_subagent_report_delivered(&[]);
+}
+
+#[test]
+fn sweep_does_not_batch_subagent_report_behind_compatible_message() {
+    let (env, digest, pane_fixture) = subagent_report_fixture(&[true]);
+    let mut human = digest.clone();
+    human.message_id = fixed_message_id(1);
+    human.enqueued_at = digest.enqueued_at - jiff::SignedDuration::from_secs(1);
+    human.sender = MessageSender::Human;
+    human.text = "ordinary prompt".to_owned();
+    human.channel = None;
+    queue_messages(&env, &[&human, &digest]);
+
+    let trace_log = env.project_root.join("zellij-report-human-trace.log");
+    run_success(
+        traced_rimz(&env, &trace_log)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "sweep"]),
+        "sweep human ahead of joined digest",
+    );
+    assert_text_then_enter(&trace_log, &user_message(&human.text));
+    let lines = trace_lines(&trace_log);
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.contains("\taction\twrite\t"))
+            .count(),
+        2,
+        "only the human paste and Enter: {lines:?}"
+    );
+    assert_eq!(
+        message_by_id(&env, &human.message_id).status,
+        MessageStatus::Sent
+    );
+    let queued = message_by_id(&env, &digest.message_id);
+    assert_eq!(queued.status, MessageStatus::Queued);
+    assert_eq!(queued.attempts, 0);
+    assert_eq!(queued.batch_id, None);
+    submit_subagent_report_prompt(&env, &user_message(&human.text));
+    assert!(env.store().list_message_history().expect("history").iter().any(|row|
+        row.message_id == human.message_id && row.status == MessageStatus::Delivered
+    ));
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-report",
+            "worktree_branch": "feature-report",
+        }),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let trace_log = env.project_root.join("zellij-report-after-human-trace.log");
+    run_success(
+        traced_rimz(&env, &trace_log)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "sweep"]),
+        "sweep joined digest after human acknowledgement",
+    );
+    assert_subagent_report_canceled(&env, &digest, &trace_log);
+}
+
+#[test]
+fn sweep_does_not_send_subagent_report_when_run_scan_fails() {
+    let (env, digest, pane_fixture) = subagent_report_fixture(&[true]);
+    queue_messages(&env, &[&digest]);
+    let store = env.store();
+    let runs = rimz::harness::run::list(store.paths()).expect("seeded runs");
+    let path = store
+        .paths()
+        .runs_dir
+        .join(format!("{}.json", runs[0].run_id));
+    std::fs::write(path, b"{not a run}\n").expect("corrupt run record");
+    let trace_log = env.project_root.join("zellij-report-scan-error-trace.log");
+    run_success(
+        traced_rimz(&env, &trace_log)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "sweep"]),
+        "sweep with unreadable run",
+    );
+    assert_no_report_pane_write(&trace_log);
+    let queued = message_by_id(&env, &digest.message_id);
+    assert_eq!(queued.status, MessageStatus::Queued);
+    assert_eq!(queued.attempts, 0);
+    assert_eq!(queued.last_sent_at, None);
+}
+
+fn subagent_report_fixture(joined: &[bool]) -> (Env, MessageRecord, PathBuf) {
+    use rimz::harness::run::{self, RunRecord, RunStatus};
+
+    let env = Env::new();
+    env.write_config(&env.project_root, "");
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-report", "feature-report", pane_env);
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-report",
+            "worktree_branch": "feature-report",
+        }),
+        pane_env,
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let store = env.store();
+    let snapshot = store.snapshot_cached().expect("snapshot");
+    let parent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "sess-report")
+        .expect("parent");
+    let mut digest = MessageRecord::new(
+        env.workspace_id.clone(),
+        parent,
+        "@first completed: first result\n@second completed: second result".to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_channel(rimz::harness::target::agent_channel(parent))
+    .with_sender(MessageSender::Harness {
+        notice: HarnessNotice::SubagentReport,
+    })
+    .with_pane_id(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
+    digest.message_id = fixed_message_id(2);
+    let at = jiff::Timestamp::from_second(1_000).expect("fixed timestamp");
+    let mut run_ids = Vec::new();
+    for (index, joined) in joined.iter().enumerate() {
+        let mut record = RunRecord::new(
+            env.workspace_id.clone(),
+            AgentKind::new_unchecked("codex"),
+            rimz::agents::PermissionMode::Auto,
+            "child task".to_owned(),
+            env.project_root.clone(),
+        );
+        record.agent_id = Some(AgentSessionId::from(format!("child-{index}")));
+        record.subagent = true;
+        record.status = RunStatus::Completed;
+        record.started_at = at;
+        record.updated_at = at;
+        record.completed_at = Some(at);
+        record.joined_at = joined.then_some(at);
+        run::create(store.paths(), &record).expect("seed completed run");
+        run_ids.push(record.run_id);
+    }
+    run::report::record_report_messages(store.paths(), &run_ids, Some(&digest.message_id))
+        .expect("link digest without canceling joined runs");
+    (env, digest, pane_fixture)
+}
+
+fn assert_joined_subagent_report_canceled(deliver: bool) {
+    let (env, digest, pane_fixture) = subagent_report_fixture(&[true]);
+    queue_messages(&env, &[&digest]);
+    let trace_log = env.project_root.join("zellij-report-cancel-trace.log");
+    let mut command = traced_rimz(&env, &trace_log);
+    command
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_MESSAGE_SETTLE_MS", "0");
+    if deliver {
+        command.args([
+            "message",
+            "deliver",
+            "--message-id",
+            digest.message_id.as_str(),
+        ]);
+    } else {
+        command.args(["message", "sweep"]);
+    }
+    run_success(&mut command, "consume joined digest");
+    assert_subagent_report_canceled(&env, &digest, &trace_log);
+}
+
+fn assert_no_report_pane_write(trace_log: &Path) {
+    let lines = trace_lines(trace_log);
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains("\taction\twrite\t")
+                && !line.contains("\taction\twrite-chars\t")),
+        "no paste or Enter: {lines:?}"
+    );
+}
+
+fn assert_subagent_report_canceled(env: &Env, digest: &MessageRecord, trace_log: &Path) {
+    assert_no_report_pane_write(trace_log);
+    assert!(
+        env.store()
+            .list_messages()
+            .expect("live queue")
+            .iter()
+            .all(|row| row.message_id != digest.message_id)
+    );
+    let history = env.store().list_message_history().expect("history");
+    let row = history
+        .iter()
+        .find(|row| row.message_id == digest.message_id)
+        .expect("canceled digest in history");
+    assert_eq!(row.status, MessageStatus::Canceled);
+    assert_eq!(row.attempts, 0);
+    assert_eq!(row.last_sent_at, None);
+    assert!(
+        env.read_events()
+            .iter()
+            .any(|event| event.method == "message.canceled"
+                && event.params_value()["message_id"] == digest.message_id.as_str()
+                && event.params_value()["reason"] == "joined before delivery")
+    );
+}
+
+fn assert_subagent_report_delivered(joined: &[bool]) {
+    let (env, digest, pane_fixture) = subagent_report_fixture(joined);
+    queue_messages(&env, &[&digest]);
+    let trace_log = env.project_root.join("zellij-report-deliver-trace.log");
+    run_success(
+        traced_rimz(&env, &trace_log)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "sweep"]),
+        "sweep unconsumed digest",
+    );
+    let prompt = format!(
+        "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\n{}",
+        digest.text
+    );
+    assert_text_then_enter(&trace_log, &prompt);
+    assert_eq!(
+        message_by_id(&env, &digest.message_id).status,
+        MessageStatus::Sent
+    );
+    submit_subagent_report_prompt(&env, &prompt);
+    assert!(env.store().list_messages().expect("live queue").is_empty());
+    assert!(
+        env.store()
+            .list_message_history()
+            .expect("history")
+            .iter()
+            .any(
+                |row| row.message_id == digest.message_id && row.status == MessageStatus::Delivered
+            )
+    );
+}
+
+fn submit_subagent_report_prompt(env: &Env, prompt: &str) {
+    run_hook(
+        env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-report",
+            "prompt": prompt,
+            "worktree_branch": "feature-report",
+        }),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
 }
 
 #[test]
