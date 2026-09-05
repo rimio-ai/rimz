@@ -1,6 +1,6 @@
 # Wake CLI
 
-`rimz wake` arms one wakeup for one live agent session: after a delay, when a named signal is emitted, or when a watched command exits. The wakeup delivers a prompt through the same durable path as [`rimz message`](./message.md), so the agent takes it at its next turn boundary with all of its context. Each wake fires once and then retires itself. Why an agent sets its own alarm instead of holding a pane open on `sleep` is the [loops guide](../../guide/loops.md#stop-polling-start-waking); the scheduler underneath is [loops.md](../../internals/harness/loops.md).
+`rimz wake` arms one wakeup for one live agent session: after a delay, when a named signal is emitted, or when a watched command exits. The wakeup delivers a prompt through the same durable path as [`rimz message`](./message.md), so the agent takes it at its next turn boundary with all of its context. Each wake fires once and then retires itself. Why an agent sets its own alarm instead of holding a pane open on `sleep` is the [loops guide](../../guide/loops.md#wake-a-running-agent); the scheduler underneath is [loops.md](../../internals/harness/loops.md).
 
 ```sh
 rimz wake --in 30m --prompt "CI should be done; check the run and merge if green"
