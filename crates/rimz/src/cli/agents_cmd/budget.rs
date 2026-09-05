@@ -6,8 +6,9 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 
 use super::{Ctx, GlobalFlags};
+use rimz::agents::BudgetWindow;
 use rimz::harness::budget::{
-    BudgetLedger, BudgetSpec, BudgetWindow, DayBaseline, read_ledger, total_cost_usd, write_ledger,
+    BudgetLedger, BudgetSpec, DayBaseline, read_ledger, total_cost_usd, write_ledger,
 };
 use rimz::store::message::DeliveryGate;
 

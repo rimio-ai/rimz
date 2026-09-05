@@ -35,12 +35,12 @@ fn interrupted_native_ask_settles_waiting_to_idle() {
         .in_pane("%1")
         .active_ago(60)
         .settle(10, TurnSettleOutcome::Interrupted);
-    session.budget_park = Some(crate::harness::budget::BudgetPark {
+    session.budget_park = Some(crate::agents::BudgetPark {
         cap_usd: 5.0,
         spend_usd: 5.25,
-        window: crate::harness::budget::BudgetWindow::Session,
+        window: crate::agents::BudgetWindow::Session,
         at: epoch(),
-        scope: crate::harness::budget::BudgetScope::Agent,
+        scope: crate::agents::BudgetScope::Agent,
         account_kind: None,
         resets_at: None,
     });

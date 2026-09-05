@@ -6,12 +6,12 @@ fn awaiting_input_outranks_derived_statuses() {
         .worktree("/repo/main")
         .active_ago(default_stall_secs() + 60)
         .turn_error(10, "API Error: Bad Request");
-    session.budget_park = Some(crate::harness::budget::BudgetPark {
+    session.budget_park = Some(crate::agents::BudgetPark {
         cap_usd: 5.0,
         spend_usd: 5.25,
-        window: crate::harness::budget::BudgetWindow::Session,
+        window: crate::agents::BudgetWindow::Session,
         at: epoch(),
-        scope: crate::harness::budget::BudgetScope::Agent,
+        scope: crate::agents::BudgetScope::Agent,
         account_kind: None,
         resets_at: None,
     });

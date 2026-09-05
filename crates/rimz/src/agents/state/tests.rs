@@ -380,8 +380,6 @@ fn effective_status_settles_background_park_to_success() {
 
 #[test]
 fn budget_park_serializes_verbatim_in_persisted_state() {
-    use crate::harness::budget::{BudgetPark, BudgetScope, BudgetWindow};
-
     let at = Timestamp::from_second(1_000).unwrap();
     let mut agent = test_agent(AgentStatus::Running, 1_000);
     let mut park = BudgetPark {
@@ -469,12 +467,12 @@ fn budget_park_serializes_verbatim_in_persisted_state() {
 #[test]
 fn waiting_and_interruption_outrank_a_budget_park() {
     let mut waiting = test_agent(AgentStatus::Waiting, 1_000);
-    waiting.budget_park = Some(crate::harness::budget::BudgetPark {
+    waiting.budget_park = Some(crate::agents::BudgetPark {
         cap_usd: 5.0,
         spend_usd: 5.25,
-        window: crate::harness::budget::BudgetWindow::Session,
+        window: crate::agents::BudgetWindow::Session,
         at: Timestamp::from_second(1_000).unwrap(),
-        scope: crate::harness::budget::BudgetScope::Agent,
+        scope: crate::agents::BudgetScope::Agent,
         account_kind: None,
         resets_at: None,
     });
@@ -596,12 +594,12 @@ fn open_turn_predicate_follows_lifecycle_and_rest_certificates() {
     assert!(!parked.holds_open_turn());
 
     let mut budget_parked = test_agent(AgentStatus::Running, 1_000);
-    budget_parked.budget_park = Some(crate::harness::budget::BudgetPark {
+    budget_parked.budget_park = Some(crate::agents::BudgetPark {
         cap_usd: 5.0,
         spend_usd: 5.25,
-        window: crate::harness::budget::BudgetWindow::Session,
+        window: crate::agents::BudgetWindow::Session,
         at: Timestamp::from_second(1_000).unwrap(),
-        scope: crate::harness::budget::BudgetScope::Agent,
+        scope: crate::agents::BudgetScope::Agent,
         account_kind: None,
         resets_at: None,
     });
@@ -663,12 +661,12 @@ fn open_turn_and_effective_status_are_consistent() {
         assert_consistent(&agent, false);
     }
 
-    let budget_park = crate::harness::budget::BudgetPark {
+    let budget_park = crate::agents::BudgetPark {
         cap_usd: 5.0,
         spend_usd: 5.25,
-        window: crate::harness::budget::BudgetWindow::Session,
+        window: crate::agents::BudgetWindow::Session,
         at: Timestamp::from_second(1_000).unwrap(),
-        scope: crate::harness::budget::BudgetScope::Agent,
+        scope: crate::agents::BudgetScope::Agent,
         account_kind: None,
         resets_at: None,
     };

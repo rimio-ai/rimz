@@ -33,6 +33,79 @@ pub struct OpenAsk {
     pub since: Timestamp,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetWindow {
+    Session,
+    Turn,
+    Day,
+}
+
+impl BudgetWindow {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Session => "session",
+            Self::Turn => "turn",
+            Self::Day => "day",
+        }
+    }
+
+    pub(crate) fn fmt_spend(self, spend_usd: f64, cap_usd: f64) -> String {
+        let suffix = match self {
+            BudgetWindow::Session => "",
+            BudgetWindow::Turn => "/turn",
+            BudgetWindow::Day => "/day",
+        };
+        format!("${spend_usd:.2} of ${cap_usd:.2}{suffix}")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetScope {
+    #[default]
+    Agent,
+    Turn,
+    Fleet,
+    Account,
+}
+
+/// Read-side park projection carried in snapshots and agent inspection JSON.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BudgetPark {
+    pub cap_usd: f64,
+    pub spend_usd: f64,
+    pub window: BudgetWindow,
+    pub at: Timestamp,
+    #[serde(default)]
+    pub scope: BudgetScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_kind: Option<AgentKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets_at: Option<Timestamp>,
+}
+
+impl BudgetPark {
+    pub fn summary(&self) -> String {
+        self.window.fmt_spend(self.spend_usd, self.cap_usd)
+    }
+
+    pub fn label(&self) -> String {
+        let prefix = match self.scope {
+            BudgetScope::Agent => "budget".to_owned(),
+            BudgetScope::Turn => "turn budget".to_owned(),
+            BudgetScope::Fleet => "fleet budget".to_owned(),
+            BudgetScope::Account => format!(
+                "{} account budget",
+                self.account_kind
+                    .as_ref()
+                    .map_or("provider", AgentKind::as_str)
+            ),
+        };
+        format!("{prefix}: {}", self.summary())
+    }
+}
+
 /// One hour: the shared ceiling for attention heat and breath tempo, and the
 /// default inactive window below which a card sinks beneath live work.
 pub const ATTENTION_AGE_CEILING_SECS: i64 = 3_600;
@@ -527,7 +600,7 @@ pub struct AgentState {
     /// Runtime-ledger projection. The producer and consumers rebuild it from
     /// the budget cache; the event reducer never treats it as durable truth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub budget_park: Option<crate::harness::budget::BudgetPark>,
+    pub budget_park: Option<BudgetPark>,
     /// What the parent asked this *subagent* to do, harvested from Claude's
     /// `subagentStatusLine`. Folded in at snapshot time by
     /// `SidebarSnapshot::with_subagent_context`, never reduced from the event
@@ -675,7 +748,7 @@ struct AgentStateWire {
     usage: AgentUsageSummary,
     context: Option<AgentContext>,
     #[serde(default)]
-    budget_park: Option<crate::harness::budget::BudgetPark>,
+    budget_park: Option<BudgetPark>,
     subagent_description: Option<String>,
     #[serde(default)]
     subagent_cost_usd: Option<f64>,
