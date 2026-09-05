@@ -90,7 +90,7 @@ The fold rejects before it accepts.
 - A different `kind`, or an already-terminal record, is ignored.
 - Session binding is strict once made. An unbound record adopts the observed `agent_id` and name; a bound record ignores any observation for a different session id, and ignores an observation with no session id at all. A same-kind descendant with its own session therefore cannot end the parent run.
 
-What survives that filter maps through `terminal_status_for_signal`:
+What survives that filter is classified by `LifecycleSignal::terminal_disposition` in `agents::lifecycle`, then mapped to `RunStatus` by `harness::run::fold_lifecycle`:
 
 | Lifecycle signal | Result |
 | --- | --- |

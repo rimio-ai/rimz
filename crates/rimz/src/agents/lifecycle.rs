@@ -190,7 +190,35 @@ pub enum LifecycleSignal {
     Lost,
 }
 
+/// Supervised-run terminal classification, distinct from the reducer outcome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalDisposition {
+    Completed,
+    Failed,
+    Canceled,
+}
+
 impl LifecycleSignal {
+    /// Terminal disposition produced by one agent lifecycle signal.
+    ///
+    /// Hook ingestion uses this same predicate before extracting the final
+    /// assistant message, so the deliverable and status transition stay in lockstep.
+    pub fn terminal_disposition(&self) -> Option<TerminalDisposition> {
+        match self {
+            LifecycleSignal::TurnEnded {
+                errored,
+                parked_on_background,
+            } if !parked_on_background => Some(if *errored {
+                TerminalDisposition::Failed
+            } else {
+                TerminalDisposition::Completed
+            }),
+            LifecycleSignal::TurnInterrupted { .. } => Some(TerminalDisposition::Canceled),
+            LifecycleSignal::Ended => Some(TerminalDisposition::Failed),
+            _ => None,
+        }
+    }
+
     /// Data-less kind for matrix rows and definition conformance.
     pub const fn kind(&self) -> LifecycleSignalKind {
         match self {

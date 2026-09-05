@@ -1,6 +1,80 @@
 use super::*;
 
 #[test]
+fn terminal_disposition_table_pins_every_signal() {
+    for (signal, expected) in [
+        (
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+            },
+            Some(TerminalDisposition::Completed),
+        ),
+        (
+            LifecycleSignal::TurnEnded {
+                errored: true,
+                parked_on_background: false,
+            },
+            Some(TerminalDisposition::Failed),
+        ),
+        (
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: true,
+            },
+            None,
+        ),
+        (
+            LifecycleSignal::TurnEnded {
+                errored: true,
+                parked_on_background: true,
+            },
+            None,
+        ),
+        (
+            LifecycleSignal::TurnInterrupted { turn_id: None },
+            Some(TerminalDisposition::Canceled),
+        ),
+        (LifecycleSignal::Ended, Some(TerminalDisposition::Failed)),
+        (LifecycleSignal::Registered, None),
+        (LifecycleSignal::TurnStarted, None),
+        (LifecycleSignal::SubagentStarted, None),
+        (LifecycleSignal::SubagentStopped { errored: false }, None),
+        (LifecycleSignal::SubagentStopped { errored: true }, None),
+        (
+            LifecycleSignal::ToolUsed {
+                mutates: false,
+                edits: false,
+                name: None,
+                native_key: None,
+                turn_id: None,
+            },
+            None,
+        ),
+        (
+            LifecycleSignal::AwaitingInput {
+                kind: crate::agents::lifecycle::AskKind::Permission,
+                ask_id: None,
+                detail: None,
+                native_key: None,
+            },
+            None,
+        ),
+        (LifecycleSignal::Compacting, None),
+        (
+            LifecycleSignal::CompactionEnded {
+                auto: None,
+                failed: false,
+            },
+            None,
+        ),
+        (LifecycleSignal::Lost, None),
+    ] {
+        assert_eq!(signal.terminal_disposition(), expected, "{signal:?}");
+    }
+}
+
+#[test]
 fn turn_phase_labels_are_stable() {
     assert_eq!(TurnPhase::Idle.as_str(), "idle");
     assert_eq!(TurnPhase::Reasoning.as_str(), "reasoning");

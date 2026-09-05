@@ -1143,8 +1143,7 @@ fn final_message_for_lifecycle(
     observation: &AgentLifecycleObservation,
     read_tail: impl FnOnce(&Path) -> Option<String>,
 ) -> Option<String> {
-    let needs_terminal_message =
-        crate::harness::run::terminal_status_for_signal(&observation.signal).is_some();
+    let needs_terminal_message = observation.signal.terminal_disposition().is_some();
     let needs_conversation_message = observation.parent_agent_id.is_none()
         && matches!(
             observation.signal,

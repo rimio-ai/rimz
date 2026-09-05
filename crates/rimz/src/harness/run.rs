@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::agents::lifecycle::TerminalDisposition;
 use crate::agents::{AgentLifecycleObservation, LifecycleSignal, PermissionMode, TurnPhase};
 use crate::agents::{AgentState, AgentStatus};
 use crate::disk::lock::WorkspaceLock;
@@ -661,8 +662,12 @@ fn fold_lifecycle(
         }
         (None, None) | (Some(_), Some(_)) => {}
     }
-    if let Some(status) = terminal_status_for_signal(&observation.signal) {
-        record.status = status;
+    if let Some(disposition) = observation.signal.terminal_disposition() {
+        record.status = match disposition {
+            TerminalDisposition::Completed => RunStatus::Completed,
+            TerminalDisposition::Failed => RunStatus::Failed,
+            TerminalDisposition::Canceled => RunStatus::Canceled,
+        };
         if let Some(path) = observation.transcript_path.as_ref() {
             record.transcript_path = Some(path.clone());
         }
@@ -739,26 +744,6 @@ fn agent_context_pct(agent: &AgentState) -> Option<u8> {
         .filter(|tokens| tokens.context_window_size.is_some())
         .and_then(|tokens| tokens.used_percentage)
         .or(agent.usage.context_pct)
-}
-
-/// Terminal run status produced by one agent lifecycle signal.
-///
-/// Hook ingestion uses this same predicate before extracting the final
-/// assistant message, so the deliverable and status transition stay in lockstep.
-pub fn terminal_status_for_signal(signal: &LifecycleSignal) -> Option<RunStatus> {
-    match signal {
-        LifecycleSignal::TurnEnded {
-            errored,
-            parked_on_background,
-        } if !parked_on_background => Some(if *errored {
-            RunStatus::Failed
-        } else {
-            RunStatus::Completed
-        }),
-        LifecycleSignal::TurnInterrupted { .. } => Some(RunStatus::Canceled),
-        LifecycleSignal::Ended => Some(RunStatus::Failed),
-        _ => None,
-    }
 }
 
 #[cfg(test)]
