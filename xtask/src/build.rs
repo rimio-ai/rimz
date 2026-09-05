@@ -635,6 +635,130 @@ pub(crate) fn install_dev(root: &Path) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn install_system(root: &Path, args: &[String]) -> Result<()> {
+    let profile = match args {
+        [] => HostProfile::Release,
+        [arg] if arg == "--dev" => HostProfile::Profiling,
+        _ => bail!("usage: cargo xtask install-system [--dev]"),
+    };
+    // Validate a real installation operation: sudo -v has a separate verifypw
+    // policy and can prompt even when these commands are NOPASSWD.
+    let status = Command::new("sudo")
+        .args(["--", "mkdir", "-p", "/usr/local/bin"])
+        .current_dir(root)
+        .status()
+        .context("system installation requires sudo; install sudo and allow your build user to run the installation commands")?;
+    if !status.success() {
+        bail!(
+            "cannot prepare /usr/local/bin with sudo; run `sudo mkdir -p /usr/local/bin` in a terminal as your normal build user, then retry"
+        );
+    }
+
+    let stage = match profile {
+        HostProfile::Release => stage_install(root)?,
+        HostProfile::Profiling => {
+            run(root, "sh", ["scripts/install-dev-tools.sh"])?;
+            stage_dev_install(root)?
+        }
+    };
+    let source = absolute_lexical_path(&stage.join("rimz"))?;
+    let dest_dir = Path::new("/usr/local/bin");
+    publish_system_binary(&source, dest_dir, |program, args| {
+        let status = Command::new("sudo")
+            .arg("--")
+            .arg(program)
+            .args(args)
+            .current_dir(root)
+            .status()
+            .with_context(|| format!("running sudo {program} for system installation"))?;
+        if !status.success() {
+            bail!("sudo {program} failed with {status}");
+        }
+        Ok(())
+    })?;
+    let installed = dest_dir.join("rimz");
+    let version = binary_build_version(&installed)?;
+    report_install(&version, &[installed]);
+    if matches!(profile, HostProfile::Profiling) {
+        upload_debug_files(&source);
+    }
+    Ok(())
+}
+
+fn publish_system_binary(
+    source: &Path,
+    dest_dir: &Path,
+    mut execute: impl FnMut(&str, &[&OsStr]) -> Result<()>,
+) -> Result<()> {
+    let installed = dest_dir.join("rimz");
+    match fs::symlink_metadata(&installed) {
+        Ok(metadata) if metadata.is_dir() => {
+            bail!(
+                "{} is a directory; move it before installing rimz",
+                installed.display()
+            );
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context("checking system installation destination"),
+    }
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .context("reading system installation staging time")?
+        .as_nanos();
+    let staging = dest_dir.join(format!(".rimz-install-{}-{nonce}", process::id()));
+    execute("mkdir", &[OsStr::new("-p"), dest_dir.as_os_str()])?;
+    // Exclusive mkdir refuses collisions rather than reusing an existing path.
+    execute(
+        "mkdir",
+        &[OsStr::new("-m"), OsStr::new("0700"), staging.as_os_str()],
+    )?;
+    let staged = staging.join("rimz");
+    let published = (|| {
+        execute(
+            "install",
+            &[
+                OsStr::new("-o"),
+                OsStr::new("0"),
+                OsStr::new("-g"),
+                OsStr::new("0"),
+                OsStr::new("-m"),
+                OsStr::new("0755"),
+                OsStr::new("--"),
+                source.as_os_str(),
+                staged.as_os_str(),
+            ],
+        )?;
+        // GNU -T and macOS -h replace a directory symlink rather than following it.
+        let rename_flags = if cfg!(target_os = "macos") {
+            "-fh"
+        } else {
+            "-fT"
+        };
+        execute(
+            "mv",
+            &[
+                OsStr::new(rename_flags),
+                OsStr::new("--"),
+                staged.as_os_str(),
+                installed.as_os_str(),
+            ],
+        )
+    })();
+    let cleanup = execute(
+        "rm",
+        &[OsStr::new("-rf"), OsStr::new("--"), staging.as_os_str()],
+    );
+    if let Err(error) = cleanup {
+        let context = format!(
+            "could not clean system installation staging directory {}: {error}; remove it with sudo",
+            staging.display()
+        );
+        return published.and(Err(error)).context(context);
+    }
+    published.with_context(|| format!("installing rimz to {}", installed.display()))
+}
+
 /// Build an optimized host `rimz` with line-tables debug info, frame pointers,
 /// and v0 symbol mangling for perf/samply profiling. The artifact stays under
 /// `target/profiling/` and is never installed over the everyday binary.

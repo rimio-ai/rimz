@@ -171,6 +171,115 @@ fn install_destination_is_home_cargo_bin() {
 }
 
 #[test]
+fn install_system_rejects_arguments_before_accessing_the_checkout_or_sudo() {
+    for args in [vec!["--release"], vec!["--dev", "--dev"], vec!["extra"]] {
+        let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+        let error = install_system(Path::new("/nonexistent/rimz-checkout"), &args).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "usage: cargo xtask install-system [--dev]"
+        );
+    }
+}
+
+#[cfg(unix)]
+fn execute_system_publication_unprivileged(program: &str, args: &[&OsStr]) -> Result<()> {
+    let args = if program == "install" {
+        assert_eq!(args[..4], ["-o", "0", "-g", "0"].map(OsStr::new));
+        &args[4..]
+    } else {
+        args
+    };
+    let status = Command::new(program).args(args).status()?;
+    if !status.success() {
+        bail!("{program} failed with {status}");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn system_publication_replaces_a_running_binary_without_changing_its_inode() {
+    use std::io::Read;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let root = tempfile::tempdir().unwrap();
+    let dest_dir = root.path().join("bin");
+    fs::create_dir(&dest_dir).unwrap();
+    let installed = dest_dir.join("rimz");
+    fs::copy("/bin/sleep", &installed).unwrap();
+    let mut old = fs::File::open(&installed).unwrap();
+    let old_bytes = fs::read(&installed).unwrap();
+    let source = root.path().join("new-rimz");
+    fs::write(&source, b"replacement").unwrap();
+    let mut child = Command::new(&installed).arg("60").spawn().unwrap();
+    let published =
+        publish_system_binary(&source, &dest_dir, execute_system_publication_unprivileged);
+    let still_running = child.try_wait().unwrap().is_none();
+    child.kill().unwrap();
+    child.wait().unwrap();
+
+    published.unwrap();
+    assert!(still_running);
+    assert_eq!(fs::read(&installed).unwrap(), b"replacement");
+    assert_ne!(
+        old.metadata().unwrap().ino(),
+        fs::metadata(&installed).unwrap().ino()
+    );
+    let mut remaining_bytes = Vec::new();
+    old.read_to_end(&mut remaining_bytes).unwrap();
+    assert_eq!(remaining_bytes, old_bytes);
+    assert_eq!(
+        fs::metadata(&installed).unwrap().permissions().mode() & 0o7777,
+        0o755
+    );
+    assert_eq!(fs::read_dir(&dest_dir).unwrap().count(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn system_publication_replaces_symlinks_and_preserves_them_on_failure() {
+    use std::os::unix::fs::symlink;
+
+    for directory in [false, true] {
+        for failure in [None, Some("install"), Some("mv")] {
+            let root = tempfile::tempdir().unwrap();
+            let dest_dir = root.path().join("bin");
+            fs::create_dir(&dest_dir).unwrap();
+            let target = root.path().join("target");
+            let target_file = if directory {
+                fs::create_dir(&target).unwrap();
+                target.join("rimz")
+            } else {
+                target.clone()
+            };
+            fs::write(&target_file, b"original").unwrap();
+            let installed = dest_dir.join("rimz");
+            symlink(&target, &installed).unwrap();
+            let source = root.path().join("new-rimz");
+            fs::write(&source, b"replacement").unwrap();
+
+            let result = publish_system_binary(&source, &dest_dir, |program, args| {
+                if failure == Some(program) {
+                    bail!("injected {program} failure");
+                }
+                execute_system_publication_unprivileged(program, args)
+            });
+
+            assert_eq!(result.is_err(), failure.is_some());
+            if failure.is_some() {
+                assert_eq!(fs::read_link(&installed).unwrap(), target);
+            } else {
+                assert!(!fs::symlink_metadata(&installed).unwrap().is_symlink());
+                assert_eq!(fs::read(&installed).unwrap(), b"replacement");
+            }
+            assert_eq!(fs::read(&target_file).unwrap(), b"original");
+            assert_eq!(fs::read_dir(&dest_dir).unwrap().count(), 1);
+        }
+    }
+}
+
+#[test]
 fn install_rebuilds_after_a_checkout_move_hides_the_mixed_build_failure() {
     let mut revisions = std::collections::VecDeque::from([
         Some("old".to_owned()),

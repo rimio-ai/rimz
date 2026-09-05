@@ -102,9 +102,8 @@ fn task_budget(task: &str) -> Option<Duration> {
     match task {
         "sandbox" | "screenshot" => None,
         "ci" | "checks" | "lint" | "test" | "test-archive" | "coverage" | "perf" | "semver"
-        | "dist" | "install" | "install-dev" | "stage-install" | "profile-build" => {
-            Some(LONG_BUDGET)
-        }
+        | "dist" | "install" | "install-dev" | "install-system" | "stage-install"
+        | "profile-build" => Some(LONG_BUDGET),
         _ => Some(DEFAULT_BUDGET),
     }
 }

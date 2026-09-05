@@ -63,6 +63,11 @@ const TASKS: &[TaskInfo] = &[
         runs: "build-plugin, host rimz with --profile profiling --features sentry and profiling RUSTFLAGS, atomically installs to ~/.cargo/bin, then best-effort uploads debug files with sentry-cli",
     },
     TaskInfo {
+        name: "install-system",
+        summary: "Build and install rimz for all users in /usr/local/bin (sudo).",
+        runs: "cargo xtask install-system [--dev]: builds release (or install-dev profiling/sentry), then uses sudo to atomically publish /usr/local/bin/rimz",
+    },
+    TaskInfo {
         name: "profile-build",
         summary: "Build an optimized host rimz for perf/samply profiling.",
         runs: "build-plugin, then host rimz with --profile profiling and profiling RUSTFLAGS; writes target/profiling/rimz",
@@ -278,6 +283,7 @@ fn task_accepts_args(task: &str) -> bool {
     matches!(
         task,
         "test"
+            | "install-system"
             | "test-archive"
             | "sandbox"
             | "perf"
@@ -316,6 +322,7 @@ fn dispatch(task: &str, args: &[String], root: &Path) -> Result<()> {
         "plugin-refresh" => build::plugin_refresh(root),
         "install" => build::install(root),
         "install-dev" => build::install_dev(root),
+        "install-system" => build::install_system(root, args),
         "profile-build" => build::profile_build(root),
         "stage-install" => build::stage_install(root).map(|_| ()),
         "dist" => build::dist(root),
