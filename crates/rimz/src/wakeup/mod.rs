@@ -1,4 +1,4 @@
-//! Best-effort datagrams posted to live sidebar consumers.
+//! Best-effort datagram transport to live sidebar consumers.
 //!
 //! Each renderer publishes a heartbeat naming its datagram socket. Senders
 //! walk current-protocol heartbeats, enforce content and mtime freshness, and

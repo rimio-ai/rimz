@@ -1,4 +1,4 @@
-//! Liveness heartbeat written by each sidebar renderer.
+//! Sidebar renderer heartbeat wire format, publication, and freshness scans.
 
 use std::fs;
 use std::io;
