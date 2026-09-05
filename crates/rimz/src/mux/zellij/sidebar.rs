@@ -475,12 +475,11 @@ impl ZellijBackend {
         let Ok(runtime) = self.runtime_paths_for_workspace(workspace_id.clone()) else {
             return;
         };
-        let _ = crate::mux::focus_anchor::execute_action(
+        let _ = super::backend::execute_focus_restoration(
             self,
             &runtime,
             session,
-            PaneId::from(ZellijPaneId::Terminal(work)),
-            crate::mux::focus_anchor::FocusOrigin::User,
+            &PaneId::from(ZellijPaneId::Terminal(work)),
             None,
             crate::mux::focus_anchor::FocusDispatchRetries {
                 attempts: super::FOCUS_RESTORE_ATTEMPTS,

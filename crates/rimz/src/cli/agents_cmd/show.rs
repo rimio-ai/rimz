@@ -751,9 +751,6 @@ pub(in crate::cli) fn focus_resolved(ctx: &Ctx, agent: &AgentState) -> Result<()
         ctx.runtime(),
         &ctx.workspace.session_name,
         pane.pane_id.clone(),
-        rimz::mux::focus_anchor::FocusOrigin::User,
-        None,
-        Default::default(),
     )?;
     Ok(())
 }

@@ -165,14 +165,13 @@ impl ZellijBackend {
         if let Some(workspace_id) = workspace_id
             && let Ok(runtime) = self.runtime_paths_for_workspace(workspace_id)
         {
-            let _ = crate::mux::focus_anchor::execute_action(
+            let _ = execute_focus_restoration(
                 self,
                 &runtime,
                 session_name,
-                target_pane.clone(),
-                crate::mux::focus_anchor::FocusOrigin::User,
+                target_pane,
                 None,
-                Default::default(),
+                crate::mux::focus_anchor::FocusDispatchRetries::default(),
             );
         } else {
             let _ = self.focus_pane(target_pane, Some(session_name));
@@ -351,8 +350,21 @@ impl ZellijBackend {
                 reason: format!("focus restore pane `{restore}` is no longer live"),
             })?;
         let runtime = self.runtime_paths_for_workspace(workspace_id.clone())?;
-        execute_focus_restoration(self, &runtime, session_name, restore, tab_position)
-            .map_err(focus_action_error)
+        execute_focus_restoration(
+            self,
+            &runtime,
+            session_name,
+            restore,
+            Some(tab_position),
+            crate::mux::focus_anchor::FocusDispatchRetries {
+                attempts: super::FOCUS_RESTORE_ATTEMPTS,
+                delay: super::FOCUS_RESTORE_RETRY_DELAY,
+            },
+        )
+        .map_err(|error| MuxErr::Output {
+            program: "zellij".to_owned(),
+            reason: error.to_string(),
+        })
     }
 
     fn move_new_tab_after(&self, session: &str, anchor: &PaneId) -> Result<()> {
@@ -1516,15 +1528,26 @@ fn restore_client_view(
         return;
     };
     let pane = PaneId::from(ZellijPaneId::Terminal(work));
-    let _ = execute_focus_restoration(backend, &runtime, &opts.session_name, &pane, tab_position);
+    let _ = execute_focus_restoration(
+        backend,
+        &runtime,
+        &opts.session_name,
+        &pane,
+        Some(tab_position),
+        crate::mux::focus_anchor::FocusDispatchRetries {
+            attempts: super::FOCUS_RESTORE_ATTEMPTS,
+            delay: super::FOCUS_RESTORE_RETRY_DELAY,
+        },
+    );
 }
 
-fn execute_focus_restoration(
+pub(super) fn execute_focus_restoration(
     backend: &ZellijBackend,
     runtime: &crate::disk::paths::RuntimePaths,
     session_name: &str,
     pane: &PaneId,
-    tab_position: u64,
+    tab_position: Option<u64>,
+    retries: crate::mux::focus_anchor::FocusDispatchRetries,
 ) -> std::result::Result<(), crate::mux::focus_anchor::FocusActionError> {
     let nonce = crate::mux::focus_anchor::request_action(
         backend,
@@ -1539,27 +1562,19 @@ fn execute_focus_restoration(
             order: None,
         },
     )?;
-    let _ = backend.go_to_tab_position(session_name, tab_position);
+    if let Some(tab_position) = tab_position {
+        let _ = backend.go_to_tab_position(session_name, tab_position);
+    }
     if crate::mux::focus_anchor::dispatch_action(
         backend,
         runtime,
         session_name,
         pane,
         nonce,
-        crate::mux::focus_anchor::FocusDispatchRetries {
-            attempts: super::FOCUS_RESTORE_ATTEMPTS,
-            delay: super::FOCUS_RESTORE_RETRY_DELAY,
-        },
+        retries,
     )? {
         Ok(())
     } else {
         Err(crate::mux::focus_anchor::FocusActionError::Superseded)
-    }
-}
-
-fn focus_action_error(error: crate::mux::focus_anchor::FocusActionError) -> MuxErr {
-    MuxErr::Output {
-        program: "zellij".to_owned(),
-        reason: error.to_string(),
     }
 }
