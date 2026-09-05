@@ -31,9 +31,9 @@ use rimz::sidebar::cache::{
     PresenceStamp, presence_stamp_path, read_pane_topology_cache, read_snapshot_cache,
 };
 use rimz::sidebar::frame::assemble_frame;
-use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use rimz::sidebar::presence::read_topology_writer_conflict;
 use rimz::utils::time::unix_now_ms;
+use rimz::wakeup::heartbeat::SidebarHeartbeat;
 use tempfile::TempDir;
 
 use crate::common::ScrubSessionEnvExt;
@@ -424,7 +424,7 @@ fn assert_sidebar_envelope(
     workspace_id: &WorkspaceId,
     session: Option<&str>,
 ) {
-    assert_eq!(event["v"], rimz::sidebar::events::SIDEBAR_EVENT_VERSION);
+    assert_eq!(event["v"], rimz::wakeup::events::SIDEBAR_EVENT_VERSION);
     assert_eq!(
         event["workspace_id"],
         serde_json::to_value(workspace_id).expect("workspace id serializes"),

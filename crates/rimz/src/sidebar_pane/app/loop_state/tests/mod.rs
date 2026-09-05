@@ -308,7 +308,7 @@ fn store_delta() -> SidebarEvent {
     }
 }
 
-fn pane_publication(publication: crate::sidebar::events::PaneFramePublicationKind) -> SidebarEvent {
+fn pane_publication(publication: crate::wakeup::events::PaneFramePublicationKind) -> SidebarEvent {
     SidebarEvent::PaneFramePublished { publication }
 }
 

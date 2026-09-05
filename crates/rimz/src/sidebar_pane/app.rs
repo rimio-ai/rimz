@@ -25,7 +25,6 @@ use crate::mux::focus_anchor::{
     FocusObservation, FocusObservationOutcome, FocusOrigin, FocusPresentation,
 };
 use crate::sidebar::event_store::EventStore;
-use crate::sidebar::events::{SidebarEvent, SidebarEventEnvelope};
 use crate::sidebar::fuse::{focus_intent_confirmed_from, fuse, fuse_owned};
 use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::ReadMarkStore;
@@ -33,6 +32,7 @@ use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL,
 use crate::sidebar_pane::pixel::probe::escalate_own_pane_passthrough;
 use crate::sidebar_pane::pixel::{PixelRenderCaps, detect_pixel_render_caps};
 use crate::store::snapshot::SidebarSnapshot;
+use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, WorkspaceId};
 use ratatui::Terminal;
 use ratatui::backend::{ClearType, CrosstermBackend};

@@ -17,10 +17,8 @@ pub mod cache;
 pub mod consumer;
 pub mod enrich;
 pub mod event_store;
-pub mod events;
 pub mod frame;
 pub mod fuse;
-pub mod heartbeat;
 pub mod meter;
 pub mod notify;
 pub mod observe;
@@ -34,7 +32,6 @@ pub mod refresh;
 pub(crate) mod test_support;
 pub mod timing;
 pub mod unread;
-pub mod wakeup;
 pub mod width_target;
 pub mod workspace_projection;
 
@@ -50,11 +47,11 @@ use crate::disk::paths::RuntimePaths;
 use crate::disk::single_flight::{self, Coalesced};
 use crate::ids::{MuxName, PaneId, SidebarInstanceId};
 use crate::mux::{DaemonView, MuxBackend, SidebarLiveness, SidebarPaneOptions};
-use crate::sidebar::heartbeat::{
+use crate::sidebar::timing::HEARTBEAT_WRITE_INTERVAL;
+use crate::wakeup::heartbeat::{
     SIDEBAR_HEARTBEAT_TTL, SIDEBAR_PROTOCOL_VERSION, SidebarHeartbeat, fresh_sidebar_heartbeats,
     mtime_within_ttl, read_current_heartbeats,
 };
-use crate::sidebar::timing::HEARTBEAT_WRITE_INTERVAL;
 
 /// Launch-lock poll cadence: the producer holds the election lock while the
 /// daemon it spawned starts and publishes its first heartbeat, and a peer queued

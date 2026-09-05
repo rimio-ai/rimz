@@ -7,10 +7,10 @@ use std::io;
 use std::os::unix::net::UnixDatagram;
 
 use crate::agents::AgentStatus;
-use crate::sidebar::events::{
+use crate::sidebar_pane::view::BodyFilter;
+use crate::wakeup::events::{
     RELOAD_CONTROL_WORD, SUPERVISOR_HANDOFF_CONTROL_WORD, SidebarEventEnvelope,
 };
-use crate::sidebar_pane::view::BodyFilter;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 
 use super::NavKeymap;
@@ -338,7 +338,7 @@ mod tests {
             crate::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
             Some("rimz-test".to_owned()),
             42,
-            crate::sidebar::events::SidebarEvent::StoreDelta {
+            crate::wakeup::events::SidebarEvent::StoreDelta {
                 event_method: None,
                 agent_signal: None,
             },
@@ -350,13 +350,13 @@ mod tests {
 
     #[test]
     fn agent_session_boundary_event_requests_fresh_panes() {
-        let start = crate::sidebar::events::SidebarEvent::StoreDelta {
+        let start = crate::wakeup::events::SidebarEvent::StoreDelta {
             event_method: Some("agent.lifecycle".to_owned()),
             agent_signal: Some(crate::agents::LifecycleSignal::Registered.tag().to_owned()),
         };
         assert!(start.requests_producer_verification());
 
-        let status = crate::sidebar::events::SidebarEvent::StoreDelta {
+        let status = crate::wakeup::events::SidebarEvent::StoreDelta {
             event_method: Some("agent.lifecycle".to_owned()),
             agent_signal: Some(crate::agents::LifecycleSignal::TurnStarted.tag().to_owned()),
         };

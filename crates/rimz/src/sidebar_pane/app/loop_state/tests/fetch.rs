@@ -107,7 +107,7 @@ fn repeated_hidden_metrics_publications_fold_once_at_the_background_deadline() {
 
     for _ in 0..3 {
         rig.event(pane_publication(
-            crate::sidebar::events::PaneFramePublicationKind::Metrics,
+            crate::wakeup::events::PaneFramePublicationKind::Metrics,
         ));
     }
     assert!(rig.next_request().is_none());
@@ -136,13 +136,13 @@ fn topology_and_store_publications_shorten_a_metrics_deadline() {
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
 
     for shorter in [
-        pane_publication(crate::sidebar::events::PaneFramePublicationKind::Topology),
+        pane_publication(crate::wakeup::events::PaneFramePublicationKind::Topology),
         store_delta(),
     ] {
         let mut rig = Rig::with_own_pane(own_pane.clone());
         rig.hide_consumer();
         rig.event(pane_publication(
-            crate::sidebar::events::PaneFramePublicationKind::Metrics,
+            crate::wakeup::events::PaneFramePublicationKind::Metrics,
         ));
         let metrics_due = rig.fetch.next_deadline().expect("metrics pending");
 
@@ -168,11 +168,11 @@ fn watched_metrics_and_hidden_presence_publications_fold_immediately() {
 
     for (publication, watched) in [
         (
-            crate::sidebar::events::PaneFramePublicationKind::Metrics,
+            crate::wakeup::events::PaneFramePublicationKind::Metrics,
             true,
         ),
         (
-            crate::sidebar::events::PaneFramePublicationKind::Presence,
+            crate::wakeup::events::PaneFramePublicationKind::Presence,
             false,
         ),
     ] {
@@ -238,7 +238,7 @@ fn focus_resume_flushes_pending_metrics_fetch() {
     rig.hide_consumer();
 
     rig.event(pane_publication(
-        crate::sidebar::events::PaneFramePublicationKind::Metrics,
+        crate::wakeup::events::PaneFramePublicationKind::Metrics,
     ));
     assert!(rig.fetch.next_deadline().is_some());
 

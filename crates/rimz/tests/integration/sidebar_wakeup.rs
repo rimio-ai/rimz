@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use rimz::sidebar::heartbeat::SidebarHeartbeat;
+use rimz::wakeup::heartbeat::SidebarHeartbeat;
 use rimz::{MuxName, SidebarInstanceId};
 
 #[test]
@@ -33,8 +33,7 @@ fn wake_sidebars_drops_datagrams_when_receiver_queue_is_full() {
     .expect("write full hb");
 
     for _ in 0..2_000 {
-        rimz::sidebar::wakeup::wake_store_delta(&h.runtime_paths, None, None)
-            .expect("wake sidebars");
+        rimz::wakeup::wake_store_delta(&h.runtime_paths, None, None).expect("wake sidebars");
     }
 
     let mut buf = [0u8; 4096];
@@ -130,7 +129,7 @@ fn wake_sidebars_dispatches_to_fresh_heartbeats_and_skips_stale_or_wrong_protoco
         .recv_from(&mut buf)
         .expect("fresh sidebar should receive");
     let parsed: serde_json::Value = serde_json::from_slice(&buf[..n]).expect("parse envelope");
-    assert_eq!(parsed["v"], rimz::sidebar::events::SIDEBAR_EVENT_VERSION);
+    assert_eq!(parsed["v"], rimz::wakeup::events::SIDEBAR_EVENT_VERSION);
     assert_eq!(
         parsed["workspace_id"],
         serde_json::to_value(&h.workspace_id).expect("ws json"),

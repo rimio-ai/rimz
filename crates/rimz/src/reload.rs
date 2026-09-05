@@ -29,11 +29,11 @@ use crate::mux::{
 };
 use crate::proc::ProcInfo;
 use crate::room::session::LiveSessions;
-use crate::sidebar::heartbeat::SidebarHeartbeat;
 use crate::sidebar::timing::{
     RECONCILE_LIST_TIMEOUT, RELOAD_CONVERGE_POLL, RELOAD_CONVERGE_TIMEOUT,
 };
 use crate::utils::time::unix_now_ms;
+use crate::wakeup::heartbeat::SidebarHeartbeat;
 use crate::workspace::{self, KnownWorkspace, record};
 
 /// Immutable executable generation shared by every long-lived process in a room.
@@ -440,7 +440,7 @@ fn upgrade_live(
     let before_signal = session_heartbeats(runtime, *mux, &ws.session_name);
 
     // 1. Signal live sidebars to re-exec onto the freshly-installed binary.
-    match crate::sidebar::wakeup::reload_all(runtime) {
+    match crate::wakeup::reload_all(runtime) {
         Ok(_) => {}
         Err(err) => {
             tracing::warn!(
@@ -756,7 +756,7 @@ fn session_heartbeats(
     mux: MuxName,
     session_name: &str,
 ) -> Vec<SidebarHeartbeat> {
-    crate::sidebar::heartbeat::fresh_sidebar_heartbeats(runtime)
+    crate::wakeup::heartbeat::fresh_sidebar_heartbeats(runtime)
         .into_iter()
         .filter(|heartbeat| heartbeat.mux == mux && heartbeat.session_name == session_name)
         .collect()

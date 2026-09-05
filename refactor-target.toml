@@ -28,6 +28,7 @@ layers = [
     [
     "message",
     "mux",
+    "wakeup",
     "remote",
     "observability",
     "diag",
@@ -159,7 +160,7 @@ surface-budget = 9
 
 [[module]]
 path = "crates/rimz/src/lib.rs"
-surface-budget = 69
+surface-budget = 70
 
 [[module]]
 path = "crates/rimz/src/main.rs"
@@ -223,7 +224,6 @@ surface-budget = 179
 
 [[module]]
 path = "crates/rimz/src/remote_control.rs"
-upward-dependencies = ["sidebar::wakeup"]
 surface-budget = 14
 
 [[module]]
@@ -262,9 +262,7 @@ upward-dependencies = [
     "harness::target",
     "mux",
     "remote::link",
-    "sidebar::heartbeat",
-    "sidebar::timing",
-    "sidebar::wakeup",
+    "wakeup",
 ]
 surface-budget = 310
 
@@ -390,7 +388,7 @@ allowed-dependencies = [
     "disk::paths",
     "ids",
     "mux",
-    "sidebar",
+    "wakeup",
 ]
 surface-budget = 2
 
@@ -447,7 +445,7 @@ allowed-dependencies = [
     "disk",
     "disk_usage",
     "ids",
-    "sidebar::heartbeat",
+    "wakeup",
     "workspace",
 ]
 surface-budget = 12

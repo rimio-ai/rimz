@@ -274,7 +274,7 @@ pub fn refresh_published(
         observations: observations.clone(),
     };
     match publish_if_changed(&runtime.agent_projection_path(), &published, || {
-        if let Err(err) = crate::sidebar::wakeup::wake_store_delta(runtime, None, None) {
+        if let Err(err) = crate::wakeup::wake_store_delta(runtime, None, None) {
             tracing::debug!(
                 workspace = %runtime.workspace_id,
                 error = &err as &dyn std::error::Error,

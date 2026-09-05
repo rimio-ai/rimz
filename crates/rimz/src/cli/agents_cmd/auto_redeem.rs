@@ -24,7 +24,7 @@ pub(super) fn run_auto_redeem(request: AutoRedeemRequest) -> Result<()> {
         Ok(Some(report)) => {
             append_report(request.kind.as_str(), request.request_id, &report, None);
             if report.reset {
-                let _ = rimz::sidebar::wakeup::wake_store_delta(&runtime, None, None);
+                let _ = rimz::wakeup::wake_store_delta(&runtime, None, None);
             }
         }
         Ok(None) => {}

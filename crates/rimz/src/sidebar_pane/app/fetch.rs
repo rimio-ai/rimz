@@ -18,12 +18,12 @@ use crate::diag::record::TickLoop;
 use crate::ids::{PaneId, SidebarInstanceId};
 use crate::sidebar::ProducerElectionTracker;
 use crate::sidebar::consumer::{PublishedSnapshotReader, RollupCursor};
-use crate::sidebar::events::SidebarEvent;
 use crate::sidebar::meter::TickMeter;
 use crate::sidebar::notify::{LinkAlert, LinkNotificationState, Notification, NotificationState};
 use crate::sidebar::read_marks::ReadMarks;
 use crate::sidebar::unread::{ClearedUnread, OpenedUnread, UnreadEpisodes};
 use crate::store::snapshot::SidebarSnapshot;
+use crate::wakeup::events::SidebarEvent;
 use crate::{RuntimePaths, StatePaths};
 
 use super::input::SNAPSHOT_WAKEUP;
@@ -724,7 +724,7 @@ fn deliver_notifications(
             crate::sidebar::notify::spawn_notify_handlers(prefs, &notification);
         }
         diag.trace_notify(notification_emitted_trace(&notification, &delivery.panes));
-        if let Err(err) = crate::sidebar::wakeup::broadcast(
+        if let Err(err) = crate::wakeup::broadcast(
             runtime,
             Some(&config.session_name),
             SidebarEvent::Notify {

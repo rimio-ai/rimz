@@ -155,7 +155,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
         );
     }
     if turn_error_updated {
-        let _ = rimz::sidebar::wakeup::wake_store_delta(store.runtime_paths(), None, None);
+        let _ = rimz::wakeup::wake_store_delta(store.runtime_paths(), None, None);
     }
 
     if let Some(context) = decoded.take_observed_context() {
@@ -167,7 +167,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
             context.context,
         ) {
             Ok(true) => {
-                let _ = rimz::sidebar::wakeup::wake_store_delta(store.runtime_paths(), None, None);
+                let _ = rimz::wakeup::wake_store_delta(store.runtime_paths(), None, None);
             }
             Ok(false) => {}
             Err(err) => {
@@ -256,7 +256,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
     );
     let Some(refresh) = refresh else {
         if locally_priced_cost_updated {
-            let _ = rimz::sidebar::wakeup::wake_store_delta(store.runtime_paths(), None, None);
+            let _ = rimz::wakeup::wake_store_delta(store.runtime_paths(), None, None);
         }
         return;
     };
@@ -274,7 +274,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
             "lifecycle: failed to merge local context sidecar",
         );
     } else {
-        let _ = rimz::sidebar::wakeup::wake_store_delta(store.runtime_paths(), None, None);
+        let _ = rimz::wakeup::wake_store_delta(store.runtime_paths(), None, None);
     }
 }
 

@@ -20,8 +20,8 @@ use rimz::harness::schedule::run_log::{self, LoopRunMode, LoopRunRecord, LoopRun
 use rimz::harness::schedule::runner::RunLockInfo;
 use rimz::harness::schedule::strikes;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, SidebarInstanceId, WorkspaceId};
-use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use rimz::store::message::{AutoCompact, MessageStatus};
+use rimz::wakeup::heartbeat::SidebarHeartbeat;
 
 #[cfg(unix)]
 use crate::common::write_fake_login_shell;

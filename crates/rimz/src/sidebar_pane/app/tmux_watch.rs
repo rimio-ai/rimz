@@ -14,7 +14,7 @@
 //! poll. Demotion is rare (an elder appearing above a live producer), so it
 //! is re-checked per nudge rather than mid-block.
 //!
-//! [`PanesChanged`]: crate::sidebar::events::SidebarEvent::PanesChanged
+//! [`PanesChanged`]: crate::wakeup::events::SidebarEvent::PanesChanged
 
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -81,8 +81,7 @@ fn watch_loop(runtime: &RuntimePaths, session_name: &str, election: &ProducerEle
                         diag.emit(event);
                     }
                     for event in project_presence(transitions) {
-                        let _ =
-                            crate::sidebar::wakeup::broadcast(runtime, Some(session_name), event);
+                        let _ = crate::wakeup::broadcast(runtime, Some(session_name), event);
                     }
                     crate::sidebar::cache::write_presence_stamp(
                         runtime,

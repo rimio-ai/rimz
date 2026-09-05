@@ -1,6 +1,6 @@
 use super::*;
 use crate::ids::{SidebarInstanceId, WorkspaceId};
-use crate::sidebar::events::{SidebarEvent, SidebarEventEnvelope};
+use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
 use std::os::unix::net::UnixDatagram;
 
 fn target(cols: u16) -> NonZeroU16 {
@@ -289,7 +289,7 @@ fn width_target_pin_broadcasts_without_a_producer_fetch() {
     socket
         .set_read_timeout(Some(Duration::from_secs(1)))
         .expect("set socket timeout");
-    crate::sidebar::heartbeat::write_heartbeat(
+    crate::wakeup::heartbeat::write_heartbeat(
         &runtime,
         runtime.workspace_id.clone(),
         &instance,

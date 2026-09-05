@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use rimz::sidebar::heartbeat::SIDEBAR_PROTOCOL_VERSION;
 use rimz::store::event::EVENT_SCHEMA_VERSION;
 use rimz::store::event_log;
+use rimz::wakeup::heartbeat::SIDEBAR_PROTOCOL_VERSION;
 use rimz::{RuntimePaths, StatePaths};
 
 use super::model::{self, Protocols};
@@ -123,7 +123,7 @@ fn heartbeat_protocol_version(path: &Path) -> std::result::Result<String, String
 }
 
 fn build_drift(
-    heartbeats: &[rimz::sidebar::heartbeat::SidebarHeartbeat],
+    heartbeats: &[rimz::wakeup::heartbeat::SidebarHeartbeat],
     own: Option<&str>,
 ) -> Option<model::BuildDrift> {
     let mut by_build: BTreeMap<String, (usize, Vec<String>)> = BTreeMap::new();
@@ -165,7 +165,7 @@ mod tests {
     use std::path::PathBuf;
 
     use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
-    use rimz::sidebar::heartbeat::SidebarHeartbeat;
+    use rimz::wakeup::heartbeat::SidebarHeartbeat;
 
     use super::*;
 

@@ -9,7 +9,7 @@ use super::{
     read_dir_if_exists,
 };
 use crate::ids::{SidebarInstanceId, WorkspaceId};
-use crate::sidebar::heartbeat::SidebarHeartbeat;
+use crate::wakeup::heartbeat::SidebarHeartbeat;
 
 #[must_use = "maintenance report; surface it to the caller"]
 pub(crate) fn collect_runtime_under(
@@ -494,7 +494,7 @@ mod tests {
     use super::*;
     use crate::disk::paths::RuntimePaths;
     use crate::ids::{MuxName, SidebarInstanceId};
-    use crate::sidebar::heartbeat::SidebarHeartbeat;
+    use crate::wakeup::heartbeat::SidebarHeartbeat;
     use tempfile::tempdir;
 
     #[test]

@@ -281,10 +281,10 @@ fn request_action_with_client_sample(
     };
     store(runtime, &anchor)?;
     drop(_guard);
-    if let Err(err) = crate::sidebar::wakeup::broadcast(
+    if let Err(err) = crate::wakeup::broadcast(
         runtime,
         Some(session_name),
-        crate::sidebar::events::SidebarEvent::FocusIntent {
+        crate::wakeup::events::SidebarEvent::FocusIntent {
             pane_id: event_pane_id.clone(),
             nonce,
         },
@@ -619,7 +619,7 @@ mod tests {
         socket
             .set_read_timeout(Some(Duration::from_secs(1)))
             .expect("set socket timeout");
-        crate::sidebar::heartbeat::write_heartbeat(
+        crate::wakeup::heartbeat::write_heartbeat(
             &runtime,
             runtime.workspace_id.clone(),
             &instance,
@@ -648,11 +648,11 @@ mod tests {
 
         let mut payload = [0_u8; 1024];
         let received = socket.recv(&mut payload).expect("receive focus intent");
-        let envelope: crate::sidebar::events::SidebarEventEnvelope =
+        let envelope: crate::wakeup::events::SidebarEventEnvelope =
             serde_json::from_slice(&payload[..received]).expect("decode focus intent");
         assert_eq!(
             envelope.event,
-            crate::sidebar::events::SidebarEvent::FocusIntent { pane_id, nonce }
+            crate::wakeup::events::SidebarEvent::FocusIntent { pane_id, nonce }
         );
         assert_eq!(
             load(&runtime).expect("stored anchor").state,

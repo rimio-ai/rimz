@@ -62,7 +62,7 @@ fn configure_actionable_hooks(
 fn seed_sidebar_heartbeat(env: &Env, session_name: &str, label: &str) -> PathBuf {
     let runtime = env.runtime_paths();
     runtime.ensure_dirs().expect("runtime dirs");
-    let heartbeat = rimz::sidebar::heartbeat::SidebarHeartbeat::new(
+    let heartbeat = rimz::wakeup::heartbeat::SidebarHeartbeat::new(
         env.workspace_id.clone(),
         rimz::ids::SidebarInstanceId::new(),
         rimz::MuxName::Zellij,

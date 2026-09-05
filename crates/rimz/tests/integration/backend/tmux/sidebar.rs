@@ -153,7 +153,7 @@ fn sidebar_reload_keeps_mouse_capture_alive() {
     wait_for_mouse_capture(&server, &pane);
     assert_click_wheel_tracking_only(&server, &pane);
     let heartbeat = wait_for_sidebar_heartbeat(&env);
-    let startup_seen = rimz::sidebar::heartbeat::SidebarHeartbeat::read_from(&heartbeat)
+    let startup_seen = rimz::wakeup::heartbeat::SidebarHeartbeat::read_from(&heartbeat)
         .expect("read initial sidebar heartbeat")
         .last_seen;
     // Let the startup maintenance heartbeat land before taking the baseline.
@@ -179,13 +179,13 @@ fn sidebar_reload_keeps_mouse_capture_alive() {
         if mouse != "1" {
             let panes = list_session_panes(&server, session);
             let current_heartbeat =
-                rimz::sidebar::heartbeat::SidebarHeartbeat::read_from(&heartbeat).ok();
+                rimz::wakeup::heartbeat::SidebarHeartbeat::read_from(&heartbeat).ok();
             panic!(
                 "mouse capture dropped {:?} into reload; panes={panes:?}; heartbeat={current_heartbeat:?}",
                 handoff_started.elapsed(),
             );
         }
-        if rimz::sidebar::heartbeat::SidebarHeartbeat::read_from(&heartbeat)
+        if rimz::wakeup::heartbeat::SidebarHeartbeat::read_from(&heartbeat)
             .is_ok_and(|heartbeat| heartbeat.last_seen > initial_seen)
         {
             break;
@@ -231,7 +231,7 @@ fn wait_for_sidebar_heartbeat(env: &Env) -> PathBuf {
             && let Some(path) = entries
                 .flatten()
                 .map(|entry| entry.path())
-                .find(|path| rimz::sidebar::heartbeat::SidebarHeartbeat::is_heartbeat_file(path))
+                .find(|path| rimz::wakeup::heartbeat::SidebarHeartbeat::is_heartbeat_file(path))
         {
             return path;
         }
@@ -246,7 +246,7 @@ fn wait_for_sidebar_heartbeat(env: &Env) -> PathBuf {
 fn wait_for_heartbeat_after(path: &Path, prior: jiff::Timestamp) -> jiff::Timestamp {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if let Ok(heartbeat) = rimz::sidebar::heartbeat::SidebarHeartbeat::read_from(path)
+        if let Ok(heartbeat) = rimz::wakeup::heartbeat::SidebarHeartbeat::read_from(path)
             && heartbeat.last_seen > prior
         {
             return heartbeat.last_seen;

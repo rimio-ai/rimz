@@ -9,8 +9,8 @@ use std::collections::HashSet;
 
 use crate::mux::focus_anchor::{FocusAnchor, FocusObservation, FocusPresentation};
 use crate::sidebar::event_store::EventStore;
-use crate::sidebar::events::SidebarEvent;
 use crate::store::snapshot::SidebarSnapshot;
+use crate::wakeup::events::SidebarEvent;
 
 pub fn fuse(
     pulled: &SidebarSnapshot,

@@ -445,7 +445,7 @@ fn freshest_matching_sidebar_heartbeat(
 ) -> Option<SystemTime> {
     let runtime = RuntimePaths::under(record.workspace_id.clone(), runtime_root).ok()?;
     let heartbeats =
-        crate::sidebar::heartbeat::read_current_heartbeats(&runtime.heartbeat_dir).ok()?;
+        crate::wakeup::heartbeat::read_current_heartbeats(&runtime.heartbeat_dir).ok()?;
     heartbeats
         .into_iter()
         .filter_map(|(path, heartbeat)| {
@@ -458,11 +458,11 @@ fn matching_sidebar_heartbeat_mtime(
     session: &str,
     record: &WorkspaceRecord,
     path: &Path,
-    heartbeat: &crate::sidebar::heartbeat::SidebarHeartbeat,
+    heartbeat: &crate::wakeup::heartbeat::SidebarHeartbeat,
 ) -> Option<SystemTime> {
     let modified = std::fs::metadata(path).ok()?.modified().ok()?;
     let fresh = match SystemTime::now().duration_since(modified) {
-        Ok(age) => age <= crate::sidebar::heartbeat::SIDEBAR_HEARTBEAT_TTL,
+        Ok(age) => age <= crate::wakeup::heartbeat::SIDEBAR_HEARTBEAT_TTL,
         Err(_) => true,
     };
     if !fresh {
@@ -716,7 +716,7 @@ mod tests {
         let runtime = RuntimePaths::under(live_id.clone(), &runtime_root).unwrap();
         runtime.ensure_dirs().unwrap();
         let instance = crate::SidebarInstanceId::new();
-        let heartbeat = crate::sidebar::heartbeat::SidebarHeartbeat::new(
+        let heartbeat = crate::wakeup::heartbeat::SidebarHeartbeat::new(
             live_id.clone(),
             instance.clone(),
             MuxName::Zellij,
