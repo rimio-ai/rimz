@@ -1424,6 +1424,71 @@ exit 0
     assert_eq!(command_count(&log, "action new-tab "), 1, "{log}");
 }
 
+#[cfg(unix)]
+#[test]
+fn open_tab_restore_switches_tab_between_request_and_dispatch() {
+    let room = TestRoom::new();
+    let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
+    room.write_cache(
+        9_999_999_999_999,
+        Some(7),
+        None,
+        vec![terminal_pane(7, 0, 120, 0, "zsh")],
+    );
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); log="$dir/zellij.log"; tab="$dir/tab-created"
+printf '%s\n' "$*" >> "$log"
+case " $* " in
+  *" action list-clients "*) printf '1 terminal_7 zsh\n'; exit 0 ;;
+  *" action list-panes --all --json "*) printf '[{"id":7,"is_plugin":false,"tab_position":0,"pane_columns":120,"pane_x":0,"title":"zsh"}]\n'; exit 0 ;;
+  *" action list-tabs "*)
+    if [ -f "$tab" ]; then printf '[{"name":"main","selectable_tiled_panes_count":1},{"name":"new","selectable_tiled_panes_count":1}]\n';
+    else printf '[{"name":"main","selectable_tiled_panes_count":1}]\n'; fi
+    exit 0 ;;
+  *" action new-tab "*) : > "$tab"; exit 0 ;;
+esac
+exit 0
+"#,
+    );
+
+    room.backend(&shim)
+        .open_tab(&TabOptions {
+            title: "new".to_owned(),
+            panes: LayoutPanes {
+                columns: vec![LayoutColumn {
+                    panes: vec![PaneCmd {
+                        argv: vec!["sleep".to_owned(), "600".to_owned()],
+                        name: None,
+                    }],
+                    stacked: false,
+                }],
+            },
+            focus: false,
+            dock_sidebar: true,
+            after: None,
+            sidebar: room.sidebar_options(120),
+        })
+        .expect("open unfocused tab");
+
+    let log = shim_log(&temp);
+    let request = log.rfind("action list-clients").expect("request sample");
+    let switch = log
+        .find("--session rimz-test action go-to-tab 1")
+        .expect("tab switch");
+    let dispatch = log
+        .find("--session rimz-test action focus-pane-id terminal_7")
+        .expect("focus dispatch");
+    assert!(request < switch && switch < dispatch, "{log}");
+
+    let anchor = crate::sidebar::focus_anchor::load(&room.runtime).expect("focus anchor");
+    assert_eq!(
+        anchor.state,
+        crate::sidebar::focus_anchor::FocusIntentState::Applied
+    );
+    assert_eq!(anchor.pane_id, pane);
+}
+
 #[test]
 fn runtime_dir_pins_full_zellij_env_surface() {
     let runtime = tempfile::TempDir::new().expect("runtime");
