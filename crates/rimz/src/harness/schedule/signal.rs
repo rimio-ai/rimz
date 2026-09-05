@@ -29,7 +29,7 @@ impl SignalName {
         &self.0
     }
 
-    pub fn family(&self) -> &str {
+    pub(super) fn family(&self) -> &str {
         self.0.split('.').next().unwrap_or(&self.0)
     }
 

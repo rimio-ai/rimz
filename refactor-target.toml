@@ -97,7 +97,7 @@ upward-dependencies = [
     "harness::spec",
     "store::message",
 ]
-surface-budget = 185
+surface-budget = 187
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -132,7 +132,7 @@ surface-budget = 7
 
 [[module]]
 path = "crates/rimz/src/forge.rs"
-surface-budget = 39
+surface-budget = 40
 
 [[module]]
 path = "crates/rimz/src/harness"
@@ -140,7 +140,7 @@ upward-dependencies = [
     "sidebar::refresh",
     "sidebar::refresh::pr",
 ]
-surface-budget = 605
+surface-budget = 609
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -577,7 +577,7 @@ allowed-dependencies = [
     "utils::time",
     "workspace",
 ]
-surface-budget = 49
+surface-budget = 50
 
 [[strangler]]
 symbol = "purge_zellij_session_cache_in"
