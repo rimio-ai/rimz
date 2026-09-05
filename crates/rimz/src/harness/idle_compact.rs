@@ -347,12 +347,12 @@ mod tests {
         }
 
         let mut parked = agent(AgentStatus::Idle, 6_000, 50_000);
-        parked.budget_park = Some(crate::harness::budget::BudgetPark {
+        parked.budget_park = Some(crate::agents::BudgetPark {
             cap_usd: 1.0,
             spend_usd: 1.0,
-            window: crate::harness::budget::BudgetWindow::Session,
+            window: crate::agents::BudgetWindow::Session,
             at: ts(6_000),
-            scope: crate::harness::budget::BudgetScope::Agent,
+            scope: crate::agents::BudgetScope::Agent,
             account_kind: None,
             resets_at: None,
         });

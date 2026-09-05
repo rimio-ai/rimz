@@ -8,10 +8,9 @@ use clap::Args;
 use jiff::Timestamp;
 
 use super::{Ctx, GlobalFlags};
+use rimz::agents::BudgetWindow;
 use rimz::config::{DayCap, MachineConfig};
-use rimz::harness::budget::{
-    BudgetSpec, BudgetWindow, DailyBudgetScope, read_scope_state, scope_interrupted,
-};
+use rimz::harness::budget::{BudgetSpec, DailyBudgetScope, read_scope_state, scope_interrupted};
 use rimz::ids::AgentKind;
 use rimz::store::message::DeliveryGate;
 

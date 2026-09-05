@@ -114,7 +114,8 @@ fn spend_summary_uses_ledger_cap_window_and_park_projection() {
     let spend = agent_budget_spend(&runtime, &state, Some(100.0));
     let cap = spend.cap.expect("ledger cap");
     assert_eq!(
-        fmt_spend(spend.spent_usd.unwrap_or(0.0), cap.cap_usd, cap.window),
+        cap.window
+            .fmt_spend(spend.spent_usd.unwrap_or(0.0), cap.cap_usd),
         "$5.25 of $6.00/day",
         "ledger spec and observed agent cost take precedence"
     );
@@ -131,7 +132,8 @@ fn spend_summary_uses_ledger_cap_window_and_park_projection() {
     let spend = agent_budget_spend(&runtime, &state, None);
     let cap = spend.cap.expect("park cap");
     assert_eq!(
-        fmt_spend(spend.spent_usd.unwrap_or(0.0), cap.cap_usd, cap.window),
+        cap.window
+            .fmt_spend(spend.spent_usd.unwrap_or(0.0), cap.cap_usd),
         "$4.50 of $4.00/day"
     );
 }

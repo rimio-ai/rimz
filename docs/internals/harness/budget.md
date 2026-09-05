@@ -32,7 +32,7 @@ Four scopes live in this module and are evaluated together on every producer tic
 
 Enforcement treats the scopes independently: the first cap crossed parks the agent. Display picks one, and agent beats turn beats fleet beats account, so a card names the tightest reason rather than the broadest.
 
-A cap parses as a [`BudgetSpec`](../../../crates/rimz/src/harness/budget.rs): a non-negative dollar amount with an optional `/day` suffix, accepting `5`, `$4.50`, and `20/day`. Bare amounts are `BudgetWindow::Session`; the suffix makes it `BudgetWindow::Day`, measured from local midnight in the configured `timezone`. `BudgetWindow::Turn` is internal to turn-park projection and the public parser rejects `/turn`. A leading `+` is rejected at parse time, because raising a cap is a CLI verb rather than a value.
+A cap parses as a [`BudgetSpec`](../../../crates/rimz/src/harness/budget.rs): a non-negative dollar amount with an optional `/day` suffix, accepting `5`, `$4.50`, and `20/day`. The window/scope/park record vocabulary lives in [`agents::state`](../../../crates/rimz/src/agents/state.rs); the budget engine stays in `harness::budget`. Bare amounts are `BudgetWindow::Session`; the suffix makes it `BudgetWindow::Day`, measured from local midnight in the configured `timezone`. `BudgetWindow::Turn` is internal to turn-park projection and the public parser rejects `/turn`. A leading `+` is rejected at parse time, because raising a cap is a CLI verb rather than a value.
 
 ## Where a cap comes from
 
@@ -134,7 +134,7 @@ The helper ([`budget_park.rs`](../../../crates/rimz/src/cli/agents_cmd/budget_pa
 
 Which agents a park may touch is one predicate, [`pause_applies`](../../../crates/rimz/src/harness/budget.rs): an agent that is `Running`, or one this park already interrupted and that is not `Waiting`. Agents at rest keep their lifecycle status, and a waiting agent keeps its ask visible until the answered turn runs again. A cap interrupts spending rather than conversation.
 
-`project_parks` then stamps the resulting `BudgetPark` onto each agent for the read side. That projection is what makes [`effective_status()`](../agents/model.md#displayed-status) report `Paused`, which is in turn what message delivery gates read ([messaging.md](./messaging.md#status-lifecycle)). `project_budget_views` fills the cockpit and provider-dashboard cap rows from the same ledgers.
+`project_parks` then stamps the resulting `agents::state::BudgetPark` onto each agent for the read side. That projection is what makes [`effective_status()`](../agents/model.md#displayed-status) report `Paused`, which is in turn what message delivery gates read ([messaging.md](./messaging.md#status-lifecycle)). `project_budget_views` fills the cockpit and provider-dashboard cap rows from the same ledgers.
 
 ## The fail-fast gate
 

@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::RuntimePaths;
-use crate::agents::{AgentState, AgentStatus};
+use crate::agents::{AgentState, AgentStatus, BudgetPark, BudgetScope, BudgetWindow};
 use crate::config::MachineConfig;
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
@@ -30,24 +30,6 @@ use crate::store::snapshot::SidebarSnapshot;
 pub use crate::harness::auto_continue::clear_budget_park;
 
 const INTERRUPT_RETRY_SECS: i64 = 120;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BudgetWindow {
-    Session,
-    Turn,
-    Day,
-}
-
-impl BudgetWindow {
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Session => "session",
-            Self::Turn => "turn",
-            Self::Day => "day",
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BudgetSpec {
@@ -123,52 +105,6 @@ pub struct DayBaseline {
 pub struct BudgetParkStamp {
     pub at_cost: f64,
     pub at: Timestamp,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BudgetScope {
-    #[default]
-    Agent,
-    Turn,
-    Fleet,
-    Account,
-}
-
-/// Read-side park projection carried in snapshots and agent inspection JSON.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct BudgetPark {
-    pub cap_usd: f64,
-    pub spend_usd: f64,
-    pub window: BudgetWindow,
-    pub at: Timestamp,
-    #[serde(default)]
-    pub scope: BudgetScope,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub account_kind: Option<AgentKind>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resets_at: Option<Timestamp>,
-}
-
-impl BudgetPark {
-    pub fn summary(&self) -> String {
-        fmt_spend(self.spend_usd, self.cap_usd, self.window)
-    }
-
-    pub fn label(&self) -> String {
-        let prefix = match self.scope {
-            BudgetScope::Agent => "budget".to_owned(),
-            BudgetScope::Turn => "turn budget".to_owned(),
-            BudgetScope::Fleet => "fleet budget".to_owned(),
-            BudgetScope::Account => format!(
-                "{} account budget",
-                self.account_kind
-                    .as_ref()
-                    .map_or("provider", AgentKind::as_str)
-            ),
-        };
-        format!("{prefix}: {}", self.summary())
-    }
 }
 
 /// One workspace-fleet or provider-login daily budget scope.
@@ -306,7 +242,7 @@ impl DailyBudgetScope {
     }
 
     fn exhausted_reason(&self, spend_usd: f64, cap_usd: f64) -> String {
-        let spend = fmt_spend(spend_usd, cap_usd, BudgetWindow::Day);
+        let spend = BudgetWindow::Day.fmt_spend(spend_usd, cap_usd);
         match self {
             Self::Fleet => {
                 format!("fleet budget exhausted ({spend}); use `rimz budget` to raise or clear it")
@@ -594,15 +530,6 @@ pub fn agent_budget_spend(
         }),
         spent_usd,
     }
-}
-
-fn fmt_spend(spend_usd: f64, cap_usd: f64, window: BudgetWindow) -> String {
-    let suffix = match window {
-        BudgetWindow::Session => "",
-        BudgetWindow::Turn => "/turn",
-        BudgetWindow::Day => "/day",
-    };
-    format!("${spend_usd:.2} of ${cap_usd:.2}{suffix}")
 }
 
 /// Pure budget decision plus day/waiver bookkeeping. The caller owns IO.

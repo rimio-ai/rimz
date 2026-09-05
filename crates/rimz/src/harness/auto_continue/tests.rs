@@ -342,12 +342,12 @@ fn only_day_budget_parks_arm_a_resume_deadline() {
     let (_dir, runtime) = temp_runtime();
     let path = park_path(&runtime);
     let mut budgeted = agent(1_000);
-    budgeted.budget_park = Some(crate::harness::budget::BudgetPark {
+    budgeted.budget_park = Some(crate::agents::BudgetPark {
         cap_usd: 5.0,
         spend_usd: 5.25,
-        window: crate::harness::budget::BudgetWindow::Day,
+        window: crate::agents::BudgetWindow::Day,
         at: ts(1_000),
-        scope: crate::harness::budget::BudgetScope::Agent,
+        scope: crate::agents::BudgetScope::Agent,
         account_kind: None,
         resets_at: Some(ts(5_000)),
     });
@@ -370,8 +370,8 @@ fn only_day_budget_parks_arm_a_resume_deadline() {
     }));
 
     remove_park(&path);
-    budgeted.budget_park = Some(crate::harness::budget::BudgetPark {
-        window: crate::harness::budget::BudgetWindow::Session,
+    budgeted.budget_park = Some(crate::agents::BudgetPark {
+        window: crate::agents::BudgetWindow::Session,
         resets_at: None,
         ..budgeted.budget_park.expect("day park")
     });

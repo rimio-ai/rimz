@@ -420,7 +420,7 @@ fn budget_report(
         cap: cap.map(|cap| cap.to_string()),
         spent_usd,
         parked: park.is_some(),
-        park: park.map(rimz::harness::budget::BudgetPark::label),
+        park: park.map(rimz::agents::BudgetPark::label),
     }
 }
 
