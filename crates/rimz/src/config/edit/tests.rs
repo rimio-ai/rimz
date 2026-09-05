@@ -219,6 +219,7 @@ fn validates_config_key_read_and_write_surfaces() {
         "agents.commands.vim",
         "agents.profiles.codex-slim.agent",
         "agents.profiles.codex-slim.description",
+        "agents.profiles.codex-slim.model-reminder",
         "agents.profiles.codex-slim.mode",
         "agents.profiles.codex-slim.model",
         "agents.profiles.codex-slim.effort",
@@ -226,6 +227,7 @@ fn validates_config_key_read_and_write_surfaces() {
         "agents.profiles.codex-slim.system-prompt-file",
         "subagents.profiles.codex-review.agent",
         "subagents.profiles.codex-review.description",
+        "subagents.profiles.codex-review.model-reminder",
         "subagents.profiles.codex-review.model",
         "loop.tasks.watch.agent",
         "loop.default-timeout",
@@ -354,6 +356,7 @@ fn dynamic_profile_and_team_field_lists_match_serialized_schema() {
         agent: "claude".to_owned(),
         description: Some("test".to_owned()),
         subagents: Some(vec!["explorer".to_owned()]),
+        model_reminder: Some(false),
         mode: Some(PermissionMode::Yolo),
         model: Some("model".to_owned()),
         effort: Some("high".to_owned()),
@@ -410,6 +413,41 @@ fn dynamic_profile_and_team_field_lists_match_serialized_schema() {
             .collect(),
         "TEAM_FIELDS drifted from Team serialization"
     );
+}
+
+#[test]
+fn set_profile_model_reminder_preserves_boolean_values_in_both_namespaces() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        dir.path().join("agents-home"),
+    ));
+    for namespace in ["agents", "subagents"] {
+        editor
+            .set(&format!("{namespace}.profiles.planner.agent"), "claude")
+            .expect("create profile");
+        let key = format!("{namespace}.profiles.planner.model-reminder");
+        assert!(matches!(
+            editor.get(Some(&key)),
+            Err(ConfigEditErr::UnsetKey { .. })
+        ));
+        for enabled in [false, true] {
+            editor
+                .set(&key, &enabled.to_string())
+                .expect("set model reminder");
+            assert_eq!(
+                editor.get(Some(&key)).expect("get model reminder"),
+                toml::Value::Boolean(enabled)
+            );
+        }
+        editor
+            .set(&key, "disabled")
+            .expect_err("model reminder must be boolean");
+        assert_eq!(
+            editor.get(Some(&key)).expect("unchanged model reminder"),
+            toml::Value::Boolean(true)
+        );
+    }
 }
 
 #[test]

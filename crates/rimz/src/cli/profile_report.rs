@@ -366,6 +366,7 @@ mod tests {
             agent: agent.to_owned(),
             description: None,
             subagents: None,
+            model_reminder: None,
             mode: None,
             model: None,
             effort: None,

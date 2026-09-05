@@ -8,6 +8,7 @@ pub mod budget;
 pub mod idle_compact;
 pub mod launch;
 mod launch_context;
+pub mod launch_reminders;
 pub mod orphan_sweep;
 pub mod parent_watch;
 pub mod petname;

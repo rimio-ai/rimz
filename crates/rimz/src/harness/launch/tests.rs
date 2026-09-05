@@ -1,4 +1,5 @@
 use super::*;
+use crate::harness::launch_reminders::{subagent_reminder, wrap};
 
 fn env(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
     entries
@@ -28,8 +29,8 @@ fn launch_environment_key_literals_are_stable() {
 
 #[test]
 fn subagent_reminder_has_structural_wrapper_lines() {
-    assert!(SUBAGENT_REMINDER.starts_with("<system_reminder>\n"));
-    assert!(SUBAGENT_REMINDER.ends_with("\n</system_reminder>"));
+    assert!(subagent_reminder().starts_with("<system_reminder>\n"));
+    assert!(subagent_reminder().ends_with("\n</system_reminder>"));
 }
 
 #[test]
@@ -210,7 +211,7 @@ fn process_compiler_locks_down_only_subagent_launches() {
                 "Read".to_owned(),
                 "Agent".to_owned(),
                 "--append-system-prompt".to_owned(),
-                SUBAGENT_REMINDER.to_owned(),
+                subagent_reminder(),
                 "--".to_owned(),
                 "inspect".to_owned(),
             ],
@@ -224,7 +225,7 @@ fn process_compiler_locks_down_only_subagent_launches() {
                 "-c".to_owned(),
                 format!(
                     "developer_instructions={}",
-                    toml::Value::String(SUBAGENT_REMINDER.to_owned())
+                    toml::Value::String(subagent_reminder())
                 ),
                 "--".to_owned(),
                 "inspect".to_owned(),
@@ -285,7 +286,7 @@ fn process_compiler_appends_subagent_reminder_for_native_adapters() {
             !ordinary
                 .provider_argv
                 .iter()
-                .any(|arg| arg == SUBAGENT_REMINDER),
+                .any(|arg| arg == &subagent_reminder()),
             "{kind}: {:?}",
             ordinary.provider_argv
         );
@@ -302,7 +303,7 @@ fn process_compiler_appends_subagent_reminder_for_native_adapters() {
             child
                 .provider_argv
                 .windows(2)
-                .any(|args| args == ["--append-system-prompt", SUBAGENT_REMINDER]),
+                .any(|args| args == ["--append-system-prompt", subagent_reminder().as_str()]),
             "{kind}: {:?}",
             child.provider_argv
         );
@@ -332,7 +333,7 @@ fn process_compiler_appends_subagent_reminder_for_native_adapters() {
     assert_eq!(occurrences.len(), 1);
     assert_eq!(
         parse_toml_string_or_raw(&occurrences[0].value),
-        SUBAGENT_REMINDER
+        subagent_reminder()
     );
 }
 
@@ -349,7 +350,7 @@ fn process_compiler_appends_available_catalog_only_to_peer_launches() {
             description: None,
         },
     ]);
-    let reminder = crate::harness::subagent_policy::reminder(&catalog);
+    let reminder = wrap(&crate::harness::subagent_policy::reminder(&catalog));
 
     for kind in ["claude", "codex"] {
         let invocation = request(
@@ -365,8 +366,10 @@ fn process_compiler_appends_available_catalog_only_to_peer_launches() {
             &invocation,
             project.path(),
             &BTreeMap::new(),
-            Some(&catalog),
-            None,
+            &LaunchReminders {
+                subagent_catalog: Some(catalog.clone()),
+                ..LaunchReminders::default()
+            },
         )
         .expect("peer process");
         if kind == "claude" {
@@ -407,15 +410,17 @@ fn process_compiler_appends_available_catalog_only_to_peer_launches() {
             &child,
             project.path(),
             &BTreeMap::new(),
-            Some(&catalog),
-            None,
+            &LaunchReminders {
+                subagent_catalog: Some(catalog.clone()),
+                ..LaunchReminders::default()
+            },
         )
         .expect("child process");
         assert!(
             child
                 .provider_argv
                 .iter()
-                .any(|arg| arg.contains(SUBAGENT_REMINDER))
+                .any(|arg| arg.contains(&subagent_reminder()))
         );
         assert!(
             !child
@@ -438,7 +443,7 @@ fn process_compiler_appends_team_context_for_native_adapters() {
         project.path(),
     )
     .expect("team context");
-    let reminder = crate::harness::launch_context::reminder(&context);
+    let reminder = wrap(&crate::harness::launch_context::reminder(&context));
 
     for kind in ["claude", "qwen", "droid"] {
         let invocation = team_request(kind);
@@ -448,8 +453,10 @@ fn process_compiler_appends_team_context_for_native_adapters() {
             &invocation,
             project.path(),
             &BTreeMap::new(),
-            None,
-            Some(&team),
+            &LaunchReminders {
+                team: Some(team.clone()),
+                ..LaunchReminders::default()
+            },
         )
         .expect("process");
         assert!(
@@ -468,8 +475,10 @@ fn process_compiler_appends_team_context_for_native_adapters() {
         &invocation,
         project.path(),
         &BTreeMap::new(),
-        None,
-        Some(&team),
+        &LaunchReminders {
+            team: Some(team.clone()),
+            ..LaunchReminders::default()
+        },
     )
     .expect("codex process");
     let occurrences = crate::agents::PresetArgMatcher::ConfigKey {
@@ -507,15 +516,20 @@ fn process_compiler_joins_catalog_and_team_context_in_one_occurrence() {
     let team_reminder = crate::harness::launch_context::reminder(&context);
 
     for kind in ["claude", "codex"] {
-        let invocation = team_request(kind);
+        let mut invocation = team_request(kind);
+        invocation.identity.params.model = Some("gpt-6-astra".to_owned());
+        invocation.identity.params.effort = Some("high".to_owned());
         let process = compile_agent_process_with_extra_env(
             project.path(),
             crate::config::RtkMode::Auto,
             &invocation,
             project.path(),
             &BTreeMap::new(),
-            Some(&catalog),
-            Some(&team),
+            &LaunchReminders {
+                subagent_catalog: Some(catalog.clone()),
+                team: Some(team.clone()),
+                ..LaunchReminders::default()
+            },
         )
         .expect("process");
         let channel = crate::agents::find_definition(kind)
@@ -528,11 +542,95 @@ fn process_compiler_joins_catalog_and_team_context_in_one_occurrence() {
             1,
             "{kind}: expected one appended system-text occurrence"
         );
+        assert_eq!(occurrences[0].value.matches("<system_reminder>").count(), 1);
         assert_eq!(
             parse_toml_string_or_raw(&occurrences[0].value),
-            format!("{catalog_reminder}\n\n{team_reminder}")
+            wrap(&format!(
+                "{team_reminder}\n\nYou run on GPT 6 Astra at high effort.\n\n{catalog_reminder}"
+            ))
         );
     }
+}
+
+#[test]
+fn process_compiler_appends_model_line_for_native_adapters() {
+    let project = tempfile::tempdir().expect("project");
+    for kind in ["claude", "codex"] {
+        for subagent in [false, true] {
+            for model in [false, true] {
+                let mut invocation = team_request(kind);
+                invocation.subagent = subagent;
+                invocation.identity.params.model = Some("gpt-6-astra".to_owned());
+                invocation.identity.params.effort = Some("high".to_owned());
+                let process = compile_agent_process_with_extra_env(
+                    project.path(),
+                    crate::config::RtkMode::Auto,
+                    &invocation,
+                    project.path(),
+                    &BTreeMap::new(),
+                    &LaunchReminders {
+                        model,
+                        team: Some(team()),
+                        subagent_catalog: Some(
+                            crate::harness::subagent_policy::SubagentCatalog::Disabled,
+                        ),
+                    },
+                )
+                .expect("process");
+                let channel = crate::agents::find_definition(kind)
+                    .and_then(|adapter| adapter.append_system_text_channel())
+                    .expect("system text channel");
+                let occurrences = crate::agents::PresetArgMatcher::from(&channel)
+                    .occurrences(&process.provider_argv);
+                assert_eq!(occurrences.len(), 1);
+                let text = parse_toml_string_or_raw(&occurrences[0].value);
+                assert_eq!(text.matches("<system_reminder>").count(), 1);
+                assert_eq!(text.matches("</system_reminder>").count(), 1);
+                assert_eq!(text.contains("GPT 6 Astra at high effort."), model);
+                assert_eq!(text.contains("You are a subagent:"), subagent);
+                assert_eq!(text.contains("in team `forge`"), !subagent);
+                assert_eq!(text.contains("Subagents are disabled"), !subagent);
+                if subagent && model {
+                    assert!(text.contains("You are @coder, running on GPT 6 Astra"));
+                    assert!(
+                        text.find("GPT 6 Astra").unwrap()
+                            < text.find("You are a subagent:").unwrap()
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn process_compiler_omits_disabled_model_when_nothing_else_applies() {
+    let project = tempfile::tempdir().expect("project");
+    let mut invocation = request(
+        "claude",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    invocation.identity.params.model = Some("fable".to_owned());
+    let process = compile_agent_process_with_extra_env(
+        project.path(),
+        crate::config::RtkMode::Auto,
+        &invocation,
+        project.path(),
+        &BTreeMap::new(),
+        &LaunchReminders {
+            model: false,
+            ..LaunchReminders::default()
+        },
+    )
+    .expect("process");
+    assert!(
+        !process
+            .provider_argv
+            .iter()
+            .any(|arg| arg.contains("system_reminder"))
+    );
 }
 
 #[test]
@@ -547,15 +645,17 @@ fn process_compiler_omits_team_context_for_unsupported_adapter() {
         project.path(),
     )
     .expect("team context");
-    let reminder = crate::harness::launch_context::reminder(&context);
+    let reminder = wrap(&crate::harness::launch_context::reminder(&context));
     let process = compile_agent_process_with_extra_env(
         project.path(),
         crate::config::RtkMode::Auto,
         &invocation,
         project.path(),
         &BTreeMap::new(),
-        None,
-        Some(&team),
+        &LaunchReminders {
+            team: Some(team.clone()),
+            ..LaunchReminders::default()
+        },
     )
     .expect("pi process");
     assert!(
@@ -592,7 +692,7 @@ fn process_compiler_merges_subagent_reminder_into_existing_append_flag() {
     assert_eq!(occurrences.len(), 1, "{:?}", child.provider_argv);
     assert_eq!(
         occurrences[0].value,
-        format!("existing guidance\n\n{SUBAGENT_REMINDER}")
+        format!("existing guidance\n\n{}", subagent_reminder())
     );
 }
 
@@ -642,7 +742,7 @@ fn process_compiler_merges_codex_reminder_by_config_key() {
         assert_eq!(occurrences.len(), 1);
         assert_eq!(
             parse_toml_string_or_raw(&occurrences[0].value),
-            format!("existing\n\n{SUBAGENT_REMINDER}")
+            format!("existing\n\n{}", subagent_reminder())
         );
         assert!(
             child
@@ -1084,7 +1184,7 @@ fn provider_account_stage_validates_and_reenters_once() {
             project.path(),
             Path::new("/bin/rimz"),
             &BTreeMap::new(),
-            (None, None),
+            &LaunchReminders::default(),
         )
         .expect_err("binding scope");
         assert_eq!(
@@ -1110,7 +1210,7 @@ fn provider_account_stage_validates_and_reenters_once() {
         project.path(),
         Path::new("/bin/rimz"),
         &BTreeMap::new(),
-        (None, None),
+        &LaunchReminders::default(),
     )
     .expect("pending stage");
     let AgentProcessStage::LoginShellReentry { argv, .. } = stage else {
@@ -1133,7 +1233,7 @@ fn provider_account_stage_validates_and_reenters_once() {
         project.path(),
         Path::new("/bin/rimz"),
         &BTreeMap::new(),
-        (None, None),
+        &LaunchReminders::default(),
     )
     .expect_err("unresolved account mismatches");
     assert!(err.is_finalized_provider_mismatch());
@@ -1160,7 +1260,7 @@ fn provider_account_stage_validates_and_reenters_once() {
         project.path(),
         Path::new("/bin/rimz"),
         &BTreeMap::new(),
-        (None, None),
+        &LaunchReminders::default(),
     )
     .expect("ordinary stage") else {
         panic!("unbound launch is ready");
