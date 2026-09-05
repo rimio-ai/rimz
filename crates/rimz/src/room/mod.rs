@@ -293,9 +293,9 @@ impl RoomContext {
             .and_then(|(cols, _)| NonZeroU16::new(cols))
         {
             Some(view_cols) => {
-                crate::sidebar::width_target::adopt(&self.runtime, self.width, view_cols)
+                crate::mux::width_target::adopt(&self.runtime, self.width, view_cols)
             }
-            None => crate::sidebar::width_target::resolve(&self.runtime, self.width, None),
+            None => crate::mux::width_target::resolve(&self.runtime, self.width, None),
         };
         SidebarPaneOptions {
             session_name: self.workspace.session_name.clone(),

@@ -616,7 +616,7 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
     liveness.topology_floor_ms = topology_floor_ms;
 
     let width = SidebarWidth::from_config(&machine_config.theme);
-    let target = crate::sidebar::width_target::resolve(runtime, width, None);
+    let target = crate::mux::width_target::resolve(runtime, width, None);
     let opts = SidebarPaneOptions {
         session_name: ws.session_name.clone(),
         workspace_id: ws.workspace_id.clone(),

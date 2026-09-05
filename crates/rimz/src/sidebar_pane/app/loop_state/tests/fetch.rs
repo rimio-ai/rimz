@@ -258,7 +258,7 @@ fn focus_resume_flushes_pending_metrics_fetch() {
 #[test]
 fn width_target_event_reloads_the_target_without_a_producer_fetch() {
     let mut rig = Rig::new();
-    crate::sidebar::width_target::pin(
+    crate::mux::width_target::pin(
         &rig.runtime,
         std::num::NonZeroU16::new(90).expect("nonzero width"),
         200,

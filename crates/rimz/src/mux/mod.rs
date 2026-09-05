@@ -17,6 +17,7 @@ pub mod recovery;
 mod selection;
 pub mod tmux;
 pub(crate) mod width;
+pub(crate) mod width_target;
 pub mod zellij;
 
 pub use capabilities::{drops_desktop_osc, lists_full_cmdline, view_kind, wraps_osc_passthrough};
