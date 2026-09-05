@@ -168,20 +168,58 @@ fn record_mapped_lifecycle_observation(
         }
     };
     log_lifecycle_receipt(agent.spec().kind, &observation, &receipt);
+    let team_state = (|| -> anyhow::Result<_> {
+        let audit = store.runtime_projection(rimz::store::runtime::RuntimeScope::Audit)?;
+        let pending = store.list_pending_messages()?;
+        Ok((audit, pending))
+    })()
+    .inspect_err(|err| {
+        warn!(error = %err, "lifecycle: failed to read team signal state");
+    })
+    .ok();
     for event in &receipt.events {
-        let Some(signal) = rimz::harness::schedule::signal::lifecycle_signal(event) else {
-            continue;
-        };
-        if let Err(err) = rimz::harness::schedule::signal::fire_signal(
-            store.runtime_paths(),
-            Some(&workspace.project_root),
-            &signal,
-        ) {
-            warn!(
-                signal = %signal.name,
-                error = %err,
-                "lifecycle: failed to fire matching loop tasks",
-            );
+        let mut signals: Vec<_> = rimz::harness::schedule::signal::lifecycle_signal(event)
+            .into_iter()
+            .collect();
+        if let Some((audit, pending)) = &team_state
+            && let Some(member) = audit
+                .agents
+                .iter()
+                .find(|member| member.kind == event.kind && member.agent_id == event.agent_id)
+            && member.team.is_some()
+        {
+            let cohorts = rimz::harness::target::team_cohorts(&audit.agents);
+            let channel = rimz::harness::target::agent_channel(member)
+                .unwrap_or_else(|| "external".to_owned());
+            let live = cohorts
+                .iter()
+                .find(|cohort| {
+                    Some(cohort.team) == member.team.as_deref() && cohort.channel == channel
+                })
+                .map_or(&[][..], |cohort| cohort.members.as_slice());
+            for signal in rimz::harness::schedule::signal::team_lifecycle_signals(
+                event, member, live, pending,
+            ) {
+                match store.append_signal(&workspace.session_name, &signal) {
+                    Ok(_) => signals.push(signal),
+                    Err(err) => {
+                        warn!(signal = %signal.name, error = %err, "lifecycle: failed to append team signal")
+                    }
+                }
+            }
+        }
+        for signal in signals {
+            if let Err(err) = rimz::harness::schedule::signal::fire_signal(
+                store.runtime_paths(),
+                Some(&workspace.project_root),
+                &signal,
+            ) {
+                warn!(
+                    signal = %signal.name,
+                    error = %err,
+                    "lifecycle: failed to fire matching loop tasks",
+                );
+            }
         }
     }
     RecordedLifecycle {

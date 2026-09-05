@@ -1,5 +1,8 @@
 //! Signal vocabulary shared by event ingress, lifecycle hooks, and loop firing.
 
+mod team;
+pub use team::team_lifecycle_signals;
+
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, Write};
@@ -217,7 +220,10 @@ pub fn match_value(value: &Value) -> String {
 }
 
 pub fn lifecycle_signal(event: &crate::agents::LifecycleEvent) -> Option<Signal> {
-    if matches!(
+    if !matches!(
+        event.signal,
+        crate::agents::LifecycleSignal::Ended | crate::agents::LifecycleSignal::Lost
+    ) && matches!(
         event.transition,
         crate::agents::LifecycleTransition::Ignored { .. }
     ) {
@@ -546,6 +552,13 @@ mod tests {
             reason: "duplicate".to_owned(),
         };
         assert_eq!(lifecycle_signal(&ignored), None);
+        for terminal in [LifecycleSignal::Ended, LifecycleSignal::Lost] {
+            ignored.signal = terminal;
+            assert_eq!(
+                lifecycle_signal(&ignored).unwrap().name.as_str(),
+                "agent.ended"
+            );
+        }
         assert_eq!(
             lifecycle_signal(&lifecycle_event(LifecycleSignal::TurnStarted)),
             None
