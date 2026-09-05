@@ -1481,10 +1481,10 @@ exit 0
         .expect("focus dispatch");
     assert!(request < switch && switch < dispatch, "{log}");
 
-    let anchor = crate::sidebar::focus_anchor::load(&room.runtime).expect("focus anchor");
+    let anchor = crate::mux::focus_anchor::load(&room.runtime).expect("focus anchor");
     assert_eq!(
         anchor.state,
-        crate::sidebar::focus_anchor::FocusIntentState::Applied
+        crate::mux::focus_anchor::FocusIntentState::Applied
     );
     assert_eq!(anchor.pane_id, pane);
 }

@@ -9,6 +9,7 @@ pub mod binaries;
 mod capabilities;
 mod command;
 pub mod domain;
+pub mod focus_anchor;
 mod focus_key;
 mod mount_proof;
 mod reconcile;

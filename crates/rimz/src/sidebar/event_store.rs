@@ -261,7 +261,7 @@ mod tests {
         store.append(
             SidebarEvent::FocusIntent {
                 pane_id: pane("terminal_2"),
-                nonce: crate::sidebar::focus_anchor::FocusNonce::new(),
+                nonce: crate::mux::focus_anchor::FocusNonce::new(),
             },
             13,
             103,

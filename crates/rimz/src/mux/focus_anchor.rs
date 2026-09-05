@@ -15,7 +15,12 @@ use uuid::Uuid;
 use crate::disk::{atomic, paths::RuntimePaths};
 use crate::ids::PaneId;
 use crate::mux::{ClientFocusOptions, ClientPaneView, MuxBackend};
-use crate::sidebar::timing::FOCUS_ANCHOR_FRESH;
+
+/// How long a jump scroll anchor stays applicable. Long enough for the
+/// destination tab to refold and adopt the focus after the jump's nudge. This
+/// also bounds how long an unconfirmed jump intent outranks observed focus; an
+/// older anchor is a stale jump and is ignored.
+pub(crate) const FOCUS_ANCHOR_FRESH: Duration = Duration::from_millis(2500);
 
 const FOCUS_ANCHOR_VERSION: &str = "rimz.focus-anchor.v3";
 

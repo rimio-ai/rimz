@@ -70,7 +70,7 @@ pub enum SidebarEvent {
     /// before the mux switch reveals the destination.
     FocusIntent {
         pane_id: PaneId,
-        nonce: crate::sidebar::focus_anchor::FocusNonce,
+        nonce: crate::mux::focus_anchor::FocusNonce,
     },
     CommandChanged {
         pane_id: PaneId,
@@ -185,7 +185,7 @@ mod tests {
             },
             SidebarEvent::FocusIntent {
                 pane_id: pane("terminal_2"),
-                nonce: crate::sidebar::focus_anchor::FocusNonce::new(),
+                nonce: crate::mux::focus_anchor::FocusNonce::new(),
             },
             SidebarEvent::FocusChanged {
                 focused: vec![pane("terminal_1")],

@@ -7,9 +7,9 @@
 
 use std::collections::HashSet;
 
+use crate::mux::focus_anchor::{FocusAnchor, FocusObservation, FocusPresentation};
 use crate::sidebar::event_store::EventStore;
 use crate::sidebar::events::SidebarEvent;
-use crate::sidebar::focus_anchor::{FocusAnchor, FocusObservation, FocusPresentation};
 use crate::store::snapshot::SidebarSnapshot;
 
 pub fn fuse(
@@ -114,7 +114,7 @@ pub(crate) fn focus_intent_confirmed_from(
     intent: &FocusAnchor,
     now_ms: u64,
 ) -> bool {
-    if intent.state != crate::sidebar::focus_anchor::FocusIntentState::Applied {
+    if intent.state != crate::mux::focus_anchor::FocusIntentState::Applied {
         return false;
     }
     let pulled_confirms = pulled
@@ -255,14 +255,14 @@ mod tests {
 
     fn anchor(pane_id: PaneId, stamp_ms: u64) -> FocusAnchor {
         FocusAnchor {
-            nonce: crate::sidebar::focus_anchor::FocusNonce::new(),
+            nonce: crate::mux::focus_anchor::FocusNonce::new(),
             session_name: "rimz-test".to_owned(),
             pane_id,
-            origin: crate::sidebar::focus_anchor::FocusOrigin::User,
+            origin: crate::mux::focus_anchor::FocusOrigin::User,
             repair_generation: None,
             issued_at_ms: stamp_ms,
             applied_at_ms: Some(stamp_ms),
-            state: crate::sidebar::focus_anchor::FocusIntentState::Applied,
+            state: crate::mux::focus_anchor::FocusIntentState::Applied,
             pre_action: Vec::new(),
             offset: 0,
             order: None,

@@ -12,7 +12,7 @@ use std::rc::Rc;
 use super::theme::Theme;
 use super::{CostRolls, FrameInteractions, ScrollbarFade, TallyAnim};
 
-pub(crate) use crate::sidebar::focus_anchor::{FrozenOrder, FrozenRow};
+pub(crate) use crate::mux::focus_anchor::{FrozenOrder, FrozenRow};
 
 #[derive(Clone, Debug, Default)]
 pub struct UiState {

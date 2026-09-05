@@ -165,12 +165,12 @@ impl ZellijBackend {
         if let Some(workspace_id) = workspace_id
             && let Ok(runtime) = self.runtime_paths_for_workspace(workspace_id)
         {
-            let _ = crate::sidebar::focus_anchor::execute_action(
+            let _ = crate::mux::focus_anchor::execute_action(
                 self,
                 &runtime,
                 session_name,
                 target_pane.clone(),
-                crate::sidebar::focus_anchor::FocusOrigin::User,
+                crate::mux::focus_anchor::FocusOrigin::User,
                 None,
                 Default::default(),
             );
@@ -1525,14 +1525,14 @@ fn execute_focus_restoration(
     session_name: &str,
     pane: &PaneId,
     tab_position: u64,
-) -> std::result::Result<(), crate::sidebar::focus_anchor::FocusActionError> {
-    let nonce = crate::sidebar::focus_anchor::request_action(
+) -> std::result::Result<(), crate::mux::focus_anchor::FocusActionError> {
+    let nonce = crate::mux::focus_anchor::request_action(
         backend,
         runtime,
         session_name,
-        crate::sidebar::focus_anchor::FocusActionRequest {
+        crate::mux::focus_anchor::FocusActionRequest {
             pane_id: pane.clone(),
-            origin: crate::sidebar::focus_anchor::FocusOrigin::User,
+            origin: crate::mux::focus_anchor::FocusOrigin::User,
             repair_generation: None,
             expected_pre_action: None,
             offset: 0,
@@ -1540,24 +1540,24 @@ fn execute_focus_restoration(
         },
     )?;
     let _ = backend.go_to_tab_position(session_name, tab_position);
-    if crate::sidebar::focus_anchor::dispatch_action(
+    if crate::mux::focus_anchor::dispatch_action(
         backend,
         runtime,
         session_name,
         pane,
         nonce,
-        crate::sidebar::focus_anchor::FocusDispatchRetries {
+        crate::mux::focus_anchor::FocusDispatchRetries {
             attempts: super::FOCUS_RESTORE_ATTEMPTS,
             delay: super::FOCUS_RESTORE_RETRY_DELAY,
         },
     )? {
         Ok(())
     } else {
-        Err(crate::sidebar::focus_anchor::FocusActionError::Superseded)
+        Err(crate::mux::focus_anchor::FocusActionError::Superseded)
     }
 }
 
-fn focus_action_error(error: crate::sidebar::focus_anchor::FocusActionError) -> MuxErr {
+fn focus_action_error(error: crate::mux::focus_anchor::FocusActionError) -> MuxErr {
     MuxErr::Output {
         program: "zellij".to_owned(),
         reason: error.to_string(),
