@@ -574,15 +574,7 @@ fn focus(
         .map(|record| record.workspace_id)
         .ok_or_else(|| anyhow::anyhow!("pane focus requires a managed RimZ room session"))?;
     let runtime = rimz::RuntimePaths::for_workspace(workspace_id)?;
-    rimz::mux::focus_anchor::execute_action(
-        backend,
-        &runtime,
-        session_name,
-        pane.clone(),
-        rimz::mux::focus_anchor::FocusOrigin::User,
-        None,
-        Default::default(),
-    )?;
+    rimz::mux::focus_anchor::execute_action(backend, &runtime, session_name, pane.clone())?;
     Ok(())
 }
 
@@ -645,9 +637,6 @@ fn zoom(
             &runtime,
             &session_name,
             sibling.pane_id.clone(),
-            rimz::mux::focus_anchor::FocusOrigin::User,
-            None,
-            Default::default(),
         )
         .context("focusing working pane before zoom")?;
         &sibling.pane_id

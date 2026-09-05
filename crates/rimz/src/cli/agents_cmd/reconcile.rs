@@ -38,9 +38,6 @@ pub(super) fn reconcile_cohort_launch(
                     &runtime,
                     &workspace.session_name,
                     pane_id,
-                    rimz::mux::focus_anchor::FocusOrigin::User,
-                    None,
-                    Default::default(),
                 )?;
                 writeln!(
                     std::io::stderr().lock(),

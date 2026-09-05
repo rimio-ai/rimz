@@ -1245,16 +1245,8 @@ fn focus(globals: &GlobalFlags, session_name: Option<String>, toggle: bool) -> R
         let workspace = rimz::room::session::workspace_record_for_session(&session_name)?
             .ok_or_else(|| anyhow::anyhow!("session {session_name} is not a managed RimZ room"))?;
         let runtime = RuntimePaths::for_workspace(workspace.workspace_id)?;
-        rimz::mux::focus_anchor::execute_action(
-            backend.as_ref(),
-            &runtime,
-            &session_name,
-            target,
-            rimz::mux::focus_anchor::FocusOrigin::User,
-            None,
-            Default::default(),
-        )
-        .context("focusing pane")?;
+        rimz::mux::focus_anchor::execute_action(backend.as_ref(), &runtime, &session_name, target)
+            .context("focusing pane")?;
     }
     Ok(())
 }

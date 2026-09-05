@@ -101,9 +101,6 @@ pub(super) fn resume_lane(
                 &runtime,
                 &workspace.session_name,
                 pane_id,
-                rimz::mux::focus_anchor::FocusOrigin::User,
-                None,
-                Default::default(),
             )?;
             writeln!(
                 std::io::stdout().lock(),

@@ -29,14 +29,8 @@ const FOCUS_ANCHOR_VERSION: &str = "rimz.focus-anchor.v3";
 pub struct FocusNonce(Uuid);
 
 impl FocusNonce {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self(Uuid::now_v7())
-    }
-}
-
-impl Default for FocusNonce {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -48,7 +42,7 @@ impl std::fmt::Display for FocusNonce {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum FocusOrigin {
+pub(crate) enum FocusOrigin {
     User,
     AutomaticRepair,
 }
@@ -65,7 +59,7 @@ pub struct FocusAnchor {
     pub nonce: FocusNonce,
     pub session_name: String,
     pub pane_id: PaneId,
-    pub origin: FocusOrigin,
+    pub(crate) origin: FocusOrigin,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repair_generation: Option<u64>,
     pub issued_at_ms: u64,
@@ -76,7 +70,7 @@ pub struct FocusAnchor {
     pub pre_action: Vec<ClientPaneView>,
     pub offset: usize,
     #[serde(default)]
-    pub order: Option<FrozenOrder>,
+    pub(crate) order: Option<FrozenOrder>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,7 +108,7 @@ impl FocusObservation {
     }
 }
 
-pub struct FocusActionRequest<'a> {
+pub(crate) struct FocusActionRequest<'a> {
     pub pane_id: PaneId,
     pub origin: FocusOrigin,
     pub repair_generation: Option<u64>,
@@ -124,7 +118,7 @@ pub struct FocusActionRequest<'a> {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct FocusDispatchRetries {
+pub(crate) struct FocusDispatchRetries {
     pub attempts: u32,
     pub delay: Duration,
 }
@@ -139,7 +133,7 @@ impl Default for FocusDispatchRetries {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FocusObservationOutcome {
+pub(crate) enum FocusObservationOutcome {
     Present,
     Fence,
     Confirmed,
@@ -169,20 +163,20 @@ pub enum FocusActionError {
 /// ids the renderer painted, so a peer renderer can keep cap exemptions stable
 /// while it adopts a shared hold.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FrozenOrder {
+pub(crate) struct FrozenOrder {
     pub(crate) groups: Vec<String>,
     pub(crate) rows: Vec<FrozenRow>,
     pub(crate) visible: HashSet<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FrozenRow {
+pub(crate) struct FrozenRow {
     pub(crate) id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) pane: Option<String>,
 }
 
-pub fn store(runtime: &RuntimePaths, anchor: &FocusAnchor) -> atomic::Result<()> {
+pub(crate) fn store(runtime: &RuntimePaths, anchor: &FocusAnchor) -> atomic::Result<()> {
     let path = runtime.focus_anchor_path();
     let file = FocusAnchorFile {
         v: FOCUS_ANCHOR_VERSION.to_owned(),
@@ -219,11 +213,11 @@ pub fn load(runtime: &RuntimePaths) -> Option<FocusAnchor> {
     Some(file.anchor)
 }
 
-pub fn is_fresh(stamp_ms: u64, now_ms: u64) -> bool {
+pub(crate) fn is_fresh(stamp_ms: u64, now_ms: u64) -> bool {
     now_ms.saturating_sub(stamp_ms) <= FOCUS_ANCHOR_FRESH.as_millis() as u64
 }
 
-pub fn request_action(
+pub(crate) fn request_action(
     backend: &dyn MuxBackend,
     runtime: &RuntimePaths,
     session_name: &str,
@@ -294,7 +288,7 @@ fn request_action_with_client_sample(
     Ok(nonce)
 }
 
-pub fn dispatch_action(
+pub(crate) fn dispatch_action(
     backend: &dyn MuxBackend,
     runtime: &RuntimePaths,
     session_name: &str,
@@ -340,25 +334,29 @@ pub fn execute_action(
     runtime: &RuntimePaths,
     session_name: &str,
     pane_id: PaneId,
-    origin: FocusOrigin,
-    expected_pre_action: Option<&[ClientPaneView]>,
-    retries: FocusDispatchRetries,
-) -> Result<FocusNonce, FocusActionError> {
+) -> Result<(), FocusActionError> {
     let nonce = request_action(
         backend,
         runtime,
         session_name,
         FocusActionRequest {
             pane_id: pane_id.clone(),
-            origin,
+            origin: FocusOrigin::User,
             repair_generation: None,
-            expected_pre_action,
+            expected_pre_action: None,
             offset: 0,
             order: None,
         },
     )?;
-    if dispatch_action(backend, runtime, session_name, &pane_id, nonce, retries)? {
-        Ok(nonce)
+    if dispatch_action(
+        backend,
+        runtime,
+        session_name,
+        &pane_id,
+        nonce,
+        FocusDispatchRetries::default(),
+    )? {
+        Ok(())
     } else {
         Err(FocusActionError::Superseded)
     }
@@ -432,7 +430,7 @@ fn observation_outcome(
     observation_outcome_from(anchor, &FocusObservation::from_snapshot(snapshot), now_ms)
 }
 
-pub fn clear_matching(runtime: &RuntimePaths, nonce: FocusNonce) -> bool {
+pub(crate) fn clear_matching(runtime: &RuntimePaths, nonce: FocusNonce) -> bool {
     let Ok(_guard) = crate::disk::lock::WorkspaceLock::acquire(&runtime.focus_anchor_lock()) else {
         return false;
     };
