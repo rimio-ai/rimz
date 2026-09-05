@@ -27,7 +27,7 @@ Ordered. A seam pass at the head is proposed before any module pass. Status is `
 | 3 | `mux` ↔ `sidebar` and `daemon_view` ↔ `mux` cycles | cycles mux ↔ sidebar 27/42 cross-layer; daemon_view ↔ mux 10/3 same layer; mux admits sidebar 27 sites | `daemon_view` ↔ `mux` landed pass-3; `mux` ↔ `sidebar` landed pass-4 |
 | 4 | Homes for `store::workspace_record` (→ `workspace`) and `store::snapshot::compose_channel` (`transcript`, `harness::target` callers); the only upward L2 → store sites after pass 1 | pass-1 re-layer admissions: `workspace` 3 sites, `transcript` 1, `pane` 1 | landed pass-3 |
 | 5 | `agents` → `mux` (`NamedKey`, `CommandSpec`), `daemon_view` (markers), `diag::rotating`, `observability`: adapter-side reach into peers exposed by the re-layer | pass-1 re-layer admissions: `mux` 6 sites, `daemon_view` 3, `diag::rotating` 3; no current `observability` site | landed pass-3 |
-| 6 | `wakeup` below `store`: the wire sits in the `mux` layer, so the store reaches up to send | pass-4 leftovers: `store` → `wakeup` 2 production sites (`store/writer/publish.rs:179`, `store/gc/collect.rs:12`); the wire holds the two references that keep it there, `mux::ClientPaneView` (`wakeup/events.rs:66`) and `mux::focus_anchor::FocusNonce` (`wakeup/events.rs:73`) | queued |
+| 6 | `wakeup` below `store`: the wire sits in the `mux` layer, so the store reaches up to send | pass-4 leftovers: `store` → `wakeup` 2 production sites (`store/writer/publish.rs:179`, `store/gc/collect.rs:12`); the wire holds the two references that keep it there, `mux::ClientPaneView` (`wakeup/events.rs:66`) and `mux::focus_anchor::FocusNonce` (`wakeup/events.rs:73`) | landed pass-5 |
 
 ### Pass 2 family verdicts
 
@@ -50,6 +50,16 @@ Site counts on the pass-4 rows below are taken at the pass base `8a4ca7bcd`, not
 
 Ordered teardown is room-owned, not deferred. `teardown_room` and `TeardownReport` move whole to `room/teardown.rs`, keeping the four steps in their original order: kill the session, purge the resurrection cache, `sidebar::sweep_orphan_runtime`, then `mux::recovery::sweep_orphan_processes` (`crates/rimz/src/room/teardown.rs:35-41`). The alternative the pass-3 planning left open, hoisting the runtime sweep out and leaving the function in `mux`, is rejected: the hoist runs the runtime sweep after the process sweep, and the process sweep kills leaked sidebar daemons (`mux/recovery.rs:131`), which moves the heartbeat and socket mtimes `sweep_orphan_runtime` decides on (`sidebar/mod.rs:387-405`). `mux/recovery.rs` keeps the guarded process sweep alone.
 
+Superseded in part by the [pass 5 target](#pass-5-target): `wakeup` drops from beside `mux` above `store` to L2 below it. The rest of this direction stands.
+
+### Pass 5 target
+
+The direction the pass writes into `crates/rimz/src/mux/AGENTS.md` and `crates/rimz/src/store/AGENTS.md`: the wire is the leaf `wakeup` module below `store` at L2, and every sender (the store's write tail, `mux`, `remote_control`, the sidebar graph and its renderer, the CLI) reaches down to it, none reaching another module through it. The identifiers that cross the wire move to the modules that own identity: `MuxClientId` and `FocusNonce` to `ids` (`ids.rs:68`, `ids.rs:729`; the nonce stays a transparent `Uuid`, so the `FocusIntent` datagram and the `rimz.focus-anchor.v3` file are byte-identical), `ClientPaneView` to `pane` (`pane.rs:21`).
+
+The rest of the pass sends vocabulary to the module that owns it. Shell selection (`user_shell`, `user_shell_program`, `shell_pane_name`, and the private probe helpers) is a process fact and lives in `proc` (`proc/mod.rs:85-101`); the room identity pin `ENV_CHANNEL`/`ENV_WORKTREE_PATH` and its argv rendering (`channel_shell_argv`, `channel_label_shell_argv`) join `ENV_WORKSPACE_ID`/`ENV_PROJECT_ROOT` in `workspace` (`workspace.rs:56-100`). `harness::launch` keeps agent-scope identity, argv compilation, the login-shell wrapper, and preflight. The persisted record's vocabulary is `agents`: `BudgetWindow`, `BudgetScope`, `BudgetPark` in `agents/state.rs:38-75`, `AgentState::channel()` in place of `harness::target::agent_channel` (`agents/state.rs:855`), and `LifecycleSignal::terminal_disposition` returning `TerminalDisposition` (`agents/lifecycle.rs:195-206`) in place of `harness::run::terminal_status_for_signal`. `harness` keeps the policy over that record: `BudgetSpec`/`BudgetParseError` parsing, ledgers and park constructors, `RunStatus` and the fold that maps a disposition onto it, and the verdicted `agent_handle`.
+
+Pass 5 measures against `f43250479`. Admission rows retain their baseline counts and state changes in their reasons; the pass-log row records the measured deltas from `cargo xtask atlas diff --expect`.
+
 ## Module verdicts
 
 One row per module reviewed, at the granularity `survey` ranks. `holds` names the SHA reviewed and the scoped-commit count that reopens it (`git log --oneline <sha>.. -- <path> | wc -l`). `landed` points at the pass row. `candidate` is a survey pick not yet reviewed, with the signal that made it one.
@@ -57,14 +67,17 @@ One row per module reviewed, at the granularity `survey` ranks. `holds` names th
 | module | status | sha | reopen at | note |
 | --- | --- | --- | --- | --- |
 | `store` | landed pass-1 | — | — | seam reviewed; module interior remains a candidate |
-| `agents` | landed pass-1 | — | — | seam reviewed; module interior remains a candidate |
+| `agents` | landed pass-1; pass-5 | — | — | seam reviewed; module interior remains a candidate. Pass 5: it owns the persisted record's budget vocabulary, `AgentState::channel()`, and `TerminalDisposition` |
 | `agents/adapters` | landed pass-2 | — | — | sibling seam reviewed; provider interiors remain separate module candidates |
 | `daemon_view` | landed pass-3 | — | — | seam reviewed; interior remains a candidate |
-| `pane` | landed pass-3 | — | — | seam reviewed; interior remains a candidate |
-| `workspace` | landed pass-3 | — | — | seam reviewed; interior remains a candidate |
-| `mux` | landed pass-4 | — | — | seam reviewed; it now owns the focus anchor, the room width target, and the Zellij topology/presence-desired caches; interior remains a candidate |
+| `pane` | landed pass-3; pass-5 | — | — | seam reviewed; interior remains a candidate. Pass 5: it gains `ClientPaneView` (`pane.rs:21`) |
+| `workspace` | landed pass-3; pass-5 | — | — | seam reviewed; interior remains a candidate. Pass 5: it gains the channel and worktree env keys and the channel shell argv (`workspace.rs:56-100`) |
+| `mux` | landed pass-4; pass-5 | — | — | seam reviewed; it now owns the focus anchor, the room width target, and the Zellij topology/presence-desired caches; interior remains a candidate. Pass 5: it imports no `harness` item |
 | `sidebar` | landed pass-4 | — | — | seam reviewed; it keeps producer election, fusion, refresh lanes, and its own cadences; interior remains a candidate |
-| `wakeup` | landed pass-4 | — | — | new module: the wire lifted out of `sidebar` (heartbeat record, event vocabulary, datagram send) |
+| `wakeup` | landed pass-5 | — | — | new module in pass 4: the wire lifted out of `sidebar` (heartbeat record, event vocabulary, datagram send). Pass 5 re-layers it to L2, a leaf below `store` |
+| `ids` | landed pass-5 | — | — | seam reviewed: it owns shared identifiers, gaining `MuxClientId` and `FocusNonce`; interior remains a candidate |
+| `proc` | landed pass-5 | — | — | seam reviewed: it owns process and environment facts including shell selection; interior remains a candidate |
+| `harness` | landed pass-5 | — | — | seam reviewed: policy over the agent record (budget parsing, ledgers, `RunStatus`, `agent_handle`), with record vocabulary in `agents`; interior remains a candidate, and `harness/schedule` keeps its own row |
 | `agents/adapters/codex` | candidate | — | — | survey rank 3; app-server, broker, rollout, and install interiors unreviewed |
 | `agents/adapters/claude` | candidate | — | — | survey rank 6; remote-control and install interiors unreviewed |
 | `config` | candidate | — | — | esc 182, depth 35.9, churn 8.9%; 38 admitted upward sites |
@@ -99,9 +112,9 @@ One row per upward dependency edge reviewed. `keep` means the edge is the intend
 | `message` → `child_process` | 2 | closed | re-layer: `child_process` is a process-lifecycle module and sits at L2 (pass 3) |
 | `diag` → `child_process` | 2 | closed | re-layer: `child_process` is a process-lifecycle module and sits at L2 (pass 3) |
 | `daemon_view` → `remote_control` | 4 | closed | re-layer: `daemon_view` sits at L6, same layer (pass 3) |
-| `agents` → `harness::target` | 2 | keep | `agent_handle` is the canonical address; `agent_channel` becomes `AgentState::channel()` in a later pass |
-| `agents` → `harness::budget` | 1 | close | later pass: `BudgetPark`/`BudgetScope`/`BudgetWindow` are `AgentState` record vocabulary |
-| `agents` → `harness::run` | 1 | close | later pass: a `LifecycleSignal` terminal disposition in `agents::lifecycle`, mapped to `RunStatus` in harness |
+| `agents` → `harness::target` | 2 | keep | `agent_handle` is the canonical address; `agent_channel` becomes `AgentState::channel()` in a later pass. Pass 5 folded it in (`agents/state.rs:855`) and deleted `agent_channel`, leaving the one verdicted `agent_handle` site |
+| `agents` → `harness::budget` | 1 | closed | later pass: `BudgetPark`/`BudgetScope`/`BudgetWindow` are `AgentState` record vocabulary. Closed pass 5: the trio is defined in `agents/state.rs:38-75` |
+| `agents` → `harness::run` | 1 | closed | later pass: a `LifecycleSignal` terminal disposition in `agents::lifecycle`, mapped to `RunStatus` in harness. Closed pass 5: `TerminalDisposition` at `agents/lifecycle.rs:195` with the `RunStatus` map in the harness fold |
 | `theme` → `agents` | 5 | keep | catalog and spec vocabulary are the shared language below the store |
 | `trust` → `agents` | 1 | keep | catalog and spec vocabulary are the shared language below the store |
 | `proc` → `agents` | 4 | keep | catalog and spec vocabulary are the shared language below the store |
@@ -111,9 +124,12 @@ One row per upward dependency edge reviewed. `keep` means the edge is the intend
 | `store` → `sidebar::{heartbeat,timing,wakeup}` | 4 | closed | pass 4 |
 | `remote_control` → `sidebar::wakeup` | 1 | closed | pass 4 |
 | `config` → `sidebar::timing` | 3 | closed | pass 4: the refresh trio is config vocabulary and is defined in `config` |
-| `store` → `wakeup` | 2 | close | seam 6: the wire moves below the store once `ClientPaneView` reaches `pane` and `FocusNonce` reaches `ids` |
+| `store` → `wakeup` | 2 | closed | seam 6: the wire moves below the store once `ClientPaneView` reaches `pane` and `FocusNonce` reaches `ids`. Closed pass 5: both types moved, `wakeup` re-layered to L2, and the two sites (`store/gc/collect.rs:12`, `store/writer/publish.rs:180`) keep their code as downward calls |
+| `store` → `mux` | 1 | closed | pass 5: the site was the client-view type the wire carried; the snapshot reads `crate::pane::ClientPaneView` now (`store/snapshot/view.rs:100`) |
 | `daemon_view` → `sidebar::timing` | 1 | keep | `EVENT_PANE_TTL` is the sidebar's event-mode cadence; daemon maintenance accepts a frame under it and reaches up for the bound deliberately |
-| `mux` → `harness::launch` | 5 | close | later pass: shell-program and pane-name vocabulary belongs below `mux` |
+| `mux` → `harness::launch` | 5 | closed | later pass: shell-program and pane-name vocabulary belongs below `mux`. Closed pass 5: shell selection to `proc`, the room pin's channel/worktree keys and channel argv to `workspace` |
+| `config` → `harness::budget` | 5 | keep | `BudgetSpec` and `BudgetParseError` are parsing, which is harness policy; the window/scope/park lift takes the edge from 5 sites to 4 in pass 5 |
+| `store` → `harness::schedule::signal` | 5 | unreviewed | added by `a8e4c4afa` after pass 4 (`store/event.rs:9`, `store/follow.rs:10`, `store/writer/signal.rs:3`); candidate for a later seam |
 
 ## Pass log
 
@@ -125,3 +141,4 @@ One row per pass, newest last. Deltas are the `diff --expect` totals at merge.
 | 2026-09-04 | pass-2 seam adapter sibling families | `crates/rimz/src/agents`; `docs`; `refactor-target.toml` | `93c4c48d7` | rehome ×1, deepen ×1, collapse ×1 | −45 | −2 | +1 internal (crossing +0) | Five shape families and the cached-value test guard hold for the reasons recorded above. No upward edge was reviewed. Deferred module notes: Copilot/Cursor `report_files`, Droid origin stamping, and the filename-scoped `spend.rs` invariant. Tightened `agents` surface to 970. |
 | 2026-09-04 | pass-3 seam #4 + #5 + `daemon_view` ↔ `mux` | `crates/rimz`; `docs`; `refactor-target.toml`; `AGENTS.md`; `ARCHITECTURE.md` | `d8361c248` | rehome ×10, deepen ×1, re-layer ×2 | +5 | −6 | +4 internal | `AgentState::channel()`; `BudgetPark`/`BudgetScope`/`BudgetWindow` into `agents`; `LifecycleSignal` terminal-disposition split; `PaneRef` method forms; `CommandSpec` runner collapse; Codex daemon spawn-failure and timeout warning text changes as declared. |
 | 2026-09-05 | pass-4 seam #3 remaining `mux` → `sidebar` | `crates/rimz`; `xtask/src/invariants.rs`; `docs`; `refactor-target.toml`; `AGENTS.md`; `CLAUDE.md`; `ARCHITECTURE.md` | `8a4ca7bcd` | rehome (31 contract rows), deepen/collapse focus dispatch, delete duplicate clocks and unused nonce/default/error surface | −44 | +2 | −4 internal | Measured with `cargo xtask atlas diff --expect /tmp/atlas-pass-4-contract.toml`: test SLOC +62, Rust files +2; all six dependency rows at 0. Ordered teardown moved whole to `room::teardown`, not a reordered sweep hoist. Seam 6 defers wire-below-store; mux's five launch-vocabulary sites remain for a later pass. Kept separate heartbeat freshness rules and sidebar-owned `EventStore`; dropped `execute_action`'s unused nonce return; `FocusPresentation` stays public for benchmark-facing fusion. Tightened sidebar 367, mux 277, wakeup 26. |
+| 2026-09-05 | pass-5 seam #6 + deferred launch/budget/lifecycle admissions | `crates/rimz/src/wakeup`; `crates/rimz/src/mux`; `crates/rimz/src/pane`; `crates/rimz/src/ids.rs`; `crates/rimz/src/proc`; `crates/rimz/src/workspace`; `crates/rimz/src/agents`; `crates/rimz/src/config`; `crates/rimz/src/store`; `crates/rimz/src/harness`; `crates/rimz/src/message`; `crates/rimz/src/room`; `crates/rimz/src/web`; `crates/rimz/src/sidebar`; `crates/rimz/src/sidebar_pane`; `crates/rimz/src/diag`; `crates/rimz/src/cli`; `crates/rimz/tests`; `docs`; `refactor-target.toml`; `AGENTS.md`; `CLAUDE.md`; `ARCHITECTURE.md` | `f43250479` | rehome ×13, delete ×2, deepen ×1, re-layer ×1 | −13 | +5 | −9 internal (crossing +0) | Measured with `cargo xtask atlas diff --expect /tmp/atlas-pass-5-contract.toml`: test SLOC +286, Rust files +0; all 13 rehomes, two deletes and nine dependency rows landed. Ceiling +16 paid for the terminal-disposition enum and split budget imports; shorter channel calls and import formatting offset that cost. Escaping surface grows +5 with the lifecycle classification and agents budget façade; five upward admissions close, and agents reaches harness only for `agent_handle`. Deferred: the room-pin map/argv duplication (`room/mod.rs:88-99` vs `workspace::channel_shell_argv`) and transparent `FocusNonce`. Tightened harness 603, mux 273, harness/launch 41, harness/run 41. |
