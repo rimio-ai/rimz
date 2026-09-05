@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 
-use crate::sidebar::events::EventStore;
+use crate::sidebar::event_store::EventStore;
 use crate::sidebar::events::SidebarEvent;
 use crate::sidebar::focus_anchor::{FocusAnchor, FocusObservation, FocusPresentation};
 use crate::store::snapshot::SidebarSnapshot;
@@ -46,7 +46,7 @@ fn active_events<'a>(
     pulled: &SidebarSnapshot,
     events: &'a EventStore,
     now_ms: u64,
-) -> Vec<&'a crate::sidebar::events::StoredEvent> {
+) -> Vec<&'a crate::sidebar::event_store::StoredEvent> {
     let baseline = pulled
         .panes_observed_at_ms
         .or(pulled.panes_produced_at_ms)
@@ -64,7 +64,7 @@ fn active_events<'a>(
 
 fn apply_fusion(
     mut fused: SidebarSnapshot,
-    active: &[&crate::sidebar::events::StoredEvent],
+    active: &[&crate::sidebar::event_store::StoredEvent],
     intent: Option<&FocusPresentation>,
 ) -> SidebarSnapshot {
     let mut deleted = HashSet::new();
@@ -165,7 +165,7 @@ fn snapshot_has_pane(snapshot: &SidebarSnapshot, pane_id: &crate::ids::PaneId) -
 }
 
 fn closes_carried_pane(
-    event: &crate::sidebar::events::StoredEvent,
+    event: &crate::sidebar::event_store::StoredEvent,
     carried_panes: &HashSet<crate::ids::PaneId>,
 ) -> bool {
     match &event.event {

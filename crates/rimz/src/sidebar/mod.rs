@@ -16,6 +16,7 @@ pub(crate) mod body_filter;
 pub mod cache;
 pub mod consumer;
 pub mod enrich;
+pub mod event_store;
 pub mod events;
 pub mod focus_anchor;
 pub mod frame;

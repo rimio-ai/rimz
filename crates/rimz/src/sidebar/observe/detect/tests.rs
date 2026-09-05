@@ -4,7 +4,7 @@ use super::super::sig::{
 };
 use super::*;
 use crate::agents::{AgentStatus, TurnPhase};
-use crate::sidebar::events::EventStore;
+use crate::sidebar::event_store::EventStore;
 use crate::sidebar::test_support::{activity_row, worktree_group};
 use crate::sidebar::timing::OBSERVE_WARMUP;
 use crate::store::snapshot::{
