@@ -263,7 +263,7 @@ fn build_task_entry(
     let on = args.on.as_deref().map(parse_check_on).transpose()?;
     let matches = parse_matches(&args.matches)?;
     let timing = resolve_add_timing(args)?;
-    if !matches!(action, AddTaskAction::CheckOnly)
+    if matches!(action, AddTaskAction::Spawn { .. })
         && args.prompt.is_none()
         && args.prompt_file.is_none()
     {

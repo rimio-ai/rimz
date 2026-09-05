@@ -62,11 +62,6 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
             true,
         ),
     });
-    let prompt = args.prompt.or_else(|| {
-        args.prompt_file
-            .is_none()
-            .then(|| "The wake condition you were waiting for completed.".to_owned())
-    });
     let mut entry = TaskEntry {
         wake: Some(target.clone()),
         wake_meta: Some(WakeMeta {
@@ -75,7 +70,7 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
             delay: args.in_after.map(duration_label),
             last_observed_at: None,
         }),
-        prompt,
+        prompt: args.prompt,
         prompt_file: args.prompt_file,
         root: ctx.workspace.project_root.clone(),
         ..TaskEntry::default()

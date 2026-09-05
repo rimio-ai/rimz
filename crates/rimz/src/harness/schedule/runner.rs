@@ -4,6 +4,8 @@
 //! launch preparation, and terminal record mapping. CLI executes the prepared
 //! supervised-run or message effect and returns its typed result.
 
+mod prompt;
+
 use std::cell::OnceCell;
 use std::fs::File;
 use std::io::{Read, Seek, Write};
@@ -727,16 +729,7 @@ impl<'a> TaskFire<'a> {
                 },
             )));
         }
-        let prompt = if self.expired {
-            format!(
-                "{} expired: no {} in {}",
-                self.name,
-                self.entry.signal.as_deref().unwrap_or_default(),
-                self.entry.timeout.as_deref().unwrap_or_default()
-            )
-        } else {
-            self.resolve_effect_prompt(fired_check.as_ref())?
-        };
+        let prompt = self.resolve_effect_prompt(fired_check.as_ref())?;
         self.consume_ephemeral()?;
         self.pending = Some(PendingEffect::Deliver {
             target: target.clone(),
@@ -776,39 +769,33 @@ impl<'a> TaskFire<'a> {
     }
 
     fn resolve_effect_prompt(&self, fired_check: Option<&FiredCheck>) -> Result<String> {
-        let mut prompt = resolve_task_prompt(&self.name, &self.entry)?;
-        if let Some(signal) = &self.signal {
-            prompt = substitute_signal_fields(prompt, signal);
-        }
-        if let Some(check) = fired_check {
-            return Ok(
-                if self
-                    .signal
-                    .as_ref()
-                    .is_some_and(|signal| signal.watch.is_some())
-                {
-                    augment_watch_prompt(prompt, &check.command, &check.outcome)
-                } else {
-                    augment_prompt(prompt, &check.command, &check.outcome)
-                },
+        let mut body = resolve_task_prompt(&self.name, &self.entry)?;
+        let signal_trigger = self.entry.signal.is_some() || self.entry.watch.is_some();
+        if self.entry.wake.is_some() || signal_trigger || self.signal.is_some() {
+            let evidence = if self.expired {
+                prompt::Evidence::Expired
+            } else if let Some(signal) = &self.signal {
+                prompt::Evidence::Signal(signal)
+            } else if signal_trigger {
+                prompt::Evidence::Manual
+            } else {
+                prompt::Evidence::Scheduled
+            };
+            body = prompt::compose_wake(
+                &self.name,
+                &self.entry,
+                self.entry.wake_meta.as_ref(),
+                evidence,
+                &body,
+                self.config.time_zone(),
             );
         }
-        if let Some(signal) = &self.signal {
-            let payload = serde_json::to_string_pretty(&signal.payload)?;
-            return Ok(format!(
-                "{prompt}\n\n--- signal {} ---\n{payload}",
-                signal.name
-            ));
+        if let Some(check) = fired_check
+            && self.entry.watch.is_none()
+        {
+            body = augment_prompt(body, &check.command, &check.outcome);
         }
-        if self.task.trigger().as_ref().is_ok_and(|parsed| {
-            matches!(
-                parsed.trigger,
-                Trigger::Signal { .. } | Trigger::Watch { .. }
-            )
-        }) {
-            return Ok(format!("{prompt}\n\n--- manual fire ---"));
-        }
-        Ok(prompt)
+        Ok(body)
     }
 
     fn terminal_record(&self, result: LoopRunResult) -> LoopRunRecord {
@@ -1036,11 +1023,14 @@ pub fn resolve_task_prompt(name: &str, entry: &TaskEntry) -> Result<String> {
     if let Some(prompt) = entry
         .prompt
         .as_deref()
-        .filter(|prompt| !prompt.trim().is_empty())
+        .filter(|prompt| entry.wake.is_some() || !prompt.trim().is_empty())
     {
         return Ok(prompt.to_owned());
     }
     let Some(path) = entry.prompt_file.as_deref() else {
+        if entry.wake.is_some() {
+            return Ok(String::new());
+        }
         anyhow::bail!("loop task `{name}` has no prompt; set `prompt` or `prompt-file`");
     };
     let path = resolve_config_path(path)?;
@@ -1384,31 +1374,6 @@ pub fn polarity_fires(on: Option<CheckOn>, outcome: &CheckOutcome) -> bool {
         CheckOn::Success => outcome.passed,
         CheckOn::Any => true,
     }
-}
-
-fn augment_watch_prompt(base: String, cmd: &str, outcome: &CheckOutcome) -> String {
-    let status = if outcome.timed_out {
-        "timeout".to_owned()
-    } else {
-        outcome
-            .code
-            .map(|code| code.to_string())
-            .unwrap_or_else(|| "lost".to_owned())
-    };
-    format!(
-        "{base}\n\n--- watch `{cmd}` exited {status} ---\n{}",
-        outcome.output
-    )
-}
-
-fn substitute_signal_fields(mut prompt: String, signal: &TriggerSignal) -> String {
-    for (key, value) in &signal.payload {
-        prompt = prompt.replace(
-            &format!("{{{{{key}}}}}"),
-            &super::signal::match_value(value),
-        );
-    }
-    prompt
 }
 
 pub fn augment_prompt(base: String, cmd: &str, outcome: &CheckOutcome) -> String {

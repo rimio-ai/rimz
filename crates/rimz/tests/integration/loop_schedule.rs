@@ -289,7 +289,48 @@ fn loop_wake_workflow_pins_and_delivers_to_live_session() {
 fn emitted_signal_reaches_the_matching_wake_consumer() {
     let env = Env::new();
     env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-signal-live", "feature-signal");
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).unwrap();
+    env.store()
+        .append_event(&rimz::store::event::EventEnvelope::agent_launched(
+            workspace.workspace_id,
+            &workspace.session_name,
+            &AgentKind::new_unchecked("claude"),
+            rimz::store::event::AgentLaunchPayload {
+                agent_id: AgentSessionId::from("sess-signal-live"),
+                launch_id: None,
+                agent_name: "claude".to_owned(),
+                agent_name_explicit: true,
+                launch: rimz::agents::LaunchParams::default(),
+                state: rimz::store::event::AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: Some("feature-signal".to_owned()),
+                prompt: None,
+                description: None,
+            },
+        ))
+        .unwrap();
+    for signal in [
+        rimz::agents::LifecycleSignal::Registered,
+        rimz::agents::LifecycleSignal::TurnStarted,
+    ] {
+        let mut observation = rimz::agents::AgentLifecycleObservation::new(
+            Some(AgentSessionId::from("sess-signal-live")),
+            signal,
+        );
+        observation.agent_name = Some("claude".to_owned());
+        env.store()
+            .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+                session_name: &workspace.session_name,
+                agent_kind: AgentKind::new_unchecked("claude"),
+                event_name: "test",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .unwrap();
+    }
     loop_ok(
         &env,
         &[
@@ -299,11 +340,11 @@ fn emitted_signal_reaches_the_matching_wake_consumer() {
             "--wake",
             "@claude",
             "--signal",
-            "ci.finished",
+            "deploy.finished",
             "--match",
-            "conclusion=failure",
+            "outcome=failure",
             "--prompt",
-            "CI is {{conclusion}}",
+            "Inspect deployment",
         ],
     );
 
@@ -312,9 +353,9 @@ fn emitted_signal_reaches_the_matching_wake_consumer() {
         &[
             "events",
             "emit",
-            "ci.finished",
+            "deploy.finished",
             "--json",
-            r#"{"conclusion":"success"}"#,
+            r#"{"outcome":"success"}"#,
         ],
     );
     assert!(read_loop_run_records(&env).is_empty());
@@ -325,9 +366,9 @@ fn emitted_signal_reaches_the_matching_wake_consumer() {
         &[
             "events",
             "emit",
-            "ci.finished",
+            "deploy.finished",
             "--json",
-            r#"{"conclusion":"failure"}"#,
+            r#"{"outcome":"failure"}"#,
         ],
     );
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -338,8 +379,8 @@ fn emitted_signal_reaches_the_matching_wake_consumer() {
     assert_eq!(records.len(), 1, "{records:?}");
     assert_eq!(records[0].result, LoopRunResult::Delivered);
     let signal = records[0].signal.as_ref().expect("signal forensics");
-    assert_eq!(signal.name.as_str(), "ci.finished");
-    assert_eq!(signal.payload["conclusion"], "failure");
+    assert_eq!(signal.name.as_str(), "deploy.finished");
+    assert_eq!(signal.payload["outcome"], "failure");
     let message = &env.store().list_pending_messages().unwrap()[0];
     assert_eq!(records[0].message_id.as_ref(), Some(&message.message_id));
     assert_eq!(message.agent_id.as_str(), "sess-signal-live");
@@ -353,11 +394,26 @@ fn emitted_signal_reaches_the_matching_wake_consumer() {
         rimz::harness::target::message_header(&message.sender, &[], None).as_deref(),
         Some("Type: WAKE\nFrom: @rimz\nContent:\n")
     );
-    assert!(message.text.contains("CI is failure"), "{}", message.text);
-    assert!(message.text.contains("ci.finished"), "{}", message.text);
+    assert!(
+        message.text.contains("Inspect deployment"),
+        "{}",
+        message.text
+    );
+    assert!(
+        message.text.starts_with("ci-wake fired: deploy.finished\n"),
+        "{}",
+        message.text
+    );
+    let evidence: serde_json::Value =
+        serde_json::from_str(message.text.lines().nth(1).unwrap()).unwrap();
+    assert_eq!(
+        evidence,
+        serde_json::json!({"signal": "deploy.finished", "outcome": "failure"})
+    );
+    assert!(message.text.ends_with("\n\nInspect deployment"));
 
     let show = loop_ok(&env, &["loop", "show", "ci-wake"]);
-    assert!(show.contains("signal: ci.finished"), "{show}");
+    assert!(show.contains("signal: deploy.finished"), "{show}");
     assert!(
         show.contains(&format!("message: {}", message.message_id)),
         "{show}"
@@ -369,9 +425,9 @@ fn emitted_signal_reaches_the_matching_wake_consumer() {
         &[
             "events",
             "emit",
-            "ci.finished",
+            "deploy.finished",
             "--json",
-            r#"{"conclusion":"failure"}"#,
+            r#"{"outcome":"failure"}"#,
         ],
     );
     std::thread::sleep(Duration::from_millis(100));
@@ -2736,4 +2792,22 @@ fn find_real_git() -> Option<std::path::PathBuf> {
     std::env::split_paths(&std::env::var_os("PATH")?)
         .map(|dir| dir.join("git"))
         .find(|candidate| candidate.is_file())
+}
+
+#[test]
+fn loop_add_spawn_still_requires_prompt() {
+    let env = Env::new();
+    let output = env
+        .rimz()
+        .args([
+            "loop", "add", "no-note", "--agent", "claude", "--every", "15m",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains("needs a prompt; pass --prompt or --prompt-file"),
+        "{error}"
+    );
 }

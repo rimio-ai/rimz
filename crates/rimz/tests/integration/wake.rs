@@ -67,7 +67,7 @@ fn wake_signal_arms_standing_instance_for_the_calling_agent() {
     let target = entry.wake.as_ref().expect("pinned wake target");
     assert_eq!(target.kind, "claude");
     assert_eq!(target.session, "provider-session");
-    assert_eq!(target.handle, "@planner");
+    assert_eq!(target.handle, "@planner#project");
 }
 
 #[test]
@@ -161,7 +161,7 @@ fn wake_wait_reports_a_watched_failure_and_settles_its_message() {
             "--",
             "sh",
             "-c",
-            "printf watched; exit 3",
+            "sleep 1; printf watched; exit 3",
         ])
         .output()
         .expect("wait for watched wake");
@@ -169,6 +169,13 @@ fn wake_wait_reports_a_watched_failure_and_settles_its_message() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("delivered · exit 3"), "{stdout}");
     assert!(stdout.contains("watched"), "{stdout}");
+    let records = wake_records(&env);
+    let message_id = records[0].message_id.as_ref().unwrap();
+    let message = wake_ok(&env, &["message", "show", message_id.as_str()]);
+    assert!(message.contains("exited 3 after"), "{message}");
+    assert!(!message.contains("exited 3 after 0s"), "{message}");
+    assert!(message.contains("armed by you at"), "{message}");
+    assert!(!message.contains("--- watch"), "{message}");
     assert!(store.list_pending_messages().unwrap().is_empty());
 
     let instances: Tasks = serde_json::from_slice(
@@ -300,7 +307,10 @@ fn unobserved_signal_wake_expires_with_a_delivered_wake() {
     let message_id = records[0].message_id.as_ref().expect("expiry message");
     let message = wake_ok(&env, &["message", "show", message_id.as_str()]);
     assert!(message.contains(&format!("{name} expired:")), "{message}");
-    assert!(message.contains("deploy.failed"), "{message}");
+    assert!(
+        message.contains("no deploy.failed on feature in 59m"),
+        "{message}"
+    );
     assert!(!wake_instances(&env).0.contains_key(&name));
 }
 
@@ -346,8 +356,6 @@ fn loop_signal_siblings_preserve_forever_and_once_subscriptions() {
             "@planner",
             "--signal",
             "deploy.failed",
-            "--prompt",
-            "inspect deployment",
         ];
         if once {
             args.push("--once");

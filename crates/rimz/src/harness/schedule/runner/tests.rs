@@ -354,6 +354,7 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
         watch: Some(crate::harness::schedule::signal::WatchOutcome::Exited {
             code: Some(1),
             output: String::new(),
+            elapsed_ms: 0,
         }),
     };
     let mut watch_fire = skipped_fire(watch_name, &catalog, Some(signal));
@@ -439,4 +440,81 @@ fn pipe_forward_buffers_partial_lines_and_terminates_the_tail() {
     assert_eq!(pending, b"second");
     assert_eq!(take_trailing_line(&mut pending), Some(b"second\n".to_vec()));
     assert!(pending.is_empty());
+}
+
+#[test]
+fn loop_signal_prompts_keep_braces_and_check_evidence() {
+    let entry = TaskEntry {
+        agent: Some("claude".to_owned()),
+        signal: Some("deploy.failed".to_owned()),
+        prompt: Some("Inspect {{branch}}".to_owned()),
+        ..TaskEntry::default()
+    };
+    let catalog = TaskCatalog::load(None).unwrap();
+    let signal = TriggerSignal {
+        name: "deploy.failed".parse().unwrap(),
+        payload: serde_json::from_value(serde_json::json!({"branch":"feature"})).unwrap(),
+        source: crate::harness::schedule::signal::SignalSource::Cli,
+        watch: None,
+    };
+    let mut fire = TaskFire::new(
+        "deployment",
+        LoadedTask::new("deployment", entry, catalog::TaskSource::Instance),
+        &catalog,
+        LoopRunMode::Scheduled,
+        false,
+        Timestamp::now(),
+        Arc::new(MachineConfig::default()),
+        Some(signal),
+        CheckEcho::Capture,
+        Instant::now(),
+    )
+    .unwrap();
+    let outcome = CheckOutcome::new(false, false, "failed guard".to_owned(), Some(1));
+    let check = FiredCheck {
+        command: "false".to_owned(),
+        record: check_record(&outcome),
+        outcome,
+    };
+    let body = fire.resolve_effect_prompt(Some(&check)).unwrap();
+    assert!(
+        body.starts_with("deployment fired: deploy.failed\n"),
+        "{body}"
+    );
+    assert!(
+        body.contains("\n\nInspect {{branch}}\n\n--- check `false` exited 1 ---\nfailed guard"),
+        "{body}"
+    );
+    assert!(!body.contains("armed by"));
+    fire.signal = None;
+    assert_eq!(
+        fire.resolve_effect_prompt(None).unwrap(),
+        "deployment fired: manual fire\n\nInspect {{branch}}"
+    );
+    fire.entry.signal = None;
+    assert_eq!(
+        fire.resolve_effect_prompt(None).unwrap(),
+        "Inspect {{branch}}"
+    );
+}
+
+#[test]
+fn wake_prompt_is_optional_but_spawn_prompt_is_required() {
+    let mut entry = TaskEntry {
+        wake: Some(TaskTarget {
+            kind: "claude".to_owned(),
+            session: "session".to_owned(),
+            handle: "@coder".to_owned(),
+        }),
+        ..TaskEntry::default()
+    };
+    assert_eq!(resolve_task_prompt("wake-test", &entry).unwrap(), "");
+    entry.wake = None;
+    entry.agent = Some("claude".to_owned());
+    assert!(
+        resolve_task_prompt("spawn-test", &entry)
+            .unwrap_err()
+            .to_string()
+            .contains("loop task `spawn-test` has no prompt")
+    );
 }

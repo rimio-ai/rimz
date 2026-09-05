@@ -176,18 +176,30 @@ pub struct Signal {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum WatchOutcome {
-    Exited { code: Option<i32>, output: String },
-    TimedOut { code: Option<i32>, output: String },
-    Lost { detail: String },
+    Exited {
+        code: Option<i32>,
+        output: String,
+        #[serde(default)]
+        elapsed_ms: u64,
+    },
+    TimedOut {
+        code: Option<i32>,
+        output: String,
+        #[serde(default)]
+        elapsed_ms: u64,
+    },
+    Lost {
+        detail: String,
+    },
 }
 
 impl WatchOutcome {
     pub fn to_check_outcome(&self) -> CheckOutcome {
         match self {
-            Self::Exited { code, output } => {
+            Self::Exited { code, output, .. } => {
                 CheckOutcome::new(*code == Some(0), false, output.clone(), *code)
             }
-            Self::TimedOut { code, output } => {
+            Self::TimedOut { code, output, .. } => {
                 CheckOutcome::new(false, true, output.clone(), *code)
             }
             Self::Lost { detail } => {
