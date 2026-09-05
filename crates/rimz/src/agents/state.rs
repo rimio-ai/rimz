@@ -849,6 +849,18 @@ fn is_zero_u32(n: &u32) -> bool {
 }
 
 impl AgentState {
+    /// The agent's channel — the lane it cooperates in: stamped lane, else
+    /// worktree directory basename.
+    /// `None` when the agent runs outside any channel context.
+    pub fn channel(&self) -> Option<String> {
+        crate::ids::compose_channel(
+            self.channel.as_deref(),
+            self.worktree_path
+                .as_deref()
+                .and_then(|path| path.rsplit('/').next()),
+        )
+    }
+
     pub(crate) fn seed(
         kind: AgentKind,
         agent_id: AgentSessionId,

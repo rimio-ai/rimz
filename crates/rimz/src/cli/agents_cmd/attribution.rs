@@ -116,12 +116,7 @@ fn report_scope(
     default_worktree: Option<&std::path::Path>,
     agents: &[&AgentState],
 ) -> AttributionScope {
-    let channel = common_optional(
-        agents
-            .iter()
-            .map(|agent| rimz::harness::target::agent_channel(agent)),
-    )
-    .or(filter);
+    let channel = common_optional(agents.iter().map(|agent| agent.channel())).or(filter);
     AttributionScope {
         selector,
         channel,

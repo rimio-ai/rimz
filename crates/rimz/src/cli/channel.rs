@@ -107,7 +107,7 @@ fn list_channels(
         .unwrap_or_default();
     let mut live_by_channel: BTreeMap<String, LiveChannelAgents<'_>> = BTreeMap::new();
     for agent in agents {
-        if let Some(channel) = rimz::harness::target::agent_channel(agent) {
+        if let Some(channel) = agent.channel() {
             let entry = live_by_channel.entry(channel.clone()).or_default();
             entry.explicit_named |= agent.channel.as_deref() == Some(channel.as_str());
             entry.agents.push(agent);

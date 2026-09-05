@@ -11,7 +11,7 @@ pub mod reply;
 pub mod send;
 
 use crate::agents::{AgentState, AgentStatus};
-use crate::harness::target::{agent_channel, recipient_channel};
+use crate::harness::target::recipient_channel;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::message::{
     AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
@@ -95,7 +95,7 @@ impl Recipient<'_> {
                 kind: agent.kind.clone(),
                 agent_id: agent.agent_id.clone(),
                 agent_name: agent.name.clone(),
-                channel: agent_channel(agent).or_else(|| {
+                channel: agent.channel().or_else(|| {
                     pane.and_then(|pane| recipient_channel(pane, Some(agent), scope_channel))
                 }),
                 pane_id: pane.map(|pane| pane.pane_id.clone()),

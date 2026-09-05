@@ -137,9 +137,7 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
         .iter()
         .filter(|agent| agent.is_awaiting_input() && agent.open_ask.is_some())
         .filter(|agent| {
-            all || channel.is_none_or(|channel| {
-                rimz::harness::target::agent_channel(agent).as_deref() == Some(channel)
-            })
+            all || channel.is_none_or(|channel| agent.channel().as_deref() == Some(channel))
         })
         .map(|agent| view_for_agent(store.paths(), agent, &snapshot.agents, &peers))
         .filter_map(Result::transpose)
@@ -267,7 +265,7 @@ fn view_for_agent(
             handle,
             name,
             kind: agent.kind.clone(),
-            channel: rimz::harness::target::agent_channel(agent),
+            channel: agent.channel(),
         },
         detail,
     }))

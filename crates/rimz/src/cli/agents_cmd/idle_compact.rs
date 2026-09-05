@@ -104,7 +104,7 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         true,
         DeliveryGate::Done,
     )
-    .with_channel(rimz::harness::target::agent_channel(agent))
+    .with_channel(agent.channel())
     .with_sender(MessageSender::System)
     .with_automated(true)
     .with_body(MessageBody::Command)

@@ -20,7 +20,7 @@ pub(super) fn live_agents(workspace: &rimz::ResolvedWorkspace) -> Vec<LiveAgent>
                 .into_iter()
                 .filter(|agent| !agent.is_provider_subagent())
                 .map(|agent| {
-                    let channel = rimz::harness::target::agent_channel(&agent);
+                    let channel = agent.channel();
                     let root = agent.parent_agent_id.is_none();
                     LiveAgent {
                         key: (agent.kind, agent.agent_id),

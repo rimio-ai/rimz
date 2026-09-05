@@ -159,7 +159,7 @@ fn should_compact(
 }
 
 fn teammate_working(snapshot: &SidebarSnapshot, candidate: &AgentState) -> bool {
-    let Some(channel) = crate::harness::target::agent_channel(candidate) else {
+    let Some(channel) = candidate.channel() else {
         return false;
     };
     snapshot
@@ -168,7 +168,7 @@ fn teammate_working(snapshot: &SidebarSnapshot, candidate: &AgentState) -> bool 
         .filter(|agent| !agent.is_provider_subagent())
         .any(|agent| {
             !(agent.kind == candidate.kind && agent.agent_id == candidate.agent_id)
-                && crate::harness::target::agent_channel(agent).as_deref() == Some(channel.as_str())
+                && agent.channel().as_deref() == Some(channel.as_str())
                 && agent.effective_status() == AgentStatus::Running
         })
 }

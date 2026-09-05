@@ -82,10 +82,7 @@ fn standalone_team_role_uses_team_channel_and_role_handle() {
         .find(|agent| agent.role.as_deref() == Some("planner"))
         .expect("planner agent");
     assert_eq!(planner.team.as_deref(), Some("forge"));
-    assert_eq!(
-        rimz::harness::target::agent_channel(planner).as_deref(),
-        Some("project/forge")
-    );
+    assert_eq!(planner.channel().as_deref(), Some("project/forge"));
 }
 
 fn assert_group_contains(screen: &str, header: &str, roles: &[&str]) {

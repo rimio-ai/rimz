@@ -325,7 +325,7 @@ fn stamped_in_place_team_channel_scopes_without_team_fallback() {
     snapshot.agents = vec![planner, coder, other];
 
     assert_eq!(
-        agent_channel(&snapshot.agents[0]).as_deref(),
+        snapshot.agents[0].channel().as_deref(),
         Some("team-channel/forge")
     );
     assert_eq!((&snapshot.agents[0]).channel_label(), "team-channel/forge");
@@ -426,19 +426,19 @@ fn launch_stamped_worktree_team_channel_renders_flat_worktree() {
     team_agent.team = Some("forge".to_owned());
     team_agent.channel = Some("auth".to_owned());
 
-    assert_eq!(agent_channel(&team_agent).as_deref(), Some("auth"));
+    assert_eq!(team_agent.channel().as_deref(), Some("auth"));
     assert_eq!((&team_agent).channel_label(), "auth");
     assert!((&team_agent).in_worktree("auth"));
     assert!(!(&team_agent).in_worktree("auth/forge"));
 }
 
 #[test]
-fn agent_channel_and_in_worktree_use_directory_not_branch() {
+fn channel_and_in_worktree_use_directory_not_branch() {
     let mut team_agent = agent("claude", "session-feat", Some("feat/auth"), "terminal_1");
     team_agent.team = Some("forge".to_owned());
     team_agent.worktree_branch = Some("scratch".to_owned());
 
-    assert_eq!(agent_channel(&team_agent).as_deref(), Some("auth"));
+    assert_eq!(team_agent.channel().as_deref(), Some("auth"));
     assert_eq!((&team_agent).channel_label(), "auth");
     assert!(!(&team_agent).in_worktree("auth/forge"));
     assert!((&team_agent).in_worktree("auth"));
@@ -451,7 +451,7 @@ fn branch_style_worktree_filter_matches_dashed_channel() {
     let mut agent = agent("claude", "session-feat", Some("feat-great"), "terminal_1");
     agent.worktree_branch = Some("feat/great".to_owned());
 
-    assert_eq!(agent_channel(&agent).as_deref(), Some("feat-great"));
+    assert_eq!(agent.channel().as_deref(), Some("feat-great"));
     assert!((&agent).in_worktree("feat/great"));
 }
 
@@ -462,7 +462,7 @@ fn explicit_named_channel_wins_over_worktree_and_team() {
     agent.team = Some("forge".to_owned());
     agent.channel = Some("design".to_owned());
 
-    assert_eq!(agent_channel(&agent).as_deref(), Some("design"));
+    assert_eq!(agent.channel().as_deref(), Some("design"));
     assert_eq!((&agent).channel_label(), "design");
     assert!((&agent).in_worktree("design"));
     assert!(!(&agent).in_worktree("feat/auth"));
