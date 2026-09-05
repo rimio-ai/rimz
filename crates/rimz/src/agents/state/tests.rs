@@ -379,6 +379,94 @@ fn effective_status_settles_background_park_to_success() {
 }
 
 #[test]
+fn budget_park_serializes_verbatim_in_persisted_state() {
+    use crate::harness::budget::{BudgetPark, BudgetScope, BudgetWindow};
+
+    let at = Timestamp::from_second(1_000).unwrap();
+    let mut agent = test_agent(AgentStatus::Running, 1_000);
+    let mut park = BudgetPark {
+        cap_usd: 5.0,
+        spend_usd: 1.25,
+        window: BudgetWindow::Day,
+        at,
+        scope: BudgetScope::Account,
+        account_kind: Some(AgentKind::new_unchecked("claude")),
+        resets_at: Some(at),
+    };
+    agent.budget_park = Some(park.clone());
+    assert_eq!(
+        serde_json::to_value(&agent).unwrap()["budget_park"],
+        serde_json::json!({
+            "cap_usd": 5.0,
+            "spend_usd": 1.25,
+            "window": "day",
+            "at": at,
+            "scope": "account",
+            "account_kind": "claude",
+            "resets_at": at
+        })
+    );
+
+    park.scope = BudgetScope::Agent;
+    park.account_kind = None;
+    park.resets_at = None;
+    assert_eq!(park.label(), "budget: $1.25 of $5.00/day");
+    assert_eq!(park.summary(), "$1.25 of $5.00/day");
+    agent.budget_park = Some(park.clone());
+    let mut value = serde_json::to_value(&agent).unwrap();
+    assert_eq!(
+        value["budget_park"],
+        serde_json::json!({
+            "cap_usd": 5.0,
+            "spend_usd": 1.25,
+            "window": "day",
+            "at": at,
+            "scope": "agent"
+        })
+    );
+    value["budget_park"]
+        .as_object_mut()
+        .unwrap()
+        .remove("scope");
+    let decoded: AgentState = serde_json::from_value(value).unwrap();
+    assert_eq!(decoded.budget_park.unwrap().scope, BudgetScope::Agent);
+
+    park.scope = BudgetScope::Account;
+    assert_eq!(park.label(), "provider account budget: $1.25 of $5.00/day");
+    assert_eq!(park.summary(), "$1.25 of $5.00/day");
+    agent.budget_park = None;
+    assert!(
+        serde_json::to_value(&agent)
+            .unwrap()
+            .get("budget_park")
+            .is_none()
+    );
+
+    for (window, label) in [
+        (BudgetWindow::Session, "session"),
+        (BudgetWindow::Turn, "turn"),
+        (BudgetWindow::Day, "day"),
+    ] {
+        assert_eq!(
+            serde_json::to_value(window).unwrap(),
+            serde_json::json!(label)
+        );
+        assert_eq!(window.label(), label);
+    }
+    for (scope, label) in [
+        (BudgetScope::Agent, "agent"),
+        (BudgetScope::Turn, "turn"),
+        (BudgetScope::Fleet, "fleet"),
+        (BudgetScope::Account, "account"),
+    ] {
+        assert_eq!(
+            serde_json::to_value(scope).unwrap(),
+            serde_json::json!(label)
+        );
+    }
+}
+
+#[test]
 fn waiting_and_interruption_outrank_a_budget_park() {
     let mut waiting = test_agent(AgentStatus::Waiting, 1_000);
     waiting.budget_park = Some(crate::harness::budget::BudgetPark {

@@ -1517,6 +1517,50 @@ fn shell_pane_name_uses_configured_shell_basename() {
     assert_eq!(shell_pane_name(), expected);
 }
 
+#[test]
+fn channel_shell_argv_pins_room_identity_order_and_label_fallback() {
+    let shell = user_shell_program();
+    let project_root = Path::new("/proj root");
+    let worktree_path = Path::new("/proj root/wt");
+    let ws = WorkspaceId::from_project_root(project_root);
+    let expected_argv = |channel: &str| {
+        vec![
+            "env".to_owned(),
+            "RIMZ=1".to_owned(),
+            format!("RIMZ_WORKSPACE_ID={ws}"),
+            "RIMZ_PROJECT_ROOT=/proj root".to_owned(),
+            "RIMZ_WORKTREE_PATH=/proj root/wt".to_owned(),
+            format!("RIMZ_CHANNEL={channel}"),
+            shell.clone(),
+        ]
+    };
+    for channel in ["feature", ""] {
+        assert_eq!(
+            channel_shell_argv(&ws, project_root, worktree_path, channel),
+            expected_argv(channel),
+            "channel {channel:?}"
+        );
+    }
+    for (label, channel) in [
+        ("", None),
+        ("plain", None),
+        ("#", None),
+        ("#feature", Some("feature")),
+        ("##x", Some("#x")),
+        ("# ", Some(" ")),
+    ] {
+        let expected = match channel {
+            Some(channel) => expected_argv(channel),
+            None => vec![shell.clone()],
+        };
+        assert_eq!(
+            channel_label_shell_argv(&ws, project_root, worktree_path, label),
+            expected,
+            "label {label:?}"
+        );
+    }
+}
+
 fn unique_probe_program() -> String {
     format!("rimz-agent-probe-{}", std::process::id())
 }
