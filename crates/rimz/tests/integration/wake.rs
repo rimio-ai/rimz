@@ -209,6 +209,247 @@ fn watch_retires_without_delivery_when_its_polarity_does_not_match() {
     assert!(instances.0.is_empty());
 }
 
+#[test]
+fn signal_wake_observes_siblings_delivers_repeated_matches_and_lapses_silently() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    let name = arm_subscription(&env);
+
+    wake_ok(
+        &env,
+        &[
+            "events",
+            "emit",
+            "deploy.passed",
+            "--json",
+            r#"{"branch":"other"}"#,
+        ],
+    );
+    assert!(wake_records(&env).is_empty());
+    assert!(
+        wake_instances(&env).0[&name]
+            .wake_meta
+            .as_ref()
+            .unwrap()
+            .last_observed_at
+            .is_none()
+    );
+
+    wake_ok(
+        &env,
+        &[
+            "events",
+            "emit",
+            "deploy.passed",
+            "--json",
+            r#"{"branch":"feature"}"#,
+        ],
+    );
+    let records = wait_for_wake_records(&env, 1);
+    assert_eq!(records[0].result.label(), "skipped");
+    assert!(records[0].message_id.is_none());
+    assert!(env.store().list_pending_messages().unwrap().is_empty());
+    let observed = wake_instances(&env).0[&name]
+        .wake_meta
+        .as_ref()
+        .unwrap()
+        .last_observed_at;
+    assert!(observed.is_some());
+
+    for count in [2, 3] {
+        wake_ok(
+            &env,
+            &[
+                "events",
+                "emit",
+                "deploy.failed",
+                "--json",
+                r#"{"branch":"feature","reason":"red"}"#,
+            ],
+        );
+        let records = wait_for_wake_records(&env, count);
+        let record = records.last().unwrap();
+        assert_eq!(record.result.label(), "delivered");
+        let message_id = record.message_id.as_ref().expect("delivered message");
+        let message = wake_ok(&env, &["message", "show", message_id.as_str()]);
+        assert!(message.contains("deploy.failed"), "{message}");
+        assert!(message.contains("feature"), "{message}");
+        assert!(wake_instances(&env).0.contains_key(&name));
+    }
+
+    expire_subscription(&env, &name);
+    wake_ok(&env, &["loop", "tick"]);
+    let records = wait_for_wake_records(&env, 4);
+    assert_eq!(records[3].result.label(), "expired");
+    assert!(records[3].message_id.is_none());
+    assert!(!wake_instances(&env).0.contains_key(&name));
+    assert_eq!(env.store().list_pending_messages().unwrap().len(), 2);
+}
+
+#[test]
+fn unobserved_signal_wake_expires_with_a_delivered_wake() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    let name = arm_subscription(&env);
+    expire_subscription(&env, &name);
+    wake_ok(&env, &["loop", "tick"]);
+    let records = wait_for_wake_records(&env, 1);
+    assert_eq!(records[0].result.label(), "expired");
+    let message_id = records[0].message_id.as_ref().expect("expiry message");
+    let message = wake_ok(&env, &["message", "show", message_id.as_str()]);
+    assert!(message.contains(&format!("{name} expired:")), "{message}");
+    assert!(message.contains("deploy.failed"), "{message}");
+    assert!(!wake_instances(&env).0.contains_key(&name));
+}
+
+#[test]
+fn signal_wake_rearm_and_cancel_race_with_lapse() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    let name = arm_subscription(&env);
+    let receipt = wake_ok(
+        &env,
+        &[
+            "wake",
+            "--signal",
+            "deploy.failed",
+            "--match",
+            "branch=feature",
+            "--json",
+        ],
+    );
+    let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
+    assert_eq!(receipt["name"], name);
+    wake_ok(&env, &["loop", "run", &name, "--expired"]);
+    assert!(wake_records(&env).is_empty());
+    assert!(wake_instances(&env).0.contains_key(&name));
+    wake_ok(&env, &["wake", "cancel", &name]);
+    wake_ok(&env, &["loop", "run", &name, "--expired"]);
+    assert!(wake_records(&env).is_empty());
+    assert!(env.store().list_pending_messages().unwrap().is_empty());
+}
+
+#[test]
+fn loop_signal_siblings_preserve_forever_and_once_subscriptions() {
+    for once in [false, true] {
+        let env = Env::new();
+        env.install_agent_hooks("claude");
+        register_calling_agent(&env);
+        let mut args = vec![
+            "loop",
+            "add",
+            "deployment",
+            "--wake",
+            "@planner",
+            "--signal",
+            "deploy.failed",
+            "--prompt",
+            "inspect deployment",
+        ];
+        if once {
+            args.push("--once");
+        }
+        wake_ok(&env, &args);
+        wake_ok(&env, &["events", "emit", "deploy.passed"]);
+        let records = wake_records(&env);
+        assert_eq!(records.len(), 1, "skip is recorded before emit returns");
+        assert_eq!(
+            serde_json::to_value(records[0].result).unwrap(),
+            "signal_skipped"
+        );
+        assert_eq!(
+            records[0].signal.as_ref().unwrap().name.as_str(),
+            "deploy.passed"
+        );
+        assert!(env.store().list_pending_messages().unwrap().is_empty());
+        wake_ok(&env, &["loop", "show", "deployment"]);
+        wake_ok(&env, &["events", "emit", "deploy.failed"]);
+        let records = wait_for_wake_records(&env, 2);
+        assert_eq!(records[1].result.label(), "delivered");
+        if once {
+            assert!(!wake_instances(&env).0.contains_key("deployment"));
+        } else {
+            wake_ok(&env, &["loop", "show", "deployment"]);
+            wake_ok(&env, &["events", "emit", "deploy.failed"]);
+            assert_eq!(
+                wait_for_wake_records(&env, 3)[2].result.label(),
+                "delivered"
+            );
+        }
+    }
+}
+
+fn wake_ok(env: &Env, args: &[&str]) -> String {
+    let output = agent_wake(env)
+        .args(args)
+        .output()
+        .expect("run wake command");
+    assert!(
+        output.status.success(),
+        "{args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+fn arm_subscription(env: &Env) -> String {
+    let receipt = wake_ok(
+        env,
+        &[
+            "wake",
+            "--signal",
+            "deploy.failed",
+            "--match",
+            "branch=feature",
+            "--json",
+        ],
+    );
+    let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
+    receipt["name"].as_str().unwrap().to_owned()
+}
+
+fn wake_instances(env: &Env) -> Tasks {
+    let path = rimz::harness::schedule::catalog::instances_path(&env.state_root());
+    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+}
+
+fn expire_subscription(env: &Env, name: &str) {
+    let mut tasks = wake_instances(env);
+    tasks.0.get_mut(name).unwrap().deadline = Some(jiff::Timestamp::UNIX_EPOCH);
+    let path = rimz::harness::schedule::catalog::instances_path(&env.state_root());
+    std::fs::write(path, serde_json::to_vec(&tasks).unwrap()).unwrap();
+}
+
+fn wake_records(env: &Env) -> Vec<rimz::harness::schedule::run_log::LoopRunRecord> {
+    let path = rimz::harness::schedule::run_log::log_path(&env.state_root());
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+fn wait_for_wake_records(
+    env: &Env,
+    count: usize,
+) -> Vec<rimz::harness::schedule::run_log::LoopRunRecord> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let records = wake_records(env);
+        if records.len() >= count {
+            return records;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "expected {count} records, got {records:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+
 fn register_calling_agent(env: &Env) {
     let store = env.store();
     let workspace =

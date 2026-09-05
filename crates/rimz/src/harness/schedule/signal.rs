@@ -273,7 +273,8 @@ pub fn fire_signal(
     let mut fired = Vec::new();
     for (name, task) in tasks {
         let Ok(parsed) = task.trigger() else { continue };
-        if parsed.trigger.resolve(&name, signal) != SignalResolution::Deliver {
+        let resolution = parsed.trigger.resolve(&name, signal);
+        if resolution == SignalResolution::Ignore {
             continue;
         }
         let key = arming::TaskKey::for_task(&name, task.source(), &task.entry().resolved_root());
@@ -288,7 +289,42 @@ pub fn fire_signal(
         if matches!(parsed.trigger, Trigger::Schedule(_)) {
             continue;
         }
-        super::fire::spawn_loop_run(runtime, project_root.as_deref(), &name, Some(&encoded));
+        if task.source() == super::catalog::TaskSource::Instance
+            && task.entry().wake_meta.is_some()
+            && matches!(parsed.trigger, Trigger::Signal { .. })
+        {
+            match super::instances::observe_signal_wake(&name, task.entry(), jiff::Timestamp::now())
+            {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(err) => {
+                    tracing::warn!(task = name, error = %err, "signal observation failed");
+                    continue;
+                }
+            }
+        }
+        if resolution == SignalResolution::Skip {
+            use super::run_log::{LoopRunMode, LoopRunRecord, LoopRunResult, SignalRecord};
+            let mut record = LoopRunRecord::new(
+                &name,
+                LoopRunResult::SignalSkipped,
+                LoopRunMode::Scheduled,
+                0,
+            );
+            record.signal = Some(SignalRecord {
+                name: signal.name.clone(),
+                payload: signal.payload.clone(),
+            });
+            super::run_log::record_transition(&task, &record);
+            continue;
+        }
+        super::fire::spawn_loop_run(
+            runtime,
+            project_root.as_deref(),
+            &name,
+            Some(&encoded),
+            false,
+        );
         fired.push(name);
     }
     Ok(fired)

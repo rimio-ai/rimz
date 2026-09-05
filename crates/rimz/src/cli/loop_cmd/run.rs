@@ -33,15 +33,24 @@ pub(super) fn run_one(
     mode: LoopRunMode,
     keep: bool,
     signal: Option<rimz::harness::schedule::signal::Signal>,
+    expired: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
     let catalog = task_catalog(globals)?;
+    if expired && catalog.for_run(name).is_none() {
+        return Ok(());
+    }
     let loaded = catalog
         .for_run(name)
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
     let entry = loaded.entry().clone();
     let source = loaded.source();
+    if expired
+        && project_root_for_globals(globals).is_some_and(|root| root != entry.resolved_root())
+    {
+        return Ok(());
+    }
     gate_project_trust(name, &entry, source, mode)?;
     let key = task_key(name, &loaded);
     let arm_state = ArmState::resolve(arming::load().get(&key), source, Timestamp::now());
@@ -91,7 +100,15 @@ pub(super) fn run_one(
         check_echo,
         started,
     )?;
-    let plan = fire.prepare();
+    let plan = if expired {
+        match fire.prepare_expired() {
+            Ok(Some(plan)) => Ok(plan),
+            Ok(None) => return Ok(()),
+            Err(err) => Err(err),
+        }
+    } else {
+        fire.prepare()
+    };
     if mode == LoopRunMode::Manual
         && let Some(trip) = fire.take_check_trip()
         && let Err(source) =

@@ -107,6 +107,93 @@ fn mutate<T>(
     Ok(result)
 }
 
+pub(super) fn observe_signal_wake(
+    name: &str,
+    candidate: &TaskEntry,
+    now: Timestamp,
+) -> Result<bool> {
+    observe_signal_wake_in(&state_home(), name, candidate, now)
+}
+
+fn observe_signal_wake_in(
+    state_root: &Path,
+    name: &str,
+    candidate: &TaskEntry,
+    now: Timestamp,
+) -> Result<bool> {
+    mutate(state_root, |tasks| {
+        let Some(current) = tasks.get_mut(name) else {
+            return Ok((false, false));
+        };
+        if !same_subscription(current, candidate) {
+            return Ok((false, false));
+        }
+        let timeout = super::runner::parse_task_timeout(
+            current
+                .timeout
+                .as_deref()
+                .ok_or(InstanceErr::MissingTimeout)?,
+        )
+        .map_err(InstanceErr::Timeout)?;
+        current.deadline = Some(now.checked_add(timeout)?);
+        if let Some(meta) = &mut current.wake_meta {
+            meta.last_observed_at = Some(now);
+        }
+        Ok((true, true))
+    })
+}
+
+pub(super) fn remove_signal_wake(name: &str, candidate: &TaskEntry) -> Result<bool> {
+    mutate(&state_home(), |tasks| {
+        if !tasks
+            .get(name)
+            .is_some_and(|current| same_subscription(current, candidate))
+        {
+            return Ok((false, false));
+        }
+        tasks.remove(name);
+        Ok((true, true))
+    })
+}
+
+pub(super) fn claim_expired(
+    name: &str,
+    candidate: &TaskEntry,
+    now: Timestamp,
+) -> Result<Option<TaskEntry>> {
+    claim_expired_in(&state_home(), name, candidate, now)
+}
+
+fn claim_expired_in(
+    state_root: &Path,
+    name: &str,
+    candidate: &TaskEntry,
+    now: Timestamp,
+) -> Result<Option<TaskEntry>> {
+    mutate(state_root, |tasks| {
+        let Some(current) = tasks.get(name) else {
+            return Ok((None, false));
+        };
+        if !same_subscription(current, candidate) || !super::fire::deadline_expired_at(current, now)
+        {
+            return Ok((None, false));
+        }
+        Ok((tasks.remove(name), true))
+    })
+}
+
+fn same_subscription(current: &TaskEntry, candidate: &TaskEntry) -> bool {
+    current.resolved_root() == candidate.resolved_root()
+        && current.signal == candidate.signal
+        && current.matches == candidate.matches
+        && current.wake == candidate.wake
+        && current
+            .wake_meta
+            .as_ref()
+            .zip(candidate.wake_meta.as_ref())
+            .is_some_and(|(a, b)| a.armed_at == b.armed_at)
+}
+
 pub(super) fn arm_signal_wake(
     entry: &TaskEntry,
     taken: &BTreeSet<String>,
@@ -184,6 +271,69 @@ mod tests {
             timeout: Some("59m".to_owned()),
             deadline: Some(Timestamp::from_second(3540).expect("deadline")),
             ..TaskEntry::default()
+        }
+    }
+
+    #[test]
+    fn stale_expiry_candidate_rechecks_refreshed_removed_and_replaced_rows() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let candidate = signal_wake();
+        let now = candidate.deadline.expect("deadline");
+        insert_into(dir.path(), "wake-test", &candidate).expect("insert");
+        assert!(observe_signal_wake_in(dir.path(), "wake-test", &candidate, now).expect("observe"));
+        assert!(
+            claim_expired_in(dir.path(), "wake-test", &candidate, now)
+                .expect("stale expiry")
+                .is_none()
+        );
+        let refreshed = load_from(dir.path()).0["wake-test"].clone();
+        assert_eq!(
+            refreshed.wake_meta.as_ref().expect("meta").last_observed_at,
+            Some(now)
+        );
+        assert!(
+            claim_expired_in(
+                dir.path(),
+                "wake-test",
+                &candidate,
+                refreshed.deadline.expect("deadline")
+            )
+            .expect("expiry")
+            .is_some()
+        );
+        assert!(
+            !observe_signal_wake_in(dir.path(), "wake-test", &candidate, now)
+                .expect("late observation")
+        );
+        assert!(
+            claim_expired_in(dir.path(), "wake-test", &candidate, now)
+                .expect("duplicate expiry")
+                .is_none()
+        );
+        for replacement in [
+            TaskEntry {
+                root: PathBuf::from("/other"),
+                ..candidate.clone()
+            },
+            TaskEntry {
+                wake_meta: Some(crate::config::WakeMeta {
+                    armed_at: now,
+                    ..candidate.wake_meta.clone().expect("meta")
+                }),
+                ..candidate.clone()
+            },
+        ] {
+            insert_into(dir.path(), "wake-test", &replacement).expect("replacement");
+            assert!(
+                claim_expired_in(dir.path(), "wake-test", &candidate, now)
+                    .expect("replaced expiry")
+                    .is_none()
+            );
+            assert!(
+                !observe_signal_wake_in(dir.path(), "wake-test", &candidate, now)
+                    .expect("replaced observation")
+            );
+            assert_eq!(load_from(dir.path()).0["wake-test"], replacement);
         }
     }
 

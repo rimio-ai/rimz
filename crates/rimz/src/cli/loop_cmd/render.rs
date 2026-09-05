@@ -1110,7 +1110,9 @@ pub(super) fn loop_result_mark(result: LoopRunResult) -> ResultMark {
         | LoopRunResult::TargetGone
         | LoopRunResult::Overlapped
         | LoopRunResult::BudgetSkipped => ("○", ui::palette::warn()),
-        LoopRunResult::CheckSkipped | LoopRunResult::SurplusSkipped => ("○", ui::palette::muted()),
+        LoopRunResult::CheckSkipped
+        | LoopRunResult::SignalSkipped
+        | LoopRunResult::SurplusSkipped => ("○", ui::palette::muted()),
     };
     ResultMark { glyph, style }
 }
