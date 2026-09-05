@@ -43,6 +43,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use crate::pane::ClientPaneView;
 use crate::pane::keys::NamedKey;
 
 use serde::{Deserialize, Serialize};
@@ -281,35 +282,6 @@ pub struct ClientPresence {
     /// Freshest client input timestamp in Unix milliseconds. `None` means the
     /// backend cannot report per-client input idle.
     pub last_input_ms: Option<u64>,
-}
-
-/// Backend-native identity for one attached multiplexer client.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(tag = "mux", content = "id", rename_all = "snake_case")]
-pub enum MuxClientId {
-    Tmux(String),
-    Zellij(u32),
-}
-
-/// One native observation pairing an attached client with its viewed pane.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ClientPaneView {
-    pub client_id: MuxClientId,
-    pub pane_id: PaneId,
-}
-
-impl Ord for ClientPaneView {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.client_id
-            .cmp(&other.client_id)
-            .then_with(|| self.pane_id.as_str().cmp(other.pane_id.as_str()))
-    }
-}
-
-impl PartialOrd for ClientPaneView {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
 }
 
 #[derive(Clone, Debug, Default)]

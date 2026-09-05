@@ -17,6 +17,7 @@ layers = [
     "transcript",
     "agent_activity",
     "pane",
+    "wakeup",
     "proc",
     "child_process",
     "config",
@@ -28,7 +29,6 @@ layers = [
     [
     "message",
     "mux",
-    "wakeup",
     "remote",
     "observability",
     "diag",
@@ -148,7 +148,7 @@ surface-budget = 620
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
-surface-budget = 39
+surface-budget = 42
 
 [[module]]
 path = "crates/rimz/src/lane.rs"
@@ -193,7 +193,7 @@ surface-budget = 4
 
 [[module]]
 path = "crates/rimz/src/pane"
-surface-budget = 41
+surface-budget = 42
 
 [[module]]
 path = "crates/rimz/src/proc"
@@ -247,9 +247,7 @@ upward-dependencies = [
     "harness::run_wake",
     "harness::schedule::signal",
     "harness::target",
-    "mux",
     "remote::link",
-    "wakeup",
 ]
 surface-budget = 314
 

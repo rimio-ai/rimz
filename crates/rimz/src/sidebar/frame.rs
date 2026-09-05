@@ -51,7 +51,7 @@ pub struct PaneFrame {
     pub viewed_panes: Vec<PaneId>,
     /// Full native attached-client observations retained for action fences.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub client_views: Vec<crate::mux::ClientPaneView>,
+    pub client_views: Vec<crate::pane::ClientPaneView>,
     /// Session-global latest focused pane resolved from fresh client views or
     /// a backend register derived from those views.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -335,7 +335,7 @@ pub struct FrameInputs<'a> {
     pub session_name: String,
     pub session_focus: Option<PaneId>,
     pub client_viewed: &'a [PaneId],
-    pub client_views: &'a [crate::mux::ClientPaneView],
+    pub client_views: &'a [crate::pane::ClientPaneView],
     pub client_view_fresh: bool,
     pub prior: Option<&'a PaneFrame>,
 }
@@ -462,7 +462,7 @@ fn resolve_session_focus(
     session_focus: Option<&PaneId>,
     prior: Option<&PaneId>,
     client_viewed: &[PaneId],
-    client_views: &[crate::mux::ClientPaneView],
+    client_views: &[crate::pane::ClientPaneView],
     client_view_fresh: bool,
     live: &HashSet<PaneId>,
 ) -> Option<PaneId> {

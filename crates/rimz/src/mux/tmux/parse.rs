@@ -1,8 +1,8 @@
 //! tmux command-output parsers.
 
-use crate::ids::{MuxName, PaneId};
-use crate::mux::{ClientPaneView, ClientPresence, ClientView, MuxClientId, MuxErr, Result};
-use crate::pane::{PaneRef, SIDEBAR_CHROME_TITLE};
+use crate::ids::{MuxClientId, MuxName, PaneId};
+use crate::mux::{ClientPresence, ClientView, MuxErr, Result};
+use crate::pane::{ClientPaneView, PaneRef, SIDEBAR_CHROME_TITLE};
 
 /// Parse one comma-separated `list-panes -F` row into a [`PaneRef`]. Returns
 /// `None` for a row missing the three load-bearing leading columns (session,

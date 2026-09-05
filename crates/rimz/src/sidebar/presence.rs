@@ -89,7 +89,7 @@ pub struct ZellijWake {
     pub pane_id: Option<PaneId>,
     pub active_tab: Option<u64>,
     pub focus_generation: Option<u64>,
-    pub focus_clients: Vec<crate::mux::ClientPaneView>,
+    pub focus_clients: Vec<crate::pane::ClientPaneView>,
     pub topology: Option<PaneTopologyCache>,
     pub telemetry: Option<ZellijPluginTelemetry>,
 }
@@ -445,7 +445,7 @@ fn switch_settled_transition(
     topology: &PaneTopologyCache,
     active_tab: u64,
     generation: u64,
-    clients: &[crate::mux::ClientPaneView],
+    clients: &[crate::pane::ClientPaneView],
 ) -> Option<PresenceTransition> {
     let mut viewed = clients.iter().map(|client| &client.pane_id);
     let first = viewed.next()?;

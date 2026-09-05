@@ -201,12 +201,12 @@ fn full_client_map_requires_every_client_to_agree_on_one_terminal() {
         },
     ];
     let agree = [
-        crate::mux::ClientPaneView {
-            client_id: crate::mux::MuxClientId::Zellij(1),
+        crate::pane::ClientPaneView {
+            client_id: crate::ids::MuxClientId::Zellij(1),
             pane_id: terminal.clone(),
         },
-        crate::mux::ClientPaneView {
-            client_id: crate::mux::MuxClientId::Zellij(2),
+        crate::pane::ClientPaneView {
+            client_id: crate::ids::MuxClientId::Zellij(2),
             pane_id: terminal.clone(),
         },
     ];
@@ -225,8 +225,8 @@ fn full_client_map_requires_every_client_to_agree_on_one_terminal() {
 
     let distinct = [
         agree[0].clone(),
-        crate::mux::ClientPaneView {
-            client_id: crate::mux::MuxClientId::Zellij(2),
+        crate::pane::ClientPaneView {
+            client_id: crate::ids::MuxClientId::Zellij(2),
             pane_id: plugin,
         },
     ];
@@ -254,8 +254,8 @@ fn tmux_client_map_resolves_one_live_pane_and_abstains_on_distinct_views() {
         ..pane(pane_id.raw(), view, Some("zsh"), false)
     };
     let panes = vec![tmux_pane(&first, "@1"), tmux_pane(&second, "@2")];
-    let first_view = crate::mux::ClientPaneView {
-        client_id: crate::mux::MuxClientId::Tmux("client-a".to_owned()),
+    let first_view = crate::pane::ClientPaneView {
+        client_id: crate::ids::MuxClientId::Tmux("client-a".to_owned()),
         pane_id: first.clone(),
     };
     let (single, _) = assemble_frame_from_inputs(FrameInputs {
@@ -273,8 +273,8 @@ fn tmux_client_map_resolves_one_live_pane_and_abstains_on_distinct_views() {
 
     let distinct_views = [
         first_view,
-        crate::mux::ClientPaneView {
-            client_id: crate::mux::MuxClientId::Tmux("client-b".to_owned()),
+        crate::pane::ClientPaneView {
+            client_id: crate::ids::MuxClientId::Tmux("client-b".to_owned()),
             pane_id: second.clone(),
         },
     ];

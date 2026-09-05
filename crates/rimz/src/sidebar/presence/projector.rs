@@ -1,7 +1,7 @@
 //! Shared host policy for projecting normalized mux presence transitions.
 
 use crate::ids::PaneId;
-use crate::mux::ClientPaneView;
+use crate::pane::ClientPaneView;
 use crate::wakeup::events::SidebarEvent;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

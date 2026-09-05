@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::disk::paths::RuntimePaths;
 use crate::disk::paths::state_home;
 use crate::ids::{PaneId, WorkspaceId};
-use crate::mux::ClientPaneView;
+use crate::pane::ClientPaneView;
 
 const NAME: &str = "focus-repairs.log.jsonl";
 const MAX_BYTES: u64 = 4 * 1_048_576;
@@ -108,7 +108,7 @@ mod tests {
             session_name: "rimz-test".to_owned(),
             generation: 7,
             evidence: vec![ClientPaneView {
-                client_id: crate::mux::MuxClientId::Zellij(3),
+                client_id: crate::ids::MuxClientId::Zellij(3),
                 pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
             }],
             target: PaneId::from_parts(MuxName::Zellij, "terminal_2"),

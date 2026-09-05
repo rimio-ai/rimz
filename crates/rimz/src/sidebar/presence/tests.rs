@@ -405,8 +405,8 @@ fn settled_switch_classifies_against_the_accepted_topology() {
     let mut incoming = wake(ZellijWakeReason::SwitchSettled);
     incoming.active_tab = Some(1);
     incoming.focus_generation = Some(8);
-    incoming.focus_clients = vec![crate::mux::ClientPaneView {
-        client_id: crate::mux::MuxClientId::Zellij(1),
+    incoming.focus_clients = vec![crate::pane::ClientPaneView {
+        client_id: crate::ids::MuxClientId::Zellij(1),
         pane_id: zellij_pane("terminal_10"),
     }];
     let mut accepted = topology(unix_now_ms(), Some(writer(2, 200)));

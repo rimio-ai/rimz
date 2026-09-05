@@ -14,7 +14,7 @@ fn applied_focus_anchor(
     order: Option<crate::sidebar_pane::render::FrozenOrder>,
 ) -> crate::mux::focus_anchor::FocusAnchor {
     crate::mux::focus_anchor::FocusAnchor {
-        nonce: crate::mux::focus_anchor::FocusNonce::new(),
+        nonce: crate::ids::FocusNonce::new(),
         session_name: "rimz-test".to_owned(),
         pane_id,
         origin: crate::mux::focus_anchor::FocusOrigin::User,
@@ -184,8 +184,8 @@ fn superseding_client_observation_leaves_scroll_untouched() {
     let selected = zellij("terminal_2");
     let stamp_ms = crate::utils::time::unix_now_ms();
     let mut anchor = applied_focus_anchor(zellij("terminal_1"), 7, stamp_ms, None);
-    anchor.pre_action = vec![crate::mux::ClientPaneView {
-        client_id: crate::mux::MuxClientId::Zellij(7),
+    anchor.pre_action = vec![crate::pane::ClientPaneView {
+        client_id: crate::ids::MuxClientId::Zellij(7),
         pane_id: anchor.pane_id.clone(),
     }];
     crate::mux::focus_anchor::store(&rig.runtime, &anchor).expect("store anchor");
@@ -193,8 +193,8 @@ fn superseding_client_observation_leaves_scroll_untouched() {
 
     let mut snapshot = snapshot_with_focused_pane(&rig.ws, selected.clone());
     snapshot.presence = Some(crate::store::snapshot::SidebarPresence::Active);
-    snapshot.client_views = vec![crate::mux::ClientPaneView {
-        client_id: crate::mux::MuxClientId::Zellij(7),
+    snapshot.client_views = vec![crate::pane::ClientPaneView {
+        client_id: crate::ids::MuxClientId::Zellij(7),
         pane_id: selected.clone(),
     }];
     rig.fold(snapshot, PaneFrame::Fresh, SnapshotSource::Produced);

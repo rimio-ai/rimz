@@ -42,8 +42,8 @@ fn focus_fixture() -> (SidebarSnapshot, PaneId, PaneId, PaneId) {
         own_view_is_daemon: false,
     });
     snapshot.presence = Some(crate::store::snapshot::SidebarPresence::Active);
-    snapshot.client_views = vec![crate::mux::ClientPaneView {
-        client_id: crate::mux::MuxClientId::Zellij(1),
+    snapshot.client_views = vec![crate::pane::ClientPaneView {
+        client_id: crate::ids::MuxClientId::Zellij(1),
         pane_id: sidebar.clone(),
     }];
     (snapshot, sidebar, first_work, second_work)

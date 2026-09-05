@@ -325,15 +325,15 @@ enum ZellijFocusPaneWire {
     Plugin(u64),
 }
 
-fn parse_zellij_focus_clients(raw: &str) -> Vec<rimz::mux::ClientPaneView> {
+fn parse_zellij_focus_clients(raw: &str) -> Vec<rimz::pane::ClientPaneView> {
     let Ok(mut clients) = serde_json::from_str::<Vec<ZellijFocusClientWire>>(raw) else {
         tracing::debug!("presence poke: focus client evidence parse failed");
         return Vec::new();
     };
     let mut projected = clients
         .drain(..)
-        .map(|client| rimz::mux::ClientPaneView {
-            client_id: rimz::mux::MuxClientId::Zellij(client.client_id),
+        .map(|client| rimz::pane::ClientPaneView {
+            client_id: rimz::ids::MuxClientId::Zellij(client.client_id),
             pane_id: match client.pane_id {
                 ZellijFocusPaneWire::Terminal(id) => {
                     PaneId::from_parts(MuxName::Zellij, format!("terminal_{id}"))

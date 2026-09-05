@@ -255,7 +255,7 @@ mod tests {
 
     fn anchor(pane_id: PaneId, stamp_ms: u64) -> FocusAnchor {
         FocusAnchor {
-            nonce: crate::mux::focus_anchor::FocusNonce::new(),
+            nonce: crate::ids::FocusNonce::new(),
             session_name: "rimz-test".to_owned(),
             pane_id,
             origin: crate::mux::focus_anchor::FocusOrigin::User,
@@ -557,8 +557,8 @@ mod tests {
         let mut snapshot = pulled(vec![pane("terminal_1", "zsh")], 12);
         snapshot.panes_observed_at_ms = Some(12);
         snapshot.focused_pane = Some(target.clone());
-        snapshot.client_views = vec![crate::mux::ClientPaneView {
-            client_id: crate::mux::MuxClientId::Zellij(1),
+        snapshot.client_views = vec![crate::pane::ClientPaneView {
+            client_id: crate::ids::MuxClientId::Zellij(1),
             pane_id: target.clone(),
         }];
 

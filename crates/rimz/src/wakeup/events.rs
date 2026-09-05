@@ -63,14 +63,14 @@ pub enum SidebarEvent {
     FocusStranded {
         pane_id: PaneId,
         generation: u64,
-        clients: Vec<crate::mux::ClientPaneView>,
+        clients: Vec<crate::pane::ClientPaneView>,
     },
     /// Store-less wakeup for a sidebar-initiated focus jump. The durable focus
     /// anchor carries the intent; this event only makes peer renderers fold it
     /// before the mux switch reveals the destination.
     FocusIntent {
         pane_id: PaneId,
-        nonce: crate::mux::focus_anchor::FocusNonce,
+        nonce: crate::ids::FocusNonce,
     },
     CommandChanged {
         pane_id: PaneId,
@@ -185,7 +185,7 @@ mod tests {
             },
             SidebarEvent::FocusIntent {
                 pane_id: pane("terminal_2"),
-                nonce: crate::mux::focus_anchor::FocusNonce::new(),
+                nonce: crate::ids::FocusNonce::new(),
             },
             SidebarEvent::FocusChanged {
                 focused: vec![pane("terminal_1")],
@@ -232,8 +232,8 @@ mod tests {
 
     #[test]
     fn focus_events_serialize_client_identity_and_nonce_verbatim() {
-        use crate::mux::focus_anchor::FocusNonce;
-        use crate::mux::{ClientPaneView, MuxClientId};
+        use crate::ids::{FocusNonce, MuxClientId};
+        use crate::pane::ClientPaneView;
 
         let pane_id = pane("terminal_2");
         let pane_json = serde_json::to_value(&pane_id).unwrap();

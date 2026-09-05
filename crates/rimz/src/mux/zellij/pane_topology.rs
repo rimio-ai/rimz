@@ -15,9 +15,9 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
-use crate::ids::{MuxName, PaneId};
-use crate::mux::{ClientPaneView, ClientView, MuxClientId, PRESENCE_STAMP_FRESH, PaneListing};
-use crate::pane::{PaneRef, SIDEBAR_CHROME_TITLE};
+use crate::ids::{MuxClientId, MuxName, PaneId};
+use crate::mux::{ClientView, PRESENCE_STAMP_FRESH, PaneListing};
+use crate::pane::{ClientPaneView, PaneRef, SIDEBAR_CHROME_TITLE};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneTopologyCache {
