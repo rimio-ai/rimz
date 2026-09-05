@@ -231,6 +231,62 @@ mod tests {
     }
 
     #[test]
+    fn focus_events_serialize_client_identity_and_nonce_verbatim() {
+        use crate::mux::focus_anchor::FocusNonce;
+        use crate::mux::{ClientPaneView, MuxClientId};
+
+        let pane_id = pane("terminal_2");
+        let pane_json = serde_json::to_value(&pane_id).unwrap();
+        let event = SidebarEvent::FocusStranded {
+            pane_id: pane_id.clone(),
+            generation: 3,
+            clients: vec![
+                ClientPaneView {
+                    client_id: MuxClientId::Tmux("%3".into()),
+                    pane_id: pane_id.clone(),
+                },
+                ClientPaneView {
+                    client_id: MuxClientId::Zellij(7),
+                    pane_id: pane_id.clone(),
+                },
+            ],
+        };
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            serde_json::json!({
+                "kind": "focus_stranded",
+                "pane_id": pane_json,
+                "generation": 3,
+                "clients": [
+                    {"client_id": {"mux": "tmux", "id": "%3"}, "pane_id": pane_json},
+                    {"client_id": {"mux": "zellij", "id": 7}, "pane_id": pane_json}
+                ]
+            })
+        );
+
+        let nonce = FocusNonce::new();
+        let nonce_json = serde_json::json!(nonce.to_string());
+        let event = SidebarEvent::FocusIntent { pane_id, nonce };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["nonce"], nonce_json);
+        assert_eq!(
+            serde_json::from_value::<SidebarEvent>(value).unwrap(),
+            event
+        );
+
+        let first = ClientPaneView {
+            client_id: MuxClientId::Zellij(7),
+            pane_id: pane("terminal_10"),
+        };
+        let second = ClientPaneView {
+            pane_id: pane("terminal_2"),
+            ..first.clone()
+        };
+        assert_eq!(first.cmp(&second), std::cmp::Ordering::Less);
+        assert!(first < second);
+    }
+
+    #[test]
     fn legacy_pane_frame_published_decodes_as_topology() {
         let decoded: SidebarEvent =
             serde_json::from_str(r#"{"kind":"pane_frame_published"}"#).unwrap();
