@@ -6,7 +6,7 @@ use super::{Signal, SignalSource};
 use crate::agents::{
     AgentState, AgentStatus, LifecycleEvent, LifecycleSignal, LifecycleTransition,
 };
-use crate::harness::target::{agent_channel, agent_handle};
+use crate::harness::target::agent_handle;
 use crate::store::message::MessageRecord;
 
 /// Derive team signals from the transitioning audit row and its live cohort members.
@@ -81,7 +81,7 @@ pub fn team_lifecycle_signals(
     if names.is_empty() {
         return Vec::new();
     }
-    let channel = agent_channel(member).unwrap_or_else(|| "external".to_owned());
+    let channel = member.channel().unwrap_or_else(|| "external".to_owned());
     let payload = Map::from_iter([
         ("team".to_owned(), json!(team)),
         ("instance".to_owned(), json!(format!("{team}#{channel}"))),
@@ -164,7 +164,7 @@ mod tests {
             .iter()
             .find(|row| row.kind == event.kind && row.agent_id == event.agent_id)
             .unwrap();
-        let channel = agent_channel(member).unwrap_or_else(|| "external".to_owned());
+        let channel = member.channel().unwrap_or_else(|| "external".to_owned());
         let cohorts = team_cohorts(rows);
         let live = cohorts
             .iter()
