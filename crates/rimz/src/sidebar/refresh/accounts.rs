@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::RuntimePaths;
 use crate::agents::AgentAccount;
 use crate::agents::account::AccountProbe;
-use crate::sidebar::timing::{ACCOUNTS_RETRY_TTL, ACCOUNTS_TTL, unix_now_ms};
+use crate::sidebar::timing::{ACCOUNTS_RETRY_TTL, ACCOUNTS_TTL};
+use crate::utils::time::unix_now_ms;
 
 use super::trace::{TraceEvent, duration_ms};
 use super::{SidebarSnapshot, trace};

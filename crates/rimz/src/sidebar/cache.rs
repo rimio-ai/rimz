@@ -15,9 +15,8 @@ use crate::disk::parse_cache::{ParseCache, StampedPath};
 use crate::ids::MuxName;
 use crate::mux::zellij::pane_topology::PaneTopologyCache;
 use crate::sidebar::frame::PaneFrame;
-use crate::sidebar::timing::{
-    EVENT_PANE_TTL, PRESENCE_STAMP_FRESH, SNAPSHOT_CACHE_TTL, unix_now_ms,
-};
+use crate::sidebar::timing::{EVENT_PANE_TTL, PRESENCE_STAMP_FRESH, SNAPSHOT_CACHE_TTL};
+use crate::utils::time::unix_now_ms;
 
 // The shared pane frame cache is keyed to one `(workspace, session)`: the
 // per-workspace runtime root scopes the workspace, and `session_name` prevents

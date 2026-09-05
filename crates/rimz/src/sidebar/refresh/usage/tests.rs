@@ -484,7 +484,7 @@ fn fresh_cached_account_usage_gates_helper_and_synchronous_refresh() {
             entries: BTreeMap::from([(
                 "claude".to_owned(),
                 ProviderCreditsEntry {
-                    oauth_read_at_ms: crate::sidebar::timing::unix_now_ms(),
+                    oauth_read_at_ms: crate::utils::time::unix_now_ms(),
                     credentials_stamp: Some(7),
                     account_key: Some("owner".to_owned()),
                     ok: true,
@@ -540,7 +540,7 @@ fn account_usage_changed_cached_credentials_claim_once_without_rereading_owner()
             entries: BTreeMap::from([(
                 "claude".to_owned(),
                 ProviderCreditsEntry {
-                    oauth_read_at_ms: crate::sidebar::timing::unix_now_ms(),
+                    oauth_read_at_ms: crate::utils::time::unix_now_ms(),
                     credentials_stamp: Some(7),
                     account_key: Some("owner".to_owned()),
                     ok: true,

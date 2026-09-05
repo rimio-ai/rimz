@@ -271,7 +271,7 @@ fn collect_plugin_presence(
 ) -> Option<model::Probe<model::PresencePlugins>> {
     let runtime = RuntimePaths::for_workspace(ws.workspace_id.clone()).ok()?;
     let state = StatePaths::for_workspace(ws.workspace_id.clone()).ok()?;
-    let now_ms = rimz::sidebar::timing::unix_now_ms();
+    let now_ms = rimz::utils::time::unix_now_ms();
     let cache = rimz::sidebar::cache::read_pane_topology_cache(&runtime, &ws.session_name);
     let cache_writer = cache.as_ref().and_then(|cache| cache.writer.as_ref());
     let conflict = fresh_topology_writer_conflict(&runtime, cache_writer, now_ms);
@@ -613,7 +613,7 @@ fn collect_presence(
     let stamp = read_presence_stamp(&runtime);
     let age = stamp
         .as_ref()
-        .map(|stamp| rimz::sidebar::timing::unix_now_ms().saturating_sub(stamp.written_at_ms));
+        .map(|stamp| rimz::utils::time::unix_now_ms().saturating_sub(stamp.written_at_ms));
     if presence_stamp_is_event(stamp.as_ref(), age, mux, &ws.session_name, ownership) {
         return model::Presence::Event {
             poked_secs: age.unwrap_or(0) / 1000,
@@ -771,7 +771,7 @@ fn collect_topology_writer(ws: &rimz::ResolvedWorkspace) -> Option<model::Topolo
     let conflict = RuntimePaths::for_workspace(ws.workspace_id.clone())
         .ok()
         .and_then(|runtime| {
-            let now_ms = rimz::sidebar::timing::unix_now_ms();
+            let now_ms = rimz::utils::time::unix_now_ms();
             let cache_writer =
                 rimz::sidebar::cache::read_pane_topology_cache(&runtime, &ws.session_name)
                     .and_then(|cache| cache.writer);

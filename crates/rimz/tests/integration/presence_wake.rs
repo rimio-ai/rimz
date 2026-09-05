@@ -33,7 +33,7 @@ use rimz::sidebar::cache::{
 use rimz::sidebar::frame::assemble_frame;
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
 use rimz::sidebar::presence::read_topology_writer_conflict;
-use rimz::sidebar::timing::unix_now_ms;
+use rimz::utils::time::unix_now_ms;
 use tempfile::TempDir;
 
 use crate::common::ScrubSessionEnvExt;

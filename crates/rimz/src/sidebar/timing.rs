@@ -5,7 +5,7 @@
 //! re-export values through their local facades when that keeps older paths
 //! stable.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use jiff::SignedDuration;
 
@@ -400,12 +400,4 @@ pub fn breath_animation_frame(refresh_ms: u16) -> Duration {
 /// this stays structurally coupled to the renderer's phase counter.
 pub fn money_animation_frame(refresh_ms: u16, click_phases: u64) -> Duration {
     Duration::from_millis(u64::from(refresh_ms) * click_phases)
-}
-
-pub fn unix_now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .min(u128::from(u64::MAX)) as u64
 }

@@ -1,8 +1,16 @@
-//! Parsers for compact, human-authored time values used across RimZ domains.
+//! Wall clock and parsers for compact, human-authored time values across RimZ domains.
 
 use std::num::ParseIntError;
 use std::str::FromStr;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+pub fn unix_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
+}
 
 /// A duration suffix RimZ accepts at a particular input boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

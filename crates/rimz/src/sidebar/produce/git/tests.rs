@@ -160,7 +160,7 @@ fn project_group_roots_refreshes_a_legacy_unclassified_cache() {
         &runtime.diff_stats_path(),
         &DiffStatsCache {
             worktrees: Some(WorktreeRootsCache {
-                refreshed_at_ms: crate::sidebar::timing::unix_now_ms(),
+                refreshed_at_ms: crate::utils::time::unix_now_ms(),
                 roots: vec![old_root],
                 marker_names: None,
             }),

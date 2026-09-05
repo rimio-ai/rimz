@@ -24,7 +24,7 @@ use crate::sidebar::cache::{
     write_pane_topology_cache, write_presence_stamp,
 };
 use crate::sidebar::events::SidebarEvent;
-use crate::sidebar::timing::unix_now_ms;
+use crate::utils::time::unix_now_ms;
 use crate::{RuntimePaths, StatePaths};
 
 pub(crate) mod projector;

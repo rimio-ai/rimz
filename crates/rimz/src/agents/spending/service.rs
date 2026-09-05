@@ -966,7 +966,7 @@ mod tests {
         runtime.ensure_dirs().unwrap();
         super::super::write_provider_spending_cache(
             &runtime.shared_provider_spending_path(),
-            super::super::unix_now_ms(),
+            crate::utils::time::unix_now_ms(),
             &Default::default(),
         );
 
@@ -1092,7 +1092,7 @@ mod tests {
         runtime.ensure_shared_dirs().unwrap();
         super::super::write_provider_spending_cache(
             &runtime.shared_provider_spending_path(),
-            super::super::unix_now_ms(),
+            crate::utils::time::unix_now_ms(),
             &Default::default(),
         );
         let namespace = SpendingServiceNamespace::for_runtime(&runtime);
@@ -1108,7 +1108,7 @@ mod tests {
         });
         drop(held);
 
-        assert!(caches.provider.is_fresh(super::super::unix_now_ms()));
+        assert!(caches.provider.is_fresh(crate::utils::time::unix_now_ms()));
     }
 
     #[test]

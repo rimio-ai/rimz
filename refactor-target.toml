@@ -325,6 +325,7 @@ allowed-dependencies = [
     "sidebar::timing",
     "disk::paths",
     "tui",
+    "utils::time",
 ]
 surface-budget = 9
 
@@ -421,6 +422,7 @@ allowed-dependencies = [
     "sidebar::cache",
     "sidebar::timing",
     "disk::paths",
+    "utils::time",
     "workspace",
 ]
 surface-budget = 15
@@ -464,7 +466,7 @@ surface-budget = 29
 [[module]]
 path = "crates/rimz/src/utils/time.rs"
 allowed-dependencies = []
-surface-budget = 7
+surface-budget = 8
 
 [[module]]
 path = "crates/rimz/src/harness/ancestry.rs"

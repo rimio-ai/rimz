@@ -42,12 +42,6 @@ pub const SPENDING_TTL: Duration = Duration::from_secs(15);
 /// Maximum age served while another producer owns the global walk.
 pub(crate) const SPENDING_STALE_GRACE: Duration = Duration::from_secs(90);
 
-pub(crate) fn unix_now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_millis() as u64)
-}
-
 #[cfg(test)]
 pub(crate) use aggregate::CountedPayload;
 pub(crate) use aggregate::{

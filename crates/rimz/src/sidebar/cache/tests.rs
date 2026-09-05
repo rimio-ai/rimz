@@ -7,8 +7,9 @@ use crate::sidebar::refresh::git_stats::{DiffStats, DiffStatsCacheEntry, Worktre
 use crate::sidebar::test_support::pane;
 use crate::sidebar::timing::{
     DIFF_STATS_IDLE_TTL, DIFF_STATS_TTL, EVENT_PANE_TTL, PRESENCE_STAMP_FRESH, SNAPSHOT_CACHE_TTL,
-    WORKTREE_ROOTS_TTL, unix_now_ms,
+    WORKTREE_ROOTS_TTL,
 };
+use crate::utils::time::unix_now_ms;
 #[test]
 fn pane_topology_cache_freshness_honors_requested_floor() {
     let cache = PaneTopologyCache {

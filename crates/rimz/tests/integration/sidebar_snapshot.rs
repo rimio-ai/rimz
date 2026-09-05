@@ -179,11 +179,8 @@ fn frame_emits_plain_text_over_a_pipe() {
     let session = "test-session";
     let runtime = env.runtime_paths();
     runtime.ensure_dirs().expect("runtime dirs");
-    let published = rimz::sidebar::frame::assemble_frame(
-        Vec::new(),
-        rimz::sidebar::timing::unix_now_ms(),
-        session,
-    );
+    let published =
+        rimz::sidebar::frame::assemble_frame(Vec::new(), rimz::utils::time::unix_now_ms(), session);
     rimz::disk::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &published)
         .expect("publish pane frame");
 
@@ -474,7 +471,7 @@ fn kiro_local_store_bootstraps_live_state_and_history_without_events() {
 
     let frame = rimz::sidebar::frame::assemble_frame(
         vec![pane.clone()],
-        rimz::sidebar::timing::unix_now_ms(),
+        rimz::utils::time::unix_now_ms(),
         &session_name,
     );
     rimz::disk::atomic::write_temp_then_rename_cache(

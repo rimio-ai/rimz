@@ -241,7 +241,7 @@ pub mod fleet {
         runtime: &RuntimePaths,
         panes: Vec<PaneRef>,
     ) -> io::Result<()> {
-        let now_ms = sidebar::timing::unix_now_ms();
+        let now_ms = crate::utils::time::unix_now_ms();
         let frame = sidebar::frame::assemble_frame(panes, now_ms, SESSION_NAME);
         sidebar::produce::publish_test_pane_frame(runtime, &frame).map_err(io::Error::other)?;
 

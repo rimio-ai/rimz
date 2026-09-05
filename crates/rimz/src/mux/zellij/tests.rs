@@ -24,7 +24,7 @@ use crate::mux::{
 #[cfg(unix)]
 use crate::sidebar::cache::write_pane_topology_cache;
 #[cfg(unix)]
-use crate::sidebar::timing::unix_now_ms;
+use crate::utils::time::unix_now_ms;
 
 #[test]
 fn tab_move_count_places_new_last_tab_after_anchor() {

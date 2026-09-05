@@ -11,11 +11,12 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 #[cfg(target_os = "macos")]
 use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use jiff::Timestamp;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+
+use crate::utils::time::unix_now_ms;
 
 use crate::agents::account::file_mtime_ms;
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
@@ -377,13 +378,6 @@ fn collect_extra_usage(field: Option<ExtraUsageWire>) -> Option<ExtraCredits> {
 
 fn cents_to_usd(value: Option<f64>) -> Option<f64> {
     value.map(|value| value / 100.0)
-}
-
-fn unix_now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

@@ -52,7 +52,7 @@ fn ingest_probes(path: &Path, client: &str) -> Result<()> {
             std::process::exit(LINK_SCHEMA_MISMATCH_EXIT);
         }
         let file = LinkStatsFile::new(
-            rimz::sidebar::timing::unix_now_ms(),
+            rimz::utils::time::unix_now_ms(),
             client.to_owned(),
             probe.stats.clone(),
         );

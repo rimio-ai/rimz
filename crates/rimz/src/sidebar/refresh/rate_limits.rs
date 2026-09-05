@@ -12,8 +12,8 @@ use crate::agents::account::{
 };
 use crate::agents::context::RateLimitWindowKey;
 use crate::agents::{AccountUsageIdentity, AgentRateLimits, RateLimitWindow};
-use crate::sidebar::timing::unix_now_ms;
 use crate::store::snapshot::SidebarSnapshot;
+use crate::utils::time::unix_now_ms;
 
 #[cfg(test)]
 mod tests;

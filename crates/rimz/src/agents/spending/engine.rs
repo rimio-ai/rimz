@@ -14,7 +14,9 @@ use crate::agents::spending::{
     user_input,
 };
 
-use super::{SPENDING_STALE_GRACE, unix_now_ms};
+use crate::utils::time::unix_now_ms;
+
+use super::SPENDING_STALE_GRACE;
 
 const SPENDING_WAIT_STEP: Duration = Duration::from_millis(20);
 const SPENDING_WAIT_STEPS: u32 = 15;

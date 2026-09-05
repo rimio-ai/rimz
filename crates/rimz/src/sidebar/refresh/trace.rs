@@ -70,7 +70,7 @@ pub(super) fn record<'a>(runtime: &RuntimePaths, event: impl FnOnce() -> TraceEv
         &path,
         TRACE_MAX_BYTES,
         &TraceRecord {
-            at_ms: super::super::timing::unix_now_ms(),
+            at_ms: crate::utils::time::unix_now_ms(),
             event: event(),
         },
     );

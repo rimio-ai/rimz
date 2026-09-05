@@ -732,7 +732,7 @@ impl DaemonRepairTracker {
         self.maintain_with(
             resolved.stamp,
             frame.as_deref(),
-            crate::sidebar::timing::unix_now_ms(),
+            crate::utils::time::unix_now_ms(),
             || {
                 let machine = crate::config::MachineConfig::load_lenient();
                 // Repair keeps an enabled host serving, so it refills the host's

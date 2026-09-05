@@ -193,7 +193,7 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
     state.ensure_dirs().unwrap();
     runtime.ensure_dirs().unwrap();
 
-    let now_ms = crate::sidebar::timing::unix_now_ms();
+    let now_ms = crate::utils::time::unix_now_ms();
     let frame = crate::sidebar::frame::assemble_frame(
         vec![pane("terminal_7", "tab_1", false)],
         now_ms,
@@ -569,7 +569,7 @@ impl ConsumerFixture {
     fn write_pane_frame(&self) {
         let mut frame = crate::sidebar::frame::assemble_frame(
             vec![pane("terminal_7", "tab_1", false)],
-            crate::sidebar::timing::unix_now_ms(),
+            crate::utils::time::unix_now_ms(),
             "rimz-test",
         );
         frame.topology_stamp_ms = Some(11);

@@ -20,7 +20,7 @@ use crate::disk::{atomic, paths};
 use crate::ids::PaneId;
 use crate::mux::{MuxErr, Result};
 use crate::sidebar::cache::{PresenceDesired, read_pane_topology_cache, write_presence_desired};
-use crate::sidebar::timing::unix_now_ms;
+use crate::utils::time::unix_now_ms;
 
 const EMBEDDED_PRESENCE_PLUGIN: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/rimz-presence-zellij.wasm"));

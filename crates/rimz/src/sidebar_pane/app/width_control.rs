@@ -375,7 +375,7 @@ impl WidthController {
             mux,
             width,
             convergence: WidthControl::new(None),
-            started_at_ms: crate::sidebar::timing::unix_now_ms(),
+            started_at_ms: crate::utils::time::unix_now_ms(),
             current_view_cols: None,
             last_siblings: None,
             structural_at_ms: None,
@@ -547,7 +547,7 @@ impl WidthController {
         {
             if self.convergence.needs_adjustment(measured_cols) {
                 self.classification_deadline = Some(Instant::now() + FEEDBACK_TIMEOUT);
-                self.classification_resize_at_ms = Some(crate::sidebar::timing::unix_now_ms());
+                self.classification_resize_at_ms = Some(crate::utils::time::unix_now_ms());
             }
             return;
         }
@@ -646,7 +646,7 @@ impl WidthController {
             let previous = self.last_siblings.replace(siblings);
             if previous.is_some_and(|previous| previous != siblings)
                 && !self.note_structural(
-                    panes_observed_at_ms.unwrap_or_else(crate::sidebar::timing::unix_now_ms),
+                    panes_observed_at_ms.unwrap_or_else(crate::utils::time::unix_now_ms),
                     measured_cols,
                     diag,
                 )

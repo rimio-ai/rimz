@@ -20,8 +20,9 @@ use crate::sidebar::cache::{
     write_presence_probe_stamp,
 };
 use crate::sidebar::frame::{FrameInputs, PaneFrame, PaneMetrics};
-use crate::sidebar::timing::{PRESENCE_SAMPLE_TTL, SNAPSHOT_CACHE_TTL, unix_now_ms};
+use crate::sidebar::timing::{PRESENCE_SAMPLE_TTL, SNAPSHOT_CACHE_TTL};
 use crate::store::snapshot::PresenceSample;
+use crate::utils::time::unix_now_ms;
 
 mod carry;
 mod starts;

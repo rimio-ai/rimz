@@ -14,7 +14,7 @@ use crate::sidebar::refresh::git_stats::{
 use crate::sidebar::refresh::{CodexDaemonReap, read_codex_daemon_reap};
 use crate::sidebar::test_support::{activity_row, pane, root_agent, worktree_group};
 use crate::sidebar::timing::GIT_ACTIVITY_WINDOW;
-use crate::sidebar::timing::unix_now_ms;
+use crate::utils::time::unix_now_ms;
 use jiff::SignedDuration;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};

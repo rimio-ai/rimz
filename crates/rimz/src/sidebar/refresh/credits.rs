@@ -14,9 +14,9 @@ use crate::agents::{
 use crate::config::AccountsConfig;
 use crate::sidebar::timing::{
     ACCOUNT_USAGE_CLAIM_TTL, CREDITS_DISPLAY_MAX_AGE, OAUTH_USAGE_SETTLED_TTL, OAUTH_USAGE_TTL,
-    unix_now_ms,
 };
 use crate::store::snapshot::{SidebarSnapshot, format_plan_label};
+use crate::utils::time::unix_now_ms;
 
 /// Shared provider extra-credits cache, keyed by agent kind.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]

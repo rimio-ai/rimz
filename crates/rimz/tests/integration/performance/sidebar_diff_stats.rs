@@ -155,7 +155,7 @@ impl Fixture {
         runtime.ensure_dirs().expect("runtime dirs");
         let frame = rimz::sidebar::frame::assemble_frame(
             panes,
-            rimz::sidebar::timing::unix_now_ms(),
+            rimz::utils::time::unix_now_ms(),
             session.clone(),
         );
         std::fs::write(
