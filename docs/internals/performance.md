@@ -85,7 +85,7 @@ The rules a performance change follows, ordered. An earlier rule outranks a late
 
 ## The cost map
 
-What each lane costs and what holds it down. Reproducible figures come from `cargo xtask perf`; external IPC rows name measured production ranges. Cadence constants live in [`timing.rs`](../../crates/rimz/src/sidebar/timing.rs), and the staleness each lane may show is budgeted in [state.md](./sidebar/state.md#cadences).
+What each lane costs and what holds it down. Reproducible figures come from `cargo xtask perf`; external IPC rows name measured production ranges. The sidebar's own cadence constants live in [`timing.rs`](../../crates/rimz/src/sidebar/timing.rs); a bound that governs another module sits with that module, so the paint grid is in [`config.rs`](../../crates/rimz/src/config.rs), presence-stamp freshness in [`mux/mod.rs`](../../crates/rimz/src/mux/mod.rs), and the renderer heartbeat TTL in [`wakeup/heartbeat.rs`](../../crates/rimz/src/wakeup/heartbeat.rs). The staleness each lane may show is budgeted in [state.md](./sidebar/state.md#cadences).
 
 ### The render loop
 

@@ -12,7 +12,7 @@ The other half are expensive. The pane roster costs a multiplexer IPC round trip
 
 Three rules resolve that, and everything below is a consequence of them.
 
-1. **The store is truth; every file the sidebar writes is cache.** A cache file rebuilds from the store plus a fresh read, is written temp-file-plus-rename with no fsync, and can be deleted at any moment without losing anything ([store.md → write classes](../store.md#write-classes)). A `cargo xtask invariants` grep keeps store-writer, run-wake, and broker imports out of `crates/rimz/src/sidebar/`, so the read-only boundary holds by construction.
+1. **The store is truth; every file the sidebar writes is cache.** A cache file rebuilds from the store plus a fresh read, is written temp-file-plus-rename with no fsync, and can be deleted at any moment without losing anything ([store.md → write classes](../store.md#write-classes)). A `cargo xtask invariants` grep keeps store-writer, run-wake, and broker imports out of the sidebar graph, `crates/rimz/src/sidebar/` and the shared wire in `crates/rimz/src/wakeup/` alike, so the read-only boundary holds by construction.
 2. **One renderer per workspace pays the expensive reads.** The eldest live renderer is elected **producer**, does the external work once, and publishes the result. Every other renderer folds those published files in process and never pulls for freshness on its own.
 3. **Realtime events carry latency, never truth.** A wakeup datagram lets a change paint now instead of at the next poll. A dropped datagram costs staleness bounded by the next producer pull, never a wrong verdict.
 
@@ -41,14 +41,9 @@ Three rules resolve that, and everything below is a consequence of them.
 
 ## Where the code lives
 
-Two module trees split the work by side of the boundary. `crates/rimz/src/sidebar/` is the data plane: it reads, folds, and publishes, and it never writes store truth. `crates/rimz/src/sidebar_pane/` is the renderer process that drives it.
+Two module trees split the work by side of the boundary. `crates/rimz/src/sidebar/` is the data plane: it reads, folds, and publishes, and it never writes store truth. `crates/rimz/src/sidebar_pane/` is the renderer process that drives it. Two more modules below them hold what the data plane shares with other senders: `crates/rimz/src/wakeup/` is the wire, and `crates/rimz/src/mux/` owns the runtime files the multiplexer writes or dispatches on.
 
-Election and liveness:
-
-| Module | What it owns |
-| --- | --- |
-| [`mod.rs`](../../../crates/rimz/src/sidebar/mod.rs) | Launch gating, producer election (`ProducerElectionTracker`), and the orphan sweep. |
-| [`heartbeat.rs`](../../../crates/rimz/src/sidebar/heartbeat.rs) | The per-renderer liveness file every election and launch gate reads. |
+Election and liveness live in [`mod.rs`](../../../crates/rimz/src/sidebar/mod.rs): launch gating, producer election (`ProducerElectionTracker`), and the orphan sweep, all decided over the heartbeat records the wire defines.
 
 Reading and folding:
 
@@ -57,7 +52,7 @@ Reading and folding:
 | [`consumer.rs`](../../../crates/rimz/src/sidebar/consumer.rs) | The consumer read: event-fresh rollup over the published pane frame, projection adoption, fold-skip input stamps, and memo lifecycle. |
 | [`enrich.rs`](../../../crates/rimz/src/sidebar/enrich.rs) | The ordered fold spine both producer and consumer run, so the two paths cannot drift. |
 | [`frame.rs`](../../../crates/rimz/src/sidebar/frame.rs) | `PaneFrame`, the typed pane topology the producer publishes. |
-| [`cache.rs`](../../../crates/rimz/src/sidebar/cache.rs) | The pane-frame cache read, its freshness verdict, and the presence and topology hint files. |
+| [`cache.rs`](../../../crates/rimz/src/sidebar/cache.rs) | The pane-frame cache read, its freshness verdict, the presence stamp, and the authoritative pane probe. |
 
 Producing and publishing, all producer-only:
 
@@ -72,11 +67,9 @@ Realtime and presence:
 
 | Module | What it owns |
 | --- | --- |
-| [`events.rs`](../../../crates/rimz/src/sidebar/events.rs) | The wakeup envelope, the event taxonomy, and the in-memory overlay store. |
-| [`wakeup.rs`](../../../crates/rimz/src/sidebar/wakeup.rs) | Sender-side heartbeat freshness, envelope encoding, and nonblocking datagram fanout. |
+| [`event_store.rs`](../../../crates/rimz/src/sidebar/event_store.rs) | The receiver's in-memory overlay store: which events overlay, how they supersede, when they expire, and the cap. |
 | [`presence.rs`](../../../crates/rimz/src/sidebar/presence.rs) | Zellij presence-wake ingestion and the topology writer gate. `presence/projector.rs` is the shared host policy both backends feed; `presence/tmux.rs` is the control-mode side. |
 | [`fuse.rs`](../../../crates/rimz/src/sidebar/fuse.rs) | Pure fusion of pulled truth, overlay events, and pending focus intent. |
-| [`focus_anchor.rs`](../../../crates/rimz/src/sidebar/focus_anchor.rs) | The two-phase intent behind every RimZ-initiated focus action. |
 
 Attention, instrumentation, and constants:
 
@@ -85,8 +78,18 @@ Attention, instrumentation, and constants:
 | [`unread.rs`](../../../crates/rimz/src/sidebar/unread.rs), [`read_marks.rs`](../../../crates/rimz/src/sidebar/read_marks.rs) | Durable unread episodes and the read receipts that clear them. |
 | [`notify.rs`](../../../crates/rimz/src/sidebar/notify.rs) | Notification policy over newly opened unread episodes ([notifications.md](./notifications.md)). |
 | [`observe.rs`](../../../crates/rimz/src/sidebar/observe.rs), [`meter.rs`](../../../crates/rimz/src/sidebar/meter.rs) | The frame-stream anomaly observer and the producer tick-budget meter ([diagnostics.md](../diagnostics.md)). |
-| [`width_target.rs`](../../../crates/rimz/src/sidebar/width_target.rs) | The room-runtime sidebar share and whether a user action pinned it. |
-| [`timing.rs`](../../../crates/rimz/src/sidebar/timing.rs) | Every sidebar cadence and TTL, as named constants with the reasoning on each. |
+| [`timing.rs`](../../../crates/rimz/src/sidebar/timing.rs) | Every sidebar cadence and TTL, as named constants with the reasoning on each. A bound that defines another module's behaviour lives with that module instead. |
+
+Below the data plane, shared with the mux seam, the store's write tail, and remote control:
+
+| Module | What it owns |
+| --- | --- |
+| [`wakeup/mod.rs`](../../../crates/rimz/src/wakeup/mod.rs) | Sender-side heartbeat freshness, envelope encoding, and nonblocking datagram fanout. |
+| [`wakeup/events.rs`](../../../crates/rimz/src/wakeup/events.rs) | The versioned wakeup envelope and the event taxonomy every sender and receiver share. |
+| [`wakeup/heartbeat.rs`](../../../crates/rimz/src/wakeup/heartbeat.rs) | The per-renderer liveness file every election and launch gate reads, its TTL, and the freshness scans over the heartbeat directory. |
+| [`mux/focus_anchor.rs`](../../../crates/rimz/src/mux/focus_anchor.rs) | The two-phase intent behind every RimZ-initiated focus action. |
+| [`mux/width_target.rs`](../../../crates/rimz/src/mux/width_target.rs) | The room-runtime sidebar share and whether a user action pinned it. |
+| [`mux/zellij/pane_topology.rs`](../../../crates/rimz/src/mux/zellij/pane_topology.rs) | The Zellij topology cache, its freshness window, and the desired-presence record. |
 
 On the renderer side, `render/` paints and `app/` runs the loop and the threads this doc describes:
 
@@ -196,7 +199,7 @@ Written by the producer ([`produce/panes.rs`](../../../crates/rimz/src/sidebar/p
 
 ### Presence hints
 
-These are the multiplexer's side of the channel, written outside the sidebar's own fold.
+These are the multiplexer's side of the channel, written outside the sidebar's own fold. `pane-topology.json` and `presence-desired.json` are spelled by [`mux/zellij/pane_topology.rs`](../../../crates/rimz/src/mux/zellij/pane_topology.rs), which owns their path, schema, and freshness window whichever process writes them.
 
 | Lane | Writer | Carries |
 | --- | --- | --- |
@@ -276,7 +279,7 @@ The cache refresher keeps the managed `rimzd` view converged, and it treats a fr
 
 ## Realtime events
 
-Wakeup datagrams carry `SidebarEventEnvelope` ([`events.rs`](../../../crates/rimz/src/sidebar/events.rs)): a schema version, the workspace id, an optional session scope, a sender timestamp, and the typed event.
+Wakeup datagrams carry `SidebarEventEnvelope` ([`wakeup/events.rs`](../../../crates/rimz/src/wakeup/events.rs)): a schema version, the workspace id, an optional session scope, a sender timestamp, and the typed event.
 
 `session_name` is the scope. `Some` targets the one mux session whose pane ids the event names; `None` is workspace-wide, which is how store deltas, reloads, and pane-frame publications reach every renderer of the workspace. The receive path drops an event for another workspace or session before it reaches the store.
 
@@ -285,7 +288,7 @@ Events divide into two kinds by what the receiver does with them:
 - **Overlay events** land in the in-memory event store and change what the next fuse paints. Exactly four qualify: `PaneClosed`, `CommandChanged`, `FocusChanged`, and a `PaneOpened` that carries a command.
 - **Nudges and actions** are consumed on arrival. Some ask the producer for a verifying pull, some drive a renderer action, and none of them touch the overlay store.
 
-The store keeps one slot per key: per pane per event kind, plus a single focus slot, latest stamp wins, capped at `MAX_EVENTS` (256). Each entry records both `sent_at_ms`, used for supersession against the pane frame, and its receive time, used for expiry under `EVENT_STORE_TTL` on the receiver's own clock. So a skewed sender clock can mis-order an overlay briefly and can never pin one.
+The store ([`event_store.rs`](../../../crates/rimz/src/sidebar/event_store.rs)) keeps one slot per key: per pane per event kind, plus a single focus slot, latest stamp wins, capped at 256 entries. Each entry records both `sent_at_ms`, used for supersession against the pane frame, and its receive time, used for expiry under `EVENT_STORE_TTL` on the receiver's own clock. So a skewed sender clock can mis-order an overlay briefly and can never pin one.
 
 ### Event taxonomy
 
@@ -371,14 +374,14 @@ Expired events disappear by receiver-clock TTL, and any wrong verdict from a mis
 
 ## Focus intent
 
-Every RimZ-initiated focus action, whether a user jump or an automatic repair, is a durable two-phase intent in `focus-anchor.json` ([`focus_anchor.rs`](../../../crates/rimz/src/sidebar/focus_anchor.rs)). The file is workspace-wide and client-scoped, and it carries a nonce, the session, the target pane, the origin, the exact pre-action client map, the viewport offset, and the frozen row order from the source frame.
+Every RimZ-initiated focus action, whether a user jump or an automatic repair, is a durable two-phase intent in `focus-anchor.json` ([`mux/focus_anchor.rs`](../../../crates/rimz/src/mux/focus_anchor.rs)). The file is workspace-wide and client-scoped, and it carries a nonce, the session, the target pane, the origin, the exact pre-action client map, the viewport offset, and the frozen row order from the source frame.
 
 The intent has two states:
 
 - **`Requested`** is written and wakes every renderer with a store-less `FocusIntent` before the one-way mux focus command. It supplies a bounded presentation overlay, so peer tabs adopt the target, viewport offset, and frozen order while the destination is still hidden.
 - **`Applied`** records command acceptance without reseeding presentation. It is the honest accepted phase used by native confirmation and fencing.
 
-Command acceptance and later native client observations resolve an intent. The pre-action client map is the fence, and [`observation_outcome`](../../../crates/rimz/src/sidebar/focus_anchor.rs) returns one of five verdicts:
+Command acceptance and later native client observations resolve an intent. The pre-action client map is the fence, and [`observation_outcome`](../../../crates/rimz/src/mux/focus_anchor.rs) returns one of five verdicts:
 
 | Verdict | Condition | Effect |
 | --- | --- | --- |
@@ -392,7 +395,7 @@ A missed `FocusIntent` wakeup delays the fold until another event or pull arrive
 
 ## Cadences
 
-The table names staleness-budget semantics. Exact values and the reasoning behind each live as named constants in [`timing.rs`](../../../crates/rimz/src/sidebar/timing.rs).
+The table names staleness-budget semantics. Exact values and the reasoning behind each live as named constants beside the code the bound governs: the sidebar's own cadences in [`timing.rs`](../../../crates/rimz/src/sidebar/timing.rs), the presence-stamp freshness both backends share in [`mux/mod.rs`](../../../crates/rimz/src/mux/mod.rs), the heartbeat TTL in [`wakeup/heartbeat.rs`](../../../crates/rimz/src/wakeup/heartbeat.rs), the focus-anchor window in [`mux/focus_anchor.rs`](../../../crates/rimz/src/mux/focus_anchor.rs), and the paint grid in [`config.rs`](../../../crates/rimz/src/config.rs).
 
 | Lane | Cadence | Where it is felt |
 | --- | --- | --- |

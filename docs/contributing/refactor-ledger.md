@@ -24,9 +24,10 @@ Ordered. A seam pass at the head is proposed before any module pass. Status is `
 | --- | --- | --- | --- |
 | 1 | `store` → `agents` and `store` → `message` upward dependencies; decide the direction and close it | `debt`: store admits agents 134 sites, message 22; cycles agents ↔ store 46/134, message ↔ store 24/22, both cross-layer | landed pass-1 |
 | 2 | Adapter sibling families in `agents/adapters/*`: collapse each onto one implementation with the divergences a fix pins | `shapes`: decode-hook family 9 members / 8 siblings (`*/mod.rs`, 935 SLOC in play); `spend.rs` cache 4 siblings (354); `ask.rs` plan 3 siblings (182); `install.rs` 2 siblings (90) | landed pass-2 |
-| 3 | `mux` ↔ `sidebar` and `daemon_view` ↔ `mux` cycles | cycles mux ↔ sidebar 27/42 cross-layer; daemon_view ↔ mux 10/3 same layer; mux admits sidebar 27 sites | `daemon_view` ↔ `mux` landed pass-3; `mux` ↔ `sidebar` queued (pass 4) |
+| 3 | `mux` ↔ `sidebar` and `daemon_view` ↔ `mux` cycles | cycles mux ↔ sidebar 27/42 cross-layer; daemon_view ↔ mux 10/3 same layer; mux admits sidebar 27 sites | `daemon_view` ↔ `mux` landed pass-3; `mux` ↔ `sidebar` landed pass-4 |
 | 4 | Homes for `store::workspace_record` (→ `workspace`) and `store::snapshot::compose_channel` (`transcript`, `harness::target` callers); the only upward L2 → store sites after pass 1 | pass-1 re-layer admissions: `workspace` 3 sites, `transcript` 1, `pane` 1 | landed pass-3 |
 | 5 | `agents` → `mux` (`NamedKey`, `CommandSpec`), `daemon_view` (markers), `diag::rotating`, `observability`: adapter-side reach into peers exposed by the re-layer | pass-1 re-layer admissions: `mux` 6 sites, `daemon_view` 3, `diag::rotating` 3; no current `observability` site | landed pass-3 |
+| 6 | `wakeup` below `store`: the wire sits in the `mux` layer, so the store reaches up to send | pass-4 leftovers: `store` → `wakeup` 2 production sites (`store/writer/publish.rs:179`, `store/gc/collect.rs:12`); the wire holds the two references that keep it there, `mux::ClientPaneView` (`wakeup/events.rs:66`) and `mux::focus_anchor::FocusNonce` (`wakeup/events.rs:73`) | queued |
 
 ### Pass 2 family verdicts
 
@@ -41,6 +42,14 @@ Ordered. A seam pass at the head is proposed before any module pass. Status is `
 
 Module-pass notes: Copilot and Cursor still hand-build parallel `report_files` lists (`copilot/install.rs`, `cursor/install.rs`); Droid and each sibling retain provider-specific session-origin stamping. The store-free `spend.rs` invariant matches by filename, so a future shared spend helper outside a `spend.rs` needs the invariant widened with it.
 
+### Pass 4 target
+
+The direction the pass writes into `crates/rimz/src/mux/AGENTS.md` and `crates/rimz/src/sidebar/AGENTS.md`: `mux` never imports `sidebar`. The sidebar's wire (heartbeat record, event vocabulary, datagram send) is the leaf module `wakeup`, beside `mux` in the layering and above `store`, reached alike by `mux`, `store`, `remote_control`, and `sidebar`. Every runtime file the multiplexer writes or dispatches on (focus anchor, width target, pane topology, presence-desired) is owned by `mux`. A bound on another module's behaviour lives with that module, and `sidebar::timing` keeps only the sidebar's own cadences.
+
+Site counts on the pass-4 rows below are taken at the pass base `8a4ca7bcd`, not at the program baseline.
+
+Ordered teardown is room-owned, not deferred. `teardown_room` and `TeardownReport` move whole to `room/teardown.rs`, keeping the four steps in their original order: kill the session, purge the resurrection cache, `sidebar::sweep_orphan_runtime`, then `mux::recovery::sweep_orphan_processes` (`crates/rimz/src/room/teardown.rs:35-41`). The alternative the pass-3 planning left open, hoisting the runtime sweep out and leaving the function in `mux`, is rejected: the hoist runs the runtime sweep after the process sweep, and the process sweep kills leaked sidebar daemons (`mux/recovery.rs:131`), which moves the heartbeat and socket mtimes `sweep_orphan_runtime` decides on (`sidebar/mod.rs:387-405`). `mux/recovery.rs` keeps the guarded process sweep alone.
+
 ## Module verdicts
 
 One row per module reviewed, at the granularity `survey` ranks. `holds` names the SHA reviewed and the scoped-commit count that reopens it (`git log --oneline <sha>.. -- <path> | wc -l`). `landed` points at the pass row. `candidate` is a survey pick not yet reviewed, with the signal that made it one.
@@ -53,6 +62,9 @@ One row per module reviewed, at the granularity `survey` ranks. `holds` names th
 | `daemon_view` | landed pass-3 | — | — | seam reviewed; interior remains a candidate |
 | `pane` | landed pass-3 | — | — | seam reviewed; interior remains a candidate |
 | `workspace` | landed pass-3 | — | — | seam reviewed; interior remains a candidate |
+| `mux` | landed pass-4 | — | — | seam reviewed; it now owns the focus anchor, the room width target, and the Zellij topology/presence-desired caches; interior remains a candidate |
+| `sidebar` | landed pass-4 | — | — | seam reviewed; it keeps producer election, fusion, refresh lanes, and its own cadences; interior remains a candidate |
+| `wakeup` | landed pass-4 | — | — | new module: the wire lifted out of `sidebar` (heartbeat record, event vocabulary, datagram send) |
 | `agents/adapters/codex` | candidate | — | — | survey rank 3; app-server, broker, rollout, and install interiors unreviewed |
 | `agents/adapters/claude` | candidate | — | — | survey rank 6; remote-control and install interiors unreviewed |
 | `config` | candidate | — | — | esc 182, depth 35.9, churn 8.9%; 38 admitted upward sites |
@@ -94,6 +106,14 @@ One row per upward dependency edge reviewed. `keep` means the edge is the intend
 | `trust` → `agents` | 1 | keep | catalog and spec vocabulary are the shared language below the store |
 | `proc` → `agents` | 4 | keep | catalog and spec vocabulary are the shared language below the store |
 | `config` → `agents` | 14 | keep | catalog and spec vocabulary are the shared language below the store |
+| `mux` → `sidebar` | 27 | closed | pass 4 |
+| `mux` → `remote` | 1 | closed | pass 4: `REMOTE_LINEAGE_ENV` is process vocabulary and moves to `proc` |
+| `store` → `sidebar::{heartbeat,timing,wakeup}` | 4 | closed | pass 4 |
+| `remote_control` → `sidebar::wakeup` | 1 | closed | pass 4 |
+| `config` → `sidebar::timing` | 3 | closed | pass 4: the refresh trio is config vocabulary and is defined in `config` |
+| `store` → `wakeup` | 2 | close | seam 6: the wire moves below the store once `ClientPaneView` reaches `pane` and `FocusNonce` reaches `ids` |
+| `daemon_view` → `sidebar::timing` | 1 | keep | `EVENT_PANE_TTL` is the sidebar's event-mode cadence; daemon maintenance accepts a frame under it and reaches up for the bound deliberately |
+| `mux` → `harness::launch` | 5 | close | later pass: shell-program and pane-name vocabulary belongs below `mux` |
 
 ## Pass log
 
