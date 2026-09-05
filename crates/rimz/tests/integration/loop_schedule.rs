@@ -492,13 +492,18 @@ fn lifecycle_signal_wakes_only_for_the_matching_agent_session() {
     );
 
     let deadline = Instant::now() + Duration::from_secs(5);
-    while read_loop_run_records(&env).is_empty() && Instant::now() < deadline {
+    while !read_loop_run_records(&env)
+        .iter()
+        .any(|record| record.result == LoopRunResult::Delivered)
+        && Instant::now() < deadline
+    {
         std::thread::sleep(Duration::from_millis(25));
     }
     let records = read_loop_run_records(&env);
-    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records.len(), 2, "{records:?}");
+    assert_eq!(records[0].result, LoopRunResult::SignalSkipped);
     assert_eq!(
-        records[0]
+        records[1]
             .signal
             .as_ref()
             .map(|signal| signal.name.as_str()),
@@ -2054,28 +2059,28 @@ fn loop_add_persists_machine_and_project_signal_triggers() {
             "--on",
             "any",
             "--signal",
-            "ci.finished",
+            "ci.failed",
             "--match",
-            "conclusion=failure",
+            "branch=feature",
         ],
     );
     assert!(
-        added.contains("trigger: fires on ci.finished [conclusion=failure]"),
+        added.contains("trigger: fires on ci.failed [branch=feature]"),
         "{added}"
     );
     let machine: LoopConfig =
         toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).expect("read loop config"))
             .expect("parse loop config");
     let machine_task = &machine.tasks.0["machine-signal"];
-    assert_eq!(machine_task.signal.as_deref(), Some("ci.finished"));
+    assert_eq!(machine_task.signal.as_deref(), Some("ci.failed"));
     assert_eq!(machine_task.on, Some(CheckOn::Any));
     assert_eq!(
         machine_task
             .matches
             .as_ref()
-            .and_then(|matches| matches.get("conclusion"))
+            .and_then(|matches| matches.get("branch"))
             .map(String::as_str),
-        Some("failure")
+        Some("feature")
     );
 
     let project_added = loop_ok(
@@ -2088,13 +2093,13 @@ fn loop_add_persists_machine_and_project_signal_triggers() {
             "--check",
             "true",
             "--signal",
-            "ci.finished",
+            "ci.failed",
             "--match",
-            "conclusion=failure",
+            "branch=feature",
         ],
     );
     assert!(
-        project_added.contains("fires on ci.finished"),
+        project_added.contains("fires on ci.failed"),
         "{project_added}"
     );
     let config_path = env.project_root.join(".rimz/config.toml");
@@ -2104,9 +2109,9 @@ fn loop_add_persists_machine_and_project_signal_triggers() {
         "{project_text}"
     );
     assert!(
-        project_text.contains("signal = \"ci.finished\"")
+        project_text.contains("signal = \"ci.failed\"")
             && project_text.contains("[tasks.project-signal.match]")
-            && project_text.contains("conclusion = \"failure\""),
+            && project_text.contains("branch = \"feature\""),
         "{project_text}"
     );
     let trusted = rimz::trust::status_with_roots(&env.project_root, &env.config_root())
@@ -2116,7 +2121,7 @@ fn loop_add_persists_machine_and_project_signal_triggers() {
 
     std::fs::write(
         &config_path,
-        project_text.replace("conclusion = \"failure\"", "conclusion = \"success\""),
+        project_text.replace("branch = \"feature\"", "branch = \"success\""),
     )
     .expect("change project signal match");
     let stale = rimz::trust::status_with_roots(&env.project_root, &env.config_root())
@@ -2294,7 +2299,7 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "--check",
                 "true",
                 "--signal",
-                "ci.finished",
+                "ci.failed",
                 "--match",
                 "status",
             ],
@@ -2308,7 +2313,7 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "--check",
                 "true",
                 "--signal",
-                "ci.finished",
+                "ci.failed",
                 "--every",
                 "15m",
             ],
@@ -2455,7 +2460,7 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "--check",
                 "true",
                 "--signal",
-                "ci.finished",
+                "ci.failed",
                 "--once",
             ],
             "--project tasks cannot use --once; one-shot subscriptions are machine state",
