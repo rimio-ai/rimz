@@ -16,9 +16,8 @@ use crate::agents::{
     RefreshTrigger,
 };
 use crate::ids::PaneId;
-use crate::sidebar::timing::{
-    SESSION_PROBE_MARKER_PREFIX, SESSION_PROBE_MARKER_TTL, SESSION_REFRESH_INTERVAL,
-};
+use crate::sidebar::timing::SESSION_REFRESH_INTERVAL;
+use crate::store::gc::{SESSION_PROBE_MARKER_PREFIX, SESSION_PROBE_MARKER_TTL};
 
 use super::SidebarSnapshot;
 

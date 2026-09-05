@@ -4,11 +4,12 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use super::{
+    GcErr, GcReport, Result, SESSION_PROBE_MARKER_PREFIX, SESSION_PROBE_MARKER_TTL,
+    read_dir_if_exists,
+};
 use crate::ids::{SidebarInstanceId, WorkspaceId};
 use crate::sidebar::heartbeat::SidebarHeartbeat;
-use crate::sidebar::timing::{SESSION_PROBE_MARKER_PREFIX, SESSION_PROBE_MARKER_TTL};
-
-use super::{GcErr, GcReport, Result, read_dir_if_exists};
 
 #[must_use = "maintenance report; surface it to the caller"]
 pub(crate) fn collect_runtime_under(

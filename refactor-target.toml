@@ -236,7 +236,7 @@ upward-dependencies = [
     "sidebar::timing",
     "sidebar::width_target",
 ]
-surface-budget = 48
+surface-budget = 51
 
 [[module]]
 path = "crates/rimz/src/sidebar"
@@ -266,7 +266,7 @@ upward-dependencies = [
     "sidebar::timing",
     "sidebar::wakeup",
 ]
-surface-budget = 308
+surface-budget = 310
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -448,10 +448,9 @@ allowed-dependencies = [
     "disk_usage",
     "ids",
     "sidebar::heartbeat",
-    "sidebar::timing",
     "workspace",
 ]
-surface-budget = 10
+surface-budget = 12
 
 [[module]]
 path = "crates/rimz/src/store/mod.rs"
