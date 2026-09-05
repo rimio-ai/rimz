@@ -3,6 +3,116 @@ use crate::agents::AgentLifecycleObservation;
 use crate::store::event::EventEnvelope;
 
 #[test]
+fn launched_child_ended_mid_turn_projects_failed_and_frees_its_parent() {
+    let at = |seconds| epoch() + std::time::Duration::from_secs(seconds);
+    let event = |seconds, event_type, params| {
+        let mut event = EventEnvelope::new(
+            workspace(),
+            "session",
+            "codex",
+            "agent-hook",
+            event_type,
+            params,
+        );
+        event.timestamp = at(seconds);
+        event
+    };
+    let events = [
+        event(
+            0,
+            "agent.lifecycle",
+            serde_json::json!({
+                "agent_id": "parent-session",
+                "pane_id": "tmux:%1",
+                "worktree_path": "/repo/main",
+                "signal": { "signal": "registered" },
+            }),
+        ),
+        event(
+            10,
+            "agent.lifecycle",
+            serde_json::json!({
+                "agent_id": "parent-session",
+                "signal": { "signal": "turn_started" },
+            }),
+        ),
+        event(
+            20,
+            "agent.launched",
+            serde_json::json!({
+                "agent_id": "child-session",
+                "agent_name": "deft-dock",
+                "state": "bound",
+                "pane_id": "tmux:%2",
+                "worktree_path": "/repo/main",
+                "parent_agent_id": "parent-session",
+                "parent_agent_kind": "codex",
+                "launch_depth": 1,
+            }),
+        ),
+        event(
+            21,
+            "agent.lifecycle",
+            serde_json::json!({
+                "agent_id": "child-session",
+                "signal": { "signal": "registered" },
+            }),
+        ),
+        event(
+            25,
+            "agent.lifecycle",
+            serde_json::json!({
+                "agent_id": "child-session",
+                "signal": { "signal": "tool_used", "mutates": false, "edits": false },
+            }),
+        ),
+        event(
+            30,
+            "agent.lifecycle",
+            serde_json::json!({
+                "agent_id": "parent-session",
+                "signal": {
+                    "signal": "turn_ended",
+                    "errored": false,
+                    "parked_on_background": false,
+                },
+            }),
+        ),
+        event(
+            40,
+            "agent.lifecycle",
+            serde_json::json!({
+                "event_name": "rimz.agent-ended",
+                "agent_id": "child-session",
+                "signal": { "signal": "ended" },
+            }),
+        ),
+    ];
+
+    let agents = reduce_agent_states(&events);
+    let child = agents
+        .iter()
+        .find(|agent| agent.agent_id == "child-session")
+        .expect("launched child remains in the rollup");
+    assert!(child.is_launched_child());
+    assert_eq!(child.ended_at, Some(at(40)));
+    assert_eq!(child.registered_at, Some(at(20)));
+
+    for now in [at(40), at(40 + 3600)] {
+        let snapshot = SidebarSnapshot::build_with_agents(workspace(), agents.clone(), now)
+            .with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
+        assert_eq!(rows(&snapshot).len(), 1, "now={now}");
+        let parent = row(&snapshot, "parent-session");
+        let children = parent.sub_agents();
+        assert_eq!(children.len(), 1, "ended child stays visible at {now}");
+        assert_eq!(children[0].id, "child-session");
+        assert_eq!(children[0].status, AgentStatus::Failed, "now={now}");
+        assert_eq!(children[0].elapsed_secs, Some(20), "now={now}");
+        assert_eq!(parent.status(), Some(AgentStatus::Success), "now={now}");
+    }
+}
+
+#[test]
 fn pi_session_envelopes_and_bridge_events_converge_on_one_rich_child() {
     for bridge_first in [true, false] {
         let mut parent = AgentLifecycleObservation::new(

@@ -183,7 +183,8 @@ pub enum LifecycleSignal {
         failed: bool,
     },
     /// The session ended (Claude `SessionEnd`/`offline`). The reducer stamps
-    /// the durable row while [`step`] preserves its last lifecycle state.
+    /// the durable row; [`step`] fails running or waiting rows and preserves
+    /// resting statuses.
     Ended,
     /// The agent's pane disappeared because its mux session died. Retained so
     /// old `rimz.agent-lost` records remain parseable during log replay.
@@ -367,10 +368,8 @@ pub fn step(
     let was_compacting = prev.is_some_and(|p| p.compacting);
     let mut kind = TransitionKind::Normal;
 
-    // `Ended` stamps row state in the reducer and `Lost` is kept for
-    // backward-compatible log replay. Both preserve the lifecycle state and
-    // report an ignored transition.
-    if matches!(signal, LifecycleSignal::Ended | LifecycleSignal::Lost) {
+    // `Lost` is kept as an ignored marker for backward-compatible log replay.
+    if matches!(signal, LifecycleSignal::Lost) {
         return Transition {
             next: LifecycleState {
                 status: prior_status.unwrap_or(AgentStatus::Idle),
@@ -378,11 +377,7 @@ pub fn step(
                 compacting: was_compacting,
             },
             kind: TransitionKind::Ignored {
-                reason: match signal {
-                    LifecycleSignal::Ended => "session ended (handled as removal)",
-                    LifecycleSignal::Lost => "session lost (legacy replay marker)",
-                    _ => unreachable!("guarded above"),
-                },
+                reason: "session lost (legacy replay marker)",
             },
             compaction_closed: false,
             waiting_cleared: false,
@@ -572,10 +567,14 @@ fn map_status(
             Some(AgentStatus::Running) | None => AgentStatus::Idle,
             Some(resting) => resting,
         },
+        // A session ending mid-turn delivered nothing, matching
+        // `terminal_disposition` and the supervised run's failed verdict.
+        LifecycleSignal::Ended => match prior_status {
+            Some(AgentStatus::Running | AgentStatus::Waiting) => AgentStatus::Failed,
+            other => other.unwrap_or(AgentStatus::Idle),
+        },
         // Handled above.
-        LifecycleSignal::Ended | LifecycleSignal::Lost => {
-            unreachable!("terminal side-channel signals return early")
-        }
+        LifecycleSignal::Lost => unreachable!("legacy lost marker returns early"),
     }
 }
 
@@ -633,13 +632,12 @@ fn map_phase(signal: &LifecycleSignal, prior_phase: TurnPhase, status: AgentStat
         LifecycleSignal::Compacting => prior_phase,
         LifecycleSignal::CompactionEnded { .. } => prior_phase,
         LifecycleSignal::Registered
+        | LifecycleSignal::Ended
         | LifecycleSignal::TurnEnded { .. }
         | LifecycleSignal::TurnInterrupted { .. }
         | LifecycleSignal::SubagentStopped { .. } => TurnPhase::Idle,
         // Handled above.
-        LifecycleSignal::Ended | LifecycleSignal::Lost => {
-            unreachable!("terminal side-channel signals return early")
-        }
+        LifecycleSignal::Lost => unreachable!("legacy lost marker returns early"),
     };
     // The phase axis exists only inside a running turn — a resting or
     // attention status always reads `Idle`, by construction.

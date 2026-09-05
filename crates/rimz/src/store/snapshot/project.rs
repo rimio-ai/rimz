@@ -726,7 +726,20 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     fold_launch_params(&mut state, &input.observation.launch);
     let ended_at =
         matches!(&input.signal, lifecycle::LifecycleSignal::Ended).then_some(input.event.timestamp);
-    let lifecycle = lifecycle_projection(input.prior, input.event.timestamp, input.signal);
+    let mut lifecycle = lifecycle_projection(input.prior, input.event.timestamp, input.signal);
+    // A reaper's end stamp is a liveness guess, not a failed-turn verdict.
+    // Resting at Idle lets later activity recover a session that raced the reap.
+    if ended_at.is_some()
+        && matches!(
+            input.event_name,
+            Some("ReapedSuperseded" | "ReapedDead" | "ReapedStale" | "WorktreeRemoved")
+        )
+        && input.prior.is_some_and(|prior| {
+            matches!(prior.status, AgentStatus::Running | AgentStatus::Waiting)
+        })
+    {
+        lifecycle.status = AgentStatus::Idle;
+    }
     let default_window = crate::agents::spec_by_kind(input.kind.as_str())
         .and_then(|definition| definition.default_context_window);
     let usage = input
