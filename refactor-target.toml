@@ -188,7 +188,7 @@ upward-dependencies = [
     "sidebar::timing",
     "sidebar::width_target",
 ]
-surface-budget = 263
+surface-budget = 268
 
 [[module]]
 path = "crates/rimz/src/observability"
@@ -303,6 +303,10 @@ surface-budget = 48
 [[module]]
 path = "crates/rimz/src/workspace.rs"
 surface-budget = 22
+
+[[module]]
+path = "crates/rimz/src/wakeup"
+surface-budget = 200
 
 [[module]]
 path = "crates/rimz/src/worktree"
@@ -651,3 +655,13 @@ reason = "Stays the mux control engine; domain callers that need a bounded subpr
 kind = "item"
 key = "harness::target::agent_handle"
 reason = "Attribution's canonical routable address; the renderer is inseparable from target resolution, so agents keeps this one upward call (pass 3)"
+
+[[verdict]]
+kind = "item"
+key = "wakeup::heartbeat::fresh_sidebar_heartbeats"
+reason = "mtime-only launch/election/reload liveness; the fanout collector adds a content-stamp check and a pre-send re-stat on purpose (0212d82657, fd73c976f)"
+
+[[verdict]]
+kind = "item"
+key = "sidebar::timing::EVENT_PANE_TTL"
+reason = "sidebar's event-mode cadence; daemon_view reaches up for it deliberately"

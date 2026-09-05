@@ -214,7 +214,7 @@ fn fullscreen_hold_rejects_width_intent_without_pinning_the_room_share() {
     controller.adjust(200, WidthAdjust::Wider, &diag);
 
     assert!(controller.convergence.is_fullscreen_held());
-    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
     let text = std::fs::read_to_string(diag.log_path().expect("diagnostic path"))
         .expect("fullscreen rejection diagnostic");
     let event = serde_json::from_str::<crate::diag::record::DiagEnvelope>(
@@ -250,7 +250,7 @@ fn fullscreen_hold_cancels_pending_classification_across_structural_change() {
     assert!(controller.convergence.is_fullscreen_held());
     assert_eq!(controller.classification_deadline, None);
     assert_eq!(controller.classification_resize_at_ms, None);
-    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
     assert!(!controller.convergence.in_flight());
 }
 
@@ -301,11 +301,8 @@ fn width_target_pin_broadcasts_without_a_producer_fetch() {
     .expect("write heartbeat");
 
     let permille =
-        crate::sidebar::width_target::pin(&runtime, target(82), 200).expect("pin width target");
-    assert_eq!(
-        crate::sidebar::width_target::pinned(&runtime),
-        Some(permille)
-    );
+        crate::mux::width_target::pin(&runtime, target(82), 200).expect("pin width target");
+    assert_eq!(crate::mux::width_target::pinned(&runtime), Some(permille));
     let mut payload = [0_u8; 1024];
     let received = socket.recv(&mut payload).expect("receive target broadcast");
     let envelope: SidebarEventEnvelope =
@@ -322,27 +319,27 @@ fn zellij_uses_live_step_and_clamps_floor_crossing() {
 
     controller.adjust(80, WidthAdjust::Wider, &diag);
     assert_eq!(
-        crate::sidebar::width_target::pinned(&runtime),
+        crate::mux::width_target::pinned(&runtime),
         Some(crate::mux::WidthPermille::from_percent(45)),
     );
     controller.adjust(80, WidthAdjust::Wider, &diag);
     assert_eq!(
-        crate::sidebar::width_target::pinned(&runtime),
+        crate::mux::width_target::pinned(&runtime),
         Some(crate::mux::WidthPermille::from_percent(50)),
         "repeated keys compound on persisted pending intent",
     );
     let prior = NonZeroU16::new(30).expect("prior target");
     let prior_share =
-        crate::sidebar::width_target::pin(&runtime, prior, 200).expect("pin prior target");
+        crate::mux::width_target::pin(&runtime, prior, 200).expect("pin prior target");
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
     controller.adjust(30, WidthAdjust::Narrower, &diag);
     assert_eq!(
-        crate::sidebar::width_target::pinned(&runtime),
+        crate::mux::width_target::pinned(&runtime),
         Some(crate::mux::WidthPermille::from_percent(12)),
         "the inexact step pins the 24-column floor instead of being ignored",
     );
     assert_ne!(
-        crate::sidebar::width_target::pinned(&runtime),
+        crate::mux::width_target::pinned(&runtime),
         Some(prior_share)
     );
 }
@@ -353,9 +350,9 @@ fn zellij_intent_without_topology_never_pins_a_phantom_share() {
     let diag = crate::diag::DiagSink::disabled();
 
     controller.adjust(80, WidthAdjust::Narrower, &diag);
-    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
     controller.adjust(80, WidthAdjust::Wider, &diag);
-    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
 }
 
 #[test]
@@ -494,7 +491,7 @@ fn parked_controller_repicks_a_changed_viewport_on_idle_retry() {
     write_zellij_topology_for_view_at(&runtime, 50, controller.started_at_ms);
     controller.backstop(Some(24), Some(1), None, &diag);
     let adopted_share =
-        crate::sidebar::width_target::resolve(&runtime, crate::mux::SidebarWidth::default(), None)
+        crate::mux::width_target::resolve(&runtime, crate::mux::SidebarWidth::default(), None)
             .share;
     controller.convergence.learned_step = Some(16);
     controller.convergence.idle = Some(WidthIdle {
@@ -510,7 +507,7 @@ fn parked_controller_repicks_a_changed_viewport_on_idle_retry() {
     assert_eq!(controller.convergence.target(), Some(target(72)));
     assert!(controller.convergence.in_flight());
     assert_eq!(
-        crate::sidebar::width_target::resolve(&runtime, crate::mux::SidebarWidth::default(), None,)
+        crate::mux::width_target::resolve(&runtime, crate::mux::SidebarWidth::default(), None,)
             .share,
         adopted_share,
         "a floorless recovery reads the share without rewriting it",
@@ -553,7 +550,7 @@ fn settled_drag_pins_once_after_the_debounce() {
     controller.backstop(Some(83), Some(1), Some(u64::MAX), &diag);
 
     assert_eq!(
-        crate::sidebar::width_target::pinned(&runtime),
+        crate::mux::width_target::pinned(&runtime),
         Some(crate::mux::WidthPermille::from_cols(
             target(83),
             target(200)
@@ -566,7 +563,7 @@ fn settled_drag_pins_once_after_the_debounce() {
     );
     controller.backstop(Some(83), Some(1), Some(u64::MAX), &diag);
     assert_eq!(
-        crate::sidebar::width_target::pinned(&runtime),
+        crate::mux::width_target::pinned(&runtime),
         Some(crate::mux::WidthPermille::from_cols(
             target(83),
             target(200)
@@ -585,7 +582,7 @@ fn broadcast_reload_uses_the_seeded_native_band() {
     let diag = crate::diag::DiagSink::disabled();
 
     controller.backstop(Some(50), Some(1), None, &diag);
-    crate::sidebar::width_target::pin(&runtime, target(83), 200).expect("pin external target");
+    crate::mux::width_target::pin(&runtime, target(83), 200).expect("pin external target");
     controller.reload_target(&crate::config::ThemeConfig::default(), Some(83), &diag);
 
     assert_eq!(controller.convergence.target(), Some(target(83)));
@@ -604,7 +601,7 @@ fn drag_inside_the_native_band_never_arms_classification() {
 
     assert_eq!(controller.classification_deadline, None);
     assert_eq!(controller.classification_resize_at_ms, None);
-    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
 }
 
 #[test]
@@ -621,7 +618,7 @@ fn settled_structural_resize_converges_without_adopting() {
     write_zellij_topology_for_view_at(&runtime, 200, structural_at_ms);
     controller.backstop(Some(83), Some(2), Some(structural_at_ms), &diag);
 
-    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
     assert_eq!(controller.convergence.target(), Some(target(50)));
 }
 
@@ -639,7 +636,7 @@ fn sibling_change_backstop_converges_without_resize_feedback() {
     assert_eq!(controller.structural_at_ms, Some(structural_at_ms));
     assert_eq!(controller.convergence.target(), Some(target(50)));
     assert!(controller.convergence.in_flight());
-    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
 }
 
 #[test]
@@ -656,7 +653,7 @@ fn structural_event_converges_without_resize_feedback() {
     assert_eq!(controller.structural_at_ms, Some(structural_at_ms));
     assert_eq!(controller.convergence.target(), Some(target(50)));
     assert!(controller.convergence.in_flight());
-    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
 }
 
 #[test]
@@ -689,7 +686,7 @@ fn stalled_structural_resize_is_not_adopted_on_later_feedback() {
     controller.classification_deadline = Some(Instant::now());
     controller.backstop(Some(83), Some(2), Some(u64::MAX), &diag);
 
-    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
     assert_eq!(controller.convergence.target(), Some(target(50)));
     assert!(controller.convergence.in_flight());
 }
@@ -741,7 +738,7 @@ fn pending_mouse_classification_suppresses_a_due_idle_retry() {
     assert!(controller.classification_deadline.is_some());
     assert_eq!(controller.idle_retry_deadline, None);
     assert!(!controller.convergence.in_flight());
-    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
 }
 
 #[test]
@@ -757,7 +754,7 @@ fn settled_view_resize_reresolves_an_unpinned_target() {
     controller.classification_deadline = Some(Instant::now());
     controller.backstop(Some(80), Some(1), Some(u64::MAX), &diag);
 
-    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
     assert_eq!(controller.convergence.target(), Some(target(60)));
 }
 
@@ -775,7 +772,7 @@ fn structural_marker_does_not_swallow_a_concurrent_view_change() {
     controller.classification_deadline = Some(Instant::now());
     controller.backstop(Some(80), Some(1), Some(u64::MAX), &diag);
 
-    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
     assert_eq!(controller.current_view_cols, Some(240));
     assert_eq!(controller.convergence.target(), Some(target(60)));
 }
@@ -785,8 +782,7 @@ fn settled_view_resize_scales_a_pinned_target() {
     let (_dir, runtime, mut controller) = controller(MuxName::Zellij);
     write_zellij_topology(&runtime);
     controller.last_siblings = Some(1);
-    let share =
-        crate::sidebar::width_target::pin(&runtime, target(80), 200).expect("pin width target");
+    let share = crate::mux::width_target::pin(&runtime, target(80), 200).expect("pin width target");
     let diag = crate::diag::DiagSink::disabled();
     controller.reload_target(&crate::config::ThemeConfig::default(), None, &diag);
     write_zellij_topology_for_view(&runtime, 240);
@@ -795,7 +791,7 @@ fn settled_view_resize_scales_a_pinned_target() {
     controller.classification_deadline = Some(Instant::now());
     controller.backstop(Some(96), Some(1), Some(u64::MAX), &diag);
 
-    assert_eq!(crate::sidebar::width_target::pinned(&runtime), Some(share));
+    assert_eq!(crate::mux::width_target::pinned(&runtime), Some(share));
     assert_eq!(controller.convergence.target(), Some(target(96)));
 }
 
@@ -812,7 +808,7 @@ fn settled_resize_without_geometry_never_adopts() {
     controller.classification_deadline = Some(Instant::now());
     controller.backstop(Some(83), Some(1), Some(u64::MAX), &diag);
 
-    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
     assert!(controller.classification_deadline.is_some());
     assert!(!controller.convergence.in_flight());
 }
@@ -832,7 +828,7 @@ fn stale_pane_observation_waits_without_adopting_or_nudging() {
     controller.classification_deadline = Some(Instant::now());
     controller.backstop(Some(83), Some(1), Some(resize_at_ms), &diag);
 
-    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
     assert!(controller.classification_deadline.is_some());
     assert_eq!(controller.classification_resize_at_ms, Some(resize_at_ms));
     assert!(!controller.convergence.in_flight());
@@ -858,7 +854,7 @@ fn merely_newer_sibling_observation_waits_without_adopting_or_nudging() {
         &diag,
     );
 
-    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
     assert!(controller.classification_deadline.is_some());
     assert_eq!(controller.classification_resize_at_ms, Some(resize_at_ms));
     assert!(
@@ -1199,7 +1195,7 @@ fn late_landing_nudge_is_feedback_not_mouse_intent() {
     controller.observe(60, SidebarWidthControlTrigger::ResizeFeedback, &diag);
 
     assert_eq!(controller.classification_deadline, None);
-    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
     assert!(!controller.convergence.is_unacknowledged());
     assert!(controller.convergence.in_flight());
     let text = std::fs::read_to_string(diag.log_path().expect("diagnostic path"))
@@ -1229,7 +1225,7 @@ fn opposite_resize_after_timeout_still_arms_mouse_classification() {
     controller.observe(95, SidebarWidthControlTrigger::ResizeFeedback, &diag);
 
     assert!(controller.classification_deadline.is_some());
-    assert_eq!(crate::sidebar::width_target::pinned(&runtime), None);
+    assert_eq!(crate::mux::width_target::pinned(&runtime), None);
     assert!(controller.convergence.unacknowledged.is_none());
 }
 
@@ -1241,7 +1237,7 @@ fn stale_step_memory_is_consumed_once_after_retargeted_settlement() {
 
     controller.backstop(Some(83), Some(1), None, &diag);
     park_after_silent_backend(&mut controller, 83, &diag);
-    crate::sidebar::width_target::pin(&runtime, target(83), 200).expect("pin new target");
+    crate::mux::width_target::pin(&runtime, target(83), 200).expect("pin new target");
     controller.reload_target(&crate::config::ThemeConfig::default(), Some(83), &diag);
 
     assert_eq!(controller.convergence.target(), Some(target(83)));

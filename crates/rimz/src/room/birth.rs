@@ -114,7 +114,7 @@ impl RoomContext {
         };
         if !pre_existed {
             crate::sidebar::purge_rebirth_heartbeats(&self.runtime);
-            if let Err(err) = crate::sidebar::width_target::clear(&self.runtime) {
+            if let Err(err) = crate::mux::width_target::clear(&self.runtime) {
                 tracing::debug!(
                     workspace = %self.workspace.workspace_id,
                     error = %err,

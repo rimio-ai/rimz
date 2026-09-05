@@ -32,7 +32,6 @@ pub mod refresh;
 pub(crate) mod test_support;
 pub mod timing;
 pub mod unread;
-pub mod width_target;
 pub mod workspace_projection;
 
 use std::collections::{BTreeSet, HashSet};

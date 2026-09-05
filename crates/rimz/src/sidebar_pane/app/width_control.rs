@@ -519,8 +519,7 @@ impl WidthController {
             target_cols: Some(target.get()),
             verdict: SidebarWidthIntentVerdict::Accepted,
         });
-        let target = match crate::sidebar::width_target::pin(&self.runtime, target, view_cols.get())
-        {
+        let target = match crate::mux::width_target::pin(&self.runtime, target, view_cols.get()) {
             Ok(permille) => permille.cols(view_cols),
             Err(err) => {
                 warn!(error = %err, "sidebar width target pin failed");
@@ -820,14 +819,14 @@ impl WidthController {
             .convergence
             .target()
             .map_or(measured_cols, NonZeroU16::get);
-        let permille =
-            match crate::sidebar::width_target::pin(&self.runtime, measured, view_cols.get()) {
-                Ok(permille) => permille,
-                Err(err) => {
-                    warn!(error = %err, "sidebar mouse width target pin failed");
-                    return;
-                }
-            };
+        let permille = match crate::mux::width_target::pin(&self.runtime, measured, view_cols.get())
+        {
+            Ok(permille) => permille,
+            Err(err) => {
+                warn!(error = %err, "sidebar mouse width target pin failed");
+                return;
+            }
+        };
         let target = permille.cols(view_cols);
         diag.emit_unlimited(crate::diag::record::DiagEvent::SidebarWidthIntent {
             trigger: SidebarWidthIntentTrigger::MouseAdopt,
@@ -863,12 +862,10 @@ impl WidthController {
         self.convergence.seed_native_step(step.stop_step_cols);
         self.current_view_cols = Some(view_cols.get());
         let target = match floor {
-            Some(_) => crate::sidebar::width_target::adopt(&self.runtime, self.width, view_cols),
-            None => crate::sidebar::width_target::resolve(
-                &self.runtime,
-                self.width,
-                Some(view_cols.get()),
-            ),
+            Some(_) => crate::mux::width_target::adopt(&self.runtime, self.width, view_cols),
+            None => {
+                crate::mux::width_target::resolve(&self.runtime, self.width, Some(view_cols.get()))
+            }
         }
         .cols(Some(view_cols.get()));
         let changed = self.convergence.target() != Some(target);
