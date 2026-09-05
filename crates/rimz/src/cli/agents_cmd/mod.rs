@@ -130,7 +130,9 @@ pub(crate) struct CohortLaunchArgs {
     /// Seed launched cards' descriptions until agents name their own sessions.
     #[arg(long, value_name = "TEXT")]
     pub(crate) description: Option<String>,
-    /// Use a RimZ-owned worktree. Bare flag creates one fresh worktree; NAME reuses or creates it.
+    /// Use a RimZ-owned worktree. Bare flag creates one fresh worktree; NAME reuses or creates it (no leading #).
+    ///
+    /// For channel #feat-a, pass -w feat-a. With shell comments enabled, -w #feat-a becomes bare -w and generates a name; quoting #feat-a still passes an invalid worktree name.
     #[arg(
         long,
         short = 'w',
