@@ -189,8 +189,7 @@ fn record_mapped_lifecycle_observation(
             && member.team.is_some()
         {
             let cohorts = rimz::harness::target::team_cohorts(&audit.agents);
-            let channel = rimz::harness::target::agent_channel(member)
-                .unwrap_or_else(|| "external".to_owned());
+            let channel = member.channel().unwrap_or_else(|| "external".to_owned());
             let live = cohorts
                 .iter()
                 .find(|cohort| {
