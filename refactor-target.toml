@@ -144,7 +144,7 @@ upward-dependencies = [
     "sidebar::refresh",
     "sidebar::refresh::pr",
 ]
-surface-budget = 617
+surface-budget = 618
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
