@@ -667,6 +667,46 @@ pub(crate) fn confirm_with_default(prompt: &str, default_yes: bool) -> Result<bo
     Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
 }
 
+fn parse_choice(answer: &str, choices: &[&str], default: usize) -> Option<usize> {
+    let answer = answer.trim();
+    if answer.is_empty() {
+        return Some(default);
+    }
+    if let Some(index) = choices
+        .iter()
+        .position(|choice| choice.eq_ignore_ascii_case(answer))
+    {
+        return Some(index);
+    }
+    let answer = answer.to_ascii_lowercase();
+    let mut matches = choices
+        .iter()
+        .enumerate()
+        .filter(|(_, choice)| choice.to_ascii_lowercase().starts_with(&answer));
+    let (index, _) = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(index)
+}
+
+fn choose(prompt: &str, choices: &[&str], default: usize) -> Result<Option<usize>> {
+    let mut stderr = std::io::stderr().lock();
+    write!(
+        stderr,
+        "{prompt} ({}) [{}]: ",
+        choices.join("/"),
+        choices[default]
+    )?;
+    stderr.flush()?;
+    drop(stderr);
+    let mut answer = String::new();
+    if std::io::stdin().read_line(&mut answer)? == 0 {
+        return Ok(None);
+    }
+    Ok(parse_choice(&answer, choices, default))
+}
+
 pub(crate) fn confirm_cross_repo_worktree(workspace: &rimz::ResolvedWorkspace) -> Result<bool> {
     confirm_cross_repo_worktree_with(
         workspace,
@@ -793,6 +833,47 @@ mod surface_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_choice_blank_uses_default() {
+        for answer in ["", " \t\n"] {
+            assert_eq!(
+                parse_choice(answer, &["resume", "fresh", "cancel"], 2),
+                Some(2)
+            );
+        }
+    }
+
+    #[test]
+    fn parse_choice_matches_full_words_and_unique_prefixes() {
+        let choices = ["Resume", "fresh", "cancel"];
+        for (answer, expected) in [
+            ("resume", 0),
+            (" FRESH\n", 1),
+            ("Cancel", 2),
+            ("R", 0),
+            ("f", 1),
+            ("C", 2),
+            ("frE", 1),
+        ] {
+            assert_eq!(parse_choice(answer, &choices, 0), Some(expected));
+        }
+    }
+
+    #[test]
+    fn parse_choice_rejects_ambiguous_prefixes_and_invalid_answers() {
+        for answer in ["r", "RE", "garbage", "fresh extra"] {
+            assert_eq!(
+                parse_choice(answer, &["resume", "remove", "fresh"], 0),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn parse_choice_full_match_wins_over_longer_prefix_match() {
+        assert_eq!(parse_choice(" RE ", &["resume", "re"], 0), Some(1));
+    }
 
     fn parsed_scope(args: &[&str]) -> (String, String, Option<String>, Option<String>) {
         let mut matches = help::customize(<Cli as CommandFactory>::command())

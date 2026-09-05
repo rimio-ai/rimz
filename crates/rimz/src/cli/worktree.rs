@@ -656,18 +656,14 @@ fn dirty_choice(path: &Path) -> Result<DirtyChoice> {
         "rimz: worktree {} has local changes or work not proven landed.",
         path.display()
     )?;
-    write!(stderr, "Choose keep/remove/shell [keep]: ")?;
-    stderr.flush()?;
     drop(stderr);
-    let mut answer = String::new();
-    if std::io::stdin().read_line(&mut answer).is_err() {
-        return Ok(DirtyChoice::Keep);
-    }
-    Ok(match answer.trim() {
-        "remove" | "r" => DirtyChoice::Remove,
-        "shell" | "s" => DirtyChoice::Shell,
-        _ => DirtyChoice::Keep,
-    })
+    Ok(
+        match super::choose("Choose", &["keep", "remove", "shell"], 0).unwrap_or(None) {
+            Some(1) => DirtyChoice::Remove,
+            Some(2) => DirtyChoice::Shell,
+            _ => DirtyChoice::Keep,
+        },
+    )
 }
 
 #[cfg(unix)]
