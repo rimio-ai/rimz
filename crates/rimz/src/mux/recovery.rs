@@ -1,7 +1,3 @@
-//! Destroy every trace of a possibly-corrupt room so the next birth is clean.
-//! Shared by `rimz reset` and attached `rimz start` auto-reset, so teardown
-//! lives in exactly one place and is testable without a real multiplexer.
-//!
 //! The dangerous step is the process sweep: it signals processes by heuristic, so
 //! it is scoped four ways — real uid, the exact path-derived session name in the
 //! command line, an explicit exclusion of this process and its ancestors, and the
@@ -9,12 +5,9 @@
 //! enumerate the current user's process table.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::RuntimePaths;
-use crate::ids::{MuxName, PaneId, WorkspaceId};
-use crate::mux::MuxBackend;
+use crate::ids::{MuxName, PaneId};
 use crate::mux::domain::ProcessDomain;
 use crate::proc::ProcInfo;
 
@@ -26,43 +19,6 @@ pub(crate) const SWEEP_GRACE: Duration = Duration::from_millis(300);
 pub(crate) struct KillOutcome {
     pub(crate) signalled: Vec<u32>,
     pub(crate) sigkilled: Vec<u32>,
-}
-
-/// What [`teardown_room`] removed, for the user-facing `rimz reset` report.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct TeardownReport {
-    /// The session was deleted (or was already gone).
-    pub session_killed: bool,
-    /// Resurrection-cache paths removed.
-    pub cache_removed: Vec<PathBuf>,
-    /// Orphaned server / leaked daemon pids signalled.
-    pub processes_swept: Vec<u32>,
-}
-
-/// Tear the room down to a clean slate: delete the session, purge the backend's
-/// resurrection cache, reap stale sidebar runtime files, and sweep orphaned
-/// servers / leaked daemons scoped to this workspace. Every step is best-effort
-/// and independent — a failure in one never blocks the others — so a later
-/// rebirth always starts from the cleanest state reachable.
-pub fn teardown_room(
-    backend: &dyn MuxBackend,
-    workspace_id: &WorkspaceId,
-    session_name: &str,
-    runtime: &RuntimePaths,
-) -> TeardownReport {
-    // Delete the session first, so the only server matching this exact name in
-    // the sweep below is the corpse — never a freshly-born replacement.
-    let session_killed = backend.kill_session(session_name).is_ok();
-    let cache_removed = backend.purge_resurrection_cache(session_name);
-    crate::sidebar::sweep_orphan_runtime(runtime);
-    // The session is already a corpse (killed above), so sweeping its lingering
-    // mux server is cleanup, not destruction.
-    let processes_swept = sweep_orphan_processes(workspace_id.as_str(), session_name, true);
-    TeardownReport {
-        session_killed,
-        cache_removed,
-        processes_swept,
-    }
 }
 
 #[cfg(any(unix, test))]
@@ -349,7 +305,10 @@ pub(crate) fn kill_pids(_targets: &[u32], _grace: Duration) -> KillOutcome {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
+    use crate::ids::WorkspaceId;
 
     fn proc(pid: u32, ppid: u32, uid: u32, cmdline: &str) -> ProcInfo {
         ProcInfo {

@@ -1,7 +1,7 @@
 //! `rimz reset` — the explicit escape hatch for a wedged room. Tears the live
 //! room's mux session down to a clean slate (delete + cache purge + orphan
 //! sweep) and, by default, rebuilds and re-enters it. Attached `rimz start`
-//! auto-reset runs the same [`rimz::mux::recovery::teardown_room`] routine.
+//! auto-reset runs the same [`rimz::room::teardown::teardown_room`] routine.
 
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;

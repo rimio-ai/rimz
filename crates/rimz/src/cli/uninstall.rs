@@ -354,7 +354,7 @@ fn teardown_rooms(
             }
         };
         let backend = mux::backend_for(room.mux);
-        let report = rimz::mux::recovery::teardown_room(
+        let report = rimz::room::teardown::teardown_room(
             backend.as_ref(),
             &room.workspace_id,
             &room.session_name,

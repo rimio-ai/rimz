@@ -187,7 +187,7 @@ upward-dependencies = [
     "sidebar::timing",
     "sidebar::width_target",
 ]
-surface-budget = 241
+surface-budget = 263
 
 [[module]]
 path = "crates/rimz/src/observability"
