@@ -9,6 +9,7 @@ use crate::agents::{LaunchParams, model_display::display_model};
 use crate::config::Team;
 
 pub struct LaunchReminders {
+    /// The launched profile's `model-reminder`; on when unset or when the launch has no profile.
     pub model: bool,
     pub subagent_catalog: Option<SubagentCatalog>,
     pub team: Option<Team>,
