@@ -26,6 +26,7 @@ use sha2::{Digest, Sha256};
 
 use crate::ids::MuxName;
 use crate::mux::{CLIENT_SIZE_ENV, CommandSpec};
+use crate::proc::REMOTE_LINEAGE_ENV;
 
 /// Binary override for tests (`tests/fixtures/ssh-trace`), mirroring
 /// `RIMZ_ZELLIJ_BIN` — the single chokepoint every ssh invocation resolves
@@ -42,10 +43,6 @@ pub const ATTACH_MARK_ENV: &str = "RIMZ_ATTACH_MARK";
 /// Marks a remote room launch whose SSH parent already owns the terminal's
 /// alternate-scroll bracket.
 pub const OUTER_SCROLL_BRACKET_ENV: &str = "RIMZ_OUTER_SCROLL_BRACKET";
-
-/// Stable per-device identity carried to the remote attach so a replacement
-/// can retire an orphaned predecessor before entering the multiplexer.
-pub const REMOTE_LINEAGE_ENV: &str = "RIMZ_REMOTE_LINEAGE";
 
 /// Marks a remote attach whose local process will interpret reconnect exit
 /// sentinels.

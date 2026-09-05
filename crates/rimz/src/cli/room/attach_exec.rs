@@ -175,7 +175,7 @@ fn reap_remote_zellij_predecessors(
     if mux != MuxName::Zellij || inside_selected_mux(mux) {
         return;
     }
-    let Some(lineage) = std::env::var(rimz::remote::REMOTE_LINEAGE_ENV)
+    let Some(lineage) = std::env::var(rimz::proc::REMOTE_LINEAGE_ENV)
         .ok()
         .filter(|lineage| !lineage.is_empty())
     else {

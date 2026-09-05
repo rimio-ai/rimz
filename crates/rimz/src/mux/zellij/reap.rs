@@ -10,8 +10,7 @@ use std::ffi::OsString;
 use std::time::{Duration, Instant};
 
 use crate::mux::{ClientFocusOptions, MuxBackend, MuxErr, Result as MuxResult};
-use crate::proc::{self, ProcInfo};
-use crate::remote::REMOTE_LINEAGE_ENV;
+use crate::proc::{self, ProcInfo, REMOTE_LINEAGE_ENV};
 
 const REAP_TIMEOUT: Duration = Duration::from_secs(2);
 const TERM_GRACE: Duration = Duration::from_millis(500);

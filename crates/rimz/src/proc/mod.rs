@@ -19,6 +19,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
+/// Stable per-device identity carried to the remote attach so a replacement
+/// can retire an orphaned predecessor before entering the multiplexer.
+pub const REMOTE_LINEAGE_ENV: &str = "RIMZ_REMOTE_LINEAGE";
+
 pub(crate) use pane_probe::command_starts_with_elevation_wrapper;
 pub use pane_probe::{
     HostedAgentProcess, InPaneAgentProcess, elevated_in_pane_agent, hosted_agent_absent_under_root,
