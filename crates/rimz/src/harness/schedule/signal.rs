@@ -130,26 +130,6 @@ impl FromStr for SignalSelector {
     }
 }
 
-impl Serialize for SignalSelector {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.collect_str(self)
-    }
-}
-
-impl<'de> Deserialize<'de> for SignalSelector {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        String::deserialize(deserializer)?
-            .parse()
-            .map_err(serde::de::Error::custom)
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SignalResolution {
     Ignore,
@@ -487,10 +467,8 @@ mod tests {
         ] {
             let selector = valid.parse::<SignalSelector>().unwrap();
             assert_eq!(selector.to_string(), valid);
-            let encoded = serde_json::to_string(&selector).unwrap();
-            assert_eq!(encoded, format!("\"{valid}\""));
             assert_eq!(
-                serde_json::from_str::<SignalSelector>(&encoded).unwrap(),
+                selector.to_string().parse::<SignalSelector>().unwrap(),
                 selector
             );
         }
