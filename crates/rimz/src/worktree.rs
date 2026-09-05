@@ -52,7 +52,7 @@ pub enum WorktreeErr {
     #[error("--from-pr requires a git repository-backed room")]
     LaunchPrRequiresRepo,
     #[error(
-        "invalid worktree name `{0}`; use letters, numbers, `_`, `-`, with `/` separating branch-style segments"
+        "invalid worktree name `{0}`; use letters, numbers, `_`, `-`, with `/` separating branch-style segments; omit the channel's leading `#` (use `feat-a` for `#feat-a`)"
     )]
     InvalidName(String),
     #[error("worktree `{name}` already exists at {path}")]

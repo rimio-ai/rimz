@@ -38,6 +38,8 @@ rimz agents claude -w                         # bare -w: a generated name
 rimz agents codex -w feat/login               # branch feat/login, tree feat-login
 ```
 
+Give the name without the channel's `#`: `-w feat-a` creates the tree `feat-a` and names its channel `#feat-a`. Quoting the prefix does not help: `-w '#feat-a'` is rejected as an invalid worktree name. With shell comments enabled, an unquoted `#feat-a` starts a comment and the shell drops it, so RimZ sees a bare `-w` and generates a name. If a launch lands in a generated tree you did not ask for, look for a `#` on the name you typed.
+
 A branch-style name with a `/` names the branch directly and maps to `-` for the tree directory and channel. By default the branch is cut from your local `HEAD`, so the tree starts from the code you are looking at; `base = "fresh"` branches from the remote's default instead ([under the hood](#under-the-hood)).
 
 `rimz worktree new <name>` creates the same tree without launching anything into it — for work of your own, or a tree you will fill with agents later.
