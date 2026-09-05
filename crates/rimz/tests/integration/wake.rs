@@ -562,6 +562,106 @@ fn register_calling_agent(env: &Env) {
 }
 
 fn register_calling_agent_in(env: &Env, worktree: &std::path::Path, launch: LaunchParams) {
+    register_agent_in(
+        env,
+        worktree,
+        launch,
+        "planner",
+        "provider-session",
+        "launch-session",
+    );
+}
+
+#[test]
+fn lifecycle_hooks_deliver_team_idle_and_root_ended_signals() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    register_agent_in(
+        &env,
+        &env.project_root,
+        LaunchParams {
+            team: Some("forge".to_owned()),
+            channel: Some("feature".to_owned()),
+            ..LaunchParams::default()
+        },
+        "coder",
+        "worker-session",
+        "worker-launch",
+    );
+    for (signal, filter) in [
+        ("team.idle", "instance=forge#feature"),
+        ("team.ended", "instance=forge#feature"),
+        ("agent.ended", "session=worker-session"),
+    ] {
+        wake_ok(&env, &["wake", "--signal", signal, "--match", filter]);
+    }
+    for event in ["UserPromptSubmit", "Stop", "SessionEnd"] {
+        let mut command = env.hook_command("claude");
+        command
+            .env("RIMZ_AGENT_PID", std::process::id().to_string())
+            .env("RIMZ_CHANNEL", "feature")
+            .env("RIMZ_AGENT_NAME", "coder");
+        let payload = serde_json::json!({
+            "hook_event_name": event,
+            "session_id": "worker-session",
+            "prompt": "finish work",
+            "last_assistant_message": "work complete",
+            "reason": "other"
+        })
+        .to_string();
+        let output = env
+            .spawn_payload(command, &payload)
+            .wait_with_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if event == "Stop" {
+            let records = wait_for_wake_records(&env, 3);
+            assert!(records.iter().any(|record| {
+                record.result.label() == "delivered"
+                    && record
+                        .signal
+                        .as_ref()
+                        .is_some_and(|signal| signal.name.as_str() == "team.idle")
+            }));
+        }
+    }
+    let records = wait_for_wake_records(&env, 6);
+    for signal in ["team.idle", "team.ended", "agent.ended"] {
+        let record = records
+            .iter()
+            .find(|record| {
+                record.result.label() == "delivered"
+                    && record
+                        .signal
+                        .as_ref()
+                        .is_some_and(|value| value.name.as_str() == signal)
+            })
+            .expect("delivered lifecycle wake");
+        let message = wake_ok(
+            &env,
+            &[
+                "message",
+                "show",
+                record.message_id.as_ref().unwrap().as_str(),
+            ],
+        );
+        assert!(message.contains(signal), "{message}");
+    }
+}
+
+fn register_agent_in(
+    env: &Env,
+    worktree: &std::path::Path,
+    launch: LaunchParams,
+    name: &str,
+    session: &str,
+    launch_id: &str,
+) {
     let store = env.store();
     let workspace =
         rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
@@ -571,9 +671,9 @@ fn register_calling_agent_in(env: &Env, worktree: &std::path::Path, launch: Laun
             &workspace.session_name,
             &AgentKind::new_unchecked("claude"),
             AgentLaunchPayload {
-                agent_id: AgentSessionId::from("provider-session"),
-                launch_id: Some(AgentSessionId::from("launch-session")),
-                agent_name: "planner".to_owned(),
+                agent_id: AgentSessionId::from(session),
+                launch_id: Some(AgentSessionId::from(launch_id)),
+                agent_name: name.to_owned(),
                 agent_name_explicit: true,
                 launch,
                 state: AgentLaunchState::Bound,
@@ -581,17 +681,17 @@ fn register_calling_agent_in(env: &Env, worktree: &std::path::Path, launch: Laun
                 pane_id: None,
                 runtime_owner: None,
                 worktree_path: Some(worktree.display().to_string()),
-                worktree_branch: Some("main".to_owned()),
+                worktree_branch: Some(name.to_owned()),
                 prompt: None,
                 description: None,
             },
         ))
         .expect("seed launched target");
     let mut observation = AgentLifecycleObservation::new(
-        Some(AgentSessionId::from("provider-session")),
+        Some(AgentSessionId::from(session)),
         LifecycleSignal::Registered,
     );
-    observation.agent_name = Some("planner".to_owned());
+    observation.agent_name = Some(name.to_owned());
     store
         .append_agent_lifecycle(AgentLifecycleIntent {
             session_name: "rimz-test",
