@@ -266,7 +266,7 @@ impl ZellijBackend {
         workspace_id: Option<&WorkspaceId>,
         timeout: Duration,
     ) -> Result<PaneTopologyCache> {
-        let observed_at_ms = crate::sidebar::timing::unix_now_ms();
+        let observed_at_ms = crate::utils::time::unix_now_ms();
         let listed = self.raw_listed_panes(session_name, timeout)?;
         let mut cache = PaneTopologyCache {
             session_name: session_name.to_owned(),
@@ -320,7 +320,7 @@ impl ZellijBackend {
             .topology_panes_for_workspace(
                 session_name,
                 workspace_id,
-                Some(crate::sidebar::timing::unix_now_ms()),
+                Some(crate::utils::time::unix_now_ms()),
                 super::super::COMMAND_TIMEOUT,
             )
             .ok()?;
@@ -645,7 +645,7 @@ impl MuxBackend for ZellijBackend {
         let cache = Self::fresh_cached_topology(
             &runtime,
             session,
-            crate::sidebar::timing::unix_now_ms(),
+            crate::utils::time::unix_now_ms(),
             None,
         )?;
         Some(CachedPaneRoster {
@@ -845,7 +845,7 @@ impl MuxBackend for ZellijBackend {
         let cache = Self::fresh_cached_topology(
             runtime,
             session,
-            crate::sidebar::timing::unix_now_ms(),
+            crate::utils::time::unix_now_ms(),
             min_observed_at_ms,
         )
         .ok_or_else(|| MuxErr::Output {

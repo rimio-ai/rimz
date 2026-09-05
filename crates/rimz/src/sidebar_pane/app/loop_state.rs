@@ -477,7 +477,7 @@ impl LoopState {
                 pane_frame,
                 source,
             } => {
-                let now_ms = crate::sidebar::timing::unix_now_ms();
+                let now_ms = crate::utils::time::unix_now_ms();
                 self.event_store.prune(now_ms);
                 let pulled = *snapshot;
                 self.last_focus_observation = FocusObservation::from_snapshot(&pulled);
@@ -549,7 +549,7 @@ impl LoopState {
         anim_start: Instant,
         diag: &crate::diag::DiagSink,
     ) {
-        let fused = self.fused_snapshot(crate::sidebar::timing::unix_now_ms());
+        let fused = self.fused_snapshot(crate::utils::time::unix_now_ms());
         self.fold_outcome(
             config,
             FetchUpdate::Snapshot {
@@ -728,14 +728,14 @@ impl LoopState {
             },
             diag,
         ) {
-            Ok(true) => self.remind.note_ring(crate::sidebar::timing::unix_now_ms()),
+            Ok(true) => self.remind.note_ring(crate::utils::time::unix_now_ms()),
             Ok(false) => {}
             Err(err) => debug!(error = %err, "terminal notification emit failed"),
         }
     }
 
     fn handle_focus_stranded(&mut self, config: &ServeConfig, repair: &PendingFocusRepair) -> bool {
-        let now_ms = crate::sidebar::timing::unix_now_ms();
+        let now_ms = crate::utils::time::unix_now_ms();
         let own_pane = crate::mux::own_pane_id(config.mux);
         if let Some(target) = focus_stranded_target(
             &self.current,
@@ -783,7 +783,7 @@ impl LoopState {
         if self.handle_focus_stranded(config, &repair) {
             return;
         }
-        let now_ms = crate::sidebar::timing::unix_now_ms();
+        let now_ms = crate::utils::time::unix_now_ms();
         if focus_repair_still_viable(repair.sent_at_ms, now_ms) {
             self.pending_focus_repair = Some(repair);
         } else {
@@ -842,7 +842,7 @@ impl LoopState {
         let own_unfocused = matches!(&event, SidebarEvent::FocusChanged { unfocused, .. }
             if own.is_some_and(|pane| unfocused.contains(pane)));
         let requests_verification = event.requests_producer_verification();
-        let now_ms = crate::sidebar::timing::unix_now_ms();
+        let now_ms = crate::utils::time::unix_now_ms();
         self.event_store.append(event, sent_at_ms, now_ms);
         self.fold_fused_now(config, anim_start, diag);
         if !self.should_exit && (requests_verification || own_focused) {
@@ -884,7 +884,7 @@ impl LoopState {
         if held_grow && self.self_close.seen_sibling {
             self.dirty = true;
             self.paint_hold
-                .engage(Instant::now(), crate::sidebar::timing::unix_now_ms());
+                .engage(Instant::now(), crate::utils::time::unix_now_ms());
         } else {
             if self
                 .apply_input(Wakeup::Resize, terminal, anim_start)?
@@ -1369,7 +1369,7 @@ impl LoopState {
             && grow_beyond_legit(width, self.max_legit_cols())
         {
             self.paint_hold
-                .engage(now, crate::sidebar::timing::unix_now_ms());
+                .engage(now, crate::utils::time::unix_now_ms());
             return true;
         }
         false
@@ -1726,7 +1726,7 @@ impl LoopState {
         let Some(anchor) = crate::sidebar::focus_anchor::load(self.read_marks.runtime()) else {
             return;
         };
-        let now_ms = crate::sidebar::timing::unix_now_ms();
+        let now_ms = crate::utils::time::unix_now_ms();
         let presentation_at_ms = anchor.applied_at_ms.unwrap_or(anchor.issued_at_ms);
         if self.ui.selected_pane.as_ref() == Some(&anchor.pane_id)
             && anchor.issued_at_ms > self.ui.last_focus_anchor_ms
@@ -1827,7 +1827,7 @@ impl LoopState {
     }
 
     fn observe_commit(&mut self) {
-        let now_ms = crate::sidebar::timing::unix_now_ms();
+        let now_ms = crate::utils::time::unix_now_ms();
         let sig = observe::extract_sig(
             &self.current,
             &self.last_pulled_sig,

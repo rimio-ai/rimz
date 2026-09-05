@@ -3,11 +3,12 @@ use crate::agents::spending::{
     CachedEntry, FileCacheEntry, HeadlineSpec, PROVIDER_SPENDING_VERSION, ProviderSpendingCache,
     SPENDING_STALE_GRACE, SPENDING_TTL, SpendCursor, SpendScope, SpendWindowMode, Spending,
     SpendingWalker, override_discovered_spending_files_for_test, read_provider_spending_cache,
-    read_spending_cache, read_workspace_spending_cache, unix_now_ms, unix_secs_now, utc_date,
+    read_spending_cache, read_workspace_spending_cache, unix_secs_now, utc_date,
     write_provider_spending_cache, write_spending_cache, write_workspace_spending_cache,
 };
 use crate::disk::single_flight::{Coalesced, coalesce};
 use crate::ids::WorkspaceId;
+use crate::utils::time::unix_now_ms;
 
 use jiff::Timestamp;
 use std::collections::{BTreeMap, HashMap};

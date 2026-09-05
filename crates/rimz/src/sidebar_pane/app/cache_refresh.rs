@@ -70,7 +70,7 @@ fn refresh_loop(
                 &mut refresh_state,
             )
         });
-        if let Some(event) = meter.finish(tick, crate::sidebar::timing::unix_now_ms()) {
+        if let Some(event) = meter.finish(tick, crate::utils::time::unix_now_ms()) {
             crate::sidebar::meter::report(&diag, event);
         }
         if let Err(err) = result {

@@ -267,7 +267,7 @@ fn request_action_with_client_sample(
         pane_id,
         origin,
         repair_generation,
-        issued_at_ms: crate::sidebar::timing::unix_now_ms(),
+        issued_at_ms: crate::utils::time::unix_now_ms(),
         applied_at_ms: None,
         state: FocusIntentState::Requested,
         pre_action,
@@ -323,7 +323,7 @@ pub fn dispatch_action(
             last_error.expect("focus retry loop ran at least once"),
         ));
     }
-    let applied_at_ms = crate::sidebar::timing::unix_now_ms();
+    let applied_at_ms = crate::utils::time::unix_now_ms();
     anchor.state = FocusIntentState::Applied;
     anchor.applied_at_ms = Some(applied_at_ms);
     store(runtime, &anchor)?;

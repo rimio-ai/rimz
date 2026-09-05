@@ -19,9 +19,10 @@ use crate::disk::atomic;
 use crate::disk::single_flight::{self, Coalesced};
 use crate::sidebar::timing::{
     DIFF_STATS_FOCUSED_COMMIT_TTL, DIFF_STATS_FOCUSED_LOCAL_TTL, DIFF_STATS_IDLE_TTL,
-    DIFF_STATS_TTL, WORKTREE_ROOTS_TTL, unix_now_ms,
+    DIFF_STATS_TTL, WORKTREE_ROOTS_TTL,
 };
 use crate::store::snapshot::{SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind};
+use crate::utils::time::unix_now_ms;
 use crate::worktree::{self, LandedVerdict};
 
 /// How a non-producing sidebar waits for the elected producer's diff-stats

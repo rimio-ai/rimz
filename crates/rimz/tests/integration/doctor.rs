@@ -790,11 +790,7 @@ fn doctor_clear_cuts_the_multiplexer_log_at_the_watermark() {
 #[test]
 fn doctor_labels_stale_build_diagnostics() {
     let env = Env::new();
-    write_diag_record(
-        &env,
-        rimz::sidebar::timing::unix_now_ms(),
-        Some("stale-build"),
-    );
+    write_diag_record(&env, rimz::utils::time::unix_now_ms(), Some("stale-build"));
 
     let report = doctor_json(
         &env.rimz()
@@ -1125,7 +1121,7 @@ fn write_presence_stamp(env: &Env, mux: Option<MuxName>, session_name: Option<&s
     let runtime = env.runtime_paths();
     runtime.ensure_dirs().expect("runtime dirs");
     let stamp = rimz::sidebar::cache::PresenceStamp {
-        written_at_ms: rimz::sidebar::timing::unix_now_ms(),
+        written_at_ms: rimz::utils::time::unix_now_ms(),
         mux,
         session_name: session_name.map(ToOwned::to_owned),
     };

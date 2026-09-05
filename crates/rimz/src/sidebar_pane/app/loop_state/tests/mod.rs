@@ -84,7 +84,7 @@ impl Rig {
         let envelope = SidebarEventEnvelope::new(
             self.ws.clone(),
             Some("rimz-test".to_owned()),
-            crate::sidebar::timing::unix_now_ms(),
+            crate::utils::time::unix_now_ms(),
             event,
         );
         self.state.on_event(

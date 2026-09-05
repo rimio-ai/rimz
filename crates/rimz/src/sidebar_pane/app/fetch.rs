@@ -341,7 +341,7 @@ impl FetchWorker {
     /// next-eldest, so it still self-heals through the producer branch.
     fn run_cycle(&mut self, state: &StatePaths, request: FetchRequest, sink: &mut ResultSink) {
         let role = self.observe_role();
-        let now_ms = crate::sidebar::timing::unix_now_ms();
+        let now_ms = crate::utils::time::unix_now_ms();
         let frame_stamps =
             crate::sidebar::cache::published_frame_stamps(&self.runtime, &self.config.session_name);
         let recordable = consumer_stamp_recordable(request, role.is_producer());
@@ -681,7 +681,7 @@ fn evaluate_notifications(
     diag: &crate::diag::DiagSink,
     snapshot: &mut SidebarSnapshot,
 ) -> Vec<NotificationDelivery> {
-    let now_ms = crate::sidebar::timing::unix_now_ms();
+    let now_ms = crate::utils::time::unix_now_ms();
     let mut episodes = UnreadEpisodes::load(runtime);
     let silent_opens = episodes.was_absent_on_load();
     let marks = ReadMarks::load_merged(runtime);
@@ -847,7 +847,7 @@ impl FetchRequest {
     pub(super) fn producer_fresh_panes() -> Self {
         Self {
             mode: FetchMode::ProducerFreshPanes,
-            min_pane_cache_ms: Some(crate::sidebar::timing::unix_now_ms()),
+            min_pane_cache_ms: Some(crate::utils::time::unix_now_ms()),
             published_frame_hint: false,
             force_fold: false,
         }
@@ -856,7 +856,7 @@ impl FetchRequest {
     pub(super) fn hard_refresh() -> Self {
         Self {
             mode: FetchMode::HardRefresh,
-            min_pane_cache_ms: Some(crate::sidebar::timing::unix_now_ms()),
+            min_pane_cache_ms: Some(crate::utils::time::unix_now_ms()),
             published_frame_hint: false,
             force_fold: false,
         }
@@ -959,9 +959,7 @@ impl FetchWorker {
                 Ok(state) => {
                     let tick = self.meter.begin();
                     self.run_cycle(&state, request, &mut sink);
-                    if let Some(event) = self
-                        .meter
-                        .finish(tick, crate::sidebar::timing::unix_now_ms())
+                    if let Some(event) = self.meter.finish(tick, crate::utils::time::unix_now_ms())
                     {
                         crate::sidebar::meter::report(&self.diag, event);
                     }

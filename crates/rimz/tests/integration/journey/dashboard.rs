@@ -5,7 +5,7 @@ use rimz::agents::AgentAccount;
 use rimz::agents::spending::{SpendTally, SpendWindow, Spending};
 use rimz::ids::MuxName;
 use rimz::sidebar::refresh::{AccountsCache, ProviderRecord};
-use rimz::sidebar::timing::unix_now_ms;
+use rimz::utils::time::unix_now_ms;
 use serde_json::json;
 
 use super::{RoomHarness, SETTLE, session_start_at, user_prompt_submit};

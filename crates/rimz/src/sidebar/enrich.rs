@@ -502,11 +502,7 @@ fn enrich_core(
     snapshot.sidebar = machine_config.sidebar.clone();
     snapshot.theme = machine_config.theme.clone();
     snapshot.attention = machine_config.agents.attention;
-    fold_link_stats(
-        &mut snapshot,
-        runtime,
-        crate::sidebar::timing::unix_now_ms(),
-    );
+    fold_link_stats(&mut snapshot, runtime, crate::utils::time::unix_now_ms());
     let diff_cache = read_diff_stats_cache(&runtime.diff_stats_path());
     let cohort_spend_cache = read_cohort_spend_cache(&runtime.cohort_spend_path());
 

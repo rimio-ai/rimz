@@ -525,7 +525,7 @@ impl PaneWatchdog {
             return Some(AuthoritativePaneProbe {
                 mux: self.mux,
                 session_name: self.session_name.clone(),
-                observed_at_ms: crate::sidebar::timing::unix_now_ms(),
+                observed_at_ms: crate::utils::time::unix_now_ms(),
                 pane_ids,
             });
         }
@@ -536,7 +536,7 @@ impl PaneWatchdog {
                 session_name: self.session_name.clone(),
                 observed_at_ms: listing
                     .observed_at_ms
-                    .max(crate::sidebar::timing::unix_now_ms()),
+                    .max(crate::utils::time::unix_now_ms()),
                 pane_ids: listing.panes.into_iter().map(|pane| pane.pane_id).collect(),
             }),
             Err(err) => {
@@ -717,7 +717,7 @@ fn shared_authoritative_pane_probe(
     runtime: &crate::RuntimePaths,
     produce: impl FnOnce() -> Option<AuthoritativePaneProbe>,
 ) -> PaneProbe {
-    let now_ms = crate::sidebar::timing::unix_now_ms();
+    let now_ms = crate::utils::time::unix_now_ms();
     let read_fresh = || read_authoritative_pane_probe(runtime, watchdog, now_ms);
     if let Some(probe) = read_fresh() {
         return pane_probe_for(&probe, &watchdog.pane);
@@ -1553,7 +1553,7 @@ mod tests {
             last_observed_at_ms: None,
         };
         let calls = std::cell::Cell::new(0);
-        let observed_at_ms = crate::sidebar::timing::unix_now_ms();
+        let observed_at_ms = crate::utils::time::unix_now_ms();
         let first = shared_authoritative_pane_probe(&watchdog, &runtime, || {
             calls.set(calls.get() + 1);
             Some(AuthoritativePaneProbe {
@@ -1590,12 +1590,8 @@ mod tests {
         };
         std::fs::write(runtime.authoritative_pane_probe_path(), b"not json").unwrap();
         assert!(
-            read_authoritative_pane_probe(
-                &runtime,
-                &watchdog,
-                crate::sidebar::timing::unix_now_ms()
-            )
-            .is_none()
+            read_authoritative_pane_probe(&runtime, &watchdog, crate::utils::time::unix_now_ms())
+                .is_none()
         );
 
         crate::sidebar::cache::write_authoritative_pane_probe(
@@ -1603,18 +1599,14 @@ mod tests {
             &AuthoritativePaneProbe {
                 mux: crate::ids::MuxName::Tmux,
                 session_name: "other".to_owned(),
-                observed_at_ms: crate::sidebar::timing::unix_now_ms(),
+                observed_at_ms: crate::utils::time::unix_now_ms(),
                 pane_ids: Vec::new(),
             },
         )
         .unwrap();
         assert!(
-            read_authoritative_pane_probe(
-                &runtime,
-                &watchdog,
-                crate::sidebar::timing::unix_now_ms()
-            )
-            .is_none()
+            read_authoritative_pane_probe(&runtime, &watchdog, crate::utils::time::unix_now_ms())
+                .is_none()
         );
 
         crate::sidebar::cache::write_authoritative_pane_probe(

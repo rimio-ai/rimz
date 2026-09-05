@@ -55,7 +55,7 @@ impl Harness {
     /// retry-fresh unavailable accounts stamp. Re-call right before each
     /// produce under test — the pane frame rides the short poll-mode TTL.
     pub fn publish_fresh_produce_inputs(&self, session: &str, panes: Vec<rimz::pane::PaneRef>) {
-        let now_ms = rimz::sidebar::timing::unix_now_ms();
+        let now_ms = rimz::utils::time::unix_now_ms();
         let frame = rimz::sidebar::frame::assemble_frame(panes, now_ms, session);
         std::fs::write(
             self.runtime_paths.pane_frame_path(),

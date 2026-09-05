@@ -192,7 +192,7 @@ impl DiagSink {
     }
 
     pub fn emit(&self, event: DiagEvent) {
-        self.emit_at_ms(event, crate::sidebar::timing::unix_now_ms());
+        self.emit_at_ms(event, crate::utils::time::unix_now_ms());
     }
 
     pub(crate) fn emit_at_ms(&self, event: DiagEvent, at_ms: u64) {
@@ -209,7 +209,7 @@ impl DiagSink {
         let Some(inner) = self.inner.as_ref() else {
             return;
         };
-        let at_ms = crate::sidebar::timing::unix_now_ms();
+        let at_ms = crate::utils::time::unix_now_ms();
         let kind = event.kind_name();
         let Ok(mut limiter) = inner.limiter.lock() else {
             inner.append(event, at_ms, 0);
@@ -227,7 +227,7 @@ impl DiagSink {
     /// never rate-limited, so every notification, bell decision, and unread
     /// transition lands.
     pub fn trace_notify(&self, event: NotifyTraceEvent) {
-        self.trace_notify_at_ms(event, crate::sidebar::timing::unix_now_ms());
+        self.trace_notify_at_ms(event, crate::utils::time::unix_now_ms());
     }
 
     fn trace_notify_at_ms(&self, event: NotifyTraceEvent, at_ms: u64) {

@@ -1839,7 +1839,7 @@ fn write_zellij_topology(
     }
     let cache = rimz::mux::zellij::pane_topology::PaneTopologyCache {
         session_name: session.to_owned(),
-        produced_at_ms: rimz::sidebar::timing::unix_now_ms(),
+        produced_at_ms: rimz::utils::time::unix_now_ms(),
         writer: None,
         focused_pane: None,
         clients: None,

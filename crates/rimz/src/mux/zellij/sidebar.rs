@@ -26,7 +26,7 @@ use crate::mux::{
 };
 use crate::pane::SIDEBAR_CHROME_TITLE;
 use crate::sidebar::timing::RECONCILE_LIST_TIMEOUT;
-use crate::sidebar::timing::unix_now_ms;
+use crate::utils::time::unix_now_ms;
 
 const ADD_DOCK_ATTEMPTS: u32 = 2;
 const DOCK_VERIFY_SETTLE: Duration = Duration::from_millis(100);

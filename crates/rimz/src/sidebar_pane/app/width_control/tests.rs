@@ -35,12 +35,12 @@ fn write_zellij_sidebar_only_topology(runtime: &RuntimePaths, sidebar_cols: u16)
         runtime,
         sidebar_cols,
         None,
-        crate::sidebar::timing::unix_now_ms(),
+        crate::utils::time::unix_now_ms(),
     );
 }
 
 fn write_zellij_topology_for_view(runtime: &RuntimePaths, view_cols: u16) {
-    write_zellij_topology_for_view_at(runtime, view_cols, crate::sidebar::timing::unix_now_ms());
+    write_zellij_topology_for_view_at(runtime, view_cols, crate::utils::time::unix_now_ms());
 }
 
 fn write_zellij_fullscreen_topology(runtime: &RuntimePaths, active: bool) -> u64 {
@@ -55,7 +55,7 @@ fn write_zellij_fullscreen_topology(runtime: &RuntimePaths, active: bool) -> u64
     cache.produced_at_ms = cache
         .produced_at_ms
         .saturating_add(1)
-        .max(crate::sidebar::timing::unix_now_ms());
+        .max(crate::utils::time::unix_now_ms());
     cache.panes[1].is_fullscreen = active;
     crate::sidebar::cache::write_pane_topology_cache(runtime, &cache)
         .expect("write fullscreen topology");
@@ -375,7 +375,7 @@ fn observation_without_an_owned_pane_stays_idle() {
         &crate::diag::DiagSink::disabled(),
     );
     assert!(!controller.note_structural(
-        crate::sidebar::timing::unix_now_ms(),
+        crate::utils::time::unix_now_ms(),
         Some(80),
         &crate::diag::DiagSink::disabled(),
     ));
@@ -617,7 +617,7 @@ fn settled_structural_resize_converges_without_adopting() {
 
     controller.observe(83, SidebarWidthControlTrigger::ResizeFeedback, &diag);
     controller.classification_deadline = Some(Instant::now());
-    let structural_at_ms = crate::sidebar::timing::unix_now_ms();
+    let structural_at_ms = crate::utils::time::unix_now_ms();
     write_zellij_topology_for_view_at(&runtime, 200, structural_at_ms);
     controller.backstop(Some(83), Some(2), Some(structural_at_ms), &diag);
 
@@ -632,7 +632,7 @@ fn sibling_change_backstop_converges_without_resize_feedback() {
     let diag = crate::diag::DiagSink::disabled();
 
     controller.backstop(Some(50), Some(3), None, &diag);
-    let structural_at_ms = crate::sidebar::timing::unix_now_ms();
+    let structural_at_ms = crate::utils::time::unix_now_ms();
     write_zellij_topology_for_view_at(&runtime, 200, structural_at_ms);
     controller.backstop(Some(80), Some(2), Some(structural_at_ms), &diag);
 
@@ -649,7 +649,7 @@ fn structural_event_converges_without_resize_feedback() {
     let diag = crate::diag::DiagSink::disabled();
 
     controller.backstop(Some(50), Some(3), None, &diag);
-    let structural_at_ms = crate::sidebar::timing::unix_now_ms();
+    let structural_at_ms = crate::utils::time::unix_now_ms();
     write_zellij_topology_for_view_at(&runtime, 200, structural_at_ms);
     controller.note_structural(structural_at_ms, Some(80), &diag);
 
@@ -666,7 +666,7 @@ fn stalled_structural_resize_is_not_adopted_on_later_feedback() {
     let diag = crate::diag::DiagSink::disabled();
 
     controller.backstop(Some(50), Some(3), None, &diag);
-    let structural_at_ms = crate::sidebar::timing::unix_now_ms();
+    let structural_at_ms = crate::utils::time::unix_now_ms();
     write_zellij_topology_for_view_at(&runtime, 200, structural_at_ms);
     controller.backstop(Some(83), Some(2), Some(structural_at_ms), &diag);
     controller
@@ -1264,7 +1264,7 @@ fn structural_change_releases_unacknowledged_park() {
 
     controller.backstop(Some(83), Some(1), None, &diag);
     park_after_silent_backend(&mut controller, 83, &diag);
-    let structural_at_ms = crate::sidebar::timing::unix_now_ms();
+    let structural_at_ms = crate::utils::time::unix_now_ms();
     write_zellij_topology_for_view_at(&runtime, 200, structural_at_ms);
     controller.backstop(Some(83), Some(2), Some(structural_at_ms), &diag);
 

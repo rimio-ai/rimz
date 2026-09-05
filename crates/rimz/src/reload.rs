@@ -31,8 +31,9 @@ use crate::proc::ProcInfo;
 use crate::room::session::LiveSessions;
 use crate::sidebar::heartbeat::SidebarHeartbeat;
 use crate::sidebar::timing::{
-    RECONCILE_LIST_TIMEOUT, RELOAD_CONVERGE_POLL, RELOAD_CONVERGE_TIMEOUT, unix_now_ms,
+    RECONCILE_LIST_TIMEOUT, RELOAD_CONVERGE_POLL, RELOAD_CONVERGE_TIMEOUT,
 };
+use crate::utils::time::unix_now_ms;
 use crate::workspace::{self, KnownWorkspace, record};
 
 /// Immutable executable generation shared by every long-lived process in a room.

@@ -1435,7 +1435,7 @@ fn wake_sidebars(runtime: &RuntimePaths) {
 }
 
 fn unix_now_ms_i64() -> i64 {
-    i64::try_from(rimz::sidebar::timing::unix_now_ms()).unwrap_or(i64::MAX)
+    i64::try_from(rimz::utils::time::unix_now_ms()).unwrap_or(i64::MAX)
 }
 
 fn emit_hidden_count(label: &str, count: usize) -> Result<()> {

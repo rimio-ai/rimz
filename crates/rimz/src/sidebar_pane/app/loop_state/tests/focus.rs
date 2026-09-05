@@ -44,7 +44,7 @@ fn requested_focus_anchor(
 fn fresh_focus_anchor_seeds_scroll_on_matching_fold() {
     let mut rig = Rig::new();
     let target = zellij("terminal_2");
-    let stamp_ms = crate::sidebar::timing::unix_now_ms();
+    let stamp_ms = crate::utils::time::unix_now_ms();
     crate::sidebar::focus_anchor::store(
         &rig.runtime,
         &applied_focus_anchor(target.clone(), 7, stamp_ms, None),
@@ -73,7 +73,7 @@ fn fresh_requested_focus_anchor_installs_shared_hold_once() {
     let mut rig = Rig::new();
     let first = zellij("terminal_1");
     let target = zellij("terminal_2");
-    let stamp_ms = crate::sidebar::timing::unix_now_ms();
+    let stamp_ms = crate::utils::time::unix_now_ms();
     let mut anchor = requested_focus_anchor(
         target.clone(),
         7,
@@ -121,7 +121,7 @@ fn fresh_requested_focus_anchor_installs_shared_hold_once() {
         selection_at_start: Some(target.clone()),
     });
     anchor.state = crate::sidebar::focus_anchor::FocusIntentState::Applied;
-    anchor.applied_at_ms = Some(crate::sidebar::timing::unix_now_ms());
+    anchor.applied_at_ms = Some(crate::utils::time::unix_now_ms());
     crate::sidebar::focus_anchor::store(&rig.runtime, &anchor).expect("apply anchor");
     let snapshot = snapshot_with_focused_pane(&rig.ws, target);
     rig.fold(snapshot, PaneFrame::Fresh, SnapshotSource::Produced);
@@ -135,7 +135,7 @@ fn fresh_requested_focus_anchor_installs_shared_hold_once() {
 fn focus_anchor_stamp_applies_once() {
     let mut rig = Rig::new();
     let target = zellij("terminal_2");
-    let stamp_ms = crate::sidebar::timing::unix_now_ms();
+    let stamp_ms = crate::utils::time::unix_now_ms();
     crate::sidebar::focus_anchor::store(
         &rig.runtime,
         &applied_focus_anchor(target.clone(), 7, stamp_ms, None),
@@ -162,7 +162,7 @@ fn stale_focus_anchor_fences_unchanged_observation_to_unknown() {
     let mut rig = Rig::new();
     let target = zellij("terminal_2");
     let ttl_ms = crate::sidebar::timing::FOCUS_ANCHOR_FRESH.as_millis() as u64;
-    let stale_stamp = crate::sidebar::timing::unix_now_ms().saturating_sub(ttl_ms + 1);
+    let stale_stamp = crate::utils::time::unix_now_ms().saturating_sub(ttl_ms + 1);
     crate::sidebar::focus_anchor::store(
         &rig.runtime,
         &applied_focus_anchor(target.clone(), 7, stale_stamp, None),
@@ -182,7 +182,7 @@ fn stale_focus_anchor_fences_unchanged_observation_to_unknown() {
 fn superseding_client_observation_leaves_scroll_untouched() {
     let mut rig = Rig::new();
     let selected = zellij("terminal_2");
-    let stamp_ms = crate::sidebar::timing::unix_now_ms();
+    let stamp_ms = crate::utils::time::unix_now_ms();
     let mut anchor = applied_focus_anchor(zellij("terminal_1"), 7, stamp_ms, None);
     anchor.pre_action = vec![crate::mux::ClientPaneView {
         client_id: crate::mux::MuxClientId::Zellij(7),

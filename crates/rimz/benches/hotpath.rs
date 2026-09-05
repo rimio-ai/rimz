@@ -137,7 +137,7 @@ fn fuse_fixture() -> FuseFixture {
     let pane_id = rimz::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_0");
     let now_ms = snapshot
         .panes_produced_at_ms
-        .unwrap_or_else(rimz::sidebar::timing::unix_now_ms)
+        .unwrap_or_else(rimz::utils::time::unix_now_ms)
         .saturating_add(1);
     events.append(
         rimz::sidebar::events::SidebarEvent::CommandChanged {
@@ -162,7 +162,7 @@ fn owned_fuse_fixture() -> FuseFixture {
     } = snapshot_fixture();
     let now_ms = snapshot
         .panes_produced_at_ms
-        .unwrap_or_else(rimz::sidebar::timing::unix_now_ms)
+        .unwrap_or_else(rimz::utils::time::unix_now_ms)
         .saturating_add(1);
     FuseFixture {
         _workspace,
@@ -181,7 +181,7 @@ fn enrich_fixture() -> EnrichFixture {
         rimz::sidebar::consumer::rollup_snapshot(&workspace.paths, &mut cursor).expect("rollup");
     let frame = rimz::sidebar::frame::assemble_frame(
         rimz::testkit::fleet::synthetic_panes(FLEET),
-        rimz::sidebar::timing::unix_now_ms(),
+        rimz::utils::time::unix_now_ms(),
         rimz::testkit::fleet::SESSION_NAME,
     );
     EnrichFixture {
@@ -206,7 +206,7 @@ fn consumer_adopt_fixture(warm_parse: bool) -> ConsumerAdoptFixture {
     .expect("publish latest");
     let mut frame = rimz::sidebar::frame::assemble_frame(
         rimz::testkit::fleet::synthetic_panes(FLEET),
-        rimz::sidebar::timing::unix_now_ms(),
+        rimz::utils::time::unix_now_ms(),
         rimz::testkit::fleet::SESSION_NAME,
     );
     frame.topology_stamp_ms = Some(1);

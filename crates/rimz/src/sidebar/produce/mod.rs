@@ -34,8 +34,8 @@ use crate::sidebar::enrich::{
 };
 use crate::sidebar::frame::{PaneFrame, assemble_frame};
 use crate::sidebar::refresh::refresh_heavy_lanes;
-use crate::sidebar::timing::unix_now_ms;
 use crate::store::snapshot::{PaneAgent, RowCard, SidebarSnapshot, SnapshotErr};
+use crate::utils::time::unix_now_ms;
 use crate::{ResolvedWorkspace, RuntimePaths, StatePaths, Store};
 
 #[derive(Debug, thiserror::Error)]
@@ -248,7 +248,7 @@ pub fn resolution_snapshot(
         mux,
         session_name: workspace.session_name.clone(),
         exclude: None,
-        min_pane_cache_ms: Some(crate::sidebar::timing::unix_now_ms()),
+        min_pane_cache_ms: Some(crate::utils::time::unix_now_ms()),
         diag: crate::diag::DiagSink::for_workspace(
             workspace.workspace_id.clone(),
             workspace.session_name.clone(),

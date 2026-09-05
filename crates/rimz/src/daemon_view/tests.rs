@@ -466,7 +466,7 @@ fn daemon_tracker_skips_stable_healthy_frames_and_retries_failures() {
     let dir = tempfile::tempdir().unwrap();
     let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap();
     let mut tracker = DaemonRepairTracker::new(workspace_id, "rimz-demo".to_owned());
-    let now_ms = crate::sidebar::timing::unix_now_ms();
+    let now_ms = crate::utils::time::unix_now_ms();
     let healthy = healthy_daemon_frame(now_ms, MuxName::Tmux);
     let builds = Cell::new(0);
     let repairs = Cell::new(0);
@@ -534,7 +534,7 @@ fn daemon_tracker_skips_stable_healthy_frames_and_retries_failures() {
 
 #[test]
 fn daemon_frame_classifier_repairs_bad_truth_and_preserves_closed_view() {
-    let now_ms = crate::sidebar::timing::unix_now_ms();
+    let now_ms = crate::utils::time::unix_now_ms();
     for mux in [MuxName::Tmux, MuxName::Zellij] {
         let healthy = healthy_daemon_frame(now_ms, mux);
         assert_eq!(

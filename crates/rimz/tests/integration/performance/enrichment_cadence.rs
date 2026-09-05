@@ -14,7 +14,7 @@
 #![allow(clippy::print_stderr)] // self-skip notices, like the sibling fixture
 
 use rimz::sidebar::consumer::RollupCursor;
-use rimz::sidebar::timing::unix_now_ms;
+use rimz::utils::time::unix_now_ms;
 
 use super::sidebar_diff_stats::Fixture;
 

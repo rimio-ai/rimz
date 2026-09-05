@@ -1697,7 +1697,7 @@ fn render_diagnostics(
                     &format!("{} recent incidents ({path})", incidents.len())
                 )
             )?;
-            let now_ms = rimz::sidebar::timing::unix_now_ms();
+            let now_ms = rimz::utils::time::unix_now_ms();
             let mut table = Table::new(["", "KIND", "SEEN", "SUMMARY"]).right(&[2]);
             for incident in &open {
                 let health = doctor_health(incident.state, incident.impact);

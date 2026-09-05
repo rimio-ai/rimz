@@ -1076,7 +1076,7 @@ fn spawn_retrying_print(env: &Env, trace_name: &str, use_worktree: bool) -> std:
         &runtime,
         &rimz::mux::zellij::pane_topology::PaneTopologyCache {
             session_name: workspace.session_name.clone(),
-            produced_at_ms: rimz::sidebar::timing::unix_now_ms(),
+            produced_at_ms: rimz::utils::time::unix_now_ms(),
             writer: None,
             focused_pane: None,
             clients: None,
@@ -1908,11 +1908,8 @@ fn list_pane(
 fn publish_pane_frame(env: &Env, session_name: &str, panes: Vec<rimz::pane::PaneRef>) {
     let runtime = env.runtime_paths();
     runtime.ensure_dirs().expect("runtime dirs");
-    let frame = rimz::sidebar::frame::assemble_frame(
-        panes,
-        rimz::sidebar::timing::unix_now_ms(),
-        session_name,
-    );
+    let frame =
+        rimz::sidebar::frame::assemble_frame(panes, rimz::utils::time::unix_now_ms(), session_name);
     rimz::disk::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame)
         .expect("publish pane frame");
 }

@@ -1703,8 +1703,7 @@ fn probe_loop(
                     delay
                 };
                 if failures >= PROBE_STREAM_BLACKOUT_FAILURES
-                    && let Some(event) =
-                        monitor.check_blackout(rimz::sidebar::timing::unix_now_ms())
+                    && let Some(event) = monitor.check_blackout(rimz::utils::time::unix_now_ms())
                 {
                     let _ = events.send(event);
                 }
@@ -1778,7 +1777,7 @@ impl ProbeChild {
     ) -> ProbeAckDrain {
         let mut drain = ProbeAckDrain::default();
         for ack in self.acknowledgements.try_iter() {
-            let outcome = monitor.record_ack(ack.seq, rimz::sidebar::timing::unix_now_ms());
+            let outcome = monitor.record_ack(ack.seq, rimz::utils::time::unix_now_ms());
             drain.acked |= outcome.accepted;
             drain.reported_rtt_changed |= outcome.reported_rtt_changed;
             if let (Some(sync), Some(ports)) = (port_sync, ack.ports) {
@@ -1856,17 +1855,17 @@ fn run_probe_stream(
         let drain = child.drain_acknowledgements(monitor, events, target, control_path, port_sync);
         acked |= drain.acked;
         if drain.reported_rtt_changed {
-            let probe = monitor.stats_refresh_probe(rimz::sidebar::timing::unix_now_ms());
+            let probe = monitor.stats_refresh_probe(rimz::utils::time::unix_now_ms());
             if write_link_probe(&mut child.stdin, &probe).is_err() {
                 break ProbeStreamStop::Ended;
             }
         }
-        if let Some(event) = monitor.check_blackout(rimz::sidebar::timing::unix_now_ms()) {
+        if let Some(event) = monitor.check_blackout(rimz::utils::time::unix_now_ms()) {
             let _ = events.send(event);
         }
 
         if Instant::now() >= next_tick {
-            let probe = monitor.next_probe(rimz::sidebar::timing::unix_now_ms());
+            let probe = monitor.next_probe(rimz::utils::time::unix_now_ms());
             if write_link_probe(&mut child.stdin, &probe).is_err() {
                 break ProbeStreamStop::Ended;
             }

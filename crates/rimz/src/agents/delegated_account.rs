@@ -5,10 +5,11 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+
+use crate::utils::time::unix_now_ms;
 
 use super::account::{AccountProbe, file_mtime_ms};
 use super::credits::AccountUsageReportable;
@@ -338,13 +339,6 @@ fn hashed_account_key(domain: &[u8], secret_kind: &str, secret: &str) -> String 
     hasher.update([0]);
     hasher.update(secret.as_bytes());
     hex::encode(hasher.finalize())
-}
-
-fn unix_now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

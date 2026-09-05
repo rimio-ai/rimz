@@ -166,7 +166,7 @@ fn publish_pane_frame(env: &Env, panes: &[rimz::pane::PaneRef]) {
         rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
     let frame = rimz::sidebar::frame::assemble_frame(
         panes.to_vec(),
-        rimz::sidebar::timing::unix_now_ms(),
+        rimz::utils::time::unix_now_ms(),
         workspace.session_name,
     );
     rimz::disk::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame)
