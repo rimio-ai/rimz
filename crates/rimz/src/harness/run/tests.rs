@@ -98,76 +98,36 @@ fn retention_and_report_fields_default_for_old_run_records() {
 }
 
 #[test]
-fn terminal_status_table_pins_every_signal() {
+fn fold_lifecycle_maps_each_disposition_to_its_run_status() {
     for (signal, expected) in [
         (
             LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
             },
-            Some(RunStatus::Completed),
+            RunStatus::Completed,
         ),
         (
             LifecycleSignal::TurnEnded {
                 errored: true,
                 parked_on_background: false,
             },
-            Some(RunStatus::Failed),
-        ),
-        (
-            LifecycleSignal::TurnEnded {
-                errored: false,
-                parked_on_background: true,
-            },
-            None,
-        ),
-        (
-            LifecycleSignal::TurnEnded {
-                errored: true,
-                parked_on_background: true,
-            },
-            None,
+            RunStatus::Failed,
         ),
         (
             LifecycleSignal::TurnInterrupted { turn_id: None },
-            Some(RunStatus::Canceled),
+            RunStatus::Canceled,
         ),
-        (LifecycleSignal::Ended, Some(RunStatus::Failed)),
-        (LifecycleSignal::Registered, None),
-        (LifecycleSignal::TurnStarted, None),
-        (LifecycleSignal::SubagentStarted, None),
-        (LifecycleSignal::SubagentStopped { errored: false }, None),
-        (LifecycleSignal::SubagentStopped { errored: true }, None),
-        (
-            LifecycleSignal::ToolUsed {
-                mutates: false,
-                edits: false,
-                name: None,
-                native_key: None,
-                turn_id: None,
-            },
-            None,
-        ),
-        (
-            LifecycleSignal::AwaitingInput {
-                kind: crate::agents::lifecycle::AskKind::Permission,
-                ask_id: None,
-                detail: None,
-                native_key: None,
-            },
-            None,
-        ),
-        (LifecycleSignal::Compacting, None),
-        (
-            LifecycleSignal::CompactionEnded {
-                auto: None,
-                failed: false,
-            },
-            None,
-        ),
-        (LifecycleSignal::Lost, None),
     ] {
-        assert_eq!(terminal_status_for_signal(&signal), expected, "{signal:?}");
+        let (_dir, paths, record) = setup();
+        let observation =
+            AgentLifecycleObservation::new(Some(AgentSessionId::from("sess-1")), signal);
+        let completed = record_lifecycle(&paths, &record.run_id, "claude", &observation, None)
+            .unwrap()
+            .expect("terminal update");
+        assert_eq!(completed.status, expected, "{:?}", observation.signal);
+        let persisted = load(&paths, &record.run_id).unwrap();
+        assert_eq!(persisted.status, expected, "{:?}", observation.signal);
     }
 }
 

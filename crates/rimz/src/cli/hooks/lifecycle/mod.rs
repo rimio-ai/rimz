@@ -235,8 +235,8 @@ fn assistant_message_for_lifecycle(
     supervised_run: bool,
     extract: impl FnOnce() -> Option<String>,
 ) -> Option<String> {
-    let needs_run_message = supervised_run
-        && rimz::harness::run::terminal_status_for_signal(&recorded.observation.signal).is_some();
+    let needs_run_message =
+        supervised_run && recorded.observation.signal.terminal_disposition().is_some();
     let needs_conversation_message = recorded.observation.parent_agent_id.is_none()
         && matches!(
             recorded.observation.signal,
