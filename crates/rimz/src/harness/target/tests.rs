@@ -702,7 +702,10 @@ fn unknown_harness_notice_header_and_ack_agree() {
     )
     .with_sender(sender);
     let prompt = message_header(&record.sender, &[], None).expect("harness header") + &record.text;
-    assert_eq!(prompt, "Type: FUTURE_NOTICE\nFrom: @rimz\nContent:\nship it");
+    assert_eq!(
+        prompt,
+        "Type: FUTURE_NOTICE\nFrom: @rimz\nContent:\nship it"
+    );
     let (leading, segments, trailing) =
         align_submitted_prompt(&prompt, &[&record]).expect("aligned notice");
     assert_eq!((leading, trailing), (None, None));

@@ -227,7 +227,7 @@ The guard sits in `attempt_delivery`, ahead of the store call: delivery causalit
 
 A guard that cannot answer never sends. A failed run scan or a failed cancel warns with the message id, skips the claim, and leaves the record `Queued` for the next sweep. Failing the sweep outright on one unreadable run file would spread a single bad file across the whole queue; claiming anyway would send exactly the duplicate the guard exists to stop. While the record sits there it still holds FIFO head position on its own card, like any head that cannot deliver.
 
-The scan and the claim are separate transactions, and that leaves one residual window: a join can stamp `joined_at` after the scan while the claim wins the race against cancellation. The join-side cancel still accepts the record, because `settle_message` settles `Queued`, `Claimed`, and `Sent` alike, but a cancel cannot retract a paste already on its way to the pane.
+The scan and the claim are separate transactions, and that leaves one residual window: a join can stamp `joined_at` after the scan while the claim wins the race against cancellation. The join-side cancel still accepts a `Queued` or `Claimed` record, but leaves a `Sent` record untouched: a cancel cannot retract a paste already on its way to the pane.
 
 ### Batching
 
