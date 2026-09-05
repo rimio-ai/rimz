@@ -44,7 +44,7 @@ A task carries exactly one trigger: a clock (`--at`, `--every`, `--cron`, `--in`
 
 A subscription observes its whole family: a task on `ci.failed` sees every `ci.*` whose matches hold, fires on `ci.failed`, and records `skipped` for a sibling such as `ci.passed` without spending a turn. A `'ci.*'` selector fires on every member. `ci.finished` and `--match conclusion=…` were replaced by the outcome names and are rejected at add time.
 
-A `ci.*` or `pr.*` subscription on a `--wake` task with no `path` or `branch` match is scoped to the target's worktree, and a `team.*` one to the caller's own cohort, the same defaults [`rimz wake`](./wake.md#caller-scoped-defaults) applies.
+A `ci.*` or `pr.*` subscription on a `--wake` task with no `path` or `branch` match is scoped to the caller's worktree, and a `team.*` one to the caller's own cohort; from a user shell both use the target instead, the same defaults [`rimz wake`](./wake.md#caller-scoped-defaults) applies.
 
 The fired task's prompt opens with a headline naming the signal and its subject, followed by the payload as one compact JSON line, then the task's own `--prompt` verbatim; `--wake` tasks may omit the prompt entirely and deliver the headline alone. The run record keeps the signal name and its payload, replacing a payload over 4 KiB with a truncated rendering.
 

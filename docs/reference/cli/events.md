@@ -87,8 +87,6 @@ The hidden `--source forge` that the refresh uses accepts exactly `ci.passed`, `
 
 A subscriber names one signal (`--signal deploy.finished`) or one family (`--signal 'deploy.*'`), and the family is the first name segment. A subscription observes every signal in its family whose `--match` fields match, then delivers on an exact name match and records `skipped` for another member. That is why a wake on `ci.failed` is not woken by a green build, but a green build still tells RimZ the subscription is alive and restarts its [quiet window](./wake.md#a-signal-wake-is-a-standing-subscription). A signal from another family, or one that fails a `--match`, is ignored.
 
-Firing has no daemon behind it and no queue in front of it. The emitting process resolves the subscribers itself and spawns one detached run per match, so a signal reaches only the tasks armed for this workspace at that instant: a task armed a second later does not see it, and nothing is replayed when a room opens. A wake armed on a signal fires without a room open, unlike a `--in` delay, which waits for the room's elder or the loop timer.
-
 Emitted signals rejoin the stream `follow` prints:
 
 ```console
