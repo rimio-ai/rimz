@@ -2396,6 +2396,145 @@ fn completed_subagent_wait_prints_the_durable_result_after_the_child_ends() {
 }
 
 #[test]
+fn wait_rechecks_parent_turn_before_each_printed_result() {
+    assert_wait_rechecks_parent_turn(false);
+}
+
+#[test]
+fn wait_rechecks_parent_rest_certificate_before_each_printed_result() {
+    assert_wait_rechecks_parent_turn(true);
+}
+
+fn assert_wait_rechecks_parent_turn(settle_without_hook: bool) {
+    let env = Env::new();
+    let store = env.store();
+    let (attended, parent_kind, parent_launch_id) = create_finished_subagent(&env, &store);
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            parent_kind.as_str(),
+            "UserPromptSubmit",
+            &AgentLifecycleObservation::new(
+                Some(AgentSessionId::from("parent-session")),
+                LifecycleSignal::TurnStarted,
+            ),
+        ))
+        .expect("start parent turn");
+    assert!(
+        store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .expect("read active parent")
+            .agents
+            .iter()
+            .find(|agent| agent.launch_id.as_ref() == Some(&parent_launch_id))
+            .expect("parent remains in projection")
+            .holds_open_turn()
+    );
+    let mut unattended = create_running_named_run(&env, &store, "late-child");
+    unattended.subagent = true;
+    unattended.last_message = Some("late child answer\n".to_owned());
+    write_run_status(&store, &mut unattended, RunStatus::Running);
+
+    let mut child = env
+        .rimz()
+        .args([
+            "agents",
+            "wait",
+            attended.run_id.as_str(),
+            unattended.run_id.as_str(),
+            "--timeout",
+            "15s",
+        ])
+        .env(rimz::harness::launch::ENV_AGENT_KIND, parent_kind.as_str())
+        .env(
+            rimz::harness::launch::ENV_AGENT_ID,
+            parent_launch_id.as_str(),
+        )
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn wait during parent turn");
+
+    // The first join proves this process reached its print decision while
+    // the parent was active; a startup delay cannot satisfy the regression.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while rimz::harness::run::load(store.paths(), &attended.run_id)
+        .expect("read attended join")
+        .joined_at
+        .is_none()
+    {
+        assert!(child.try_wait().expect("poll wait").is_none());
+        assert!(Instant::now() < deadline, "first result was not joined");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    if settle_without_hook {
+        let at = Timestamp::now();
+        let mut context = AgentContext::new(parent_kind.as_str(), at);
+        context.settle = Some(rimz::agents::TurnSettle::new(
+            at,
+            rimz::agents::TurnSettleOutcome::Complete,
+        ));
+        rimz::store::agent_context::write_record(
+            &env.runtime_paths(),
+            &rimz::agents::context::record::AgentContextRecord::new(
+                parent_kind.as_str(),
+                "parent-session",
+                context,
+            ),
+        )
+        .expect("settle parent turn without a Stop hook");
+    } else {
+        store
+            .append_event(&EventEnvelope::agent_lifecycle(
+                env.workspace_id.clone(),
+                &workspace.session_name,
+                parent_kind.as_str(),
+                "Stop",
+                &AgentLifecycleObservation::new(
+                    Some(AgentSessionId::from("parent-session")),
+                    LifecycleSignal::TurnEnded {
+                        errored: false,
+                        parked_on_background: false,
+                    },
+                ),
+            ))
+            .expect("end parent turn while wait is pending");
+    }
+    assert!(
+        !store
+            .snapshot_cached()
+            .expect("read resting parent")
+            .agents
+            .iter()
+            .find(|agent| agent.launch_id.as_ref() == Some(&parent_launch_id))
+            .expect("parent remains in projection")
+            .holds_open_turn()
+    );
+    write_run_status(&store, &mut unattended, RunStatus::Completed);
+
+    let out = child.wait_with_output().expect("collect wait results");
+    assert!(out.status.success(), "wait failed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("durable child answer"), "{stdout}");
+    assert!(stdout.contains("late child answer"), "{stdout}");
+    assert!(
+        rimz::harness::run::load(store.paths(), &attended.run_id)
+            .expect("reload attended result")
+            .joined_at
+            .is_some()
+    );
+    assert_eq!(
+        rimz::harness::run::load(store.paths(), &unattended.run_id)
+            .expect("reload unattended result")
+            .joined_at,
+        None,
+        "a result printed after the parent turn ends must remain available to the digest"
+    );
+}
+
+#[test]
 fn wait_multi_blocks_until_all_terminal() {
     let env = Env::new();
     let store = env.store();
