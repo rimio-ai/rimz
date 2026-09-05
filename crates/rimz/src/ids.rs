@@ -62,6 +62,14 @@ impl FromStr for MuxName {
     }
 }
 
+/// Backend-native identity for one attached multiplexer client.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(tag = "mux", content = "id", rename_all = "snake_case")]
+pub enum MuxClientId {
+    Tmux(String),
+    Zellij(u32),
+}
+
 /// Whether a view is a Zellij tab or a tmux window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -712,6 +720,23 @@ impl<'de> Deserialize<'de> for PaneId {
     {
         let value = String::deserialize(deserializer)?;
         Self::parse(&value).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Focus-intent token minted by RimZ.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct FocusNonce(Uuid);
+
+impl FocusNonce {
+    pub(crate) fn new() -> Self {
+        Self(Uuid::now_v7())
+    }
+}
+
+impl std::fmt::Display for FocusNonce {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
     }
 }
 

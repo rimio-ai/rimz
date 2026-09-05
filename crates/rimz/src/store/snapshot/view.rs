@@ -97,7 +97,7 @@ pub struct SidebarSnapshot {
     pub viewed_panes: Vec<PaneId>,
     /// Full native attached-client observations for focus action fencing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub client_views: Vec<crate::mux::ClientPaneView>,
+    pub client_views: Vec<crate::pane::ClientPaneView>,
     /// Mux session that produced the pane/client frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_session_name: Option<String>,

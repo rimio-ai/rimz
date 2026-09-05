@@ -475,7 +475,7 @@ fn focus_stranded_target(
     snapshot: &SidebarSnapshot,
     ui: &UiState,
     stranded_pane_id: &PaneId,
-    evidence: &[crate::mux::ClientPaneView],
+    evidence: &[crate::pane::ClientPaneView],
     own_pane_id: Option<&PaneId>,
     sent_at_ms: u64,
     now_ms: u64,
@@ -546,7 +546,7 @@ fn spawn_pane_focus(
     session_name: &str,
     runtime: crate::disk::paths::RuntimePaths,
     origin: crate::mux::focus_anchor::FocusOrigin,
-    expected_pre_action: Option<Vec<crate::mux::ClientPaneView>>,
+    expected_pre_action: Option<Vec<crate::pane::ClientPaneView>>,
     presentation: (usize, Option<crate::mux::focus_anchor::FrozenOrder>),
     repair_generation: Option<u64>,
 ) {

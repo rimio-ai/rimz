@@ -114,7 +114,7 @@ fn own_tab_viewed(
 struct PendingFocusRepair {
     pane_id: PaneId,
     generation: u64,
-    clients: Vec<crate::mux::ClientPaneView>,
+    clients: Vec<crate::pane::ClientPaneView>,
     sent_at_ms: u64,
 }
 

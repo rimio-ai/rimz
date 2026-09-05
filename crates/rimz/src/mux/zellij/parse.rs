@@ -2,10 +2,9 @@
 
 use std::collections::BTreeSet;
 
-use crate::ids::{MuxName, PaneId};
-use crate::mux::{
-    ClientPaneView, ClientPresence, ClientView, MuxClientId, MuxErr, SessionLiveness,
-};
+use crate::ids::{MuxClientId, MuxName, PaneId};
+use crate::mux::{ClientPresence, ClientView, MuxErr, SessionLiveness};
+use crate::pane::ClientPaneView;
 
 /// Whether action stdout is the transient empty race rather than a real answer.
 /// Empty or whitespace-only output means the action client raced the session

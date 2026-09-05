@@ -10,11 +10,11 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tracing::debug;
-use uuid::Uuid;
 
 use crate::disk::{atomic, paths::RuntimePaths};
-use crate::ids::PaneId;
-use crate::mux::{ClientFocusOptions, ClientPaneView, MuxBackend};
+use crate::ids::{FocusNonce, PaneId};
+use crate::mux::{ClientFocusOptions, MuxBackend};
+use crate::pane::ClientPaneView;
 
 /// How long a jump scroll anchor stays applicable. Long enough for the
 /// destination tab to refold and adopt the focus after the jump's nudge. This
@@ -23,22 +23,6 @@ use crate::mux::{ClientFocusOptions, ClientPaneView, MuxBackend};
 pub(crate) const FOCUS_ANCHOR_FRESH: Duration = Duration::from_millis(2500);
 
 const FOCUS_ANCHOR_VERSION: &str = "rimz.focus-anchor.v3";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct FocusNonce(Uuid);
-
-impl FocusNonce {
-    pub(crate) fn new() -> Self {
-        Self(Uuid::now_v7())
-    }
-}
-
-impl std::fmt::Display for FocusNonce {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -493,7 +477,7 @@ mod tests {
 
     fn view(client_id: u32, pane_id: &PaneId) -> ClientPaneView {
         ClientPaneView {
-            client_id: crate::mux::MuxClientId::Zellij(client_id),
+            client_id: crate::ids::MuxClientId::Zellij(client_id),
             pane_id: pane_id.clone(),
         }
     }

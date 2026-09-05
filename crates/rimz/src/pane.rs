@@ -14,7 +14,28 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-use crate::ids::{AgentKind, AgentSessionId, PaneId, ViewKind};
+use crate::ids::{AgentKind, AgentSessionId, MuxClientId, PaneId, ViewKind};
+
+/// One native observation pairing an attached client with its viewed pane.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ClientPaneView {
+    pub client_id: MuxClientId,
+    pub pane_id: PaneId,
+}
+
+impl Ord for ClientPaneView {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.client_id
+            .cmp(&other.client_id)
+            .then_with(|| self.pane_id.as_str().cmp(other.pane_id.as_str()))
+    }
+}
+
+impl PartialOrd for ClientPaneView {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
 
 /// Pane title/name that marks RimZ's own sidebar renderer — the one chrome
 /// classification key. The renderer sets it (terminal title escape), the
