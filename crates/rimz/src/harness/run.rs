@@ -290,8 +290,9 @@ pub struct RunRecord {
     /// Pane-backed child launched through `rimz subagents`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub subagent: bool,
-    /// Time at which the parent claimed the settled result, either by printing
-    /// it inline or discarding it through `rimz subagents stop`; joined runs are
+    /// Time at which the caller claimed the settled result, either by printing
+    /// it during an open agent turn (or to a human shell) or discarding it
+    /// through `rimz subagents stop`; joined runs are
     /// excluded from the next completion digest and let the joiner cancel a
     /// digest once every row it lists has been joined.
     #[serde(default, skip_serializing_if = "Option::is_none")]

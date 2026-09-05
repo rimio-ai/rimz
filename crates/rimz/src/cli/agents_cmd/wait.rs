@@ -279,10 +279,25 @@ fn mark_joined<'a>(
     session_name: &str,
     outcomes: impl IntoIterator<Item = &'a TargetOutcome>,
 ) {
+    let attended = std::cell::LazyCell::new(|| match store.snapshot_cached() {
+        Ok(snapshot) => rimz::harness::ancestry::resolve_calling_agent(&snapshot.agents)
+            .map_or(true, AgentState::holds_open_turn),
+        Err(err) => {
+            tracing::warn!(error = %err, "could not read the caller's turn for the joined run");
+            true
+        }
+    });
     for outcome in outcomes {
         let TerminalPayload::Run(record) = &outcome.payload else {
             continue;
         };
+        if !*attended {
+            tracing::debug!(
+                run_id = %record.run_id,
+                "result printed outside the caller's turn; left unjoined for the digest",
+            );
+            continue;
+        }
         let result = rimz::harness::run::report::join_and_settle_digest(
             store,
             session_name,

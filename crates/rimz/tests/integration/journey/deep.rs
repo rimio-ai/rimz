@@ -1334,6 +1334,70 @@ fn tmux_settled_subagent_reports_to_parent() {
         &parent_hook_env,
     );
     assert!(stopped.status.success(), "stop parent turn: {stopped:?}");
+    assert!(
+        !wait_for_named_agent(&env, "report-parent", true, CAPTURE_BUDGET).holds_open_turn(),
+        "the unattended wait must run after the parent turn ended"
+    );
+
+    for (key, value) in [
+        ("RIMZ_TEST_AGENT_SESSION", "sess-report-unattended"),
+        ("RIMZ_TEST_AGENT_SLEEP_MS", "0"),
+    ] {
+        tmux(&socket, &["set-environment", "-t", &session, key, value]);
+    }
+    let unattended = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .env("TMUX", tmux_env(&socket))
+        .env("TMUX_PANE", &parent_pane_raw)
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "codex")
+        .env(
+            rimz::harness::launch::ENV_AGENT_ID,
+            parent_launch_id.as_str(),
+        )
+        .env("RIMZ_TEST_AGENT_SESSION", "sess-report-unattended")
+        .env("RIMZ_TEST_AGENT_SLEEP_MS", "0")
+        .args([
+            "--mux",
+            "tmux",
+            "subagents",
+            "codex",
+            "print after the parent turn ended",
+            "--timeout",
+            "2m",
+            "--wait",
+        ])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("launch unattended waited subagent");
+    assert!(
+        unattended.status.success(),
+        "unattended wait failed: {unattended:?}"
+    );
+    assert!(String::from_utf8_lossy(&unattended.stdout).contains("stub done"));
+    let unattended_name = launched_subagent_name(&unattended);
+    let unattended_run = wait_for_named_terminal_run(&env, &unattended_name, CAPTURE_BUDGET);
+    assert_eq!(
+        unattended_run.joined_at, None,
+        "a printed result after the parent's turn must remain unjoined: {unattended_run:?}"
+    );
+    let unattended_digest_line = format!("@{unattended_name} — completed");
+    let unattended_frame = capture_joined_until(
+        &socket,
+        &parent_pane_raw,
+        |frame| {
+            frame.contains("Type: SUBAGENT_REPORT")
+                && frame.contains("From: @rimz")
+                && frame.contains(&unattended_digest_line)
+        },
+        CAPTURE_BUDGET,
+    );
+    assert!(
+        unattended_frame.contains("Type: SUBAGENT_REPORT")
+            && unattended_frame.contains("From: @rimz")
+            && unattended_frame.contains(&unattended_digest_line)
+            && !unattended_frame.contains("stub done"),
+        "unattended join suppressed the parent's native digest: {unattended_run:?}\n{unattended_frame}"
+    );
 
     for (key, value) in [
         ("RIMZ_TEST_AGENT_SESSION", "sess-report-timed"),

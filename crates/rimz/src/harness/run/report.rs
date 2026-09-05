@@ -1,6 +1,7 @@
 //! Durable membership markers for parent-owned results and subagent report digests.
 //!
-//! A run printed inline or dismissed by the parent's `rimz subagents stop` is
+//! A run printed during the caller's open turn (or to a human shell), or
+//! dismissed by the parent's `rimz subagents stop`, is
 //! excluded from a digest that has not been composed. Once a digest exists, it
 //! may be canceled only after every listed run has been claimed this way,
 //! preserving the notice while any row remains unread.
