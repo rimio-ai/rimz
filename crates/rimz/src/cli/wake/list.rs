@@ -39,15 +39,15 @@ pub(super) fn run(json: bool, globals: &GlobalFlags) -> Result<()> {
     if json {
         return super::super::render::json(&rows);
     }
-    let mut table = super::super::render::Table::new(["NAME", "TRIGGER", "TARGET", "AGE", "STATE"])
+    let mut table = super::super::render::Table::new(["NAME", "STATE", "TARGET", "AGE", "TRIGGER"])
         .max_width(super::super::render::terminal_columns(120));
     for row in rows {
         table.row([
             super::super::render::cell(row.name),
-            super::super::render::cell(row.trigger),
+            super::super::render::cell(row.state),
             super::super::render::cell(row.target),
             super::super::render::cell(row.age),
-            super::super::render::cell(row.state),
+            super::super::render::cell(row.trigger),
         ]);
     }
     table.render(&mut super::super::render::out())?;
