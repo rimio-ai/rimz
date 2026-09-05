@@ -62,7 +62,7 @@ struct SnapshotFixture {
 struct FuseFixture {
     _workspace: BenchWorkspace,
     snapshot: rimz::store::snapshot::SidebarSnapshot,
-    events: rimz::sidebar::events::EventStore,
+    events: rimz::sidebar::event_store::EventStore,
     now_ms: u64,
 }
 
@@ -133,7 +133,7 @@ fn fuse_fixture() -> FuseFixture {
         _workspace,
         snapshot,
     } = snapshot_fixture();
-    let mut events = rimz::sidebar::events::EventStore::default();
+    let mut events = rimz::sidebar::event_store::EventStore::default();
     let pane_id = rimz::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_0");
     let now_ms = snapshot
         .panes_produced_at_ms
@@ -167,7 +167,7 @@ fn owned_fuse_fixture() -> FuseFixture {
     FuseFixture {
         _workspace,
         snapshot,
-        events: rimz::sidebar::events::EventStore::default(),
+        events: rimz::sidebar::event_store::EventStore::default(),
         now_ms,
     }
 }

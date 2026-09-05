@@ -21,7 +21,8 @@ use crate::config::NotificationsPrefs;
 use crate::diag::record::DiagEvent;
 use crate::disk::paths::PathErr;
 use crate::ids::PaneId;
-use crate::sidebar::events::{EventStore, SidebarEvent, SidebarEventEnvelope};
+use crate::sidebar::event_store::EventStore;
+use crate::sidebar::events::{SidebarEvent, SidebarEventEnvelope};
 use crate::sidebar::focus_anchor::{
     FocusObservation, FocusObservationOutcome, FocusOrigin, FocusPresentation,
 };
