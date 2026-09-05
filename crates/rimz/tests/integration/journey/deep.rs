@@ -1195,12 +1195,13 @@ fn tmux_settled_subagent_reports_to_parent() {
             .expect("list fleet digest")
             .into_iter()
             .find(|message| {
-                matches!(
-                    message.sender,
-                    rimz::store::message::MessageSender::Harness {
-                        notice: rimz::store::message::HarnessNotice::SubagentReport
-                    }
-                )
+                message.status == rimz::store::message::MessageStatus::Sent
+                    && matches!(
+                        message.sender,
+                        rimz::store::message::MessageSender::Harness {
+                            notice: rimz::store::message::HarnessNotice::SubagentReport
+                        }
+                    )
             })
         {
             break report;
@@ -1235,6 +1236,39 @@ fn tmux_settled_subagent_reports_to_parent() {
     ] {
         tmux(&socket, &["set-environment", "-t", &session, key, value]);
     }
+    // A real inline join runs during the parent's turn. The stdin-only stub
+    // otherwise stays stopped, allowing delivery to beat join cancellation;
+    // an already-sent digest cannot be recalled.
+    let parent_pid = tmux_capture(
+        &socket,
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            &parent_pane_raw,
+            "#{pane_pid}",
+        ],
+    );
+    let parent_hook_env = [
+        ("TMUX_PANE", parent_pane_raw.as_str()),
+        ("RIMZ_AGENT_PID", parent_pid.as_str()),
+    ];
+    let resumed = env.run_installed_hook_in_pane(
+        "codex",
+        &serde_json::json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": parent_agent.agent_id.as_str(),
+            "prompt": "join the next child inline",
+        })
+        .to_string(),
+        &parent_hook_env,
+    );
+    assert!(resumed.status.success(), "resume parent: {resumed:?}");
+    assert_eq!(
+        wait_for_named_agent(&env, "report-parent", true, CAPTURE_BUDGET).status,
+        rimz::agents::AgentStatus::Running,
+        "the report delivery gate must see an active parent turn"
+    );
     let waited = env
         .rimz()
         .env("PATH", &agent_path)
@@ -1280,8 +1314,20 @@ fn tmux_settled_subagent_reports_to_parent() {
             })
             .count(),
         1,
-        "--wait launch must not queue a new digest"
+        "--wait must leave no new digest queued during the parent's turn"
     );
+
+    let stopped = env.run_installed_hook_in_pane(
+        "codex",
+        &serde_json::json!({
+            "hook_event_name": "Stop",
+            "session_id": parent_agent.agent_id.as_str(),
+            "last_assistant_message": "joined the child",
+        })
+        .to_string(),
+        &parent_hook_env,
+    );
+    assert!(stopped.status.success(), "stop parent turn: {stopped:?}");
 
     for (key, value) in [
         ("RIMZ_TEST_AGENT_SESSION", "sess-report-timed"),
