@@ -990,7 +990,7 @@ pub(crate) fn create_on_miss(
     let inline_named_channel = target
         .split_once('#')
         .is_some_and(|(_, channel)| rimz::channel::valid_name(channel));
-    let current_named = std::env::var(rimz::harness::launch::ENV_CHANNEL).ok();
+    let current_named = std::env::var(rimz::workspace::ENV_CHANNEL).ok();
     let named = channel_flag.is_some()
         || (worktree_flag.is_none() && inline_named_channel)
         || create

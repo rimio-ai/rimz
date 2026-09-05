@@ -569,7 +569,7 @@ fn new_window_hook_respawns_plain_shell_at_final_width_only() {
     );
     assert_eq!(
         server.display(plain_work.pane_id.raw(), "#{pane_start_command}"),
-        rimz::harness::launch::user_shell_program(),
+        rimz::proc::user_shell_program(),
         "empty-start-command tabs are respawned as the user's shell",
     );
     let explicit_command = "cat";

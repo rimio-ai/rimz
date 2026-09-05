@@ -58,7 +58,7 @@ fn attached_terminal_title_ignores_shell_osc_title() {
         "title payload sentinel",
     );
 
-    let shell = rimz::harness::launch::shell_pane_name();
+    let shell = rimz::proc::shell_pane_name();
     let expected = format!("{} | {shell}", room.name());
     let deadline = Instant::now() + Duration::from_secs(5);
     let (titles, output_len) = loop {

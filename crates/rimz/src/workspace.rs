@@ -7,6 +7,8 @@
 //! a marker directory ([`PROJECT_MARKERS`]) for a non-git project, and the
 //! directory itself as the last tier — a first-class directory workspace.
 //!
+//! The pane-scope worktree/channel pin extends the session pin and is rendered as argv for empty channel shells.
+//!
 //! Identity is then *pinned per session*: session birth stamps
 //! [`ENV_WORKSPACE_ID`]/[`ENV_PROJECT_ROOT`] into the mux environment, and
 //! participating commands (hooks, statusline helpers) resolve by ownership.
@@ -49,6 +51,13 @@ pub const ENV_WORKSPACE_ID: &str = "RIMZ_WORKSPACE_ID";
 /// Environment key carrying the session's pinned project root.
 pub const ENV_PROJECT_ROOT: &str = "RIMZ_PROJECT_ROOT";
 
+/// Named cooperation lane an agent launched under. Set by the launch wrapper;
+/// read by lifecycle hooks and peer-message commands as the routing channel.
+pub const ENV_CHANNEL: &str = "RIMZ_CHANNEL";
+/// The cwd backing a launched pane. Set with the room pin so split panes can
+/// still report the worktree path they were opened for.
+pub const ENV_WORKTREE_PATH: &str = "RIMZ_WORKTREE_PATH";
+
 /// The identity pin a RimZ session stamps into the mux environment at birth,
 /// inherited by every pane and so by every agent and its hook children.
 pub fn pin_env(workspace_id: &WorkspaceId, project_root: &Path) -> BTreeMap<String, String> {
@@ -59,6 +68,37 @@ pub fn pin_env(workspace_id: &WorkspaceId, project_root: &Path) -> BTreeMap<Stri
             project_root.display().to_string(),
         ),
     ])
+}
+
+/// Shell pane argv for an empty named channel, pinned to the room identity.
+pub fn channel_shell_argv(
+    workspace_id: &WorkspaceId,
+    project_root: &Path,
+    worktree_path: &Path,
+    channel: &str,
+) -> Vec<String> {
+    vec![
+        "env".to_owned(),
+        "RIMZ=1".to_owned(),
+        format!("{}={workspace_id}", ENV_WORKSPACE_ID),
+        format!("{}={}", ENV_PROJECT_ROOT, project_root.display()),
+        format!("{}={}", ENV_WORKTREE_PATH, worktree_path.display()),
+        format!("{}={channel}", ENV_CHANNEL),
+        crate::proc::user_shell_program(),
+    ]
+}
+
+/// Shell pane argv for a resume tab label, falling back to a plain shell.
+pub fn channel_label_shell_argv(
+    workspace_id: &WorkspaceId,
+    project_root: &Path,
+    worktree_path: &Path,
+    label: &str,
+) -> Vec<String> {
+    let Some(channel) = label.strip_prefix('#').filter(|value| !value.is_empty()) else {
+        return vec![crate::proc::user_shell_program()];
+    };
+    channel_shell_argv(workspace_id, project_root, worktree_path, channel)
 }
 
 /// Which ladder tier produced a workspace root. The class describes the root

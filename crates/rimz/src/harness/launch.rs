@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::capabilities::SystemTextChannel;
 use crate::harness::launch_reminders::LaunchReminders;
-use crate::ids::{AgentKind, RunId, WorkspaceId};
+use crate::ids::{AgentKind, RunId};
 
 const ENV_BIN: &str = "/usr/bin/env";
 const POSIX_LOGIN_SHELL_SCRIPT: &str = r#"exec /usr/bin/env "$@""#;
@@ -49,12 +49,6 @@ pub const ENV_LAUNCH_GROUP: &str = "RIMZ_LAUNCH_GROUP";
 /// The agent's order inside its launch cohort: team role-list index or inline
 /// agent-cell index. Set by the wrapper; read into lifecycle observations.
 pub const ENV_LAUNCH_ORDINAL: &str = "RIMZ_LAUNCH_ORDINAL";
-/// Named cooperation lane an agent launched under. Set by the launch wrapper;
-/// read by lifecycle hooks and peer-message commands as the routing channel.
-pub const ENV_CHANNEL: &str = "RIMZ_CHANNEL";
-/// The cwd backing a launched pane. Set with the room pin so split panes can
-/// still report the worktree path they were opened for.
-pub const ENV_WORKTREE_PATH: &str = "RIMZ_WORKTREE_PATH";
 /// The model selected by launch flags or profile presets. Set by the launch
 /// wrapper; read into the lifecycle observation as card identity fallback.
 pub const ENV_AGENT_MODEL: &str = "RIMZ_AGENT_MODEL";
@@ -180,77 +174,8 @@ impl AgentProcessStageErr {
     }
 }
 
-/// Resolve the user's configured shell for launches that should match a
-/// normal terminal. `$SHELL` wins when it names a launchable shell; otherwise
-/// the passwd entry is used. Sentinels such as `nologin` and missing absolute
-/// paths are rejected.
-pub fn user_shell() -> Option<PathBuf> {
-    match env_shell() {
-        Some(shell) => launchable_shell(&shell).then_some(shell),
-        None => passwd_shell().filter(|shell| launchable_shell(shell)),
-    }
-}
-
-/// Resolve the user's shell program for an ordinary shell pane.
-pub fn user_shell_program() -> String {
-    user_shell()
-        .unwrap_or_else(|| PathBuf::from("sh"))
-        .to_string_lossy()
-        .into_owned()
-}
-
-/// Short, stable identity for an ordinary shell pane.
-pub fn shell_pane_name() -> String {
-    let shell = user_shell_program();
-    Path::new(&shell)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| "sh".to_owned())
-}
-
-/// Shell pane argv for an empty named channel, pinned to the room identity.
-pub fn channel_shell_argv(
-    workspace_id: &WorkspaceId,
-    project_root: &Path,
-    worktree_path: &Path,
-    channel: &str,
-) -> Vec<String> {
-    vec![
-        "env".to_owned(),
-        "RIMZ=1".to_owned(),
-        format!("{}={workspace_id}", crate::workspace::ENV_WORKSPACE_ID),
-        format!(
-            "{}={}",
-            crate::workspace::ENV_PROJECT_ROOT,
-            project_root.display()
-        ),
-        format!(
-            "{}={}",
-            crate::harness::launch::ENV_WORKTREE_PATH,
-            worktree_path.display()
-        ),
-        format!("{}={channel}", crate::harness::launch::ENV_CHANNEL),
-        user_shell_program(),
-    ]
-}
-
-/// Shell pane argv for a resume tab label, falling back to a plain shell.
-pub fn channel_label_shell_argv(
-    workspace_id: &WorkspaceId,
-    project_root: &Path,
-    worktree_path: &Path,
-    label: &str,
-) -> Vec<String> {
-    let Some(channel) = label.strip_prefix('#').filter(|value| !value.is_empty()) else {
-        return vec![user_shell_program()];
-    };
-    channel_shell_argv(workspace_id, project_root, worktree_path, channel)
-}
-
 /// The identity a `rimz agents exec` pane carries in its structured request
-/// and as RIMZ_* env (crate::harness::launch::ENV_*) for lifecycle hooks and peer
+/// and as RIMZ_* env for lifecycle hooks and peer
 /// attribution.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecIdentity {
@@ -321,7 +246,7 @@ fn launch_fields(params: &crate::agents::LaunchParams) -> [LaunchField<'_>; 10] 
             value: LaunchFieldValue::Ordinal(params.launch_ordinal),
         },
         LaunchField {
-            env: Some(crate::harness::launch::ENV_CHANNEL),
+            env: Some(crate::workspace::ENV_CHANNEL),
             value: text(|params| params.channel.as_deref()),
         },
         LaunchField {
@@ -956,7 +881,7 @@ fn effective_launch_env(overrides: &BTreeMap<String, String>) -> BTreeMap<String
 /// does not place assignments in argv.
 pub fn login_shell_argv(env: &BTreeMap<String, String>, agent_argv: &[String]) -> Vec<String> {
     login_shell_argv_with(
-        user_shell().as_deref(),
+        crate::proc::user_shell().as_deref(),
         Path::new(ENV_BIN).is_file(),
         env,
         agent_argv,
@@ -1075,7 +1000,7 @@ pub fn program_resolves_after_shell_rc(
     program: &str,
 ) -> Result<bool, ProgramLookupErr> {
     program_resolves_with(
-        user_shell().as_deref(),
+        crate::proc::user_shell().as_deref(),
         Path::new(ENV_BIN).is_file(),
         env,
         program,
@@ -1226,44 +1151,6 @@ fn parse_probe_path(output: &str) -> Result<Option<String>, ProgramLookupErr> {
         }
     }
     Err(ProgramLookupErr::ProbeOutput)
-}
-
-fn env_shell() -> Option<PathBuf> {
-    std::env::var_os("SHELL")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-}
-
-#[cfg(unix)]
-fn passwd_shell() -> Option<PathBuf> {
-    let user = nix::unistd::User::from_uid(nix::unistd::Uid::current())
-        .ok()
-        .flatten()?;
-    Some(user.shell)
-}
-
-#[cfg(not(unix))]
-fn passwd_shell() -> Option<PathBuf> {
-    None
-}
-
-fn launchable_shell(shell: &Path) -> bool {
-    !is_login_disabled_shell(shell) && shell_exists(shell)
-}
-
-fn is_login_disabled_shell(shell: &Path) -> bool {
-    shell
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(|name| matches!(name, "false" | "nologin"))
-        .unwrap_or(false)
-}
-
-fn shell_exists(shell: &Path) -> bool {
-    if shell.is_absolute() {
-        return shell.is_file();
-    }
-    which::which(shell).is_ok()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

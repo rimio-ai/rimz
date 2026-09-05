@@ -61,7 +61,7 @@ pub(in crate::cli::hooks) fn fill_root_launch_identity(
                 .and_then(|raw| raw.parse::<u32>().ok());
     }
     if observation.launch.channel.is_none() {
-        observation.launch.channel = identity_env(observation, rimz::harness::launch::ENV_CHANNEL);
+        observation.launch.channel = identity_env(observation, rimz::workspace::ENV_CHANNEL);
     }
     if observation.launch.profile.is_none() {
         observation.launch.profile =

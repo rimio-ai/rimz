@@ -75,7 +75,7 @@ fn message_cancel_and_clear_respect_ids_targets_and_channel_lanes() {
     let ops = queue_direct_channel_message(&env, "ops", "ops");
     let cleared = run_success(
         env.rimz()
-            .env(rimz::harness::launch::ENV_CHANNEL, "docs")
+            .env(rimz::workspace::ENV_CHANNEL, "docs")
             .args(["message", "clear"]),
         "clear lane",
     );
@@ -4528,7 +4528,7 @@ fn scrub_launch_identity(cmd: &mut std::process::Command) {
         rimz::harness::launch::ENV_TEAM,
         rimz::harness::launch::ENV_LAUNCH_GROUP,
         rimz::harness::launch::ENV_LAUNCH_ORDINAL,
-        rimz::harness::launch::ENV_CHANNEL,
+        rimz::workspace::ENV_CHANNEL,
         rimz::harness::launch::ENV_AGENT_MODEL,
         rimz::harness::launch::ENV_AGENT_EFFORT,
     ] {
@@ -4692,7 +4692,7 @@ fn list_message_ids(env: &Env, args: &[&str], channel: Option<&str>) -> Vec<Stri
     let mut cmd = env.rimz();
     cmd.args(args);
     if let Some(channel) = channel {
-        cmd.env(rimz::harness::launch::ENV_CHANNEL, channel);
+        cmd.env(rimz::workspace::ENV_CHANNEL, channel);
     }
     let output = run_success(&mut cmd, "message list");
     serde_json::from_slice::<serde_json::Value>(&output.stdout)

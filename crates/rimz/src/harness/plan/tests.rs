@@ -1479,11 +1479,11 @@ fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
     );
     assert_eq!(
         panes.columns[1].panes[0].argv,
-        [crate::harness::launch::user_shell_program()]
+        [crate::proc::user_shell_program()]
     );
     assert_eq!(
         panes.columns[1].panes[0].name.as_deref(),
-        Some(crate::harness::launch::shell_pane_name().as_str()),
+        Some(crate::proc::shell_pane_name().as_str()),
     );
 }
 

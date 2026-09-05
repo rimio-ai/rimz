@@ -183,7 +183,7 @@ fn session_layout_renders_terminal_template_bar_and_runtime_args() {
     let layout =
         render_session_layout(&sidebar_opts("rimz-contract", Some(50), None), None, &[]).unwrap();
     assert_work_area_template(&layout, 2, 3);
-    let shell = crate::harness::launch::shell_pane_name();
+    let shell = crate::proc::shell_pane_name();
     assert_eq!(
         layout
             .matches(&format!(r#"pane focus=true name="{shell}""#))

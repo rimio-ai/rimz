@@ -19,8 +19,6 @@ fn launch_environment_key_literals_are_stable() {
     assert_eq!(ENV_TEAM, "RIMZ_TEAM");
     assert_eq!(ENV_LAUNCH_GROUP, "RIMZ_LAUNCH_GROUP");
     assert_eq!(ENV_LAUNCH_ORDINAL, "RIMZ_LAUNCH_ORDINAL");
-    assert_eq!(ENV_CHANNEL, "RIMZ_CHANNEL");
-    assert_eq!(ENV_WORKTREE_PATH, "RIMZ_WORKTREE_PATH");
     assert_eq!(ENV_AGENT_MODEL, "RIMZ_AGENT_MODEL");
     assert_eq!(ENV_AGENT_EFFORT, "RIMZ_AGENT_EFFORT");
     assert_eq!(ENV_AGENT_BUDGET, "RIMZ_AGENT_BUDGET");
@@ -182,7 +180,7 @@ fn process_compiler_composes_adapter_identity_and_rtk_environment() {
     assert_eq!(
         process
             .env
-            .get(crate::harness::launch::ENV_CHANNEL)
+            .get(crate::workspace::ENV_CHANNEL)
             .map(String::as_str),
         Some("design")
     );
@@ -813,7 +811,7 @@ fn launch_environment_precedence_is_project_adapter_identity_then_rtk() {
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
             "project",
         ),
-        (crate::harness::launch::ENV_CHANNEL, "project"),
+        (crate::workspace::ENV_CHANNEL, "project"),
         (crate::harness::launch::ENV_RTK, "project"),
     ]);
 
@@ -830,7 +828,7 @@ fn launch_environment_precedence_is_project_adapter_identity_then_rtk() {
         composed["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"],
         "false"
     );
-    assert_eq!(composed[crate::harness::launch::ENV_CHANNEL], "identity");
+    assert_eq!(composed[crate::workspace::ENV_CHANNEL], "identity");
     assert_eq!(composed[crate::harness::launch::ENV_RTK], "off");
 }
 
@@ -1037,7 +1035,7 @@ fn exec_identity_env_maps_identity_fields() {
                 "2".to_owned()
             ),
             (
-                crate::harness::launch::ENV_CHANNEL.to_owned(),
+                crate::workspace::ENV_CHANNEL.to_owned(),
                 "design".to_owned()
             ),
             (
@@ -1498,67 +1496,6 @@ fn program_lookup_rejects_invalid_launch_env_keys() {
     .expect_err("invalid key");
 
     assert!(err.to_string().contains("BAD=KEY"));
-}
-
-#[test]
-fn launchable_shell_rejects_missing_and_disabled_shells() {
-    assert!(!launchable_shell(Path::new("/definitely/not/a/shell")));
-    assert!(!launchable_shell(Path::new("/usr/sbin/nologin")));
-    assert!(!launchable_shell(Path::new("/bin/false")));
-}
-
-#[test]
-fn shell_pane_name_uses_configured_shell_basename() {
-    let shell = user_shell_program();
-    let expected = Path::new(&shell)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .expect("shell basename");
-    assert_eq!(shell_pane_name(), expected);
-}
-
-#[test]
-fn channel_shell_argv_pins_room_identity_order_and_label_fallback() {
-    let shell = user_shell_program();
-    let project_root = Path::new("/proj root");
-    let worktree_path = Path::new("/proj root/wt");
-    let ws = WorkspaceId::from_project_root(project_root);
-    let expected_argv = |channel: &str| {
-        vec![
-            "env".to_owned(),
-            "RIMZ=1".to_owned(),
-            format!("RIMZ_WORKSPACE_ID={ws}"),
-            "RIMZ_PROJECT_ROOT=/proj root".to_owned(),
-            "RIMZ_WORKTREE_PATH=/proj root/wt".to_owned(),
-            format!("RIMZ_CHANNEL={channel}"),
-            shell.clone(),
-        ]
-    };
-    for channel in ["feature", ""] {
-        assert_eq!(
-            channel_shell_argv(&ws, project_root, worktree_path, channel),
-            expected_argv(channel),
-            "channel {channel:?}"
-        );
-    }
-    for (label, channel) in [
-        ("", None),
-        ("plain", None),
-        ("#", None),
-        ("#feature", Some("feature")),
-        ("##x", Some("#x")),
-        ("# ", Some(" ")),
-    ] {
-        let expected = match channel {
-            Some(channel) => expected_argv(channel),
-            None => vec![shell.clone()],
-        };
-        assert_eq!(
-            channel_label_shell_argv(&ws, project_root, worktree_path, label),
-            expected,
-            "label {label:?}"
-        );
-    }
 }
 
 fn unique_probe_program() -> String {

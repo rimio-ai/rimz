@@ -937,8 +937,8 @@ pub fn compile_layout_panes(
                 .map(|cell| {
                     let pane = match cell {
                         Cell::Command { argv } if argv.is_empty() => PaneCmd {
-                            argv: vec![crate::harness::launch::user_shell_program()],
-                            name: Some(crate::harness::launch::shell_pane_name()),
+                            argv: vec![crate::proc::user_shell_program()],
+                            name: Some(crate::proc::shell_pane_name()),
                         },
                         Cell::Command { argv } => PaneCmd {
                             argv: argv.clone(),

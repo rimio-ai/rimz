@@ -669,14 +669,14 @@ fn dirty_choice(path: &Path) -> Result<DirtyChoice> {
 #[cfg(unix)]
 fn exec_shell(path: &Path) -> Result<()> {
     use std::os::unix::process::CommandExt;
-    let shell = rimz::harness::launch::user_shell_program();
+    let shell = rimz::proc::user_shell_program();
     let err = Command::new(&shell).current_dir(path).exec();
     Err::<(), _>(err).with_context(|| format!("execing {shell}"))
 }
 
 #[cfg(not(unix))]
 fn exec_shell(path: &Path) -> Result<()> {
-    let shell = rimz::harness::launch::user_shell_program();
+    let shell = rimz::proc::user_shell_program();
     let status = Command::new(&shell)
         .current_dir(path)
         .status()

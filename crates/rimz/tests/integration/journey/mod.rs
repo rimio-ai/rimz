@@ -163,7 +163,7 @@ impl<'a> RoomHarness<'a> {
         cmd.env("RIMZ_BIN", env.rimz_bin());
         cmd.env("XDG_RUNTIME_DIR", runtime.path());
         cmd.env("RIMZ_TEST_PANE_LIST", &pane_file);
-        cmd.env(rimz::harness::launch::ENV_CHANNEL, "");
+        cmd.env(rimz::workspace::ENV_CHANNEL, "");
         cmd.env(rimz::harness::launch::ENV_TEAM, "");
         cmd.env_remove("RUST_LOG");
 
@@ -364,7 +364,7 @@ impl<'a> RoomHarness<'a> {
             rimz::harness::launch::ENV_AGENT_NAME.to_owned(),
             String::new(),
         ));
-        env.push((rimz::harness::launch::ENV_CHANNEL.to_owned(), String::new()));
+        env.push((rimz::workspace::ENV_CHANNEL.to_owned(), String::new()));
         env.push((rimz::harness::launch::ENV_TEAM.to_owned(), String::new()));
         env.push((
             rimz::harness::launch::ENV_LAUNCH_GROUP.to_owned(),
@@ -566,10 +566,7 @@ fn launch_team_identity(
 ) -> Vec<(String, String)> {
     let mut identity = launch_identity(role, profile);
     identity.push((rimz::harness::launch::ENV_TEAM.to_owned(), team.to_owned()));
-    identity.push((
-        rimz::harness::launch::ENV_CHANNEL.to_owned(),
-        channel.to_owned(),
-    ));
+    identity.push((rimz::workspace::ENV_CHANNEL.to_owned(), channel.to_owned()));
     identity
 }
 

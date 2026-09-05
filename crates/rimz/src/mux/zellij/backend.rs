@@ -780,7 +780,7 @@ impl MuxBackend for ZellijBackend {
         }
         let title = opts.title.or_else(|| {
             opts.command.as_ref().map_or_else(
-                || Some(crate::harness::launch::shell_pane_name()),
+                || Some(crate::proc::shell_pane_name()),
                 |command| super::pane_short_name(command),
             )
         });
