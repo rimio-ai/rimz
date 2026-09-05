@@ -55,7 +55,7 @@ pub enum RoomBirth {
 /// Reset details returned for CLI presentation.
 #[derive(Debug)]
 pub struct RoomResetReport {
-    pub teardown: crate::mux::recovery::TeardownReport,
+    pub teardown: crate::room::teardown::TeardownReport,
     pub records: crate::store::writer::ResetRecordsOutcome,
 }
 
@@ -291,7 +291,7 @@ impl RoomContext {
 
     /// Tear down mux runtime and reset durable room records.
     pub fn reset(&self, hard: bool) -> Result<RoomResetReport> {
-        let teardown = crate::mux::recovery::teardown_room(
+        let teardown = crate::room::teardown::teardown_room(
             self.backend.as_ref(),
             &self.workspace.workspace_id,
             &self.workspace.session_name,

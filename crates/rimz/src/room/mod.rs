@@ -2,6 +2,7 @@
 
 mod birth;
 pub mod session;
+pub mod teardown;
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU16;
