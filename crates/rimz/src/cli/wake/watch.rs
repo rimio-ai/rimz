@@ -38,22 +38,26 @@ pub(super) fn run(name: &str, globals: &GlobalFlags) -> Result<()> {
     let timeout = check_timeout(task.entry())?
         .or(configured_timeout)
         .unwrap_or(SCHEDULED_RUN_DEFAULT_TIMEOUT);
+    let started = std::time::Instant::now();
     let outcome = run_check(
         &ctx.workspace.project_root,
         command,
         timeout,
         CheckEcho::Capture,
     )?;
+    let elapsed_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     let check = check_record(&outcome);
     let watch = if check.timed_out {
         WatchOutcome::TimedOut {
             code: check.code,
             output: check.output,
+            elapsed_ms,
         }
     } else {
         WatchOutcome::Exited {
             code: check.code,
             output: check.output,
+            elapsed_ms,
         }
     };
     let signal = Signal {

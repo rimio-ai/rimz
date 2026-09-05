@@ -56,10 +56,10 @@ struct WakeArgs {
     /// Agent to wake. Omit from an agent pane to wake yourself.
     #[arg(value_name = "@TARGET")]
     target: Option<String>,
-    /// Message delivered with the wake evidence.
+    /// Optional note delivered verbatim after the wake evidence.
     #[arg(long, conflicts_with = "prompt_file")]
     prompt: Option<String>,
-    /// File whose contents become the delivered message.
+    /// File containing an optional note delivered verbatim after the wake evidence.
     #[arg(long = "prompt-file", value_name = "PATH")]
     prompt_file: Option<PathBuf>,
     /// Wake once after this duration.
