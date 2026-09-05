@@ -219,6 +219,10 @@ fn project_tasks_reject_machine_local_fields() {
             "[tasks.wake]\nagent = \"codex\"\ndeadline = \"2026-07-01T12:00:00Z\"\nevery = \"day\"\nat = \"08:00\"\n",
             "deadline",
         ),
+        (
+            "[tasks.wake]\nagent = \"codex\"\nsignal = \"ci.failed\"\nwake-meta = { armed_by = { kind = \"human\" }, armed_at = \"2026-07-01T12:00:00Z\" }\n",
+            "wake-meta",
+        ),
     ];
     for (text, field) in cases {
         let project = tempdir().expect("project");
