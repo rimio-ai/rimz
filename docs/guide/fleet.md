@@ -273,6 +273,8 @@ rimz agents claude            # the tuned default, as @claude
 rimz agents claude-planner    # the planning specialist, as @claude-planner
 ```
 
+For Codex, leaving `model` unset preserves your Codex configuration; if no model is configured there either, Codex chooses its own default. RimZ does not pin a fallback model.
+
 Each field renders into the base CLI's own flag, so a profile can pin anything the CLI can pin from its command line, and nothing it can't. The one exception is `budget`, which RimZ itself enforces:
 
 | Field | What it sets | Renders as (Claude) |

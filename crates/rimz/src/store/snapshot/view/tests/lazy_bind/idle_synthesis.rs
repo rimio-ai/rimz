@@ -3,18 +3,18 @@ use super::*;
 #[test]
 fn wired_unprompted_codex_panes_render_idle_agent_rows() {
     for (label, command, configured_model, expected_model) in [
-        ("bare codex command", "codex", None, "gpt-5.5-codex"),
+        ("bare codex command", "codex", None, None),
         (
             "supervised wrapper command",
             "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/main",
             None,
-            "gpt-5.5-codex",
+            None,
         ),
         (
             "configured default model",
             "codex",
             Some("o4-mini"),
-            "o4-mini",
+            Some("o4-mini"),
         ),
     ] {
         let mut snapshot = room(Vec::new());
@@ -33,7 +33,7 @@ fn wired_unprompted_codex_panes_render_idle_agent_rows() {
         assert_eq!(rows[0].status(), Some(AgentStatus::Idle), "{label}");
         assert_eq!(rows[0].id, "tmux:term1", "{label}");
         assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "term1");
-        assert_eq!(rows[0].model(), Some(expected_model), "{label}");
+        assert_eq!(rows[0].model(), expected_model, "{label}");
         assert_eq!(rows[0].context_window(), Some(272_000), "{label}");
         assert_eq!(
             rows[0].as_agent().unwrap().usage.context_pct,

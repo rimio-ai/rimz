@@ -169,14 +169,18 @@ fn codex_descriptor_declares_lazy_registration() {
             .capabilities
             .registers_lazily
     );
-    assert_eq!(CodexAdapter.spec().default_model, Some("gpt-5.5-codex"));
+    assert_eq!(CodexAdapter.spec().default_model, None);
     assert_eq!(CodexAdapter.spec().default_context_window, Some(272_000));
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
     std::fs::write(&path, "").unwrap();
     let launch_model = with_codex_config_path(&path, || CodexAdapter.default_launch_model());
-    assert_eq!(launch_model.as_deref(), Some("gpt-5.5-codex"));
+    assert_eq!(launch_model, None);
+
+    std::fs::write(&path, "model = \"gpt-6-astra\"\n").unwrap();
+    let launch_model = with_codex_config_path(&path, || CodexAdapter.default_launch_model());
+    assert_eq!(launch_model.as_deref(), Some("gpt-6-astra"));
 }
 
 #[test]

@@ -127,9 +127,6 @@ const RICH_REFRESH_THROTTLE_SECS: i64 = 20;
 /// agent card uses this stable provider fallback instead of briefly omitting the
 /// window token.
 const DEFAULT_CONTEXT_WINDOW: u64 = 272_000;
-/// Valid Codex `--model` default stamped by `rimz agents` when no launch model
-/// is configured. Adapter conformance pins this to Codex's shipped default.
-const DEFAULT_MODEL: &str = "gpt-5.5-codex";
 
 /// Marker RimZ sets on every `codex app-server` it spawns for read-only
 /// enrichment (the cold-spawn in [`app_server`] and the warm [`broker`]). Such a
@@ -205,7 +202,8 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
     user_coverage: CODEX_USER_COVERAGE,
     lifecycle_hooks: CODEX_LIFECYCLE_HOOKS,
     default_context_window: Some(DEFAULT_CONTEXT_WINDOW),
-    default_model: Some(DEFAULT_MODEL),
+    // Codex owns its native default; do not pin launches or guess idle identity.
+    default_model: None,
     // Codex commonly runs as a `node` bundle, so PID attribution accepts the
     // launcher process name beside its own.
     process_names: &["codex", "node"],
@@ -682,7 +680,7 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
     }
 
     fn default_launch_model(&self) -> Option<String> {
-        configured_model().or_else(|| self.spec().default_model.map(ToOwned::to_owned))
+        configured_model()
     }
 
     fn configured_identity(&self) -> (Option<String>, Option<String>) {

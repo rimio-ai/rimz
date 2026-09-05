@@ -922,18 +922,14 @@ fn launch_options_apply_without_overwriting_spec_identity() {
 }
 
 #[test]
-fn default_launch_models_stamp_only_cells_without_models() {
-    let codex_default = crate::agents::find_definition("codex")
-        .expect("codex")
-        .default_launch_model()
-        .expect("codex default model");
+fn codex_launch_leaves_native_default_unset_and_preserves_explicit_model() {
     let explicit = Cell::Agent(AgentCell {
         kind: AgentKind::new_unchecked("codex"),
-        args: vec!["--model".to_owned(), "o3".to_owned()],
+        args: vec!["--model".to_owned(), "gpt-6-astra".to_owned()],
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
         launch: LaunchParams {
-            model: Some("o3".to_owned()),
+            model: Some("gpt-6-astra".to_owned()),
             ..Default::default()
         },
     });
@@ -942,12 +938,13 @@ fn default_launch_models_stamp_only_cells_without_models() {
         .rows
         .extend([explicit, Cell::agent(AgentKind::new_unchecked("claude"))]);
     finalize(&mut layout, &Default::default(), &[]).expect("finalize launch");
-    assert!(matches!(&layout.columns[0].rows[0],
-        Cell::Agent(AgentCell { args, launch: LaunchParams { model: Some(model), .. }, .. })
-            if model == &codex_default && args == &["--model", codex_default.as_str()]));
+    assert_eq!(
+        layout.columns[0].rows[0],
+        Cell::agent(AgentKind::new_unchecked("codex"))
+    );
     assert!(matches!(&layout.columns[0].rows[1],
         Cell::Agent(AgentCell { args, launch: LaunchParams { model: Some(model), .. }, .. })
-            if model == "o3" && args == &["--model", "o3"]));
+            if model == "gpt-6-astra" && args == &["--model", "gpt-6-astra"]));
     assert_eq!(
         layout.columns[0].rows[2],
         Cell::agent(AgentKind::new_unchecked("claude"))
@@ -1122,19 +1119,13 @@ fn config_key_effort_reconciles_without_touching_unrelated_or_undeclared_flags()
             .len(),
         1
     );
-    let codex_default = crate::agents::find_definition("codex")
-        .expect("codex")
-        .default_launch_model()
-        .expect("codex default model");
     assert!(matches!(&codex.columns[0].rows[0],
-    Cell::Agent(AgentCell { args, .. })
+    Cell::Agent(AgentCell { args, launch: LaunchParams { model: None, .. }, .. })
         if args == &[
             "-c",
             "web_search=cached",
             "-c",
             "model_reasoning_effort=high",
-            "--model",
-            codex_default.as_str(),
         ]));
 
     let mut claude = LayoutSpec::single(preset_cell("claude", &["--effort", "high"], None, None));
@@ -1203,10 +1194,6 @@ fn supervised_turn_limit_renders_supported_adapter_and_fails_fast() {
 
 #[test]
 fn finalization_handles_mixed_cells_without_leaking_state() {
-    let codex_default = crate::agents::find_definition("codex")
-        .expect("codex")
-        .default_launch_model()
-        .expect("codex default model");
     let command = Cell::Command {
         argv: vec!["printf".to_owned(), "untouched".to_owned()],
     };
@@ -1245,8 +1232,8 @@ fn finalization_handles_mixed_cells_without_leaking_state() {
         Cell::Agent(AgentCell { launch: LaunchParams { model: Some(model), budget: Some(budget), .. }, .. })
             if model == "profile" && budget == "$2.00/day"));
     assert!(matches!(bare,
-        Cell::Agent(AgentCell { launch: LaunchParams { model: Some(model), budget: Some(budget), .. }, .. })
-            if model == &codex_default && budget == "$2.00/day"));
+        Cell::Agent(AgentCell { launch: LaunchParams { model: None, budget: Some(budget), .. }, .. })
+            if budget == "$2.00/day"));
     assert!(matches!(no_default,
         Cell::Agent(AgentCell { launch: LaunchParams { model: None, budget: Some(budget), .. }, .. })
             if budget == "$2.00/day"));
