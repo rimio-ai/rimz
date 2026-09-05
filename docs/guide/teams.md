@@ -136,9 +136,17 @@ Start from the forge directory or from scratch: rename the roles, add or drop so
 
 ## Relaunch reconciles instead of duplicating
 
-Point any co-launched layout — a named team or an inline multi-agent spec — at an explicit worktree name, and RimZ reads the state first: a live cohort focuses its tab, a closed cohort with work in progress offers to resume it, and a clean merged tree offers to remove it and start fresh.
+Point any co-launched layout — a named team or an inline multi-agent spec — at an explicit worktree name, and RimZ reads the state first: a live cohort focuses its tab, and a closed cohort asks what you want done with the worktree it left behind.
 
 `rimz agents claude:planner,codex:coder -w feat-once` focuses the existing pair when the same command runs again.
+
+When the cohort is closed and the tree still carries work, `rimz teams forge -w feat-rate-limits` asks whether to resume the team, launch it fresh, or cancel, offering `(resume/fresh/cancel)` with `resume` as the default.
+
+Choose `fresh` when you want new sessions without losing the previous run's work. The branch, uncommitted changes, and declared scratch files such as `plan.md` and `result.md` stay in the same checkout. The new members receive a reminder of existing scratch files so they can read the old run before acting.
+
+When the tree is instead clean and its content has landed, the choices are `remove`, `fresh`, and `cancel`, defaulting to `cancel`, because removing a merged worktree deletes the checkout and its branch. Pressing Enter takes the default, and any answer the prompt does not recognize cancels.
+
+`rimz teams forge -w feat-rate-limits --fresh` (or `rimz agents claude:planner,codex:coder -w feat-once --fresh`) skips the prompt and takes the fresh path directly, which is also what a non-interactive run prints as the command to use. It needs the worktree named, and it never duplicates a live cohort: if the team is still running there, the command focuses it as usual.
 
 `--resume` (alias `--continue`) forces the resume path, reopening the newest matching set of sessions: by team name and role for a team, or by cell order for an inline spec. Resume takes identity, working directory, and channel from RimZ's durable records and each role's model, effort, system prompt, and permission mode from its profile, so a resumed team comes back configured exactly as it launched. It stands alone: no prompt, model, or channel flags ride with it.
 
