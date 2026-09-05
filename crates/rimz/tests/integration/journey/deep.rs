@@ -1300,6 +1300,12 @@ fn tmux_settled_subagent_reports_to_parent() {
         String::from_utf8_lossy(&waited.stderr)
     );
     assert!(String::from_utf8_lossy(&waited.stdout).contains("stub done"));
+    let waited_name = launched_subagent_name(&waited);
+    let waited_run = wait_for_named_terminal_run(&env, &waited_name, CAPTURE_BUDGET);
+    assert!(
+        waited_run.joined_at.is_some(),
+        "--wait must mark the printed result joined: {waited_run:?}"
+    );
     assert_eq!(
         env.store()
             .list_messages()
@@ -1387,7 +1393,7 @@ fn tmux_settled_subagent_reports_to_parent() {
                             notice: rimz::store::message::HarnessNotice::SubagentReport
                         }
                     )
-                    && message.message_id != fleet_digest.message_id
+                    && message.text.contains(&format!("@{timed_name} — completed"))
             })
         {
             break report;
