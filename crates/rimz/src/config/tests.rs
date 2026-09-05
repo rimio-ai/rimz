@@ -2024,7 +2024,7 @@ fn display_numeric_bounds_parse_and_clamp_at_use() {
     assert_eq!(MachineConfig::default().theme.display.max_cols.get(), 72);
     assert_eq!(
         MachineConfig::default().theme.display.refresh_ms,
-        crate::sidebar::timing::DEFAULT_REFRESH_MS
+        crate::config::DEFAULT_REFRESH_MS
     );
 
     assert!(
@@ -2044,7 +2044,7 @@ fn display_numeric_bounds_parse_and_clamp_at_use() {
     .expect("load");
     assert_eq!(
         too_low.theme.display.resolved_refresh_ms(),
-        crate::sidebar::timing::MIN_REFRESH_MS
+        crate::config::MIN_REFRESH_MS
     );
 
     let too_high = load_no_fragments(&write_named(
@@ -2055,7 +2055,7 @@ fn display_numeric_bounds_parse_and_clamp_at_use() {
     .expect("load");
     assert_eq!(
         too_high.theme.display.resolved_refresh_ms(),
-        crate::sidebar::timing::MAX_REFRESH_MS
+        crate::config::MAX_REFRESH_MS
     );
 }
 

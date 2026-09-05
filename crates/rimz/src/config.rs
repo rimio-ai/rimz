@@ -112,6 +112,17 @@ pub use theme::{
 pub use web::WebPrefs;
 pub use worktree::{WorktreeBase, WorktreeBaseParseError, WorktreeConfig};
 
+/// Default render base grid: 100ms, or 10Hz.
+pub(crate) const DEFAULT_REFRESH_MS: u16 = 100;
+
+/// Minimum accepted render base grid. Prevents accidental busy-spins from
+/// config typos while leaving room for faster test or local tuning.
+pub(crate) const MIN_REFRESH_MS: u16 = 16;
+
+/// Maximum accepted render base grid. Higher values make input and overlay
+/// event latency visibly worse, so keep slow data polling on `--tick-seconds`.
+pub(crate) const MAX_REFRESH_MS: u16 = 1_000;
+
 const CONFIG_FILE: &str = "config.toml";
 const THEME_FILE: &str = "theme.toml";
 const AGENTS_FILE: &str = "agents.toml";

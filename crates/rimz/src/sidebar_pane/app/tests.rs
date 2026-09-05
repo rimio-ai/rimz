@@ -58,7 +58,7 @@ fn tick_for_clamps_zero_and_honours_explicit_seconds() {
 #[test]
 fn frame_grid_advances_one_frame_or_snaps_past_missed_frames() {
     let base = Instant::now();
-    let frame = crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS);
+    let frame = crate::sidebar::timing::animation_frame(crate::config::DEFAULT_REFRESH_MS);
     assert_eq!(next_frame_after(base, base, frame), base + frame);
     let now = base + frame * 5;
     assert_eq!(next_frame_after(base, now, frame), now + frame);
@@ -117,7 +117,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
     assert!(is_animating(&slow, &UiState::default(), 0, false));
     assert_eq!(
         frame_interval(&slow, &UiState::default(), false),
-        crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS),
+        crate::sidebar::timing::animation_frame(crate::config::DEFAULT_REFRESH_MS),
         "a cold theme cache stays on the safe base grid until the first paint warms it"
     );
 
@@ -135,7 +135,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
         .status = crate::agents::AgentStatus::Running;
     assert_eq!(
         frame_interval(&slow, &ui, false),
-        crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS)
+        crate::sidebar::timing::animation_frame(crate::config::DEFAULT_REFRESH_MS)
     );
 }
 
@@ -254,7 +254,7 @@ fn help_popup_keeps_animation_grid_hot() {
     assert!(is_animating(&snapshot, &ui, 0, false));
     assert_eq!(
         frame_interval(&snapshot, &ui, false),
-        crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS)
+        crate::sidebar::timing::animation_frame(crate::config::DEFAULT_REFRESH_MS)
     );
 }
 
@@ -301,12 +301,12 @@ fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
         let pet = loading_ui.pet.as_mut().expect("pet");
         pet.body = None;
         pet.frame_interval = Some(crate::sidebar::timing::animation_frame(
-            crate::sidebar::timing::DEFAULT_REFRESH_MS,
+            crate::config::DEFAULT_REFRESH_MS,
         ));
         assert!(is_animating(&snapshot, &loading_ui, 0, false));
         assert_eq!(
             frame_interval(&snapshot, &loading_ui, false),
-            crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS)
+            crate::sidebar::timing::animation_frame(crate::config::DEFAULT_REFRESH_MS)
         );
     }
 
@@ -352,7 +352,7 @@ fn active_alert_suppresses_hidden_pet_animation_cadence() {
     assert!(!is_animating(&snapshot, &ui, 0, alert_active));
     assert_eq!(
         frame_interval(&snapshot, &ui, alert_active),
-        crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS)
+        crate::sidebar::timing::animation_frame(crate::config::DEFAULT_REFRESH_MS)
     );
 
     if ui.cached_theme(&snapshot.theme).unwrap().pet_body_enabled() {
