@@ -605,7 +605,7 @@ fn child_reports(
                                 .expect("launched children have a parent")
                         )
                     }),
-                channel: rimz::harness::target::agent_channel(child),
+                channel: child.channel(),
                 kind: child.kind.to_string(),
                 status: child.status.as_str().to_owned(),
                 description: child.activity_line(),

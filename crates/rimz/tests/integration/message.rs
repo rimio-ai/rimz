@@ -2288,7 +2288,7 @@ fn subagent_report_fixture(joined: &[bool]) -> (Env, MessageRecord, PathBuf) {
         true,
         DeliveryGate::Done,
     )
-    .with_channel(rimz::harness::target::agent_channel(parent))
+    .with_channel(parent.channel())
     .with_sender(MessageSender::Harness {
         notice: HarnessNotice::SubagentReport,
     })

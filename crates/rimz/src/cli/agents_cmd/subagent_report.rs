@@ -88,7 +88,7 @@ pub(super) fn report_fleet(
         true,
         DeliveryGate::Done,
     )
-    .with_channel(rimz::harness::target::agent_channel(parent))
+    .with_channel(parent.channel())
     .with_sender(sender);
     if let Some(pane_id) = pane_id {
         message = message.with_pane_id(pane_id.clone());

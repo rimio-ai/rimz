@@ -425,7 +425,7 @@ fn launched_parent_handle(
             name: parent.name.clone(),
             profile: parent.profile.clone(),
             role: parent.role.clone(),
-            channel: rimz::harness::target::agent_channel(parent),
+            channel: parent.channel(),
         },
         None => rimz::store::message::MessageSender::Agent {
             kind: child.parent_agent_kind.clone()?,

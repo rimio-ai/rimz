@@ -354,7 +354,7 @@ pub(super) fn build_entry(
             last_seen: agent.last_seen,
         },
         placement: PlacementReport {
-            channel: rimz::harness::target::agent_channel(agent),
+            channel: agent.channel(),
             worktree: agent.worktree_path.clone(),
             branch: agent.worktree_branch.clone(),
             pane,

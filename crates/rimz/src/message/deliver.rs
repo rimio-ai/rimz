@@ -150,7 +150,7 @@ fn synthetic_record(
     pane_id: Option<&PaneId>,
 ) -> MessageRecord {
     let record = MessageRecord::new(workspace_id, agent, text, true, gate)
-        .with_channel(crate::harness::target::agent_channel(agent))
+        .with_channel(agent.channel())
         .with_sender(sender);
     match pane_id {
         Some(pane_id) => record.with_pane_id(pane_id.clone()),

@@ -284,7 +284,7 @@ fn slot(agent: &AgentState) -> SlotKey {
         },
     };
     SlotKey {
-        channel: crate::harness::target::agent_channel(agent),
+        channel: agent.channel(),
         kind: agent.kind.clone(),
         slot,
     }

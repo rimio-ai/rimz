@@ -1005,7 +1005,7 @@ fn resolve_scope_lane(
         let path = normalized_agent_worktree(agent).ok_or_else(|| LaneResumeError::Unknown {
             scope: raw_scope.to_owned(),
         })?;
-        let channel = crate::harness::target::agent_channel(agent);
+        let channel = agent.channel();
         let worktree_name = worktrees
             .iter()
             .find(|worktree| worktree.path == path)
@@ -1061,7 +1061,7 @@ fn resolve_current_lane(
         .ok_or_else(|| LaneResumeError::Unknown {
             scope: path_label(&current),
         })?;
-    let channel = crate::harness::target::agent_channel(agent);
+    let channel = agent.channel();
     Ok(ResolvedLane {
         display: channel
             .as_deref()
@@ -1094,9 +1094,9 @@ fn current_lane_candidates(agents: &[AgentState], lane: &ResolvedLane) -> Vec<Ag
         .filter(|agent| full_session(agent))
         .filter(|agent| normalized_agent_worktree(agent).as_deref() == Some(lane.path.as_path()))
         .filter(|agent| {
-            lane.channel.as_deref().is_none_or(|channel| {
-                crate::harness::target::agent_channel(agent).as_deref() == Some(channel)
-            })
+            lane.channel
+                .as_deref()
+                .is_none_or(|channel| agent.channel().as_deref() == Some(channel))
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -1225,11 +1225,10 @@ fn plan_live_lane_split(
         .filter(|agent| supports_agent_resume(agent) && session_backed(agent))
         .map(|agent| agent.kind.clone())
         .collect();
-    let channel = lane.channel.clone().or_else(|| {
-        closed
-            .first()
-            .and_then(crate::harness::target::agent_channel)
-    });
+    let channel = lane
+        .channel
+        .clone()
+        .or_else(|| closed.first().and_then(AgentState::channel));
     Ok(LaneResumeAction::SplitClosed {
         lane_label: lane.display,
         cwd: lane.path,
@@ -1312,7 +1311,7 @@ fn lane_summaries(
         let Some(path) = normalized_agent_worktree(agent) else {
             continue;
         };
-        let channel = crate::harness::target::agent_channel(agent).filter(|_| {
+        let channel = agent.channel().filter(|_| {
             path != root
                 || agent
                     .channel
@@ -1344,11 +1343,7 @@ fn lane_summaries(
                 label: lane
                     .channel
                     .clone()
-                    .or_else(|| {
-                        candidates
-                            .first()
-                            .and_then(crate::harness::target::agent_channel)
-                    })
+                    .or_else(|| candidates.first().and_then(AgentState::channel))
                     .map_or_else(
                         || format!("#{}", path_label(&lane.path)),
                         |value| format!("#{value}"),

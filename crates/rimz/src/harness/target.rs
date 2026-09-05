@@ -370,7 +370,7 @@ pub fn pane_binding<'snapshot, 'pane>(
         !agent.is_provider_subagent()
             && agent.kind == pane.kind
             && agent.agent_id.is_provisional()
-            && agent_channel(agent) == pane.channel()
+            && agent.channel() == pane.channel()
     }) {
         return Some(PaneBinding {
             pane,
@@ -885,20 +885,6 @@ pub fn resolve_room_channel(
     }
 }
 
-/// The agent's channel — the lane it cooperates in: stamped lane, else
-/// worktree directory basename.
-/// `None` when the agent runs outside any channel context.
-/// The display-side `Option` peer of the resolver's [`Candidate::channel_label`].
-pub fn agent_channel(agent: &AgentState) -> Option<String> {
-    compose_channel(
-        agent.channel.as_deref(),
-        agent
-            .worktree_path
-            .as_deref()
-            .and_then(|path| path.rsplit('/').next()),
-    )
-}
-
 /// One live launch of a configured team in a lane.
 #[derive(Clone, Debug)]
 pub struct TeamCohort<'a> {
@@ -989,7 +975,7 @@ pub fn team_cohorts(agents: &[AgentState]) -> Vec<TeamCohort<'_>> {
         let Some(team) = agent.team.as_deref().filter(|team| !team.is_empty()) else {
             continue;
         };
-        let channel = agent_channel(agent).unwrap_or_else(|| "external".to_owned());
+        let channel = agent.channel().unwrap_or_else(|| "external".to_owned());
         grouped.entry((team, channel)).or_default().push(agent);
     }
     grouped
@@ -1067,7 +1053,7 @@ pub fn channel_team<'a>(agents: &'a [AgentState], channel: &str) -> Option<&'a s
         let Some(team) = agent.team.as_deref().filter(|team| !team.is_empty()) else {
             continue;
         };
-        if agent_channel(agent).as_deref() != Some(channel) {
+        if agent.channel().as_deref() != Some(channel) {
             continue;
         }
         match found {
@@ -1091,7 +1077,7 @@ pub fn recipient_channel(
     scope_channel: Option<&str>,
 ) -> Option<String> {
     bound
-        .and_then(agent_channel)
+        .and_then(AgentState::channel)
         .or_else(|| target.channel())
         .or_else(|| scope_channel.map(ToOwned::to_owned))
 }
@@ -1113,7 +1099,7 @@ pub fn recipient_channel(
 /// globally-unique petname, then a session-id selector. This keeps the handle a
 /// round-tripping address even for an agent running outside any worktree.
 pub fn agent_handle(agent: &AgentState, peers: &[&AgentState], include_channel: bool) -> String {
-    let channel = agent_channel(agent);
+    let channel = agent.channel();
     let suffix = include_channel && channel.is_some();
     // Channel context — the scope a bare `@<kind>` resolves within — comes from
     // the `#<channel>` suffix or, in grouped output, the section header. Only an
@@ -1348,7 +1334,7 @@ pub fn agent_sender_handle(
             .copied()
             .find(|agent| agent.name.as_deref() == Some(sender_name))
     {
-        let include_channel = agent_channel(agent).as_deref() != target_channel;
+        let include_channel = agent.channel().as_deref() != target_channel;
         return Some(agent_handle(agent, peers, include_channel));
     }
     let include_channel = channel.as_deref() != target_channel;
@@ -1369,10 +1355,10 @@ fn harness_notice_type(notice: &HarnessNotice) -> String {
 }
 
 fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> String {
-    let channel = agent_channel(agent);
+    let channel = agent.channel();
     let scoped_peers = peers
         .iter()
-        .filter(|peer| !scoped || agent_channel(peer) == channel)
+        .filter(|peer| !scoped || peer.channel() == channel)
         .copied()
         .collect::<Vec<_>>();
     // Restart renders from an unchanged snapshot clone. Canonicalize that

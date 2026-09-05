@@ -527,7 +527,7 @@ fn pane_json<'a>(
             kind: agent.kind.to_string(),
             handle: rimz::harness::target::agent_handle(agent, peers, true),
             status: agent.effective_status().as_str().to_owned(),
-            worktree: rimz::harness::target::agent_channel(agent),
+            worktree: agent.channel(),
         }),
         command: pane.command.as_deref(),
         cwd: pane.cwd.as_deref(),
