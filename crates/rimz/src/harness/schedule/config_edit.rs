@@ -219,10 +219,10 @@ mod tests {
             at: Some("07:00".to_owned()),
             every: Some("1h".to_owned()),
             cron: Some("0 * * * *".to_owned()),
-            signal: Some("ci.finished".to_owned()),
+            signal: Some("ci.failed".to_owned()),
             matches: Some(std::collections::BTreeMap::from([(
-                "conclusion".to_owned(),
-                "failure".to_owned(),
+                "branch".to_owned(),
+                "feature".to_owned(),
             )])),
             watch: None,
             once: Some(true),
@@ -242,7 +242,7 @@ mod tests {
         assert!(machine.contains_key("system-prompt-file"));
         assert!(machine_text.contains("[tasks.full.wake]"));
         assert!(machine_text.contains("[tasks.full.match]"));
-        assert!(machine_text.contains("conclusion = \"failure\""));
+        assert!(machine_text.contains("branch = \"feature\""));
         assert_eq!(
             toml_edit::de::from_document::<TaskEntry>(DocumentMut::from(machine))
                 .expect("machine round trip"),

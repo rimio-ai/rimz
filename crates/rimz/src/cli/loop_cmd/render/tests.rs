@@ -496,10 +496,10 @@ fn next_cell_uses_the_list_relative_time_label() {
 fn signal_timing_renders_trigger_matches_and_listening_state() {
     let now = Timestamp::from_second(10_000).unwrap();
     let entry = TaskEntry {
-        signal: Some("ci.finished".to_owned()),
+        signal: Some("ci.failed".to_owned()),
         matches: Some(BTreeMap::from([(
-            "conclusion".to_owned(),
-            "failure".to_owned(),
+            "branch".to_owned(),
+            "feature".to_owned(),
         )])),
         ..TaskEntry::default()
     };
@@ -522,7 +522,7 @@ fn signal_timing_renders_trigger_matches_and_listening_state() {
     write_show_headline(&mut out, "task", &timing, now).unwrap();
     let show = String::from_utf8(out).unwrap();
     assert!(
-        show.contains("on ci.finished [conclusion=failure] · listening"),
+        show.contains("on ci.failed [branch=feature] · listening"),
         "{show}"
     );
 }

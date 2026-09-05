@@ -344,25 +344,25 @@ fn project_tasks_accept_signals_and_reject_machine_only_trigger_fields() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.wake]\nagent = \"codex\"\nprompt = \"wake\"\nsignal = \"ci.finished\"\nmatch = { conclusion = \"failure\" }\n",
+        "[tasks.wake]\nagent = \"codex\"\nprompt = \"wake\"\nsignal = \"ci.failed\"\nmatch = { branch = \"feature\" }\n",
     );
 
     let loaded = load_project_tasks(project.path(), config.path()).expect("signal project task");
     let task = &loaded.tasks.0["wake"];
-    assert_eq!(task.signal.as_deref(), Some("ci.finished"));
+    assert_eq!(task.signal.as_deref(), Some("ci.failed"));
     assert_eq!(
         task.matches
             .as_ref()
-            .and_then(|matches| matches.get("conclusion"))
+            .and_then(|matches| matches.get("branch"))
             .map(String::as_str),
-        Some("failure")
+        Some("feature")
     );
 
     for (field, value) in [("watch", "\"cargo test\""), ("once", "true")] {
         write_project_config(
             &project,
             &format!(
-                "[tasks.wake]\nagent = \"codex\"\nprompt = \"wake\"\nsignal = \"ci.finished\"\n{field} = {value}\n"
+                "[tasks.wake]\nagent = \"codex\"\nprompt = \"wake\"\nsignal = \"ci.failed\"\n{field} = {value}\n"
             ),
         );
         let err = project_tasks(project.path(), config.path()).expect_err(field);

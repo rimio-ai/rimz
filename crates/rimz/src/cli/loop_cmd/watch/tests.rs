@@ -384,7 +384,7 @@ fn signal_and_watch_timing_map_to_live_watch_labels() {
     for (entry, state, label) in [
         (
             TaskEntry {
-                signal: Some("ci.finished".to_owned()),
+                signal: Some("ci.failed".to_owned()),
                 ..TaskEntry::default()
             },
             RowState::Listening,

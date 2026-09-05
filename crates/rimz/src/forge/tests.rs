@@ -281,6 +281,42 @@ fn builds_pull_request_web_urls() {
 }
 
 #[test]
+fn builds_checks_web_urls() {
+    for (remote, expected) in [
+        (
+            "https://github.com/org/repo.git",
+            "https://github.com/org/repo/commit/abc123/checks",
+        ),
+        (
+            "git@github.com:org/repo.git",
+            "https://github.com/org/repo/commit/abc123/checks",
+        ),
+        (
+            "git@gitea.example.test:org/repo.git",
+            "https://gitea.example.test/org/repo/commit/abc123",
+        ),
+        (
+            "https://codeberg.org/org/repo.git",
+            "https://codeberg.org/org/repo/commit/abc123",
+        ),
+    ] {
+        assert_eq!(
+            RemoteRepo::parse(remote)
+                .and_then(|repo| repo.checks_web_url("abc123"))
+                .as_deref(),
+            Some(expected),
+            "{remote}"
+        );
+    }
+    for remote in ["https://github.com/repo.git", "git@gitlab.com:org/repo.git"] {
+        assert_eq!(
+            RemoteRepo::parse(remote).and_then(|repo| repo.checks_web_url("abc123")),
+            None
+        );
+    }
+}
+
+#[test]
 fn builds_github_bulk_query_with_ordered_escaped_aliases() {
     let query = github_bulk_query(
         "org/repo",

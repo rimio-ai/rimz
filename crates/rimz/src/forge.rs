@@ -240,6 +240,18 @@ impl RemoteRepo {
         Some(format!("https://{}/{repo}/{path}", self.host()))
     }
 
+    pub(crate) fn checks_web_url(&self, head: &str) -> Option<String> {
+        let repo = self.repo_slug()?;
+        let suffix = match self.forge_cli()? {
+            ForgeCli::Gh => "/checks",
+            ForgeCli::Tea => "",
+        };
+        Some(format!(
+            "https://{}/{repo}/commit/{head}{suffix}",
+            self.host()
+        ))
+    }
+
     pub(crate) fn matches_target(&self, target: &PrTarget) -> bool {
         let Some((host, repo)) = target.host.as_deref().zip(target.repo.as_deref()) else {
             return true;

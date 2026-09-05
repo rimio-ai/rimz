@@ -761,7 +761,7 @@ mod tests {
             output: "o".repeat(CHECK_OUTPUT_CAP + 20),
         });
         record.signal = Some(SignalRecord {
-            name: "ci.finished".parse().unwrap(),
+            name: "ci.failed".parse().unwrap(),
             payload: Map::from_iter([(
                 "detail".to_owned(),
                 Value::String("s".repeat(CHECK_OUTPUT_CAP + 20)),
