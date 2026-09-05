@@ -57,6 +57,7 @@ Inside `harness/` itself, start here when you are looking for where a behaviour 
 | --- | --- |
 | [`spec.rs`](../../../crates/rimz/src/harness/spec.rs) | The layout IR: the inline grammar, team and profile resolution, virtual `<kind>-<mode>` cells, prompt-file path rooting, the prompt leader, and the name-collision rules that keep profile names addressable. |
 | [`plan.rs`](../../../crates/rimz/src/harness/plan.rs) | Turning a spec into a launch: effective-config resolution, launch finalization, per-cell launch identities, and fresh or resumed compilation to backend-neutral pane commands. |
+| [`launch_reminders.rs`](../../../crates/rimz/src/harness/launch_reminders.rs) | One system-reminder block combining team context, the model and effort line, and delegation guidance. |
 | [`ancestry.rs`](../../../crates/rimz/src/harness/ancestry.rs) | Durable caller resolution and launch-chain policy. |
 | [`prompt_compose.rs`](../../../crates/rimz/src/harness/prompt_compose.rs) | Ordered system-prompt composition, content-addressed runtime artifacts, and adapter replacement argv or environment. |
 | [`launch_context.rs`](../../../crates/rimz/src/harness/launch_context.rs) | Team launch context and its launch-time scratch-file snapshot reminder. |
