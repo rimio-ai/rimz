@@ -152,6 +152,10 @@ pub enum ScheduleErr {
     WatchWithCheck { name: String },
     #[error("schedule `{name}` has an invalid signal name `{value}`")]
     BadSignal { name: String, value: String },
+    #[error(
+        "schedule `{name}`: ci.finished was replaced by ci.passed, ci.failed, or 'ci.*'; remove --match conclusion"
+    )]
+    ObsoleteCiSignal { name: String },
     #[error("schedule `{name}` has an empty watched command")]
     BadWatch { name: String },
     #[error("schedule `{name}` sets a calendar `every` value without `at`; add `at = \"HH:MM\"`")]
@@ -351,7 +355,7 @@ pub struct ParsedSchedule {
 pub enum Trigger {
     Schedule(ParsedSchedule),
     Signal {
-        name: signal::SignalName,
+        selector: signal::SignalSelector,
         matches: std::collections::BTreeMap<String, String>,
     },
     Watch {
@@ -363,35 +367,44 @@ impl Trigger {
     pub fn describe(&self) -> String {
         match self {
             Self::Schedule(schedule) => schedule.describe(),
-            Self::Signal { name, matches } => {
+            Self::Signal { selector, matches } => {
                 let filters = matches
                     .iter()
                     .map(|(key, value)| format!("{key}={value}"))
                     .collect::<Vec<_>>()
                     .join(",");
                 if filters.is_empty() {
-                    format!("on {name}")
+                    format!("on {selector}")
                 } else {
-                    format!("on {name} [{filters}]")
+                    format!("on {selector} [{filters}]")
                 }
             }
             Self::Watch { command } => format!("watch: {command}"),
         }
     }
 
-    pub fn accepts(&self, task_name: &str, signal: &signal::Signal) -> bool {
+    fn resolve(&self, task_name: &str, signal: &signal::Signal) -> signal::SignalResolution {
+        use signal::SignalResolution::{Deliver, Ignore, Skip};
         match self {
-            Self::Schedule(_) => false,
-            Self::Signal { name, matches } => {
-                name == &signal.name
-                    && matches.iter().all(|(key, expected)| {
+            Self::Schedule(_) => Ignore,
+            Self::Signal { selector, matches } => {
+                if selector.family() != signal.name.family()
+                    || !matches.iter().all(|(key, expected)| {
                         signal
                             .payload
                             .get(key)
                             .is_some_and(|value| signal::match_value(value) == *expected)
                     })
+                {
+                    return Ignore;
+                }
+                match selector {
+                    signal::SignalSelector::Exact(name) if name != &signal.name => Skip,
+                    _ => Deliver,
+                }
             }
-            Self::Watch { .. } => signal.name.as_str() == format!("wake.{task_name}"),
+            Self::Watch { .. } if signal.name.as_str() == format!("wake.{task_name}") => Deliver,
+            Self::Watch { .. } => Ignore,
         }
     }
 }
@@ -441,7 +454,7 @@ pub enum TaskTimingState {
     Upcoming(Timestamp),
     Due(Timestamp),
     NoOccurrence,
-    Listening { name: signal::SignalName },
+    Listening { name: signal::SignalSelector },
     Watching { command: String },
 }
 
@@ -485,13 +498,15 @@ impl TaskTiming {
                         _,
                     ) => {
                         let Ok(ParsedTrigger {
-                            trigger: Trigger::Signal { name, .. },
+                            trigger: Trigger::Signal { selector, .. },
                             ..
                         }) = &parsed
                         else {
                             unreachable!("matched signal trigger")
                         };
-                        TaskTimingState::Listening { name: name.clone() }
+                        TaskTimingState::Listening {
+                            name: selector.clone(),
+                        }
                     }
                     (
                         Ok(ParsedTrigger {
@@ -673,11 +688,23 @@ pub fn parse_trigger(name: &str, entry: &TaskEntry) -> Result<ParsedTrigger, Sch
         });
     }
     let trigger = if let Some(raw) = entry.signal.as_deref() {
-        Trigger::Signal {
-            name: raw.parse().map_err(|_| ScheduleErr::BadSignal {
+        let selector: signal::SignalSelector = raw.parse().map_err(|_| ScheduleErr::BadSignal {
+            name: name.to_owned(),
+            value: raw.to_owned(),
+        })?;
+        if raw == "ci.finished"
+            || (selector.family() == "ci"
+                && entry
+                    .matches
+                    .as_ref()
+                    .is_some_and(|matches| matches.contains_key("conclusion")))
+        {
+            return Err(ScheduleErr::ObsoleteCiSignal {
                 name: name.to_owned(),
-                value: raw.to_owned(),
-            })?,
+            });
+        }
+        Trigger::Signal {
+            selector,
             matches: entry.matches.clone().unwrap_or_default(),
         }
     } else if let Some(command) = entry.watch.as_deref() {

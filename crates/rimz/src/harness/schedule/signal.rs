@@ -16,6 +16,8 @@ use std::path::Path;
 
 pub const MAX_SIGNAL_NAME_BYTES: usize = 64;
 
+const RESERVED_FAMILIES: &[&str] = &["agent", "wake", "team", "ci", "pr"];
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SignalName(String);
 
@@ -24,8 +26,12 @@ impl SignalName {
         &self.0
     }
 
+    pub fn family(&self) -> &str {
+        self.0.split('.').next().unwrap_or(&self.0)
+    }
+
     pub fn is_reserved(&self) -> bool {
-        self.0.starts_with("agent.") || self.0.starts_with("wake.")
+        RESERVED_FAMILIES.contains(&self.family())
     }
 }
 
@@ -80,6 +86,73 @@ impl<'de> Deserialize<'de> for SignalName {
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("invalid signal name `{0}`; use lowercase dot-separated words, at most 64 bytes")]
 pub struct SignalNameErr(String);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SignalSelector {
+    Exact(SignalName),
+    Family(String),
+}
+
+impl SignalSelector {
+    pub fn family(&self) -> &str {
+        match self {
+            Self::Exact(name) => name.family(),
+            Self::Family(family) => family,
+        }
+    }
+}
+
+impl fmt::Display for SignalSelector {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Exact(name) => name.fmt(f),
+            Self::Family(family) => write!(f, "{family}.*"),
+        }
+    }
+}
+
+impl FromStr for SignalSelector {
+    type Err = SignalNameErr;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        if let Some(family) = raw.strip_suffix(".*") {
+            if raw.len() > MAX_SIGNAL_NAME_BYTES || family.contains('.') {
+                return Err(SignalNameErr(raw.to_owned()));
+            }
+            return family
+                .parse::<SignalName>()
+                .map(|name| Self::Family(name.0));
+        }
+        raw.parse().map(Self::Exact)
+    }
+}
+
+impl Serialize for SignalSelector {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for SignalSelector {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SignalResolution {
+    Ignore,
+    Skip,
+    Deliver,
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -200,7 +273,7 @@ pub fn fire_signal(
     let mut fired = Vec::new();
     for (name, task) in tasks {
         let Ok(parsed) = task.trigger() else { continue };
-        if !parsed.trigger.accepts(&name, signal) {
+        if parsed.trigger.resolve(&name, signal) != SignalResolution::Deliver {
             continue;
         }
         let key = arming::TaskKey::for_task(&name, task.source(), &task.entry().resolved_root());
@@ -342,7 +415,34 @@ mod tests {
         }
         assert!("agent.idle".parse::<SignalName>().unwrap().is_reserved());
         assert!("wake.task".parse::<SignalName>().unwrap().is_reserved());
-        assert!(!"ci.finished".parse::<SignalName>().unwrap().is_reserved());
+        for family in ["agent", "wake", "team", "ci", "pr"] {
+            let name = format!("{family}.done").parse::<SignalName>().unwrap();
+            assert_eq!(name.family(), family);
+            assert!(name.is_reserved());
+        }
+        assert!(!"deploy.done".parse::<SignalName>().unwrap().is_reserved());
+        for invalid in ["*", "a.*", "a.b.*", "a*"] {
+            assert!(invalid.parse::<SignalName>().is_err());
+        }
+        for valid in [
+            "ci.failed",
+            "ci.*",
+            "deploy.finished",
+            "a.b.c",
+            "deploy_done",
+        ] {
+            let selector = valid.parse::<SignalSelector>().unwrap();
+            assert_eq!(selector.to_string(), valid);
+            let encoded = serde_json::to_string(&selector).unwrap();
+            assert_eq!(encoded, format!("\"{valid}\""));
+            assert_eq!(
+                serde_json::from_str::<SignalSelector>(&encoded).unwrap(),
+                selector
+            );
+        }
+        for invalid in ["*", "a.b.*", "a*", "A.*", ".*", "a..*"] {
+            assert!(invalid.parse::<SignalSelector>().is_err(), "{invalid}");
+        }
     }
 
     #[test]
