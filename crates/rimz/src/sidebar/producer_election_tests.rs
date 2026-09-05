@@ -4,6 +4,7 @@ use std::time::{Duration, SystemTime};
 use tempfile::TempDir;
 
 use super::*;
+use crate::ids::WorkspaceId;
 
 struct Harness {
     _dir: TempDir,

@@ -577,7 +577,7 @@ fn heartbeat_mtime_is_fresh(path: &Path) -> bool {
         Err(_) => return false,
     };
     match SystemTime::now().duration_since(modified) {
-        Ok(age) => age <= rimz::sidebar::timing::SIDEBAR_HEARTBEAT_TTL,
+        Ok(age) => age <= rimz::sidebar::heartbeat::SIDEBAR_HEARTBEAT_TTL,
         Err(_) => true,
     }
 }

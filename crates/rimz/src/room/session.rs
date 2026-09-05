@@ -462,7 +462,7 @@ fn matching_sidebar_heartbeat_mtime(
 ) -> Option<SystemTime> {
     let modified = std::fs::metadata(path).ok()?.modified().ok()?;
     let fresh = match SystemTime::now().duration_since(modified) {
-        Ok(age) => age <= crate::sidebar::timing::SIDEBAR_HEARTBEAT_TTL,
+        Ok(age) => age <= crate::sidebar::heartbeat::SIDEBAR_HEARTBEAT_TTL,
         Err(_) => true,
     };
     if !fresh {

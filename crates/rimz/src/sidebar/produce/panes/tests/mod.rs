@@ -275,7 +275,7 @@ fn unchanged_presence_preserves_pane_frame_and_sends_no_wakeup() {
     let socket = UnixDatagram::bind(&socket_path).unwrap();
     socket.set_nonblocking(true).unwrap();
     let instance = crate::SidebarInstanceId::new();
-    crate::sidebar::write_heartbeat(
+    crate::sidebar::heartbeat::write_heartbeat(
         &runtime,
         workspace,
         &instance,
