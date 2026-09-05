@@ -493,7 +493,7 @@ fn spawn_process_at(
     let mut command = CommandBuilder::new(program);
     crate::common::ZellijNamespace::pin_pty_at(xdg, &mut command);
     if let AttachMode::ExactLineage(lineage) = mode {
-        command.env(rimz::remote::REMOTE_LINEAGE_ENV, lineage);
+        command.env(rimz::proc::REMOTE_LINEAGE_ENV, lineage);
     }
     match mode {
         AttachMode::Normal => command.args(["attach", name]),
@@ -501,7 +501,7 @@ fn spawn_process_at(
             command.args(["attach", "--create", name])
         }
         AttachMode::RemoteWrapper => {
-            command.env(rimz::remote::REMOTE_LINEAGE_ENV, "0123456789abcdef");
+            command.env(rimz::proc::REMOTE_LINEAGE_ENV, "0123456789abcdef");
             command.env(rimz::remote::REMOTE_SUPERVISED_ENV, "1");
             command.args(["attach", "--zellij", "--attach", name])
         }

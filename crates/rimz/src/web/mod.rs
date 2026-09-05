@@ -48,7 +48,7 @@ const TTYD_AMBIENT_CONTEXT_ENV: [&str; 28] = [
     crate::remote::REMOTE_RECONNECT_ENV,
     crate::remote::ATTACH_MARK_ENV,
     crate::remote::OUTER_SCROLL_BRACKET_ENV,
-    crate::remote::REMOTE_LINEAGE_ENV,
+    crate::proc::REMOTE_LINEAGE_ENV,
     crate::remote::REMOTE_SUPERVISED_ENV,
     crate::remote::REMOTE_CLIENT_VERSION_ENV,
     crate::remote::REMOTE_FORCE_VERSION_ENV,

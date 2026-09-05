@@ -105,7 +105,7 @@ fn wait_for_attached_lineage_client(pid: u32, session: &str, lineage: &str) {
                     .any(|process| process.pid == pid),
                 rimz::proc::comm(pid),
                 rimz::proc::argv(pid),
-                rimz::proc::env_var(pid, rimz::remote::REMOTE_LINEAGE_ENV),
+                rimz::proc::env_var(pid, rimz::proc::REMOTE_LINEAGE_ENV),
                 rimz::proc::process_start_token(pid),
             ))
         },
