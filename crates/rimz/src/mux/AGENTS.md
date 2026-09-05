@@ -12,7 +12,7 @@ Local contract for `crates/rimz/src/mux/` — the Zellij/tmux seam. Extends [cra
 
 ## Ownership and direction
 
-- `mux` never imports `sidebar`. The wire every renderer listens on (the heartbeat record, the event vocabulary, the datagram send) is the leaf [`wakeup/`](../wakeup/mod.rs) module, which sits beside this one in the layering, above `store`; `mux`, `store`, `remote_control`, and `sidebar` all reach it, and none of them reaches the sidebar through it.
+- `mux` never imports `sidebar`. The wire every renderer listens on (the heartbeat record, the event vocabulary, the datagram send) is the leaf [`wakeup/`](../wakeup/mod.rs) module below `store`; every sender reaches down to it (the store's write tail, `mux`, `remote_control`, the sidebar graph and its renderer, the CLI), and none reaches another module through it.
 - Every runtime file the multiplexer writes or dispatches on is owned here: the durable focus intent behind each RimZ-initiated jump in [`focus_anchor.rs`](./focus_anchor.rs), the room-wide width target in [`width_target.rs`](./width_target.rs), and the Zellij pane-topology and presence-desired caches in [`zellij/pane_topology.rs`](./zellij/pane_topology.rs). Their path, schema, and freshness rules stay here even where the writer sits elsewhere: the sidebar's Zellij wake ingestion publishes the topology cache through these helpers rather than spelling the file itself.
 - A bound that defines another module's behaviour lives with that module. Command deadlines sit beside the commands they bound in [`zellij.rs`](./zellij.rs), the presence-stamp freshness both backends share sits at the mux root in [`mod.rs`](./mod.rs), and [`sidebar::timing`](../sidebar/timing.rs) keeps only the sidebar's own cadences.
 

@@ -205,7 +205,7 @@ Every fsync syscall funnels through [`disk/atomic.rs`](../../crates/rimz/src/dis
 
 ### Wakeups
 
-After a commit the writer calls the sender each receiver listens on: [`wakeup/mod.rs`](../../crates/rimz/src/wakeup/mod.rs), the shared wire that sits beside `mux` and above this module, walks the runtime heartbeat directory and sends a typed `store_delta` datagram to each sidebar whose heartbeat is fresh within about 5 seconds, while [`harness/run_wake.rs`](../../crates/rimz/src/harness/run_wake.rs) pings a completing run's [waiter socket](./harness/scripting.md#the-wake-socket). The wakeup sender re-stats each heartbeat just before send to close the window where a renderer exited between read and write.
+After a commit the writer calls the sender each receiver listens on: [`wakeup/mod.rs`](../../crates/rimz/src/wakeup/mod.rs), the shared leaf wire below this module, walks the runtime heartbeat directory and sends a typed `store_delta` datagram to each sidebar whose heartbeat is fresh within about 5 seconds, while [`harness/run_wake.rs`](../../crates/rimz/src/harness/run_wake.rs) pings a completing run's [waiter socket](./harness/scripting.md#the-wake-socket). The wakeup sender re-stats each heartbeat just before send to close the window where a renderer exited between read and write.
 
 Sends are non-blocking, so a full receiver queue drops the datagram and the write moves on. Per-target failures are absorbed; only a failure to read the heartbeat directory propagates.
 

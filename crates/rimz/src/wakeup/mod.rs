@@ -1,5 +1,11 @@
 //! Best-effort datagram transport to live sidebar consumers.
 //!
+//! The wire is a leaf over `ids`, `pane`, `disk`, `utils`, and `build_id`,
+//! reached downward by the store's write tail, the mux seam, remote control,
+//! the sidebar graph and its renderer, and the CLI. No production line here
+//! imports upward; the inline tests borrow `agents` and `store::event`
+//! vocabulary.
+//!
 //! Each renderer publishes a heartbeat naming its datagram socket. Senders
 //! walk current-protocol heartbeats, enforce content and mtime freshness, and
 //! post nonblocking events. Per-target failures are absorbed; only heartbeat
