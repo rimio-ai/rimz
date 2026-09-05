@@ -220,7 +220,7 @@ fn presence_plugins_classify_active_rejected_and_inactive_generations() {
         last_ms: now_ms.saturating_sub(1_000),
         last_diag_ms: now_ms.saturating_sub(1_000),
     };
-    let desired = rimz::sidebar::cache::PresenceDesired {
+    let desired = rimz::mux::zellij::pane_topology::PresenceDesired {
         build: "desired-build".to_owned(),
         config: "desired-config".to_owned(),
         recorded_at_ms: now_ms,
@@ -360,7 +360,7 @@ fn presence_plugins_suppress_empty_live_view_without_desired_build() {
         .is_none()
     );
 
-    let desired = rimz::sidebar::cache::PresenceDesired {
+    let desired = rimz::mux::zellij::pane_topology::PresenceDesired {
         build: "desired-build".to_owned(),
         config: "desired-config".to_owned(),
         recorded_at_ms: 1_000_000,

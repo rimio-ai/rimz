@@ -180,15 +180,8 @@ surface-budget = 90
 
 [[module]]
 path = "crates/rimz/src/mux"
-upward-dependencies = [
-    "harness::launch",
-    "sidebar",
-    "sidebar::cache",
-    "sidebar::focus_anchor",
-    "sidebar::timing",
-    "sidebar::width_target",
-]
-surface-budget = 268
+upward-dependencies = ["harness::launch"]
+surface-budget = 277
 
 [[module]]
 path = "crates/rimz/src/observability"
@@ -411,7 +404,6 @@ allowed-dependencies = [
     "ids",
     "mux",
     "proc",
-    "sidebar",
 ]
 surface-budget = 16
 
@@ -421,8 +413,6 @@ allowed-dependencies = [
     "config",
     "ids",
     "mux",
-    "sidebar::cache",
-    "sidebar::timing",
     "disk::paths",
     "utils::time",
     "workspace",

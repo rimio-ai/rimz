@@ -12,6 +12,7 @@ use std::{env, fs};
 use kdl::{KdlDocument, KdlNode};
 
 use super::backend::RawListedPane;
+use super::pane_topology::{PresenceDesired, read_pane_topology_cache, write_presence_desired};
 use super::{
     PRESENCE_BOOT_PIPE, PRESENCE_PIPE_TIMEOUT, PRESENCE_RETIRE_PIPE, PRESENCE_RETIRE_PROOF_TIMEOUT,
     PRESENCE_TOPOLOGY_PIPE, TOPOLOGY_CACHE_POLL_STEP, ZellijBackend,
@@ -19,7 +20,6 @@ use super::{
 use crate::disk::{atomic, paths};
 use crate::ids::PaneId;
 use crate::mux::{MuxErr, Result};
-use crate::sidebar::cache::{PresenceDesired, read_pane_topology_cache, write_presence_desired};
 use crate::utils::time::unix_now_ms;
 
 const EMBEDDED_PRESENCE_PLUGIN: &[u8] =

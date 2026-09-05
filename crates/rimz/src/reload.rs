@@ -23,15 +23,14 @@ use crate::diag::record::DiagEvent;
 use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::ids::{MuxName, PaneId};
 use crate::mux::recovery;
+use crate::mux::zellij::{RECONCILE_LIST_TIMEOUT, pane_topology};
 use crate::mux::{
     MuxBackend, PaneListOptions, PaneListing, PaneReadConsistency, SidebarLiveness,
     SidebarPaneOptions, SidebarWidth, backend_for,
 };
 use crate::proc::ProcInfo;
 use crate::room::session::LiveSessions;
-use crate::sidebar::timing::{
-    RECONCILE_LIST_TIMEOUT, RELOAD_CONVERGE_POLL, RELOAD_CONVERGE_TIMEOUT,
-};
+use crate::sidebar::timing::{RELOAD_CONVERGE_POLL, RELOAD_CONVERGE_TIMEOUT};
 use crate::utils::time::unix_now_ms;
 use crate::wakeup::heartbeat::SidebarHeartbeat;
 use crate::workspace::{self, KnownWorkspace, record};
@@ -487,7 +486,7 @@ fn upgrade_live(
             mouse_click_through: mux_config.zellij.mouse_click_through,
         };
         let desired_config = crate::mux::zellij::presence_plugin_config_hash_for(&presence);
-        let cache = crate::sidebar::cache::read_pane_topology_cache(runtime, &ws.session_name);
+        let cache = pane_topology::read_pane_topology_cache(runtime, &ws.session_name);
         let current_writer = current_presence_plugin_writer(
             cache.as_ref(),
             unix_now_ms(),
@@ -662,13 +661,13 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
 }
 
 fn current_presence_plugin_writer<'a>(
-    cache: Option<&'a crate::mux::zellij::pane_topology::PaneTopologyCache>,
+    cache: Option<&'a pane_topology::PaneTopologyCache>,
     now_ms: u64,
     desired_build: &str,
     desired_config: &str,
-) -> Option<&'a crate::mux::zellij::pane_topology::TopologyWriter> {
-    let cache = cache
-        .filter(|cache| crate::sidebar::cache::pane_topology_cache_is_fresh(cache, now_ms, None))?;
+) -> Option<&'a pane_topology::TopologyWriter> {
+    let cache =
+        cache.filter(|cache| pane_topology::pane_topology_cache_is_fresh(cache, now_ms, None))?;
     cache.writer.as_ref().filter(|writer| {
         writer.build.as_deref() == Some(desired_build)
             && writer.config.as_deref() == Some(desired_config)
@@ -689,15 +688,9 @@ fn presence_channel_is_live(
     let deadline = Instant::now() + RELOAD_PRESENCE_PROBE_TIMEOUT;
     loop {
         let now_ms = unix_now_ms();
-        if crate::sidebar::cache::read_pane_topology_cache(runtime, session_name).is_some_and(
-            |cache| {
-                crate::sidebar::cache::pane_topology_cache_is_fresh(
-                    &cache,
-                    now_ms,
-                    Some(min_produced_at_ms),
-                )
-            },
-        ) {
+        if pane_topology::read_pane_topology_cache(runtime, session_name).is_some_and(|cache| {
+            pane_topology::pane_topology_cache_is_fresh(&cache, now_ms, Some(min_produced_at_ms))
+        }) {
             return true;
         }
         if Instant::now() >= deadline {
@@ -1386,7 +1379,7 @@ mod tests {
         assert!(
             current_presence_plugin_writer(
                 Some(&current),
-                1_000 + crate::sidebar::timing::PRESENCE_STAMP_FRESH.as_millis() as u64 + 1,
+                1_000 + crate::mux::PRESENCE_STAMP_FRESH.as_millis() as u64 + 1,
                 "wasm",
                 "config"
             )

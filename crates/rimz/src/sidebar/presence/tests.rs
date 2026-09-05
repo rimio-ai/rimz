@@ -189,7 +189,7 @@ fn zellij_boundary_move_is_emitted_only_for_stable_work_topology() {
 
 #[test]
 fn generation_classification_fences_only_fresh_older_writers() {
-    let now_ms = crate::sidebar::timing::PRESENCE_STAMP_FRESH.as_millis() as u64 + 100_000;
+    let now_ms = crate::mux::PRESENCE_STAMP_FRESH.as_millis() as u64 + 100_000;
     let fresh = topology(now_ms, Some(writer(2, 200)));
     let stale = topology(0, Some(writer(2, 200)));
     let older = topology(now_ms, Some(writer(1, 100)));
@@ -250,7 +250,7 @@ fn desired_identity_outranks_later_nonmatching_writers() {
 fn desired_record_fences_a_later_nonmatching_wake() {
     let (_dir, state, runtime) = paths();
     let desired = desired();
-    crate::sidebar::cache::write_presence_desired(&runtime, &desired).unwrap();
+    crate::mux::zellij::pane_topology::write_presence_desired(&runtime, &desired).unwrap();
     let produced_at_ms = unix_now_ms();
     let accepted = topology(
         produced_at_ms,
@@ -531,7 +531,10 @@ fn announced_snapshot_is_sanitized_before_diff_and_persist() {
 #[test]
 fn topology_write_failure_returns_error_before_accepted_side_effects() {
     let (_dir, state, runtime) = paths();
-    std::fs::create_dir_all(crate::sidebar::cache::pane_topology_cache_path(&runtime)).unwrap();
+    std::fs::create_dir_all(crate::mux::zellij::pane_topology::pane_topology_cache_path(
+        &runtime,
+    ))
+    .unwrap();
     let mut incoming = wake(ZellijWakeReason::Alive);
     incoming.topology = Some(topology(unix_now_ms(), Some(writer(2, 200))));
     incoming.telemetry = Some(ZellijPluginTelemetry {

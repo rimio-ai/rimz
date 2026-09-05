@@ -14,15 +14,15 @@ use crate::disk::paths::RuntimePaths;
 #[cfg(unix)]
 use crate::ids::{PaneId, WorkspaceId};
 #[cfg(unix)]
-use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane, TopologyClients};
+use crate::mux::zellij::pane_topology::{
+    PaneTopologyCache, PaneTopologyPane, TopologyClients, write_pane_topology_cache,
+};
 #[cfg(unix)]
 use crate::mux::{
     LayoutColumn, LayoutPanes, MuxBackend, PaneCmd, PaneListOptions, PaneReadConsistency,
     ReconcilePaneRole, SessionHealth, SidebarLiveness, SidebarPaneOptions, SidebarWidth,
     SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions, WidthSyncOptions,
 };
-#[cfg(unix)]
-use crate::sidebar::cache::write_pane_topology_cache;
 #[cfg(unix)]
 use crate::utils::time::unix_now_ms;
 
@@ -668,7 +668,7 @@ fn cached_pane_roster_reads_only_fresh_normalized_terminal_ids() {
 
     room.write_cache(
         produced_at_ms
-            .saturating_sub(crate::sidebar::timing::PRESENCE_STAMP_FRESH.as_millis() as u64)
+            .saturating_sub(crate::mux::PRESENCE_STAMP_FRESH.as_millis() as u64)
             .saturating_sub(1),
         None,
         None,
@@ -919,7 +919,7 @@ exit 0
             "rimz-test",
             &room.workspace_id,
             floor,
-            crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
+            crate::mux::zellij::RECONCILE_LIST_TIMEOUT,
         )
         .expect("final topology")
         .into_iter()
@@ -1123,7 +1123,7 @@ exit 0
             "rimz-test",
             None,
             Some(&room.workspace_id),
-            crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
+            crate::mux::zellij::RECONCILE_LIST_TIMEOUT,
         )
         .expect("final listing")
         .panes

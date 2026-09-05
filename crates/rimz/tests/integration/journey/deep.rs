@@ -1845,7 +1845,7 @@ fn write_zellij_topology(
         clients: None,
         panes,
     };
-    rimz::sidebar::cache::write_pane_topology_cache(runtime, &cache)
+    rimz::mux::zellij::pane_topology::write_pane_topology_cache(runtime, &cache)
         .expect("publish Zellij pane topology fixture");
 }
 

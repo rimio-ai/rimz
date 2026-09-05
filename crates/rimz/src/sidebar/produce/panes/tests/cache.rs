@@ -166,7 +166,7 @@ fn producer_verification_trusts_event_carried_topology_without_topology_floor() 
         now.saturating_sub(crate::sidebar::timing::EVENT_PANE_TTL.as_millis() as u64 + 1),
         false,
     );
-    crate::sidebar::cache::write_pane_topology_cache(
+    crate::mux::zellij::pane_topology::write_pane_topology_cache(
         &runtime,
         &crate::mux::zellij::pane_topology::PaneTopologyCache {
             session_name: "s".to_owned(),

@@ -4,8 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use super::pane_topology::PaneTopologyCache;
-use super::pane_topology::PaneTopologyPane;
+use super::pane_topology::{
+    PaneTopologyCache, PaneTopologyPane, pane_topology_cache_is_fresh, read_pane_topology_cache,
+};
 use super::parse::{is_no_active_sessions, session_state_from_line};
 use super::{TOPOLOGY_CACHE_POLL_STEP, ZellijBackend, health_probe_timeout};
 use crate::config::{MachineConfig, MultiplexerConfig};
@@ -13,7 +14,6 @@ use crate::disk::paths::{self, RuntimePaths, StatePaths};
 use crate::ids::WorkspaceId;
 use crate::mux::{MuxErr, Result, SessionLiveness};
 use crate::mux::{PaneReadConsistency, PresencePluginOptions};
-use crate::sidebar::cache::{pane_topology_cache_is_fresh, read_pane_topology_cache};
 use crate::utils::time::unix_now_ms;
 use crate::workspace::{self, KnownWorkspace};
 

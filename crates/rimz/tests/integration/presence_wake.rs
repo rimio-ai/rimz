@@ -25,11 +25,11 @@ use std::time::Duration;
 
 use rimz::disk::paths::RuntimePaths;
 use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
-use rimz::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane, TopologyWriter};
-use rimz::pane::PaneRef;
-use rimz::sidebar::cache::{
-    PresenceStamp, presence_stamp_path, read_pane_topology_cache, read_snapshot_cache,
+use rimz::mux::zellij::pane_topology::{
+    PaneTopologyCache, PaneTopologyPane, TopologyWriter, read_pane_topology_cache,
 };
+use rimz::pane::PaneRef;
+use rimz::sidebar::cache::{PresenceStamp, presence_stamp_path, read_snapshot_cache};
 use rimz::sidebar::frame::assemble_frame;
 use rimz::sidebar::presence::read_topology_writer_conflict;
 use rimz::utils::time::unix_now_ms;
@@ -759,8 +759,8 @@ fn stale_topology_writer_rejects_the_whole_poke_and_throttles_diagnostics() {
 #[test]
 fn stale_topology_cache_accepts_an_older_writer_takeover() {
     let env = WakeEnv::new();
-    let stale_at = unix_now_ms()
-        .saturating_sub(rimz::sidebar::timing::PRESENCE_STAMP_FRESH.as_millis() as u64 + 1);
+    let stale_at =
+        unix_now_ms().saturating_sub(rimz::mux::PRESENCE_STAMP_FRESH.as_millis() as u64 + 1);
     let prior = env.topology_cache_with_writer(stale_at, 2, 200);
     let prior_json = serde_json::to_string(&prior).expect("serialize prior topology");
     let output = env.wake_with(

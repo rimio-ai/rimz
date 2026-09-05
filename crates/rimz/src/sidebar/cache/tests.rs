@@ -1,51 +1,14 @@
 use super::*;
 use crate::disk::atomic;
 use crate::ids::WorkspaceId;
-use crate::sidebar::FRESH_PANE_GRACE;
+use crate::mux::PRESENCE_STAMP_FRESH;
 use crate::sidebar::frame::assemble_frame;
 use crate::sidebar::refresh::git_stats::{DiffStats, DiffStatsCacheEntry, WorktreeRootsCache};
 use crate::sidebar::test_support::pane;
 use crate::sidebar::timing::{
-    DIFF_STATS_IDLE_TTL, DIFF_STATS_TTL, EVENT_PANE_TTL, PRESENCE_STAMP_FRESH, SNAPSHOT_CACHE_TTL,
-    WORKTREE_ROOTS_TTL,
+    DIFF_STATS_IDLE_TTL, DIFF_STATS_TTL, EVENT_PANE_TTL, SNAPSHOT_CACHE_TTL, WORKTREE_ROOTS_TTL,
 };
 use crate::utils::time::unix_now_ms;
-#[test]
-fn pane_topology_cache_freshness_honors_requested_floor() {
-    let cache = PaneTopologyCache {
-        session_name: "rimz-test".to_owned(),
-        produced_at_ms: 100,
-        writer: None,
-        focused_pane: None,
-        clients: None,
-        panes: Vec::new(),
-    };
-
-    assert!(pane_topology_cache_is_fresh(&cache, 101, Some(100)));
-    assert!(!pane_topology_cache_is_fresh(&cache, 101, Some(101)));
-}
-
-#[test]
-fn pane_topology_reap_floor_rejects_cache_older_than_fresh_pane_grace() {
-    let now = unix_now_ms();
-    let grace_ms = FRESH_PANE_GRACE.as_millis() as u64;
-    let floor = now.saturating_sub(grace_ms);
-    let old_cache = PaneTopologyCache {
-        session_name: "rimz-test".to_owned(),
-        produced_at_ms: floor.saturating_sub(1),
-        writer: None,
-        focused_pane: None,
-        clients: None,
-        panes: Vec::new(),
-    };
-    let fresh_cache = PaneTopologyCache {
-        produced_at_ms: floor,
-        ..old_cache.clone()
-    };
-
-    assert!(!pane_topology_cache_is_fresh(&old_cache, now, Some(floor)));
-    assert!(pane_topology_cache_is_fresh(&fresh_cache, now, Some(floor)));
-}
 
 #[test]
 fn presence_stamp_round_trips_through_the_runtime_root() {
@@ -132,23 +95,6 @@ fn presence_probe_stamp_round_trips_and_rejects_bad_files() {
 
     std::fs::write(presence_probe_stamp_path(&runtime), b"{ not json").unwrap();
     assert_eq!(read_presence_probe_stamp(&runtime), None);
-}
-
-#[test]
-fn desired_presence_identity_round_trips() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace = WorkspaceId::from_project_root(dir.path());
-    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
-    runtime.ensure_dirs().unwrap();
-    let desired = PresenceDesired {
-        build: "wasm-build".to_owned(),
-        config: "config-hash".to_owned(),
-        recorded_at_ms: 42,
-    };
-
-    write_presence_desired(&runtime, &desired).unwrap();
-
-    assert_eq!(read_presence_desired(&runtime), Some(desired));
 }
 
 fn cache_produced_at(produced_at_ms: u64) -> PaneFrame {

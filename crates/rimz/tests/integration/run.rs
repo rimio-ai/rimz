@@ -1072,7 +1072,7 @@ fn spawn_retrying_print(env: &Env, trace_name: &str, use_worktree: bool) -> std:
     let trace_log = env.project_root.join(format!("{trace_name}.log"));
     let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
     let runtime = env.runtime_paths();
-    rimz::sidebar::cache::write_pane_topology_cache(
+    rimz::mux::zellij::pane_topology::write_pane_topology_cache(
         &runtime,
         &rimz::mux::zellij::pane_topology::PaneTopologyCache {
             session_name: workspace.session_name.clone(),

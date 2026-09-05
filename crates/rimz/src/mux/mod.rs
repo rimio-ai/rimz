@@ -55,6 +55,15 @@ use crate::pane::PaneRef;
 /// glyph update rather than retain a worker for the general 30s bound.
 pub(crate) const TAB_RENAME_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// How young the presence stamp must be for the producer to trust the push
+/// channel and use [`EVENT_PANE_TTL`](crate::sidebar::timing::EVENT_PANE_TTL). 2.5× the plugin's 60s keepalive — two
+/// missed keepalives of slack, the same ratio the sidebar heartbeat TTL keeps
+/// over its write cadence. Past this the channel reads as dead and the
+/// producer reverts to [`SNAPSHOT_CACHE_TTL`](crate::sidebar::timing::SNAPSHOT_CACHE_TTL) poll mode, byte-identical to a
+/// session with no push channel. tmux's control-mode watch writes the stamp
+/// while attached and lapses back to poll mode after true silence.
+pub const PRESENCE_STAMP_FRESH: Duration = Duration::from_secs(150);
+
 #[derive(Debug, thiserror::Error)]
 pub enum MuxErr {
     #[error("multiplexer command `{program}` not found on PATH")]
