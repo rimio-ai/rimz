@@ -369,17 +369,6 @@ pub const OBSERVE_DEADPID_CONFIRMATIONS: u32 = 2;
 /// without a matching hosted process is logged.
 pub(super) const OBSERVE_HOSTLESS_AGENT_CONFIRMATIONS: u32 = 2;
 
-/// Default render base grid: 100ms, or 10Hz.
-pub const DEFAULT_REFRESH_MS: u16 = 100;
-
-/// Minimum accepted render base grid. Prevents accidental busy-spins from
-/// config typos while leaving room for faster test or local tuning.
-pub const MIN_REFRESH_MS: u16 = 16;
-
-/// Maximum accepted render base grid. Higher values make input and overlay
-/// event latency visibly worse, so keep slow data polling on `--tick-seconds`.
-pub const MAX_REFRESH_MS: u16 = 1_000;
-
 /// The breath/blink animation cadence. It stays close to the base grid so the
 /// smooth breathe's truecolor lightness ramp does not visibly band, and is
 /// clamped at runtime to never be faster than the configured base grid.

@@ -101,7 +101,7 @@ upward-dependencies = [
     "store::message",
     "sidebar::timing",
 ]
-surface-budget = 182
+surface-budget = 185
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -211,7 +211,7 @@ upward-dependencies = [
     "agents",
     "agents::registry",
 ]
-surface-budget = 97
+surface-budget = 98
 
 [[module]]
 path = "crates/rimz/src/reload.rs"

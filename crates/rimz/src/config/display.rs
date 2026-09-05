@@ -2,7 +2,7 @@ use std::num::NonZeroU16;
 
 use serde::{Deserialize, Serialize};
 
-use crate::sidebar::timing::{DEFAULT_REFRESH_MS, MAX_REFRESH_MS, MIN_REFRESH_MS};
+use super::{DEFAULT_REFRESH_MS, MAX_REFRESH_MS, MIN_REFRESH_MS};
 
 /// `[theme.display] scrollbar`: when the agent cards overflow their viewport,
 /// how the right-margin scrollbar shows. Display-only.
