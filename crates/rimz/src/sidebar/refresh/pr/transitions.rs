@@ -1,12 +1,19 @@
 //! Pure forge-signal derivation from consecutive PR cache publications.
 
+use std::collections::BTreeMap;
+
 use serde_json::{Map, Value};
 
-use super::{PrLink, PrStateCache, TargetStamp};
+use super::{PrLink, PrStateCache, RepoGroup, TargetStamp};
+use crate::forge::RemoteRepo;
 use crate::harness::schedule::signal::{Signal, SignalSource};
 use crate::store::snapshot::{WorktreePrCi, WorktreePrState};
 
-pub(super) fn transitions(prior: &PrStateCache, next: &PrStateCache) -> Vec<Signal> {
+pub(super) fn transitions(
+    prior: &PrStateCache,
+    next: &PrStateCache,
+    groups: &BTreeMap<String, RepoGroup>,
+) -> Vec<Signal> {
     let mut signals = Vec::new();
     for (path, next_link) in &next.states {
         let Some(stamp) = continuous_target(prior, next, path) else {
@@ -15,6 +22,13 @@ pub(super) fn transitions(prior: &PrStateCache, next: &PrStateCache) -> Vec<Sign
         let Some(repo) = successful_repo(next, path) else {
             continue;
         };
+        let remote = groups.get(repo).and_then(|group| {
+            group
+                .targets
+                .iter()
+                .find(|target| target.path == *path)
+                .map(|target| &target.remote)
+        });
         if !stamp.owns_link(next_link) {
             continue;
         }
@@ -40,25 +54,17 @@ pub(super) fn transitions(prior: &PrStateCache, next: &PrStateCache) -> Vec<Sign
                         repo,
                         Some(next_link),
                         Some(next_link.state),
-                        None,
+                        remote,
                     ),
                 ));
             }
         }
-        if let Some(conclusion) = finished_conclusion(next_link.ci)
+        if let Some(name) = final_verdict_name(next_link.ci)
             && prior_link.ci != next_link.ci
         {
             signals.push(signal(
-                "ci.finished",
-                payload(
-                    next,
-                    path,
-                    stamp,
-                    repo,
-                    Some(next_link),
-                    None,
-                    Some(conclusion),
-                ),
+                name,
+                payload(next, path, stamp, repo, Some(next_link), None, remote),
             ));
         }
     }
@@ -73,15 +79,22 @@ pub(super) fn transitions(prior: &PrStateCache, next: &PrStateCache) -> Vec<Sign
         if prior.states.contains_key(path) || next.states.contains_key(path) {
             continue;
         }
-        let Some(conclusion) = finished_conclusion(Some(*next_ci)) else {
+        let Some(name) = final_verdict_name(Some(*next_ci)) else {
             continue;
         };
         if prior.branch_ci.get(path) == Some(next_ci) {
             continue;
         }
+        let remote = groups.get(repo).and_then(|group| {
+            group
+                .targets
+                .iter()
+                .find(|target| target.path == *path)
+                .map(|target| &target.remote)
+        });
         signals.push(signal(
-            "ci.finished",
-            payload(next, path, stamp, repo, None, None, Some(conclusion)),
+            name,
+            payload(next, path, stamp, repo, None, None, remote),
         ));
     }
     signals
@@ -105,10 +118,10 @@ fn successful_repo<'a>(cache: &'a PrStateCache, path: &str) -> Option<&'a str> {
         .then_some(repo)
 }
 
-fn finished_conclusion(ci: Option<WorktreePrCi>) -> Option<&'static str> {
+fn final_verdict_name(ci: Option<WorktreePrCi>) -> Option<&'static str> {
     match ci {
-        Some(WorktreePrCi::Passing) => Some("success"),
-        Some(WorktreePrCi::Failing) => Some("failure"),
+        Some(WorktreePrCi::Passing) => Some("ci.passed"),
+        Some(WorktreePrCi::Failing) => Some("ci.failed"),
         Some(WorktreePrCi::Pending) | None => None,
     }
 }
@@ -120,7 +133,7 @@ fn payload(
     repo: &str,
     link: Option<&PrLink>,
     state: Option<WorktreePrState>,
-    conclusion: Option<&str>,
+    remote: Option<&RemoteRepo>,
 ) -> Map<String, Value> {
     let mut payload = Map::from_iter([
         ("path".to_owned(), Value::String(path.to_owned())),
@@ -137,6 +150,9 @@ fn payload(
     }
     if let Some(head) = cache.head_seen.get(path).filter(|head| !head.is_empty()) {
         payload.insert("head".to_owned(), Value::String(head.clone()));
+        if let Some(url) = remote.and_then(|remote| remote.checks_web_url(head)) {
+            payload.insert("checks_url".to_owned(), Value::String(url));
+        }
     }
     if let Some(state) = state {
         let state = match state {
@@ -145,12 +161,6 @@ fn payload(
             WorktreePrState::Open => "open",
         };
         payload.insert("state".to_owned(), Value::String(state.to_owned()));
-    }
-    if let Some(conclusion) = conclusion {
-        payload.insert(
-            "conclusion".to_owned(),
-            Value::String(conclusion.to_owned()),
-        );
     }
     payload
 }

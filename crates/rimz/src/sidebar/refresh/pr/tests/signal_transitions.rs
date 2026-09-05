@@ -32,6 +32,7 @@ fn open_pr_emits_only_its_terminal_transition() {
                 "number": 42,
                 "url": "https://github.com/org/repo/pull/42",
                 "head": "head-2",
+                "checks_url": "https://github.com/org/repo/commit/head-2/checks",
                 "state": if state == WorktreePrState::Merged { "merged" } else { "closed" },
             })
         );
@@ -39,18 +40,18 @@ fn open_pr_emits_only_its_terminal_transition() {
 }
 
 #[test]
-fn pending_ci_emits_success_and_failure_conclusions() {
-    for (ci, conclusion) in [
-        (WorktreePrCi::Passing, "success"),
-        (WorktreePrCi::Failing, "failure"),
+fn pending_ci_emits_passed_and_failed_signals() {
+    for (ci, name) in [
+        (WorktreePrCi::Passing, "ci.passed"),
+        (WorktreePrCi::Failing, "ci.failed"),
     ] {
         let prior = pr_cache(WorktreePrState::Open, Some(WorktreePrCi::Pending));
         let next = pr_cache(WorktreePrState::Open, Some(ci));
 
         let signals = production_transitions(&prior, &next);
 
-        assert_eq!(signal_names(&signals), vec!["ci.finished"]);
-        assert_eq!(signals[0].payload["conclusion"], conclusion);
+        assert_eq!(signal_names(&signals), vec![name]);
+        assert!(!signals[0].payload.contains_key("conclusion"));
         assert_eq!(signals[0].payload["head"], "head-2");
     }
 }
@@ -63,8 +64,8 @@ fn changed_final_ci_on_a_new_head_emits_again() {
 
     let signals = production_transitions(&prior, &next);
 
-    assert_eq!(signal_names(&signals), vec!["ci.finished"]);
-    assert_eq!(signals[0].payload["conclusion"], "failure");
+    assert_eq!(signal_names(&signals), vec!["ci.failed"]);
+    assert!(!signals[0].payload.contains_key("conclusion"));
     assert_eq!(signals[0].payload["head"], "head-2");
 }
 
@@ -75,7 +76,7 @@ fn terminal_pr_and_finished_ci_emit_both_transitions() {
 
     let signals = production_transitions(&prior, &next);
 
-    assert_eq!(signal_names(&signals), vec!["pr.merged", "ci.finished"]);
+    assert_eq!(signal_names(&signals), vec!["pr.merged", "ci.passed"]);
 }
 
 #[test]
@@ -139,7 +140,7 @@ fn branch_only_ci_uses_cached_target_continuity() {
 
     let signals = production_transitions(&prior, &next);
 
-    assert_eq!(signal_names(&signals), vec!["ci.finished"]);
+    assert_eq!(signal_names(&signals), vec!["ci.passed"]);
     assert_eq!(
         Value::Object(signals[0].payload.clone()),
         json!({
@@ -147,7 +148,7 @@ fn branch_only_ci_uses_cached_target_continuity() {
             "branch": "feature",
             "repo": REPO,
             "head": "head-2",
-            "conclusion": "success",
+            "checks_url": "https://github.com/org/repo/commit/head-2/checks",
         })
     );
 
@@ -163,10 +164,61 @@ fn tracked_none_to_final_ci_emits_but_identical_final_ci_does_not() {
         .insert(PATH.to_owned(), WorktreePrCi::Failing);
     assert_eq!(
         signal_names(&production_transitions(&prior, &next)),
-        vec!["ci.finished"]
+        vec!["ci.failed"]
     );
 
     assert!(production_transitions(&next, &next).is_empty());
+    let mut new_head = next.clone();
+    new_head
+        .head_seen
+        .insert(PATH.to_owned(), "head-3".to_owned());
+    assert!(production_transitions(&next, &new_head).is_empty());
+}
+
+#[test]
+fn checks_urls_use_remote_slug_and_observed_head() {
+    for (remote, expected) in [
+        (
+            "git@github.com:actual/project.git",
+            "https://github.com/actual/project/commit/head-2/checks",
+        ),
+        (
+            "git@gitea.example.test:actual/project.git",
+            "https://gitea.example.test/actual/project/commit/head-2",
+        ),
+    ] {
+        let mut target = super::target(PATH, "feature");
+        target.remote = forge::RemoteRepo::parse(remote).unwrap();
+        let groups = group_targets(vec![super::target("/another/path", "other"), target]);
+        for with_pr in [true, false] {
+            let (prior, mut next) = if with_pr {
+                (
+                    pr_cache(WorktreePrState::Open, Some(WorktreePrCi::Pending)),
+                    pr_cache(WorktreePrState::Open, Some(WorktreePrCi::Failing)),
+                )
+            } else {
+                let mut next = base_cache();
+                next.branch_ci
+                    .insert(PATH.to_owned(), WorktreePrCi::Failing);
+                (base_cache(), next)
+            };
+            let signals = super::super::transitions::transitions(&prior, &next, &groups);
+            assert_eq!(signals[0].payload["checks_url"], expected);
+            assert_eq!(signals[0].payload["repo"], REPO);
+            for head in [None, Some("")] {
+                next.head_seen.remove(PATH);
+                if let Some(head) = head {
+                    next.head_seen.insert(PATH.to_owned(), head.to_owned());
+                }
+                let signals = super::super::transitions::transitions(&prior, &next, &groups);
+                assert!(!signals[0].payload.contains_key("checks_url"));
+            }
+        }
+    }
+    let prior = pr_cache(WorktreePrState::Open, Some(WorktreePrCi::Pending));
+    let next = pr_cache(WorktreePrState::Open, Some(WorktreePrCi::Failing));
+    let signals = super::super::transitions::transitions(&prior, &next, &BTreeMap::new());
+    assert!(!signals[0].payload.contains_key("checks_url"));
 }
 
 #[test]
@@ -208,7 +260,8 @@ fn production_transitions(
     prior: &PrStateCache,
     next: &PrStateCache,
 ) -> Vec<crate::harness::schedule::signal::Signal> {
-    super::super::transitions::transitions(prior, next)
+    let groups = group_targets(vec![super::target(PATH, "feature")]);
+    super::super::transitions::transitions(prior, next, &groups)
 }
 
 fn signal_names(signals: &[crate::harness::schedule::signal::Signal]) -> Vec<&str> {

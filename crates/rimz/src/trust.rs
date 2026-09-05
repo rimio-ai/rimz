@@ -1479,8 +1479,8 @@ mod tests {
             "[tasks.x]\nat = \"08:00\"\n",
             "[tasks.x]\nevery = \"15m\"\n",
             "[tasks.x]\ncron = \"0 8 * * 1\"\n",
-            "[tasks.x]\nsignal = \"ci.finished\"\n",
-            "[tasks.x]\nmatch = { conclusion = \"failure\" }\n",
+            "[tasks.x]\nsignal = \"ci.failed\"\n",
+            "[tasks.x]\nmatch = { branch = \"feature\" }\n",
             "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
             "[env]\nPATH_PREPEND = \"/opt/rimz/bin\"\n",
         ];

@@ -103,9 +103,7 @@ fn emit(name: &str, raw_payload: Option<&str>, source: &str, globals: &GlobalFla
     let name = name
         .parse::<rimz::harness::schedule::signal::SignalName>()
         .map_err(anyhow::Error::msg)?;
-    if name.is_reserved() {
-        anyhow::bail!("signal name `{name}` is reserved for RimZ");
-    }
+    let source = validate_emit_source(&name, source)?;
     let payload = parse_payload(raw_payload)?;
     let workspace = rimz::WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
@@ -113,11 +111,7 @@ fn emit(name: &str, raw_payload: Option<&str>, source: &str, globals: &GlobalFla
     let signal = rimz::harness::schedule::signal::Signal {
         name: name.clone(),
         payload,
-        source: match source {
-            "forge" => rimz::harness::schedule::signal::SignalSource::Forge,
-            "cli" => rimz::harness::schedule::signal::SignalSource::Cli,
-            _ => unreachable!("clap restricts signal sources"),
-        },
+        source,
         watch: None,
     };
     let event_id = store
@@ -139,6 +133,34 @@ fn emit(name: &str, raw_payload: Option<&str>, source: &str, globals: &GlobalFla
         writeln!(out, "  {task}")?;
     }
     Ok(())
+}
+
+fn validate_emit_source(
+    name: &rimz::harness::schedule::signal::SignalName,
+    source: &str,
+) -> Result<rimz::harness::schedule::signal::SignalSource> {
+    use rimz::harness::schedule::signal::SignalSource;
+
+    match source {
+        "forge" => {
+            if !matches!(
+                name.as_str(),
+                "ci.passed" | "ci.failed" | "pr.merged" | "pr.closed"
+            ) {
+                anyhow::bail!(
+                    "--source forge accepts only ci.passed, ci.failed, pr.merged, or pr.closed"
+                );
+            }
+            Ok(SignalSource::Forge)
+        }
+        "cli" => {
+            if name.is_reserved() {
+                anyhow::bail!("signal name `{name}` is reserved for RimZ");
+            }
+            Ok(SignalSource::Cli)
+        }
+        _ => unreachable!("clap restricts signal sources"),
+    }
 }
 
 fn parse_payload(raw: Option<&str>) -> Result<Map<String, Value>> {
@@ -178,6 +200,38 @@ fn write_json_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reserved_families_reject_custom_emit_but_accept_internal_forge() {
+        use rimz::harness::schedule::signal::SignalSource;
+
+        for raw in ["ci.passed", "ci.failed", "pr.merged", "pr.closed"] {
+            let name = raw.parse().unwrap();
+            assert!(validate_emit_source(&name, "cli").is_err(), "{raw}");
+            assert_eq!(
+                validate_emit_source(&name, "forge").unwrap(),
+                SignalSource::Forge
+            );
+        }
+        for raw in [
+            "agent.idle",
+            "wake.task",
+            "team.idle",
+            "ci.finished",
+            "ci.custom",
+            "pr.custom",
+        ] {
+            let name = raw.parse().unwrap();
+            assert!(validate_emit_source(&name, "cli").is_err(), "{raw}");
+            assert!(validate_emit_source(&name, "forge").is_err(), "{raw}");
+        }
+        let name = "deploy.finished".parse().unwrap();
+        assert_eq!(
+            validate_emit_source(&name, "cli").unwrap(),
+            SignalSource::Cli
+        );
+        assert!(validate_emit_source(&name, "forge").is_err());
+    }
 
     struct BrokenPipe;
 

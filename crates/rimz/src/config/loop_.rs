@@ -315,10 +315,10 @@ mod tests {
             budget_per_day: Some("$20.00".to_owned()),
             surplus: Some("1.5x".to_owned()),
             surplus_after: Some("3d".to_owned()),
-            signal: Some("ci.finished".to_owned()),
+            signal: Some("ci.failed".to_owned()),
             matches: Some(BTreeMap::from([(
-                "conclusion".to_owned(),
-                "failure".to_owned(),
+                "branch".to_owned(),
+                "feature".to_owned(),
             )])),
             once: Some(true),
             deadline: Some(deadline),
@@ -386,9 +386,9 @@ mod tests {
         assert!(toml.contains("surplus = \"1.5x\""), "{toml}");
         assert!(toml.contains("surplus-after = \"3d\""), "{toml}");
         assert!(toml.contains("max-attempts = 4"), "{toml}");
-        assert!(toml.contains("signal = \"ci.finished\""), "{toml}");
+        assert!(toml.contains("signal = \"ci.failed\""), "{toml}");
         assert!(toml.contains("[tasks.ci.match]"), "{toml}");
-        assert!(toml.contains("conclusion = \"failure\""), "{toml}");
+        assert!(toml.contains("branch = \"feature\""), "{toml}");
         assert!(toml.contains("once = true"), "{toml}");
 
         let json = serde_json::to_string(&loop_config.tasks).expect("json");

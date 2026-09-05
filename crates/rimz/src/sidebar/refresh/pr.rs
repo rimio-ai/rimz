@@ -235,7 +235,7 @@ pub(super) fn produce_pr_states(
                 emit_transitions(
                     runtime,
                     project_root,
-                    transitions::transitions(&prior, &cache),
+                    transitions::transitions(&prior, &cache, &groups),
                 );
             }
             cache
