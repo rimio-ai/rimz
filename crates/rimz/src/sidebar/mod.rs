@@ -47,15 +47,15 @@ use std::time::{Duration, SystemTime};
 
 use tracing::debug;
 
-use crate::disk::atomic;
 use crate::disk::paths::RuntimePaths;
 use crate::disk::single_flight::{self, Coalesced};
-use crate::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
+use crate::ids::{MuxName, PaneId, SidebarInstanceId};
 use crate::mux::{DaemonView, MuxBackend, SidebarLiveness, SidebarPaneOptions};
 use crate::sidebar::heartbeat::{
-    SIDEBAR_PROTOCOL_VERSION, SidebarHeartbeat, read_current_heartbeats,
+    SIDEBAR_HEARTBEAT_TTL, SIDEBAR_PROTOCOL_VERSION, SidebarHeartbeat, fresh_sidebar_heartbeats,
+    mtime_within_ttl, read_current_heartbeats,
 };
-use crate::sidebar::timing::{HEARTBEAT_WRITE_INTERVAL, SIDEBAR_HEARTBEAT_TTL};
+use crate::sidebar::timing::HEARTBEAT_WRITE_INTERVAL;
 
 /// Launch-lock poll cadence: the producer holds the election lock while the
 /// daemon it spawned starts and publishes its first heartbeat, and a peer queued
@@ -70,14 +70,6 @@ pub enum SidebarLaunchOutcome {
     SkippedFresh,
     Opened,
     Failed,
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("writing sidebar heartbeat {path}: {source}")]
-pub struct HeartbeatWriteErr {
-    pub path: PathBuf,
-    #[source]
-    pub source: atomic::AtomicErr,
 }
 
 trait SidebarMux {
@@ -114,61 +106,6 @@ impl<T: MuxBackend + ?Sized> SidebarMux for T {
     ) -> crate::mux::Result<crate::mux::SidebarRecovery> {
         MuxBackend::reconcile_sidebars(self, opts, live)
     }
-}
-
-/// Write this sidebar instance's liveness heartbeat in-process.
-///
-/// The heartbeat is a runtime liveness file, not store truth, so the renderer
-/// owns it directly rather than forking `rimz sidebar heartbeat` once per tick.
-/// The JSON shape and the atomic temp-then-rename are identical to the CLI path
-/// they replace, so the store wakeup fanout and the launch freshness gate that
-/// read it are unchanged. The heartbeat carries this process's build id when
-/// the running image is readable. The renderer ensures the runtime dirs at
-/// startup, so this only does the write.
-pub fn write_heartbeat(
-    runtime: &RuntimePaths,
-    workspace_id: WorkspaceId,
-    instance_id: &SidebarInstanceId,
-    mux: MuxName,
-    session_name: &str,
-    wakeup_socket: &Path,
-    pane_id: Option<PaneId>,
-) -> Result<(), HeartbeatWriteErr> {
-    let mut heartbeat = SidebarHeartbeat::new(
-        workspace_id,
-        instance_id.clone(),
-        mux,
-        session_name,
-        wakeup_socket.to_path_buf(),
-        pane_id,
-    );
-    heartbeat.build = crate::build_id::current().map(str::to_owned);
-    heartbeat.version = Some(crate::build_id::VERSION.to_owned());
-    let path = runtime.sidebar_heartbeat_path(instance_id);
-    // Cache-class: a heartbeat is disposable liveness, rewritten every beat
-    // and gc-swept when stale — surviving a power cut buys nothing.
-    atomic::write_temp_then_rename_cache(&path, &heartbeat)
-        .map_err(|source| HeartbeatWriteErr { path, source })
-}
-
-/// Every fresh, current-protocol sidebar heartbeat in the workspace runtime dir.
-/// The shared scan behind the launch gate, the runtime election, and the reload
-/// liveness set: a stale mtime, unreadable JSON, or mismatched protocol is
-/// skipped (so an old-build sidebar drops out and reload replaces it).
-pub(crate) fn fresh_sidebar_heartbeats(rt: &RuntimePaths) -> Vec<SidebarHeartbeat> {
-    let heartbeats = match read_current_heartbeats(&rt.heartbeat_dir) {
-        Ok(heartbeats) => heartbeats,
-        Err(err) => {
-            debug!(path = %rt.heartbeat_dir.display(), error = %err, "sidebar heartbeat dir unreadable");
-            return Vec::new();
-        }
-    };
-
-    heartbeats
-        .into_iter()
-        .filter(|(path, _)| mtime_within_ttl(path))
-        .map(|(_, heartbeat)| heartbeat)
-        .collect()
 }
 
 /// A live sidebar serving one session from a different RimZ build.
@@ -673,20 +610,6 @@ fn remove_rebirth_heartbeat(path: &Path) {
         Err(err) => {
             debug!(path = %path.display(), error = %err, "purging rebirth sidebar heartbeat failed")
         }
-    }
-}
-
-fn mtime_within_ttl(path: &Path) -> bool {
-    let modified = match fs::metadata(path).and_then(|meta| meta.modified()) {
-        Ok(modified) => modified,
-        Err(err) => {
-            debug!(path = %path.display(), error = %err, "sidebar runtime file metadata unreadable");
-            return false;
-        }
-    };
-    match SystemTime::now().duration_since(modified) {
-        Ok(age) => age <= SIDEBAR_HEARTBEAT_TTL,
-        Err(_) => true,
     }
 }
 

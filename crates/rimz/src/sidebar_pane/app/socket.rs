@@ -13,7 +13,7 @@ pub(super) fn write_heartbeat(
     runtime: &RuntimePaths,
     socket_path: &Path,
 ) -> Result<()> {
-    crate::sidebar::write_heartbeat(
+    crate::sidebar::heartbeat::write_heartbeat(
         runtime,
         config.workspace_id.clone(),
         &config.instance_id,

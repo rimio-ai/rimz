@@ -289,7 +289,7 @@ fn width_target_pin_broadcasts_without_a_producer_fetch() {
     socket
         .set_read_timeout(Some(Duration::from_secs(1)))
         .expect("set socket timeout");
-    crate::sidebar::write_heartbeat(
+    crate::sidebar::heartbeat::write_heartbeat(
         &runtime,
         runtime.workspace_id.clone(),
         &instance,

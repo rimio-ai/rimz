@@ -19,8 +19,7 @@ use crate::disk::paths::RuntimePaths;
 use crate::sidebar::events::{
     RELOAD_CONTROL_WORD, SUPERVISOR_HANDOFF_CONTROL_WORD, SidebarEvent, SidebarEventEnvelope,
 };
-use crate::sidebar::heartbeat::{SidebarHeartbeat, read_current_heartbeats};
-use crate::sidebar::timing::SIDEBAR_HEARTBEAT_TTL;
+use crate::sidebar::heartbeat::{SIDEBAR_HEARTBEAT_TTL, SidebarHeartbeat, read_current_heartbeats};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WakeupErr {

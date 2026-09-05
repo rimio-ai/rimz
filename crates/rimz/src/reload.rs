@@ -756,7 +756,7 @@ fn session_heartbeats(
     mux: MuxName,
     session_name: &str,
 ) -> Vec<SidebarHeartbeat> {
-    crate::sidebar::fresh_sidebar_heartbeats(runtime)
+    crate::sidebar::heartbeat::fresh_sidebar_heartbeats(runtime)
         .into_iter()
         .filter(|heartbeat| heartbeat.mux == mux && heartbeat.session_name == session_name)
         .collect()

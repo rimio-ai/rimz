@@ -28,7 +28,7 @@ fn wait_for_sidebar_heartbeat(
     };
     let deadline = Instant::now() + Duration::from_secs(6);
     loop {
-        if crate::sidebar::fresh_sidebar_heartbeats(&runtime)
+        if crate::sidebar::heartbeat::fresh_sidebar_heartbeats(&runtime)
             .into_iter()
             .any(|heartbeat| {
                 heartbeat.mux == mux
