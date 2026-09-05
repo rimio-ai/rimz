@@ -721,6 +721,62 @@ fn worktree_remove_survives_history_append_failure() {
 
 #[cfg(unix)]
 #[test]
+fn worktree_remove_reports_live_queue_write_failure_after_removal() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    let message_id = queue_channel_message(&env, "demo", "old work");
+    let messages_dir = env.store().paths().messages_dir.clone();
+    let permissions = std::fs::metadata(&messages_dir)
+        .expect("messages directory")
+        .permissions();
+    std::fs::set_permissions(&messages_dir, std::fs::Permissions::from_mode(0o555))
+        .expect("block atomic queue replacement, not queue reads");
+    let probe = messages_dir.join("write-probe");
+    if std::fs::write(&probe, b"").is_ok() {
+        std::fs::set_permissions(&messages_dir, permissions).expect("restore permissions");
+        tracing::warn!("skipping: this user bypasses directory write permissions");
+        return;
+    }
+    let output = env.rimz().args(["worktree", "remove", "demo"]).output();
+    std::fs::set_permissions(&messages_dir, permissions).expect("restore permissions");
+    output
+        .expect("remove command")
+        .assert()
+        .code(1)
+        .stderr(contains("archiving messages for removed worktree channel"))
+        .stderr(contains("messages.jsonl.tmp."));
+
+    assert!(
+        !path.exists(),
+        "removal completes before the queue write fails"
+    );
+    assert!(
+        env.store()
+            .list_messages()
+            .expect("queue is still readable")
+            .iter()
+            .any(|message| message.message_id == message_id
+                && message.status == rimz::store::message::MessageStatus::Queued)
+    );
+    assert!(
+        !env.read_events()
+            .iter()
+            .any(|event| event.method == "message.archived")
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn worktree_cleanup_retires_sessions_and_archives_messages_after_removal() {
     if git_missing() {
         return;
