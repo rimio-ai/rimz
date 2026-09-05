@@ -219,18 +219,20 @@ rimz loop add watchdog --check "cargo test" --on fail \
     --agent codex --prompt "fix the failing test" --every 15m
 ```
 
-**Wait without a pane.** [`rimz wake`](./docs/reference/cli/wake.md) is the alarm an agent sets for itself instead of holding its turn open on `sleep`: it ends the turn, and RimZ delivers the prompt back into the same conversation when the delay, the command, or the signal arrives.
+**Wait without a pane.** [`rimz wake`](./docs/reference/cli/wake.md) is the alarm an agent sets for itself instead of holding its turn open on `sleep`: it ends the turn, and when the delay, the command, or the signal arrives RimZ delivers a message back into the same conversation naming what fired and on what.
 
 ```sh
 # One-shot wake after a delay
 rimz wake --in 30m --prompt "resume the review"
 
-# Wake when the command exits, with its output in the prompt
+# Wake when the command exits, with its output in the message
 rimz wake -- gh run watch --exit-status
 
-# Wake on an event anything can emit: CI, a git hook, a deploy script, another agent
-rimz wake --signal ci.finished --match conclusion=failure --prompt "CI failed on {{branch}}; fix it"
-rimz events emit ci.finished --json '{"conclusion":"failure","branch":"main"}'
+# Wake when CI fails on the branch this agent is working on
+rimz wake --signal ci.failed
+
+# Wake on an event anything can emit: a git hook, a deploy script, another agent
+rimz events emit deploy.finished --json '{"env":"prod","version":"1.4.2"}'
 ```
 
 ### Step away

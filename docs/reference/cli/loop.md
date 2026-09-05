@@ -1,6 +1,6 @@
 # Loop CLI
 
-`rimz loop` puts agent turns on a clock or on an event. A task is a durable trigger: `rimz loop add` writes recurring machine tasks to `loop.toml`, writes project tasks to the repo's `.rimz/config.toml`, and stores one-shots and poll-until deadlines in state. The room's sidebar elder fires clock tasks while a room for the task's project is open, the optional machine-wide timer fires them for roots without one, and a signal task fires from the process that emits its signal. `loop remove` deletes the task from whichever store owns it. A task uses `--agent` to spawn one supervised transient pane, `--wake` to deliver a prompt to one live agent session through the message path, `--check` to run a scheduled command, or `--check` as a guard before an agent action. Why you schedule turns, guard them with watchdogs, and pace them against the provider's window is the [loops guide](../../guide/loops.md). One-shot wakeups an agent arms for itself, including watched commands, are [`rimz wake`](./wake.md).
+`rimz loop` puts agent turns on a clock or on an event. A task is a durable trigger: `rimz loop add` writes recurring machine tasks to `loop.toml`, writes project tasks to the repo's `.rimz/config.toml`, and stores one-shots and poll-until deadlines in state. The room's sidebar elder fires clock tasks while a room for the task's project is open, the optional machine-wide timer fires them for roots without one, and a signal task fires from the process that emits its signal. `loop remove` deletes the task from whichever store owns it. A task uses `--agent` to spawn one supervised transient pane, `--wake` to deliver a prompt to one live agent session through the message path, `--check` to run a scheduled command, or `--check` as a guard before an agent action. Why you schedule turns, guard them with watchdogs, and pace them against the provider's window is the [loops guide](../../guide/loops.md). The wakeups an agent arms for itself, including watched commands and signal subscriptions with a quiet window, are [`rimz wake`](./wake.md).
 
 ```sh
 rimz loop add morning --agent claude --prompt "summarize what landed on main overnight" --every weekday --at 07:00
@@ -11,8 +11,8 @@ rimz loop add watchdog --check "cargo test" --on fail --agent codex --prompt "fi
 rimz loop add auth-fix --agent codex --prompt "fix auth" --verify "cargo xtask test auth" --max-attempts 3 --every day --at 02:00
 rimz loop add ci-green --check "gh run watch --exit-status" --on success --until 30m --every 2m --wake @planner --prompt "CI is green; merge"
 rimz loop add repo-audit --project --agent codex --prompt "audit the dependency lockfile for advisories" --every day --at 08:00
-rimz loop add ci-fix --signal ci.finished --match conclusion=failure --agent codex --prompt "CI failed on {{branch}}; read the failing job and fix it"
-rimz loop add merged --signal pr.merged --once --wake @planner --prompt "PR #{{number}} merged; start the follow-up"
+rimz loop add ci-fix --signal ci.failed --agent codex --prompt "CI failed; read the failing job and fix it"
+rimz loop add merged --signal pr.merged --once --wake @planner --prompt "start the follow-up"
 rimz loop fire pr-watch
 rimz loop rename pr-watch ci-watch
 rimz loop enable pr-watch
@@ -40,9 +40,13 @@ A task carries exactly one trigger: a clock (`--at`, `--every`, `--cron`, `--in`
 
 ## Signals
 
-`--signal <NAME>` subscribes the task to a named signal instead of a clock: it fires whenever that signal is emitted and keeps listening. `--match KEY=VALUE` requires a top-level payload field to equal the value and repeats for an all-of set; `--once` removes the task after its first fire. Both require `--signal`. Signals come from `rimz events emit`, from forge transitions the room observes, and from agent lifecycle transitions ([events reference](./events.md#emit-a-signal)); `loop list` and `loop show` render a subscription as `on <name> [k=v]` with the state `listening`.
+`--signal <SELECTOR>` subscribes the task to one signal name (`ci.failed`) or one whole family (`'ci.*'`) instead of a clock. The subscription keeps listening for as long as the task exists; only `--once` retires it, and only when a fire actually delivers. Unlike [`rimz wake --signal`](./wake.md#a-signal-wake-is-a-standing-subscription), a loop subscription has no quiet window and never expires on its own. `--match KEY=VALUE` requires a top-level payload field to equal the value and repeats for an all-of set. Both flags require `--signal`. Signals come from `rimz events emit`, from forge transitions the room observes, and from agent and team lifecycle transitions ([events reference](./events.md#emit-a-signal)); `loop list` and `loop show` render a subscription as `on <selector> [k=v]` with the state `listening`.
 
-The payload reaches the fired task twice: `{{key}}` placeholders in the prompt are substituted with its top-level values, and the whole payload is appended to the prompt under a `--- signal <name> ---` block. The run record keeps the signal name and its payload, replacing a payload over 4 KiB with a truncated rendering.
+A subscription observes its whole family: a task on `ci.failed` sees every `ci.*` whose matches hold, fires on `ci.failed`, and records `skipped` for a sibling such as `ci.passed` without spending a turn. A `'ci.*'` selector fires on every member. `ci.finished` and `--match conclusion=…` were replaced by the outcome names and are rejected at add time.
+
+A `ci.*` or `pr.*` subscription on a `--wake` task with no `path` or `branch` match is scoped to the target's worktree, and a `team.*` one to the caller's own cohort, the same defaults [`rimz wake`](./wake.md#caller-scoped-defaults) applies.
+
+The fired task's prompt opens with a headline naming the signal and its subject, followed by the payload as one compact JSON line, then the task's own `--prompt` verbatim; `--wake` tasks may omit the prompt entirely and deliver the headline alone. The run record keeps the signal name and its payload, replacing a payload over 4 KiB with a truncated rendering.
 
 A `--wake` task subscribed to an `agent.*` signal must name a different agent with `--match handle=<other>` or `--match session=<other>`, so a wake cannot be triggered by its own target's lifecycle. Signal firing runs in the emitting process and needs no open room, but the task must be enabled here: a disabled, paused, or untrusted-project task is skipped, and nothing is replayed later. Project tasks may use `--signal` and `--match` (both enter the trust hash) and satisfy the repeat requirement with a subscription alone; they still reject `--once`, and `watch` entries are machine state that only `rimz wake` writes.
 

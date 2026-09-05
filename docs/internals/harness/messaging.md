@@ -461,7 +461,7 @@ An unmet `when` condition sets `retry_after` to the exact projected trip time ra
 
 Durations accept `s`, `m`, `h`, `d`. Wall-clock `HH:MM` resolves to the next occurrence in the configured `timezone` (today if still future, else tomorrow), falling back to the system zone. Zero durations are rejected.
 
-`rimz message --schedule` and `rimz wake` are different mechanisms with a similar feel, and the split is worth keeping straight. A schedule is a floor on a record that already exists: the text is written now and held until its stamp. A wake is a loop task that holds no message at all until its trigger fires, and only then dispatches one, as an automated `Harness { notice: Wake }` send with fan-out disabled and no caller attribution. That is why a wake can wait on a signal or a command rather than only a clock, and why its text never appears in the queue until it lands ([loops.md](./loops.md#one-shot-wakes)).
+`rimz message --schedule` and `rimz wake` are different mechanisms with a similar feel, and the split is worth keeping straight. A schedule is a floor on a record that already exists: the text is written now and held until its stamp. A wake is a loop task that holds no message at all until its trigger fires, and only then dispatches one, as an automated `Harness { notice: Wake }` send with fan-out disabled and no caller attribution. That is why a wake can wait on a signal or a command rather than only a clock, and why its text never appears in the queue until it lands ([loops.md](./loops.md#wakes)).
 
 ## Storage and audit
 
