@@ -556,3 +556,24 @@ fn message_method_wire_contract() {
     }
     assert_eq!(Method::parse("message.unknown"), None);
 }
+
+#[test]
+fn signal_names_pin_the_public_grammar() {
+    for valid in ["ci.finished", "deploy_done", "a-b.c2"] {
+        assert_eq!(valid.parse::<SignalName>().unwrap().as_str(), valid);
+    }
+    for invalid in ["", ".ci", "ci.", "CI.finished", "ci finished", "_ci"] {
+        assert!(invalid.parse::<SignalName>().is_err(), "{invalid}");
+    }
+    assert!("agent.idle".parse::<SignalName>().unwrap().is_reserved());
+    assert!("wake.task".parse::<SignalName>().unwrap().is_reserved());
+    for family in ["agent", "wake", "team", "ci", "pr"] {
+        let name = format!("{family}.done").parse::<SignalName>().unwrap();
+        assert_eq!(name.family(), family);
+        assert!(name.is_reserved());
+    }
+    assert!(!"deploy.done".parse::<SignalName>().unwrap().is_reserved());
+    for invalid in ["*", "a.*", "a.b.*", "a*"] {
+        assert!(invalid.parse::<SignalName>().is_err());
+    }
+}

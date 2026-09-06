@@ -9,7 +9,7 @@ use std::io::{Read, Seek, Write};
 use std::str::FromStr;
 
 use anyhow::Context;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::catalog::TaskCatalog;
@@ -22,81 +22,9 @@ use super::{Trigger, arming};
 use crate::RuntimePaths;
 use crate::harness::schedule::runner::RunLockInfo;
 use crate::store::Store;
+use crate::store::event::{MAX_SIGNAL_NAME_BYTES, SignalName, SignalNameErr, SignalSource};
 use crate::workspace::ResolvedWorkspace;
 use std::path::Path;
-
-const MAX_SIGNAL_NAME_BYTES: usize = 64;
-
-const RESERVED_FAMILIES: &[&str] = &["agent", "wake", "team", "ci", "pr"];
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SignalName(String);
-
-impl SignalName {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    pub(super) fn family(&self) -> &str {
-        self.0.split('.').next().unwrap_or(&self.0)
-    }
-
-    pub fn is_reserved(&self) -> bool {
-        RESERVED_FAMILIES.contains(&self.family())
-    }
-}
-
-impl fmt::Display for SignalName {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl FromStr for SignalName {
-    type Err = SignalNameErr;
-
-    fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        let valid = !raw.is_empty()
-            && raw.len() <= MAX_SIGNAL_NAME_BYTES
-            && raw.split('.').all(|segment| {
-                !segment.is_empty()
-                    && segment
-                        .chars()
-                        .next()
-                        .is_some_and(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
-                    && segment.chars().all(|ch| {
-                        ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_'
-                    })
-            });
-        valid
-            .then(|| Self(raw.to_owned()))
-            .ok_or_else(|| SignalNameErr(raw.to_owned()))
-    }
-}
-
-impl Serialize for SignalName {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&self.0)
-    }
-}
-
-impl<'de> Deserialize<'de> for SignalName {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        String::deserialize(deserializer)?
-            .parse()
-            .map_err(serde::de::Error::custom)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("invalid signal name `{0}`; use lowercase dot-separated words, at most 64 bytes")]
-pub struct SignalNameErr(String);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SignalSelector {
@@ -132,7 +60,7 @@ impl FromStr for SignalSelector {
             }
             return family
                 .parse::<SignalName>()
-                .map(|name| Self::Family(name.0));
+                .map(|name| Self::Family(name.as_str().to_owned()));
         }
         raw.parse().map(Self::Exact)
     }
@@ -143,15 +71,6 @@ pub(super) enum SignalResolution {
     Ignore,
     Skip,
     Deliver,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum SignalSource {
-    Cli,
-    Watch,
-    Lifecycle,
-    Forge,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -499,23 +418,6 @@ mod tests {
 
     #[test]
     fn signal_names_pin_the_public_grammar() {
-        for valid in ["ci.finished", "deploy_done", "a-b.c2"] {
-            assert_eq!(valid.parse::<SignalName>().unwrap().as_str(), valid);
-        }
-        for invalid in ["", ".ci", "ci.", "CI.finished", "ci finished", "_ci"] {
-            assert!(invalid.parse::<SignalName>().is_err(), "{invalid}");
-        }
-        assert!("agent.idle".parse::<SignalName>().unwrap().is_reserved());
-        assert!("wake.task".parse::<SignalName>().unwrap().is_reserved());
-        for family in ["agent", "wake", "team", "ci", "pr"] {
-            let name = format!("{family}.done").parse::<SignalName>().unwrap();
-            assert_eq!(name.family(), family);
-            assert!(name.is_reserved());
-        }
-        assert!(!"deploy.done".parse::<SignalName>().unwrap().is_reserved());
-        for invalid in ["*", "a.*", "a.b.*", "a*"] {
-            assert!(invalid.parse::<SignalName>().is_err());
-        }
         for valid in [
             "ci.failed",
             "ci.*",

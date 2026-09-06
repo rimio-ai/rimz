@@ -6,7 +6,8 @@ use serde_json::{Map, Value};
 
 use super::{PrLink, PrStateCache, RepoGroup, TargetStamp};
 use crate::forge::RemoteRepo;
-use crate::harness::schedule::signal::{Signal, SignalSource};
+use crate::harness::schedule::signal::Signal;
+use crate::store::event::SignalSource;
 use crate::store::snapshot::{WorktreePrCi, WorktreePrState};
 
 pub(super) fn transitions(

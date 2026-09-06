@@ -1,12 +1,14 @@
 //! Event envelope appended to `events.log.jsonl`.
 
+use std::fmt;
+use std::str::FromStr;
+
 use jiff::Timestamp;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::{RawValue, to_raw_value};
 use serde_json::{Value, json};
 
 use crate::agents::{AgentLifecycleObservation, AgentState, LaunchParams, LifecycleSignal};
-use crate::harness::schedule::signal::{SignalName, SignalSource};
 use crate::ids::{
     AgentKind, AgentSessionId, EventId, MessageId, MuxName, PaneId, RunId, WorkspaceId,
 };
@@ -46,6 +48,88 @@ macro_rules! lifetime_fields {
 }
 
 lifetime_fields!(transcript_path; worktree_path, worktree_branch, account_key; role, team, channel, profile);
+
+pub(crate) const MAX_SIGNAL_NAME_BYTES: usize = 64;
+
+const RESERVED_FAMILIES: &[&str] = &["agent", "wake", "team", "ci", "pr"];
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SignalName(String);
+
+impl SignalName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub(crate) fn family(&self) -> &str {
+        self.0.split('.').next().unwrap_or(&self.0)
+    }
+
+    pub fn is_reserved(&self) -> bool {
+        RESERVED_FAMILIES.contains(&self.family())
+    }
+}
+
+impl fmt::Display for SignalName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for SignalName {
+    type Err = SignalNameErr;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        let valid = !raw.is_empty()
+            && raw.len() <= MAX_SIGNAL_NAME_BYTES
+            && raw.split('.').all(|segment| {
+                !segment.is_empty()
+                    && segment
+                        .chars()
+                        .next()
+                        .is_some_and(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
+                    && segment.chars().all(|ch| {
+                        ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_'
+                    })
+            });
+        valid
+            .then(|| Self(raw.to_owned()))
+            .ok_or_else(|| SignalNameErr(raw.to_owned()))
+    }
+}
+
+impl Serialize for SignalName {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for SignalName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("invalid signal name `{0}`; use lowercase dot-separated words, at most 64 bytes")]
+pub struct SignalNameErr(pub(crate) String);
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SignalSource {
+    Cli,
+    Watch,
+    Lifecycle,
+    Forge,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentLifecyclePayload {

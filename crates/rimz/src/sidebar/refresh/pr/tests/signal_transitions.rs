@@ -5,7 +5,7 @@ use std::path::Path;
 use serde_json::{Map, Value, json};
 
 use super::super::*;
-use crate::harness::schedule::signal::SignalSource;
+use crate::store::event::SignalSource;
 
 const PATH: &str = "/repo/worktree";
 const REPO: &str = "gh:github.com:org/repo";

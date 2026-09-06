@@ -90,7 +90,7 @@ fn fire_tasks(
                 let signal = super::signal::Signal {
                     name: signal_name,
                     payload: serde_json::Map::new(),
-                    source: super::signal::SignalSource::Watch,
+                    source: crate::store::event::SignalSource::Watch,
                     watch: Some(super::signal::WatchOutcome::Lost {
                         detail: "watch process is no longer running".to_owned(),
                     }),
