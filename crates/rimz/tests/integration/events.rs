@@ -7,8 +7,54 @@ use std::time::Duration;
 
 use crate::common::Env;
 use rimz::agents::{AgentLifecycleObservation, LifecycleEvent, LifecycleSignal};
+use rimz::harness::schedule::signal::{SignalName, SignalSelector, SignalSource};
 use rimz::ids::{AgentKind, AgentSessionId};
+use rimz::store::event::SignalEventPayload;
 use rimz::store::writer::AgentLifecycleIntent;
+use serde_json::json;
+
+#[test]
+fn signal_vocabulary_shape_and_cap_are_pinned() {
+    let signal = SignalEventPayload {
+        name: "deploy.done".parse().expect("signal name"),
+        payload: json!({"a": 1}).as_object().expect("object payload").clone(),
+        source: SignalSource::Cli,
+    };
+    assert_eq!(
+        serde_json::to_value(&signal).expect("signal JSON"),
+        json!({"name": "deploy.done", "payload": {"a": 1}, "source": "cli"})
+    );
+    assert!("x".repeat(64).parse::<SignalName>().is_ok());
+    assert!("x".repeat(65).parse::<SignalName>().is_err());
+    assert_eq!(
+        "x.*".parse::<SignalSelector>().expect("family selector"),
+        SignalSelector::Family("x".into())
+    );
+    assert!(
+        format!("{}.*", "x".repeat(63))
+            .parse::<SignalSelector>()
+            .is_err()
+    );
+    assert_eq!(
+        format!("{}.*", "x".repeat(62))
+            .parse::<SignalSelector>()
+            .expect("64-byte selector"),
+        SignalSelector::Family("x".repeat(62))
+    );
+    for (source, wire) in [
+        (SignalSource::Cli, "cli"),
+        (SignalSource::Watch, "watch"),
+        (SignalSource::Lifecycle, "lifecycle"),
+        (SignalSource::Forge, "forge"),
+    ] {
+        let serialized = serde_json::to_value(source).expect("signal source JSON");
+        assert_eq!(serialized, json!(wire));
+        assert_eq!(
+            serde_json::from_value::<SignalSource>(serialized).expect("signal source"),
+            source
+        );
+    }
+}
 
 #[test]
 fn events_emit_is_durable_and_replayed_by_follow() {

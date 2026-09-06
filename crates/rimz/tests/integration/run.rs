@@ -10,8 +10,9 @@ use rimz::agents::{
     LifecycleSignal, RateLimitCacheEntry, RateLimitWindow, RateLimitsCache, SessionOrigin,
     TurnErrorClass,
 };
-use rimz::harness::run::{RunRecord, RunStatus};
-use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, ViewKind};
+use rimz::harness::run::{RunRecord, RunStatus, RunVerify};
+use rimz::harness::run_wake::WakeupFrame;
+use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, RunId, ViewKind, WorkspaceId};
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -19,6 +20,101 @@ use std::io::{Read as _, Write as _};
 use std::process::Command;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
+
+#[test]
+fn run_record_json_shape_is_pinned() {
+    let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("workspace id");
+    let mut record = RunRecord::new(
+        workspace_id,
+        AgentKind::new_unchecked("claude"),
+        PermissionMode::Auto,
+        "p".into(),
+        "/tmp/w".into(),
+    );
+    record.run_id = RunId::parse("run_0123456789abcdef0123456789abcdef").expect("run id");
+    let now: Timestamp = "2026-01-01T00:00:00Z".parse().expect("timestamp");
+    record.started_at = now;
+    record.updated_at = now;
+    let required = json!({
+        "run_id": "run_0123456789abcdef0123456789abcdef",
+        "workspace_id": "ws_0123456789abcdef01234567",
+        "kind": "claude",
+        "status": "pending",
+        "permission_mode": "auto",
+        "prompt": "p",
+        "worktree_path": "/tmp/w",
+        "started_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z"
+    });
+    assert_eq!(serde_json::to_value(&record).expect("run JSON"), required);
+
+    let old: RunRecord = serde_json::from_value(required.clone()).expect("old run record");
+    assert_eq!(old, record);
+    assert!(!old.keep);
+    assert!(!old.subagent);
+    assert_eq!(old.agent_id, None);
+    assert_eq!(old.agent_name, None);
+    assert_eq!(old.pane_id, None);
+    assert_eq!(old.provider_pid, None);
+    assert_eq!(old.provider_process_start, None);
+    assert_eq!(old.transcript_path, None);
+    assert_eq!(old.failure_tail, None);
+    assert_eq!(old.retry_of, None);
+    assert_eq!(old.loop_task, None);
+    assert_eq!(old.verify, None);
+    assert_eq!(old.joined_at, None);
+    assert_eq!(old.report_message_id, None);
+    assert_eq!(old.budget, None);
+    assert_eq!(old.cost_usd, None);
+    assert_eq!(old.input_tokens, None);
+    assert_eq!(old.output_tokens, None);
+    assert_eq!(old.last_message, None);
+    assert_eq!(old.deadline_at, None);
+    assert_eq!(old.completed_at, None);
+
+    record.keep = true;
+    record.verify = Some(RunVerify {
+        cmd: "true".into(),
+        attempts: 1,
+        passed: true,
+        code: Some(0),
+        timed_out: false,
+        output: "verified".into(),
+    });
+    record.status = RunStatus::Completed;
+    record.completed_at = Some(now);
+    let mut populated = required;
+    populated["keep"] = json!(true);
+    populated["verify"] = json!({
+        "cmd": "true",
+        "attempts": 1,
+        "passed": true,
+        "code": 0,
+        "timed_out": false,
+        "output": "verified"
+    });
+    populated["status"] = json!("completed");
+    populated["completed_at"] = json!("2026-01-01T00:00:00Z");
+    let serialized = serde_json::to_value(&record).expect("populated run JSON");
+    assert_eq!(serialized, populated);
+    assert_eq!(
+        serde_json::from_value::<RunRecord>(serialized).expect("populated run record"),
+        record
+    );
+}
+
+#[test]
+fn wakeup_frame_json_shape_is_pinned() {
+    let frame = WakeupFrame::RunCompleted {
+        workspace_id: WorkspaceId::parse("ws_0123456789abcdef01234567").expect("workspace id"),
+        run_id: RunId::parse("run_0123456789abcdef0123456789abcdef").expect("run id"),
+        status: RunStatus::Completed,
+    };
+    assert_eq!(
+        serde_json::to_string(&frame).expect("wake frame JSON"),
+        r#"{"kind":"run_completed","workspace_id":"ws_0123456789abcdef01234567","run_id":"run_0123456789abcdef0123456789abcdef","status":"completed"}"#
+    );
+}
 
 #[test]
 fn hidden_timeout_helper_settles_only_an_overdue_run() {
