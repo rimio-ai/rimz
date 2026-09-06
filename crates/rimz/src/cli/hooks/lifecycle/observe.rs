@@ -199,7 +199,7 @@ fn record_mapped_lifecycle_observation(
             for signal in rimz::harness::schedule::signal::team_lifecycle_signals(
                 event, member, live, pending,
             ) {
-                match store.append_signal(&workspace.session_name, &signal) {
+                match store.append_signal(&workspace.session_name, (&signal).into()) {
                     Ok(_) => signals.push(signal),
                     Err(err) => {
                         warn!(signal = %signal.name, error = %err, "lifecycle: failed to append team signal")

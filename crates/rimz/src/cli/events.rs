@@ -115,7 +115,7 @@ fn emit(name: &str, raw_payload: Option<&str>, source: &str, globals: &GlobalFla
         watch: None,
     };
     let event_id = store
-        .append_signal(&workspace.session_name, &signal)
+        .append_signal(&workspace.session_name, (&signal).into())
         .context("appending signal event")?;
     let fired = rimz::harness::schedule::signal::fire_signal(
         store.runtime_paths(),
