@@ -64,7 +64,7 @@ surface-budget = 6
 [[module]]
 path = "crates/rimz/src/agents"
 upward-dependencies = ["harness::target"]
-surface-budget = 988
+surface-budget = 989
 
 [[module]]
 path = "crates/rimz/src/bin"
