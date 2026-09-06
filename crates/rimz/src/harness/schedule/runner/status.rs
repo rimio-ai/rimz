@@ -9,9 +9,7 @@ use crate::disk::paths::RuntimePaths;
 use crate::harness::schedule::Trigger;
 use crate::harness::schedule::run_log::SignalRecord;
 use crate::harness::schedule::signal::SignalSelector;
-use crate::sidebar::refresh::pr::{
-    PrStateCache, ci_signal_name, pr_signal_name, read_pr_state_cache,
-};
+use crate::sidebar::refresh::pr::{PrStateCache, read_pr_state_cache};
 use crate::store::snapshot::{WorktreePrCi, WorktreePrState};
 
 pub(super) struct ForgeView {
@@ -94,21 +92,19 @@ fn from_cache(
         }
     }
     let (state, current) = if selector.family() == "ci" {
-        let state = match ci {
-            Some(WorktreePrCi::Pending) => "ci pending",
-            Some(WorktreePrCi::Passing) => "ci passing",
-            Some(WorktreePrCi::Failing) => "ci failing",
-            None => "no CI seen",
-        };
-        (state, ci.and_then(ci_signal_name))
+        match ci {
+            Some(WorktreePrCi::Pending) => ("ci pending", None),
+            Some(WorktreePrCi::Passing) => ("ci passing", Some("ci.passed")),
+            Some(WorktreePrCi::Failing) => ("ci failing", Some("ci.failed")),
+            None => ("no CI seen", None),
+        }
     } else {
-        let state = match link.map(|link| link.state) {
-            Some(WorktreePrState::Open) => "pr open",
-            Some(WorktreePrState::Closed) => "pr closed",
-            Some(WorktreePrState::Merged) => "pr merged",
-            None => "no PR seen",
-        };
-        (state, link.and_then(|link| pr_signal_name(link.state)))
+        match link.map(|link| link.state) {
+            Some(WorktreePrState::Open) => ("pr open", None),
+            Some(WorktreePrState::Closed) => ("pr closed", Some("pr.closed")),
+            Some(WorktreePrState::Merged) => ("pr merged", Some("pr.merged")),
+            None => ("no PR seen", None),
+        }
     };
     let mut label = format!("{state} on {headline}");
     if let Some(current) = current {
@@ -116,7 +112,7 @@ fn from_cache(
             return WaitStatus::Answered {
                 label,
                 signal: SignalRecord {
-                    // Both shared mappings return fixed, valid signal names.
+                    // The state matches above return fixed, valid signal names.
                     name: current.parse().expect("forge verdict signal name"),
                     payload,
                 },
