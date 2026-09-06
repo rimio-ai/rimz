@@ -29,8 +29,8 @@ pub(super) fn attribution(
             projection.agents,
             jiff::Timestamp::now(),
         ));
-    let lifetimes =
-        LaneLifetimes::resolve(snapshot.agents.iter()).context("resolving lane lifetimes")?;
+    let lifetimes = rimz::worktree::lane_lifetimes(snapshot.agents.iter())
+        .context("resolving lane lifetimes")?;
     let peers = rimz::harness::target::addressable_agents(&snapshot);
     let channel = super::list::list_channel_filter(all, scope.as_deref(), &ctx.workspace);
     let default_worktree =

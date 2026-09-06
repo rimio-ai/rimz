@@ -6,7 +6,6 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::AgentState;
-use crate::agents::attribution::{LaneLifetimeErr, LaneLifetimes};
 use crate::agents::spending::{EffortParseMemo, EffortSessionRef};
 use crate::store::active_time;
 use crate::store::snapshot::{
@@ -105,8 +104,8 @@ fn compute_cohort_effort(
     active_grace_secs: u32,
     prices: &crate::agents::PriceBook,
     memo: &mut EffortParseMemo,
-) -> Result<BTreeMap<String, SidebarCohortEffort>, LaneLifetimeErr> {
-    let lifetimes = LaneLifetimes::resolve(agents.iter())?;
+) -> Result<BTreeMap<String, SidebarCohortEffort>, crate::worktree::WorktreeErr> {
+    let lifetimes = crate::worktree::lane_lifetimes(agents.iter())?;
     let agent_refs = agents.iter().collect::<Vec<_>>();
     let slots = crate::agents::attribution::slot_groups(&agent_refs, &lifetimes);
     let active = active_time::read_for_keys(
