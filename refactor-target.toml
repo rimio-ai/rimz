@@ -7,7 +7,6 @@ layers = [
     "ids",
     "lane",
     "sock",
-    "osc",
     "testkit",
     "update",
     "disk",
@@ -32,6 +31,7 @@ layers = [
     "remote",
     "observability",
     "diag",
+    "osc",
 ],
     [
     "harness",
@@ -73,8 +73,7 @@ surface-budget = 0
 
 [[module]]
 path = "crates/rimz/src/build_id.rs"
-upward-dependencies = ["proc"]
-surface-budget = 7
+surface-budget = 6
 
 [[module]]
 path = "crates/rimz/src/channel.rs"
@@ -116,7 +115,6 @@ surface-budget = 14
 
 [[module]]
 path = "crates/rimz/src/diag"
-upward-dependencies = ["sidebar::presence"]
 surface-budget = 80
 
 [[module]]
@@ -133,10 +131,7 @@ surface-budget = 48
 
 [[module]]
 path = "crates/rimz/src/harness"
-upward-dependencies = [
-    "sidebar::refresh",
-    "sidebar::refresh::pr",
-]
+upward-dependencies = ["sidebar::refresh"]
 # Watch verdicts, output paths and retention cross the library/CLI seam.
 # Launch-row selection is shared by ancestry and CLI parent consumers.
 surface-budget = 542
@@ -181,10 +176,6 @@ surface-budget = 11
 
 [[module]]
 path = "crates/rimz/src/osc.rs"
-upward-dependencies = [
-    "config",
-    "mux",
-]
 surface-budget = 4
 
 [[module]]
@@ -222,7 +213,7 @@ surface-budget = 51
 
 [[module]]
 path = "crates/rimz/src/sidebar"
-surface-budget = 367
+surface-budget = 361
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
@@ -701,3 +692,13 @@ reason = "Classifier and thresholds are remote policy over a store-owned tier; s
 kind = "item"
 key = "disk::usage::FileIdentity"
 reason = "Per-walk (dev, ino) dedupe; parse_cache::FileStamp keys on mtime and length and temp_sweep counts nlink exhaustion, so the three identities are different rules, not one."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::rate_limits::merge_account_rate_limits"
+reason = "Account-cache publication is the refresh lane's fusion (authoritative precedence, bound copies, unknown-episode marker); harness auto-redeem reaches it as a producer until the writer lifts beside its reader in agents::account."
+
+[[verdict]]
+kind = "item"
+key = "mux::capabilities::drops_desktop_osc"
+reason = "Backend facts stay behind the mux seam (270fcff83); osc is policy over them and sits above mux."
