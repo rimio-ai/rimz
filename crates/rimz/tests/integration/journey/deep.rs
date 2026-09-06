@@ -729,6 +729,344 @@ fn tmux_supervised_print_launches_hook_firing_agent_binary() {
 }
 
 #[test]
+fn tmux_resumed_parent_session_switch_keeps_subagent_nested() {
+    if which::which("tmux").is_err() {
+        eprintln!("tmux not on PATH; skipping resumed parent smoke");
+        return;
+    }
+    let Some(_rimz) = rimz_bin() else {
+        eprintln!("rimz not built; skipping resumed parent smoke");
+        return;
+    };
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    env.install_agent_hooks("codex");
+    trust_codex_hooks(&env);
+    let stub_dir = write_hook_firing_agent(&env, "codex");
+    let agent_path = path_with_front(&stub_dir);
+    trust_codex_agent_path(&env, &agent_path);
+    let socket = managed_socket(&env.runtime_root);
+    let _server = TmuxServerGuard::new(socket.clone());
+    let session = workspace_session(&env);
+
+    let parent = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .env("TMUX", tmux_env(&socket))
+        .env("RIMZ_TEST_AGENT_SESSION", "sess-parent-old")
+        .env("RIMZ_TEST_AGENT_SLEEP_MS", "120000")
+        .args([
+            "--mux",
+            "tmux",
+            "agents",
+            "codex",
+            "coordinate the review",
+            "--name",
+            "switch-parent",
+            "-p",
+            "--bg",
+            "--keep",
+            "--timeout",
+            "3m",
+        ])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("launch parent");
+    assert!(parent.status.success(), "parent launch failed: {parent:?}");
+    let old = wait_for_named_agent(&env, "switch-parent", true, CAPTURE_BUDGET);
+    assert_eq!(old.agent_id.as_str(), "sess-parent-old");
+    let launch_id = old.launch_id.clone().expect("parent launch identity");
+    let old_pid = old.runtime_owner.as_ref().expect("OLD provider owner").pid;
+    let old_wrapper_pid = rimz::proc::comm_and_ppid(old_pid)
+        .map(|(_, ppid)| ppid)
+        .expect("OLD provider parent process");
+    let old_pane = tmux_pane_for_pid(&socket, &session, old_wrapper_pid)
+        .expect("OLD wrapper's actual pane, not its possibly stale hook stamp");
+    // Retain the pane after the wrapper settles so resume reuses its address.
+    tmux(
+        &socket,
+        &["set-option", "-p", "-t", &old_pane, "remain-on-exit", "on"],
+    );
+    let stopped = Command::new("kill")
+        .args(["-TERM", &old_pid.to_string()])
+        .bounded_output()
+        .expect("stop OLD provider, leaving its wrapper to settle the run");
+    assert!(stopped.status.success(), "stop OLD provider: {stopped:?}");
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    while rimz::proc::comm_and_ppid(old_pid).is_some() {
+        assert!(Instant::now() < deadline, "OLD provider did not exit");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    wait_for_named_terminal_run(&env, "switch-parent", CAPTURE_BUDGET);
+    // The shim has no SessionEnd trap. Supply the provider's real end hook
+    // after its process exits, rather than manufacturing an ended store row.
+    if env
+        .store()
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("read stopped parent")
+        .agents
+        .iter()
+        .any(|agent| agent.agent_id == old.agent_id && agent.ended_at.is_none())
+    {
+        let ended = env.run_installed_hook_in_pane(
+            "codex",
+            &serde_json::json!({
+                "hook_event_name": "SessionEnd",
+                "session_id": old.agent_id.as_str(),
+            })
+            .to_string(),
+            &[
+                ("TMUX", &tmux_env(&socket)),
+                ("TMUX_PANE", &old_pane),
+                ("RIMZ_AGENT_PID", &old_pid.to_string()),
+            ],
+        );
+        assert!(ended.status.success(), "end OLD session: {ended:?}");
+    }
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    loop {
+        let snapshot = env
+            .store()
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .expect("read ended OLD");
+        if snapshot
+            .agents
+            .iter()
+            .any(|agent| agent.agent_id == old.agent_id && agent.ended_at.is_some())
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "OLD did not end: {snapshot:?}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // The shim ignores resume argv and registers the session selected by the
+    // tmux server, just as a provider returning a forked rollout does.
+    for (key, value) in [
+        ("RIMZ_TEST_AGENT_SESSION", "sess-parent-new"),
+        ("RIMZ_TEST_AGENT_SLEEP_MS", "120000"),
+    ] {
+        tmux(&socket, &["set-environment", "-t", &session, key, value]);
+    }
+    // Exercise the real resume exec/attach path, not cohort selection. Bare
+    // `agents codex --resume` execs directly; close-on-exit forces spawn mode.
+    let mut request = rimz::harness::launch::ExecRequest::bare_launch(old.kind.clone(), vec![]);
+    request.action = rimz::harness::launch::ExecAction::Resume {
+        session_id: old.agent_id.to_string(),
+        extra_args: vec![],
+    };
+    request.identity.launch_id = Some(launch_id.to_string());
+    request.close_pane_on_exit = true;
+    let argv = rimz::harness::launch::exec_argv(&env.rimz_bin(), &request)
+        .expect("compile spawn-mode resume");
+    let command = argv
+        .iter()
+        .map(|arg| shell_quote(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let command = format!("exec {command}");
+    tmux(
+        &socket,
+        &[
+            "respawn-pane",
+            "-k",
+            "-t",
+            &old_pane,
+            "-c",
+            old.worktree_path.as_deref().expect("OLD cwd"),
+            &command,
+        ],
+    );
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    let new =
+        loop {
+            let snapshot = env.store().snapshot().expect("read resumed parent");
+            if let Some(new) = snapshot.agents.iter().find(|agent| {
+                agent.agent_id.as_str() == "sess-parent-new" && agent.holds_open_turn()
+            }) {
+                break new.clone();
+            }
+            assert!(
+                Instant::now() < deadline,
+                "resumed provider did not register NEW: {snapshot:?}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        };
+    let provider_pid = new.runtime_owner.as_ref().expect("NEW provider owner").pid;
+    let wrapper_pid = rimz::proc::comm_and_ppid(provider_pid)
+        .map(|(_, ppid)| ppid)
+        .expect("resumed provider parent process");
+    let parent_pane = tmux_pane_for_pid(&socket, &session, wrapper_pid)
+        .unwrap_or_else(|| panic!("resume wrapper must own a pane: provider={provider_pid}, wrapper={wrapper_pid}, wrapper_parent={:?}, old_pane={old_pane}", rimz::proc::comm_and_ppid(wrapper_pid)));
+    assert_eq!(parent_pane, old_pane, "resume must reuse the actual pane");
+    assert_ne!(provider_pid, wrapper_pid);
+    let wrapper_argv = rimz::proc::argv(wrapper_pid).expect("resumed wrapper argv");
+    assert!(
+        wrapper_argv.get(1).and_then(|arg| arg.to_str()) == Some("agents")
+            && wrapper_argv.get(2).and_then(|arg| arg.to_str()) == Some("exec"),
+        "resumed provider must be spawned by rimz, not execed by a shell"
+    );
+    let audit = env
+        .store()
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("read resumed identity");
+    let attached_old = audit
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id == old.agent_id)
+        .expect("old parent history");
+    assert_eq!(attached_old.launch_id.as_ref(), Some(&launch_id));
+    assert_eq!(
+        attached_old.pane.as_ref().map(|pane| &pane.pane_id),
+        new.pane.as_ref().map(|pane| &pane.pane_id)
+    );
+    assert!(attached_old.ended_at.is_some());
+    assert!(new.ended_at.is_none());
+
+    for (key, value) in [
+        ("RIMZ_TEST_AGENT_SESSION", "sess-switch-child"),
+        ("RIMZ_TEST_SUBAGENT_PARENT_PROBE_INTERVAL_MS", "500"),
+    ] {
+        tmux(&socket, &["set-environment", "-t", &session, key, value]);
+    }
+    let child = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .env("TMUX", tmux_env(&socket))
+        .env("TMUX_PANE", &parent_pane)
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "codex")
+        .env(rimz::harness::launch::ENV_AGENT_ID, launch_id.as_str())
+        .env("RIMZ_TEST_SUBAGENT_PARENT_PROBE_INTERVAL_MS", "500")
+        .args([
+            "--mux",
+            "tmux",
+            "subagents",
+            "codex",
+            "inspect after resume",
+            "--description",
+            "inspect after resume",
+            "--timeout",
+            "3m",
+        ])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("launch resumed parent's child");
+    assert!(child.status.success(), "subagent launch failed: {child:?}");
+    let child_name = launched_subagent_name(&child);
+    let child_agent = wait_for_named_agent(&env, &child_name, true, CAPTURE_BUDGET);
+    let child_provider_pid = child_agent.runtime_owner.as_ref().unwrap().pid;
+    let child_wrapper_pid = rimz::proc::comm_and_ppid(child_provider_pid).unwrap().1;
+    assert_eq!(
+        rimz::proc::env_var(
+            child_wrapper_pid,
+            "RIMZ_TEST_SUBAGENT_PARENT_PROBE_INTERVAL_MS"
+        )
+        .as_deref(),
+        Some("500"),
+        "probe cadence must reach the child watchdog process"
+    );
+    let parent_stamp = new.pane.as_ref().expect("NEW pane");
+    let child_pane = wait_for_named_run(&env, &child_name, CAPTURE_BUDGET)
+        .pane_id
+        .expect("child run pane");
+    let mut parent_fixture = live_agent_pane_fixture(&new, parent_stamp);
+    parent_fixture.pane_id = rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Tmux, &parent_pane);
+    let mut child_fixture = live_agent_pane_fixture(&child_agent, parent_stamp);
+    child_fixture.pane_id = child_pane;
+    let snapshot = env.snapshot_json_with_panes(&[parent_fixture, child_fixture]);
+    let rows = snapshot["worktree_groups"]
+        .as_array()
+        .expect("worktree groups")
+        .iter()
+        .flat_map(|group| group["rows"].as_array().expect("rows"))
+        .collect::<Vec<_>>();
+    let parent_row = rows
+        .iter()
+        .find(|row| row["id"] == new.agent_id.as_str())
+        .expect("live NEW must render a parent card");
+    let nested = parent_row["sub_agents"].as_array().is_some_and(|children| {
+        children
+            .iter()
+            .any(|child| child["description"] == "inspect after resume")
+    });
+    let root_child = rows
+        .iter()
+        .any(|row| row["id"] == child_agent.agent_id.as_str());
+
+    // Collect the consumer outcome before asserting inheritance, so a red
+    // run also distinguishes the watchdog defect from mere producer state.
+    // Two seconds covers four configured 500 ms parent-probe intervals.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut stayed_live = true;
+    loop {
+        let run = wait_for_named_run(&env, &child_name, CAPTURE_BUDGET);
+        stayed_live &= !run.status.is_terminal();
+        if Instant::now() >= deadline {
+            assert!(
+                tmux_pane_alive(&socket, &session, &parent_pane),
+                "NEW parent pane disappeared"
+            );
+            assert!(
+                new.launch_id.as_ref() == Some(&launch_id)
+                    && child_agent.parent_agent_id.as_ref() == Some(&launch_id)
+                    && nested
+                    && !root_child
+                    && stayed_live,
+                "resumed launch lost its child: expected_launch={launch_id}, NEW_launch={:?}, OLD_owner={:?}, NEW_owner={:?}, child_parent={:?}, nested={nested}, root_child={root_child}, stayed_live={stayed_live}, child_run={run:?}",
+                new.launch_id,
+                attached_old.runtime_owner,
+                new.runtime_owner,
+                child_agent.parent_agent_id,
+            );
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let before_exit = env
+        .store()
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap();
+    let current_parent =
+        rimz::harness::target::launch_row(&before_exit.agents, &new.kind, &launch_id).unwrap();
+    assert_eq!(
+        current_parent.pane.as_ref().unwrap().pane_id.raw(),
+        parent_pane,
+        "watchdog must see the actual parent pane before its death: launch_group={:?}, wrapper_tmux_pane={:?}, provider_tmux_pane={:?}, panes={}",
+        before_exit
+            .agents
+            .iter()
+            .filter(|agent| {
+                agent.agent_id == launch_id || agent.launch_id.as_ref() == Some(&launch_id)
+            })
+            .map(|agent| (
+                &agent.kind,
+                &agent.agent_id,
+                &agent.launch_id,
+                agent.ended_at,
+                agent.holds_open_turn(),
+                &agent.pane,
+            ))
+            .collect::<Vec<_>>(),
+        rimz::proc::env_var(wrapper_pid, "TMUX_PANE"),
+        rimz::proc::env_var(provider_pid, "TMUX_PANE"),
+        tmux_capture(
+            &socket,
+            &[
+                "list-panes",
+                "-a",
+                "-F",
+                "#{pane_id} #{pane_pid} #{pane_current_command}"
+            ],
+        ),
+    );
+    tmux(&socket, &["kill-pane", "-t", &parent_pane]);
+    assert!(!tmux_pane_alive(&socket, &session, &parent_pane));
+    let ended = wait_for_named_terminal_run(&env, &child_name, CAPTURE_BUDGET);
+    assert_eq!(ended.status, rimz::store::run::RunStatus::Canceled);
+}
+
+#[test]
 fn tmux_subagent_nests_under_parent_and_parent_stop_cascades() {
     if which::which("tmux").is_err() {
         eprintln!("tmux not on PATH; skipping subagent tmux smoke");
@@ -888,13 +1226,13 @@ fn tmux_subagent_nests_under_parent_and_parent_stop_cascades() {
     let child_agent = wait_for_named_agent(&env, &child_name, true, CAPTURE_BUDGET);
     assert_eq!(
         child_agent.parent_agent_id.as_ref(),
-        Some(&parent_agent.agent_id)
+        Some(&parent_launch_id)
     );
     assert_eq!(child_agent.launch_depth, Some(1));
     let sibling_agent = wait_for_named_agent(&env, &sibling_name, true, CAPTURE_BUDGET);
     assert_eq!(
         sibling_agent.parent_agent_id.as_ref(),
-        Some(&parent_agent.agent_id)
+        Some(&parent_launch_id)
     );
     let child_pane = wait_for_named_run(&env, &child_name, CAPTURE_BUDGET)
         .pane_id

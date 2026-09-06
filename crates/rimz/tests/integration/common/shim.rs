@@ -66,6 +66,10 @@ pub fn write_hook_firing_agent(env: &Env, agent: &str) -> PathBuf {
          fi\n\
          rimz={rimz}\n\
          agent={agent}\n\
+         if [ \"$agent\" = codex ] && [ \"${{1:-}}\" = login ] && [ \"${{2:-}}\" = status ]; then\n\
+           printf 'Not logged in\\n' >&2\n\
+           exit 1\n\
+         fi\n\
          session=${{RIMZ_TEST_AGENT_SESSION:-sess-hook-agent}}\n\
          worktree=${{PWD:-.}}\n\
          branch=${{RIMZ_TEST_AGENT_BRANCH:-main}}\n\
@@ -99,6 +103,34 @@ pub fn write_hook_firing_agent(env: &Env, agent: &str) -> PathBuf {
     std::fs::write(&shim, body).expect("write hook-firing agent shim");
     chmod_executable(&shim);
     dir
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_account_probe_does_not_emit_session_hooks() {
+    use super::CommandTimeoutExt;
+
+    let env = Env::new();
+    let bin = write_hook_firing_agent(&env, "codex").join("codex");
+    let output = env
+        .rimz_at(&bin)
+        .args(["login", "status"])
+        .bounded_output()
+        .expect("probe fake Codex account");
+    let snapshot = env
+        .store()
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("read probe effects");
+    assert!(
+        snapshot.agents.is_empty(),
+        "probe created sessions: {:?}",
+        snapshot.agents
+    );
+    assert!(!output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr).trim(),
+        "Not logged in"
+    );
 }
 
 #[cfg(unix)]
