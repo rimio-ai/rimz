@@ -162,7 +162,7 @@ pub fn write_temp_then_rename_cache<T: Serialize>(path: &Path, value: &T) -> Res
 }
 
 /// A cache-class file that is missing or unreadable reads as its default.
-pub fn read_json_cache<T: Default + serde::de::DeserializeOwned>(path: &Path) -> T {
+pub(crate) fn read_json_cache<T: Default + serde::de::DeserializeOwned>(path: &Path) -> T {
     std::fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
