@@ -686,7 +686,13 @@ fn attribution_counts_only_the_current_worktree_lifetime() {
             marker.worktree_path.display().to_string()
         );
     }
-    let boundary = format!("since {}", marker.created_at);
+    let boundary = format!(
+        "since {}",
+        marker
+            .created_at
+            .to_zoned(rimz::config::MachineConfig::default().time_zone())
+            .strftime("%Y-%m-%d %H:%M")
+    );
     for args in [
         vec!["agents", "attribution", "#demo"],
         vec!["agents", "attribution", "#demo", "--md"],
@@ -728,6 +734,56 @@ fn attribution_counts_only_the_current_worktree_lifetime() {
             std::fs::read_to_string(path).expect("retained transcript"),
             contents
         );
+    }
+}
+
+#[test]
+fn attribution_warns_only_for_unreadable_checkouts_in_its_fold() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).unwrap();
+    let broken = env.home_root.join("broken");
+    std::fs::create_dir_all(broken.join(".git")).unwrap();
+    std::fs::write(broken.join(".git/rimz-worktree.json"), "{").unwrap();
+    for (session, channel, path) in [
+        ("sess-good", "good", &env.project_root),
+        ("sess-broken-one", "broken", &broken),
+        ("sess-broken-two", "broken", &broken),
+    ] {
+        for signal in [LifecycleSignal::Registered, LifecycleSignal::TurnStarted] {
+            let mut observation = AgentLifecycleObservation::new(Some(session.into()), signal);
+            observation.launch.channel = Some(channel.to_owned());
+            observation.worktree_path = Some(path.display().to_string());
+            env.store()
+                .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                    env.workspace_id.clone(),
+                    &workspace.session_name,
+                    "claude",
+                    "UserPromptSubmit",
+                    &observation,
+                ))
+                .unwrap();
+        }
+    }
+    for (selector, warnings) in [("#good", 0), ("--all", 1)] {
+        let output = env
+            .rimz()
+            .args(["agents", "attribution", selector, "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["totals"]["agents"], 1);
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(stderr.matches("warning:").count(), warnings);
+        if warnings != 0 {
+            assert!(stderr.contains(&broken.display().to_string()));
+            assert!(stderr.contains("its sessions are left out of seat totals"));
+        }
     }
 }
 

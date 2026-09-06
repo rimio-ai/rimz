@@ -620,9 +620,7 @@ fn slot_lifetime_effort(
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading audit agent rollup")?;
     let refs = audit.agents.iter().collect::<Vec<_>>();
-    let lifetimes =
-        rimz::worktree::lane_lifetimes(audit.agents.iter()).context("resolving lane lifetimes")?;
-    let records = slot_records_for_agent(&refs, agent, &lifetimes);
+    let records = slot_records_for_agent(&refs, agent);
     let prices = rimz::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
     let effort = rimz::agents::spending::slot_effort(
         &records
@@ -652,7 +650,6 @@ fn slot_lifetime_effort(
 fn slot_records_for_agent<'a>(
     records: &[&'a AgentState],
     agent: &'a AgentState,
-    lifetimes: &rimz::agents::attribution::LaneLifetimes,
 ) -> Vec<&'a AgentState> {
     let launched_children = agent.is_launched_child().then(|| {
         records
@@ -662,7 +659,16 @@ fn slot_records_for_agent<'a>(
             .collect::<Vec<_>>()
     });
     let candidates = launched_children.as_deref().unwrap_or(records);
-    rimz::agents::attribution::slot_groups(candidates, lifetimes)
+    let lifetimes = rimz::worktree::lane_lifetimes(candidates.iter().copied());
+    for (path, reason) in lifetimes.unreadable() {
+        let _ = writeln!(
+            render::err(),
+            "{} {}: {reason}; its sessions are left out of seat totals",
+            render::paint(render::palette::warn().bold(), "warning:"),
+            path.display()
+        );
+    }
+    rimz::agents::attribution::slot_groups(candidates, &lifetimes)
         .into_iter()
         .find(|slot| slot.iter().any(|record| record.agent_id == agent.agent_id))
         .unwrap_or_else(|| vec![agent])
@@ -837,21 +843,26 @@ mod tests {
     }
 
     #[test]
-    fn show_removed_lane_falls_back_to_the_addressed_record() {
+    fn show_excluded_lane_falls_back_to_the_addressed_record() {
         let dir = tempfile::tempdir().unwrap();
+        let checkout = dir.path().join("removed");
         let mut first = rimz::testkit::agent_state("claude", "first", jiff::Timestamp::UNIX_EPOCH);
-        first.worktree_path = Some(dir.path().join("removed").display().to_string());
+        first.worktree_path = Some(checkout.display().to_string());
         first.team = Some("forge".to_owned());
         first.role = Some("coder".to_owned());
         let mut second = first.clone();
         second.agent_id = "second".into();
         let records = [&first, &second];
-        let lifetimes = rimz::worktree::lane_lifetimes(records).unwrap();
-
-        let slot = slot_records_for_agent(&records, &second, &lifetimes);
+        let slot = slot_records_for_agent(&records, &second);
 
         assert_eq!(slot.len(), 1);
         assert_eq!(slot[0].agent_id, second.agent_id);
+
+        std::fs::create_dir_all(checkout.join(".git")).unwrap();
+        std::fs::write(checkout.join(".git/rimz-worktree.json"), "{").unwrap();
+        let unreadable_slot = slot_records_for_agent(&records, &second);
+        assert_eq!(unreadable_slot.len(), 1);
+        assert_eq!(unreadable_slot[0].agent_id, second.agent_id);
     }
 
     #[test]
@@ -870,8 +881,7 @@ mod tests {
         second.agent_id = "child-two".into();
         let records = [&parent, &first, &second];
 
-        let lifetimes = rimz::worktree::lane_lifetimes(records).unwrap();
-        let child_slot = slot_records_for_agent(&records, &second, &lifetimes);
+        let child_slot = slot_records_for_agent(&records, &second);
 
         assert_eq!(
             child_slot

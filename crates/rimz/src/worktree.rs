@@ -142,12 +142,6 @@ pub enum WorktreeErr {
     PrBranchConflict { branch: String, detail: String },
     #[error("could not parse git output: {0}")]
     Parse(String),
-    #[error("reading worktree lifetime for {}", path.display())]
-    LaneLifetimeRead {
-        path: PathBuf,
-        #[source]
-        source: Box<WorktreeErr>,
-    },
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -1058,9 +1052,7 @@ pub(crate) fn read_marker_from_checkout_metadata(path: &Path) -> Result<Option<W
 }
 
 /// Resolve current lane lifetimes once from a report's full record set.
-pub fn lane_lifetimes<'a>(
-    records: impl IntoIterator<Item = &'a AgentState>,
-) -> Result<LaneLifetimes> {
+pub fn lane_lifetimes<'a>(records: impl IntoIterator<Item = &'a AgentState>) -> LaneLifetimes {
     let mut by_path = HashMap::new();
     for path in records
         .into_iter()
@@ -1070,27 +1062,25 @@ pub fn lane_lifetimes<'a>(
         if by_path.contains_key(path) {
             continue;
         }
-        let exists = path
+        let lifetime = path
             .try_exists()
-            .map_err(|source| WorktreeErr::LaneLifetimeRead {
-                path: path.to_owned(),
-                source: Box::new(source.into()),
-            })?;
-        let lifetime = if exists {
-            read_marker_from_checkout_metadata(path)
-                .map_err(|source| WorktreeErr::LaneLifetimeRead {
-                    path: path.to_owned(),
-                    source: Box::new(source),
-                })?
-                .map_or(LaneLifetime::Unbounded, |marker| {
-                    LaneLifetime::Since(marker.created_at)
+            .map_err(WorktreeErr::from)
+            .and_then(|exists| {
+                if !exists {
+                    return Ok(LaneLifetime::Removed);
+                }
+                read_marker_from_checkout_metadata(path).map(|marker| {
+                    marker.map_or(LaneLifetime::Unbounded, |marker| {
+                        LaneLifetime::Since(marker.created_at)
+                    })
                 })
-        } else {
-            LaneLifetime::Removed
-        };
+            })
+            .unwrap_or_else(|err| LaneLifetime::Unreadable {
+                reason: err.to_string(),
+            });
         by_path.insert(path.to_owned(), lifetime);
     }
-    Ok(LaneLifetimes::new(by_path))
+    LaneLifetimes::new(by_path)
 }
 
 fn read_marker_file(marker: &Path) -> Result<Option<WorktreeMarker>> {

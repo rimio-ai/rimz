@@ -57,7 +57,7 @@ fn lane_lifetimes_resolve_managed_checkouts() {
             lifetime_agent(path, "new", 21),
         ];
         let refs = agents.iter().collect::<Vec<_>>();
-        let lifetimes = lane_lifetimes(agents.iter()).expect("resolve managed lane");
+        let lifetimes = lane_lifetimes(agents.iter());
         let groups = slot_groups(&refs, &lifetimes);
         let admitted = groups
             .iter()
@@ -91,7 +91,7 @@ fn lane_lifetimes_keep_unmarked_paths_unbounded() {
         lifetime_agent(&checkout, "unstamped", 1),
     ];
     agents[3].worktree_path = None;
-    let lifetimes = lane_lifetimes(agents.iter()).expect("resolve lane lifetimes");
+    let lifetimes = lane_lifetimes(agents.iter());
     for registered_at in [Some(at(1)), None] {
         for record in &mut agents {
             record.registered_at = registered_at;
@@ -112,29 +112,53 @@ fn lane_lifetimes_exclude_removed_paths() {
     let path = dir.path().join("lane");
     mark_lane(&path, at(20));
     let record = lifetime_agent(&path, "current", 21);
-    let lifetimes = lane_lifetimes([&record]).expect("resolve current lane");
+    let lifetimes = lane_lifetimes([&record]);
     assert_eq!(slot_groups(&[&record], &lifetimes).len(), 1);
     assert_eq!(lifetimes.common_since(&[&record]), Some(at(20)));
     std::fs::remove_dir_all(&path).expect("remove checkout");
-    let lifetimes = lane_lifetimes([&record]).expect("resolve removed lane");
+    let lifetimes = lane_lifetimes([&record]);
 
     assert!(slot_groups(&[&record], &lifetimes).is_empty());
     assert_eq!(lifetimes.common_since(&[&record]), None);
 }
 
 #[test]
-fn lane_lifetimes_reject_malformed_markers() {
+fn lane_lifetimes_record_unreadable_markers_without_failing() {
     let dir = tempfile::tempdir().expect("tempdir");
-    mark_lane(dir.path(), at(20));
-    std::fs::write(dir.path().join(".git/rimz-worktree.json"), "{")
-        .expect("write malformed marker");
-    let record = lifetime_agent(dir.path(), "current", 21);
+    let first = dir.path().join("a-unreadable");
+    let second = dir.path().join("z-unreadable");
+    let good = dir.path().join("good");
+    for path in [&first, &second] {
+        mark_lane(path, at(20));
+        std::fs::write(path.join(".git/rimz-worktree.json"), "{").expect("write malformed marker");
+    }
+    mark_lane(&good, at(20));
+    let agents = [
+        lifetime_agent(&second, "second", 21),
+        lifetime_agent(&first, "first", 21),
+        lifetime_agent(&second, "second-resumed", 22),
+        lifetime_agent(&good, "current", 21),
+        lifetime_agent(&good, "old", 19),
+    ];
 
-    let Err(WorktreeErr::LaneLifetimeRead { path, source }) = lane_lifetimes([&record]) else {
-        panic!("malformed marker must fail lane resolution");
-    };
-    assert_eq!(path, dir.path());
-    assert!(matches!(*source, WorktreeErr::Json(_)));
+    let lifetimes = lane_lifetimes(agents.iter());
+    let refs = agents.iter().collect::<Vec<_>>();
+    let groups = slot_groups(&refs, &lifetimes);
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].len(), 1);
+    assert_eq!(groups[0][0].agent_id, agents[3].agent_id);
+    assert_eq!(lifetimes.common_since(&[&agents[3]]), Some(at(20)));
+    let reason = read_marker_from_checkout_metadata(&first)
+        .err()
+        .expect("malformed marker")
+        .to_string();
+    assert_eq!(
+        lifetimes.unreadable().collect::<Vec<_>>(),
+        [
+            (first.as_path(), reason.as_str()),
+            (second.as_path(), reason.as_str())
+        ]
+    );
 }
 
 fn workspace(root_class: RootClass) -> ResolvedWorkspace {

@@ -94,8 +94,15 @@ pub(super) fn load_catalog(
         .store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading audit agent rollup")?;
-    let lifetimes =
-        rimz::worktree::lane_lifetimes(audit.agents.iter()).context("resolving lane lifetimes")?;
+    let lifetimes = rimz::worktree::lane_lifetimes(audit.agents.iter());
+    for (path, reason) in lifetimes.unreadable() {
+        let _ = writeln!(
+            render::err(),
+            "{} {}: {reason}; its sessions are left out of seat totals",
+            render::paint(render::palette::warn().bold(), "warning:"),
+            path.display(),
+        );
+    }
     let prices = rimz::agents::pricing::cached_book(&ctx.runtime().shared_pricing_cache_path());
     Ok(build_catalog(
         &effective.teams,
@@ -574,7 +581,7 @@ mod tests {
             LiveCatalog {
                 agents: &[agent],
                 audit_agents: &[],
-                lifetimes: &rimz::worktree::lane_lifetimes([]).unwrap(),
+                lifetimes: &rimz::worktree::lane_lifetimes([]),
                 prices: &rimz::agents::PriceBook::default(),
                 worktree: None,
             },
@@ -622,7 +629,7 @@ mod tests {
         agent.role = Some("planner".to_owned());
         agent.channel = Some("feat-x".to_owned());
         agent.transcript_path = Some(transcript.to_string_lossy().into_owned());
-        let lifetimes = rimz::worktree::lane_lifetimes(std::iter::once(&agent)).unwrap();
+        let lifetimes = rimz::worktree::lane_lifetimes(std::iter::once(&agent));
         let reports = build_catalog(
             &TeamsConfig(BTreeMap::from([("forge".to_owned(), team())])),
             &ProfilesConfig::default(),
@@ -696,7 +703,7 @@ mod tests {
         old.transcript_path = current.transcript_path.clone();
         let audit_agents = [old, current.clone()];
         let build = || {
-            let lifetimes = rimz::worktree::lane_lifetimes(audit_agents.iter()).unwrap();
+            let lifetimes = rimz::worktree::lane_lifetimes(audit_agents.iter());
             build_catalog(
                 &TeamsConfig(BTreeMap::from([("forge".to_owned(), team())])),
                 &ProfilesConfig::default(),
@@ -715,6 +722,23 @@ mod tests {
         let instance = &reports[0].instances[0];
         assert_eq!(instance.members.len(), 1);
         assert_eq!(instance.members[0].cost_usd, Some(0.25));
+
+        std::fs::write(git_dir.join("rimz-worktree.json"), "invalid marker").unwrap();
+        let unreadable = build();
+        let unreadable_instance = &unreadable[0].instances[0];
+        assert_eq!(unreadable_instance.members.len(), 1);
+        assert_eq!(unreadable_instance.members[0].cost_usd, None);
+        assert_eq!(
+            unreadable_instance.members[0].handle,
+            instance.members[0].handle
+        );
+        assert_eq!(
+            unreadable_instance.members[0].status,
+            instance.members[0].status
+        );
+        assert_eq!(unreadable_instance.channel, instance.channel);
+        assert_eq!(unreadable_instance.state, instance.state);
+        assert_eq!(unreadable_instance.status_counts, instance.status_counts);
 
         std::fs::remove_dir_all(&worktree).unwrap();
         let removed = build();
@@ -746,7 +770,7 @@ mod tests {
             LiveCatalog {
                 agents: &[],
                 audit_agents: &[],
-                lifetimes: &rimz::worktree::lane_lifetimes([]).unwrap(),
+                lifetimes: &rimz::worktree::lane_lifetimes([]),
                 prices: &rimz::agents::PriceBook::default(),
                 worktree: None,
             },
@@ -793,7 +817,7 @@ mod tests {
             LiveCatalog {
                 agents: &[],
                 audit_agents: &[],
-                lifetimes: &rimz::worktree::lane_lifetimes([]).unwrap(),
+                lifetimes: &rimz::worktree::lane_lifetimes([]),
                 prices: &rimz::agents::PriceBook::default(),
                 worktree: None,
             },
@@ -836,15 +860,12 @@ mod tests {
 
     #[test]
     fn catalog_filter_matches_an_exact_lane_or_member_worktree() {
-        let dir = tempfile::tempdir().unwrap();
-        let worktree = dir.path().join("feat-x");
-        std::fs::create_dir(&worktree).unwrap();
         let teams = TeamsConfig(BTreeMap::from([("forge".to_owned(), team())]));
         let mut agent = AgentState::stub("claude", "sess-planner", AgentStatus::Running);
         agent.team = Some("forge".to_owned());
         agent.role = Some("planner".to_owned());
         agent.channel = None;
-        agent.worktree_path = Some(worktree.to_string_lossy().into_owned());
+        agent.worktree_path = Some("/repo-worktrees/feat-x".to_owned());
         let build = |filter| {
             build_catalog(
                 &teams,
@@ -853,7 +874,7 @@ mod tests {
                 LiveCatalog {
                     agents: std::slice::from_ref(&agent),
                     audit_agents: &[],
-                    lifetimes: &rimz::worktree::lane_lifetimes([]).unwrap(),
+                    lifetimes: &rimz::worktree::lane_lifetimes([]),
                     prices: &rimz::agents::PriceBook::default(),
                     worktree: filter,
                 },
@@ -862,7 +883,10 @@ mod tests {
         };
 
         assert_eq!(build(Some("feat-x"))[0].instances[0].channel, "feat-x");
-        assert_eq!(build(worktree.to_str())[0].instances[0].channel, "feat-x");
+        assert_eq!(
+            build(Some("/repo-worktrees/feat-x"))[0].instances[0].channel,
+            "feat-x"
+        );
         assert!(build(Some("other"))[0].instances.is_empty());
     }
 }

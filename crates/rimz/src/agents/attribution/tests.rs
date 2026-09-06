@@ -73,10 +73,16 @@ fn lane_lifetimes_admit_registration_at_or_after_marker_birth() {
 }
 
 #[test]
-fn lane_lifetimes_exclude_removed_and_unresolved_paths() {
+fn lane_lifetimes_exclude_removed_unreadable_and_unresolved_paths() {
     let record = agent(Path::new("/repo/lane"), "current", "claude", 21);
     for by_path in [
         HashMap::from([(PathBuf::from("/repo/lane"), LaneLifetime::Removed)]),
+        HashMap::from([(
+            PathBuf::from("/repo/lane"),
+            LaneLifetime::Unreadable {
+                reason: "invalid marker".to_owned(),
+            },
+        )]),
         HashMap::new(),
     ] {
         let lifetimes = LaneLifetimes::new(by_path);
