@@ -237,7 +237,7 @@ A signal wake is one question, and every exit removes its row. `--timeout` (defa
 | `arm_signal_wake`, called when arming finds a live row with the same target, selector, matches, and root | replaces that row in place: the name survives, and the candidate's `wake_meta`, `deadline`, `timeout`, and prompt take over |
 | `claim_expired`, called by the expiry runner | removes the row and hands its entry back, but only while it is still the same subscription and still past its deadline |
 
-`same_subscription` is that identity check: resolved root, selector, matches, delivery target, and `wake_meta.armed_at`. A re-arm therefore invalidates every claim outstanding against the row it replaced. Instance rows are published through `disk::atomic::write_temp_then_rename`, the durable path.
+`same_subscription` is that identity check: resolved root, selector, matches, delivery target, and `wake_meta.armed_at`. Signal firing also passes that arm stamp to the detached runner as `--wake-armed-at`; after loading the catalog, the runner exits without delivery or a run record when the stamp no longer matches. This fences a re-arm before child startup, while the conditional removal fences a re-arm after the child loads its row. Instance rows are published through `disk::atomic::write_temp_then_rename`, the durable path.
 
 Expiry is planned by the elder and executed by a detached runner, which is what keeps `fire.rs:plan` read-only in the sidebar graph. `plan` marks a live instance row that has `wake_meta`, a `Signal` trigger, and a passed `deadline` as `Action::Expire` and spawns `rimz loop run <name> --expired`. `prepare_expired` claims the row, resolves `RuntimePaths` from the row's own root, and asks `status::resolve` what the room knows now:
 

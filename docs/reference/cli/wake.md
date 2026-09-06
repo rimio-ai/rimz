@@ -52,7 +52,7 @@ $ rimz wake --signal ci.finished
 error: schedule `wake`: ci.finished was replaced by ci.passed, ci.failed, or 'ci.*'; remove --match conclusion
 ```
 
-**A command after `--`** runs it under a watcher process and wakes when it exits. `--on fail|success|any` filters the outcome, defaulting to `any`; `fail` covers a non-zero exit and a timeout, `success` a zero exit. `--timeout <DURATION>` stops watching after that long, defaulting to `59m`. The command runs through `sh -c` at the project root with stdin closed. Its combined stdout and stderr are written to a per-wake log file as they arrive ([below](#the-output-file)), and the last 4 KiB rides along as a tail in the delivered message and in the stored run record. The `--on` filter applies at delivery, not at arming: an outcome the filter rejects records `skipped` in the run log and retires the one-shot wake without delivering a message.
+**A command after `--`** runs it under a watcher process and wakes when it exits. `--on fail|success|any` filters the outcome, defaulting to `any`; `fail` covers a non-zero exit and a timeout, `success` a zero exit. `--timeout <DURATION>` stops watching after that long, defaulting to `59m` and taking the same bounds as `--in`. The command runs through `sh -c` at the project root with stdin closed. Its combined stdout and stderr are written to a per-wake log file as they arrive ([below](#the-output-file)), and the last 4 KiB rides along as a tail in the delivered message and in the stored run record. The `--on` filter applies at delivery, not at arming: an outcome the filter rejects records `skipped` in the run log and retires the one-shot wake without delivering a message.
 
 ### A signal wake is one question
 

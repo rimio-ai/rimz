@@ -33,6 +33,7 @@ pub(super) fn run_one(
     mode: LoopRunMode,
     keep: bool,
     signal: Option<rimz::harness::schedule::signal::Signal>,
+    wake_armed_at: Option<Timestamp>,
     expired: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
@@ -45,6 +46,11 @@ pub(super) fn run_one(
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
     let entry = loaded.entry().clone();
+    if wake_armed_at.is_some_and(|armed_at| {
+        entry.wake_meta.as_ref().map(|meta| meta.armed_at) != Some(armed_at)
+    }) {
+        return Ok(());
+    }
     let source = loaded.source();
     if expired
         && project_root_for_globals(globals).is_some_and(|root| root != entry.resolved_root())

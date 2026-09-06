@@ -452,7 +452,20 @@ pub fn fire_signal(
             super::run_log::record_transition(&task, &record);
             continue;
         }
-        super::fire::spawn_loop_run(runtime, Some(project_root), &name, Some(&encoded), false);
+        let wake_armed_at = task
+            .entry()
+            .wake_meta
+            .as_ref()
+            .filter(|_| task.entry().signal.is_some())
+            .map(|meta| meta.armed_at);
+        super::fire::spawn_loop_run(
+            runtime,
+            Some(project_root),
+            &name,
+            Some(&encoded),
+            wake_armed_at,
+            false,
+        );
         fired.push(name);
     }
     Ok(fired)

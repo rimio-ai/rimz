@@ -124,8 +124,7 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
         None
     };
     if entry.signal.is_some() {
-        let (armed_name, _, _) = catalog.arm_signal_wake(&entry, created)?;
-        name = armed_name;
+        name = catalog.arm_signal_wake(&entry, created)?;
     } else {
         catalog.replace_machine(&name, &entry)?;
     }

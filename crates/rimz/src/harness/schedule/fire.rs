@@ -68,11 +68,11 @@ fn fire_tasks(
         match action {
             Action::Arm => {}
             Action::Fire => {
-                spawn_loop_run(runtime, project_root, &name, None, false);
+                spawn_loop_run(runtime, project_root, &name, None, None, false);
                 fired.push(name);
             }
             Action::Expire => {
-                spawn_loop_run(runtime, project_root, &name, None, true);
+                spawn_loop_run(runtime, project_root, &name, None, None, true);
                 fired.push(name);
             }
             Action::WatchLost => {
@@ -106,7 +106,7 @@ fn fire_tasks(
                     watch: Some(watch),
                 };
                 if let Ok(encoded) = serde_json::to_string(&signal) {
-                    spawn_loop_run(runtime, project_root, &name, Some(&encoded), false);
+                    spawn_loop_run(runtime, project_root, &name, Some(&encoded), None, false);
                     fired.push(name);
                 }
             }
@@ -298,6 +298,7 @@ pub(super) fn spawn_loop_run(
     project_root: Option<&Path>,
     name: &str,
     signal_json: Option<&str>,
+    wake_armed_at: Option<Timestamp>,
     expired: bool,
 ) {
     let mut args = Vec::<OsString>::new();
@@ -313,6 +314,12 @@ pub(super) fn spawn_loop_run(
     }
     if let Some(signal_json) = signal_json {
         args.extend([OsString::from("--signal-json"), signal_json.into()]);
+    }
+    if let Some(armed_at) = wake_armed_at {
+        args.extend([
+            OsString::from("--wake-armed-at"),
+            armed_at.to_string().into(),
+        ]);
     }
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,

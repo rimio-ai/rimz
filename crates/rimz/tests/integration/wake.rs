@@ -529,6 +529,110 @@ fn pending_ci_cache_at_deadline_delivers_status_and_rearm_once() {
 }
 
 #[test]
+fn signal_spawn_cannot_consume_a_wake_rearmed_before_child_startup() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    let name = arm_subscription(&env);
+    let armed_at = wake_instances(&env).0[&name]
+        .wake_meta
+        .as_ref()
+        .unwrap()
+        .armed_at;
+    let captured = env.home_root.join("signal-spawn.args");
+    let shim = env.home_root.join("capture-signal-spawn");
+    std::fs::write(&shim, "#!/bin/sh\nprintf '%s\\0' \"$@\" > \"$RIMZ_TEST_SPAWN_ARGS.tmp\"\nmv \"$RIMZ_TEST_SPAWN_ARGS.tmp\" \"$RIMZ_TEST_SPAWN_ARGS\"\n").unwrap();
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let output = agent_wake(&env)
+        .env("RIMZ_BIN", &shim)
+        .env("RIMZ_TEST_SPAWN_ARGS", &captured)
+        .args([
+            "events",
+            "emit",
+            "deploy.failed",
+            "--json",
+            r#"{"branch":"feature"}"#,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !captured.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "signal helper was not spawned"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let args = std::fs::read(&captured)
+        .unwrap()
+        .split(|byte| *byte == 0)
+        .filter(|arg| !arg.is_empty())
+        .map(|arg| String::from_utf8(arg.to_vec()).unwrap())
+        .collect::<Vec<_>>();
+    let receipt = wake_ok(
+        &env,
+        &[
+            "wake",
+            "--signal",
+            "deploy.failed",
+            "--match",
+            "branch=feature",
+            "--prompt",
+            "replacement note",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&receipt).unwrap()["name"],
+        name
+    );
+    let replacement = wake_instances(&env).0[&name].clone();
+    assert_ne!(replacement.wake_meta.as_ref().unwrap().armed_at, armed_at);
+
+    let delayed = env.rimz().args(&args).output().unwrap();
+    assert!(
+        delayed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&delayed.stderr)
+    );
+    assert_eq!(
+        wake_instances(&env).0.get(&name),
+        Some(&replacement),
+        "the older signal consumed the replacement wake"
+    );
+    assert!(env.store().list_pending_messages().unwrap().is_empty());
+    assert!(wake_records(&env).is_empty());
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["--wake-armed-at", &armed_at.to_string()])
+    );
+
+    wake_ok(
+        &env,
+        &[
+            "events",
+            "emit",
+            "deploy.failed",
+            "--json",
+            r#"{"branch":"feature"}"#,
+        ],
+    );
+    let records = wait_for_wake_records(&env, 1);
+    assert_eq!(records[0].result.label(), "delivered");
+    assert!(!wake_instances(&env).0.contains_key(&name));
+    let messages = env.store().list_pending_messages().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert!(messages[0].text.contains("replacement note"));
+}
+
+#[test]
 fn passing_ci_cache_at_deadline_closes_silently_without_a_signal() {
     let env = Env::new();
     env.install_agent_hooks("claude");

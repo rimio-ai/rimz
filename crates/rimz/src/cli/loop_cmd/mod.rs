@@ -237,6 +237,8 @@ struct RunArgs {
     name: String,
     #[arg(long, hide = true)]
     signal_json: Option<String>,
+    #[arg(long, hide = true, requires = "signal_json")]
+    wake_armed_at: Option<Timestamp>,
     #[arg(long, hide = true, conflicts_with = "signal_json")]
     expired: bool,
 }
@@ -334,6 +336,7 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
             LoopRunMode::Manual,
             args.keep,
             None,
+            None,
             false,
             globals,
         ),
@@ -349,6 +352,7 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
                 LoopRunMode::Scheduled,
                 false,
                 signal,
+                args.wake_armed_at,
                 args.expired,
                 globals,
             )
