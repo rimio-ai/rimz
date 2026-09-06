@@ -694,7 +694,18 @@ fn subagent_type(task: Option<&str>) -> Option<String> {
 }
 
 fn model_stats(models: BTreeMap<Option<String>, spending::SlotEffort>) -> Vec<ModelStat> {
-    let mut stats = models
+    let mut grouped = BTreeMap::<Option<String>, spending::SlotEffort>::new();
+    for (model, effort) in models {
+        if effort.tokens == TokenSplit::default() && effort.cost_usd.is_none() {
+            continue;
+        }
+        let total = grouped
+            .entry(model.filter(|model| !model.trim().is_empty()))
+            .or_default();
+        total.tokens.add_assign(effort.tokens);
+        total.cost_usd = spending::sum_optional_cost(total.cost_usd, effort.cost_usd);
+    }
+    let mut stats = grouped
         .into_iter()
         .map(|(model, effort)| ModelStat {
             model,
