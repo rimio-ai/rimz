@@ -660,14 +660,7 @@ fn slot_records_for_agent<'a>(
     });
     let candidates = launched_children.as_deref().unwrap_or(records);
     let lifetimes = rimz::worktree::lane_lifetimes(candidates.iter().copied());
-    for (path, reason) in lifetimes.unreadable() {
-        let _ = writeln!(
-            render::err(),
-            "{} {}: {reason}; its sessions are left out of seat totals",
-            render::paint(render::palette::warn().bold(), "warning:"),
-            path.display()
-        );
-    }
+    render::warn_unreadable_lanes(&lifetimes);
     rimz::agents::attribution::slot_groups(candidates, &lifetimes)
         .into_iter()
         .find(|slot| slot.iter().any(|record| record.agent_id == agent.agent_id))

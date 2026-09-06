@@ -63,14 +63,7 @@ pub(super) fn attribution(
     // Eligible children follow their durable parent link across lane selection.
     let agents = roots.iter().copied().chain(children).collect::<Vec<_>>();
     let lifetimes = rimz::worktree::lane_lifetimes(agents.iter().copied());
-    for (path, reason) in lifetimes.unreadable() {
-        let _ = writeln!(
-            render::err(),
-            "{} {}: {reason}; its sessions are left out of seat totals",
-            render::paint(render::palette::warn().bold(), "warning:"),
-            path.display()
-        );
-    }
+    render::warn_unreadable_lanes(&lifetimes);
     let report_scope = report_scope(scope, channel, default_worktree, &roots, &lifetimes);
     let transcript =
         rimz::transcript::read_all(ctx.store.paths()).context("reading conversation transcript")?;

@@ -95,14 +95,7 @@ pub(super) fn load_catalog(
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading audit agent rollup")?;
     let lifetimes = rimz::worktree::lane_lifetimes(audit.agents.iter());
-    for (path, reason) in lifetimes.unreadable() {
-        let _ = writeln!(
-            render::err(),
-            "{} {}: {reason}; its sessions are left out of seat totals",
-            render::paint(render::palette::warn().bold(), "warning:"),
-            path.display(),
-        );
-    }
+    render::warn_unreadable_lanes(&lifetimes);
     let prices = rimz::agents::pricing::cached_book(&ctx.runtime().shared_pricing_cache_path());
     Ok(build_catalog(
         &effective.teams,
