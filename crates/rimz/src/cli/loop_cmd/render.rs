@@ -152,13 +152,11 @@ fn task_row(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Vec<ui::Ce
 
 pub(super) fn held_text(state: &schedule::TaskTimingState, now: Timestamp) -> Option<String> {
     Some(match state {
-        schedule::TaskTimingState::Disabled(DisabledReason::NotEnabledHere) => {
-            "disabled · enable to arm".to_owned()
-        }
-        schedule::TaskTimingState::Disabled(DisabledReason::Manual) => "disabled".to_owned(),
-        schedule::TaskTimingState::Disabled(DisabledReason::Strikes(strikes)) => {
-            format!("disabled · {strikes} strikes")
-        }
+        schedule::TaskTimingState::Disabled(reason) => match reason {
+            DisabledReason::NotEnabledHere => "disabled · enable to arm".to_owned(),
+            DisabledReason::Manual => "disabled".to_owned(),
+            DisabledReason::Strikes(strikes) => format!("disabled · {strikes} strikes"),
+        },
         schedule::TaskTimingState::Paused(until) => {
             format!("paused · {}", ui::rel_until(*until, now))
         }
