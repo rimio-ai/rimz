@@ -236,7 +236,7 @@ fn arm_signal_wake_in(
             current.deadline = Some(now.checked_add(timeout)?);
             return Ok(((name.clone(), current.clone(), true), true));
         }
-        let petname = crate::harness::petname::mint(
+        let petname = crate::agents::petname::mint(
             tasks
                 .keys()
                 .chain(taken)

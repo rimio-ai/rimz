@@ -341,7 +341,7 @@ fn reserved_agent_words_name_current_verbs() {
         verbs.insert(subcommand.get_name().to_owned());
         verbs.extend(subcommand.get_all_aliases().map(str::to_owned));
     }
-    for word in rimz::harness::petname::RESERVED_AGENT_WORDS {
+    for word in rimz::agents::petname::RESERVED_AGENT_WORDS {
         if *word == "term" {
             continue;
         }

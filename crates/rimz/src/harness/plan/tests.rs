@@ -1359,7 +1359,7 @@ fn launch_request_names_and_metadata() {
 
 #[test]
 fn launch_identity_requests_reject_envelope_handles() {
-    for name in crate::harness::petname::HEADER_PSEUDO_HANDLES {
+    for name in crate::agents::petname::HEADER_PSEUDO_HANDLES {
         assert!(validate_agent_name(name).is_err());
     }
 }

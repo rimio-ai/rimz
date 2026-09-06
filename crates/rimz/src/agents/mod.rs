@@ -30,6 +30,7 @@ pub mod model_display;
 mod observation;
 mod open_ask;
 pub(crate) mod payload;
+pub mod petname;
 pub mod pricing;
 pub(crate) mod question;
 pub mod registry;
