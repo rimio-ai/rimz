@@ -41,6 +41,14 @@ fn link_alert(
     }
 }
 
+#[test]
+fn link_alert_event_serializes_tier_as_snake_case() {
+    let event = link_alert(LinkTier::Bad, Some(800), 40, 10, None);
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["tier"], "bad");
+    assert_eq!(serde_json::from_value::<DiagEvent>(json).unwrap(), event);
+}
+
 fn hosted_carry(reason: HostedCarryDropReason) -> DiagEvent {
     DiagEvent::HostedCarryDropped {
         pane_id: pane("terminal_5"),

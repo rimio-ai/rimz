@@ -866,6 +866,21 @@ mod tests {
     }
 
     #[test]
+    fn link_tier_orders_good_below_degraded_below_bad_and_spells_snake_case() {
+        assert!(LinkTier::Good < LinkTier::Degraded);
+        assert!(LinkTier::Degraded < LinkTier::Bad);
+        assert_eq!(LinkTier::Bad.max(LinkTier::Good), LinkTier::Bad);
+        for (tier, json) in [
+            (LinkTier::Good, "\"good\""),
+            (LinkTier::Degraded, "\"degraded\""),
+            (LinkTier::Bad, "\"bad\""),
+        ] {
+            assert_eq!(serde_json::to_string(&tier).unwrap(), json);
+            assert_eq!(serde_json::from_str::<LinkTier>(json).unwrap(), tier);
+        }
+    }
+
+    #[test]
     fn tier_and_badge_heat_boundaries_are_exact() {
         for (rtt, loss, expected) in [
             (Some(150), 0, LinkTier::Good),
