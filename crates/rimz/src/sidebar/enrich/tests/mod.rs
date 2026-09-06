@@ -3,7 +3,7 @@ use crate::agents::SessionOrigin;
 use crate::agents::{AgentState, AgentStatus};
 use crate::disk::atomic;
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
-use crate::remote::link::{LinkStats, LinkStatsFile, LinkTier};
+use crate::remote::link::{LinkStats, LinkStatsFile};
 use crate::sidebar::refresh::AccountsCache;
 use crate::sidebar::refresh::PrLink;
 use crate::sidebar::refresh::daemon_reap::write_codex_daemon_reap;
@@ -14,6 +14,7 @@ use crate::sidebar::refresh::git_stats::{
 use crate::sidebar::refresh::{CodexDaemonReap, read_codex_daemon_reap};
 use crate::sidebar::test_support::{activity_row, pane, root_agent, worktree_group};
 use crate::sidebar::timing::GIT_ACTIVITY_WINDOW;
+use crate::store::snapshot::LinkTier;
 use crate::utils::time::unix_now_ms;
 use jiff::SignedDuration;
 use std::collections::{BTreeMap, BTreeSet};

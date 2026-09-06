@@ -245,7 +245,7 @@ upward-dependencies = [
     "disk_usage",
     "remote::link",
 ]
-surface-budget = 336
+surface-budget = 337
 
 [[module]]
 path = "crates/rimz/src/theme"

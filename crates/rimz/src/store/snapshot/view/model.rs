@@ -7,7 +7,6 @@ use crate::agents::{
     ExtraCredits, ProviderAccountScope, RateLimitWindow, ResetCredits, SpendTally,
 };
 use crate::config::PaletteRole;
-use crate::remote::link::LinkTier;
 use crate::store::snapshot::row::SidebarRow;
 
 /// One configured local-day dollar cap and its current metered state.
@@ -349,6 +348,15 @@ impl SidebarPresence {
     }
 }
 
+/// Link-health tier for notifications, diagnostics, and CLI health output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkTier {
+    Good,
+    Degraded,
+    Bad,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SidebarLinkHealth {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -362,6 +370,21 @@ pub struct SidebarLinkHealth {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn link_tier_orders_good_below_degraded_below_bad_and_spells_snake_case() {
+        assert!(LinkTier::Good < LinkTier::Degraded);
+        assert!(LinkTier::Degraded < LinkTier::Bad);
+        assert_eq!(LinkTier::Bad.max(LinkTier::Good), LinkTier::Bad);
+        for (tier, json) in [
+            (LinkTier::Good, "\"good\""),
+            (LinkTier::Degraded, "\"degraded\""),
+            (LinkTier::Bad, "\"bad\""),
+        ] {
+            assert_eq!(serde_json::to_string(&tier).unwrap(), json);
+            assert_eq!(serde_json::from_str::<LinkTier>(json).unwrap(), tier);
+        }
+    }
 
     #[test]
     fn sidebar_link_health_serializes_tier_as_snake_case() {

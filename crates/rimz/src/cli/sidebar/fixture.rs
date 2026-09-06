@@ -1,7 +1,7 @@
 use super::*;
 use rimz::agents::spending::sum_optional_cost;
 use rimz::store::snapshot::{
-    AgentCard, ProcessCard, ProcessState, RemoteControlBadge, RowCard, SNAPSHOT_VERSION,
+    AgentCard, LinkTier, ProcessCard, ProcessState, RemoteControlBadge, RowCard, SNAPSHOT_VERSION,
     SidebarLinkFreshness, SidebarLinkHealth, SidebarProviderPanel, SidebarRow, SidebarSnapshot,
     SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrCi,
     WorktreePrState, WorktreeTrunkSync,
@@ -1077,7 +1077,7 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     snapshot.link = Some(SidebarLinkHealth {
         rtt_ms: Some(48),
         miss_pct: 2,
-        tier: rimz::remote::link::LinkTier::Good,
+        tier: LinkTier::Good,
         freshness: SidebarLinkFreshness::Fresh,
         sampled_at_ms: now.as_millisecond() as u64,
     });

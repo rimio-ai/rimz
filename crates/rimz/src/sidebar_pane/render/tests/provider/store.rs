@@ -306,7 +306,7 @@ fn pets_provider_dashboard_folds_footer_left_of_pet() {
     snapshot.link = Some(crate::store::snapshot::SidebarLinkHealth {
         rtt_ms: Some(210),
         miss_pct: 0,
-        tier: crate::remote::link::LinkTier::Good,
+        tier: crate::store::snapshot::LinkTier::Good,
         freshness: crate::store::snapshot::SidebarLinkFreshness::Fresh,
         sampled_at_ms: 1_700_000_000_000,
     });
