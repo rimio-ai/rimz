@@ -219,10 +219,7 @@ impl TaskCatalog {
             config_edit::set_entry(config_edit::TaskStore::Machine, name, entry)?;
         }
         let source = TaskSource::from_entry(entry);
-        clear_overlays(
-            &TaskKey::for_task(name, source, &entry.resolved_root()),
-            source,
-        )
+        clear_overlays(&TaskKey::for_task(name, source, &entry.resolved_root()))
     }
 
     /// Atomically reuse a live signal wake or mint a new instance.
@@ -263,7 +260,7 @@ impl TaskCatalog {
 
     pub fn remove(&self, name: &str) -> Result<TaskMutation> {
         let Some(task) = self.visible.get(name) else {
-            return Ok(TaskMutation::unchanged());
+            return Ok(TaskMutation::default());
         };
         let changed = remove_definition(name, task)?;
         let key = task_key(name, task);
@@ -271,10 +268,7 @@ impl TaskCatalog {
         let cleared_strikes = strikes::clear(&key)?;
         Ok(TaskMutation {
             changed,
-            source: Some(task.source()),
-            project_root: project_root(task),
-            cleared_arming,
-            cleared_strikes,
+            cleared_overlays: cleared_arming || cleared_strikes,
         })
     }
 
@@ -283,7 +277,7 @@ impl TaskCatalog {
             bail!("loop task `{new_name}` already exists");
         }
         let Some(task) = self.visible.get(name) else {
-            return Ok(TaskMutation::unchanged());
+            return Ok(TaskMutation::default());
         };
         let changed = match task.source() {
             TaskSource::Config => {
@@ -302,10 +296,7 @@ impl TaskCatalog {
         let cleared_strikes = strikes::rename(&old_key, &new_key)?;
         Ok(TaskMutation {
             changed,
-            source: Some(task.source()),
-            project_root: project_root(task),
-            cleared_arming,
-            cleared_strikes,
+            cleared_overlays: cleared_arming || cleared_strikes,
         })
     }
 
@@ -314,14 +305,11 @@ impl TaskCatalog {
     /// not an interactive edit.
     pub fn consume_scheduled(&self, name: &str) -> Result<TaskMutation> {
         let Some(task) = self.runnable.get(name) else {
-            return Ok(TaskMutation::unchanged());
+            return Ok(TaskMutation::default());
         };
         Ok(TaskMutation {
             changed: remove_definition(name, task)?,
-            source: Some(task.source()),
-            project_root: project_root(task),
-            cleared_arming: false,
-            cleared_strikes: false,
+            cleared_overlays: false,
         })
     }
 
@@ -383,39 +371,16 @@ impl TaskSource {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TaskMutation {
     changed: bool,
-    source: Option<TaskSource>,
-    project_root: Option<PathBuf>,
-    cleared_arming: bool,
-    cleared_strikes: bool,
+    cleared_overlays: bool,
 }
 
 impl TaskMutation {
-    fn unchanged() -> Self {
-        Self::default()
-    }
-
     pub const fn changed(&self) -> bool {
         self.changed
     }
 
-    pub const fn source(&self) -> Option<TaskSource> {
-        self.source
-    }
-
-    pub fn project_root(&self) -> Option<&Path> {
-        self.project_root.as_deref()
-    }
-
-    pub const fn cleared_arming(&self) -> bool {
-        self.cleared_arming
-    }
-
-    pub const fn cleared_strikes(&self) -> bool {
-        self.cleared_strikes
-    }
-
     pub const fn cleared_overlays(&self) -> bool {
-        self.cleared_arming || self.cleared_strikes
+        self.cleared_overlays
     }
 }
 
@@ -435,13 +400,12 @@ fn merge_base(instances: Tasks, machine: Tasks) -> BTreeMap<String, LoadedTask> 
     tasks
 }
 
-fn clear_overlays(key: &str, source: TaskSource) -> Result<TaskMutation> {
+fn clear_overlays(key: &str) -> Result<TaskMutation> {
+    let cleared_arming = arming::remove(key)?;
+    let cleared_strikes = strikes::clear(key)?;
     Ok(TaskMutation {
         changed: true,
-        source: Some(source),
-        project_root: None,
-        cleared_arming: arming::remove(key)?,
-        cleared_strikes: strikes::clear(key)?,
+        cleared_overlays: cleared_arming || cleared_strikes,
     })
 }
 
@@ -453,21 +417,15 @@ fn enable_project_overlays(
     let key = TaskKey::for_task(name, source, project_root);
     let cleared_arming = arming::load().contains_key(&key);
     arming::enable(&key)?;
+    let cleared_strikes = strikes::clear(&key)?;
     Ok(TaskMutation {
         changed: true,
-        source: Some(source),
-        project_root: Some(project_root.to_path_buf()),
-        cleared_arming,
-        cleared_strikes: strikes::clear(&key)?,
+        cleared_overlays: cleared_arming || cleared_strikes,
     })
 }
 
 fn task_key(name: &str, task: &LoadedTask) -> String {
     TaskKey::for_task(name, task.source(), &task.entry().resolved_root())
-}
-
-fn project_root(task: &LoadedTask) -> Option<PathBuf> {
-    matches!(task.source(), TaskSource::Project { .. }).then(|| task.entry().root.clone())
 }
 
 fn remove_definition(name: &str, task: &LoadedTask) -> Result<bool> {
