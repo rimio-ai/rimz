@@ -51,7 +51,7 @@ pub(super) fn grouped_tasks<'a>(
                         name,
                         task,
                         &stamps,
-                        arming_entries.get(&task_key(name, task)),
+                        arming_entries.get(&task.key(name)),
                         now_zoned,
                     ),
                 })
@@ -150,20 +150,28 @@ fn task_row(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Vec<ui::Ce
     ]
 }
 
+pub(super) fn held_text(state: &schedule::TaskTimingState, now: Timestamp) -> Option<String> {
+    Some(match state {
+        schedule::TaskTimingState::Disabled(DisabledReason::NotEnabledHere) => {
+            "disabled · enable to arm".to_owned()
+        }
+        schedule::TaskTimingState::Disabled(DisabledReason::Manual) => "disabled".to_owned(),
+        schedule::TaskTimingState::Disabled(DisabledReason::Strikes(strikes)) => {
+            format!("disabled · {strikes} strikes")
+        }
+        schedule::TaskTimingState::Paused(until) => {
+            format!("paused · {}", ui::rel_until(*until, now))
+        }
+        _ => return None,
+    })
+}
+
 fn next_cell(timing: &schedule::TaskTiming, now: Timestamp) -> ui::Cell {
     match timing.state() {
         schedule::TaskTimingState::Blocked(state) => blocked_next_cell(state),
-        schedule::TaskTimingState::Disabled(DisabledReason::NotEnabledHere) => {
-            ui::cell("disabled · enable to arm").fg(ui::palette::muted())
-        }
-        schedule::TaskTimingState::Disabled(DisabledReason::Manual) => {
-            ui::cell("disabled").fg(ui::palette::muted())
-        }
-        schedule::TaskTimingState::Disabled(DisabledReason::Strikes(strikes)) => {
-            ui::cell(format!("disabled · {strikes} strikes")).fg(ui::palette::muted())
-        }
-        schedule::TaskTimingState::Paused(until) => {
-            ui::cell(format!("paused · {}", ui::rel_until(until, now))).fg(ui::palette::muted())
+        state @ (schedule::TaskTimingState::Disabled(_) | schedule::TaskTimingState::Paused(_)) => {
+            // This arm only accepts the states handled by held_text.
+            ui::cell(held_text(&state, now).unwrap()).fg(ui::palette::muted())
         }
         schedule::TaskTimingState::Upcoming(next) | schedule::TaskTimingState::Due(next) => {
             ui::cell(ui::rel_until(next, now))
@@ -490,7 +498,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         .map(rimz::harness::schedule::last_stamps)
         .unwrap_or_default();
     let now = Timestamp::now();
-    let key = task_key(&args.name, &task);
+    let key = task.key(&args.name);
     let arming = arming::load().remove(&key);
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let timing = observe_task_timing(&args.name, &task, &stamps, arming.as_ref(), &now_zoned);
@@ -670,10 +678,7 @@ fn write_show_facts(
     let root = entry.resolved_root();
     let room_is_open = room_open(&root);
     let blocked_state = source.blocked_state();
-    let strike_count = strikes::load()
-        .get(&task_key(name, task))
-        .copied()
-        .unwrap_or(0);
+    let strike_count = strikes::load().get(&task.key(name)).copied().unwrap_or(0);
     let run_id = context.active_run.map(|record| record.run_id.as_str());
     let active = match context.lock_state {
         Some(RunLockState::Held(Some(info))) => Some(format!(

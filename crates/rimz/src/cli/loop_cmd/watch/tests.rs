@@ -374,7 +374,11 @@ fn task_timing_maps_to_watch_labels() {
     ];
     for (timing, state, label) in cases {
         assert_eq!(row_state_for_timing(&timing), state);
-        assert_eq!(timing_next_text(&timing, now), label);
+        assert_eq!(
+            render::held_text(&timing.state(), now).as_deref(),
+            (state == RowState::Held).then_some(label)
+        );
+        assert_eq!(next_text(state, &timing, now), label);
     }
 }
 
@@ -407,7 +411,8 @@ fn signal_and_watch_timing_map_to_live_watch_labels() {
             &now.to_zoned(jiff::tz::TimeZone::UTC),
         );
         assert_eq!(row_state_for_timing(&timing), state);
-        assert_eq!(timing_next_text(&timing, now), label);
+        assert_eq!(render::held_text(&timing.state(), now), None);
+        assert_eq!(next_text(state, &timing, now), label);
     }
 }
 

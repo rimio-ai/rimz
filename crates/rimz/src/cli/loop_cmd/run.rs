@@ -52,7 +52,7 @@ pub(super) fn run_one(
         return Ok(());
     }
     gate_project_trust(name, &entry, source, mode)?;
-    let key = task_key(name, &loaded);
+    let key = loaded.key(name);
     let arm_state = ArmState::resolve(arming::load().get(&key), source, Timestamp::now());
     if mode == LoopRunMode::Scheduled && arm_state != ArmState::Live {
         return Ok(());

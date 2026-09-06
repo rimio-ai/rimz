@@ -390,10 +390,6 @@ fn load_task(name: &str, globals: &GlobalFlags) -> Result<Option<LoadedTask>> {
     Ok(task_catalog(globals)?.visible().get(name).cloned())
 }
 
-fn task_key(name: &str, task: &LoadedTask) -> String {
-    TaskKey::for_task(name, task.source(), &task.entry().resolved_root())
-}
-
 fn runtime_for_root(root: &Path) -> Option<RuntimePaths> {
     RuntimePaths::for_workspace(WorkspaceId::from_project_root(root)).ok()
 }

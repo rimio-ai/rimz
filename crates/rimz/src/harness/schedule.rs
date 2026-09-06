@@ -13,6 +13,8 @@
 
 use std::time::Duration;
 
+use anyhow::Context;
+
 use crate::config::{TaskEntry, TaskTarget};
 use crate::utils::time::{ClockTime, DurationUnit, parse_duration_units};
 use jiff::{SignedDuration, Timestamp, Zoned};
@@ -551,6 +553,19 @@ impl TaskTiming {
     pub const fn scheduled_next_timestamp(&self) -> Option<Timestamp> {
         self.scheduled_next
     }
+}
+
+pub fn delayed_at(duration: Duration) -> anyhow::Result<String> {
+    let mut target = Timestamp::now()
+        .to_zoned(crate::config::MachineConfig::load_lenient().time_zone())
+        .checked_add(duration)
+        .context("resolving --in against the configured clock")?;
+    if target.second() != 0 || target.subsec_nanosecond() != 0 {
+        target = target
+            .checked_add(Duration::from_secs((60 - target.second()) as u64))
+            .context("rounding --in to the next scheduler minute")?;
+    }
+    Ok(format!("{:02}:{:02}", target.hour(), target.minute()))
 }
 
 /// Validate a schedule name: non-empty and limited to a filesystem- and
