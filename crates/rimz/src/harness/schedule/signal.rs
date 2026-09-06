@@ -129,7 +129,7 @@ impl WatchVerdict {
         }
     }
 
-    pub fn passed(&self) -> bool {
+    fn passed(&self) -> bool {
         matches!(self, Self::Exited { code: Some(0), .. })
     }
 }
