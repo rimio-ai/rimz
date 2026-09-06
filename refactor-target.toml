@@ -140,7 +140,7 @@ upward-dependencies = [
     "sidebar::refresh",
     "sidebar::refresh::pr",
 ]
-surface-budget = 559
+surface-budget = 536
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -237,11 +237,6 @@ upward-dependencies = [
     "diag",
     "diag::record",
     "disk_usage",
-    "harness::petname",
-    "harness::run",
-    "harness::run_wake",
-    "harness::schedule::signal",
-    "harness::target",
     "remote::link",
 ]
 surface-budget = 336
@@ -434,7 +429,6 @@ path = "crates/rimz/src/store/mod.rs"
 allowed-dependencies = [
     "disk",
     "disk::paths",
-    "harness::run",
     "workspace::record",
 ]
 surface-budget = 29
@@ -464,7 +458,6 @@ allowed-dependencies = [
     "harness::ancestry",
     "harness::budget",
     "harness::launch",
-    "harness::petname",
     "harness::prompt_compose",
     "harness::spec",
     "ids",
@@ -513,17 +506,15 @@ surface-budget = 40
 path = "crates/rimz/src/harness/run.rs"
 allowed-dependencies = [
     "agents",
-    "disk::atomic",
     "disk::lock",
     "disk::paths",
     "forge",
     "harness::budget",
-    "harness::run_wake",
     "ids",
     "proc",
     "store",
 ]
-surface-budget = 41
+surface-budget = 31
 
 [[module]]
 path = "crates/rimz/src/harness/run/report.rs"
@@ -545,7 +536,7 @@ allowed-dependencies = [
     "sock",
     "store",
 ]
-surface-budget = 11
+surface-budget = 9
 
 [[module]]
 path = "crates/rimz/src/harness/prompt_compose.rs"
