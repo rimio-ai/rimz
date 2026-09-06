@@ -9,8 +9,9 @@ use clap::ValueEnum;
 
 use crate::cli::GlobalFlags;
 use rimz::agents::{AgentDefinition, HookPreflightErr, TurnLifecycleNeed, preflight_hooks};
-use rimz::harness::run::{RunCancellation, RunRecord};
+use rimz::harness::run::RunCancellation;
 use rimz::mux::PaneCmd;
+use rimz::store::run::RunRecord;
 use rimz::utils::time::{DurationUnit, parse_duration_units};
 use rimz::workspace::WorkspaceResolver;
 

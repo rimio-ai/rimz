@@ -387,7 +387,7 @@ fn record_run_lifecycle(
     event_name: &str,
     recorded: &RecordedLifecycle,
     assistant_message: Option<&str>,
-) -> Option<rimz::harness::run::RunRecord> {
+) -> Option<rimz::store::run::RunRecord> {
     let run_id = env_run_id()?;
     match rimz::harness::run::record_lifecycle(
         store.paths(),

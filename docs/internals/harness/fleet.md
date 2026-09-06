@@ -43,7 +43,7 @@ The harness is a product area, not a single Rust module. It spans four source tr
 | Page | Owns | Source |
 | --- | --- | --- |
 | fleet.md (this page) | Spawn, address, resume, reclaim | [`harness/`](../../../crates/rimz/src/harness) |
-| [scripting.md](./scripting.md) | Supervised `-p` runs | [`harness/run.rs`](../../../crates/rimz/src/harness/run.rs), [`run_wake.rs`](../../../crates/rimz/src/harness/run_wake.rs), [`cli/supervised/`](../../../crates/rimz/src/cli/supervised) |
+| [scripting.md](./scripting.md) | Supervised `-p` runs | [`store/run.rs`](../../../crates/rimz/src/store/run.rs), [`harness/run.rs`](../../../crates/rimz/src/harness/run.rs), [`run_wake.rs`](../../../crates/rimz/src/harness/run_wake.rs), [`cli/supervised/`](../../../crates/rimz/src/cli/supervised) |
 | [subagents.md](./subagents.md) | Agents launching supervised children | [`cli/subagents/`](../../../crates/rimz/src/cli/subagents), [`harness/plan.rs`](../../../crates/rimz/src/harness/plan.rs) |
 | [loops.md](./loops.md) | Scheduled tasks and unattended recovery | [`harness/schedule/`](../../../crates/rimz/src/harness/schedule), [`auto_continue.rs`](../../../crates/rimz/src/harness/auto_continue.rs), [`auto_redeem.rs`](../../../crates/rimz/src/harness/auto_redeem.rs) |
 | [budget.md](./budget.md) | Dollar caps and the park they produce | [`harness/budget.rs`](../../../crates/rimz/src/harness/budget.rs), [`cli/budget.rs`](../../../crates/rimz/src/cli/budget.rs) |
@@ -51,7 +51,7 @@ The harness is a product area, not a single Rust module. It spans four source tr
 | [worktrees.md](./worktrees.md) | RimZ-owned Git worktrees | [`worktree.rs`](../../../crates/rimz/src/worktree.rs) |
 | [trust.md](./trust.md) | Which parts of a project config may execute | [`trust.rs`](../../../crates/rimz/src/trust.rs) |
 
-Start here when you are looking for where a behaviour lives. Every file below is under `harness/` except the petname grammar, which lives in `agents/`.
+Start here when you are looking for where a behaviour lives. Every file below is under `harness/` except the petname grammar in `agents/` and the durable run record in `store/`.
 
 | File | Owns |
 | --- | --- |
@@ -67,7 +67,8 @@ Start here when you are looking for where a behaviour lives. Every file below is
 | [`resume.rs`](../../../crates/rimz/src/harness/resume.rs) | Resume planning for room rebirth, explicit cohort resume, and lane resume, plus `resolve_posture`, the relaunch posture seam every path shares. |
 | [`rebirth.rs`](../../../crates/rimz/src/harness/rebirth.rs) | Two-phase inspection of the previous incarnation of a room, over the shared recovery plan. |
 | [`budget.rs`](../../../crates/rimz/src/harness/budget.rs) | Dollar caps and their parks. See [budget.md](./budget.md). |
-| [`run.rs`](../../../crates/rimz/src/harness/run.rs), [`run_wake.rs`](../../../crates/rimz/src/harness/run_wake.rs) | Supervised runs. See [scripting.md](./scripting.md). |
+| [`store/run.rs`](../../../crates/rimz/src/store/run.rs) | The durable supervised-run record: schema, codec, and the terminal wake sender. See [scripting.md](./scripting.md). |
+| [`run.rs`](../../../crates/rimz/src/harness/run.rs), [`run_wake.rs`](../../../crates/rimz/src/harness/run_wake.rs) | Supervised-run transitions over that record, and the waiter that receives its wake. See [scripting.md](./scripting.md). |
 | [`schedule.rs`](../../../crates/rimz/src/harness/schedule.rs), [`schedule/`](../../../crates/rimz/src/harness/schedule) | Loop tasks and their runner. See [loops.md](./loops.md). |
 | [`auto_continue.rs`](../../../crates/rimz/src/harness/auto_continue.rs), [`auto_redeem.rs`](../../../crates/rimz/src/harness/auto_redeem.rs), [`assist_log.rs`](../../../crates/rimz/src/harness/assist_log.rs) | Unattended recovery and its audit trail. See [loops.md § Recovery the elder runs](./loops.md#recovery-the-elder-runs). |
 

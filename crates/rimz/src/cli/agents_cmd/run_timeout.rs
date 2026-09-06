@@ -21,11 +21,11 @@ pub fn run_timeout(request: RunTimeoutRequest, globals: &super::GlobalFlags) -> 
     let (record, wrote) =
         rimz::harness::run::timeout_if_due(ctx.store.paths(), &request.run_id, now)?;
     let deadline_due = record.deadline_at.is_some_and(|deadline| deadline <= now);
-    if !wrote && !(record.status == rimz::harness::run::RunStatus::TimedOut && deadline_due) {
+    if !wrote && !(record.status == rimz::store::run::RunStatus::TimedOut && deadline_due) {
         return Ok(());
     }
     if wrote {
-        let _ = rimz::harness::run_wake::wake_run(ctx.store.runtime_paths(), &record);
+        let _ = rimz::store::run::wake_run(ctx.store.runtime_paths(), &record);
     }
     if wrote && let Some((pid, process_start)) = provider_process {
         let _ = rimz::child_process::signal_process_term(pid, Some(&process_start));
@@ -39,11 +39,11 @@ pub fn run_timeout(request: RunTimeoutRequest, globals: &super::GlobalFlags) -> 
         .context("reclaiming timed-out run pane")
 }
 
-fn retains_pane_after_timeout(record: &rimz::harness::run::RunRecord) -> bool {
+fn retains_pane_after_timeout(record: &rimz::store::run::RunRecord) -> bool {
     record.subagent && record.keep
 }
 
-fn provider_process_for_run(record: &rimz::harness::run::RunRecord) -> Option<(u32, String)> {
+fn provider_process_for_run(record: &rimz::store::run::RunRecord) -> Option<(u32, String)> {
     Some((record.provider_pid?, record.provider_process_start.clone()?))
 }
 
@@ -53,7 +53,7 @@ mod tests {
 
     #[test]
     fn only_kept_subagent_timeouts_retain_the_pane() {
-        let mut record = rimz::harness::run::RunRecord::new(
+        let mut record = rimz::store::run::RunRecord::new(
             rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-run")),
             rimz::ids::AgentKind::new_unchecked("codex"),
             rimz::agents::PermissionMode::Auto,
@@ -71,7 +71,7 @@ mod tests {
 
     #[test]
     fn timeout_backstop_uses_persisted_provider_not_wrapper_owner() {
-        let mut record = rimz::harness::run::RunRecord::new(
+        let mut record = rimz::store::run::RunRecord::new(
             rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-run")),
             rimz::ids::AgentKind::new_unchecked("codex"),
             rimz::agents::PermissionMode::Auto,

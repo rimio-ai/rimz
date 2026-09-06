@@ -2257,7 +2257,8 @@ fn sweep_does_not_send_subagent_report_when_run_scan_fails() {
 }
 
 fn subagent_report_fixture(joined: &[bool]) -> (Env, MessageRecord, PathBuf) {
-    use rimz::harness::run::{self, RunRecord, RunStatus};
+    use rimz::harness::run;
+    use rimz::store::run::{RunRecord, RunStatus};
 
     let env = Env::new();
     env.write_config(&env.project_root, "");

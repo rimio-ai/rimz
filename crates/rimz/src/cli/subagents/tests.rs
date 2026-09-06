@@ -490,7 +490,7 @@ fn default_wait_keeps_finished_supervised_children() {
         rimz::agents::AgentState::stub("claude", "interactive", rimz::agents::AgentStatus::Idle);
     let children = vec![&finished, &running, &untracked];
 
-    let mut finished_run = rimz::harness::run::RunRecord::new(
+    let mut finished_run = rimz::store::run::RunRecord::new(
         rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/subagent-wait")),
         rimz::ids::AgentKind::new_unchecked("codex"),
         rimz::agents::PermissionMode::Auto,
@@ -499,8 +499,8 @@ fn default_wait_keeps_finished_supervised_children() {
     );
     finished_run.agent_id = Some(finished.agent_id.clone());
     finished_run.agent_name = finished.name.clone();
-    finished_run.status = rimz::harness::run::RunStatus::Completed;
-    let mut running_run = rimz::harness::run::RunRecord::new(
+    finished_run.status = rimz::store::run::RunStatus::Completed;
+    let mut running_run = rimz::store::run::RunRecord::new(
         rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/subagent-wait")),
         rimz::ids::AgentKind::new_unchecked("codex"),
         rimz::agents::PermissionMode::Auto,
@@ -539,11 +539,11 @@ fn stop_preparation_stamps_entire_selected_fleet_before_cancellation() {
         rimz::agents::AgentState::stub("codex", "second", rimz::agents::AgentStatus::Success);
     second.name = Some("second".to_owned());
     let runs = [
-        ("first", &first, rimz::harness::run::RunStatus::Running),
-        ("second", &second, rimz::harness::run::RunStatus::Completed),
+        ("first", &first, rimz::store::run::RunStatus::Running),
+        ("second", &second, rimz::store::run::RunStatus::Completed),
     ]
     .map(|(name, child, status)| {
-        let mut run = rimz::harness::run::RunRecord::new(
+        let mut run = rimz::store::run::RunRecord::new(
             workspace_id.clone(),
             child.kind.clone(),
             rimz::agents::PermissionMode::Auto,
@@ -609,7 +609,7 @@ fn child_reports_name_each_parent_and_channel() {
     let mut orphan = second.clone();
     orphan.agent_id = "child-orphan".into();
     orphan.parent_agent_id = Some("missing-parent".into());
-    let mut run = rimz::harness::run::RunRecord::new(
+    let mut run = rimz::store::run::RunRecord::new(
         rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/subagent-list")),
         first.kind.clone(),
         rimz::agents::PermissionMode::Auto,
@@ -617,7 +617,7 @@ fn child_reports_name_each_parent_and_channel() {
         PathBuf::from("/tmp/subagent-list"),
     );
     run.agent_id = Some(first.agent_id.clone());
-    run.status = rimz::harness::run::RunStatus::Completed;
+    run.status = rimz::store::run::RunStatus::Completed;
     let agents = [planner, coder, first, second, orphan];
     let children = [&agents[2], &agents[3], &agents[4]];
 

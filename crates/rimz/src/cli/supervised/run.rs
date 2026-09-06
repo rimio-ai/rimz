@@ -5,7 +5,7 @@ use crate::cli::render;
 use rimz::agents::PermissionMode;
 use rimz::agents::transcript::TranscriptCursor;
 use rimz::harness::plan::{LaunchFinalizeOptions, launch_identity_requests};
-use rimz::harness::run::{RunRecord, RunStatus, SupervisedRunOutcome, SupervisedRunRequest};
+use rimz::harness::run::{SupervisedRunOutcome, SupervisedRunRequest};
 use rimz::harness::run_wake::{self, ExpectedRunFrame};
 use rimz::harness::spec::LayoutSpec;
 use rimz::ids::AgentKind;
@@ -13,6 +13,7 @@ use rimz::mux::{
     LayoutColumn, LayoutPanes, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions,
     own_pane_id,
 };
+use rimz::store::run::{RunRecord, RunStatus};
 use rimz::store::{writer::AgentLaunchBatch, writer::AgentLaunchName, writer::AgentLaunchScope};
 use std::borrow::Cow;
 use std::io::{IsTerminal as _, Write as _};
@@ -713,7 +714,7 @@ fn verify_phase(
         } else {
             detail.output.clone()
         };
-        let verify = rimz::harness::run::RunVerify {
+        let verify = rimz::store::run::RunVerify {
             cmd: cmd.to_owned(),
             attempts: verify_attempt,
             passed: outcome.passed(),

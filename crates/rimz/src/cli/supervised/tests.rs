@@ -2,11 +2,12 @@ use super::*;
 use rimz::agents::PermissionMode;
 use rimz::agents::{AgentState, AgentStatus, LaunchParams};
 use rimz::disk::paths::{RuntimePaths, StatePaths};
-use rimz::harness::run::{RunCancellation, RunStatus, SupervisedRunRequest};
-use rimz::harness::run_wake::{self, ExpectedRunFrame, WakeupFrame};
+use rimz::harness::run::{RunCancellation, SupervisedRunRequest};
+use rimz::harness::run_wake::{self, ExpectedRunFrame};
 use rimz::harness::spec::Cell;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
 use rimz::pane::PaneRef;
+use rimz::store::run::{RunStatus, WakeupFrame};
 use tokio::net::UnixDatagram;
 
 #[test]

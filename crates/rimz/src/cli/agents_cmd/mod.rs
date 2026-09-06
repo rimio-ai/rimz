@@ -58,7 +58,7 @@ use rimz::harness::plan::{
     launch_identity_requests, mint_launch_id, validate_agent_name,
 };
 use rimz::harness::resume::{PostureDegrade, ResumePosture};
-use rimz::harness::run::{RunRecord, RunStatus, SupervisedRunOutcome};
+use rimz::harness::run::SupervisedRunOutcome;
 use rimz::harness::run_timeout::RunTimeoutRequest;
 use rimz::harness::spec::{AgentCell, Cell, LayoutSpec};
 use rimz::ids::{AgentKind, AgentSessionId};
@@ -66,6 +66,7 @@ use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd, SplitPaneOptions, own_pane_i
 use rimz::room::{RoomContext, RoomSizing};
 use rimz::sidebar::refresh::usage::AccountUsageRefreshRequest;
 use rimz::store::message::{DeliveryGate, gate_open};
+use rimz::store::run::{RunRecord, RunStatus};
 use rimz::store::{
     writer::AgentLaunchBatch, writer::AgentLaunchIdentity, writer::AgentLaunchName,
     writer::AgentLaunchRequest, writer::AgentLaunchScope,

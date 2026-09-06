@@ -1576,7 +1576,7 @@ fn agents_exec_missing_worktree_path_fails_launch_without_spawning() {
     init_repo(&env.project_root);
     let missing = env.home_root.join("project-worktrees").join("missing");
     let store = env.store();
-    let record = rimz::harness::run::RunRecord::new(
+    let record = rimz::store::run::RunRecord::new(
         env.workspace_id.clone(),
         AgentKind::new_unchecked("codex"),
         rimz::agents::PermissionMode::Auto,
@@ -1616,7 +1616,7 @@ fn agents_exec_missing_worktree_path_fails_launch_without_spawning() {
         .expect("failed launch remains in roster");
     assert_eq!(agent.status, rimz::agents::AgentStatus::Failed);
     let run = rimz::harness::run::load(store.paths(), &run_id).expect("load run");
-    assert_eq!(run.status, rimz::harness::run::RunStatus::Failed);
+    assert_eq!(run.status, rimz::store::run::RunStatus::Failed);
 }
 
 #[cfg(unix)]

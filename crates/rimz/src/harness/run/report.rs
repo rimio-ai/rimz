@@ -77,7 +77,7 @@ pub fn record_report_messages(
             }
         }
         record.updated_at = now;
-        match crate::store::run_store::write(&paths.runs_dir, &record) {
+        match crate::store::run::write(&paths.runs_dir, &record) {
             Ok(()) => written.push(original.clone()),
             Err(err) => {
                 write_error.get_or_insert(err);
@@ -88,7 +88,7 @@ pub fn record_report_messages(
     if let Some(write_error) = write_error {
         let mut rollback_error = None;
         for original in written.iter().rev() {
-            if let Err(err) = crate::store::run_store::write(&paths.runs_dir, original) {
+            if let Err(err) = crate::store::run::write(&paths.runs_dir, original) {
                 rollback_error.get_or_insert(err);
             }
         }

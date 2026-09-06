@@ -1101,9 +1101,7 @@ fn fail_run_on_exec_precondition(context: Option<&RunExecContext>) {
 fn fail_run_if_nonterminal(context: &RunExecContext, reason: &'static str) {
     match rimz::harness::run::fail_if_nonterminal(context.store.paths(), &context.run_id) {
         Ok(Some(record)) => {
-            if let Err(err) =
-                rimz::harness::run_wake::wake_run(context.store.runtime_paths(), &record)
-            {
+            if let Err(err) = rimz::store::run::wake_run(context.store.runtime_paths(), &record) {
                 tracing::debug!(
                     run_id = %context.run_id,
                     error = %err,

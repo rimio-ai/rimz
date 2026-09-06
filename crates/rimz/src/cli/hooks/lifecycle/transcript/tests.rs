@@ -384,7 +384,7 @@ fn launched_child_brief_is_attributed_to_parent() {
         },
     );
 
-    let mut run = rimz::harness::run::RunRecord::new(
+    let mut run = rimz::store::run::RunRecord::new(
         workspace.workspace_id.clone(),
         rimz::ids::AgentKind::new_unchecked("claude"),
         rimz::agents::PermissionMode::Auto,

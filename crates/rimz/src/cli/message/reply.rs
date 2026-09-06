@@ -11,8 +11,8 @@ use crate::cli::render;
 use crate::cli::render::prose::{Prose, prose_width};
 use crate::cli::send::WaitSpec;
 use crate::cli::spinner::Spinner;
-use rimz::harness::run::RunStatus;
 use rimz::message::reply::{ReplyFailure, ReplyProgress, ReplyResult, ReplyUpdate, ReplyWait};
+use rimz::store::run::RunStatus;
 
 const POLL: Duration = Duration::from_millis(500);
 

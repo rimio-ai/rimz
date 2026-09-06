@@ -42,7 +42,7 @@ pub mod follow;
 pub mod gc;
 pub mod live_roster;
 pub mod message;
-pub(crate) mod run_store;
+pub mod run;
 pub mod runtime;
 pub(crate) mod session_death;
 pub(crate) mod sidecar;
@@ -86,7 +86,7 @@ pub enum StoreErr {
     #[error(transparent)]
     MessageStore(#[from] message::MessageStoreErr),
     #[error(transparent)]
-    RunStore(#[from] crate::harness::run::RunStoreErr),
+    RunStore(#[from] run::RunStoreErr),
     #[error(transparent)]
     Lock(#[from] lock::LockErr),
     #[error(transparent)]

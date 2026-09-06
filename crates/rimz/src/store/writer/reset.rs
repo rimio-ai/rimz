@@ -4,11 +4,11 @@ use std::path::Path;
 
 use jiff::Timestamp;
 
-use crate::harness::run::{RunRecord, RunStatus};
+use crate::store::run::{self as run, RunRecord, RunStatus};
 
 use crate::disk::lock;
 
-use super::super::{Result, Store, StoreErr, event_log, run_store, snapshot};
+use super::super::{Result, Store, StoreErr, event_log, snapshot};
 use super::ResetRecordsOutcome;
 
 fn remove_file_if_exists(path: &Path) -> Result<bool> {
@@ -115,7 +115,7 @@ fn remove_diag_logs(root: &Path) -> Result<usize> {
 
 fn cancel_active_runs_for_reset_locked(paths: &super::super::StatePaths) -> Result<Vec<RunRecord>> {
     let mut canceled = Vec::new();
-    for mut record in run_store::list(&paths.runs_dir)? {
+    for mut record in run::list(&paths.runs_dir)? {
         if record.status.is_terminal() {
             continue;
         }
@@ -123,7 +123,7 @@ fn cancel_active_runs_for_reset_locked(paths: &super::super::StatePaths) -> Resu
         record.status = RunStatus::Canceled;
         record.updated_at = now;
         record.completed_at = Some(now);
-        run_store::write(&paths.runs_dir, &record)?;
+        run::write(&paths.runs_dir, &record)?;
         canceled.push(record);
     }
     Ok(canceled)

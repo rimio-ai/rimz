@@ -14,12 +14,12 @@ use rimz::agents::PermissionMode;
 use rimz::agents::{AgentRateLimits, RateLimitCacheEntry, RateLimitWindow, RateLimitsCache};
 use rimz::config::{CheckOn, LoopConfig, TaskEntry, TaskTarget, Tasks};
 use rimz::harness::budget::{BudgetLedger, DayBaseline, write_ledger};
-use rimz::harness::run::{RunRecord, RunStatus};
 use rimz::harness::schedule::arming::Arming;
 use rimz::harness::schedule::run_log::{LoopRunMode, LoopRunRecord, LoopRunResult};
 use rimz::harness::schedule::runner::RunLockInfo;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, SidebarInstanceId, WorkspaceId};
 use rimz::store::message::{AutoCompact, MessageStatus};
+use rimz::store::run::{RunRecord, RunStatus};
 use rimz::wakeup::heartbeat::SidebarHeartbeat;
 
 #[cfg(unix)]

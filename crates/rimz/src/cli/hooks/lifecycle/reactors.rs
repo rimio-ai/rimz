@@ -33,7 +33,7 @@ pub(super) struct ReactorCtx<'a> {
     pub(super) workspace: &'a ResolvedWorkspace,
     pub(super) store: &'a Store,
     pub(super) primary_event_id: Option<&'a rimz::ids::EventId>,
-    pub(super) run_completion: Option<&'a rimz::harness::run::RunRecord>,
+    pub(super) run_completion: Option<&'a rimz::store::run::RunRecord>,
 }
 
 pub(super) fn dispatch(ctx: &ReactorCtx<'_>, events: &[rimz::agents::LifecycleEvent]) {
@@ -57,7 +57,7 @@ fn run_wake(ctx: &ReactorCtx<'_>, event: &rimz::agents::LifecycleEvent) {
     let Some(record) = ctx.run_completion else {
         return;
     };
-    if let Err(err) = rimz::harness::run_wake::wake_run(ctx.store.runtime_paths(), record) {
+    if let Err(err) = rimz::store::run::wake_run(ctx.store.runtime_paths(), record) {
         warn!(
             kind = %event.kind,
             agent_id = %event.agent_id,
