@@ -1,4 +1,141 @@
+use jiff::Timestamp;
+
+use crate::agents::attribution::slot_groups;
+
 use super::*;
+
+fn at(seconds: i64) -> Timestamp {
+    Timestamp::from_second(seconds).expect("test timestamp")
+}
+
+fn lifetime_agent(path: &Path, id: &str, registered: i64) -> AgentState {
+    std::fs::create_dir_all(path).expect("create lane");
+    let mut record = agent(
+        id,
+        Some(path.to_str().expect("UTF-8 lane path")),
+        None,
+        at(registered),
+    );
+    record.registered_at = Some(at(registered));
+    record
+}
+
+fn mark_lane(path: &Path, created_at: Timestamp) {
+    let git_dir = path.join(".git");
+    std::fs::create_dir_all(&git_dir).expect("create git metadata");
+    let marker = WorktreeMarker {
+        version: 1,
+        name: "lane".to_owned(),
+        branch: "feature".to_owned(),
+        base_branch: Some("main".to_owned()),
+        from_pr: None,
+        base_ref: "main".to_owned(),
+        repo_root: path.to_owned(),
+        worktree_path: path.to_owned(),
+        created_at,
+    };
+    std::fs::write(
+        git_dir.join("rimz-worktree.json"),
+        serde_json::to_vec(&marker).expect("serialize marker"),
+    )
+    .expect("write marker");
+}
+
+#[test]
+fn lane_lifetimes_resolve_managed_checkouts() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let checkout = dir.path().join("checkout");
+    mark_lane(&checkout, at(20));
+    let linked = dir.path().join("linked");
+    std::fs::create_dir(&linked).expect("create linked checkout");
+    std::fs::write(linked.join(".git"), "gitdir: ../checkout/.git\n").expect("write gitfile");
+
+    for path in [&checkout, &linked] {
+        let agents = [
+            lifetime_agent(path, "old", 19),
+            lifetime_agent(path, "boundary", 20),
+            lifetime_agent(path, "new", 21),
+        ];
+        let refs = agents.iter().collect::<Vec<_>>();
+        let lifetimes = lane_lifetimes(agents.iter()).expect("resolve managed lane");
+        let groups = slot_groups(&refs, &lifetimes);
+        let admitted = groups
+            .iter()
+            .flatten()
+            .map(|record| &record.agent_id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(admitted.len(), 2);
+        assert!(!admitted.contains(&&agents[0].agent_id));
+        assert!(admitted.contains(&&agents[1].agent_id));
+        assert!(admitted.contains(&&agents[2].agent_id));
+        assert_eq!(lifetimes.common_since(&refs), Some(at(20)));
+    }
+}
+
+#[test]
+fn lane_lifetimes_keep_unmarked_paths_unbounded() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let checkout = dir.path().join("checkout");
+    mark_lane(&checkout, at(20));
+    let plain = dir.path().join("plain");
+    std::fs::create_dir_all(plain.join(".git")).expect("create plain git directory");
+    let linked = dir.path().join("linked");
+    std::fs::create_dir(&linked).expect("create linked checkout");
+    std::fs::create_dir(dir.path().join("admin")).expect("create linked metadata");
+    std::fs::write(linked.join(".git"), "gitdir: ../admin\n").expect("write gitfile");
+    let mut agents = [
+        lifetime_agent(&plain, "plain", 1),
+        lifetime_agent(&linked, "linked", 1),
+        lifetime_agent(&checkout.join("src"), "subdirectory", 1),
+        lifetime_agent(&checkout, "unstamped", 1),
+    ];
+    agents[3].worktree_path = None;
+    let lifetimes = lane_lifetimes(agents.iter()).expect("resolve lane lifetimes");
+    for registered_at in [Some(at(1)), None] {
+        for record in &mut agents {
+            record.registered_at = registered_at;
+        }
+        let refs = agents.iter().collect::<Vec<_>>();
+        let groups = slot_groups(&refs, &lifetimes);
+        assert_eq!(groups.len(), 4);
+        for group in groups {
+            assert_eq!(group.len(), 1);
+            assert_eq!(lifetimes.common_since(&group), None);
+        }
+    }
+}
+
+#[test]
+fn lane_lifetimes_exclude_removed_paths() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("lane");
+    mark_lane(&path, at(20));
+    let record = lifetime_agent(&path, "current", 21);
+    let lifetimes = lane_lifetimes([&record]).expect("resolve current lane");
+    assert_eq!(slot_groups(&[&record], &lifetimes).len(), 1);
+    assert_eq!(lifetimes.common_since(&[&record]), Some(at(20)));
+    std::fs::remove_dir_all(&path).expect("remove checkout");
+    let lifetimes = lane_lifetimes([&record]).expect("resolve removed lane");
+
+    assert!(slot_groups(&[&record], &lifetimes).is_empty());
+    assert_eq!(lifetimes.common_since(&[&record]), None);
+}
+
+#[test]
+fn lane_lifetimes_reject_malformed_markers() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    mark_lane(dir.path(), at(20));
+    std::fs::write(dir.path().join(".git/rimz-worktree.json"), "{")
+        .expect("write malformed marker");
+    let record = lifetime_agent(dir.path(), "current", 21);
+
+    let Err(WorktreeErr::LaneLifetimeRead { path, source }) = lane_lifetimes([&record]) else {
+        panic!("malformed marker must fail lane resolution");
+    };
+    assert_eq!(path, dir.path());
+    assert!(matches!(*source, WorktreeErr::Json(_)));
+}
 
 fn workspace(root_class: RootClass) -> ResolvedWorkspace {
     let project_root = PathBuf::from("/code/query-engine");

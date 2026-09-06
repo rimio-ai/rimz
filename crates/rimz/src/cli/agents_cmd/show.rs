@@ -620,8 +620,8 @@ fn slot_lifetime_effort(
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading audit agent rollup")?;
     let refs = audit.agents.iter().collect::<Vec<_>>();
-    let lifetimes = rimz::agents::attribution::LaneLifetimes::resolve(audit.agents.iter())
-        .context("resolving lane lifetimes")?;
+    let lifetimes =
+        rimz::worktree::lane_lifetimes(audit.agents.iter()).context("resolving lane lifetimes")?;
     let records = slot_records_for_agent(&refs, agent, &lifetimes);
     let prices = rimz::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
     let effort = rimz::agents::spending::slot_effort(
@@ -846,7 +846,7 @@ mod tests {
         let mut second = first.clone();
         second.agent_id = "second".into();
         let records = [&first, &second];
-        let lifetimes = rimz::agents::attribution::LaneLifetimes::resolve(records).unwrap();
+        let lifetimes = rimz::worktree::lane_lifetimes(records).unwrap();
 
         let slot = slot_records_for_agent(&records, &second, &lifetimes);
 
@@ -870,7 +870,7 @@ mod tests {
         second.agent_id = "child-two".into();
         let records = [&parent, &first, &second];
 
-        let lifetimes = rimz::agents::attribution::LaneLifetimes::resolve(records).unwrap();
+        let lifetimes = rimz::worktree::lane_lifetimes(records).unwrap();
         let child_slot = slot_records_for_agent(&records, &second, &lifetimes);
 
         assert_eq!(

@@ -30,54 +30,16 @@ pub struct LaneLifetimes {
     by_path: HashMap<PathBuf, LaneLifetime>,
 }
 
-enum LaneLifetime {
+pub enum LaneLifetime {
     Unbounded,
     Removed,
     Since(Timestamp),
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum LaneLifetimeErr {
-    #[error("reading worktree lifetime for {}", path.display())]
-    Read {
-        path: PathBuf,
-        #[source]
-        source: crate::worktree::WorktreeErr,
-    },
-}
-
 impl LaneLifetimes {
-    pub fn resolve<'a>(
-        records: impl IntoIterator<Item = &'a AgentState>,
-    ) -> Result<Self, LaneLifetimeErr> {
-        let mut by_path = HashMap::new();
-        for path in records
-            .into_iter()
-            .filter_map(|record| record.worktree_path.as_deref())
-        {
-            let path = Path::new(path);
-            if by_path.contains_key(path) {
-                continue;
-            }
-            let exists = path.try_exists().map_err(|source| LaneLifetimeErr::Read {
-                path: path.to_owned(),
-                source: source.into(),
-            })?;
-            let lifetime = if exists {
-                crate::worktree::read_marker_from_checkout_metadata(path)
-                    .map_err(|source| LaneLifetimeErr::Read {
-                        path: path.to_owned(),
-                        source,
-                    })?
-                    .map_or(LaneLifetime::Unbounded, |marker| {
-                        LaneLifetime::Since(marker.created_at)
-                    })
-            } else {
-                LaneLifetime::Removed
-            };
-            by_path.insert(path.to_owned(), lifetime);
-        }
-        Ok(Self { by_path })
+    /// The map must cover every stamped checkout in the report's record set.
+    pub fn new(by_path: HashMap<PathBuf, LaneLifetime>) -> Self {
+        Self { by_path }
     }
 
     pub fn common_since(&self, roots: &[&AgentState]) -> Option<Timestamp> {

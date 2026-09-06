@@ -5,7 +5,7 @@
 //! removal only ever removes marked worktrees. Removal assessment combines Git
 //! safety with normalized pane and agent occupancy facts.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::agents::AgentState;
+use crate::agents::attribution::{LaneLifetime, LaneLifetimes};
 use crate::config::{WorktreeBase, WorktreeConfig};
 use crate::forge::PrTarget;
 use crate::ids::PaneId;
@@ -141,6 +142,12 @@ pub enum WorktreeErr {
     PrBranchConflict { branch: String, detail: String },
     #[error("could not parse git output: {0}")]
     Parse(String),
+    #[error("reading worktree lifetime for {}", path.display())]
+    LaneLifetimeRead {
+        path: PathBuf,
+        #[source]
+        source: Box<WorktreeErr>,
+    },
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -1048,6 +1055,42 @@ pub(crate) fn read_marker_from_checkout_metadata(path: &Path) -> Result<Option<W
         return Ok(None);
     };
     read_marker_file(&marker)
+}
+
+/// Resolve current lane lifetimes once from a report's full record set.
+pub fn lane_lifetimes<'a>(
+    records: impl IntoIterator<Item = &'a AgentState>,
+) -> Result<LaneLifetimes> {
+    let mut by_path = HashMap::new();
+    for path in records
+        .into_iter()
+        .filter_map(|record| record.worktree_path.as_deref())
+    {
+        let path = Path::new(path);
+        if by_path.contains_key(path) {
+            continue;
+        }
+        let exists = path
+            .try_exists()
+            .map_err(|source| WorktreeErr::LaneLifetimeRead {
+                path: path.to_owned(),
+                source: Box::new(source.into()),
+            })?;
+        let lifetime = if exists {
+            read_marker_from_checkout_metadata(path)
+                .map_err(|source| WorktreeErr::LaneLifetimeRead {
+                    path: path.to_owned(),
+                    source: Box::new(source),
+                })?
+                .map_or(LaneLifetime::Unbounded, |marker| {
+                    LaneLifetime::Since(marker.created_at)
+                })
+        } else {
+            LaneLifetime::Removed
+        };
+        by_path.insert(path.to_owned(), lifetime);
+    }
+    Ok(LaneLifetimes::new(by_path))
 }
 
 fn read_marker_file(marker: &Path) -> Result<Option<WorktreeMarker>> {

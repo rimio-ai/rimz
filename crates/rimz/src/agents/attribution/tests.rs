@@ -8,7 +8,6 @@ fn at(seconds: i64) -> Timestamp {
 }
 
 fn agent(path: &Path, id: &str, kind: &str, registered: i64) -> AgentState {
-    std::fs::create_dir_all(path).expect("create lane");
     serde_json::from_value(json!({
         "agent_id": id,
         "kind": kind,
@@ -27,36 +26,24 @@ fn agent(path: &Path, id: &str, kind: &str, registered: i64) -> AgentState {
     .expect("test agent")
 }
 
-fn mark_lane(path: &Path, created_at: Timestamp) {
-    let git_dir = path.join(".git");
-    std::fs::create_dir_all(&git_dir).expect("create git metadata");
-    let marker = crate::worktree::WorktreeMarker {
-        version: 1,
-        name: "lane".to_owned(),
-        branch: "feature".to_owned(),
-        base_branch: Some("main".to_owned()),
-        from_pr: None,
-        base_ref: "main".to_owned(),
-        repo_root: path.to_owned(),
-        worktree_path: path.to_owned(),
-        created_at,
-    };
-    std::fs::write(
-        git_dir.join("rimz-worktree.json"),
-        serde_json::to_vec(&marker).expect("serialize marker"),
+fn unbounded_lifetimes<'a>(records: impl IntoIterator<Item = &'a AgentState>) -> LaneLifetimes {
+    LaneLifetimes::new(
+        records
+            .into_iter()
+            .filter_map(|record| record.worktree_path.as_deref())
+            .map(|path| (PathBuf::from(path), LaneLifetime::Unbounded))
+            .collect(),
     )
-    .expect("write marker");
 }
 
 #[test]
 fn lane_lifetimes_admit_registration_at_or_after_marker_birth() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    mark_lane(dir.path(), at(20));
+    let lane = Path::new("/repo/lane");
     let mut agents = [
-        agent(dir.path(), "old", "claude", 19),
-        agent(dir.path(), "boundary", "claude", 20),
-        agent(dir.path(), "new", "claude", 21),
-        agent(dir.path(), "unknown", "claude", 22),
+        agent(lane, "old", "claude", 19),
+        agent(lane, "boundary", "claude", 20),
+        agent(lane, "new", "claude", 21),
+        agent(lane, "unknown", "claude", 22),
     ];
     for record in &mut agents {
         record.team = Some("forge".to_owned());
@@ -65,7 +52,10 @@ fn lane_lifetimes_admit_registration_at_or_after_marker_birth() {
     }
     agents[3].registered_at = None;
     let refs = agents.iter().collect::<Vec<_>>();
-    let lifetimes = LaneLifetimes::resolve(agents.iter()).expect("resolve lane lifetimes");
+    let lifetimes = LaneLifetimes::new(HashMap::from([(
+        lane.to_owned(),
+        LaneLifetime::Since(at(20)),
+    )]));
 
     let groups = slot_groups(&refs, &lifetimes);
 
@@ -77,84 +67,43 @@ fn lane_lifetimes_admit_registration_at_or_after_marker_birth() {
             .collect::<Vec<_>>(),
         [&agents[1].agent_id, &agents[2].agent_id]
     );
-    let report = build_for(&agents);
+    let report = build_scoped(&agents, &[], &[], &lifetimes);
     assert_eq!(report.groups[0].members[0].sessions, 2);
     assert_eq!(report.totals.tool_calls, 2);
 }
 
 #[test]
-fn lane_lifetimes_keep_unmarked_paths_unbounded() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let checkout = dir.path().join("checkout");
-    mark_lane(&checkout, at(20));
-    let plain = dir.path().join("plain");
-    std::fs::create_dir_all(plain.join(".git")).expect("create plain git directory");
-    let linked = dir.path().join("linked");
-    std::fs::create_dir(&linked).expect("create linked checkout");
-    std::fs::create_dir(dir.path().join("admin")).expect("create linked metadata");
-    std::fs::write(linked.join(".git"), "gitdir: ../admin\n").expect("write gitfile");
-    let mut agents = [
-        agent(&plain, "plain", "claude", 1),
-        agent(&linked, "linked", "claude", 1),
-        agent(&checkout.join("src"), "subdirectory", "claude", 1),
-        agent(&checkout, "unstamped", "claude", 1),
-    ];
-    agents[3].worktree_path = None;
-    let lifetimes = LaneLifetimes::resolve(agents.iter()).expect("resolve lane lifetimes");
-    for registered_at in [Some(at(1)), None] {
-        for record in &mut agents {
-            record.registered_at = registered_at;
-        }
-        let refs = agents.iter().collect::<Vec<_>>();
-        let groups = slot_groups(&refs, &lifetimes);
-        assert_eq!(groups.len(), 4);
-        for group in groups {
-            assert_eq!(group.len(), 1);
-            assert_eq!(lifetimes.common_since(&group), None);
-        }
+fn lane_lifetimes_exclude_removed_and_unresolved_paths() {
+    let record = agent(Path::new("/repo/lane"), "current", "claude", 21);
+    for by_path in [
+        HashMap::from([(PathBuf::from("/repo/lane"), LaneLifetime::Removed)]),
+        HashMap::new(),
+    ] {
+        let lifetimes = LaneLifetimes::new(by_path);
+        assert!(slot_groups(&[&record], &lifetimes).is_empty());
+        assert_eq!(lifetimes.common_since(&[&record]), None);
     }
 }
 
 #[test]
-fn lane_lifetimes_exclude_removed_paths() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("lane");
-    mark_lane(&path, at(20));
-    let mut record = agent(&path, "current", "claude", 21);
-    record.tool_calls.insert("exec".to_owned(), 1);
-    assert_eq!(build_for(&[record.clone()]).totals.agents, 1);
-    std::fs::remove_dir_all(&path).expect("remove checkout");
-    let lifetimes = LaneLifetimes::resolve([&record]).expect("resolve removed lane");
+fn lane_lifetimes_admit_unbounded_and_unstamped_records_without_registration() {
+    let mut unbounded = agent(Path::new("/repo/lane"), "unbounded", "claude", 1);
+    unbounded.registered_at = None;
+    let mut unstamped = unbounded.clone();
+    unstamped.agent_id = AgentSessionId::from("unstamped");
+    unstamped.worktree_path = None;
+    let lifetimes = LaneLifetimes::new(HashMap::from([(
+        PathBuf::from("/repo/lane"),
+        LaneLifetime::Unbounded,
+    )]));
 
-    assert!(slot_groups(&[&record], &lifetimes).is_empty());
-    assert_eq!(lifetimes.common_since(&[&record]), None);
-    let report = build_for(&[record]);
-    assert!(report.groups.is_empty());
-    assert_eq!(report.totals.agents, 0);
-    assert_eq!(report.totals.tool_calls, 0);
-}
-
-#[test]
-fn lane_lifetimes_reject_malformed_markers() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    mark_lane(dir.path(), at(20));
-    std::fs::write(dir.path().join(".git/rimz-worktree.json"), "{")
-        .expect("write malformed marker");
-    let record = agent(dir.path(), "current", "claude", 21);
-
-    let Err(LaneLifetimeErr::Read { path, .. }) = LaneLifetimes::resolve([&record]) else {
-        panic!("malformed marker must fail lane resolution");
-    };
-    assert_eq!(path, dir.path());
+    assert_eq!(slot_groups(&[&unbounded, &unstamped], &lifetimes).len(), 2);
 }
 
 #[test]
 fn slot_groups_admit_roots_and_children_by_their_own_lifetime() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let lane = dir.path().join("lane");
-    let sibling = dir.path().join("sibling");
-    mark_lane(&lane, at(20));
-    mark_lane(&sibling, at(10));
+    let lane = PathBuf::from("/repo/lane");
+    let sibling = PathBuf::from("/repo/sibling");
     let mut old = agent(&lane, "old", "claude", 19);
     old.team = Some("forge".to_owned());
     old.role = Some("coder".to_owned());
@@ -185,7 +134,10 @@ fn slot_groups_admit_roots_and_children_by_their_own_lifetime() {
         orphan,
     ];
     let refs = agents.iter().collect::<Vec<_>>();
-    let lifetimes = LaneLifetimes::resolve(agents.iter()).expect("resolve all audit lanes");
+    let lifetimes = LaneLifetimes::new(HashMap::from([
+        (lane, LaneLifetime::Since(at(20))),
+        (sibling, LaneLifetime::Since(at(10))),
+    ]));
 
     let groups = slot_groups(&refs, &lifetimes);
     let current_group = groups
@@ -214,7 +166,7 @@ fn slot_groups_admit_roots_and_children_by_their_own_lifetime() {
         })
         .expect("eligible orphan slot");
     assert_eq!(orphan_group.len(), 1);
-    let report = build_for(&agents);
+    let report = build_scoped(&agents, &[], &[], &lifetimes);
     assert_eq!(report.totals.agents, 1);
     assert_eq!(report.totals.tool_calls, 1);
     assert_eq!(report.groups[0].members[0].sessions, 1);
@@ -222,19 +174,21 @@ fn slot_groups_admit_roots_and_children_by_their_own_lifetime() {
 
 #[test]
 fn common_since_requires_one_managed_lane() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let lane = dir.path().join("lane");
-    let sibling = dir.path().join("sibling");
-    mark_lane(&lane, at(20));
-    mark_lane(&sibling, at(20));
+    let lane = PathBuf::from("/repo/lane");
+    let sibling = PathBuf::from("/repo/sibling");
     let first = agent(&lane, "first", "claude", 19);
     let second = agent(&lane, "second", "claude", 21);
     let other = agent(&sibling, "other", "claude", 21);
-    let unmarked = agent(&dir.path().join("unmarked"), "unmarked", "claude", 1);
+    let unmarked = agent(Path::new("/repo/unmarked"), "unmarked", "claude", 1);
     let mut unstamped = first.clone();
     unstamped.worktree_path = None;
-    let lifetimes = LaneLifetimes::resolve([&first, &second, &other, &unmarked, &unstamped])
-        .expect("resolve lane lifetimes");
+    let removed = agent(Path::new("/repo/removed"), "removed", "claude", 21);
+    let lifetimes = LaneLifetimes::new(HashMap::from([
+        (lane, LaneLifetime::Since(at(20))),
+        (sibling, LaneLifetime::Since(at(20))),
+        (PathBuf::from("/repo/unmarked"), LaneLifetime::Unbounded),
+        (PathBuf::from("/repo/removed"), LaneLifetime::Removed),
+    ]));
 
     assert_eq!(lifetimes.common_since(&[&first]), Some(at(20)));
     assert_eq!(lifetimes.common_since(&[&first, &second]), Some(at(20)));
@@ -243,6 +197,7 @@ fn common_since_requires_one_managed_lane() {
     assert_eq!(lifetimes.common_since(&[&first, &unstamped]), None);
     assert_eq!(lifetimes.common_since(&[&unmarked]), None);
     assert_eq!(lifetimes.common_since(&[&unstamped]), None);
+    assert_eq!(lifetimes.common_since(&[&removed]), None);
     assert_eq!(lifetimes.common_since(&[]), None);
 }
 
@@ -255,16 +210,24 @@ fn build_with(
     subagents: &[AgentState],
     transcript: &[TranscriptEntry],
 ) -> Attribution {
+    let lifetimes = unbounded_lifetimes(agents.iter().chain(subagents));
+    build_scoped(agents, subagents, transcript, &lifetimes)
+}
+
+fn build_scoped(
+    agents: &[AgentState],
+    subagents: &[AgentState],
+    transcript: &[TranscriptEntry],
+    lifetimes: &LaneLifetimes,
+) -> Attribution {
     let dir = tempfile::tempdir().expect("tempdir");
     let refs = agents.iter().collect::<Vec<_>>();
-    let lifetimes =
-        LaneLifetimes::resolve(agents.iter().chain(subagents)).expect("resolve lane lifetimes");
     let subagent_refs = subagents.iter().collect::<Vec<_>>();
     let active_secs = BTreeMap::new();
     let pricing_cache_path = dir.path().join("prices.json");
     build(AttributionRequest {
         agents: &refs,
-        lifetimes: &lifetimes,
+        lifetimes,
         peers: &refs,
         subagents: &subagent_refs,
         transcript,
@@ -308,15 +271,15 @@ fn mixed_origin_report() -> Attribution {
     )
     .expect("write launched transcript");
 
-    let mut parent = agent(&dir.path().join("lane"), "parent", "claude", 10);
+    let mut parent = agent(Path::new("/repo/lane"), "parent", "claude", 10);
     parent.team = Some("forge".to_owned());
     parent.role = Some("planner".to_owned());
     parent.transcript_path = Some(transcript.to_string_lossy().into_owned());
-    let mut native = agent(&dir.path().join("lane"), "native", "claude", 20);
+    let mut native = agent(Path::new("/repo/lane"), "native", "claude", 20);
     native.parent_agent_id = Some(parent.agent_id.clone());
     native.parent_agent_kind = Some(parent.kind.clone());
     native.task = Some("Explorer".to_owned());
-    let mut launched = agent(&dir.path().join("lane"), "launched", "claude", 30);
+    let mut launched = agent(Path::new("/repo/lane"), "launched", "claude", 30);
     launched.parent_agent_id = Some(parent.agent_id.clone());
     launched.parent_agent_kind = Some(parent.kind.clone());
     launched.launch_depth = Some(1);
@@ -351,7 +314,7 @@ fn folds_compaction_continuations_and_sums_rollup_effort() {
         crate::ids::MuxName::Tmux,
         "%3",
     ));
-    let mut first = agent(&dir.path().join("lane"), "one", "claude", 10);
+    let mut first = agent(Path::new("/repo/lane"), "one", "claude", 10);
     first.team = Some("forge".to_owned());
     first.role = Some("coder".to_owned());
     first.launch_ordinal = Some(1);
@@ -367,7 +330,7 @@ fn folds_compaction_continuations_and_sums_rollup_effort() {
         Some("agent-start".to_owned()),
     ));
     first.transcript_path = Some(first_transcript.to_string_lossy().into_owned());
-    let mut second = agent(&dir.path().join("lane"), "two", "claude", 30);
+    let mut second = agent(Path::new("/repo/lane"), "two", "claude", 30);
     second.team = Some("forge".to_owned());
     second.role = Some("coder".to_owned());
     second.launch_ordinal = Some(1);
@@ -413,7 +376,7 @@ fn resumed_slot_deduplicates_replayed_transcript_effort() {
         )
         .unwrap();
         let mut state = agent(
-            &dir.path().join("lane"),
+            Path::new("/repo/lane"),
             id,
             "codex",
             if id == "one" { 10 } else { 30 },
@@ -434,16 +397,15 @@ fn resumed_slot_deduplicates_replayed_transcript_effort() {
 
 #[test]
 fn launched_child_attribution_corroborates_missing_parent_kind() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let wrong = agent(&dir.path().join("lane"), "parent", "claude", 10);
-    let mut parent = agent(&dir.path().join("lane"), "current", "codex", 20);
+    let wrong = agent(Path::new("/repo/lane"), "parent", "claude", 10);
+    let mut parent = agent(Path::new("/repo/lane"), "current", "codex", 20);
     parent.launch_id = Some(AgentSessionId::from("parent"));
-    let mut child = agent(&dir.path().join("lane"), "child", "codex", 30);
+    let mut child = agent(Path::new("/repo/lane"), "child", "codex", 30);
     child.parent_agent_id = Some(AgentSessionId::from("parent"));
     child.launch_depth = Some(1);
 
     let refs = [&wrong, &parent, &child];
-    let lifetimes = LaneLifetimes::resolve(refs).expect("resolve lane lifetimes");
+    let lifetimes = unbounded_lifetimes(refs);
     let groups = slot_groups(&refs, &lifetimes);
     let group = groups
         .iter()
@@ -465,7 +427,7 @@ fn launched_child_attribution_corroborates_missing_parent_kind() {
 #[test]
 fn launched_child_continuations_deduplicate_as_one_subagent_seat() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut parent = agent(&dir.path().join("lane"), "parent", "claude", 5);
+    let mut parent = agent(Path::new("/repo/lane"), "parent", "claude", 5);
     parent.team = Some("forge".to_owned());
     parent.role = Some("planner".to_owned());
     parent.tool_calls.insert("exec".to_owned(), 1);
@@ -485,7 +447,7 @@ fn launched_child_continuations_deduplicate_as_one_subagent_seat() {
             r#"{{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":2.0,"requestId":"request","message":{{"id":"message","usage":{{"input_tokens":20,"output_tokens":2}}}}}}"#
         )
         .unwrap();
-        let mut child = agent(&dir.path().join("lane"), id, "claude", registered);
+        let mut child = agent(Path::new("/repo/lane"), id, "claude", registered);
         child.parent_agent_id = Some(parent.agent_id.clone());
         child.parent_agent_kind = Some(parent.kind.clone());
         child.launch_depth = Some(1);
@@ -535,7 +497,7 @@ fn claude_slot_credits_subagent_transcript_effort() {
         ),
     )
     .unwrap();
-    let mut state = agent(&dir.path().join("lane"), "claude-session", "claude", 10);
+    let mut state = agent(Path::new("/repo/lane"), "claude-session", "claude", 10);
     state.team = Some("forge".to_owned());
     state.role = Some("planner".to_owned());
     state.transcript_path = Some(transcript.to_string_lossy().into_owned());
@@ -593,12 +555,12 @@ fn launched_child_effort_folds_into_the_parent_seat() {
         ),
     )
     .unwrap();
-    let mut parent = agent(&dir.path().join("lane"), "parent", "claude", 10);
+    let mut parent = agent(Path::new("/repo/lane"), "parent", "claude", 10);
     parent.team = Some("forge".to_owned());
     parent.role = Some("planner".to_owned());
     parent.transcript_path = Some(parent_transcript.to_string_lossy().into_owned());
     parent.tool_calls.insert("exec".to_owned(), 1);
-    let mut child = agent(&dir.path().join("lane"), "child", "claude", 30);
+    let mut child = agent(Path::new("/repo/lane"), "child", "claude", 30);
     child.name = Some("helper".to_owned());
     child.parent_agent_id = Some(parent.agent_id.clone());
     child.parent_agent_kind = Some(parent.kind.clone());
@@ -634,7 +596,7 @@ fn launched_child_effort_folds_into_the_parent_seat() {
     ];
     let agents = [parent, child];
     let refs = agents.iter().collect::<Vec<_>>();
-    let lifetimes = LaneLifetimes::resolve(agents.iter()).expect("resolve lane lifetimes");
+    let lifetimes = unbounded_lifetimes(agents.iter());
     let active_secs = BTreeMap::from([((agents[0].kind.clone(), agents[0].agent_id.clone()), 10)]);
     let pricing_cache_path = dir.path().join("prices.json");
     let report = build(AttributionRequest {
@@ -891,10 +853,10 @@ fn launched_only_delegation_keeps_the_member_with_all_in_cost() {
         ),
     )
     .expect("write child transcript");
-    let mut parent = agent(&dir.path().join("lane"), "parent", "claude", 10);
+    let mut parent = agent(Path::new("/repo/lane"), "parent", "claude", 10);
     parent.team = Some("forge".to_owned());
     parent.role = Some("planner".to_owned());
-    let mut child = agent(&dir.path().join("lane"), "child", "claude", 30);
+    let mut child = agent(Path::new("/repo/lane"), "child", "claude", 30);
     child.parent_agent_id = Some(parent.agent_id.clone());
     child.parent_agent_kind = Some(parent.kind.clone());
     child.launch_depth = Some(1);
@@ -902,7 +864,7 @@ fn launched_only_delegation_keeps_the_member_with_all_in_cost() {
     child.transcript_path = Some(child_transcript.to_string_lossy().into_owned());
     let agents = [parent, child];
     let refs = agents.iter().collect::<Vec<_>>();
-    let lifetimes = LaneLifetimes::resolve(agents.iter()).expect("resolve lane lifetimes");
+    let lifetimes = unbounded_lifetimes(agents.iter());
     let active_secs = BTreeMap::new();
     let pricing_cache_path = dir.path().join("prices.json");
 
@@ -940,15 +902,13 @@ fn launched_child_in_another_lane_follows_its_parent() {
         ),
     )
     .expect("write child transcript");
-    let mut parent = agent(&dir.path().join("lane"), "parent", "claude", 10);
+    let mut parent = agent(Path::new("/repo/lane"), "parent", "claude", 10);
     parent.channel = Some("feature".to_owned());
     parent.team = Some("forge".to_owned());
     parent.role = Some("planner".to_owned());
-    let mut child = agent(&dir.path().join("lane"), "child", "claude", 30);
+    let mut child = agent(Path::new("/repo/lane"), "child", "claude", 30);
     child.channel = Some("sibling".to_owned());
-    let sibling = dir.path().join("sibling");
-    std::fs::create_dir(&sibling).expect("create sibling lane");
-    child.worktree_path = Some(sibling.to_string_lossy().into_owned());
+    child.worktree_path = Some("/repo/sibling".to_owned());
     child.parent_agent_id = Some(parent.agent_id.clone());
     child.parent_agent_kind = Some(parent.kind.clone());
     child.launch_depth = Some(1);
@@ -972,7 +932,7 @@ fn same_named_children_of_different_parents_stay_with_their_launcher() {
         (1, "coder", "coder-audit", 2.0),
     ] {
         let mut parent = agent(
-            &dir.path().join("lane"),
+            Path::new("/repo/lane"),
             role,
             "claude",
             10 + i64::from(ordinal),
@@ -989,7 +949,7 @@ fn same_named_children_of_different_parents_stay_with_their_launcher() {
         )
         .expect("write child transcript");
         let mut child = agent(
-            &dir.path().join("lane"),
+            Path::new("/repo/lane"),
             child_id,
             "claude",
             30 + i64::from(ordinal),
@@ -1029,7 +989,7 @@ fn same_named_children_of_different_parents_stay_with_their_launcher() {
 #[test]
 fn all_in_cost_sums_child_slots_in_stable_order() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut parent = agent(&dir.path().join("lane"), "parent", "claude", 10);
+    let mut parent = agent(Path::new("/repo/lane"), "parent", "claude", 10);
     parent.team = Some("forge".to_owned());
     parent.role = Some("planner".to_owned());
     let mut agents = vec![parent.clone()];
@@ -1046,7 +1006,7 @@ fn all_in_cost_sums_child_slots_in_stable_order() {
             ),
         )
         .expect("write child transcript");
-        let mut child = agent(&dir.path().join("lane"), child_id, "claude", 30 + ordinal);
+        let mut child = agent(Path::new("/repo/lane"), child_id, "claude", 30 + ordinal);
         child.parent_agent_id = Some(parent.agent_id.clone());
         child.parent_agent_kind = Some(parent.kind.clone());
         child.launch_depth = Some(1);
@@ -1075,7 +1035,7 @@ fn launched_child_without_a_retained_parent_is_not_a_member() {
         ),
     )
     .unwrap();
-    let mut child = agent(&dir.path().join("lane"), "child", "claude", 30);
+    let mut child = agent(Path::new("/repo/lane"), "child", "claude", 30);
     child.parent_agent_id = Some(AgentSessionId::from("missing"));
     child.launch_depth = Some(1);
     child.transcript_path = Some(transcript.to_string_lossy().into_owned());
@@ -1090,13 +1050,12 @@ fn launched_child_without_a_retained_parent_is_not_a_member() {
 
 #[test]
 fn team_roles_and_provider_kinds_keep_distinct_slots() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut planner = agent(&dir.path().join("lane"), "planner", "claude", 10);
+    let mut planner = agent(Path::new("/repo/lane"), "planner", "claude", 10);
     planner.team = Some("forge".to_owned());
     planner.role = Some("planner".to_owned());
     planner.launch_ordinal = Some(0);
     planner.tool_calls.insert("read".to_owned(), 1);
-    let mut coder = agent(&dir.path().join("lane"), "coder", "codex", 11);
+    let mut coder = agent(Path::new("/repo/lane"), "coder", "codex", 11);
     coder.team = Some("forge".to_owned());
     coder.role = Some("coder".to_owned());
     coder.launch_ordinal = Some(1);
@@ -1111,13 +1070,12 @@ fn team_roles_and_provider_kinds_keep_distinct_slots() {
 
 #[test]
 fn identical_team_roles_in_different_lanes_keep_distinct_slots() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut auth = agent(&dir.path().join("lane"), "auth-coder", "codex", 10);
+    let mut auth = agent(Path::new("/repo/lane"), "auth-coder", "codex", 10);
     auth.team = Some("forge".to_owned());
     auth.role = Some("coder".to_owned());
     auth.channel = Some("auth".to_owned());
     auth.tool_calls.insert("exec".to_owned(), 1);
-    let mut docs = agent(&dir.path().join("lane"), "docs-coder", "codex", 20);
+    let mut docs = agent(Path::new("/repo/lane"), "docs-coder", "codex", 20);
     docs.team = Some("forge".to_owned());
     docs.role = Some("coder".to_owned());
     docs.channel = Some("docs".to_owned());
@@ -1136,20 +1094,19 @@ fn identical_team_roles_in_different_lanes_keep_distinct_slots() {
 
 #[test]
 fn roleless_cohorts_and_reused_panes_fold() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut first = agent(&dir.path().join("lane"), "one", "codex", 10);
+    let mut first = agent(Path::new("/repo/lane"), "one", "codex", 10);
     first.launch_group = Some("group".to_owned());
     first.launch_ordinal = Some(0);
     first.tool_calls.insert("exec".to_owned(), 1);
-    let mut continuation = agent(&dir.path().join("lane"), "two", "codex", 20);
+    let mut continuation = agent(Path::new("/repo/lane"), "two", "codex", 20);
     continuation.launch_group = Some("group".to_owned());
     continuation.launch_ordinal = Some(0);
-    let mut pane_first = agent(&dir.path().join("lane"), "pane-one", "claude", 30);
+    let mut pane_first = agent(Path::new("/repo/lane"), "pane-one", "claude", 30);
     pane_first.pane = Some(crate::pane::PaneRef::from_id(
         crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%1"),
     ));
     pane_first.tool_calls.insert("read".to_owned(), 1);
-    let mut pane_second = agent(&dir.path().join("lane"), "pane-two", "claude", 40);
+    let mut pane_second = agent(Path::new("/repo/lane"), "pane-two", "claude", 40);
     pane_second.pane = pane_first.pane.clone();
 
     let report = build_for(&[first, continuation, pane_first, pane_second]);
@@ -1163,13 +1120,12 @@ fn roleless_cohorts_and_reused_panes_fold() {
 
 #[test]
 fn exited_presence_wall_clock_and_teamless_order_are_honest() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut team = agent(&dir.path().join("lane"), "team", "codex", 10);
+    let mut team = agent(Path::new("/repo/lane"), "team", "codex", 10);
     team.team = Some("forge".to_owned());
     team.role = Some("coder".to_owned());
     team.ended_at = Some(at(20));
     team.tool_calls.insert("exec".to_owned(), 1);
-    let mut stray = agent(&dir.path().join("lane"), "stray", "claude", 30);
+    let mut stray = agent(Path::new("/repo/lane"), "stray", "claude", 30);
     stray.tool_calls.insert("read".to_owned(), 1);
 
     let report = build_for(&[team, stray]);
@@ -1184,15 +1140,15 @@ fn exited_presence_wall_clock_and_teamless_order_are_honest() {
 #[test]
 fn agents_without_a_recorded_contribution_are_omitted() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut idle = agent(&dir.path().join("lane"), "idle", "claude", 10);
+    let mut idle = agent(Path::new("/repo/lane"), "idle", "claude", 10);
     idle.team = Some("idle-team".to_owned());
     idle.role = Some("planner".to_owned());
-    let mut contributor = agent(&dir.path().join("lane"), "contributor", "codex", 20);
+    let mut contributor = agent(Path::new("/repo/lane"), "contributor", "codex", 20);
     contributor.team = Some("forge".to_owned());
     contributor.role = Some("coder".to_owned());
     contributor.tool_calls.insert("exec".to_owned(), 1);
     let mut turn_contributor = agent(
-        &dir.path().join("lane"),
+        Path::new("/repo/lane"),
         "turn-contributor",
         "antigravity",
         30,
@@ -1234,7 +1190,7 @@ fn agents_without_a_recorded_contribution_are_omitted() {
     assert_eq!(durable.cost_usd, None);
 
     let refs = agents.iter().collect::<Vec<_>>();
-    let lifetimes = LaneLifetimes::resolve(agents.iter()).expect("resolve lane lifetimes");
+    let lifetimes = unbounded_lifetimes(agents.iter());
     let active_secs = BTreeMap::new();
     let pricing_cache_path = dir.path().join("prices.json");
     let report = build(AttributionRequest {
@@ -1258,16 +1214,15 @@ fn agents_without_a_recorded_contribution_are_omitted() {
 
 #[test]
 fn transcript_counts_messages_asks_and_sent_credit_per_slot() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut planner = agent(&dir.path().join("lane"), "planner-session", "claude", 10);
+    let mut planner = agent(Path::new("/repo/lane"), "planner-session", "claude", 10);
     planner.team = Some("forge".to_owned());
     planner.role = Some("planner".to_owned());
     planner.channel = Some("feature".to_owned());
-    let mut coder = agent(&dir.path().join("lane"), "coder-session", "codex", 20);
+    let mut coder = agent(Path::new("/repo/lane"), "coder-session", "codex", 20);
     coder.team = Some("forge".to_owned());
     coder.role = Some("coder".to_owned());
     coder.channel = Some("feature".to_owned());
-    let mut docs_coder = agent(&dir.path().join("lane"), "docs-coder", "codex", 30);
+    let mut docs_coder = agent(Path::new("/repo/lane"), "docs-coder", "codex", 30);
     docs_coder.team = Some("forge".to_owned());
     docs_coder.role = Some("coder".to_owned());
     docs_coder.channel = Some("docs".to_owned());
@@ -1349,17 +1304,17 @@ fn subagents_group_by_task_and_join_durable_child_cost() {
         )
         .unwrap();
     }
-    let mut parent = agent(&dir.path().join("lane"), "parent", "claude", 10);
+    let mut parent = agent(Path::new("/repo/lane"), "parent", "claude", 10);
     parent.team = Some("forge".to_owned());
     parent.role = Some("planner".to_owned());
     parent.transcript_path = Some(transcript.to_string_lossy().into_owned());
-    let mut explore_one = agent(&dir.path().join("lane"), "explore-one", "claude", 20);
+    let mut explore_one = agent(Path::new("/repo/lane"), "explore-one", "claude", 20);
     explore_one.parent_agent_id = Some(AgentSessionId::from("parent"));
     explore_one.task = Some("Explore".to_owned());
-    let mut explore_two = agent(&dir.path().join("lane"), "explore-two", "claude", 30);
+    let mut explore_two = agent(Path::new("/repo/lane"), "explore-two", "claude", 30);
     explore_two.parent_agent_id = Some(AgentSessionId::from("parent"));
     explore_two.task = Some("Explore".to_owned());
-    let mut described = agent(&dir.path().join("lane"), "described", "claude", 40);
+    let mut described = agent(Path::new("/repo/lane"), "described", "claude", 40);
     described.parent_agent_id = Some(AgentSessionId::from("parent"));
     described.task = Some("Inspect every parser call site".to_owned());
 
@@ -1396,8 +1351,7 @@ fn subagent_type_rejects_descriptions_and_unbounded_labels() {
 
 #[test]
 fn sent_messages_alone_are_a_contribution() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let idle = agent(&dir.path().join("lane"), "idle", "claude", 10);
+    let idle = agent(Path::new("/repo/lane"), "idle", "claude", 10);
     let mut sent = TranscriptEntry::new(
         at(50),
         AgentKind::new_unchecked("codex"),

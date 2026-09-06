@@ -95,7 +95,7 @@ pub(super) fn load_catalog(
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading audit agent rollup")?;
     let lifetimes =
-        LaneLifetimes::resolve(audit.agents.iter()).context("resolving lane lifetimes")?;
+        rimz::worktree::lane_lifetimes(audit.agents.iter()).context("resolving lane lifetimes")?;
     let prices = rimz::agents::pricing::cached_book(&ctx.runtime().shared_pricing_cache_path());
     Ok(build_catalog(
         &effective.teams,
@@ -574,7 +574,7 @@ mod tests {
             LiveCatalog {
                 agents: &[agent],
                 audit_agents: &[],
-                lifetimes: &LaneLifetimes::resolve([]).unwrap(),
+                lifetimes: &rimz::worktree::lane_lifetimes([]).unwrap(),
                 prices: &rimz::agents::PriceBook::default(),
                 worktree: None,
             },
@@ -622,7 +622,7 @@ mod tests {
         agent.role = Some("planner".to_owned());
         agent.channel = Some("feat-x".to_owned());
         agent.transcript_path = Some(transcript.to_string_lossy().into_owned());
-        let lifetimes = LaneLifetimes::resolve(std::iter::once(&agent)).unwrap();
+        let lifetimes = rimz::worktree::lane_lifetimes(std::iter::once(&agent)).unwrap();
         let reports = build_catalog(
             &TeamsConfig(BTreeMap::from([("forge".to_owned(), team())])),
             &ProfilesConfig::default(),
@@ -696,7 +696,7 @@ mod tests {
         old.transcript_path = current.transcript_path.clone();
         let audit_agents = [old, current.clone()];
         let build = || {
-            let lifetimes = LaneLifetimes::resolve(audit_agents.iter()).unwrap();
+            let lifetimes = rimz::worktree::lane_lifetimes(audit_agents.iter()).unwrap();
             build_catalog(
                 &TeamsConfig(BTreeMap::from([("forge".to_owned(), team())])),
                 &ProfilesConfig::default(),
@@ -746,7 +746,7 @@ mod tests {
             LiveCatalog {
                 agents: &[],
                 audit_agents: &[],
-                lifetimes: &LaneLifetimes::resolve([]).unwrap(),
+                lifetimes: &rimz::worktree::lane_lifetimes([]).unwrap(),
                 prices: &rimz::agents::PriceBook::default(),
                 worktree: None,
             },
@@ -793,7 +793,7 @@ mod tests {
             LiveCatalog {
                 agents: &[],
                 audit_agents: &[],
-                lifetimes: &LaneLifetimes::resolve([]).unwrap(),
+                lifetimes: &rimz::worktree::lane_lifetimes([]).unwrap(),
                 prices: &rimz::agents::PriceBook::default(),
                 worktree: None,
             },
@@ -853,7 +853,7 @@ mod tests {
                 LiveCatalog {
                     agents: std::slice::from_ref(&agent),
                     audit_agents: &[],
-                    lifetimes: &LaneLifetimes::resolve([]).unwrap(),
+                    lifetimes: &rimz::worktree::lane_lifetimes([]).unwrap(),
                     prices: &rimz::agents::PriceBook::default(),
                     worktree: filter,
                 },
