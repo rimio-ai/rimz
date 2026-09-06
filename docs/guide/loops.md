@@ -117,7 +117,8 @@ A subscription names one signal or one whole family: `--signal ci.failed` for th
 Family-watching is what makes a wake survive the fix. A `rimz wake --signal ci.failed` stays armed after it fires: it is a standing subscription with a 59-minute quiet window, and every verdict on the watched branch restarts that window, so the failure at 14:10, the push at 14:20, and the second failure at 14:35 all reach the agent on one arming. When an hour passes with nothing at all, the subscription retires, and the agent hears about that too:
 
 ```text
-wake-still-path expired: no ci.failed on /home/you/code/app-feat-x in 59m
+waited on ci.failed on /home/you/code/app-feat-x
+nothing in 59m; subscription closed [wake-still-path]
 ```
 
 A subscription that did see something retires in silence, because the agent has already been told what happened. `--timeout 4h` widens the window for a slower wait, and re-running the same `rimz wake` command restarts the clock rather than arming a second subscription (`already listening: wake-still-path (59m left)`).
