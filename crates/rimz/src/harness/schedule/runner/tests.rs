@@ -43,6 +43,11 @@ fn spawn_timeout_prefers_task_then_config_then_builtin() {
         "task timeout outranks config"
     );
     assert_eq!(
+        effective_spawn_timeout(Scheduled, Some(task), None),
+        Some(task),
+        "task timeout applies without a configured default"
+    );
+    assert_eq!(
         effective_spawn_timeout(Scheduled, None, Some(configured)),
         Some(configured),
         "config timeout applies when the task is silent"
