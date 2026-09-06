@@ -573,6 +573,52 @@ fn model_stats_orders_by_cost_tokens_and_model_id_with_unknowns_last() {
 }
 
 #[test]
+fn model_stats_merges_empty_ids_and_omits_rows_without_effort() {
+    let rows = model_stats(
+        [
+            (Some(""), None, 10),
+            (Some(" \t"), None, 5),
+            (None, Some(0.25), 20),
+            (Some("unused"), None, 0),
+            (Some("unpriced"), None, 5),
+            (Some("cost-only"), Some(0.5), 0),
+        ]
+        .into_iter()
+        .map(|(model, cost_usd, input)| {
+            (
+                model.map(ToOwned::to_owned),
+                spending::SlotEffort {
+                    tokens: TokenSplit {
+                        input,
+                        ..TokenSplit::default()
+                    },
+                    cost_usd,
+                },
+            )
+        })
+        .collect(),
+    );
+
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].model.as_deref(), Some("cost-only"));
+    assert_eq!(rows[0].cost_usd, Some(0.5));
+    assert_eq!(rows[0].tokens, TokenSplit::default());
+    assert_eq!(rows[1].model, None);
+    assert_eq!(rows[1].cost_usd, Some(0.25));
+    assert_eq!(rows[1].tokens.input, 35);
+    assert_eq!(rows[2].model.as_deref(), Some("unpriced"));
+    assert_eq!(rows[2].cost_usd, None);
+    assert_eq!(rows[2].tokens.input, 5);
+    assert!(
+        model_stats(BTreeMap::from([
+            (None, spending::SlotEffort::default()),
+            (Some(String::new()), spending::SlotEffort::default()),
+        ]))
+        .is_empty()
+    );
+}
+
+#[test]
 fn launched_only_delegation_keeps_the_member_with_all_in_cost() {
     let dir = tempfile::tempdir().expect("tempdir");
     let child_transcript = dir.path().join("child.jsonl");
