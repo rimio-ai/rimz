@@ -15,7 +15,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, kill};
@@ -39,9 +39,9 @@ use crate::harness::schedule::run_log::{
 };
 use crate::harness::schedule::signal::Signal as TriggerSignal;
 use crate::harness::schedule::{TaskAction, Trigger};
-use crate::ids::WorkspaceId;
+use crate::ids::{RunId, WorkspaceId};
 use crate::utils::time::{DurationUnit, parse_duration_units};
-use crate::workspace::WorkspaceResolver;
+use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};
 
 pub const CHECK_DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 pub const SCHEDULED_RUN_DEFAULT_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
@@ -1126,6 +1126,122 @@ pub fn effective_spawn_timeout(
         (mode == crate::harness::schedule::run_log::LoopRunMode::Scheduled)
             .then_some(configured_timeout.unwrap_or(SCHEDULED_RUN_DEFAULT_TIMEOUT))
     })
+}
+
+const STOP_GRACE: Duration = Duration::from_secs(5);
+
+pub enum StopOutcome {
+    NoActiveRun,
+    Stopped {
+        run_id: Option<RunId>,
+        signaled: bool,
+    },
+}
+
+pub fn stop_task(
+    name: &str,
+    task: &LoadedTask,
+    cancel: impl FnOnce(Option<&ResolvedWorkspace>, WorkspaceId, Option<&RunRecord>) -> Result<()>,
+) -> Result<StopOutcome> {
+    let entry = task.entry();
+    let lock_state = probe_run_lock(name, entry)?;
+    if next_stop_action(&lock_state, false, false, false) == StopAction::Done {
+        return Ok(StopOutcome::NoActiveRun);
+    }
+
+    let root = entry.resolved_root();
+    let (workspace, workspace_id) = stop_workspace(&root)?;
+    let paths = StatePaths::for_workspace(workspace_id.clone())?;
+    let run = newest_active_run(&paths, name);
+    cancel(
+        workspace.as_ref(),
+        workspace_id,
+        run.as_ref().ok().and_then(Option::as_ref),
+    )?;
+    let run = run?;
+
+    if wait_for_run_lock_release(name, entry, STOP_GRACE)? {
+        return Ok(StopOutcome::Stopped {
+            run_id: run.map(|record| record.run_id),
+            signaled: false,
+        });
+    }
+
+    let action = next_stop_action(&lock_state, run.is_some(), true, false);
+    let (holder, signal_error) = match action {
+        StopAction::Signal(info) => match signal_run_lock_holder(&info) {
+            Ok(()) => (Some(info), None),
+            Err(err) => (Some(info), Some(err)),
+        },
+        StopAction::Done | StopAction::CancelRun | StopAction::Manual => {
+            (lock_info(&lock_state), None)
+        }
+    };
+
+    if signal_error.is_none()
+        && let Some(info) = holder
+        && wait_for_run_lock_release(name, entry, STOP_GRACE)?
+    {
+        append_stopped_record(name, task, info, run.as_ref());
+        return Ok(StopOutcome::Stopped {
+            run_id: run.map(|record| record.run_id),
+            signaled: true,
+        });
+    }
+
+    let lock = run_lock_path(name, entry)?;
+    let holder = holder
+        .map(|info| format!(" (pid {})", info.pid))
+        .unwrap_or_default();
+    let signal = signal_error
+        .map(|err| format!("; SIGTERM failed: {err:#}"))
+        .unwrap_or_default();
+    bail!(
+        "loop `{name}` is still active{holder}; lock {}; stop the holder manually and retry{signal}",
+        lock.display()
+    )
+}
+
+fn stop_workspace(root: &Path) -> Result<(Option<ResolvedWorkspace>, WorkspaceId)> {
+    let workspace = root
+        .exists()
+        .then(|| WorkspaceResolver::resolve(root, None))
+        .transpose()
+        .with_context(|| format!("resolving project root at {}", root.display()))?;
+    let workspace_id = match &workspace {
+        Some(workspace) => workspace.workspace_id.clone(),
+        None => WorkspaceResolver::persisted_workspace_id(root)?,
+    };
+    Ok((workspace, workspace_id))
+}
+
+fn lock_info(state: &RunLockState) -> Option<RunLockInfo> {
+    match state {
+        RunLockState::Held(info) => *info,
+        RunLockState::Available => None,
+    }
+}
+
+fn append_stopped_record(
+    name: &str,
+    task: &LoadedTask,
+    info: RunLockInfo,
+    run: Option<&RunRecord>,
+) {
+    let elapsed = Timestamp::now()
+        .as_millisecond()
+        .saturating_sub(info.started_at.as_millisecond());
+    let duration_ms = u64::try_from(elapsed).unwrap_or(0);
+    let mut record = LoopRunRecord::new(
+        name,
+        LoopRunResult::Canceled,
+        LoopRunMode::Scheduled,
+        duration_ms,
+    );
+    record.mode = None;
+    record.error = Some("stopped by rimz loop stop".to_owned());
+    record.run_id = run.map(|record| record.run_id.to_string());
+    run_log::record_transition(task, &record);
 }
 
 pub struct RunLockGuard {
