@@ -222,7 +222,7 @@ pub(super) fn render_markdown(w: &mut impl Write, report: &Attribution) -> std::
         markdown_summary_subject(report),
         totals_label(&report.totals)
     )?;
-    writeln!(w)?;
+    writeln!(w, "\n<br/>\n\n**Agents**\n")?;
     let show_captions = report.groups.len() > 1;
     for (index, group) in report.groups.iter().enumerate() {
         if index > 0 {
@@ -737,6 +737,10 @@ mod tests {
         insta::assert_snapshot!(String::from_utf8(output).expect("utf8"), @r#"
         <details>
         <summary>Implemented by <a href="https://github.com/rimio-ai/rimz">RimZ</a> agents · 2 agents · 2h10m active · $3.20 · 14 messages (4 from you)</summary>
+
+        <br/>
+
+        **Agents**
 
         **forge team**
 

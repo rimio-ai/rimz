@@ -203,7 +203,7 @@ Models
   gpt-5.6-terra:    $0.83 · 184.8k input, 16.3k output, 1.3m cache read
 ```
 
-Every dollar and token figure is all-in for the member or team, including subagents; each `subagents` line breaks part of the effort figure above down by task rather than adding to it. `Models` splits that same spend by the model id each provider transcript recorded, including native subagents and launched children. Unlike the member heading, which names its latest session's model, these rows show every model used, ordered by cost largest first. Entries whose transcript named no model collect under `unknown`. The `--md` form turns the same figures and wording into a collapsed pull-request receipt whose summary links RimZ to its repository, with a `**Models**` bullet list after the members.
+Every dollar and token figure is all-in for the member or team, including subagents; each `subagents` line breaks part of the effort figure above down by task rather than adding to it. `Models` splits that same spend by the model id each provider transcript recorded, including native subagents and launched children. Unlike the member heading, which names its latest session's model, these rows show every model used, ordered by cost largest first. Entries whose transcript named no model collect under `unknown`. The `--md` form turns the same figures and wording into a collapsed pull-request receipt whose summary links RimZ to its repository, with member bullets under `**Agents**` followed by a `**Models**` bullet list.
 
 **Find what is burning CPU or tokens.** When the machine gets loud, `rimz agents top` ranks the live fleet by the resources each agent's pane process tree is using. It streams by default; `--once` takes a sample and exits for a script:
 
