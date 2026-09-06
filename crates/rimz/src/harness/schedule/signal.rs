@@ -23,7 +23,7 @@ use crate::harness::schedule::runner::RunLockInfo;
 use crate::{ResolvedWorkspace, RuntimePaths, Store};
 use std::path::Path;
 
-pub const MAX_SIGNAL_NAME_BYTES: usize = 64;
+const MAX_SIGNAL_NAME_BYTES: usize = 64;
 
 const RESERVED_FAMILIES: &[&str] = &["agent", "wake", "team", "ci", "pr"];
 
@@ -183,7 +183,7 @@ pub enum WatchOutcome {
 }
 
 impl WatchOutcome {
-    pub fn to_check_outcome(&self) -> CheckOutcome {
+    pub(super) fn to_check_outcome(&self) -> CheckOutcome {
         match self {
             Self::Exited { code, output, .. } => {
                 CheckOutcome::new(*code == Some(0), false, output.clone(), *code)
@@ -198,7 +198,7 @@ impl WatchOutcome {
     }
 }
 
-pub fn match_value(value: &Value) -> String {
+pub(super) fn match_value(value: &Value) -> String {
     match value {
         Value::String(value) => value.clone(),
         other => other.to_string(),

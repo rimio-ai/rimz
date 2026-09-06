@@ -5,7 +5,7 @@
 //! user-global JSON file.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::overlay_store::{OverlayError, OverlayStore};
 use crate::config::TaskEntry;
@@ -71,7 +71,8 @@ pub fn threshold(entry: &TaskEntry) -> Option<u32> {
     }
 }
 
-pub fn path(state_root: &Path) -> PathBuf {
+#[cfg(test)]
+fn path(state_root: &Path) -> std::path::PathBuf {
     STORE.path(state_root)
 }
 

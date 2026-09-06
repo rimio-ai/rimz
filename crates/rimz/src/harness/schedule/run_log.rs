@@ -26,7 +26,7 @@ const MAX_BYTES: u64 = 4 * 1_048_576;
 const CHECK_OUTPUT_CAP: usize = 4 * 1024;
 const ERROR_CAP: usize = 2 * 1024;
 const LAST_MESSAGE_CAP: usize = 2 * 1024;
-pub const COST_WINDOW: usize = 10;
+const COST_WINDOW: usize = 10;
 
 /// Output facts that are useful only while presenting one terminal fire.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -44,9 +44,9 @@ pub enum RunTransition {
     AutoDisabled { strikes: u32 },
 }
 
-/// Append first, then update strike and arming overlays. Overlay failures stay
-/// best-effort because the terminal history row is durable truth.
-pub fn record_transition(task: &LoadedTask, record: &LoopRunRecord) -> RunTransition {
+/// Attempt the history append before updating strike and arming overlays.
+/// Both the append and overlay updates are best-effort.
+pub(super) fn record_transition(task: &LoadedTask, record: &LoopRunRecord) -> RunTransition {
     append_to(&state_home(), record);
     let name = &record.task;
     let key = TaskKey::for_task(name, task.source(), &task.entry().resolved_root());
@@ -234,7 +234,7 @@ pub struct TaskCostSummary {
     pub costed_runs: usize,
 }
 
-pub fn log_path(state_root: &Path) -> PathBuf {
+fn log_path(state_root: &Path) -> PathBuf {
     state_root.join("rimz").join(NAME)
 }
 
@@ -305,14 +305,14 @@ fn cost_on_local_day(record: &LoopRunRecord, now: &Zoned) -> Option<f64> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DailyBudgetGate {
-    pub spend_usd: f64,
-    pub cap_usd: f64,
-    pub reserved_usd: f64,
+pub(super) struct DailyBudgetGate {
+    pub(super) spend_usd: f64,
+    pub(super) cap_usd: f64,
+    pub(super) reserved_usd: f64,
 }
 
 impl DailyBudgetGate {
-    pub fn reason(self) -> String {
+    pub(super) fn reason(self) -> String {
         if self.reserved_usd > 0.0 {
             format!(
                 "daily budget ${:.2} cannot fund the next ${:.2} run (${:.2} spent)",
