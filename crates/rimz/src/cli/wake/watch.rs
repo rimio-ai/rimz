@@ -71,7 +71,7 @@ pub(super) fn run(name: &str, globals: &GlobalFlags) -> Result<()> {
     ctx.store
         .append_signal(&ctx.workspace.session_name, &signal)
         .context("appending wake signal")?;
-    fire_signal(ctx.runtime(), Some(&ctx.workspace.project_root), &signal)
+    fire_signal(ctx.runtime(), &ctx.workspace.project_root, &signal)
         .context("firing watched wake")?;
     Ok(())
 }

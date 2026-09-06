@@ -10,7 +10,6 @@ use rimz::harness::schedule::run_log::{self, LoopRunRecord, LoopRunResult};
 const POLL: Duration = Duration::from_millis(500);
 
 pub(super) fn for_record(
-    _ctx: &Ctx,
     name: &str,
     created: Timestamp,
     timeout: Option<Duration>,

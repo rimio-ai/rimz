@@ -147,7 +147,7 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
     }
 
     if let Some(timeout) = args.wait {
-        let record = wait::for_record(&ctx, &name, created, timeout)?;
+        let record = wait::for_record(&name, created, timeout)?;
         wait::print_and_settle(&ctx, &record, args.json)?;
     }
     Ok(())

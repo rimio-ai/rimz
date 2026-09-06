@@ -47,7 +47,7 @@ pub enum RunTransition {
 /// Append first, then update strike and arming overlays. Overlay failures stay
 /// best-effort because the terminal history row is durable truth.
 pub fn record_transition(task: &LoadedTask, record: &LoopRunRecord) -> RunTransition {
-    append(record);
+    append_to(&state_home(), record);
     let name = &record.task;
     let key = TaskKey::for_task(name, task.source(), &task.entry().resolved_root());
     let signal = strikes::classify(record);
@@ -238,11 +238,6 @@ pub fn log_path(state_root: &Path) -> PathBuf {
     state_root.join("rimz").join(NAME)
 }
 
-fn append(record: &LoopRunRecord) {
-    let state_root = state_home();
-    append_to(&state_root, record);
-}
-
 fn append_to(state_root: &Path, record: &LoopRunRecord) {
     let capped = capped_record(record);
     crate::disk::rotating::append(&log_path(state_root), MAX_BYTES, &capped);
@@ -264,10 +259,6 @@ pub fn task_records(state_root: &Path, task: &str) -> Vec<LoopRunRecord> {
         }
     });
     records
-}
-
-fn task_spend_today(state_root: &Path, task: &str, now: &Zoned) -> f64 {
-    spend_on_local_day(&task_records(state_root, task), now)
 }
 
 pub fn spend_on_local_day(records: &[LoopRunRecord], now: &Zoned) -> f64 {
@@ -357,7 +348,7 @@ pub(super) fn daily_budget_gate(
         .parse::<crate::harness::budget::BudgetSpec>()
         .map_err(|err| format!("task `{task}` has invalid budget: {err}"))?
         .cap_usd;
-    let spend = task_spend_today(state_root, task, now);
+    let spend = spend_on_local_day(&task_records(state_root, task), now);
     Ok(
         ((spend >= cap) || (reserved > 0.0 && spend + reserved > cap)).then_some(DailyBudgetGate {
             spend_usd: spend,

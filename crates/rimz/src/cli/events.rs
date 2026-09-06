@@ -119,7 +119,7 @@ fn emit(name: &str, raw_payload: Option<&str>, source: &str, globals: &GlobalFla
         .context("appending signal event")?;
     let fired = rimz::harness::schedule::signal::fire_signal(
         store.runtime_paths(),
-        Some(&workspace.project_root),
+        &workspace.project_root,
         &signal,
     )
     .context("firing signal tasks")?;
