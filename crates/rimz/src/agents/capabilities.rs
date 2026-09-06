@@ -108,6 +108,13 @@ pub trait HookCapability: CoreCapability {
 
 #[doc(hidden)]
 pub trait InstallationCapability: CoreCapability {
+    /// The fix when this agent would stop at a directory-trust prompt instead
+    /// of taking its task. Any recorded trust level counts as decided.
+    /// `repo_root` is the checkout's main repository root, when it has one.
+    fn launch_dir_trust_gap(&self, _cwd: &Path, _repo_root: Option<&Path>) -> Option<String> {
+        None
+    }
+
     /// Provider-owned files whose contents determine sidebar wiring admission
     /// or the default launch model. The list covers every file read by
     /// [`Self::hooks_installed`] and [`Self::default_launch_model`]. Resolving a

@@ -24,7 +24,7 @@ rimz agents codex "Prepare the release checklist." -p             # the same gra
 
 1. It checks pre-launch dollar gates and any exact managed-launch provider quota, then writes a durable run record — a JSON file under `~/.local/state/rimz/workspaces/<id>/runs/` — before anything opens.
 2. It opens one pane in your Zellij or tmux (a split beside you when you run it inside the room, a new tab when the caller is outside it) running the official agent CLI with your prompt: the same launch as an interactive `rimz agents <kind>`, one supervised turn instead of a session.
-3. It blocks until the agent's own reporting hooks say the root turn ended — hooks are the completion signal, which is why they are the one [prerequisite](#prerequisites).
+3. It blocks until the agent's own reporting hooks say the root turn ended — hooks are the completion signal, which is why they are a [prerequisite](#prerequisites).
 4. It prints the answer, exits with the run's code, and closes the pane. The agent's session file stays where the CLI always puts it, so `claude --resume` and the provider's own apps keep working, and `rimz agents show` and `rimz transcript` read the run back after it ends.
 
 Nothing else moves: no daemon, no forked agent, no RimZ-private copy of the session. Ctrl+C cancels cleanly — exit `130`, agent stopped, pane reclaimed — and `rimz agents stop <ref>` does the same from any other pane. Add `--keep` to leave the finished pane open for inspection.
@@ -141,7 +141,7 @@ A reference is the printed name, a run id, or any [agent address](./messaging.md
 
 ## Agents scripting agents
 
-`rimz agents -p` is a plain shell command, and agents have shell tools — so the caller does not have to be you. `rimz subagents` packages that path for a RimZ-launched agent: single launches and JSON fanouts run in the background by default, inherit the caller's checkout, and print petnames for a later join. Add `--wait` to either form to wait for its result. Claude can hand its diff to Codex for a second opinion, Codex can hand a stubborn bug to Claude, and a planner can fan an audit across three runs. The calling agent sees only commands and durable answers, so subagents mix providers freely; pairing model strengths this way is the same economics that makes [teams](./teams.md) work.
+`rimz agents -p` is a plain shell command, and agents have shell tools — so the caller does not have to be you. `rimz subagents` packages that path for a RimZ-launched agent: single launches and JSON fanouts run in the background by default, inherit the parent's launch checkout even when its shell has changed directories, and print petnames for a later join. Add `--wait` to either form to wait for its result. Claude can hand its diff to Codex for a second opinion, Codex can hand a stubborn bug to Claude, and a planner can fan an audit across three runs. The calling agent sees only commands and durable answers, so subagents mix providers freely; pairing model strengths this way is the same economics that makes [teams](./teams.md) work.
 
 ```sh
 # inside a planner turn: launch three bounded audits, then join all three
@@ -213,6 +213,8 @@ Because these are public CLI, a wrapper composes them freely: read a prompt with
 ## Prerequisites
 
 Supervised runs need installed and trusted hooks, because hooks are the completion signal — a run with no hooks has no way to know its turn ended. `rimz doctor` confirms the hook state, and [Troubleshooting](./troubleshooting.md) covers a run that never completes. Installing hooks is a one-time consent step, walked in [set up your machine](./setup.md#install-agent-hooks).
+
+Codex also needs a recorded directory-trust decision before a supervised run: open `codex` interactively in the checkout once and answer its trust prompt. RimZ refuses unattended launches that would stop at that prompt; it never grants trust for you.
 
 ## See also
 

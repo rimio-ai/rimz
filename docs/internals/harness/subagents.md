@@ -93,6 +93,14 @@ The doorway deliberately omits `--worktree`, `--from-pr`, `--channel`, `--stdin`
 
 The supervised runner resolves the durable caller before it resolves a subagent profile. [`subagent_policy.rs`](../../../crates/rimz/src/harness/subagent_policy.rs) then applies the caller's `[agents.profiles]` policy: when that profile sets `subagents = [...]`, both the positional profile and any `--agent` rebase must appear literally in the list. Refusal happens before provider preflight, store append, or mux mutation. Its shared catalog filters both `rimz subagents profiles` and the parent's launch reminder; a user-shell catalog remains unfiltered.
 
+### The child works where its parent works
+
+The runner resolves its workspace from `"."`, which is wherever the parent's shell happened to be when it ran the launch. A parent that writes a brief under `/tmp` and launches from there would otherwise hand the child `/tmp` as its checkout. So immediately after ancestry, `anchor_subagent_workspace` ([`cli/supervised.rs`](../../../crates/rimz/src/cli/supervised.rs)) resolves the workspace a second time, from the caller's own `AgentState.worktree_path`, and everything below reads that value: profile qualification, channel inference, pane identity env (`RIMZ_WORKTREE_PATH`), and `resolve_launch_checkout`, whose `cwd` becomes the pane cwd, the provider cwd, the sidebar options, `RunRecord.worktree_path`, and the child's own recorded checkout. The parent's `worktree_path` is stamped from its launch cwd (or filled from a hook process's cwd) and carried for the session's lifetime, so it does not follow a shell `cd`. Both resolutions share the room pin's project root, so the store and effective config opened before the re-anchor stay correct.
+
+The gate is `request.subagent` and a resolved caller, so peers launched through `rimz agents` and loop fires keep the invoking cwd by design. A caller row with no recorded checkout keeps the invoking cwd and logs at debug; a recorded checkout that no longer exists refuses, naming the path, before any store append or mux action.
+
+Provider preflight then runs against that checkout. Besides hook installation and hook trust, a Codex child must already carry a directory-trust decision for it, or the launch refuses with the fix instead of parking the child on Codex's trust screen until its deadline ([adapter_codex.md](../agents/adapter_codex.md#directory-trust-preflight)).
+
 ## Single launch and fanout share one composition
 
 `rimz subagents fanout` accepts a JSON array and desugars every entry through the same `SubagentLaunchArgs::into_agent_launch` path above. Task `timeout` wins over the fanout flag, which wins over the configured default. Fanout-level `keep` applies uniformly; per-task foreground, retention, and passthrough argv are not part of the data format.

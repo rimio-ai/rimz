@@ -418,6 +418,7 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
     let env = Env::new();
     env.install_agent_hooks("codex");
     trust_codex_hooks(&env);
+    trust_codex_project(&env, &env.project_root);
     let agent_bin = write_failing_agent_shim(&env, "codex", 1);
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
     let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
@@ -496,6 +497,193 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
         create < presence,
         "session/sidebar creation must precede presence:\n{trace}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn subagent_launch_from_foreign_cwd_uses_parent_checkout() {
+    assert_subagent_launch_uses_parent_checkout(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn subagent_fanout_from_foreign_cwd_uses_parent_checkout() {
+    assert_subagent_launch_uses_parent_checkout(true);
+}
+
+#[cfg(unix)]
+fn assert_subagent_launch_uses_parent_checkout(fanout: bool) {
+    let env = Env::new();
+    let checkout = env.home_root.join("parent-checkout");
+    let foreign = env.home_root.join("foreign-briefs");
+    std::fs::create_dir(&checkout).expect("mkdir parent checkout");
+    std::fs::create_dir(&foreign).expect("mkdir foreign cwd");
+    let prompt = "Read this brief from the foreign cwd, but work in the parent checkout.";
+    std::fs::write(foreign.join("brief.md"), prompt).expect("write relative prompt file");
+    std::fs::write(checkout.join("brief.md"), "wrong checkout brief")
+        .expect("write decoy prompt file");
+    std::fs::write(
+        foreign.join("tasks.json"),
+        r#"[{"profile":"codex","prompt_file":"brief.md"},{"profile":"codex","prompt_file":"brief.md"}]"#,
+    )
+    .expect("write fanout tasks");
+    env.install_agent_hooks("codex");
+    trust_codex_hooks(&env);
+    trust_codex_project(&env, &checkout);
+    let agent_bin = write_failing_agent_shim(&env, "codex", 1);
+    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let store = env.store();
+    store
+        .record_workspace(&workspace)
+        .expect("record pinned room");
+    let parent_kind = AgentKind::new_unchecked("claude");
+    let parent_id = AgentSessionId::from("parent-session");
+    let parent_launch_id = AgentSessionId::from("parent-launch");
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            &parent_kind,
+            AgentLaunchPayload {
+                agent_id: parent_id.clone(),
+                launch_id: Some(parent_launch_id.clone()),
+                agent_name: "parent".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams::default(),
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: Some(PaneId::from_parts(MuxName::Zellij, "terminal_2")),
+                runtime_owner: None,
+                worktree_path: Some(checkout.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .expect("seed parent checkout");
+    let trace_path = env.project_root.join("subagent-checkout.log");
+    rimz::mux::zellij::pane_topology::write_pane_topology_cache(
+        store.runtime_paths(),
+        &rimz::mux::zellij::pane_topology::PaneTopologyCache {
+            session_name: workspace.session_name.clone(),
+            produced_at_ms: rimz::utils::time::unix_now_ms(),
+            writer: None,
+            focused_pane: None,
+            clients: None,
+            panes: serde_json::from_value(json!([
+                {"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},
+                {"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}
+            ]))
+            .expect("parent pane topology"),
+        },
+    )
+    .expect("write parent pane topology");
+    let presence = env.project_root.join("presence.wasm");
+    std::fs::write(&presence, b"test-presence").expect("write presence fixture");
+    let mut command = env.rimz();
+    command.args(["--mux", "zellij", "subagents"]);
+    if fanout {
+        command.args(["fanout", "tasks.json"]);
+    } else {
+        command.args(["codex", "--prompt-file", "brief.md"]);
+    }
+    let output = command
+        .current_dir(&foreign)
+        .envs(rimz::workspace::pin_env(&env.workspace_id, &env.project_root))
+        .env(rimz::harness::launch::ENV_AGENT_KIND, parent_kind.as_str())
+        .env(rimz::harness::launch::ENV_AGENT_ID, parent_launch_id.as_str())
+        .env("SHELL", shell)
+        .env("PATH", path_with_front(&agent_bin))
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_path)
+        .env("RIMZ_PRESENCE_PLUGIN", presence)
+        .env("ZELLIJ_PANE_ID", "2")
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        )
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+        )
+        .bounded_output()
+        .expect("launch subagents from foreign cwd");
+    assert!(
+        output.status.success(),
+        "subagent launch failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let expected_count = if fanout { 2 } else { 1 };
+    let records = rimz::harness::run::list(store.paths()).expect("list child runs");
+    assert_eq!(records.len(), expected_count);
+    let agents = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("child launch history")
+        .agents;
+    for record in records {
+        assert!(record.subagent);
+        assert_eq!(record.workspace_id, env.workspace_id);
+        assert_eq!(record.worktree_path, checkout);
+        assert_eq!(record.prompt, prompt);
+        let child = agents
+            .iter()
+            .find(|agent| agent.name == record.agent_name)
+            .expect("child launch card");
+        assert_eq!(child.worktree_path.as_deref(), checkout.to_str());
+        assert_eq!(child.parent_agent_id.as_ref(), Some(&parent_id));
+    }
+    let trace = std::fs::read_to_string(&trace_path).expect("read child pane trace");
+    let panes = trace
+        .lines()
+        .filter(|line| line.contains("\tnew-pane\t") && line.contains("\t--cwd\t"))
+        .collect::<Vec<_>>();
+    assert_eq!(panes.len(), expected_count, "child pane launches: {trace}");
+    for pane in panes {
+        let args = pane.split('\t').collect::<Vec<_>>();
+        let cwd = args.windows(2).find(|args| args[0] == "--cwd");
+        assert_eq!(cwd.map(|args| args[1]), checkout.to_str(), "{pane}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn supervised_codex_without_project_trust_refuses_before_launch() {
+    let env = Env::new();
+    env.install_agent_hooks("codex");
+    trust_codex_hooks(&env);
+    let agent_bin = write_failing_agent_shim(&env, "codex", 1);
+    let trace_path = env.project_root.join("untrusted-supervised.log");
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "agents", "codex", "fix it", "-p", "--bg"])
+        .env("PATH", path_with_front(&agent_bin))
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_path)
+        .bounded_output()
+        .expect("refuse untrusted supervised checkout");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let config = env.agent_config_path("codex");
+    for expected in [
+        "trust",
+        "prompt",
+        "codex",
+        "projects",
+        "trust_level",
+        env.project_root.to_str().expect("project path"),
+        config.to_str().expect("config path"),
+    ] {
+        assert!(stderr.contains(expected), "missing {expected:?}: {stderr}");
+    }
+    let store = env.store();
+    assert!(
+        rimz::harness::run::list(store.paths())
+            .expect("list runs")
+            .is_empty()
+    );
+    assert!(store.snapshot().expect("snapshot").agents.is_empty());
+    assert!(!trace_path.exists(), "preflight must not invoke the mux");
 }
 
 #[test]
@@ -1162,6 +1350,7 @@ fn verify_reprompt_interrupt_stays_canceled() {
 fn spawn_retrying_print(env: &Env, trace_name: &str, use_worktree: bool) -> std::process::Child {
     env.install_agent_hooks("codex");
     trust_codex_hooks(env);
+    trust_codex_project(env, &env.project_root);
     let agent_bin = write_failing_agent_shim(env, "codex", 1);
     let shell = write_fake_login_shell(env, "rimz-test-sh", &[]);
     let trace_log = env.project_root.join(format!("{trace_name}.log"));
@@ -1235,6 +1424,7 @@ fn spawn_verifying_print(
 ) -> std::process::Child {
     env.install_agent_hooks("codex");
     trust_codex_hooks(env);
+    trust_codex_project(env, &env.project_root);
     let agent_bin = write_failing_agent_shim(env, "codex", 1);
     let shell = write_fake_login_shell(env, "rimz-test-sh", &[]);
     let trace_log = env.project_root.join(format!("{trace_name}.log"));
@@ -1494,6 +1684,27 @@ fn trust_codex_hooks(env: &Env) {
         ));
     }
     std::fs::write(&config, text).expect("write trust state");
+}
+
+#[cfg(unix)]
+fn trust_codex_project(env: &Env, project: &std::path::Path) {
+    let config = env.agent_config_path("codex");
+    let mut table: toml::Table = std::fs::read_to_string(&config)
+        .expect("read codex config")
+        .parse()
+        .expect("parse codex config");
+    table.insert(
+        "projects".to_owned(),
+        toml::Value::Table(toml::Table::from_iter([(
+            project.display().to_string(),
+            toml::Value::Table(toml::Table::from_iter([(
+                "trust_level".to_owned(),
+                toml::Value::String("trusted".to_owned()),
+            )])),
+        )])),
+    );
+    std::fs::write(&config, toml::to_string(&table).expect("serialize trust"))
+        .expect("write project trust");
 }
 
 #[test]

@@ -22,6 +22,7 @@ fn launch_checkout_without_flags_keeps_current_worktree() {
         .expect("current checkout");
 
     assert_eq!(checkout.cwd, workspace.worktree_root);
+    assert_eq!(checkout.repo_root, None);
     assert_eq!(checkout.worktree_name, None);
     assert_eq!(checkout.generated_name(), None);
 }
@@ -95,6 +96,7 @@ fn launch_checkout_creates_from_the_current_repo_root() {
         worktree_path(&cwd_repo, &WorktreeConfig::default(), "cross-root").expect("path")
     );
     assert!(checkout.cwd.exists());
+    assert_eq!(checkout.repo_root.as_ref(), Some(&cwd_repo));
     assert!(
         !worktree_path(
             &workspace.project_root,
@@ -126,12 +128,14 @@ fn launch_checkout_falls_back_to_the_room_repo_without_a_current_repo() {
         checkout.cwd,
         worktree_path(&room_repo, &WorktreeConfig::default(), "room-root").expect("path")
     );
+    assert_eq!(checkout.repo_root, Some(room_repo));
 }
 
 #[test]
 fn generated_launch_name_is_exposed_only_for_bare_checkout() {
     let generated = LaunchCheckout {
         cwd: PathBuf::from("/code/query-engine-worktrees/swift-orbit"),
+        repo_root: Some(PathBuf::from("/code/query-engine")),
         worktree_name: Some("swift-orbit".to_owned()),
         review_only_reason: None,
         generated_name: true,

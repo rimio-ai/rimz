@@ -2117,6 +2117,10 @@ fn tmux_env(socket: &Path) -> String {
 fn trust_codex_hooks(env: &Env) {
     let config = env.agent_config_path("codex");
     let mut text = std::fs::read_to_string(&config).expect("read codex config");
+    text.push_str(&format!(
+        "\n[projects.{}]\ntrust_level = \"trusted\"\n",
+        toml::Value::String(env.project_root.display().to_string()),
+    ));
     // Leave forward-compatible Interrupt advisory to exercise preflight.
     for token in [
         "session_start",

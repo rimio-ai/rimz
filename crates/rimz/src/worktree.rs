@@ -191,6 +191,8 @@ pub struct PushDestination {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaunchCheckout {
     pub cwd: PathBuf,
+    /// The checkout's main repository root, or `None` outside Git.
+    pub repo_root: Option<PathBuf>,
     pub worktree_name: Option<String>,
     pub review_only_reason: Option<String>,
     generated_name: bool,
@@ -577,6 +579,7 @@ pub fn resolve_launch_checkout(
         let marker = created.marker;
         return Ok(LaunchCheckout {
             cwd: marker.worktree_path,
+            repo_root: Some(repo_root.to_path_buf()),
             worktree_name: Some(marker.name),
             review_only_reason,
             generated_name: false,
@@ -586,6 +589,7 @@ pub fn resolve_launch_checkout(
     let Some(raw_name) = worktree else {
         return Ok(LaunchCheckout {
             cwd: workspace.worktree_root.clone(),
+            repo_root: workspace.cwd_project_root.clone(),
             worktree_name: None,
             review_only_reason: None,
             generated_name: false,
@@ -606,6 +610,7 @@ pub fn resolve_launch_checkout(
     let marker = created.marker;
     Ok(LaunchCheckout {
         cwd: marker.worktree_path,
+        repo_root: Some(repo_root.to_path_buf()),
         worktree_name: Some(marker.name),
         review_only_reason: None,
         generated_name: name.is_empty(),

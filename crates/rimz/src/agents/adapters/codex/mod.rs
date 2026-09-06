@@ -8,7 +8,7 @@
 //! neutral hook output is empty stdout.
 //!
 //! Owns hook install / uninstall through a non-destructive merge into
-//! `~/.codex/config.toml` using Codex's inline `[[hooks.Event]]` tables.
+//! `$CODEX_HOME/config.toml` (`~/.codex` by default) using Codex's inline `[[hooks.Event]]` tables.
 //!
 //! Realtime details split across two sources. Usage (the context window, raw
 //! token totals, token composition, and cost) is read from the rollout tail
@@ -34,6 +34,7 @@ mod local_sessions;
 pub(crate) mod oauth_usage;
 pub(crate) mod payloads;
 pub mod process;
+mod project_trust;
 mod rollout;
 mod session_index;
 pub(crate) mod spend;
@@ -104,6 +105,16 @@ use super::{
     resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::transcript::{AskOption, AskQuestion};
+
+/// Codex's shared config, credentials, and control-socket home.
+pub(super) fn codex_home() -> Option<PathBuf> {
+    if let Some(raw) = std::env::var_os("CODEX_HOME").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(raw));
+    }
+    std::env::var_os("HOME")
+        .filter(|v| !v.is_empty())
+        .map(|home| PathBuf::from(home).join(".codex"))
+}
 
 /// Per-hook timeout written into the Codex config (seconds). Hooks write a
 /// Waiting state and return neutral immediately, so the value is a short guard
@@ -669,6 +680,15 @@ impl crate::agents::capabilities::HookCapability for CodexAdapter {
 }
 
 impl crate::agents::capabilities::InstallationCapability for CodexAdapter {
+    fn launch_dir_trust_gap(&self, cwd: &Path, repo_root: Option<&Path>) -> Option<String> {
+        match install::codex_config_path() {
+            Ok(config) => project_trust::trust_gap_at(&config, cwd, repo_root),
+            Err(err) => Some(format!(
+                "set CODEX_HOME to the Codex config directory: {err}"
+            )),
+        }
+    }
+
     fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {
         Some(&install::MANAGED_INTEGRATION)
     }

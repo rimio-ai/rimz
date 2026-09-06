@@ -63,11 +63,36 @@ pub(super) fn resolve_run_workspace(globals: &GlobalFlags) -> Result<rimz::Resol
         .context("resolving current workspace")
 }
 
-pub(super) fn preflight_agent(adapter: &AgentDefinition) -> Result<()> {
+fn anchor_subagent_workspace(
+    workspace: rimz::ResolvedWorkspace,
+    request: &rimz::harness::run::SupervisedRunRequest,
+    caller: Option<&rimz::agents::AgentState>,
+    globals: &GlobalFlags,
+) -> Result<rimz::ResolvedWorkspace> {
+    let Some(parent) = caller.filter(|_| request.subagent) else {
+        return Ok(workspace);
+    };
+    let Some(path) = parent.worktree_path.as_deref() else {
+        tracing::debug!("subagent parent has no recorded checkout; keeping invoking cwd");
+        return Ok(workspace);
+    };
+    if !Path::new(path).is_dir() {
+        bail!(
+            "the parent's checkout `{path}` no longer exists; restart the parent from an existing checkout, or launch with `rimz agents` from the directory the child should work in"
+        );
+    }
+    WorkspaceResolver::resolve_participant(path, globals.root.clone())
+        .with_context(|| format!("resolving the parent's checkout `{path}`"))
+}
+
+pub(super) fn preflight_agent(
+    adapter: &AgentDefinition,
+    launch: &rimz::worktree::LaunchCheckout,
+) -> Result<()> {
     let definition = adapter.spec();
     let kind = definition.kind;
     match preflight_hooks(adapter, TurnLifecycleNeed::Wired) {
-        Ok(()) => Ok(()),
+        Ok(()) => {}
         Err(HookPreflightErr::TurnLifecycleUnsupported { reason }) => bail!(
             "`rimz agents -p` cannot supervise {kind}: a verified executable turn-lifecycle signal is required; {}",
             reason
@@ -81,6 +106,16 @@ pub(super) fn preflight_agent(adapter: &AgentDefinition) -> Result<()> {
             fix
         ),
     }
+    if let Err(error) =
+        rimz::agents::preflight_launch_dir(adapter, &launch.cwd, launch.repo_root.as_deref())
+    {
+        bail!(
+            "`rimz agents -p` cannot start {kind} in `{}`: {kind} has not recorded a trust decision for that directory and would stop at its trust prompt instead of taking the task; {}",
+            launch.cwd.display(),
+            error.fix
+        );
+    }
+    Ok(())
 }
 
 pub(super) fn preflight_program(

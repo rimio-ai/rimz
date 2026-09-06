@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::agents::{
     AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
-    HookUninstallReport, ManagedIntegration, Result, agent_config_path, read_optional_file,
+    HookUninstallReport, ManagedIntegration, Result, read_optional_file,
 };
 use crate::disk::atomic;
 
@@ -59,13 +59,16 @@ impl ManagedIntegration for CodexManagedIntegration {
 }
 
 pub(super) fn codex_config_path() -> Result<PathBuf> {
-    // Honour an explicit override (`RIMZ_CODEX_CONFIG`) so tests and tooling
-    // can point the installer at a tempdir without touching real config.
-    agent_config_path(
-        "codex",
-        "RIMZ_CODEX_CONFIG",
-        Path::new(".codex/config.toml"),
-    )
+    // Mirror Codex's home lookup, with a config-only override for tests/tooling.
+    if let Some(raw) = std::env::var_os("RIMZ_CODEX_CONFIG").filter(|v| !v.is_empty()) {
+        return Ok(PathBuf::from(raw));
+    }
+    super::codex_home()
+        .map(|home| home.join("config.toml"))
+        .ok_or_else(|| AgentErr::Install {
+            agent: "codex",
+            reason: "$CODEX_HOME and $HOME are not set; cannot resolve Codex config".to_owned(),
+        })
 }
 
 pub(super) fn install_into(path: &Path) -> Result<HookInstallReport> {

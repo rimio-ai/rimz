@@ -12,6 +12,7 @@ use std::path::Path;
 mod ask;
 mod install;
 mod lifecycle;
+mod project_trust;
 mod transcript;
 
 #[test]

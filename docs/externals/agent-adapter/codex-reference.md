@@ -17,6 +17,7 @@ Re-fetch these pages — and, for the app-server, re-run the schema generators �
 | Hooks reference (events, payloads, decision schema, trust) | <https://learn.chatgpt.com/docs/hooks> |
 | Version-pinned hook event enum and runtime dispatch | <https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/protocol/src/protocol.rs>, <https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/core/src/hook_runtime.rs> |
 | Hook executor (cwd/env semantics) | <https://github.com/openai/codex/blob/main/codex-rs/hooks/src/engine/command_runner.rs> |
+| Project directory trust: screen predicate, key lookup, git main root (read from `main` at `459a79e`, 2026-09-05, which supplies the line numbers in that section) | <https://github.com/openai/codex/blob/459a79eb85400af759e9220c7bafb4429ae07516/codex-rs/tui/src/lib.rs>, <https://github.com/openai/codex/blob/459a79eb85400af759e9220c7bafb4429ae07516/codex-rs/config/src/loader/mod.rs>, <https://github.com/openai/codex/blob/459a79eb85400af759e9220c7bafb4429ae07516/codex-rs/git-utils/src/trust.rs> |
 | Config reference (`notify`, credential store, `[tui]` notifications) | <https://learn.chatgpt.com/docs/config-file/config-reference> |
 | Advanced config (`notify` payload) | <https://learn.chatgpt.com/docs/config-file/config-advanced> |
 | CLI reference (`resume`, `fork`, `login status`) | <https://learn.chatgpt.com/docs/developer-commands?surface=cli> |
@@ -49,6 +50,31 @@ Codex treats a run of plain characters arriving at most 8 ms apart as a suspecte
 
 Each `-c key=value` or `--config key=value` occurrence overrides the corresponding loaded configuration key for that launch. Codex parses the value as TOML and falls back to a raw string when TOML parsing fails, so callers that need exact string round trips should emit a TOML-quoted value. `developer_instructions` produces developer-role instruction text separate from the user message; it does not have the replacement-file semantics of `model_instructions_file`. A CLI value overrides the same key from `~/.codex/config.toml`.
 
+## Project directory trust
+
+Codex asks "Do you trust the contents of this directory?" on startup whenever the resolved project carries no trust level: `should_show_trust_screen` is exactly `config.active_project.trust_level.is_none()` (`tui/src/lib.rs:1963`). A recorded `untrusted` is a decision and suppresses the screen; only an absent entry shows it. The screen precedes the first prompt, so an unattended launch in an undecided directory stops there and never starts a turn.
+
+Decisions live in `$CODEX_HOME/config.toml` (`~/.codex/config.toml` by default), keyed by absolute path. Lookup runs over the merged configuration, so a managed layer can supply the same keys:
+
+```toml
+[projects."/home/user/src/app"]
+trust_level = "trusted"   # or "untrusted"
+```
+
+`decision_for_dir` (`config/src/loader/mod.rs:1062`) takes the first key that carries a level, in this order:
+
+1. the session cwd;
+2. the nearest ancestor holding a `project_root_markers` entry, default `[".git"]`, where a `.git` directory counts only if it holds `HEAD` (`config/src/project_root_markers.rs:5`, `config/src/loader/mod.rs:1548`);
+3. the main repository root from `resolve_root_git_project_for_trust` (`git-utils/src/trust.rs:13`), which reads a linked worktree's `.git` file, follows `gitdir` into `worktrees/<name>`, and returns the checkout owning the canonical `commondir`. A worktree of a trusted repository is therefore trusted through that main root.
+
+Each candidate is looked up as its normalized canonical path and as written, so a symlinked directory and its target share one decision; Windows folds ASCII case and other platforms compare exactly (`config/src/loader/mod.rs:1448`, `:1470`).
+
+Answering "Yes, continue" writes `trust_level = "trusted"` for the trust target, which is the main git root when there is one and the cwd otherwise (`tui/src/onboarding/onboarding_screen.rs:168`, `tui/src/config_update.rs:62`).
+
+The same decision gates project-local `.codex/config.toml` layers ("project-local config, hooks, and exec policies"), while a user-level `$CODEX_HOME/config.toml` hook, which is what RimZ installs, runs regardless of it. `codex exec --skip-git-repo-check` covers a separate not-a-git-repository refusal (`exec/src/lib.rs:909`), and the approval and sandbox flags RimZ passes at launch leave trust untouched: no CLI flag skips the trust screen. A `config.toml` Codex cannot parse exits at startup instead of prompting (`tui/src/lib.rs:1955`).
+
+RimZ's own read of this surface, and the supervised-launch preflight it feeds, are in [adapter_codex.md → Directory trust preflight](../../internals/agents/adapter_codex.md#directory-trust-preflight).
+
 ## Hooks
 
 Codex hooks mirror Claude's shape: a command Codex runs at a lifecycle point, fed a JSON payload on **stdin**, returning a decision on **stdout**. They are wired in `~/.codex/config.toml` as `[[hooks.Event]]` tables. RimZ's [`CodexAdapter`](../../../crates/rimz/src/agents/adapters/codex/mod.rs) `CODEX_HOOKS` catalog is the source of truth for the wired set; the native-event → RimZ status mapping is the [adapter_codex.md → Hooks and lifecycle](../../internals/agents/adapter_codex.md#hooks-and-lifecycle).
@@ -57,7 +83,7 @@ Codex hooks mirror Claude's shape: a command Codex runs at a lifecycle point, fe
 
 ### Config shape
 
-Codex discovers `hooks.json` and inline `[hooks]` tables beside active user and trusted-project config layers; plugin and managed layers can add their own hooks. Sources merge rather than replace one another. RimZ writes one user-level inline representation in `~/.codex/config.toml`, and hooks are enabled by default (`[features].hooks = false` disables them; `codex_hooks` is a deprecated alias).
+Codex discovers `hooks.json` and inline `[hooks]` tables beside active user and trusted-project config layers; plugin and managed layers can add their own hooks. Sources merge rather than replace one another. RimZ writes one user-level inline representation in `$CODEX_HOME/config.toml` (`~/.codex/config.toml` by default), and hooks are enabled by default (`[features].hooks = false` disables them; `codex_hooks` is a deprecated alias).
 
 ```toml
 [[hooks.PreToolUse]]

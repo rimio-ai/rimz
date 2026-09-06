@@ -53,19 +53,6 @@ pub(crate) fn codex_bin() -> PathBuf {
     which::which("codex").unwrap_or_else(|_| PathBuf::from("codex"))
 }
 
-/// Codex's home directory: `CODEX_HOME` when set, else `~/.codex`. Mirrors the
-/// resolution Codex itself uses, so the control socket — and the managed
-/// standalone install resolved by [`super::daemon`] — are found where Codex
-/// places them.
-pub(crate) fn codex_home() -> Option<PathBuf> {
-    if let Some(raw) = std::env::var_os("CODEX_HOME").filter(|v| !v.is_empty()) {
-        return Some(PathBuf::from(raw));
-    }
-    std::env::var_os("HOME")
-        .filter(|v| !v.is_empty())
-        .map(|home| PathBuf::from(home).join(".codex"))
-}
-
 /// Spawn a thread draining newline-framed lines from `reader` into a channel, so
 /// a request can wait with its remaining deadline. Shared by both transports and
 /// the broker ([`crate::agents::adapters::codex::broker`]).

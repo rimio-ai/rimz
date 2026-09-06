@@ -1020,6 +1020,30 @@ pub fn preflight_hooks(
     Ok(())
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("{kind} has no trust decision for `{}`: {fix}", dir.display())]
+pub struct LaunchDirUntrusted {
+    pub kind: &'static str,
+    pub dir: PathBuf,
+    pub fix: String,
+}
+
+/// Check whether a supervised launch would stop at directory-trust onboarding.
+pub fn preflight_launch_dir(
+    adapter: &AgentDefinition,
+    cwd: &Path,
+    repo_root: Option<&Path>,
+) -> std::result::Result<(), LaunchDirUntrusted> {
+    if let Some(fix) = adapter.launch_dir_trust_gap(cwd, repo_root) {
+        return Err(LaunchDirUntrusted {
+            kind: adapter.spec().kind,
+            dir: cwd.to_path_buf(),
+            fix,
+        });
+    }
+    Ok(())
+}
+
 fn turn_lifecycle_gap(coverage: ConcernCoverage, need: TurnLifecycleNeed) -> Option<&'static str> {
     match need {
         TurnLifecycleNeed::None => None,

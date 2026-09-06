@@ -76,7 +76,7 @@ The launch block is declarative on purpose. Because permission argv, resume shap
 | --- | --- | --- |
 | `CoreCapability` | `spec()`, plus the test-only conformance fixtures | required, no default |
 | `HookCapability` | `decode_hook`, `hook_ingress`, ask options and answer plans, subagent correlation and provider-settled child recovery | no native decoder: every event classifies unknown and records nothing |
-| `InstallationCapability` | `managed_integration` and the install, preview, uninstall, detection, trust, and statusline-wrap surface it drives | hook installation is unavailable for this agent |
+| `InstallationCapability` | `managed_integration` and the install, preview, uninstall, detection, trust, and statusline-wrap surface it drives, plus `launch_dir_trust_gap` for providers that gate a launch directory ([Codex](./adapter_codex.md#directory-trust-preflight)) | hook installation is unavailable for this agent, and no launch directory is gated |
 | `LaunchCapability` | `is_interactive_process`, `launch_command`, `resume_command`, `launch_env`, `append_system_text_channel`, subagent argv/env lockdown, `room_env`, version probing | render argv from the spec and apply no provider-native subagent lockdown |
 | `SessionCapability` | local-session discovery, resume-identity parsing, daemon evidence, turn-death refinement | no provider-owned session store to read |
 | `TranscriptCapability` | `parse_transcript_messages`, streaming pages, source positions | no transcript surface; JSONL adapters inherit the byte-cursor implementation |
