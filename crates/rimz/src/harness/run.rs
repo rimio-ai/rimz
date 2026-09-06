@@ -256,13 +256,11 @@ pub fn timeout_if_due(
     now: Timestamp,
 ) -> Result<(RunRecord, bool)> {
     update_record(paths, run_id, |record, _| {
-        if record.status.is_terminal()
-            || !record.deadline_at.is_some_and(|deadline| deadline <= now)
+        if !record.deadline_at.is_some_and(|deadline| deadline <= now)
+            || !record.mark_terminal(RunStatus::TimedOut, now)
         {
             return Ok(RecordMutation::Keep(false));
         }
-        record.status = RunStatus::TimedOut;
-        record.completed_at = Some(now);
         Ok(RecordMutation::Write(true))
     })
 }
@@ -273,12 +271,10 @@ pub fn budget_exceeded(
     cost_usd: Option<f64>,
 ) -> Result<(RunRecord, bool)> {
     update_record(paths, run_id, |record, now| {
-        if record.status.is_terminal() {
+        if !record.mark_terminal(RunStatus::BudgetExceeded, now) {
             return Ok(RecordMutation::Keep(false));
         }
-        record.status = RunStatus::BudgetExceeded;
         record.cost_usd = cost_usd.filter(|cost| cost.is_finite() && *cost >= 0.0);
-        record.completed_at = Some(now);
         Ok(RecordMutation::Write(true))
     })
 }
@@ -377,12 +373,11 @@ fn mark_terminal(
     status: RunStatus,
 ) -> Result<(RunRecord, bool)> {
     update_record(paths, run_id, |record, now| {
-        if record.status.is_terminal() {
-            return Ok(RecordMutation::Keep(false));
-        }
-        record.status = status;
-        record.completed_at = Some(now);
-        Ok(RecordMutation::Write(true))
+        Ok(if record.mark_terminal(status, now) {
+            RecordMutation::Write(true)
+        } else {
+            RecordMutation::Keep(false)
+        })
     })
 }
 

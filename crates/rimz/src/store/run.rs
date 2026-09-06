@@ -1,5 +1,4 @@
-//! Durable per-run records for supervised `rimz agents -p` turns: schema, codec,
-//! and the terminal wake sender.
+//! Durable per-run records for supervised `rimz agents -p` turns: schema, codec, and the terminal wake sender.
 //!
 //! Run records are cold-path durable state: a waiting CLI may exit, a user may
 //! inspect the result later with `rimz agents show`, and the final assistant text
@@ -221,6 +220,18 @@ impl RunRecord {
             updated_at: now,
             completed_at: None,
         }
+    }
+
+    /// Terminal state is sticky; callers must supply a terminal status.
+    pub(crate) fn mark_terminal(&mut self, status: RunStatus, now: Timestamp) -> bool {
+        debug_assert!(status.is_terminal());
+        if self.status.is_terminal() {
+            return false;
+        }
+        self.status = status;
+        self.completed_at = Some(now);
+        self.updated_at = now;
+        true
     }
 }
 

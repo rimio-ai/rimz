@@ -244,7 +244,7 @@ upward-dependencies = [
     "harness::target",
     "remote::link",
 ]
-surface-budget = 335
+surface-budget = 336
 
 [[module]]
 path = "crates/rimz/src/theme"
