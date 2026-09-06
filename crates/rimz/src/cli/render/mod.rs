@@ -74,6 +74,17 @@ pub(crate) fn err() -> anstream::AutoStream<std::io::StderrLock<'static>> {
     anstream::AutoStream::auto(std::io::stderr().lock())
 }
 
+pub(crate) fn warn_unreadable_lanes(lifetimes: &rimz::agents::attribution::LaneLifetimes) {
+    for (path, reason) in lifetimes.unreadable() {
+        let _ = writeln!(
+            err(),
+            "{} {}: {reason}; its sessions are left out of seat totals",
+            paint(palette::warn().bold(), "warning:"),
+            path.display()
+        );
+    }
+}
+
 /// Render best-effort browser client customization warnings on stderr.
 pub(crate) fn web_warnings(warnings: &[rimz::web::WebWarning]) {
     let mut stderr = err();
