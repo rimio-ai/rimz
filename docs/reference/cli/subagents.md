@@ -40,7 +40,7 @@ Each array entry has the single-launch fields that make sense for data-driven de
 | `max_turns` | no | Maximum agentic turns |
 | `description` | no | Initial child-card description |
 
-Relative `prompt_file` paths resolve from the caller's current working directory. A task timeout overrides the fanout-level `--timeout`, which overrides `[agents.subagents] timeout` (30 minutes by default). `--keep` applies to every child. Per-task raw argv, execution mode, and pane retention are deliberately omitted; use `[subagents.profiles]` for provider arguments or separate single launches when children need different lifecycle controls.
+Relative `prompt_file` paths resolve from the caller's current working directory, and every child works in the parent's checkout like a [single launch](#launch-one-child). A task timeout overrides the fanout-level `--timeout`, which overrides `[agents.subagents] timeout` (30 minutes by default). `--keep` applies to every child. Per-task raw argv, execution mode, and pane retention are deliberately omitted; use `[subagents.profiles]` for provider arguments or separate single launches when children need different lifecycle controls.
 
 All tasks are validated before the first launch. If a runtime failure occurs after some children have started, the error names them; they keep their normal deadline and cleanup behavior and remain available to `subagents wait` and `subagents stop`.
 
@@ -60,14 +60,16 @@ second=$(rimz subagents launch reviewer "review the proposed API")
 rimz subagents wait "$first" "$second"
 ```
 
-The bare form and `launch` verb are equivalent. A prompt is mandatory: the parent must supply the whole assignment as the second positional argument or with `--prompt-file PATH`. Relative paths resolve from the caller's current working directory. The child inherits the parent's current checkout and lane.
+The bare form and `launch` verb are equivalent. A prompt is mandatory: the parent must supply the whole assignment as the second positional argument or with `--prompt-file PATH`. Relative `--prompt-file` paths resolve from the shell's current directory, so a parent can write a brief anywhere and hand it over.
+
+The child works in the parent's checkout (the directory the parent itself was launched in), whatever directory the launch command runs from, and it inherits the parent's lane. A launch refuses when that checkout no longer exists rather than starting the child somewhere else. Every child is a supervised run, so the [supervised-run requirements](./agents.md#supervised-runs--p) apply: installed and trusted hooks, and, for a Codex child, a recorded trust decision for that checkout.
 
 Children of a team member share companion tabs named `<view> subagents`, with numbered overflow tabs. Each companion starts with two side-by-side columns, then grows rows up to eight tiled child panes: four rows per column, excluding the sidebar. Placement targets approximately equal pane areas; a small terminal or an existing layout that cannot be safely split may overflow earlier. Solo callers retain their side-column layout, using these companion tabs as fallback. See the [scripting guide](../../guide/scripting.md#agents-scripting-agents) for the workflow.
 
 | Behavior | Default | Override |
 | --- | --- | --- |
 | Result | one status digest from `@rimz` after the fleet settles; read text with `rimz subagents wait` | `--wait[=DURATION]` joins inline when it reaches the result |
-| Checkout | caller's current checkout | fixed |
+| Checkout | parent's checkout | fixed |
 | Deadline | 30 minutes | `--timeout`, then `[agents.subagents] timeout` |
 | Pane after completion | closes when the run settles | `--keep` holds it until `stop` or `rimz gc` |
 | Address | minted petname | fixed |

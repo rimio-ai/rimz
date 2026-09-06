@@ -221,7 +221,7 @@ cat build-error.txt | rimz agents claude -p --stdin 'explain the root cause' > o
 - `--verify <CMD>` runs the command in the run cwd after every completed turn and re-prompts the same session with failure evidence until it passes. `--max-attempts <N>` is the total agent-turn cap, defaults to `3`, and must be at least `1`; exhaustion exits `123`. The verify command uses `--timeout` or a five-minute default, a timed-out verify is red, and both flags refuse `--bg` and `--output-format stream-json`.
 - Ctrl+C on a blocking `-p` cancels the run, exits `130`, and lets the wrapper stop the agent before the pane is reclaimed.
 
-Supervised runs need installed and trusted hooks, because hooks are the completion signal. The run records, wakeup socket, streaming, and pane cleanup are in [scripting.md](../../internals/harness/scripting.md).
+Supervised runs need installed and trusted hooks, because hooks are the completion signal. A Codex run additionally needs a recorded trust decision for the launch directory, since Codex otherwise opens its directory-trust screen and never reads the prompt; answer that screen once in an interactive `codex` session there, or add a `[projects."<path>"] trust_level` entry to your Codex config. Both checks refuse at the entry point with the fix, before the run record or the pane. The run records, wakeup socket, streaming, and pane cleanup are in [scripting.md](../../internals/harness/scripting.md).
 
 ### List and manage agents
 

@@ -321,6 +321,75 @@ fn supervised_launch_normalizes_model_and_effort_overrides() {
 }
 
 #[test]
+fn subagent_launch_anchors_at_the_parent_checkout() {
+    use clap::Parser;
+
+    let checkout = tempfile::tempdir().expect("parent checkout");
+    let scratch = tempfile::tempdir().expect("invoking cwd");
+    let git = std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .arg(checkout.path())
+        .output()
+        .expect("git init");
+    assert!(git.status.success());
+    let original_cwd = std::env::current_dir().expect("original cwd");
+    std::env::set_current_dir(scratch.path()).expect("enter scratch");
+    let globals = crate::cli::Cli::parse_from(["rimz", "subagents"]).global;
+    let shell = resolve_run_workspace(&globals).expect("shell workspace");
+    let mut parent = AgentState::stub("claude", "parent", AgentStatus::Idle);
+    parent.worktree_path = Some(checkout.path().display().to_string());
+    let anchored = anchor_subagent_workspace(
+        shell.clone(),
+        &supervised_request("task", true),
+        Some(&parent),
+        &globals,
+    )
+    .expect("parent workspace");
+    let expected = checkout.path().canonicalize().expect("canonical checkout");
+    assert_eq!(anchored.worktree_root, expected);
+    assert_eq!(anchored.cwd_project_root.as_ref(), Some(&expected));
+    let launch = rimz::worktree::resolve_launch_checkout(
+        &anchored,
+        &rimz::config::WorktreeConfig::default(),
+        None,
+        None,
+    )
+    .expect("launch checkout");
+    assert_eq!(launch.cwd, expected);
+
+    let peer = anchor_subagent_workspace(
+        shell.clone(),
+        &supervised_request("task", false),
+        Some(&parent),
+        &globals,
+    )
+    .expect("peer workspace");
+    assert_eq!(peer.worktree_root, shell.worktree_root);
+
+    parent.worktree_path = None;
+    let legacy = anchor_subagent_workspace(
+        shell.clone(),
+        &supervised_request("task", true),
+        Some(&parent),
+        &globals,
+    )
+    .expect("legacy parent workspace");
+    assert_eq!(legacy.worktree_root, shell.worktree_root);
+
+    let missing = checkout.path().join("gone");
+    parent.worktree_path = Some(missing.display().to_string());
+    let error = anchor_subagent_workspace(
+        shell,
+        &supervised_request("task", true),
+        Some(&parent),
+        &globals,
+    )
+    .expect_err("vanished parent checkout");
+    assert!(error.to_string().contains(&missing.display().to_string()));
+    std::env::set_current_dir(original_cwd).expect("restore cwd");
+}
+
+#[test]
 fn supervised_selection_checks_subagent_allowlist() {
     let mut caller = AgentState::stub("claude", "parent", AgentStatus::Running);
     caller.profile = Some("planner".to_owned());

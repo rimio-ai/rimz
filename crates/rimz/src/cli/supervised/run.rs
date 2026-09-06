@@ -436,6 +436,8 @@ fn prepare_supervised(
         request.subagent,
         machine_config.agents.max_chain_length,
     )?;
+    // The room pin keeps the store and effective config on the same project root.
+    let workspace = supervised::anchor_subagent_workspace(workspace, request, caller, globals)?;
     let scope = if request.subagent {
         rimz::config::effective::ProfileScope::Subagents
     } else {
@@ -517,7 +519,7 @@ fn prepare_supervised(
         &launch.cwd,
         &request.managed_launch,
     )?;
-    supervised::preflight_agent(adapter)?;
+    supervised::preflight_agent(adapter, &launch)?;
     supervised::preflight_program(&process)?;
     let kind = adapter.spec().kind_id();
     if let Some(channel) = request.channel.as_deref() {

@@ -49,9 +49,9 @@ mod tests;
 mod transport;
 mod wire;
 
+pub(super) use super::codex_home;
 pub(crate) use transport::{
-    AppServerErr, JsonRpcTransport, codex_bin, codex_home, recv_response, spawn_frame_reader,
-    write_frame,
+    AppServerErr, JsonRpcTransport, codex_bin, recv_response, spawn_frame_reader, write_frame,
 };
 use transport::{FramedTransport, WsTransport};
 use wire::{
