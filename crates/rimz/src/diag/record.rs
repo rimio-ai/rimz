@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::ids::{
     AgentKind, AgentSessionId, MessageId, PaneId, SidebarInstanceId, ViewId, WorkspaceId,
 };
-use crate::remote::link::LinkTier;
+use crate::store::snapshot::LinkTier;
 
 const DIAG_SCHEMA_VERSION: &str = "rimz.diag.v1";
 

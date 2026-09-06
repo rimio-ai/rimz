@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::mux::CommandSpec;
 use crate::sock;
+use crate::store::snapshot::LinkTier;
 
 use super::{RemoteSpec, RemoteTarget, env_ms, quote_remote_path, remote_path_prefix, sh_quote};
 
@@ -25,15 +26,6 @@ const LINK_WINDOW: usize = 30;
 const PROBE_INTERVAL_ENV: &str = "RIMZ_REMOTE_PROBE_MS";
 const PROBE_TIMEOUT_ENV: &str = "RIMZ_REMOTE_PROBE_TIMEOUT_MS";
 const BLACKOUT_AFTER_ENV: &str = "RIMZ_REMOTE_BLACKOUT_MS";
-
-/// Link-health tier for notifications, diagnostics, and CLI health output.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LinkTier {
-    Good,
-    Degraded,
-    Bad,
-}
 
 /// Rolling link measurements published by the local probe stream and folded by
 /// the remote sidebar.
@@ -357,26 +349,6 @@ fn axis_badge_heat(value: u32, calm: u32, alarm: u32) -> f32 {
         0.0
     } else {
         ((value - calm) as f32 / (alarm - calm) as f32).min(1.0)
-    }
-}
-
-impl Ord for LinkTier {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        tier_rank(*self).cmp(&tier_rank(*other))
-    }
-}
-
-impl PartialOrd for LinkTier {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-fn tier_rank(tier: LinkTier) -> u8 {
-    match tier {
-        LinkTier::Good => 0,
-        LinkTier::Degraded => 1,
-        LinkTier::Bad => 2,
     }
 }
 
@@ -863,21 +835,6 @@ mod tests {
             state.finish(Duration::from_secs(2), []).0,
             "an exited acknowledged child is settled instead of zombie-killed"
         );
-    }
-
-    #[test]
-    fn link_tier_orders_good_below_degraded_below_bad_and_spells_snake_case() {
-        assert!(LinkTier::Good < LinkTier::Degraded);
-        assert!(LinkTier::Degraded < LinkTier::Bad);
-        assert_eq!(LinkTier::Bad.max(LinkTier::Good), LinkTier::Bad);
-        for (tier, json) in [
-            (LinkTier::Good, "\"good\""),
-            (LinkTier::Degraded, "\"degraded\""),
-            (LinkTier::Bad, "\"bad\""),
-        ] {
-            assert_eq!(serde_json::to_string(&tier).unwrap(), json);
-            assert_eq!(serde_json::from_str::<LinkTier>(json).unwrap(), tier);
-        }
     }
 
     #[test]
