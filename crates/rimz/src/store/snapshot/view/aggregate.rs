@@ -28,25 +28,48 @@ struct AgentProjectionIndex<'a> {
 }
 
 impl<'a> AgentProjectionIndex<'a> {
-    fn new(agents: &'a [AgentState]) -> Self {
+    fn new(agents: &'a [AgentState], rows: &[SidebarRow]) -> Self {
         let mut roots = BTreeMap::new();
         let mut children: BTreeMap<AgentKey, Vec<&AgentState>> = BTreeMap::new();
+        for agent in agents
+            .iter()
+            .filter(|agent| agent.parent_agent_id.is_none())
+        {
+            roots
+                .entry((agent.kind.clone(), agent.agent_id.clone()))
+                .or_insert(agent);
+        }
+        let rendered_parents = rows
+            .iter()
+            .filter(|row| row.is_agent())
+            .filter_map(|row| {
+                roots
+                    .get(&(
+                        AgentKind::new_unchecked(row.name.clone()),
+                        AgentSessionId::from(row.id.as_str()),
+                    ))
+                    .copied()
+            })
+            .collect::<Vec<_>>();
         for agent in agents {
             if let Some(parent_id) = &agent.parent_agent_id {
-                children
-                    .entry((
-                        agent
-                            .parent_agent_kind
-                            .clone()
-                            .unwrap_or_else(|| agent.kind.clone()),
-                        parent_id.clone(),
-                    ))
-                    .or_default()
-                    .push(agent);
-            } else {
-                roots
-                    .entry((agent.kind.clone(), agent.agent_id.clone()))
-                    .or_insert(agent);
+                let raw_key = (
+                    agent
+                        .parent_agent_kind
+                        .clone()
+                        .unwrap_or_else(|| agent.kind.clone()),
+                    parent_id.clone(),
+                );
+                let parent_key = if agent.is_launched_child() {
+                    rendered_parents
+                        .iter()
+                        .find(|parent| agent.parent_is(parent))
+                        .map(|parent| (parent.kind.clone(), parent.agent_id.clone()))
+                        .unwrap_or(raw_key)
+                } else {
+                    raw_key
+                };
+                children.entry(parent_key).or_default().push(agent);
             }
         }
         Self { roots, children }
@@ -110,7 +133,7 @@ pub(super) fn build_worktree_groups_from_rows(
     now: Timestamp,
     windows: AttentionWindows,
 ) -> Vec<SidebarWorktreeGroup> {
-    let agent_index = AgentProjectionIndex::new(agent_projection.agents);
+    let agent_index = AgentProjectionIndex::new(agent_projection.agents, &rows);
     // Nest each subagent under its parent root row before grouping. This is the
     // one chokepoint every live (`rows_from_panes`) card flows through, so
     // nesting behaves identically for process, agent, and attention rows.

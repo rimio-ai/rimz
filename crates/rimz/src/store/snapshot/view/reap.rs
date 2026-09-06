@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::agents::AgentState;
-use crate::ids::{AgentSessionId, PaneId};
+use crate::ids::PaneId;
 use crate::pane;
 use crate::pane::PaneRef;
 use crate::store::session_death;
@@ -37,8 +37,7 @@ impl SidebarSnapshot {
     /// - a session is daemon-owned ([`is_daemon_owned`]), its id is absent from
     ///   `loaded`, and it has no pane or its stamped pane is absent from the
     ///   admitted live-pane set — reap it;
-    /// - a root agent stamped on a daemon-dashboard host pane is hidden with
-    ///   its subagents;
+    /// - host-pane roots are hidden; children stay with a surviving live parent;
     /// - anything else — keep it.
     ///
     /// Callers run this before the live-pane fold, so a reaped session can
@@ -106,20 +105,36 @@ impl SidebarSnapshot {
                         .as_ref()
                         .is_some_and(|pane| host_pane_ids.iter().any(|id| id == &pane.pane_id))
             })
-            .map(|agent| agent.agent_id.clone())
-            .collect::<BTreeSet<AgentSessionId>>();
+            .collect::<Vec<_>>();
         if dropped_roots.is_empty() {
             return;
         }
-        self.agents.retain(|agent| {
-            if agent.parent_agent_id.is_none() {
-                return !dropped_roots.contains(&agent.agent_id);
-            }
-            agent
-                .parent_agent_id
-                .as_ref()
-                .is_none_or(|parent| !dropped_roots.contains(parent))
-        });
+        let surviving_roots = self
+            .agents
+            .iter()
+            .filter(|agent| {
+                agent.parent_agent_id.is_none()
+                    && agent.ended_at.is_none()
+                    && !agent
+                        .pane
+                        .as_ref()
+                        .is_some_and(|pane| host_pane_ids.contains(&pane.pane_id))
+            })
+            .collect::<Vec<_>>();
+        let dropped = self
+            .agents
+            .iter()
+            .filter(|agent| {
+                dropped_roots.iter().any(|parent| {
+                    (agent.kind == parent.kind && agent.agent_id == parent.agent_id)
+                        || (agent.parent_is(parent)
+                            && !surviving_roots.iter().any(|root| agent.parent_is(root)))
+                })
+            })
+            .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
+            .collect::<BTreeSet<_>>();
+        self.agents
+            .retain(|agent| !dropped.contains(&(agent.kind.clone(), agent.agent_id.clone())));
     }
 
     /// Reap ghost sessions from the agent rollup. This filters the *derived*

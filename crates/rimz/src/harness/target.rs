@@ -967,7 +967,11 @@ fn launch_members<'a>(
         .collect()
 }
 
-/// Current row of a launch, including a legacy session-id alias. Live rows win by pane-owner order; an ended launch keeps its latest-active row. Attach rest certificates before selecting among live rows.
+/// Current row of a launch, including a legacy session-id alias.
+///
+/// - Live rows win by pane-owner order.
+/// - An ended launch keeps its latest-active row.
+/// - Attach rest certificates before selecting among live rows.
 pub fn launch_row<'a>(
     agents: &'a [AgentState],
     kind: &AgentKind,

@@ -244,6 +244,173 @@ fn launched_cross_kind_child_nests_without_losing_its_pane() {
 }
 
 #[test]
+fn launched_child_nests_under_the_rendered_parent_launch() {
+    let mut parent = agent("claude", "NEW", AgentStatus::Success, 20)
+        .worktree("/repo/main")
+        .in_pane("%root");
+    parent.launch_id = Some("L".into());
+    let mut child = agent("codex", "child", AgentStatus::Running, 30)
+        .worktree("/repo/main")
+        .in_pane("%child");
+    child.parent_agent_id = Some("L".into());
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(1);
+
+    for keep_live_predecessor in [false, true] {
+        let mut agents = Vec::new();
+        if keep_live_predecessor {
+            let mut old = agent("claude", "OLD", AgentStatus::Success, 10)
+                .worktree("/repo/main")
+                .in_pane("%root");
+            old.launch_id = parent.launch_id.clone();
+            agents.push(old);
+        }
+        agents.extend([parent.clone(), child.clone()]);
+        let snapshot = room(agents).with_live_panes(
+            vec![
+                pane("%root", "claude", "/repo/main"),
+                pane("%child", "codex", "/repo/main"),
+            ],
+            None,
+        );
+        if keep_live_predecessor {
+            assert!(rollup_agent(&snapshot, "OLD").ended_at.is_none());
+        }
+        assert_eq!(rows(&snapshot).len(), 1);
+        assert_eq!(row(&snapshot, "NEW").sub_agents()[0].id, "child");
+        assert_eq!(row(&snapshot, "NEW").status(), Some(AgentStatus::Running));
+        assert_eq!(snapshot.agent_panes.len(), 2);
+        assert!(snapshot.agent_panes.iter().any(|pane| {
+            pane.agent_id.as_ref() == Some(&child.agent_id) && pane.pane_id.raw() == "%child"
+        }));
+    }
+
+    let orphan = room_with_agent_panes(vec![child]);
+    assert_eq!(rows(&orphan).len(), 1);
+    assert_eq!(
+        row(&orphan, "child").pane.as_ref().unwrap().pane_id.raw(),
+        "%child"
+    );
+}
+
+#[test]
+fn mixed_children_attach_to_rendered_successor_not_live_predecessor() {
+    let mut old = agent("claude", "OLD", AgentStatus::Success, 10);
+    old.launch_id = Some("L".into());
+    let mut parent = agent("claude", "NEW", AgentStatus::Success, 20);
+    parent.launch_id = old.launch_id.clone();
+    parent.turn_started_at = Some(ago(30));
+    let mut child = agent("codex", "launched", AgentStatus::Success, 30);
+    child.parent_agent_id = Some("L".into());
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(1);
+    child.last_activity = ago(5);
+    let mut context = crate::agents::AgentContext::new("codex", epoch());
+    context.cost = Some(crate::agents::AgentCost {
+        total_cost_usd: Some(0.5),
+        ..crate::agents::AgentCost::default()
+    });
+    child.context = Some(context);
+    let mut native = child_state("NEW", "native", AgentStatus::Success, 5);
+    native.subagent_cost_usd = Some(0.25);
+    let old_native = child_state("OLD", "old-native", AgentStatus::Running, 5);
+
+    let agents = [old, parent.clone(), child, native, old_native];
+    assert!(agents.iter().all(|agent| agent.ended_at.is_none()));
+    let mut rows = vec![row_from_agent(&parent, epoch())];
+    attach_sub_agents(&mut rows, &agents, epoch());
+    let card = rows[0].as_agent().expect("rendered successor");
+    assert_eq!(card.sub_agents.len(), 2);
+    assert!(card.sub_agents.iter().any(|child| child.id == "launched"));
+    assert!(card.sub_agents.iter().any(|child| child.id == "native"));
+    assert_eq!(card.sub_agent_count, 2);
+    assert_eq!(card.sub_agent_cost_usd, Some(0.75));
+    assert_eq!(card.delegated_cost_usd, Some(0.5));
+}
+
+#[test]
+fn host_pane_reap_drops_launch_linked_children_but_not_other_kinds() {
+    let mut parent = agent("claude", "NEW", AgentStatus::Success, 20).in_pane("%host");
+    parent.launch_id = Some("L".into());
+    let mut child = agent("codex", "launched", AgentStatus::Running, 30);
+    child.parent_agent_id = Some("L".into());
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(1);
+    let native = child_state("NEW", "native", AgentStatus::Running, 5);
+    let mut unrelated = child.clone();
+    unrelated.agent_id = "unrelated".into();
+    unrelated.parent_agent_kind = Some(AgentKind::new_unchecked("codex"));
+    let mut snapshot = room(vec![parent, child, native, unrelated.clone()]);
+    let panes = [pane(
+        "%host",
+        "claude remote-control --spawn worktree",
+        "/repo/main",
+    )];
+    snapshot.reap_runtime(crate::store::snapshot::view::RuntimeReapInputs {
+        daemon_pids: &BTreeSet::new(),
+        loaded: None,
+        frame_panes: Some(&panes),
+        exclude_pane: None,
+    });
+    assert_eq!(snapshot.agents, vec![unrelated]);
+}
+
+#[test]
+fn host_pane_reap_keeps_children_with_a_live_parent_launch_sibling() {
+    for (kind, ended, keeps_child) in [
+        ("claude", false, true),
+        ("claude", true, false),
+        ("codex", false, false),
+    ] {
+        let mut parent = agent("claude", "OLD", AgentStatus::Running, 20).in_pane("%host");
+        parent.launch_id = Some("L".into());
+        let mut sibling = agent(kind, "NEW", AgentStatus::Running, 10).in_pane("%work");
+        sibling.launch_id = parent.launch_id.clone();
+        sibling.ended_at = ended.then(|| ago(5));
+        let mut child = agent("codex", "launched", AgentStatus::Running, 5);
+        child.parent_agent_id = parent.launch_id.clone();
+        child.parent_agent_kind = Some(parent.kind.clone());
+        child.launch_depth = Some(1);
+        let native = child_state("OLD", "native", AgentStatus::Running, 5);
+        let mut snapshot = room(vec![parent, sibling.clone(), child, native]);
+        let panes = [
+            pane(
+                "%host",
+                "claude remote-control --spawn worktree",
+                "/repo/main",
+            ),
+            pane("%work", kind, "/repo/main"),
+        ];
+        snapshot.reap_runtime(crate::store::snapshot::view::RuntimeReapInputs {
+            daemon_pids: &BTreeSet::new(),
+            loaded: None,
+            frame_panes: Some(&panes),
+            exclude_pane: None,
+        });
+        let ids = snapshot
+            .agents
+            .iter()
+            .map(|agent| agent.agent_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            if keeps_child {
+                vec!["NEW", "launched"]
+            } else {
+                vec!["NEW"]
+            },
+            "sibling kind={kind}, ended={ended}"
+        );
+        if keeps_child {
+            let mut rows = vec![row_from_agent(&sibling, epoch())];
+            attach_sub_agents(&mut rows, &snapshot.agents, epoch());
+            assert_eq!(rows[0].sub_agents().len(), 1);
+            assert_eq!(rows[0].sub_agents()[0].id, "launched");
+        }
+    }
+}
+
+#[test]
 fn launched_child_stays_while_live_and_retires_at_the_parents_next_turn() {
     let mut parent = agent("claude", "root", AgentStatus::Running, 100);
     parent.turn_started_at = Some(ago(10));

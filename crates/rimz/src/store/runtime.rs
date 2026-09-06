@@ -60,26 +60,27 @@ impl RuntimeProjection {
             RuntimeScope::Runtime => {
                 let visible_parents = agents
                     .iter()
-                    .filter(|agent| !agent.is_launched_child() && agent_is_runtime_visible(agent))
-                    .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
-                    .collect::<BTreeSet<_>>();
+                    .filter(|agent| {
+                        agent.parent_agent_id.is_none() && agent_is_runtime_visible(agent)
+                    })
+                    .collect::<Vec<_>>();
+                let visible = agents
+                    .iter()
+                    .map(|agent| {
+                        agent_is_runtime_visible(agent)
+                            || (agent.is_launched_child()
+                                && visible_parents.iter().any(|parent| agent.parent_is(parent)))
+                    })
+                    .collect::<Vec<_>>();
                 let mut expelled = BTreeSet::new();
                 let agents = agents
                     .into_iter()
-                    .filter(|agent| {
-                        let parent_visible = agent.is_launched_child()
-                            && agent
-                                .parent_agent_kind
-                                .as_ref()
-                                .zip(agent.parent_agent_id.as_ref())
-                                .is_some_and(|(kind, id)| {
-                                    visible_parents.contains(&(kind.clone(), id.clone()))
-                                });
-                        let visible = agent_is_runtime_visible(agent) || parent_visible;
+                    .zip(visible)
+                    .filter_map(|(agent, visible)| {
                         if !visible && agent.ended_at.is_none() {
                             expelled.insert((agent.kind.clone(), agent.agent_id.clone()));
                         }
-                        visible
+                        visible.then_some(agent)
                     })
                     .collect();
                 Self {
@@ -221,6 +222,33 @@ mod tests {
         let ended_parent_projection =
             RuntimeProjection::from_parts(vec![ended_parent, child], RuntimeScope::Runtime);
         assert!(ended_parent_projection.agents.is_empty());
+    }
+
+    #[test]
+    fn runtime_projection_keeps_child_through_parent_launch() {
+        for parent_kind in [None, Some(AgentKind::new_unchecked("claude"))] {
+            let mut old = agent(None);
+            old.launch_id = Some("L".into());
+            old.ended_at = Some(Timestamp::UNIX_EPOCH);
+            let mut successor = agent(None);
+            successor.agent_id = "NEW".into();
+            successor.launch_id = old.launch_id.clone();
+            let mut child = agent(None);
+            child.agent_id = "child".into();
+            child.parent_agent_id = Some("L".into());
+            child.parent_agent_kind = parent_kind;
+            child.launch_depth = Some(1);
+            child.ended_at = Some(Timestamp::UNIX_EPOCH);
+
+            let projection = RuntimeProjection::from_parts(
+                vec![old.clone(), successor.clone(), child.clone()],
+                RuntimeScope::Runtime,
+            );
+            assert_eq!(projection.agents, vec![successor, child.clone()]);
+            let without_successor =
+                RuntimeProjection::from_parts(vec![old, child], RuntimeScope::Runtime);
+            assert!(without_successor.agents.is_empty());
+        }
     }
 
     #[test]

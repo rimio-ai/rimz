@@ -424,7 +424,9 @@ impl Store {
         })
     }
 
-    /// Bind one resumed session to its wrapper's pane and persist its stable identity. The owner names the agent process the row belongs to.
+    /// Persist a resumed session's stable identity and wrapper pane.
+    ///
+    /// The owner names the agent process the row belongs to.
     #[must_use = "durability barrier; check the result"]
     pub fn attach_agent_pane(
         &self,

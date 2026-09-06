@@ -12,8 +12,8 @@ use crate::store::session_death::GHOST_SESSION_TTL_SECS;
 use super::{AgentKey, AgentProjectionIndex};
 
 /// Nest each subagent under its parent root row. A subagent is a reduced
-/// `AgentState` carrying `parent_agent_id`; it is paneless, so it built no row
-/// of its own (`rows_from_panes` binds only stamped panes).
+/// `AgentState` carrying `parent_agent_id`; native children are paneless, while
+/// launched children retain their pane binding and nest when their parent renders.
 pub(super) fn attach_sub_agents_indexed(
     rows: &mut [SidebarRow],
     index: &AgentProjectionIndex<'_>,
@@ -159,7 +159,7 @@ pub(in crate::store::snapshot) fn attach_sub_agents(
     agents: &[AgentState],
     now: Timestamp,
 ) {
-    let index = AgentProjectionIndex::new(agents);
+    let index = AgentProjectionIndex::new(agents, rows);
     attach_sub_agents_indexed(rows, &index, now);
 }
 
