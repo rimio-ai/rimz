@@ -149,8 +149,7 @@ fn lane_lifetimes_record_unreadable_markers_without_failing() {
     assert_eq!(groups[0][0].agent_id, agents[3].agent_id);
     assert_eq!(lifetimes.common_since(&[&agents[3]]), Some(at(20)));
     let reason = read_marker_from_checkout_metadata(&first)
-        .err()
-        .expect("malformed marker")
+        .expect_err("malformed marker")
         .to_string();
     assert_eq!(
         lifetimes.unreadable().collect::<Vec<_>>(),
