@@ -8,13 +8,18 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, Write};
 use std::str::FromStr;
 
+use anyhow::Context;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
-use super::runner::CheckOutcome;
+use super::catalog::TaskCatalog;
+use super::runner::{
+    CheckEcho, CheckOutcome, SCHEDULED_RUN_DEFAULT_TIMEOUT, check_record, check_timeout,
+    parse_task_timeout, run_check,
+};
 use super::{Trigger, arming};
-use crate::RuntimePaths;
 use crate::harness::schedule::runner::RunLockInfo;
+use crate::{ResolvedWorkspace, RuntimePaths, Store};
 use std::path::Path;
 
 pub const MAX_SIGNAL_NAME_BYTES: usize = 64;
@@ -254,6 +259,70 @@ pub fn lifecycle_signal(event: &crate::agents::LifecycleEvent) -> Option<Signal>
         source: SignalSource::Lifecycle,
         watch: None,
     })
+}
+
+pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> anyhow::Result<()> {
+    let catalog = TaskCatalog::load(Some(&workspace.project_root))?;
+    let Some(task) = catalog.for_run(name) else {
+        return Ok(());
+    };
+    if task.entry().resolved_root() != workspace.project_root {
+        return Ok(());
+    }
+    let Some(command) = task.entry().watch.as_deref() else {
+        return Ok(());
+    };
+    let Some(_guard) =
+        acquire_watch_lock(store.runtime_paths(), name).context("locking wake watcher")?
+    else {
+        return Ok(());
+    };
+    let configured_timeout = crate::config::MachineConfig::load_lenient()
+        .r#loop
+        .default_timeout
+        .as_deref()
+        .map(parse_task_timeout)
+        .transpose()
+        .map_err(anyhow::Error::msg)?;
+    let timeout = check_timeout(task.entry())?
+        .or(configured_timeout)
+        .unwrap_or(SCHEDULED_RUN_DEFAULT_TIMEOUT);
+    let started = std::time::Instant::now();
+    let outcome = run_check(
+        &workspace.project_root,
+        command,
+        timeout,
+        CheckEcho::Capture,
+    )?;
+    let elapsed_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+    let check = check_record(&outcome);
+    let watch = if check.timed_out {
+        WatchOutcome::TimedOut {
+            code: check.code,
+            output: check.output,
+            elapsed_ms,
+        }
+    } else {
+        WatchOutcome::Exited {
+            code: check.code,
+            output: check.output,
+            elapsed_ms,
+        }
+    };
+    let signal = Signal {
+        name: format!("wake.{name}")
+            .parse()
+            .expect("generated wake signal name is valid"),
+        payload: Map::new(),
+        source: SignalSource::Watch,
+        watch: Some(watch),
+    };
+    store
+        .append_signal(&workspace.session_name, &signal)
+        .context("appending wake signal")?;
+    fire_signal(store.runtime_paths(), &workspace.project_root, &signal)
+        .context("firing watched wake")?;
+    Ok(())
 }
 
 /// Fire matching tasks in the emitter process. Signal events are never replayed.
