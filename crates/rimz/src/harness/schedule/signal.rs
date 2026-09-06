@@ -19,8 +19,10 @@ use super::runner::{
     task_timeout,
 };
 use super::{Trigger, arming};
+use crate::RuntimePaths;
 use crate::harness::schedule::runner::RunLockInfo;
-use crate::{ResolvedWorkspace, RuntimePaths, Store};
+use crate::store::Store;
+use crate::workspace::ResolvedWorkspace;
 use std::path::Path;
 
 const MAX_SIGNAL_NAME_BYTES: usize = 64;
