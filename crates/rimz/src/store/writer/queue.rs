@@ -780,7 +780,7 @@ impl Store {
                             .filter(|message| same_submitted_batch(first, message))
                             .collect::<Vec<_>>();
                         if let Some((leading, _, trailing)) =
-                            crate::harness::target::align_submitted_prompt(prompt, &batch)
+                            crate::store::message::align_submitted_prompt(prompt, &batch)
                         {
                             selected.0.extend(
                                 batch

@@ -65,7 +65,7 @@ pub(super) fn record_user_input_for_lifecycle(
             .prompt
             .as_deref()
             .and_then(|prompt| {
-                rimz::harness::target::align_submitted_prompt(prompt, &delivered_refs)
+                rimz::store::message::align_submitted_prompt(prompt, &delivered_refs)
             })
             .is_some_and(|(leading, _, trailing)| leading.is_some() || trailing.is_some());
         if !mixed_submit {
