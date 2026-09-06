@@ -411,7 +411,7 @@ fn triggers_match_names_and_top_level_payload_values() {
             ("result".to_owned(), serde_json::json!("failure")),
             ("attempt".to_owned(), serde_json::json!(2)),
         ]),
-        source: signal::SignalSource::Cli,
+        source: crate::store::event::SignalSource::Cli,
         watch: None,
     };
     let matching = Trigger::Signal {
@@ -500,7 +500,7 @@ fn signal_selectors_observe_only_matching_family_payloads() {
         let signal = signal::Signal {
             name: emitted.parse().unwrap(),
             payload: serde_json::Map::from_iter([("path".to_owned(), serde_json::json!(path))]),
-            source: signal::SignalSource::Cli,
+            source: crate::store::event::SignalSource::Cli,
             watch: None,
         };
         assert_eq!(

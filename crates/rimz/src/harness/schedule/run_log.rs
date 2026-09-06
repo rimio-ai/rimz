@@ -16,9 +16,9 @@ use crate::disk::paths::state_home;
 use crate::harness::run::RunStatus;
 use crate::harness::schedule::arming::{self, TaskKey};
 use crate::harness::schedule::catalog::LoadedTask;
-use crate::harness::schedule::signal::SignalName;
 use crate::harness::schedule::strikes;
 use crate::ids::MessageId;
+use crate::store::event::SignalName;
 use serde_json::{Map, Value};
 
 const NAME: &str = "loop-runs.log.jsonl";

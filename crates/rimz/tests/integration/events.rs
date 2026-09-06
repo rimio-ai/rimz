@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use crate::common::Env;
 use rimz::agents::{AgentLifecycleObservation, LifecycleEvent, LifecycleSignal};
-use rimz::harness::schedule::signal::{SignalName, SignalSelector, SignalSource};
+use rimz::harness::schedule::signal::SignalSelector;
 use rimz::ids::{AgentKind, AgentSessionId};
-use rimz::store::event::SignalEventPayload;
+use rimz::store::event::{SignalEventPayload, SignalName, SignalSource};
 use rimz::store::writer::AgentLifecycleIntent;
 use serde_json::json;
 

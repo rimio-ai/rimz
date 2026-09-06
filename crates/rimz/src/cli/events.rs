@@ -101,7 +101,7 @@ fn poll_interval() -> Duration {
 
 fn emit(name: &str, raw_payload: Option<&str>, source: &str, globals: &GlobalFlags) -> Result<()> {
     let name = name
-        .parse::<rimz::harness::schedule::signal::SignalName>()
+        .parse::<rimz::store::event::SignalName>()
         .map_err(anyhow::Error::msg)?;
     let source = validate_emit_source(&name, source)?;
     let payload = parse_payload(raw_payload)?;
@@ -136,10 +136,10 @@ fn emit(name: &str, raw_payload: Option<&str>, source: &str, globals: &GlobalFla
 }
 
 fn validate_emit_source(
-    name: &rimz::harness::schedule::signal::SignalName,
+    name: &rimz::store::event::SignalName,
     source: &str,
-) -> Result<rimz::harness::schedule::signal::SignalSource> {
-    use rimz::harness::schedule::signal::SignalSource;
+) -> Result<rimz::store::event::SignalSource> {
+    use rimz::store::event::SignalSource;
 
     match source {
         "forge" => {
@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn reserved_families_reject_custom_emit_but_accept_internal_forge() {
-        use rimz::harness::schedule::signal::SignalSource;
+        use rimz::store::event::SignalSource;
 
         for raw in ["ci.passed", "ci.failed", "pr.merged", "pr.closed"] {
             let name = raw.parse().unwrap();

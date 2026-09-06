@@ -1,6 +1,6 @@
 use super::*;
 use crate::config::TaskTarget;
-use crate::harness::schedule::signal::SignalSource;
+use crate::store::event::SignalSource;
 
 fn task() -> TaskEntry {
     TaskEntry {

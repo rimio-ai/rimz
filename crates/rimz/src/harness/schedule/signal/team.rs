@@ -2,11 +2,12 @@
 
 use serde_json::{Map, Value, json};
 
-use super::{Signal, SignalSource};
+use super::Signal;
 use crate::agents::{
     AgentState, AgentStatus, LifecycleEvent, LifecycleSignal, LifecycleTransition,
 };
 use crate::harness::target::agent_handle;
+use crate::store::event::SignalSource;
 use crate::store::message::MessageRecord;
 
 /// Derive team signals from the transitioning audit row and its live cohort members.

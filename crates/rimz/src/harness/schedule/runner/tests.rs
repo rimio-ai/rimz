@@ -324,7 +324,7 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
     let signal = TriggerSignal {
         name: "wake.runner-skipped-watch".parse().expect("signal name"),
         payload: serde_json::Map::new(),
-        source: crate::harness::schedule::signal::SignalSource::Watch,
+        source: crate::store::event::SignalSource::Watch,
         watch: Some(crate::harness::schedule::signal::WatchOutcome::Exited {
             code: Some(1),
             output: String::new(),
@@ -428,7 +428,7 @@ fn loop_signal_prompts_keep_braces_and_check_evidence() {
     let signal = TriggerSignal {
         name: "deploy.failed".parse().unwrap(),
         payload: serde_json::from_value(serde_json::json!({"branch":"feature"})).unwrap(),
-        source: crate::harness::schedule::signal::SignalSource::Cli,
+        source: crate::store::event::SignalSource::Cli,
         watch: None,
     };
     let mut fire = TaskFire::new(
