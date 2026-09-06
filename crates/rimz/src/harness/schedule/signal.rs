@@ -259,13 +259,10 @@ pub fn lifecycle_signal(event: &crate::agents::LifecycleEvent) -> Option<Signal>
 /// Fire matching tasks in the emitter process. Signal events are never replayed.
 pub fn fire_signal(
     runtime: &RuntimePaths,
-    project_root: Option<&Path>,
+    project_root: &Path,
     signal: &Signal,
 ) -> Result<Vec<String>, serde_json::Error> {
-    let project_root = project_root
-        .map(Path::to_path_buf)
-        .or_else(|| super::fire::workspace_project_root(runtime));
-    let tasks = super::fire::runnable_tasks_for(runtime, project_root.as_deref());
+    let tasks = super::fire::runnable_tasks_for(runtime, Some(project_root));
     let arming_entries = arming::load();
     let encoded = serde_json::to_string(signal)?;
     let mut fired = Vec::new();
@@ -282,9 +279,6 @@ pub fn fire_signal(
             jiff::Timestamp::now(),
         ) != arming::ArmState::Live
         {
-            continue;
-        }
-        if matches!(parsed.trigger, Trigger::Schedule(_)) {
             continue;
         }
         if task.source() == super::catalog::TaskSource::Instance
@@ -316,13 +310,7 @@ pub fn fire_signal(
             super::run_log::record_transition(&task, &record);
             continue;
         }
-        super::fire::spawn_loop_run(
-            runtime,
-            project_root.as_deref(),
-            &name,
-            Some(&encoded),
-            false,
-        );
+        super::fire::spawn_loop_run(runtime, Some(project_root), &name, Some(&encoded), false);
         fired.push(name);
     }
     Ok(fired)

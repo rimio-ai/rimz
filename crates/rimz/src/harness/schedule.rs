@@ -495,40 +495,22 @@ impl TaskTiming {
                     (Err(_), _) => TaskTimingState::Invalid,
                     (
                         Ok(ParsedTrigger {
-                            trigger: Trigger::Signal { .. },
-                            ..
-                        }),
-                        _,
-                    ) => {
-                        let Ok(ParsedTrigger {
                             trigger: Trigger::Signal { selector, .. },
                             ..
-                        }) = &parsed
-                        else {
-                            unreachable!("matched signal trigger")
-                        };
-                        TaskTimingState::Listening {
-                            name: selector.clone(),
-                        }
-                    }
+                        }),
+                        _,
+                    ) => TaskTimingState::Listening {
+                        name: selector.clone(),
+                    },
                     (
                         Ok(ParsedTrigger {
-                            trigger: Trigger::Watch { .. },
+                            trigger: Trigger::Watch { command },
                             ..
                         }),
                         _,
-                    ) => {
-                        let Ok(ParsedTrigger {
-                            trigger: Trigger::Watch { command },
-                            ..
-                        }) = &parsed
-                        else {
-                            unreachable!("matched watch trigger")
-                        };
-                        TaskTimingState::Watching {
-                            command: command.clone(),
-                        }
-                    }
+                    ) => TaskTimingState::Watching {
+                        command: command.clone(),
+                    },
                     (Ok(_), None) => TaskTimingState::Unarmed,
                     (Ok(_), Some(_)) => match scheduled_next {
                         Some(next) if next <= now.timestamp() => TaskTimingState::Due(next),

@@ -210,7 +210,7 @@ fn record_mapped_lifecycle_observation(
         for signal in signals {
             if let Err(err) = rimz::harness::schedule::signal::fire_signal(
                 store.runtime_paths(),
-                Some(&workspace.project_root),
+                &workspace.project_root,
                 &signal,
             ) {
                 warn!(
