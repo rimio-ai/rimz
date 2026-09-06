@@ -21,7 +21,6 @@ fn meta(handle: &str) -> WakeMeta {
         },
         armed_at: "2026-01-01T14:02:00Z".parse().unwrap(),
         delay: None,
-        last_observed_at: None,
     }
 }
 
@@ -192,7 +191,7 @@ fn signal_without_metadata_keeps_scope_and_has_no_elapsed_time() {
 }
 
 #[test]
-fn expiry_names_subscription_scope_and_window() {
+fn expiry_names_scope_deadline_and_rearm() {
     let task = TaskEntry {
         signal: Some("ci.*".to_owned()),
         matches: Some([("path".to_owned(), "/home/you/code/app-feat-x".to_owned())].into()),
@@ -204,11 +203,14 @@ fn expiry_names_subscription_scope_and_window() {
             "wake-test",
             &task,
             Some(&meta("@coder#feat-x")),
-            Evidence::Expired,
+            Evidence::Expired {
+                view: None,
+                rearm: "rimz wake --signal 'ci.*' --match path=/home/you/code/app-feat-x"
+            },
             "{{branch}}",
             now()
         ),
-        "waited on ci.* on /home/you/code/app-feat-x\nnothing in 59m; subscription closed [wake-test]\n\n{{branch}}"
+        "waited on ci.* on /home/you/code/app-feat-x\nnothing in 59m; wake closed [wake-test]\nre-arm: rimz wake --signal 'ci.*' --match path=/home/you/code/app-feat-x\n\n{{branch}}"
     );
 }
 
@@ -296,7 +298,7 @@ fn foreign_armer_leads_and_note_is_verbatim() {
 }
 
 #[test]
-fn shell_armer_leads_even_when_subscription_expires() {
+fn shell_armer_leads_even_when_wake_expires() {
     let task = TaskEntry {
         signal: Some("ci.failed".to_owned()),
         timeout: Some("59m".to_owned()),
@@ -311,11 +313,41 @@ fn shell_armer_leads_even_when_subscription_expires() {
             "wake-test",
             &task,
             Some(&meta),
-            Evidence::Expired,
+            Evidence::Expired {
+                view: None,
+                rearm: "rimz wake --signal ci.failed"
+            },
             "",
             now()
         ),
-        "armed on you from the shell.\nwaited on ci.failed\nnothing in 59m; subscription closed [wake-test]"
+        "armed on you from the shell.\nwaited on ci.failed\nnothing in 59m; wake closed [wake-test]\nre-arm: rimz wake --signal ci.failed"
+    );
+}
+
+#[test]
+fn expiry_carries_room_status_before_rearm_and_verbatim_note() {
+    let task = TaskEntry {
+        signal: Some("ci.failed".to_owned()),
+        timeout: Some("59m".to_owned()),
+        ..task()
+    };
+    let view = ForgeView {
+        headline: "feat-x (PR #91)".to_owned(),
+        label: "ci pending on feat-x (PR #91)".to_owned(),
+    };
+    assert_eq!(
+        compose_wake(
+            "wake-test",
+            &task,
+            Some(&meta("@coder#feat-x")),
+            Evidence::Expired {
+                view: Some(&view),
+                rearm: "rimz wake --signal ci.failed"
+            },
+            "  inspect {{branch}}\n",
+            now()
+        ),
+        "waited on ci.failed on feat-x (PR #91)\nnothing in 59m; wake closed · ci pending on feat-x (PR #91) [wake-test]\nre-arm: rimz wake --signal ci.failed\n\n  inspect {{branch}}\n"
     );
 }
 

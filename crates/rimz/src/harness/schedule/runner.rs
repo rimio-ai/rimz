@@ -5,6 +5,7 @@
 //! supervised-run or message effect and returns its typed result.
 
 mod prompt;
+mod status;
 
 use std::cell::OnceCell;
 use std::fs::File;
@@ -224,6 +225,10 @@ impl FireContext {
     }
 }
 
+struct ExpiredWake {
+    view: Option<status::ForgeView>,
+}
+
 /// One loop fire from ordered gates through exactly one history transition.
 pub struct TaskFire<'a> {
     name: String,
@@ -232,7 +237,7 @@ pub struct TaskFire<'a> {
     catalog: &'a TaskCatalog,
     action: Option<TaskAction>,
     ephemeral: bool,
-    expired: bool,
+    expired: Option<ExpiredWake>,
     context: Option<FireContext>,
     mode: LoopRunMode,
     keep: bool,
@@ -275,7 +280,7 @@ impl<'a> TaskFire<'a> {
             catalog,
             action: Some(action),
             ephemeral,
-            expired: false,
+            expired: None,
             context: None,
             mode,
             keep,
@@ -308,22 +313,25 @@ impl<'a> TaskFire<'a> {
             return Ok(None);
         };
         self.entry = entry;
-        self.expired = true;
-        if self
-            .entry
-            .wake_meta
-            .as_ref()
-            .is_some_and(|meta| meta.last_observed_at.is_some())
-        {
-            return Ok(Some(TaskFirePlan::Done(self.record_terminal(
-                LoopRunResult::Expired,
-                LoopRunPresentation::default(),
-                TaskFireNotice::Gate {
-                    reason: "retired quiet".to_owned(),
-                },
-                None,
-            ))));
-        }
+        let runtime = RuntimePaths::for_workspace(WorkspaceResolver::persisted_workspace_id(
+            self.entry.resolved_root(),
+        )?)?;
+        let parsed = self.task.trigger().as_ref().map_err(Clone::clone)?;
+        let view = match status::resolve(&parsed.trigger, &runtime) {
+            status::WaitStatus::Answered { label, signal } => {
+                return Ok(Some(TaskFirePlan::Done(self.record_terminal_with(
+                    LoopRunResult::Expired,
+                    LoopRunPresentation::default(),
+                    TaskFireNotice::Gate {
+                        reason: format!("answered · {label}"),
+                    },
+                    None,
+                    |record| record.signal = Some(signal),
+                ))));
+            }
+            status::WaitStatus::Open(view) => view,
+        };
+        self.expired = Some(ExpiredWake { view });
         let action = self
             .action
             .take()
@@ -350,7 +358,7 @@ impl<'a> TaskFire<'a> {
         if deadline_expired_at(&self.entry, self.now)
             && !(self.entry.wake_meta.is_some() && self.entry.signal.is_some())
         {
-            if self.mode == LoopRunMode::Scheduled && !self.expired {
+            if self.mode == LoopRunMode::Scheduled && self.expired.is_none() {
                 self.remove_schedule()?;
             }
             return Ok(TaskFirePlan::Done(self.record_terminal(
@@ -470,7 +478,7 @@ impl<'a> TaskFire<'a> {
             (PendingEffect::Deliver { target, check }, TaskFireEffect::Delivered(message_id)) => {
                 let handle = target.handle;
                 Ok(self.record_terminal_with(
-                    if self.expired {
+                    if self.expired.is_some() {
                         LoopRunResult::Expired
                     } else {
                         LoopRunResult::Delivered
@@ -486,7 +494,7 @@ impl<'a> TaskFire<'a> {
                 ))
             }
             (PendingEffect::Deliver { target, check }, TaskFireEffect::TargetGone) => {
-                if self.mode == LoopRunMode::Scheduled && !self.expired {
+                if self.mode == LoopRunMode::Scheduled && self.expired.is_none() {
                     self.remove_schedule()?;
                 }
                 let handle = target.handle;
@@ -695,7 +703,7 @@ impl<'a> TaskFire<'a> {
     ) -> Result<TaskFirePlan> {
         let check = fired_check.as_ref().map(|check| check.record.clone());
         if !catalog::delivery_target_alive(&self.entry, &target)? {
-            if self.mode == LoopRunMode::Scheduled && !self.expired {
+            if self.mode == LoopRunMode::Scheduled && self.expired.is_none() {
                 self.remove_schedule()?;
             }
             let handle = target.handle;
@@ -713,7 +721,22 @@ impl<'a> TaskFire<'a> {
             )));
         }
         let prompt = self.resolve_effect_prompt(fired_check.as_ref())?;
-        self.consume_ephemeral()?;
+        if self.mode == LoopRunMode::Scheduled
+            && self.task.source() == catalog::TaskSource::Instance
+            && self.entry.wake_meta.is_some()
+            && self.entry.signal.is_some()
+        {
+            if self.expired.is_none()
+                && !super::instances::remove_signal_wake(&self.name, &self.entry)?
+            {
+                return Ok(TaskFirePlan::Done(self.record_gate(
+                    LoopRunResult::Canceled,
+                    "wake already consumed, canceled, or replaced".to_owned(),
+                )));
+            }
+        } else {
+            self.consume_ephemeral()?;
+        }
         self.pending = Some(PendingEffect::Deliver {
             target: target.clone(),
             check: check.clone(),
@@ -755,8 +778,16 @@ impl<'a> TaskFire<'a> {
         let mut body = resolve_task_prompt(&self.name, &self.entry)?;
         let signal_trigger = self.entry.signal.is_some() || self.entry.watch.is_some();
         if self.entry.wake.is_some() || signal_trigger || self.signal.is_some() {
-            let evidence = if self.expired {
-                prompt::Evidence::Expired
+            let rearm = self
+                .expired
+                .as_ref()
+                .map(|_| status::rearm_command(&self.entry))
+                .transpose()?;
+            let evidence = if let Some(expired) = &self.expired {
+                prompt::Evidence::Expired {
+                    view: expired.view.as_ref(),
+                    rearm: rearm.as_deref().context("expired wake re-arm command")?,
+                }
             } else if let Some(signal) = &self.signal {
                 prompt::Evidence::Signal(signal)
             } else if signal_trigger {
