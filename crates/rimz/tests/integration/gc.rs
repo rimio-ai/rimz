@@ -148,6 +148,65 @@ fn gc_prunes_dead_root_workspace() {
 }
 
 #[test]
+fn gc_prunes_wake_logs_despite_another_projects_invalid_config() {
+    let env = Env::new();
+    let other = env.home_root.join("other-project");
+    env.record(&other);
+    std::fs::create_dir_all(other.join(".rimz")).unwrap();
+    std::fs::write(
+        other.join(".rimz/config.toml"),
+        "[tasks.bad]\nwatch = \"true\"\n",
+    )
+    .unwrap();
+    let paths = env.state_path_for(&other);
+    std::fs::create_dir_all(&paths.wakes_dir).unwrap();
+    let log = paths.wakes_dir.join("wake-retired.log");
+    std::fs::write(&log, "old command output").unwrap();
+    std::fs::File::open(&log)
+        .unwrap()
+        .set_modified(SystemTime::now() - Duration::from_secs(15 * 24 * 3600))
+        .unwrap();
+
+    let damaged = env.home_root.join("damaged-project");
+    env.record(&damaged);
+    let damaged_paths = env.state_path_for(&damaged);
+    std::fs::remove_dir(&damaged_paths.wakes_dir).unwrap();
+    std::fs::write(&damaged_paths.wakes_dir, "not a directory").unwrap();
+
+    let gone = env.home_root.join("gone-project");
+    env.record(&gone);
+    let gone_paths = env.state_path_for(&gone);
+    std::fs::remove_dir_all(gone).unwrap();
+    env.rimz()
+        .args(["gc"])
+        .assert()
+        .success()
+        .stdout(contains("1 wake log pruned"));
+    assert!(
+        !log.exists(),
+        "retired log is pruned without loading project config"
+    );
+    assert!(
+        damaged_paths.wakes_dir.is_file(),
+        "unreadable wake area is kept"
+    );
+    assert!(
+        !gone_paths.root.exists(),
+        "later workspace sweep still runs"
+    );
+
+    std::fs::write(&log, "another retired log").unwrap();
+    std::fs::File::open(&log)
+        .unwrap()
+        .set_modified(SystemTime::now() - Duration::from_secs(15 * 24 * 3600))
+        .unwrap();
+    let output = env.rimz().args(["gc", "--json"]).assert().success();
+    let report: serde_json::Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    assert_eq!(report["wake_logs_pruned"], 1);
+    assert!(!log.exists());
+}
+
+#[test]
 fn gc_reaps_scaffold_but_keeps_unreadable_history() {
     let env = Env::new();
     let workspaces = env.state_root().join("rimz").join("workspaces");
@@ -300,6 +359,7 @@ fn gc_json_emits_report() {
         serde_json::from_slice(&assert.get_output().stdout).expect("gc json");
 
     assert_eq!(value["dry_run"], false);
+    assert_eq!(value["wake_logs_pruned"], 0);
     assert!(
         value.get("reclaimed_bytes").is_some(),
         "json includes reclaimed_bytes: {value}"
