@@ -178,22 +178,32 @@ START             DUR  TOKENS       COST     OUTCOME  PROMPT
 
 ```console
 $ rimz agents attribution
-forge team · 2 agents · 36m active · $33.49
+forge team · 3 agents · 14m active · $13.56 · 3 messages (2 from you)
 
-  @planner · Claude · claude-opus-5@xhigh
-      effort:    15m active · $16.72
-      subagents: 3 × explore · $2.19
-      activity:  84 tool calls
-      tokens:    11k input, 148k output, 16m cache read
+  @planner · Claude · claude-fable-5-1@high
+      effort:    8m active · $4.83
+      subagents: 1 × explorer · $0.83
+      activity:  33 tool calls
+      messages:  2 from you · 2 to teammates
+      tokens:    184.8k input, 37.9k output, 111k cache write, 4.1m cache read
 
-  @coder · Codex · gpt-5.6-sol@xhigh
-      effort:    21m active · $16.77
-      subagents: 1 × reviewer · $4.10
-      activity:  106 tool calls
-      tokens:    294k input, 41k output, 19m cache read
+  @coder · Codex · gpt-6-astra@high
+      effort:    5m active · $8.73
+      subagents: 2 × documenter, 2 × implementer · $5.70
+      activity:  59 tool calls
+      messages:  1 from teammates · 4 to teammates
+      tokens:    208.8k input, 50.5k output, 131.5k cache write, 5.1m cache read
+
+  @reviewer · Claude · claude-opus-5@high
+
+Models
+  gpt-6-astra:      $5.13 · 208.6k input, 15k output, 2.3m cache read
+  claude-fable-5-1: $4.00 · 72 input, 21.5k output, 111k cache write, 2.8m cache read
+  claude-opus-5:    $3.60 · 116 input, 35.5k output, 131.5k cache write, 2.8m cache read
+  gpt-5.6-terra:    $0.83 · 184.8k input, 16.3k output, 1.3m cache read
 ```
 
-Every dollar and token figure is all-in for the member or team, including subagents; each `subagents` line breaks part of the effort figure above down by task rather than adding to it. The `--md` form turns the same figures and wording into a collapsed pull-request receipt whose summary links RimZ to its repository.
+Every dollar and token figure is all-in for the member or team, including subagents; each `subagents` line breaks part of the effort figure above down by task rather than adding to it. `Models` splits that same spend by the model id each provider transcript recorded, including native subagents and launched children. Unlike the member heading, which names its latest session's model, these rows show every model used, ordered by cost largest first. Entries whose transcript named no model collect under `unknown`. The `--md` form turns the same figures and wording into a collapsed pull-request receipt whose summary links RimZ to its repository, with a `**Models**` bullet list after the members.
 
 **Find what is burning CPU or tokens.** When the machine gets loud, `rimz agents top` ranks the live fleet by the resources each agent's pane process tree is using. It streams by default; `--once` takes a sample and exits for a script:
 

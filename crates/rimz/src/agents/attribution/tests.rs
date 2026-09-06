@@ -63,7 +63,7 @@ fn mixed_origin_report() -> Attribution {
     std::fs::write(
         &transcript,
         concat!(
-            r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":1.0,"requestId":"parent","message":{"id":"parent","usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":1.0,"requestId":"parent","message":{"id":"parent","model":"parent-model","usage":{"input_tokens":10,"output_tokens":1,"cache_creation_input_tokens":4,"cache_read_input_tokens":5}}}"#,
             "\n"
         ),
     )
@@ -71,7 +71,7 @@ fn mixed_origin_report() -> Attribution {
     std::fs::write(
         subagent_dir.join("agent-native.jsonl"),
         concat!(
-            r#"{"timestamp":"2026-01-01T10:00:01.000Z","costUSD":2.0,"requestId":"native","isSidechain":true,"message":{"id":"native","usage":{"input_tokens":20,"output_tokens":2}}}"#,
+            r#"{"timestamp":"2026-01-01T10:00:01.000Z","costUSD":2.0,"requestId":"native","isSidechain":true,"message":{"id":"native","model":"child-model","usage":{"input_tokens":20,"output_tokens":2,"cache_creation_input_tokens":6,"cache_read_input_tokens":7}}}"#,
             "\n"
         ),
     )
@@ -79,7 +79,7 @@ fn mixed_origin_report() -> Attribution {
     std::fs::write(
         &launched_transcript,
         concat!(
-            r#"{"timestamp":"2026-01-01T10:00:02.000Z","costUSD":3.0,"requestId":"launched","message":{"id":"launched","usage":{"input_tokens":30,"output_tokens":3}}}"#,
+            r#"{"timestamp":"2026-01-01T10:00:02.000Z","costUSD":3.0,"requestId":"launched","message":{"id":"launched","model":"child-model","usage":{"input_tokens":30,"output_tokens":3,"cache_creation_input_tokens":8,"cache_read_input_tokens":9}}}"#,
             "\n"
         ),
     )
@@ -288,6 +288,30 @@ fn claude_slot_credits_subagent_transcript_effort() {
     assert_eq!(member.tokens.input, 30);
     assert_eq!(member.tokens.output, 3);
     assert_eq!(member.cost_usd, Some(3.0));
+    assert_eq!(
+        member.models,
+        [
+            ModelStat {
+                model: Some("child-model".to_owned()),
+                tokens: TokenSplit {
+                    input: 20,
+                    output: 2,
+                    ..TokenSplit::default()
+                },
+                cost_usd: Some(2.0),
+            },
+            ModelStat {
+                model: None,
+                tokens: TokenSplit {
+                    input: 10,
+                    output: 1,
+                    ..TokenSplit::default()
+                },
+                cost_usd: Some(1.0),
+            },
+        ]
+    );
+    assert_eq!(report.models, member.models);
 }
 
 #[test]
@@ -298,7 +322,7 @@ fn launched_child_effort_folds_into_the_parent_seat() {
     std::fs::write(
         &parent_transcript,
         concat!(
-            r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":1.0,"requestId":"parent","message":{"id":"parent","usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":1.0,"requestId":"parent","message":{"id":"parent","model":"parent-model","usage":{"input_tokens":10,"output_tokens":1}}}"#,
             "\n"
         ),
     )
@@ -306,7 +330,7 @@ fn launched_child_effort_folds_into_the_parent_seat() {
     std::fs::write(
         &child_transcript,
         concat!(
-            r#"{"timestamp":"2026-01-01T10:00:01.000Z","costUSD":2.0,"requestId":"child","message":{"id":"child","usage":{"input_tokens":20,"output_tokens":2}}}"#,
+            r#"{"timestamp":"2026-01-01T10:00:01.000Z","costUSD":2.0,"requestId":"child","message":{"id":"child","model":"child-model","usage":{"input_tokens":20,"output_tokens":2}}}"#,
             "\n"
         ),
     )
@@ -395,6 +419,30 @@ fn launched_child_effort_folds_into_the_parent_seat() {
     assert_eq!(report.totals.active_secs, Some(10));
     assert_eq!(report.totals.asks, 0);
     assert_eq!(report.totals.messages, MessageCounts::default());
+    assert_eq!(
+        member.models,
+        [
+            ModelStat {
+                model: Some("child-model".to_owned()),
+                tokens: TokenSplit {
+                    input: 20,
+                    output: 2,
+                    ..TokenSplit::default()
+                },
+                cost_usd: Some(2.0),
+            },
+            ModelStat {
+                model: Some("parent-model".to_owned()),
+                tokens: TokenSplit {
+                    input: 10,
+                    output: 1,
+                    ..TokenSplit::default()
+                },
+                cost_usd: Some(1.0),
+            },
+        ]
+    );
+    assert_eq!(report.models, member.models);
 }
 
 #[test]
@@ -419,14 +467,52 @@ fn subagents_with_one_label_merge_across_origins() {
 }
 
 #[test]
-fn schema_five_serializes_one_cost_and_task_grouped_subagents() {
+fn schema_six_serializes_one_cost_and_task_grouped_subagents() {
     let report = serde_json::to_value(mixed_origin_report()).expect("serialize attribution");
     let member = &report["groups"][0]["members"][0];
     let subagent = &member["subagents"][0];
 
-    assert_eq!(report["schema"], 5);
+    assert_eq!(report["schema"], 6);
     assert_eq!(member["cost_usd"], 6.0);
-    assert_eq!(member.as_object().map(serde_json::Map::len), Some(22));
+    assert_eq!(member.as_object().map(serde_json::Map::len), Some(23));
+    assert_eq!(
+        report["models"],
+        json!([
+            {
+                "model": "child-model",
+                "tokens": {"input": 50, "output": 5, "cache_write": 14, "cache_read": 16},
+                "cost_usd": 5.0,
+            },
+            {
+                "model": "parent-model",
+                "tokens": {"input": 10, "output": 1, "cache_write": 4, "cache_read": 5},
+                "cost_usd": 1.0,
+            },
+        ])
+    );
+    assert_eq!(member["models"], report["models"]);
+    for (models, totals) in [
+        (&member["models"], member),
+        (&report["models"], &report["totals"]),
+    ] {
+        let models = models.as_array().expect("model rows");
+        assert_eq!(
+            models
+                .iter()
+                .map(|row| row["cost_usd"].as_f64().expect("model cost"))
+                .sum::<f64>(),
+            totals["cost_usd"].as_f64().expect("total cost")
+        );
+        for component in ["input", "output", "cache_write", "cache_read"] {
+            assert_eq!(
+                models
+                    .iter()
+                    .map(|row| row["tokens"][component].as_u64().expect("model tokens"))
+                    .sum::<u64>(),
+                totals["tokens"][component].as_u64().expect("total tokens")
+            );
+        }
+    }
     assert_eq!(
         subagent,
         &json!({
@@ -439,6 +525,51 @@ fn schema_five_serializes_one_cost_and_task_grouped_subagents() {
         report["totals"].as_object().map(serde_json::Map::len),
         Some(10)
     );
+}
+
+#[test]
+fn model_stats_orders_by_cost_tokens_and_model_id_with_unknowns_last() {
+    let rows = model_stats(
+        [
+            (Some("expensive"), Some(2.0), 0, 0),
+            (Some("cached"), Some(1.0), 0, 11),
+            (Some("alpha"), Some(1.0), 10, 0),
+            (Some("beta"), Some(1.0), 10, 0),
+            (None, Some(1.0), 10, 0),
+            (Some("unpriced"), None, 100, 0),
+        ]
+        .into_iter()
+        .map(|(model, cost_usd, input, cache_read)| {
+            (
+                model.map(ToOwned::to_owned),
+                spending::SlotEffort {
+                    tokens: TokenSplit {
+                        input,
+                        cache_read,
+                        ..TokenSplit::default()
+                    },
+                    cost_usd,
+                },
+            )
+        })
+        .collect(),
+    );
+
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.model.as_deref())
+            .collect::<Vec<_>>(),
+        [
+            Some("expensive"),
+            Some("cached"),
+            Some("alpha"),
+            Some("beta"),
+            None,
+            Some("unpriced"),
+        ]
+    );
+    assert_eq!(rows.last().expect("unpriced row").cost_usd, None);
+    assert_eq!(rows.last().expect("unpriced row").tokens.input, 100);
 }
 
 #[test]

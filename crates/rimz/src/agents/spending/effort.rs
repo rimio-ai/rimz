@@ -52,6 +52,7 @@ pub struct SlotEffort {
 pub struct SlotEffortBreakdown {
     pub total: SlotEffort,
     pub subagents: BTreeMap<String, SlotEffort>,
+    pub models: BTreeMap<Option<String>, SlotEffort>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -185,6 +186,13 @@ fn fold_tagged_entries<'a>(
     let mut breakdown = SlotEffortBreakdown::default();
     for selected in deduped.into_counted() {
         absorb_entry(&mut breakdown.total, selected.entry);
+        absorb_entry(
+            breakdown
+                .models
+                .entry(selected.entry.model.clone())
+                .or_default(),
+            selected.entry,
+        );
         if let Some(child_id) = selected.subagent {
             absorb_entry(
                 breakdown.subagents.entry(child_id).or_default(),
@@ -234,8 +242,8 @@ mod tests {
         let replay = first.clone();
         let unpriced = entry("unpriced", 20, 0.0);
 
-        let effort =
-            fold_tagged_entries([(&first, None), (&replay, None), (&unpriced, None)]).total;
+        let breakdown = fold_tagged_entries([(&first, None), (&replay, None), (&unpriced, None)]);
+        let effort = breakdown.total;
 
         assert_eq!(
             effort.tokens,
@@ -247,6 +255,7 @@ mod tests {
             }
         );
         assert_eq!(effort.cost_usd, Some(0.25));
+        assert_eq!(breakdown.models[&None], effort);
     }
 
     #[test]
@@ -322,6 +331,22 @@ mod tests {
             }
         );
         assert_eq!(breakdown.subagents["a"].cost_usd, Some(2.0));
+        assert_eq!(breakdown.models.len(), 2);
+        assert_eq!(
+            breakdown.models[&Some("main-model".to_owned())],
+            SlotEffort {
+                tokens: EffortTokens {
+                    input: 10,
+                    output: 1,
+                    ..EffortTokens::default()
+                },
+                cost_usd: Some(1.0),
+            }
+        );
+        assert_eq!(
+            breakdown.models[&Some("child-model".to_owned())],
+            breakdown.subagents["a"]
+        );
     }
 
     #[test]
