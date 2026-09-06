@@ -1100,7 +1100,7 @@ fn resolve_managed_spawn_state(
 }
 
 /// Newest durable supervised run still active for one loop task.
-pub fn newest_active_run(paths: &StatePaths, name: &str) -> Result<Option<RunRecord>> {
+fn newest_active_run(paths: &StatePaths, name: &str) -> Result<Option<RunRecord>> {
     let mut records = crate::harness::run::list(paths)?;
     records
         .retain(|record| !record.status.is_terminal() && record.loop_task.as_deref() == Some(name));
@@ -1144,10 +1144,9 @@ pub fn stop_task(
     cancel: impl FnOnce(Option<&ResolvedWorkspace>, WorkspaceId, Option<&RunRecord>) -> Result<()>,
 ) -> Result<StopOutcome> {
     let entry = task.entry();
-    let lock_state = probe_run_lock(name, entry)?;
-    if next_stop_action(&lock_state, false, false, false) == StopAction::Done {
+    let RunLockState::Held(holder) = probe_run_lock(name, entry)? else {
         return Ok(StopOutcome::NoActiveRun);
-    }
+    };
 
     let root = entry.resolved_root();
     let (workspace, workspace_id) = stop_workspace(&root)?;
@@ -1167,16 +1166,7 @@ pub fn stop_task(
         });
     }
 
-    let action = next_stop_action(&lock_state, run.is_some(), true, false);
-    let (holder, signal_error) = match action {
-        StopAction::Signal(info) => match signal_run_lock_holder(&info) {
-            Ok(()) => (Some(info), None),
-            Err(err) => (Some(info), Some(err)),
-        },
-        StopAction::Done | StopAction::CancelRun | StopAction::Manual => {
-            (lock_info(&lock_state), None)
-        }
-    };
+    let signal_error = holder.and_then(|info| signal_run_lock_holder(&info).err());
 
     if signal_error.is_none()
         && let Some(info) = holder
@@ -1213,13 +1203,6 @@ fn stop_workspace(root: &Path) -> Result<(Option<ResolvedWorkspace>, WorkspaceId
         None => WorkspaceResolver::persisted_workspace_id(root)?,
     };
     Ok((workspace, workspace_id))
-}
-
-fn lock_info(state: &RunLockState) -> Option<RunLockInfo> {
-    match state {
-        RunLockState::Held(info) => *info,
-        RunLockState::Available => None,
-    }
 }
 
 fn append_stopped_record(
@@ -1270,14 +1253,6 @@ pub enum RunLockState {
     Held(Option<RunLockInfo>),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StopAction {
-    Done,
-    CancelRun,
-    Signal(RunLockInfo),
-    Manual,
-}
-
 pub fn acquire_run_lock(name: &str, entry: &TaskEntry) -> Result<RunLockAttempt> {
     let path = run_lock_path(name, entry)?;
     let parent = path
@@ -1317,28 +1292,14 @@ fn probe_run_lock_path(path: &Path) -> Result<RunLockState> {
     probe_run_lock_file(file, path)
 }
 
-pub fn run_lock_path(name: &str, entry: &TaskEntry) -> Result<PathBuf> {
+fn run_lock_path(name: &str, entry: &TaskEntry) -> Result<PathBuf> {
     let runtime =
         RuntimePaths::for_workspace(WorkspaceId::from_project_root(&entry.resolved_root()))
             .context("locating loop task runtime")?;
     Ok(runtime.root.join(format!("loop-run-{name}.lock")))
 }
 
-pub fn next_stop_action(
-    state: &RunLockState,
-    run_found: bool,
-    cancel_attempted: bool,
-    signal_attempted: bool,
-) -> StopAction {
-    match state {
-        RunLockState::Available => StopAction::Done,
-        RunLockState::Held(_) if run_found && !cancel_attempted => StopAction::CancelRun,
-        RunLockState::Held(Some(info)) if !signal_attempted => StopAction::Signal(*info),
-        RunLockState::Held(_) => StopAction::Manual,
-    }
-}
-
-pub fn signal_run_lock_holder(info: &RunLockInfo) -> Result<()> {
+fn signal_run_lock_holder(info: &RunLockInfo) -> Result<()> {
     let pid = i32::try_from(info.pid).context("loop run lock holder pid is out of range")?;
     if pid == 0 {
         anyhow::bail!("loop run lock holder pid must be positive");
@@ -1352,7 +1313,7 @@ pub fn signal_run_lock_holder(info: &RunLockInfo) -> Result<()> {
     }
 }
 
-pub fn wait_for_run_lock_release(name: &str, entry: &TaskEntry, grace: Duration) -> Result<bool> {
+fn wait_for_run_lock_release(name: &str, entry: &TaskEntry, grace: Duration) -> Result<bool> {
     wait_for_run_lock_release_path(&run_lock_path(name, entry)?, grace)
 }
 
