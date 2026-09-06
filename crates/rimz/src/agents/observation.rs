@@ -32,7 +32,11 @@ pub enum SessionOrigin {
 /// Launcher-selected parameters shared by launch and lifecycle event payloads.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LaunchParams {
-    /// Parent launch id for a pane-backed `rimz subagents` child, falling back to its session id when no launch id exists. Absent for peers and provider-native subagents.
+    /// Parent launch id for a pane-backed `rimz subagents` child.
+    ///
+    /// Fall back to the parent session id when no launch id exists.
+    ///
+    /// Absent for peers and provider-native subagents.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_agent_id: Option<AgentSessionId>,
     /// Provider kind of `parent_agent_id`. Launched children can cross

@@ -524,7 +524,11 @@ pub struct AgentState {
     pub pane: Option<PaneRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_owner: Option<RuntimeOwner>,
-    /// The parent launch id, or session id for provider-native children and parents without a launch id. The sidebar nests under a rendered parent row; a pane-backed orphan gets its own row.
+    /// The parent launch id, with session-id fallback for launchless parents.
+    ///
+    /// Provider-native children always name the parent session.
+    ///
+    /// Nest under a rendered parent; pane-backed orphans get their own rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_agent_id: Option<AgentSessionId>,
     /// Provider kind of `parent_agent_id`; absent for legacy and same-kind
@@ -940,7 +944,7 @@ impl AgentState {
         self.parent_agent_id.is_some() && self.launch_depth.is_none()
     }
 
-    /// Whether the parent link names this candidate's session or launch, corroborated by provider kind.
+    /// Match the parent link to a candidate session or launch of the right kind.
     pub fn parent_is(&self, candidate: &AgentState) -> bool {
         self.parent_agent_id
             .as_ref()

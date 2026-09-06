@@ -1,8 +1,10 @@
 //! Parent-lifecycle watchdog for pane-backed supervised subagents.
 //!
-//! End stamps are authoritative only when every parent launch row has ended. Pane presence is a latency
-//! signal, so absence only becomes destructive after repeated authoritative
-//! mux reads and one final reconfirmation.
+//! End stamps are authoritative only after every parent launch row ends.
+//!
+//! Pane presence is a latency signal, not authority.
+//!
+//! Pane loss cancels only after repeated authoritative mux reads and a final reconfirmation.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
