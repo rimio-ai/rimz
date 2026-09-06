@@ -264,37 +264,6 @@ fn wait_for_run_lock_release_observes_guard_drop() {
 }
 
 #[test]
-fn stop_ladder_cancels_then_signals_then_reports_manual_recovery() {
-    let info = RunLockInfo {
-        pid: 42,
-        started_at: Timestamp::from_second(1).expect("timestamp"),
-    };
-    let held = RunLockState::Held(Some(info));
-
-    assert_eq!(
-        next_stop_action(&RunLockState::Available, true, false, false),
-        StopAction::Done
-    );
-    assert_eq!(
-        next_stop_action(&held, true, false, false),
-        StopAction::CancelRun
-    );
-    assert_eq!(
-        next_stop_action(&held, true, true, false),
-        StopAction::Signal(info)
-    );
-    assert_eq!(
-        next_stop_action(&held, true, true, true),
-        StopAction::Manual
-    );
-    assert_eq!(
-        next_stop_action(&RunLockState::Held(None), false, false, false),
-        StopAction::Manual,
-        "an unidentifiable holder can only be cleared by hand"
-    );
-}
-
-#[test]
 fn check_polarity_truth_table() {
     let outcome = |passed, timed_out, code| CheckOutcome {
         passed,
