@@ -9,6 +9,8 @@ use super::surface::SurfaceSection;
 #[derive(Debug, Serialize)]
 pub(super) struct InspectVerdict {
     escaping_items: usize,
+    /// The raw `esc` the other verbs report for the same boundary.
+    escaping_declarations: usize,
     outside_production_sites: usize,
     head_items: usize,
     internal_only: usize,
@@ -54,6 +56,7 @@ impl InspectVerdict {
         narrowable.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
         Self {
             escaping_items: surface.items.len(),
+            escaping_declarations: surface.declarations,
             outside_production_sites: surface.outside_sites,
             head_items: surface.head_items,
             internal_only: surface.internal_only,
@@ -91,9 +94,10 @@ impl InspectVerdict {
 pub(super) fn render_verdict(out: &mut String, verdict: &InspectVerdict) {
     writeln!(
         out,
-        "# Verdict\n\n{} escaping items ({} through `pub use`), {} outside production sites; {} items carry 80%",
+        "# Verdict\n\n{} escaping items ({} through `pub use`; {} declarations as `survey`/`diff`/`conform` count esc), {} outside production sites; {} items carry 80%",
         verdict.escaping_items,
         verdict.reexports,
+        verdict.escaping_declarations,
         verdict.outside_production_sites,
         verdict.head_items
     )
