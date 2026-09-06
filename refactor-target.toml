@@ -140,7 +140,7 @@ upward-dependencies = [
     "sidebar::refresh",
     "sidebar::refresh::pr",
 ]
-surface-budget = 609
+surface-budget = 559
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -501,15 +501,13 @@ allowed-dependencies = [
     "agents",
     "agents::capabilities",
     "config",
-    "harness::launch_context",
     "harness::launch_reminders",
-    "harness::subagent_policy",
     "ids",
     "proc",
     "trust",
     "workspace",
 ]
-surface-budget = 41
+surface-budget = 40
 
 [[module]]
 path = "crates/rimz/src/harness/run.rs"
@@ -577,7 +575,7 @@ allowed-dependencies = [
     "utils::time",
     "workspace",
 ]
-surface-budget = 50
+surface-budget = 35
 
 [[strangler]]
 symbol = "purge_zellij_session_cache_in"
@@ -653,3 +651,53 @@ reason = "Two decisions, not one rule: the CLI sites enforce the relative-raise 
 kind = "item"
 key = "agents::lifecycle::TerminalDisposition"
 reason = "Supervised-run terminal classification kept beside the signal; the reducer's error-first rule is a different decision (pass 5)"
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::runner::CheckTrip"
+reason = "CLI renders trip output and drives the spawn; bd89f8fcf, d80549907."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::runner::PreparedSpawn"
+reason = "CLI renders trip output and drives the spawn; bd89f8fcf, d80549907."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::ScheduleErr"
+reason = "Reached by inference from the binary; narrowing is a private-interface lint."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::TaskActionErr"
+reason = "Reached by inference from the binary; narrowing is a private-interface lint."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::arming::ArmingError"
+reason = "Reached by inference from the binary; narrowing is a private-interface lint."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::strikes::StrikesError"
+reason = "Reached by inference from the binary; narrowing is a private-interface lint."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::signal::SignalNameErr"
+reason = "Reached by inference from the binary; narrowing is a private-interface lint."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::run_log::SignalRecord"
+reason = "Reached by inference from the binary; narrowing is a private-interface lint."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::run_log::TaskCostSummary"
+reason = "Reached by inference from the binary; narrowing is a private-interface lint."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::runner::new"
+reason = "TaskFire keeps ten explicit inputs; CLI owns the spawn."
