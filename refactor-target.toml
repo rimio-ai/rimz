@@ -64,7 +64,8 @@ surface-budget = 6
 [[module]]
 path = "crates/rimz/src/agents"
 upward-dependencies = ["harness::target"]
-surface-budget = 992
+# The parent-link predicate is shared by store, harness and CLI consumers.
+surface-budget = 993
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -141,7 +142,8 @@ upward-dependencies = [
     "sidebar::refresh::pr",
 ]
 # Watch verdicts, output paths and retention cross the library/CLI seam.
-surface-budget = 541
+# Launch-row selection is shared by ancestry and CLI parent consumers.
+surface-budget = 542
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -446,6 +448,7 @@ path = "crates/rimz/src/harness/ancestry.rs"
 allowed-dependencies = [
     "agents",
     "harness::launch",
+    "harness::target",
     "ids",
     "mux",
     "pane",

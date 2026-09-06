@@ -31,7 +31,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::agents::AgentState;
-use crate::ids::{PaneId, compose_channel};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, compose_channel};
 use crate::store::message::{MessageSender, identity_handle};
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 
@@ -946,6 +946,36 @@ fn launch_occupant<'a>(group: &[&'a AgentState]) -> Option<&'a AgentState> {
         })
 }
 
+fn launch_members<'a>(
+    agents: &'a [AgentState],
+    kind: &AgentKind,
+    id: &AgentSessionId,
+) -> Vec<&'a AgentState> {
+    let alias = agents
+        .iter()
+        .find(|agent| &agent.kind == kind && &agent.agent_id == id && !agent.is_provider_subagent())
+        .and_then(|agent| agent.launch_id.as_ref());
+    agents
+        .iter()
+        .filter(|agent| {
+            &agent.kind == kind
+                && !agent.is_provider_subagent()
+                && (&agent.agent_id == id
+                    || agent.launch_id.as_ref() == Some(id)
+                    || alias.is_some_and(|alias| agent.launch_id.as_ref() == Some(alias)))
+        })
+        .collect()
+}
+
+/// Current row of a launch, including a legacy session-id alias. Live rows win by pane-owner order; an ended launch keeps its latest-active row. Attach rest certificates before selecting among live rows.
+pub fn launch_row<'a>(
+    agents: &'a [AgentState],
+    kind: &AgentKind,
+    id: &AgentSessionId,
+) -> Option<&'a AgentState> {
+    launch_occupant(&launch_members(agents, kind, id))
+}
+
 /// One representative per launch instance. Every conversation in an agent
 /// instance shares its `launch_id`; this selector alone decides which row the
 /// launch currently is. It reads `holds_open_turn`, so callers that need the
@@ -993,10 +1023,20 @@ pub fn team_cohorts(agents: &[AgentState]) -> Vec<TeamCohort<'_>> {
 /// Ended children remain in this projection so callers can list and wait on
 /// completed supervised work. Lifecycle commands filter to live rows.
 pub fn launched_children<'a>(agents: &'a [AgentState], parent: &AgentState) -> Vec<&'a AgentState> {
+    let members = launch_members(
+        agents,
+        &parent.kind,
+        parent.launch_id.as_ref().unwrap_or(&parent.agent_id),
+    );
     by_registration(
         agents
             .iter()
-            .filter(|child| is_launched_child_of(child, parent))
+            .filter(|child| {
+                is_launched_child_of(child, parent)
+                    || members
+                        .iter()
+                        .any(|member| is_launched_child_of(child, member))
+            })
             .collect(),
     )
 }
@@ -1017,23 +1057,20 @@ pub fn launched_children_in_channel<'a>(
     )
 }
 
-/// The row that launched `child`, including parents whose provider session
-/// replaced their original launch identity.
+/// The current row of the launch that parents `child`.
 pub fn launched_parent<'a>(agents: &'a [AgentState], child: &AgentState) -> Option<&'a AgentState> {
-    agents
-        .iter()
-        .find(|parent| is_launched_child_of(child, parent))
+    if !child.is_launched_child() {
+        return None;
+    }
+    launch_row(
+        agents,
+        child.parent_agent_kind.as_ref().unwrap_or(&child.kind),
+        child.parent_agent_id.as_ref()?,
+    )
 }
 
 fn is_launched_child_of(child: &AgentState, parent: &AgentState) -> bool {
-    child.is_launched_child()
-        && child.parent_agent_id.as_ref().is_some_and(|parent_id| {
-            parent_id == &parent.agent_id || parent.launch_id.as_ref() == Some(parent_id)
-        })
-        && child
-            .parent_agent_kind
-            .as_ref()
-            .is_none_or(|kind| kind == &parent.kind)
+    child.is_launched_child() && child.parent_is(parent)
 }
 
 fn by_registration(mut children: Vec<&AgentState>) -> Vec<&AgentState> {

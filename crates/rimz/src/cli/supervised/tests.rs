@@ -123,6 +123,39 @@ fn subagent_zone_strategy_shares_companion_across_team() {
 }
 
 #[test]
+fn subagent_zone_strategy_reuses_legacy_parent_launch_children() {
+    use super::pane::{SubagentZoneStrategy, select_subagent_zone_strategy};
+
+    let theme = rimz::config::ThemeConfig::default();
+    let mut old = agent_state("codex", "OLD", AgentStatus::Idle);
+    old.launch_id = Some(AgentSessionId::from("L"));
+    old.ended_at = Some(jiff::Timestamp::from_second(10).unwrap());
+    let mut parent = agent_state("codex", "NEW", AgentStatus::Running);
+    parent.launch_id = old.launch_id.clone();
+    parent.pane = Some(pane_ref("%1", "work"));
+    let mut child = launched_child("child", &old, "%2", 20);
+    child.pane.as_mut().unwrap().view_name = Some("work".to_owned());
+    let mut wrong = launched_child("wrong-kind", &old, "%3", 30);
+    wrong.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+    wrong.pane.as_mut().unwrap().view_name = Some("work".to_owned());
+    let live = vec![
+        parent.pane.clone().unwrap(),
+        child.pane.clone().unwrap(),
+        wrong.pane.clone().unwrap(),
+    ];
+    let agents = vec![old, parent.clone(), child, wrong];
+
+    assert_eq!(
+        select_subagent_zone_strategy(&agents, &live, &parent, "room", &theme),
+        Some(SubagentZoneStrategy::Split {
+            session_name: "room".to_owned(),
+            pane_id: PaneId::from_parts(MuxName::Tmux, "%2"),
+            placement: rimz::mux::SplitPlacement::Stacked,
+        })
+    );
+}
+
+#[test]
 fn subagent_zone_strategy_uses_live_ended_child_and_skips_dead_newer_child() {
     use super::pane::{SubagentZoneStrategy, select_subagent_zone_strategy};
 
@@ -836,6 +869,7 @@ fn pane_ref(id: &str, view_name: &str) -> PaneRef {
 fn launched_child(id: &str, parent: &AgentState, pane_id: &str, registered_at: i64) -> AgentState {
     let mut child = agent_state("codex", id, AgentStatus::Running);
     child.parent_agent_id = Some(parent.agent_id.clone());
+    child.parent_agent_kind = Some(parent.kind.clone());
     child.launch_depth = Some(1);
     child.pane = Some(pane_ref(pane_id, "subagents"));
     child.registered_at = Some(jiff::Timestamp::from_second(registered_at).unwrap());

@@ -205,6 +205,33 @@ fn resumed_slot_deduplicates_replayed_transcript_effort() {
 }
 
 #[test]
+fn launched_child_attribution_corroborates_missing_parent_kind() {
+    let wrong = agent("parent", "claude", 10);
+    let mut parent = agent("current", "codex", 20);
+    parent.launch_id = Some(AgentSessionId::from("parent"));
+    let mut child = agent("child", "codex", 30);
+    child.parent_agent_id = Some(AgentSessionId::from("parent"));
+    child.launch_depth = Some(1);
+
+    let groups = slot_groups(&[&wrong, &parent, &child]);
+    let group = groups
+        .iter()
+        .find(|records| {
+            records
+                .iter()
+                .any(|record| record.agent_id == child.agent_id)
+        })
+        .unwrap();
+    assert_eq!(group.len(), 2);
+    assert!(
+        group
+            .iter()
+            .any(|record| record.agent_id == parent.agent_id)
+    );
+    assert!(!group.iter().any(|record| record.kind == wrong.kind));
+}
+
+#[test]
 fn launched_child_continuations_deduplicate_as_one_subagent_seat() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut parent = agent("parent", "claude", 5);

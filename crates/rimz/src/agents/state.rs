@@ -524,9 +524,7 @@ pub struct AgentState {
     pub pane: Option<PaneRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_owner: Option<RuntimeOwner>,
-    /// The parent session id set by a provider subagent observation or a
-    /// `rimz subagents` launch stamp. The sidebar nests a child under its
-    /// parent row and never renders a child as a top-level row.
+    /// The parent launch id, or session id for provider-native children and parents without a launch id. The sidebar nests under a rendered parent row; a pane-backed orphan gets its own row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_agent_id: Option<AgentSessionId>,
     /// Provider kind of `parent_agent_id`; absent for legacy and same-kind
@@ -940,6 +938,14 @@ impl AgentState {
     /// A provider-native, paneless child rather than a full agent session.
     pub fn is_provider_subagent(&self) -> bool {
         self.parent_agent_id.is_some() && self.launch_depth.is_none()
+    }
+
+    /// Whether the parent link names this candidate's session or launch, corroborated by provider kind.
+    pub fn parent_is(&self, candidate: &AgentState) -> bool {
+        self.parent_agent_id
+            .as_ref()
+            .is_some_and(|id| &candidate.agent_id == id || candidate.launch_id.as_ref() == Some(id))
+            && self.parent_agent_kind.as_ref().unwrap_or(&self.kind) == &candidate.kind
     }
 
     /// Whether this agent is inside the bounded compaction window used by
