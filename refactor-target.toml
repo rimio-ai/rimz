@@ -140,7 +140,8 @@ upward-dependencies = [
     "sidebar::refresh",
     "sidebar::refresh::pr",
 ]
-surface-budget = 536
+# Watch verdicts, output paths and retention cross the library/CLI seam.
+surface-budget = 541
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
