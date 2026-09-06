@@ -1026,6 +1026,162 @@ fn same_process_fork_inherits_launch_identity_and_owns_the_role() {
     assert_eq!(resolved.agent_id.as_str(), "side-thread");
 }
 
+fn resumed_fork_events(provider_pane: &str) -> Vec<EventEnvelope> {
+    let launch = launch_event(
+        "codex",
+        AgentLaunchPayload {
+            launch_id: Some(AgentSessionId::from("launch_coder")),
+            launch: LaunchParams {
+                role: Some("coder".to_owned()),
+                team: Some("forge".to_owned()),
+                launch_depth: Some(2),
+                ..LaunchParams::default()
+            },
+            ..launch_payload("primary", "coder-card")
+        },
+    );
+    let primary = same_process_registration("primary", "coder-card", 1, "tmux:%1", 41);
+    let ended = raw_lifecycle_at(
+        "codex",
+        2,
+        json!({ "agent_id": "primary", "signal": { "signal": "ended" } }),
+    );
+    let attach = |pane_id: &str, owner_pid| {
+        EventEnvelope::agent_attached(
+            workspace(),
+            "session",
+            &AgentKind::new_unchecked("codex"),
+            AgentAttachPayload {
+                agent_id: AgentSessionId::from("primary"),
+                launch_id: Some(AgentSessionId::from("launch_coder")),
+                pane_id: PaneId::parse(pane_id).expect("pane id"),
+                pane_pid: Some(42),
+                runtime_owner: RuntimeOwner::new(
+                    RuntimeOwnerKind::Agent,
+                    "primary",
+                    owner_pid,
+                    Some("agent-start".to_owned()),
+                ),
+            },
+        )
+    };
+    let fork = raw_lifecycle_at(
+        "codex",
+        5,
+        json!({
+            "agent_id": "side-thread",
+            "agent_name": "side-card",
+            "origin": "forked",
+            "signal": { "signal": "registered" },
+            "pane_id": "tmux:%1",
+            "runtime_owner": {
+                "kind": "agent",
+                "subject_id": "side-thread",
+                "pid": 43,
+                "process_start": "agent-start",
+            },
+        }),
+    );
+    let mut events = vec![
+        launch,
+        primary,
+        ended,
+        attach("tmux:%1", 42),
+        attach(provider_pane, 43),
+        fork,
+    ];
+    for (index, event) in events.iter_mut().enumerate() {
+        event.timestamp = Timestamp::from_second(epoch().as_second() + index as i64).unwrap();
+    }
+    events
+}
+
+#[test]
+fn resumed_fork_inherits_launch_identity_after_provider_reattach() {
+    let events = resumed_fork_events("tmux:%1");
+    let agents = reduce_agent_states(&events);
+    let primary = agents
+        .iter()
+        .find(|agent| agent.agent_id == "primary")
+        .expect("primary");
+    let fork = agents
+        .iter()
+        .find(|agent| agent.agent_id == "side-thread")
+        .expect("fork");
+
+    assert_eq!(primary.ended_at, Some(events[2].timestamp));
+    assert_eq!(primary.runtime_owner.as_ref().unwrap().pid, 43);
+    assert_eq!(fork.launch_id.as_deref(), Some("launch_coder"));
+    assert_eq!(fork.role.as_deref(), Some("coder"));
+    assert_eq!(fork.team.as_deref(), Some("forge"));
+    assert_eq!(fork.launch_depth, Some(2));
+    assert_eq!(fork.origin, Some(SessionOrigin::Forked));
+    assert_eq!(fork.name.as_deref(), Some("side-card"));
+    assert_eq!(fork.registered_at, Some(events[5].timestamp));
+}
+
+#[test]
+fn late_provider_reattach_repairs_the_successor_on_its_next_event() {
+    let mut events = resumed_fork_events("tmux:%1");
+    events.swap(4, 5);
+    events[4].timestamp = Timestamp::from_second(epoch().as_second() + 4).unwrap();
+    events[5].timestamp = Timestamp::from_second(epoch().as_second() + 5).unwrap();
+    let agents = reduce_agent_states(&events);
+    let fork = agents
+        .iter()
+        .find(|agent| agent.agent_id == "side-thread")
+        .expect("fork");
+    assert_eq!(fork.launch_id, None);
+    assert_eq!(fork.role, None);
+
+    events.push(raw_lifecycle_at(
+        "codex",
+        6,
+        json!({ "agent_id": "side-thread", "signal": { "signal": "turn_started" } }),
+    ));
+    let agents = reduce_agent_states(&events);
+    let primary = agents
+        .iter()
+        .find(|agent| agent.agent_id == "primary")
+        .expect("primary");
+    let fork = agents
+        .iter()
+        .find(|agent| agent.agent_id == "side-thread")
+        .expect("fork");
+    assert_eq!(primary.ended_at, Some(events[2].timestamp));
+    assert_eq!(fork.launch_id.as_deref(), Some("launch_coder"));
+    assert_eq!(fork.role.as_deref(), Some("coder"));
+    assert_eq!(fork.team.as_deref(), Some("forge"));
+    assert_eq!(fork.launch_depth, Some(2));
+    assert_eq!(fork.name.as_deref(), Some("side-card"));
+    assert_eq!(fork.registered_at, Some(events[4].timestamp));
+}
+
+#[test]
+fn provider_reattach_on_another_pane_does_not_transfer_launch_identity() {
+    let mut events = resumed_fork_events("tmux:%2");
+    events.push(raw_lifecycle_at(
+        "codex",
+        6,
+        json!({ "agent_id": "side-thread", "signal": { "signal": "turn_started" } }),
+    ));
+    let agents = reduce_agent_states(&events);
+    let primary = agents
+        .iter()
+        .find(|agent| agent.agent_id == "primary")
+        .expect("primary");
+    let fork = agents
+        .iter()
+        .find(|agent| agent.agent_id == "side-thread")
+        .expect("fork");
+    assert_eq!(primary.runtime_owner.as_ref().unwrap().pid, 43);
+    assert_eq!(fork.runtime_owner.as_ref().unwrap().pid, 43);
+    assert_eq!(fork.launch_id, None);
+    assert_eq!(fork.role, None);
+    assert_eq!(fork.team, None);
+    assert_eq!(fork.launch_depth, None);
+}
+
 #[test]
 fn launch_identity_does_not_wait_for_successor_origin() {
     let pane_id = "tmux:%4";

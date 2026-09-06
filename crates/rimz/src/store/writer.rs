@@ -12,7 +12,7 @@ use std::time::Duration;
 use crate::agents::LaunchParams;
 use crate::disk::{lock, paths::StatePaths};
 use crate::ids::{AgentKind, AgentSessionId, RunId, WorkspaceId};
-use crate::pane::RuntimeOwnerKind;
+use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use crate::store::event::{
     AgentAttachPayload, AgentLaunchPayload, AgentLaunchState, EventEnvelope,
 };
@@ -424,8 +424,7 @@ impl Store {
         })
     }
 
-    /// Bind one resumed session to the pane its wrapper occupies and persist
-    /// the stable identity exported to that process.
+    /// Bind one resumed session to its wrapper's pane and persist its stable identity. The owner names the agent process the row belongs to.
     #[must_use = "durability barrier; check the result"]
     pub fn attach_agent_pane(
         &self,
@@ -434,9 +433,8 @@ impl Store {
         launch_id: Option<&crate::ids::AgentSessionId>,
         session_name: &str,
         pane_id: &crate::ids::PaneId,
+        runtime_owner: RuntimeOwner,
     ) -> Result<()> {
-        let runtime_owner =
-            runtime::current_process_owner(RuntimeOwnerKind::Agent, agent_id.as_str());
         self.commit(|txn| {
             txn.append(&EventEnvelope::agent_attached(
                 self.inner.paths.workspace_id.clone(),
