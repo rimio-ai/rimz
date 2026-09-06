@@ -40,7 +40,7 @@ pub fn run_budget_park(request: BudgetParkRequest) -> Result<()> {
         let (record, wrote) =
             rimz::harness::run::budget_exceeded(store.paths(), &record.run_id, at_cost)?;
         if wrote {
-            let _ = rimz::store::run::wake_run(store.runtime_paths(), &record);
+            rimz::store::run::wake_run(store.runtime_paths(), &record);
         }
     }
     interrupted.context("interrupting over-budget agent")

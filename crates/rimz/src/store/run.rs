@@ -246,31 +246,32 @@ pub(crate) fn run_socket_path(rt: &RuntimePaths, run_id: &RunId) -> PathBuf {
 
 /// Send a terminal datagram to the supervised-run waiter. Durable run state
 /// remains authoritative; sender creation and per-target failures are absorbed.
-pub fn wake_run(rt: &RuntimePaths, record: &RunRecord) -> serde_json::Result<()> {
+pub fn wake_run(rt: &RuntimePaths, record: &RunRecord) {
     let target = run_socket_path(rt, &record.run_id);
     if !target.exists() {
-        return Ok(());
+        return;
     }
+    // String ids and a unit status enum cannot fail JSON serialization.
     let payload = serde_json::to_vec(&WakeupFrame::RunCompleted {
         workspace_id: record.workspace_id.clone(),
         run_id: record.run_id.clone(),
         status: record.status,
-    })?;
+    })
+    .expect("run wake frame is JSON-serializable");
     let sender = match StdUnixDatagram::unbound() {
         Ok(sender) => sender,
         Err(error) => {
             debug!(%error, "run wake: creating sender socket failed");
-            return Ok(());
+            return;
         }
     };
     if let Err(error) = sender.set_nonblocking(true) {
         debug!(%error, "run wake: making sender socket non-blocking failed");
-        return Ok(());
+        return;
     }
     if let Err(error) = sender.send_to(&payload, &target) {
         debug!(?target, %error, "run wake: send_to failed (waiter may have exited)");
     }
-    Ok(())
 }
 
 type Result<T> = std::result::Result<T, RunStoreErr>;
