@@ -22,7 +22,9 @@ use super::{Trigger, arming};
 use crate::RuntimePaths;
 use crate::harness::schedule::runner::RunLockInfo;
 use crate::store::Store;
-use crate::store::event::{MAX_SIGNAL_NAME_BYTES, SignalName, SignalNameErr, SignalSource};
+use crate::store::event::{
+    MAX_SIGNAL_NAME_BYTES, SignalEventPayload, SignalName, SignalNameErr, SignalSource,
+};
 use crate::workspace::ResolvedWorkspace;
 use std::path::Path;
 
@@ -81,6 +83,16 @@ pub struct Signal {
     pub source: SignalSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watch: Option<WatchOutcome>,
+}
+
+impl From<&Signal> for SignalEventPayload {
+    fn from(signal: &Signal) -> Self {
+        Self {
+            name: signal.name.clone(),
+            payload: signal.payload.clone(),
+            source: signal.source,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -238,7 +250,7 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
         watch: Some(watch),
     };
     store
-        .append_signal(&workspace.session_name, &signal)
+        .append_signal(&workspace.session_name, (&signal).into())
         .context("appending wake signal")?;
     fire_signal(store.runtime_paths(), &workspace.project_root, &signal)
         .context("firing watched wake")?;

@@ -1,6 +1,5 @@
 //! Durable signal append through the ordinary store commit boundary.
 
-use crate::harness::schedule::signal::Signal;
 use crate::ids::EventId;
 use crate::store::event::{EventEnvelope, SIGNAL_METHOD, SignalEventPayload};
 
@@ -9,12 +8,11 @@ use crate::store::Result;
 
 impl Store {
     #[must_use = "durability barrier; check the result"]
-    pub fn append_signal(&self, session_name: &str, signal: &Signal) -> Result<EventId> {
-        let payload = SignalEventPayload {
-            name: signal.name.clone(),
-            payload: signal.payload.clone(),
-            source: signal.source,
-        };
+    pub fn append_signal(
+        &self,
+        session_name: &str,
+        payload: SignalEventPayload,
+    ) -> Result<EventId> {
         let event = EventEnvelope::new(
             self.inner.paths.workspace_id.clone(),
             session_name,
