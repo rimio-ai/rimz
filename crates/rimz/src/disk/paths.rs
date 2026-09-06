@@ -63,6 +63,7 @@ pub struct StatePaths {
     pub messages_dir: PathBuf,
     pub transcript_dir: PathBuf,
     pub runs_dir: PathBuf,
+    pub wakes_dir: PathBuf,
     pub locks_dir: PathBuf,
     pub workspace_lock: PathBuf,
     pub publish_lock: PathBuf,
@@ -105,6 +106,7 @@ impl StatePaths {
             messages_dir,
             transcript_dir,
             runs_dir,
+            wakes_dir: root.join("wakes"),
             workspace_lock: locks_dir.join("workspace.lock"),
             publish_lock: locks_dir.join("publish.lock"),
             workspace_record: root.join("workspace.json"),
@@ -123,6 +125,7 @@ impl StatePaths {
     pub fn ensure_dirs(&self) -> Result<()> {
         mkdir_p(&self.snapshots_dir)?;
         mkdir_p(&self.runs_dir)?;
+        mkdir_p(&self.wakes_dir)?;
         mkdir_p(&self.locks_dir)?;
         Ok(())
     }
@@ -842,6 +845,7 @@ mod tests {
         assert_eq!(paths.rollup_cache.file_name().unwrap(), "rollup.json");
         assert!(paths.rollup_cache.starts_with(&paths.snapshots_dir));
         assert_eq!(paths.runs_dir.file_name().unwrap(), "runs");
+        assert_eq!(paths.wakes_dir, paths.root.join("wakes"));
         assert_eq!(paths.transcript_dir.file_name().unwrap(), "transcript");
         assert_eq!(
             paths.workspace_record.file_name().unwrap(),

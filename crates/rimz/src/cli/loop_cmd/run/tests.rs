@@ -231,6 +231,7 @@ fn skipped_check_summary_uses_check_time_and_action_verbs() {
     let spawn = RunOutcome::check_result(
         LoopRunResult::CheckSkipped,
         CheckRecord {
+            output_path: None,
             code: Some(0),
             timed_out: false,
             output: "ok".to_owned(),
@@ -269,6 +270,7 @@ fn skipped_check_summary_uses_check_time_and_action_verbs() {
     let wake = RunOutcome::check_result(
         LoopRunResult::CheckSkipped,
         CheckRecord {
+            output_path: None,
             code: Some(1),
             timed_out: false,
             output: "no".to_owned(),
@@ -288,6 +290,7 @@ fn scheduled_check_skip_keeps_compact_task_prefix() {
     let outcome = RunOutcome::check_result(
         LoopRunResult::CheckSkipped,
         CheckRecord {
+            output_path: None,
             code: Some(0),
             timed_out: false,
             output: "ok".to_owned(),
@@ -311,6 +314,7 @@ fn scheduled_check_skip_keeps_compact_task_prefix() {
 #[test]
 fn trip_line_names_check_fact_and_action() {
     let check = CheckRecord {
+        output_path: None,
         code: Some(101),
         timed_out: false,
         output: "failed".to_owned(),
@@ -321,6 +325,7 @@ fn trip_line_names_check_fact_and_action() {
         &mut out,
         &TaskAction::Spawn("codex".to_owned()),
         &check,
+        None,
         12_000,
     )
     .unwrap();
@@ -465,6 +470,7 @@ fn check_only_verdicts_name_the_check_fact() {
         ),
     ] {
         let outcome = RunOutcome::terminal(result).with_check(Some(CheckRecord {
+            output_path: None,
             code,
             timed_out,
             output: "detail".to_owned(),
@@ -519,4 +525,65 @@ fn manual_early_exits_explain_what_stays_in_place() {
         summary("nudge", &entry, 100, LoopRunMode::Manual, false, &expired,),
         "○ deadline expired — task left in place\n"
     );
+}
+
+#[test]
+fn watch_trip_and_summary_use_verdict_elapsed_once() {
+    use rimz::harness::schedule::signal::WatchVerdict;
+
+    for verdict in [
+        WatchVerdict::Exited {
+            code: Some(3),
+            elapsed_ms: 3_000,
+        },
+        WatchVerdict::Exited {
+            code: None,
+            elapsed_ms: 3_000,
+        },
+        WatchVerdict::TimedOut { elapsed_ms: 3_000 },
+        WatchVerdict::Lost {
+            detail: "watcher process exited without reporting".to_owned(),
+            elapsed_ms: 3_000,
+        },
+    ] {
+        let check = CheckRecord {
+            code: match verdict {
+                WatchVerdict::Exited { code, .. } => code,
+                _ => None,
+            },
+            timed_out: matches!(verdict, WatchVerdict::TimedOut { .. }),
+            output: String::new(),
+            output_path: Some("/tmp/wake.log".into()),
+        };
+        let mut out = Vec::new();
+        write_check_trip_line(
+            &mut out,
+            &TaskAction::Spawn("codex".to_owned()),
+            &check,
+            Some(&verdict),
+            0,
+        )
+        .unwrap();
+        let raw = String::from_utf8(out).unwrap();
+        assert_eq!(
+            anstream::adapter::strip_str(&raw).to_string(),
+            format!("  ✗ {} → starting codex\n", verdict.label())
+        );
+        for result in [LoopRunResult::Delivered, LoopRunResult::CheckSkipped] {
+            let mut outcome = RunOutcome::terminal(result).with_check(Some(check.clone()));
+            outcome.record.watch = Some(verdict.clone());
+            for mode in [LoopRunMode::Manual, LoopRunMode::Scheduled] {
+                let out = summary(
+                    "watch",
+                    &wake_entry(true, CheckOn::Success),
+                    0,
+                    mode,
+                    false,
+                    &outcome,
+                );
+                assert_eq!(out.matches(&verdict.label()).count(), 1, "{out}");
+                assert!(!out.contains(" in 0ms"), "{out}");
+            }
+        }
+    }
 }

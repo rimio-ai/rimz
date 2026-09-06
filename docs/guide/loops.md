@@ -76,14 +76,17 @@ rimz wake --signal ci.failed               # wake me if CI fails on my branch
 - A command after `--` is the poll loop without the pane. RimZ runs it in a detached watcher process that outlives the turn, and when it exits the agent is woken with the command, its exit status, and its output tail. It wakes on any exit by default; `--on fail` or `--on success` wakes only for that outcome, and `--timeout 30m` gives up on a command that never ends.
 - `--signal ci.failed` waits on an event instead of a command, and needs no arguments beyond the name: RimZ already knows which worktree the calling agent is working in and scopes the wait to that branch's checks. The [next section](#signals-the-rooms-event-bus) is where signals come from.
 
-None of those lines carries a prompt, because the wake explains itself when it lands. It names what fired, on what, and who armed it, and carries the event's own payload, so the agent reads the outcome it was waiting for:
+None of those lines carries a prompt, because the wake explains itself when it lands. It reads back what the agent waited on, how it ended, how long it took, and the event's own payload, so the agent picks up the outcome it was waiting for:
 
 ```text
-wake-still-path fired: ci.failed on feat-x (PR #91), armed by you at 14:02
+waited on ci.failed on feat-x (PR #91)
+fired after 18m [wake-still-path]
 {"branch":"feat-x","checks_url":"https://github.com/you/app/commit/9f2c1ab/checks","head":"9f2c1ab","number":91,"path":"/home/you/code/app-feat-x","repo":"you/app","signal":"ci.failed"}
 ```
 
-`--prompt` is still there as an optional note, delivered verbatim under the evidence. Use it when the headline will not be enough on its own: a reminder of what you meant to do next, or a label that tells two waits apart. `rimz wake --in 30m --prompt "if the deploy is still baking, extend the freeze"` is the shape to reach for.
+A watched command reads the same way, with its own verdict in place of the fire: `exit 1 after 12m`, `timed out after 59m`, or a `watcher died after 3m` that also says the command's own fate is unknown. Its whole combined output goes to `~/.local/state/rimz/workspaces/<workspace-id>/wakes/<name>.log`, which the verdict line names, and the message carries the last 4 KiB of it, so a chatty build leaves the agent with the tail in front of it and the rest one read away ([wake reference](../reference/cli/wake.md#the-output-file)).
+
+`--prompt` is still there as an optional note, delivered verbatim under the evidence. Use it when the verdict will not be enough on its own: a reminder of what you meant to do next, or a label that tells two waits apart. `rimz wake --in 30m --prompt "if the deploy is still baking, extend the freeze"` is the shape to reach for.
 
 From your own shell there is no caller to wake, so the address is required: `rimz wake @planner --in 30m`. An agent passes `@handle` the same way to wake a teammate. `rimz wake list` shows what is pending, with the trigger, the target, and how much of a subscription's window is left; `rimz wake cancel <name>` calls it off. A chain of wakes is a self-paced loop: each turn ends by arming the next wake only while work remains, so the loop stops when the goal is met. When the agent has nothing else to do until a command finishes, `rimz wake --wait -- cargo build` blocks and prints the outcome inline instead; reach for that in a script.
 

@@ -485,9 +485,16 @@ fn has_agent_runs_section(task: &LoadedTask) -> bool {
 }
 
 pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
-    let task = load_task(&args.name, globals)?.ok_or_else(|| {
-        anyhow::anyhow!("no loop task named `{}`; see `rimz loop list`", args.name)
-    })?;
+    let Some(task) = load_task(&args.name, globals)? else {
+        return logs(
+            LogsArgs {
+                name: args.name,
+                runs: args.runs,
+                failed: false,
+            },
+            globals,
+        );
+    };
     let entry = task.entry();
     let root = entry.resolved_root();
     let runtime = runtime_for_root(&root);
@@ -558,11 +565,12 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
-    let task = load_task(&args.name, globals)?.ok_or_else(|| {
-        anyhow::anyhow!("no loop task named `{}`; see `rimz loop list`", args.name)
-    })?;
-    let entry = task.entry();
+    let task = load_task(&args.name, globals)?;
+    let entry = task.as_ref().map(|task| task.entry());
     let records = run_log::task_records(&state_home(), &args.name);
+    if entry.is_none() && records.is_empty() {
+        anyhow::bail!("no loop task named `{}`; see `rimz loop list`", args.name);
+    }
     let visible = records
         .iter()
         .filter(|record| !args.failed || record_is_failure(record))
@@ -808,7 +816,10 @@ fn write_agent_runs(
             run_status_cell(record, 1),
             ui::cell(
                 record
-                    .duration_ms
+                    .watch
+                    .as_ref()
+                    .map(|verdict| verdict.elapsed_ms())
+                    .or(record.duration_ms)
                     .map(format_duration_ms)
                     .unwrap_or_else(|| "-".to_owned()),
             )
@@ -861,7 +872,10 @@ fn write_runs_table(
             run_status_cell(record, row.count),
             ui::cell(
                 record
-                    .duration_ms
+                    .watch
+                    .as_ref()
+                    .map(|verdict| verdict.elapsed_ms())
+                    .or(record.duration_ms)
                     .map(format_duration_ms)
                     .unwrap_or_else(|| "-".to_owned()),
             )
@@ -972,18 +986,31 @@ pub(super) struct RunStatusDisplay {
 }
 
 pub(super) fn run_status(record: &LoopRunRecord) -> RunStatusDisplay {
-    let label = match record.result {
-        LoopRunResult::Failed => {
-            let mut label = record.result.label().to_owned();
-            if let Some(exit) = failure_exit_label(record) {
-                label.push_str(" (");
-                label.push_str(&exit);
-                label.push(')');
-            }
-            label
+    let label = match (&record.watch, record.result) {
+        (
+            Some(verdict),
+            LoopRunResult::Failed
+            | LoopRunResult::VerifyFailed
+            | LoopRunResult::TimedOut
+            | LoopRunResult::BudgetExceeded
+            | LoopRunResult::Errored,
+        ) => {
+            format!("{} ({})", record.result.label(), verdict.label())
         }
-        LoopRunResult::CheckSkipped => check_skipped_label(record).to_owned(),
-        result => result.label().to_owned(),
+        (Some(_), LoopRunResult::CheckSkipped) => record.result.label().to_owned(),
+        (_, result) => match result {
+            LoopRunResult::Failed => {
+                let mut label = record.result.label().to_owned();
+                if let Some(exit) = failure_exit_label(record) {
+                    label.push_str(" (");
+                    label.push_str(&exit);
+                    label.push(')');
+                }
+                label
+            }
+            LoopRunResult::CheckSkipped => check_skipped_label(record).to_owned(),
+            result => result.label().to_owned(),
+        },
     };
     let mark = match record.result {
         LoopRunResult::CheckSkipped => {
@@ -1148,6 +1175,9 @@ fn cost_cell(record: &LoopRunRecord) -> ui::Cell {
 }
 
 fn record_exit(record: &LoopRunRecord) -> Option<String> {
+    if let Some(verdict) = &record.watch {
+        return Some(verdict.label());
+    }
     if let Some(check) = &record.check {
         if check.timed_out {
             return Some("timeout".to_owned());

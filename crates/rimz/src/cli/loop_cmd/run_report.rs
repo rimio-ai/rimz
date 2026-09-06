@@ -1,6 +1,7 @@
 //! Shared summaries and stored-run forensics for loop executions.
 
 use super::*;
+use rimz::harness::schedule::signal::WatchVerdict;
 
 const CHECK_SUMMARY_OUTPUT_CAP: usize = 4 * 1024;
 
@@ -77,7 +78,9 @@ fn write_manual_run_summary(
             &format!("{} {result_label}", result_mark.glyph)
         )
     )?;
-    write!(out, " in {}", render::format_duration_ms(duration_ms))?;
+    if record.watch.is_none() {
+        write!(out, " in {}", render::format_duration_ms(duration_ms))?;
+    }
     if let Some(spend) =
         render::spend_segments(record.cost_usd, record.input_tokens, record.output_tokens)
     {
@@ -158,7 +161,9 @@ fn write_scheduled_run_summary(
             "loop `{name}`: {}",
             ui::paint(result_mark.style.bold(), &label)
         )?;
-        write!(out, " in {}", render::format_duration_ms(duration_ms))?;
+        if record.watch.is_none() {
+            write!(out, " in {}", render::format_duration_ms(duration_ms))?;
+        }
         if let Some(spend) =
             render::spend_segments(record.cost_usd, record.input_tokens, record.output_tokens)
         {
@@ -176,7 +181,9 @@ fn write_scheduled_run_summary(
         if let Some(exit_label) = exit_label.as_deref() {
             write!(out, " {exit_label}")?;
         }
-        write!(out, " in {}", render::format_duration_ms(duration_ms))?;
+        if record.watch.is_none() {
+            write!(out, " in {}", render::format_duration_ms(duration_ms))?;
+        }
         if let Some(spend) =
             render::spend_segments(record.cost_usd, record.input_tokens, record.output_tokens)
         {
@@ -201,7 +208,7 @@ fn manual_result_label(action_kind: TaskActionKind, summary: &RunSummary<'_>) ->
     if action_kind.is_check_only()
         && let Some(check) = &summary.record.check
     {
-        return check_result_label(check);
+        return check_result_label(check, summary.record.watch.as_ref());
     }
     let mut label = success_result_label(summary.record);
     if let Some(exit_label) = outcome_exit_label(summary) {
@@ -211,7 +218,10 @@ fn manual_result_label(action_kind: TaskActionKind, summary: &RunSummary<'_>) ->
     label
 }
 
-fn check_result_label(check: &CheckRecord) -> String {
+fn check_result_label(check: &CheckRecord, watch: Option<&WatchVerdict>) -> String {
+    if let Some(verdict) = watch {
+        return verdict.label();
+    }
     if check.timed_out {
         "check timed out".to_owned()
     } else if check.code == Some(0) {
@@ -228,6 +238,7 @@ pub(super) fn write_check_trip_line(
     out: &mut impl Write,
     action: &TaskAction,
     check: &CheckRecord,
+    watch: Option<&WatchVerdict>,
     duration_ms: u64,
 ) -> std::io::Result<()> {
     let (glyph, style) = if check.timed_out || check.code != Some(0) {
@@ -235,18 +246,11 @@ pub(super) fn write_check_trip_line(
     } else {
         ("✓", ui::palette::good())
     };
-    write!(
-        out,
-        "  {}",
-        ui::paint(
-            style,
-            &format!(
-                "{glyph} {} in {}",
-                check_result_label(check),
-                render::format_duration_ms(duration_ms)
-            )
-        )
-    )?;
+    let mut label = check_result_label(check, watch);
+    if watch.is_none() {
+        label.push_str(&format!(" in {}", render::format_duration_ms(duration_ms)));
+    }
+    write!(out, "  {}", ui::paint(style, &format!("{glyph} {label}")))?;
     writeln!(
         out,
         " {}",
@@ -270,19 +274,23 @@ fn write_check_skipped_summary(
         .record
         .check
         .as_ref()
-        .map(check_result_label)
+        .map(|check| check_result_label(check, summary.record.watch.as_ref()))
         .unwrap_or_else(|| "check skipped".to_owned());
     let check_duration_ms = summary
         .presentation
         .check_duration_ms
         .unwrap_or(duration_ms);
-    let duration = render::format_duration_ms(check_duration_ms);
+    let duration = if summary.record.watch.is_some() {
+        String::new()
+    } else {
+        format!(" in {}", render::format_duration_ms(check_duration_ms))
+    };
     let (glyph, style) = render::check_skip_display(summary.record.check.as_ref());
     if mode == LoopRunMode::Manual {
         write!(
             out,
             "{}",
-            ui::paint(style, &format!("{glyph} {label} in {duration}"))
+            ui::paint(style, &format!("{glyph} {label}{duration}"))
         )?;
         writeln!(
             out,
@@ -296,7 +304,7 @@ fn write_check_skipped_summary(
         write!(out, "loop `{name}`: {}", ui::paint(style, &label))?;
         writeln!(
             out,
-            " in {duration} — {}",
+            "{duration} — {}",
             render::check_skip_decision(entry, action)
         )
     }
@@ -349,6 +357,9 @@ fn write_completion_detail(
 }
 
 fn outcome_exit_label(summary: &RunSummary<'_>) -> Option<String> {
+    if let Some(verdict) = &summary.record.watch {
+        return Some(format!("· {}", verdict.label()));
+    }
     if let Some(exit) = summary.presentation.exit_code {
         if exit == 0 {
             return None;
@@ -411,7 +422,7 @@ pub(super) fn render_record_detail(
         write!(out, " · {exit}")?;
     }
     writeln!(out)?;
-    write_record_forensics(out, entry, record, prose)
+    write_record_forensics(out, Some(entry), record, prose)
 }
 
 pub(super) fn write_failure_pointer(
@@ -447,14 +458,14 @@ pub(super) fn write_failure_pointer(
 
 pub(super) fn write_record_forensics(
     out: &mut impl Write,
-    entry: &TaskEntry,
+    entry: Option<&TaskEntry>,
     record: &LoopRunRecord,
     prose: ui::prose::Prose,
 ) -> std::io::Result<()> {
     let run_record = record
         .run_id
         .as_deref()
-        .and_then(|run_id| run_record_for(entry, run_id));
+        .and_then(|run_id| entry.and_then(|entry| run_record_for(entry, run_id)));
     write_check_section(out, record, run_record.as_ref(), prose)?;
     write_verify_section(out, run_record.as_ref())?;
     if let Some(spend) = record_spend_label(record) {
@@ -480,6 +491,9 @@ fn write_check_section(
     prose: ui::prose::Prose,
 ) -> std::io::Result<()> {
     if let Some(check) = &record.check {
+        if let Some(path) = &check.output_path {
+            write_detail_link(out, "output", &path.display().to_string())?;
+        }
         let first_style = if check.timed_out || check.code != Some(0) {
             Some(ui::palette::alarm())
         } else {
@@ -572,6 +586,9 @@ pub(super) fn detail_exit_segment(record: &LoopRunRecord) -> Option<String> {
             | LoopRunResult::Errored
     ) {
         return None;
+    }
+    if let Some(verdict) = &record.watch {
+        return Some(verdict.label());
     }
     let check = record.check.as_ref()?;
     if check.timed_out {

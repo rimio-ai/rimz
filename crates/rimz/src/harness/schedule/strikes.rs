@@ -154,6 +154,7 @@ mod tests {
             duration_ms: Some(1),
             error: None,
             check,
+            watch: None,
             signal: None,
             message_id: None,
             run_id: None,
@@ -168,6 +169,7 @@ mod tests {
 
     fn check(code: Option<i32>, timed_out: bool) -> Option<CheckRecord> {
         Some(CheckRecord {
+            output_path: None,
             code,
             timed_out,
             output: String::new(),
