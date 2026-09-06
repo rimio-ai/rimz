@@ -1,5 +1,4 @@
-//! RimZ-owned disk usage measurement: symlink-safe, hardlink-aware byte walks
-//! plus the account roots `doctor` and `gc` surface.
+//! RimZ-owned disk usage measurement: symlink-safe, hardlink-aware byte walks plus the account roots `doctor`, `uninstall`, and `gc` surface.
 
 use std::collections::HashSet;
 use std::fs;

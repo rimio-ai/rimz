@@ -27,7 +27,7 @@ Freshness is an extent, not a timestamp. A derived rollup records the `LogExtent
 | Module | What it owns |
 | --- | --- |
 | [`disk/paths.rs`](../../crates/rimz/src/disk/paths.rs) | `StatePaths` and `RuntimePaths`: every filename in this doc, and the XDG resolution behind them. |
-| [`disk/atomic.rs`](../../crates/rimz/src/disk/atomic.rs) | Whole-file publication and sync discipline, plus cache-local temp cleanup. Every fsync syscall in the project is in this file, enforced by a CI grep. |
+| [`disk/atomic.rs`](../../crates/rimz/src/disk/atomic.rs) | Whole-file publication and sync discipline, plus cache-local temp cleanup and the cache-class read (missing or corrupt reads as default). Every fsync syscall in the project is in this file, enforced by a CI grep. |
 | [`disk/lock.rs`](../../crates/rimz/src/disk/lock.rs) | The workspace advisory lock, bounded at 30 seconds and naming the holder-hunting command on timeout. |
 | [`disk/rotating.rs`](../../crates/rimz/src/disk/rotating.rs) | Best-effort rotating JSONL append and decoded visits. |
 | [`disk/usage.rs`](../../crates/rimz/src/disk/usage.rs) | Symlink-safe, hardlink-aware byte walks and the account roots `doctor`, `uninstall`, and `gc` report. |
