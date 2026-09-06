@@ -437,20 +437,6 @@ pub fn fire_signal(
         {
             continue;
         }
-        if task.source() == super::catalog::TaskSource::Instance
-            && task.entry().wake_meta.is_some()
-            && matches!(parsed.trigger, Trigger::Signal { .. })
-        {
-            match super::instances::observe_signal_wake(&name, task.entry(), jiff::Timestamp::now())
-            {
-                Ok(true) => {}
-                Ok(false) => continue,
-                Err(err) => {
-                    tracing::warn!(task = name, error = %err, "signal observation failed");
-                    continue;
-                }
-            }
-        }
         if resolution == SignalResolution::Skip {
             use super::run_log::{LoopRunMode, LoopRunRecord, LoopRunResult, SignalRecord};
             let mut record = LoopRunRecord::new(

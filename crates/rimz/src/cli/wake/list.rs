@@ -69,10 +69,10 @@ fn row(ctx: &Ctx, name: &str, task: &LoadedTask) -> Result<WakeRow> {
         Trigger::Signal { .. } => {
             let now = jiff::Timestamp::now();
             let state = task.entry().deadline.map_or_else(
-                || "listening".to_owned(),
+                || "waiting".to_owned(),
                 |deadline| {
                     format!(
-                        "listening · {} left",
+                        "waiting · {} left",
                         super::super::render::age_short(now, deadline.max(now))
                     )
                 },

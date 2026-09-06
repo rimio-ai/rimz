@@ -221,7 +221,7 @@ impl TaskCatalog {
         clear_overlays(&TaskKey::for_task(name, source, &entry.resolved_root()))
     }
 
-    /// Atomically reuse a live signal wake or mint a new instance.
+    /// Atomically replace a live signal wake in place or mint a new instance.
     pub fn arm_signal_wake(
         &self,
         entry: &TaskEntry,
@@ -577,9 +577,8 @@ mod tests {
             armed_by: crate::config::WakeArmer::Human,
             armed_at: jiff::Timestamp::UNIX_EPOCH,
             delay: None,
-            last_observed_at: None,
         });
-        assert!(!super::super::TaskShape::compile("task", &entry).is_ephemeral());
+        assert!(super::super::TaskShape::compile("task", &entry).is_ephemeral());
         assert_eq!(TaskSource::from_entry(&entry), TaskSource::Instance);
     }
 

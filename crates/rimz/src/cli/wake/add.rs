@@ -70,7 +70,6 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
             armed_by,
             armed_at: created,
             delay: args.in_after.map(duration_label),
-            last_observed_at: None,
         }),
         prompt: args.prompt,
         prompt_file: args.prompt_file,
@@ -91,7 +90,7 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
         entry.deadline = Some(
             created
                 .checked_add(timeout)
-                .context("resolving signal quiet window")?,
+                .context("resolving signal wake deadline")?,
         );
         rimz::harness::schedule::TaskShape::compile(&name, &entry)
             .trigger()
@@ -124,15 +123,12 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
     } else {
         None
     };
-    let already_listening = if entry.signal.is_some() {
-        let (armed_name, armed_entry, existing) = catalog.arm_signal_wake(&entry, created)?;
+    if entry.signal.is_some() {
+        let (armed_name, _, _) = catalog.arm_signal_wake(&entry, created)?;
         name = armed_name;
-        entry = armed_entry;
-        existing
     } else {
         catalog.replace_machine(&name, &entry)?;
-        false
-    };
+    }
     if let Some(file) = output_file {
         spawn_watcher(&ctx, &name, file)?;
     }
@@ -143,15 +139,6 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
             trigger: &trigger,
             target: &target.handle,
         })?;
-    } else if !args.json && already_listening {
-        writeln!(
-            super::super::render::out(),
-            "already listening: {name} ({} left)",
-            entry
-                .timeout
-                .as_deref()
-                .expect("signal wakes have a timeout")
-        )?;
     } else if !args.json {
         writeln!(
             super::super::render::out(),
@@ -194,6 +181,12 @@ fn validate_shape(args: &WakeArgs) -> Result<()> {
     }
     if args.timeout.is_some_and(|duration| duration.is_zero()) {
         bail!("--timeout must be greater than zero");
+    }
+    if args
+        .timeout
+        .is_some_and(|duration| duration >= Duration::from_secs(24 * 60 * 60))
+    {
+        bail!("--timeout must be less than 24h");
     }
     Ok(())
 }

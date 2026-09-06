@@ -25,12 +25,6 @@ pub(super) enum InstanceErr {
     Lock(#[from] LockErr),
     #[error(transparent)]
     Write(#[from] AtomicErr),
-    #[error("signal wake has no timeout")]
-    MissingTimeout,
-    #[error("invalid signal wake timeout: {0}")]
-    Timeout(String),
-    #[error("resolving signal wake deadline: {0}")]
-    Deadline(#[from] jiff::Error),
 }
 
 type Result<T> = std::result::Result<T, InstanceErr>;
@@ -105,42 +99,6 @@ fn mutate<T>(
         write_temp_then_rename(&path(state_root), &entries)?;
     }
     Ok(result)
-}
-
-pub(super) fn observe_signal_wake(
-    name: &str,
-    candidate: &TaskEntry,
-    now: Timestamp,
-) -> Result<bool> {
-    observe_signal_wake_in(&state_home(), name, candidate, now)
-}
-
-fn observe_signal_wake_in(
-    state_root: &Path,
-    name: &str,
-    candidate: &TaskEntry,
-    now: Timestamp,
-) -> Result<bool> {
-    mutate(state_root, |tasks| {
-        let Some(current) = tasks.get_mut(name) else {
-            return Ok((false, false));
-        };
-        if !same_subscription(current, candidate) {
-            return Ok((false, false));
-        }
-        let timeout = super::runner::parse_task_timeout(
-            current
-                .timeout
-                .as_deref()
-                .ok_or(InstanceErr::MissingTimeout)?,
-        )
-        .map_err(InstanceErr::Timeout)?;
-        current.deadline = Some(now.checked_add(timeout)?);
-        if let Some(meta) = &mut current.wake_meta {
-            meta.last_observed_at = Some(now);
-        }
-        Ok((true, true))
-    })
 }
 
 pub(super) fn remove_signal_wake(name: &str, candidate: &TaskEntry) -> Result<bool> {
@@ -226,14 +184,7 @@ fn arm_signal_wake_in(
                     .eq(entry.matches.iter().flatten())
                 && current.resolved_root() == entry.resolved_root()
         }) {
-            let timeout = super::runner::parse_task_timeout(
-                current
-                    .timeout
-                    .as_deref()
-                    .ok_or(InstanceErr::MissingTimeout)?,
-            )
-            .map_err(InstanceErr::Timeout)?;
-            current.deadline = Some(now.checked_add(timeout)?);
+            *current = entry.clone();
             return Ok(((name.clone(), current.clone(), true), true));
         }
         let petname = crate::agents::petname::mint(
@@ -263,7 +214,6 @@ mod tests {
                 armed_by: crate::config::WakeArmer::Human,
                 armed_at: Timestamp::UNIX_EPOCH,
                 delay: None,
-                last_observed_at: None,
             }),
             root: PathBuf::from("/repo"),
             prompt: Some("original note".to_owned()),
@@ -275,39 +225,15 @@ mod tests {
     }
 
     #[test]
-    fn stale_expiry_candidate_rechecks_refreshed_removed_and_replaced_rows() {
+    fn stale_expiry_candidate_rechecks_removed_and_replaced_rows() {
         let dir = tempfile::tempdir().expect("tempdir");
         let candidate = signal_wake();
         let now = candidate.deadline.expect("deadline");
         insert_into(dir.path(), "wake-test", &candidate).expect("insert");
-        assert!(observe_signal_wake_in(dir.path(), "wake-test", &candidate, now).expect("observe"));
+        remove_from(dir.path(), "wake-test").expect("remove");
         assert!(
             claim_expired_in(dir.path(), "wake-test", &candidate, now)
-                .expect("stale expiry")
-                .is_none()
-        );
-        let refreshed = load_from(dir.path()).0["wake-test"].clone();
-        assert_eq!(
-            refreshed.wake_meta.as_ref().expect("meta").last_observed_at,
-            Some(now)
-        );
-        assert!(
-            claim_expired_in(
-                dir.path(),
-                "wake-test",
-                &candidate,
-                refreshed.deadline.expect("deadline")
-            )
-            .expect("expiry")
-            .is_some()
-        );
-        assert!(
-            !observe_signal_wake_in(dir.path(), "wake-test", &candidate, now)
-                .expect("late observation")
-        );
-        assert!(
-            claim_expired_in(dir.path(), "wake-test", &candidate, now)
-                .expect("duplicate expiry")
+                .expect("removed expiry")
                 .is_none()
         );
         for replacement in [
@@ -329,16 +255,35 @@ mod tests {
                     .expect("replaced expiry")
                     .is_none()
             );
-            assert!(
-                !observe_signal_wake_in(dir.path(), "wake-test", &candidate, now)
-                    .expect("replaced observation")
-            );
             assert_eq!(load_from(dir.path()).0["wake-test"], replacement);
         }
     }
 
     #[test]
-    fn identical_signal_wake_arm_restarts_clock_preserving_note_and_timeout() {
+    fn signal_wake_expiry_claim_removes_row_once() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let candidate = signal_wake();
+        insert_into(dir.path(), "wake-test", &candidate).expect("insert");
+        assert!(
+            claim_expired_in(dir.path(), "wake-test", &candidate, Timestamp::UNIX_EPOCH)
+                .expect("early expiry")
+                .is_none()
+        );
+        let now = candidate.deadline.expect("deadline");
+        assert_eq!(
+            claim_expired_in(dir.path(), "wake-test", &candidate, now).expect("expiry"),
+            Some(candidate.clone())
+        );
+        assert!(load_from(dir.path()).0.is_empty());
+        assert!(
+            claim_expired_in(dir.path(), "wake-test", &candidate, now)
+                .expect("duplicate expiry")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn identical_signal_wake_arm_replaces_row_in_place() {
         let dir = tempfile::tempdir().expect("tempdir");
         let entry = signal_wake();
         let (name, _, reused) =
@@ -351,39 +296,63 @@ mod tests {
         replacement.matches = Some(BTreeMap::new());
         replacement.wake.as_mut().expect("target").handle = "@renamed".to_owned();
         let now = Timestamp::from_second(120).expect("now");
+        replacement.wake_meta.as_mut().expect("meta").armed_at = now;
+        replacement.wake_meta.as_mut().expect("meta").armed_by = crate::config::WakeArmer::Agent {
+            handle: "@planner".to_owned(),
+        };
+        replacement.deadline = Some(Timestamp::from_second(180).expect("new deadline"));
         let (reused_name, rearmed, reused) =
             arm_signal_wake_in(dir.path(), &replacement, &BTreeSet::new(), now).expect("rearm");
         assert!(reused);
         assert_eq!(reused_name, name);
-        let mut expected = entry;
-        expected.deadline = Some(Timestamp::from_second(3660).expect("new deadline"));
-        assert_eq!(rearmed, expected);
-        assert_eq!(load_from(dir.path()).0, BTreeMap::from([(name, expected)]));
+        assert_eq!(rearmed, replacement);
+        assert_eq!(
+            load_from(dir.path()).0,
+            BTreeMap::from([(name.clone(), replacement.clone())])
+        );
+        assert!(
+            claim_expired_in(dir.path(), &name, &entry, entry.deadline.expect("deadline"))
+                .expect("stale expiry after rearm")
+                .is_none()
+        );
+        replacement.prompt = None;
+        replacement.prompt_file = Some(PathBuf::from("/repo/note.md"));
+        let (reused_name, rearmed, reused) =
+            arm_signal_wake_in(dir.path(), &replacement, &BTreeSet::new(), now)
+                .expect("rearm with note file");
+        assert!(reused);
+        assert_eq!(reused_name, name);
+        assert_eq!(rearmed, replacement);
+        assert_eq!(
+            load_from(dir.path()).0,
+            BTreeMap::from([(name, replacement)])
+        );
     }
 
     #[test]
     fn concurrent_signal_wake_arms_publish_one_instance() {
         let dir = tempfile::tempdir().expect("tempdir");
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
-        let writers = [0, 1].map(|_| {
+        let writers = [0, 1].map(|index| {
             let root = dir.path().to_path_buf();
             let barrier = barrier.clone();
             std::thread::spawn(move || {
+                let mut entry = signal_wake();
+                entry.prompt = Some(format!("note {index}"));
                 barrier.wait();
-                arm_signal_wake_in(
-                    &root,
-                    &signal_wake(),
-                    &BTreeSet::new(),
-                    Timestamp::UNIX_EPOCH,
-                )
-                .expect("atomic arm")
+                arm_signal_wake_in(&root, &entry, &BTreeSet::new(), Timestamp::UNIX_EPOCH)
+                    .expect("atomic arm")
             })
         });
         barrier.wait();
         let results = writers.map(|writer| writer.join().expect("writer"));
         assert_eq!(results[0].0, results[1].0);
         assert_ne!(results[0].2, results[1].2);
-        assert_eq!(load_from(dir.path()).0.len(), 1);
+        let replacement = results.iter().find(|result| result.2).expect("replacement");
+        assert_eq!(
+            load_from(dir.path()).0,
+            BTreeMap::from([(replacement.0.clone(), replacement.1.clone())])
+        );
     }
 
     #[test]

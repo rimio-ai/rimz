@@ -535,7 +535,6 @@ mod tests {
                 armed_by: crate::config::WakeArmer::Human,
                 armed_at: prior,
                 delay: None,
-                last_observed_at: None,
             }),
             ..watch.entry().clone()
         });
@@ -556,7 +555,6 @@ mod tests {
                 armed_by: crate::config::WakeArmer::Human,
                 armed_at: now.timestamp(),
                 delay: None,
-                last_observed_at: None,
             }),
             ..TaskEntry::default()
         };

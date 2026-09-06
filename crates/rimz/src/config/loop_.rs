@@ -125,8 +125,6 @@ pub struct WakeMeta {
     pub armed_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delay: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_observed_at: Option<Timestamp>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -300,7 +298,6 @@ mod tests {
                 },
                 armed_at: deadline,
                 delay: Some("30m".to_owned()),
-                last_observed_at: Some(deadline),
             }),
             prompt: Some("wake".to_owned()),
             check: Some("cargo test".to_owned()),

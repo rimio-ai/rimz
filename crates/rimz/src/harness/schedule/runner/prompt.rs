@@ -3,6 +3,7 @@
 use jiff::Timestamp;
 use serde_json::{Map, Value};
 
+use super::status::ForgeView;
 use crate::config::{TaskEntry, WakeArmer, WakeMeta};
 use crate::harness::schedule::signal::{Signal, elapsed_label};
 
@@ -10,7 +11,10 @@ pub(super) enum Evidence<'a> {
     Scheduled,
     Signal(&'a Signal),
     Manual,
-    Expired,
+    Expired {
+        view: Option<&'a ForgeView>,
+        rearm: &'a str,
+    },
 }
 
 pub(super) fn compose_wake(
@@ -33,7 +37,7 @@ pub(super) fn compose_wake(
     } else {
         body.push_str(&format!(" [{name}]"));
     }
-    if let Evidence::Signal(signal) = evidence {
+    if let Evidence::Signal(signal) = &evidence {
         body.push('\n');
         match &signal.watch {
             Some(watch) if watch.output.is_empty() => body.push_str("(no output)"),
@@ -44,6 +48,10 @@ pub(super) fn compose_wake(
                 body.push_str(&Value::Object(payload).to_string());
             }
         }
+    }
+    if let Evidence::Expired { rearm, .. } = evidence {
+        body.push_str("\nre-arm: ");
+        body.push_str(rearm);
     }
     if !note.is_empty() {
         body.push_str("\n\n");
@@ -75,6 +83,12 @@ fn wait_line(task: &TaskEntry, meta: Option<&WakeMeta>, evidence: &Evidence<'_>)
         return format!("waited on {}", signal_headline(signal));
     }
     if let Some(selector) = &task.signal {
+        if let Evidence::Expired {
+            view: Some(view), ..
+        } = evidence
+        {
+            return format!("waited on {selector} on {}", view.headline);
+        }
         return format!("waited on {selector}{}", subscription_scope(task));
     }
     if let Some(delay) = meta.and_then(|meta| meta.delay.as_deref()) {
@@ -104,10 +118,16 @@ fn verdict_line(
                 None => "fired".to_owned(),
             },
         },
-        Evidence::Expired => format!(
-            "nothing in {}; subscription closed",
-            task.timeout.as_deref().unwrap_or_default()
-        ),
+        Evidence::Expired { view, .. } => {
+            let mut verdict = format!(
+                "nothing in {}; wake closed",
+                task.timeout.as_deref().unwrap_or_default()
+            );
+            if let Some(view) = view {
+                verdict.push_str(&format!(" · {}", view.label));
+            }
+            verdict
+        }
         Evidence::Manual => "fired by hand".to_owned(),
         Evidence::Scheduled if meta.is_some_and(|meta| meta.delay.is_some()) => return None,
         Evidence::Scheduled => "fired".to_owned(),
