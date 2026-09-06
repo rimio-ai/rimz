@@ -141,6 +141,6 @@ fn pr_state_probe_ok_default() -> bool {
     true
 }
 
-pub fn read_pr_state_cache(path: &Path) -> PrStateCache {
+pub(crate) fn read_pr_state_cache(path: &Path) -> PrStateCache {
     crate::disk::atomic::read_json_cache(path)
 }

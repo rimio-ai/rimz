@@ -80,7 +80,7 @@ One row per module reviewed, at the granularity `survey` ranks. `holds` names th
 
 | module | status | sha | reopen at | note |
 | --- | --- | --- | --- | --- |
-| `store` | landed pass-1; pass-7 | — | — | seam reviewed; module interior remains a candidate. Pass 7: it owns the run record (`store::run`), the signal vocabulary (`store::event`), and the submitted-prompt alignment (`store::message`); it imports no `harness` item |
+| `store` | landed pass-1; pass-7; pass-8 | — | — | seam reviewed; module interior remains a candidate. Pass 7: it owns the run record (`store::run`), the signal vocabulary (`store::event`), and the submitted-prompt alignment (`store::message`); it imports no `harness` item. Pass 8: owns `LinkTier` at `store::snapshot`; only diag upward admissions remain |
 | `agents` | landed pass-1; pass-5; pass-7 | — | — | seam reviewed; module interior remains a candidate. Pass 5: it owns the persisted record's budget vocabulary, `AgentState::channel()`, and `TerminalDisposition`. Pass 7: it gains `agents::petname`, the handle grammar the store mints and validates against |
 | `agents/adapters` | landed pass-2 | — | — | sibling seam reviewed; provider interiors remain separate module candidates |
 | `daemon_view` | landed pass-3 | — | — | seam reviewed; interior remains a candidate |
@@ -91,7 +91,7 @@ One row per module reviewed, at the granularity `survey` ranks. `holds` names th
 | `wakeup` | landed pass-5 | — | — | new module in pass 4: the wire lifted out of `sidebar` (heartbeat record, event vocabulary, datagram send). Pass 5 re-layers it to L2, a leaf below `store` |
 | `ids` | landed pass-5 | — | — | seam reviewed: it owns shared identifiers, gaining `MuxClientId` and `FocusNonce`; interior remains a candidate |
 | `proc` | landed pass-5 | — | — | seam reviewed: it owns process and environment facts including shell selection; interior remains a candidate |
-| `harness` | landed pass-5; pass-7 | — | — | seam reviewed: policy over the agent record (budget parsing, ledgers, `RunStatus`, `agent_handle`), with record vocabulary in `agents`; interior remains a candidate, and `harness/schedule` keeps its own row. Pass 7: policy over store records (run transitions and their workspace lock, the run waiter, signal selectors and firing); the run record and `RunStatus` live in `store::run`, `petname` in `agents` |
+| `harness` | landed pass-5; pass-7; pass-8 | — | — | seam reviewed: policy over the agent record (budget parsing, ledgers, `RunStatus`, `agent_handle`), with record vocabulary in `agents`; interior remains a candidate, and `harness/schedule` keeps its own row. Pass 7: policy over store records (run transitions and their workspace lock, the run waiter, signal selectors and firing); the run record and `RunStatus` live in `store::run`, `petname` in `agents`. Pass 8: reaches forge for PR state; two account-cache writer sites stay until the agents::account lift |
 | `agents/adapters/codex` | candidate | — | — | survey rank 3; app-server, broker, rollout, and install interiors unreviewed |
 | `agents/adapters/claude` | candidate | — | — | survey rank 6; remote-control and install interiors unreviewed |
 | `config` | candidate | — | — | esc 182, depth 35.9, churn 8.9%; 38 admitted upward sites |
@@ -100,16 +100,13 @@ One row per module reviewed, at the granularity `survey` ranks. `holds` names th
 | `agents/spending` | candidate | — | — | esc 118, depth 39.9 |
 | `cli/remote` | candidate | — | — | pin, thin, cx 34.0, pace 1.32; pins are the prerequisite |
 | `sidebar_pane/render/sections` | candidate | — | — | thin (t/c 0.06) with 3.7k code; pins are the prerequisite |
-| `store` | landed pass-8 | — | — | owns `LinkTier` at `store::snapshot`; only diag upward admissions remain; supersedes the pass-7 seam status above |
 | `remote` | landed pass-8 | — | — | keeps classifier and thresholds, imports the tier downward; module interior remains a candidate |
 | `disk` | landed pass-8 | — | — | gains `disk::usage`, the unchanged byte walk and storage-root measurement |
 | `worktree` | landed pass-8 | — | — | reaches `disk::usage` downward; interior remains a candidate |
-| `diag` | landed pass-8 | — | — | imports the tier from `store::snapshot`; its own upward admissions remain unreviewed |
+| `diag` | landed pass-8 | — | — | imports the tier from `store::snapshot` and owns `PluginCommandFailure`; its sidebar upward admission is closed; store ↔ diag::record cycle retained for the store-side close |
 | `forge` | landed pass-8 | — | — | owns the PR-state record and reader in `forge::pr_state` |
 | `osc` | landed pass-8 | — | — | re-layered to L5 as policy over config and mux capabilities |
 | `build_id` | landed pass-8 | — | — | no crate imports; proc alone owns executable-path resolution |
-| `harness` | landed pass-8 | — | — | reaches forge for PR state; two account-cache writer sites stay until the agents::account lift |
-| `diag` | landed pass-8 extension | — | — | owns `PluginCommandFailure`; store ↔ diag::record cycle retained for the store-side close |
 
 ## Admission intents
 
