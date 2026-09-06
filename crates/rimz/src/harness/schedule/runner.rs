@@ -44,7 +44,7 @@ use crate::utils::time::{DurationUnit, parse_duration_units};
 use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};
 
 pub const CHECK_DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
-pub const SCHEDULED_RUN_DEFAULT_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
+pub(super) const SCHEDULED_RUN_DEFAULT_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 pub const SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL: &str = "2h";
 const CHECK_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const RUN_LOCK_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(200);
@@ -539,7 +539,7 @@ impl<'a> TaskFire<'a> {
             let outcome = run_check(
                 &self.entry.resolved_root(),
                 &command,
-                check_timeout(&self.entry)?.unwrap_or(CHECK_DEFAULT_TIMEOUT),
+                task_timeout(&self.entry)?.unwrap_or(CHECK_DEFAULT_TIMEOUT),
                 self.check_echo.take().unwrap_or(CheckEcho::Capture),
             )?;
             (command, outcome, elapsed_millis(check_started))
@@ -657,21 +657,8 @@ impl<'a> TaskFire<'a> {
             .map(parse_mode_value)
             .transpose()?
             .unwrap_or(PermissionMode::Auto);
-        let task_timeout = self
-            .entry
-            .timeout
-            .as_deref()
-            .map(parse_task_timeout)
-            .transpose()
-            .map_err(anyhow::Error::msg)?;
-        let configured_timeout = self
-            .config
-            .r#loop
-            .default_timeout
-            .as_deref()
-            .map(parse_task_timeout)
-            .transpose()
-            .map_err(anyhow::Error::msg)?;
+        let task_timeout = task_timeout(&self.entry)?;
+        let configured_timeout = configured_timeout(&self.config)?;
         let timeout = effective_spawn_timeout(self.mode, task_timeout, configured_timeout);
         let budget = self
             .entry
@@ -1117,7 +1104,7 @@ pub fn newest_active_run_for_entry(name: &str, entry: &TaskEntry) -> Result<Opti
     newest_active_run(&paths, name)
 }
 
-pub fn effective_spawn_timeout(
+pub(super) fn effective_spawn_timeout(
     mode: crate::harness::schedule::run_log::LoopRunMode,
     task_timeout: Option<Duration>,
     configured_timeout: Option<Duration>,
@@ -1414,7 +1401,17 @@ pub fn check_record(outcome: &CheckOutcome) -> CheckRecord {
     }
 }
 
-pub fn check_timeout(entry: &TaskEntry) -> Result<Option<Duration>> {
+pub(super) fn configured_timeout(config: &MachineConfig) -> Result<Option<Duration>> {
+    config
+        .r#loop
+        .default_timeout
+        .as_deref()
+        .map(parse_task_timeout)
+        .transpose()
+        .map_err(anyhow::Error::msg)
+}
+
+pub(super) fn task_timeout(entry: &TaskEntry) -> Result<Option<Duration>> {
     entry
         .timeout
         .as_deref()

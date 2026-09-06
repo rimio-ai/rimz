@@ -13,9 +13,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
 use super::catalog::TaskCatalog;
+use super::run_log::LoopRunMode;
 use super::runner::{
-    CheckEcho, CheckOutcome, SCHEDULED_RUN_DEFAULT_TIMEOUT, check_record, check_timeout,
-    parse_task_timeout, run_check,
+    CheckEcho, CheckOutcome, check_record, configured_timeout, effective_spawn_timeout, run_check,
+    task_timeout,
 };
 use super::{Trigger, arming};
 use crate::harness::schedule::runner::RunLockInfo;
@@ -277,16 +278,14 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
     else {
         return Ok(());
     };
-    let configured_timeout = crate::config::MachineConfig::load_lenient()
-        .r#loop
-        .default_timeout
-        .as_deref()
-        .map(parse_task_timeout)
-        .transpose()
-        .map_err(anyhow::Error::msg)?;
-    let timeout = check_timeout(task.entry())?
-        .or(configured_timeout)
-        .unwrap_or(SCHEDULED_RUN_DEFAULT_TIMEOUT);
+    let configured = configured_timeout(&crate::config::MachineConfig::load_lenient())?;
+    // Scheduled mode always supplies the built-in timeout when neither source does.
+    let timeout = effective_spawn_timeout(
+        LoopRunMode::Scheduled,
+        task_timeout(task.entry())?,
+        configured,
+    )
+    .expect("scheduled mode always resolves a timeout");
     let started = std::time::Instant::now();
     let outcome = run_check(
         &workspace.project_root,
@@ -385,7 +384,7 @@ pub fn fire_signal(
     Ok(fired)
 }
 
-pub struct WatchLockGuard {
+pub(super) struct WatchLockGuard {
     file: File,
 }
 
@@ -395,11 +394,11 @@ impl Drop for WatchLockGuard {
     }
 }
 
-pub fn watch_lock_path(runtime: &RuntimePaths, name: &str) -> std::path::PathBuf {
+fn watch_lock_path(runtime: &RuntimePaths, name: &str) -> std::path::PathBuf {
     runtime.root.join(format!("loop-watch-{name}.lock"))
 }
 
-pub fn acquire_watch_lock(
+pub(super) fn acquire_watch_lock(
     runtime: &RuntimePaths,
     name: &str,
 ) -> std::io::Result<Option<WatchLockGuard>> {
