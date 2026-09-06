@@ -1,17 +1,7 @@
 //! Shared mechanics for independent refresh-lane work.
 
-use std::path::Path;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-
-use serde::de::DeserializeOwned;
-
-pub(super) fn read_json_cache<T: Default + DeserializeOwned>(path: &Path) -> T {
-    std::fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
-}
 
 pub(super) fn bounded_map<T: Sync, R: Send>(
     work_lane: crate::lane::WorkLane,

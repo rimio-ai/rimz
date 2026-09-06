@@ -2,10 +2,10 @@ use super::*;
 use crate::agents::SessionOrigin;
 use crate::agents::{AgentState, AgentStatus};
 use crate::disk::atomic;
+use crate::forge::pr_state::PrLink;
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use crate::remote::link::{LinkStats, LinkStatsFile};
 use crate::sidebar::refresh::AccountsCache;
-use crate::sidebar::refresh::PrLink;
 use crate::sidebar::refresh::daemon_reap::write_codex_daemon_reap;
 use crate::sidebar::refresh::git_stats::{
     DiffStatsCache, DiffStatsCacheEntry, WorktreeRootsCache, focused_worktree_paths,

@@ -534,7 +534,7 @@ fn active_version_probe_kinds(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
 /// Read the producer's published account cache, or an empty cache on a cold,
 /// corrupt, or old-schema file. Read-only and fork-free.
 pub(in crate::sidebar) fn read_accounts_cache(path: &Path) -> AccountsCache {
-    super::runner::read_json_cache(path)
+    crate::disk::atomic::read_json_cache(path)
 }
 
 /// Publish the probed account cache atomically so readers never observe a

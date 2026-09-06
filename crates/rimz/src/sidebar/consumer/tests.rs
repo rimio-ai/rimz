@@ -1,10 +1,10 @@
 use super::*;
 use crate::agents::{AgentContext, AgentStatus, AgentTurnError, TurnErrorClass};
 use crate::disk::atomic;
+use crate::forge::pr_state::PrStateCache;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::sidebar::enrich::{FoldOpts, WorkspaceSnapshot, enrich};
 use crate::sidebar::frame::{CarriedPane, assemble_frame};
-use crate::sidebar::refresh::PrStateCache;
 use crate::sidebar::refresh::git_stats::{DiffStatsCache, DiffStatsCacheEntry};
 use crate::sidebar::test_support::{child_agent, pane, pane_in_tab, root_agent};
 use crate::store::snapshot::{SidebarSnapshot, SidebarWorktreeKind};
@@ -594,7 +594,7 @@ fn read_published_snapshot_folds_caches_without_forking() {
     let mut pr = PrStateCache::default();
     pr.states.insert(
         wt.clone(),
-        crate::sidebar::refresh::pr::PrLink {
+        crate::forge::pr_state::PrLink {
             branch: Some("feature".to_owned()),
             incarnation: None,
             state: crate::store::snapshot::WorktreePrState::Open,

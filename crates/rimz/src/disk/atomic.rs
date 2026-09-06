@@ -161,6 +161,14 @@ pub fn write_temp_then_rename_cache<T: Serialize>(path: &Path, value: &T) -> Res
     write_temp_then_rename_with(path, value, Fsync::Skip, JsonStyle::Pretty, None)
 }
 
+/// A cache-class file that is missing or unreadable reads as its default.
+pub fn read_json_cache<T: Default + serde::de::DeserializeOwned>(path: &Path) -> T {
+    std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
 /// Like [`write_temp_then_rename_cache`] but emits compact JSON. Use for large
 /// rebuilt caches where human-readable formatting materially affects size.
 pub fn write_temp_then_rename_cache_compact<T: Serialize>(path: &Path, value: &T) -> Result<()> {

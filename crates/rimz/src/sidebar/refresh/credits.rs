@@ -215,7 +215,7 @@ pub(super) struct AccountUsageCompletion {
 }
 
 pub(super) fn read_credits_cache(path: &Path) -> CreditsCache {
-    super::runner::read_json_cache(path)
+    crate::disk::atomic::read_json_cache(path)
 }
 
 pub(super) fn write_credits_cache(path: &Path, cache: &CreditsCache) {

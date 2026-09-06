@@ -1,5 +1,5 @@
 use super::*;
-use crate::sidebar::refresh::pr::PrLink;
+use crate::forge::pr_state::PrLink;
 
 fn cache(ci: Option<WorktreePrCi>, state: WorktreePrState) -> PrStateCache {
     let mut cache = PrStateCache::default();

@@ -6,10 +6,10 @@ use serde_json::{Map, Value};
 
 use crate::config::TaskEntry;
 use crate::disk::paths::RuntimePaths;
+use crate::forge::pr_state::{PrStateCache, read_pr_state_cache};
 use crate::harness::schedule::Trigger;
 use crate::harness::schedule::run_log::SignalRecord;
 use crate::harness::schedule::signal::SignalSelector;
-use crate::sidebar::refresh::pr::{PrStateCache, read_pr_state_cache};
 use crate::store::snapshot::{WorktreePrCi, WorktreePrState};
 
 pub(super) struct ForgeView {

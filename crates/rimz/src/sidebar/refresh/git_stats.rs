@@ -189,7 +189,7 @@ pub(in crate::sidebar) fn is_trunk_branch(branch: &str, trunk: Option<&str>) -> 
 }
 
 pub fn read_diff_stats_cache(path: &Path) -> DiffStatsCache {
-    super::runner::read_json_cache(path)
+    crate::disk::atomic::read_json_cache(path)
 }
 
 /// Refresh the producer's per-worktree git facts. The git forks are the

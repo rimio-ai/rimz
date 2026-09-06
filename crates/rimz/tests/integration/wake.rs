@@ -3,8 +3,8 @@
 use crate::common::Env;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams, LifecycleSignal};
 use rimz::config::Tasks;
+use rimz::forge::pr_state::{PrLink, PrStateCache};
 use rimz::ids::{AgentKind, AgentSessionId};
-use rimz::sidebar::refresh::pr::{PrLink, PrStateCache};
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 use rimz::store::snapshot::{WorktreePrCi, WorktreePrState};
 use rimz::store::writer::AgentLifecycleIntent;
