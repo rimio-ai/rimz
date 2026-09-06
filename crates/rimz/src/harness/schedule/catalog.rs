@@ -78,6 +78,10 @@ impl LoadedTask {
         &self.entry
     }
 
+    pub fn key(&self, name: &str) -> String {
+        TaskKey::for_task(name, self.source(), &self.entry().resolved_root())
+    }
+
     pub const fn source(&self) -> TaskSource {
         self.source
     }
@@ -235,7 +239,7 @@ impl TaskCatalog {
             .filter(|(name, task)| {
                 task.source() != TaskSource::Instance
                     || arming::ArmState::resolve(
-                        arming_entries.get(&task_key(name, task)),
+                        arming_entries.get(&task.key(name)),
                         task.source(),
                         now,
                     ) != arming::ArmState::Live
@@ -263,7 +267,7 @@ impl TaskCatalog {
             return Ok(TaskMutation::default());
         };
         let changed = remove_definition(name, task)?;
-        let key = task_key(name, task);
+        let key = task.key(name);
         let cleared_arming = arming::remove(&key)?;
         let cleared_strikes = strikes::clear(&key)?;
         Ok(TaskMutation {
@@ -290,8 +294,8 @@ impl TaskCatalog {
                 new_name,
             )?,
         };
-        let old_key = task_key(name, task);
-        let new_key = task_key(new_name, task);
+        let old_key = task.key(name);
+        let new_key = task.key(new_name);
         let cleared_arming = arming::rename(&old_key, &new_key)?;
         let cleared_strikes = strikes::rename(&old_key, &new_key)?;
         Ok(TaskMutation {
@@ -422,10 +426,6 @@ fn enable_project_overlays(
         changed: true,
         cleared_overlays: cleared_arming || cleared_strikes,
     })
-}
-
-fn task_key(name: &str, task: &LoadedTask) -> String {
-    TaskKey::for_task(name, task.source(), &task.entry().resolved_root())
 }
 
 fn remove_definition(name: &str, task: &LoadedTask) -> Result<bool> {

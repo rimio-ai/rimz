@@ -221,16 +221,7 @@ fn watch_row_model(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Wat
             )
         },
     );
-    let next_text = match state {
-        RowState::Running => "running now".to_owned(),
-        RowState::Held => timing_next_text(&task.timing, context.now),
-        RowState::Blocked => "blocked · trust".to_owned(),
-        RowState::Due => "due".to_owned(),
-        RowState::Upcoming(next) => ui::until_label(next, context.now),
-        RowState::Listening => "listening".to_owned(),
-        RowState::Watching => "watching".to_owned(),
-        RowState::NeverRun => "—".to_owned(),
-    };
+
     WatchRow {
         name: task.name.to_owned(),
         glyph,
@@ -238,9 +229,26 @@ fn watch_row_model(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Wat
         state,
         failed,
         next_ts,
-        next_text,
+        next_text: next_text(state, &task.timing, context.now),
         last_text,
         status_text,
+    }
+}
+
+fn next_text(state: RowState, timing: &schedule::TaskTiming, now: Timestamp) -> String {
+    match state {
+        RowState::Running => "running now".to_owned(),
+        RowState::Held => {
+            // row_state_for_timing maps only disabled and paused states to Held.
+            render::held_text(&timing.state(), now)
+                .unwrap_or_else(|| unreachable!("Held rows are disabled or paused"))
+        }
+        RowState::Blocked => "blocked · trust".to_owned(),
+        RowState::Due => "due".to_owned(),
+        RowState::Upcoming(next) => ui::until_label(next, now),
+        RowState::Listening => "listening".to_owned(),
+        RowState::Watching => "watching".to_owned(),
+        RowState::NeverRun => "—".to_owned(),
     }
 }
 
@@ -265,29 +273,6 @@ fn row_state_for_timing(timing: &schedule::TaskTiming) -> RowState {
         schedule::TaskTimingState::Invalid
         | schedule::TaskTimingState::Unarmed
         | schedule::TaskTimingState::NoOccurrence => RowState::NeverRun,
-    }
-}
-
-fn timing_next_text(timing: &schedule::TaskTiming, now: Timestamp) -> String {
-    match timing.state() {
-        schedule::TaskTimingState::Blocked(_) => "blocked · trust".to_owned(),
-        schedule::TaskTimingState::Disabled(DisabledReason::NotEnabledHere) => {
-            "disabled · enable to arm".to_owned()
-        }
-        schedule::TaskTimingState::Disabled(DisabledReason::Manual) => "disabled".to_owned(),
-        schedule::TaskTimingState::Disabled(DisabledReason::Strikes(strikes)) => {
-            format!("disabled · {strikes} strikes")
-        }
-        schedule::TaskTimingState::Paused(until) => {
-            format!("paused · {}", ui::rel_until(until, now))
-        }
-        schedule::TaskTimingState::Due(_) => "due".to_owned(),
-        schedule::TaskTimingState::Upcoming(next) => ui::until_label(next, now),
-        schedule::TaskTimingState::Listening { .. } => "listening".to_owned(),
-        schedule::TaskTimingState::Watching { .. } => "watching".to_owned(),
-        schedule::TaskTimingState::Invalid
-        | schedule::TaskTimingState::Unarmed
-        | schedule::TaskTimingState::NoOccurrence => "—".to_owned(),
     }
 }
 

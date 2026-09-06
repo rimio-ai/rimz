@@ -373,7 +373,7 @@ pub(super) fn pause(args: PauseArgs, globals: &GlobalFlags) -> Result<()> {
         anyhow::anyhow!("no loop task named `{}`; see `rimz loop list`", args.name)
     })?;
     let now = Timestamp::now();
-    let key = task_key(&args.name, &task);
+    let key = task.key(&args.name);
     let entries = arming::load();
     if matches!(
         ArmState::resolve(entries.get(&key), task.source(), now),
@@ -410,7 +410,7 @@ pub(super) fn enable(args: ScopeArgs, globals: &GlobalFlags) -> Result<()> {
     let entries = arming::load();
     let mut out = ui::out();
     for (name, task) in tasks {
-        let key = task_key(&name, &task);
+        let key = task.key(&name);
         let record = entries.get(&key);
         let already_enabled = ArmState::resolve(record, task.source(), now) == ArmState::Live
             && record.is_none_or(|record| record.enabled && record.strikes.is_none());
@@ -434,7 +434,7 @@ pub(super) fn disable(args: ScopeArgs, globals: &GlobalFlags) -> Result<()> {
     let tasks = scoped_tasks(args, globals)?;
     let mut out = ui::out();
     for (name, task) in tasks {
-        arming::disable(&task_key(&name, &task), None)?;
+        arming::disable(&task.key(&name), None)?;
         writeln!(out, "loop `{name}`: disabled")?;
     }
     Ok(())
@@ -610,17 +610,8 @@ fn resolve_add_timing(args: &AddArgs) -> Result<AddTiming> {
     if duration >= Duration::from_secs(24 * 60 * 60) {
         bail!("--in must be less than 24h");
     }
-    let mut target = Timestamp::now()
-        .to_zoned(MachineConfig::load_lenient().time_zone())
-        .checked_add(duration)
-        .context("resolving --in against the configured clock")?;
-    if target.second() != 0 || target.subsec_nanosecond() != 0 {
-        target = target
-            .checked_add(Duration::from_secs((60 - target.second()) as u64))
-            .context("rounding --in to the next scheduler minute")?;
-    }
     Ok(AddTiming {
-        at: Some(format!("{:02}:{:02}", target.hour(), target.minute())),
+        at: Some(schedule::delayed_at(duration)?),
         deadline,
     })
 }

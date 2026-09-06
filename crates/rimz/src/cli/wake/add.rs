@@ -76,7 +76,7 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
         ..TaskEntry::default()
     };
     let trigger = if let Some(delay) = args.in_after {
-        entry.at = Some(resolve_in(delay)?);
+        entry.at = Some(rimz::harness::schedule::delayed_at(delay)?);
         format!("in {}", duration_label(delay))
     } else if let Some(signal) = args.signal {
         signal
@@ -182,19 +182,6 @@ fn validate_shape(args: &WakeArgs) -> Result<()> {
         bail!("--timeout must be greater than zero");
     }
     Ok(())
-}
-
-fn resolve_in(duration: Duration) -> Result<String> {
-    let mut target = Timestamp::now()
-        .to_zoned(rimz::config::MachineConfig::load_lenient().time_zone())
-        .checked_add(duration)
-        .context("resolving --in against the configured clock")?;
-    if target.second() != 0 || target.subsec_nanosecond() != 0 {
-        target = target
-            .checked_add(Duration::from_secs((60 - target.second()) as u64))
-            .context("rounding --in to the next scheduler minute")?;
-    }
-    Ok(format!("{:02}:{:02}", target.hour(), target.minute()))
 }
 
 fn duration_label(duration: Duration) -> String {
