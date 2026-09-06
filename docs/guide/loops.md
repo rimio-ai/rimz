@@ -88,7 +88,7 @@ A watched command reads the same way, with its own verdict in place of the fire:
 
 `--prompt` is still there as an optional note, delivered verbatim under the evidence. Use it when the verdict will not be enough on its own: a reminder of what you meant to do next, or a label that tells two waits apart. `rimz wake --in 30m --prompt "if the deploy is still baking, extend the freeze"` is the shape to reach for.
 
-From your own shell there is no caller to wake, so the address is required: `rimz wake @planner --in 30m`. An agent passes `@handle` the same way to wake a teammate. `rimz wake list` shows what is pending, with the trigger, the target, and how much of a subscription's window is left; `rimz wake cancel <name>` calls it off. A chain of wakes is a self-paced loop: each turn ends by arming the next wake only while work remains, so the loop stops when the goal is met. When the agent has nothing else to do until a command finishes, `rimz wake --wait -- cargo build` blocks and prints the outcome inline instead; reach for that in a script.
+From your own shell there is no caller to wake, so the address is required: `rimz wake @planner --in 30m`. An agent passes `@handle` the same way to wake a teammate. `rimz wake list` shows what is pending, with the trigger, the target, and how long a signal wake still has; `rimz wake cancel <name>` calls it off. A chain of wakes is a self-paced loop: each turn ends by arming the next wake only while work remains, so the loop stops when the goal is met. When the agent has nothing else to do until a command finishes, `rimz wake --wait -- cargo build` blocks and prints the outcome inline instead; reach for that in a script.
 
 `rimz loop add --wake` takes any trigger a task takes, so it is the form for a wake that repeats or waits behind a guard:
 
@@ -114,18 +114,21 @@ Those four families, plus `wake` for a watched command's own completion, are Rim
 
 A subscription names one signal or one whole family: `--signal ci.failed` for the red verdict, `--signal 'ci.*'` for any verdict. Either way it watches the whole family, and what it does with a sibling is the useful part. A wake on `ci.failed` sees the green build too, records it as a skip, and stays quiet; the branch that goes green never wakes an agent that only asked for red. A signal that fails a `--match`, from another branch or another cohort, is ignored outright.
 
-Family-watching is what makes a wake survive the fix. A `rimz wake --signal ci.failed` stays armed after it fires: it is a standing subscription with a 59-minute quiet window, and every verdict on the watched branch restarts that window, so the failure at 14:10, the push at 14:20, and the second failure at 14:35 all reach the agent on one arming. When an hour passes with nothing at all, the subscription retires, and the agent hears about that too:
+A wake is one question, and `rimz wake --signal ci.failed` asks it once: if the branch fails, wake me; if it passes or is still building, let me rest. The failure delivers the wake, and the row is done.
+
+`--timeout` is how long the question stays open, 59 minutes by default and `--timeout 4h` for a slower wait. When it runs out, RimZ reads what the room already knows about that branch. Under a `ci.failed` wake on a branch that has gone green, the question is answered: the wake closes with no message at all, and nothing wakes the agent to tell it the good news. Anything else closes with one message, the only one this wake will send, so it carries the status and the command that resumes the wait:
 
 ```text
-waited on ci.failed on /home/you/code/app-feat-x
-nothing in 59m; subscription closed [wake-still-path]
+waited on ci.failed on feat-x (PR #91)
+nothing in 59m; wake closed · ci pending on feat-x (PR #91) [wake-still-path]
+re-arm: rimz wake --signal ci.failed --match 'path=/home/you/code/app-feat-x'
 ```
 
-A subscription that did see something retires in silence, because the agent has already been told what happened. `--timeout 4h` widens the window for a slower wait, and re-running the same `rimz wake` command restarts the clock rather than arming a second subscription (`already listening: wake-still-path (59m left)`).
+The agent decides from there. Re-arming after a close creates a new wake; re-arming an identical question while it is still live replaces that row in place with a fresh deadline, timeout, and note. Both closings need the room open, or the [timer](#who-keeps-time), to notice the deadline, and the status line comes from the same forge poll that draws the sidebar's CI glyph, so a branch the room has never polled reads `no PR or CI seen`.
 
 Scoping is automatic wherever RimZ already knows the answer. A `ci.*` or `pr.*` wake armed from an agent working in a worktree is scoped to that worktree, and a `team.*` wake to the caller's own cohort, so `rimz wake --signal ci.failed` is the whole CI wait. On the root checkout it refuses instead of waiting forever, because the forge poll only watches worktree branches, and it names the two ways forward: `--match branch=<name>`, or `rimz wake -- gh run watch --exit-status`. An `agent.*` wake has the opposite rule: it must name someone else (`--match handle=@coder` or `--match session=<id>`), because an agent's own idle transition waking it into another turn is a loop.
 
-For a subscription that outlives the agent that armed it, `rimz loop add ci-fix --signal ci.failed --agent codex --prompt "…"` is the standing form: it keeps listening for as long as the task exists, with no quiet window, and `--once` retires it after its first real fire.
+For a subscription that outlives the agent that armed it, `rimz loop add ci-fix --signal ci.failed --agent codex --prompt "…"` is the standing form: it keeps listening for as long as the task exists, with no deadline, and `--once` retires it after its first real fire.
 
 ### Your own signals
 
@@ -142,7 +145,7 @@ emitted deploy.finished (evt_01a07076a71c72e09f0461533909ceb1) · fired 1 tasks
 
 A CI job's last step, a git hook, a deploy script, a cron line, another agent: each one emits, and every wake and task subscribed to that family fires. Names are lowercase dot-separated words outside the five reserved families, and the payload is one JSON object whose top-level fields `--match` filters on and the woken agent reads.
 
-Your own families observe and skip like the built-in ones, so it pays to name them by outcome. An agent waiting with `rimz wake --signal deploy.failed` is woken by `deploy.failed`, kept alive but quiet by `deploy.finished`, and left alone by anything outside the `deploy` family.
+Your own families observe and skip like the built-in ones, so it pays to name them by outcome. An agent waiting with `rimz wake --signal deploy.failed` is woken by `deploy.failed`, left armed and quiet by `deploy.finished`, and untouched by anything outside the `deploy` family.
 
 The emitting process fires the subscribers itself, so this works with no daemon and no open room. Nothing is queued or replayed either: a signal reaches the subscriptions armed at that instant, which is why an agent arms its wake before starting the work that will emit it.
 
@@ -207,7 +210,7 @@ at = "09:00"
 every = "mon"
 ```
 
-A task that retires itself (a bare `--at`, `--in`, anything with a `--until` deadline, a `--once` subscription, or any `rimz wake`) is stored as state in `~/.local/state/rimz/loop-instances.json` instead, so an agent scheduling its own wake never touches your `loop.toml`. Most of those entries disappear when they fire; a `rimz wake --signal` row instead stays until its quiet window runs out, and its stored deadline moves each time it sees a signal. `rimz loop list` shows the source of each task as `machine` or `state`.
+A task that retires itself (a bare `--at`, `--in`, anything with a `--until` deadline, a `--once` subscription, or any `rimz wake`) is stored as state in `~/.local/state/rimz/loop-instances.json` instead, so an agent scheduling its own wake never touches your `loop.toml`. Each of those entries disappears when it fires, and a `rimz wake --signal` row also disappears at the deadline that closes it. `rimz loop list` shows the source of each task as `machine` or `state`.
 
 `--project` writes the entry to `<root>/.rimz/config.toml`: shared automation that travels with the repo, so it has to be a standing task (`--every`, `--cron`, or `--signal`), and it cannot use `--wake` (a session pinned on your machine means nothing on someone else's). A committed task runs commands on whoever pulls it, so it enters the [project trust hash](./security.md) and stays inert until each user approves it. Trust and enablement answer different questions: trust says the project config contains commands you accept as yours to run, and `rimz loop enable <name>` says this particular task may run unattended on this machine. A project task pulled from a repo starts disabled even after trust is granted; a task you create with `rimz loop add --project` starts enabled on your machine. A trusted project task wins over a same-named machine task without double-firing.
 
@@ -221,7 +224,7 @@ rimz loop timer install
 
 That installs one systemd user timer on Linux or launchd agent on macOS. Once a minute it runs a one-off RimZ tick, re-reads every task, and fires only projects without an open room; an open room still wins for its own tasks. Know what a timer fire does before you install it. An `--agent` fire starts a room for that project, runs the turn in it, and leaves the room open, so a 02:00 task means a multiplexer session running on the machine by morning. A check-only task runs with no room. A `--wake` task cannot be rescued by the timer at all: its target lives in the room, so a closed room means the session is gone and the task is removed. `rimz loop timer status` shows whether it is installed; `rimz loop timer remove` reverses it.
 
-Only clocks need a timekeeper. A signal task and a `rimz wake` watcher are fired by the process that emits the signal or runs the command, whether or not a room is open. The one clock a signal subscription still needs is its own expiry: a `rimz wake --signal` window that runs out is noticed by the room's elder or the timer, like any other deadline.
+Only clocks need a timekeeper. A signal task and a `rimz wake` watcher are fired by the process that emits the signal or runs the command, whether or not a room is open. The one clock a signal subscription still needs is its own deadline: a `rimz wake --signal` that runs out of time is closed by the room's elder or the timer, like any other deadline.
 
 With or without the timer, nothing is replayed. A task is armed the first time a clock sees it and fires on its next occurrence after that, so opening a room hours late never sets off a catch-up storm.
 
