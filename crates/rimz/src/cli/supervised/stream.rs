@@ -7,8 +7,8 @@ use anyhow::{Context, Result};
 use super::output::StreamSink;
 use rimz::agents::AgentDefinition;
 use rimz::agents::transcript::TranscriptCursor;
-use rimz::harness::run::RunRecord;
 use rimz::harness::run_wake::RunWaiter;
+use rimz::store::run::RunRecord;
 
 pub(crate) fn stream_blocking_run(
     waiter: &RunWaiter,

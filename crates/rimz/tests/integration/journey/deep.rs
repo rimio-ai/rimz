@@ -1431,7 +1431,7 @@ fn tmux_settled_subagent_reports_to_parent() {
         .expect("launch deadline-limited subagent");
     assert_eq!(
         timed.status.code(),
-        Some(rimz::harness::run::RunStatus::TimedOut.exit_code()),
+        Some(rimz::store::run::RunStatus::TimedOut.exit_code()),
         "deadline-limited join should time out\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&timed.stdout),
         String::from_utf8_lossy(&timed.stderr)
@@ -1788,7 +1788,7 @@ fn wait_for_named_agent(
     }
 }
 
-fn wait_for_named_run(env: &Env, name: &str, budget: Duration) -> rimz::harness::run::RunRecord {
+fn wait_for_named_run(env: &Env, name: &str, budget: Duration) -> rimz::store::run::RunRecord {
     let deadline = Instant::now() + budget;
     loop {
         let runs = rimz::harness::run::list(env.store().paths()).expect("read runs");
@@ -1810,7 +1810,7 @@ fn wait_for_named_terminal_run(
     env: &Env,
     name: &str,
     budget: Duration,
-) -> rimz::harness::run::RunRecord {
+) -> rimz::store::run::RunRecord {
     let deadline = Instant::now() + budget;
     loop {
         let run = wait_for_named_run(env, name, budget);

@@ -8,10 +8,11 @@ use std::collections::HashSet;
 
 use anyhow::Context;
 use rimz::agents::AgentState;
-use rimz::harness::run::{self as run, RunRecord, RunStatus};
+use rimz::harness::run;
 use rimz::ids::{AgentSessionId, MessageId, RunId};
 use rimz::message::deliver::{DeliveryPolicy, deliver_one};
 use rimz::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
+use rimz::store::run::{RunRecord, RunStatus, RunStoreErr};
 use rimz::workspace::ResolvedWorkspace;
 use rimz::{RuntimeScope, Store};
 
@@ -35,7 +36,7 @@ pub(super) enum ReportErr {
     #[error(transparent)]
     Store(#[from] rimz::store::StoreErr),
     #[error(transparent)]
-    Run(#[from] run::RunStoreErr),
+    Run(#[from] RunStoreErr),
     #[error(transparent)]
     Deliver(#[from] rimz::message::deliver::DeliverErr),
 }

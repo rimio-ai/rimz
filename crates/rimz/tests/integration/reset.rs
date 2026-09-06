@@ -9,10 +9,10 @@ use predicates::str::contains;
 use rimz::agents::PermissionMode;
 use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams};
-use rimz::harness::run::{RunRecord, RunStatus};
 use rimz::harness::run_wake::{ExpectedRunFrame, RunWaiter};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use rimz::store::event::EventEnvelope;
+use rimz::store::run::{RunRecord, RunStatus};
 use rimz::workspace::WorkspaceResolver;
 
 use crate::common::Env;

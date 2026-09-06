@@ -476,7 +476,7 @@ pub(super) fn write_record_forensics(
 fn write_check_section(
     out: &mut impl Write,
     record: &LoopRunRecord,
-    run_record: Option<&rimz::harness::run::RunRecord>,
+    run_record: Option<&rimz::store::run::RunRecord>,
     prose: ui::prose::Prose,
 ) -> std::io::Result<()> {
     if let Some(check) = &record.check {
@@ -504,7 +504,7 @@ fn write_check_section(
 
 fn write_verify_section(
     out: &mut impl Write,
-    run_record: Option<&rimz::harness::run::RunRecord>,
+    run_record: Option<&rimz::store::run::RunRecord>,
 ) -> std::io::Result<()> {
     if let Some(verify) = run_record
         .and_then(|record| record.verify.as_ref())
@@ -534,7 +534,7 @@ fn write_summary_run_links(out: &mut impl Write, record: &LoopRunRecord) -> std:
 fn write_stored_run_links(
     out: &mut impl Write,
     record: &LoopRunRecord,
-    run_record: Option<&rimz::harness::run::RunRecord>,
+    run_record: Option<&rimz::store::run::RunRecord>,
 ) -> std::io::Result<()> {
     if let Some(run_id) = &record.run_id {
         write_detail_link(out, "run", run_id)?;
@@ -646,7 +646,7 @@ fn write_gutter_line(
     writeln!(out)
 }
 
-fn run_record_for(entry: &TaskEntry, run_id: &str) -> Option<rimz::harness::run::RunRecord> {
+fn run_record_for(entry: &TaskEntry, run_id: &str) -> Option<rimz::store::run::RunRecord> {
     let run_id = rimz::RunId::parse(run_id).ok()?;
     let paths = StatePaths::under(
         WorkspaceId::from_project_root(&entry.resolved_root()),

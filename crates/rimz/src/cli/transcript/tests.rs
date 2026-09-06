@@ -663,7 +663,7 @@ fn transcript_paths() -> (tempfile::TempDir, rimz::StatePaths) {
 }
 
 fn run_record(paths: &rimz::StatePaths, agent_id: Option<&str>) -> rimz::RunId {
-    let mut record = rimz::harness::run::RunRecord::new(
+    let mut record = rimz::store::run::RunRecord::new(
         paths.workspace_id.clone(),
         AgentKind::new_unchecked("codex"),
         rimz::agents::PermissionMode::Auto,

@@ -7,8 +7,8 @@
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::harness::run::{RunRecord, RunStatus};
 use crate::ids::{RunId, WorkspaceId};
+use crate::store::run::{RunRecord, RunStatus};
 use crate::{RuntimePaths, StatePaths};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

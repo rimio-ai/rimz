@@ -3,7 +3,8 @@
 use std::io::Write;
 
 use anyhow::Result;
-use rimz::harness::run::{RunLiveStatus, RunRecord, RunStatus};
+use rimz::harness::run::RunLiveStatus;
+use rimz::store::run::{RunRecord, RunStatus};
 
 use crate::cli::render;
 use crate::cli::render::prose::Prose;
@@ -84,7 +85,7 @@ pub(crate) fn status_label(status: RunStatus) -> &'static str {
     }
 }
 
-pub(super) fn verify_status_label(verify: &rimz::harness::run::RunVerify) -> String {
+pub(super) fn verify_status_label(verify: &rimz::store::run::RunVerify) -> String {
     if verify.timed_out {
         "timeout".to_owned()
     } else {
@@ -97,7 +98,7 @@ pub(super) fn verify_status_label(verify: &rimz::harness::run::RunVerify) -> Str
 
 pub(crate) fn write_verify_failure<W: Write + ?Sized>(
     out: &mut W,
-    verify: &rimz::harness::run::RunVerify,
+    verify: &rimz::store::run::RunVerify,
     prefix: &str,
     style: Option<anstyle::Style>,
 ) -> std::io::Result<()> {
@@ -353,7 +354,7 @@ mod tests {
     fn verify_failed_run_prints_answer_and_verify_forensics() {
         let mut record = record(RunStatus::VerifyFailed);
         record.last_message = Some("claimed done".to_owned());
-        record.verify = Some(rimz::harness::run::RunVerify {
+        record.verify = Some(rimz::store::run::RunVerify {
             cmd: "cargo xtask test auth".to_owned(),
             attempts: 3,
             passed: false,
@@ -375,7 +376,7 @@ mod tests {
 
     #[test]
     fn verify_failure_writer_styles_the_full_prefixed_sentence() {
-        let verify = rimz::harness::run::RunVerify {
+        let verify = rimz::store::run::RunVerify {
             cmd: "cargo xtask gate".to_owned(),
             attempts: 2,
             passed: false,

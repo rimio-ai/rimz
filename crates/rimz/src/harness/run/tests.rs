@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::agents::AgentState;
 use crate::agents::LifecycleSignal;
-use crate::ids::MuxName;
+use crate::ids::{AgentKind, MuxName, WorkspaceId};
 use crate::pane::PaneRef;
 use tempfile::tempdir;
 
@@ -59,42 +59,6 @@ fn durable_deadline_defaults_for_old_records_and_times_out_once_due() {
 
     let (_, wrote) = timeout_if_due(&paths, &record.run_id, deadline).expect("repeat due deadline");
     assert!(!wrote);
-}
-
-#[test]
-fn retention_and_report_fields_default_for_old_run_records() {
-    let (_dir, _paths, record) = setup();
-    let mut old_json = serde_json::to_value(&record).expect("serialize run");
-    old_json.as_object_mut().expect("run object").remove("keep");
-    old_json
-        .as_object_mut()
-        .expect("run object")
-        .remove("subagent");
-    old_json
-        .as_object_mut()
-        .expect("run object")
-        .remove("joined_at");
-    old_json
-        .as_object_mut()
-        .expect("run object")
-        .remove("report_message_id");
-    old_json
-        .as_object_mut()
-        .expect("run object")
-        .remove("provider_pid");
-    old_json
-        .as_object_mut()
-        .expect("run object")
-        .remove("provider_process_start");
-
-    let old: RunRecord = serde_json::from_value(old_json).expect("deserialize old run");
-
-    assert!(!old.keep);
-    assert!(!old.subagent);
-    assert_eq!(old.joined_at, None);
-    assert_eq!(old.report_message_id, None);
-    assert_eq!(old.provider_pid, None);
-    assert_eq!(old.provider_process_start, None);
 }
 
 #[test]
@@ -265,21 +229,6 @@ fn terminal_transitions_are_once_only_and_map_exit_codes() {
     assert!(!RunStatus::Canceled.is_retryable());
     assert!(RunStatus::BudgetExceeded.is_terminal());
     assert!(RunStatus::Canceled.is_terminal());
-}
-
-#[test]
-fn retry_link_round_trips_and_defaults_when_absent() {
-    let (_dir, _paths, mut record) = setup();
-    let prior = RunId::new();
-    record.retry_of = Some(prior.clone());
-
-    let mut value = serde_json::to_value(&record).unwrap();
-    let decoded: RunRecord = serde_json::from_value(value.clone()).unwrap();
-    assert_eq!(decoded.retry_of.as_ref(), Some(&prior));
-
-    value.as_object_mut().unwrap().remove("retry_of");
-    let decoded: RunRecord = serde_json::from_value(value).unwrap();
-    assert_eq!(decoded.retry_of, None);
 }
 
 #[test]

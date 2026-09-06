@@ -20,10 +20,11 @@ A `RunRecord` is written under `~/.local/state/rimz/workspaces/<id>/runs/<run_id
 
 | File | Owns |
 | --- | --- |
-| [`harness/run.rs`](../../../crates/rimz/src/harness/run.rs) | The vocabulary and durable record interface: `SupervisedRunRequest`, `RunRecord`, `RunStatus` and its exit codes, `RunVerify`, locked create/read/update intents, the lifecycle fold, and cancellation. |
+| [`store/run.rs`](../../../crates/rimz/src/store/run.rs) | The durable record and its wire: `RunRecord`, `RunStatus` and its exit codes, `RunVerify`, the temp-file-plus-rename codec, and the `run_completed` wake frame with the sender that emits it. |
+| [`harness/run.rs`](../../../crates/rimz/src/harness/run.rs) | Policy over that record: `SupervisedRunRequest`, the locked create/read/update intents, every status transition, the lifecycle fold, and cancellation. |
 | [`harness/prompt_compose.rs`](../../../crates/rimz/src/harness/prompt_compose.rs) | System-prompt materialization plus retry and verification prompt construction. |
 | [`harness/run_timeout.rs`](../../../crates/rimz/src/harness/run_timeout.rs) | Producer-side deadline detection and detached timeout-helper spawning. |
-| [`harness/run_wake.rs`](../../../crates/rimz/src/harness/run_wake.rs) | The blocking wait: the per-run datagram socket, frame validation, the poll loop, and timeout and cancellation transitions. |
+| [`harness/run_wake.rs`](../../../crates/rimz/src/harness/run_wake.rs) | The receiving half of the blocking wait: binding the per-run datagram socket, frame validation, the poll loop, and the timeout and cancellation transitions it drives. |
 | [`cli/supervised/run.rs`](../../../crates/rimz/src/cli/supervised/run.rs) | The driver both `agents -p` and loop fires call: preparation, placement, the attempt loop, the verify loop, and the retry loop. |
 | [`cli/supervised/output.rs`](../../../crates/rimz/src/cli/supervised/output.rs) | The output projections: text, JSON, the NDJSON `RunStreamEvent` sink, and the stderr forensics block. |
 | [`cli/supervised/stream.rs`](../../../crates/rimz/src/cli/supervised/stream.rs) | Streaming while a run is live, for both a blocking caller and an attached `agents wait --stream`. |
@@ -46,7 +47,7 @@ A `RunRecord` is written under `~/.local/state/rimz/workspaces/<id>/runs/<run_id
 
 Two fields are worth calling out. `transcript_path` points at the *provider's own* session file, not the RimZ transcript log that `rimz transcript` renders; streaming reads that file directly. `agent_id` starts empty and is filled by the first matching lifecycle observation, which is how the record binds to a session it did not know the id of when it was written.
 
-Records are cold-path durable state. `harness::run` owns their schema, transitions, and workspace-lock placement; its private store codec performs temp-file-plus-rename through the store atomic helpers. Store reset alone writes through that codec directly, under the same workspace lock, so it can cancel active runs before rotating room state. Records remain until an operator removes state. Live fields deliberately stay out of the record: `rimz agents show <run-id>` reads the retained record and attaches live card context from the snapshot at read time, so agent drift creates no extra locked writes.
+Records are cold-path durable state. `store::run` owns the schema and the codec, which performs temp-file-plus-rename through the store atomic helpers; `harness::run` owns the transitions and their workspace-lock placement, and its `create`, `load`, and `list` wrappers are how a caller holding `StatePaths` reaches the codec without resolving the runs directory itself. Store reset is the one other writer through that codec, under the same workspace lock, so it can cancel active runs before rotating room state. Records remain until an operator removes state. Live fields deliberately stay out of the record: `rimz agents show <run-id>` reads the retained record and attaches live card context from the snapshot at read time, so agent drift creates no extra locked writes.
 
 ## Status and exit codes
 
@@ -107,7 +108,7 @@ What survives that filter is classified by `LifecycleSignal::terminal_dispositio
 
 `run_wake::RunWaiter` exists purely to cut latency on an otherwise correct polling loop.
 
-The waiter binds `sock/run.<short_id>.sock` before the pane opens and stays bound across verification re-prompts. When a terminal transition is newly written, the writer sends a `run_completed` datagram to that path. The waiter validates every frame by `(workspace_id, run_id)`, logs and drops a mismatch, and keeps receiving.
+The waiter binds `sock/run.<short_id>.sock` before the pane opens and stays bound across verification re-prompts. When a terminal transition is newly written, whoever wrote it calls `store::run::wake_run`, which sends a `run_completed` datagram to that path. The waiter validates every frame by `(workspace_id, run_id)`, logs and drops a mismatch, and keeps receiving.
 
 The record on disk stays truth. The waiter polls it every 250 ms regardless, so a lost, delayed, or mismatched datagram costs at most one tick. A blocking waiter can write the `--timeout` transition itself; a background run has no waiter, so the elected sidebar producer scans durable run records on its normal heavy-lane cadence. When `deadline_at` is due it spawns the hidden `agents run-timeout` helper. That helper rechecks the deadline under the workspace lock, writes `TimedOut`, wakes any waiter, and reclaims the pane. Detection remains read-only in the sidebar process; the short-lived helper owns every mutation.
 

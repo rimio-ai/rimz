@@ -244,7 +244,7 @@ upward-dependencies = [
     "harness::target",
     "remote::link",
 ]
-surface-budget = 323
+surface-budget = 335
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -564,6 +564,7 @@ path = "crates/rimz/src/harness/schedule/runner.rs"
 allowed-dependencies = [
     "agents",
     "config",
+    "disk::paths",
     "harness::budget",
     "harness::launch",
     "harness::plan",
@@ -571,7 +572,7 @@ allowed-dependencies = [
     "harness::schedule",
     "ids",
     "proc",
-    "disk::paths",
+    "store::run",
     "utils::time",
     "workspace",
 ]

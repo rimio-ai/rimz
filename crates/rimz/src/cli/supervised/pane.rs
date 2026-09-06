@@ -8,7 +8,6 @@ use anyhow::Result;
 
 use crate::cli::GlobalFlags;
 use rimz::agents::AgentState;
-use rimz::harness::run::RunRecord;
 use rimz::ids::{AgentKind, AgentSessionId, PaneId};
 use rimz::mux::{
     LayoutColumn, LayoutPanes, PaneCmd, PaneListOptions, PaneReadConsistency, SidebarPaneOptions,
@@ -16,6 +15,7 @@ use rimz::mux::{
 };
 use rimz::pane::PaneRef;
 use rimz::room::session::MissingSessionReport;
+use rimz::store::run::RunRecord;
 
 pub(crate) const STOP_BACKSTOP_GRACE: Duration = Duration::from_secs(3);
 const STOP_BACKSTOP_POLL: Duration = Duration::from_millis(250);

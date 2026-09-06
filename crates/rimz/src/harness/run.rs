@@ -1,53 +1,24 @@
-//! Supervised-run requests, records, transitions, and cancellation.
+//! Supervised-run requests, transitions, and cancellation.
 
 pub mod report;
 
-use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use jiff::Timestamp;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::agents::lifecycle::TerminalDisposition;
 use crate::agents::{AgentLifecycleObservation, LifecycleSignal, PermissionMode, TurnPhase};
 use crate::agents::{AgentState, AgentStatus};
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::StatePaths;
-use crate::ids::{AgentKind, AgentSessionId, PaneId, RunId, WorkspaceId};
-use crate::store::run_store;
+use crate::ids::{AgentSessionId, PaneId, RunId};
+use crate::store::run::{RunRecord, RunStatus, RunStoreErr, RunVerify};
 use crate::store::{Store, snapshot::SidebarSnapshot};
 
 const FAILURE_TAIL_CAP: usize = 4 * 1024;
-
-#[derive(Debug, thiserror::Error)]
-pub enum RunStoreErr {
-    #[error("run {0} not found")]
-    NotFound(RunId),
-    #[error(transparent)]
-    Atomic(#[from] crate::disk::atomic::AtomicErr),
-    #[error(transparent)]
-    Lock(#[from] crate::disk::lock::LockErr),
-    #[error("cannot access {path}: {source}")]
-    Io {
-        path: PathBuf,
-        #[source]
-        source: io::Error,
-    },
-    #[error("json parse error on {path}: {source}")]
-    Json {
-        path: PathBuf,
-        #[source]
-        source: serde_json::Error,
-    },
-    #[error("run {run_id} is {actual}; expected {expected}")]
-    InvalidStatus {
-        run_id: RunId,
-        actual: &'static str,
-        expected: &'static str,
-    },
-}
 
 type Result<T> = std::result::Result<T, RunStoreErr>;
 
@@ -172,8 +143,8 @@ impl RunCancellation {
 pub enum CancelRunErr {
     #[error(transparent)]
     Store(#[from] RunStoreErr),
-    #[error(transparent)]
-    Wake(#[from] crate::harness::run_wake::RunWakeErr),
+    #[error("serializing run wake frame: {0}")]
+    Wake(#[from] serde_json::Error),
 }
 
 /// Durably cancel a run and wake its waiter only for the newly-written
@@ -184,189 +155,9 @@ pub fn cancel_and_wake(
 ) -> std::result::Result<RunRecord, CancelRunErr> {
     let (record, wrote) = cancel(store.paths(), run_id)?;
     if wrote {
-        crate::harness::run_wake::wake_run(store.runtime_paths(), &record)?;
+        crate::store::run::wake_run(store.runtime_paths(), &record)?;
     }
     Ok(record)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RunStatus {
-    Pending,
-    Running,
-    Completed,
-    Failed,
-    VerifyFailed,
-    TimedOut,
-    BudgetExceeded,
-    Canceled,
-}
-
-impl RunStatus {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Running => "running",
-            Self::Completed => "completed",
-            Self::Failed => "failed",
-            Self::VerifyFailed => "verify_failed",
-            Self::TimedOut => "timed_out",
-            Self::BudgetExceeded => "budget_exceeded",
-            Self::Canceled => "canceled",
-        }
-    }
-
-    pub const fn is_terminal(self) -> bool {
-        matches!(
-            self,
-            Self::Completed
-                | Self::Failed
-                | Self::VerifyFailed
-                | Self::TimedOut
-                | Self::BudgetExceeded
-                | Self::Canceled
-        )
-    }
-
-    pub const fn exit_code(self) -> i32 {
-        match self {
-            Self::Completed => 0,
-            Self::Failed => 1,
-            Self::VerifyFailed => 123,
-            Self::Canceled => 130,
-            Self::BudgetExceeded => 125,
-            Self::TimedOut | Self::Pending | Self::Running => 124,
-        }
-    }
-
-    pub const fn is_retryable(self) -> bool {
-        matches!(self, Self::Failed)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RunVerify {
-    pub cmd: String,
-    pub attempts: u32,
-    pub passed: bool,
-    pub code: Option<i32>,
-    pub timed_out: bool,
-    pub output: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct RunRecord {
-    pub run_id: RunId,
-    pub workspace_id: WorkspaceId,
-    pub kind: AgentKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<AgentSessionId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pane_id: Option<PaneId>,
-    /// Spawned provider process owned by the in-pane wrapper.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider_pid: Option<u32>,
-    /// Process-start token paired with `provider_pid` to reject PID reuse.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider_process_start: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub transcript_path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failure_tail: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retry_of: Option<RunId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub loop_task: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub verify: Option<RunVerify>,
-    pub status: RunStatus,
-    pub permission_mode: PermissionMode,
-    /// Never reclaim this run's pane automatically, including when its parent
-    /// agent exits.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub keep: bool,
-    /// Pane-backed child launched through `rimz subagents`.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub subagent: bool,
-    /// Time at which the caller claimed the settled result, either by printing
-    /// it during an open agent turn (or to a human shell) or discarding it
-    /// through `rimz subagents stop`; joined runs are
-    /// excluded from the next completion digest and let the joiner cancel a
-    /// digest once every row it lists has been joined.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub joined_at: Option<Timestamp>,
-    /// Completion digest that listed this run.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub report_message_id: Option<crate::ids::MessageId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub budget: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cost_usd: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_tokens: Option<u64>,
-    pub prompt: String,
-    pub worktree_path: PathBuf,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_message: Option<String>,
-    pub started_at: Timestamp,
-    /// Producer-enforced wall-clock deadline for this supervised attempt.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub deadline_at: Option<Timestamp>,
-    pub updated_at: Timestamp,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completed_at: Option<Timestamp>,
-}
-
-impl RunRecord {
-    pub fn new(
-        workspace_id: WorkspaceId,
-        kind: AgentKind,
-        permission_mode: PermissionMode,
-        prompt: String,
-        worktree_path: PathBuf,
-    ) -> Self {
-        let now = Timestamp::now();
-        Self {
-            run_id: RunId::new(),
-            workspace_id,
-            kind,
-            agent_id: None,
-            agent_name: None,
-            pane_id: None,
-            provider_pid: None,
-            provider_process_start: None,
-            transcript_path: None,
-            failure_tail: None,
-            retry_of: None,
-            loop_task: None,
-            verify: None,
-            status: RunStatus::Pending,
-            permission_mode,
-            keep: false,
-            subagent: false,
-            joined_at: None,
-            report_message_id: None,
-            budget: None,
-            cost_usd: None,
-            input_tokens: None,
-            output_tokens: None,
-            prompt,
-            worktree_path,
-            last_message: None,
-            started_at: now,
-            deadline_at: None,
-            updated_at: now,
-            completed_at: None,
-        }
-    }
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -381,15 +172,15 @@ pub struct RunLiveStatus {
 
 pub fn create(paths: &StatePaths, record: &RunRecord) -> Result<()> {
     let _guard = WorkspaceLock::acquire(&paths.workspace_lock)?;
-    run_store::write(&paths.runs_dir, record)
+    crate::store::run::write(&paths.runs_dir, record)
 }
 
 pub fn load(paths: &StatePaths, run_id: &RunId) -> Result<RunRecord> {
-    run_store::load(&paths.runs_dir, run_id)
+    crate::store::run::load(&paths.runs_dir, run_id)
 }
 
 pub fn list(paths: &StatePaths) -> Result<Vec<RunRecord>> {
-    run_store::list(&paths.runs_dir)
+    crate::store::run::list(&paths.runs_dir)
 }
 
 enum RecordMutation<T> {
@@ -409,7 +200,7 @@ fn update_record<T>(
         RecordMutation::Keep(outcome) => Ok((record, outcome)),
         RecordMutation::Write(outcome) => {
             record.updated_at = now;
-            run_store::write(&paths.runs_dir, &record)?;
+            crate::store::run::write(&paths.runs_dir, &record)?;
             Ok((record, outcome))
         }
     }

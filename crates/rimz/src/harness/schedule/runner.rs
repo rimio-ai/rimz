@@ -31,7 +31,7 @@ use crate::agents::{
 use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
 use crate::disk::paths::{RuntimePaths, StatePaths, state_home};
 use crate::harness::plan::ResolvedSingleAgentLaunch;
-use crate::harness::run::{RunRecord, SupervisedRunOutcome, SupervisedRunRequest};
+use crate::harness::run::{SupervisedRunOutcome, SupervisedRunRequest};
 use crate::harness::schedule::catalog::{self, LoadedTask, TaskCatalog};
 use crate::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
@@ -40,6 +40,7 @@ use crate::harness::schedule::run_log::{
 use crate::harness::schedule::signal::Signal as TriggerSignal;
 use crate::harness::schedule::{TaskAction, Trigger};
 use crate::ids::{RunId, WorkspaceId};
+use crate::store::run::RunRecord;
 use crate::utils::time::{DurationUnit, parse_duration_units};
 use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};
 

@@ -630,7 +630,7 @@ fn transcript_scopes_launched_child_and_attributes_brief() {
 
     let child_kind = AgentKind::new_unchecked("codex");
     let child_id = AgentSessionId::from("child-transcript-session");
-    let mut run = rimz::harness::run::RunRecord::new(
+    let mut run = rimz::store::run::RunRecord::new(
         env.workspace_id.clone(),
         child_kind.clone(),
         rimz::agents::PermissionMode::Auto,

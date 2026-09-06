@@ -14,14 +14,14 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Context as _;
-use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::disk::paths::RuntimePaths;
-use crate::harness::run::{RunCancellation, RunRecord, RunStatus};
+use crate::harness::run::RunCancellation;
 use crate::ids::{RunId, WorkspaceId};
 use crate::sock;
 use crate::store::Store;
+use crate::store::run::{RunRecord, RunStatus, WakeupFrame, run_socket_path};
 
 const RUN_WAIT_POLL: Duration = Duration::from_millis(250);
 
@@ -56,51 +56,6 @@ enum RunWakeOutcome {
 pub struct ExpectedRunFrame {
     pub workspace_id: WorkspaceId,
     pub run_id: RunId,
-}
-
-/// Wakeup frame the store writer sends to a per-run socket when a supervised
-/// `rimz agents -p` turn reaches a terminal state.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum WakeupFrame {
-    RunCompleted {
-        workspace_id: WorkspaceId,
-        run_id: RunId,
-        status: RunStatus,
-    },
-}
-
-fn run_socket_path(rt: &RuntimePaths, run_id: &RunId) -> PathBuf {
-    rt.sock_dir.join(format!("run.{}.sock", run_id.short()))
-}
-
-/// Send a terminal datagram to the supervised-run waiter. Durable run state
-/// remains authoritative; sender creation and per-target failures are absorbed.
-pub fn wake_run(rt: &RuntimePaths, record: &RunRecord) -> Result<()> {
-    let target = run_socket_path(rt, &record.run_id);
-    if !target.exists() {
-        return Ok(());
-    }
-    let payload = serde_json::to_vec(&WakeupFrame::RunCompleted {
-        workspace_id: record.workspace_id.clone(),
-        run_id: record.run_id.clone(),
-        status: record.status,
-    })?;
-    let sender = match StdUnixDatagram::unbound() {
-        Ok(sender) => sender,
-        Err(error) => {
-            debug!(%error, "run wake: creating sender socket failed");
-            return Ok(());
-        }
-    };
-    if let Err(error) = sender.set_nonblocking(true) {
-        debug!(%error, "run wake: making sender socket non-blocking failed");
-        return Ok(());
-    }
-    if let Err(error) = sender.send_to(&payload, &target) {
-        debug!(?target, %error, "run wake: send_to failed (waiter may have exited)");
-    }
-    Ok(())
 }
 
 /// Bind a per-run datagram socket. Caller owns both the returned
@@ -264,9 +219,10 @@ mod tests {
     use super::*;
     use crate::agents::PermissionMode;
     use crate::disk::paths::StatePaths;
-    use crate::harness::run::{RunCancellation, RunRecord};
+    use crate::harness::run::RunCancellation;
     use crate::ids::{AgentKind, WorkspaceId};
     use crate::store::Store;
+    use crate::store::run::RunRecord;
     use tokio::net::UnixDatagram;
 
     fn short_runtime_root() -> tempfile::TempDir {

@@ -2,8 +2,8 @@ use std::time::{Duration, SystemTime};
 
 use tracing::warn;
 
-use crate::harness::run::RunRecord;
 use crate::store::event::{EventEnvelope, EventKind};
+use crate::store::run::RunRecord;
 
 use crate::disk::{lock, paths::StatePaths};
 
@@ -157,7 +157,7 @@ impl Store {
     }
 
     pub(super) fn wake_run_best_effort(&self, record: &RunRecord) {
-        if let Err(err) = crate::harness::run_wake::wake_run(&self.inner.runtime, record) {
+        if let Err(err) = crate::store::run::wake_run(&self.inner.runtime, record) {
             warn!(
                 run_id = %record.run_id,
                 error = %err,

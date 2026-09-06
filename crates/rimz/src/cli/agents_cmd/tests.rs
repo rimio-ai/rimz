@@ -10,9 +10,9 @@ use rimz::agents::{
 use rimz::config::{MachineConfig, Profile, ProfilesConfig, ThemeConfig, ThemeGlyphsConfig};
 use rimz::forge::Forge;
 use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
-use rimz::harness::run::{RunRecord, RunStatus};
 use rimz::harness::run_wake::ExpectedRunFrame;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, MuxName, PaneId, RunId, WorkspaceId};
+use rimz::store::run::{RunRecord, RunStatus};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;

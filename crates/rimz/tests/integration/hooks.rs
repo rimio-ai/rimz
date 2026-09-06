@@ -1660,7 +1660,7 @@ fn duplicate_cursor_session_end_is_idempotent_beyond_audit_end_stamps() {
     let message_id = message.message_id.clone();
     env.store().queue_message(&message, "rimz-test").unwrap();
 
-    let run = rimz::harness::run::RunRecord::new(
+    let run = rimz::store::run::RunRecord::new(
         env.workspace_id.clone(),
         rimz::ids::AgentKind::new_unchecked("cursor"),
         rimz::agents::PermissionMode::Auto,
@@ -1724,7 +1724,7 @@ fn duplicate_cursor_session_end_is_idempotent_beyond_audit_end_stamps() {
     feed_end();
     assert_ended_once();
     let terminal_run = rimz::harness::run::load(env.store().paths(), &run.run_id).unwrap();
-    assert_eq!(terminal_run.status, rimz::harness::run::RunStatus::Failed);
+    assert_eq!(terminal_run.status, rimz::store::run::RunStatus::Failed);
 
     feed_end();
     assert_ended_once();

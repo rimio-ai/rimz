@@ -5,10 +5,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
-use rimz::harness::run::RunRecord;
 use rimz::harness::schedule::runner::{CheckEcho, CheckOutcome, run_check};
 use rimz::message::deliver;
 use rimz::store::message::DeliveryGate;
+use rimz::store::run::RunRecord;
 
 use super::pane;
 

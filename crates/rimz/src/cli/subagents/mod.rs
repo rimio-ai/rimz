@@ -246,7 +246,7 @@ fn launch_child(args: SubagentLaunchArgs, json: bool, globals: &GlobalFlags) -> 
         agents_cmd::BackgroundLaunchOutcome::BudgetExceeded { reason } => {
             let err = anyhow::Error::msg(reason).context("launching subagent");
             render::report(&err);
-            std::process::exit(rimz::harness::run::RunStatus::BudgetExceeded.exit_code());
+            std::process::exit(rimz::store::run::RunStatus::BudgetExceeded.exit_code());
         }
         agents_cmd::BackgroundLaunchOutcome::Aborted => return Ok(()),
     };
@@ -302,7 +302,7 @@ fn fanout_children(args: FanoutArgs, globals: &GlobalFlags) -> Result<()> {
                 let err = anyhow::Error::msg(reason)
                     .context(fanout_launch_error_context(index, &launched));
                 render::report(&err);
-                std::process::exit(rimz::harness::run::RunStatus::BudgetExceeded.exit_code());
+                std::process::exit(rimz::store::run::RunStatus::BudgetExceeded.exit_code());
             }
             Ok(agents_cmd::BackgroundLaunchOutcome::Aborted) => return Ok(()),
             Err(err) => {
@@ -575,7 +575,7 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
 fn child_reports(
     agents: &[AgentState],
     children: &[&AgentState],
-    runs: &[rimz::harness::run::RunRecord],
+    runs: &[rimz::store::run::RunRecord],
 ) -> Vec<ChildReport> {
     let peers = agents
         .iter()
@@ -669,9 +669,9 @@ fn list_profiles(json: bool, path: bool, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn newest_run_for_child<'a>(
-    runs: &'a [rimz::harness::run::RunRecord],
+    runs: &'a [rimz::store::run::RunRecord],
     child: &AgentState,
-) -> Option<&'a rimz::harness::run::RunRecord> {
+) -> Option<&'a rimz::store::run::RunRecord> {
     runs.iter()
         .filter(|run| {
             run.agent_id.as_ref() == Some(&child.agent_id)
@@ -704,7 +704,7 @@ fn wait_children(
 
 fn wait_references(
     children: &[&AgentState],
-    runs: &[rimz::harness::run::RunRecord],
+    runs: &[rimz::store::run::RunRecord],
     names: &[String],
     any: bool,
 ) -> Result<Vec<String>> {
@@ -771,7 +771,7 @@ fn stop_children(names: Vec<String>, all: bool, globals: &GlobalFlags) -> Result
 fn prepare_children_for_stop<'a>(
     store: &rimz::Store,
     session_name: &str,
-    runs: &[rimz::harness::run::RunRecord],
+    runs: &[rimz::store::run::RunRecord],
     children: Vec<&'a AgentState>,
 ) -> (
     Vec<&'a AgentState>,

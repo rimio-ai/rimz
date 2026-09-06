@@ -10,10 +10,9 @@ use rimz::agents::{
     LifecycleSignal, RateLimitCacheEntry, RateLimitWindow, RateLimitsCache, SessionOrigin,
     TurnErrorClass,
 };
-use rimz::harness::run::{RunRecord, RunStatus, RunVerify};
-use rimz::harness::run_wake::WakeupFrame;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, RunId, ViewKind, WorkspaceId};
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
+use rimz::store::run::{RunRecord, RunStatus, RunVerify, WakeupFrame};
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::io::{Read as _, Write as _};
@@ -1469,7 +1468,7 @@ fn finish_run(store: &rimz::Store, record: &mut RunRecord) {
     record.updated_at = Timestamp::now();
     record.completed_at = Some(record.updated_at);
     rimz::harness::run::create(store.paths(), record).expect("write terminal run");
-    rimz::harness::run_wake::wake_run(store.runtime_paths(), record).expect("wake run waiter");
+    rimz::store::run::wake_run(store.runtime_paths(), record).expect("wake run waiter");
 }
 
 #[cfg(unix)]

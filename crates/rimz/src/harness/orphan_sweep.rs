@@ -10,8 +10,8 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::AgentState;
-use crate::harness::run::RunRecord;
 use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
+use crate::store::run::RunRecord;
 use crate::{RuntimePaths, StatePaths};
 
 const ORPHAN_GRACE: Duration = Duration::from_secs(10 * 60);
@@ -44,7 +44,7 @@ pub enum OrphanSweepErr {
     #[error(transparent)]
     Snapshot(#[from] crate::store::snapshot::SnapshotErr),
     #[error(transparent)]
-    RunStore(#[from] crate::harness::run::RunStoreErr),
+    RunStore(#[from] crate::store::run::RunStoreErr),
 }
 
 /// Detect durable parent orphans and delegate each repair to a hidden helper.
@@ -351,7 +351,7 @@ mod tests {
         let mut runs = children.each_ref().map(|child| {
             let mut run = run(child.name.as_deref().unwrap(), at);
             run.agent_id = Some(child.agent_id.clone());
-            run.status = crate::harness::run::RunStatus::Completed;
+            run.status = crate::store::run::RunStatus::Completed;
             run.subagent = true;
             run
         });
