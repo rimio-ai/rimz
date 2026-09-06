@@ -32,7 +32,7 @@ use std::path::Path;
 
 use crate::agents::AgentState;
 use crate::ids::{PaneId, compose_channel};
-use crate::store::message::{HarnessNotice, MessageRecord, MessageSender, identity_handle};
+use crate::store::message::{MessageSender, identity_handle};
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -1173,119 +1173,6 @@ pub fn split_batched_prompt(text: &str) -> Vec<&str> {
     }
 }
 
-/// Align one submitted pane paste with the records written as its batch.
-///
-/// Record text supplies the otherwise ambiguous boundaries between adjacent
-/// messages. Agent-, subagent-, and human-authored records consume their
-/// rendered headers; system records stay verbatim. Interior record whitespace
-/// matches verbatim; only the paste's outer first/last whitespace follows hook
-/// normalization. Composer text around an intact batch is returned separately.
-pub fn align_submitted_prompt<'a>(
-    prompt: &'a str,
-    records: &[&MessageRecord],
-) -> Option<(Option<&'a str>, Vec<&'a str>, Option<&'a str>)> {
-    if records.is_empty() {
-        return None;
-    }
-    let prompt = prompt.trim();
-    let anchor = match &records[0].sender {
-        MessageSender::Agent { .. } => "Type: AGENT_MESSAGE\nFrom: @".to_owned(),
-        MessageSender::Subagent { .. } => "Type: SUBAGENT_REPORT\nFrom: @".to_owned(),
-        MessageSender::Harness { notice } => format!(
-            "Type: {}\nFrom: @rimz\nContent:\n",
-            harness_notice_type(notice)
-        ),
-        MessageSender::Human => "Type: USER_MESSAGE\nFrom: @user\nContent:\n".to_owned(),
-        MessageSender::System => {
-            let (segments, trailing) = align_submitted_prompt_from(prompt, records)?;
-            return trailing.is_empty().then_some((None, segments, None));
-        }
-    };
-    for (start, _) in prompt.match_indices(&anchor) {
-        let Some((segments, trailing)) = align_submitted_prompt_from(&prompt[start..], records)
-        else {
-            continue;
-        };
-        return Some((
-            nonempty_trimmed(&prompt[..start]),
-            segments,
-            nonempty_trimmed(trailing),
-        ));
-    }
-    None
-}
-
-fn align_submitted_prompt_from<'a>(
-    prompt: &'a str,
-    records: &[&MessageRecord],
-) -> Option<(Vec<&'a str>, &'a str)> {
-    let mut remaining = prompt;
-    let mut segments = Vec::with_capacity(records.len());
-    for (index, record) in records.iter().enumerate() {
-        let segment = remaining;
-        let mut body = segment;
-        match &record.sender {
-            MessageSender::Agent { .. } => {
-                let attributed = body.strip_prefix("Type: AGENT_MESSAGE\nFrom: @")?;
-                let (handle, text) = attributed.split_once("\nContent:\n")?;
-                if handle.is_empty() || handle.chars().any(char::is_whitespace) {
-                    return None;
-                }
-                body = text;
-            }
-            MessageSender::Subagent { .. } => {
-                let attributed = body.strip_prefix("Type: SUBAGENT_REPORT\nFrom: @")?;
-                let (handle, text) = attributed.split_once("\nContent:\n")?;
-                if handle.is_empty() || handle.chars().any(char::is_whitespace) {
-                    return None;
-                }
-                body = text;
-            }
-            MessageSender::Harness { notice } => {
-                let header = format!(
-                    "Type: {}\nFrom: @rimz\nContent:\n",
-                    harness_notice_type(notice)
-                );
-                body = body.strip_prefix(&header)?;
-            }
-            MessageSender::Human => {
-                body = body.strip_prefix("Type: USER_MESSAGE\nFrom: @user\nContent:\n")?;
-            }
-            MessageSender::System => {}
-        }
-        let first = index == 0;
-        let last = index + 1 == records.len();
-        if first {
-            body = body.trim_start();
-        }
-        let expected = match (first, last) {
-            (true, true) => record.text.trim(),
-            (true, false) => record.text.trim_start(),
-            (false, true) => record.text.trim_end(),
-            (false, false) => record.text.as_str(),
-        };
-        if expected.is_empty() {
-            return None;
-        }
-        let after_text = body.strip_prefix(expected)?;
-        if last {
-            let segment_end = segment.len() - after_text.len();
-            segments.push(segment[..segment_end].trim());
-            return Some((segments, after_text));
-        }
-        let after_join = after_text.strip_prefix("\n\n")?;
-        let segment_end = segment.len() - after_text.len();
-        segments.push(segment[..segment_end].trim());
-        remaining = after_join;
-    }
-    None
-}
-
-fn nonempty_trimmed(text: &str) -> Option<&str> {
-    let text = text.trim();
-    (!text.is_empty()).then_some(text)
-}
-
 /// The structured header for a human-, agent-, subagent-, or harness-authored message.
 ///
 /// Agent-authored text uses the shortest live handle when the sender is visible
@@ -1305,7 +1192,7 @@ pub fn message_header(
     if let MessageSender::Harness { notice } = sender {
         return Some(format!(
             "Type: {}\nFrom: @rimz\nContent:\n",
-            harness_notice_type(notice)
+            notice.header_type()
         ));
     }
     let handle = agent_sender_handle(sender, peers, target_channel)?;
@@ -1344,14 +1231,6 @@ pub fn agent_sender_handle(
         handle.push_str(channel);
     }
     Some(handle)
-}
-
-fn harness_notice_type(notice: &HarnessNotice) -> String {
-    match notice {
-        HarnessNotice::SubagentReport => "SUBAGENT_REPORT".to_owned(),
-        HarnessNotice::Wake => "WAKE".to_owned(),
-        HarnessNotice::Other(notice) => notice.to_ascii_uppercase(),
-    }
 }
 
 fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> String {

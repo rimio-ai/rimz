@@ -249,8 +249,7 @@ pub(super) fn record_conversation(
                     .flatten()
                     .and_then(|ask| ask.id);
                 let delivered_refs = delivered.iter().collect::<Vec<_>>();
-                let aligned =
-                    rimz::harness::target::align_submitted_prompt(prompt, &delivered_refs);
+                let aligned = rimz::store::message::align_submitted_prompt(prompt, &delivered_refs);
                 let batch_aligned = aligned.is_some();
                 let segments = if let Some((leading, aligned, trailing)) = aligned {
                     let mut segments = Vec::with_capacity(aligned.len() + 2);
