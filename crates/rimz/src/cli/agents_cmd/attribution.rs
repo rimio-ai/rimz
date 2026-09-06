@@ -6,7 +6,7 @@ use super::*;
 use crate::cli::render;
 use rimz::agents::attribution::{
     Attribution, AttributionGroup, AttributionMember, AttributionRequest, AttributionScope,
-    EffortTotals, ModelStat, TokenSplit,
+    EffortTotals, LaneLifetimes, ModelStat, TokenSplit,
 };
 
 const REPO_URL: &str = "https://github.com/rimio-ai/rimz";
@@ -29,6 +29,8 @@ pub(super) fn attribution(
             projection.agents,
             jiff::Timestamp::now(),
         ));
+    let lifetimes =
+        LaneLifetimes::resolve(snapshot.agents.iter()).context("resolving lane lifetimes")?;
     let peers = rimz::harness::target::addressable_agents(&snapshot);
     let channel = super::list::list_channel_filter(all, scope.as_deref(), &ctx.workspace);
     let default_worktree =
@@ -60,8 +62,8 @@ pub(super) fn attribution(
             }
         })
         .collect::<Vec<_>>();
-    let report_scope = report_scope(scope, channel, default_worktree, &roots);
-    // A launched child follows its durable parent link, not its own lane stamp.
+    let report_scope = report_scope(scope, channel, default_worktree, &roots, &lifetimes);
+    // Eligible children follow their durable parent link across lane selection.
     let agents = roots.iter().copied().chain(children).collect::<Vec<_>>();
     let transcript =
         rimz::transcript::read_all(ctx.store.paths()).context("reading conversation transcript")?;
@@ -89,6 +91,7 @@ pub(super) fn attribution(
     .collect();
     let report = rimz::agents::attribution::build(AttributionRequest {
         agents: &agents,
+        lifetimes: &lifetimes,
         peers: &peers,
         subagents: &subagents,
         transcript: &transcript,
@@ -115,6 +118,7 @@ fn report_scope(
     filter: Option<String>,
     default_worktree: Option<&std::path::Path>,
     agents: &[&AgentState],
+    lifetimes: &LaneLifetimes,
 ) -> AttributionScope {
     let channel = common_optional(agents.iter().map(|agent| agent.channel())).or(filter);
     AttributionScope {
@@ -124,6 +128,7 @@ fn report_scope(
         worktree: default_worktree
             .map(|path| path.display().to_string())
             .or_else(|| common_optional(agents.iter().map(|agent| agent.worktree_path.clone()))),
+        since: lifetimes.common_since(agents),
     }
 }
 
@@ -136,6 +141,13 @@ fn common_optional(values: impl IntoIterator<Item = Option<String>>) -> Option<S
 }
 
 pub(super) fn render_panel(w: &mut impl Write, report: &Attribution) -> std::io::Result<()> {
+    if let Some(since) = report.scope.since {
+        writeln!(
+            w,
+            "{}",
+            render::paint(render::palette::muted(), &format!("since {since}"))
+        )?;
+    }
     if report.groups.is_empty() {
         return writeln!(
             w,
@@ -216,12 +228,16 @@ pub(super) fn render_markdown(w: &mut impl Write, report: &Attribution) -> std::
         return Ok(());
     }
     writeln!(w, "<details>")?;
-    writeln!(
+    write!(
         w,
-        "<summary>{} · {}</summary>",
+        "<summary>{} · {}",
         markdown_summary_subject(report),
         totals_label(&report.totals)
     )?;
+    if let Some(since) = report.scope.since {
+        write!(w, " · since {since}")?;
+    }
+    writeln!(w, "</summary>")?;
     writeln!(w, "\n<br/>\n\n**Agents**\n")?;
     let show_captions = report.groups.len() > 1;
     for (index, group) in report.groups.iter().enumerate() {
@@ -629,7 +645,7 @@ mod tests {
         let team_members = vec![team_member];
         let other_members = vec![stray];
         Attribution {
-            schema: 6,
+            schema: 7,
             generated_at: jiff::Timestamp::UNIX_EPOCH,
             rimz_version: "test".to_owned(),
             scope: AttributionScope::default(),
@@ -974,6 +990,38 @@ mod tests {
         assert_eq!(token_count(1_000_000), "1m");
         assert_eq!(token_count(999_949_999), "999.9m");
         assert_eq!(token_count(999_950_000), "1b");
+    }
+
+    #[test]
+    fn attribution_headers_show_the_lane_boundary() {
+        let mut report = report();
+        for since in [None, Some(jiff::Timestamp::UNIX_EPOCH)] {
+            report.scope.since = since;
+            let mut panel = anstream::StripStream::new(Vec::new());
+            render_panel(&mut panel, &report).expect("render panel");
+            let panel = String::from_utf8(panel.into_inner()).expect("utf8");
+            let mut markdown = Vec::new();
+            render_markdown(&mut markdown, &report).expect("render markdown");
+            let markdown = String::from_utf8(markdown).expect("utf8");
+            assert_eq!(
+                panel.starts_with("since 1970-01-01T00:00:00Z\n"),
+                since.is_some()
+            );
+            assert_eq!(
+                markdown.contains(" · since 1970-01-01T00:00:00Z</summary>"),
+                since.is_some()
+            );
+        }
+        report.groups.clear();
+        let mut panel = anstream::StripStream::new(Vec::new());
+        render_panel(&mut panel, &report).expect("render empty panel");
+        assert_eq!(
+            String::from_utf8(panel.into_inner()).expect("utf8"),
+            "since 1970-01-01T00:00:00Z\nNo agent attribution records in this scope.\n"
+        );
+        let mut markdown = Vec::new();
+        render_markdown(&mut markdown, &report).expect("render empty markdown");
+        assert!(markdown.is_empty());
     }
 
     #[test]

@@ -185,7 +185,7 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
         String::from_utf8_lossy(&output.stderr)
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("attribution json");
-    assert_eq!(report["schema"], 6);
+    assert_eq!(report["schema"], 7);
     assert_eq!(
         report["groups"].as_array().map(Vec::len),
         Some(1),
@@ -342,7 +342,7 @@ fn attribution_cli_credits_claude_subagent_companions() {
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("attribution json");
 
-    assert_eq!(report["schema"], 6);
+    assert_eq!(report["schema"], 7);
     assert_eq!(
         report["models"],
         serde_json::json!([
@@ -559,6 +559,176 @@ fn attribution_default_stays_in_the_callers_checkout() {
     );
     let all: Value = serde_json::from_slice(&all.stdout).expect("all json");
     assert_eq!(all["totals"]["agents"], 2);
+}
+
+#[test]
+fn attribution_counts_only_the_current_worktree_lifetime() {
+    if std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let env = Env::new();
+    for args in [
+        vec!["init", "-b", "main"],
+        vec!["config", "user.email", "rimz@example.com"],
+        vec!["config", "user.name", "RimZ Test"],
+        vec!["commit", "--allow-empty", "-m", "initial"],
+    ] {
+        let output = std::process::Command::new("git")
+            .current_dir(&env.project_root)
+            .args(args)
+            .output()
+            .expect("run fixture git");
+        assert!(
+            output.status.success(),
+            "fixture git failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let run = |args: &[&str]| {
+        let output = env.rimz().args(args).output().expect("run rimz");
+        assert!(
+            output.status.success(),
+            "{args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output.stdout
+    };
+    run(&["worktree", "new", "demo"]);
+    let checkout = env.home_root.join("project-worktrees").join("demo");
+    let marker = rimz::worktree::read_marker_for_worktree(&checkout)
+        .expect("read worktree marker")
+        .expect("managed worktree marker");
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let transcripts = env.home_root.join("attribution-transcripts");
+    std::fs::create_dir_all(&transcripts).expect("mkdir transcripts");
+    let records = [
+        ("sess-old-root", None, -2, 10.0),
+        ("sess-old-child", Some("sess-old-root"), -1, 20.0),
+        ("sess-current-root", None, 1, 1.0),
+        ("sess-current-child", Some("sess-current-root"), 2, 3.0),
+    ];
+    let store = env.store();
+    let mut transcript_contents = Vec::new();
+    for (session, parent, offset, cost) in records {
+        let registered_at = marker.created_at + jiff::SignedDuration::from_secs(offset);
+        let transcript = transcripts.join(format!("{session}.jsonl"));
+        let contents = format!(
+            "{}\n",
+            serde_json::json!({
+                "timestamp": registered_at,
+                "costUSD": cost,
+                "requestId": session,
+                "message": {"id": session, "usage": {"input_tokens": 10, "output_tokens": 1}},
+            })
+        );
+        std::fs::write(&transcript, &contents).expect("write transcript");
+        transcript_contents.push((transcript.clone(), contents));
+        let mut observation =
+            AgentLifecycleObservation::new(Some(session.into()), LifecycleSignal::Registered);
+        observation.launch.team = Some("forge".to_owned());
+        observation.launch.role = Some("planner".to_owned());
+        observation.launch.channel = Some("demo".to_owned());
+        observation.worktree_path = Some(marker.worktree_path.display().to_string());
+        observation.worktree_branch = Some(marker.branch.clone());
+        observation.transcript_path = Some(transcript.display().to_string());
+        if let Some(parent) = parent {
+            observation.launch.parent_agent_id = Some(parent.into());
+            observation.launch.parent_agent_kind =
+                Some(rimz::ids::AgentKind::new_unchecked("claude"));
+            observation.launch.launch_depth = Some(1);
+            observation.launch.profile = Some("explorer".to_owned());
+        }
+        let mut event = rimz::EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "UserPromptSubmit",
+            &observation,
+        );
+        event.timestamp = registered_at;
+        store
+            .append_event(&event)
+            .expect("register attribution agent");
+        let ended = AgentLifecycleObservation::new(Some(session.into()), LifecycleSignal::Ended);
+        let mut event = rimz::EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "rimz.agent-ended",
+            &ended,
+        );
+        event.timestamp = registered_at + jiff::SignedDuration::from_millis(100);
+        store.append_event(&event).expect("end attribution agent");
+    }
+
+    for selector in ["#demo", "--all"] {
+        let report: Value =
+            serde_json::from_slice(&run(&["agents", "attribution", selector, "--json"]))
+                .expect("attribution json");
+        assert_eq!(report["groups"].as_array().expect("groups").len(), 1);
+        let members = report["groups"][0]["members"].as_array().expect("members");
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0]["sessions"], 1);
+        assert_eq!(members[0]["cost_usd"], 4.0);
+        assert_eq!(
+            members[0]["subagents"],
+            serde_json::json!([{"task": "explorer", "count": 1, "cost_usd": 3.0}])
+        );
+        assert_eq!(report["totals"]["agents"], 1);
+        assert_eq!(report["totals"]["cost_usd"], 4.0);
+        assert_eq!(report["scope"]["since"], marker.created_at.to_string());
+        assert_eq!(
+            report["scope"]["worktree"],
+            marker.worktree_path.display().to_string()
+        );
+    }
+    let boundary = format!("since {}", marker.created_at);
+    for args in [
+        vec!["agents", "attribution", "#demo"],
+        vec!["agents", "attribution", "#demo", "--md"],
+    ] {
+        let report = String::from_utf8(run(&args)).expect("attribution utf8");
+        assert!(report.contains(&boundary), "missing {boundary}: {report}");
+    }
+
+    run(&["worktree", "remove", "demo"]);
+    assert!(!checkout.exists(), "worktree removed");
+    for selector in ["#demo", "--all"] {
+        let report: Value =
+            serde_json::from_slice(&run(&["agents", "attribution", selector, "--json"]))
+                .expect("attribution json after removal");
+        assert_eq!(report["groups"], serde_json::json!([]));
+        assert_eq!(
+            report["totals"],
+            serde_json::to_value(rimz::agents::attribution::EffortTotals::default())
+                .expect("empty totals")
+        );
+    }
+    let audit = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("audit projection after removal");
+    assert_eq!(audit.agents.len(), records.len());
+    for (session, _, offset, _) in records {
+        let agent = audit
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == session)
+            .expect("retained audit agent");
+        assert_eq!(
+            agent.registered_at,
+            Some(marker.created_at + jiff::SignedDuration::from_secs(offset))
+        );
+    }
+    for (path, contents) in transcript_contents {
+        assert_eq!(
+            std::fs::read_to_string(path).expect("retained transcript"),
+            contents
+        );
+    }
 }
 
 #[test]
