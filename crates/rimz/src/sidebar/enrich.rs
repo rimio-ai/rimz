@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::RuntimePaths;
 use crate::agents::spending::SpendingCaches;
+use crate::forge::pr_state::{PrLink, read_pr_state_cache};
 use crate::harness::auto_continue::{self, ResumeMessage};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::Store;
@@ -33,7 +34,6 @@ use super::refresh::git_stats::{
     worktree_group_path_fields,
 };
 use super::refresh::live_spend::{apply_live_day_spend, apply_live_today_spend};
-use super::refresh::pr::{PrLink, read_pr_state_cache};
 use super::refresh::rate_limits::apply_cached_rate_limits;
 use super::timing::{LINK_STATS_EXPIRE, LINK_STATS_STALE};
 

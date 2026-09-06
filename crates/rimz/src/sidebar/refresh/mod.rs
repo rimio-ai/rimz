@@ -15,6 +15,7 @@ use crate::agents::spending::{
 };
 use crate::agents::{AgentAccount, AgentState};
 use crate::config::MachineConfig;
+use crate::forge::pr_state::PrLink;
 use crate::store::snapshot::SidebarSnapshot;
 use crate::{RuntimePaths, Store};
 
@@ -37,7 +38,6 @@ pub use accounts::{AccountsCache, ProviderRecord, ProviderStatus, query_provider
 pub use credits::merge_provider_realtime_usage;
 pub use daemon_reap::{CodexDaemonReap, read_codex_daemon_reap};
 pub use live_spend::{apply_live_day_spend, apply_live_today_spend};
-pub use pr::{PrLink, PrStateCache};
 pub(crate) use rate_limits::merge_account_rate_limits;
 pub use sessions::{
     ForcedSessionRefresh, force_refresh_session_context, refresh_session_transcript_context,

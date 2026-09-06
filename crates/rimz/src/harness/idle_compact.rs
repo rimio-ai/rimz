@@ -57,7 +57,7 @@ pub(crate) fn compact_idle_agents(
         return;
     }
     let pr_cache = (config.idle_compact == IdleCompactMode::Auto)
-        .then(|| crate::sidebar::refresh::pr::read_pr_state_cache(&runtime.pr_state_path()));
+        .then(|| crate::forge::pr_state::read_pr_state_cache(&runtime.pr_state_path()));
     for agent in &snapshot.agents {
         let command = crate::agents::spec_by_kind(agent.kind.as_str())
             .and_then(|spec| spec.launch.compact_command(config.compact_instruction()));
@@ -173,7 +173,7 @@ fn teammate_working(snapshot: &SidebarSnapshot, candidate: &AgentState) -> bool 
         })
 }
 
-fn worktree_pr_open(agent: &AgentState, cache: &crate::sidebar::refresh::pr::PrStateCache) -> bool {
+fn worktree_pr_open(agent: &AgentState, cache: &crate::forge::pr_state::PrStateCache) -> bool {
     let (Some(path), Some(branch)) = (
         agent.worktree_path.as_deref(),
         agent.worktree_branch.as_deref(),
@@ -255,8 +255,8 @@ fn spawn_idle_compact(
 mod tests {
     use super::*;
     use crate::agents::AgentStatus;
+    use crate::forge::pr_state::{PrLink, PrStateCache};
     use crate::ids::{MuxName, WorkspaceId};
-    use crate::sidebar::refresh::pr::{PrLink, PrStateCache};
     use crate::store::snapshot::PaneAgent;
 
     fn ts(seconds: i64) -> Timestamp {

@@ -125,11 +125,11 @@ allowed-dependencies = [
     "ids",
     "sock",
 ]
-surface-budget = 122
+surface-budget = 123
 
 [[module]]
-path = "crates/rimz/src/forge.rs"
-surface-budget = 40
+path = "crates/rimz/src/forge"
+surface-budget = 48
 
 [[module]]
 path = "crates/rimz/src/harness"
@@ -410,7 +410,7 @@ surface-budget = 26
 [[module]]
 path = "crates/rimz/src/disk/atomic.rs"
 allowed-dependencies = []
-surface-budget = 18
+surface-budget = 19
 
 [[module]]
 path = "crates/rimz/src/store/gc"
