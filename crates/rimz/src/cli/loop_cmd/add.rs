@@ -674,10 +674,7 @@ fn write_add_feedback(
 fn first_next_fire(parsed: &schedule::ParsedTrigger) -> Option<Timestamp> {
     let now = Timestamp::now();
     let zone = MachineConfig::load_lenient().time_zone();
-    let schedule::Trigger::Schedule(schedule) = &parsed.trigger else {
-        return None;
-    };
-    schedule.schedule.next_after(now, &now.to_zoned(zone))
+    parsed.next_after(&now.to_zoned(zone))
 }
 
 fn resolve_deadline(raw: &str) -> Result<Timestamp> {

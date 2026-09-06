@@ -16,11 +16,6 @@ use crate::disk::paths::{RuntimePaths, StatePaths, config_home, state_home};
 use crate::trust::TrustState;
 use crate::workspace::WorkspaceResolver;
 
-#[doc(hidden)]
-pub fn instances_path(state_root: &Path) -> PathBuf {
-    instances::path(state_root)
-}
-
 pub fn project_config_path(project_root: &Path) -> PathBuf {
     config_edit::TaskStore::Project(project_root).path()
 }
@@ -94,7 +89,7 @@ impl LoadedTask {
         self.shape.trigger()
     }
 
-    pub const fn is_ephemeral(&self) -> bool {
+    pub(super) const fn is_ephemeral(&self) -> bool {
         self.shape.is_ephemeral()
     }
 }
@@ -199,7 +194,7 @@ impl TaskCatalog {
         self.runnable.get(name)
     }
 
-    pub(crate) fn runnable(&self) -> &BTreeMap<String, LoadedTask> {
+    pub(super) fn runnable(&self) -> &BTreeMap<String, LoadedTask> {
         &self.runnable
     }
 
@@ -307,7 +302,7 @@ impl TaskCatalog {
     /// Remove only the definition selected by catalog precedence. Arming and
     /// strike overlays stay untouched because this is scheduled consumption,
     /// not an interactive edit.
-    pub fn consume_scheduled(&self, name: &str) -> Result<TaskMutation> {
+    pub(super) fn consume_scheduled(&self, name: &str) -> Result<TaskMutation> {
         let Some(task) = self.runnable.get(name) else {
             return Ok(TaskMutation::default());
         };
@@ -439,7 +434,7 @@ fn remove_definition(name: &str, task: &LoadedTask) -> Result<bool> {
     }
 }
 
-pub fn delivery_target_alive(
+pub(super) fn delivery_target_alive(
     entry: &TaskEntry,
     target: &crate::config::TaskTarget,
 ) -> Result<bool> {

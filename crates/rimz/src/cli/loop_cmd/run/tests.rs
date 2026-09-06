@@ -166,7 +166,10 @@ fn raw_summary(
         prose: ui::prose::Prose::Raw,
     };
     let mut out = Vec::new();
-    let action = TaskAction::from_entry(name, entry).unwrap();
+    let action = schedule::TaskShape::compile(name, entry)
+        .action()
+        .unwrap()
+        .clone();
     write_run_summary(&mut out, name, entry, &action, mode, keep, &summary).unwrap();
     String::from_utf8(out).unwrap()
 }

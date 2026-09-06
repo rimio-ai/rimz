@@ -34,10 +34,7 @@ fn wake_signal_arms_standing_instance_for_the_calling_agent() {
     assert!(stdout.contains("→ @planner"));
 
     let tasks: Tasks = serde_json::from_slice(
-        &std::fs::read(rimz::harness::schedule::catalog::instances_path(
-            &env.state_root(),
-        ))
-        .expect("wake instance store"),
+        &std::fs::read(loop_instances_path(&env)).expect("wake instance store"),
     )
     .expect("wake instances JSON");
     let (name, entry) = tasks.0.iter().next().expect("one wake row");
@@ -179,10 +176,7 @@ fn wake_wait_reports_a_watched_failure_and_settles_its_message() {
     assert!(store.list_pending_messages().unwrap().is_empty());
 
     let instances: Tasks = serde_json::from_slice(
-        &std::fs::read(rimz::harness::schedule::catalog::instances_path(
-            &env.state_root(),
-        ))
-        .expect("wake instance store"),
+        &std::fs::read(loop_instances_path(&env)).expect("wake instance store"),
     )
     .expect("wake instances JSON");
     assert!(instances.0.is_empty());
@@ -207,10 +201,7 @@ fn watch_retires_without_delivery_when_its_polarity_does_not_match() {
     assert!(stdout.contains("skipped · exit 0"), "{stdout}");
     assert!(env.store().list_pending_messages().unwrap().is_empty());
     let instances: Tasks = serde_json::from_slice(
-        &std::fs::read(rimz::harness::schedule::catalog::instances_path(
-            &env.state_root(),
-        ))
-        .expect("wake instance store"),
+        &std::fs::read(loop_instances_path(&env)).expect("wake instance store"),
     )
     .expect("wake instances JSON");
     assert!(instances.0.is_empty());
@@ -419,20 +410,28 @@ fn arm_subscription(env: &Env) -> String {
     receipt["name"].as_str().unwrap().to_owned()
 }
 
+fn loop_instances_path(env: &Env) -> std::path::PathBuf {
+    env.state_root().join("rimz").join("loop-instances.json")
+}
+
+fn loop_runs_path(env: &Env) -> std::path::PathBuf {
+    env.state_root().join("rimz").join("loop-runs.log.jsonl")
+}
+
 fn wake_instances(env: &Env) -> Tasks {
-    let path = rimz::harness::schedule::catalog::instances_path(&env.state_root());
+    let path = loop_instances_path(env);
     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
 }
 
 fn expire_subscription(env: &Env, name: &str) {
     let mut tasks = wake_instances(env);
     tasks.0.get_mut(name).unwrap().deadline = Some(jiff::Timestamp::UNIX_EPOCH);
-    let path = rimz::harness::schedule::catalog::instances_path(&env.state_root());
+    let path = loop_instances_path(env);
     std::fs::write(path, serde_json::to_vec(&tasks).unwrap()).unwrap();
 }
 
 fn wake_records(env: &Env) -> Vec<rimz::harness::schedule::run_log::LoopRunRecord> {
-    let path = rimz::harness::schedule::run_log::log_path(&env.state_root());
+    let path = loop_runs_path(env);
     std::fs::read_to_string(path)
         .unwrap_or_default()
         .lines()

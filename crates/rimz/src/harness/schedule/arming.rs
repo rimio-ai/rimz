@@ -6,7 +6,7 @@
 //! so schedules do not replay occurrences missed while held.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -82,7 +82,7 @@ impl TaskKey {
         format!("{}{name}", Self::scope(source, root))
     }
 
-    pub fn known_scopes(project_root: Option<&Path>) -> BTreeSet<String> {
+    pub(super) fn known_scopes(project_root: Option<&Path>) -> BTreeSet<String> {
         let mut scopes = BTreeSet::from([MACHINE_SCOPE.to_owned()]);
         if let Some(root) = project_root {
             scopes.insert(Self::project_scope(root));
@@ -123,10 +123,6 @@ impl ArmState {
         }
         Self::Live
     }
-}
-
-pub fn path(state_root: &Path) -> PathBuf {
-    STORE.path(state_root)
 }
 
 pub fn load() -> BTreeMap<String, Arming> {

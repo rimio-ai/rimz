@@ -81,7 +81,7 @@ pub enum TaskActionErr {
 }
 
 impl TaskAction {
-    pub fn from_entry(name: &str, entry: &TaskEntry) -> Result<Self, TaskActionErr> {
+    fn from_entry(name: &str, entry: &TaskEntry) -> Result<Self, TaskActionErr> {
         if entry.verify.is_some() && entry.agent.is_none() {
             return Err(TaskActionErr::VerifyWithoutAgent {
                 name: name.to_owned(),
@@ -126,7 +126,7 @@ impl TaskAction {
         }
     }
 
-    pub const fn is_check_only(&self) -> bool {
+    const fn is_check_only(&self) -> bool {
         matches!(self, Self::CheckOnly)
     }
 }
@@ -199,12 +199,12 @@ impl TaskShape {
         &self.trigger
     }
 
-    pub const fn is_ephemeral(&self) -> bool {
+    const fn is_ephemeral(&self) -> bool {
         self.ephemeral
     }
 }
 
-pub(super) fn ephemeral_lifetime(entry: &TaskEntry) -> bool {
+fn ephemeral_lifetime(entry: &TaskEntry) -> bool {
     if entry.wake_meta.is_some() && entry.signal.is_some() {
         return false;
     }
@@ -216,7 +216,7 @@ pub(super) fn ephemeral_lifetime(entry: &TaskEntry) -> bool {
 
 /// A weekday in Mon..Sun order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Weekday {
+enum Weekday {
     Mon,
     Tue,
     Wed,
@@ -273,7 +273,7 @@ impl Weekday {
 /// A normalized firing time: minute, hour (local wall-clock), and the weekday
 /// set. An empty weekday set means every day.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CalendarSpec {
+struct CalendarSpec {
     pub minute: u8,
     pub hour: u8,
     pub weekdays: Vec<Weekday>,
@@ -281,7 +281,7 @@ pub struct CalendarSpec {
 
 /// A normalized interval schedule.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IntervalSpec {
+struct IntervalSpec {
     pub minutes: u32,
 }
 
@@ -293,7 +293,7 @@ impl IntervalSpec {
 
 /// A parsed schedule: calendar time, interval, or a raw cron escape hatch.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Schedule {
+enum Schedule {
     Calendar(CalendarSpec),
     Interval(IntervalSpec),
     RawCron(String),
@@ -301,7 +301,7 @@ pub enum Schedule {
 
 impl Schedule {
     /// A short human description for listings.
-    pub fn describe(&self) -> String {
+    fn describe(&self) -> String {
         match self {
             Schedule::RawCron(cron) => format!("cron `{cron}`"),
             Schedule::Calendar(spec) => {
@@ -322,7 +322,7 @@ impl Schedule {
 
     /// Whether this schedule is due now, given the last time its task was
     /// armed or fired. First-sight arming is owned by the elder firing module.
-    pub fn due(&self, last_fire: Timestamp, now: &Zoned) -> bool {
+    fn due(&self, last_fire: Timestamp, now: &Zoned) -> bool {
         match self {
             Schedule::Interval(spec) => {
                 now.timestamp().duration_since(last_fire).as_secs() >= i64::from(spec.minutes) * 60
@@ -351,7 +351,7 @@ impl Schedule {
 /// A parsed task schedule plus its one-shot flag.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParsedSchedule {
-    pub schedule: Schedule,
+    schedule: Schedule,
     pub once: bool,
 }
 
@@ -369,7 +369,7 @@ pub enum Trigger {
 }
 
 impl Trigger {
-    pub fn describe(&self) -> String {
+    fn describe(&self) -> String {
         match self {
             Self::Schedule(schedule) => schedule.describe(),
             Self::Signal { selector, matches } => {
@@ -422,6 +422,13 @@ pub struct ParsedTrigger {
 }
 
 impl ParsedTrigger {
+    pub fn next_after(&self, now: &Zoned) -> Option<Timestamp> {
+        let Trigger::Schedule(parsed) = &self.trigger else {
+            return None;
+        };
+        parsed.schedule.next_after(now.timestamp(), now)
+    }
+
     pub fn describe(&self) -> String {
         self.trigger.describe()
     }
@@ -429,7 +436,7 @@ impl ParsedTrigger {
 
 impl ParsedSchedule {
     /// A short human description for listings.
-    pub fn describe(&self) -> String {
+    fn describe(&self) -> String {
         if self.once
             && let Schedule::Calendar(spec) = &self.schedule
         {
@@ -610,7 +617,7 @@ pub fn parse_surplus_after(raw: &str) -> Result<Duration, String> {
 
 /// Parse and validate an entry's firing time into a [`ParsedSchedule`]. Full
 /// agent preflight is validated separately by the CLI.
-pub fn parse_schedule(name: &str, entry: &TaskEntry) -> Result<ParsedSchedule, ScheduleErr> {
+fn parse_schedule(name: &str, entry: &TaskEntry) -> Result<ParsedSchedule, ScheduleErr> {
     let schedule = match TimingFields::classify(entry) {
         TimingFields::Conflict => {
             return Err(ScheduleErr::TimeConflict {

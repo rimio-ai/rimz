@@ -971,7 +971,7 @@ pub fn parse_mode(raw: &str) -> Result<String> {
     Ok(mode_name(parse_mode_value(raw)?).to_owned())
 }
 
-pub fn parse_mode_value(raw: &str) -> Result<PermissionMode> {
+fn parse_mode_value(raw: &str) -> Result<PermissionMode> {
     let trimmed = raw.trim();
     match PermissionMode::from_str(trimmed) {
         Ok(PermissionMode::Plan) | Err(_) => {
@@ -994,7 +994,7 @@ pub fn parse_task_timeout(raw: &str) -> std::result::Result<Duration, String> {
     parse_duration_units(raw, TASK_TIMEOUT_UNITS).map_err(|err| err.to_string())
 }
 
-pub fn resolve_task_prompt(name: &str, entry: &TaskEntry) -> Result<String> {
+fn resolve_task_prompt(name: &str, entry: &TaskEntry) -> Result<String> {
     if let Some(prompt) = entry
         .prompt
         .as_deref()
@@ -1017,7 +1017,7 @@ pub fn resolve_task_prompt(name: &str, entry: &TaskEntry) -> Result<String> {
     Ok(prompt)
 }
 
-pub fn resolve_config_path(path: &Path) -> Result<PathBuf> {
+fn resolve_config_path(path: &Path) -> Result<PathBuf> {
     let expanded = expand_tilde(path);
     if expanded.is_absolute() {
         return Ok(expanded);
@@ -1214,7 +1214,7 @@ fn append_stopped_record(
     run_log::record_transition(task, &record);
 }
 
-pub struct RunLockGuard {
+struct RunLockGuard {
     file: File,
 }
 
@@ -1230,7 +1230,7 @@ pub struct RunLockInfo {
     pub started_at: Timestamp,
 }
 
-pub enum RunLockAttempt {
+enum RunLockAttempt {
     Acquired(RunLockGuard),
     Held(Option<RunLockInfo>),
 }
@@ -1240,7 +1240,7 @@ pub enum RunLockState {
     Held(Option<RunLockInfo>),
 }
 
-pub fn acquire_run_lock(name: &str, entry: &TaskEntry) -> Result<RunLockAttempt> {
+fn acquire_run_lock(name: &str, entry: &TaskEntry) -> Result<RunLockAttempt> {
     let path = run_lock_path(name, entry)?;
     let parent = path
         .parent()
@@ -1420,7 +1420,7 @@ pub(super) fn task_timeout(entry: &TaskEntry) -> Result<Option<Duration>> {
         .map_err(|err| anyhow::anyhow!("{err}"))
 }
 
-pub fn check_only_result(outcome: &CheckOutcome) -> LoopRunResult {
+fn check_only_result(outcome: &CheckOutcome) -> LoopRunResult {
     if outcome.timed_out {
         LoopRunResult::TimedOut
     } else if outcome.passed {
@@ -1430,7 +1430,7 @@ pub fn check_only_result(outcome: &CheckOutcome) -> LoopRunResult {
     }
 }
 
-pub fn polarity_fires(on: Option<CheckOn>, outcome: &CheckOutcome) -> bool {
+fn polarity_fires(on: Option<CheckOn>, outcome: &CheckOutcome) -> bool {
     match on.unwrap_or_default() {
         CheckOn::Fail => !outcome.passed,
         CheckOn::Success => outcome.passed,
@@ -1438,7 +1438,7 @@ pub fn polarity_fires(on: Option<CheckOn>, outcome: &CheckOutcome) -> bool {
     }
 }
 
-pub fn augment_prompt(base: String, cmd: &str, outcome: &CheckOutcome) -> String {
+fn augment_prompt(base: String, cmd: &str, outcome: &CheckOutcome) -> String {
     let status = if outcome.timed_out {
         "timeout".to_owned()
     } else {

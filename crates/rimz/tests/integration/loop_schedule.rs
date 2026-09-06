@@ -15,10 +15,9 @@ use rimz::agents::{AgentRateLimits, RateLimitCacheEntry, RateLimitWindow, RateLi
 use rimz::config::{CheckOn, LoopConfig, TaskEntry, TaskTarget, Tasks};
 use rimz::harness::budget::{BudgetLedger, DayBaseline, write_ledger};
 use rimz::harness::run::{RunRecord, RunStatus};
-use rimz::harness::schedule::arming::{self, Arming};
-use rimz::harness::schedule::run_log::{self, LoopRunMode, LoopRunRecord, LoopRunResult};
+use rimz::harness::schedule::arming::Arming;
+use rimz::harness::schedule::run_log::{LoopRunMode, LoopRunRecord, LoopRunResult};
 use rimz::harness::schedule::runner::RunLockInfo;
-use rimz::harness::schedule::strikes;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, SidebarInstanceId, WorkspaceId};
 use rimz::store::message::{AutoCompact, MessageStatus};
 use rimz::wakeup::heartbeat::SidebarHeartbeat;
@@ -1012,7 +1011,7 @@ fn loop_enable_disable_pause_workflow() {
         },
     )]);
     std::fs::write(
-        arming::path(&env.state_root()),
+        loop_arming_path(&env),
         serde_json::to_vec(&expired).expect("serialize expired pause"),
     )
     .expect("write expired pause");
@@ -1134,8 +1133,7 @@ fn loop_task_mutations_move_and_clear_overlays() {
         ),
     );
     loop_ok(&env, &["loop", "pause", "old", "--for", "2h"]);
-    std::fs::write(strikes::path(&env.state_root()), r#"{"machine::old":2}"#)
-        .expect("write loop strikes");
+    std::fs::write(loop_strikes_path(&env), r#"{"machine::old":2}"#).expect("write loop strikes");
     loop_ok(&env, &["loop", "rename", "old", "new"]);
     let text = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
     assert!(
@@ -2642,8 +2640,24 @@ fn write_project_config_at(project_root: &Path, text: &str) {
     std::fs::write(path, text).expect("write project config");
 }
 
+fn loop_arming_path(env: &Env) -> std::path::PathBuf {
+    env.state_root().join("rimz").join("loop-arming.json")
+}
+
+fn loop_strikes_path(env: &Env) -> std::path::PathBuf {
+    env.state_root().join("rimz").join("loop-strikes.json")
+}
+
+fn loop_instances_path(env: &Env) -> std::path::PathBuf {
+    env.state_root().join("rimz").join("loop-instances.json")
+}
+
+fn loop_runs_path(env: &Env) -> std::path::PathBuf {
+    env.state_root().join("rimz").join("loop-runs.log.jsonl")
+}
+
 fn read_loop_run_records(env: &Env) -> Vec<LoopRunRecord> {
-    let path = run_log::log_path(&env.state_root());
+    let path = loop_runs_path(env);
     let Ok(text) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
@@ -2653,7 +2667,7 @@ fn read_loop_run_records(env: &Env) -> Vec<LoopRunRecord> {
 }
 
 fn write_loop_run_records(env: &Env, records: &[LoopRunRecord]) {
-    let path = run_log::log_path(&env.state_root());
+    let path = loop_runs_path(env);
     std::fs::create_dir_all(path.parent().expect("log parent")).expect("mkdir log parent");
     let mut text = String::new();
     for record in records {
@@ -2664,7 +2678,7 @@ fn write_loop_run_records(env: &Env, records: &[LoopRunRecord]) {
 }
 
 fn read_loop_instances(env: &Env) -> Tasks {
-    let path = rimz::harness::schedule::catalog::instances_path(&env.state_root());
+    let path = loop_instances_path(env);
     let Ok(text) = std::fs::read_to_string(path) else {
         return Tasks::default();
     };
@@ -2672,7 +2686,7 @@ fn read_loop_instances(env: &Env) -> Tasks {
 }
 
 fn read_loop_arming(env: &Env) -> BTreeMap<String, Arming> {
-    let path = arming::path(&env.state_root());
+    let path = loop_arming_path(env);
     let Ok(text) = std::fs::read_to_string(path) else {
         return BTreeMap::new();
     };
@@ -2680,7 +2694,7 @@ fn read_loop_arming(env: &Env) -> BTreeMap<String, Arming> {
 }
 
 fn write_loop_arming(env: &Env, entries: &BTreeMap<String, Arming>) {
-    let path = arming::path(&env.state_root());
+    let path = loop_arming_path(env);
     std::fs::create_dir_all(path.parent().expect("arming parent")).expect("mkdir arming parent");
     std::fs::write(
         path,
@@ -2701,7 +2715,7 @@ fn project_task_key(project_root: &Path, name: &str) -> String {
 }
 
 fn read_loop_strikes(env: &Env) -> BTreeMap<String, u32> {
-    let path = strikes::path(&env.state_root());
+    let path = loop_strikes_path(env);
     let Ok(text) = std::fs::read_to_string(path) else {
         return BTreeMap::new();
     };
@@ -2709,7 +2723,7 @@ fn read_loop_strikes(env: &Env) -> BTreeMap<String, u32> {
 }
 
 fn write_loop_instances(env: &Env, tasks: Tasks) {
-    let path = rimz::harness::schedule::catalog::instances_path(&env.state_root());
+    let path = loop_instances_path(env);
     std::fs::create_dir_all(path.parent().expect("instances parent")).expect("mkdir state");
     std::fs::write(path, serde_json::to_vec_pretty(&tasks).expect("json"))
         .expect("write loop instances");
@@ -2773,7 +2787,7 @@ fn wait_for_held_loop_lock(child: &mut std::process::Child, path: &Path) -> RunL
 }
 
 fn append_legacy_loop_record(env: &Env, task: &str, result: LoopRunResult) {
-    let path = run_log::log_path(&env.state_root());
+    let path = loop_runs_path(env);
     std::fs::create_dir_all(path.parent().expect("log parent")).expect("mkdir log parent");
     let result = serde_json::to_string(&result).expect("result json");
     let line =

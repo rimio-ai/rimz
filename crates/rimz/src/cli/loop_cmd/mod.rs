@@ -37,7 +37,7 @@ use rimz::harness::schedule::runner::{
 };
 use rimz::harness::schedule::{
     self, TaskAction, TaskActionKind,
-    arming::{self, ArmState, Arming, DisabledReason, TaskKey},
+    arming::{self, ArmState, Arming, DisabledReason},
     catalog::{LoadedTask, TaskCatalog, TaskSource},
     strikes,
 };

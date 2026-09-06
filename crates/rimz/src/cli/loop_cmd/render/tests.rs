@@ -37,7 +37,10 @@ fn task_rules_and_check_rows_use_action_specific_verbs() {
         on: Some(CheckOn::Fail),
         ..TaskEntry::default()
     };
-    let spawn_action = TaskAction::from_entry("task", &spawn).unwrap();
+    let spawn_action = schedule::TaskShape::compile("task", &spawn)
+        .action()
+        .unwrap()
+        .clone();
     assert_eq!(
         task_run_rule(&spawn, &spawn_action),
         "check, then start codex on fail"
@@ -57,7 +60,10 @@ fn task_rules_and_check_rows_use_action_specific_verbs() {
         on: Some(CheckOn::Success),
         ..TaskEntry::default()
     };
-    let wake_action = TaskAction::from_entry("task", &wake).unwrap();
+    let wake_action = schedule::TaskShape::compile("task", &wake)
+        .action()
+        .unwrap()
+        .clone();
     assert_eq!(
         task_run_rule(&wake, &wake_action),
         "check, then wake @planner on success"
@@ -71,7 +77,10 @@ fn task_rules_and_check_rows_use_action_specific_verbs() {
         check: Some("cargo test".to_owned()),
         ..TaskEntry::default()
     };
-    let check_action = TaskAction::from_entry("task", &check).unwrap();
+    let check_action = schedule::TaskShape::compile("task", &check)
+        .action()
+        .unwrap()
+        .clone();
     assert_eq!(task_run_rule(&check, &check_action), "check");
 
     let spawn = TaskEntry {
@@ -80,7 +89,10 @@ fn task_rules_and_check_rows_use_action_specific_verbs() {
         max_attempts: Some(4),
         ..TaskEntry::default()
     };
-    let spawn_action = TaskAction::from_entry("task", &spawn).unwrap();
+    let spawn_action = schedule::TaskShape::compile("task", &spawn)
+        .action()
+        .unwrap()
+        .clone();
     assert_eq!(
         task_run_rule(&spawn, &spawn_action),
         "start claude, verify `cargo xtask gate` (up to 4 attempts)"
@@ -88,7 +100,10 @@ fn task_rules_and_check_rows_use_action_specific_verbs() {
 
     let mut wake_only = wake;
     wake_only.check = None;
-    let wake_action = TaskAction::from_entry("task", &wake_only).unwrap();
+    let wake_action = schedule::TaskShape::compile("task", &wake_only)
+        .action()
+        .unwrap()
+        .clone();
     assert_eq!(task_run_rule(&wake_only, &wake_action), "wake @planner");
 }
 
@@ -426,7 +441,9 @@ fn source_detail_names_definition_path() {
         format!(
             "state — {}",
             ui::home_relative(
-                schedule::catalog::instances_path(&state_home())
+                state_home()
+                    .join("rimz")
+                    .join("loop-instances.json")
                     .to_string_lossy()
                     .as_ref(),
             )
