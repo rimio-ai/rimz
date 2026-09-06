@@ -266,14 +266,6 @@ fn read_u64_at(bytes: &[u8], offset: usize, endian: Endian) -> Option<u64> {
     })
 }
 
-/// Resolve an executable path reported by the OS to the replacement binary on
-/// disk. Linux annotates the running image path with " (deleted)" after an
-/// atomic install unlinks that inode; the replacement lives at the stripped
-/// path.
-pub fn resolve_on_disk_binary(exe: &Path) -> Option<PathBuf> {
-    crate::proc::resolve_existing_or_replacement(exe)
-}
-
 #[cfg(target_os = "linux")]
 fn running_image_path() -> Option<PathBuf> {
     Some(PathBuf::from("/proc/self/exe"))
@@ -427,26 +419,5 @@ mod tests {
                 .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
         );
         assert_eq!(Some(id.as_str()), current());
-    }
-
-    #[test]
-    fn resolve_on_disk_binary_strips_deleted_suffix_when_replacement_exists() {
-        let dir = tempfile::tempdir().unwrap();
-        let real = dir.path().join("rimz");
-        std::fs::write(&real, b"x").unwrap();
-        let deleted = PathBuf::from(format!("{} (deleted)", real.display()));
-
-        assert_eq!(resolve_on_disk_binary(&deleted), Some(real.clone()));
-        assert_eq!(resolve_on_disk_binary(&real), Some(real));
-    }
-
-    #[test]
-    fn resolve_on_disk_binary_returns_none_when_no_file_exists() {
-        let dir = tempfile::tempdir().unwrap();
-        let missing = dir.path().join("rimz");
-        let deleted = PathBuf::from(format!("{} (deleted)", missing.display()));
-
-        assert_eq!(resolve_on_disk_binary(&deleted), None);
-        assert_eq!(resolve_on_disk_binary(&missing), None);
     }
 }
