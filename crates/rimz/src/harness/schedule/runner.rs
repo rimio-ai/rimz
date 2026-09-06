@@ -12,7 +12,7 @@ use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -37,7 +37,7 @@ use crate::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
     RunTransition, SignalRecord,
 };
-use crate::harness::schedule::signal::Signal as TriggerSignal;
+use crate::harness::schedule::signal::{Signal as TriggerSignal, WAKE_TAIL_CAP, WatchVerdict};
 use crate::harness::schedule::{TaskAction, Trigger};
 use crate::ids::{RunId, WorkspaceId};
 use crate::store::run::RunRecord;
@@ -77,6 +77,7 @@ pub struct TaskFireFinished {
 #[derive(Clone, Debug)]
 pub struct CheckTrip {
     pub record: CheckRecord,
+    pub watch: Option<WatchVerdict>,
     pub duration_ms: u64,
 }
 
@@ -534,7 +535,11 @@ impl<'a> TaskFire<'a> {
                 .and_then(|signal| signal.watch.as_ref()),
         );
         let (command, outcome, duration_ms) = if let Some((command, outcome)) = supplied_watch {
-            (command.clone(), outcome.to_check_outcome(), 0)
+            (
+                command.clone(),
+                outcome.to_check_outcome(),
+                outcome.verdict.elapsed_ms(),
+            )
         } else if let Some(command) = self.entry.check.clone() {
             let check_started = Instant::now();
             let outcome = run_check(
@@ -547,7 +552,8 @@ impl<'a> TaskFire<'a> {
         } else {
             return Ok(PreparedCheck::fire(None));
         };
-        let record = check_record(&outcome);
+        let mut record = check_record(&outcome);
+        record.output_path = supplied_watch.and_then(|(_, watch)| watch.output_path.clone());
         if self
             .context
             .as_ref()
@@ -594,6 +600,7 @@ impl<'a> TaskFire<'a> {
         if self.mode == LoopRunMode::Manual {
             self.check_trip = Some(CheckTrip {
                 record: record.clone(),
+                watch: supplied_watch.map(|(_, watch)| watch.verdict.clone()),
                 duration_ms,
             });
         }
@@ -763,7 +770,7 @@ impl<'a> TaskFire<'a> {
                 self.entry.wake_meta.as_ref(),
                 evidence,
                 &body,
-                self.config.time_zone(),
+                self.now,
             );
         }
         if let Some(check) = fired_check
@@ -777,6 +784,11 @@ impl<'a> TaskFire<'a> {
     fn terminal_record(&self, result: LoopRunResult) -> LoopRunRecord {
         let mut record =
             LoopRunRecord::new(&self.name, result, self.mode, elapsed_millis(self.started));
+        record.watch = self
+            .signal
+            .as_ref()
+            .and_then(|signal| signal.watch.as_ref())
+            .map(|watch| watch.verdict.clone());
         record.signal = self.signal.as_ref().map(|signal| SignalRecord {
             name: signal.name.clone(),
             payload: signal.payload.clone(),
@@ -1388,6 +1400,9 @@ impl CheckOutcome {
 
 pub enum CheckEcho {
     Capture,
+    Tee {
+        file: File,
+    },
     Stream {
         announcement: Option<String>,
         prefix: String,
@@ -1399,6 +1414,7 @@ pub fn check_record(outcome: &CheckOutcome) -> CheckRecord {
         code: outcome.code,
         timed_out: outcome.timed_out,
         output: outcome.output.clone(),
+        output_path: None,
     }
 }
 
@@ -1460,8 +1476,9 @@ pub fn run_check(
     timeout: Duration,
     echo: CheckEcho,
 ) -> Result<CheckOutcome> {
-    let prefix = match echo {
-        CheckEcho::Capture => None,
+    let (prefix, file, cap) = match echo {
+        CheckEcho::Capture => (None, None, CHECK_OUTPUT_CAP),
+        CheckEcho::Tee { file } => (None, Some(file), WAKE_TAIL_CAP),
         CheckEcho::Stream {
             announcement,
             prefix,
@@ -1471,9 +1488,14 @@ pub fn run_check(
                 out.write_all(announcement.as_bytes())?;
                 out.flush()?;
             }
-            Some(prefix)
+            (Some(prefix), None, CHECK_OUTPUT_CAP)
         }
     };
+    let capture = Arc::new(Mutex::new(CheckCapture {
+        file,
+        tail: Vec::with_capacity(cap),
+        cap,
+    }));
     let mut child = Command::new("sh")
         .arg("-c")
         .arg(cmd)
@@ -1485,12 +1507,14 @@ pub fn run_check(
         .with_context(|| format!("running loop check `{cmd}` in {}", dir.display()))?;
     let stdout = drain_pipe(
         child.stdout.take(),
+        Arc::clone(&capture),
         prefix
             .clone()
             .map(|prefix| PipeForward::new(PipeDestination::Stdout, prefix)),
     );
     let stderr = drain_pipe(
         child.stderr.take(),
+        Arc::clone(&capture),
         prefix.map(|prefix| PipeForward::new(PipeDestination::Stderr, prefix)),
     );
     let deadline = Instant::now() + timeout;
@@ -1510,9 +1534,20 @@ pub fn run_check(
         }
         std::thread::sleep(CHECK_POLL_INTERVAL);
     };
-    let mut output = stdout.join().unwrap_or_default();
-    output.extend(stderr.join().unwrap_or_default());
-    let output = crate::proc::tail_output(&output, CHECK_OUTPUT_CAP);
+    for drain in [stdout, stderr] {
+        drain
+            .join()
+            .map_err(|_| anyhow::anyhow!("loop check output reader panicked"))??;
+    }
+    let capture = capture
+        .lock()
+        .map_err(|_| anyhow::anyhow!("loop check output lock poisoned"))?;
+    let output = String::from_utf8_lossy(&capture.tail);
+    let mut start = output.len().saturating_sub(cap);
+    while !output.is_char_boundary(start) {
+        start += 1;
+    }
+    let output = output[start..].to_owned();
     Ok(CheckOutcome {
         passed: status.success() && !timed_out,
         timed_out,
@@ -1588,20 +1623,48 @@ fn take_trailing_line(pending: &mut Vec<u8>) -> Option<Vec<u8>> {
     Some(line)
 }
 
+struct CheckCapture {
+    file: Option<File>,
+    tail: Vec<u8>,
+    cap: usize,
+}
+
+impl CheckCapture {
+    fn push(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        if let Some(file) = &mut self.file {
+            file.write_all(bytes)?;
+        }
+        if bytes.len() >= self.cap {
+            self.tail.clear();
+            self.tail
+                .extend_from_slice(&bytes[bytes.len() - self.cap..]);
+            return Ok(());
+        }
+        let discard = (self.tail.len() + bytes.len()).saturating_sub(self.cap);
+        self.tail.drain(..discard);
+        self.tail.extend_from_slice(bytes);
+        Ok(())
+    }
+}
+
 fn drain_pipe(
     pipe: Option<impl Read + Send + 'static>,
+    capture: Arc<Mutex<CheckCapture>>,
     mut forward: Option<PipeForward>,
-) -> std::thread::JoinHandle<Vec<u8>> {
+) -> std::thread::JoinHandle<std::io::Result<()>> {
     std::thread::spawn(move || {
-        let mut buf = Vec::new();
         if let Some(mut pipe) = pipe {
             let mut chunk = [0; 8 * 1024];
-            while let Ok(read) = pipe.read(&mut chunk) {
+            loop {
+                let read = pipe.read(&mut chunk)?;
                 if read == 0 {
                     break;
                 }
                 let bytes = &chunk[..read];
-                buf.extend_from_slice(bytes);
+                capture
+                    .lock()
+                    .map_err(|_| std::io::Error::other("loop check output lock poisoned"))?
+                    .push(bytes)?;
                 if let Some(forward) = &mut forward {
                     forward.push(bytes);
                 }
@@ -1610,7 +1673,7 @@ fn drain_pipe(
         if let Some(forward) = forward {
             forward.finish();
         }
-        buf
+        Ok(())
     })
 }
 

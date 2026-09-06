@@ -1,6 +1,6 @@
 # Wake CLI
 
-`rimz wake` arms one wakeup for one live agent session: after a delay, when a matching signal is emitted, or when a watched command exits. The wakeup delivers a message through the same durable path as [`rimz message`](./message.md), so the agent takes it at its next turn boundary with all of its context. The message explains itself: it names what fired, on what, and who armed it, and `--prompt` adds an optional note under that. Why an agent sets its own alarm instead of holding a pane open on `sleep` is the [loops guide](../../guide/loops.md#wake-a-running-agent); the scheduler underneath is [loops.md](../../internals/harness/loops.md).
+`rimz wake` arms one wakeup for one live agent session: after a delay, when a matching signal is emitted, or when a watched command exits. The wakeup delivers a message through the same durable path as [`rimz message`](./message.md), so the agent takes it at its next turn boundary with all of its context. The message reads as the result of the wait: what was waited on, how it ended, how long it took, and where the full output is; `--prompt` adds an optional note under that. Why an agent sets its own alarm instead of holding a pane open on `sleep` is the [loops guide](../../guide/loops.md#wake-a-running-agent); the scheduler underneath is [loops.md](../../internals/harness/loops.md).
 
 ```sh
 rimz wake --in 30m                           # wake me once, 30 minutes from now
@@ -52,14 +52,14 @@ $ rimz wake --signal ci.finished
 error: schedule `wake`: ci.finished was replaced by ci.passed, ci.failed, or 'ci.*'; remove --match conclusion
 ```
 
-**A command after `--`** runs it under a watcher process and wakes when it exits. `--on fail|success|any` filters the outcome, defaulting to `any`; `fail` covers a non-zero exit and a timeout, `success` a zero exit. `--timeout <DURATION>` stops watching after that long, defaulting to `59m`. The command runs through `sh -c` at the project root with stdin closed, and its combined stdout and stderr ride along as a tail (16 KiB in the delivered message, 4 KiB in the stored record). The `--on` filter applies at delivery, not at arming: an outcome the filter rejects records `skipped` in the run log and retires the one-shot wake without delivering a message.
+**A command after `--`** runs it under a watcher process and wakes when it exits. `--on fail|success|any` filters the outcome, defaulting to `any`; `fail` covers a non-zero exit and a timeout, `success` a zero exit. `--timeout <DURATION>` stops watching after that long, defaulting to `59m`. The command runs through `sh -c` at the project root with stdin closed. Its combined stdout and stderr are written to a per-wake log file as they arrive ([below](#the-output-file)), and the last 4 KiB rides along as a tail in the delivered message and in the stored run record. The `--on` filter applies at delivery, not at arming: an outcome the filter rejects records `skipped` in the run log and retires the one-shot wake without delivering a message.
 
 ### A signal wake is a standing subscription
 
 A branch that fails CI at 14:10 may fail again at 14:35, after another push. So a `--signal` row is not consumed when it fires. It keeps listening, and `--timeout` (default `59m`, chosen to match the provider prompt cache) is a quiet window rather than a lifetime:
 
 - Every observation of the subscribed family restarts the window, whether or not it delivered a message.
-- When the window runs out, the row is removed. A subscription that observed nothing at all delivers one last message saying so (`<name> expired: no ci.failed on /home/you/code/app-feat-x in 59m`, naming the selector and the first scope among `branch`, `path`, `instance`, `team`, `handle`, and `session`); a subscription that observed anything retires silently and records `expired` with no message.
+- When the window runs out, the row is removed. A subscription that observed nothing at all delivers one last message saying so (`waited on ci.failed on /home/you/code/app-feat-x` over `nothing in 59m; subscription closed`, naming the selector and the first scope among `branch`, `path`, `instance`, `team`, `handle`, and `session`); a subscription that observed anything retires silently and records `expired` with no message.
 
 **Observe, then deliver or skip.** The family is the first name segment. A subscription to `ci.failed` observes every `ci.*` whose `--match` fields match: the same name delivers a wake, another member of the family records `skipped` in the run log, delivers nothing, and restarts the quiet window. A `ci.*` selector delivers every member. The same rule covers custom emits: a wake on `deploy.failed` treats `deploy.finished` as a sibling observation. A signal from another family, or one whose payload fails a `--match`, is ignored entirely and leaves the window alone.
 
@@ -94,36 +94,64 @@ error: wake on an agent.* signal requires --match handle=<other> or --match sess
 
 ## The delivered message
 
-The message opens with one headline: the wake's name, what fired, the subject, and who armed it and when. `armed by you` means the target armed it itself, `armed by @handle` names another agent, and `armed from the shell` means a human did.
+The message reads back the wait it came from, in one order: the wait line names what was waited on, the verdict line says how it ended, then the evidence, then your note after a blank line.
 
 ```text
-wake-still-path fired: ci.failed on feat-x (PR #91), armed by you at 14:02
+waited on `gh run watch --exit-status`
+exit 1 after 12m · output: …/wakes/wake-solid-pixel.log [wake-solid-pixel]
+<the last 4 KiB of the command's combined output>
+
+<note>
+```
+
+Times are elapsed, never wall-clock: an agent reading the message turns later can use `after 12m` and cannot place `14:02`. The bracketed name closes the verdict line (the wait line for a delay), and it is the name `rimz loop logs` and `rimz wake cancel` take.
+
+| Trigger | Wait line | Verdict line | Evidence |
+| --- | --- | --- | --- |
+| `--in 30m` | `waited 30m [wake-still-path]` | none: the wait line already says it | none |
+| a watched command | ``waited on `cargo test` `` | `exit 0 after 4m`, `exit 1 after 12m`, `killed by signal after 3s`, `timed out after 59m`, or `watcher died after 3m; the command may still be running or may have died with it`, each closed by ` · output: <path> [<name>]` | the last 4 KiB of the command's combined output, or `(no output)` |
+| a signal | `waited on ci.failed on feat-x (PR #91)` | `fired after 18m [wake-still-path]` | the payload as one compact JSON line, carrying a `signal` field that names what fired |
+| an expired subscription | `waited on ci.failed on /home/you/code/app-feat-x` | `nothing in 59m; subscription closed [wake-still-path]` | none |
+
+```text
+waited on ci.failed on feat-x (PR #91)
+fired after 18m [wake-still-path]
 {"branch":"feat-x","checks_url":"https://github.com/you/app/commit/9f2c1ab/checks","head":"9f2c1ab","number":91,"path":"/home/you/code/app-feat-x","repo":"you/app","signal":"ci.failed"}
 ```
 
-Evidence follows on the next line, and its shape depends on the trigger:
+A `rimz loop fire` of a signal- or command-triggered wake row reads `fired by hand`. A [`rimz loop add --wake`](./loop.md) row carries no arming stamp, so its verdict line is `fired` with no elapsed.
 
-| Trigger | Headline | Evidence |
-| --- | --- | --- |
-| `--in 30m` | `wake-still-path fired: 30m elapsed, armed by you at 14:02` | none |
-| a watched command | ``wake-solid-pixel fired: `gh run watch --exit-status` exited 1 after 12m, armed by you at 14:02`` | the command's output tail |
-| a signal | `wake-still-path fired: ci.failed on feat-x (PR #91), armed by you at 14:02` | the payload as one compact JSON line, carrying a `signal` field that names what fired |
-| an expired subscription | `wake-still-path expired: no ci.failed on /home/you/code/app-feat-x in 59m` | none |
+A wake you armed on yourself says nothing about who armed it. When someone else armed it on you, the message is an instruction rather than your own late result, so it opens with one more line: `@planner armed this wake on you.`, or `armed on you from the shell.` when a human did.
 
-A watched command that timed out reads `timed out after 59m`, and a watcher that died before its command finished reads `watcher lost` with the detail as its evidence. A `rimz loop fire` of a signal- or command-triggered wake row reads `manual fire`.
+```text
+@planner armed this wake on you.
+waited on ci.passed on feat-x (PR #91)
+fired after 41m [wake-calm-river]
+{"branch":"feat-x",…,"signal":"ci.passed"}
 
-`--prompt`, or the contents of `--prompt-file <PATH>`, is appended verbatim after a blank line: a note to yourself, useful when several waits are in flight and the headline alone will not say what to do next. Nothing in it is substituted or rewritten (`{{key}}` placeholders are gone; braces are delivered as typed). A relative `--prompt-file` path resolves against the machine config directory, `~/.config/rimz/`, so prefer an absolute path.
+the migration window is open
+```
+
+`--prompt`, or the contents of `--prompt-file <PATH>`, is appended verbatim after a blank line: a note to yourself, useful when several waits are in flight and the verdict alone will not say what to do next. Nothing in it is substituted or rewritten (`{{key}}` placeholders are gone; braces are delivered as typed). A relative `--prompt-file` path resolves against the machine config directory, `~/.config/rimz/`, so prefer an absolute path.
 
 Delivery is a durable message from `@rimz` carrying a `Type: WAKE` header, gated on the receiver's next `done` boundary and inheriting the `[harness] smart_compact` default. An idle agent takes it at once, a working agent at its next boundary, and a session that has ended by then records `target gone`. The wake's run record links the message id, so `rimz message show <id>` and `rimz loop logs <name>` reach the same delivery. Delivered wakes are recorded in the transcript log but hidden from the rendered view; [`rimz transcript --json`](./transcript.md) keeps them.
 
+### The output file
+
+A watched command writes its whole combined output to `~/.local/state/rimz/workspaces/<workspace-id>/wakes/<name>.log`, and the message carries only the last 4 KiB of it, so whatever the tail cut off is one file read away.
+
+`rimz wake` creates the file when it arms the wake and hands it to the watcher as the watcher's own error stream, so a watcher that fails before the command ever runs leaves its error there instead of dying silently. Stdout and stderr land in the file in arrival order. It lives in state, not in the room's runtime directory, so it outlives the room and the machine's uptime. `rimz gc` removes it once the wake itself is gone, no watcher is running under that name, and its last write is more than 14 days old.
+
 ## Wait for the outcome instead
 
-`--wait` requires a watched command. It arms the wake, then blocks until the run record lands, polling every 500 ms; `--wait=<DURATION>` bounds the wait. When the message is still queued, the join cancels it with the reason `joined inline`; a message that already reached the pane cannot be recalled. After the receipt line it prints `<name>: <result>`, then ` · exit <code>` or ` · timed out`, then the command output:
+`--wait` requires a watched command. It arms the wake, then blocks until the run record lands, polling every 500 ms; `--wait=<DURATION>` bounds the wait. When the message is still queued, the join cancels it with the reason `joined inline`; a message that already reached the pane cannot be recalled. After the receipt line it prints `<name>: <result>` and the same verdict the message would have carried, then the output file's path, then the tail or `(no output)`:
 
 ```console
 $ rimz wake --on fail --wait -- true
 armed wake-solid-pixel: watch: true → @mint-lagoon
-wake-solid-pixel: skipped · exit 0
+wake-solid-pixel: skipped · exit 0 after 0s
+output: …/wakes/wake-solid-pixel.log
+(no output)
 ```
 
 The exit code is `0` only when the wake was delivered (or filtered out by `--on`) and the command exited `0` without timing out; every other outcome, including `target gone` and a non-zero command exit, is `1`. It does not reproduce the command's own exit code. A deadline that passes exits `1` and leaves the wake armed:
@@ -152,8 +180,8 @@ The list covers pending wakes for the current project root. Called from an agent
 
 ## What a wake writes on your machine
 
-An armed wake is a loop task in machine state (`~/.local/state/rimz/loop-instances.json`), never in your `loop.toml`, and it appears in `rimz loop list` with source `state`. A signal subscription's row is rewritten durably on every observation, because its deadline and last-observation stamp move; the row is removed when it expires or is canceled. A watched command additionally starts one detached `rimz wake watch <name>` process holding `loop-watch-<name>.lock` in the workspace runtime directory; a signal subscription starts no process at all. Every fire, skip, and expiry appends one record to the loop run log, so `rimz loop show <name>` and `rimz loop logs <name>` read a wake's history like any other task until the entry retires.
+An armed wake is a loop task in machine state (`~/.local/state/rimz/loop-instances.json`), never in your `loop.toml`, and it appears in `rimz loop list` with source `state`. A signal subscription's row is rewritten durably on every observation, because its deadline and last-observation stamp move; the row is removed when it expires or is canceled. A watched command additionally writes `wakes/<name>.log` in the workspace state directory ([above](#the-output-file)) and starts one detached `rimz wake watch <name>` process, in its own process group so that the shell or turn that armed the wake cannot take the watcher down with it, holding `loop-watch-<name>.lock` in the workspace runtime directory; a signal subscription starts no process at all. Every fire, skip, and expiry appends one record to the loop run log, so `rimz loop show <name>` and `rimz loop logs <name>` read a wake's history even after its entry retires; `show` then displays history without an active schedule.
 
-If the watcher process dies before its command finishes, the room's elder notices the missing lock after a 30-second grace and fires the wake with a `watcher lost` outcome instead of leaving it pending forever. `rimz gc` reaps wake rows whose pinned session has left the agent snapshot, stopping their watchers as it goes.
+If the watcher process dies before its command finishes, the room's elder notices the missing lock after a 30-second grace and fires the wake with a `watcher died after <elapsed>` verdict instead of leaving it pending forever; the watched command's own fate is unknown at that point, and the log file is where any error the watcher printed will be. `rimz gc` reaps wake rows whose pinned session has left the agent snapshot, stopping their watchers as it goes.
 
 The recurring counterpart is [`rimz loop add --signal`](./loop.md#signals), which subscribes a standing task to the same signals with no quiet window.

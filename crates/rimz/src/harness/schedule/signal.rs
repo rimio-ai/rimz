@@ -20,13 +20,14 @@ use super::runner::{
 };
 use super::{Trigger, arming};
 use crate::RuntimePaths;
+use crate::disk::paths::StatePaths;
 use crate::harness::schedule::runner::RunLockInfo;
 use crate::store::Store;
 use crate::store::event::{
     MAX_SIGNAL_NAME_BYTES, SignalEventPayload, SignalName, SignalNameErr, SignalSource,
 };
 use crate::workspace::ResolvedWorkspace;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SignalSelector {
@@ -95,40 +96,166 @@ impl From<&Signal> for SignalEventPayload {
     }
 }
 
+pub(super) const WAKE_TAIL_CAP: usize = 4 * 1024;
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "result", rename_all = "snake_case")]
-pub enum WatchOutcome {
-    Exited {
-        code: Option<i32>,
-        output: String,
-        #[serde(default)]
-        elapsed_ms: u64,
-    },
-    TimedOut {
-        code: Option<i32>,
-        output: String,
-        #[serde(default)]
-        elapsed_ms: u64,
-    },
-    Lost {
-        detail: String,
-    },
+pub enum WatchVerdict {
+    Exited { code: Option<i32>, elapsed_ms: u64 },
+    TimedOut { elapsed_ms: u64 },
+    Lost { detail: String, elapsed_ms: u64 },
+}
+
+impl WatchVerdict {
+    pub fn label(&self) -> String {
+        let elapsed = elapsed_label(self.elapsed_ms());
+        match self {
+            Self::Exited {
+                code: Some(code), ..
+            } => format!("exit {code} after {elapsed}"),
+            Self::Exited { code: None, .. } => format!("killed by signal after {elapsed}"),
+            Self::TimedOut { .. } => format!("timed out after {elapsed}"),
+            Self::Lost { .. } => format!(
+                "watcher died after {elapsed}; the command may still be running or may have died with it"
+            ),
+        }
+    }
+
+    pub fn elapsed_ms(&self) -> u64 {
+        match self {
+            Self::Exited { elapsed_ms, .. }
+            | Self::TimedOut { elapsed_ms }
+            | Self::Lost { elapsed_ms, .. } => *elapsed_ms,
+        }
+    }
+
+    pub fn passed(&self) -> bool {
+        matches!(self, Self::Exited { code: Some(0), .. })
+    }
+}
+
+pub(super) fn elapsed_label(elapsed_ms: u64) -> String {
+    let seconds = elapsed_ms / 1_000;
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else {
+        crate::theme::fmt::duration_label(seconds / 60)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WatchOutcome {
+    #[serde(flatten)]
+    pub verdict: WatchVerdict,
+    #[serde(default)]
+    pub output: String,
+    pub output_path: Option<PathBuf>,
 }
 
 impl WatchOutcome {
     pub(super) fn to_check_outcome(&self) -> CheckOutcome {
-        match self {
-            Self::Exited { code, output, .. } => {
-                CheckOutcome::new(*code == Some(0), false, output.clone(), *code)
-            }
-            Self::TimedOut { code, output, .. } => {
-                CheckOutcome::new(false, true, output.clone(), *code)
-            }
-            Self::Lost { detail } => {
-                CheckOutcome::new(false, false, format!("watcher lost: {detail}"), None)
-            }
-        }
+        let code = match self.verdict {
+            WatchVerdict::Exited { code, .. } => code,
+            _ => None,
+        };
+        CheckOutcome::new(
+            self.verdict.passed(),
+            matches!(self.verdict, WatchVerdict::TimedOut { .. }),
+            self.output.clone(),
+            code,
+        )
     }
+}
+
+pub fn wake_log_path(paths: &StatePaths, name: &str) -> PathBuf {
+    paths.wakes_dir.join(format!("{name}.log"))
+}
+
+pub(super) fn read_wake_tail(path: &Path) -> std::io::Result<String> {
+    let mut file = File::open(path)?;
+    let start = file.metadata()?.len().saturating_sub(WAKE_TAIL_CAP as u64);
+    file.seek(std::io::SeekFrom::Start(start))?;
+    let mut bytes = Vec::with_capacity(WAKE_TAIL_CAP);
+    file.take(WAKE_TAIL_CAP as u64).read_to_end(&mut bytes)?;
+    let output = String::from_utf8_lossy(&bytes);
+    let mut start = output.len().saturating_sub(WAKE_TAIL_CAP);
+    while !output.is_char_boundary(start) {
+        start += 1;
+    }
+    Ok(output[start..].to_owned())
+}
+
+/// Prune old wake audit output, retaining definitions and running watchers.
+pub fn prune_wake_logs() -> anyhow::Result<usize> {
+    let entries = match std::fs::read_dir(crate::disk::paths::workspaces_dir()) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(err) => return Err(err.into()),
+    };
+    let now = std::time::SystemTime::now();
+    let mut removed = 0;
+    for entry in entries {
+        let entry = entry?;
+        let Ok(id) = crate::ids::WorkspaceId::parse(&entry.file_name().to_string_lossy()) else {
+            continue;
+        };
+        let paths = StatePaths::for_workspace(id.clone())?;
+        let record = match crate::workspace::record::read(&paths.workspace_record) {
+            Ok(record) => record,
+            Err(err) => {
+                tracing::debug!(workspace = %id, error = %err, "wake log gc retained unreadable workspace");
+                continue;
+            }
+        };
+        let catalog = TaskCatalog::load(Some(&record.project_root))?;
+        let retained = catalog
+            .visible()
+            .iter()
+            .filter(|(_, task)| task.entry().watch.is_some())
+            .map(|(name, _)| name.clone())
+            .collect();
+        let runtime = RuntimePaths::for_workspace(id)?;
+        removed += prune_wake_logs_in(&paths.wakes_dir, &runtime, &retained, now)?;
+    }
+    Ok(removed)
+}
+
+fn prune_wake_logs_in(
+    dir: &Path,
+    runtime: &RuntimePaths,
+    retained: &std::collections::BTreeSet<String>,
+    now: std::time::SystemTime,
+) -> std::io::Result<usize> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(err) => return Err(err),
+    };
+    let mut removed = 0;
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().is_none_or(|extension| extension != "log")
+            || !entry.file_type()?.is_file()
+        {
+            continue;
+        }
+        let Some(name) = path.file_stem().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if retained.contains(name) || watcher_info(runtime, name)?.is_some() {
+            continue;
+        }
+        let metadata = entry.metadata()?;
+        if now.duration_since(metadata.modified()?).unwrap_or_default()
+            <= crate::store::event_log::DEFAULT_RETENTION
+        {
+            continue;
+        }
+        std::fs::remove_file(path)?;
+        removed += 1;
+    }
+    Ok(removed)
 }
 
 pub(super) fn match_value(value: &Value) -> String {
@@ -198,13 +325,17 @@ pub fn lifecycle_signal(event: &crate::agents::LifecycleEvent) -> Option<Signal>
 pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> anyhow::Result<()> {
     let catalog = TaskCatalog::load(Some(&workspace.project_root))?;
     let Some(task) = catalog.for_run(name) else {
-        return Ok(());
+        anyhow::bail!("no wake named {name} in the catalog");
     };
     if task.entry().resolved_root() != workspace.project_root {
-        return Ok(());
+        anyhow::bail!(
+            "wake {name} belongs to {}, watcher started for {}",
+            task.entry().resolved_root().display(),
+            workspace.project_root.display()
+        );
     }
     let Some(command) = task.entry().watch.as_deref() else {
-        return Ok(());
+        anyhow::bail!("wake {name} has no watched command");
     };
     let Some(_guard) =
         acquire_watch_lock(store.runtime_paths(), name).context("locking wake watcher")?
@@ -219,27 +350,32 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
         configured,
     )
     .expect("scheduled mode always resolves a timeout");
+    let output_path = wake_log_path(store.paths(), name);
+    let file = OpenOptions::new()
+        .append(true)
+        .open(&output_path)
+        .with_context(|| format!("opening wake output {}", output_path.display()))?;
     let started = std::time::Instant::now();
     let outcome = run_check(
         &workspace.project_root,
         command,
         timeout,
-        CheckEcho::Capture,
+        CheckEcho::Tee { file },
     )?;
     let elapsed_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     let check = check_record(&outcome);
-    let watch = if check.timed_out {
-        WatchOutcome::TimedOut {
-            code: check.code,
-            output: check.output,
-            elapsed_ms,
-        }
+    let verdict = if check.timed_out {
+        WatchVerdict::TimedOut { elapsed_ms }
     } else {
-        WatchOutcome::Exited {
+        WatchVerdict::Exited {
             code: check.code,
-            output: check.output,
             elapsed_ms,
         }
+    };
+    let watch = WatchOutcome {
+        verdict,
+        output: check.output,
+        output_path: Some(output_path),
     };
     let signal = Signal {
         name: format!("wake.{name}")
@@ -407,6 +543,130 @@ mod tests {
         AgentStatus, LifecycleEvent, LifecycleSignal, LifecycleTransition, TurnPhase,
     };
     use crate::ids::{AgentKind, AgentSessionId, EventId, WorkspaceId};
+
+    #[test]
+    fn watch_verdicts_share_labels_and_check_semantics() {
+        for (verdict, label, passed, timed_out, code) in [
+            (
+                WatchVerdict::Exited {
+                    code: Some(0),
+                    elapsed_ms: 3_000,
+                },
+                "exit 0 after 3s",
+                true,
+                false,
+                Some(0),
+            ),
+            (
+                WatchVerdict::Exited {
+                    code: Some(3),
+                    elapsed_ms: 720_000,
+                },
+                "exit 3 after 12m",
+                false,
+                false,
+                Some(3),
+            ),
+            (
+                WatchVerdict::Exited {
+                    code: None,
+                    elapsed_ms: 3_000,
+                },
+                "killed by signal after 3s",
+                false,
+                false,
+                None,
+            ),
+            (
+                WatchVerdict::TimedOut {
+                    elapsed_ms: 3_540_000,
+                },
+                "timed out after 59m",
+                false,
+                true,
+                None,
+            ),
+            (
+                WatchVerdict::Lost {
+                    detail: "diagnostic".to_owned(),
+                    elapsed_ms: 180_000,
+                },
+                "watcher died after 3m; the command may still be running or may have died with it",
+                false,
+                false,
+                None,
+            ),
+        ] {
+            assert_eq!(verdict.label(), label);
+            assert_eq!(verdict.passed(), passed);
+            let outcome = WatchOutcome {
+                verdict,
+                output: "actual tail".to_owned(),
+                output_path: Some(PathBuf::from("/state/wakes/wake.log")),
+            };
+            let encoded = serde_json::to_string(&outcome).unwrap();
+            assert_eq!(
+                serde_json::from_str::<WatchOutcome>(&encoded).unwrap(),
+                outcome
+            );
+            let check = check_record(&outcome.to_check_outcome());
+            assert_eq!(check.output, "actual tail");
+            assert_eq!(check.timed_out, timed_out);
+            assert_eq!(check.code, code);
+        }
+    }
+
+    #[test]
+    fn wake_tail_bounds_lossy_utf8_and_keeps_the_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wake.log");
+        let mut bytes = vec![0xff; WAKE_TAIL_CAP * 2];
+        bytes.extend_from_slice(b"final diagnostic");
+        std::fs::write(&path, bytes).unwrap();
+        let tail = read_wake_tail(&path).unwrap();
+        assert!(tail.len() <= WAKE_TAIL_CAP);
+        assert!(tail.ends_with("final diagnostic"));
+        assert!(tail.contains('�'));
+        std::fs::write(&path, "short output").unwrap();
+        assert_eq!(read_wake_tail(&path).unwrap(), "short output");
+    }
+
+    #[test]
+    fn wake_log_gc_retains_recent_defined_and_live_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(id, dir.path()).unwrap();
+        std::fs::create_dir_all(&runtime.root).unwrap();
+        let logs = dir.path().join("wakes");
+        std::fs::create_dir(&logs).unwrap();
+        let now = std::time::SystemTime::now();
+        let old =
+            now - crate::store::event_log::DEFAULT_RETENTION - std::time::Duration::from_secs(1);
+        for name in [
+            "old.log",
+            "recent.log",
+            "defined.log",
+            "live.log",
+            "unrelated.txt",
+        ] {
+            let file = File::create(logs.join(name)).unwrap();
+            if name != "recent.log" {
+                file.set_times(std::fs::FileTimes::new().set_modified(old))
+                    .unwrap();
+            }
+        }
+        let guard = acquire_watch_lock(&runtime, "live").unwrap().unwrap();
+        let retained = std::collections::BTreeSet::from(["defined".to_owned()]);
+        assert_eq!(
+            prune_wake_logs_in(&logs, &runtime, &retained, now).unwrap(),
+            1
+        );
+        assert!(!logs.join("old.log").exists());
+        for name in ["recent.log", "defined.log", "live.log", "unrelated.txt"] {
+            assert!(logs.join(name).exists(), "{name}");
+        }
+        drop(guard);
+    }
 
     fn lifecycle_event(signal: LifecycleSignal) -> LifecycleEvent {
         LifecycleEvent {

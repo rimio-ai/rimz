@@ -40,27 +40,44 @@ pub(super) fn print_and_settle(ctx: &Ctx, record: &LoopRunRecord, json: bool) ->
     if json {
         super::super::render::json(record)?;
     } else {
-        let mut out = super::super::render::out();
-        write!(out, "{}: {}", record.task, record.result.label())?;
-        if let Some(check) = &record.check {
-            if check.timed_out {
-                write!(out, " · timed out")?;
-            } else if let Some(code) = check.code {
-                write!(out, " · exit {code}")?;
-            }
-        }
-        writeln!(out)?;
-        if let Some(check) = &record.check
-            && !check.output.is_empty()
-        {
-            writeln!(out, "{}", check.output)?;
-        }
-        if let Some(error) = &record.error {
-            writeln!(out, "{error}")?;
-        }
+        write_record(&mut super::super::render::out(), record)?;
     }
     if !success_shaped(record) {
         std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn write_record(out: &mut impl Write, record: &LoopRunRecord) -> std::io::Result<()> {
+    write!(out, "{}: {}", record.task, record.result.label())?;
+    if let Some(verdict) = &record.watch {
+        write!(out, " · {}", verdict.label())?;
+    } else if let Some(check) = &record.check {
+        if check.timed_out {
+            write!(out, " · timed out")?;
+        } else if let Some(code) = check.code {
+            write!(out, " · exit {code}")?;
+        }
+    }
+    writeln!(out)?;
+    if let Some(path) = record
+        .check
+        .as_ref()
+        .and_then(|check| check.output_path.as_ref())
+    {
+        writeln!(out, "output: {}", path.display())?;
+    }
+    let output = record
+        .check
+        .as_ref()
+        .map_or("", |check| check.output.as_str());
+    if record.watch.is_some() && output.is_empty() {
+        writeln!(out, "(no output)")?;
+    } else if !output.is_empty() {
+        writeln!(out, "{output}")?;
+    }
+    if let Some(error) = &record.error {
+        writeln!(out, "{error}")?;
     }
     Ok(())
 }
@@ -84,6 +101,47 @@ mod tests {
     use rimz::ids::WorkspaceId;
     use rimz::store::message::{DeliveryGate, MessageRecord, MessageStatus};
     use rimz::{RuntimePaths, StatePaths, Store};
+
+    #[test]
+    fn inline_watch_result_prints_verdict_path_tail_and_error() {
+        use super::*;
+        use rimz::harness::schedule::run_log::{CheckRecord, LoopRunMode};
+        use rimz::harness::schedule::signal::WatchVerdict;
+
+        for output in ["", "last line"] {
+            let mut record = LoopRunRecord::new(
+                "wake-test",
+                LoopRunResult::Delivered,
+                LoopRunMode::Scheduled,
+                0,
+            );
+            record.watch = Some(WatchVerdict::Exited {
+                code: Some(3),
+                elapsed_ms: 3_000,
+            });
+            record.check = Some(CheckRecord {
+                code: Some(3),
+                timed_out: false,
+                output: output.to_owned(),
+                output_path: Some("/tmp/wake.log".into()),
+            });
+            record.error = Some("delivery error".to_owned());
+            let mut out = Vec::new();
+            write_record(&mut out, &record).unwrap();
+            let tail = if output.is_empty() {
+                "(no output)"
+            } else {
+                output
+            };
+            assert_eq!(
+                String::from_utf8(out).unwrap(),
+                format!(
+                    "wake-test: delivered · exit 3 after 3s\noutput: /tmp/wake.log\n{tail}\ndelivery error\n"
+                )
+            );
+            assert!(!success_shaped(&record));
+        }
+    }
 
     #[test]
     fn inline_wait_cancels_open_message_but_preserves_sent_message() {

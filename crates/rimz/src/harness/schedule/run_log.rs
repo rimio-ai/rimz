@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::disk::paths::state_home;
 use crate::harness::schedule::arming::{self, TaskKey};
 use crate::harness::schedule::catalog::LoadedTask;
+use crate::harness::schedule::signal::WatchVerdict;
 use crate::harness::schedule::strikes;
 use crate::ids::MessageId;
 use crate::store::event::SignalName;
@@ -88,6 +89,8 @@ pub struct LoopRunRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<CheckRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watch: Option<WatchVerdict>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signal: Option<SignalRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<MessageId>,
@@ -122,6 +125,7 @@ impl LoopRunRecord {
             duration_ms: Some(duration_ms),
             error: None,
             check: None,
+            watch: None,
             signal: None,
             message_id: None,
             run_id: None,
@@ -156,6 +160,8 @@ pub struct CheckRecord {
     pub code: Option<i32>,
     pub timed_out: bool,
     pub output: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -430,6 +436,7 @@ mod tests {
             duration_ms: None,
             error: None,
             check: None,
+            watch: None,
             signal: None,
             message_id: None,
             run_id: None,
@@ -496,6 +503,7 @@ mod tests {
         }
 
         let check = CheckRecord {
+            output_path: None,
             code: Some(7),
             timed_out: false,
             output: "check output".to_owned(),
@@ -715,9 +723,14 @@ mod tests {
         with_detail.mode = Some(LoopRunMode::Manual);
         with_detail.duration_ms = Some(123);
         with_detail.check = Some(CheckRecord {
+            output_path: Some(PathBuf::from("/tmp/wake.log")),
             code: Some(127),
             timed_out: false,
             output: "missing command".to_owned(),
+        });
+        with_detail.watch = Some(WatchVerdict::Exited {
+            code: Some(127),
+            elapsed_ms: 3_000,
         });
         with_detail.run_id = Some("run_0123456789abcdef0123456789abcdef".to_owned());
         with_detail.transcript_path = Some("/tmp/rimz/sessions/wake.jsonl".to_owned());
@@ -738,6 +751,16 @@ mod tests {
         assert_eq!(record.mode, None);
         assert_eq!(record.check, None);
         assert_eq!(record.transcript_path, None);
+        assert_eq!(record.watch, None);
+        let line = r#"{"task":"wake","at":"1970-01-01T00:00:10Z","result":"completed","check":{"code":0,"timed_out":false,"output":"ok"}}"#;
+        let record: LoopRunRecord = serde_json::from_str(line).expect("legacy check record");
+        assert_eq!(record.watch, None);
+        assert_eq!(record.check.as_ref().unwrap().output_path, None);
+        let encoded = serde_json::to_string(&record).unwrap();
+        assert_eq!(
+            serde_json::from_str::<LoopRunRecord>(&encoded).unwrap(),
+            record
+        );
     }
 
     #[test]
@@ -747,6 +770,7 @@ mod tests {
         record.error = Some("e".repeat(ERROR_CAP + 20));
         record.last_message = Some("m".repeat(LAST_MESSAGE_CAP + 20));
         record.check = Some(CheckRecord {
+            output_path: None,
             code: Some(1),
             timed_out: false,
             output: "o".repeat(CHECK_OUTPUT_CAP + 20),

@@ -1,4 +1,6 @@
+use std::fs::{File, OpenOptions};
 use std::io::Write;
+use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
@@ -110,6 +112,18 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
         .as_ref()
         .map_err(Clone::clone)?;
 
+    let output_file = if entry.watch.is_some() {
+        let path = rimz::harness::schedule::signal::wake_log_path(ctx.store.paths(), &name);
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .with_context(|| format!("creating wake output {}", path.display()))?;
+        file.set_len(0).context("clearing wake output")?;
+        Some(file)
+    } else {
+        None
+    };
     let already_listening = if entry.signal.is_some() {
         let (armed_name, armed_entry, existing) = catalog.arm_signal_wake(&entry, created)?;
         name = armed_name;
@@ -119,8 +133,8 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
         catalog.replace_machine(&name, &entry)?;
         false
     };
-    if entry.watch.is_some() {
-        spawn_watcher(&ctx, &name)?;
+    if let Some(file) = output_file {
+        spawn_watcher(&ctx, &name, file)?;
     }
 
     if args.json && !waits_inline {
@@ -194,7 +208,7 @@ fn duration_label(duration: Duration) -> String {
     format!("{seconds}s")
 }
 
-fn spawn_watcher(ctx: &Ctx, name: &str) -> Result<()> {
+fn spawn_watcher(ctx: &Ctx, name: &str, output: File) -> Result<()> {
     let mut command = Command::new(rimz::proc::rimz_exe());
     command
         .args(["--root"])
@@ -203,7 +217,8 @@ fn spawn_watcher(ctx: &Ctx, name: &str) -> Result<()> {
         .current_dir(&ctx.runtime().shared_root)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::from(output))
+        .process_group(0);
     rimz::child_process::spawn_detached_reaped(&mut command, "wake-watch")
         .context("starting wake watcher")?;
     Ok(())

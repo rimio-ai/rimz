@@ -70,6 +70,7 @@ fn budget_refusal_finishes_as_a_recorded_gate() {
         code: Some(1),
         timed_out: false,
         output: "guard failed".to_owned(),
+        output_path: None,
     };
     let mut record = LoopRunRecord::new(
         "nightly",
@@ -325,22 +326,31 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
         name: "wake.runner-skipped-watch".parse().expect("signal name"),
         payload: serde_json::Map::new(),
         source: crate::store::event::SignalSource::Watch,
-        watch: Some(crate::harness::schedule::signal::WatchOutcome::Exited {
-            code: Some(1),
+        watch: Some(crate::harness::schedule::signal::WatchOutcome {
+            verdict: WatchVerdict::Exited {
+                code: Some(1),
+                elapsed_ms: 1234,
+            },
             output: String::new(),
-            elapsed_ms: 0,
+            output_path: Some(dir.path().join("watch.log")),
         }),
     };
     let mut watch_fire = skipped_fire(watch_name, &catalog, Some(signal));
     let watch_check = watch_fire.prepare_check().expect("read watch check");
+    let finished = watch_check.done.expect("skipped watch result");
+    assert_eq!(finished.record.result, LoopRunResult::CheckSkipped);
     assert_eq!(
-        watch_check
-            .done
-            .expect("skipped watch result")
-            .record
-            .result,
-        LoopRunResult::CheckSkipped
+        finished.record.watch,
+        Some(WatchVerdict::Exited {
+            code: Some(1),
+            elapsed_ms: 1234
+        })
     );
+    assert_eq!(
+        finished.record.check.unwrap().output_path,
+        Some(dir.path().join("watch.log"))
+    );
+    assert_eq!(finished.presentation.check_duration_ms, Some(1234));
 
     let instances = crate::harness::schedule::instances::load();
     assert!(instances.0.contains_key(poll_name));
@@ -402,6 +412,48 @@ fn run_check_captures_output_status_and_timeout() {
 }
 
 #[test]
+fn watched_check_keeps_full_output_and_a_bounded_tail() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("watch.log");
+    let output = run_check(
+        dir.path(),
+        "seq 1 5000; printf stderr >&2",
+        Duration::from_secs(5),
+        CheckEcho::Tee {
+            file: File::create(&path).unwrap(),
+        },
+    )
+    .unwrap();
+    let full = std::fs::read_to_string(path).unwrap();
+    assert!(output.passed());
+    assert!(full.contains("1\n2\n3\n"));
+    assert!(full.contains("4999\n5000\n"));
+    assert!(full.contains("stderr"));
+    assert!(full.len() > WAKE_TAIL_CAP);
+    assert!(output.output.len() <= WAKE_TAIL_CAP);
+    assert!(full.ends_with(&output.output));
+    assert!(output.output.contains("5000"));
+}
+
+#[test]
+fn check_capture_bounds_chatty_chunks_before_decoding() {
+    let mut capture = CheckCapture {
+        file: None,
+        tail: Vec::new(),
+        cap: WAKE_TAIL_CAP,
+    };
+    for chunk in [
+        vec![b'a'; WAKE_TAIL_CAP * 3],
+        vec![b'b'; 17],
+        vec![b'c'; WAKE_TAIL_CAP],
+    ] {
+        capture.push(&chunk).unwrap();
+        assert!(capture.tail.len() <= WAKE_TAIL_CAP);
+    }
+    assert_eq!(capture.tail, vec![b'c'; WAKE_TAIL_CAP]);
+}
+
+#[test]
 fn pipe_forward_buffers_partial_lines_and_terminates_the_tail() {
     let mut pending = b"first".to_vec();
     assert_eq!(take_complete_line(&mut pending), None);
@@ -452,7 +504,7 @@ fn loop_signal_prompts_keep_braces_and_check_evidence() {
     };
     let body = fire.resolve_effect_prompt(Some(&check)).unwrap();
     assert!(
-        body.starts_with("deployment fired: deploy.failed\n"),
+        body.starts_with("waited on deploy.failed\nfired [deployment]\n"),
         "{body}"
     );
     assert!(
@@ -463,7 +515,7 @@ fn loop_signal_prompts_keep_braces_and_check_evidence() {
     fire.signal = None;
     assert_eq!(
         fire.resolve_effect_prompt(None).unwrap(),
-        "deployment fired: manual fire\n\nInspect {{branch}}"
+        "waited on deploy.failed\nfired by hand [deployment]\n\nInspect {{branch}}"
     );
     fire.entry.signal = None;
     assert_eq!(

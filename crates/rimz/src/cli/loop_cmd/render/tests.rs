@@ -17,6 +17,7 @@ fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
         duration_ms: None,
         error: None,
         check: None,
+        watch: None,
         signal: None,
         message_id: None,
         run_id: None,
@@ -178,6 +179,7 @@ fn verdict_uses_the_latest_conclusive_streak() {
     let failed = record(10, LoopRunResult::Failed);
     let mut passed_check = record(20, LoopRunResult::CheckSkipped);
     passed_check.check = Some(CheckRecord {
+        output_path: None,
         code: Some(0),
         timed_out: false,
         output: "ok".to_owned(),
@@ -256,6 +258,7 @@ fn agent_runs_heading_aggregates_all_valid_costs() {
 fn check_failure_line_uses_last_non_empty_failed_check_line() {
     let mut failed = record(10, LoopRunResult::Failed);
     failed.check = Some(CheckRecord {
+        output_path: None,
         code: Some(127),
         timed_out: false,
         output: "ignored\n\nmissing command\n".to_owned(),
@@ -264,6 +267,7 @@ fn check_failure_line_uses_last_non_empty_failed_check_line() {
 
     let mut passed = record(11, LoopRunResult::Completed);
     passed.check = Some(CheckRecord {
+        output_path: None,
         code: Some(0),
         timed_out: false,
         output: "ok".to_owned(),
@@ -275,6 +279,7 @@ fn check_failure_line_uses_last_non_empty_failed_check_line() {
 fn record_note_prefers_error_then_failed_check_output() {
     let mut failed = record(10, LoopRunResult::Failed);
     failed.check = Some(CheckRecord {
+        output_path: None,
         code: Some(1),
         timed_out: false,
         output: "first\ncheck failed".to_owned(),
@@ -290,6 +295,7 @@ fn record_note_prefers_error_then_failed_check_output() {
 fn run_status_names_check_skipped_outcomes() {
     let mut skipped = record(10, LoopRunResult::CheckSkipped);
     skipped.check = Some(CheckRecord {
+        output_path: None,
         code: Some(0),
         timed_out: false,
         output: "ok".to_owned(),
@@ -300,6 +306,7 @@ fn run_status_names_check_skipped_outcomes() {
     assert_eq!(status.style, ui::palette::good());
 
     skipped.check = Some(CheckRecord {
+        output_path: None,
         code: Some(1),
         timed_out: false,
         output: "not yet".to_owned(),
@@ -310,6 +317,7 @@ fn run_status_names_check_skipped_outcomes() {
     assert_eq!(status.style, ui::palette::muted());
 
     skipped.check = Some(CheckRecord {
+        output_path: None,
         code: None,
         timed_out: true,
         output: "too slow".to_owned(),
@@ -568,6 +576,7 @@ fn show_headline_keeps_blocked_before_pause() {
 fn run_status_merges_failed_check_exit() {
     let mut failed = record(10, LoopRunResult::Failed);
     failed.check = Some(CheckRecord {
+        output_path: None,
         code: Some(127),
         timed_out: false,
         output: "missing".to_owned(),
@@ -610,6 +619,7 @@ fn collapsed_run_rows_merge_adjacent_matching_render_columns() {
     first.mode = Some(LoopRunMode::Scheduled);
     first.duration_ms = Some(10);
     first.check = Some(CheckRecord {
+        output_path: None,
         code: Some(1),
         timed_out: false,
         output: "boom".to_owned(),
@@ -620,6 +630,7 @@ fn collapsed_run_rows_merge_adjacent_matching_render_columns() {
     let mut third = second.clone();
     third.at = Timestamp::from_second(30).expect("timestamp");
     third.check = Some(CheckRecord {
+        output_path: None,
         code: Some(1),
         timed_out: false,
         output: "different".to_owned(),
@@ -688,6 +699,7 @@ fn render_record_detail_titles_status_age_and_mode() {
 fn render_record_detail_marks_failed_check_output() {
     let mut detail = record(20, LoopRunResult::Failed);
     detail.check = Some(CheckRecord {
+        output_path: None,
         code: Some(2),
         timed_out: false,
         output: "first line\nsecond line".to_owned(),
@@ -735,4 +747,93 @@ fn failure_pointer_links_to_filtered_logs_without_full_forensics() {
         "last failure — ✗ error · 10s ago · scheduled · dig in: rimz loop logs wake --failed"
     ));
     assert!(!out.contains("outer error"));
+}
+
+#[test]
+fn watch_history_uses_verdict_words_and_output_path() {
+    use rimz::harness::schedule::signal::WatchVerdict;
+
+    for (verdict, expected) in [
+        (
+            WatchVerdict::Exited {
+                code: Some(0),
+                elapsed_ms: 3_000,
+            },
+            "exit 0 after 3s",
+        ),
+        (
+            WatchVerdict::Exited {
+                code: Some(3),
+                elapsed_ms: 3_000,
+            },
+            "exit 3 after 3s",
+        ),
+        (
+            WatchVerdict::Exited {
+                code: None,
+                elapsed_ms: 3_000,
+            },
+            "killed by signal after 3s",
+        ),
+        (
+            WatchVerdict::TimedOut { elapsed_ms: 3_000 },
+            "timed out after 3s",
+        ),
+        (
+            WatchVerdict::Lost {
+                detail: "watcher process exited without reporting".to_owned(),
+                elapsed_ms: 3_000,
+            },
+            "watcher died after 3s; the command may still be running or may have died with it",
+        ),
+    ] {
+        for result in [
+            LoopRunResult::Delivered,
+            LoopRunResult::Failed,
+            LoopRunResult::TimedOut,
+            LoopRunResult::CheckSkipped,
+        ] {
+            let mut detail = record(20, result);
+            detail.watch = Some(verdict.clone());
+            detail.duration_ms = Some(0);
+            detail.check = Some(CheckRecord {
+                code: match verdict {
+                    WatchVerdict::Exited { code, .. } => code,
+                    _ => None,
+                },
+                timed_out: matches!(verdict, WatchVerdict::TimedOut { .. }),
+                output: "last line".to_owned(),
+                output_path: Some("/tmp/wake.log".into()),
+            });
+            let mut out = Vec::new();
+            render_record_detail(
+                &mut out,
+                &TaskEntry::default(),
+                &detail,
+                "last run",
+                Timestamp::from_second(30).unwrap(),
+                ui::prose::Prose::Raw,
+            )
+            .unwrap();
+            let raw = String::from_utf8(out).unwrap();
+            let out = anstream::adapter::strip_str(&raw).to_string();
+            assert_eq!(out.matches(expected).count(), 1, "{out}");
+            assert!(
+                out.contains("  output: /tmp/wake.log\n  │ last line"),
+                "{out}"
+            );
+            assert!(!out.contains("after 3s in"), "{out}");
+            let mut table = Vec::new();
+            write_runs_table(
+                &mut table,
+                &[detail],
+                5,
+                Timestamp::from_second(30).unwrap(),
+            )
+            .unwrap();
+            let table = String::from_utf8(table).unwrap();
+            assert!(table.contains("3.0s"), "{table}");
+            assert!(!table.contains("0ms"), "{table}");
+        }
+    }
 }

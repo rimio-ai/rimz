@@ -158,20 +158,52 @@ fn wake_wait_reports_a_watched_failure_and_settles_its_message() {
             "--",
             "sh",
             "-c",
-            "sleep 1; printf watched; exit 3",
+            "sleep 1; seq 1 5000; printf watched; exit 3",
         ])
         .output()
         .expect("wait for watched wake");
     assert!(!output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("delivered · exit 3"), "{stdout}");
+    assert!(stdout.contains("delivered · exit 3 after"), "{stdout}");
     assert!(stdout.contains("watched"), "{stdout}");
     let records = wake_records(&env);
+    let check = records[0].check.as_ref().unwrap();
+    let path = check.output_path.as_ref().expect("watch output path");
+    let full = std::fs::read_to_string(path).expect("full watch output");
+    assert_eq!(
+        full,
+        format!(
+            "{}watched",
+            (1..=5000)
+                .map(|line| format!("{line}\n"))
+                .collect::<String>()
+        )
+    );
+    assert!(check.output.len() <= 4096);
+    assert!(full.ends_with(&check.output));
+    assert!(stdout.contains(&path.display().to_string()), "{stdout}");
     let message_id = records[0].message_id.as_ref().unwrap();
     let message = wake_ok(&env, &["message", "show", message_id.as_str()]);
-    assert!(message.contains("exited 3 after"), "{message}");
-    assert!(!message.contains("exited 3 after 0s"), "{message}");
-    assert!(message.contains("armed by you at"), "{message}");
+    assert!(message.contains("waited on `"), "{message}");
+    assert!(message.contains("exit 3 after"), "{message}");
+    assert!(!message.contains("exit 3 after 0s"), "{message}");
+    assert!(!message.contains("armed by you"), "{message}");
+    assert!(
+        message.contains(&format!("output: {}", path.display())),
+        "{message}"
+    );
+    assert!(message.contains("5000\n  watched"), "{message}");
+    let logs = wake_ok(&env, &["loop", "logs", &records[0].task]);
+    assert!(
+        logs.contains(&records[0].watch.as_ref().unwrap().label()),
+        "{logs}"
+    );
+    assert!(logs.contains(&path.display().to_string()), "{logs}");
+    let shown = wake_ok(&env, &["loop", "show", &records[0].task]);
+    assert!(
+        shown.contains(&records[0].watch.as_ref().unwrap().label()),
+        "{shown}"
+    );
     assert!(!message.contains("--- watch"), "{message}");
     assert!(store.list_pending_messages().unwrap().is_empty());
 
@@ -180,6 +212,156 @@ fn wake_wait_reports_a_watched_failure_and_settles_its_message() {
     )
     .expect("wake instances JSON");
     assert!(instances.0.is_empty());
+}
+
+#[test]
+fn watched_wake_survives_the_arming_process_group_exiting() {
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    let child = agent_wake(&env)
+        .args([
+            "wake",
+            "--json",
+            "--",
+            "sh",
+            "-c",
+            "sleep 1; printf survived",
+        ])
+        .process_group(0)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let armer_group = nix::unistd::Pid::from_raw(i32::try_from(child.id()).unwrap());
+    let armed = child.wait_with_output().unwrap();
+    assert!(
+        armed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&armed.stderr)
+    );
+    let killed = nix::sys::signal::killpg(armer_group, nix::sys::signal::Signal::SIGTERM);
+    assert!(killed.is_ok() || killed == Err(nix::errno::Errno::ESRCH));
+    let records = wait_for_wake_records(&env, 1);
+    assert!(
+        matches!(records[0].watch.as_ref().unwrap(), rimz::harness::schedule::signal::WatchVerdict::Exited { code: Some(0), elapsed_ms } if *elapsed_ms >= 1_000)
+    );
+    let message = env.store().list_pending_messages().unwrap().pop().unwrap();
+    assert!(message.text.starts_with("waited on `"), "{}", message.text);
+    assert!(message.text.contains("survived"), "{}", message.text);
+}
+
+#[test]
+fn missing_watcher_row_reports_its_error_to_the_wake_log() {
+    let env = Env::new();
+    let store = env.store();
+    let path = store.paths().wakes_dir.join("wake-missing.log");
+    let output = std::fs::File::create(&path).unwrap();
+    let status = env
+        .rimz()
+        .args(["wake", "watch", "wake-missing"])
+        .stderr(output)
+        .status()
+        .unwrap();
+    assert!(!status.success());
+    let log = std::fs::read_to_string(path).unwrap();
+    assert!(
+        log.contains("no wake named wake-missing in the catalog"),
+        "{log}"
+    );
+}
+
+#[test]
+fn lost_watcher_delivers_elapsed_and_the_existing_log_tail() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    let receipt = wake_ok(
+        &env,
+        &[
+            "wake",
+            "--json",
+            "--",
+            "sh",
+            "-c",
+            "printf started; exec sleep 30",
+        ],
+    );
+    let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
+    let name = receipt["name"].as_str().unwrap();
+    let store = env.store();
+    let path = store.paths().wakes_dir.join(format!("{name}.log"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let watcher = loop {
+        if std::fs::read_to_string(&path).is_ok_and(|output| output == "started") {
+            break rimz::harness::schedule::signal::watcher_info(store.runtime_paths(), name)
+                .unwrap()
+                .unwrap();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "watcher did not start"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    };
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(i32::try_from(watcher.pid).unwrap()),
+        nix::sys::signal::Signal::SIGKILL,
+    )
+    .unwrap();
+    while rimz::harness::schedule::signal::watcher_info(store.runtime_paths(), name)
+        .unwrap()
+        .is_some()
+    {
+        assert!(std::time::Instant::now() < deadline, "watcher did not stop");
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    let armed_at = jiff::Timestamp::now()
+        .checked_sub(std::time::Duration::from_secs(60))
+        .unwrap();
+    let mut tasks = wake_instances(&env);
+    tasks
+        .0
+        .get_mut(name)
+        .unwrap()
+        .wake_meta
+        .as_mut()
+        .unwrap()
+        .armed_at = armed_at;
+    std::fs::write(
+        loop_instances_path(&env),
+        serde_json::to_vec(&tasks).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        store.runtime_paths().root.join("loop-fire.json"),
+        serde_json::to_vec(&std::collections::BTreeMap::from([(name, armed_at)])).unwrap(),
+    )
+    .unwrap();
+    wake_ok(&env, &["loop", "tick"]);
+    let records = wait_for_wake_records(&env, 1);
+    let verdict = records[0].watch.as_ref().unwrap();
+    assert!(
+        matches!(verdict, rimz::harness::schedule::signal::WatchVerdict::Lost { elapsed_ms, .. } if *elapsed_ms >= 60_000)
+    );
+    assert_eq!(
+        records[0].check.as_ref().unwrap().output_path.as_ref(),
+        Some(&path)
+    );
+    let message = store.list_pending_messages().unwrap().pop().unwrap();
+    assert!(message.text.contains(&verdict.label()), "{}", message.text);
+    assert!(message.text.contains("started"), "{}", message.text);
+    let logs = wake_ok(&env, &["loop", "logs", name]);
+    assert!(logs.contains(&verdict.label()), "{logs}");
+    assert!(logs.contains(&path.display().to_string()), "{logs}");
+    let shown = wake_ok(&env, &["loop", "show", &records[0].task]);
+    assert!(
+        shown.contains(&records[0].watch.as_ref().unwrap().label()),
+        "{shown}"
+    );
 }
 
 #[test]
@@ -297,9 +479,13 @@ fn unobserved_signal_wake_expires_with_a_delivered_wake() {
     assert_eq!(records[0].result.label(), "expired");
     let message_id = records[0].message_id.as_ref().expect("expiry message");
     let message = wake_ok(&env, &["message", "show", message_id.as_str()]);
-    assert!(message.contains(&format!("{name} expired:")), "{message}");
     assert!(
-        message.contains("no deploy.failed on feature in 59m"),
+        message.contains(&format!("subscription closed [{name}]")),
+        "{message}"
+    );
+    assert!(
+        message.contains("waited on deploy.failed on feature")
+            && message.contains("nothing in 59m"),
         "{message}"
     );
     assert!(!wake_instances(&env).0.contains_key(&name));

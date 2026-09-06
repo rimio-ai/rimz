@@ -399,12 +399,14 @@ fn emitted_signal_reaches_the_matching_wake_consumer() {
         message.text
     );
     assert!(
-        message.text.starts_with("ci-wake fired: deploy.finished\n"),
+        message
+            .text
+            .starts_with("waited on deploy.finished\nfired [ci-wake]\n"),
         "{}",
         message.text
     );
     let evidence: serde_json::Value =
-        serde_json::from_str(message.text.lines().nth(1).unwrap()).unwrap();
+        serde_json::from_str(message.text.lines().nth(2).unwrap()).unwrap();
     assert_eq!(
         evidence,
         serde_json::json!({"signal": "deploy.finished", "outcome": "failure"})

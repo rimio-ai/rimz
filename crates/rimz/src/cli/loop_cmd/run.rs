@@ -111,8 +111,13 @@ pub(super) fn run_one(
     };
     if mode == LoopRunMode::Manual
         && let Some(trip) = fire.take_check_trip()
-        && let Err(source) =
-            write_check_trip_line(&mut ui::out(), &action, &trip.record, trip.duration_ms)
+        && let Err(source) = write_check_trip_line(
+            &mut ui::out(),
+            &action,
+            &trip.record,
+            trip.watch.as_ref(),
+            trip.duration_ms,
+        )
     {
         let err = source.into();
         if matches!(

@@ -1,10 +1,10 @@
 //! Self-explaining wake headlines, evidence, and verbatim notes.
 
-use jiff::tz::TimeZone;
+use jiff::Timestamp;
 use serde_json::{Map, Value};
 
 use crate::config::{TaskEntry, WakeArmer, WakeMeta};
-use crate::harness::schedule::signal::{Signal, WatchOutcome};
+use crate::harness::schedule::signal::{Signal, elapsed_label};
 
 pub(super) enum Evidence<'a> {
     Scheduled,
@@ -19,75 +19,30 @@ pub(super) fn compose_wake(
     meta: Option<&WakeMeta>,
     evidence: Evidence<'_>,
     note: &str,
-    tz: TimeZone,
+    now: Timestamp,
 ) -> String {
-    let trigger = match evidence {
-        Evidence::Expired => format!(
-            "no {}{} in {}",
-            task.signal.as_deref().unwrap_or_default(),
-            subscription_scope(task),
-            task.timeout.as_deref().unwrap_or_default()
-        ),
-        Evidence::Manual => "manual fire".to_owned(),
-        Evidence::Scheduled => meta
-            .and_then(|meta| meta.delay.as_deref())
-            .map(|delay| format!("{delay} elapsed"))
-            .unwrap_or_else(|| "scheduled wake".to_owned()),
-        Evidence::Signal(signal) => match &signal.watch {
-            Some(WatchOutcome::Exited {
-                code, elapsed_ms, ..
-            }) => format!(
-                "`{}` exited {} after {}",
-                task.watch.as_deref().unwrap_or_default(),
-                code.map(|code| code.to_string())
-                    .unwrap_or_else(|| "by signal".to_owned()),
-                elapsed_label(*elapsed_ms)
-            ),
-            Some(WatchOutcome::TimedOut { elapsed_ms, .. }) => format!(
-                "`{}` timed out after {}",
-                task.watch.as_deref().unwrap_or_default(),
-                elapsed_label(*elapsed_ms)
-            ),
-            Some(WatchOutcome::Lost { .. }) => "watcher lost".to_owned(),
-            None => signal_headline(signal),
-        },
-    };
-    let expired = matches!(evidence, Evidence::Expired);
-    let verb = if expired { "expired" } else { "fired" };
-    let mut body = format!("{name} {verb}: {trigger}");
-    if let Some(meta) = meta.filter(|_| !expired) {
-        let armer = match &meta.armed_by {
-            WakeArmer::Human => "armed from the shell".to_owned(),
-            WakeArmer::Agent { handle }
-                if task
-                    .wake
-                    .as_ref()
-                    .is_some_and(|target| target.handle == *handle) =>
-            {
-                "armed by you".to_owned()
-            }
-            WakeArmer::Agent { handle } => format!("armed by {handle}"),
-        };
-        body.push_str(&format!(
-            ", {armer} at {}",
-            meta.armed_at.to_zoned(tz).strftime("%H:%M")
-        ));
+    let mut body = String::new();
+    if let Some(armer) = armer_line(meta, task) {
+        body.push_str(&armer);
+        body.push('\n');
+    }
+    body.push_str(&wait_line(task, meta, &evidence));
+    if let Some(verdict) = verdict_line(&evidence, task, meta, now, name) {
+        body.push('\n');
+        body.push_str(&verdict);
+    } else {
+        body.push_str(&format!(" [{name}]"));
     }
     if let Evidence::Signal(signal) = evidence {
-        let tail = match &signal.watch {
-            Some(WatchOutcome::Exited { output, .. } | WatchOutcome::TimedOut { output, .. }) => {
-                output.clone()
-            }
-            Some(WatchOutcome::Lost { detail }) => detail.clone(),
+        body.push('\n');
+        match &signal.watch {
+            Some(watch) if watch.output.is_empty() => body.push_str("(no output)"),
+            Some(watch) => body.push_str(&watch.output),
             None => {
                 let mut payload = signal.payload.clone();
                 payload.insert("signal".to_owned(), Value::String(signal.name.to_string()));
-                Value::Object(payload).to_string()
+                body.push_str(&Value::Object(payload).to_string());
             }
-        };
-        if !tail.is_empty() {
-            body.push('\n');
-            body.push_str(&tail);
         }
     }
     if !note.is_empty() {
@@ -95,6 +50,78 @@ pub(super) fn compose_wake(
         body.push_str(note);
     }
     body
+}
+
+fn armer_line(meta: Option<&WakeMeta>, task: &TaskEntry) -> Option<String> {
+    match &meta?.armed_by {
+        WakeArmer::Human => Some("armed on you from the shell.".to_owned()),
+        WakeArmer::Agent { handle }
+            if task
+                .wake
+                .as_ref()
+                .is_some_and(|target| target.handle == *handle) =>
+        {
+            None
+        }
+        WakeArmer::Agent { handle } => Some(format!("{handle} armed this wake on you.")),
+    }
+}
+
+fn wait_line(task: &TaskEntry, meta: Option<&WakeMeta>, evidence: &Evidence<'_>) -> String {
+    if let Some(command) = &task.watch {
+        return format!("waited on `{command}`");
+    }
+    if let Evidence::Signal(signal) = evidence {
+        return format!("waited on {}", signal_headline(signal));
+    }
+    if let Some(selector) = &task.signal {
+        return format!("waited on {selector}{}", subscription_scope(task));
+    }
+    if let Some(delay) = meta.and_then(|meta| meta.delay.as_deref()) {
+        return format!("waited {delay}");
+    }
+    "scheduled wake".to_owned()
+}
+
+fn verdict_line(
+    evidence: &Evidence<'_>,
+    task: &TaskEntry,
+    meta: Option<&WakeMeta>,
+    now: Timestamp,
+    name: &str,
+) -> Option<String> {
+    let mut verdict = match evidence {
+        Evidence::Signal(signal) => match &signal.watch {
+            Some(watch) => watch.verdict.label(),
+            None => match meta {
+                Some(meta) => {
+                    let elapsed_ms = now
+                        .as_millisecond()
+                        .saturating_sub(meta.armed_at.as_millisecond())
+                        .max(0) as u64;
+                    format!("fired after {}", elapsed_label(elapsed_ms))
+                }
+                None => "fired".to_owned(),
+            },
+        },
+        Evidence::Expired => format!(
+            "nothing in {}; subscription closed",
+            task.timeout.as_deref().unwrap_or_default()
+        ),
+        Evidence::Manual => "fired by hand".to_owned(),
+        Evidence::Scheduled if meta.is_some_and(|meta| meta.delay.is_some()) => return None,
+        Evidence::Scheduled => "fired".to_owned(),
+    };
+    if let Evidence::Signal(signal) = evidence
+        && let Some(path) = signal
+            .watch
+            .as_ref()
+            .and_then(|watch| watch.output_path.as_ref())
+    {
+        verdict.push_str(&format!(" · output: {}", path.display()));
+    }
+    verdict.push_str(&format!(" [{name}]"));
+    Some(verdict)
 }
 
 fn signal_headline(signal: &Signal) -> String {
@@ -132,15 +159,6 @@ fn subscription_scope(task: &TaskEntry) -> String {
         }
     }
     String::new()
-}
-
-fn elapsed_label(elapsed_ms: u64) -> String {
-    let seconds = elapsed_ms / 1_000;
-    if seconds < 60 {
-        format!("{seconds}s")
-    } else {
-        crate::theme::fmt::duration_label(seconds / 60)
-    }
 }
 
 #[cfg(test)]
