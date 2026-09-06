@@ -126,6 +126,32 @@ include = [
 }
 
 #[test]
+fn read_only_boundaries_reject_store_run_wake_sender() {
+    let root = temp_repo_root("read-only-run-wake");
+    for relative in [
+        "agents/adapters/codex/spend.rs",
+        "sidebar/mod.rs",
+        "wakeup/mod.rs",
+        "harness/orphan_sweep.rs",
+    ] {
+        let path = root.join("crates/rimz/src").join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "use crate::store::run::wake_run;\n").unwrap();
+        let files = [path];
+        let result = if relative.starts_with("agents/") {
+            ensure_spend_parser_boundaries(&root, &files)
+        } else {
+            ensure_sidebar_library_boundaries(&root, &files)
+        };
+        assert!(result.unwrap_err().to_string().contains("read-only"));
+        std::fs::write(&files[0], "use crate::store::run::RunRecord;\n").unwrap();
+        ensure_spend_parser_boundaries(&root, &files).unwrap();
+        ensure_sidebar_library_boundaries(&root, &files).unwrap();
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn spend_parser_path_predicate_covers_nested_modules() {
     let agents_root = Path::new("/repo/crates/rimz/src/agents");
 
