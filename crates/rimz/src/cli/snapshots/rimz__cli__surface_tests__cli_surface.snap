@@ -1384,6 +1384,7 @@ rimz loop run [hidden]
     --root <ROOT>  [action=set takes=1..=1 global]
     --signal-json <SIGNAL_JSON>  [action=set takes=1..=1 hidden]
     --tmux  [action=set-true takes=0..=0 global]
+    --wake-armed-at <WAKE_ARMED_AT>  [action=set takes=1..=1 hidden]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz loop show

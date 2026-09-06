@@ -222,11 +222,7 @@ impl TaskCatalog {
     }
 
     /// Atomically replace a live signal wake in place or mint a new instance.
-    pub fn arm_signal_wake(
-        &self,
-        entry: &TaskEntry,
-        now: jiff::Timestamp,
-    ) -> Result<(String, TaskEntry, bool)> {
+    pub fn arm_signal_wake(&self, entry: &TaskEntry, now: jiff::Timestamp) -> Result<String> {
         let arming_entries = arming::load();
         let taken = self
             .visible

@@ -156,7 +156,7 @@ pub(super) fn arm_signal_wake(
     entry: &TaskEntry,
     taken: &BTreeSet<String>,
     now: Timestamp,
-) -> Result<(String, TaskEntry, bool)> {
+) -> Result<String> {
     arm_signal_wake_in(&state_home(), entry, taken, now)
 }
 
@@ -165,7 +165,7 @@ fn arm_signal_wake_in(
     entry: &TaskEntry,
     taken: &BTreeSet<String>,
     now: Timestamp,
-) -> Result<(String, TaskEntry, bool)> {
+) -> Result<String> {
     mutate(state_root, |tasks| {
         if let Some((name, current)) = tasks.iter_mut().find(|(name, current)| {
             !taken.contains(*name)
@@ -185,7 +185,7 @@ fn arm_signal_wake_in(
                 && current.resolved_root() == entry.resolved_root()
         }) {
             *current = entry.clone();
-            return Ok(((name.clone(), current.clone(), true), true));
+            return Ok((name.clone(), true));
         }
         let petname = crate::agents::petname::mint(
             tasks
@@ -195,7 +195,7 @@ fn arm_signal_wake_in(
         );
         let name = format!("wake-{petname}");
         tasks.insert(name.clone(), entry.clone());
-        Ok(((name, entry.clone(), false), true))
+        Ok((name, true))
     })
 }
 
@@ -286,10 +286,12 @@ mod tests {
     fn identical_signal_wake_arm_replaces_row_in_place() {
         let dir = tempfile::tempdir().expect("tempdir");
         let entry = signal_wake();
-        let (name, _, reused) =
-            arm_signal_wake_in(dir.path(), &entry, &BTreeSet::new(), Timestamp::UNIX_EPOCH)
-                .expect("first arm");
-        assert!(!reused);
+        let name = arm_signal_wake_in(dir.path(), &entry, &BTreeSet::new(), Timestamp::UNIX_EPOCH)
+            .expect("first arm");
+        assert_eq!(
+            load_from(dir.path()).0,
+            BTreeMap::from([(name.clone(), entry.clone())])
+        );
         let mut replacement = entry.clone();
         replacement.prompt = Some("replacement note".to_owned());
         replacement.timeout = Some("1m".to_owned());
@@ -301,11 +303,9 @@ mod tests {
             handle: "@planner".to_owned(),
         };
         replacement.deadline = Some(Timestamp::from_second(180).expect("new deadline"));
-        let (reused_name, rearmed, reused) =
+        let reused_name =
             arm_signal_wake_in(dir.path(), &replacement, &BTreeSet::new(), now).expect("rearm");
-        assert!(reused);
         assert_eq!(reused_name, name);
-        assert_eq!(rearmed, replacement);
         assert_eq!(
             load_from(dir.path()).0,
             BTreeMap::from([(name.clone(), replacement.clone())])
@@ -317,12 +317,9 @@ mod tests {
         );
         replacement.prompt = None;
         replacement.prompt_file = Some(PathBuf::from("/repo/note.md"));
-        let (reused_name, rearmed, reused) =
-            arm_signal_wake_in(dir.path(), &replacement, &BTreeSet::new(), now)
-                .expect("rearm with note file");
-        assert!(reused);
+        let reused_name = arm_signal_wake_in(dir.path(), &replacement, &BTreeSet::new(), now)
+            .expect("rearm with note file");
         assert_eq!(reused_name, name);
-        assert_eq!(rearmed, replacement);
         assert_eq!(
             load_from(dir.path()).0,
             BTreeMap::from([(name, replacement)])
@@ -333,12 +330,17 @@ mod tests {
     fn concurrent_signal_wake_arms_publish_one_instance() {
         let dir = tempfile::tempdir().expect("tempdir");
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
-        let writers = [0, 1].map(|index| {
+        let candidates = [0, 1].map(|index| {
+            let mut entry = signal_wake();
+            entry.prompt = Some(format!("note {index}"));
+            entry.timeout = Some(format!("{}m", index + 1));
+            entry.deadline = Some(Timestamp::from_second(60 * (index + 1)).expect("deadline"));
+            entry
+        });
+        let writers = candidates.clone().map(|entry| {
             let root = dir.path().to_path_buf();
             let barrier = barrier.clone();
             std::thread::spawn(move || {
-                let mut entry = signal_wake();
-                entry.prompt = Some(format!("note {index}"));
                 barrier.wait();
                 arm_signal_wake_in(&root, &entry, &BTreeSet::new(), Timestamp::UNIX_EPOCH)
                     .expect("atomic arm")
@@ -346,13 +348,10 @@ mod tests {
         });
         barrier.wait();
         let results = writers.map(|writer| writer.join().expect("writer"));
-        assert_eq!(results[0].0, results[1].0);
-        assert_ne!(results[0].2, results[1].2);
-        let replacement = results.iter().find(|result| result.2).expect("replacement");
-        assert_eq!(
-            load_from(dir.path()).0,
-            BTreeMap::from([(replacement.0.clone(), replacement.1.clone())])
-        );
+        assert_eq!(results[0], results[1]);
+        let stored = load_from(dir.path()).0;
+        assert_eq!(stored.len(), 1);
+        assert!(candidates.contains(&stored[&results[0]]));
     }
 
     #[test]
@@ -374,18 +373,19 @@ mod tests {
                 _ => unreachable!("fixed test cases"),
             }
             insert_into(dir.path(), "wake-old", &old).expect("old subscription");
-            let (name, _, reused) =
-                arm_signal_wake_in(dir.path(), &entry, &taken, Timestamp::UNIX_EPOCH)
-                    .expect("distinct arm");
-            assert!(!reused, "{field}");
-            assert_ne!(name, "wake-old");
-            assert_eq!(load_from(dir.path()).0["wake-old"], old);
+            let name = arm_signal_wake_in(dir.path(), &entry, &taken, Timestamp::UNIX_EPOCH)
+                .expect("distinct arm");
+            assert_ne!(name, "wake-old", "{field}");
+            assert_eq!(
+                load_from(dir.path()).0,
+                BTreeMap::from([("wake-old".to_owned(), old), (name.clone(), entry.clone())])
+            );
             remove_from(dir.path(), &name).expect("remove fresh");
             remove_from(dir.path(), "wake-old").expect("remove old");
         }
-        let (_, _, reused) = arm_signal_wake_in(dir.path(), &entry, &taken, Timestamp::UNIX_EPOCH)
+        let name = arm_signal_wake_in(dir.path(), &entry, &taken, Timestamp::UNIX_EPOCH)
             .expect("arm after retirement");
-        assert!(!reused);
+        assert_eq!(load_from(dir.path()).0, BTreeMap::from([(name, entry)]));
     }
 
     fn task() -> TaskEntry {
