@@ -32,10 +32,8 @@ use rimz::harness::schedule::run_log::{
     RunTransition,
 };
 use rimz::harness::schedule::runner::{
-    CheckEcho, RunLockInfo, RunLockState, SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL, StopAction,
-    newest_active_run, newest_active_run_for_entry, next_stop_action, parse_mode,
-    parse_task_timeout, preflight_entry, probe_run_lock, run_lock_path, signal_run_lock_holder,
-    wait_for_run_lock_release,
+    CheckEcho, RunLockInfo, RunLockState, SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL,
+    newest_active_run_for_entry, parse_mode, parse_task_timeout, preflight_entry, probe_run_lock,
 };
 use rimz::harness::schedule::{
     self, TaskAction, TaskActionKind,

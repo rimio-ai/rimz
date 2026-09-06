@@ -523,3 +523,14 @@ fn wake_prompt_is_optional_but_spawn_prompt_is_required() {
             .contains("loop task `spawn-test` has no prompt")
     );
 }
+
+#[test]
+fn vanished_task_root_keeps_its_persisted_workspace_identity() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("vanished");
+
+    let (workspace, workspace_id) = stop_workspace(&root).expect("resolve stop workspace");
+
+    assert!(workspace.is_none());
+    assert_eq!(workspace_id, WorkspaceId::from_project_root(&root));
+}
