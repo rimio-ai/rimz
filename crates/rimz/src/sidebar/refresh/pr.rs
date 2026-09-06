@@ -24,22 +24,6 @@ use crate::utils::time::unix_now_ms;
 
 mod transitions;
 
-pub(crate) fn ci_signal_name(ci: WorktreePrCi) -> Option<&'static str> {
-    match ci {
-        WorktreePrCi::Passing => Some("ci.passed"),
-        WorktreePrCi::Failing => Some("ci.failed"),
-        WorktreePrCi::Pending => None,
-    }
-}
-
-pub(crate) fn pr_signal_name(state: WorktreePrState) -> Option<&'static str> {
-    match state {
-        WorktreePrState::Merged => Some("pr.merged"),
-        WorktreePrState::Closed => Some("pr.closed"),
-        WorktreePrState::Open => None,
-    }
-}
-
 const PR_STATE_WAIT_STEP: Duration = Duration::from_millis(20);
 const PR_STATE_WAIT_STEPS: u32 = 15;
 const PR_STATE_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
