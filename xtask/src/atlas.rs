@@ -14,6 +14,7 @@ mod facts;
 mod history;
 mod index;
 mod inspect;
+mod ledger;
 mod metrics;
 mod modules;
 mod output;

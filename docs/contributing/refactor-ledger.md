@@ -76,7 +76,7 @@ The extension puts OSC notification policy at L5 over config and mux capabilitie
 
 ## Module verdicts
 
-One row per module reviewed, at the granularity `survey` ranks. `holds` names the SHA reviewed and the scoped-commit count that reopens it (`git log --oneline <sha>.. -- <path> | wc -l`). `landed` points at the pass row. `candidate` is a survey pick not yet reviewed, with the signal that made it one.
+One row per module reviewed, at the granularity `survey` ranks. `holds` names the SHA reviewed and the scoped-commit count that reopens it (`git log --oneline <sha>.. -- <path> | wc -l`); `survey` reads these two cells and flags the module `held` until the count is reached, then `reopen`. `landed` points at the pass row. `candidate` is a survey pick not yet reviewed, with the signal that made it one.
 
 | module | status | sha | reopen at | note |
 | --- | --- | --- | --- | --- |
@@ -110,7 +110,7 @@ One row per module reviewed, at the granularity `survey` ranks. `holds` names th
 
 ## Admission intents
 
-One row per upward dependency edge reviewed. `keep` means the edge is the intended shape and its reason; `close` names the seam pass that closes it. An edge with no row is unreviewed. Baseline: every admission in `refactor-target.toml` is unreviewed.
+One row per upward dependency edge reviewed. `keep` means the edge is the intended shape and its reason; `close` names the seam pass that closes it. An edge with no row is unreviewed, and `survey` lists it under `unreviewed` until a row lands; keep the edge cell machine-readable as `` `from` → `to` `` with an optional `to::{a,b}` group. Baseline: every admission in `refactor-target.toml` is unreviewed.
 
 | from → to | sites at baseline | intent | reason / seam |
 | --- | ---: | --- | --- |
