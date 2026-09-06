@@ -67,25 +67,21 @@ pub(super) fn select_subagent_zone_strategy(
         .pane
         .as_ref()
         .and_then(|pane| live_panes.iter().find(|live| live.pane_id == pane.pane_id));
-    if let Some(pane) = agents
-        .iter()
+    if let Some(pane) = rimz::harness::target::launched_children(agents, caller)
+        .into_iter()
         .filter(|agent| {
-            agent.is_launched_child()
-                && agent.parent_agent_id.as_ref().is_some_and(|parent| {
-                    parent == &caller.agent_id || caller.launch_id.as_ref() == Some(parent)
+            agent.pane.as_ref().is_some_and(|pane| {
+                live_panes.iter().any(|live| {
+                    live.pane_id == pane.pane_id
+                        && live_caller.is_some_and(|parent| {
+                            live.session_name == parent.session_name
+                                && !live.is_floating
+                                && !live.is_rimz_sidebar()
+                                && live.view_id == parent.view_id
+                                && live.view_name == parent.view_name
+                        })
                 })
-                && agent.pane.as_ref().is_some_and(|pane| {
-                    live_panes.iter().any(|live| {
-                        live.pane_id == pane.pane_id
-                            && live_caller.is_some_and(|parent| {
-                                live.session_name == parent.session_name
-                                    && !live.is_floating
-                                    && !live.is_rimz_sidebar()
-                                    && live.view_id == parent.view_id
-                                    && live.view_name == parent.view_name
-                            })
-                    })
-                })
+            })
         })
         .max_by_key(|agent| (agent.registered_at, agent.agent_id.clone()))
         .and_then(|agent| agent.pane.as_ref())

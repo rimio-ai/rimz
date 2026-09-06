@@ -116,18 +116,11 @@ fn orphaned_child(
     if child.ended_at.is_some() || !child.is_launched_child() {
         return None;
     }
-    let parent_id = child.parent_agent_id.as_ref()?;
     let run = newest_run(child, runs);
     if run.is_some_and(|run| run.keep) {
         return None;
     }
-    let parent = agents.iter().find(|agent| {
-        (agent.agent_id == *parent_id || agent.launch_id.as_ref() == Some(parent_id))
-            && child
-                .parent_agent_kind
-                .as_ref()
-                .is_none_or(|kind| agent.kind == *kind)
-    });
+    let parent = crate::harness::target::launched_parent(agents, child);
     let orphaned_at = match parent {
         Some(parent) => parent.ended_at?,
         None => child
@@ -319,6 +312,28 @@ mod tests {
 
         child.registered_at = Some(now);
         assert!(orphaned_child(&child, &[child.clone()], &[], now).is_none());
+    }
+
+    #[test]
+    fn parent_successor_prevents_orphaning_until_the_whole_launch_ends() {
+        let now = Timestamp::from_second(1_000).unwrap();
+        let at = now - Duration::from_secs(601);
+        let mut old = crate::testkit::agent_state("codex", "OLD", at);
+        old.launch_id = Some(AgentSessionId::from("L"));
+        old.ended_at = Some(at);
+        let mut new = crate::testkit::agent_state("codex", "NEW", at);
+        new.launch_id = old.launch_id.clone();
+        let mut child = crate::testkit::agent_state("codex", "child", at);
+        child.launch_depth = Some(1);
+        child.registered_at = Some(at);
+        for parent_id in ["L", "OLD"] {
+            child.parent_agent_id = Some(AgentSessionId::from(parent_id));
+            for ended in [false, true] {
+                new.ended_at = ended.then_some(at);
+                let agents = [old.clone(), new.clone(), child.clone()];
+                assert_eq!(orphaned_child(&child, &agents, &[], now).is_some(), ended);
+            }
+        }
     }
 
     #[test]

@@ -1769,3 +1769,52 @@ fn launched_parent_matches_the_adopted_launch_id() {
     );
     assert!(launched_parent(&agents, &orphan).is_none());
 }
+
+#[test]
+fn parent_launch_selects_the_live_occupant_and_keeps_legacy_children() {
+    let mut old = agent("codex", "a-old", None, "terminal_1");
+    old.launch_id = Some("launch-parent".into());
+    old.ended_at = Some(Timestamp::from_second(1_000).unwrap());
+    old.last_activity = Timestamp::from_second(1_000).unwrap();
+    let mut new = old.clone();
+    new.agent_id = "z-new".into();
+    new.ended_at = None;
+    new.last_activity = Timestamp::from_second(2_000).unwrap();
+    let mut child = agent("claude", "child", None, "terminal_2");
+    child.launch_depth = Some(1);
+    child.parent_agent_kind = Some(old.kind.clone());
+    child.parent_agent_id = Some("launch-parent".into());
+    let mut legacy = child.clone();
+    legacy.agent_id = "legacy-child".into();
+    legacy.parent_agent_id = Some(old.agent_id.clone());
+    let mut native = child.clone();
+    native.agent_id = "native-child".into();
+    native.launch_depth = None;
+    let mut wrong_kind = child.clone();
+    wrong_kind.agent_id = "wrong-kind".into();
+    wrong_kind.parent_agent_kind = None;
+    let mut agents = [old, new, child, legacy, native, wrong_kind];
+
+    for id in ["launch-parent", "a-old", "z-new"] {
+        assert_eq!(
+            launch_row(&agents, &agents[0].kind, &AgentSessionId::from(id))
+                .unwrap()
+                .agent_id,
+            "z-new"
+        );
+    }
+    assert_eq!(launched_children(&agents, &agents[1]).len(), 2);
+    assert_eq!(launched_children(&agents, &agents[0]).len(), 2);
+    for child in &agents[2..4] {
+        assert_eq!(launched_parent(&agents, child).unwrap().agent_id, "z-new");
+    }
+    assert!(launched_parent(&agents, &agents[4]).is_none());
+    assert!(launched_parent(&agents, &agents[5]).is_none());
+    assert!(launch_row(&agents, &agents[4].kind, &agents[4].agent_id).is_none());
+    assert!(launch_row(&agents, &agents[0].kind, &AgentSessionId::from("unknown")).is_none());
+
+    agents[1].ended_at = Some(Timestamp::from_second(2_100).unwrap());
+    let parent = launched_parent(&agents, &agents[2]).unwrap();
+    assert_eq!(parent.agent_id, "z-new");
+    assert_eq!(parent.ended_at, agents[1].ended_at);
+}

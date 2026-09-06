@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use anyhow::Context;
 use rimz::agents::AgentState;
 use rimz::harness::run;
-use rimz::ids::{AgentSessionId, MessageId, RunId};
+use rimz::ids::{AgentKind, AgentSessionId, MessageId, RunId};
 use rimz::message::deliver::{DeliveryPolicy, deliver_one};
 use rimz::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
 use rimz::store::run::{RunRecord, RunStatus, RunStoreErr};
@@ -46,12 +46,36 @@ pub(super) fn report_fleet(
     store: &Store,
     parent_id: &AgentSessionId,
 ) -> Result<ReportOutcome, ReportErr> {
+    report_fleet_with_kind(workspace, store, parent_id, None)
+}
+
+fn report_parent<'a>(
+    agents: &'a [AgentState],
+    parent_id: &AgentSessionId,
+    parent_kind: Option<&AgentKind>,
+) -> Option<&'a AgentState> {
+    let kind = match parent_kind {
+        Some(kind) => kind,
+        None => {
+            &agents
+                .iter()
+                .find(|agent| {
+                    &agent.agent_id == parent_id || agent.launch_id.as_ref() == Some(parent_id)
+                })?
+                .kind
+        }
+    };
+    rimz::harness::target::launch_row(agents, kind, parent_id)
+}
+
+fn report_fleet_with_kind(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    parent_id: &AgentSessionId,
+    parent_kind: Option<&AgentKind>,
+) -> Result<ReportOutcome, ReportErr> {
     let projection = store.runtime_projection(RuntimeScope::Audit)?;
-    let Some(parent) = projection
-        .agents
-        .iter()
-        .find(|agent| &agent.agent_id == parent_id || agent.launch_id.as_ref() == Some(parent_id))
-    else {
+    let Some(parent) = report_parent(&projection.agents, parent_id, parent_kind) else {
         return Ok(ReportOutcome::NoParent);
     };
     if parent.ended_at.is_some() {
@@ -152,17 +176,23 @@ pub(super) fn report_settled_child(
     }
     let projection = store.runtime_projection(RuntimeScope::Audit)?;
     let Some(child) = projection.agents.iter().find(|agent| {
-        run.agent_id.as_ref().map_or_else(
-            || agent.name.as_deref() == run.agent_name.as_deref(),
-            |agent_id| &agent.agent_id == agent_id,
-        )
+        agent.kind == run.kind
+            && run.agent_id.as_ref().map_or_else(
+                || agent.name.as_deref() == run.agent_name.as_deref(),
+                |agent_id| &agent.agent_id == agent_id,
+            )
     }) else {
         return Ok(ReportOutcome::ChildMissing);
     };
     let Some(parent_id) = child.parent_agent_id.as_ref() else {
         return Ok(ReportOutcome::NoParent);
     };
-    report_fleet(workspace, store, parent_id)
+    report_fleet_with_kind(
+        workspace,
+        store,
+        parent_id,
+        Some(child.parent_agent_kind.as_ref().unwrap_or(&child.kind)),
+    )
 }
 
 pub(super) fn backstop_digest(request: super::SubagentDigestRequest) -> anyhow::Result<()> {
@@ -343,6 +373,30 @@ mod tests {
         run.completed_at = Some(Timestamp::from_second(1_252).unwrap());
         run.updated_at = run.completed_at.unwrap();
         run
+    }
+
+    #[test]
+    fn digest_parent_routes_to_live_successor_with_corroborated_kind() {
+        let mut old = child("OLD", None);
+        old.launch_id = Some(AgentSessionId::from("L"));
+        old.ended_at = Some(Timestamp::from_second(1_000).unwrap());
+        let mut new = child("NEW", None);
+        new.launch_id = old.launch_id.clone();
+        let wrong = AgentState::stub("claude", "L", AgentStatus::Idle);
+        let agents = [wrong, old, new.clone()];
+
+        for parent_id in ["L", "OLD"] {
+            let parent =
+                report_parent(&agents, &AgentSessionId::from(parent_id), Some(&new.kind)).unwrap();
+            assert_eq!(parent.agent_id, new.agent_id);
+            assert!(parent.ended_at.is_none());
+        }
+        assert_eq!(
+            report_parent(&agents[1..], &AgentSessionId::from("OLD"), None)
+                .unwrap()
+                .agent_id,
+            new.agent_id
+        );
     }
 
     #[test]

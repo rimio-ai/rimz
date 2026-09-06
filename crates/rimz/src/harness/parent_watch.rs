@@ -1,6 +1,6 @@
 //! Parent-lifecycle watchdog for pane-backed supervised subagents.
 //!
-//! Durable parent end stamps are authoritative. Pane presence is a latency
+//! End stamps are authoritative only when every parent launch row has ended. Pane presence is a latency
 //! signal, so absence only becomes destructive after repeated authoritative
 //! mux reads and one final reconfirmation.
 
@@ -235,19 +235,8 @@ fn resolve_parent_and_child<'a>(
     child_kind: &AgentKind,
     child_launch_id: &AgentSessionId,
 ) -> Option<(&'a AgentState, &'a AgentState)> {
-    let child = agents.iter().find(|agent| {
-        &agent.kind == child_kind
-            && (agent.launch_id.as_ref() == Some(child_launch_id)
-                || &agent.agent_id == child_launch_id)
-    })?;
-    let parent_id = child.parent_agent_id.as_ref()?;
-    let parent = agents.iter().find(|agent| {
-        (&agent.agent_id == parent_id || agent.launch_id.as_ref() == Some(parent_id))
-            && child
-                .parent_agent_kind
-                .as_ref()
-                .is_none_or(|kind| &agent.kind == kind)
-    })?;
+    let child = crate::harness::target::launch_row(agents, child_kind, child_launch_id)?;
+    let parent = crate::harness::target::launched_parent(agents, child)?;
     Some((parent, child))
 }
 
@@ -305,6 +294,31 @@ mod tests {
     }
 
     #[test]
+    fn parent_end_follows_current_launch_occupant_and_legacy_alias() {
+        let at = jiff::Timestamp::from_second(1_000).unwrap();
+        let mut old = crate::testkit::agent_state("codex", "OLD", at);
+        old.launch_id = Some(AgentSessionId::from("L"));
+        old.ended_at = Some(at);
+        let mut new = crate::testkit::agent_state("codex", "NEW", at);
+        new.launch_id = old.launch_id.clone();
+        let mut child = crate::testkit::agent_state("codex", "child", at);
+        child.launch_depth = Some(1);
+        for parent_id in ["L", "OLD"] {
+            child.parent_agent_id = Some(AgentSessionId::from(parent_id));
+            for ended in [false, true] {
+                new.ended_at = ended.then_some(at);
+                let agents = [old.clone(), new.clone(), child.clone()];
+                let (parent, _) =
+                    resolve_parent_and_child(&agents, &child.kind, &child.agent_id).unwrap();
+                assert_eq!(parent.ended_at.is_some(), ended);
+                if !ended {
+                    assert_eq!(parent.agent_id, new.agent_id);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn adopted_child_and_parent_rows_resolve_by_stable_launch_identity() {
         let mut parent =
             crate::testkit::agent_state("codex", "parent-provider-session", jiff::Timestamp::now());
@@ -314,6 +328,7 @@ mod tests {
         child.launch_id = Some(AgentSessionId::from("launch-child"));
         child.parent_agent_id = Some(AgentSessionId::from("launch-parent"));
         child.parent_agent_kind = Some(parent.kind.clone());
+        child.launch_depth = Some(1);
 
         let agents = [parent.clone(), child.clone()];
         let resolved = resolve_parent_and_child(

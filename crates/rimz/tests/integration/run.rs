@@ -651,7 +651,7 @@ fn assert_subagent_launch_uses_parent_checkout(fanout: bool, repo_subdir: bool) 
             .find(|agent| agent.name == record.agent_name)
             .expect("child launch card");
         assert_eq!(child.worktree_path.as_deref(), checkout.to_str());
-        assert_eq!(child.parent_agent_id.as_ref(), Some(&parent_id));
+        assert_eq!(child.parent_agent_id.as_ref(), Some(&parent_launch_id));
     }
     let trace = std::fs::read_to_string(&trace_path).expect("read child pane trace");
     let panes = trace

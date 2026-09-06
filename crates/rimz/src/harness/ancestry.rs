@@ -160,7 +160,10 @@ pub fn resolve_launch_ancestry(
     let generation = caller.launch_depth.unwrap_or(0);
     if subagent {
         return Ok(Some(LaunchAncestry::Subagent {
-            parent_agent_id: caller.agent_id.clone(),
+            parent_agent_id: caller
+                .launch_id
+                .clone()
+                .unwrap_or_else(|| caller.agent_id.clone()),
             parent_agent_kind: caller.kind.clone(),
             launch_generation: generation.saturating_add(1),
         }));
@@ -176,7 +179,7 @@ pub fn resolve_launch_ancestry(
     }))
 }
 
-/// Resolve the launching process through its stable launch id. Kind
+/// Resolve the launching process to its launch's current row. Kind
 /// corroborates the match so stale cross-provider environment cannot attach a
 /// child to the wrong durable row. An agent process already running across an
 /// upgrade has no launch id; only that missing-id case may use an unambiguous
@@ -196,7 +199,7 @@ pub fn resolve_launch_ancestry_here(
 /// Resolve the pane-backed agent that owns the current process environment.
 ///
 /// Command doorways that operate on the caller's descendants use the same
-/// stable launch-id rules as ancestry stamping, so a stale pane environment
+/// current launch-row rules as ancestry stamping, so a stale pane environment
 /// cannot select another agent's children.
 pub fn resolve_calling_agent(
     agents: &[crate::agents::AgentState],
@@ -210,13 +213,7 @@ pub fn resolve_launch_caller<'a>(
     caller: &CallerIdentity,
 ) -> Result<&'a crate::agents::AgentState, LaunchAncestryError> {
     let resolved = if let Some(launch_id) = caller.launch_id.as_ref() {
-        agents.iter().find(|agent| {
-            agent.kind == caller.kind
-                && agent
-                    .launch_id
-                    .as_ref()
-                    .is_some_and(|candidate| candidate == launch_id)
-        })
+        super::target::launch_row(agents, &caller.kind, launch_id)
     } else {
         let pane_id = caller
             .pane_id
@@ -359,6 +356,44 @@ mod tests {
         assert_eq!(identity.name.as_deref(), Some("architect"));
         assert_eq!(identity.profile.as_deref(), Some("planner"));
         assert_eq!(identity.role.as_deref(), Some("lead"));
+    }
+
+    #[test]
+    fn launch_id_resolves_to_the_live_row_and_stamps_the_launch() {
+        let mut old = crate::agents::AgentState::stub("codex", "a-old", AgentStatus::Idle);
+        old.launch_id = Some(AgentSessionId::from("launch-parent"));
+        old.ended_at = Some(jiff::Timestamp::from_second(100).unwrap());
+        let mut new = old.clone();
+        new.agent_id = AgentSessionId::from("z-new");
+        new.ended_at = None;
+        let identity = CallerIdentity {
+            kind: old.kind.clone(),
+            launch_id: old.launch_id.clone(),
+            pane_id: None,
+            name: None,
+            profile: None,
+            role: None,
+        };
+        let agents = [old, new];
+        for id in ["launch-parent", "a-old"] {
+            let caller = resolve_launch_caller(
+                &agents,
+                &CallerIdentity {
+                    launch_id: Some(AgentSessionId::from(id)),
+                    ..identity.clone()
+                },
+            )
+            .unwrap();
+            assert_eq!(caller.agent_id, "z-new");
+            assert_eq!(
+                resolve_launch_ancestry(Some(caller), true, 3).unwrap(),
+                Some(LaunchAncestry::Subagent {
+                    parent_agent_id: AgentSessionId::from("launch-parent"),
+                    parent_agent_kind: identity.kind.clone(),
+                    launch_generation: 1,
+                })
+            );
+        }
     }
 
     #[test]

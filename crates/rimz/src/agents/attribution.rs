@@ -358,14 +358,7 @@ fn fold_seats<'a>(agents: &[&'a AgentState]) -> Vec<(SlotKey, Vec<&'a AgentState
 }
 
 fn is_launched_child_of(child: &AgentState, parent: &AgentState) -> bool {
-    child.is_launched_child()
-        && child.parent_agent_id.as_ref().is_some_and(|parent_id| {
-            parent_id == &parent.agent_id || parent.launch_id.as_ref() == Some(parent_id)
-        })
-        && child
-            .parent_agent_kind
-            .as_ref()
-            .is_none_or(|kind| kind == &parent.kind)
+    child.is_launched_child() && child.parent_is(parent)
 }
 
 /// Lifetime records for one seat, including pane-backed children it launched.
@@ -627,15 +620,11 @@ fn subagent_stats(
     launched: &[(&AgentState, spending::SlotEffortBreakdown)],
 ) -> Vec<SubagentStat> {
     let mut children = BTreeMap::<String, Option<String>>::new();
-    for child in subagents.iter().copied().filter(|child| {
-        records.iter().any(|parent| {
-            child.parent_agent_id.as_ref() == Some(&parent.agent_id)
-                && child
-                    .parent_agent_kind
-                    .as_ref()
-                    .is_none_or(|kind| kind == &parent.kind)
-        })
-    }) {
+    for child in subagents
+        .iter()
+        .copied()
+        .filter(|child| records.iter().any(|parent| child.parent_is(parent)))
+    {
         children.insert(
             child.agent_id.to_string(),
             subagent_type(child.task.as_deref()),

@@ -377,7 +377,7 @@ fn launched_child_brief_is_attributed_to_parent() {
         "swift-child",
         rimz::agents::LaunchParams {
             parent_agent_id: Some(rimz::ids::AgentSessionId::from("parent-launch-session")),
-            parent_agent_kind: None,
+            parent_agent_kind: Some(rimz::ids::AgentKind::new_unchecked("codex")),
             launch_depth: Some(1),
             channel: Some("chat".to_owned()),
             ..Default::default()
@@ -431,7 +431,10 @@ fn launched_child_brief_is_attributed_to_parent() {
         entries[0].parent_agent_id.as_deref(),
         Some("parent-launch-session")
     );
-    assert_eq!(entries[0].parent_agent_kind, None);
+    assert_eq!(
+        entries[0].parent_agent_kind,
+        Some(rimz::ids::AgentKind::new_unchecked("codex"))
+    );
     assert_eq!(entries[1].entry, rimz::transcript::TranscriptKind::Prompt);
     assert_eq!(entries[1].from, None);
     assert_eq!(
