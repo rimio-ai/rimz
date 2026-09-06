@@ -116,13 +116,9 @@ fn remove_diag_logs(root: &Path) -> Result<usize> {
 fn cancel_active_runs_for_reset_locked(paths: &super::super::StatePaths) -> Result<Vec<RunRecord>> {
     let mut canceled = Vec::new();
     for mut record in run::list(&paths.runs_dir)? {
-        if record.status.is_terminal() {
+        if !record.mark_terminal(RunStatus::Canceled, Timestamp::now()) {
             continue;
         }
-        let now = Timestamp::now();
-        record.status = RunStatus::Canceled;
-        record.updated_at = now;
-        record.completed_at = Some(now);
         run::write(&paths.runs_dir, &record)?;
         canceled.push(record);
     }
