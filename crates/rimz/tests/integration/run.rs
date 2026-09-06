@@ -502,21 +502,37 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
 #[cfg(unix)]
 #[test]
 fn subagent_launch_from_foreign_cwd_uses_parent_checkout() {
-    assert_subagent_launch_uses_parent_checkout(false);
+    assert_subagent_launch_uses_parent_checkout(false, false);
 }
 
 #[cfg(unix)]
 #[test]
 fn subagent_fanout_from_foreign_cwd_uses_parent_checkout() {
-    assert_subagent_launch_uses_parent_checkout(true);
+    assert_subagent_launch_uses_parent_checkout(true, false);
 }
 
 #[cfg(unix)]
-fn assert_subagent_launch_uses_parent_checkout(fanout: bool) {
+#[test]
+fn subagent_launch_preserves_parent_root_subdirectory() {
+    assert_subagent_launch_uses_parent_checkout(false, true);
+}
+
+#[cfg(unix)]
+fn assert_subagent_launch_uses_parent_checkout(fanout: bool, repo_subdir: bool) {
     let env = Env::new();
-    let checkout = env.home_root.join("parent-checkout");
+    let checkout = if repo_subdir {
+        let git = Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(&env.home_root)
+            .output()
+            .expect("init monorepo");
+        assert!(git.status.success());
+        env.project_root.clone()
+    } else {
+        env.home_root.join("parent-checkout")
+    };
     let foreign = env.home_root.join("foreign-briefs");
-    std::fs::create_dir(&checkout).expect("mkdir parent checkout");
+    std::fs::create_dir_all(&checkout).expect("mkdir parent checkout");
     std::fs::create_dir(&foreign).expect("mkdir foreign cwd");
     let prompt = "Read this brief from the foreign cwd, but work in the parent checkout.";
     std::fs::write(foreign.join("brief.md"), prompt).expect("write relative prompt file");
@@ -532,7 +548,11 @@ fn assert_subagent_launch_uses_parent_checkout(fanout: bool) {
     trust_codex_project(&env, &checkout);
     let agent_bin = write_failing_agent_shim(&env, "codex", 1);
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
-    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let workspace = rimz::WorkspaceResolver::resolve(
+        &env.project_root,
+        repo_subdir.then(|| env.project_root.clone()),
+    )
+    .expect("workspace");
     let store = env.store();
     store
         .record_workspace(&workspace)

@@ -95,6 +95,8 @@ The supervised runner resolves the durable caller before it resolves a subagent 
 
 ### The child works where its parent works
 
+The recorded path remains the child's `worktree_root` even when it is a repository subdirectory selected by the parent's `--root`; workspace resolution supplies the surrounding metadata, not a replacement launch directory.
+
 The runner resolves its workspace from `"."`, which is wherever the parent's shell happened to be when it ran the launch. A parent that writes a brief under `/tmp` and launches from there would otherwise hand the child `/tmp` as its checkout. So immediately after ancestry, `anchor_subagent_workspace` ([`cli/supervised.rs`](../../../crates/rimz/src/cli/supervised.rs)) resolves the workspace a second time, from the caller's own `AgentState.worktree_path`, and everything below reads that value: profile qualification, channel inference, pane identity env (`RIMZ_WORKTREE_PATH`), and `resolve_launch_checkout`, whose `cwd` becomes the pane cwd, the provider cwd, the sidebar options, `RunRecord.worktree_path`, and the child's own recorded checkout. The parent's `worktree_path` is stamped from its launch cwd (or filled from a hook process's cwd) and carried for the session's lifetime, so it does not follow a shell `cd`. Both resolutions share the room pin's project root, so the store and effective config opened before the re-anchor stay correct.
 
 The gate is `request.subagent` and a resolved caller, so peers launched through `rimz agents` and loop fires keep the invoking cwd by design. A caller row with no recorded checkout keeps the invoking cwd and logs at debug; a recorded checkout that no longer exists refuses, naming the path, before any store append or mux action.
