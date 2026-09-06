@@ -620,7 +620,9 @@ fn slot_lifetime_effort(
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading audit agent rollup")?;
     let refs = audit.agents.iter().collect::<Vec<_>>();
-    let records = slot_records_for_agent(&refs, agent);
+    let lifetimes = rimz::agents::attribution::LaneLifetimes::resolve(audit.agents.iter())
+        .context("resolving lane lifetimes")?;
+    let records = slot_records_for_agent(&refs, agent, &lifetimes);
     let prices = rimz::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
     let effort = rimz::agents::spending::slot_effort(
         &records
@@ -650,6 +652,7 @@ fn slot_lifetime_effort(
 fn slot_records_for_agent<'a>(
     records: &[&'a AgentState],
     agent: &'a AgentState,
+    lifetimes: &rimz::agents::attribution::LaneLifetimes,
 ) -> Vec<&'a AgentState> {
     let launched_children = agent.is_launched_child().then(|| {
         records
@@ -659,7 +662,7 @@ fn slot_records_for_agent<'a>(
             .collect::<Vec<_>>()
     });
     let candidates = launched_children.as_deref().unwrap_or(records);
-    rimz::agents::attribution::slot_groups(candidates)
+    rimz::agents::attribution::slot_groups(candidates, lifetimes)
         .into_iter()
         .find(|slot| slot.iter().any(|record| record.agent_id == agent.agent_id))
         .unwrap_or_else(|| vec![agent])
@@ -834,6 +837,24 @@ mod tests {
     }
 
     #[test]
+    fn show_removed_lane_falls_back_to_the_addressed_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut first = rimz::testkit::agent_state("claude", "first", jiff::Timestamp::UNIX_EPOCH);
+        first.worktree_path = Some(dir.path().join("removed").display().to_string());
+        first.team = Some("forge".to_owned());
+        first.role = Some("coder".to_owned());
+        let mut second = first.clone();
+        second.agent_id = "second".into();
+        let records = [&first, &second];
+        let lifetimes = rimz::agents::attribution::LaneLifetimes::resolve(records).unwrap();
+
+        let slot = slot_records_for_agent(&records, &second, &lifetimes);
+
+        assert_eq!(slot.len(), 1);
+        assert_eq!(slot[0].agent_id, second.agent_id);
+    }
+
+    #[test]
     fn launched_child_show_uses_its_own_continuation_slot() {
         let now = jiff::Timestamp::UNIX_EPOCH;
         let parent = rimz::testkit::agent_state("claude", "parent", now);
@@ -849,7 +870,8 @@ mod tests {
         second.agent_id = "child-two".into();
         let records = [&parent, &first, &second];
 
-        let child_slot = slot_records_for_agent(&records, &second);
+        let lifetimes = rimz::agents::attribution::LaneLifetimes::resolve(records).unwrap();
+        let child_slot = slot_records_for_agent(&records, &second, &lifetimes);
 
         assert_eq!(
             child_slot

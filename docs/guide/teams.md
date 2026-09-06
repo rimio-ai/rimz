@@ -84,6 +84,7 @@ The bare team name and the longer `launch` form use the same reconciliation engi
 Fresh launches that open a new pane or tab print the handles RimZ minted as `starting`, followed by copy-ready commands to check the cohort and reach its leader; live status arrives asynchronously and stays authoritative in `teams show`.
 When the same team is live in several lanes, run the lifecycle command inside the lane you mean or select it with `team#worktree` or `-w NAME`.
 The `COST` in `rimz teams show`, the team's collapsed finished sidebar receipt, and attribution use the same all-in lifetime fold across every resumed session of each role and every subagent it spawned. Attribution's `subagents` line breaks that spend down by task. Expanding a finished receipt puts each role's lifetime cost on its card, and those cards add back to the receipt; live cards remain scoped to the current provider session.
+All three figures cover the worktree's current life, so a name reused by a later cohort in a recreated worktree reports that cohort alone, and a removed worktree contributes nothing anywhere.
 Use [`rimz agents attribution --md`](../reference/cli/agents.md#attribution) when the team's pull request is ready; it credits every contributing role from durable lane history, including members that exited before the PR opened.
 The full flag surface lives in the [teams CLI reference](../reference/cli/teams.md).
 

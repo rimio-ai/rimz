@@ -175,33 +175,46 @@ START             DUR  TOKENS       COST     OUTCOME  PROMPT
 ```
 
 **Credit the people and models behind the change.** A pull request usually opens after the first teammate has already exited, so live agent cards cannot supply a complete byline. `rimz agents attribution` reads the lane's audit records and provider transcripts instead; `--md` prints a collapsed block ready to append to the pull-request body, while the default panel is useful before you ship:
-
 ```console
 $ rimz agents attribution
-forge team · 3 agents · 14m active · $13.56 · 3 messages (2 from you)
+since 2026-09-06T13:26:00.155953104Z
+forge team · 3 agents · 26m active · $21.02 · 2 messages (1 from you)
 
   @planner · Claude · claude-fable-5-1@high
-      effort:    8m active · $4.83
-      subagents: 1 × explorer · $0.83
-      activity:  33 tool calls
-      messages:  2 from you · 2 to teammates
-      tokens:    184.8k input, 37.9k output, 111k cache write, 4.1m cache read
+      effort:    14m active · $8.29
+      subagents: 2 × explorer, 1 × designer · $3.51
+      activity:  34 tool calls
+      messages:  1 from you · 4 to teammates
+      tokens:    469.4k input, 75.3k output, 117.1k cache write, 5.8m cache read
 
   @coder · Codex · gpt-6-astra@high
-      effort:    5m active · $8.73
-      subagents: 2 × documenter, 2 × implementer · $5.70
-      activity:  59 tool calls
-      messages:  1 from teammates · 4 to teammates
-      tokens:    208.8k input, 50.5k output, 131.5k cache write, 5.1m cache read
+      effort:    11m active · $12.73
+      subagents: 4 × implementer, 1 × documenter · $7.87
+      activity:  91 tool calls
+      messages:  1 from teammates · 5 to teammates
+      tokens:    316.3k input, 56.9k output, 98.4k cache write, 8.6m cache read
 
   @reviewer · Claude · claude-opus-5@high
 
+Other agents · 1 agent · 4m active · $2.09 · 1 messages (1 from you)
+
+  @debugger · Codex · gpt-6-astra@high
+      effort:    4m active · $2.09
+      subagents: 1 × explorer · $0.61
+      activity:  29 tool calls
+      messages:  1 from you · 1 to teammates
+      tokens:    220.3k input, 14.5k output, 1.5m cache read
+
 Models
-  gpt-6-astra:      $5.13 · 208.6k input, 15k output, 2.3m cache read
-  claude-fable-5-1: $4.00 · 72 input, 21.5k output, 111k cache write, 2.8m cache read
-  claude-opus-5:    $3.60 · 116 input, 35.5k output, 131.5k cache write, 2.8m cache read
-  gpt-5.6-terra:    $0.83 · 184.8k input, 16.3k output, 1.3m cache read
+  gpt-6-astra:      $12.20 · 478.9k input, 42.3k output, 5.3m cache read
+  claude-fable-5-1: $4.78 · 64 input, 36.8k output, 117.1k cache write, 2.4m cache read
+  claude-opus-5:    $3.81 · 130 input, 28.5k output, 98.4k cache write, 4.2m cache read
+  gpt-5.6-terra:    $2.32 · 527k input, 39.1k output, 4m cache read
+
+Total · 4 agents · 30m active · $23.11 · 3 messages (2 from you)
 ```
+
+The report covers the worktree's current life: every session that ran in the checkout since RimZ created it, teammates that exited on the way included, and nothing from an earlier worktree that carried the same name. Remove the worktree and its sessions leave the report, though the records themselves survive. A checkout RimZ did not create, your main clone included, counts all the history it has retained, as before.
 
 Every dollar and token figure is all-in for the member or team, including subagents; each `subagents` line breaks part of the effort figure above down by task rather than adding to it. `Models` splits that same spend by the model id each provider transcript recorded, including native subagents and launched children. Unlike the member heading, which names its latest session's model, these rows show every model used, ordered by cost largest first. Entries whose transcript named no model collect under `unknown`. The `--md` form turns the same figures and wording into a collapsed pull-request receipt whose summary links RimZ to its repository, with member bullets under `**Agents**` followed by a `**Models**` bullet list.
 

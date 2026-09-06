@@ -5,11 +5,12 @@
 //! time comes from runtime sidecars and can become unavailable after GC. A member's
 //! tokens and dollars cover its seat and every subagent it spawned; the subagent
 //! breakdown groups that spend by task, and model rows split the same all-in spend
-//! by the transcript's model id.
+//! by the transcript's model id. Records enter the seat fold only within their
+//! stamped checkout's current lifetime.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 use serde::Serialize;
@@ -21,8 +22,89 @@ use super::{AgentState, pricing, spending};
 
 pub use super::spending::EffortTokens as TokenSplit;
 
-const ATTRIBUTION_SCHEMA: u8 = 6;
+const ATTRIBUTION_SCHEMA: u8 = 7;
 const SUBAGENT_TYPE_MAX_CHARS: usize = 24;
+
+/// Current lane lifetimes, resolved once from a report's full record set.
+pub struct LaneLifetimes {
+    by_path: HashMap<PathBuf, LaneLifetime>,
+}
+
+enum LaneLifetime {
+    Unbounded,
+    Removed,
+    Since(Timestamp),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum LaneLifetimeErr {
+    #[error("reading worktree lifetime for {}", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: crate::worktree::WorktreeErr,
+    },
+}
+
+impl LaneLifetimes {
+    pub fn resolve<'a>(
+        records: impl IntoIterator<Item = &'a AgentState>,
+    ) -> Result<Self, LaneLifetimeErr> {
+        let mut by_path = HashMap::new();
+        for path in records
+            .into_iter()
+            .filter_map(|record| record.worktree_path.as_deref())
+        {
+            let path = Path::new(path);
+            if by_path.contains_key(path) {
+                continue;
+            }
+            let exists = path.try_exists().map_err(|source| LaneLifetimeErr::Read {
+                path: path.to_owned(),
+                source: source.into(),
+            })?;
+            let lifetime = if exists {
+                crate::worktree::read_marker_from_checkout_metadata(path)
+                    .map_err(|source| LaneLifetimeErr::Read {
+                        path: path.to_owned(),
+                        source,
+                    })?
+                    .map_or(LaneLifetime::Unbounded, |marker| {
+                        LaneLifetime::Since(marker.created_at)
+                    })
+            } else {
+                LaneLifetime::Removed
+            };
+            by_path.insert(path.to_owned(), lifetime);
+        }
+        Ok(Self { by_path })
+    }
+
+    pub fn common_since(&self, roots: &[&AgentState]) -> Option<Timestamp> {
+        let path = roots.first()?.worktree_path.as_deref()?;
+        if !roots
+            .iter()
+            .all(|root| root.worktree_path.as_deref() == Some(path))
+        {
+            return None;
+        }
+        match self.by_path.get(Path::new(path)) {
+            Some(LaneLifetime::Since(since)) => Some(*since),
+            _ => None,
+        }
+    }
+
+    fn admits(&self, record: &AgentState) -> bool {
+        let Some(path) = record.worktree_path.as_deref() else {
+            return true;
+        };
+        match self.by_path.get(Path::new(path)) {
+            Some(LaneLifetime::Unbounded) => true,
+            Some(LaneLifetime::Since(since)) => record.registered_at.is_some_and(|at| at >= *since),
+            Some(LaneLifetime::Removed) | None => false,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Attribution {
@@ -41,6 +123,7 @@ pub struct AttributionScope {
     pub channel: Option<String>,
     pub branch: Option<String>,
     pub worktree: Option<String>,
+    pub since: Option<Timestamp>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -140,6 +223,7 @@ pub enum Presence {
 
 pub struct AttributionRequest<'a> {
     pub agents: &'a [&'a AgentState],
+    pub lifetimes: &'a LaneLifetimes,
     pub peers: &'a [&'a AgentState],
     pub subagents: &'a [&'a AgentState],
     pub transcript: &'a [TranscriptEntry],
@@ -175,7 +259,7 @@ struct FoldedMember {
 }
 
 pub fn build(request: AttributionRequest<'_>) -> Attribution {
-    let folded = fold_seats(request.agents);
+    let folded = fold_seats(request.agents, request.lifetimes);
     let peer_representatives = representatives(request.peers);
     let conversation_counts = conversation_counts(request.transcript);
     let prices = pricing::cached_book(request.pricing_cache_path);
@@ -330,17 +414,15 @@ fn fold<'a>(agents: &[&'a AgentState]) -> Vec<(SlotKey, Vec<&'a AgentState>)> {
 /// Fold each pane-backed child record into the durable seat that launched it.
 /// Orphaned children retain their own slot for `slot_groups` consumers;
 /// attribution drops slots that contain no parent identity.
-fn fold_seats<'a>(agents: &[&'a AgentState]) -> Vec<(SlotKey, Vec<&'a AgentState>)> {
-    let parents = agents
+fn fold_seats<'a>(
+    agents: &[&'a AgentState],
+    lifetimes: &LaneLifetimes,
+) -> Vec<(SlotKey, Vec<&'a AgentState>)> {
+    let (children, parents): (Vec<_>, Vec<_>) = agents
         .iter()
         .copied()
-        .filter(|agent| !agent.is_launched_child())
-        .collect::<Vec<_>>();
-    let children = agents
-        .iter()
-        .copied()
-        .filter(|agent| agent.is_launched_child())
-        .collect::<Vec<_>>();
+        .filter(|agent| lifetimes.admits(agent))
+        .partition(|agent| agent.is_launched_child());
     let mut slots = fold(&parents).into_iter().collect::<HashMap<_, _>>();
     for child in children {
         let parent = parents
@@ -362,8 +444,11 @@ fn is_launched_child_of(child: &AgentState, parent: &AgentState) -> bool {
 }
 
 /// Lifetime records for one seat, including pane-backed children it launched.
-pub fn slot_groups<'a>(agents: &[&'a AgentState]) -> Vec<Vec<&'a AgentState>> {
-    fold_seats(agents)
+pub fn slot_groups<'a>(
+    agents: &[&'a AgentState],
+    lifetimes: &LaneLifetimes,
+) -> Vec<Vec<&'a AgentState>> {
+    fold_seats(agents, lifetimes)
         .into_iter()
         .map(|(_, records)| records)
         .collect()

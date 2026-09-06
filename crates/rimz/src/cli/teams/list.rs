@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 use super::super::{Ctx, GlobalFlags, render, report_unknown_config_keys};
+use rimz::agents::attribution::LaneLifetimes;
 use rimz::agents::{AgentState, AgentStatus, TurnPhase};
 use rimz::config::{CommandsConfig, ProfilesConfig, Team, TeamsConfig};
 use rimz::harness::spec::{AgentCell, LayoutSpec};
@@ -93,6 +94,8 @@ pub(super) fn load_catalog(
         .store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading audit agent rollup")?;
+    let lifetimes =
+        LaneLifetimes::resolve(audit.agents.iter()).context("resolving lane lifetimes")?;
     let prices = rimz::agents::pricing::cached_book(&ctx.runtime().shared_pricing_cache_path());
     Ok(build_catalog(
         &effective.teams,
@@ -101,6 +104,7 @@ pub(super) fn load_catalog(
         LiveCatalog {
             agents: &snapshot.agents,
             audit_agents: &audit.agents,
+            lifetimes: &lifetimes,
             prices: &prices,
             worktree,
         },
@@ -132,6 +136,7 @@ fn build_catalog(
     let live = live_instances(
         live_catalog.agents,
         live_catalog.audit_agents,
+        live_catalog.lifetimes,
         live_catalog.prices,
         live_catalog.worktree,
     );
@@ -172,6 +177,7 @@ fn build_catalog(
 struct LiveCatalog<'a> {
     agents: &'a [AgentState],
     audit_agents: &'a [AgentState],
+    lifetimes: &'a LaneLifetimes,
     prices: &'a rimz::agents::PriceBook,
     worktree: Option<&'a str>,
 }
@@ -321,6 +327,7 @@ fn cell_label(cell: &AgentCell) -> String {
 fn live_instances(
     agents: &[AgentState],
     audit_agents: &[AgentState],
+    lifetimes: &LaneLifetimes,
     prices: &rimz::agents::PriceBook,
     worktree: Option<&str>,
 ) -> BTreeMap<String, Vec<LiveInstance>> {
@@ -337,7 +344,7 @@ fn live_instances(
     let audit_refs = audit_agents.iter().collect::<Vec<_>>();
     let mut effort_by_session = BTreeMap::new();
     let mut memo = rimz::agents::spending::EffortParseMemo::default();
-    for records in rimz::agents::attribution::slot_groups(&audit_refs) {
+    for records in rimz::agents::attribution::slot_groups(&audit_refs, lifetimes) {
         if !records
             .iter()
             .any(|agent| live_ids.contains(&agent.agent_id))
@@ -567,6 +574,7 @@ mod tests {
             LiveCatalog {
                 agents: &[agent],
                 audit_agents: &[],
+                lifetimes: &LaneLifetimes::resolve([]).unwrap(),
                 prices: &rimz::agents::PriceBook::default(),
                 worktree: None,
             },
@@ -614,6 +622,7 @@ mod tests {
         agent.role = Some("planner".to_owned());
         agent.channel = Some("feat-x".to_owned());
         agent.transcript_path = Some(transcript.to_string_lossy().into_owned());
+        let lifetimes = LaneLifetimes::resolve(std::iter::once(&agent)).unwrap();
         let reports = build_catalog(
             &TeamsConfig(BTreeMap::from([("forge".to_owned(), team())])),
             &ProfilesConfig::default(),
@@ -621,6 +630,7 @@ mod tests {
             LiveCatalog {
                 agents: &[agent.clone()],
                 audit_agents: &[agent],
+                lifetimes: &lifetimes,
                 prices: &rimz::agents::PriceBook::default(),
                 worktree: None,
             },
@@ -628,6 +638,101 @@ mod tests {
         );
 
         assert_eq!(reports[0].instances[0].members[0].cost_usd, Some(0.25));
+    }
+
+    #[test]
+    fn live_member_cost_counts_only_the_current_lane_lifetime() {
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = dir.path().join("feat-x");
+        let git_dir = worktree.join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let marker = rimz::worktree::WorktreeMarker {
+            version: 4,
+            name: "feat-x".to_owned(),
+            branch: "feat-x".to_owned(),
+            base_branch: Some("main".to_owned()),
+            from_pr: None,
+            base_ref: "main".to_owned(),
+            repo_root: dir.path().to_path_buf(),
+            worktree_path: worktree.clone(),
+            created_at: "2026-06-02T10:00:00Z".parse().unwrap(),
+        };
+        rimz::disk::atomic::write_temp_then_rename(&git_dir.join("rimz-worktree.json"), &marker)
+            .unwrap();
+        let transcript = dir.path().join("opencode.db");
+        let connection = rusqlite::Connection::open(&transcript).unwrap();
+        connection
+            .execute_batch("CREATE TABLE message (id TEXT, session_id TEXT, data TEXT)")
+            .unwrap();
+        for (session, cost) in [("old-planner", 10.0), ("current-planner", 0.25)] {
+            let data = serde_json::json!({
+                "cost": cost,
+                "modelID": "gpt",
+                "providerID": "openai",
+                "time": { "created": 1780394400000_i64 },
+                "tokens": { "input": 10, "output": 2, "cache": { "read": 3, "write": 4 } }
+            });
+            connection
+                .execute(
+                    "INSERT INTO message (id, session_id, data) VALUES (?1, ?2, ?3)",
+                    (session, session, data.to_string()),
+                )
+                .unwrap();
+        }
+        drop(connection);
+        let mut current = AgentState::stub("opencode", "current-planner", AgentStatus::Running);
+        current.team = Some("forge".to_owned());
+        current.role = Some("planner".to_owned());
+        current.channel = Some("feat-x".to_owned());
+        current.worktree_path = Some(worktree.to_string_lossy().into_owned());
+        current.registered_at = Some("2026-06-02T10:00:01Z".parse().unwrap());
+        current.transcript_path = Some(transcript.to_string_lossy().into_owned());
+        let mut old = AgentState::stub("opencode", "old-planner", AgentStatus::Success);
+        old.team = current.team.clone();
+        old.role = current.role.clone();
+        old.channel = current.channel.clone();
+        old.worktree_path = current.worktree_path.clone();
+        old.registered_at = Some("2026-06-02T09:59:59Z".parse().unwrap());
+        old.transcript_path = current.transcript_path.clone();
+        let audit_agents = [old, current.clone()];
+        let build = || {
+            let lifetimes = LaneLifetimes::resolve(audit_agents.iter()).unwrap();
+            build_catalog(
+                &TeamsConfig(BTreeMap::from([("forge".to_owned(), team())])),
+                &ProfilesConfig::default(),
+                &CommandsConfig::default(),
+                LiveCatalog {
+                    agents: std::slice::from_ref(&current),
+                    audit_agents: &audit_agents,
+                    lifetimes: &lifetimes,
+                    prices: &rimz::agents::PriceBook::default(),
+                    worktree: None,
+                },
+                |_| None,
+            )
+        };
+        let reports = build();
+        let instance = &reports[0].instances[0];
+        assert_eq!(instance.members.len(), 1);
+        assert_eq!(instance.members[0].cost_usd, Some(0.25));
+
+        std::fs::remove_dir_all(&worktree).unwrap();
+        let removed = build();
+        let removed_instance = &removed[0].instances[0];
+        assert_eq!(removed_instance.members.len(), 1);
+        assert_eq!(removed_instance.members[0].cost_usd, None);
+        assert_eq!(
+            removed_instance.members[0].handle,
+            instance.members[0].handle
+        );
+        assert_eq!(
+            removed_instance.members[0].status,
+            instance.members[0].status
+        );
+        assert_eq!(removed_instance.channel, instance.channel);
+        assert_eq!(removed_instance.state, instance.state);
+        assert_eq!(removed_instance.status_counts, instance.status_counts);
+        assert!(transcript.exists());
     }
 
     #[test]
@@ -641,6 +746,7 @@ mod tests {
             LiveCatalog {
                 agents: &[],
                 audit_agents: &[],
+                lifetimes: &LaneLifetimes::resolve([]).unwrap(),
                 prices: &rimz::agents::PriceBook::default(),
                 worktree: None,
             },
@@ -687,6 +793,7 @@ mod tests {
             LiveCatalog {
                 agents: &[],
                 audit_agents: &[],
+                lifetimes: &LaneLifetimes::resolve([]).unwrap(),
                 prices: &rimz::agents::PriceBook::default(),
                 worktree: None,
             },
@@ -729,12 +836,15 @@ mod tests {
 
     #[test]
     fn catalog_filter_matches_an_exact_lane_or_member_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = dir.path().join("feat-x");
+        std::fs::create_dir(&worktree).unwrap();
         let teams = TeamsConfig(BTreeMap::from([("forge".to_owned(), team())]));
         let mut agent = AgentState::stub("claude", "sess-planner", AgentStatus::Running);
         agent.team = Some("forge".to_owned());
         agent.role = Some("planner".to_owned());
         agent.channel = None;
-        agent.worktree_path = Some("/repo-worktrees/feat-x".to_owned());
+        agent.worktree_path = Some(worktree.to_string_lossy().into_owned());
         let build = |filter| {
             build_catalog(
                 &teams,
@@ -743,6 +853,7 @@ mod tests {
                 LiveCatalog {
                     agents: std::slice::from_ref(&agent),
                     audit_agents: &[],
+                    lifetimes: &LaneLifetimes::resolve([]).unwrap(),
                     prices: &rimz::agents::PriceBook::default(),
                     worktree: filter,
                 },
@@ -751,10 +862,7 @@ mod tests {
         };
 
         assert_eq!(build(Some("feat-x"))[0].instances[0].channel, "feat-x");
-        assert_eq!(
-            build(Some("/repo-worktrees/feat-x"))[0].instances[0].channel,
-            "feat-x"
-        );
+        assert_eq!(build(worktree.to_str())[0].instances[0].channel, "feat-x");
         assert!(build(Some("other"))[0].instances.is_empty());
     }
 }

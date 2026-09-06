@@ -21,7 +21,9 @@ The marker lives in the worktree's Git admin directory (`.git/worktrees/<name>/r
 | `base_ref` | Resolved base commit at creation. The last-resort comparison when no branch survives. |
 | `from_pr` | Pull-request number for a `--from-pr` tree. |
 | `repo_root`, `worktree_path` | Where the tree came from and where it lives. |
-| `created_at` | Creation timestamp. |
+| `created_at` | Creation timestamp, and the boundary that scopes [attribution](../agents/model.md#attribution) to this incarnation of the tree. |
+
+`created_at` is also the attribution boundary. Creation writes it once, reuse of an existing tree keeps the marker it finds, and a tree removed and recreated under the same name gets a fresh one, which makes it the durable birth of the lane's current incarnation. Attribution reads it to admit only the agent records registered at or after that birth, so the sessions of an earlier tree at the same path stop being counted the moment a new one replaces it.
 
 `base_branch` arrived in version 3 and `from_pr` in version 4, both as `#[serde(default)]` options, so markers written by older builds still deserialize and their trees still clean up. Two tests in [`worktree/tests.rs`](../../../crates/rimz/src/worktree/tests.rs) pin that compatibility. Any field added later needs the same treatment.
 
@@ -188,6 +190,8 @@ Removal is `git worktree remove` followed by branch deletion, both from the repo
 Branch deletion re-runs the same proof rather than trusting Git's merge check. `git branch -d` first; a branch already gone counts as deleted; a "not fully merged" refusal escalates to `-D` only when `content_landed` passes again, and otherwise returns `KeptUnmerged` so the CLI can tell the user their branch survived.
 
 After Git removal succeeds, `retire_removal` runs two independent durable effects: ending the store sessions bound to that path or branch, and archiving the worktree channel's messages. They run independently and both results come back in a `#[must_use]` struct, because Git removal is already irreversible by that point and one failure must not swallow the other. Explicit removal and cohort reconciliation surface these failures; wrapper cleanup and `gc` log them and move on.
+
+Attribution readers resolve the lifetime from the checkout itself at read time, so once removal deletes the directory the tree's sessions drop out of attribution, `teams show` cost, and sidebar cohort receipts. The records themselves are untouched, and a recreated tree starts its own count from its new `created_at`.
 
 Cohort reconciliation calls `retire_removal` only through the `remove` choice. The fresh choice removes nothing and leaves prior session rows and messages unchanged; orphan message archival stays with `rimz gc`, rather than a channel-wide sweep that could affect a separately launched live agent in the same lane.
 
