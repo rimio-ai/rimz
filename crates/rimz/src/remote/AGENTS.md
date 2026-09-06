@@ -19,7 +19,7 @@ Local contract for `crates/rimz/src/remote/` — the SSH attach library. Extends
 
 - [`mod.rs`](./mod.rs) — the `[user@]host:<session-or-path>` grammar, the guarded ssh command, and the autossh-style reconnect policy.
 - [`aliases.rs`](./aliases.rs) — per-machine aliases in `remote.toml`; [`version.rs`](./version.rs) — client/host skew classification.
-- [`link.rs`](./link.rs) — the health JSONL protocol and terminal-session transitions; [`reachability.rs`](./reachability.rs) — endpoint discovery and reconnect-wait state; [`recovery.rs`](./recovery.rs) — panel timing and checkpoints.
+- [`link.rs`](./link.rs) — the health JSONL protocol, the tier classifier over `store::snapshot::LinkTier`, and terminal-session transitions; [`reachability.rs`](./reachability.rs) — endpoint discovery and reconnect-wait state; [`recovery.rs`](./recovery.rs) — panel timing and checkpoints.
 - [`forward.rs`](./forward.rs) — listener discovery and live ControlMaster forwards; [`web.rs`](./web.rs) and [`setup.rs`](./setup.rs) — argv builders whose I/O belongs to the CLI; [`tty.rs`](./tty.rs) — terminal-state hygiene.
 
 ## Tests
