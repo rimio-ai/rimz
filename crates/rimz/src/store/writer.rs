@@ -669,7 +669,7 @@ fn allocate_agent_launch_identities(
                 name.clone()
             }
             AgentLaunchName::Soft(name)
-                if crate::harness::petname::valid_agent_name(name)
+                if crate::agents::petname::valid_agent_name(name)
                     && !name_taken(name, &taken, &session_ids) =>
             {
                 name.clone()
@@ -693,7 +693,7 @@ fn allocate_agent_launch_identities(
 }
 
 fn validate_agent_launch_name(name: &str) -> Result<()> {
-    if crate::harness::petname::valid_agent_name(name) {
+    if crate::agents::petname::valid_agent_name(name) {
         Ok(())
     } else {
         Err(StoreErr::AgentLaunchIdentity(format!(
@@ -708,8 +708,8 @@ fn name_taken(name: &str, taken: &BTreeSet<String>, session_ids: &[&str]) -> boo
 
 fn mint_available_agent_name(taken: &BTreeSet<String>, session_ids: &[&str]) -> String {
     loop {
-        let candidate = crate::harness::petname::mint(taken.iter().map(String::as_str));
-        if crate::harness::petname::valid_agent_name(&candidate)
+        let candidate = crate::agents::petname::mint(taken.iter().map(String::as_str));
+        if crate::agents::petname::valid_agent_name(&candidate)
             && !name_taken(&candidate, taken, session_ids)
         {
             return candidate;

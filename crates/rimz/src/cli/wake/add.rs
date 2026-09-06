@@ -46,7 +46,7 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
     let mut name = if args.signal.is_some() {
         "wake".to_owned()
     } else {
-        let petname = rimz::harness::petname::mint(
+        let petname = rimz::agents::petname::mint(
             catalog
                 .visible()
                 .keys()

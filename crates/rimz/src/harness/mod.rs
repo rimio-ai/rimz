@@ -11,7 +11,6 @@ mod launch_context;
 pub mod launch_reminders;
 pub mod orphan_sweep;
 pub mod parent_watch;
-pub mod petname;
 pub mod plan;
 pub mod prompt_compose;
 pub mod rebirth;

@@ -308,10 +308,7 @@ impl CardIdentityAllocator {
         {
             return name.to_owned();
         }
-        crate::harness::petname::mint_for_session(
-            fallback_id,
-            self.names.keys().map(String::as_str),
-        )
+        crate::agents::petname::mint_for_session(fallback_id, self.names.keys().map(String::as_str))
     }
 
     fn assign_name_candidate(
@@ -340,7 +337,7 @@ impl CardIdentityAllocator {
             .iter()
             .filter(|(_name, owner)| *owner != key)
             .map(|(name, _owner)| name.as_str());
-        let name = crate::harness::petname::mint_for_session(fallback_id, taken);
+        let name = crate::agents::petname::mint_for_session(fallback_id, taken);
         self.names.insert(name.clone(), key.clone());
         name
     }
@@ -420,5 +417,5 @@ impl CardIdentityAllocator {
 }
 
 pub(super) fn usable_name(name: &str) -> bool {
-    crate::harness::petname::valid_agent_name(name)
+    crate::agents::petname::valid_agent_name(name)
 }

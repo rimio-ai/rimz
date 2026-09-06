@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use crate::agents::PermissionMode;
+use crate::agents::petname;
 use crate::config::{CommandsConfig, Profile, ProfilesConfig, RoleBinding, Team, TeamsConfig};
-use crate::harness::petname;
 use crate::ids::AgentKind;
 
 const BUILTIN_PEER: &str = "claude,codex";

@@ -43,14 +43,14 @@ pub const RESERVED_AGENT_WORDS: &[&str] = &[
 ];
 
 /// Handles used in message envelopes for senders that are not agents.
-pub(super) const HEADER_PSEUDO_HANDLES: &[&str] = &["user", "rimz"];
+pub const HEADER_PSEUDO_HANDLES: &[&str] = &["user", "rimz"];
 
 pub fn mint(taken: impl IntoIterator<Item = impl AsRef<str>>) -> String {
     let seed = Uuid::now_v7().simple().to_string();
     mint_from_seed(&seed, taken)
 }
 
-pub fn mint_for_session(
+pub(crate) fn mint_for_session(
     agent_id: &AgentSessionId,
     taken: impl IntoIterator<Item = impl AsRef<str>>,
 ) -> String {
