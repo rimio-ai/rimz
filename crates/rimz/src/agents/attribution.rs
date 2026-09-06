@@ -34,12 +34,26 @@ pub enum LaneLifetime {
     Unbounded,
     Removed,
     Since(Timestamp),
+    Unreadable { reason: String },
 }
 
 impl LaneLifetimes {
     /// The map must cover every stamped checkout in the report's record set.
     pub fn new(by_path: HashMap<PathBuf, LaneLifetime>) -> Self {
         Self { by_path }
+    }
+
+    pub fn unreadable(&self) -> impl Iterator<Item = (&Path, &str)> {
+        let mut unreadable = self
+            .by_path
+            .iter()
+            .filter_map(|(path, lifetime)| match lifetime {
+                LaneLifetime::Unreadable { reason } => Some((path.as_path(), reason.as_str())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        unreadable.sort_unstable_by_key(|(path, _)| *path);
+        unreadable.into_iter()
     }
 
     pub fn common_since(&self, roots: &[&AgentState]) -> Option<Timestamp> {
@@ -63,7 +77,7 @@ impl LaneLifetimes {
         match self.by_path.get(Path::new(path)) {
             Some(LaneLifetime::Unbounded) => true,
             Some(LaneLifetime::Since(since)) => record.registered_at.is_some_and(|at| at >= *since),
-            Some(LaneLifetime::Removed) | None => false,
+            Some(LaneLifetime::Removed | LaneLifetime::Unreadable { .. }) | None => false,
         }
     }
 }

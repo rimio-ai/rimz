@@ -29,8 +29,6 @@ pub(super) fn attribution(
             projection.agents,
             jiff::Timestamp::now(),
         ));
-    let lifetimes = rimz::worktree::lane_lifetimes(snapshot.agents.iter())
-        .context("resolving lane lifetimes")?;
     let peers = rimz::harness::target::addressable_agents(&snapshot);
     let channel = super::list::list_channel_filter(all, scope.as_deref(), &ctx.workspace);
     let default_worktree =
@@ -62,9 +60,18 @@ pub(super) fn attribution(
             }
         })
         .collect::<Vec<_>>();
-    let report_scope = report_scope(scope, channel, default_worktree, &roots, &lifetimes);
     // Eligible children follow their durable parent link across lane selection.
     let agents = roots.iter().copied().chain(children).collect::<Vec<_>>();
+    let lifetimes = rimz::worktree::lane_lifetimes(agents.iter().copied());
+    for (path, reason) in lifetimes.unreadable() {
+        let _ = writeln!(
+            render::err(),
+            "{} {}: {reason}; its sessions are left out of seat totals",
+            render::paint(render::palette::warn().bold(), "warning:"),
+            path.display()
+        );
+    }
+    let report_scope = report_scope(scope, channel, default_worktree, &roots, &lifetimes);
     let transcript =
         rimz::transcript::read_all(ctx.store.paths()).context("reading conversation transcript")?;
     let me = super::report::SelfIdentity::from_env().resolve(&snapshot);
@@ -145,7 +152,7 @@ pub(super) fn render_panel(w: &mut impl Write, report: &Attribution) -> std::io:
         writeln!(
             w,
             "{}",
-            render::paint(render::palette::muted(), &format!("since {since}"))
+            render::paint(render::palette::muted(), &since_label(since))
         )?;
     }
     if report.groups.is_empty() {
@@ -235,7 +242,7 @@ pub(super) fn render_markdown(w: &mut impl Write, report: &Attribution) -> std::
         totals_label(&report.totals)
     )?;
     if let Some(since) = report.scope.since {
-        write!(w, " · since {since}")?;
+        write!(w, " · {}", since_label(since))?;
     }
     writeln!(w, "</summary>")?;
     writeln!(w, "\n<br/>\n\n**Agents**\n")?;
@@ -316,6 +323,15 @@ fn group_name(group: &AttributionGroup) -> String {
     group.team.as_ref().map_or_else(
         || "Other agents".to_owned(),
         |team| format!("{} team", team.name),
+    )
+}
+
+fn since_label(since: jiff::Timestamp) -> String {
+    format!(
+        "since {}",
+        since
+            .to_zoned(crate::cli::machine_config().time_zone())
+            .strftime("%Y-%m-%d %H:%M")
     )
 }
 
@@ -995,7 +1011,17 @@ mod tests {
     #[test]
     fn attribution_headers_show_the_lane_boundary() {
         let mut report = report();
-        for since in [None, Some(jiff::Timestamp::UNIX_EPOCH)] {
+        let timestamp = "2026-09-06T13:26:00.155953104Z"
+            .parse::<jiff::Timestamp>()
+            .unwrap();
+        let local = timestamp.to_zoned(crate::cli::machine_config().time_zone());
+        let boundary = format!(
+            "since {} {:02}:{:02}",
+            local.date(),
+            local.hour(),
+            local.minute()
+        );
+        for since in [None, Some(timestamp)] {
             report.scope.since = since;
             let mut panel = anstream::StripStream::new(Vec::new());
             render_panel(&mut panel, &report).expect("render panel");
@@ -1003,12 +1029,9 @@ mod tests {
             let mut markdown = Vec::new();
             render_markdown(&mut markdown, &report).expect("render markdown");
             let markdown = String::from_utf8(markdown).expect("utf8");
+            assert_eq!(panel.starts_with(&format!("{boundary}\n")), since.is_some());
             assert_eq!(
-                panel.starts_with("since 1970-01-01T00:00:00Z\n"),
-                since.is_some()
-            );
-            assert_eq!(
-                markdown.contains(" · since 1970-01-01T00:00:00Z</summary>"),
+                markdown.contains(&format!(" · {boundary}</summary>")),
                 since.is_some()
             );
         }
@@ -1017,7 +1040,7 @@ mod tests {
         render_panel(&mut panel, &report).expect("render empty panel");
         assert_eq!(
             String::from_utf8(panel.into_inner()).expect("utf8"),
-            "since 1970-01-01T00:00:00Z\nNo agent attribution records in this scope.\n"
+            format!("{boundary}\nNo agent attribution records in this scope.\n")
         );
         let mut markdown = Vec::new();
         render_markdown(&mut markdown, &report).expect("render empty markdown");

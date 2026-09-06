@@ -67,7 +67,7 @@ pub(super) fn refresh_cohort_spend_for(
         return;
     };
     let prices = crate::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
-    let groups = match compute_cohort_effort(
+    let groups = compute_cohort_effort(
         &snapshot.worktree_groups,
         &agents,
         runtime,
@@ -75,13 +75,7 @@ pub(super) fn refresh_cohort_spend_for(
         active_grace_secs,
         &prices,
         memo,
-    ) {
-        Ok(groups) => groups,
-        Err(error) => {
-            tracing::debug!(%error, "sidebar cohort-spend lane lifetime resolution failed");
-            return;
-        }
-    };
+    );
     let refreshed = CohortSpendCache {
         version: COHORT_SPEND_CACHE_VERSION,
         refreshed_at_ms: now_ms,
@@ -104,8 +98,15 @@ fn compute_cohort_effort(
     active_grace_secs: u32,
     prices: &crate::agents::PriceBook,
     memo: &mut EffortParseMemo,
-) -> Result<BTreeMap<String, SidebarCohortEffort>, crate::worktree::WorktreeErr> {
-    let lifetimes = crate::worktree::lane_lifetimes(agents.iter())?;
+) -> BTreeMap<String, SidebarCohortEffort> {
+    let lifetimes = crate::worktree::lane_lifetimes(agents.iter());
+    for (path, reason) in lifetimes.unreadable() {
+        tracing::debug!(
+            path = %path.display(),
+            %reason,
+            "sidebar cohort-spend lane sessions left out of seat totals"
+        );
+    }
     let agent_refs = agents.iter().collect::<Vec<_>>();
     let slots = crate::agents::attribution::slot_groups(&agent_refs, &lifetimes);
     let active = active_time::read_for_keys(
@@ -172,7 +173,7 @@ fn compute_cohort_effort(
     }
 
     memo.retain_touched();
-    Ok(computed)
+    computed
 }
 
 #[cfg(test)]
@@ -261,6 +262,9 @@ mod tests {
                 .unwrap();
         }
         drop(connection);
+        let checkout = dir.path().join("planner-lane");
+        let git_dir = checkout.join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
         let mut agents = Vec::new();
         let mut rows = Vec::new();
         for (session_id, role) in [("planner", "planner"), ("coder", "coder")] {
@@ -268,6 +272,11 @@ mod tests {
             agent.team = Some("forge".to_owned());
             agent.role = Some(role.to_owned());
             agent.transcript_path = Some(transcript.to_string_lossy().into_owned());
+            agent.worktree_path = Some(if role == "planner" {
+                checkout.to_string_lossy().into_owned()
+            } else {
+                dir.path().to_string_lossy().into_owned()
+            });
             agents.push(agent);
             let mut row = activity_row(
                 true,
@@ -283,15 +292,14 @@ mod tests {
         let mut memo = EffortParseMemo::default();
 
         let computed = compute_cohort_effort(
-            &[group],
+            std::slice::from_ref(&group),
             &agents,
             &runtime,
             jiff::Timestamp::UNIX_EPOCH,
             180,
             &crate::agents::PriceBook::default(),
             &mut memo,
-        )
-        .unwrap();
+        );
         let effort = computed.values().next().unwrap();
 
         assert_eq!(effort.cost_usd, Some(0.5));
@@ -317,6 +325,22 @@ mod tests {
             },
         );
         assert_eq!(seat_tokens, effort.tokens);
+
+        std::fs::write(git_dir.join("rimz-worktree.json"), "invalid marker").unwrap();
+        let unreadable = compute_cohort_effort(
+            &[group],
+            &agents,
+            &runtime,
+            jiff::Timestamp::UNIX_EPOCH,
+            180,
+            &crate::agents::PriceBook::default(),
+            &mut memo,
+        );
+        let remaining = unreadable.values().next().unwrap();
+        assert_eq!(remaining.cost_usd, Some(0.25));
+        assert_eq!(remaining.tokens.input, 20);
+        assert_eq!(remaining.seats.len(), 1);
+        assert_eq!(remaining.seats["coder"], effort.seats["coder"]);
     }
 
     #[test]
@@ -405,7 +429,7 @@ mod tests {
                 memo,
             )
         };
-        let computed = compute(&mut memo).unwrap();
+        let computed = compute(&mut memo);
         let effort = &computed[&group.key];
         assert_eq!(effort.cost_usd, Some(4.0));
         assert_eq!(effort.tokens.input, 40);
@@ -418,10 +442,11 @@ mod tests {
         assert_eq!(effort.seats["current"].tokens, effort.tokens);
 
         std::fs::write(&marker_path, "invalid marker").unwrap();
-        assert!(compute(&mut memo).is_err());
+        let unreadable = compute(&mut memo);
+        assert_eq!(unreadable[&group.key], SidebarCohortEffort::default());
 
         std::fs::remove_dir_all(&checkout).unwrap();
-        let removed = compute(&mut memo).unwrap();
+        let removed = compute(&mut memo);
         assert_eq!(removed[&group.key], SidebarCohortEffort::default());
         assert!(transcript.exists());
     }
