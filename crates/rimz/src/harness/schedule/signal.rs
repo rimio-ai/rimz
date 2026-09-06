@@ -12,13 +12,13 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use super::arming;
 use super::catalog::TaskCatalog;
 use super::run_log::LoopRunMode;
 use super::runner::{
     CheckEcho, CheckOutcome, check_record, configured_timeout, effective_spawn_timeout, run_check,
     task_timeout,
 };
-use super::{Trigger, arming};
 use crate::RuntimePaths;
 use crate::disk::paths::StatePaths;
 use crate::harness::schedule::runner::RunLockInfo;
