@@ -186,12 +186,30 @@ fn attach_agent_pane_records_process_owned_placement() {
     let agent_id = AgentSessionId::from("sess-resumed");
     let launch_id = AgentSessionId::from("launch-resumed");
     let pane_id = crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%4");
+    let owner = crate::pane::RuntimeOwner::new(
+        RuntimeOwnerKind::Agent,
+        "sess-resumed",
+        43,
+        Some("provider-start".to_owned()),
+    );
 
     store
-        .attach_agent_pane(&kind, &agent_id, Some(&launch_id), "rimz-test", &pane_id)
+        .attach_agent_pane(
+            &kind,
+            &agent_id,
+            Some(&launch_id),
+            "rimz-test",
+            &pane_id,
+            owner.clone(),
+        )
         .expect("attach resumed agent");
 
-    let events = store.read_events().expect("read attach");
+    let events = store
+        .read_events()
+        .expect("read attach")
+        .into_iter()
+        .filter(|event| event.method == "agent.attached")
+        .collect::<Vec<_>>();
     assert_eq!(events.len(), 1);
     let event = &events[0];
     assert_eq!(event.workspace_id, workspace_id);
@@ -206,10 +224,7 @@ fn attach_agent_pane_records_process_owned_placement() {
     assert_eq!(payload.launch_id, Some(launch_id));
     assert_eq!(payload.pane_id, pane_id);
     assert_eq!(payload.pane_pid, Some(std::process::id()));
-    assert_eq!(
-        payload.runtime_owner,
-        runtime::current_process_owner(RuntimeOwnerKind::Agent, "sess-resumed")
-    );
+    assert_eq!(payload.runtime_owner, owner);
 }
 
 #[test]

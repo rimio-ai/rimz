@@ -122,6 +122,10 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
                 .launch_id
                 .as_deref()
                 .map(AgentSessionId::from),
+            rimz::store::runtime::current_process_owner(
+                rimz::pane::RuntimeOwnerKind::Agent,
+                target.1.as_str(),
+            ),
         );
     }
     let (program, rest) = process.argv.split_first().ok_or_else(|| {
@@ -148,6 +152,22 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let child = command
         .spawn()
         .with_context(|| format!("running {program}"))?;
+    if let Some(target) = attach_target.as_ref() {
+        record_own_resume_pane(
+            &invocation,
+            target,
+            request
+                .identity
+                .launch_id
+                .as_deref()
+                .map(AgentSessionId::from),
+            rimz::store::runtime::process_owner(
+                rimz::pane::RuntimeOwnerKind::Agent,
+                target.1.as_str(),
+                child.id(),
+            ),
+        );
+    }
     if let Some(context) = run_context.as_ref() {
         record_provider_process(context, child.id());
     }
@@ -849,21 +869,22 @@ fn attach_own_launch_pane(invocation: &ExecInvocationContext<'_>, identity: &Lau
     let workspace = invocation.workspace;
     let attached = invocation.store().and_then(|store| {
         let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-        let current = projection
-            .agents
-            .iter()
-            .find(|agent| {
-                agent.kind == identity.kind
-                    && (agent.launch_id.as_ref() == Some(&identity.agent_id)
-                        || agent.agent_id == identity.agent_id)
-            })
-            .context("resolving current agent row by launch id")?;
+        let current = rimz::harness::target::launch_row(
+            &projection.agents,
+            &identity.kind,
+            &identity.agent_id,
+        )
+        .context("resolving current agent row by launch id")?;
         store.attach_agent_pane(
             &current.kind,
             &current.agent_id,
             Some(&identity.agent_id),
             &workspace.session_name,
             &pane_id,
+            rimz::store::runtime::current_process_owner(
+                rimz::pane::RuntimeOwnerKind::Agent,
+                current.agent_id.as_str(),
+            ),
         )?;
         Ok(())
     });
@@ -882,6 +903,7 @@ fn record_own_resume_pane(
     invocation: &ExecInvocationContext<'_>,
     target: &(AgentKind, AgentSessionId),
     launch_id: Option<AgentSessionId>,
+    runtime_owner: rimz::pane::RuntimeOwner,
 ) {
     let Some(pane_id) = rimz::mux::ambient_pane_id() else {
         return;
@@ -894,6 +916,7 @@ fn record_own_resume_pane(
             launch_id.as_ref(),
             &workspace.session_name,
             &pane_id,
+            runtime_owner,
         )?;
         Ok(())
     }) {
