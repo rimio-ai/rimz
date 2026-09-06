@@ -4,11 +4,11 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use super::{PrLink, PrStateCache, RepoGroup, TargetStamp};
+use super::{PrLink, PrStateCache, RepoGroup, TargetStamp, ci_signal_name, pr_signal_name};
 use crate::forge::RemoteRepo;
 use crate::harness::schedule::signal::Signal;
 use crate::store::event::SignalSource;
-use crate::store::snapshot::{WorktreePrCi, WorktreePrState};
+use crate::store::snapshot::WorktreePrState;
 
 pub(super) fn transitions(
     prior: &PrStateCache,
@@ -40,11 +40,7 @@ pub(super) fn transitions(
             continue;
         }
         if prior_link.state == WorktreePrState::Open {
-            let name = match next_link.state {
-                WorktreePrState::Merged => Some("pr.merged"),
-                WorktreePrState::Closed => Some("pr.closed"),
-                WorktreePrState::Open => None,
-            };
+            let name = pr_signal_name(next_link.state);
             if let Some(name) = name {
                 signals.push(signal(
                     name,
@@ -60,7 +56,7 @@ pub(super) fn transitions(
                 ));
             }
         }
-        if let Some(name) = final_verdict_name(next_link.ci)
+        if let Some(name) = next_link.ci.and_then(ci_signal_name)
             && prior_link.ci != next_link.ci
         {
             signals.push(signal(
@@ -80,7 +76,7 @@ pub(super) fn transitions(
         if prior.states.contains_key(path) || next.states.contains_key(path) {
             continue;
         }
-        let Some(name) = final_verdict_name(Some(*next_ci)) else {
+        let Some(name) = ci_signal_name(*next_ci) else {
             continue;
         };
         if prior.branch_ci.get(path) == Some(next_ci) {
@@ -117,14 +113,6 @@ fn successful_repo<'a>(cache: &'a PrStateCache, path: &str) -> Option<&'a str> {
         .get(repo)
         .is_some_and(|probe| probe.ok)
         .then_some(repo)
-}
-
-fn final_verdict_name(ci: Option<WorktreePrCi>) -> Option<&'static str> {
-    match ci {
-        Some(WorktreePrCi::Passing) => Some("ci.passed"),
-        Some(WorktreePrCi::Failing) => Some("ci.failed"),
-        Some(WorktreePrCi::Pending) | None => None,
-    }
 }
 
 fn payload(
