@@ -39,9 +39,6 @@ pub enum RunWakeErr {
 
     #[error("recv on run wake socket: {0}")]
     Recv(#[source] std::io::Error),
-
-    #[error("serializing run wake frame: {0}")]
-    Serialize(#[from] serde_json::Error),
 }
 
 pub type Result<T> = std::result::Result<T, RunWakeErr>;

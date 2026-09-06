@@ -139,23 +139,12 @@ impl RunCancellation {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum CancelRunErr {
-    #[error(transparent)]
-    Store(#[from] RunStoreErr),
-    #[error("serializing run wake frame: {0}")]
-    Wake(#[from] serde_json::Error),
-}
-
 /// Durably cancel a run and wake its waiter only for the newly-written
 /// terminal transition.
-pub fn cancel_and_wake(
-    store: &Store,
-    run_id: &RunId,
-) -> std::result::Result<RunRecord, CancelRunErr> {
+pub fn cancel_and_wake(store: &Store, run_id: &RunId) -> Result<RunRecord> {
     let (record, wrote) = cancel(store.paths(), run_id)?;
     if wrote {
-        crate::store::run::wake_run(store.runtime_paths(), &record)?;
+        crate::store::run::wake_run(store.runtime_paths(), &record);
     }
     Ok(record)
 }

@@ -3,7 +3,6 @@ use std::time::{Duration, SystemTime};
 use tracing::warn;
 
 use crate::store::event::{EventEnvelope, EventKind};
-use crate::store::run::RunRecord;
 
 use crate::disk::{lock, paths::StatePaths};
 
@@ -153,16 +152,6 @@ impl Store {
         // found-intact race for the cost of an O(0-delta) fold.
         if let Err(err) = publish() {
             warn!(error = %err, "snapshot publish failed after event-log repair");
-        }
-    }
-
-    pub(super) fn wake_run_best_effort(&self, record: &RunRecord) {
-        if let Err(err) = crate::store::run::wake_run(&self.inner.runtime, record) {
-            warn!(
-                run_id = %record.run_id,
-                error = %err,
-                "run wakeup failed after store commit"
-            );
         }
     }
 

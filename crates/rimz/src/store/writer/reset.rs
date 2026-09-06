@@ -204,7 +204,7 @@ impl Store {
         };
 
         for record in &canceled_runs {
-            self.wake_run_best_effort(record);
+            crate::store::run::wake_run(&self.inner.runtime, record);
         }
         outcome.runtime_removed = remove_dir_if_exists(&self.inner.runtime.root)?;
         Ok(outcome)

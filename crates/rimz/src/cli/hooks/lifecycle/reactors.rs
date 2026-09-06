@@ -57,15 +57,7 @@ fn run_wake(ctx: &ReactorCtx<'_>, event: &rimz::agents::LifecycleEvent) {
     let Some(record) = ctx.run_completion else {
         return;
     };
-    if let Err(err) = rimz::store::run::wake_run(ctx.store.runtime_paths(), record) {
-        warn!(
-            kind = %event.kind,
-            agent_id = %event.agent_id,
-            run_id = %record.run_id,
-            error = %err,
-            "lifecycle: failed to wake the completed run",
-        );
-    }
+    rimz::store::run::wake_run(ctx.store.runtime_paths(), record);
 }
 
 fn archive_ended(ctx: &ReactorCtx<'_>, event: &rimz::agents::LifecycleEvent) {
