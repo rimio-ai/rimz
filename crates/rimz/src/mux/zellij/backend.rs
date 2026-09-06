@@ -21,13 +21,14 @@ use super::sidebar::DockOutcome;
 use super::{HEALTH_PROBE_RETRY_DELAY, RECONCILE_LIST_TIMEOUT, ZellijBackend};
 use crate::disk::paths::RuntimePaths;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
+use crate::mux::companion_layout::{GridPane, balance, plan_append};
 use crate::mux::{
     BackgroundViewLaunch, BackgroundViewOptions, CachedPaneRoster, ClientFocusOptions, ClientView,
-    CommandSpec, DaemonView, MuxBackend, MuxErr, PaneCapture, PaneListOptions, PaneListing,
-    ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, Result, SessionHealth, SessionLiveness,
-    SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitDirection,
-    SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions, WidthStep, ensure_pane_backend,
-    execute_reconcile_plan, group_reconcile_panes, memoized_version,
+    CommandSpec, CompanionPaneAppend, DaemonView, MuxBackend, MuxErr, PaneCapture, PaneListOptions,
+    PaneListing, ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, Result, SessionHealth,
+    SessionLiveness, SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery,
+    SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions, WidthStep,
+    ensure_pane_backend, execute_reconcile_plan, group_reconcile_panes, memoized_version,
 };
 use crate::pane::keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, paste_payload};
 use serde::Deserialize;
@@ -150,6 +151,242 @@ fn merge_topology_enrichment(cache: &mut PaneTopologyCache, prior: PaneTopologyC
 }
 
 impl ZellijBackend {
+    fn companion_geometry(
+        &self,
+        session: &str,
+        anchor: &PaneId,
+        timeout: Duration,
+    ) -> Result<Option<(Vec<GridPane>, Vec<GridPane>)>> {
+        #[derive(Deserialize)]
+        struct Geometry {
+            #[serde(flatten)]
+            pane: RawListedPane,
+            pane_y: Option<u64>,
+            pane_rows: Option<u64>,
+        }
+        let output = self
+            .zellij_action(session)
+            .args(["list-panes", "--all", "--json"])
+            .run_with_timeout(timeout)?;
+        let listed: Vec<Geometry> =
+            serde_json::from_slice(&output.stdout).map_err(|err| MuxErr::Output {
+                program: "zellij".to_owned(),
+                reason: format!("parsing companion geometry: {err}"),
+            })?;
+        let native = ZellijPaneId::try_from(anchor)
+            .ok()
+            .and_then(ZellijPaneId::terminal_id);
+        let Some(tab) = listed
+            .iter()
+            .find(|item| !item.pane.is_plugin && Some(item.pane.id) == native)
+            .and_then(|item| item.pane.tab_id)
+        else {
+            return Ok(None);
+        };
+        let mut work = Vec::new();
+        let mut chrome = Vec::new();
+        for item in listed
+            .into_iter()
+            .filter(|item| item.pane.tab_id == Some(tab))
+        {
+            let pane = item.pane;
+            if pane.is_fullscreen || pane.is_suppressed {
+                return Ok(None);
+            }
+            let (Some(x), Some(y), Some(cols), Some(rows)) =
+                (pane.pane_x, item.pane_y, pane.pane_columns, item.pane_rows)
+            else {
+                return Ok(None);
+            };
+            let grid = GridPane {
+                pane_id: PaneId::from_parts(
+                    MuxName::Zellij,
+                    format!(
+                        "{}_{id}",
+                        if pane.is_plugin { "plugin" } else { "terminal" },
+                        id = pane.id
+                    ),
+                ),
+                x,
+                y,
+                cols,
+                rows,
+            };
+            if pane.is_plugin
+                || pane.is_floating
+                || pane.title.as_deref() == Some(crate::pane::SIDEBAR_CHROME_TITLE)
+            {
+                chrome.push(grid);
+            } else {
+                work.push(grid);
+            }
+        }
+        work.sort_by(|a, b| a.pane_id.as_str().cmp(b.pane_id.as_str()));
+        chrome.sort_by(|a, b| a.pane_id.as_str().cmp(b.pane_id.as_str()));
+        Ok(Some((work, chrome)))
+    }
+
+    fn balance_companion(
+        &self,
+        session: &str,
+        anchor: &PaneId,
+        before: &[GridPane],
+        chrome: &[GridPane],
+    ) -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut previous_error = None;
+        let mut confirmed_targets = None;
+        let bounds = |panes: &[GridPane]| {
+            (
+                panes.iter().map(|pane| pane.x).min(),
+                panes.iter().map(|pane| pane.y).min(),
+                panes.iter().map(|pane| pane.x + pane.cols).max(),
+                panes.iter().map(|pane| pane.y + pane.rows).max(),
+            )
+        };
+        while let Some(remaining) = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|time| !time.is_zero())
+        {
+            let Some((panes, current_chrome)) =
+                self.companion_geometry(session, anchor, remaining)?
+            else {
+                break;
+            };
+            if current_chrome != chrome
+                || !before
+                    .iter()
+                    .all(|old| panes.iter().any(|pane| pane.pane_id == old.pane_id))
+            {
+                break;
+            }
+            if panes == before {
+                std::thread::sleep(Duration::from_millis(20).min(remaining));
+                continue;
+            }
+            if panes.len() != before.len() + 1 {
+                break;
+            }
+            if bounds(&panes) != bounds(before) {
+                break;
+            }
+            let Some(targets) = balance(&panes, 0) else {
+                break;
+            };
+            if confirmed_targets
+                .as_ref()
+                .is_some_and(|confirmed| confirmed != &targets)
+            {
+                break;
+            }
+            confirmed_targets = Some(targets.clone());
+            let right = panes
+                .iter()
+                .map(|pane| pane.x + pane.cols)
+                .max()
+                .unwrap_or(0);
+            let bottom = panes
+                .iter()
+                .map(|pane| pane.y + pane.rows)
+                .max()
+                .unwrap_or(0);
+            let mut steps = Vec::new();
+            for target in &targets {
+                let Some(pane) = panes.iter().find(|pane| pane.pane_id == target.pane_id) else {
+                    return Ok(());
+                };
+                for (direction, edge, desired, outer) in [
+                    ("right", pane.x + pane.cols, target.x + target.cols, right),
+                    ("down", pane.y + pane.rows, target.y + target.rows, bottom),
+                ] {
+                    if edge != outer {
+                        steps.push((
+                            edge.abs_diff(desired),
+                            direction,
+                            edge < desired,
+                            &pane.pane_id,
+                            edge,
+                        ));
+                    }
+                }
+            }
+            let error: u64 = steps.iter().map(|step| step.0).sum();
+            if previous_error.is_some_and(|previous| error >= previous) {
+                break;
+            }
+            previous_error = Some(error);
+            let Some((distance, direction, increase, pane, edge)) =
+                steps.into_iter().max_by_key(|step| step.0)
+            else {
+                break;
+            };
+            if distance == 0 {
+                break;
+            }
+            // A column boundary can span several independently resizable rows.
+            // Move every still-unmoved segment before evaluating the grid again:
+            // after only one segment the intermediate shape is not a column.
+            // Native resizing sometimes moves the entire aligned boundary, so
+            // re-read before each following segment instead of applying twice.
+            let boundary = if direction == "right" {
+                panes
+                    .iter()
+                    .filter(|pane| pane.x + pane.cols == edge)
+                    .map(|pane| pane.pane_id.clone())
+                    .collect::<Vec<_>>()
+            } else {
+                vec![pane.clone()]
+            };
+            for (index, pane) in boundary.into_iter().enumerate() {
+                let Some(remaining) = deadline
+                    .checked_duration_since(Instant::now())
+                    .filter(|time| !time.is_zero())
+                else {
+                    return Ok(());
+                };
+                if index > 0 {
+                    let Some((current, current_chrome)) =
+                        self.companion_geometry(session, anchor, remaining)?
+                    else {
+                        return Ok(());
+                    };
+                    if current_chrome != chrome
+                        || current.len() != panes.len()
+                        || !panes
+                            .iter()
+                            .all(|old| current.iter().any(|pane| pane.pane_id == old.pane_id))
+                    {
+                        return Ok(());
+                    }
+                    let Some(current_pane) =
+                        current.iter().find(|candidate| candidate.pane_id == pane)
+                    else {
+                        return Ok(());
+                    };
+                    if current_pane.x + current_pane.cols != edge {
+                        continue;
+                    }
+                }
+                let Some(remaining) = deadline
+                    .checked_duration_since(Instant::now())
+                    .filter(|time| !time.is_zero())
+                else {
+                    return Ok(());
+                };
+                self.zellij_action(session)
+                    .args([
+                        "resize",
+                        if increase { "increase" } else { "decrease" },
+                        direction,
+                        "--pane-id",
+                        pane.raw(),
+                    ])
+                    .run_with_timeout(remaining)?;
+            }
+        }
+        Ok(())
+    }
+
     fn restore_background_split_focus(
         &self,
         placement: SplitPlacement,
@@ -723,7 +960,7 @@ impl MuxBackend for ZellijBackend {
                 .is_some_and(|version| version >= super::MIN_NO_FOCUS_ZELLIJ_VERSION);
         // Zellij gives `--tab-id` precedence over the CLI pane context. On
         // 0.45+, `--no-focus` lets both tab-targeted and pane-targeted spawns
-        // preserve every attached client's view. On 0.44 an anchored stack
+        // preserve every attached client's view and the exact split anchor. On 0.44 an anchored stack
         // uses `--near-current-pane` and lets `ZELLIJ_PANE_ID` imply the tab;
         // directional spawns silently no-op with that flag and keep resolving
         // a stable tab id.
@@ -734,7 +971,7 @@ impl MuxBackend for ZellijBackend {
                     pane_id,
                 },
                 SplitPlacement::Directional(_),
-            ) => Some(self.tab_id_for_pane(session_name, pane_id)?),
+            ) if !no_focus => Some(self.tab_id_for_pane(session_name, pane_id)?),
             _ => None,
         };
         let mut spec = match session_name {
@@ -811,6 +1048,58 @@ impl MuxBackend for ZellijBackend {
             );
         }
         Ok(())
+    }
+
+    fn append_companion_pane(&self, mut opts: SplitPaneOptions) -> Result<CompanionPaneAppend> {
+        let SplitTarget::SessionPane {
+            session_name,
+            pane_id,
+        } = &opts.target
+        else {
+            return Ok(CompanionPaneAppend::Full);
+        };
+        let session = session_name.clone();
+        let anchor = pane_id.clone();
+        if !self
+            .version()
+            .ok()
+            .as_deref()
+            .and_then(super::parse_version)
+            .is_some_and(|version| version >= super::MIN_NO_FOCUS_ZELLIJ_VERSION)
+        {
+            return Ok(CompanionPaneAppend::Full);
+        }
+        let Some((panes, chrome)) =
+            self.companion_geometry(&session, &anchor, super::super::COMMAND_TIMEOUT)?
+        else {
+            return Ok(CompanionPaneAppend::Full);
+        };
+        let Some(split) = plan_append(&panes, 0) else {
+            return Ok(CompanionPaneAppend::Full);
+        };
+        let Some(selected) = panes.iter().find(|pane| pane.pane_id == split.pane_id) else {
+            return Ok(CompanionPaneAppend::Full);
+        };
+        // Framed terminals need room for both content and their outer frames.
+        if match split.direction {
+            SplitDirection::Down => selected.rows < 10,
+            SplitDirection::Right => selected.cols < 12,
+        } {
+            return Ok(CompanionPaneAppend::Full);
+        }
+        opts.target = SplitTarget::SessionPane {
+            session_name: session.clone(),
+            pane_id: split.pane_id,
+        };
+        opts.placement = SplitPlacement::Directional(split.direction);
+        opts.focus = false;
+        // The caller fails this durable run on an uncertain spawn result; it
+        // never retries the same payload in another tab.
+        self.split_pane(opts)?;
+        if let Err(err) = self.balance_companion(&session, &anchor, &panes, &chrome) {
+            tracing::debug!(error = %err, "companion opened; geometry balancing stopped");
+        }
+        Ok(CompanionPaneAppend::Opened)
     }
 
     fn focus_pane(&self, pane: &PaneId, session: Option<&str>) -> Result<()> {

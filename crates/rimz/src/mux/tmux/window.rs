@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::ids::{MuxName, PaneId};
+use crate::mux::companion_layout::GridPane;
 use crate::mux::{CommandSpec, HostPane, MuxErr, Result, SidebarPaneOptions, ensure_pane_backend};
 
 use super::TmuxBackend;
@@ -72,6 +73,98 @@ pub(super) fn window_name_arg(raw: &str) -> String {
 }
 
 impl TmuxBackend {
+    pub(super) fn companion_geometry(
+        &self,
+        anchor: &PaneId,
+    ) -> Result<Option<(Vec<GridPane>, Vec<GridPane>)>> {
+        ensure_pane_backend(anchor, MuxName::Tmux)?;
+        // Non-UTF-8 tmux clients replace tabs with underscores in stdout.
+        // Printable separators keep geometry readable under CI's C locale too.
+        let output = self.cmd().args([
+            "list-panes", "-t", anchor.raw(), "-F",
+            "#{pane_id} #{pane_left} #{pane_width} #{pane_top} #{pane_height}|#{window_zoomed_flag}|#{pane_floating_flag}|#{==:#{pane_title},rimz-sidebar}|#{pane_current_command}|#{pane_start_command}",
+        ]).run_with_timeout(std::time::Duration::from_secs(2))?;
+        let mut work = Vec::new();
+        let mut chrome = Vec::new();
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let fields = line.splitn(6, '|').collect::<Vec<_>>();
+            let [cell, zoomed, floating, sidebar, command, spawn] = fields.as_slice() else {
+                return Ok(None);
+            };
+            if *zoomed == "1" || *floating == "1" {
+                return Ok(None);
+            }
+            let Some(cell) = parse_tmux_pane_cell(cell) else {
+                return Ok(None);
+            };
+            if cell
+                .pane_id
+                .strip_prefix('%')
+                .and_then(|id| id.parse::<u64>().ok())
+                .is_none()
+            {
+                return Ok(None);
+            }
+            let pane = GridPane {
+                pane_id: PaneId::from_parts(MuxName::Tmux, cell.pane_id),
+                x: cell.left,
+                y: cell.top,
+                cols: cell.width,
+                rows: cell.height,
+            };
+            // tmux quotes a single shell-command argument as a whole. Decode
+            // that layer before inspecting argv, so a hook-born sidebar is
+            // chrome even before its process publishes the pane title.
+            let sidebar_spawn = shlex::split(spawn)
+                .and_then(|argv| match argv.as_slice() {
+                    [command] => shlex::split(command),
+                    _ => Some(argv),
+                })
+                .is_some_and(|argv| {
+                    argv.get(1).is_some_and(|arg| arg == "sidebar")
+                        && argv.get(2).is_some_and(|arg| arg == "serve")
+                });
+            if *sidebar == "1" || crate::pane::command_is_sidebar_chrome(command) || sidebar_spawn {
+                chrome.push(pane);
+            } else {
+                work.push(pane);
+            }
+        }
+        if !work.iter().any(|pane| pane.pane_id == *anchor) {
+            return Ok(None);
+        }
+        Ok(Some((work, chrome)))
+    }
+
+    pub(super) fn balance_companion_grid(
+        &self,
+        anchor: &PaneId,
+        before: &[GridPane],
+        chrome_before: &[GridPane],
+    ) -> Result<()> {
+        let Some((panes, chrome)) = self.companion_geometry(anchor)? else {
+            return Ok(());
+        };
+        if chrome != chrome_before
+            || panes.len() != before.len() + 1
+            || !before
+                .iter()
+                .all(|old| panes.iter().any(|pane| pane.pane_id == old.pane_id))
+        {
+            return Ok(());
+        }
+        let Some(targets) = crate::mux::companion_layout::balance(&panes, 1) else {
+            return Ok(());
+        };
+        let Some(layout) = companion_tmux_layout(&targets, &chrome) else {
+            return Ok(());
+        };
+        self.cmd()
+            .args(["select-layout", "-t", anchor.raw(), &layout])
+            .run_with_timeout(std::time::Duration::from_secs(2))?;
+        Ok(())
+    }
+
     /// Attach a RimZ-owned display identity to one pane. Pane user options are
     /// not writable through terminal escape sequences, unlike `pane_title`.
     pub(super) fn set_pane_rimz_title(&self, pane_id: &str, name: &str) {
@@ -930,6 +1023,78 @@ impl TmuxBackend {
         }
         Ok(pane_id)
     }
+}
+
+/// Encode only the supported columns and optional full-height left sidebar.
+/// A single native layout replacement avoids ancestor-dependent resize effects.
+pub(super) fn companion_tmux_layout(panes: &[GridPane], chrome: &[GridPane]) -> Option<String> {
+    let first = panes.first()?;
+    let right = panes.iter().map(|pane| pane.x + pane.cols).max()?;
+    let bottom = panes.iter().map(|pane| pane.y + pane.rows).max()?;
+    let width = right - first.x;
+    let height = bottom - first.y;
+    let leaf = |pane: &GridPane| {
+        Some(format!(
+            "{}x{},{},{},{}",
+            pane.cols,
+            pane.rows,
+            pane.x,
+            pane.y,
+            pane.pane_id.raw().strip_prefix('%')?.parse::<u64>().ok()?
+        ))
+    };
+    let mut bands = Vec::new();
+    let mut remaining = panes;
+    while let Some(first) = remaining.first() {
+        let count = remaining
+            .iter()
+            .take_while(|pane| pane.x == first.x)
+            .count();
+        let (band, rest) = remaining.split_at(count);
+        let leaves = band.iter().map(leaf).collect::<Option<Vec<_>>>()?;
+        bands.push(if leaves.len() == 1 {
+            leaves[0].clone()
+        } else {
+            format!(
+                "{}x{},{},{}[{}]",
+                first.cols,
+                height,
+                first.x,
+                first.y,
+                leaves.join(",")
+            )
+        });
+        remaining = rest;
+    }
+    let work = if bands.len() == 1 {
+        bands.pop()?
+    } else {
+        format!(
+            "{}x{},{},{}{{{}}}",
+            width,
+            height,
+            first.x,
+            first.y,
+            bands.join(",")
+        )
+    };
+    let body = match chrome {
+        [] if first.x == 0 && first.y == 0 => work,
+        [sidebar]
+            if sidebar.x == 0
+                && sidebar.y == 0
+                && first.y == 0
+                && sidebar.rows == height
+                && sidebar.cols + 1 == first.x =>
+        {
+            format!("{}x{},0,0{{{},{}}}", right, height, leaf(sidebar)?, work)
+        }
+        _ => return None,
+    };
+    let checksum = body.bytes().fold(0_u16, |sum, byte| {
+        sum.rotate_right(1).wrapping_add(u16::from(byte))
+    });
+    Some(format!("{checksum:04x},{body}"))
 }
 
 pub(super) fn parse_tmux_pane_geometry(line: &str) -> Option<TmuxPaneGeometry> {

@@ -399,7 +399,7 @@ exit 0
     assert!(
         log.contains(
             &format!(
-                "--session rimz-test action new-pane --direction right --tab-id 42 --no-focus --name {shell} | pane=7"
+                "--session rimz-test action new-pane --direction right --no-focus --name {shell} | pane=7"
             )
         ),
         "{log}"
@@ -417,9 +417,82 @@ exit 0
     );
     assert_eq!(
         log.lines().count(),
-        7,
+        6,
         "expected split and lookup calls:\n{log}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn companion_append_counts_held_terminals_before_spawning() {
+    let panes = (0..8)
+        .map(|id| {
+            serde_json::json!({
+                "id": id, "tab_id": 42, "is_held": true, "exited": true,
+                "pane_x": (id / 4) * 60, "pane_y": (id % 4) * 20,
+                "pane_columns": 60, "pane_rows": 20,
+            })
+        })
+        .collect::<Vec<_>>();
+    let (temp, shim) = zellij_shim(&format!(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+if [ "$1" = "--version" ]; then printf 'zellij 0.45.0\n'; exit 0; fi
+printf '%s\n' "$*" >> "$dir/zellij.log"
+printf '%s\n' '{}'
+"#,
+        serde_json::to_string(&panes).unwrap()
+    ));
+    let result = ZellijBackend::with_program_for_test(&shim)
+        .append_companion_pane(SplitPaneOptions {
+            target: SplitTarget::SessionPane {
+                session_name: "rimz-test".to_owned(),
+                pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_0"),
+            },
+            ..Default::default()
+        })
+        .expect("full held grid");
+    assert_eq!(result, crate::mux::CompanionPaneAppend::Full);
+    assert!(!shim_log(&temp).contains("new-pane"));
+}
+
+#[cfg(unix)]
+#[test]
+fn companion_append_does_not_retry_after_geometry_failure() {
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+if [ "$1" = "--version" ]; then printf 'zellij 0.45.0\n'; exit 0; fi
+printf '%s | pane=%s\n' "$*" "$ZELLIJ_PANE_ID" >> "$dir/zellij.log"
+case " $* " in
+  *" new-pane "*) touch "$dir/opened" ;;
+  *" list-panes "*)
+    if [ -f "$dir/opened" ]; then printf 'invalid json'; else
+      printf '[{"id":7,"tab_id":42,"pane_x":30,"pane_y":0,"pane_columns":120,"pane_rows":80}]\n'
+    fi ;;
+esac
+"#,
+    );
+    let result = ZellijBackend::with_program_for_test(&shim)
+        .append_companion_pane(SplitPaneOptions {
+            target: SplitTarget::SessionPane {
+                session_name: "rimz-test".to_owned(),
+                pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_7"),
+            },
+            command: Some(vec!["sleep".to_owned(), "600".to_owned()]),
+            ..Default::default()
+        })
+        .expect("opened despite balancing failure");
+    assert_eq!(result, crate::mux::CompanionPaneAppend::Opened);
+    let log = shim_log(&temp);
+    let spawns = log
+        .lines()
+        .filter(|line| line.contains("new-pane"))
+        .collect::<Vec<_>>();
+    assert_eq!(spawns.len(), 1);
+    assert!(spawns[0].contains("--direction right --no-focus"), "{log}");
+    assert!(spawns[0].ends_with("pane=7"), "{log}");
+    assert!(!spawns[0].contains("--tab-id"), "{log}");
 }
 
 #[cfg(unix)]

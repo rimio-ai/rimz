@@ -11,17 +11,18 @@ use super::options::{
     sidebar_serve_command, sidebar_width_option_set_cmd,
 };
 use super::parse::{parse_client_view, parse_floating_pane_ids, parse_pane_line};
-use super::window::TmuxPaneGeometry;
+use super::window::{TmuxPaneGeometry, companion_tmux_layout};
 use crate::ids::{MuxName, PaneId};
 use crate::mux::LayoutPanes;
+use crate::mux::companion_layout::{balance, plan_append};
 use crate::mux::width::sidebar_width_off_spec;
 use crate::mux::{
     BackgroundViewLaunch, BackgroundViewOptions, ClientFocusOptions, ClientView, CommandSpec,
-    DaemonView, MuxBackend, MuxErr, PaneCapture, PaneListOptions, PaneListing, ReconcileAddOutcome,
-    ReconcilePane, ReconcilePaneRole, Result, SessionOptions, SidebarLiveness, SidebarPaneOptions,
-    SidebarRecovery, SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions,
-    WidthStep, WidthSyncOptions, ensure_pane_backend, execute_reconcile_plan,
-    group_reconcile_panes, memoized_version,
+    CompanionPaneAppend, DaemonView, MuxBackend, MuxErr, PaneCapture, PaneListOptions, PaneListing,
+    ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, Result, SessionOptions, SidebarLiveness,
+    SidebarPaneOptions, SidebarRecovery, SplitDirection, SplitPaneOptions, SplitPlacement,
+    SplitTarget, TabOptions, WidthStep, WidthSyncOptions, ensure_pane_backend,
+    execute_reconcile_plan, group_reconcile_panes, memoized_version,
 };
 use crate::pane::keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, paste_payload};
 
@@ -321,6 +322,63 @@ impl MuxBackend for TmuxBackend {
             self.even_column_best_effort(&pane_id, "tmux.split_pane.even_column");
         }
         Ok(())
+    }
+
+    fn append_companion_pane(&self, mut opts: SplitPaneOptions) -> Result<CompanionPaneAppend> {
+        let SplitTarget::SessionPane {
+            pane_id: anchor, ..
+        } = &opts.target
+        else {
+            return Ok(CompanionPaneAppend::Full);
+        };
+        let anchor = anchor.clone();
+        let Some((panes, chrome)) = self.companion_geometry(&anchor)? else {
+            return Ok(CompanionPaneAppend::Full);
+        };
+        let Some(split) = plan_append(&panes, 1) else {
+            return Ok(CompanionPaneAppend::Full);
+        };
+        // Check the post-split minimums before launching the payload, not after.
+        let mut projected = panes.clone();
+        let Some(target) = projected
+            .iter_mut()
+            .find(|pane| pane.pane_id == split.pane_id)
+        else {
+            return Ok(CompanionPaneAppend::Full);
+        };
+        let mut added = target.clone();
+        match split.direction {
+            SplitDirection::Down => {
+                target.rows = (target.rows - 1) / 2;
+                added.y += target.rows + 1;
+                added.rows -= target.rows + 1;
+            }
+            SplitDirection::Right => {
+                target.cols = (target.cols - 1) / 2;
+                added.x += target.cols + 1;
+                added.cols -= target.cols + 1;
+            }
+        }
+        projected.push(added);
+        if balance(&projected, 1)
+            .and_then(|targets| companion_tmux_layout(&targets, &chrome))
+            .is_none()
+        {
+            return Ok(CompanionPaneAppend::Full);
+        }
+        opts.target = SplitTarget::Pane(split.pane_id);
+        opts.placement = SplitPlacement::Directional(split.direction);
+        opts.focus = false;
+        self.split_pane(opts)?;
+        if let Err(err) = self.balance_companion_grid(&anchor, &panes, &chrome) {
+            tracing::warn!(
+                pane = %anchor,
+                tags.operation = "tmux.companion.balance",
+                error = &err as &dyn std::error::Error,
+                "companion pane opened; grid balancing failed",
+            );
+        }
+        Ok(CompanionPaneAppend::Opened)
     }
 
     fn focus_pane(&self, pane: &PaneId, session: Option<&str>) -> Result<()> {

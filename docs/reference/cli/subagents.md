@@ -62,6 +62,8 @@ rimz subagents wait "$first" "$second"
 
 The bare form and `launch` verb are equivalent. A prompt is mandatory: the parent must supply the whole assignment as the second positional argument or with `--prompt-file PATH`. Relative paths resolve from the caller's current working directory. The child inherits the parent's current checkout and lane.
 
+Children of a team member share companion tabs named `<view> subagents`, with numbered overflow tabs. Each companion starts with two side-by-side columns, then grows rows up to eight tiled child panes: four rows per column, excluding the sidebar. Placement targets approximately equal pane areas; a small terminal or an existing layout that cannot be safely split may overflow earlier. Solo callers retain their side-column layout, using these companion tabs as fallback. See the [scripting guide](../../guide/scripting.md#agents-scripting-agents) for the workflow.
+
 | Behavior | Default | Override |
 | --- | --- | --- |
 | Result | one status digest from `@rimz` after the fleet settles; read text with `rimz subagents wait` | `--wait[=DURATION]` joins inline when it reaches the result |

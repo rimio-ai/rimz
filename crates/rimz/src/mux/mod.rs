@@ -8,6 +8,7 @@
 pub mod binaries;
 mod capabilities;
 mod command;
+mod companion_layout;
 pub mod domain;
 pub mod focus_anchor;
 mod focus_key;
@@ -23,6 +24,7 @@ pub mod zellij;
 pub use capabilities::{drops_desktop_osc, lists_full_cmdline, view_kind, wraps_osc_passthrough};
 pub use command::CommandSpec;
 pub(crate) use command::{COMMAND_TIMEOUT, LIST_SESSIONS_TIMEOUT};
+pub use companion_layout::COMPANION_PANE_LIMIT;
 pub use focus_key::RoomKeyBinding;
 pub(crate) use reconcile::{
     ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, execute_reconcile_plan,
@@ -532,6 +534,14 @@ pub struct SplitPaneOptions {
     pub focus: bool,
 }
 
+/// A companion append never asks the caller to retry after opening a pane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompanionPaneAppend {
+    Opened,
+    /// No pane was opened: the view is full or cannot safely be subdivided.
+    Full,
+}
+
 /// Mux context used to resolve a pane split.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum SplitTarget {
@@ -819,6 +829,10 @@ pub trait MuxBackend: Send + Sync {
         Ok(ClientView::default())
     }
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<()>;
+
+    /// Append to a dedicated child tab, preserving existing processes and chrome.
+    /// Recheck physical occupancy before birth; balancing after birth is best-effort.
+    fn append_companion_pane(&self, opts: SplitPaneOptions) -> Result<CompanionPaneAppend>;
     /// Focus `pane`. Zellij pane ids are session-scoped, so callers outside a
     /// room pane pass `Some(session)`; in-pane callers may pass `None` and let
     /// `ZELLIJ_SESSION_NAME` resolve it. tmux ignores the session because pane

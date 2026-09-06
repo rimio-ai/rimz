@@ -2,6 +2,150 @@
 
 use super::support::*;
 
+#[test]
+fn companion_grid_preserves_processes_sidebar_and_focus() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let session = "rimz-companion-grid";
+    ensure_rimz_session(&server, session, Some((290, 90)));
+    // Hook-born sidebars must be recognized from their spawn command, before
+    // their process publishes the title used by the other chrome signals.
+    let (_stub_dir, stub) = delayed_sidebar_title_command_stub();
+    let sidebar = sidebar_opts(session, stub, Some(290));
+    server
+        .backend
+        .open_sidebar(&sidebar, None)
+        .expect("sidebar");
+    let original_focus = server.display(session, "#{window_id}:#{pane_id}");
+    server
+        .backend
+        .open_tab(&TabOptions {
+            title: "children".to_owned(),
+            panes: LayoutPanes {
+                columns: vec![tiled_column(vec![PaneCmd {
+                    argv: vec!["sleep".to_owned(), "600".to_owned()],
+                    name: None,
+                }])],
+            },
+            focus: false,
+            dock_sidebar: true,
+            after: None,
+            sidebar,
+        })
+        .expect("child tab");
+    let tab = format!("{session}:children");
+    let initial = server.wait_for_panes(&tab, 2);
+    let sidebar = initial.iter().find(|pane| pane.left == 0).expect("sidebar");
+    let anchor = initial
+        .iter()
+        .find(|pane| pane.left > 0)
+        .expect("work pane");
+    let anchor_id = PaneId::from_parts(MuxName::Tmux, &anchor.id);
+    let child_focus = server.display(&tab, "#{pane_id}");
+    let mut pids = BTreeMap::new();
+    for count in 1_usize..=8 {
+        let panes = server.wait_for_panes(&tab, count + 1);
+        assert_eq!(panes.len(), count + 1);
+        let live_sidebar = panes
+            .iter()
+            .find(|pane| pane.id == sidebar.id)
+            .expect("sidebar survives");
+        assert_eq!(
+            (
+                live_sidebar.left,
+                live_sidebar.top,
+                live_sidebar.width,
+                live_sidebar.height
+            ),
+            (sidebar.left, sidebar.top, sidebar.width, sidebar.height),
+        );
+        let work = panes
+            .iter()
+            .filter(|pane| pane.id != sidebar.id)
+            .collect::<Vec<_>>();
+        let mut bands = BTreeMap::<u64, Vec<&PaneGeom>>::new();
+        for pane in &work {
+            assert!(pane.left > sidebar.width);
+            bands.entry(pane.left).or_default().push(pane);
+        }
+        assert_eq!(bands.len(), count.min(2));
+        assert!(bands.values().all(|band| band.len() <= count.div_ceil(2)));
+        let areas = work
+            .iter()
+            .map(|pane| pane.width * pane.height)
+            .collect::<Vec<_>>();
+        assert!(
+            areas.iter().max().expect("max area") - areas.iter().min().expect("min area") <= 350,
+            "near-equal areas at {count} panes: {work:?}"
+        );
+        for pane in &panes {
+            let pid = server.display(&pane.id, "#{pane_pid}");
+            if let Some(previous) = pids.insert(pane.id.clone(), pid.clone()) {
+                assert_eq!(previous, pid, "process preserved in {}", pane.id);
+            }
+        }
+        assert_eq!(pids.len(), panes.len(), "no pane was replaced");
+        assert_eq!(
+            server.display(session, "#{window_id}:#{pane_id}"),
+            original_focus
+        );
+        assert_eq!(server.display(&tab, "#{pane_id}"), child_focus);
+        if count == 6 {
+            let held = work
+                .iter()
+                .find(|pane| pane.id != anchor.id)
+                .expect("held child");
+            server.tmux(&["set-option", "-p", "-t", &held.id, "remain-on-exit", "on"]);
+            server.tmux(&["respawn-pane", "-k", "-t", &held.id, "true"]);
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while server.display(&held.id, "#{pane_dead}") != "1" {
+                assert!(Instant::now() < deadline, "child must become held");
+                thread::sleep(Duration::from_millis(10));
+            }
+            pids.insert(held.id.clone(), server.display(&held.id, "#{pane_pid}"));
+        }
+        let outcome = server
+            .backend
+            .append_companion_pane(SplitPaneOptions {
+                target: SplitTarget::SessionPane {
+                    session_name: session.to_owned(),
+                    pane_id: anchor_id.clone(),
+                },
+                cwd: Some(std::env::temp_dir().display().to_string()),
+                command: Some(vec!["sleep".to_owned(), "600".to_owned()]),
+                title: Some(format!("child-{}", count + 1)),
+                close_on_exit: true,
+                env: Default::default(),
+                placement: SplitPlacement::Stacked,
+                focus: true,
+            })
+            .expect("append companion");
+        assert_eq!(
+            outcome,
+            if count == 8 {
+                rimz::mux::CompanionPaneAppend::Full
+            } else {
+                rimz::mux::CompanionPaneAppend::Opened
+            },
+            "append at {count} work panes: {panes:?}; tmux: {}; anchor: {}; metadata: {:?}",
+            server.stdout(&["-V"]),
+            anchor.id,
+            server.stdout(&[
+                "list-panes",
+                "-t",
+                &anchor.id,
+                "-F",
+                "#{pane_id} #{pane_left} #{pane_width} #{pane_top} #{pane_height}|#{window_zoomed_flag}|#{pane_floating_flag}|#{==:#{pane_title},rimz-sidebar}|#{pane_current_command}|#{pane_start_command}",
+            ])
+        );
+    }
+    assert_eq!(
+        server.wait_for_panes(&tab, 9).len(),
+        9,
+        "Full does not spawn"
+    );
+}
+
 fn held_managed_pane(marker: &[&str]) -> rimz::mux::HostPane {
     let mut argv = vec![
         "sh".to_owned(),

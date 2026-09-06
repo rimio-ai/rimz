@@ -10,8 +10,9 @@ use crate::cli::GlobalFlags;
 use rimz::agents::AgentState;
 use rimz::ids::{AgentKind, AgentSessionId, PaneId};
 use rimz::mux::{
-    LayoutColumn, LayoutPanes, PaneCmd, PaneListOptions, PaneReadConsistency, SidebarPaneOptions,
-    SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget, TabOptions,
+    COMPANION_PANE_LIMIT, CompanionPaneAppend, LayoutColumn, LayoutPanes, PaneCmd, PaneListOptions,
+    PaneReadConsistency, SidebarPaneOptions, SplitDirection, SplitPaneOptions, SplitPlacement,
+    SplitTarget, TabOptions,
 };
 use rimz::pane::PaneRef;
 use rimz::room::session::MissingSessionReport;
@@ -28,24 +29,22 @@ pub(super) enum SubagentZoneStrategy {
         session_name: String,
         pane_id: PaneId,
         placement: SplitPlacement,
-        on_failure: SubagentSplitFallback,
     },
     CompanionTab {
         title: String,
     },
+    CompanionGrid {
+        anchors: Vec<(String, PaneId)>,
+        title: String,
+    },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum SubagentSplitFallback {
-    CompanionTab,
-    RunTab,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) enum SubagentZoneOpen {
     Opened,
     CompanionTab,
     RunTab,
+    Failed(rimz::mux::MuxErr),
 }
 
 pub(super) fn select_subagent_zone_strategy(
@@ -56,37 +55,37 @@ pub(super) fn select_subagent_zone_strategy(
     theme: &rimz::config::ThemeConfig,
 ) -> Option<SubagentZoneStrategy> {
     let team = caller.team.as_deref().filter(|team| !team.is_empty());
-    let parent_ids = match team {
-        Some(_) => rimz::harness::target::team_cohorts(agents)
-            .into_iter()
-            .find(|cohort| {
-                cohort
-                    .members
-                    .iter()
-                    .any(|member| member.agent_id == caller.agent_id)
-            })
-            .map(|cohort| {
-                cohort
-                    .members
-                    .into_iter()
-                    .map(|member| member.agent_id.clone())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_else(|| vec![caller.agent_id.clone()]),
-        None => vec![caller.agent_id.clone()],
-    };
+    if let Some(strategy) = companion_grid_strategy(live_panes, caller, fallback_session, theme) {
+        return Some(strategy);
+    }
+    if team.is_some() {
+        return Some(SubagentZoneStrategy::CompanionTab {
+            title: companion_title(caller, theme),
+        });
+    }
+    let live_caller = caller
+        .pane
+        .as_ref()
+        .and_then(|pane| live_panes.iter().find(|live| live.pane_id == pane.pane_id));
     if let Some(pane) = agents
         .iter()
         .filter(|agent| {
             agent.is_launched_child()
-                && agent
-                    .parent_agent_id
-                    .as_ref()
-                    .is_some_and(|parent| parent_ids.contains(parent))
-                && agent
-                    .pane
-                    .as_ref()
-                    .is_some_and(|pane| live_panes.iter().any(|live| live.pane_id == pane.pane_id))
+                && agent.parent_agent_id.as_ref().is_some_and(|parent| {
+                    parent == &caller.agent_id || caller.launch_id.as_ref() == Some(parent)
+                })
+                && agent.pane.as_ref().is_some_and(|pane| {
+                    live_panes.iter().any(|live| {
+                        live.pane_id == pane.pane_id
+                            && live_caller.is_some_and(|parent| {
+                                live.session_name == parent.session_name
+                                    && !live.is_floating
+                                    && !live.is_rimz_sidebar()
+                                    && live.view_id == parent.view_id
+                                    && live.view_name == parent.view_name
+                            })
+                    })
+                })
         })
         .max_by_key(|agent| (agent.registered_at, agent.agent_id.clone()))
         .and_then(|agent| agent.pane.as_ref())
@@ -95,36 +94,7 @@ pub(super) fn select_subagent_zone_strategy(
             session_name: pane_session_name(pane, fallback_session),
             pane_id: pane.pane_id.clone(),
             placement: SplitPlacement::Stacked,
-            on_failure: if team.is_some() {
-                SubagentSplitFallback::RunTab
-            } else {
-                SubagentSplitFallback::CompanionTab
-            },
         });
-    }
-    if team.is_some() {
-        let title = companion_title(caller, theme);
-        if let Some(pane) = live_panes.iter().rev().find(|pane| {
-            pane_in_named_view(pane, &title, theme) && !pane.is_floating && !pane.is_rimz_sidebar()
-        }) {
-            return Some(SubagentZoneStrategy::Split {
-                session_name: pane_session_name(pane, fallback_session),
-                pane_id: pane.pane_id.clone(),
-                placement: SplitPlacement::Stacked,
-                on_failure: SubagentSplitFallback::RunTab,
-            });
-        }
-        if let Some(pane) = live_panes.iter().find(|pane| {
-            pane_in_named_view(pane, &title, theme) && !pane.is_floating && pane.is_rimz_sidebar()
-        }) {
-            return Some(SubagentZoneStrategy::Split {
-                session_name: pane_session_name(pane, fallback_session),
-                pane_id: pane.pane_id.clone(),
-                placement: SplitPlacement::Directional(SplitDirection::Right),
-                on_failure: SubagentSplitFallback::RunTab,
-            });
-        }
-        return Some(SubagentZoneStrategy::CompanionTab { title });
     }
     caller.pane.as_ref().and_then(|pane| {
         live_panes
@@ -134,15 +104,72 @@ pub(super) fn select_subagent_zone_strategy(
                 session_name: pane_session_name(pane, fallback_session),
                 pane_id: pane.pane_id.clone(),
                 placement: SplitPlacement::Directional(SplitDirection::Right),
-                on_failure: SubagentSplitFallback::CompanionTab,
             })
     })
 }
 
-fn pane_in_named_view(pane: &PaneRef, name: &str, theme: &rimz::config::ThemeConfig) -> bool {
-    pane.view_name
-        .as_deref()
-        .is_some_and(|observed| rimz::theme::strip_status_glyph_suffix(observed, theme) == name)
+fn companion_grid_strategy(
+    live_panes: &[PaneRef],
+    caller: &AgentState,
+    fallback_session: &str,
+    theme: &rimz::config::ThemeConfig,
+) -> Option<SubagentZoneStrategy> {
+    let base = companion_title(caller, theme);
+    let mut views = BTreeMap::<(usize, String, String), Vec<&PaneRef>>::new();
+    for pane in live_panes.iter().filter(|pane| !pane.is_floating) {
+        let Some(name) = pane.view_name.as_deref() else {
+            continue;
+        };
+        let name = rimz::theme::strip_status_glyph_suffix(name, theme);
+        let number = if name == base {
+            1
+        } else if let Some(suffix) = name.strip_prefix(&format!("{base} "))
+            && let Ok(number) = suffix.parse::<usize>()
+            && number >= 2
+            && suffix == number.to_string()
+        {
+            number
+        } else {
+            continue;
+        };
+        views
+            .entry((
+                number,
+                pane_session_name(pane, fallback_session),
+                pane.view_id.clone().unwrap_or_else(|| name.to_owned()),
+            ))
+            .or_default()
+            .push(pane);
+    }
+    let next = views
+        .keys()
+        .map(|(number, _, _)| *number)
+        .max()?
+        .saturating_add(1);
+    let title = format!("{base} {next}");
+    let anchors = views
+        .into_iter()
+        .filter_map(|((_, session, _), panes)| {
+            let work = panes
+                .iter()
+                .filter(|pane| !pane.is_rimz_sidebar())
+                .collect::<Vec<_>>();
+            if work.len() >= COMPANION_PANE_LIMIT {
+                return None;
+            }
+            // A sidebar-only listing may hide retained terminals on Zellij.
+            // Always let the backend inspect physical occupancy before birth.
+            work.first()
+                .copied()
+                .or_else(|| panes.first())
+                .map(|pane| (session, pane.pane_id.clone()))
+        })
+        .collect::<Vec<_>>();
+    if anchors.is_empty() {
+        Some(SubagentZoneStrategy::CompanionTab { title })
+    } else {
+        Some(SubagentZoneStrategy::CompanionGrid { anchors, title })
+    }
 }
 
 fn pane_session_name(pane: &PaneRef, fallback: &str) -> String {
@@ -262,11 +289,8 @@ pub(super) fn split_into_subagent_zone(
     ) else {
         return SubagentZoneOpen::CompanionTab;
     };
-    let split = |session_name: String,
-                 pane_id: PaneId,
-                 placement: SplitPlacement,
-                 on_failure: SubagentSplitFallback| {
-        match backend.split_pane(SplitPaneOptions {
+    let split = |session_name: String, pane_id: PaneId, placement: SplitPlacement| match backend
+        .split_pane(SplitPaneOptions {
             target: SplitTarget::SessionPane {
                 session_name: session_name.clone(),
                 pane_id: pane_id.clone(),
@@ -279,20 +303,42 @@ pub(super) fn split_into_subagent_zone(
             placement,
             focus: false,
         }) {
-            Ok(()) => SubagentZoneOpen::Opened,
-            Err(err) => {
-                tracing::debug!(
-                    session = %session_name,
-                    pane = %pane_id,
-                    error = &err as &dyn std::error::Error,
-                    ?on_failure,
-                    "subagent zone split failed",
-                );
-                match on_failure {
-                    SubagentSplitFallback::CompanionTab => SubagentZoneOpen::CompanionTab,
-                    SubagentSplitFallback::RunTab => SubagentZoneOpen::RunTab,
+        Ok(()) => SubagentZoneOpen::Opened,
+        Err(err) => {
+            tracing::debug!(
+                session = %session_name,
+                pane = %pane_id,
+                error = &err as &dyn std::error::Error,
+                "subagent zone split failed",
+            );
+            match err {
+                rimz::mux::MuxErr::Timeout { .. } | rimz::mux::MuxErr::Output { .. } => {
+                    SubagentZoneOpen::Failed(err)
                 }
+                _ => SubagentZoneOpen::CompanionTab,
             }
+        }
+    };
+    let open_companion = |title| match backend.open_tab(&TabOptions {
+        title,
+        panes: LayoutPanes {
+            columns: vec![LayoutColumn {
+                panes: vec![pane.clone()],
+                stacked: false,
+            }],
+        },
+        focus: false,
+        dock_sidebar: true,
+        after: caller.pane.as_ref().map(|pane| pane.pane_id.clone()),
+        sidebar: sidebar.clone(),
+    }) {
+        Ok(()) => SubagentZoneOpen::Opened,
+        Err(err) => {
+            tracing::debug!(
+                error = &err as &dyn std::error::Error,
+                "subagent companion tab could not be confirmed",
+            );
+            SubagentZoneOpen::Failed(err)
         }
     };
     match strategy {
@@ -300,30 +346,35 @@ pub(super) fn split_into_subagent_zone(
             session_name,
             pane_id,
             placement,
-            on_failure,
-        } => split(session_name, pane_id, placement, on_failure),
-        SubagentZoneStrategy::CompanionTab { title } => match backend.open_tab(&TabOptions {
-            title,
-            panes: LayoutPanes {
-                columns: vec![LayoutColumn {
-                    panes: vec![pane.clone()],
-                    stacked: true,
-                }],
-            },
-            focus: false,
-            dock_sidebar: true,
-            after: caller.pane.as_ref().map(|pane| pane.pane_id.clone()),
-            sidebar,
-        }) {
-            Ok(()) => SubagentZoneOpen::Opened,
-            Err(err) => {
-                tracing::debug!(
-                    error = &err as &dyn std::error::Error,
-                    "subagent companion tab failed; falling back to a run tab",
-                );
-                SubagentZoneOpen::RunTab
+        } => split(session_name, pane_id, placement),
+        SubagentZoneStrategy::CompanionTab { title } => open_companion(title),
+        SubagentZoneStrategy::CompanionGrid { anchors, title } => {
+            for (session_name, pane_id) in anchors {
+                match backend.append_companion_pane(SplitPaneOptions {
+                    target: SplitTarget::SessionPane {
+                        session_name,
+                        pane_id,
+                    },
+                    cwd: Some(cwd.to_string_lossy().into_owned()),
+                    command: Some(pane.argv.clone()),
+                    title: Some(child_name.to_owned()),
+                    close_on_exit: false,
+                    env: env.clone(),
+                    placement: SplitPlacement::default(),
+                    focus: false,
+                }) {
+                    Ok(CompanionPaneAppend::Opened) => return SubagentZoneOpen::Opened,
+                    Ok(CompanionPaneAppend::Full) => continue,
+                    Err(err) => {
+                        // A spawn timeout may have opened the pane. Never launch
+                        // the same durable run twice after an ambiguous result.
+                        tracing::warn!(error = %err, "subagent grid append could not be confirmed");
+                        return SubagentZoneOpen::Failed(err);
+                    }
+                }
             }
-        },
+            open_companion(title)
+        }
     }
 }
 

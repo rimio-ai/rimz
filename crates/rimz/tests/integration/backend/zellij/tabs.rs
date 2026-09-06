@@ -9,6 +9,287 @@ use super::support::*;
 use crate::common::CommandTimeoutExt;
 
 #[test]
+fn companion_grid_preserves_processes_sidebar_and_focus() {
+    use rimz::mux::{CompanionPaneAppend, SplitPaneOptions, SplitTarget};
+
+    require_zellij!();
+    let room = LiveZellijSession::new("companion-grid");
+    let backend = room.backend();
+    let version = backend.version().expect("zellij version");
+    let minor = version
+        .split('.')
+        .nth(1)
+        .and_then(|value| value.parse::<u32>().ok());
+    if minor.is_none_or(|minor| minor < 45) {
+        return;
+    }
+    let cwd = TempDir::new().expect("cwd");
+    let (_stub_dir, stub) = sidebar_stub_alive_for(600);
+    let sidebar = SidebarPaneOptions {
+        session_name: room.name().to_owned(),
+        workspace_id: WorkspaceId::from_project_root(cwd.path()),
+        project_root: cwd.path().to_path_buf(),
+        extra_env: Default::default(),
+        cwd: cwd.path().to_path_buf(),
+        target: rimz::mux::SidebarTarget {
+            share: rimz::mux::WidthPermille::from_percent(25),
+            max_cols: std::num::NonZeroU16::new(50).expect("width"),
+            pinned: false,
+        },
+        detected_view_size: None,
+        rimz_bin: stub,
+        pristine_birth: false,
+        config: Default::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+    publish_room_bin(room.path(), &sidebar);
+    backend.open_sidebar(&sidebar, None).expect("sidebar");
+    wait_for_pane_count(room.path(), room.name(), 2);
+    let mut client = AttachedClient::attach(&room, 300, 100);
+    let source = expect_list_panes(room.path(), room.name())
+        .panes
+        .into_iter()
+        .find(|pane| pane.is_live_terminal() && !pane.is_sidebar())
+        .expect("source");
+    let source = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", source.id));
+    client.wait_until_focused(&source, "source before companion");
+    let command = |index: usize| {
+        vec![
+            "sh".to_owned(),
+            "-c".to_owned(),
+            "printf '%s\\n' \"$$\" > \"$1\"; exec sleep 600".to_owned(),
+            "grid".to_owned(),
+            cwd.path()
+                .join(format!("pid-{index}"))
+                .display()
+                .to_string(),
+        ]
+    };
+    backend
+        .open_tab(&TabOptions {
+            title: "companion".to_owned(),
+            panes: LayoutPanes {
+                columns: vec![tiled_column(vec![PaneCmd {
+                    argv: command(1),
+                    name: None,
+                }])],
+            },
+            focus: false,
+            dock_sidebar: true,
+            after: None,
+            sidebar,
+        })
+        .expect("companion tab");
+    let first = wait_for_named_work_pane_count(room.path(), room.name(), "companion", 1)[0];
+    let anchor = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", first.id));
+    let initial = expect_list_panes(room.path(), room.name());
+    let chrome = initial
+        .panes
+        .iter()
+        .filter(|pane| pane.is_plugin || pane.is_sidebar())
+        .map(|pane| pane.geometry())
+        .collect::<Vec<_>>();
+    let mut identities = Vec::new();
+    let mut ids = vec![first.id];
+    for count in 1_usize..=8 {
+        if count > 1 {
+            assert_eq!(
+                backend
+                    .append_companion_pane(SplitPaneOptions {
+                        target: SplitTarget::SessionPane {
+                            session_name: room.name().to_owned(),
+                            pane_id: anchor.clone()
+                        },
+                        command: Some(command(count)),
+                        ..Default::default()
+                    })
+                    .expect("append companion"),
+                CompanionPaneAppend::Opened,
+                "pane {count}"
+            );
+        }
+        let panes = wait_for_named_work_pane_count(room.path(), room.name(), "companion", count);
+        assert!(ids.iter().all(|id| panes.iter().any(|pane| pane.id == *id)));
+        ids = panes.iter().map(|pane| pane.id).collect();
+        let snapshot = expect_list_panes(room.path(), room.name());
+        assert_eq!(
+            snapshot
+                .panes
+                .iter()
+                .filter(|pane| pane.is_plugin || pane.is_sidebar())
+                .map(|pane| pane.geometry())
+                .collect::<Vec<_>>(),
+            chrome
+        );
+        let pid = poll_until(
+            Duration::from_secs(5),
+            || {
+                std::fs::read_to_string(cwd.path().join(format!("pid-{count}")))
+                    .map_err(|err| err.to_string())
+                    .and_then(|text| text.trim().parse::<u32>().map_err(|err| err.to_string()))
+            },
+            |_| true,
+            "child pid",
+        );
+        identities.push((
+            pid,
+            rimz::proc::process_start_token(pid).expect("process start"),
+        ));
+        for (pid, start) in &identities {
+            assert!(
+                rimz::proc::process_is_live(*pid, Some(start)),
+                "process {pid} replaced"
+            );
+        }
+        let mut bands = std::collections::BTreeMap::<u64, usize>::new();
+        for pane in &panes {
+            *bands.entry(pane.x).or_default() += 1;
+        }
+        assert!(
+            bands.len() == count.min(2) && bands.values().all(|rows| *rows <= count.div_ceil(2)),
+            "grid bounds at {count} panes: {panes:?}"
+        );
+        let areas = panes
+            .iter()
+            .map(|pane| pane.columns * pane.rows)
+            .collect::<Vec<_>>();
+        assert!(
+            areas.iter().max().expect("maximum area") * 10
+                <= areas.iter().min().expect("minimum area") * 16,
+            "native resize steps should keep areas near-equal at {count} panes: {panes:?}",
+        );
+        if count == 8 {
+            assert_eq!(bands.values().copied().collect::<Vec<_>>(), vec![4; 2]);
+        }
+        client.assert_input_reaches(&source, "source while appending companion");
+    }
+    assert_eq!(
+        backend
+            .append_companion_pane(SplitPaneOptions {
+                target: SplitTarget::SessionPane {
+                    session_name: room.name().to_owned(),
+                    pane_id: anchor
+                },
+                command: Some(command(9)),
+                ..Default::default()
+            })
+            .expect("full companion"),
+        CompanionPaneAppend::Full
+    );
+    assert!(!cwd.path().join("pid-9").exists());
+    assert_eq!(
+        wait_for_named_work_pane_count(room.path(), room.name(), "companion", 8).len(),
+        8
+    );
+}
+
+#[test]
+fn directional_background_split_uses_exact_anchor_rectangle() {
+    use rimz::mux::{SplitDirection, SplitPaneOptions, SplitPlacement, SplitTarget};
+
+    require_zellij!();
+    let room = LiveZellijSession::new("exact-split-anchor");
+    room.create_background();
+    let backend = room.backend();
+    let version = backend.version().expect("version");
+    if version
+        .split('.')
+        .nth(1)
+        .and_then(|part| part.parse::<u32>().ok())
+        .is_none_or(|minor| minor < 45)
+    {
+        return;
+    }
+    let mut client = AttachedClient::attach(&room, 200, 80);
+    let source = expect_list_panes(room.path(), room.name())
+        .panes
+        .into_iter()
+        .find(|pane| pane.is_live_terminal())
+        .expect("source");
+    let anchor = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", source.id));
+    let split = |pane_id, direction| SplitPaneOptions {
+        target: SplitTarget::SessionPane {
+            session_name: room.name().to_owned(),
+            pane_id,
+        },
+        placement: SplitPlacement::Directional(direction),
+        command: Some(vec!["sleep".to_owned(), "600".to_owned()]),
+        focus: false,
+        ..Default::default()
+    };
+    backend
+        .split_pane(split(anchor.clone(), SplitDirection::Right))
+        .expect("first split");
+    let before = poll_until(
+        Duration::from_secs(5),
+        || list_panes(room.path(), room.name()),
+        |snapshot| {
+            snapshot
+                .panes
+                .iter()
+                .filter(|pane| pane.is_live_terminal())
+                .count()
+                == 2
+        },
+        "first split",
+    );
+    let other = before
+        .panes
+        .iter()
+        .find(|pane| pane.is_live_terminal() && pane.id != source.id)
+        .expect("right pane")
+        .geometry();
+    let target = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", other.id));
+    backend
+        .split_pane(split(target, SplitDirection::Down))
+        .expect("split unfocused right pane");
+    let after = poll_until(
+        Duration::from_secs(5),
+        || list_panes(room.path(), room.name()),
+        |snapshot| {
+            snapshot
+                .panes
+                .iter()
+                .filter(|pane| pane.is_live_terminal())
+                .count()
+                == 3
+        },
+        "exact split",
+    );
+    assert_eq!(
+        before
+            .panes
+            .iter()
+            .find(|pane| pane.id == source.id && !pane.is_plugin)
+            .unwrap()
+            .geometry(),
+        after
+            .panes
+            .iter()
+            .find(|pane| pane.id == source.id && !pane.is_plugin)
+            .unwrap()
+            .geometry()
+    );
+    let right = after
+        .panes
+        .iter()
+        .filter(|pane| pane.is_live_terminal() && pane.id != source.id)
+        .collect::<Vec<_>>();
+    assert_eq!(right.len(), 2);
+    assert!(
+        right
+            .iter()
+            .all(|pane| pane.pane_x == other.x && pane.pane_columns == other.columns)
+    );
+    assert_eq!(
+        right.iter().map(|pane| pane.pane_rows).sum::<u64>(),
+        other.rows
+    );
+    client.assert_input_reaches(&anchor, "original focus after exact anchor split");
+}
+
+#[test]
 fn rename_tab_uses_the_anchor_panes_stable_tab_id() {
     require_zellij!();
 

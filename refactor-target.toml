@@ -173,7 +173,9 @@ surface-budget = 90
 
 [[module]]
 path = "crates/rimz/src/mux"
-surface-budget = 273
+# Companion append adds one deep operation, its outcome, and the shared tab cap.
+# Geometry planning and native balancing remain private to mux.
+surface-budget = 276
 
 [[module]]
 path = "crates/rimz/src/observability"

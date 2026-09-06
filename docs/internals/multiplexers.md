@@ -35,6 +35,7 @@ Shared seam, `crates/rimz/src/mux/`:
 | [`reconcile.rs`](../../crates/rimz/src/mux/reconcile.rs) | The structural sidebar repair planner, pane-role precedence, and transaction executor. |
 | [`mount_proof.rs`](../../crates/rimz/src/mux/mount_proof.rs) | Current-build heartbeat proof for panes mounted during repair. |
 | [`width.rs`](../../crates/rimz/src/mux/width.rs) | Sidebar sizing: share resolution, native steps, and target spellings. |
+| [`companion_layout.rs`](../../crates/rimz/src/mux/companion_layout.rs) | Pure bounded column planning and equal-area targets for [subagent companion tabs](./harness/subagents.md#what-a-launch-desugars-to). |
 | [`width_target.rs`](../../crates/rimz/src/mux/width_target.rs) | The room-runtime width record every renderer resolves against: its file, its pin flag, and the change broadcast. |
 | [`focus_anchor.rs`](../../crates/rimz/src/mux/focus_anchor.rs) | The durable two-phase intent behind every RimZ-initiated focus action: nonce, anchor file, pre-action fence, and the five observation verdicts. |
 | [`recovery.rs`](../../crates/rimz/src/mux/recovery.rs) | The guarded process sweep behind room teardown: heuristic kills scoped by uid, session name, ancestry, and process domain. |
@@ -96,12 +97,14 @@ Selection is stable across worktrees: every worktree of one repository resolves 
 | Session lifecycle | `ensure_session`, `attach_command`, `detach`, `kill_session`, `list_sessions`, `session_liveness`, `version` | `attach_command` hands a `CommandSpec` to the CLI attach runner rather than running it. |
 | Pane inventory | `list_panes`, `cached_pane_roster`, `client_view` | See [reading the room](#reading-the-room). |
 | Pane I/O | `capture_pane`, `send_keys`, `send_key`, `paste_text` | `paste_text` wraps one bracketed paste and converts logical newlines to CR; the submit Enter follows separately as a keystroke. |
-| Structure | `split_pane`, `open_tab`, `rename_tab`, `open_sidebar`, `open_background_view`, `close_pane`, `close_view_floating_panes` | Callers pass backend-neutral argv and layout geometry. Tab rename and optional post-birth placement address a view through a pane anchor. |
+| Structure | `split_pane`, `append_companion_pane`, `open_tab`, `rename_tab`, `open_sidebar`, `open_background_view`, `close_pane`, `close_view_floating_panes` | Callers pass backend-neutral argv and layout geometry. Companion append checks native occupancy before birth and balances best-effort afterward; its `Full` result guarantees no payload ran. Tab rename and optional post-birth placement address a view through a pane anchor. |
 | Focus and geometry | `focus_pane`, `toggle_fullscreen`, `sidebar_width_step`, `nudge_sidebar_width`, `record_sidebar_width_default`, `register_room_key` | |
 | Health | `probe_session_health`, `ensure_clean_session`, `reconcile_sidebars`, `purge_resurrection_cache`, `resurrection_cache_paths`, `session_accepts_agent_close` | Several default to a no-op because they answer a Zellij-only question. |
 | Presence | `ensure_presence_plugin` | Zellij-only; tmux inherits the no-op default because its control-mode watch already pushes. |
 
 Methods with a sensible cross-backend answer carry a default implementation, so a backend implements only what it does differently. `ensure_clean_session` and `purge_resurrection_cache` exist because Zellij resurrects sessions and tmux does not; tmux takes the no-op and the calling code stays branch-free.
+
+Companion-grid planning excludes sidebar chrome before checking occupancy or balancing. tmux recognizes the sidebar's spawn argv as well as its title and current command, decoding the outer quoting of a single shell-command argument so hook-born sidebars remain fixed even before their title arrives.
 
 `TabOptions::after` requests that a new view open immediately after the view containing an anchor pane; `None` appends. tmux resolves the pane to its window id and uses `new-window -a`. Zellij appends, focuses the new tab long enough to move it left across the required neighbors, then restores an unfocused launch by re-resolving the original pane's current tab position. Placement is best-effort on both backends: failure leaves the new view appended rather than sinking the launch.
 
