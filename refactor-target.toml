@@ -151,7 +151,7 @@ surface-budget = 9
 
 [[module]]
 path = "crates/rimz/src/lib.rs"
-surface-budget = 70
+surface-budget = 69
 
 [[module]]
 path = "crates/rimz/src/main.rs"
@@ -205,7 +205,7 @@ surface-budget = 11
 
 [[module]]
 path = "crates/rimz/src/remote"
-surface-budget = 178
+surface-budget = 177
 
 [[module]]
 path = "crates/rimz/src/remote_control.rs"
@@ -237,8 +237,6 @@ path = "crates/rimz/src/store"
 upward-dependencies = [
     "diag",
     "diag::record",
-    "disk_usage",
-    "remote::link",
 ]
 surface-budget = 337
 
@@ -286,7 +284,6 @@ surface-budget = 26
 
 [[module]]
 path = "crates/rimz/src/worktree"
-upward-dependencies = ["disk_usage"]
 # The read-only lifetime resolver supplies attribution consumers across modules.
 surface-budget = 55
 
@@ -419,7 +416,6 @@ surface-budget = 18
 path = "crates/rimz/src/store/gc"
 allowed-dependencies = [
     "disk",
-    "disk_usage",
     "ids",
     "wakeup",
     "workspace",
@@ -565,7 +561,6 @@ allowed-dependencies = [
     "harness::run",
     "harness::schedule",
     "ids",
-    "proc",
     "store::run",
     "utils::time",
     "workspace",
@@ -696,3 +691,13 @@ reason = "Reached by inference from the binary; narrowing is a private-interface
 kind = "item"
 key = "harness::schedule::runner::new"
 reason = "TaskFire keeps ten explicit inputs; CLI owns the spawn."
+
+[[verdict]]
+kind = "item"
+key = "remote::link::link_tier"
+reason = "Classifier and thresholds are remote policy over a store-owned tier; stays at L5 with the protocol."
+
+[[verdict]]
+kind = "item"
+key = "disk::usage::FileIdentity"
+reason = "Per-walk (dev, ino) dedupe; parse_cache::FileStamp keys on mtime and length and temp_sweep counts nlink exhaustion, so the three identities are different rules, not one."

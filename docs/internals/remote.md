@@ -16,7 +16,7 @@ Start with the [remote guide](../guide/remote.md) for what a user sees and the [
 | --- | --- |
 | [`remote/mod.rs`](../../crates/rimz/src/remote/mod.rs) | Target grammar, the guarded remote shell snippet, `TermPlan`, `SshAttachPlan`, lineage derivation, `ReconnectPolicy`, and the `Verdict` classification. |
 | [`remote/aliases.rs`](../../crates/rimz/src/remote/aliases.rs) | Saved aliases in `remote.toml`: schema, validation, and atomic CRUD. |
-| [`remote/link.rs`](../../crates/rimz/src/remote/link.rs) | The `rimz.link.v1` probe protocol, `ProbeWindow` and `LinkMonitor` accounting, the `SessionLinkState` machine, health tiers and badge heat, and the ControlMaster argv. |
+| [`remote/link.rs`](../../crates/rimz/src/remote/link.rs) | The `rimz.link.v1` probe protocol, `ProbeWindow` and `LinkMonitor` accounting, the `SessionLinkState` machine, health-tier classification and badge heat, and the ControlMaster argv. |
 | [`remote/reachability.rs`](../../crates/rimz/src/remote/reachability.rs) | `ssh -G` endpoint discovery, TUN-route classification, and the `AttemptPacer`. |
 | [`remote/recovery.rs`](../../crates/rimz/src/remote/recovery.rs) | `RecoveryPanel` checkpoint state, panel timing, and the internet checkpoint endpoint. |
 | [`remote/forward.rs`](../../crates/rimz/src/remote/forward.rs) | Remote listener parsing from procfs and the `PortSync` diff state. |
@@ -302,7 +302,7 @@ The supervisor replaces the session only when all three conditions hold: the ses
 
 The module keeps a stepped scale for alerting and a continuous one for the badge, and mixing them up is an easy bug.
 
-`LinkTier` is the stepped one, taking the worse of the two axes:
+`LinkTier` is the stepped one; the type lives beside the snapshot's `SidebarLinkHealth` record in `store::snapshot`. The `remote::link::link_tier` classifier owns the thresholds, taking the worse of the two axes:
 
 | Axis | Good | Degraded | Bad |
 | --- | --- | --- | --- |
