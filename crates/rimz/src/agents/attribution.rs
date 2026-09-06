@@ -4,7 +4,8 @@
 //! dollars come from provider transcripts through the shared price book; active
 //! time comes from runtime sidecars and can become unavailable after GC. A member's
 //! tokens and dollars cover its seat and every subagent it spawned; the subagent
-//! breakdown groups that spend by task.
+//! breakdown groups that spend by task, and model rows split the same all-in spend
+//! by the transcript's model id.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -20,7 +21,7 @@ use super::{AgentState, pricing, spending};
 
 pub use super::spending::EffortTokens as TokenSplit;
 
-const ATTRIBUTION_SCHEMA: u8 = 5;
+const ATTRIBUTION_SCHEMA: u8 = 6;
 const SUBAGENT_TYPE_MAX_CHARS: usize = 24;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -30,6 +31,7 @@ pub struct Attribution {
     pub rimz_version: String,
     pub scope: AttributionScope,
     pub groups: Vec<AttributionGroup>,
+    pub models: Vec<ModelStat>,
     pub totals: EffortTotals,
 }
 
@@ -78,6 +80,7 @@ pub struct AttributionMember {
     pub tokens: TokenSplit,
     pub cost_usd: Option<f64>,
     pub subagents: Vec<SubagentStat>,
+    pub models: Vec<ModelStat>,
 }
 
 impl AttributionMember {
@@ -104,6 +107,13 @@ pub struct MessageCounts {
 pub struct SubagentStat {
     pub task: Option<String>,
     pub count: u32,
+    pub cost_usd: Option<f64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ModelStat {
+    pub model: Option<String>,
+    pub tokens: TokenSplit,
     pub cost_usd: Option<f64>,
 }
 
@@ -245,12 +255,19 @@ pub fn build(request: AttributionRequest<'_>) -> Attribution {
         .flat_map(|group| group.members.iter())
         .collect::<Vec<_>>();
     let totals = totals_from_refs(&all_members);
+    let mut models = BTreeMap::<Option<String>, spending::SlotEffort>::new();
+    for stat in all_members.iter().flat_map(|member| &member.models) {
+        let effort = models.entry(stat.model.clone()).or_default();
+        effort.tokens.add_assign(stat.tokens);
+        effort.cost_usd = spending::sum_optional_cost(effort.cost_usd, stat.cost_usd);
+    }
     Attribution {
         schema: ATTRIBUTION_SCHEMA,
         generated_at: request.now,
         rimz_version: crate::build_id::VERSION.to_owned(),
         scope: request.scope,
         groups,
+        models: model_stats(models),
         totals,
     }
 }
@@ -395,7 +412,7 @@ fn member(
     let launched_effort = child_slots
         .into_iter()
         .map(|(_, child_records)| {
-            let child_effort = spending::slot_effort(
+            let child_effort = spending::slot_effort_breakdown(
                 &child_records
                     .iter()
                     .map(|child| spending::EffortSessionRef::from_state(child))
@@ -444,9 +461,15 @@ fn member(
     );
     let mut tokens = effort.total.tokens;
     let mut cost_usd = effort.total.cost_usd;
-    for (_, child_effort) in &launched_effort {
-        tokens.add_assign(child_effort.tokens);
-        cost_usd = spending::sum_optional_cost(cost_usd, child_effort.cost_usd);
+    let mut models = effort.models;
+    for (_, child_effort) in launched_effort {
+        tokens.add_assign(child_effort.total.tokens);
+        cost_usd = spending::sum_optional_cost(cost_usd, child_effort.total.cost_usd);
+        for (model, child_model) in child_effort.models {
+            let effort = models.entry(model).or_default();
+            effort.tokens.add_assign(child_model.tokens);
+            effort.cost_usd = spending::sum_optional_cost(effort.cost_usd, child_model.cost_usd);
+        }
     }
     let active_secs = seat
         .identity
@@ -508,6 +531,7 @@ fn member(
         tokens,
         cost_usd,
         subagents,
+        models: model_stats(models),
     }
 }
 
@@ -600,7 +624,7 @@ fn subagent_stats(
     records: &[&AgentState],
     subagents: &[&AgentState],
     spend: &BTreeMap<String, spending::SlotEffort>,
-    launched: &[(&AgentState, spending::SlotEffort)],
+    launched: &[(&AgentState, spending::SlotEffortBreakdown)],
 ) -> Vec<SubagentStat> {
     let mut children = BTreeMap::<String, Option<String>>::new();
     for child in subagents.iter().copied().filter(|child| {
@@ -642,7 +666,7 @@ fn subagent_stats(
             cost_usd: None,
         });
         stat.count = stat.count.saturating_add(1);
-        stat.cost_usd = spending::sum_optional_cost(stat.cost_usd, effort.cost_usd);
+        stat.cost_usd = spending::sum_optional_cost(stat.cost_usd, effort.total.cost_usd);
     }
     let mut stats = grouped.into_values().collect::<Vec<_>>();
     stats.sort_by(|left, right| {
@@ -667,6 +691,38 @@ fn subagent_type(task: Option<&str>) -> Option<String> {
             .chars()
             .all(|character| !character.is_whitespace() && !character.is_control()))
     .then_some(task)
+}
+
+fn model_stats(models: BTreeMap<Option<String>, spending::SlotEffort>) -> Vec<ModelStat> {
+    let mut stats = models
+        .into_iter()
+        .map(|(model, effort)| ModelStat {
+            model,
+            tokens: effort.tokens,
+            cost_usd: effort.cost_usd,
+        })
+        .collect::<Vec<_>>();
+    stats.sort_by(model_order);
+    stats
+}
+
+fn model_order(left: &ModelStat, right: &ModelStat) -> Ordering {
+    right
+        .cost_usd
+        .unwrap_or(-1.0)
+        .total_cmp(&left.cost_usd.unwrap_or(-1.0))
+        .then_with(|| {
+            right
+                .tokens
+                .display_total()
+                .cmp(&left.tokens.display_total())
+        })
+        .then_with(|| match (&left.model, &right.model) {
+            (Some(left), Some(right)) => left.cmp(right),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
+        })
 }
 
 fn newest<'a>(records: &[&'a AgentState]) -> Option<&'a AgentState> {

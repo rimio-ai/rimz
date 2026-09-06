@@ -6,7 +6,7 @@ use super::*;
 use crate::cli::render;
 use rimz::agents::attribution::{
     Attribution, AttributionGroup, AttributionMember, AttributionRequest, AttributionScope,
-    EffortTotals,
+    EffortTotals, ModelStat, TokenSplit,
 };
 
 const REPO_URL: &str = "https://github.com/rimio-ai/rimz";
@@ -190,11 +190,20 @@ pub(super) fn render_panel(w: &mut impl Write, report: &Attribution) -> std::io:
             if let Some(messages) = messages_label(member) {
                 details.push("messages", render::cell(messages));
             }
-            if let Some(tokens) = token_label(member) {
+            if let Some(tokens) = token_split_label(&member.tokens) {
                 details.push("tokens", render::cell(tokens));
             }
             details.render(w)?;
         }
+    }
+    if !report.models.is_empty() {
+        writeln!(w)?;
+        writeln!(w, "{}", render::paint(render::palette::header(), "Models"))?;
+        let mut models = render::KeyVals::new().indent(2);
+        for stat in &report.models {
+            models.push(model_name(stat), render::cell(model_row_label(stat)));
+        }
+        models.render(w)?;
     }
     if show_captions && report.groups.len() == 1 {
         return Ok(());
@@ -230,7 +239,7 @@ pub(super) fn render_markdown(w: &mut impl Write, report: &Attribution) -> std::
                 "- **{}** — {} {}",
                 markdown_escape(role),
                 markdown_escape(&member.provider),
-                markdown_model_label(member),
+                markdown_code(&model_label(member)),
             )?;
             if let Some(effort) = effort_label(member) {
                 writeln!(w, "  - effort: {}", markdown_escape(&effort))?;
@@ -244,9 +253,19 @@ pub(super) fn render_markdown(w: &mut impl Write, report: &Attribution) -> std::
             if let Some(messages) = messages_label(member) {
                 writeln!(w, "  - messages: {}", markdown_escape(&messages))?;
             }
-            if let Some(tokens) = token_label(member) {
+            if let Some(tokens) = token_split_label(&member.tokens) {
                 writeln!(w, "  - tokens: {}", markdown_escape(&tokens))?;
             }
+        }
+    }
+    if !report.models.is_empty() {
+        writeln!(w, "\n**Models**\n")?;
+        for stat in &report.models {
+            let name = stat
+                .model
+                .as_deref()
+                .map_or_else(|| "unknown".to_owned(), markdown_code);
+            writeln!(w, "- {name} — {}", markdown_escape(&model_row_label(stat)))?;
         }
     }
     writeln!(w)?;
@@ -307,10 +326,9 @@ fn identity_label(member: &AttributionMember) -> String {
 
 /// A code span renders its contents verbatim, so the span branch only flattens
 /// newlines; the backtick fallback is plain Markdown text and takes the full escape.
-fn markdown_model_label(member: &AttributionMember) -> String {
-    let label = model_label(member);
+fn markdown_code(label: &str) -> String {
     if label.contains('`') {
-        markdown_escape(&label)
+        markdown_escape(label)
     } else {
         format!("`{}`", label.replace(['\r', '\n'], " "))
     }
@@ -366,12 +384,27 @@ fn messages_label(member: &AttributionMember) -> Option<String> {
     })
 }
 
-fn token_label(member: &AttributionMember) -> Option<String> {
+fn model_name(stat: &ModelStat) -> &str {
+    stat.model.as_deref().unwrap_or("unknown")
+}
+
+fn model_row_label(stat: &ModelStat) -> String {
     [
-        (member.tokens.input, "input"),
-        (member.tokens.output, "output"),
-        (member.tokens.cache_write, "cache write"),
-        (member.tokens.cache_read, "cache read"),
+        stat.cost_usd.map(rimz::theme::fmt::dollars2),
+        token_split_label(&stat.tokens),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" · ")
+}
+
+fn token_split_label(tokens: &TokenSplit) -> Option<String> {
+    [
+        (tokens.input, "input"),
+        (tokens.output, "output"),
+        (tokens.cache_write, "cache write"),
+        (tokens.cache_read, "cache read"),
     ]
     .into_iter()
     .filter(|(count, _)| *count > 0)
@@ -499,7 +532,7 @@ fn html_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rimz::agents::attribution::{MessageCounts, Presence, SubagentStat, TeamRef, TokenSplit};
+    use rimz::agents::attribution::{MessageCounts, Presence, SubagentStat, TeamRef};
     use rimz::ids::AgentKind;
 
     fn member(handle: &str, role: Option<&str>, provider: &str, model: &str) -> AttributionMember {
@@ -546,12 +579,32 @@ mod tests {
                     cost_usd: None,
                 },
             ],
+            models: vec![ModelStat {
+                model: Some("claude-opus-4-8".to_owned()),
+                tokens: TokenSplit {
+                    input: 1_200,
+                    output: 800,
+                    cache_write: 2_000,
+                    cache_read: 3_000,
+                },
+                cost_usd: Some(1.60),
+            }],
         }
     }
 
     fn report() -> Attribution {
         let team_member = member("@planner", Some("plan|ner"), "Claude", "fable`2");
-        let stray = member("@codex", None, "Codex", "gpt-5.5");
+        let mut stray = member("@codex", None, "Codex", "gpt-5.5");
+        stray.tokens = TokenSplit {
+            input: 300,
+            output: 100,
+            ..TokenSplit::default()
+        };
+        stray.models = vec![ModelStat {
+            model: Some("gpt-5.5".to_owned()),
+            tokens: stray.tokens,
+            cost_usd: stray.cost_usd,
+        }];
         let group_totals = |members: &[AttributionMember]| EffortTotals {
             agents: u32::try_from(members.len()).expect("small fixture"),
             active_secs: Some(3_900 * members.len() as u64),
@@ -566,21 +619,27 @@ mod tests {
                 from_teammates: 5 * members.len() as u64,
                 to_teammates: 4 * members.len() as u64,
             },
-            tokens: TokenSplit {
-                input: 1_200 * members.len() as u64,
-                output: 800 * members.len() as u64,
-                cache_write: 2_000 * members.len() as u64,
-                cache_read: 3_000 * members.len() as u64,
-            },
+            tokens: members
+                .iter()
+                .fold(TokenSplit::default(), |mut tokens, member| {
+                    tokens.add_assign(member.tokens);
+                    tokens
+                }),
         };
         let team_members = vec![team_member];
         let other_members = vec![stray];
         Attribution {
-            schema: 5,
+            schema: 6,
             generated_at: jiff::Timestamp::UNIX_EPOCH,
             rimz_version: "test".to_owned(),
             scope: AttributionScope::default(),
             totals: group_totals(&[team_members[0].clone(), other_members[0].clone()]),
+            models: team_members[0]
+                .models
+                .iter()
+                .chain(&other_members[0].models)
+                .cloned()
+                .collect(),
             groups: vec![
                 AttributionGroup {
                     team: Some(TeamRef {
@@ -620,7 +679,11 @@ mod tests {
               subagents: 4 × explorer, 1 × other · $0.90
               activity:  2 asks · 7 tool calls · 1 compaction
               messages:  2 from you · 5 from teammates · 4 to teammates
-              tokens:    1.2k input, 800 output, 2k cache write, 3k cache read
+              tokens:    300 input, 100 output
+
+        Models
+          claude-opus-4-8: $1.60 · 1.2k input, 800 output, 2k cache write, 3k cache read
+          gpt-5.5:         $1.60 · 300 input, 100 output
 
         Total · 2 agents · 2h10m active · $3.20 · 14 messages (4 from you)
         ");
@@ -631,6 +694,7 @@ mod tests {
         let mut report = report();
         let teamless = report.groups.pop().expect("teamless fixture group");
         report.totals = teamless.totals.clone();
+        report.models = teamless.members[0].models.clone();
         report.groups = vec![teamless];
 
         let mut output = anstream::StripStream::new(Vec::new());
@@ -641,7 +705,10 @@ mod tests {
               subagents: 4 × explorer, 1 × other · $0.90
               activity:  2 asks · 7 tool calls · 1 compaction
               messages:  2 from you · 5 from teammates · 4 to teammates
-              tokens:    1.2k input, 800 output, 2k cache write, 3k cache read
+              tokens:    300 input, 100 output
+
+        Models
+          gpt-5.5: $1.60 · 300 input, 100 output
 
         Total · 1 agent · 1h05m active · $1.60 · 7 messages (2 from you)
         ");
@@ -652,12 +719,14 @@ mod tests {
         let mut report = report();
         report.groups.truncate(1);
         report.totals = report.groups[0].totals.clone();
+        report.models = report.groups[0].members[0].models.clone();
 
         let mut output = anstream::StripStream::new(Vec::new());
         render_panel(&mut output, &report).expect("render panel");
         let output = String::from_utf8(output.into_inner()).expect("utf8");
 
         assert!(output.starts_with("forge team ·"));
+        assert!(output.contains("\nModels\n  claude-opus-4-8:"));
         assert!(!output.contains("Total ·"));
     }
 
@@ -685,7 +754,12 @@ mod tests {
           - subagents: 4 × explorer, 1 × other · $0.90
           - activity: 2 asks · 7 tool calls · 1 compaction
           - messages: 2 from you · 5 from teammates · 4 to teammates
-          - tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
+          - tokens: 300 input, 100 output
+
+        **Models**
+
+        - `claude-opus-4-8` — $1.60 · 1.2k input, 800 output, 2k cache write, 3k cache read
+        - `gpt-5.5` — $1.60 · 300 input, 100 output
 
         </details>
         "#);
@@ -696,6 +770,7 @@ mod tests {
         let mut report = report();
         report.groups.pop();
         report.totals = report.groups[0].totals.clone();
+        report.models = report.groups[0].members[0].models.clone();
         let mut output = Vec::new();
 
         render_markdown(&mut output, &report).expect("render markdown");
@@ -720,16 +795,19 @@ mod tests {
     #[test]
     fn markdown_model_code_span_keeps_punctuation_verbatim() {
         let mut spanned = member("@coder", Some("coder"), "Qwen", "qwen2_5-coder");
-        assert_eq!(markdown_model_label(&spanned), "`qwen2_5-coder@high`");
+        assert_eq!(
+            markdown_code(&model_label(&spanned)),
+            "`qwen2_5-coder@high`"
+        );
 
         spanned.model = Some("llama3*8b".to_owned());
-        assert_eq!(markdown_model_label(&spanned), "`llama3*8b@high`");
+        assert_eq!(markdown_code(&model_label(&spanned)), "`llama3*8b@high`");
 
         spanned.model = Some("a[1]".to_owned());
-        assert_eq!(markdown_model_label(&spanned), "`a[1]@high`");
+        assert_eq!(markdown_code(&model_label(&spanned)), "`a[1]@high`");
 
         spanned.model = Some("fable`2".to_owned());
-        assert_eq!(markdown_model_label(&spanned), "fable&#96;2@high");
+        assert_eq!(markdown_code(&model_label(&spanned)), "fable&#96;2@high");
     }
 
     #[test]
@@ -802,12 +880,44 @@ mod tests {
         let mut sample = member("@coder", Some("coder"), "Codex", "gpt-5.5");
         sample.tokens.cache_write = 0;
         assert_eq!(
-            token_label(&sample).as_deref(),
+            token_split_label(&sample.tokens).as_deref(),
             Some("1.2k input, 800 output, 3k cache read")
         );
 
         sample.tokens = TokenSplit::default();
-        assert_eq!(token_label(&sample), None);
+        assert_eq!(token_split_label(&sample.tokens), None);
+    }
+
+    #[test]
+    fn renderers_show_unpriced_unknown_model_tokens() {
+        let mut report = report();
+        report.groups.truncate(1);
+        let member = &mut report.groups[0].members[0];
+        member.tokens = TokenSplit {
+            input: 200,
+            ..TokenSplit::default()
+        };
+        member.cost_usd = None;
+        member.subagents.clear();
+        member.models = vec![ModelStat {
+            model: None,
+            tokens: member.tokens,
+            cost_usd: None,
+        }];
+        report.models = member.models.clone();
+        report.groups[0].totals.tokens = report.models[0].tokens;
+        report.groups[0].totals.cost_usd = None;
+        report.totals = report.groups[0].totals.clone();
+
+        let mut panel = anstream::StripStream::new(Vec::new());
+        render_panel(&mut panel, &report).expect("render panel");
+        let panel = String::from_utf8(panel.into_inner()).expect("utf8");
+        assert!(panel.ends_with("\nModels\n  unknown: 200 input\n"));
+
+        let mut markdown = Vec::new();
+        render_markdown(&mut markdown, &report).expect("render markdown");
+        let markdown = String::from_utf8(markdown).expect("utf8");
+        assert!(markdown.ends_with("\n**Models**\n\n- unknown — 200 input\n\n</details>\n"));
     }
 
     #[test]
@@ -822,9 +932,12 @@ mod tests {
         report.groups[0].members[0].messages = MessageCounts::default();
         report.groups[0].members[0].tokens = TokenSplit::default();
         report.groups[0].members[0].subagents.clear();
+        report.groups[0].members[0].models.clear();
+        report.models.clear();
         report.groups[0].totals.active_secs = None;
         report.groups[0].totals.cost_usd = None;
         report.groups[0].totals.messages = MessageCounts::default();
+        report.groups[0].totals.tokens = TokenSplit::default();
         report.totals = report.groups[0].totals.clone();
 
         let mut panel = anstream::StripStream::new(Vec::new());
@@ -837,12 +950,14 @@ mod tests {
         assert!(!panel.contains("messages:"));
         assert!(!panel.contains("tokens:"));
         assert!(!panel.contains("subagents:"));
+        assert!(!panel.contains("Models"));
 
         let mut markdown = Vec::new();
         render_markdown(&mut markdown, &report).expect("render markdown");
         let markdown = String::from_utf8(markdown).expect("utf8");
         assert!(!markdown.contains("unknown"));
         assert!(!markdown.contains("none recorded"));
+        assert!(!markdown.contains("**Models**"));
     }
 
     #[test]
@@ -861,6 +976,7 @@ mod tests {
     fn empty_scope_is_muted_for_people_and_silent_for_markdown() {
         let mut report = report();
         report.groups.clear();
+        report.models.clear();
         report.totals = EffortTotals::default();
         let mut panel = anstream::StripStream::new(Vec::new());
         render_panel(&mut panel, &report).expect("render panel");

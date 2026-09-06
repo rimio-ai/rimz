@@ -185,7 +185,7 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
         String::from_utf8_lossy(&output.stderr)
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("attribution json");
-    assert_eq!(report["schema"], 5);
+    assert_eq!(report["schema"], 6);
     assert_eq!(
         report["groups"].as_array().map(Vec::len),
         Some(1),
@@ -211,6 +211,43 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
     assert_eq!(report["totals"]["cost_usd"], 0.0175);
     assert_eq!(report["totals"]["active_secs"], 60);
     assert_eq!(report["totals"]["asks_answered"], 1);
+    assert_eq!(report["models"].as_array().map(Vec::len), Some(1));
+    assert_eq!(report["models"][0]["model"], "gpt-5.5");
+    assert_eq!(
+        report["models"][0]["cost_usd"],
+        report["totals"]["cost_usd"]
+    );
+    assert_eq!(report["models"][0]["tokens"], report["totals"]["tokens"]);
+    for member in members {
+        assert_eq!(member["models"].as_array().map(Vec::len), Some(1));
+        assert_eq!(member["models"][0]["model"], "gpt-5.5");
+        assert_eq!(member["models"][0]["tokens"], member["tokens"]);
+        assert_eq!(member["models"][0]["cost_usd"], member["cost_usd"]);
+    }
+    for component in ["input", "output", "cache_write", "cache_read"] {
+        assert_eq!(
+            members
+                .iter()
+                .map(|member| member["models"][0]["tokens"][component]
+                    .as_u64()
+                    .expect("member model tokens"))
+                .sum::<u64>(),
+            report["models"][0]["tokens"][component]
+                .as_u64()
+                .expect("report model tokens")
+        );
+    }
+    assert_eq!(
+        members
+            .iter()
+            .map(|member| member["models"][0]["cost_usd"]
+                .as_f64()
+                .expect("model cost"))
+            .sum::<f64>(),
+        report["models"][0]["cost_usd"]
+            .as_f64()
+            .expect("total model cost")
+    );
 
     let markdown = env
         .rimz()
@@ -305,6 +342,26 @@ fn attribution_cli_credits_claude_subagent_companions() {
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("attribution json");
 
+    assert_eq!(report["schema"], 6);
+    assert_eq!(
+        report["models"],
+        serde_json::json!([
+            {
+                "model": "child-model",
+                "tokens": {"input": 20, "output": 2, "cache_write": 0, "cache_read": 0},
+                "cost_usd": 2.0,
+            },
+            {
+                "model": null,
+                "tokens": {"input": 10, "output": 1, "cache_write": 0, "cache_read": 0},
+                "cost_usd": 1.0,
+            },
+        ])
+    );
+    assert_eq!(
+        report["groups"][0]["members"][0]["models"],
+        report["models"]
+    );
     assert_eq!(report["totals"]["tokens"]["input"], 30);
     assert_eq!(report["totals"]["tokens"]["output"], 3);
     assert_eq!(report["totals"]["cost_usd"], 3.0);
@@ -337,6 +394,8 @@ fn attribution_cli_credits_claude_subagent_companions() {
     let markdown = String::from_utf8(markdown.stdout).expect("markdown utf8");
     assert!(markdown.contains("effort: $3.00"));
     assert!(markdown.contains("  - effort: $3.00\n  - subagents: 1 × explore · $2.00"));
+    assert!(markdown.contains("**Models**"));
+    assert!(markdown.contains("`child-model`"));
 }
 
 #[test]
