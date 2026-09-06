@@ -27,6 +27,7 @@ Three rules follow from that shared scheduler, and they explain most of the modu
 | [`store/event.rs`](../../../crates/rimz/src/store/event.rs) | The persisted signal vocabulary the harness converts into: the `SignalName` grammar and its reserved families, `SignalSource`, and the `SignalEventPayload` that `Store::append_signal` records ([store.md](../store.md#what-is-in-it)). |
 | [`schedule/signal/team.rs`](../../../crates/rimz/src/harness/schedule/signal/team.rs) | The pure cohort-edge derivation behind `team.idle`, `team.waiting`, `team.failed`, and `team.ended`. |
 | [`schedule/runner/prompt.rs`](../../../crates/rimz/src/harness/schedule/runner/prompt.rs) | `compose_wake`: the armer line, the wait line, the verdict line, the evidence, and the verbatim note. |
+| [`schedule/runner/status.rs`](../../../crates/rimz/src/harness/schedule/runner/status.rs) | The deadline answer: the PR-state cache lookup for a signal wake's scope, the `Answered`/`Open` split, the status label, and `rearm_command`. |
 | [`cli/wake/`](../../../crates/rimz/src/cli/wake) | `rimz wake`: trigger validation, target pinning, caller-scoped match defaults, petname minting, starting the detached watcher child, the inline `--wait` join, and `list`/`cancel`. No scheduling policy. |
 | [`schedule/catalog.rs`](../../../crates/rimz/src/harness/schedule/catalog.rs) | The task catalog: the three sources, visible and runnable precedence, source-aware mutation, and scheduled consumption. |
 | [`schedule/fire.rs`](../../../crates/rimz/src/harness/schedule/fire.rs) | Shared elder/external firing: root ownership, arm-on-first-sight, due planning, `loop-fire.json`, and spawning the detached `rimz loop run <name>`. |
@@ -63,7 +64,7 @@ Three sources back the catalog, and they are not interchangeable.
 | --- | --- | --- |
 | `Config` | `~/.config/rimz/loop.toml` | per-machine automation, like your crontab; never inherited by a clone |
 | `Project` | `<root>/.rimz/config.toml` under `[tasks.*]` | shared automation that travels with the repo, and therefore defaults disabled until it is both trusted and enabled on this machine |
-| `Instance` | `~/.local/state/rimz/loop-instances.json` | RimZ-owned runtime rows: one-shots, poll-until rows, `once` subscriptions, and every `rimz wake`, including the standing signal subscriptions that outlive a fire |
+| `Instance` | `~/.local/state/rimz/loop-instances.json` | RimZ-owned runtime rows: one-shots, poll-until rows, `once` subscriptions, and every `rimz wake` |
 
 The instance store exists so runtime churn never edits user config. An agent scheduling its own `--in 30m` wake writes state, not your `loop.toml`, and the row retires itself after firing.
 
@@ -96,7 +97,7 @@ The validation is where the shapes stay honest: any two trigger families togethe
 
 `Trigger::resolve` is the whole matching rule, and it has three outcomes rather than a bool. A `Signal` trigger returns `Ignore` when the families differ or any `match` key fails against the payload (comparing a JSON string to the raw value and any other JSON value to its compact encoding), `Deliver` when the selector is that exact name or its family, and `Skip` for another member of the same family that passed the matches. A `Watch` trigger resolves only the internal `wake.<task-name>` signal to `Deliver`, which is what keeps one watcher's completion from firing another wake. A `Schedule` trigger ignores everything: clocks are not signals.
 
-`ephemeral_lifetime` decides which rows retire themselves: anything with no repeating trigger, plus any row carrying a `deadline`, `once = true`, or a `watch` command. The one exception is the standing wake: a row with both `wake_meta` and a `signal` is never ephemeral, because its `deadline` is a quiet window rather than a lifetime, and expiry removes it explicitly ([below](#the-quiet-window)).
+`ephemeral_lifetime` decides which rows retire themselves: anything with no repeating trigger, plus any row carrying a `deadline`, `once = true`, or a `watch` command. A signal wake carries a `deadline`, so it is ephemeral like the rest, and the delivery path removes it under the instance lock rather than through the catalog ([below](#the-deadline)).
 
 ## Schedule shapes
 
@@ -140,7 +141,7 @@ The plan is a decision per task, and the first row is checked before the stamp i
 
 | State | Action |
 | --- | --- |
-| live standing wake past its `deadline` | expire: record `now` and spawn `rimz loop run <name> --expired` |
+| live signal wake past its `deadline` | expire: record `now` and spawn `rimz loop run <name> --expired` |
 | no stamp | arm: record `now`, do not fire |
 | stamped, disabled or pause active | hold the existing stamp unchanged |
 | stamped, schedule due | fire: record `now` |
@@ -188,8 +189,9 @@ Two facts about durability are easy to get backwards. `rimz events emit`, the wa
 1. Load the runnable catalog for the project root, dropping untrusted project rows, and keep only tasks whose resolved root maps to this workspace.
 2. `resolve` each task's trigger against the signal, dropping `Ignore` and `Schedule` rows outright.
 3. Drop any task whose arming overlay is not `Live`, so a disabled or paused subscription stays quiet.
-4. For a standing wake row, restart the quiet window under the instance lock ([below](#wakes)); a row that has vanished since step 1 is treated as `Ignore`.
-5. `Skip`: append a `SignalSkipped` run record carrying the observed signal and spawn nothing. `Deliver`: spawn a detached `rimz loop run <name> --signal-json <encoded>` and return the name for the emitter to print.
+4. `Skip`: append a `SignalSkipped` run record carrying the observed signal and spawn nothing. `Deliver`: spawn a detached `rimz loop run <name> --signal-json <encoded>` and return the name for the emitter to print.
+
+A wake row's own removal is not in that sequence. `fire_signal` touches no instance row, so a sibling leaves a wake exactly as it found it, deadline included; the spawned run removes the row itself when it prepares the delivery ([below](#the-deadline)).
 
 There is no queue, no persistence of pending matches, and no replay: signal firing leaves `loop-fire.json` untouched, and a subscription written one second after the emit simply misses it. The elder may stamp a signal row when it first sees the catalog, but that clock-side display state is never consulted by `fire_signal`. A signal reaches only the subscriptions armed in that workspace at that instant, which is the property that lets an emitter run with no room open.
 
@@ -210,9 +212,9 @@ A watched command's signal carries a `WatchOutcome`: a `WatchVerdict` plus its e
 
 ## Wakes
 
-`rimz wake` writes the same rows through a narrower door. Arming validates exactly one trigger (`--in`, `--signal`, or a command after `--`), resolves the delivery target, mints a `wake-<adjective>-<noun>` name unique among existing `wake-` tasks, and writes a `Deliver` entry to the instance store. `--in` becomes a bare `at = "HH:MM"` one-shot, a command becomes a `Watch` trigger, and `--signal` becomes a standing `Signal` trigger with a `deadline`; `loop.toml` is never touched.
+`rimz wake` writes the same rows through a narrower door. Arming validates exactly one trigger (`--in`, `--signal`, or a command after `--`), resolves the delivery target, mints a `wake-<adjective>-<noun>` name unique among existing `wake-` tasks, and writes a `Deliver` entry to the instance store. `--in` becomes a bare `at = "HH:MM"` one-shot, a command becomes a `Watch` trigger, and `--signal` becomes a `Signal` trigger with a `deadline`; `loop.toml` is never touched.
 
-Every `rimz wake` row also carries `wake_meta` (serde `wake-meta`), which is what separates it from a `loop add --wake` row: `armed_by` (`Human`, or `Agent { handle }`), `armed_at`, the `--in` text as `delay`, and `last_observed_at`. The composer reads it for the armer clause, `wake list` reads it for `AGE`, and `ephemeral_lifetime` reads it together with the `Signal` trigger to decide the row is *not* consumed on fire.
+Every `rimz wake` row also carries `wake_meta` (serde `wake-meta`), which is what separates it from a `loop add --wake` row: `armed_by` (`Human`, or `Agent { handle }`), `armed_at`, and the `--in` text as `delay`. The composer reads it for the armer clause, `wake list` reads it for `AGE`, and the elder's plan reads it with the `Signal` trigger and a passed `deadline` to tell a wake to close from a loop task to leave alone.
 
 The target is where the caller identity matters. An explicit `@handle` resolves against the live rollup and pins `{kind, session, handle}`; a provisional card is refused, because there is no session to deliver to yet. With no address, the wake goes back to the calling agent, resolved from its launch environment or process ancestry, which is why a user shell must name a target. The same identity scopes `wake list` and `wake cancel` to the caller's own wakes.
 
@@ -225,19 +227,32 @@ The target is where the caller identity matters. An explicit `@handle` resolves 
 
 `self_wake_guard` blocks the opposite shape: a wake armed on any `agent.*` signal must carry `--match handle=<other>` or `--match session=<other>` naming someone other than the target, so an agent's own lifecycle cannot wake it. Arm-time validation also rejects `ci.finished` and a `conclusion` match on a `ci` selector, naming `ci.passed`, `ci.failed`, and `ci.*` as the replacements.
 
-### The quiet window
+### The deadline
 
-A signal wake is a subscription with a lapse timer rather than a one-shot. `--timeout` (default `59m`, matching the provider prompt cache) sets both the row's `timeout` and its initial `deadline = armed_at + timeout`, and three paths move it, all under the instance-store lock:
+A signal wake is one question, and every exit removes its row. `--timeout` (default `59m`, matching the provider prompt cache, and refused at or above 24h by the same `validate_shape` rule as `--in`) sets both the row's `timeout` and its `deadline = armed_at + timeout`. Nothing moves that deadline afterwards; three paths take the row instead, all under the instance-store lock:
 
 | Path | Effect |
 | --- | --- |
-| `observe_signal_wake`, called by `fire_signal` for any resolution that is not `Ignore` | `last_observed_at = now`, `deadline = now + timeout`; a row that is gone or no longer the same subscription returns `false` and the fire stops there |
-| `arm_signal_wake`, called when arming finds a live row with the same target, selector, matches, and root | restarts the deadline and returns the existing row, so its note and timeout survive; the CLI prints `already listening: <name> (<window> left)` |
-| `claim_expired`, called by the expiry runner | removes the row, but only while it is still the same subscription and still past its deadline |
+| `remove_signal_wake`, called by the runner just before it delivers | removes the row while it is still the same subscription. `false` means a concurrent runner, cancel, or re-arm owns the question now, and the fire records `canceled` with `wake already consumed, canceled, or replaced` instead of delivering twice |
+| `arm_signal_wake`, called when arming finds a live row with the same target, selector, matches, and root | replaces that row in place: the name survives, and the candidate's `wake_meta`, `deadline`, `timeout`, and prompt take over |
+| `claim_expired`, called by the expiry runner | removes the row and hands its entry back, but only while it is still the same subscription and still past its deadline |
 
-Instance rows are published through `disk::atomic::write_temp_then_rename`, the durable path, because a subscription now rewrites its row on every observation rather than once at arm time.
+`same_subscription` is that identity check: resolved root, selector, matches, delivery target, and `wake_meta.armed_at`. A re-arm therefore invalidates every claim outstanding against the row it replaced. Instance rows are published through `disk::atomic::write_temp_then_rename`, the durable path.
 
-Expiry is planned by the elder and executed by a detached runner, which is what keeps `fire.rs:plan` read-only in the sidebar graph. `plan` marks a live instance row that has `wake_meta`, a `Signal` trigger, and a passed `deadline` as `Action::Expire` and spawns `rimz loop run <name> --expired`. The runner's `prepare_expired` claims and removes the row, then splits on evidence: `last_observed_at.is_none()` delivers the expiry message and records `Expired` with its message id, and anything observed records `Expired` with the notice `retired quiet` and no message. A re-arm, an observation, or a `wake cancel` between the tick and the claim makes the claim a no-op, so the racing subscription simply keeps listening.
+Expiry is planned by the elder and executed by a detached runner, which is what keeps `fire.rs:plan` read-only in the sidebar graph. `plan` marks a live instance row that has `wake_meta`, a `Signal` trigger, and a passed `deadline` as `Action::Expire` and spawns `rimz loop run <name> --expired`. `prepare_expired` claims the row, resolves `RuntimePaths` from the row's own root, and asks `status::resolve` what the room knows now:
+
+- `Answered { label, signal }` records `Expired` with that `SignalRecord` and no message. The gate reason `answered · <label>` is presentation only and reaches nobody when the elder spawns the runner detached, so the run record's `signal` field is where the answer becomes durable: `rimz loop logs` and `rimz loop show` render it as `signal: ci.passed` on the closed row.
+- `Open(view)` prepares the ordinary delivery with `Evidence::Expired { view, rearm }`, so the closing message records `Expired` with a `message_id`.
+
+A re-arm or a `wake cancel` between the tick and the claim makes the claim a no-op, and the runner exits without a record. A re-arm leaves its replacement waiting; cancellation leaves no row.
+
+`status::resolve` reads `pr-state.json` through `sidebar::refresh::pr::read_pr_state_cache`, the same call `idle_compact.rs` already makes, so the answer is the room's current forge truth rather than a replay of the signal trail. Only `ci` and `pr` selectors look at it; every other family is `Open(None)` and closes with no status. Scope resolution is `matches.path` into `states`, falling back to `branch_ci[path]`, or a lone `branch` match resolved to the single `PrLink` carrying it. `ci_signal_name` and `pr_signal_name` in [`sidebar/refresh/pr.rs`](../../../crates/rimz/src/sidebar/refresh/pr.rs) are the one table from a cached verdict to a signal name, shared with the transition emitter that fires those names, and `Answered` is exactly the case where the table yields `Some(n)` and the selector is `Exact` on a different name. Everything else stays `Open`:
+
+- `WorktreePrCi::Pending` and an open PR name no signal, so they answer nothing.
+- A verdict the selector *would* have delivered keeps its `Open(view)` and labels itself `…; no matching transition received`. The cache stores current state, not when the state began, so it cannot say whether that verdict predates the arming; guessing here would swallow the wake.
+- A scope the cache cannot pin is `Open(None)` and closes with no status at all: a `--match` key outside `path` and `branch`, a `path` whose cached branch contradicts the row's `branch`, a `branch` matching two links, or neither key to look up. A scope it can pin but has never seen is `Open` with the `no PR or CI seen on <scope>` label instead. Silence requires an understood scope, so all of these deliver.
+
+`rearm_command` writes the same wait back as one shell-ready line through `shlex::try_join`, because selectors carry glob syntax and matches and prompt paths carry arbitrary characters. It emits every stored `--match` (the caller-scoped defaults included, since they are equivalent explicit filters), `--timeout` only when it is not `59m`, and `--prompt-file` as the row stores it, which keeps `resolve_config_path`'s rule (absolute as given, relative against `~/.config/rimz/`) pointing at the same file. It names no `@target`, since the message reaches the target that would re-arm it, and it drops an inline `--prompt`, which rides the same message as the note.
 
 ### Watched commands
 
@@ -267,7 +282,7 @@ One helper, `signal::wake_log_path(paths, name)`, derives `<StatePaths.root>/wak
 | 3 | the exact managed-launch provider quota, when a binding is proven | `budget skipped` |
 | 4 | `--surplus` / `--surplus-after` forward headroom on the provider's longest window | `surplus skipped` |
 | 5 | the per-task advisory run lock | `overlapped` |
-| 6 | the poll-until `deadline` | `expired` |
+| 6 | the poll-until `deadline`, which skips a signal wake because `prepare_expired` owns that deadline and a signal landing between the elder tick and the claim should still deliver | `expired` |
 | 7 | the `check` command and its polarity | `skipped`, or a check-only terminal result |
 
 Only then does the action run. `TaskFirePlan` returns `Done` (a gate already produced the terminal record), `Spawn` (a prepared `SupervisedRunRequest`), or `Deliver` (a prepared target and prompt). The CLI executes it and calls `finish`, which maps the outcome to a `LoopRunResult` and appends the record. All gates apply in both scheduled and manual modes, so `rimz loop fire` tests the real policy.
@@ -276,7 +291,7 @@ A closed gate costs nothing and adds no strike; the recurring schedule keeps pol
 
 The run lock is `loop-run-<name>.lock` beside `loop-fire.json`, carrying the holder's `{pid, started_at}`. The kernel releases it when the runner exits or crashes, and display probes read it without rewriting its payload. `runner::stop_task` owns the stop ladder behind `rimz loop stop`, with the CLI passing its supervised cancellation in as a closure: probe the lock and report no active run when it is free, cancel the newest active run through the durable path, wait five seconds, then SIGTERM the holder and wait five seconds more. Only the SIGTERM branch appends a `canceled` row from the stop path itself. A holder still owning the lock afterwards is not escalated to SIGKILL; the error names its PID and the lock path instead.
 
-An **ephemeral** task (a one-shot, or any task with a `deadline`) removes its own state row *before* the supervised run or delivery. A one-shot removed pre-fire that then fails to launch is not retried. A poll-until row also removes itself when its check fires the action, and expires without delivery once its deadline passes. A standing signal wake is the exception the lifetime rule carves out: it survives its own delivery and is removed only by expiry, cancellation, or a `target gone` verdict.
+An **ephemeral** task (a one-shot, or any task with a `deadline`) removes its own state row *before* the supervised run or delivery. A one-shot removed pre-fire that then fails to launch is not retried. A poll-until row also removes itself when its check fires the action, and expires without delivery once its deadline passes. A signal wake follows the same rule through its own door: `remove_signal_wake` under the instance lock rather than `consume_scheduled`, so a losing claim can stop the delivery instead of duplicating it.
 
 ### Where a scheduled run lands
 
@@ -301,12 +316,12 @@ A row that delivers to a session, or fires on a signal or a watched command, the
 | Line | Composer | Content |
 | --- | --- | --- |
 | armer | `armer_line(meta, task)` | `@{handle} armed this wake on you.` or `armed on you from the shell.`, and nothing at all when the armer is the delivery target or the row has no `wake_meta` |
-| wait | `wait_line(task, meta, evidence)` | `` waited on `<cmd>` `` for a watch row, `waited on <signal subject>` for a signal, `waited on <selector><scope>` for an expiry, `waited <delay>` for a delay, and `scheduled wake` for a clock row that recorded none |
-| verdict | `verdict_line(evidence, task, meta, now, name)` | `WatchVerdict::label` for a watch row, `fired after <elapsed since armed_at>` for a signal (`fired` with no `wake_meta`), `nothing in <timeout>; subscription closed` for an expiry, `fired by hand` for a manual fire, and nothing at all for a delay, whose wait line takes the `[<name>]` suffix instead; then ` · output: <path>` when the outcome carries one, then ` [<name>]` |
-| evidence | the assembler | the output tail or `(no output)` for a watch row, the payload as one compact JSON line with `signal` overwritten by the fired name for a signal, nothing otherwise |
+| wait | `wait_line(task, meta, evidence)` | `` waited on `<cmd>` `` for a watch row, `waited on <signal subject>` for a signal, `waited on <selector> on <view.headline>` for a closing wake that read forge state and `waited on <selector><scope>` for one that did not, `waited <delay>` for a delay, and `scheduled wake` for a clock row that recorded none |
+| verdict | `verdict_line(evidence, task, meta, now, name)` | `WatchVerdict::label` for a watch row, `fired after <elapsed since armed_at>` for a signal (`fired` with no `wake_meta`), `nothing in <timeout>; wake closed` plus ` · <view.label>` for a closing wake, `fired by hand` for a manual fire, and nothing at all for a delay, whose wait line takes the `[<name>]` suffix instead; then ` · output: <path>` when the outcome carries one, then ` [<name>]` |
+| evidence | the assembler | the output tail or `(no output)` for a watch row, the payload as one compact JSON line with `signal` overwritten by the fired name for a signal, one `re-arm: <command>` line for a closing wake, nothing otherwise |
 | note | the assembler | the base prompt verbatim after a blank line |
 
-The signal subject is `signal_headline`'s wording: the name, plus ` on <branch>` and ` (PR #<n>)` for `ci`/`pr`, the `handle` for `agent`, the `instance` for `team`. An expiry has no fired signal to read, so it names the selector and the first scope `subscription_scope` finds among `branch`, `path`, `instance`, `team`, `handle`, and `session`.
+The signal subject is `signal_headline`'s wording: the name, plus ` on <branch>` and ` (PR #<n>)` for `ci`/`pr`, the `handle` for `agent`, the `instance` for `team`. A closing wake has no fired signal to read: with a `ForgeView` it takes that view's headline, which `status.rs` builds in the same `feat-x (PR #91)` shape, and without one it names the selector and the first scope `subscription_scope` finds among `branch`, `path`, `instance`, `team`, `handle`, and `session`.
 
 Two rules hold the shape together. Every duration is elapsed rather than wall-clock, because a receiver reading the message an hour late can act on `after 12m` and cannot place `14:02`; `compose_wake` therefore takes the fire timestamp instead of a `TimeZone`, and measures from `WakeMeta.armed_at` for signals and lost watchers and from `WatchVerdict::elapsed_ms` for a command that ran. And the armer is named only when it is not the target: a wake another agent or a human armed on you is an instruction, so it leads, while your own wake says nothing about who armed it. A `loop add --wake` row has no `wake_meta` at all, so it gets the wait line and a bare `fired [<name>]`.
 
@@ -327,9 +342,9 @@ Two patterns fall out of the guard. A **watchdog** runs a command on a schedule 
 
 `wake` pins a schedule to one exact agent session. `rimz loop add <name> --wake @<handle>` resolves the address against the live rollup **at add time**, records a `wake` sub-table of `kind`, `session`, and `handle`, and rejects `agent` and every supervised-run flag, because delivery opens no pane.
 
-On fire, the runner resolves the recorded root, confirms the pinned root session still exists, and sends the prompt through the same path as `rimz message`, as a `Harness { notice: Wake }` sender carrying the `Type: WAKE` header ([messaging.md](./messaging.md#the-message-header)), gated `done` and inheriting the `[harness] smart_compact` default. An idle agent takes it immediately, a running agent parks it for its next `done` boundary, and a missing session records `target gone` and removes the schedule, standing subscriptions included, because that exact conversation cannot come back. The delivery is recorded as a `Wake` transcript entry, which the rendered transcript hides and `--json` keeps ([cli/transcript.md](../../reference/cli/transcript.md)). `rimz gc` runs the same liveness check as a safety sweep for wake schedules whose pinned session left the rollup without the task ever firing.
+On fire, the runner resolves the recorded root, confirms the pinned root session still exists, and sends the prompt through the same path as `rimz message`, as a `Harness { notice: Wake }` sender carrying the `Type: WAKE` header ([messaging.md](./messaging.md#the-message-header)), gated `done` and inheriting the `[harness] smart_compact` default. An idle agent takes it immediately, a running agent parks it for its next `done` boundary, and a missing session records `target gone` and removes the schedule, because that exact conversation cannot come back. The delivery is recorded as a `Wake` transcript entry, which the rendered transcript hides and `--json` keeps ([cli/transcript.md](../../reference/cli/transcript.md)). `rimz gc` runs the same liveness check as a safety sweep for wake schedules whose pinned session left the rollup without the task ever firing.
 
-Self-paced loops ride the same rows: an agent arms its next wake at the end of the current turn, so the wait exists only while work remains. A `--in` wake is removed before delivery and a signal wake keeps listening until its window lapses. `rimz wake` is the front end agents use for that ([above](#wakes)); `rimz loop add --wake` is the same action with a standing trigger and no window.
+Self-paced loops ride the same rows: an agent arms its next wake at the end of the current turn, so the wait exists only while work remains. A `--in` wake and a signal wake alike are removed before delivery, so the next wait is always one the agent armed on purpose. `rimz wake` is the front end agents use for that ([above](#wakes)); `rimz loop add --wake` is the same action with a standing trigger and no deadline.
 
 ## History, strikes, and arming
 

@@ -62,7 +62,7 @@ emitted deploy.finished (evt_01a06d7d112171d0bdaceff9e4a3c6aa) · fired 1 tasks
 
 A name is lowercase dot-separated words, at most 64 bytes, each segment starting with a lowercase letter or digit and otherwise using letters, digits, `-`, or `_`. `--json` takes one top-level JSON object of at most 64 KiB; subscribers filter on its top-level fields with `--match KEY=VALUE`, and the whole payload reaches the woken agent as one compact JSON line.
 
-Firing has no daemon behind it and no queue in front of it. The emitting process resolves the subscribers itself and spawns one detached run per match, so a signal reaches only the tasks armed for this workspace at that instant: a task armed a second later does not see it, and nothing is replayed when a room opens. A wake armed on a signal fires without a room open, unlike a `--in` delay, which waits for the room's elder or the loop timer.
+Firing has no daemon behind it and no queue in front of it. The emitting process resolves the subscribers itself and spawns one detached run per match, so a signal reaches only the tasks armed for this workspace at that instant: a task armed a second later does not see it, and nothing is replayed when a room opens. A wake armed on a signal fires without a room open, unlike a `--in` delay or that wake's own [deadline](./wake.md#a-signal-wake-is-one-question), which wait for the room's elder or the loop timer.
 
 ### Reserved families
 
@@ -85,7 +85,7 @@ The hidden `--source forge` that the refresh uses accepts exactly `ci.passed`, `
 
 ### A subscription observes its whole family
 
-A subscriber names one signal (`--signal deploy.finished`) or one family (`--signal 'deploy.*'`), and the family is the first name segment. A subscription observes every signal in its family whose `--match` fields match, then delivers on an exact name match and records `skipped` for another member. That is why a wake on `ci.failed` is not woken by a green build, but a green build still tells RimZ the subscription is alive and restarts its [quiet window](./wake.md#a-signal-wake-is-a-standing-subscription). A signal from another family, or one that fails a `--match`, is ignored.
+A subscriber names one signal (`--signal deploy.finished`) or one family (`--signal 'deploy.*'`), and the family is the first name segment. A subscription observes every signal in its family whose `--match` fields match, then delivers on an exact name match and records `skipped` for another member. That is why a wake on `ci.failed` is not woken by a green build; the skip is a run-log row and nothing else, so the wake stays armed on its original deadline ([one question](./wake.md#a-signal-wake-is-one-question)). A signal from another family, or one that fails a `--match`, is ignored.
 
 Emitted signals rejoin the stream `follow` prints:
 
