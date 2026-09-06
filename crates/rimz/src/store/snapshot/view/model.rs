@@ -363,6 +363,23 @@ pub struct SidebarLinkHealth {
 mod tests {
     use super::*;
 
+    #[test]
+    fn sidebar_link_health_serializes_tier_as_snake_case() {
+        let health = SidebarLinkHealth {
+            rtt_ms: Some(230),
+            miss_pct: 4,
+            tier: LinkTier::Degraded,
+            freshness: SidebarLinkFreshness::Fresh,
+            sampled_at_ms: 1,
+        };
+        let json = serde_json::to_value(&health).unwrap();
+        assert_eq!(json["tier"], "degraded");
+        assert_eq!(
+            serde_json::from_value::<SidebarLinkHealth>(json).unwrap(),
+            health
+        );
+    }
+
     fn collapse_test_row(id: &str, agent: bool) -> SidebarRow {
         SidebarRow {
             id: id.to_owned(),
