@@ -176,6 +176,27 @@ mod tests {
     }
 
     #[test]
+    fn plugin_presence_sample_serializes_last_failure_as_plain_fields() {
+        let mut sample: PluginPresenceSample = serde_json::from_str(
+            r#"{"at_ms":1200,"session_name":"room","pages":2,"bytes":131072,"uptime_ms":1200,"commands":3}"#,
+        )
+        .unwrap();
+        sample.last_failure = Some(PluginCommandFailure {
+            exit_code: Some(2),
+            detail: "command failed".to_owned(),
+            at_ms: Some(1100),
+        });
+        let json = serde_json::to_value(&sample).unwrap();
+        assert_eq!(
+            json["last_failure"],
+            serde_json::json!({"exit_code": 2, "detail": "command failed", "at_ms": 1100})
+        );
+        let decoded: PluginPresenceSample = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(decoded.last_failure, sample.last_failure);
+        assert_eq!(serde_json::to_value(decoded).unwrap(), json);
+    }
+
+    #[test]
     fn generation_span_reads_rotated_and_current_and_ignores_malformed_tail() {
         let dir = tempfile::tempdir().unwrap();
         let current = log_path(dir.path());
