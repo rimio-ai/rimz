@@ -984,6 +984,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn resolve_existing_or_replacement_strips_deleted_suffix_when_replacement_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("rimz");
+        std::fs::write(&real, b"x").unwrap();
+        let deleted = PathBuf::from(format!("{} (deleted)", real.display()));
+
+        assert_eq!(
+            resolve_existing_or_replacement(&deleted),
+            Some(real.clone())
+        );
+        assert_eq!(resolve_existing_or_replacement(&real), Some(real));
+    }
+
+    #[test]
+    fn resolve_existing_or_replacement_returns_none_when_no_file_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("rimz");
+        let deleted = PathBuf::from(format!("{} (deleted)", missing.display()));
+
+        assert_eq!(resolve_existing_or_replacement(&deleted), None);
+        assert_eq!(resolve_existing_or_replacement(&missing), None);
+    }
+
+    #[test]
     fn launchable_shell_rejects_missing_and_disabled_shells() {
         assert!(!launchable_shell(Path::new("/definitely/not/a/shell")));
         assert!(!launchable_shell(Path::new("/usr/sbin/nologin")));
