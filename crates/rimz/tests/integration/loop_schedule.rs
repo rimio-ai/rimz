@@ -2003,6 +2003,17 @@ fn loop_overlap_records_holder_and_preserves_one_shot() {
     lock_file.unlock().expect("unlock loop run lock");
 }
 
+#[test]
+fn loop_stop_without_active_run_reports_no_active_run() {
+    let env = Env::new();
+    loop_ok(
+        &env,
+        &["loop", "add", "idle", "--check", "true", "--every", "15m"],
+    );
+    let stopped = loop_ok(&env, &["loop", "stop", "idle"]);
+    assert!(stopped.contains("loop `idle`: no active run"), "{stopped}");
+}
+
 #[cfg(unix)]
 #[test]
 fn loop_stop_terminates_holder_and_records_cancellation() {
