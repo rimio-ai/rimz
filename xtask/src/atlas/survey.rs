@@ -9,6 +9,7 @@ use serde_json::{Map, json};
 use super::conform::{self, Direction};
 use super::detect::{self, GuardFamily};
 use super::facts::{Facets, Facts};
+use super::ledger::{self, LEDGER_FILE, Ledger};
 use super::modules::{
     crate_module_for_path, crate_module_for_row, module_is_within, path_in_scope,
 };
@@ -62,6 +63,8 @@ struct Probe {
     sibling_families: usize,
     guard_families: usize,
     admitted_upward_sites: usize,
+    /// Admitted sites no ledger admission-intent row reviews.
+    unreviewed_upward_sites: usize,
     next: String,
 }
 
@@ -92,13 +95,35 @@ struct Cycle {
 }
 
 /// One target rule's upward dependencies, counted at their sites and split
-/// by whether the target admits them.
+/// three ways: admitted by the target and reviewed by a ledger row, admitted
+/// but unreviewed, and unadmitted. Sites are counted per rule, so a file rule
+/// and the directory rule enclosing it both count the same site.
 #[derive(Clone, Debug, Serialize)]
 struct DebtRow {
     path: PathBuf,
     upward_sites: usize,
-    admitted: Vec<ProviderSites>,
+    /// Keyed by the edge as the ledger spells it, with the row's intent.
+    reviewed: Vec<ReviewedSites>,
+    /// Keyed by the resolved provider module, the edge a ledger row would name.
+    unreviewed: Vec<ProviderSites>,
     unadmitted: Vec<ProviderSites>,
+}
+
+impl DebtRow {
+    fn admitted_sites(&self) -> usize {
+        self.reviewed.iter().map(|row| row.sites).sum::<usize>() + self.unreviewed_sites()
+    }
+
+    fn unreviewed_sites(&self) -> usize {
+        self.unreviewed.iter().map(|row| row.sites).sum()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct ReviewedSites {
+    provider: String,
+    sites: usize,
+    intent: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -120,6 +145,17 @@ struct Debt {
     configured: bool,
     rules: Vec<DebtRow>,
     stranglers: Vec<StranglerRow>,
+}
+
+/// What the survey read from the refactor ledger, for the footer: absent,
+/// or the row counts plus the rows it could not use. A `holds` row whose
+/// SHA git does not know lands in `problems` and leaves its module unflagged.
+#[derive(Clone, Debug, Default, Serialize)]
+struct LedgerNote {
+    present: bool,
+    intents: usize,
+    holds: usize,
+    problems: Vec<String>,
 }
 
 fn usage() -> String {
@@ -154,6 +190,7 @@ struct Report {
     guard_families_dropped: detect::GuardDrops,
     suppressed: usize,
     stale: Vec<String>,
+    ledger: LedgerNote,
 }
 
 pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
@@ -243,8 +280,20 @@ fn build_report(
     by: RankBy,
     include_all: bool,
 ) -> Result<Report> {
-    let rows = rank::rows_by(facts, scope, by)?;
+    let mut rows = rank::rows_by(facts, scope, by)?;
     let totals = rank::totals(&rows);
+    let ledger = ledger::load(&root.join(LEDGER_FILE))?;
+    let mut ledger_note = ledger
+        .as_ref()
+        .map_or_else(LedgerNote::default, |ledger| LedgerNote {
+            present: true,
+            intents: ledger.intents.len(),
+            holds: ledger.holds.len(),
+            problems: ledger.problems.clone(),
+        });
+    if let Some(ledger) = &ledger {
+        flag_held_rows(root, scope, ledger, &mut rows, &mut ledger_note.problems);
+    }
     let (all_shapes, shape_families_dropped) = if include_all {
         shapes::families_all_with_dropped(facts, scope)
     } else {
@@ -314,7 +363,7 @@ fn build_report(
         .context("survey metric facts missing")?;
     let hot = rank::hotspots(metrics, &log.file_shares(&facts.root, scope));
     let debt = configured.as_ref().map_or_else(Debt::default, |target| {
-        recorded_debt(root, target, facts, scope)
+        recorded_debt(root, target, ledger.as_ref(), facts, scope)
     });
     let probes = build_probes(scope, &rows, &hot, &shapes, &guards, &debt);
     let ranks = configured.as_ref().map(Target::layer_ranks);
@@ -349,13 +398,54 @@ fn build_report(
         guard_families_dropped,
         suppressed,
         stale,
+        ledger: ledger_note,
     })
 }
 
+/// Rank-row flag for a module a ledger `holds` verdict covers and whose
+/// scoped commits since the reviewed SHA stay under the reopen count.
+const HELD_FLAG: &str = "held";
+/// Rank-row flag for a held module whose scoped commits reached the reopen
+/// count: the ledger row wants a fresh review.
+const REOPEN_FLAG: &str = "reopen";
+
+/// Marks every rank row the ledger holds: `held` while the module's commits
+/// since the reviewed SHA stay under its reopen count, `reopen` once they
+/// reach it. A SHA git cannot resolve is reported and leaves the row alone.
+fn flag_held_rows(
+    root: &Path,
+    scope: &Path,
+    ledger: &Ledger,
+    rows: &mut [Row],
+    problems: &mut Vec<String>,
+) {
+    for row in rows {
+        let Some(hold) = ledger.hold_for(&row.module) else {
+            continue;
+        };
+        let directory = scope.join(&row.module);
+        let file = directory.with_extension("rs");
+        match ledger::commits_since(root, &hold.sha, &[&directory, &file]) {
+            Ok(commits) if commits >= hold.reopen_at => row.flags.push(REOPEN_FLAG),
+            Ok(_) => row.flags.push(HELD_FLAG),
+            Err(error) => {
+                problems.push(format!("`{}` holds at {}: {error:#}", row.module, hold.sha))
+            }
+        }
+    }
+}
+
 /// Counts every upward dependency site under each target rule that touches
-/// the scope, grouped by the admission it matches, and every strangler's
-/// current count against its baseline. Syntax-only, so it needs no index.
-fn recorded_debt(root: &Path, target: &Target, facts: &Facts, scope: &Path) -> Debt {
+/// the scope, grouped by the admission it matches and whether a ledger row
+/// reviews it, and every strangler's current count against its baseline.
+/// Syntax-only, so it needs no index.
+fn recorded_debt(
+    root: &Path,
+    target: &Target,
+    ledger: Option<&Ledger>,
+    facts: &Facts,
+    scope: &Path,
+) -> Debt {
     let ranks = target.layer_ranks();
     let touches_scope = |path: &Path| path_in_scope(path, scope) || path_in_scope(scope, path);
     let mut rules = Vec::new();
@@ -369,7 +459,8 @@ fn recorded_debt(root: &Path, target: &Target, facts: &Facts, scope: &Path) -> D
             .as_deref()
             .or(rule.upward_dependencies.as_deref())
             .unwrap_or_default();
-        let mut admitted = BTreeMap::<String, usize>::new();
+        let mut reviewed = BTreeMap::<(String, String), usize>::new();
+        let mut unreviewed = BTreeMap::<String, usize>::new();
         let mut unadmitted = BTreeMap::<String, usize>::new();
         let files = facts
             .syntax
@@ -395,23 +486,48 @@ fn recorded_debt(root: &Path, target: &Target, facts: &Facts, scope: &Path) -> D
                 {
                     continue;
                 }
-                match admissions
+                if !admissions
                     .iter()
-                    .find(|prefix| module_is_within(&resolved, prefix))
+                    .any(|prefix| module_is_within(&resolved, prefix))
                 {
-                    Some(prefix) => *admitted.entry(prefix.clone()).or_default() += 1,
-                    None => *unadmitted.entry(resolved).or_default() += 1,
+                    *unadmitted.entry(resolved).or_default() += 1;
+                    continue;
+                }
+                match ledger.and_then(|ledger| ledger.intent_for(&file.module_path, &resolved)) {
+                    Some(intent) => {
+                        *reviewed
+                            .entry((intent.to.clone(), intent.intent.clone()))
+                            .or_default() += 1;
+                    }
+                    None => *unreviewed.entry(resolved).or_default() += 1,
                 }
             }
         }
-        let upward_sites = admitted.values().sum::<usize>() + unadmitted.values().sum::<usize>();
+        let upward_sites = reviewed.values().sum::<usize>()
+            + unreviewed.values().sum::<usize>()
+            + unadmitted.values().sum::<usize>();
         if upward_sites == 0 {
             continue;
         }
+        let mut reviewed = reviewed
+            .into_iter()
+            .map(|((provider, intent), sites)| ReviewedSites {
+                provider,
+                sites,
+                intent,
+            })
+            .collect::<Vec<_>>();
+        reviewed.sort_by(|left, right| {
+            right
+                .sites
+                .cmp(&left.sites)
+                .then_with(|| left.provider.cmp(&right.provider))
+        });
         rules.push(DebtRow {
             path: rule.path.clone(),
             upward_sites,
-            admitted: provider_sites(admitted),
+            reviewed,
+            unreviewed: provider_sites(unreviewed),
             unadmitted: provider_sites(unadmitted),
         });
     }
@@ -469,9 +585,12 @@ fn build_probes(
     guards: &[GuardFamily],
     debt: &Debt,
 ) -> Vec<Probe> {
+    // A held module keeps its rank row and its position; it only stops
+    // taking a probe slot until its ledger row reopens.
     rows.iter()
-        .take(5)
         .enumerate()
+        .filter(|(_, row)| !row.flags.contains(&HELD_FLAG))
+        .take(5)
         .map(|(index, row)| {
             let crate_module = crate_module_for_row(scope, &row.module.replace('/', "::"));
             let path_matches = |path: &Path| {
@@ -494,7 +613,7 @@ fn build_probes(
                 .iter()
                 .filter(|family| family.locations.iter().any(|site| path_matches(&site.path)))
                 .count();
-            let admitted_upward_sites = debt
+            let covering_rules = debt
                 .rules
                 .iter()
                 .filter(|rule| {
@@ -505,8 +624,12 @@ fn build_probes(
                     };
                     module_is_within(&crate_module, &rule_module)
                 })
-                .flat_map(|rule| &rule.admitted)
-                .map(|provider| provider.sites)
+                .collect::<Vec<_>>();
+            let admitted_upward_sites =
+                covering_rules.iter().map(|rule| rule.admitted_sites()).sum();
+            let unreviewed_upward_sites = covering_rules
+                .iter()
+                .map(|rule| rule.unreviewed_sites())
                 .sum();
             let next_module = crate_module.replace("::", "-");
             Probe {
@@ -524,6 +647,7 @@ fn build_probes(
                     .count(),
                 guard_families,
                 admitted_upward_sites,
+                unreviewed_upward_sites,
                 next: format!(
                     "cargo xtask atlas inspect --module {crate_module} --section verdict,callers,heaviest,calls --out /tmp/atlas-{next_module}.md"
                 ),
@@ -809,8 +933,13 @@ fn render_probes(output: &mut String, probes: &[Probe]) {
             ));
         }
         if probe.admitted_upward_sites > 0 {
+            let unreviewed = if probe.unreviewed_upward_sites == 0 {
+                String::new()
+            } else {
+                format!(" ({} unreviewed)", probe.unreviewed_upward_sites)
+            };
             signals.push(format!(
-                "admitted upward: {} sites",
+                "admitted upward: {} sites{unreviewed}",
                 probe.admitted_upward_sites
             ));
         }
@@ -1033,8 +1162,37 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
         } else {
             writeln!(output, "stale verdict keys: {stale}").unwrap();
         }
+        render_ledger_note(&mut output, &report.ledger, top);
     }
     output
+}
+
+fn render_ledger_note(output: &mut String, note: &LedgerNote, top: usize) {
+    if !note.present {
+        writeln!(
+            output,
+            "ledger: no {LEDGER_FILE}; every admission reads as unreviewed"
+        )
+        .unwrap();
+        return;
+    }
+    writeln!(
+        output,
+        "ledger: {} admission intents, {} holds",
+        note.intents, note.holds
+    )
+    .unwrap();
+    for problem in note.problems.iter().take(top) {
+        writeln!(output, "ledger problem: {problem}").unwrap();
+    }
+    if note.problems.len() > top {
+        writeln!(
+            output,
+            "ledger problems: and {} more",
+            note.problems.len() - top
+        )
+        .unwrap();
+    }
 }
 
 fn render_debt(output: &mut String, debt: &Debt, cycles: &[Cycle], top: usize) {
@@ -1049,17 +1207,23 @@ fn render_debt(output: &mut String, debt: &Debt, cycles: &[Cycle], top: usize) {
     } else {
         writeln!(
             output,
-            "| rule | upward sites | admitted (sites) | unadmitted (sites) |"
+            "sites counted per `[[module]]` rule: a file rule and the directory rule enclosing it both count the same site. Reviewed means a `{LEDGER_FILE}` admission-intent row covers the edge; unreviewed admissions are the review backlog.\n"
         )
         .unwrap();
-        writeln!(output, "| --- | ---: | --- | --- |").unwrap();
+        writeln!(
+            output,
+            "| rule | upward sites | reviewed (sites, intent) | unreviewed (sites) | unadmitted (sites) |"
+        )
+        .unwrap();
+        writeln!(output, "| --- | ---: | --- | --- | --- |").unwrap();
         for row in debt.rules.iter().take(top) {
             writeln!(
                 output,
-                "| {} | {} | {} | {} |",
+                "| {} | {} | {} | {} | {} |",
                 row.path.display(),
                 row.upward_sites,
-                render_provider_sites(&row.admitted, top),
+                render_reviewed_sites(&row.reviewed, top),
+                render_provider_sites(&row.unreviewed, top),
                 render_provider_sites(&row.unadmitted, top)
             )
             .unwrap();
@@ -1105,7 +1269,10 @@ fn render_cycles(output: &mut String, cycles: &[Cycle], top: usize) {
             };
             format!(
                 "{} ↔ {} ({}/{} sites{layer})",
-                cycle.a, cycle.b, cycle.a_to_b, cycle.b_to_a
+                cycle_label(&cycle.a),
+                cycle_label(&cycle.b),
+                cycle.a_to_b,
+                cycle.b_to_a
             )
         })
         .collect::<Vec<_>>();
@@ -1114,6 +1281,32 @@ fn render_cycles(output: &mut String, cycles: &[Cycle], top: usize) {
     }
     writeln!(output, "\nmodule cycles: {}", rendered.join(", "))
         .expect("writing to a String cannot fail");
+}
+
+/// The crate root is not a module of the tree: a cycle against it means the
+/// other side imports a `lib.rs` re-export (`crate::Store`), which syntax
+/// resolves to the root rather than to the defining module. Name it so.
+fn cycle_label(module: &str) -> &str {
+    if module == "(crate)" {
+        "(crate root re-exports)"
+    } else {
+        module
+    }
+}
+
+fn render_reviewed_sites(rows: &[ReviewedSites], top: usize) -> String {
+    if rows.is_empty() {
+        return "—".to_owned();
+    }
+    let mut rendered = rows
+        .iter()
+        .take(top)
+        .map(|row| format!("{} {} ({})", row.provider, row.sites, row.intent))
+        .collect::<Vec<_>>();
+    if rows.len() > top {
+        rendered.push(format!("… {} more", rows.len() - top));
+    }
+    rendered.join(", ")
 }
 
 fn render_provider_sites(rows: &[ProviderSites], top: usize) -> String {
@@ -1173,6 +1366,7 @@ fn render_json(report: &Report, output_args: &OutputArgs) -> Result<String> {
                 "guard_families_dropped_as_predicate_use": report.guard_families_dropped.predicate_use,
                 "suppressed_families": report.suppressed,
                 "stale_verdict_keys": &report.stale,
+                "ledger": &report.ledger,
             }),
         );
     }
@@ -1180,369 +1374,4 @@ fn render_json(report: &Report, output_args: &OutputArgs) -> Result<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::super::detect::GuardSite;
-    use super::super::shapes::Member;
-    use super::super::sources::Source;
-    use super::*;
-
-    #[test]
-    fn assemblers_count_distinct_scope_modules_a_function_calls_into() {
-        let report = super::super::syntax::analyze_sources(
-            &[Source::new(
-                "crates/demo/src/cli.rs",
-                "use crate::agents;\nuse crate::config::Config;\nuse crate::store::open;\nfn run() {\n    open();\n    agents::list();\n    agents::catalog::load();\n    Config::load();\n    crate::mux::attach();\n    crate::Paths::load();\n    self::helper();\n    value.finish();\n}\nfn light() { open(); Config::load(); }\nfn helper() {}\n",
-            )],
-            &BTreeSet::new(),
-        );
-        let known = ["cli", "agents", "agents::catalog", "config", "store", "mux"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect::<BTreeSet<_>>();
-
-        let rows = assemblers(
-            &report.files,
-            &known,
-            &BTreeSet::new(),
-            Path::new("crates/demo/src"),
-        );
-
-        assert_eq!(rows.len(), 1, "{rows:?}");
-        assert_eq!(rows[0].function, "run");
-        assert_eq!(rows[0].callees, 6);
-        assert_eq!(
-            rows[0]
-                .providers
-                .iter()
-                .map(|provider| (provider.provider.as_str(), provider.sites))
-                .collect::<Vec<_>>(),
-            [
-                ("agents", 2),
-                ("(root)", 1),
-                ("config", 1),
-                ("mux", 1),
-                ("store", 1)
-            ]
-        );
-    }
-
-    #[test]
-    fn survey_output_is_bounded_by_top() {
-        let rows = (0..30)
-            .map(|index| Row {
-                module: format!("module-{index}"),
-                code: index,
-                ..Row::default()
-            })
-            .collect::<Vec<_>>();
-        let shapes = (0..30)
-            .map(|index| ShapeFamily {
-                name: format!("shape-{index}"),
-                members: vec![Member {
-                    path: PathBuf::from(format!("src/shape-{index}.rs")),
-                    line: 1,
-                    name: "work".to_owned(),
-                    sloc: 40,
-                }],
-                files: 1,
-                mean_sloc: 40.0,
-                sloc_in_play: 40.0,
-                score: 40.0,
-                siblings: 0,
-                role: None,
-                provider: None,
-            })
-            .collect();
-        let guards = (0..30)
-            .map(|index| GuardFamily {
-                key: format!("guard-{index}"),
-                files: 3,
-                sites: 3,
-                locations: vec![GuardSite {
-                    path: PathBuf::from(format!("src/guard-{index}.rs")),
-                    line: 1,
-                    kind: "if".to_owned(),
-                }],
-            })
-            .collect();
-        let hot = (0..30)
-            .map(|index| Hotspot {
-                function: format!("hot-{index}"),
-                path: PathBuf::from(format!("src/hot-{index}.rs")),
-                line: 1,
-                cx: 1.0,
-                churn: 1.0,
-                hot: 1.0,
-            })
-            .collect();
-        let report = Report {
-            path: PathBuf::from("src"),
-            probes: Vec::new(),
-            totals: rank::totals(&rows),
-            rows,
-            hot,
-            assemblers: Vec::new(),
-            debt: Debt {
-                configured: true,
-                rules: (0..30)
-                    .map(|index| DebtRow {
-                        path: PathBuf::from(format!("src/rule-{index}")),
-                        upward_sites: 30 - index,
-                        admitted: vec![ProviderSites {
-                            provider: "cli".to_owned(),
-                            sites: 30 - index,
-                        }],
-                        unadmitted: Vec::new(),
-                    })
-                    .collect(),
-                stranglers: vec![StranglerRow {
-                    path: PathBuf::from("src/store"),
-                    symbol: "legacy_open".to_owned(),
-                    current: 2,
-                    baseline: 3,
-                }],
-            },
-            cycles: Vec::new(),
-            shapes,
-            guards,
-            history_commits: 100,
-            pace_window: 25,
-            parse_failures: 0,
-            shape_families_dropped: shapes::FamilyDrops {
-                vocabulary: 6,
-                below_gate: 3,
-                single_provider: 2,
-            },
-            guard_families_dropped: detect::GuardDrops {
-                vocabulary: 4,
-                predicate_use: 2,
-            },
-            suppressed: 0,
-            stale: (0..30)
-                .map(|index| format!("shape:stale-{index}"))
-                .collect(),
-        };
-
-        let output = render_markdown(&report, 20, &OutputArgs::default());
-
-        assert!(output.lines().count() <= 150);
-        assert!(output.contains("module-19"));
-        assert!(!output.contains("module-20"));
-        assert!(output.contains("hot-19"));
-        assert!(!output.contains("hot-20"));
-        assert!(output.contains("and 10 more"));
-        assert!(output.contains("| src/rule-19 | 11 | cli 11 | — |"));
-        assert!(!output.contains("src/rule-20"));
-        assert!(output.contains("_10 more rules omitted._"));
-        assert!(output.contains("stranglers (current/baseline): `legacy_open` src/store 2/3"));
-        assert!(output.contains("shape families dropped as std vocabulary: 6"));
-        assert!(output.contains("3 below the finding gate"));
-        assert!(output.contains("2 as one module's API"));
-        assert!(output.contains("guard families dropped as std idiom: 4"));
-        assert!(output.contains("2 as predicate use"));
-        assert!(output.contains("cx: severity-weighted over-threshold excess"));
-    }
-
-    #[test]
-    fn probes_join_rank_hot_shapes_guards_and_admitted_debt() {
-        let rows = vec![Row {
-            module: "store/snapshot".to_owned(),
-            code: 3_200,
-            esc: 28,
-            churn: 4.1,
-            flags: vec!["pin", "cx"],
-            ..Row::default()
-        }];
-        let hot = vec![
-            Hotspot {
-                function: "fold_snapshot".to_owned(),
-                path: PathBuf::from("crates/rimz/src/store/snapshot.rs"),
-                line: 10,
-                cx: 10.0,
-                churn: 7.13,
-                hot: 71.3,
-            },
-            Hotspot {
-                function: "apply_delta".to_owned(),
-                path: PathBuf::from("crates/rimz/src/store/snapshot/apply.rs"),
-                line: 20,
-                cx: 8.0,
-                churn: 5.025,
-                hot: 40.2,
-            },
-        ];
-        let shapes = vec![
-            ShapeFamily {
-                name: "fold".to_owned(),
-                members: vec![Member {
-                    path: PathBuf::from("crates/rimz/src/store/snapshot.rs"),
-                    line: 10,
-                    name: "fold_snapshot".to_owned(),
-                    sloc: 40,
-                }],
-                files: 1,
-                mean_sloc: 40.0,
-                sloc_in_play: 40.0,
-                score: 40.0,
-                siblings: 0,
-                role: None,
-                provider: None,
-            },
-            ShapeFamily {
-                name: "apply".to_owned(),
-                members: vec![Member {
-                    path: PathBuf::from("crates/rimz/src/store/snapshot/apply.rs"),
-                    line: 20,
-                    name: "apply_delta".to_owned(),
-                    sloc: 40,
-                }],
-                files: 2,
-                mean_sloc: 40.0,
-                sloc_in_play: 80.0,
-                score: 80.0,
-                siblings: 2,
-                role: Some("apply.rs".to_owned()),
-                provider: None,
-            },
-        ];
-        let guards = vec![GuardFamily {
-            key: "ready".to_owned(),
-            files: 1,
-            sites: 3,
-            locations: vec![GuardSite {
-                path: PathBuf::from("crates/rimz/src/store/snapshot.rs"),
-                line: 30,
-                kind: "if".to_owned(),
-            }],
-        }];
-        let debt = Debt {
-            configured: true,
-            rules: vec![DebtRow {
-                path: PathBuf::from("crates/rimz/src/store"),
-                upward_sites: 200,
-                admitted: vec![ProviderSites {
-                    provider: "cli".to_owned(),
-                    sites: 185,
-                }],
-                unadmitted: vec![ProviderSites {
-                    provider: "agents".to_owned(),
-                    sites: 15,
-                }],
-            }],
-            stranglers: Vec::new(),
-        };
-
-        let probes = build_probes(
-            Path::new("crates/rimz/src"),
-            &rows,
-            &hot,
-            &shapes,
-            &guards,
-            &debt,
-        );
-
-        assert_eq!(probes[0].module, "store/snapshot");
-        assert_eq!(probes[0].rank, 1);
-        assert_eq!(probes[0].hot.len(), 2);
-        assert_eq!(probes[0].shape_families, 2);
-        assert_eq!(probes[0].sibling_families, 1);
-        assert_eq!(probes[0].guard_families, 1);
-        assert_eq!(probes[0].admitted_upward_sites, 185);
-        assert_eq!(
-            probes[0].next,
-            "cargo xtask atlas inspect --module store::snapshot --section verdict,callers,heaviest,calls --out /tmp/atlas-store-snapshot.md"
-        );
-        let mut output = String::new();
-        render_probes(&mut output, &probes);
-        assert!(output.contains(
-            "`store/snapshot` — rank #1 (code 3.2k, esc 28, churn 4.1, flags pin,cx) · hot: fold_snapshot 71.3, apply_delta 40.2 · shapes: 2 families (1 sibling → collapse?) · guards: 1 family · admitted upward: 185 sites"
-        ));
-    }
-
-    #[test]
-    fn cycles_count_dependency_sites_in_both_directions() {
-        let sources = vec![
-            super::super::sources::Source::new(
-                "crates/demo/src/a.rs",
-                "use crate::b::{one, two};\npub fn back() {}\n",
-            ),
-            super::super::sources::Source::new(
-                "crates/demo/src/b.rs",
-                "use crate::a::back;\npub fn one() {}\npub fn two() {}\n",
-            ),
-        ];
-        let syntax = super::super::syntax::analyze_sources(&sources, &BTreeSet::new());
-        let known_modules = syntax
-            .files
-            .iter()
-            .map(|file| file.module_path.clone())
-            .collect::<BTreeSet<_>>();
-
-        let cycles = cycles_from_syntax(
-            &syntax.files,
-            &known_modules,
-            &BTreeSet::new(),
-            Path::new("crates/demo/src"),
-            None,
-        );
-
-        assert_eq!(
-            cycles,
-            [Cycle {
-                a: "a".to_owned(),
-                b: "b".to_owned(),
-                a_to_b: 2,
-                b_to_a: 1,
-                same_layer: None,
-            }]
-        );
-
-        let ranks = LayerRanks::new(&[vec!["a".to_owned()], vec!["b".to_owned()]]);
-        let cycles = cycles_from_syntax(
-            &syntax.files,
-            &known_modules,
-            &BTreeSet::new(),
-            Path::new("crates/demo/src"),
-            Some(&ranks),
-        );
-        assert_eq!(cycles[0].same_layer, Some(false));
-    }
-
-    #[test]
-    fn survey_parses_json_out_and_sections() {
-        let args = [
-            "--json",
-            "--out",
-            "/tmp/atlas-survey.json",
-            "--section",
-            "rank,guards",
-            "--by",
-            "tc",
-            "--all",
-        ]
-        .map(str::to_owned)
-        .to_vec();
-
-        let parsed = parse_args(&args).unwrap().unwrap();
-
-        assert!(parsed.output.json);
-        assert_eq!(parsed.by, RankBy::TestCode);
-        assert!(parsed.all);
-        assert_eq!(
-            parsed.output.out.as_deref(),
-            Some(Path::new("/tmp/atlas-survey.json"))
-        );
-        assert!(parsed.output.wants("rank"));
-        assert!(parsed.output.wants("guards"));
-        assert!(!parsed.output.wants("shapes"));
-    }
-
-    #[test]
-    fn survey_rejects_unknown_sections() {
-        let args = ["--section", "rank,unknown"].map(str::to_owned).to_vec();
-
-        let error = parse_args(&args).unwrap_err().to_string();
-
-        assert!(error.contains("unknown section(s) unknown"));
-    }
-}
+mod tests;

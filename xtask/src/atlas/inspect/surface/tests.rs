@@ -297,6 +297,10 @@ fn surface_measures_reexports_at_their_definitions_and_pins_tests_past_the_narro
 
     assert_eq!(declaration_only, 0);
     assert_eq!(surface.reexports, 2);
+    assert_eq!(
+        surface.declarations, 2,
+        "the two `pub use` leaves are the raw esc the other verbs count"
+    );
     let keys = surface
         .items
         .iter()

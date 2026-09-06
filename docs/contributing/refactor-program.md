@@ -24,7 +24,7 @@ Seam passes go first because they change what the module passes would see. When 
 
 Read, in this order, before running anything:
 
-1. [refactor-ledger.md](./refactor-ledger.md) in full: the seam queue, the module verdict table, the pass log, and the admission intents. A module with a current `holds` verdict is skipped unless its churn since the verdict's SHA has crossed the threshold the row names.
+1. [refactor-ledger.md](./refactor-ledger.md) in full: the seam queue, the module verdict table, the pass log, and the admission intents. A module with a current `holds` verdict is skipped unless its churn since the verdict's SHA has crossed the threshold the row names; `survey` reads the row and flags the rank line `held` or `reopen` accordingly, keeping a held module out of the probes.
 2. `refactor-target.toml`: the `layers`, every `[[module]]` admission that touches the scope, every `[[strangler]]`, and every `[[verdict]]`. A `[[verdict]]` is a recorded decision; do not re-litigate it unless the friction is real enough to reopen it, and then mark the candidate as contradicting the record.
 3. `git worktree list` and `git branch -a`: in-flight work names the modules a pass must not touch and the collisions a plan has to name.
 4. The scope's own `AGENTS.md` contract and the internals page the [documentation map](../../AGENTS.md#documentation-map) names for it.
