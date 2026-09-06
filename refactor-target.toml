@@ -117,7 +117,7 @@ surface-budget = 14
 [[module]]
 path = "crates/rimz/src/diag"
 upward-dependencies = ["sidebar::presence"]
-surface-budget = 79
+surface-budget = 80
 
 [[module]]
 path = "crates/rimz/src/disk"
