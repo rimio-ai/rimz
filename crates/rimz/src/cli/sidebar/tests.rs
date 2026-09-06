@@ -139,7 +139,7 @@ fn plugin_telemetry_decodes_structured_and_legacy_argv() {
             topology_failures: Some(2),
             other_failures: Some(2),
             zellij_version: Some("0.44.3".to_owned()),
-            last_failure: Some(rimz::sidebar::presence::PluginCommandFailure {
+            last_failure: Some(rimz::diag::plugin_presence::PluginCommandFailure {
                 exit_code: Some(1),
                 detail: "Error: could not publish accepted topology".to_owned(),
                 // This payload predates the stamp, as a plugin loaded before it

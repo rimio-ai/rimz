@@ -12,7 +12,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::diag::DiagSink;
-use crate::diag::plugin_presence::{PluginPresenceSample, WASM_PAGE_BYTES};
+use crate::diag::plugin_presence::{PluginCommandFailure, PluginPresenceSample, WASM_PAGE_BYTES};
 use crate::diag::record::{DiagEvent, WorkPaneBoundaryMove};
 use crate::ids::{MuxName, PaneId, ViewId};
 use crate::mux::zellij::pane_topology::{
@@ -64,22 +64,6 @@ pub struct ZellijPluginTelemetry {
     pub zellij_version: Option<String>,
     #[serde(default)]
     pub last_failure: Option<PluginCommandFailure>,
-}
-
-/// Why the plugin's most recent wake failed, as the host itself reported it on
-/// stderr before exiting, and the plugin clock reading it happened at.
-///
-/// The stamp arrived with the failure-retention fix; a plugin loaded before it
-/// reports the cause without one. `None` therefore reads as "age unknown" and
-/// keeps such a cause usable, rather than dating it to the epoch and hiding it.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
-pub struct PluginCommandFailure {
-    #[serde(default)]
-    pub exit_code: Option<i32>,
-    #[serde(default)]
-    pub detail: String,
-    #[serde(default)]
-    pub at_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
