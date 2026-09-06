@@ -435,6 +435,7 @@ fn ensure_spend_parser_boundaries(root: &Path, files: &[PathBuf]) -> Result<()> 
         concat!("atomic", "::"),
         concat!("::", "run_wake"),
         concat!("run_wake", "::"),
+        "wake_run",
         concat!("::", "broker"),
         concat!("broker", "::"),
     ] {
@@ -465,6 +466,7 @@ fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<(
         concat!("store", "::", "writer"),
         concat!("::", "run_wake"),
         concat!("run_wake", "::"),
+        "wake_run",
         concat!("::", "broker"),
         concat!("broker", "::"),
     ] {
