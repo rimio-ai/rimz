@@ -191,7 +191,7 @@ pub struct PushDestination {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaunchCheckout {
     pub cwd: PathBuf,
-    /// The checkout's main repository root, or `None` outside Git.
+    /// Repository root from workspace resolution, or `None` outside Git; `--root` can override it.
     pub repo_root: Option<PathBuf>,
     pub worktree_name: Option<String>,
     pub review_only_reason: Option<String>,

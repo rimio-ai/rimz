@@ -311,7 +311,7 @@ const CODEX_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "session index + app-server",
     },
     hook_install: ConcernCoverage::Wired {
-        via: "~/.codex/config.toml",
+        via: "$CODEX_HOME/config.toml (~/.codex by default)",
     },
     account_spend: ConcernCoverage::Wired {
         via: "app-server/OAuth usage/rollouts",

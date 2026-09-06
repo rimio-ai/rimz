@@ -1,6 +1,7 @@
 //! Read-only Codex `[projects]` directory trust, following upstream `codex-rs/config/src/loader/mod.rs` and `codex-rs/git-utils/src/trust.rs`.
 //!
 //! Check exact cwd, nearest project root, then the main Git root supplied by the launch resolver; never grant trust.
+//! Hook preflight normally catches file-level failures first; this read still reports them if the config changes between checks.
 
 use std::collections::HashMap;
 use std::path::Path;
