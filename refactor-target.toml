@@ -47,7 +47,6 @@ layers = [
     "web",
     "reload",
     "uninstall",
-    "disk_usage",
     "daemon_content",
     "channel",
 ],
@@ -126,11 +125,7 @@ allowed-dependencies = [
     "ids",
     "sock",
 ]
-surface-budget = 114
-
-[[module]]
-path = "crates/rimz/src/disk_usage.rs"
-surface-budget = 7
+surface-budget = 122
 
 [[module]]
 path = "crates/rimz/src/forge.rs"

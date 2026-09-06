@@ -2,6 +2,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::disk::usage::dir_size;
 use crate::ids::WorkspaceId;
 use crate::workspace::record;
 
@@ -138,7 +139,7 @@ fn remove_workspace(
 
 fn workspace_bytes(state_dir: &Path, workspace_id: &WorkspaceId, runtime_rimz_root: &Path) -> u64 {
     let runtime_dir = runtime_rimz_root.join(workspace_id.as_str());
-    crate::disk_usage::dir_size(state_dir).saturating_add(crate::disk_usage::dir_size(&runtime_dir))
+    dir_size(state_dir).saturating_add(dir_size(&runtime_dir))
 }
 
 fn remove_dir_all_if_exists(path: &Path) -> Result<()> {

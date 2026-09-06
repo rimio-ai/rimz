@@ -30,7 +30,6 @@ pub mod daemon_content;
 pub mod daemon_view;
 pub mod diag;
 pub mod disk;
-pub mod disk_usage;
 pub mod forge;
 pub mod harness;
 pub mod ids;
