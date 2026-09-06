@@ -787,7 +787,7 @@ pub fn sweep_owned(
         ..WorktreeSweep::default()
     };
     for (entry, _status) in candidates {
-        let bytes = crate::disk_usage::dir_size(&entry.path);
+        let bytes = crate::disk::usage::dir_size(&entry.path);
         if dry_run {
             sweep.removed.push(SweptWorktree {
                 name: entry.marker.name,

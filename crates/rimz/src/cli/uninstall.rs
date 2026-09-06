@@ -13,7 +13,7 @@ use super::GlobalFlags;
 use super::loop_timer::{self, TimerStatus};
 use super::render::fmt_bytes;
 use rimz::disk::paths;
-use rimz::disk_usage::{RuntimeStorage, StorageKind, StorageRoot};
+use rimz::disk::usage::{RuntimeStorage, StorageKind, StorageRoot};
 use rimz::ids::{MuxName, WorkspaceId};
 use rimz::mux::{self, MuxErr};
 use rimz::uninstall::{RemovalOutcome, Removed};
@@ -72,7 +72,7 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
     };
     ensure_not_in_rimz_room(&workspaces)?;
 
-    let disk_usage = rimz::disk_usage::measure();
+    let disk_usage = rimz::disk::usage::measure();
     let (live_rooms, session_failures) = live_rooms(&workspaces);
     failures.extend(session_failures);
     let hook_agents = managed_hook_agents();

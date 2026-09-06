@@ -55,7 +55,7 @@ pub(super) fn collect_host() -> model::Host {
 }
 
 pub(super) fn collect_storage() -> model::Storage {
-    let disk_usage = rimz::disk_usage::measure();
+    let disk_usage = rimz::disk::usage::measure();
     model::Storage {
         total_bytes: disk_usage.total_bytes(),
         roots: disk_usage
