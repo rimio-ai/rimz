@@ -81,8 +81,12 @@ fn anchor_subagent_workspace(
             "the parent's checkout `{path}` no longer exists; restart the parent from an existing checkout, or launch with `rimz agents` from the directory the child should work in"
         );
     }
-    WorkspaceResolver::resolve_participant(path, globals.root.clone())
-        .with_context(|| format!("resolving the parent's checkout `{path}`"))
+    let mut anchored = WorkspaceResolver::resolve_participant(path, globals.root.clone())
+        .with_context(|| format!("resolving the parent's checkout `{path}`"))?;
+    anchored.worktree_root = Path::new(path)
+        .canonicalize()
+        .with_context(|| format!("resolving the parent's launch directory `{path}`"))?;
+    Ok(anchored)
 }
 
 pub(super) fn preflight_agent(

@@ -357,6 +357,26 @@ fn subagent_launch_anchors_at_the_parent_checkout() {
     .expect("launch checkout");
     assert_eq!(launch.cwd, expected);
 
+    let subdir = checkout.path().join("packages/web");
+    std::fs::create_dir_all(&subdir).expect("parent subdirectory");
+    parent.worktree_path = Some(subdir.display().to_string());
+    let anchored = anchor_subagent_workspace(
+        shell.clone(),
+        &supervised_request("task", true),
+        Some(&parent),
+        &globals,
+    )
+    .expect("subdirectory parent workspace");
+    let launch = rimz::worktree::resolve_launch_checkout(
+        &anchored,
+        &rimz::config::WorktreeConfig::default(),
+        None,
+        None,
+    )
+    .expect("subdirectory launch checkout");
+    assert_eq!(launch.cwd, subdir.canonicalize().expect("canonical subdir"));
+    assert_eq!(anchored.cwd_project_root.as_ref(), Some(&expected));
+
     let peer = anchor_subagent_workspace(
         shell.clone(),
         &supervised_request("task", false),
