@@ -289,18 +289,6 @@ impl<'a> TaskFire<'a> {
         })
     }
 
-    pub fn entry(&self) -> &TaskEntry {
-        &self.entry
-    }
-
-    pub fn keep(&self) -> bool {
-        self.keep
-    }
-
-    pub fn mode(&self) -> LoopRunMode {
-        self.mode
-    }
-
     pub fn take_check_trip(&mut self) -> Option<CheckTrip> {
         self.check_trip.take()
     }
