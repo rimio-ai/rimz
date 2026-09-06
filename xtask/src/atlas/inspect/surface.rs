@@ -97,6 +97,10 @@ pub(super) struct SurfaceSection {
     pub(super) head_items: usize,
     pub(super) single_site: usize,
     pub(super) internal_only: usize,
+    /// Every escaping declaration as `survey`, `diff`, and `conform` count
+    /// `esc`: `mod` lines and each `pub use` included, before this section
+    /// folds re-exports onto their definitions.
+    pub(super) declarations: usize,
     /// Rows measured through a `pub use` at their definition.
     pub(super) reexports: usize,
     /// Further `pub use` declarations of an item already measured.
@@ -254,7 +258,10 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
             .insert(reference_module_label(&edge.from, &target.module));
     }
 
-    let mut section = SurfaceSection::default();
+    let mut section = SurfaceSection {
+        declarations: escaping.len(),
+        ..SurfaceSection::default()
+    };
     let mut declaration_only = 0;
     let mut measured = BTreeSet::<EdgeTarget>::new();
     for item in escaping {

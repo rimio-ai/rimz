@@ -37,6 +37,17 @@ fn inspect_args_require_a_module_and_parse_output_flags() {
             .contains("--module")
     );
     assert!(
+        parse_args(&["--item".into(), "open".into()])
+            .unwrap_err()
+            .to_string()
+            .contains("--item <module::Name>")
+    );
+    let implied = parse_args(&["--item".into(), "store::snapshot::Fold".into()])
+        .unwrap()
+        .unwrap();
+    assert_eq!(implied.module, "store::snapshot");
+    assert_eq!(implied.item.as_deref(), Some("store::snapshot::Fold"));
+    assert!(
         parse_args(&["--module".into(), "store".into(), "--no-index".into()])
             .unwrap_err()
             .to_string()

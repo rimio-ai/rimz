@@ -48,6 +48,7 @@ Builds a Markdown dossier for one Rust module from exact SCIP references.
   --from <value>    caller module to quote (default: heaviest caller)
   --item <value>    public item to investigate: `Name` in the module, or
                     `module::Name` for `Name` anywhere under `module`
+                    (implies --module <module> when that flag is absent)
   --top <n>         rows and names shown per section (default 20)
   --all             show shape and guard families below the finding gate
   --brief           the subagent brief: verdict, record, heaviest, surface,
@@ -423,8 +424,21 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
         }
         top.get_or_insert(BRIEF_TOP);
     }
+    // A qualified `--item module::Name` names its module already; a bare
+    // `Name` has nowhere to look without `--module`.
+    let module = module
+        .or_else(|| {
+            item.as_deref()
+                .and_then(|key| key.rsplit_once("::"))
+                .map(|(module, _)| module.to_owned())
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "atlas inspect requires --module (or --item <module::Name>, which implies it)"
+            )
+        })?;
     Ok(Some(Args {
-        module: module.ok_or_else(|| anyhow::anyhow!("atlas inspect requires --module"))?,
+        module,
         from,
         item,
         top: top.unwrap_or(20),
