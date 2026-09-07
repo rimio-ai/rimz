@@ -276,7 +276,8 @@ surface-budget = 26
 [[module]]
 path = "crates/rimz/src/worktree"
 # The read-only lifetime resolver supplies attribution consumers across modules.
-surface-budget = 55
+# Unmanaged-launch validation and lifecycle ownership also serve the binary CLI.
+surface-budget = 57
 
 [[module]]
 path = "crates/rimz/src/cli/remote/supervisor.rs"
