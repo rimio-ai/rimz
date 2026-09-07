@@ -734,6 +734,290 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
 }
 
 #[test]
+fn agents_existing_unmanaged_worktree_requires_consent_and_preserves_checkout() {
+    require_tmux!();
+    if git_missing() {
+        return;
+    }
+    existing_unmanaged_worktree_launch("agents", "claude,claude");
+}
+
+#[test]
+fn teams_existing_unmanaged_worktree_requires_consent_and_preserves_checkout() {
+    require_tmux!();
+    if git_missing() {
+        return;
+    }
+    existing_unmanaged_worktree_launch("teams", "duo");
+}
+
+fn existing_unmanaged_worktree_launch(doorway: &str, spec: &str) {
+    use std::io::Write;
+    use std::os::unix::fs::MetadataExt;
+
+    let env = Env::new();
+    std::fs::write(env.home_root.join(".zshrc"), "").expect("disable zsh first-run menu");
+    init_repo(&env.project_root);
+    let worktree = env.home_root.join("project-worktrees/existing");
+    git(
+        &env.project_root,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "user-owned",
+            worktree.to_str().expect("checkout path"),
+        ],
+    );
+    std::fs::write(worktree.join("README.md"), "unfinished work\n").expect("dirty checkout");
+    std::fs::write(worktree.join("notes.txt"), "user scratch\n").expect("write scratch");
+    let checkout_inode = std::fs::metadata(&worktree)
+        .expect("checkout metadata")
+        .ino();
+    let git_file = std::fs::read(worktree.join(".git")).expect("checkout git pointer");
+    let config_dir = env.config_root().join("rimz");
+    std::fs::create_dir_all(&config_dir).expect("mkdir config");
+    std::fs::write(
+        config_dir.join("agents.toml"),
+        "[agents.profiles.worker]\nagent = \"claude\"\n\
+         [agents.teams.duo]\nlayout = \"lead+helper\"\n\
+         [[agents.teams.duo.roles]]\nrole = \"lead\"\nprofile = \"worker\"\n\
+         [[agents.teams.duo.roles]]\nrole = \"helper\"\nprofile = \"worker\"\n",
+    )
+    .expect("write configured team");
+    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let agent_bin = write_sleeping_agent_shim(&env, "claude");
+    let ready = env.home_root.join("existing-ready");
+    std::fs::create_dir(&ready).expect("mkdir readiness records");
+    std::fs::write(
+        agent_bin.join("claude"),
+        format!(
+            "#!/bin/bash\nprintf ready > '{}/'$$\nexec -a claude sleep 300\n",
+            ready.display()
+        ),
+    )
+    .expect("write cohort sleeping shim");
+    let launch_command = || {
+        let mut command = env.rimz();
+        command
+            .env("PATH", path_with_front(&agent_bin))
+            .env("SHELL", "/definitely/not/a/shell")
+            .args(["--mux", "tmux", doorway, spec, "-w", "existing"]);
+        command
+    };
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
+    let mut options = session_opts(
+        &workspace.session_name,
+        workspace.workspace_id.clone(),
+        &workspace.project_root,
+        &workspace.worktree_root,
+        Some((160, 40)),
+    );
+    options
+        .extra_env
+        .extend(launch_command().get_envs().filter_map(|(key, value)| {
+            value.map(|value| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.to_string_lossy().into_owned(),
+                )
+            })
+        }));
+    server
+        .backend
+        .ensure_session(&options)
+        .expect("ensure room");
+    let agents = || {
+        env.store()
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .expect("audit agents")
+            .agents
+    };
+    let pane_ids = || {
+        server.stdout(&[
+            "list-panes",
+            "-s",
+            "-t",
+            &workspace.session_name,
+            "-F",
+            "#{pane_id}",
+        ])
+    };
+    let original_panes = pane_ids();
+    let assert_unmanaged = || {
+        assert_eq!(
+            std::fs::metadata(&worktree)
+                .expect("checkout metadata")
+                .ino(),
+            checkout_inode
+        );
+        assert_eq!(
+            std::fs::read(worktree.join(".git")).expect("git pointer"),
+            git_file
+        );
+        assert!(
+            rimz::worktree::read_marker_for_worktree(&worktree)
+                .expect("read marker")
+                .is_none()
+        );
+        git(
+            &worktree,
+            &["show-ref", "--verify", "refs/heads/user-owned"],
+        );
+    };
+    let assert_dirty_files = || {
+        assert_eq!(
+            std::fs::read_to_string(worktree.join("README.md")).expect("dirty file"),
+            "unfinished work\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(worktree.join("notes.txt")).expect("scratch file"),
+            "user scratch\n"
+        );
+    };
+    let output = launch_command()
+        .stdin(std::process::Stdio::null())
+        .bounded_output()
+        .expect("run nonterminal launch");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains("rerun in a terminal"), "{stderr}");
+    assert!(agents().is_empty());
+    assert_eq!(pane_ids(), original_panes);
+    assert_unmanaged();
+    assert_dirty_files();
+
+    let run_prompt = |answer: &str| {
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 40,
+                cols: 160,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("open launch PTY");
+        let command = launch_command();
+        let mut cmd = CommandBuilder::new(env.rimz_bin());
+        env.pin_pty_command(&mut cmd);
+        cmd.args(command.get_args());
+        cmd.cwd(&env.project_root);
+        for (key, value) in command.get_envs() {
+            match value {
+                Some(value) => cmd.env(key, value),
+                None => cmd.env_remove(key),
+            }
+        }
+        let mut child = pair.slave.spawn_command(cmd).expect("spawn launch prompt");
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().expect("prompt reader");
+        let output = thread::spawn(move || {
+            let mut output = Vec::new();
+            let _ = reader.read_to_end(&mut output);
+            output
+        });
+        let mut writer = pair.master.take_writer().expect("prompt writer");
+        writer.write_all(answer.as_bytes()).expect("answer prompt");
+        writer.flush().expect("flush answer");
+        drop(writer);
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let status = loop {
+            if let Some(status) = child.try_wait().expect("poll prompt") {
+                break Some(status);
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            thread::sleep(Duration::from_millis(25));
+        };
+        drop(pair.master);
+        let output =
+            String::from_utf8_lossy(&output.join().expect("join prompt reader")).into_owned();
+        assert!(status.is_some_and(|status| status.success()), "{output}");
+        assert!(output.contains("not RimZ-managed"), "{output}");
+        assert!(output.contains("[y/N]"), "{output}");
+        output
+    };
+    for answer in ["no\n", "\n"] {
+        let output = run_prompt(answer);
+        assert!(
+            output.contains("Launch aborted; nothing changed."),
+            "{output}"
+        );
+        assert!(agents().is_empty());
+        assert_eq!(pane_ids(), original_panes);
+        assert_eq!(
+            std::fs::read_dir(&ready).expect("read readiness").count(),
+            0
+        );
+        assert_unmanaged();
+        assert_dirty_files();
+    }
+
+    run_prompt("yes\n");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let launched = loop {
+        let rows = agents();
+        if rows.len() == 2 && std::fs::read_dir(&ready).expect("read readiness").count() == 2 {
+            break rows;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{doorway} did not launch both agents: {rows:?}"
+        );
+        thread::sleep(Duration::from_millis(25));
+    };
+    for agent in &launched {
+        assert!(agent.ended_at.is_none());
+        if doorway == "teams" {
+            assert_eq!(agent.team.as_deref(), Some("duo"));
+        }
+        let pane = &agent.pane.as_ref().expect("agent pane").pane_id;
+        let cwd = server.display(pane.raw(), "#{pane_current_path}");
+        assert_eq!(
+            Path::new(&cwd).canonicalize().expect("pane cwd"),
+            worktree.canonicalize().expect("checkout")
+        );
+    }
+    assert_unmanaged();
+    assert_dirty_files();
+
+    // Make the checkout clean so dirtiness cannot mask accidental ownership and cleanup.
+    std::fs::copy(
+        env.project_root.join("README.md"),
+        worktree.join("README.md"),
+    )
+    .expect("restore clean checkout");
+    std::fs::remove_file(worktree.join("notes.txt")).expect("remove test scratch");
+    server.tmux(&[
+        "kill-window",
+        "-t",
+        &format!("{}:#existing", workspace.session_name),
+    ]);
+    for agent in &launched {
+        wait_for_agent_end_observation(&env, agent.agent_id.as_str());
+    }
+    let cleanup = env
+        .rimz()
+        .args(["--mux", "tmux", "worktree", "cleanup"])
+        .arg(&worktree)
+        .arg("--non-interactive")
+        .bounded_output()
+        .expect("run cleanup against clean unmanaged checkout");
+    assert!(
+        cleanup.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cleanup.stderr)
+    );
+    assert_unmanaged();
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("README.md")).expect("retained clean file"),
+        "fixture\n"
+    );
+}
+
+#[test]
 fn closing_agent_tab_records_end_and_disposes_clean_worktree() {
     require_tmux!();
     if git_missing() {

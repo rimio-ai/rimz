@@ -56,6 +56,8 @@ The domain module runs Git through `crate::proc::git_command` with `LC_ALL=C` an
 
 A launch that names its worktree reuses an existing one; `rimz worktree new` refuses instead. A reused tree is never re-seeded, and `CreatedWorktree` reports zero included and linked counts so the CLI stays quiet about work it did not do.
 
+For an unmarked named checkout, agent and team launch entry points validate that it is a linked worktree of the launch repository, then ask for terminal confirmation (default no). Acceptance selects its cwd and channel without writing an ownership marker or seeding files; removal and cleanup remain managed-only. Non-terminal launches refuse with a terminal-confirmation hint. PR launches do not take this path because their reuse requires recorded PR provenance.
+
 `resolve_launch_checkout` is the seam the agent launcher enters. It returns the cwd every pane in the layout gets, plus the worktree name that becomes the channel, and it fails fast with `LaunchWorktreeRequiresRepo` when neither the current path nor the room root is a Git repository. Before that seam, the CLI compares the current repository root with the room pin: a mismatch is printed with both paths and requires a default-no confirmation, while non-terminal stdin refuses with an explicit `--root` hint. Cohort relaunch reconciliation uses the same selected repository root.
 
 ### From a pull request

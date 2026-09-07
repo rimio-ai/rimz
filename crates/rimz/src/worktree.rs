@@ -62,6 +62,8 @@ pub enum WorktreeErr {
     Missing { name: String, path: PathBuf },
     #[error("worktree `{name}` is not a RimZ-managed worktree at {path}")]
     Unmarked { name: String, path: PathBuf },
+    #[error("{path} is not a linked worktree of {repo_root}")]
+    NotLinkedWorktree { path: PathBuf, repo_root: PathBuf },
     #[error(
         "worktree `{name}` has local changes or work not proven landed; use --force to remove it"
     )]
@@ -197,9 +199,20 @@ pub struct LaunchCheckout {
     pub worktree_name: Option<String>,
     pub review_only_reason: Option<String>,
     generated_name: bool,
+    ownership: CheckoutOwnership,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CheckoutOwnership {
+    User,
+    Rimz,
 }
 
 impl LaunchCheckout {
+    pub fn is_managed_worktree(&self) -> bool {
+        self.ownership == CheckoutOwnership::Rimz
+    }
+
     /// Return the auto-generated name for a bare `--worktree` request.
     pub fn generated_name(&self) -> Option<&str> {
         self.generated_name
@@ -584,6 +597,7 @@ pub fn resolve_launch_checkout(
             worktree_name: Some(marker.name),
             review_only_reason,
             generated_name: false,
+            ownership: CheckoutOwnership::Rimz,
         });
     }
 
@@ -594,6 +608,7 @@ pub fn resolve_launch_checkout(
             worktree_name: None,
             review_only_reason: None,
             generated_name: false,
+            ownership: CheckoutOwnership::User,
         });
     };
     if workspace.cwd_project_root.is_none() && workspace.root_class != RootClass::Repo {
@@ -615,6 +630,45 @@ pub fn resolve_launch_checkout(
         worktree_name: Some(marker.name),
         review_only_reason: None,
         generated_name: name.is_empty(),
+        ownership: CheckoutOwnership::Rimz,
+    })
+}
+
+/// Resolve a user-owned linked checkout without adopting or seeding it.
+/// Callers must obtain confirmation before launching into the returned checkout.
+pub fn resolve_unmanaged_launch_checkout(
+    workspace: &ResolvedWorkspace,
+    config: &WorktreeConfig,
+    name: &str,
+) -> Result<LaunchCheckout> {
+    let repo_root = workspace.launch_repo_root();
+    let name = parse_requested_name(name)?.name;
+    let path = worktree_path(repo_root, config, &name)?.canonicalize()?;
+    let common_dir = git_stdout(
+        repo_root,
+        ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    let checkout_common_dir = git_stdout(
+        &path,
+        ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    let checkout_root = git_stdout(&path, ["rev-parse", "--show-toplevel"])?;
+    if Path::new(&common_dir).canonicalize()? != Path::new(&checkout_common_dir).canonicalize()?
+        || Path::new(&checkout_root).canonicalize()? != path
+        || repo_root.canonicalize()? == path
+    {
+        return Err(WorktreeErr::NotLinkedWorktree {
+            path,
+            repo_root: repo_root.to_path_buf(),
+        });
+    }
+    Ok(LaunchCheckout {
+        cwd: path,
+        repo_root: Some(repo_root.to_path_buf()),
+        worktree_name: Some(name),
+        review_only_reason: None,
+        generated_name: false,
+        ownership: CheckoutOwnership::User,
     })
 }
 

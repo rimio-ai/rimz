@@ -707,6 +707,33 @@ fn choose(prompt: &str, choices: &[&str], default: usize) -> Result<Option<usize
     Ok(parse_choice(&answer, choices, default))
 }
 
+fn resolve_launch_checkout(
+    workspace: &rimz::ResolvedWorkspace,
+    config: &rimz::config::WorktreeConfig,
+    worktree: Option<&str>,
+    from_pr: Option<&rimz::forge::PrTarget>,
+) -> Result<Option<rimz::worktree::LaunchCheckout>> {
+    let name = match rimz::worktree::resolve_launch_checkout(workspace, config, worktree, from_pr) {
+        Ok(launch) => return Ok(Some(launch)),
+        Err(rimz::worktree::WorktreeErr::Unmarked { name, .. }) if from_pr.is_none() => name,
+        Err(err) => return Err(err.into()),
+    };
+    let launch = rimz::worktree::resolve_unmanaged_launch_checkout(workspace, config, &name)?;
+    if !std::io::stdin().is_terminal() {
+        anyhow::bail!(
+            "worktree `{name}` is not RimZ-managed; rerun in a terminal to confirm entering it"
+        );
+    }
+    if !confirm(&format!(
+        "Worktree `{name}` at {} is not RimZ-managed. Enter it without adopting it or enabling automatic cleanup?",
+        launch.cwd.display(),
+    ))? {
+        writeln!(render::err(), "Launch aborted; nothing changed.")?;
+        return Ok(None);
+    }
+    Ok(Some(launch))
+}
+
 pub(crate) fn confirm_cross_repo_worktree(workspace: &rimz::ResolvedWorkspace) -> Result<bool> {
     confirm_cross_repo_worktree_with(
         workspace,

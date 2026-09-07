@@ -230,12 +230,15 @@ pub(super) fn launch_layout(
         }
     }
 
-    let launch = rimz::worktree::resolve_launch_checkout(
+    let Some(launch) = crate::cli::resolve_launch_checkout(
         workspace,
         &machine_config.agents.worktree,
         args.launch.cohort.worktree.as_deref(),
         args.launch.cohort.from_pr.as_ref(),
-    )?;
+    )?
+    else {
+        return Ok(());
+    };
     if let Some(team) = team_name.as_deref().and_then(|name| teams.0.get(name)) {
         rimz::worktree::exclude_team_scratch(&launch.cwd, &team.scratch_files);
     }
@@ -285,6 +288,7 @@ pub(super) fn launch_layout(
             description: args.launch.cohort.description.clone(),
         },
     )?;
+    let cleanup_worktree = launch.is_managed_worktree();
     let worktree_name = launch.worktree_name.clone();
     let cwd = launch.cwd;
     let title = room_channel.as_deref().map_or_else(
@@ -303,7 +307,7 @@ pub(super) fn launch_layout(
         &layout,
         LayoutPaneParams {
             cwd: &cwd,
-            cleanup_worktree: worktree_launch,
+            cleanup_worktree,
             in_place,
             resume_seeds: None,
             launch_identities: launch_batch.identities(),

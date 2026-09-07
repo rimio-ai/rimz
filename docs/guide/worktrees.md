@@ -44,6 +44,8 @@ A branch-style name with a `/` names the branch directly and maps to `-` for the
 
 `rimz worktree new <name>` creates the same tree without launching anything into it — for work of your own, or a tree you will fill with agents later.
 
+Already made the tree with `git worktree add`? If it is in the configured worktree directory and belongs to this repository, `rimz agents <spec> -w <name>` and `rimz teams <team> -w <name>` ask whether to enter it. Answer `y` to launch there; Enter or `n` cancels. RimZ keeps your files and branch as they are, does not seed or adopt the tree, and leaves cleanup to you. Confirmation needs a terminal; unattended launches refuse. `--from-pr` still requires a matching RimZ-managed PR checkout.
+
 ### From a pull request
 
 `--from-pr <number|url>` fetches a pull request's head over your `origin` credentials and lands the layout in a `pr-<N>` worktree. A PR URL must name the same host and repository as `origin`. On GitHub, Gitea, and Forgejo, the authenticated forge CLI identifies whether the head belongs to the origin repository or a fork: same-repository branches track `origin`, while fork branches pull from and push to the fork so a plain `git push` updates the pull request. Without a supported forge CLI, RimZ creates a review-only local branch at the exact PR head and leaves pushes unconfigured.
