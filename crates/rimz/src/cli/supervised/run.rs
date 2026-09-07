@@ -486,12 +486,15 @@ fn prepare_supervised(
     if worktree_launch && !crate::cli::confirm_cross_repo_worktree(&workspace)? {
         return Ok(None);
     }
-    let launch = rimz::worktree::resolve_launch_checkout(
+    let Some(launch) = crate::cli::resolve_launch_checkout(
         &workspace,
         &machine_config.agents.worktree,
         request.worktree.as_deref(),
         request.from_pr.as_ref(),
-    )?;
+    )?
+    else {
+        return Ok(None);
+    };
     if let Some(reason) = launch.review_only_reason.as_deref() {
         writeln!(
             std::io::stderr(),
@@ -624,7 +627,7 @@ fn execute_attempt(
         launch_id: Some(&launch_identity.agent_id),
         cwd: &prepared.launch.cwd,
         prompt,
-        cleanup_worktree: (request.worktree.is_some() || request.from_pr.is_some()) && retries == 0,
+        cleanup_worktree: prepared.launch.is_managed_worktree() && retries == 0,
         permission_args: &agent_cell.args,
         system_prompt_file: agent_cell.system_prompt_file.as_deref(),
         append_system_prompt_files: &agent_cell.append_system_prompt_files,
@@ -827,7 +830,6 @@ pub(in crate::cli) fn run_supervised(
         room.session_name(),
     )?;
     let retries = request.retries;
-    let owns_worktree = request.worktree.is_some() || request.from_pr.is_some();
     let base_prompt = prepared.prompt.clone();
     let mut prompt = prepared.prompt.clone();
     let mut retry_of = None;
@@ -879,7 +881,7 @@ pub(in crate::cli) fn run_supervised(
         }
         if !record.status.is_retryable() || attempt == retries {
             if retries > 0
-                && owns_worktree
+                && prepared.launch.is_managed_worktree()
                 && let Err(err) =
                     crate::cli::worktree::cleanup_worktree(&prepared.launch.cwd, globals, false)
             {

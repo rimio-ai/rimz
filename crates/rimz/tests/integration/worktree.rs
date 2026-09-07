@@ -117,6 +117,102 @@ fn worktree_new_list_and_remove_round_trip() {
 }
 
 #[test]
+fn unmanaged_launch_checkout_preserves_ownership_and_local_work() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    let path = env.home_root.join("project-worktrees/feat-review");
+    git_stdout(
+        &env.project_root,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "feat/review",
+            path.to_str().expect("path"),
+        ],
+    );
+    std::fs::write(path.join("local.txt"), "keep me\n").expect("local work");
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let config = rimz::config::WorktreeConfig::default();
+    assert!(matches!(
+        rimz::worktree::resolve_launch_checkout(&workspace, &config, Some("feat/review"), None),
+        Err(rimz::worktree::WorktreeErr::Unmarked { .. })
+    ));
+    let checkout =
+        rimz::worktree::resolve_unmanaged_launch_checkout(&workspace, &config, "feat/review")
+            .expect("resolve user-owned checkout");
+    assert_eq!(
+        checkout.cwd,
+        path.canonicalize().expect("canonical checkout")
+    );
+    assert_eq!(checkout.worktree_name.as_deref(), Some("feat-review"));
+    assert_eq!(checkout.generated_name(), None);
+    assert!(!checkout.is_managed_worktree());
+    assert_eq!(
+        std::fs::read_to_string(path.join("local.txt")).expect("local work"),
+        "keep me\n"
+    );
+    assert!(
+        rimz::worktree::read_marker_for_worktree(&path)
+            .expect("marker")
+            .is_none()
+    );
+    assert!(
+        rimz::worktree::discover_owned(&env.project_root)
+            .expect("managed trees")
+            .is_empty()
+    );
+    env.rimz()
+        .args(["worktree", "remove", "feat-review", "--force"])
+        .assert()
+        .failure()
+        .stderr(contains("not a RimZ-managed worktree"));
+    assert!(path.exists());
+}
+
+#[test]
+fn unmanaged_launch_checkout_rejects_non_worktrees_and_other_repositories() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let config = rimz::config::WorktreeConfig {
+        dir: "checkouts".to_owned(),
+        ..Default::default()
+    };
+    let plain = env.project_root.join("checkouts/plain");
+    std::fs::create_dir_all(&plain).expect("plain directory");
+    let other = env.project_root.join("checkouts/other");
+    std::fs::create_dir_all(&other).expect("other repository directory");
+    init_repo(&other);
+    let linked = env.project_root.join("checkouts/linked-other");
+    git_stdout(
+        &other,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "linked-other",
+            linked.to_str().expect("path"),
+        ],
+    );
+    for name in ["plain", "other", "linked-other"] {
+        assert!(
+            matches!(
+                rimz::worktree::resolve_unmanaged_launch_checkout(&workspace, &config, name),
+                Err(rimz::worktree::WorktreeErr::NotLinkedWorktree { .. })
+            ),
+            "{name} must not be accepted as a worktree of this repository"
+        );
+    }
+}
+
+#[test]
 fn worktree_remove_distinguishes_missing_from_unmarked() {
     if git_missing() {
         return;

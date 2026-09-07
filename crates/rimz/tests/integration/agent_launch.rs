@@ -745,6 +745,37 @@ fn fresh_launch_requires_a_named_worktree_before_side_effects() {
 
 #[cfg(unix)]
 #[test]
+fn supervised_unmanaged_worktree_requires_terminal_confirmation() {
+    let env = Env::new();
+    if !init_launch_repo(&env.project_root) {
+        return;
+    }
+    let path = env.home_root.join("project-worktrees/review");
+    assert!(
+        std::process::Command::new("git")
+            .current_dir(&env.project_root)
+            .args(["worktree", "add", "-b", "review"])
+            .arg(&path)
+            .status()
+            .expect("add worktree")
+            .success()
+    );
+    env.rimz()
+        .args(["agents", "codex", "-p", "review this", "-w", "review"])
+        .stdin(std::process::Stdio::null())
+        .assert()
+        .failure()
+        .stderr(contains("rerun in a terminal to confirm entering it"));
+    assert!(
+        rimz::worktree::read_marker_for_worktree(&path)
+            .expect("marker")
+            .is_none()
+    );
+    assert!(env.store().snapshot().expect("snapshot").agents.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
 fn supervised_cross_repo_worktree_refuses_non_terminal_input() {
     let env = Env::new();
     let current_root = env.home_root.join("current");
