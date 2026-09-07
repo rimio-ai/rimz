@@ -103,6 +103,37 @@ fn team_signal_binding_registers_delivers_and_retires() {
 }
 
 #[test]
+fn team_signal_registration_preserves_same_named_machine_configuration() {
+    let env = Env::new();
+    let Some(cwd) = team_signal_fixture(&env) else {
+        return;
+    };
+    let config = format!(
+        "[tasks.team-forge-feature-team-coder-ci-failed]\ncheck = \"true\"\nevery = \"15m\"\nroot = {:?}\n",
+        env.project_root.display().to_string()
+    );
+    write_loop_config(&env, &config);
+    seed_team_signal_member(&env, &cwd, "configured-session", None);
+    let mut command = env.hook_command("claude");
+    command
+        .current_dir(&cwd)
+        .env(rimz::harness::launch::ENV_AGENT_NAME, "configured-session")
+        .env(rimz::workspace::ENV_CHANNEL, "feature-team");
+    let output = env.spawn_payload(command, &json!({ "hook_event_name": "SessionStart", "session_id": "configured-session", "cwd": cwd }).to_string()).wait_with_output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        std::fs::read_to_string(loop_config_path(&env)).unwrap(),
+        config
+    );
+    assert!(read_loop_instances(&env).0.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("configuration-owned"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn team_signal_slug_collisions_preserve_distinct_subscriptions() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -780,6 +811,84 @@ fn session_end_hook_retires_all_own_deliveries_and_their_overlays() {
         assert!(!read_loop_arming(&env).contains_key(&key));
         assert!(!read_loop_strikes(&env).contains_key(&key));
     }
+}
+
+#[test]
+fn retired_delivery_runner_preserves_replacement_session_subscription() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "retired-session", "feature-cas");
+    let ready = env.project_root.join("check-ready");
+    let release = env.project_root.join("check-release");
+    let check = format!(
+        "touch {}; while ! test -e {}; do sleep 0.01; done",
+        shlex::try_quote(ready.to_str().unwrap()).unwrap(),
+        shlex::try_quote(release.to_str().unwrap()).unwrap(),
+    );
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "reused",
+            "--wake",
+            "@retired-session",
+            "--every",
+            "15m",
+            "--check",
+            &check,
+            "--on",
+            "any",
+            "--prompt",
+            "old",
+        ],
+    );
+    let runner = env
+        .rimz()
+        .args(["loop", "run", "reused"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_path(&ready);
+    run_hook(
+        &env,
+        json!({"hook_event_name": "SessionEnd", "session_id": "retired-session"}),
+        &env.project_root,
+    );
+    register_running_agent(&env, "replacement-session", "feature-cas");
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "reused",
+            "--wake",
+            "@replacement-session",
+            "--every",
+            "15m",
+            "--prompt",
+            "replacement",
+        ],
+    );
+    std::fs::write(release, "").unwrap();
+    let output = runner.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        read_loop_instances(&env).0["reused"]
+            .wake
+            .as_ref()
+            .unwrap()
+            .session
+            .as_str(),
+        "replacement-session"
+    );
+    loop_ok(&env, &["loop", "run", "reused"]);
+    assert_pending_message(&env, "replacement-session", "replacement");
 }
 
 #[test]

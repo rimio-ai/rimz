@@ -238,7 +238,7 @@ impl TaskCatalog {
             config_edit::remove(config_edit::TaskStore::Machine, name)?;
         } else {
             config_edit::set_entry(config_edit::TaskStore::Machine, name, entry)?;
-            instances::remove(&instance_root, name)?;
+            instances::remove(&instance_root, name, None)?;
         }
         let source = TaskSource::from_entry(entry);
         clear_overlays(&TaskKey::for_task(name, source, &entry.resolved_root()))
@@ -447,6 +447,7 @@ fn remove_definition(name: &str, task: &LoadedTask) -> Result<bool> {
         TaskSource::Instance => Ok(instances::remove(
             &instance_root(&task.entry().resolved_root()),
             name,
+            Some(task.entry()),
         )?),
         TaskSource::Project { .. } => Ok(config_edit::remove(
             config_edit::TaskStore::Project(&task.entry().root),
