@@ -1,13 +1,14 @@
 use std::io::Write;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use super::super::{GlobalFlags, render};
 use super::list::{LiveInstance, LiveMember, RoleReport, TeamReport, ci_style, stage_label};
 use rimz::store::snapshot::{WorktreePrCi, WorktreePrState};
 
 pub(super) fn run(name: &str, lane: Option<&str>, json: bool, globals: &GlobalFlags) -> Result<()> {
-    let reports = super::list::load_catalog(globals, lane)?;
+    let machine = rimz::config::MachineConfig::load().context("loading machine config")?;
+    let reports = super::list::load_catalog(globals, lane, &machine)?;
     let Some(report) = reports
         .iter()
         .find(|report| report.name == name && report.defined)

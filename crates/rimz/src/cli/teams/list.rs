@@ -8,7 +8,7 @@ use serde::Serialize;
 use super::super::{Ctx, GlobalFlags, render, report_unknown_config_keys};
 use rimz::agents::attribution::LaneLifetimes;
 use rimz::agents::{AgentState, AgentStatus, TurnPhase};
-use rimz::config::{CommandsConfig, ProfilesConfig, Team, TeamsConfig};
+use rimz::config::{CommandsConfig, MachineConfig, ProfilesConfig, Team, TeamsConfig, ThemeConfig};
 use rimz::harness::spec::{AgentCell, LayoutSpec};
 use rimz::store::snapshot::{SidebarSnapshot, WorktreePrCi, WorktreePrState};
 use rimz::utils::path::normalize_path_lexical;
@@ -99,20 +99,21 @@ pub(super) struct LiveMember {
 }
 
 pub(super) fn run(json: bool, globals: &GlobalFlags) -> Result<()> {
-    let reports = load_catalog(globals, None)?;
+    let machine = MachineConfig::load().context("loading machine config")?;
+    let reports = load_catalog(globals, None, &machine)?;
     if json {
         return render::json_pretty(&reports);
     }
-    write_catalog(&mut render::out(), &reports)
+    write_catalog(&mut render::out(), &reports, &machine.theme)
 }
 
 pub(super) fn load_catalog(
     globals: &GlobalFlags,
     worktree: Option<&str>,
+    machine: &MachineConfig,
 ) -> Result<Vec<TeamReport>> {
     let ctx = Ctx::open(globals)?;
-    let machine = rimz::config::MachineConfig::load().context("loading machine config")?;
-    report_unknown_config_keys(&machine)?;
+    report_unknown_config_keys(machine)?;
     let effective = rimz::config::effective::load(
         &machine.agents,
         &machine.subagents.profiles,
@@ -529,7 +530,7 @@ fn instance_state(counts: &BTreeMap<String, usize>) -> &'static str {
     }
 }
 
-fn write_catalog(w: &mut impl Write, reports: &[TeamReport]) -> Result<()> {
+fn write_catalog(w: &mut impl Write, reports: &[TeamReport], theme: &ThemeConfig) -> Result<()> {
     if reports.is_empty() {
         writeln!(w, "No teams defined.")?;
         writeln!(w, "Install forge with: rimz teams install forge")?;
@@ -538,8 +539,7 @@ fn write_catalog(w: &mut impl Write, reports: &[TeamReport]) -> Result<()> {
     }
     let mut table = render::Table::new(["TEAM", "LANE", "STAGE", "PR", "STATUS"])
         .max_width(render::terminal_columns(120));
-    let machine = crate::cli::machine_config();
-    let glyph = rimz::theme::theme_glyphs(&machine.theme);
+    let glyph = rimz::theme::theme_glyphs(theme);
     for report in reports {
         for instance in report
             .instances
@@ -547,21 +547,14 @@ fn write_catalog(w: &mut impl Write, reports: &[TeamReport]) -> Result<()> {
             .map(Some)
             .chain(report.instances.is_empty().then_some(None))
         {
-            let status = report.error.as_deref().map_or_else(
-                || {
-                    instance
-                        .map_or(
-                            if report.defined {
-                                "ready"
-                            } else {
-                                "not defined"
-                            },
-                            |instance| instance.state.as_str(),
-                        )
-                        .to_owned()
-                },
-                |error| format!("broken: {error}"),
-            );
+            let state = instance.map_or("ready", |instance| instance.state.as_str());
+            let status = if let Some(error) = &report.error {
+                format!("broken: {error}")
+            } else if !report.defined {
+                format!("{state} · not defined")
+            } else {
+                state.to_owned()
+            };
             let pr = instance.and_then(|instance| instance.pr.as_ref());
             let mut pr_text = pr
                 .and_then(|pr| pr.number)
@@ -824,7 +817,7 @@ mod tests {
         assert!(json[0]["instances"][0]["members"][0]["phase"].is_string());
         assert!(json[0]["instances"][1]["stage"].is_null());
         let mut rendered = anstream::StripStream::new(Vec::new());
-        write_catalog(&mut rendered, &reports).unwrap();
+        write_catalog(&mut rendered, &reports, &ThemeConfig::default()).unwrap();
         insta::assert_snapshot!(
             "human_catalog_has_one_row_per_cohort",
             String::from_utf8(rendered.into_inner()).unwrap()
@@ -851,12 +844,13 @@ mod tests {
         agent.team = Some("forge".to_owned());
         agent.role = Some("planner".to_owned());
         agent.channel = Some("feat-x".to_owned());
+        let snapshot = snapshot(vec![agent]);
         let reports = build_catalog(
             &teams,
             &ProfilesConfig::default(),
             &CommandsConfig::default(),
             LiveCatalog {
-                snapshot: &snapshot(vec![agent]),
+                snapshot: &snapshot,
                 audit_agents: &[],
                 lifetimes: &rimz::worktree::lane_lifetimes([]),
                 prices: &rimz::agents::PriceBook::default(),
@@ -880,6 +874,26 @@ mod tests {
         assert_eq!(json[0]["instances"][0]["members"][0]["handle"], "@planner");
         assert_eq!(json[0]["instances"][0]["members"][0]["status"], "running");
         assert!(json[0]["instances"][0]["members"][0].get("phase").is_some());
+
+        let removed = build_catalog(
+            &TeamsConfig::default(),
+            &ProfilesConfig::default(),
+            &CommandsConfig::default(),
+            LiveCatalog {
+                snapshot: &snapshot,
+                audit_agents: &[],
+                lifetimes: &rimz::worktree::lane_lifetimes([]),
+                prices: &rimz::agents::PriceBook::default(),
+                worktree: None,
+            },
+            |_| None,
+        );
+        assert!(!removed[0].defined);
+        assert_eq!(removed[0].instances[0].channel, "feat-x");
+        let mut rendered = anstream::StripStream::new(Vec::new());
+        write_catalog(&mut rendered, &removed, &ThemeConfig::default()).unwrap();
+        let rendered = String::from_utf8(rendered.into_inner()).unwrap();
+        assert!(rendered.contains("working · not defined"));
     }
 
     #[test]
@@ -1101,14 +1115,14 @@ mod tests {
             |_| None,
         );
         let mut rendered = Vec::new();
-        write_catalog(&mut rendered, &reports).unwrap();
+        write_catalog(&mut rendered, &reports, &ThemeConfig::default()).unwrap();
         let rendered = String::from_utf8(rendered).unwrap();
         assert!(rendered.contains("forge"));
         assert!(rendered.contains("STAGE"));
         assert!(rendered.contains("ready"));
 
         let mut empty = Vec::new();
-        write_catalog(&mut empty, &[]).unwrap();
+        write_catalog(&mut empty, &[], &ThemeConfig::default()).unwrap();
         let empty = String::from_utf8(empty).unwrap();
         assert!(empty.contains("rimz teams install forge"));
         assert!(empty.contains("docs/guide/teams.md"));
@@ -1127,6 +1141,7 @@ mod tests {
                 error: None,
                 instances: Vec::new(),
             }],
+            &ThemeConfig::default(),
         )
         .unwrap();
         assert!(

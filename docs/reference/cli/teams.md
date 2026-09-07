@@ -18,7 +18,7 @@ rimz teams list
 rimz teams ls --json
 ```
 
-The bare command and `list`/`ls` merge the effective team definitions with live team instances. The columns are `TEAM LANE STAGE PR STATUS`, with one row per live cohort; `PR` includes the projected PR number and CI indicator when available. A definition with no live cohort gets one row with `-` for lane, stage, and PR, and `ready` or a definition error for status. Definition errors remain visible on live rows, and live instances remain visible when their definition has since been removed. Resolved roles, models, and effort stay in `show`.
+The bare command and `list`/`ls` merge the effective team definitions with live team instances. The columns are `TEAM LANE STAGE PR STATUS`, with one row per live cohort; `PR` includes the projected PR number and CI indicator when available. A definition with no live cohort gets one row with `-` for lane, stage, and PR, and `ready` or a definition error for status. Definition errors remain visible on live rows; a cohort whose definition was removed keeps its live status with `not defined` appended. Resolved roles, models, and effort stay in `show`.
 
 The effective catalogue merges the machine `agents.toml`, fragments under `~/.agents/teams/`, and a trusted repository overlay.
 An unreadable or invalid effective config fails at entry with the source error.

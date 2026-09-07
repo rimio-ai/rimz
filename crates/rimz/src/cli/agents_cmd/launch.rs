@@ -739,7 +739,13 @@ fn write_launch_receipt(w: &mut impl Write, receipt: &LaunchReceipt<'_>) -> Resu
         )?;
     }
     writeln!(w)?;
-    write_launch_hints(w, team, channel, None, leader.map(launch_identity_handle))
+    write_launch_hints(
+        w,
+        team,
+        channel,
+        identities.first().map(launch_identity_handle),
+        leader.map(launch_identity_handle),
+    )
 }
 
 fn launch_identity_handle(identity: &AgentLaunchIdentity) -> &str {
@@ -1023,6 +1029,37 @@ mod tests {
         assert!(output.contains("  @worker   codex  -"));
         assert!(output.contains("  prompt    → @worker  \"Read the handoff.\""));
         assert!(output.contains("Reach: rimz message @worker '<text>'"));
+
+        let layout = rimz::harness::spec::parse_layout_spec(
+            "claude,claude",
+            &Default::default(),
+            &Default::default(),
+        )
+        .unwrap();
+        let leader_index = rimz::harness::spec::prompt_leader(&layout, None).ok();
+        assert!(leader_index.is_none());
+        let identities = [
+            launch_identity("claude", "first-peer"),
+            launch_identity("claude", "second-peer"),
+        ];
+        let mut output = anstream::StripStream::new(Vec::new());
+        write_launch_receipt(
+            &mut output,
+            &LaunchReceipt {
+                team: None,
+                channel: Some("parallel"),
+                cwd: Path::new("/repo"),
+                branch: None,
+                identities: &identities,
+                leader_index,
+                terminal_width: 100,
+            },
+        )
+        .unwrap();
+        let output = String::from_utf8(output.into_inner()).unwrap();
+        assert!(output.contains("Reach: rimz message @first-peer#parallel '<text>'"));
+        assert!(!output.contains("leader"));
+        assert!(!output.contains("prompt"));
     }
 
     #[test]
