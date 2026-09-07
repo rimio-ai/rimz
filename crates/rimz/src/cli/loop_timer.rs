@@ -128,6 +128,7 @@ fn task_roots() -> BTreeSet<PathBuf> {
         .values()
         .map(|task| task.entry().resolved_root())
         .collect::<BTreeSet<_>>();
+    roots.extend(rimz::harness::schedule::catalog::workspace_instance_roots());
     match rimz::trust::granted_roots() {
         Ok(granted) => roots.extend(granted.into_iter().filter(|root| {
             TaskCatalog::load_lenient(Some(root))

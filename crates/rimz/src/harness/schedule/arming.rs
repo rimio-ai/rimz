@@ -92,8 +92,8 @@ impl TaskKey {
 
     fn scope(source: TaskSource, root: &Path) -> String {
         match source {
-            TaskSource::Config | TaskSource::Instance => MACHINE_SCOPE.to_owned(),
-            TaskSource::Project { .. } => Self::project_scope(root),
+            TaskSource::Config => MACHINE_SCOPE.to_owned(),
+            TaskSource::Instance | TaskSource::Project { .. } => Self::project_scope(root),
         }
     }
 

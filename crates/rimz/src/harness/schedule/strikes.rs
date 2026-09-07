@@ -148,6 +148,7 @@ mod tests {
     fn record(result: LoopRunResult, check: Option<CheckRecord>) -> LoopRunRecord {
         LoopRunRecord {
             task: "nightly".to_owned(),
+            root: None,
             at: Timestamp::from_second(1).expect("timestamp"),
             result,
             mode: Some(LoopRunMode::Scheduled),

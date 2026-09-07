@@ -48,7 +48,9 @@ pub enum RunTransition {
 /// Attempt the history append before updating strike and arming overlays.
 /// Both the append and overlay updates are best-effort.
 pub(super) fn record_transition(task: &LoadedTask, record: &LoopRunRecord) -> RunTransition {
-    append_to(&state_home(), record);
+    let mut scoped_record = record.clone();
+    scoped_record.root = Some(task.entry().resolved_root());
+    append_to(&state_home(), &scoped_record);
     let name = &record.task;
     let key = TaskKey::for_task(name, task.source(), &task.entry().resolved_root());
     let signal = strikes::classify(record);
@@ -78,6 +80,8 @@ pub(super) fn record_transition(task: &LoadedTask, record: &LoopRunRecord) -> Ru
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LoopRunRecord {
     pub task: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<PathBuf>,
     pub at: Timestamp,
     pub result: LoopRunResult,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -119,6 +123,7 @@ impl LoopRunRecord {
     ) -> Self {
         Self {
             task: task.into(),
+            root: None,
             at: Timestamp::now(),
             result,
             mode: Some(mode),
@@ -249,22 +254,33 @@ fn append_to(state_root: &Path, record: &LoopRunRecord) {
     crate::disk::rotating::append(&log_path(state_root), MAX_BYTES, &capped);
 }
 
-pub fn stats(state_root: &Path, now: &Zoned) -> BTreeMap<String, LoopRunStats> {
+pub fn stats(
+    state_root: &Path,
+    now: &Zoned,
+    root: Option<&Path>,
+) -> BTreeMap<String, LoopRunStats> {
     let mut stats = BTreeMap::new();
     crate::disk::rotating::visit_records(&log_path(state_root), |record: LoopRunRecord| {
-        fold_record(record, now, &mut stats);
+        if matches_root(&record, root) {
+            fold_record(record, now, &mut stats);
+        }
     });
     stats
 }
 
-pub fn task_records(state_root: &Path, task: &str) -> Vec<LoopRunRecord> {
+pub fn task_records(state_root: &Path, task: &str, root: Option<&Path>) -> Vec<LoopRunRecord> {
     let mut records = Vec::new();
     crate::disk::rotating::visit_records(&log_path(state_root), |record: LoopRunRecord| {
-        if record.task == task {
+        if record.task == task && matches_root(&record, root) {
             records.push(record);
         }
     });
     records
+}
+
+fn matches_root(record: &LoopRunRecord, root: Option<&Path>) -> bool {
+    root.zip(record.root.as_deref())
+        .is_none_or(|(root, recorded)| root == recorded)
 }
 
 pub fn spend_on_local_day(records: &[LoopRunRecord], now: &Zoned) -> f64 {
@@ -354,7 +370,10 @@ pub(super) fn daily_budget_gate(
         .parse::<crate::harness::budget::BudgetSpec>()
         .map_err(|err| format!("task `{task}` has invalid budget: {err}"))?
         .cap_usd;
-    let spend = spend_on_local_day(&task_records(state_root, task), now);
+    let spend = spend_on_local_day(
+        &task_records(state_root, task, Some(&entry.resolved_root())),
+        now,
+    );
     Ok(
         ((spend >= cap) || (reserved > 0.0 && spend + reserved > cap)).then_some(DailyBudgetGate {
             spend_usd: spend,
@@ -430,6 +449,7 @@ mod tests {
     fn record(task: &str, second: i64, result: LoopRunResult) -> LoopRunRecord {
         LoopRunRecord {
             task: task.to_owned(),
+            root: None,
             at: Timestamp::from_second(second).expect("timestamp"),
             result,
             mode: None,
@@ -459,7 +479,7 @@ mod tests {
         let now = Timestamp::from_second(20)
             .expect("timestamp")
             .to_zoned(jiff::tz::TimeZone::UTC);
-        let stats = stats(dir.path(), &now);
+        let stats = stats(dir.path(), &now, None);
         let wake = stats.get("wake").expect("wake stats");
         assert_eq!(wake.runs, 2);
         assert_eq!(wake.streak, 1);
@@ -566,8 +586,8 @@ mod tests {
         crate::disk::rotating::append(&log_path(dir.path()), 1, &old);
         crate::disk::rotating::append(&log_path(dir.path()), 1, &new);
 
-        assert_eq!(task_records(dir.path(), "morning"), vec![old]);
-        assert_eq!(task_records(dir.path(), "other"), vec![new]);
+        assert_eq!(task_records(dir.path(), "morning", None), vec![old]);
+        assert_eq!(task_records(dir.path(), "other", None), vec![new]);
     }
 
     #[test]
@@ -631,7 +651,7 @@ mod tests {
         )
         .expect("write run log");
 
-        assert_eq!(stats(dir.path(), &now)["wake"].spend_today_usd, 4.0);
+        assert_eq!(stats(dir.path(), &now, None)["wake"].spend_today_usd, 4.0);
     }
 
     #[test]
@@ -685,7 +705,7 @@ mod tests {
         let now = Timestamp::from_second(30)
             .expect("timestamp")
             .to_zoned(jiff::tz::TimeZone::UTC);
-        let stats = stats(dir.path(), &now);
+        let stats = stats(dir.path(), &now, None);
         let wake = stats.get("wake").expect("wake stats");
         assert_eq!(wake.runs, 2);
         assert_eq!(wake.streak, 1);
@@ -709,7 +729,7 @@ mod tests {
         let now = Timestamp::from_second(30)
             .expect("timestamp")
             .to_zoned(jiff::tz::TimeZone::UTC);
-        let stats = stats(dir.path(), &now);
+        let stats = stats(dir.path(), &now, None);
         let wake = stats.get("wake").expect("wake stats");
         assert_eq!(wake.runs, 2);
         assert_eq!(wake.streak, 2);
@@ -739,7 +759,7 @@ mod tests {
         append_to(dir.path(), &with_detail);
         append_to(dir.path(), &record("other", 11, LoopRunResult::Completed));
 
-        assert_eq!(task_records(dir.path(), "wake"), vec![with_detail]);
+        assert_eq!(task_records(dir.path(), "wake", None), vec![with_detail]);
     }
 
     #[test]
@@ -784,7 +804,7 @@ mod tests {
         });
 
         append_to(dir.path(), &record);
-        let stored = task_records(dir.path(), "wake")
+        let stored = task_records(dir.path(), "wake", None)
             .pop()
             .expect("stored record");
         assert_eq!(stored.error.expect("error").len(), ERROR_CAP);

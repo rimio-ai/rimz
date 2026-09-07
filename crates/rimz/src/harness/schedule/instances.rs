@@ -1,7 +1,7 @@
 //! RimZ-owned loop task instances and merged loop task reads.
 //!
-//! Durable recurring definitions live in `loop.toml`. Machine-generated
-//! one-shots, self-wakes, and poll-until instances live here as state, using
+//! Durable recurring definitions live in `loop.toml`. Session deliveries,
+//! one-shots, and poll-until instances live here as workspace state, using
 //! the same task entry shape without turning runtime churn into user config
 //! edits. Readers merge both backings here; durable config wins when both
 //! stores contain a name.
@@ -9,15 +9,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use super::overlay_store::OverlayStore;
 use crate::config::{TaskEntry, Tasks};
 use crate::disk::atomic::{AtomicErr, write_temp_then_rename};
 use crate::disk::lock::{LockErr, WorkspaceLock};
-use crate::disk::paths::state_home;
-use anyhow::Context;
+use crate::disk::paths::workspaces_dir_under;
+use crate::ids::WorkspaceId;
 use jiff::Timestamp;
-
-const STORE: OverlayStore = OverlayStore::new("loop-instances.json", "loop-instances.lock");
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum InstanceErr {
@@ -25,43 +22,98 @@ pub(super) enum InstanceErr {
     Lock(#[from] LockErr),
     #[error(transparent)]
     Write(#[from] AtomicErr),
+    #[error("reading {path}: {source}")]
+    Read {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("reading {path}: {source}")]
+    Parse {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
 }
 
 type Result<T> = std::result::Result<T, InstanceErr>;
 
 pub(super) fn path(state_root: &Path) -> PathBuf {
-    STORE.path(state_root)
+    state_root.join("loop-instances.json")
 }
 
-pub(super) fn load() -> Tasks {
-    load_from(&state_home())
+fn lock_path(state_root: &Path) -> PathBuf {
+    state_root.join("loop-instances.lock")
 }
 
-pub(super) fn insert(name: &str, entry: &TaskEntry) -> Result<()> {
-    insert_into(&state_home(), name, entry)
+pub(super) fn insert(state_root: &Path, name: &str, entry: &TaskEntry) -> Result<()> {
+    insert_into(state_root, name, entry)
 }
 
-pub(super) fn remove(name: &str) -> Result<bool> {
-    remove_from(&state_home(), name)
+pub(super) fn remove(state_root: &Path, name: &str) -> Result<bool> {
+    remove_from(state_root, name)
 }
 
-pub(super) fn rename(old: &str, new: &str) -> Result<bool> {
-    rename_from(&state_home(), old, new)
+pub(super) fn rename(state_root: &Path, old: &str, new: &str) -> Result<bool> {
+    rename_from(state_root, old, new)
 }
 
 pub(super) fn load_from(state_root: &Path) -> Tasks {
-    Tasks(STORE.load(state_root))
+    load_strict_from(state_root).unwrap_or_default()
 }
 
-pub(super) fn load_strict_from(state_root: &Path) -> anyhow::Result<Tasks> {
+pub(super) fn load_strict_from(state_root: &Path) -> Result<Tasks> {
     let path = path(state_root);
     match std::fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map_err(anyhow::Error::from)
-            .with_context(|| format!("reading {}", path.display())),
+        Ok(bytes) => {
+            serde_json::from_slice(&bytes).map_err(|source| InstanceErr::Parse { path, source })
+        }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Tasks::default()),
-        Err(err) => Err(err).with_context(|| format!("reading {}", path.display())),
+        Err(source) => Err(InstanceErr::Read { path, source }),
     }
+}
+
+pub(super) fn migrate_legacy(state_home: &Path) -> Result<()> {
+    let legacy_root = state_home.join("rimz");
+    let legacy_path = path(&legacy_root);
+    match std::fs::metadata(&legacy_path) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(InstanceErr::Read {
+                path: legacy_path,
+                source,
+            });
+        }
+        Ok(_) => {}
+    }
+    let _guard = WorkspaceLock::acquire(&lock_path(&legacy_root))?;
+    let legacy = load_strict_from(&legacy_root)?;
+    let mut workspaces = BTreeMap::<PathBuf, BTreeMap<String, TaskEntry>>::new();
+    for (name, entry) in legacy.0 {
+        let root = workspaces_dir_under(state_home)
+            .join(WorkspaceId::from_project_root(&entry.resolved_root()).as_str());
+        workspaces.entry(root).or_default().insert(name, entry);
+    }
+    let mut destinations = Vec::new();
+    for (root, entries) in workspaces {
+        let guard = WorkspaceLock::acquire(&lock_path(&root))?;
+        let mut current = load_strict_from(&root)?.0;
+        for (name, entry) in entries {
+            current.entry(name).or_insert(entry);
+        }
+        destinations.push((root, guard, current));
+    }
+    // Keep destination locks until the source is cleared, including across all
+    // publishes, so another writer cannot remove a row before migration commits.
+    for (root, _, entries) in &destinations {
+        write_temp_then_rename(&path(root), entries)?;
+    }
+    // Persist an empty source before unlinking so a crash cannot resurrect rows
+    // if the unlink itself has not reached disk.
+    write_temp_then_rename(&legacy_path, &Tasks::default())?;
+    std::fs::remove_file(&legacy_path).map_err(|source| InstanceErr::Read {
+        path: legacy_path,
+        source,
+    })?;
+    Ok(())
 }
 
 fn insert_into(state_root: &Path, name: &str, entry: &TaskEntry) -> Result<()> {
@@ -92,8 +144,8 @@ fn mutate<T>(
     state_root: &Path,
     edit: impl FnOnce(&mut BTreeMap<String, TaskEntry>) -> Result<(T, bool)>,
 ) -> Result<T> {
-    let _guard = WorkspaceLock::acquire(&STORE.lock_path(state_root))?;
-    let mut entries = STORE.load(state_root);
+    let _guard = WorkspaceLock::acquire(&lock_path(state_root))?;
+    let mut entries = load_strict_from(state_root)?.0;
     let (result, changed) = edit(&mut entries)?;
     if changed {
         write_temp_then_rename(&path(state_root), &entries)?;
@@ -101,8 +153,91 @@ fn mutate<T>(
     Ok(result)
 }
 
-pub(super) fn remove_signal_wake(name: &str, candidate: &TaskEntry) -> Result<bool> {
-    mutate(&state_home(), |tasks| {
+pub(super) fn insert_delivery(
+    state_root: &Path,
+    name: Option<&str>,
+    entry: &TaskEntry,
+    taken: &BTreeSet<String>,
+) -> Result<(String, bool)> {
+    mutate(state_root, |tasks| {
+        let arming = super::arming::load();
+        let now = Timestamp::now();
+        if entry.signal.is_some()
+            && let Some((name, _)) = tasks.iter().find(|(name, current)| {
+                let key = super::arming::TaskKey::for_task(
+                    name,
+                    super::catalog::TaskSource::Instance,
+                    &current.resolved_root(),
+                );
+                !taken.contains(*name)
+                    && super::arming::ArmState::resolve(
+                        arming.get(&key),
+                        super::catalog::TaskSource::Instance,
+                        now,
+                    ) == super::arming::ArmState::Live
+                    && current
+                        .wake
+                        .as_ref()
+                        .zip(entry.wake.as_ref())
+                        .is_some_and(|(a, b)| a.kind == b.kind && a.session == b.session)
+                    && current
+                        .signal
+                        .as_deref()
+                        .and_then(|raw| raw.parse::<super::signal::SignalSelector>().ok())
+                        == entry.signal.as_deref().and_then(|raw| raw.parse().ok())
+                    && current
+                        .matches
+                        .iter()
+                        .flatten()
+                        .eq(entry.matches.iter().flatten())
+                    && current.resolved_root() == entry.resolved_root()
+            })
+        {
+            return Ok(((name.clone(), true), false));
+        }
+        let name = name.map(ToOwned::to_owned).unwrap_or_else(|| {
+            let petname = crate::agents::petname::mint(
+                tasks
+                    .keys()
+                    .chain(taken)
+                    .filter_map(|name| name.strip_prefix("wake-")),
+            );
+            format!("wake-{petname}")
+        });
+        tasks.insert(name.clone(), entry.clone());
+        Ok(((name, false), true))
+    })
+}
+
+pub(super) fn retire_session(
+    state_root: &Path,
+    kind: &crate::ids::AgentKind,
+    session: &crate::ids::AgentSessionId,
+) -> Result<Vec<String>> {
+    mutate(state_root, |tasks| {
+        let names = tasks
+            .iter()
+            .filter(|(_, entry)| {
+                entry.wake.as_ref().is_some_and(|target| {
+                    target.kind == kind.as_str() && target.session == session.as_str()
+                })
+            })
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        for name in &names {
+            tasks.remove(name);
+        }
+        let changed = !names.is_empty();
+        Ok((names, changed))
+    })
+}
+
+pub(super) fn remove_signal_wake(
+    state_root: &Path,
+    name: &str,
+    candidate: &TaskEntry,
+) -> Result<bool> {
+    mutate(state_root, |tasks| {
         if !tasks
             .get(name)
             .is_some_and(|current| same_subscription(current, candidate))
@@ -115,11 +250,12 @@ pub(super) fn remove_signal_wake(name: &str, candidate: &TaskEntry) -> Result<bo
 }
 
 pub(super) fn claim_expired(
+    state_root: &Path,
     name: &str,
     candidate: &TaskEntry,
     now: Timestamp,
 ) -> Result<Option<TaskEntry>> {
-    claim_expired_in(&state_home(), name, candidate, now)
+    claim_expired_in(state_root, name, candidate, now)
 }
 
 fn claim_expired_in(
@@ -153,11 +289,12 @@ fn same_subscription(current: &TaskEntry, candidate: &TaskEntry) -> bool {
 }
 
 pub(super) fn arm_signal_wake(
+    state_root: &Path,
     entry: &TaskEntry,
     taken: &BTreeSet<String>,
     now: Timestamp,
 ) -> Result<String> {
-    arm_signal_wake_in(&state_home(), entry, taken, now)
+    arm_signal_wake_in(state_root, entry, taken, now)
 }
 
 fn arm_signal_wake_in(
