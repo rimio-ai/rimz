@@ -102,9 +102,10 @@ pub fn arm_member(
         .enumerate()
         .filter(|(_, b)| b.role == role)
     {
-        let ordinal = ordinals.entry(&binding.signal).or_insert(0);
-        *ordinal += 1;
         let result = (|| -> Result<DeliverySpec, TeamBindingFailure> {
+            let base = member_task_name(name, &channel, role, &binding.signal, 1)?;
+            let ordinal = ordinals.entry(base.to_string()).or_insert(0);
+            *ordinal += 1;
             let task_name = member_task_name(name, &channel, role, &binding.signal, *ordinal)?;
             let selector = super::parse_signal_selector(
                 &task_name.to_string(),
