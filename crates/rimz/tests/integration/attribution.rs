@@ -693,13 +693,15 @@ fn attribution_counts_only_the_current_worktree_lifetime() {
             .to_zoned(rimz::config::MachineConfig::default().time_zone())
             .strftime("%Y-%m-%d %H:%M")
     );
-    for args in [
-        vec!["agents", "attribution", "#demo"],
-        vec!["agents", "attribution", "#demo", "--md"],
-    ] {
-        let report = String::from_utf8(run(&args)).expect("attribution utf8");
-        assert!(report.contains(&boundary), "missing {boundary}: {report}");
-    }
+    let panel = String::from_utf8(run(&["agents", "attribution", "#demo"]))
+        .expect("attribution panel utf8");
+    assert!(panel.contains(&boundary), "missing {boundary}: {panel}");
+    let markdown = String::from_utf8(run(&["agents", "attribution", "#demo", "--md"]))
+        .expect("attribution markdown utf8");
+    assert!(
+        !markdown.contains("since "),
+        "unexpected boundary: {markdown}"
+    );
 
     run(&["worktree", "remove", "demo"]);
     assert!(!checkout.exists(), "worktree removed");
