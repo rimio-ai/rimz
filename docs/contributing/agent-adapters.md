@@ -84,6 +84,8 @@ The provider half of the integration is [providers.md → Adding a provider](../
 
 ## Step 9 — Test it
 
+Before a lifecycle field gates behaviour, inventory each adapter's durable set/clear producers and test the field across persisted-cache advancement with an empty delta; display-derived observations are not durable reset evidence.
+
 The required set, consolidated from [adapter.md → Adding an agent](../internals/agents/adapter.md#adding-an-agent) and the [module contract](../../crates/rimz/src/agents/AGENTS.md):
 
 - install / uninstall / preview, and install version drift (an under-wired config re-offers the merge)

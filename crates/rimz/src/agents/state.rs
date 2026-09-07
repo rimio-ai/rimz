@@ -682,8 +682,8 @@ pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_compact_command_tokens: Option<u64>,
     /// The next input must not be another compaction. Set by a sent compact
-    /// command or successful manual compaction; cleared by `TurnStarted` or
-    /// `Registered`. Delivery acknowledgements do not rearm a cleared marker.
+    /// command or successful manual compaction; cleared only by `TurnStarted`.
+    /// Registration preserves it; delivery acknowledgements do not rearm it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compacted_awaiting_prompt: Option<Timestamp>,
     pub last_seen: Timestamp,
@@ -967,6 +967,14 @@ impl AgentState {
     pub fn is_compacting(&self, now: Timestamp) -> bool {
         self.compacting_since
             .is_some_and(|since| now.duration_since(since).as_secs() < COMPACTING_WINDOW_SECS)
+    }
+
+    /// A marker is actionable only when durable turn starts can clear it.
+    pub fn compaction_unprompted(&self, now: Timestamp) -> bool {
+        self.is_compacting(now)
+            || (self.compacted_awaiting_prompt.is_some()
+                && super::spec_by_kind(self.kind.as_str())
+                    .is_some_and(|spec| spec.lifecycle_hooks.turn_started.is_native()))
     }
 
     /// Minimal test fixture with stable identity fields and empty enrichment.

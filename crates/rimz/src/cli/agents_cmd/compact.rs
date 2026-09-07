@@ -31,6 +31,12 @@ pub(super) fn compact_agent(
         .launch
         .compact_command
         .with_context(|| format!("{} has no native compaction command", agent.kind))?;
+    if !spec.lifecycle_hooks.turn_started.is_native() {
+        bail!(
+            "{} reports no durable turn starts, so RimZ cannot guarantee a compaction never follows a compaction; compact it in its own pane",
+            agent.kind
+        );
+    }
     if instruction.is_some() && compact.instruction == CompactInstruction::Unsupported {
         bail!(
             "{} does not accept a compaction instruction; it receives `{}` bare — rerun without the instruction",
@@ -61,7 +67,7 @@ pub(super) fn compact_agent(
             automated: false,
         },
     )
-    .with_context(|| handle.clone())?;
+    .map_err(|err| anyhow::anyhow!("{handle}: {err}"))?;
     match outcome {
         CompactOutcome::Sent => writeln!(render::out(), "compacting {handle} ({message_id})")?,
         CompactOutcome::Queued => writeln!(

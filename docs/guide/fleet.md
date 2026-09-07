@@ -259,6 +259,8 @@ rimz agents compact @coder "keep the open questions and the exact file list"
 
 Without an instruction, it uses your [configured compaction brief](./configuration.md#smart-compaction). RimZ refuses another compaction until the agent takes a new user turn, and refuses while one is already queued or running. The [command reference](../reference/cli/agents.md#compact) covers instruction support and delivery output.
 
+Kiro has no native turn-start hook, so this command cannot enforce the no-repeat guarantee and refuses it; compact Kiro in its own pane instead.
+
 Two everyday tasks have their own guides, with the depth this page leaves out:
 
 - **Steer or queue an agent** — send text that parks at the turn boundary, interrupts the live turn, or arrives on a schedule: the [messaging guide](./messaging.md).

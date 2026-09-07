@@ -112,6 +112,61 @@ fn compact_command_stamp_can_match_by_agent_name_after_session_adoption() {
 
 #[test]
 fn compact_command_events_stamp_carryover_agents_after_rotation() {
+    for target_id in ["sess-a", "provisional"] {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+        let mut carried = agent("claude", "sess-a", AgentStatus::Idle, 0);
+        carried.name = Some("lucid-atlas".to_owned());
+        write_carryover(
+            &paths.agents_carryover,
+            &EventCarryover {
+                agents: vec![carried, agent("claude", "untouched", AgentStatus::Idle, 0)],
+                agent_identity: Default::default(),
+                resume_outcomes: Vec::new(),
+            },
+        )
+        .unwrap();
+        event_log::append(
+            &paths.events_log,
+            &compact_event(
+                &workspace,
+                1,
+                target_id,
+                Some("lucid-atlas"),
+                MessageStatus::Sent,
+                Some(210_000),
+            ),
+        )
+        .unwrap();
+
+        let (cache, agents, _) = catch_up_rollup(&paths).unwrap();
+        let agent = agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == "sess-a")
+            .expect("agent");
+        assert_eq!(agent.last_compact_command_tokens, Some(210_000));
+        assert!(agent.compacted_awaiting_prompt.is_some());
+        let marker = agent.compacted_awaiting_prompt;
+        write_rollup_cache(&paths.rollup_cache, &cache).unwrap();
+        let (advanced, agents, _) = catch_up_rollup(&paths).unwrap();
+        assert_eq!(advanced.extent, cache.extent);
+        let agent = agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == "sess-a")
+            .expect("carried agent after cache advancement");
+        assert_eq!(agent.compacted_awaiting_prompt, marker);
+        assert_eq!(agent.last_compact_command_tokens, Some(210_000));
+        assert_eq!(advanced.raw_agents.len(), 1);
+        assert_eq!(advanced.raw_agents[0].agent_id.as_str(), "sess-a");
+    }
+}
+
+#[test]
+fn carryover_compact_stamp_does_not_precede_earlier_lifecycle_events() {
+    use lifecycle::LifecycleSignal;
+
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
     let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
@@ -119,32 +174,109 @@ fn compact_command_events_stamp_carryover_agents_after_rotation() {
     write_carryover(
         &paths.agents_carryover,
         &EventCarryover {
-            agents: vec![agent("claude", "sess-a", AgentStatus::Idle, 0)],
+            agents: vec![agent("claude", "predecessor", AgentStatus::Idle, 0)],
+            ..EventCarryover::default()
+        },
+    )
+    .unwrap();
+    let mut observation = crate::agents::AgentLifecycleObservation::new(
+        Some("successor".into()),
+        LifecycleSignal::CompactionEnded {
+            auto: None,
+            failed: false,
+        },
+    );
+    observation.compacted_from = Some("predecessor".into());
+    event_log::append(
+        &paths.events_log,
+        &EventEnvelope::agent_lifecycle(
+            workspace.clone(),
+            "session",
+            "claude",
+            "SessionStart",
+            &observation,
+        ),
+    )
+    .unwrap();
+    event_log::append(
+        &paths.events_log,
+        &lifecycle_at(
+            &workspace,
+            "claude",
+            "UserPromptSubmit",
+            "predecessor",
+            LifecycleSignal::TurnStarted,
+        ),
+    )
+    .unwrap();
+    let sent = compact_event(
+        &workspace,
+        1,
+        "predecessor",
+        None,
+        MessageStatus::Sent,
+        Some(210_000),
+    );
+    event_log::append(&paths.events_log, &sent).unwrap();
+
+    let (cache, agents, _) = catch_up_rollup(&paths).unwrap();
+    write_rollup_cache(&paths.rollup_cache, &cache).unwrap();
+    let (_, advanced, _) = catch_up_rollup(&paths).unwrap();
+    for agents in [agents, advanced] {
+        let predecessor = agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == "predecessor")
+            .unwrap();
+        assert_eq!(predecessor.compacted_awaiting_prompt, Some(sent.timestamp));
+        assert_eq!(predecessor.last_compact_command_tokens, Some(210_000));
+        let successor = agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == "successor")
+            .unwrap();
+        assert_eq!(successor.compacted_awaiting_prompt, None);
+        assert_eq!(successor.last_compact_command_tokens, None);
+    }
+}
+
+#[test]
+fn kiro_compact_marker_persists_without_lifecycle_events_but_does_not_latch() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let kiro = agent("kiro", "sess-kiro", AgentStatus::Idle, 0);
+    write_carryover(
+        &paths.agents_carryover,
+        &EventCarryover {
+            agents: vec![kiro.clone()],
             agent_identity: Default::default(),
             resume_outcomes: Vec::new(),
         },
     )
     .unwrap();
-    event_log::append(
-        &paths.events_log,
-        &compact_event(
-            &workspace,
-            1,
-            "sess-a",
-            None,
-            MessageStatus::Sent,
-            Some(210_000),
-        ),
+    let mut command = MessageRecord::new(
+        workspace,
+        &kiro,
+        "/compact".to_owned(),
+        true,
+        DeliveryGate::Done,
     )
-    .unwrap();
-
-    let (_, agents, _) = catch_up_rollup(&paths).unwrap();
-    let agent = agents
-        .iter()
-        .find(|agent| agent.agent_id.as_str() == "sess-a")
-        .expect("agent");
-    assert_eq!(agent.last_compact_command_tokens, Some(210_000));
-    assert!(agent.compacted_awaiting_prompt.is_some());
+    .with_body(MessageBody::Command);
+    for (status, method) in [
+        (MessageStatus::Sent, MessageEventMethod::Sent),
+        (MessageStatus::TimedOut, MessageEventMethod::TimedOut),
+    ] {
+        command.status = status;
+        event_log::append(
+            &paths.events_log,
+            &EventEnvelope::message_event(&command, "session", method, None),
+        )
+        .unwrap();
+        let (cache, agents, _) = catch_up_rollup(&paths).unwrap();
+        write_rollup_cache(&paths.rollup_cache, &cache).unwrap();
+        assert!(agents[0].compacted_awaiting_prompt.is_some());
+        assert!(!agents[0].compaction_unprompted(Timestamp::now()));
+    }
 }
 
 #[test]
@@ -169,7 +301,10 @@ fn compact_marker_needs_no_tokens_and_delayed_delivery_cannot_rearm_it() {
     assert_eq!(agents[0].compacted_awaiting_prompt, Some(sent.timestamp));
     assert_eq!(agents[0].last_compact_command_tokens, None);
 
-    for signal in [LifecycleSignal::TurnStarted, LifecycleSignal::Registered] {
+    for (signal, expected) in [
+        (LifecycleSignal::TurnStarted, None),
+        (LifecycleSignal::Registered, Some(sent.timestamp)),
+    ] {
         event_log::append(&paths.events_log, &sent).unwrap();
         let (cache, _, _) = catch_up_rollup(&paths).unwrap();
         write_rollup_cache(&paths.rollup_cache, &cache).unwrap();
@@ -191,11 +326,11 @@ fn compact_marker_needs_no_tokens_and_delayed_delivery_cannot_rearm_it() {
         )
         .unwrap();
         let (_, agents, _) = catch_up_rollup(&paths).unwrap();
-        assert_eq!(agents[0].compacted_awaiting_prompt, None);
+        assert_eq!(agents[0].compacted_awaiting_prompt, expected);
         assert_eq!(agents[0].last_compact_command_tokens, Some(80_000));
         std::fs::remove_file(&paths.rollup_cache).unwrap();
         let (_, rebuilt, _) = catch_up_rollup(&paths).unwrap();
-        assert_eq!(rebuilt[0].compacted_awaiting_prompt, None);
+        assert_eq!(rebuilt[0].compacted_awaiting_prompt, expected);
     }
 }
 

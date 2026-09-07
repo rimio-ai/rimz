@@ -27,13 +27,15 @@ pub enum CompactErr {
         status: MessageStatus,
     },
     #[error(
-        "already compacted at {at} and has not taken a turn since; a compaction never follows a compaction"
+        "already compacted {elapsed} ago and has not taken a turn since; a compaction never follows a compaction",
+        elapsed = crate::store::message::format_dwell(Timestamp::now().duration_since(*at).as_secs().max(0) as u64)
     )]
     Repeated { at: Timestamp },
-    #[error(
-        "compaction {message_id} was settled before delivery; inspect it with `rimz message show {message_id}`"
-    )]
-    Settled { message_id: MessageId },
+    #[error("compaction {message_id}: {reason}")]
+    Settled {
+        message_id: MessageId,
+        reason: String,
+    },
     #[error(transparent)]
     Store(#[from] crate::store::StoreErr),
     #[error(transparent)]
@@ -69,7 +71,10 @@ pub fn refuse_repeat(store: &Store, agent: &AgentState, now: Timestamp) -> Resul
             status: message.status,
         });
     }
-    if let Some(at) = agent.compacted_awaiting_prompt {
+    if let Some(at) = agent
+        .compacted_awaiting_prompt
+        .filter(|_| agent.compaction_unprompted(now))
+    {
         return Err(CompactErr::Repeated { at });
     }
     Ok(())
@@ -117,16 +122,35 @@ pub fn send_compact(
     if retry.head_sent {
         return Ok(CompactOutcome::Sent);
     }
-    if !store
+    if store
         .list_messages()?
         .iter()
         .any(|queued| queued.message_id == message.message_id)
     {
-        return Err(CompactErr::Settled {
-            message_id: message.message_id,
-        });
+        return Ok(CompactOutcome::Queued);
     }
-    Ok(CompactOutcome::Queued)
+    let settled = store
+        .list_message_history()?
+        .into_iter()
+        .find(|record| record.message_id == message.message_id);
+    if settled
+        .as_ref()
+        .is_some_and(|record| record.status == MessageStatus::Delivered)
+    {
+        return Ok(CompactOutcome::Sent);
+    }
+    let reason = settled.map_or_else(
+        || "outcome is no longer in the message history".to_owned(),
+        |record| {
+            record
+                .last_error
+                .unwrap_or_else(|| format!("settled as {}", record.status))
+        },
+    );
+    Err(CompactErr::Settled {
+        message_id: message.message_id,
+        reason,
+    })
 }
 
 #[cfg(test)]
