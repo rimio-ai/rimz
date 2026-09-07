@@ -96,7 +96,7 @@ pub struct DeliverySpec {
 }
 
 pub enum ArmOutcome {
-    Armed { name: String, entry: TaskEntry },
+    Armed { name: String, entry: Box<TaskEntry> },
     AlreadySubscribed { name: String },
 }
 
@@ -178,7 +178,10 @@ pub fn arm_delivery(
             return Err(ArmFailure::Watcher(error));
         }
     }
-    Ok(ArmOutcome::Armed { name, entry })
+    Ok(ArmOutcome::Armed {
+        name,
+        entry: Box::new(entry),
+    })
 }
 
 #[derive(Debug, thiserror::Error)]

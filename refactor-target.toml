@@ -135,11 +135,12 @@ upward-dependencies = ["sidebar::refresh"]
 # Watch verdicts, output paths and retention cross the library/CLI seam.
 # Launch-row selection is shared by ancestry and CLI parent consumers.
 # Team inspection shares scratch discovery and board-stage records with launch reminders.
-surface-budget = 548
+# Delivery specs and team subscriptions share the CLI/library boundary.
+surface-budget = 574
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
-surface-budget = 42
+surface-budget = 44
 
 [[module]]
 path = "crates/rimz/src/lane.rs"
@@ -235,7 +236,7 @@ surface-budget = 337
 [[module]]
 path = "crates/rimz/src/theme"
 upward-dependencies = ["agents"]
-surface-budget = 31
+surface-budget = 32
 
 [[module]]
 path = "crates/rimz/src/transcript.rs"
@@ -558,7 +559,7 @@ allowed-dependencies = [
     "utils::time",
     "workspace",
 ]
-surface-budget = 35
+surface-budget = 37
 
 [[strangler]]
 symbol = "purge_zellij_session_cache_in"
