@@ -773,6 +773,22 @@ pub fn queue_head<'a>(
         .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
 }
 
+/// An ordinary claim still inside its TTL that a fresh boundary send parks behind.
+pub(crate) fn in_flight_claim<'a>(
+    pending: impl IntoIterator<Item = &'a MessageRecord>,
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+    agent_name: Option<&str>,
+    now: Timestamp,
+) -> Option<&'a MessageRecord> {
+    pending.into_iter().find(|message| {
+        message.status == MessageStatus::Claimed
+            && message.gate != DeliveryGate::Resume
+            && message.same_card(AgentCardRef::new(kind, agent_id, agent_name))
+            && !claim_expired(message.last_attempt_at, now)
+    })
+}
+
 /// Oldest ready record ahead of `candidate` in the same logical-card lane.
 /// Callers choose what readiness means: Store claims use durable stamps, while
 /// diagnosis can use currently true dynamic conditions for the candidate.

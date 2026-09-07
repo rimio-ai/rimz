@@ -68,6 +68,8 @@ Structured input is one object per question:
 
 RimZ validates every answer before sending a keystroke. An ask-id target also acts as a compare-and-swap token: a prompt answered or superseded in the pane is stale and receives no input. Unsupported permission and plan actions exit `3` before pane delivery, list the valid remote option, and direct you to the Claude pane.
 
+`answer` waits for any in-flight RimZ write to the same pane, then keeps the whole answer's text and keys together through submission. `--no-wait` skips confirmation, not this wait for the pane writer.
+
 Confirmation waits 30 seconds by default. `--wait 5m` changes the deadline; `--no-wait` returns after the pane write. Exit `0` means confirmed or intentionally not waited, `2` means the ask was stale or its pane unavailable, `3` means validation or adapter capability failed, and `4` means the agent did not confirm before the deadline.
 
 Claude questions support single picks, multi-select picks, and free text. Permission `allow` uses the stable first menu action. Plan `approve` uses Shift-Tab and enables auto-accept edits. If you Escape a question and submit free text in the pane, RimZ records that next human prompt as the open question's answer. The Escape-based deny and keep-planning actions stay pane-only because Claude Code 2.1.205 emits no lifecycle confirmation for them.

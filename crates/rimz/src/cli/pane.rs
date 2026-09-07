@@ -11,8 +11,11 @@ use clap::{Args, Subcommand};
 use super::GlobalFlags;
 use crate::cli::render;
 use rimz::agents::{AgentState, TurnPhase};
+use rimz::disk::paths::RuntimePaths;
 use rimz::ids::PaneId;
-use rimz::mux::{MuxBackend, PaneListOptions, SplitPaneOptions, SplitPlacement, SplitTarget};
+use rimz::mux::{
+    MuxBackend, PaneListOptions, PaneWriter, SplitPaneOptions, SplitPlacement, SplitTarget,
+};
 use rimz::pane::PaneRef;
 use rimz::pane::keys::NamedKey;
 use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
@@ -139,8 +142,13 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
             text,
         } => {
             let target = resolve_pane_target(&target, globals)?;
-            let backend = rimz::mux::backend_for(target.pane.mux());
-            send(backend.as_ref(), &target.pane, text.as_deref(), &key, enter)
+            send(
+                &RuntimePaths::shared(),
+                &target.pane,
+                text.as_deref(),
+                &key,
+                enter,
+            )
         }
         PaneSubcmd::Focus {
             target,
@@ -716,16 +724,8 @@ fn resolve_session_name(globals: &GlobalFlags, session_name: Option<String>) -> 
     }
 }
 
-pub(super) fn send_text(backend: &dyn MuxBackend, pane: &PaneId, text: &str) -> Result<()> {
-    backend.send_keys(pane, text).map_err(Into::into)
-}
-
-pub(super) fn send_key(backend: &dyn MuxBackend, pane: &PaneId, key: NamedKey) -> Result<()> {
-    backend.send_key(pane, key).map_err(Into::into)
-}
-
 fn send(
-    backend: &dyn MuxBackend,
+    runtime: &RuntimePaths,
     pane: &PaneId,
     text: Option<&str>,
     keys: &[NamedKey],
@@ -737,14 +737,15 @@ fn send(
     if text.is_none_or(str::is_empty) && keys.is_empty() && !enter {
         bail!("expected text, --key, or --enter");
     }
+    let writer = PaneWriter::open(runtime, pane)?;
     if let Some(text) = text.filter(|text| !text.is_empty()) {
-        send_text(backend, pane, text)?;
+        writer.type_text(text)?;
     }
     for key in keys {
-        send_key(backend, pane, *key)?;
+        writer.press(*key)?;
     }
     if enter {
-        send_key(backend, pane, NamedKey::Enter)?;
+        writer.press(NamedKey::Enter)?;
     }
     Ok(())
 }

@@ -17,7 +17,7 @@ use crate::message::{
 };
 use crate::store::message::{
     AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
-    WhenCondition, queue_head,
+    WhenCondition, in_flight_claim, queue_head,
 };
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::workspace::ResolvedWorkspace;
@@ -921,6 +921,14 @@ fn dispatch_decision(
             now,
         )
         .is_some()
+            || in_flight_claim(
+                pending.iter(),
+                &agent.kind,
+                &agent.agent_id,
+                agent.name.as_deref(),
+                now,
+            )
+            .is_some()
     }) {
         return DispatchDecision::Parked { reason: None };
     }
