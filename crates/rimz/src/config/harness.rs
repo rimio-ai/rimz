@@ -190,7 +190,7 @@ pub enum IdleCompactMode {
     /// Leave idle agents untouched.
     #[default]
     Off,
-    /// Compact while a teammate still works or the worktree PR remains open.
+    /// Compact while another agent in the same channel is running.
     Auto,
     /// Compact every eligible idle agent.
     Always,

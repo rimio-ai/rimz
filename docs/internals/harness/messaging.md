@@ -325,7 +325,7 @@ A failed compaction fails the delivery through the same retry path as a failed s
 
 ## Idle compaction
 
-Idle compaction reuses the command-record half of smart compaction without attaching a following prompt. The elected sidebar producer checks top-level rollup agents against `[harness] idle_compact`, the idle threshold, the 50,000-token floor, adapter support, and the `auto` re-engagement signals, then spawns a detached `rimz agents idle-compact` helper so the sidebar import graph remains read-only on the store.
+Idle compaction reuses the command-record half of smart compaction without attaching a following prompt. The elected sidebar producer checks top-level rollup agents against `[harness] idle_compact`, the idle threshold, the 50,000-token floor, adapter support, and, in `auto` mode, whether another top-level agent in the same channel is running, then spawns a detached `rimz agents idle-compact` helper so the sidebar import graph remains read-only on the store. PR state is not an eligibility input.
 
 The helper re-resolves the workspace, session, and pane, verifies that the agent is still idle and the configured threshold is still due, and validates the command against the adapter and its current configured instruction. It queues one automated system `MessageBody::Command` with `DeliveryGate::Done`, pins the pane, stamps `compacted_context_tokens` from the fresh context reading, and attempts `DeliveryPolicy::Boundary`. A closed boundary stays queued through the ordinary retry disposition rather than typing into a working, waiting, parked, or compacting pane.
 

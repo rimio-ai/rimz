@@ -192,7 +192,7 @@ idle_compact = "auto"
 idle_compact_after = "59m"
 ```
 
-`idle_compact` is `off` by default. `auto` compacts an eligible idle agent while a same-channel teammate is working or its worktree pull request is open; `always` ignores those re-engagement signals. `idle_compact_after` accepts `s`, `m`, `h`, or `d` and defaults to `59m`. The reflex requires at least 50,000 occupied context tokens, uses each adapter's native compact command with the same `compact_instruction`, and fires at most once in one idle stretch. The behavior model is in [loops.md](./loops.md#idle-compaction), and the durable delivery mechanics are in [messaging.md](../internals/harness/messaging.md#idle-compaction).
+`idle_compact` is `off` by default. `auto` compacts an eligible idle agent only while another agent in the same channel is running; an open worktree pull request does not qualify. `always` ignores that re-engagement requirement. `idle_compact_after` accepts `s`, `m`, `h`, or `d` and defaults to `59m`. The reflex requires at least 50,000 occupied context tokens, uses each adapter's native compact command with the same `compact_instruction`, and fires at most once in one idle stretch. The behavior model is in [loops.md](./loops.md#idle-compaction), and the durable delivery mechanics are in [messaging.md](../internals/harness/messaging.md#idle-compaction).
 
 ### rtk output compression
 
