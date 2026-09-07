@@ -400,13 +400,14 @@ Both modules sit in the sidebar's read-only import graph, so they stay free of s
 
 That invariant is the assist log: `$XDG_STATE_HOME/rimz/assists.log.jsonl`, account-global, best-effort append, rotating at 4 MiB to one `assists.log.1.jsonl` predecessor. Readers fold both generations by timestamp. The intervention itself remains the operational truth when an append fails.
 
-Four `Assist` variants live in the log today:
+Five `Assist` variants live in the log today:
 
 | Variant | Writer | Records |
 | --- | --- | --- |
 | `auto_redeem` | the detached redeem helper | provider, decision reason, request id, available credits, soonest expiry, the natural reset it beat, consume outcome or error, whether a reset occurred, and refreshed window stamps |
 | `auto_continue` | the detached continue helper | typed provider and session ids, display handle, park class, original park timestamp, delivery verdict, and the durable message id |
 | `auto_compact` | the message delivery path after a compact command lands | target session, display handle, threshold, occupied context when known, and the durable compact-command message id |
+| `idle_compact` | the detached idle-compaction helper | target provider and session, display handle, idle duration, occupied context, durable compact-command message id, delivery verdict, and error when present |
 | `auto_resume` | rebirth recovery after materialization restores at least one pane | workspace, session, death cause, recovered pane count, and planned tab labels |
 
 `rimz stats` folds both assist-log generations together, scoped to the active dashboard window, and publishes one rollup: delivered continues and their summed `recorded_at - parked_since` recovered time; compact commands sent; redeem attempts and `reset` outcomes; and rebirths plus restored panes. The dashboard shows those four non-zero categories, `rimz stats --assists` renders the merged newest-first event stream, and `rimz stats --json` publishes both.

@@ -243,6 +243,7 @@ rimz agents top --once -w auth-refresh   # one lane's resource-ranked fleet tabl
 rimz agents focus @claude-2#cli-docs     # jump to the pane
 rimz agents fork @coder --name twin      # branch a conversation into a new agent
 rimz agents restart @claude-2#cli-docs   # replace its pane and resume it
+rimz agents compact @claude-2#cli-docs   # compact context at the next turn boundary
 rimz agents resume '#cli-docs'           # fill every closed place in one lane
 rimz agents wait swift-otter --stream    # block until it lands, tailing the transcript
 rimz agents wait otter fox --any         # race agents; print the first finisher
@@ -267,9 +268,10 @@ rimz agents stop @claude --all           # stop every matching Claude in scope
 | `refresh` | one agent, the channel, or `--all` | force-refreshes card context |
 | `stop` | one run or agent; `--all` fans out | cancels a run or closes the pane |
 | `restart` | one live agent | replaces its pane and resumes its provider session |
+| `compact` | one agent with a bound pane | submits its native context-compaction command at a turn boundary |
 | `resume` | one lane | focuses a whole live lane or restores its closed members |
 
-`list`, `show`, `logs`, `history`, `attribution`, `top`, `focus`, `wait`, and `refresh` read state and change no agent. `fork` starts a new agent without changing its source, `stop` ends an agent, `restart` deliberately ends and replaces one, and `resume` restores the closed portion of a lane.
+`list`, `show`, `logs`, `history`, `attribution`, `top`, `focus`, `wait`, and `refresh` read state and change no agent. `fork` starts a new agent without changing its source, `stop` ends an agent, `restart` deliberately ends and replaces one, `compact` asks one to compact its context, and `resume` restores the closed portion of a lane.
 
 #### `list`
 
@@ -370,3 +372,11 @@ Several references form a join. Text mode prints each final answer in completion
 #### `restart`
 
 `restart <ref>` acts on one live pane. It focuses that pane, opens its replacement in the same layout position, then closes the old pane; focus follows the replacement on both Zellij and tmux. The replacement re-renders the stamped profile from current configuration, preserves role, team, channel, and permission mode, and uses the provider's native session resume. One-off model, `--agent`, and passthrough flags are not durable and are not replayed. If the profile now resolves to a different provider — including a session launched through `--agent` — restart refuses and points back to `rimz agents <profile> --agent <kind>` for an explicit fresh launch. When no resume command or recorded conversation exists, restart launches fresh and prints `restarted fresh as @<allocated-name> — <reason>`; the allocator may choose a new name while the old live card still owns its handle, so the output makes that degraded rename explicit.
+
+#### `compact`
+
+`rimz agents compact @handle [INSTRUCTION]` queues the agent's native context-compaction command and attempts delivery at a turn boundary. An idle agent receives it immediately; a running or waiting agent keeps it queued until its next boundary. There is no `--steer` or `--force`. Output is `compacting @handle (msg_...)` when sent, or `queued compaction for @handle (msg_...) — @handle is <status>; delivers at its next turn boundary` when queued; sent means submitted, not finished.
+
+Omit `INSTRUCTION` to use [`[harness] compact_instruction`](../../guide/configuration.md#smart-compaction). A positional string replaces that brief for adapters accepting trailing text (Claude today); `""` sends the bare command. An explicit instruction, including `""`, is refused for bare-command adapters rather than silently dropped; rerun without the instruction. An agent without a bound pane or a native compaction command is also refused.
+
+The command refuses an agent that is currently compacting, already has a live compaction command in its queue, or last received a compaction with no user turn since: a compaction never follows a compaction; the next user turn re-arms it. Refusals print the reason to stderr, leave stdout empty, and exit `1`. This is an operator action, recorded as a durable message and audit event, not an automation assist.

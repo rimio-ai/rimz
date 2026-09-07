@@ -75,7 +75,7 @@ That is enough to launch, re-add, and jump to agents. Routing text to them — p
 
 ## Manage a running room
 
-Once a few agents are working, the same `rimz agents` command reads the room and drives it. Every verb below takes a [handle](#handles-in-brief), so `@coder` is the codex you launched into a team and `@swift-otter` the bare Claude you started in the corner. These commands run from any pane in the room, or from a script anywhere that resolves to the same workspace.
+Once a few agents are working, the same `rimz agents` command reads the room and drives it: inspect, focus, stop, restart, or compact one agent. Every verb below takes a [handle](#handles-in-brief), so `@coder` is the codex you launched into a team and `@swift-otter` the bare Claude you started in the corner. These commands run from any pane in the room, or from a script anywhere that resolves to the same workspace.
 
 **See the whole room at a glance.** Bare `rimz agents` lists the current channel's cards, grouped by the worktree each lives in and ordered so whoever needs you sits on top:
 
@@ -250,6 +250,14 @@ rimz agents stop @claude --all  # close every Claude in scope
 **Bounce an agent in place.** `rimz agents restart @coder` focuses the agent, replaces its pane in the same layout position, and resumes the provider session with the original profile, role, team, channel, and permission mode. The profile is rendered from the current `agents.toml`, so edits take effect on the bounce. When the provider has no resumable conversation, restart launches fresh and prints the allocated replacement handle instead of hiding a possible rename.
 
 **Fork an agent to try another approach.** `rimz agents fork @coder` takes over the launching pane with the full conversation under a new provider-assigned session id in the source worktree, leaving the original session untouched and preserving its permission mode. Pass `--new-pane` to keep the launching pane, or `--new-tab` for a separate view. RimZ gives the fork a fresh pet name; use `rimz agents fork @coder --name twin` to pin `@twin` when you want both approaches to have memorable handles.
+
+**Compact context before the next task.** You can type the agent's native compaction command in its pane; `rimz agents compact @coder` submits that same command from wherever you are, immediately when idle or queued until the next turn boundary. To choose what survives the summary, pass an instruction on an agent that supports it (Claude today; in this example, `@coder` is a Claude profile):
+
+```sh
+rimz agents compact @coder "keep the open questions and the exact file list"
+```
+
+Without an instruction, it uses your [configured compaction brief](./configuration.md#smart-compaction). RimZ refuses another compaction until the agent takes a new user turn, and refuses while one is already queued or running. The [command reference](../reference/cli/agents.md#compact) covers instruction support and delivery output.
 
 Two everyday tasks have their own guides, with the depth this page leaves out:
 
