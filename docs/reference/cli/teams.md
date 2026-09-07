@@ -82,7 +82,7 @@ The receipt ends with these lane-qualified hints (shown here for `forge#feat-rat
 ```text
 Check: rimz teams show forge#feat-rate-limits
 Reach: rimz message @planner#feat-rate-limits '<text>'
-Wait:  rimz loop add --wake @me --signal team.idle --match instance=forge#feat-rate-limits --once
+Wait:  rimz loop add team-idle --wake @me --signal team.idle --match instance=forge#feat-rate-limits --once
 ```
 
 Startup remains asynchronous: the receipt is not a readiness barrier, and members may not yet appear in `teams show`. Inspect the cohort for live status. `Wait` arms a one-shot subscription on a future transition to `team.idle`; it does not block until readiness or completion, and idle does not mean the task is done. Signals do not replay: if the cohort was already idle before the subscription was armed, that transition will not wake you. Inspect current state as well as arming the subscription; [signal delivery](./loop.md#signals) applies. Launch has no JSON receipt; `--json` is for list and inspection.

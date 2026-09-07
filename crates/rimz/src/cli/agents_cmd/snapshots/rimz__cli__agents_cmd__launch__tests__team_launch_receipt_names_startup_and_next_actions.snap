@@ -13,4 +13,4 @@ launched forge in #feat-x
 
 Check: rimz teams show forge#feat-x
 Reach: rimz message @planner#feat-x '<text>'
-Wait:  rimz loop add --wake @me --signal team.idle --match instance=forge#feat-x --once
+Wait:  rimz loop add team-idle --wake @me --signal team.idle --match instance=forge#feat-x --once
