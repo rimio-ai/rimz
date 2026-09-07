@@ -444,7 +444,7 @@ fn token_counts_change_units_at_decimal_boundaries() {
 }
 
 #[test]
-fn attribution_headers_show_the_lane_boundary() {
+fn attribution_only_panel_shows_the_lane_boundary() {
     let mut report = report();
     let timestamp = "2026-09-06T13:26:00.155953104Z"
         .parse::<jiff::Timestamp>()
@@ -465,10 +465,7 @@ fn attribution_headers_show_the_lane_boundary() {
         render_markdown(&mut markdown, &report).expect("render markdown");
         let markdown = String::from_utf8(markdown).expect("utf8");
         assert_eq!(panel.starts_with(&format!("{boundary}\n")), since.is_some());
-        assert_eq!(
-            markdown.contains(&format!(" · {boundary}</summary>")),
-            since.is_some()
-        );
+        assert!(!markdown.contains("since "));
     }
     report.groups.clear();
     let mut panel = anstream::StripStream::new(Vec::new());
