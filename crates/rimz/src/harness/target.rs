@@ -1159,7 +1159,19 @@ pub enum HeaderKind {
     Agent,
     Subagent,
     Wake,
+    Signal,
     User,
+}
+
+fn classify_header_line(line: &str) -> Option<HeaderKind> {
+    match line {
+        "Type: AGENT_MESSAGE" => Some(HeaderKind::Agent),
+        "Type: SUBAGENT_REPORT" => Some(HeaderKind::Subagent),
+        "Type: WAKE" => Some(HeaderKind::Wake),
+        "Type: SIGNAL" => Some(HeaderKind::Signal),
+        "Type: USER_MESSAGE" => Some(HeaderKind::User),
+        _ => None,
+    }
 }
 
 /// Split a delivered prompt into its structured header and body.
@@ -1168,13 +1180,7 @@ pub enum HeaderKind {
 /// `#channel` suffix. System and `--no-from` text carry no header.
 pub fn parse_message_header(text: &str) -> Option<(HeaderKind, String, String)> {
     let (kind, rest) = text.split_once('\n')?;
-    let kind = match kind {
-        "Type: AGENT_MESSAGE" => HeaderKind::Agent,
-        "Type: SUBAGENT_REPORT" => HeaderKind::Subagent,
-        "Type: WAKE" => HeaderKind::Wake,
-        "Type: USER_MESSAGE" => HeaderKind::User,
-        _ => return None,
-    };
+    let kind = classify_header_line(kind)?;
     let (from, rest) = rest.split_once('\n')?;
     let handle = from.strip_prefix("From: @")?;
     if handle.is_empty() || handle.chars().any(char::is_whitespace) {
@@ -1197,10 +1203,7 @@ pub fn split_batched_prompt(text: &str) -> Vec<&str> {
             next_start += 1;
         }
         let first_line = text[next_start..].lines().next().unwrap_or_default();
-        if matches!(
-            first_line,
-            "Type: AGENT_MESSAGE" | "Type: SUBAGENT_REPORT" | "Type: WAKE" | "Type: USER_MESSAGE"
-        ) {
+        if classify_header_line(first_line).is_some() {
             segments.push(&text[start..boundary]);
             start = next_start;
         }

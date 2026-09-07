@@ -563,6 +563,90 @@ fn transcript_hook_records_routed_prompt_as_message_entry() {
 }
 
 #[test]
+fn signal_delivery_is_acknowledged_and_hidden_from_rendered_transcript() {
+    use rimz::store::message::{
+        DeliveryGate, HarnessNotice, MessageRecord, MessageSender, MessageStatus,
+    };
+
+    let env = Env::new();
+    let session_id = "sess-signal-transcript";
+    let branch = "signal-transcript";
+    register_codex_turn(&env, session_id, branch, "visible request", "initial reply");
+    let store = env.store();
+    let snapshot = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("snapshot");
+    let recipient = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id == session_id)
+        .expect("registered recipient");
+    let mut record = MessageRecord::new(
+        env.workspace_id.clone(),
+        recipient,
+        "CI failed; inspect the build log.".to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_sender(MessageSender::Harness {
+        notice: HarnessNotice::Signal,
+    });
+    record.status = MessageStatus::Sent;
+    record.last_sent_at = Some(jiff::Timestamp::from_second(1_000).expect("fixed timestamp"));
+    store
+        .queue_message(&record, "rimz-test")
+        .expect("seed sent signal");
+    let prompt = rimz::harness::target::message_header(&record.sender, &[], Some(branch))
+        .expect("signal header")
+        + &record.text;
+    assert!(prompt.starts_with("Type: SIGNAL\n"));
+    run_hook(
+        &env,
+        "codex",
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": session_id,
+            "prompt": prompt,
+            "worktree_branch": branch,
+            "worktree_path": env.home_root.join(branch).display().to_string(),
+        }),
+    );
+
+    assert!(store.list_messages().expect("live queue").is_empty());
+    let history = store.list_message_history().expect("history");
+    let delivered = history
+        .iter()
+        .find(|row| row.message_id == record.message_id)
+        .expect("acknowledged signal");
+    assert_eq!(delivered.status, MessageStatus::Delivered);
+    let entries = rimz::transcript::read_all(store.paths()).expect("transcript");
+    let signal = entries
+        .iter()
+        .find(|entry| entry.message_id.as_ref() == Some(&record.message_id))
+        .expect("signal transcript entry");
+    assert_eq!(signal.entry, TranscriptKind::Wake);
+    assert_eq!(signal.from.as_deref(), Some("@rimz"));
+    assert_eq!(signal.text, record.text);
+    let output = run_ok(env.rimz().args(["transcript", "#signal-transcript"]));
+    assert!(output.contains("visible request"), "{output}");
+    assert!(!output.contains(&record.text), "{output}");
+    assert!(!output.contains("Type: SIGNAL"), "{output}");
+    let output = run_ok(
+        env.rimz()
+            .args(["transcript", "#signal-transcript", "--json", "--flat"]),
+    );
+    let json: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert!(
+        json["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["text"] == record.text),
+        "{output}"
+    );
+}
+
+#[test]
 fn transcript_hook_strips_user_message_header_from_prompt_entry() {
     let env = Env::new();
     register_codex_turn(

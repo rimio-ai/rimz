@@ -277,7 +277,8 @@ pub(super) fn record_conversation(
                             Some((
                                 header @ (rimz::harness::target::HeaderKind::Agent
                                 | rimz::harness::target::HeaderKind::Subagent
-                                | rimz::harness::target::HeaderKind::Wake),
+                                | rimz::harness::target::HeaderKind::Wake
+                                | rimz::harness::target::HeaderKind::Signal),
                                 sender,
                                 body,
                             )) => {
@@ -289,7 +290,8 @@ pub(super) fn record_conversation(
                                     rimz::harness::target::HeaderKind::Subagent => {
                                         rimz::transcript::TranscriptKind::SubagentReport
                                     }
-                                    rimz::harness::target::HeaderKind::Wake => {
+                                    rimz::harness::target::HeaderKind::Wake
+                                    | rimz::harness::target::HeaderKind::Signal => {
                                         rimz::transcript::TranscriptKind::Wake
                                     }
                                     rimz::harness::target::HeaderKind::User => {

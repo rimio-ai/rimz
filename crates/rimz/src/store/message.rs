@@ -58,6 +58,7 @@ pub enum MessageSender {
 pub enum HarnessNotice {
     SubagentReport,
     Wake,
+    Signal,
     /// Preserve newer notices verbatim through older queue rewrites and history pruning.
     #[serde(untagged)]
     Other(String),
@@ -68,6 +69,7 @@ impl HarnessNotice {
         match self {
             Self::SubagentReport => "SUBAGENT_REPORT".to_owned(),
             Self::Wake => "WAKE".to_owned(),
+            Self::Signal => "SIGNAL".to_owned(),
             Self::Other(notice) => notice.to_ascii_uppercase(),
         }
     }
