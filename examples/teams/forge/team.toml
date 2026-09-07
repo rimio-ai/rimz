@@ -4,7 +4,8 @@
 
 [agents.teams.forge]
 layout = "planner,coder+reviewer"
-scratch-files = ["/plan.md", "/result.md", "/review.md"]
+scratch-files = ["/blackboard.md", "/*-notes.md"]
+stages = ["Explore", "Plan", "Implement", "Review", "Submit", "Reflect"]
 
 [[agents.teams.forge.roles]]
 role = "planner"

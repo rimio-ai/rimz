@@ -260,6 +260,15 @@ pub(crate) fn home_relative(path: &str) -> String {
     home_relative_to(home.as_ref().and_then(|home| home.to_str()), path)
 }
 
+pub(crate) fn agent_activity_line(
+    agent: &rimz::agents::AgentState,
+    card: Option<&rimz::store::snapshot::AgentCard>,
+) -> Option<String> {
+    card.and_then(rimz::store::snapshot::AgentCard::activity_description)
+        .and_then(rimz::agents::single_line_description)
+        .or_else(|| agent.activity_line())
+}
+
 /// Collapse a diagnostic into one terminal-friendly line.
 pub(crate) fn one_line(message: &str) -> String {
     message

@@ -7,7 +7,6 @@ use crate::cli::render;
 use rimz::agents::PermissionMode;
 use rimz::agents::{
     AgentCardRef, AgentState, AgentStatus, ContextSeverity, OpenAsk, TurnErrorClass, TurnPhase,
-    single_line_description,
 };
 use rimz::ids::{AgentKind, AgentSessionId, PaneId};
 use rimz::store::snapshot::{
@@ -272,10 +271,7 @@ pub(super) fn build_entry(
             .or(state_label)
             .map(ToOwned::to_owned),
     });
-    let description = card
-        .and_then(AgentCard::activity_description)
-        .and_then(single_line_description)
-        .or_else(|| agent.activity_line());
+    let description = render::agent_activity_line(agent, card);
     let model = model_report(agent);
     let pane = row
         .and_then(|row| row.pane.as_ref())

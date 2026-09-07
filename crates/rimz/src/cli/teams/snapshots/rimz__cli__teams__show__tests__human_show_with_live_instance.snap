@@ -12,9 +12,13 @@ forge
   planner  claude   claude  fable  high    auto
   (prompt stack: rimz teams show forge --json)
 
-Live instances
-  LANE     MEMBER    STATUS   CTX   COST
-  #feat-x  @planner  running  42%  $0.25
+#feat-x · Plan (delta) (@planner)
+  worktree: /repo/worktrees/feat-x · branch feat-x
+  stages:   Explore → [Plan] → Implement
+  pr:       none
+
+  MEMBER    STATUS   ACTIVITY         CTX   COST  AGE
+  @planner  running  reading show.rs  42%  $0.25   2m
 
 Reach: rimz message @planner#feat-x '<text>'
 Focus: rimz teams focus forge#feat-x

@@ -3,7 +3,8 @@ use std::io::Write;
 use anyhow::{Result, bail};
 
 use super::super::{GlobalFlags, render};
-use super::list::{LiveMember, RoleReport, TeamReport};
+use super::list::{LiveInstance, LiveMember, RoleReport, TeamReport, ci_style, stage_label};
+use rimz::store::snapshot::{WorktreePrCi, WorktreePrState};
 
 pub(super) fn run(name: &str, lane: Option<&str>, json: bool, globals: &GlobalFlags) -> Result<()> {
     let reports = super::list::load_catalog(globals, lane)?;
@@ -30,10 +31,15 @@ pub(super) fn run(name: &str, lane: Option<&str>, json: bool, globals: &GlobalFl
     if json {
         return render::json_pretty(&report);
     }
-    write_report(&mut render::out(), &report, lane)
+    write_report(&mut render::out(), &report, lane, jiff::Timestamp::now())
 }
 
-fn write_report(w: &mut impl Write, report: &TeamReport, lane: Option<&str>) -> Result<()> {
+fn write_report(
+    w: &mut impl Write,
+    report: &TeamReport,
+    lane: Option<&str>,
+    now: jiff::Timestamp,
+) -> Result<()> {
     writeln!(
         w,
         "{}",
@@ -106,22 +112,9 @@ fn write_report(w: &mut impl Write, report: &TeamReport, lane: Option<&str>) -> 
                 &format!("no live instance in #{}", lane.unwrap_or_default())
             )
         )?;
-    } else if !report.instances.is_empty() {
-        writeln!(w)?;
-        writeln!(
-            w,
-            "{}",
-            render::paint(render::palette::header(), "Live instances")
-        )?;
-        let mut live = render::Table::new(["LANE", "MEMBER", "STATUS", "CTX", "COST"])
-            .indent(2)
-            .right(&[3, 4]);
-        for instance in &report.instances {
-            for member in &instance.members {
-                live.row(member_cells(&instance.channel, member));
-            }
-        }
-        live.render(w)?;
+    }
+    for instance in &report.instances {
+        write_instance(w, instance, now)?;
     }
 
     if report.instances.is_empty() {
@@ -140,6 +133,116 @@ fn write_report(w: &mut impl Write, report: &TeamReport, lane: Option<&str>) -> 
         )?;
         writeln!(w, "Focus: rimz teams focus {}#{}", report.name, channel)?;
     }
+    Ok(())
+}
+
+fn write_instance(w: &mut impl Write, instance: &LiveInstance, now: jiff::Timestamp) -> Result<()> {
+    writeln!(w)?;
+    let stage = instance
+        .stage
+        .as_ref()
+        .map(|stage| format!(" · {}", stage_label(stage)))
+        .unwrap_or_default();
+    writeln!(
+        w,
+        "{}",
+        render::paint(
+            render::palette::header(),
+            &format!("#{}{stage}", instance.channel)
+        )
+    )?;
+    let mut facts = render::KeyVals::new().indent(2);
+    let mut checkout = instance
+        .worktree
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    if let Some(branch) = &instance.branch {
+        checkout.push_str(&format!(" · branch {branch}"));
+    }
+    facts.push("worktree", render::cell(checkout).dash());
+    if !instance.stages.is_empty() {
+        let current = instance
+            .stage
+            .as_ref()
+            .and_then(|stage| stage.name.split_whitespace().next());
+        facts.push(
+            "stages",
+            render::cell(
+                instance
+                    .stages
+                    .iter()
+                    .map(|stage| {
+                        if current == Some(stage.as_str()) {
+                            format!("[{stage}]")
+                        } else {
+                            stage.clone()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" → "),
+            ),
+        );
+    }
+    let mut pr = Vec::new();
+    if let Some(report) = &instance.pr {
+        if let Some(number) = report.number {
+            pr.push(format!("#{number}"));
+        }
+        if let Some(state) = report.state {
+            let (label, style) = match state {
+                WorktreePrState::Open => ("open", render::palette::accent()),
+                WorktreePrState::Merged => ("merged", render::palette::good()),
+                WorktreePrState::Closed => ("closed", render::palette::muted()),
+            };
+            pr.push(render::paint(style, label));
+        }
+        if let Some(ci) = report.ci {
+            let label = match ci {
+                WorktreePrCi::Passing => "passing",
+                WorktreePrCi::Pending => "pending",
+                WorktreePrCi::Failing => "failing",
+            };
+            pr.push(render::paint(ci_style(ci), &format!("ci {label}")));
+        }
+        if let Some(url) = &report.url {
+            pr.push(url.clone());
+        }
+    }
+    facts.push(
+        "pr",
+        render::cell(if pr.is_empty() {
+            "none".to_owned()
+        } else {
+            pr.join(" · ")
+        }),
+    );
+    if !instance.memory.is_empty() {
+        facts.push_lines(
+            "memory",
+            instance.memory.iter().map(|file| {
+                let age = file
+                    .modified_at
+                    .map(|time| render::rel_age(time, now))
+                    .unwrap_or_else(|| "-".to_owned());
+                vec![render::cell(format!(
+                    "{}  {} lines · {age}",
+                    file.path.display(),
+                    file.lines
+                ))]
+            }),
+        );
+    }
+    facts.render(w)?;
+    writeln!(w)?;
+    let mut live = render::Table::new(["MEMBER", "STATUS", "ACTIVITY", "CTX", "COST", "AGE"])
+        .indent(2)
+        .right(&[3, 4, 5])
+        .max_width(render::terminal_columns(120));
+    for member in &instance.members {
+        live.row(member_cells(member, now));
+    }
+    live.render(w)?;
     Ok(())
 }
 
@@ -172,11 +275,11 @@ fn role_cells(role: &RoleReport) -> [render::Cell; 6] {
     ]
 }
 
-fn member_cells(channel: &str, member: &LiveMember) -> [render::Cell; 5] {
+fn member_cells(member: &LiveMember, now: jiff::Timestamp) -> [render::Cell; 6] {
     [
-        render::cell(format!("#{channel}")).fg(render::palette::meta()),
         render::cell(&member.handle).fg(render::palette::identity(&member.kind)),
         render::cell(member.status.as_str()).fg(render::status::agent(member.status, member.phase)),
+        render::cell(member.activity.as_deref().unwrap_or("-")).dash(),
         render::cell(
             member
                 .context_fill_pct
@@ -192,6 +295,7 @@ fn member_cells(channel: &str, member: &LiveMember) -> [render::Cell; 5] {
         )
         .dash()
         .fg(render::palette::money()),
+        render::cell(render::age_short(member.last_activity_at, now)).fg(render::palette::muted()),
     ]
 }
 
@@ -230,11 +334,22 @@ mod tests {
             channel: "feat-x".to_owned(),
             state: "running".to_owned(),
             status_counts: BTreeMap::from([("running".to_owned(), 1)]),
+            worktree: Some("/repo/worktrees/feat-x".into()),
+            branch: Some("feat-x".to_owned()),
+            stages: vec!["Explore".into(), "Plan".into(), "Implement".into()],
+            stage: Some(super::super::list::StageReport {
+                name: "Plan (delta)".into(),
+                owner: Some("planner".into()),
+            }),
+            pr: None,
+            memory: Vec::new(),
             members: vec![LiveMember {
                 handle: "@planner".to_owned(),
                 kind: "claude".to_owned(),
                 status: AgentStatus::Running,
                 phase: TurnPhase::Reasoning,
+                activity: Some("reading show.rs".into()),
+                last_activity_at: jiff::Timestamp::UNIX_EPOCH,
                 context_fill_pct: Some(42.0),
                 cost_usd: Some(0.25),
             }],
@@ -243,8 +358,43 @@ mod tests {
 
     fn rendered(report: &TeamReport, lane: Option<&str>) -> String {
         let mut output = anstream::StripStream::new(Vec::new());
-        write_report(&mut output, report, lane).unwrap();
+        write_report(
+            &mut output,
+            report,
+            lane,
+            jiff::Timestamp::from_second(120).unwrap(),
+        )
+        .unwrap();
         String::from_utf8(output.into_inner()).unwrap()
+    }
+
+    #[test]
+    fn human_show_brackets_the_board_stage_and_uses_last_activity() {
+        let mut instance = live_instance();
+        instance.pr = Some(super::super::list::PrReport {
+            number: Some(412),
+            state: Some(WorktreePrState::Open),
+            ci: Some(WorktreePrCi::Passing),
+            url: Some("https://example.com/pull/412".into()),
+        });
+        instance.memory = vec![super::super::list::MemoryReport {
+            path: "/repo/worktrees/feat-x/blackboard.md".into(),
+            lines: 41,
+            modified_at: Some(jiff::Timestamp::UNIX_EPOCH),
+        }];
+        let output = rendered(&report(vec![instance.clone()]), None);
+        assert!(output.contains("Explore → [Plan] → Implement"));
+        assert!(output.contains("Plan (delta) (@planner)"));
+        assert!(output.contains("ci passing"));
+        assert!(output.contains("/repo/worktrees/feat-x/blackboard.md"));
+        assert!(output.contains("41 lines · 2m ago"));
+        assert!(
+            output
+                .lines()
+                .any(|line| line.contains("@planner") && line.ends_with("2m"))
+        );
+        instance.stage.as_mut().unwrap().name = "Done".into();
+        assert!(rendered(&report(vec![instance]), None).contains("Explore → Plan → Implement"));
     }
 
     #[test]

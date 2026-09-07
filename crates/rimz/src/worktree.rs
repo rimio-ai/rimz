@@ -194,6 +194,7 @@ pub struct PushDestination {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaunchCheckout {
     pub cwd: PathBuf,
+    pub branch: Option<String>,
     /// Repository root from workspace resolution, or `None` outside Git; `--root` can override it.
     pub repo_root: Option<PathBuf>,
     pub worktree_name: Option<String>,
@@ -592,6 +593,7 @@ pub fn resolve_launch_checkout(
         let review_only_reason = created.review_only_reason;
         let marker = created.marker;
         return Ok(LaunchCheckout {
+            branch: current_branch(&marker.worktree_path),
             cwd: marker.worktree_path,
             repo_root: Some(repo_root.to_path_buf()),
             worktree_name: Some(marker.name),
@@ -603,6 +605,7 @@ pub fn resolve_launch_checkout(
 
     let Some(raw_name) = worktree else {
         return Ok(LaunchCheckout {
+            branch: current_branch(&workspace.worktree_root),
             cwd: workspace.worktree_root.clone(),
             repo_root: workspace.cwd_project_root.clone(),
             worktree_name: None,
@@ -625,6 +628,7 @@ pub fn resolve_launch_checkout(
     )?;
     let marker = created.marker;
     Ok(LaunchCheckout {
+        branch: current_branch(&marker.worktree_path),
         cwd: marker.worktree_path,
         repo_root: Some(repo_root.to_path_buf()),
         worktree_name: Some(marker.name),
@@ -673,6 +677,7 @@ pub fn resolve_unmanaged_launch_checkout(
         });
     }
     Ok(LaunchCheckout {
+        branch: current_branch(&path),
         cwd: path,
         repo_root: Some(repo_root.to_path_buf()),
         worktree_name: Some(name),

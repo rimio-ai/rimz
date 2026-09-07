@@ -124,6 +124,13 @@ pub(super) fn launch_layout(
             )
         })
         .transpose()?;
+    let receipt_leader_index = prompt_agent_index.or_else(|| {
+        rimz::harness::spec::prompt_leader(
+            &layout,
+            team_name.as_deref().and_then(|name| teams.0.get(name)),
+        )
+        .ok()
+    });
     for kind in layout.agent_kinds() {
         rimz::harness::launch::preflight_agent_kind(
             &workspace.project_root,
@@ -290,6 +297,7 @@ pub(super) fn launch_layout(
     )?;
     let cleanup_worktree = launch.owns_checkout_lifecycle();
     let worktree_name = launch.worktree_name.clone();
+    let branch = launch.branch;
     let cwd = launch.cwd;
     let title = room_channel.as_deref().map_or_else(
         || {
@@ -339,17 +347,19 @@ pub(super) fn launch_layout(
         },
     )?;
     if !in_place {
-        let leader = team_name
-            .as_deref()
-            .and_then(|name| teams.0.get(name))
-            .and_then(|team| team.leader.as_deref());
         write_launch_receipt(
             &mut render::out(),
-            team_name.as_deref(),
-            room_channel.as_deref(),
-            &cwd,
-            launch_batch.identities(),
-            leader,
+            &LaunchReceipt {
+                team: team_name
+                    .as_deref()
+                    .and_then(|name| teams.0.get(name).map(|team| (name, team))),
+                channel: room_channel.as_deref(),
+                cwd: &cwd,
+                branch: branch.as_deref(),
+                identities: launch_batch.identities(),
+                leader_index: receipt_leader_index,
+                terminal_width: render::terminal_columns(100),
+            },
         )?;
     }
     Ok(())
@@ -644,23 +654,57 @@ fn cohort_resume_subject(spec: &str, scope: Option<&str>) -> String {
     }
 }
 
-fn write_launch_receipt(
-    w: &mut impl Write,
-    team: Option<&str>,
-    channel: Option<&str>,
-    cwd: &Path,
-    identities: &[AgentLaunchIdentity],
-    leader: Option<&str>,
-) -> Result<()> {
+struct LaunchReceipt<'a> {
+    team: Option<(&'a str, &'a rimz::config::Team)>,
+    channel: Option<&'a str>,
+    cwd: &'a Path,
+    branch: Option<&'a str>,
+    identities: &'a [AgentLaunchIdentity],
+    leader_index: Option<usize>,
+    terminal_width: usize,
+}
+
+fn write_launch_receipt(w: &mut impl Write, receipt: &LaunchReceipt<'_>) -> Result<()> {
+    let team = receipt.team.map(|(name, _)| name);
+    let channel = receipt.channel;
+    let identities = receipt.identities;
     let subject = match (team, identities) {
         (Some(team), _) => team.to_owned(),
         (None, [identity]) => format!("@{}", identity.name),
         (None, identities) => format!("{} agents", identities.len()),
     };
     let lane = channel.map_or_else(String::new, |channel| format!(" in #{channel}"));
-    let cwd = rimz::utils::path::normalize_path_lexical(cwd);
-    let cwd = render::home_relative(&cwd.display().to_string());
-    writeln!(w, "launched {subject}{lane} ({cwd})")?;
+    let cwd = rimz::utils::path::normalize_path_lexical(receipt.cwd);
+    if let Some((_, definition)) = receipt.team {
+        writeln!(w, "launched {subject}{lane}")?;
+        let branch = receipt
+            .branch
+            .map_or_else(String::new, |branch| format!("  · branch {branch}"));
+        writeln!(w, "  worktree  {}{branch}", cwd.display())?;
+        if !definition.stages.is_empty() {
+            writeln!(w, "  stages    {}", definition.stages.join(" → "))?;
+        }
+        writeln!(w, "  board     {}", cwd.join("blackboard.md").display())?;
+    } else {
+        writeln!(w, "launched {subject}{lane} ({})", cwd.display())?;
+    }
+    let leader = receipt.leader_index.and_then(|index| identities.get(index));
+    if let Some(identity) = leader
+        && let Some(prompt) = identity.prompt.as_deref()
+    {
+        let prompt = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+        let prompt = prompt.replace('\\', "\\\\").replace('"', "\\\"");
+        let line = format!(
+            "  prompt    → @{}  \"{prompt}\"",
+            launch_identity_handle(identity)
+        );
+        writeln!(
+            w,
+            "{}",
+            render::clip_to_width(&line, receipt.terminal_width)
+        )?;
+    }
+    writeln!(w)?;
 
     let handle_width = identities
         .iter()
@@ -672,31 +716,30 @@ fn write_launch_receipt(
         .map(|identity| identity.kind.as_str().len())
         .max()
         .unwrap_or(0);
-    let receipt_leader = leader.or_else(|| identities.first().map(launch_identity_handle));
-    for identity in identities {
-        let identity_handle = launch_identity_handle(identity);
+    let model_width = identities
+        .iter()
+        .map(|identity| identity.launch.model.as_deref().unwrap_or("-").len())
+        .max()
+        .unwrap_or(0);
+    for (index, identity) in identities.iter().enumerate() {
         let handle = format!("@{:<handle_width$}", launch_identity_handle(identity));
         let kind = format!("{:<kind_width$}", identity.kind.as_str());
-        let leader_marker = if identities.len() > 1 && receipt_leader == Some(identity_handle) {
-            render::paint(render::palette::muted(), "  · leader")
+        let model = identity.launch.model.as_deref().unwrap_or("-");
+        let model = if team.is_some() && receipt.leader_index == Some(index) {
+            format!("{model:<model_width$}  leader")
         } else {
-            String::new()
+            model.to_owned()
         };
         writeln!(
             w,
-            "  {}  {kind}  {}{leader_marker}",
+            "  {}  {}  {}",
             render::paint(render::palette::identity(identity.kind.as_str()), &handle),
-            render::paint(render::palette::muted(), "starting")
+            render::paint(render::palette::identity(identity.kind.as_str()), &kind),
+            render::paint(render::palette::muted(), &model)
         )?;
     }
     writeln!(w)?;
-    write_launch_hints(
-        w,
-        team,
-        channel,
-        identities.first().map(launch_identity_handle),
-        leader,
-    )
+    write_launch_hints(w, team, channel, None, leader.map(launch_identity_handle))
 }
 
 fn launch_identity_handle(identity: &AgentLaunchIdentity) -> &str {
@@ -733,6 +776,12 @@ fn write_launch_hints(
     if let Some(handle) = leader.or(fallback_handle) {
         let lane = channel.map_or_else(String::new, |channel| format!("#{channel}"));
         writeln!(w, "Reach: rimz message @{handle}{lane} '<text>'")?;
+    }
+    if let (Some(team), Some(channel)) = (team, channel) {
+        writeln!(
+            w,
+            "Wait:  rimz wake --signal team.idle --match instance={team}#{channel}"
+        )?;
     }
     Ok(())
 }
@@ -914,15 +963,30 @@ mod tests {
         ];
         identities[0].launch.role = Some("planner".to_owned());
         identities[1].launch.role = Some("coder".to_owned());
+        identities[0].launch.model = Some("fable".to_owned());
+        identities[1].launch.model = Some("gpt-6-astra".to_owned());
+        identities[0].prompt = Some("Read the handoff at /tmp/handoff-feat-x.md.".to_owned());
+        let team = rimz::config::Team {
+            stages: vec![
+                "Explore".to_owned(),
+                "Plan".to_owned(),
+                "Implement".to_owned(),
+            ],
+            ..Default::default()
+        };
         let mut output = anstream::StripStream::new(Vec::new());
 
         write_launch_receipt(
             &mut output,
-            Some("forge"),
-            Some("feat-x"),
-            Path::new("/repo-worktrees/feat-x"),
-            &identities,
-            Some("planner"),
+            &LaunchReceipt {
+                team: Some(("forge", &team)),
+                channel: Some("feat-x"),
+                cwd: Path::new("/repo-worktrees/feat-x"),
+                branch: Some("actual-branch"),
+                identities: &identities,
+                leader_index: Some(0),
+                terminal_width: 100,
+            },
         )
         .unwrap();
 
@@ -931,41 +995,69 @@ mod tests {
 
     #[test]
     fn plain_launch_receipt_uses_the_first_member_without_a_team_check() {
-        let identities = [launch_identity("codex", "worker")];
-        let mut output = Vec::new();
+        let mut identities = [launch_identity("codex", "worker")];
+        identities[0].prompt = Some("Read  the\n handoff.".to_owned());
+        let mut output = anstream::StripStream::new(Vec::new());
 
         write_launch_receipt(
             &mut output,
-            None,
-            None,
-            Path::new("/repo"),
-            &identities,
-            None,
+            &LaunchReceipt {
+                team: None,
+                channel: None,
+                cwd: Path::new("/repo"),
+                branch: None,
+                identities: &identities,
+                leader_index: Some(0),
+                terminal_width: 100,
+            },
         )
         .unwrap();
 
-        let output = String::from_utf8(output).unwrap();
+        let output = String::from_utf8(output.into_inner()).unwrap();
         assert!(output.contains("launched @worker (/repo)"));
         assert!(!output.contains("Check:"));
-        assert!(!output.contains("· leader"));
+        assert!(!output.contains("leader"));
+        assert!(!output.contains("starting"));
+        assert!(!output.contains("Wait:"));
+        assert!(!output.contains("board"));
+        assert!(output.contains("  @worker   codex  -"));
+        assert!(output.contains("  prompt    → @worker  \"Read the handoff.\""));
         assert!(output.contains("Reach: rimz message @worker '<text>'"));
     }
 
     #[test]
     fn team_launch_receipt_marks_the_implicit_leader() {
-        let identities = [
-            launch_identity("claude", "planner"),
+        let mut identities = [
             launch_identity("codex", "coder"),
+            launch_identity("claude", "planner"),
         ];
+        identities[0].launch.role = Some("coder".to_owned());
+        identities[1].launch.role = Some("planner".to_owned());
+        let team = toml::from_str::<rimz::config::Team>(
+            r#"roles = [{role = "planner", profile = "claude"}, {role = "coder", profile = "codex"}]"#,
+        )
+        .unwrap();
+        let layout = rimz::harness::spec::parse_layout_spec(
+            "codex:coder,claude:planner",
+            &Default::default(),
+            &Default::default(),
+        )
+        .unwrap();
+        let leader_index = rimz::harness::spec::prompt_leader(&layout, Some(&team)).unwrap();
+        assert_eq!(leader_index, 1);
         let mut output = anstream::StripStream::new(Vec::new());
 
         write_launch_receipt(
             &mut output,
-            Some("forge"),
-            Some("feat-x"),
-            Path::new("/repo-worktrees/feat-x"),
-            &identities,
-            None,
+            &LaunchReceipt {
+                team: Some(("forge", &team)),
+                channel: Some("feat-x"),
+                cwd: Path::new("/repo-worktrees/feat-x"),
+                branch: None,
+                identities: &identities,
+                leader_index: Some(leader_index),
+                terminal_width: 100,
+            },
         )
         .unwrap();
 
@@ -975,8 +1067,84 @@ mod tests {
             .find(|line| line.contains("@planner"))
             .unwrap();
         let coder = output.lines().find(|line| line.contains("@coder")).unwrap();
-        assert!(planner.contains("· leader"));
-        assert!(!coder.contains("· leader"));
+        assert!(planner.contains("leader"));
+        assert!(!coder.contains("leader"));
+        assert!(!output.contains("stages"));
+        assert!(!output.contains("prompt"));
+        assert!(!output.contains("branch"));
+        assert!(output.contains("  board     /repo-worktrees/feat-x/blackboard.md"));
+        assert!(output.contains("Reach: rimz message @planner#feat-x '<text>'"));
+    }
+
+    #[test]
+    fn team_launch_receipt_uses_prompt_leader_and_clips_the_prompt() {
+        let layout = rimz::harness::spec::parse_layout_spec(
+            "codex,claude",
+            &Default::default(),
+            &Default::default(),
+        )
+        .unwrap();
+        let team = rimz::config::Team {
+            leader: Some("claude".to_owned()),
+            ..Default::default()
+        };
+        let leader_index = rimz::harness::spec::prompt_leader(&layout, Some(&team)).unwrap();
+        assert_eq!(leader_index, 1);
+        let mut identities = [
+            launch_identity("codex", "worker"),
+            launch_identity("claude", "stable-haven"),
+        ];
+        identities[1].launch.role = Some("planner".to_owned());
+        identities[1].prompt =
+            Some("Read  \"the handoff\"\nthen design a fix for the team.".to_owned());
+        let receipt = LaunchReceipt {
+            team: Some(("forge", &team)),
+            channel: Some("feat-x"),
+            cwd: Path::new("/repo-worktrees/feat-x"),
+            branch: None,
+            identities: &identities,
+            leader_index: Some(leader_index),
+            terminal_width: 52,
+        };
+        let mut output = anstream::StripStream::new(Vec::new());
+        write_launch_receipt(&mut output, &receipt).unwrap();
+        let output = String::from_utf8(output.into_inner()).unwrap();
+        let prompt = output
+            .lines()
+            .find(|line| line.starts_with("  prompt"))
+            .unwrap();
+        assert!(prompt.starts_with("  prompt    → @planner  \"Read \\\"the handoff\\\" then"));
+        assert!(prompt.ends_with('…'));
+        assert_eq!(prompt.chars().count(), 52);
+        assert!(
+            output
+                .lines()
+                .any(|line| line.starts_with("  @planner") && line.ends_with("leader"))
+        );
+        assert!(
+            !output
+                .lines()
+                .any(|line| line.starts_with("  @worker") && line.contains("leader"))
+        );
+        assert!(output.contains("Reach: rimz message @planner#feat-x '<text>'"));
+        assert!(
+            output.contains("Wait:  rimz wake --signal team.idle --match instance=forge#feat-x")
+        );
+        assert!(!output.contains("starting"));
+
+        let mut output = anstream::StripStream::new(Vec::new());
+        write_launch_receipt(
+            &mut output,
+            &LaunchReceipt {
+                terminal_width: 100,
+                ..receipt
+            },
+        )
+        .unwrap();
+        let output = String::from_utf8(output.into_inner()).unwrap();
+        assert!(output.contains(
+            "  prompt    → @planner  \"Read \\\"the handoff\\\" then design a fix for the team.\""
+        ));
     }
 
     #[test]
