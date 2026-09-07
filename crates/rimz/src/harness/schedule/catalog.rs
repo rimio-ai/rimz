@@ -588,7 +588,7 @@ mod tests {
         let wakes = pending_wakes_by_session(
             &catalog,
             Path::new("/repo"),
-            "2026-06-01T10:00:00Z".parse().unwrap(),
+            &"2026-06-01T10:00:00Z[UTC]".parse().unwrap(),
         );
         assert_eq!(
             wakes[&session]

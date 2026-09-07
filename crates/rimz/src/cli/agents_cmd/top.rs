@@ -116,7 +116,7 @@ fn sample(
             AgentSample {
                 kind: agent.kind.to_string(),
                 handle,
-                status: agent.status,
+                status: agent.sleeping_over(agent.status),
                 context_pct: agent.context_fill_pct(),
                 tokens: agent.usage.total_tokens.unwrap_or(0),
                 age: render::age_short(agent.last_seen, now),

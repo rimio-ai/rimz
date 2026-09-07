@@ -237,7 +237,7 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
             .flatten()
             .filter(|name| !name.is_empty()),
         provider_native: child.is_provider_subagent(),
-        status: child.status,
+        status: child.sleeping_over(child.status),
         phase: child.phase,
         task: child.task.clone(),
         profile: child.profile.clone(),

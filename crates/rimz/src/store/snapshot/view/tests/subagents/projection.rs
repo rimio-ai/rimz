@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::{PendingWake, PendingWakeTrigger};
 
 #[test]
 fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
@@ -29,6 +30,23 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     finished.subagent_started_at = Some(started);
     let sub = sub_agent_from_state(&finished, now);
     assert_eq!(sub.elapsed_secs, Some(40));
+
+    finished.pending_wakes.push(PendingWake {
+        name: "wake-command".to_owned(),
+        trigger: PendingWakeTrigger::Command {
+            command: "cargo test".to_owned(),
+        },
+        armed_at: Some(ago(60)),
+    });
+    let sub = sub_agent_from_state(&finished, now);
+    assert_eq!(sub.status, AgentStatus::Sleeping);
+    assert_eq!(sub.elapsed_secs, Some(40));
+    assert_eq!(finished.status, AgentStatus::Success);
+    finished.pending_wakes.clear();
+    assert_eq!(
+        sub_agent_from_state(&finished, now).status,
+        AgentStatus::Success
+    );
 
     // Codex has no statusline start time, so registration supplies elapsed.
     let mut bare = child_state("sess-root", "child-3", AgentStatus::Running, 5);
