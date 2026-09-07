@@ -244,6 +244,18 @@ fn gc_reaps_scaffold_but_keeps_unreadable_history() {
 #[test]
 fn gc_reaps_dead_loop_delivery_schedule() {
     let env = Env::new();
+    for signal in [LifecycleSignal::Registered, LifecycleSignal::Ended] {
+        let observation = AgentLifecycleObservation::new(Some("sess-ended".into()), signal);
+        env.store()
+            .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                env.workspace_id.clone(),
+                "rimz-test",
+                "claude",
+                "test",
+                &observation,
+            ))
+            .unwrap();
+    }
     let config_dir = env.config_root().join("rimz");
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
     let config_path = config_dir.join("loop.toml");
@@ -254,7 +266,13 @@ fn gc_reaps_dead_loop_delivery_schedule() {
              wake = {{ kind = \"claude\", session = \"sess-dead\", handle = \"@claude\" }}\n\
              prompt = \"wake up\"\n\
              root = \"{}\"\n\
+             at = \"07:00\"\n\
+             [tasks.ended]\n\
+             wake = {{ kind = \"claude\", session = \"sess-ended\", handle = \"@claude\" }}\n\
+             prompt = \"wake up\"\n\
+             root = \"{}\"\n\
              at = \"07:00\"\n",
+            env.project_root.display(),
             env.project_root.display()
         ),
     )
@@ -265,12 +283,24 @@ fn gc_reaps_dead_loop_delivery_schedule() {
         .assert()
         .success()
         .stdout(contains("loop schedules"))
-        .stdout(contains("1 dead reaped"));
+        .stdout(contains("2 dead reaped"));
 
     let config = std::fs::read_to_string(config_path).expect("read agents config");
     assert!(
         !config.contains("[tasks.dead]"),
         "dead schedule should be removed"
+    );
+    assert!(
+        !config.contains("[tasks.ended]"),
+        "ended schedule should be removed"
+    );
+    assert!(
+        env.store()
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .unwrap()
+            .agents
+            .iter()
+            .any(|agent| agent.agent_id.as_str() == "sess-ended" && agent.ended_at.is_some())
     );
 }
 
