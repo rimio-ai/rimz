@@ -983,6 +983,21 @@ fn existing_unmanaged_worktree_launch(doorway: &str, spec: &str) {
     assert_unmanaged();
     assert_dirty_files();
 
+    let live_panes = pane_ids();
+    let relaunch = launch_command()
+        .stdin(std::process::Stdio::null())
+        .bounded_output()
+        .expect("relaunch live unmanaged cohort");
+    let stderr = String::from_utf8_lossy(&relaunch.stderr);
+    assert!(relaunch.status.success(), "{stderr}");
+    assert!(stderr.contains("already running"), "{stderr}");
+    assert_eq!(
+        agents().len(),
+        launched.len(),
+        "must not duplicate the cohort"
+    );
+    assert_eq!(pane_ids(), live_panes, "must focus the existing panes");
+
     // Make the checkout clean so dirtiness cannot mask accidental ownership and cleanup.
     std::fs::copy(
         env.project_root.join("README.md"),

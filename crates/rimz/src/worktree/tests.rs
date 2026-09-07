@@ -185,7 +185,7 @@ fn launch_checkout_without_flags_keeps_current_worktree() {
     assert_eq!(checkout.repo_root, None);
     assert_eq!(checkout.worktree_name, None);
     assert_eq!(checkout.generated_name(), None);
-    assert!(!checkout.is_managed_worktree());
+    assert!(!checkout.owns_checkout_lifecycle());
 }
 
 #[test]
@@ -309,8 +309,8 @@ fn generated_launch_name_is_exposed_only_for_bare_checkout() {
 
     assert_eq!(generated.generated_name(), Some("swift-orbit"));
     assert_eq!(named.generated_name(), None);
-    assert!(generated.is_managed_worktree());
-    assert!(named.is_managed_worktree());
+    assert!(generated.owns_checkout_lifecycle());
+    assert!(named.owns_checkout_lifecycle());
 }
 
 #[test]

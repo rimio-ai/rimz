@@ -145,12 +145,26 @@ fn unmanaged_launch_checkout_preserves_ownership_and_local_work() {
         rimz::worktree::resolve_unmanaged_launch_checkout(&workspace, &config, "feat/review")
             .expect("resolve user-owned checkout");
     assert_eq!(
-        checkout.cwd,
+        checkout.cwd.canonicalize().expect("launch cwd"),
         path.canonicalize().expect("canonical checkout")
     );
     assert_eq!(checkout.worktree_name.as_deref(), Some("feat-review"));
     assert_eq!(checkout.generated_name(), None);
-    assert!(!checkout.is_managed_worktree());
+    assert!(!checkout.owns_checkout_lifecycle());
+    #[cfg(unix)]
+    {
+        let alias = env.home_root.join("linked-worktrees");
+        std::os::unix::fs::symlink(env.home_root.join("project-worktrees"), &alias)
+            .expect("symlink worktree directory");
+        let config = rimz::config::WorktreeConfig {
+            dir: alias.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let checkout =
+            rimz::worktree::resolve_unmanaged_launch_checkout(&workspace, &config, "feat-review")
+                .expect("resolve through configured symlink");
+        assert_eq!(checkout.cwd, alias.join("feat-review"));
+    }
     assert_eq!(
         std::fs::read_to_string(path.join("local.txt")).expect("local work"),
         "keep me\n"
@@ -181,6 +195,16 @@ fn unmanaged_launch_checkout_rejects_non_worktrees_and_other_repositories() {
     let env = Env::new();
     init_repo(&env.project_root);
     let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let outside = env.home_root.join("project-worktrees/plain");
+    std::fs::create_dir_all(&outside).expect("plain sibling directory");
+    assert!(matches!(
+        rimz::worktree::resolve_unmanaged_launch_checkout(
+            &workspace,
+            &rimz::config::WorktreeConfig::default(),
+            "plain",
+        ),
+        Err(rimz::worktree::WorktreeErr::NotLinkedWorktree { .. })
+    ));
     let config = rimz::config::WorktreeConfig {
         dir: "checkouts".to_owned(),
         ..Default::default()

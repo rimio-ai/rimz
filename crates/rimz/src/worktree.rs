@@ -209,7 +209,7 @@ enum CheckoutOwnership {
 }
 
 impl LaunchCheckout {
-    pub fn is_managed_worktree(&self) -> bool {
+    pub fn owns_checkout_lifecycle(&self) -> bool {
         self.ownership == CheckoutOwnership::Rimz
     }
 
@@ -643,19 +643,29 @@ pub fn resolve_unmanaged_launch_checkout(
 ) -> Result<LaunchCheckout> {
     let repo_root = workspace.launch_repo_root();
     let name = parse_requested_name(name)?.name;
-    let path = worktree_path(repo_root, config, &name)?.canonicalize()?;
+    let path = worktree_path(repo_root, config, &name)?;
+    let canonical_path = path.canonicalize()?;
     let common_dir = git_stdout(
         repo_root,
         ["rev-parse", "--path-format=absolute", "--git-common-dir"],
     )?;
+    let classify_checkout_error = |err| match err {
+        WorktreeErr::Git { .. } => WorktreeErr::NotLinkedWorktree {
+            path: path.clone(),
+            repo_root: repo_root.to_path_buf(),
+        },
+        other => other,
+    };
     let checkout_common_dir = git_stdout(
         &path,
         ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )?;
-    let checkout_root = git_stdout(&path, ["rev-parse", "--show-toplevel"])?;
+    )
+    .map_err(classify_checkout_error)?;
+    let checkout_root =
+        git_stdout(&path, ["rev-parse", "--show-toplevel"]).map_err(classify_checkout_error)?;
     if Path::new(&common_dir).canonicalize()? != Path::new(&checkout_common_dir).canonicalize()?
-        || Path::new(&checkout_root).canonicalize()? != path
-        || repo_root.canonicalize()? == path
+        || Path::new(&checkout_root).canonicalize()? != canonical_path
+        || repo_root.canonicalize()? == canonical_path
     {
         return Err(WorktreeErr::NotLinkedWorktree {
             path,

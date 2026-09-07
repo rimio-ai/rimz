@@ -288,7 +288,7 @@ pub(super) fn launch_layout(
             description: args.launch.cohort.description.clone(),
         },
     )?;
-    let cleanup_worktree = launch.is_managed_worktree();
+    let cleanup_worktree = launch.owns_checkout_lifecycle();
     let worktree_name = launch.worktree_name.clone();
     let cwd = launch.cwd;
     let title = room_channel.as_deref().map_or_else(
