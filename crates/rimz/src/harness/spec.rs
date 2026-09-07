@@ -1484,6 +1484,7 @@ fn validate_command_names(commands: &CommandsConfig) -> Result<()> {
         }
         if petname::RESERVED_AGENT_WORDS.contains(&name.as_str())
             || petname::HEADER_PSEUDO_HANDLES.contains(&name.as_str())
+            || name == "me"
         {
             return Err(LayoutErr::ReservedCommandName { name: name.clone() });
         }
@@ -1501,6 +1502,9 @@ fn address_grammar_clash(name: &str) -> Option<&'static str> {
     }
     if name == "all" {
         return Some("`@all` is the broadcast handle");
+    }
+    if name == "me" {
+        return Some("`@me` is the calling agent");
     }
     if is_kind_ordinal_shape(name) {
         return Some("it reads as a kind ordinal like `@claude-2`");
@@ -1527,6 +1531,7 @@ fn validate_team_names(teams: &TeamsConfig) -> Result<()> {
     if let Some(name) = teams.0.keys().find(|name| {
         petname::RESERVED_AGENT_WORDS.contains(&name.as_str())
             || petname::HEADER_PSEUDO_HANDLES.contains(&name.as_str())
+            || name.as_str() == "me"
     }) {
         return Err(LayoutErr::ReservedTeamName(name.clone()));
     }
