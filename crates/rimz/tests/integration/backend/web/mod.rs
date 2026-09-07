@@ -380,7 +380,17 @@ endY:r.y+({end_raw_y}+.5)*r.cellHeight
     {
         assert!(
             Instant::now() < release_deadline,
-            "browser release produced no tmux mouse report"
+            "browser release produced no tmux mouse report: payloads={:?}, browser={:?}",
+            frames
+                .sent_payloads()
+                .iter()
+                .rev()
+                .take(8)
+                .collect::<Vec<_>>(),
+            support::eval_string(
+                &tab,
+                "JSON.stringify({protocol:window.term?._core?.coreMouseService?.activeProtocol,encoding:window.term?._core?.coreMouseService?.activeEncoding,decisions:window.__rimzWeb?.decisions.slice(-16)})"
+            ),
         );
         std::thread::sleep(Duration::from_millis(10));
     }
