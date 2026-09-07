@@ -228,16 +228,12 @@ pub(super) fn render_markdown(w: &mut impl Write, report: &Attribution) -> std::
         return Ok(());
     }
     writeln!(w, "<details>")?;
-    write!(
+    writeln!(
         w,
-        "<summary>{} · {}",
+        "<summary>{} · {}</summary>",
         markdown_summary_subject(report),
         totals_label(&report.totals)
     )?;
-    if let Some(since) = report.scope.since {
-        write!(w, " · {}", since_label(since))?;
-    }
-    writeln!(w, "</summary>")?;
     writeln!(w, "\n<br/>\n\n**Agents**\n")?;
     let show_captions = report.groups.len() > 1;
     for (index, group) in report.groups.iter().enumerate() {
