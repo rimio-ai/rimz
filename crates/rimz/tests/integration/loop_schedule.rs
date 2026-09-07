@@ -149,21 +149,51 @@ role = "coder"
 [[agents.teams.forge.signals]]
 signal = "deploy.foo.bar"
 role = "coder"
+[[agents.teams.forge.signals]]
+signal = "deploy.done"
+role = "coder"
+match = { target = "first" }
+[[agents.teams.forge.signals]]
+signal = "deploy.done"
+role = "coder"
+match = { target = "second" }
+[[agents.teams.forge.signals]]
+signal = "deploy.done-2"
+role = "coder"
+[[agents.teams.forge.signals]]
+signal = "deploy.done-2-2"
+role = "coder"
 "#,
     )
     .unwrap();
     seed_team_signal_member(&env, &env.project_root, "slug-session", None);
     team_signal_hook(&env, &env.project_root, "slug-session", "SessionStart");
     let tasks = read_loop_instances(&env);
-    assert_eq!(tasks.0.len(), 2);
+    assert_eq!(tasks.0.len(), 6);
     assert_eq!(
         tasks
             .0
             .values()
-            .filter_map(|entry| entry.signal.as_deref())
+            .map(|entry| (
+                entry.signal.as_deref().unwrap(),
+                entry
+                    .matches
+                    .as_ref()
+                    .and_then(|matches| matches.get("target"))
+                    .map(String::as_str),
+            ))
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["deploy.foo-bar", "deploy.foo.bar"])
+        BTreeSet::from([
+            ("deploy.foo-bar", None),
+            ("deploy.foo.bar", None),
+            ("deploy.done", Some("first")),
+            ("deploy.done", Some("second")),
+            ("deploy.done-2", None),
+            ("deploy.done-2-2", None),
+        ])
     );
+    team_signal_hook(&env, &env.project_root, "slug-session", "SessionStart");
+    assert_eq!(read_loop_instances(&env), tasks);
 }
 
 #[test]
