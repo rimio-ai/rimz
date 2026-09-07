@@ -12,8 +12,8 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::project::{
-    AgentIdentityState, FoldEvent, agent_event_key, backfill_agent_identities, decode_events,
-    reduce_agent_states_seeded_with_identity, stamp_compact_commands_in_agents,
+    AgentIdentityState, FoldEvent, agent_event_key, backfill_agent_identities,
+    compact_command_agent_key, decode_events, reduce_agent_states_seeded_with_identity,
     unstamp_for_rebirth,
 };
 use super::{Result, SnapshotErr};
@@ -113,7 +113,7 @@ fn merge_agent_rollups(base: &[AgentState], live: &[AgentState]) -> Vec<AgentSta
 
 /// Bump when [`RollupCache`]'s shape changes — a mismatched cache reads as
 /// absent and cold-rebuilds.
-const ROLLUP_CACHE_VERSION: u32 = 17;
+const ROLLUP_CACHE_VERSION: u32 = 18;
 
 /// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
 /// the raw pre-projection fold map stamped with the log extent folded so far.
@@ -210,7 +210,6 @@ fn fold_delta(
 ) -> FoldedDelta {
     carryover.agent_identity =
         backfill_agent_identities(&mut carryover.agents, carryover.agent_identity);
-    stamp_compact_commands_in_agents(&mut carryover.agents, events);
     let rebirth_precedes_delta = seed.saw_session_rebirth;
     seed.saw_session_rebirth |= events_have_rebirth(events);
     if rebirth_precedes_delta {
@@ -220,11 +219,17 @@ fn fold_delta(
 
     let mut carried_by_key = None;
 
-    // Any agent event can be the first observation after rotation. Hydrate only
-    // observed keys and linked predecessors before reducing so `carried_base` remains the single owner
-    // of lifetime fields without changing raw_agents into a carryover union.
+    // Hydrate only observed keys, linked predecessors, and command receivers. Stamps
+    // are applied by the reducer in log order and persist in raw_agents, not carryover.
     for event in events {
-        let Some(key) = agent_event_key(event) else {
+        let key = match &event.kind {
+            EventKind::Message { payload, .. } => compact_command_agent_key(
+                seed.agents.values().chain(carryover.agents.iter()),
+                payload,
+            ),
+            _ => agent_event_key(event),
+        };
+        let Some(key) = key else {
             continue;
         };
         let predecessor = match &event.kind {

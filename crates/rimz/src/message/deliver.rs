@@ -364,27 +364,25 @@ pub(crate) fn execute_attempt(
         .collect::<Vec<_>>();
     if head.body == MessageBody::Command {
         let current = store.runtime_projection(crate::RuntimeScope::Audit)?;
-        let refusal = match current
+        let now = Timestamp::now();
+        if let Some(agent) = current
             .agents
             .iter()
-            .find(|agent| head.same_agent_card(agent))
+            .find(|agent| head.same_agent_card(agent) && agent.compaction_unprompted(now))
         {
-            Some(agent) if agent.compacted_awaiting_prompt.is_some() => Some((
-                crate::store::writer::DeliveryFailureDisposition::Terminal,
-                "a compaction never follows a compaction; the agent has not taken a turn since its last one",
-            )),
-            Some(agent) if agent.is_compacting(Timestamp::now()) => Some((
-                crate::store::writer::DeliveryFailureDisposition::Retry,
-                "parked: waiting for compaction to finish",
-            )),
-            _ => None,
-        };
-        if let Some((disposition, reason)) = refusal {
+            if agent.is_compacting(now) {
+                store.release_message_claims(
+                    &ids,
+                    "parked: waiting for compaction to finish",
+                    &workspace.session_name,
+                )?;
+                return Ok(AttemptOutcome::Queued);
+            }
             store.record_message_delivery_failures(
                 &ids,
                 Some(head),
-                disposition,
-                reason,
+                crate::store::writer::DeliveryFailureDisposition::Terminal,
+                "a compaction never follows a compaction; the agent has not taken a turn since its last one",
                 &workspace.session_name,
             )?;
             return Ok(AttemptOutcome::Queued);

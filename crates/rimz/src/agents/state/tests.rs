@@ -101,6 +101,22 @@ fn compacting_marker_expires_after_delivery_window() {
 }
 
 #[test]
+fn compaction_marker_requires_durable_turn_starts_and_never_expires() {
+    let now = Timestamp::from_second(1_000_000).unwrap();
+    for (kind, guarded) in [("claude", true), ("kiro", false)] {
+        let mut agent = AgentState::stub(kind, "sess-compact", AgentStatus::Idle);
+        assert!(!agent.compaction_unprompted(now));
+        agent.compacted_awaiting_prompt = Some(Timestamp::from_second(1).unwrap());
+        assert_eq!(agent.compaction_unprompted(now), guarded);
+        agent.compacting_since = Some(now);
+        assert!(agent.compaction_unprompted(now));
+        agent.compacting_since = None;
+        agent.compacted_awaiting_prompt = None;
+        assert!(!agent.compaction_unprompted(now));
+    }
+}
+
+#[test]
 fn legacy_agent_pid_deserializes_to_runtime_owner() {
     let agent: AgentState = serde_json::from_value(serde_json::json!({
         "agent_id": "sess-1",

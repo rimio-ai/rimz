@@ -65,7 +65,7 @@ path = "crates/rimz/src/agents"
 upward-dependencies = ["harness::target"]
 # The parent-link predicate is shared by store, harness and CLI consumers.
 # Attribution adds lifetime values, boundary queries and unreadable-path warnings.
-surface-budget = 998
+surface-budget = 999
 
 [[module]]
 path = "crates/rimz/src/bin"

@@ -190,18 +190,6 @@ pub(super) fn unstamp_for_rebirth<'a>(agents: impl IntoIterator<Item = &'a mut A
     }
 }
 
-pub(super) fn stamp_compact_commands_in_agents(
-    agents: &mut [AgentState],
-    events: &[FoldEvent<'_>],
-) {
-    for event in events {
-        let EventKind::Message { payload, .. } = &event.kind else {
-            continue;
-        };
-        stamp_compact_command(agents.iter_mut(), payload, event.envelope.timestamp);
-    }
-}
-
 /// [`reduce_agent_states`] resuming from a prior fold map. Each lifecycle
 /// event reads only its own key's prior state, and the rebirth boundary is a
 /// pointwise transform of the whole map at its log position — either way,
@@ -276,7 +264,7 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
                 );
             }
             EventKind::Message { payload, .. } => {
-                stamp_compact_command(map.values_mut(), payload, envelope.timestamp);
+                stamp_compact_command(&mut map, payload, envelope.timestamp);
             }
             EventKind::SessionDeath(_) => {}
             EventKind::Signal(_) => {}
@@ -593,33 +581,42 @@ fn reduce_agent_launch(
     map.insert(key, state);
 }
 
-fn stamp_compact_command<'a>(
-    agents: impl IntoIterator<Item = &'a mut AgentState>,
+pub(super) fn compact_command_agent_key<'a>(
+    agents: impl Iterator<Item = &'a AgentState> + Clone,
     payload: &MessageEventPayload,
-    timestamp: Timestamp,
-) {
+) -> Option<(AgentKind, AgentSessionId)> {
     if payload.body != MessageBody::Command
         || !matches!(
             payload.status,
             MessageStatus::Sent | MessageStatus::Delivered
         )
     {
-        return;
+        return None;
     }
-    let mut agents = agents.into_iter().collect::<Vec<_>>();
-    let index = agents
-        .iter()
-        .position(|agent| agent.kind == payload.kind && agent.agent_id == payload.agent_id)
+    let mut agents = agents;
+    let agent = agents
+        .clone()
+        .find(|agent| agent.kind == payload.kind && agent.agent_id == payload.agent_id)
         .or_else(|| {
             let agent_name = payload.agent_name.as_deref()?;
-            agents.iter().position(|agent| {
+            agents.find(|agent| {
                 agent.kind == payload.kind && agent.name.as_deref() == Some(agent_name)
             })
-        });
-    let Some(index) = index else {
+        })?;
+    Some((agent.kind.clone(), agent.agent_id.clone()))
+}
+
+fn stamp_compact_command(
+    agents: &mut BTreeMap<AgentKey, AgentState>,
+    payload: &MessageEventPayload,
+    timestamp: Timestamp,
+) {
+    let Some(key) = compact_command_agent_key(agents.values(), payload) else {
         return;
     };
-    let agent = &mut agents[index];
+    let Some(agent) = agents.get_mut(&key) else {
+        return;
+    };
     if let Some(tokens) = payload.compacted_context_tokens {
         agent.last_compact_command_tokens = Some(tokens);
     }
@@ -998,7 +995,7 @@ fn lifecycle_projection(
             auto: Some(false),
             failed: false,
         } => Some(timestamp),
-        lifecycle::LifecycleSignal::TurnStarted | lifecycle::LifecycleSignal::Registered => None,
+        lifecycle::LifecycleSignal::TurnStarted => None,
         _ => prior.and_then(|p| p.compacted_awaiting_prompt),
     };
     let mut tool_calls = prior.map_or_else(BTreeMap::new, |p| p.tool_calls.clone());

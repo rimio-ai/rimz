@@ -3405,6 +3405,174 @@ fn message_inherits_smart_compact_default() {
 }
 
 #[test]
+fn agents_compact_reports_sibling_delivery_and_terminal_reasons() {
+    for delivered in [true, false] {
+        let env = Env::new();
+        run_hook(
+            &env,
+            json!({"hook_event_name": "SessionStart", "session_id": "sess-compact-race"}),
+            &[("ZELLIJ_PANE_ID", "3")],
+        );
+        let before = DeliveryRendezvous::new(&env, "compact-before");
+        let trace = env.project_root.join("compact-race.log");
+        let child = traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_DELIVERY_BEFORE_CLAIM", &before.path)
+            .args(["agents", "compact", "@claude"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut release = before.arrive();
+        let store = env.store();
+        let command = store.list_messages().unwrap().remove(0);
+        if !delivered {
+            let observation = AgentLifecycleObservation::new(
+                Some("sess-compact-race".into()),
+                LifecycleSignal::CompactionEnded {
+                    auto: Some(false),
+                    failed: false,
+                },
+            );
+            store
+                .append_event(&EventEnvelope::agent_lifecycle(
+                    env.workspace_id.clone(),
+                    "rimz-test",
+                    "claude",
+                    "PostCompact",
+                    &observation,
+                ))
+                .unwrap();
+        }
+        run_success(
+            traced_rimz(&env, &trace).args([
+                "message",
+                "deliver",
+                "--message-id",
+                command.message_id.as_str(),
+            ]),
+            "sibling compaction delivery",
+        );
+        if delivered {
+            store
+                .confirm_delivered_for_card(
+                    &command.kind,
+                    &command.agent_id,
+                    command.agent_name.as_deref(),
+                    rimz::store::writer::DeliveryAck::Compaction,
+                    "rimz-test",
+                )
+                .unwrap();
+        }
+        release.write_all(&[1]).unwrap();
+        let output = child.wait_with_output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if delivered {
+            assert!(output.status.success(), "{stderr}");
+            assert!(String::from_utf8_lossy(&output.stdout).starts_with("compacting @claude"));
+            assert_eq!(
+                trace_lines(&trace)
+                    .iter()
+                    .filter(|line| is_compact_command(line))
+                    .count(),
+                1
+            );
+        } else {
+            assert_eq!(output.status.code(), Some(1));
+            assert!(
+                stderr.contains("a compaction never follows a compaction"),
+                "{stderr}"
+            );
+            assert_no_report_pane_write(&trace);
+        }
+    }
+}
+
+#[test]
+fn command_delivery_parks_without_spending_an_attempt_when_compaction_starts_after_claim() {
+    let env = Env::new();
+    run_hook(
+        &env,
+        json!({"hook_event_name": "SessionStart", "session_id": "sess-compact-park"}),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let store = env.store();
+    let agent = store.snapshot_cached().unwrap().agents.remove(0);
+    let mut command = MessageRecord::new(
+        env.workspace_id.clone(),
+        &agent,
+        "/compact".to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_body(MessageBody::Command);
+    command.attempts = rimz::store::message::MAX_DELIVERY_ATTEMPTS - 1;
+    queue_messages(&env, &[&command]);
+    let after = DeliveryRendezvous::new(&env, "compact-after");
+    let trace = env.project_root.join("compact-park.log");
+    let child = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_DELIVERY_AFTER_CLAIM", &after.path)
+        .args([
+            "message",
+            "deliver",
+            "--message-id",
+            command.message_id.as_str(),
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release = after.arrive();
+    let observation = AgentLifecycleObservation::new(
+        Some("sess-compact-park".into()),
+        LifecycleSignal::Compacting,
+    );
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            "rimz-test",
+            "claude",
+            "PreCompact",
+            &observation,
+        ))
+        .unwrap();
+    release.write_all(&[1]).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let parked = message_by_id(&env, &command.message_id);
+    assert_eq!(parked.status, MessageStatus::Queued);
+    assert_eq!(parked.attempts, command.attempts);
+    assert_no_report_pane_write(&trace);
+}
+
+#[test]
+fn agents_compact_refuses_an_adapter_without_durable_turn_starts() {
+    let env = Env::new();
+    register_role_agent(
+        &env,
+        "kiro",
+        "sess-kiro-compact",
+        "coder",
+        false,
+        Some(TRACE_PANE),
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "kiro")]);
+    let trace = env.project_root.join("kiro-compact.log");
+    let output = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .args(["agents", "compact", "@coder-agent"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("reports no durable turn starts"),
+        "{output:?}"
+    );
+    assert!(output.stdout.is_empty());
+    assert!(env.store().list_messages().unwrap().is_empty());
+    assert_no_report_pane_write(&trace);
+}
+
+#[test]
 fn agents_compact_types_the_native_command_and_refuses_a_repeat() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -3456,9 +3624,11 @@ fn agents_compact_types_the_native_command_and_refuses_a_repeat() {
         assert_eq!(refused.status.code(), Some(1), "after {hook:?}");
         assert!(refused.stdout.is_empty());
         let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(stderr.starts_with("error: @claude: "), "{stderr}");
         assert!(stderr.contains("compaction"), "after {hook:?}: {stderr}");
         if matches!(hook, Some("PostCompact" | "SessionStart")) {
             assert!(stderr.contains("never follows a compaction"), "{stderr}");
+            assert!(stderr.contains(" ago "), "{stderr}");
         }
         assert_eq!(
             trace_lines(&trace)
@@ -3473,6 +3643,18 @@ fn agents_compact_types_the_native_command_and_refuses_a_repeat() {
     assert!(delivered.iter().any(|message| {
         message.message_id == command.message_id && message.status == MessageStatus::Delivered
     }));
+
+    run_hook(
+        &env,
+        json!({"hook_event_name": "SessionStart", "session_id": "sess-manual-compact", "source": "resume"}),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let resumed = traced_rimz(&env, &trace)
+        .args(["agents", "compact", "@claude"])
+        .output()
+        .unwrap();
+    assert_eq!(resumed.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&resumed.stderr).contains("never follows a compaction"));
 
     for hook in ["UserPromptSubmit", "Stop"] {
         run_hook(

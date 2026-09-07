@@ -149,6 +149,8 @@ What each concern drives: `turn` live status (session start and every turn bound
 
 Identical-tool loop detection extends `tools` only when the hook carries both a tool name and structured arguments, because a name-only run would misclassify legitimate reads. Claude and Codex currently provide both fields; every other adapter keeps tool-loop detection off until its hook wire can do so accurately.
 
+The no-repeat guarantee for [`rimz agents compact`](./cli/agents.md#compact) requires a native turn-start hook as well as a native compaction command. Kiro has only pulled turn observations and is refused by this operator verb; its smart and idle compaction retain their context-baseline guards.
+
 ### Notes on the alpha and experimental set
 
 The gaps you will actually feel, per agent. Each agent's [mapping doc](#per-agent-mappings) carries the full rationale.

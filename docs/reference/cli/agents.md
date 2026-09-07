@@ -380,3 +380,5 @@ Several references form a join. Text mode prints each final answer in completion
 Omit `INSTRUCTION` to use [`[harness] compact_instruction`](../../guide/configuration.md#smart-compaction). A positional string replaces that brief for adapters accepting trailing text (Claude today); `""` sends the bare command. An explicit instruction, including `""`, is refused for bare-command adapters rather than silently dropped; rerun without the instruction. An agent without a bound pane or a native compaction command is also refused.
 
 The command refuses an agent that is currently compacting, already has a live compaction command in its queue, or last received a compaction with no user turn since: a compaction never follows a compaction; the next user turn re-arms it. Refusals print the reason to stderr, leave stdout empty, and exit `1`. This is an operator action, recorded as a durable message and audit event, not an automation assist.
+
+Adapters without native turn-start hooks (Kiro today) are refused because RimZ cannot enforce this guarantee for them; use their native compaction command in the agent's own pane instead.
