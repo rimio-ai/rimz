@@ -78,7 +78,11 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
     }
     let now = Timestamp::now();
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
-    let stats = run_log::stats(&state_home(), &now_zoned);
+    let stats = run_log::stats(
+        &state_home(),
+        &now_zoned,
+        project_root_for_globals(globals).as_deref(),
+    );
     let mut blocked_count = 0;
     let mut not_enabled_count = 0;
     let timer_is_active = timer::active();
@@ -507,7 +511,11 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let arming = arming::load().remove(&key);
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let timing = observe_task_timing(&args.name, &task, &stamps, arming.as_ref(), &now_zoned);
-    let records = run_log::task_records(&state_home(), &args.name);
+    let records = run_log::task_records(
+        &state_home(),
+        &args.name,
+        project_root_for_globals(globals).as_deref(),
+    );
     let show_agent_runs = has_agent_runs_section(&task);
     let lock_state = probe_run_lock(&args.name, entry).ok();
     let active_run = if matches!(lock_state.as_ref(), Some(RunLockState::Held(_))) {
@@ -567,7 +575,11 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
 pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
     let task = load_task(&args.name, globals)?;
     let entry = task.as_ref().map(|task| task.entry());
-    let records = run_log::task_records(&state_home(), &args.name);
+    let records = run_log::task_records(
+        &state_home(),
+        &args.name,
+        project_root_for_globals(globals).as_deref(),
+    );
     if entry.is_none() && records.is_empty() {
         anyhow::bail!("no loop task named `{}`; see `rimz loop list`", args.name);
     }

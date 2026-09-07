@@ -125,9 +125,23 @@ fn config_file_error_detail(
 /// workspace-independent: it surfaces the scheduled-execution surface this box
 /// carries; `rimz loop list` reports whether each task's room is open.
 fn collect_loop() -> model::LoopTasks {
-    let rows = rimz::harness::schedule::catalog::TaskCatalog::load_lenient(None)
+    use rimz::harness::schedule::catalog::{TaskCatalog, TaskSource, workspace_instance_roots};
+    let machine = TaskCatalog::load_lenient(None);
+    let instances = workspace_instance_roots()
+        .into_iter()
+        .flat_map(|root| {
+            TaskCatalog::load_lenient(Some(&root))
+                .visible()
+                .iter()
+                .filter(|(_, task)| task.source() == TaskSource::Instance)
+                .map(|(name, task)| (name.clone(), task.clone()))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let rows = machine
         .visible()
         .iter()
+        .chain(instances.iter().map(|(name, task)| (name, task)))
         .map(|(name, task)| {
             let entry = task.entry();
             let (when, valid) = match task.trigger() {

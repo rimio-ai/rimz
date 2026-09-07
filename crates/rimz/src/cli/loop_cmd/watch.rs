@@ -56,7 +56,7 @@ fn render_watch_frame(out: &mut impl Write, project_root: Option<&Path>, hold: b
     let now = Timestamp::now();
     let arming_entries = arming::load();
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
-    let stats = run_log::stats(&state_home(), &now_zoned);
+    let stats = run_log::stats(&state_home(), &now_zoned, project_root);
     let context = ListRowContext { stats: &stats, now };
     let groups = grouped_tasks(catalog.visible(), &arming_entries, &now_zoned)
         .into_iter()

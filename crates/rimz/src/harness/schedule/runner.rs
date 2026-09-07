@@ -307,8 +307,15 @@ impl<'a> TaskFire<'a> {
         {
             return Ok(None);
         }
-        let Some(entry) =
-            super::instances::claim_expired(&self.name, &self.entry, Timestamp::now())?
+        let Some(entry) = super::instances::claim_expired(
+            &StatePaths::for_workspace(WorkspaceId::from_project_root(
+                &self.entry.resolved_root(),
+            ))?
+            .root,
+            &self.name,
+            &self.entry,
+            Timestamp::now(),
+        )?
         else {
             return Ok(None);
         };
@@ -727,7 +734,14 @@ impl<'a> TaskFire<'a> {
             && self.entry.signal.is_some()
         {
             if self.expired.is_none()
-                && !super::instances::remove_signal_wake(&self.name, &self.entry)?
+                && !super::instances::remove_signal_wake(
+                    &StatePaths::for_workspace(WorkspaceId::from_project_root(
+                        &self.entry.resolved_root(),
+                    ))?
+                    .root,
+                    &self.name,
+                    &self.entry,
+                )?
             {
                 return Ok(TaskFirePlan::Done(self.record_gate(
                     LoopRunResult::Canceled,
@@ -753,7 +767,14 @@ impl<'a> TaskFire<'a> {
             && self.entry.wake_meta.is_some()
             && self.entry.signal.is_some()
         {
-            super::instances::remove_signal_wake(&self.name, &self.entry)?;
+            super::instances::remove_signal_wake(
+                &StatePaths::for_workspace(WorkspaceId::from_project_root(
+                    &self.entry.resolved_root(),
+                ))?
+                .root,
+                &self.name,
+                &self.entry,
+            )?;
         } else {
             self.catalog.consume_scheduled(&self.name)?;
         }

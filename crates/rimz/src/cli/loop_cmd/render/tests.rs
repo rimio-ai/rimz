@@ -11,6 +11,7 @@ fn room_badge_names_the_external_timer_only_without_a_room() {
 fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
     LoopRunRecord {
         task: "wake".to_owned(),
+        root: None,
         at: Timestamp::from_second(second).expect("timestamp"),
         result,
         mode: None,
@@ -451,6 +452,8 @@ fn source_detail_names_definition_path() {
             ui::home_relative(
                 state_home()
                     .join("rimz")
+                    .join("workspaces")
+                    .join(WorkspaceId::from_project_root(&entry.resolved_root()).as_str())
                     .join("loop-instances.json")
                     .to_string_lossy()
                     .as_ref(),

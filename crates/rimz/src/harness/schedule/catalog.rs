@@ -12,12 +12,28 @@ use super::{
 };
 use crate::Store;
 use crate::config::{MachineConfig, TaskEntry, Tasks};
-use crate::disk::paths::{RuntimePaths, StatePaths, config_home, state_home};
+use crate::disk::paths::{RuntimePaths, StatePaths, config_home, state_home, workspaces_dir};
+use crate::ids::WorkspaceId;
 use crate::trust::TrustState;
 use crate::workspace::WorkspaceResolver;
 
 pub fn project_config_path(project_root: &Path) -> PathBuf {
     config_edit::TaskStore::Project(project_root).path()
+}
+
+fn instance_root(project_root: &Path) -> PathBuf {
+    workspaces_dir().join(WorkspaceId::from_project_root(project_root).as_str())
+}
+
+pub fn workspace_instance_roots() -> BTreeSet<PathBuf> {
+    let Ok(workspaces) = std::fs::read_dir(workspaces_dir()) else {
+        return BTreeSet::new();
+    };
+    workspaces
+        .flatten()
+        .flat_map(|workspace| instances::load_from(&workspace.path()).0.into_values())
+        .map(|entry| entry.resolved_root())
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,7 +62,7 @@ impl TaskSource {
     pub fn path(self, entry: &TaskEntry) -> PathBuf {
         match self {
             Self::Config => MachineConfig::loop_path(),
-            Self::Instance => instances::path(&state_home()),
+            Self::Instance => instances::path(&instance_root(&entry.resolved_root())),
             Self::Project { .. } => config_edit::TaskStore::Project(&entry.root).path(),
         }
     }
@@ -106,7 +122,11 @@ impl TaskCatalog {
     /// Strict interactive load. Malformed machine, instance, or project state
     /// fails at command entry.
     pub fn load(project_root: Option<&Path>) -> Result<Self> {
-        let instances = instances::load_strict_from(&state_home())?;
+        instances::migrate_legacy(&state_home())?;
+        let instances = project_root
+            .map(|root| instances::load_strict_from(&instance_root(root)))
+            .transpose()?
+            .unwrap_or_default();
         let machine = MachineConfig::load_loop().context("reading per-machine loop.toml")?;
         let machine_tasks = machine.tasks;
         let project = project_root
@@ -124,7 +144,9 @@ impl TaskCatalog {
 
     /// Best-effort load for elder, doctor, and maintenance reads.
     pub fn load_lenient(project_root: Option<&Path>) -> Self {
-        let instances = instances::load();
+        let instances = project_root
+            .map(|root| instances::load_from(&instance_root(root)))
+            .unwrap_or_default();
         let machine = MachineConfig::load_lenient().r#loop.clone();
         let project = project_root.and_then(|root| {
             crate::config::effective::project_tasks(root, &config_home())
@@ -210,12 +232,13 @@ impl TaskCatalog {
                     .display()
             );
         }
-        if entry.wake_meta.is_some() || super::ephemeral_lifetime(entry) {
+        let instance_root = instance_root(&entry.resolved_root());
+        if entry.wake.is_some() || super::ephemeral_lifetime(entry) {
+            instances::insert(&instance_root, name, entry)?;
             config_edit::remove(config_edit::TaskStore::Machine, name)?;
-            instances::insert(name, entry)?;
         } else {
-            instances::remove(name)?;
             config_edit::set_entry(config_edit::TaskStore::Machine, name, entry)?;
+            instances::remove(&instance_root, name)?;
         }
         let source = TaskSource::from_entry(entry);
         clear_overlays(&TaskKey::for_task(name, source, &entry.resolved_root()))
@@ -237,7 +260,12 @@ impl TaskCatalog {
             })
             .map(|(name, _)| name.clone())
             .collect();
-        Ok(instances::arm_signal_wake(entry, &taken, now)?)
+        Ok(instances::arm_signal_wake(
+            &instance_root(&entry.resolved_root()),
+            entry,
+            &taken,
+            now,
+        )?)
     }
 
     pub fn replace_project(
@@ -278,7 +306,11 @@ impl TaskCatalog {
             TaskSource::Config => {
                 config_edit::rename(config_edit::TaskStore::Machine, name, new_name)?
             }
-            TaskSource::Instance => instances::rename(name, new_name)?,
+            TaskSource::Instance => instances::rename(
+                &instance_root(&task.entry().resolved_root()),
+                name,
+                new_name,
+            )?,
             TaskSource::Project { .. } => config_edit::rename(
                 config_edit::TaskStore::Project(&task.entry().root),
                 name,
@@ -317,8 +349,22 @@ impl TaskCatalog {
 
     pub fn reap_dead_deliveries() -> Result<usize> {
         let catalog = Self::load_lenient(None);
+        let mut reaped = catalog.reap_catalog_deliveries()?;
+        for root in workspace_instance_roots() {
+            let catalog = Self::from_layers(
+                instances::load_from(&instance_root(&root)),
+                Tasks::default(),
+                None,
+                Some(&root),
+            );
+            reaped += catalog.reap_catalog_deliveries()?;
+        }
+        Ok(reaped)
+    }
+
+    fn reap_catalog_deliveries(&self) -> Result<usize> {
         let mut reaped = 0;
-        for (name, task) in catalog.runnable.clone() {
+        for (name, task) in self.runnable.clone() {
             let target = match task.action() {
                 Ok(TaskAction::Deliver(target)) => target.clone(),
                 Ok(TaskAction::Spawn(_) | TaskAction::CheckOnly) => continue,
@@ -341,7 +387,7 @@ impl TaskCatalog {
                     {
                         let _ = super::signal::stop_watcher(&runtime, &name);
                     }
-                    catalog.consume_scheduled(&name)?;
+                    self.consume_scheduled(&name)?;
                     reaped += 1;
                 }
                 Err(err) => {
@@ -355,7 +401,7 @@ impl TaskCatalog {
 
 impl TaskSource {
     fn from_entry(entry: &TaskEntry) -> Self {
-        if entry.wake_meta.is_some() || super::ephemeral_lifetime(entry) {
+        if entry.wake.is_some() || super::ephemeral_lifetime(entry) {
             Self::Instance
         } else {
             Self::Config
@@ -422,7 +468,10 @@ fn enable_project_overlays(
 fn remove_definition(name: &str, task: &LoadedTask) -> Result<bool> {
     match task.source() {
         TaskSource::Config => Ok(config_edit::remove(config_edit::TaskStore::Machine, name)?),
-        TaskSource::Instance => Ok(instances::remove(name)?),
+        TaskSource::Instance => Ok(instances::remove(
+            &instance_root(&task.entry().resolved_root()),
+            name,
+        )?),
         TaskSource::Project { .. } => Ok(config_edit::remove(
             config_edit::TaskStore::Project(&task.entry().root),
             name,
@@ -443,6 +492,7 @@ pub(super) fn delivery_target_alive(
     let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     Ok(snapshot.agents.iter().any(|agent| {
         !agent.is_provider_subagent()
+            && agent.ended_at.is_none()
             && agent.kind.as_str() == target.kind.as_str()
             && agent.agent_id.as_str() == target.session
     }))

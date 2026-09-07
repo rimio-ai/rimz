@@ -311,9 +311,13 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
         watch: Some("false".to_owned()),
         ..TaskEntry::default()
     };
-    crate::harness::schedule::instances::insert(poll_name, &poll).expect("insert poll");
-    crate::harness::schedule::instances::insert(watch_name, &watch).expect("insert watch");
-    let catalog = TaskCatalog::load(None).expect("load task catalog");
+    let state =
+        StatePaths::for_workspace(WorkspaceId::from_project_root(dir.path())).expect("state paths");
+    crate::harness::schedule::instances::insert(&state.root, poll_name, &poll)
+        .expect("insert poll");
+    crate::harness::schedule::instances::insert(&state.root, watch_name, &watch)
+        .expect("insert watch");
+    let catalog = TaskCatalog::load(Some(dir.path())).expect("load task catalog");
 
     let mut poll_fire = skipped_fire(poll_name, &catalog, None);
     let poll_check = poll_fire.prepare_check().expect("run poll check");
@@ -352,10 +356,11 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
     );
     assert_eq!(finished.presentation.check_duration_ms, Some(1234));
 
-    let instances = crate::harness::schedule::instances::load();
+    let instances = crate::harness::schedule::instances::load_from(&state.root);
     assert!(instances.0.contains_key(poll_name));
     assert!(!instances.0.contains_key(watch_name));
-    crate::harness::schedule::instances::remove(poll_name).expect("remove poll fixture");
+    crate::harness::schedule::instances::remove(&state.root, poll_name)
+        .expect("remove poll fixture");
 }
 
 fn skipped_fire<'a>(

@@ -27,6 +27,260 @@ use crate::common::write_fake_login_shell;
 use crate::common::{Env, ScrubSessionEnvExt};
 
 #[test]
+fn loop_deliveries_always_persist_as_instances() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-instance-storage", "feature-loop");
+    for (name, trigger) in [
+        ("recurring", ["--every", "15m"]),
+        ("standing", ["--signal", "deploy.done"]),
+        ("one-shot", ["--in", "1h"]),
+    ] {
+        loop_ok(
+            &env,
+            &[
+                "loop", "add", name, "--wake", "@claude", trigger[0], trigger[1],
+            ],
+        );
+    }
+    let instances = read_loop_instances(&env);
+    for name in ["recurring", "standing", "one-shot"] {
+        assert!(instances.0[name].wake.is_some());
+    }
+    let config = std::fs::read_to_string(loop_config_path(&env)).unwrap_or_default();
+    assert!(!config.contains("[tasks."), "{config}");
+    let (_, error) = loop_fail(
+        &env,
+        &[
+            "loop",
+            "add",
+            "project-wake",
+            "--project",
+            "--wake",
+            "@claude",
+            "--every",
+            "15m",
+        ],
+    );
+    assert!(error.contains("--project"), "{error}");
+}
+
+#[test]
+fn same_task_name_in_two_rooms_does_not_collide() {
+    let env = Env::new();
+    let other = env.home_root.join("other-project");
+    std::fs::create_dir(&other).expect("other project");
+    for root in [&env.project_root, &other] {
+        let output = env
+            .rimz()
+            .current_dir(root)
+            .args(["loop", "add", "same", "--check", "true", "--at", "07:00"])
+            .output()
+            .expect("add instance");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let other_path = env.state_path_for(&other).root.join("loop-instances.json");
+    let other_bytes = std::fs::read(&other_path).expect("other instances");
+    let other_tasks: Tasks = serde_json::from_slice(&other_bytes).expect("tasks");
+    assert_eq!(
+        read_loop_instances(&env).0["same"].resolved_root(),
+        env.project_root
+    );
+    assert_eq!(other_tasks.0["same"].resolved_root(), other);
+    loop_ok(&env, &["loop", "disable", "same"]);
+    let output = env
+        .rimz()
+        .current_dir(&other)
+        .args(["loop", "enable", "same"])
+        .output()
+        .expect("enable other");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let arming = read_loop_arming(&env);
+    assert!(!arming[&project_task_key(&env.project_root, "same")].enabled);
+    assert!(arming[&project_task_key(&other, "same")].enabled);
+    loop_ok(&env, &["loop", "remove", "same"]);
+    assert!(!read_loop_instances(&env).0.contains_key("same"));
+    assert_eq!(
+        std::fs::read(&other_path).expect("other unchanged"),
+        other_bytes
+    );
+}
+
+#[test]
+fn legacy_instances_are_rehomed_once_by_workspace() {
+    let env = Env::new();
+    let other = env.home_root.join("other-project");
+    std::fs::create_dir(&other).expect("other project");
+    let entry = TaskEntry {
+        root: env.project_root.clone(),
+        check: Some("true".to_owned()),
+        at: Some("07:00".to_owned()),
+        ..TaskEntry::default()
+    };
+    let existing = TaskEntry {
+        check: Some("false".to_owned()),
+        ..entry.clone()
+    };
+    write_loop_instances(
+        &env,
+        Tasks(BTreeMap::from([("same".to_owned(), existing.clone())])),
+    );
+    let legacy_path = env.state_root().join("rimz/loop-instances.json");
+    let legacy = Tasks(BTreeMap::from([
+        ("same".to_owned(), entry),
+        (
+            "other".to_owned(),
+            TaskEntry {
+                root: other.clone(),
+                check: Some("true".to_owned()),
+                at: Some("07:00".to_owned()),
+                ..TaskEntry::default()
+            },
+        ),
+    ]));
+    std::fs::write(
+        &legacy_path,
+        serde_json::to_vec(&legacy).expect("legacy json"),
+    )
+    .expect("legacy");
+    loop_ok(&env, &["loop", "list"]);
+    assert!(!legacy_path.exists());
+    assert_eq!(
+        read_loop_instances(&env).0,
+        BTreeMap::from([("same".to_owned(), existing)])
+    );
+    let other_path = env.state_path_for(&other).root.join("loop-instances.json");
+    let migrated: Tasks =
+        serde_json::from_slice(&std::fs::read(&other_path).expect("migrated")).expect("tasks");
+    assert_eq!(migrated.0["other"], legacy.0["other"]);
+    loop_ok(&env, &["loop", "remove", "same"]);
+    loop_ok(&env, &["loop", "list"]);
+    assert!(read_loop_instances(&env).0.is_empty());
+    assert!(!legacy_path.exists());
+}
+
+#[test]
+fn malformed_instance_migration_preserves_source_and_destination() {
+    let env = Env::new();
+    let legacy_path = env.state_root().join("rimz/loop-instances.json");
+    std::fs::create_dir_all(legacy_path.parent().expect("parent")).expect("state dir");
+    std::fs::write(&legacy_path, b"not json").expect("legacy");
+    let (_, error) = loop_fail(&env, &["loop", "list"]);
+    assert!(error.contains("loop-instances.json"), "{error}");
+    assert_eq!(
+        std::fs::read(&legacy_path).expect("legacy unchanged"),
+        b"not json"
+    );
+    let legacy = Tasks(BTreeMap::from([(
+        "same".to_owned(),
+        TaskEntry {
+            root: env.project_root.clone(),
+            check: Some("true".to_owned()),
+            at: Some("07:00".to_owned()),
+            ..TaskEntry::default()
+        },
+    )]));
+    let bytes = serde_json::to_vec(&legacy).expect("json");
+    std::fs::write(&legacy_path, &bytes).expect("legacy");
+    let destination = loop_instances_path(&env);
+    std::fs::create_dir_all(destination.parent().expect("parent")).expect("workspace dir");
+    std::fs::write(&destination, b"broken destination").expect("destination");
+    loop_fail(&env, &["loop", "list"]);
+    assert_eq!(
+        std::fs::read(&legacy_path).expect("legacy unchanged"),
+        bytes
+    );
+    assert_eq!(
+        std::fs::read(&destination).expect("destination unchanged"),
+        b"broken destination"
+    );
+    std::fs::remove_file(&legacy_path).expect("remove legacy");
+    loop_fail(
+        &env,
+        &["loop", "add", "new", "--check", "true", "--at", "07:00"],
+    );
+    assert_eq!(
+        std::fs::read(&destination).expect("destination unchanged"),
+        b"broken destination"
+    );
+}
+
+#[test]
+fn concurrent_legacy_instance_loads_preserve_all_rows() {
+    let env = Env::new();
+    let legacy_path = env.state_root().join("rimz/loop-instances.json");
+    std::fs::create_dir_all(legacy_path.parent().expect("parent")).expect("state dir");
+    let legacy = Tasks(
+        (0..20)
+            .map(|index| {
+                (
+                    format!("task-{index}"),
+                    TaskEntry {
+                        root: env.project_root.clone(),
+                        check: Some("true".to_owned()),
+                        at: Some("07:00".to_owned()),
+                        ..TaskEntry::default()
+                    },
+                )
+            })
+            .collect(),
+    );
+    std::fs::write(&legacy_path, serde_json::to_vec(&legacy).expect("json")).expect("legacy");
+    let children = [0, 1].map(|_| {
+        env.rimz()
+            .args(["loop", "list"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("list child")
+    });
+    for child in children {
+        let output = child.wait_with_output().expect("list result");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert_eq!(read_loop_instances(&env), legacy);
+    assert!(!legacy_path.exists());
+}
+
+#[test]
+fn loop_history_filters_workspace_and_keeps_legacy_records() {
+    let env = Env::new();
+    let records = [
+        (None, "legacy-room"),
+        (Some(env.project_root.clone()), "this-room"),
+        (Some(env.home_root.join("other")), "foreign-room"),
+    ]
+    .map(|(root, message)| {
+        let mut record =
+            LoopRunRecord::new("history", LoopRunResult::Errored, LoopRunMode::Manual, 0);
+        record.root = root;
+        record.error = Some(message.to_owned());
+        record
+    });
+    write_loop_run_records(&env, &records);
+    for command in ["logs", "show"] {
+        let output = loop_ok(&env, &["loop", command, "history"]);
+        assert!(
+            output.contains("legacy-room") && output.contains("this-room"),
+            "{output}"
+        );
+        assert!(!output.contains("foreign-room"), "{output}");
+    }
+}
+
+#[test]
 fn external_tick_fires_a_machine_task_without_a_workspace_record() {
     let env = Env::new();
     let marker = env.project_root.join("machine-tick-ran");
@@ -255,11 +509,9 @@ fn loop_wake_workflow_pins_and_delivers_to_live_session() {
         ],
     );
     assert!(added.contains("pinned to claude session `sess-loop-live`"));
-    let config: LoopConfig =
-        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).expect("read loop config"))
-            .expect("parse loop config");
+    let instances = read_loop_instances(&env);
     assert_eq!(
-        config.tasks.0["wake"]
+        instances.0["wake"]
             .wake
             .as_ref()
             .map(|wake| wake.session.as_str()),
@@ -273,13 +525,17 @@ fn loop_wake_workflow_pins_and_delivers_to_live_session() {
         Some(AutoCompact::Percent(70))
     );
     assert_eq!(last_loop_record(&env).result, LoopRunResult::Delivered);
+    assert_eq!(
+        last_loop_record(&env).root.as_deref(),
+        Some(env.project_root.as_path())
+    );
     let list = loop_ok(&env, &["loop", "list"]);
     let show = loop_ok(&env, &["loop", "show", "wake"]);
     assert!(
         list.lines()
             .any(|line| line.contains("wake") && line.contains("delivered"))
             && show.contains("source:")
-            && show.contains("machine"),
+            && show.contains("state"),
         "list/show smoke failed:\n{list}\n{show}"
     );
 }
@@ -1167,7 +1423,8 @@ fn loop_task_mutations_move_and_clear_overlays() {
     assert!(
         !instances.0.contains_key("old-state")
             && instances.0.contains_key("new-state")
-            && read_loop_arming(&env).contains_key(&machine_task_key("new-state"))
+            && read_loop_arming(&env)
+                .contains_key(&project_task_key(&env.project_root, "new-state"))
     );
 
     loop_ok(&env, &["loop", "remove", "new"]);
@@ -2183,11 +2440,9 @@ fn loop_add_rejects_agent_signal_self_wakes() {
             "continue",
         ],
     );
-    let machine: LoopConfig =
-        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).expect("read loop config"))
-            .expect("parse loop config");
+    let instances = read_loop_instances(&env);
     assert_eq!(
-        machine.tasks.0["peer-wake"]
+        instances.0["peer-wake"]
             .matches
             .as_ref()
             .and_then(|matches| matches.get("handle"))
@@ -2651,7 +2906,9 @@ fn loop_strikes_path(env: &Env) -> std::path::PathBuf {
 }
 
 fn loop_instances_path(env: &Env) -> std::path::PathBuf {
-    env.state_root().join("rimz").join("loop-instances.json")
+    env.state_path_for(&env.project_root)
+        .root
+        .join("loop-instances.json")
 }
 
 fn loop_runs_path(env: &Env) -> std::path::PathBuf {
