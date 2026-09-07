@@ -16,7 +16,7 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::config::{HarnessConfig, IdleCompactMode};
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
-use crate::store::snapshot::{SidebarSnapshot, WorktreePrState};
+use crate::store::snapshot::SidebarSnapshot;
 
 /// Below this fill, re-caching costs less than an extra compaction turn.
 pub const IDLE_COMPACT_MIN_TOKENS: u64 = 50_000;
@@ -41,12 +41,6 @@ struct FireRecord {
     fired_for_activity: Timestamp,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct AutoSignals {
-    teammate_working: bool,
-    pr_open: bool,
-}
-
 /// Compact every eligible root agent whose idle threshold is due.
 pub(crate) fn compact_idle_agents(
     snapshot: &SidebarSnapshot,
@@ -56,23 +50,13 @@ pub(crate) fn compact_idle_agents(
     if config.idle_compact == IdleCompactMode::Off {
         return;
     }
-    let pr_cache = (config.idle_compact == IdleCompactMode::Auto)
-        .then(|| crate::forge::pr_state::read_pr_state_cache(&runtime.pr_state_path()));
     for agent in &snapshot.agents {
         let command = crate::agents::spec_by_kind(agent.kind.as_str())
             .and_then(|spec| spec.launch.compact_command(config.compact_instruction()));
         let occupied = agent.occupied_context_tokens();
         let record_path = fire_record_path(runtime, &agent.kind, &agent.agent_id);
-        let signals = if config.idle_compact == IdleCompactMode::Auto {
-            AutoSignals {
-                teammate_working: teammate_working(snapshot, agent),
-                pr_open: pr_cache
-                    .as_ref()
-                    .is_some_and(|cache| worktree_pr_open(agent, cache)),
-            }
-        } else {
-            AutoSignals::default()
-        };
+        let teammate_working =
+            config.idle_compact == IdleCompactMode::Auto && teammate_working(snapshot, agent);
         if !should_compact(
             agent,
             command.as_deref(),
@@ -80,7 +64,7 @@ pub(crate) fn compact_idle_agents(
             config.idle_compact,
             config.idle_compact_after(),
             snapshot.now,
-            signals,
+            teammate_working,
             read_fire_record(&record_path).as_ref(),
         ) {
             continue;
@@ -121,7 +105,7 @@ fn should_compact(
     mode: IdleCompactMode,
     idle_after: Duration,
     now: Timestamp,
-    signals: AutoSignals,
+    teammate_working: bool,
     record: Option<&FireRecord>,
 ) -> bool {
     if mode == IdleCompactMode::Off
@@ -138,7 +122,7 @@ fn should_compact(
     {
         return false;
     }
-    if mode == IdleCompactMode::Auto && !(signals.teammate_working || signals.pr_open) {
+    if mode == IdleCompactMode::Auto && !teammate_working {
         return false;
     }
     let idle_secs = now.as_second() - agent.last_activity.as_second();
@@ -171,18 +155,6 @@ fn teammate_working(snapshot: &SidebarSnapshot, candidate: &AgentState) -> bool 
                 && agent.channel().as_deref() == Some(channel.as_str())
                 && agent.effective_status() == AgentStatus::Running
         })
-}
-
-fn worktree_pr_open(agent: &AgentState, cache: &crate::forge::pr_state::PrStateCache) -> bool {
-    let (Some(path), Some(branch)) = (
-        agent.worktree_path.as_deref(),
-        agent.worktree_branch.as_deref(),
-    ) else {
-        return false;
-    };
-    cache.states.get(path).is_some_and(|link| {
-        link.branch.as_deref() == Some(branch) && link.state == WorktreePrState::Open
-    })
 }
 
 fn fire_record_path(
@@ -257,7 +229,7 @@ mod tests {
     use crate::agents::AgentStatus;
     use crate::forge::pr_state::{PrLink, PrStateCache};
     use crate::ids::{MuxName, WorkspaceId};
-    use crate::store::snapshot::PaneAgent;
+    use crate::store::snapshot::{PaneAgent, WorktreePrState};
 
     fn ts(seconds: i64) -> Timestamp {
         Timestamp::from_second(seconds).expect("timestamp")
@@ -302,7 +274,7 @@ mod tests {
             IdleCompactMode::Always,
             Duration::from_secs(59 * 60),
             ts(10_000),
-            AutoSignals::default(),
+            false,
             None,
         )
     }
@@ -320,7 +292,7 @@ mod tests {
             IdleCompactMode::Always,
             Duration::from_secs(59 * 60),
             ts(10_000),
-            AutoSignals::default(),
+            false,
             None,
         ));
         assert!(!should_compact(
@@ -330,7 +302,7 @@ mod tests {
             IdleCompactMode::Off,
             Duration::from_secs(59 * 60),
             ts(10_000),
-            AutoSignals::default(),
+            false,
             None,
         ));
     }
@@ -385,7 +357,7 @@ mod tests {
             IdleCompactMode::Always,
             Duration::from_secs(59 * 60),
             ts(10_000),
-            AutoSignals::default(),
+            false,
             Some(&same_activity),
         ));
 
@@ -400,31 +372,15 @@ mod tests {
             IdleCompactMode::Always,
             Duration::from_secs(59 * 60),
             ts(10_000),
-            AutoSignals::default(),
+            false,
             Some(&recent),
         ));
     }
 
     #[test]
-    fn auto_requires_a_working_teammate_or_open_pr() {
+    fn auto_requires_a_working_teammate() {
         let candidate = agent(AgentStatus::Idle, 6_000, 80_000);
-        for (signals, expected) in [
-            (AutoSignals::default(), false),
-            (
-                AutoSignals {
-                    teammate_working: true,
-                    pr_open: false,
-                },
-                true,
-            ),
-            (
-                AutoSignals {
-                    teammate_working: false,
-                    pr_open: true,
-                },
-                true,
-            ),
-        ] {
+        for teammate_working in [false, true] {
             assert_eq!(
                 should_compact(
                     &candidate,
@@ -433,57 +389,48 @@ mod tests {
                     IdleCompactMode::Auto,
                     Duration::from_secs(59 * 60),
                     ts(10_000),
-                    signals,
+                    teammate_working,
                     None,
                 ),
-                expected
+                teammate_working
             );
         }
-        assert!(due(&candidate), "always ignores auto signals");
+        assert!(due(&candidate), "always ignores teammate activity");
     }
 
     #[test]
-    fn auto_signal_resolution_uses_channel_and_matching_open_pr_branch() {
+    fn auto_requires_another_running_top_level_agent_in_the_same_channel() {
         let candidate = agent(AgentStatus::Idle, 6_000, 80_000);
         let mut teammate = agent(AgentStatus::Running, 9_900, 1);
         teammate.agent_id = AgentSessionId::from("session-2");
-        let snapshot = SidebarSnapshot::build_with_agents(
+        let mut snapshot = SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(Path::new("/repo")),
             vec![candidate.clone(), teammate],
             ts(10_000),
         );
         assert!(teammate_working(&snapshot, &candidate));
 
-        let open = PrLink {
-            branch: Some("feat/cache".to_owned()),
-            incarnation: None,
-            state: WorktreePrState::Open,
-            number: None,
-            url: None,
-            ci: None,
-            merge_sha: None,
-        };
-        let mut cache = PrStateCache::default();
-        cache
-            .states
-            .insert("/repo/worktree".to_owned(), open.clone());
-        assert!(worktree_pr_open(&candidate, &cache));
-        for state in [WorktreePrState::Closed, WorktreePrState::Merged] {
-            cache.states.get_mut("/repo/worktree").expect("link").state = state;
-            assert!(!worktree_pr_open(&candidate, &cache));
+        for status in [
+            AgentStatus::Idle,
+            AgentStatus::Success,
+            AgentStatus::Waiting,
+        ] {
+            snapshot.agents[1].status = status;
+            assert!(!teammate_working(&snapshot, &candidate));
         }
-        cache.states.insert(
-            "/repo/worktree".to_owned(),
-            PrLink {
-                branch: Some("other".to_owned()),
-                ..open
-            },
-        );
-        assert!(!worktree_pr_open(&candidate, &cache));
+        snapshot.agents[1].status = AgentStatus::Running;
+        snapshot.agents[1].channel = Some("other".to_owned());
+        assert!(!teammate_working(&snapshot, &candidate));
+        snapshot.agents[1].channel = None;
+        snapshot.agents[1].parent_agent_id = Some(candidate.agent_id.clone());
+        assert!(!teammate_working(&snapshot, &candidate));
+        snapshot.agents.pop();
+        snapshot.agents[0].status = AgentStatus::Running;
+        assert!(!teammate_working(&snapshot, &candidate));
     }
 
     #[test]
-    fn producer_records_one_spawn_for_an_idle_stretch() {
+    fn producer_auto_ignores_open_pr_and_records_one_spawn_with_working_teammate() {
         let dir = tempfile::tempdir().expect("tempdir");
         let workspace_id = WorkspaceId::from_project_root(dir.path());
         let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime");
@@ -506,10 +453,39 @@ mod tests {
             worktree_branch: candidate.worktree_branch.clone(),
         });
         let config = HarnessConfig {
-            idle_compact: IdleCompactMode::Always,
+            idle_compact: IdleCompactMode::Auto,
             idle_compact_after: Some(Duration::from_secs(59 * 60)),
             ..Default::default()
         };
+
+        let mut cache = PrStateCache::default();
+        cache.states.insert(
+            candidate.worktree_path.clone().expect("worktree"),
+            PrLink {
+                branch: candidate.worktree_branch.clone(),
+                incarnation: None,
+                state: WorktreePrState::Open,
+                number: None,
+                url: None,
+                ci: None,
+                merge_sha: None,
+            },
+        );
+        write_temp_then_rename_cache(&runtime.pr_state_path(), &cache).expect("write PR cache");
+        compact_idle_agents(&snapshot, &runtime, &config);
+        assert!(
+            read_fire_record(&fire_record_path(
+                &runtime,
+                &candidate.kind,
+                &candidate.agent_id,
+            ))
+            .is_none(),
+            "an open PR alone must not trigger compaction"
+        );
+
+        let mut teammate = agent(AgentStatus::Running, 9_900, 1);
+        teammate.agent_id = AgentSessionId::from("session-2");
+        snapshot.agents.push(teammate);
 
         compact_idle_agents(&snapshot, &runtime, &config);
         let record = read_fire_record(&fire_record_path(
@@ -526,7 +502,7 @@ mod tests {
             IdleCompactMode::Always,
             Duration::from_secs(59 * 60),
             ts(11_000),
-            AutoSignals::default(),
+            false,
             Some(&record),
         ));
     }

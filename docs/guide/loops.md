@@ -343,7 +343,7 @@ The reflex fails closed and paces itself. Every rule starts from a credit in han
 
 ### Idle compaction
 
-An idle agent can outlive its provider's warm prompt cache, so the next message pays to cache the whole accumulated conversation again. `harness.idle_compact = "auto"` submits the agent's own compact command after 59 minutes of inactivity while a same-channel teammate is still working or the worktree's pull request remains open; `"always"` applies the reflex to every eligible idle agent. `harness.idle_compact_after` changes the threshold, with a duration such as `"45m"` or `"2h"`.
+An idle agent can outlive its provider's warm prompt cache, so the next message pays to cache the whole accumulated conversation again. `harness.idle_compact = "auto"` submits the agent's own compact command after 59 minutes of inactivity only while another agent in the same channel is running; an open worktree pull request does not qualify. `"always"` applies the reflex to every eligible idle agent. `harness.idle_compact_after` changes the threshold, with a duration such as `"45m"` or `"2h"`.
 
 The reflex applies only to top-level agents whose adapter exposes a compact command and whose occupied context is at least 50,000 tokens. Working, waiting, parked, and already-compacting agents stay untouched, and delivery waits for an idle turn boundary. Each idle stretch compacts at most once.
 
