@@ -39,7 +39,7 @@ const NOUNS: &[&str] = &[
 /// Words `rimz agents` owns as verbs or cells; no profile, command, team, or agent name may claim them.
 /// TODO(reserved-words): decide whether to reserve the newer restart, resume, budget, logs, history, top, check, register, and refresh verbs.
 pub const RESERVED_AGENT_WORDS: &[&str] = &[
-    "compact", "exec", "focus", "fork", "list", "ls", "profiles", "show", "stop", "term", "wait",
+    "compact", "exec", "focus", "fork", "list", "ls", "me", "profiles", "show", "stop", "term", "wait",
 ];
 
 /// Handles used in message envelopes for senders that are not agents.
@@ -138,6 +138,7 @@ mod tests {
             ("fork", false),
             // `all` is the @all fan-out keyword; the generator must never mint it.
             ("all", false),
+            ("me", false),
             ("user", true),
             ("rimz", true),
             ("two words", false),
