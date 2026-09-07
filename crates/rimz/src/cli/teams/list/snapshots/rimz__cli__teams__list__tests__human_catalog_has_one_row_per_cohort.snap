@@ -1,5 +1,5 @@
 ---
-source: crates/rimz/src/cli/teams/list.rs
+source: crates/rimz/src/cli/teams/list/tests.rs
 expression: "String::from_utf8(rendered.into_inner()).unwrap()"
 ---
 TEAM   LANE     STAGE                       PR     STATUS
