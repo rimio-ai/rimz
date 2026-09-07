@@ -22,12 +22,13 @@ A raw target is `[user@]host:<session-or-path>`. After the colon, a value contai
 | `remote add <name> <target>` | Save an alias in `~/.config/rimz/remote.toml` |
 | `remote update <name> <target>` | Replace a saved alias's target and flags |
 | `remote rename <old> <new>` | Rename a saved alias |
-| `remote list` | Print saved aliases |
+| `remote list` | Print saved aliases grouped by SSH destination (`[user@]host`), with paths or sessions beneath each server |
 | `remote rm <name>` | Remove a saved alias |
 | `remote reset <alias-or-target>` | Connect with recovery skipped, so the remote room comes up empty |
 
 The details that matter in practice:
 
+- `remote list` sorts servers and their aliases alphabetically, keeping different SSH users separate. `remote list --json` retains the flat `remotes` array with complete targets for scripts.
 - `remote add` treats any input with a `:` as a raw target and everything else as an alias name. On an existing name it prompts to overwrite in an interactive terminal and errors otherwise, so a saved alias is never silently replaced; use `remote update` in a script. `update` takes the same flags as `add`, errors when the alias does not exist, and resets flags you do not pass to their defaults. `--no-auto-forward` persists as `auto_forward = false` on the alias.
 - `remote setup <alias-or-host>` accepts a saved alias, a raw `[user@]host:<session-or-path>` target, or a bare `[user@]host`, then installs the verified prebuilt release to `~/.local/bin/rimz` on that host. This is the only remote subcommand that writes to the remote host outside a room. When `remote connect` or `remote connect --web` finds no remote binary, the local error points back to this command.
 - Reconnect supervision is on by default. `--no-reconnect` hands the link to one SSH run; `remote add --no-reconnect` saves that as the alias default.
