@@ -197,6 +197,13 @@ pub fn prune_wake_logs() -> anyhow::Result<usize> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(0),
         Err(err) => return Err(err.into()),
     };
+    let machine = match TaskCatalog::load(None) {
+        Ok(catalog) => catalog,
+        Err(err) => {
+            tracing::warn!(error = %err, "wake log gc retained output with unreadable task state");
+            return Ok(0);
+        }
+    };
     let now = std::time::SystemTime::now();
     let mut removed = 0;
     for entry in entries {
@@ -213,11 +220,19 @@ pub fn prune_wake_logs() -> anyhow::Result<usize> {
         let pruned: anyhow::Result<usize> = (|| {
             let paths = StatePaths::for_workspace(id.clone())?;
             let record = crate::workspace::record::read(&paths.workspace_record)?;
-            let catalog = TaskCatalog::load(Some(&record.project_root))?;
-            let retained = catalog
-                .visible()
+            let instances = super::instances::load_strict_from(&paths.root)?;
+            let retained = instances
+                .0
                 .iter()
-                .filter(|(_, task)| task.entry().watch.is_some())
+                .chain(
+                    machine
+                        .visible()
+                        .iter()
+                        .map(|(name, task)| (name, task.entry())),
+                )
+                .filter(|(_, entry)| {
+                    entry.watch.is_some() && entry.resolved_root() == record.project_root
+                })
                 .map(|(name, _)| name.clone())
                 .collect();
             let runtime = RuntimePaths::for_workspace(id.clone())?;
