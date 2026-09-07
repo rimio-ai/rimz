@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::agents::{PendingWake, PendingWakeTrigger};
-use crate::ids::{AgentKind, AgentSessionId};
+use crate::config::MachineConfig;
+use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
 use crate::store::snapshot::SidebarSnapshot;
 
 use super::Trigger;
@@ -63,12 +64,11 @@ fn pending_wake(name: &str, task: &LoadedTask, now: &jiff::Zoned) -> Option<Pend
 pub fn pending_wakes_by_session(
     catalog: &TaskCatalog,
     root: &Path,
-    now: jiff::Timestamp,
+    now: &jiff::Zoned,
 ) -> BTreeMap<(AgentKind, AgentSessionId), Vec<PendingWake>> {
     let mut wakes = BTreeMap::<_, Vec<_>>::new();
-    let now = now.to_zoned(crate::config::MachineConfig::load_lenient().time_zone());
     for (name, task) in session_deliveries(catalog, root, None) {
-        let Some(wake) = pending_wake(name, task, &now) else {
+        let Some(wake) = pending_wake(name, task, now) else {
             continue;
         };
         let Some(target) = task.entry().wake.as_ref() else {
@@ -92,9 +92,22 @@ pub fn pending_wakes_by_session(
     wakes
 }
 
-pub(crate) fn project_pending_wakes(snapshot: &mut SidebarSnapshot, project_root: Option<&Path>) {
+pub(crate) fn project_pending_wakes(
+    snapshot: &mut SidebarSnapshot,
+    project_root: Option<&Path>,
+    config: &MachineConfig,
+) {
     let mut wakes = project_root.map_or_else(BTreeMap::new, |root| {
-        pending_wakes_by_session(&TaskCatalog::load_lenient(Some(root)), root, snapshot.now)
+        let instance_root = crate::disk::paths::workspaces_dir()
+            .join(WorkspaceId::from_project_root(root).as_str());
+        if super::instances::load_from(&instance_root).0.is_empty() {
+            return BTreeMap::new();
+        }
+        pending_wakes_by_session(
+            &TaskCatalog::load_lenient(Some(root)),
+            root,
+            &snapshot.now.to_zoned(config.time_zone()),
+        )
     });
     for agent in &mut snapshot.agents {
         agent.pending_wakes = wakes

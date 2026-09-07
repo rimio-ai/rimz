@@ -225,7 +225,9 @@ fn record_mapped_lifecycle_observation(
             let sleeping = pending_wakes_by_session(
                 &TaskCatalog::load_lenient(Some(&workspace.project_root)),
                 &workspace.project_root,
-                event.at,
+                &event
+                    .at
+                    .to_zoned(rimz::config::MachineConfig::load_lenient().time_zone()),
             )
             .into_keys()
             .collect();

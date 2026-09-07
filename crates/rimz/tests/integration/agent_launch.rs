@@ -250,6 +250,23 @@ fn user_shell_subagents_list_inspects_the_channel() {
             .expect("seed agent row");
     }
 
+    let instances_path = env.store().paths().root.join("loop-instances.json");
+    let tasks = std::collections::BTreeMap::from([(
+        "wake-child",
+        rimz::config::TaskEntry {
+            root: env.project_root.clone(),
+            signal: Some("deploy.done".to_owned()),
+            once: Some(true),
+            wake: Some(rimz::config::TaskTarget {
+                kind: AgentKind::new_unchecked("codex"),
+                session: AgentSessionId::from("swift-child"),
+                handle: "@swift-otter".to_owned(),
+            }),
+            ..Default::default()
+        },
+    )]);
+    std::fs::write(&instances_path, serde_json::to_vec(&tasks).unwrap()).unwrap();
+
     let output = env
         .rimz()
         .args(["subagents", "list", "--json"])
@@ -266,9 +283,11 @@ fn user_shell_subagents_list_inspects_the_channel() {
     let rows = rows.as_array().expect("channel list array");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["name"], "swift-otter");
+    assert_eq!(rows[0]["status"], "sleeping");
     assert_eq!(rows[0]["parent"], "@planner");
     assert_eq!(rows[0]["channel"], "feat-x");
 
+    std::fs::write(&instances_path, b"{}").unwrap();
     let output = env
         .rimz()
         .args(["subagents", "list", "--json"])
@@ -284,6 +303,7 @@ fn user_shell_subagents_list_inspects_the_channel() {
     let rows = rows.as_array().expect("all-channel list array");
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["channel"], "feat-x");
+    assert_ne!(rows[0]["status"], "sleeping");
     assert_eq!(rows[1]["channel"], "other");
 
     for args in [

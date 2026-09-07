@@ -43,7 +43,11 @@ fn card_emphasis_maps_attention_tiers() {
         CardEmphasis::Normal,
         "selection lifts non-attention rows to the normal tier"
     );
-    for status in [AgentStatus::Running, AgentStatus::Idle] {
+    for status in [
+        AgentStatus::Running,
+        AgentStatus::Idle,
+        AgentStatus::Sleeping,
+    ] {
         assert_eq!(card_emphasis(status, true, false), CardEmphasis::Blink);
         assert_eq!(card_emphasis(status, false, false), CardEmphasis::Soft);
     }

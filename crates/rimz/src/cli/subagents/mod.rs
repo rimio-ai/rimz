@@ -521,10 +521,21 @@ fn list_scope(agent_caller: bool) -> ListScope {
 
 fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
-    let audit = ctx
+    let mut audit = ctx
         .store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading agent history")?;
+    let root = &ctx.workspace.project_root;
+    let mut wakes = rimz::harness::schedule::pending::pending_wakes_by_session(
+        &rimz::harness::schedule::catalog::TaskCatalog::load_lenient(Some(root)),
+        root,
+        &jiff::Timestamp::now().to_zoned(rimz::config::MachineConfig::load_lenient().time_zone()),
+    );
+    for agent in &mut audit.agents {
+        agent.pending_wakes = wakes
+            .remove(&(agent.kind.clone(), agent.agent_id.clone()))
+            .unwrap_or_default();
+    }
     let caller_identity = rimz::harness::ancestry::resolve_caller(&audit.agents);
     let caller = caller_identity.as_ref().and_then(|identity| {
         rimz::harness::ancestry::resolve_launch_caller(&audit.agents, identity).ok()
@@ -607,7 +618,7 @@ fn child_reports(
                     }),
                 channel: child.channel(),
                 kind: child.kind.to_string(),
-                status: child.status.as_str().to_owned(),
+                status: child.sleeping_over(child.status).as_str().to_owned(),
                 description: child.activity_line(),
                 run_id: run.map(|run| run.run_id.to_string()),
                 run_status: run.map(|run| run.status.as_str().to_owned()),

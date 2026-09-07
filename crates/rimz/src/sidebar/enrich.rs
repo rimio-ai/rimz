@@ -586,6 +586,7 @@ fn enrich_core(
         crate::harness::schedule::pending::project_pending_wakes(
             &mut snapshot,
             project_root.as_deref(),
+            &machine_config,
         );
     }
 
