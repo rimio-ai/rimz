@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::state::select_activity_description;
-use crate::agents::{AgentContext, AgentTokenUsage, AgentUsageSummary};
+use crate::agents::{AgentContext, AgentTokenUsage, AgentUsageSummary, PendingWake};
 use crate::agents::{AgentStatus, ContextSeverity};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, compose_channel};
 use crate::pane::PaneRef;
@@ -294,6 +294,9 @@ pub enum RowCard {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentCard {
     pub status: AgentStatus,
+    /// The soonest armed one-shot delivery, copied from the enriched rollup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_wake: Option<PendingWake>,
     /// The running turn's shape, copied from the rollup: `reasoning` paints the
     /// thinking head, `acting` the working spinner, `parked` the secondary
     /// "background" marker.
@@ -387,6 +390,7 @@ impl Default for AgentCard {
     fn default() -> Self {
         Self {
             status: AgentStatus::Idle,
+            pending_wake: None,
             phase: TurnPhase::Idle,
             task: None,
             first_prompt: None,

@@ -624,6 +624,7 @@ pub(super) struct AgentCounts {
     pub(super) success: usize,
     pub(super) failed: usize,
     pub(super) paused: usize,
+    pub(super) sleeping: usize,
 }
 
 impl AgentCounts {
@@ -635,11 +636,18 @@ impl AgentCounts {
             AgentStatus::Success => self.success += 1,
             AgentStatus::Failed => self.failed += 1,
             AgentStatus::Paused => self.paused += 1,
+            AgentStatus::Sleeping => self.sleeping += 1,
         }
     }
 
     pub(super) fn total(&self) -> usize {
-        self.running + self.waiting + self.idle + self.success + self.failed + self.paused
+        self.running
+            + self.waiting
+            + self.idle
+            + self.success
+            + self.failed
+            + self.paused
+            + self.sleeping
     }
 }
 

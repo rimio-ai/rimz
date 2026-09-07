@@ -61,6 +61,23 @@ fn delivery_and_reply_transitions_preserve_turn_boundaries() {
             Step::Wait(WaitPhase::Reply { .. })
         ));
     }
+    for status in [
+        AgentStatus::Idle,
+        AgentStatus::Success,
+        AgentStatus::Sleeping,
+    ] {
+        assert_eq!(
+            step(
+                WaitPhase::Reply {
+                    turn_started_at: None
+                },
+                false,
+                MessageStatus::Delivered,
+                card(status, 1),
+            ),
+            Step::Finish(RunStatus::Completed)
+        );
+    }
 }
 
 #[test]

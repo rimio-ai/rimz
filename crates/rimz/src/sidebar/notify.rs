@@ -229,7 +229,7 @@ impl AgentNotificationKind {
             AgentStatus::Failed => Some(Self::Failed),
             AgentStatus::Paused => Some(Self::Paused),
             AgentStatus::Success => Some(Self::Success),
-            AgentStatus::Running | AgentStatus::Idle => None,
+            AgentStatus::Running | AgentStatus::Idle | AgentStatus::Sleeping => None,
         }
     }
 

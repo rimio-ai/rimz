@@ -31,6 +31,7 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(StatusWaiting, "?", Some("\u{f128}")),
     glyph!(StatusAttention, "!", Some("\u{f12a}")),
     glyph!(StatusPaused, "⏸\u{FE0E}", Some("\u{f04c}")),
+    glyph!(StatusSleeping, "☾", Some("\u{f186}")),
     glyph!(StatusDone, "✓", Some("\u{f00c}")),
     glyph!(StatusIdle, "○", Some("\u{f2dd}")),
     glyph!(StatusWorking, "⢿", None),
@@ -228,6 +229,7 @@ pub(crate) fn agent_status_glyph_role(status: AgentStatus) -> GlyphRole {
         AgentStatus::Idle => GlyphRole::StatusIdle,
         AgentStatus::Success => GlyphRole::StatusDone,
         AgentStatus::Paused => GlyphRole::StatusPaused,
+        AgentStatus::Sleeping => GlyphRole::StatusSleeping,
     }
 }
 
@@ -315,6 +317,12 @@ mod tests {
     /// override rather than a copy of the Unicode glyph it replaces.
     #[test]
     fn catalog_rows_are_ordered_complete_and_renderable() {
+        assert_eq!(unicode_glyph(GlyphRole::StatusSleeping), "\u{263e}");
+        assert_eq!(nerd_font_glyph(GlyphRole::StatusSleeping), Some("\u{f186}"));
+        assert_eq!(
+            agent_status_glyph_role(AgentStatus::Sleeping),
+            GlyphRole::StatusSleeping
+        );
         assert_eq!(
             GLYPH_CATALOG.len(),
             GlyphRole::ALL.len(),

@@ -533,6 +533,23 @@ fn invalid_team_stays_visible_with_its_error() {
 
 #[test]
 fn live_instance_state_follows_team_attention_priority() {
+    for (other, expected) in [
+        ("waiting", "blocked"),
+        ("failed", "blocked"),
+        ("paused", "paused"),
+        ("running", "working"),
+        ("success", "sleeping"),
+        ("idle", "sleeping"),
+    ] {
+        assert_eq!(
+            instance_state(&BTreeMap::from([
+                ("sleeping".to_owned(), 1),
+                (other.to_owned(), 1),
+            ])),
+            expected,
+            "sleeping with {other}"
+        );
+    }
     assert_eq!(
         instance_state(&BTreeMap::from([
             ("running".to_owned(), 2),

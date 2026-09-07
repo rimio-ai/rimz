@@ -4,7 +4,8 @@ use std::io::Write;
 
 use rimz::harness::schedule::Trigger;
 use rimz::harness::schedule::arming::{self, ArmState};
-use rimz::harness::schedule::catalog::{LoadedTask, TaskCatalog, TaskSource};
+use rimz::harness::schedule::catalog::{LoadedTask, TaskCatalog};
+use rimz::harness::schedule::pending::session_deliveries;
 use rimz::harness::schedule::signal::watcher_info;
 
 use super::*;
@@ -32,25 +33,16 @@ pub(super) fn pending_rows(ctx: &Ctx) -> Result<Vec<WakeRow>> {
     let catalog = TaskCatalog::load(Some(&ctx.workspace.project_root))?;
     let arming = arming::load();
     let now = jiff::Timestamp::now();
-    catalog
-        .visible()
-        .iter()
-        .filter(|(_, task)| task.source() == TaskSource::Instance)
-        .filter(|(_, task)| task.entry().resolved_root() == ctx.workspace.project_root)
-        .filter(|(_, task)| task.entry().wake.is_some())
-        .filter(|(_, task)| {
-            caller_session.as_ref().is_none_or(|(kind, session)| {
-                task.entry()
-                    .wake
-                    .as_ref()
-                    .is_some_and(|target| target.kind == *kind && target.session == *session)
-            })
-        })
-        .map(|(name, task)| {
-            let state = ArmState::resolve(arming.get(&task.key(name)), task.source(), now);
-            row(ctx, name, task, state)
-        })
-        .collect()
+    session_deliveries(
+        &catalog,
+        &ctx.workspace.project_root,
+        caller_session.as_ref(),
+    )
+    .map(|(name, task)| {
+        let state = ArmState::resolve(arming.get(&task.key(name)), task.source(), now);
+        row(ctx, name, task, state)
+    })
+    .collect()
 }
 
 pub(super) fn write_rows(out: &mut impl Write, rows: Vec<WakeRow>) -> Result<()> {

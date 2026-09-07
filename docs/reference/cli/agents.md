@@ -58,6 +58,8 @@ The `@` sigil is required for `message`, where it also keeps a target from being
 
 Agent launches validate every discovered `~/.agents` fragment before resolving the requested spec. A syntax error or invalid fragment fails at entry with its source path and fix; unknown fields instead print a warning, are ignored, and can be removed with `rimz setup`.
 
+Projected card `status` values are `idle`, `running`, `waiting`, `failed`, `paused`, `success`, and `sleeping`. `sleeping` means a resting agent has an instance one-shot delivery armed for its session in this workspace: a timer, watched command, or one-shot/deadline signal delivery. Standing subscriptions do not count, and working, waiting, failed, paused, or live-child delegation takes precedence. JSON exposes `pending_wakes` with each wake's name, trigger, and optional arm timestamp; timers sort by due time before commands and signals, with names breaking ties. The status is derived, not a hook-reported lifecycle value; `--when` continues to accept only raw statuses.
+
 ### Discover agent profiles
 
 ```sh

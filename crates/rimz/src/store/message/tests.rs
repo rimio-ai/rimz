@@ -14,6 +14,7 @@ fn delivery_gates_follow_agent_lifecycle() {
         (AgentStatus::Waiting, false, false, false),
         (AgentStatus::Idle, true, true, false),
         (AgentStatus::Success, true, true, false),
+        (AgentStatus::Sleeping, true, true, false),
         (AgentStatus::Failed, false, true, false),
         (AgentStatus::Paused, false, false, true),
     ];

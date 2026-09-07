@@ -46,6 +46,7 @@ glyph_roles! {
         StatusWaiting => "waiting",
         StatusAttention => "attention",
         StatusPaused => "paused",
+        StatusSleeping => "sleeping",
         StatusDone => "done",
         StatusIdle => "idle",
         StatusWorking => "working",
@@ -361,6 +362,7 @@ mod tests {
              waiting = \"?\"\n\
              attention = \"!\"\n\
              paused = \"⏸\"\n\
+             sleeping = \"s\"\n\
              done = \"✓\"\n\
              working = \"⢿\"\n\
              idle = \"○\"\n",
@@ -372,6 +374,10 @@ mod tests {
             Some("!")
         );
         assert_eq!(config.glyph("unicode", GlyphRole::StatusPaused), Some("⏸"));
+        assert_eq!(
+            config.glyph("unicode", GlyphRole::StatusSleeping),
+            Some("s")
+        );
         assert_eq!(config.glyph("unicode", GlyphRole::StatusDone), Some("✓"));
         assert_eq!(config.glyph("unicode", GlyphRole::StatusWorking), Some("⢿"));
         assert_eq!(config.glyph("unicode", GlyphRole::StatusIdle), Some("○"));

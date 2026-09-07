@@ -53,7 +53,7 @@ The top block reads the whole room in four lines:
 - **Identity.** The workspace name and its path, so a glance confirms which project this room is.
 - **Sessions and tokens.** How many agent sessions have run in the configured spend window, with the room's token breakdown pinned right: total, input, output, and cache-read. What the marks mean and how the figures add up is [Token Insight](./insight.md).
 - **Live agents and spend.** How many agents are alive right now, an unread count like `(2)` when results or questions await you, the open-PR lane count `⑃ N`, and the room's dollar spend rolling up live as agents work. The PR chip turns red for failing CI, amber while CI runs, green when every known lane passes, and keeps its cool link tone when CI is unknown. Click the unread count to filter the cards to unread rows, or click the open-PR count to filter them to lanes whose branch has an open pull request.
-- **The make-up line.** The fleet by state: `? 3  ! 1  ⏸ 0  ✓ 8` counts who asked you something, who failed, who is parked on a provider limit, and who holds a finished result, with live capacity (`⢿` working, `○` idle) on the right.
+- **The make-up line.** The fleet by state: `? 3  ! 1  ⏸ 0  ✓ 8` counts who asked you something, who failed, who is parked on a provider limit, and who holds a finished result, with calm states (`⢿` working, `☾` sleeping, `○` idle) on the right.
 
 A row of zeros with no unread count means nothing needs you, so you can skip the scan entirely. Every non-zero bucket is a click target that filters the cards to that state in every tab of the room; clearing or replacing the lens in one tab updates them all. When the agent that most needs you scrolls out of view, an `↑ N need you` banner appears; clicking it brings that card back.
 
@@ -108,7 +108,7 @@ A pane no agent has claimed (your editor, a shell, a build) renders as a slimmer
 
 ## The agent lifecycle
 
-Every card wears one state, and six cover the life of a session:
+Every card wears one state, and seven cover the life of a session:
 
 | glyph | state | meaning | needs you |
 |-------|-------|---------|-----------|
@@ -118,6 +118,7 @@ Every card wears one state, and six cover the life of a session:
 | `!` | failed | the turn errored, died on a provider API error, or a running agent went silent past the stall window | **yes** |
 | `⏸` | paused | stopped mid-turn on a provider rate limit or overload | when it recovers |
 | `✓` | done | the turn finished cleanly and holds a result | a look, when convenient |
+| `☾` | sleeping | resting until an armed one-shot wake fires; the description names the wake | a look, when convenient |
 
 The full glyph vocabulary, including the transient heads that ride over a running card (thinking before the first file edit, compacting, waiting on subagents, parked on background work), is the [interface legend](../interface/sidebar.md#reading-the-glyphs).
 
@@ -136,7 +137,9 @@ A session's life traces one loop through those states:
 - An **ask pulls the card to `waiting`**, and answering it in the pane returns the agent to work; the card notices the answer even before the turn formally moves on.
 - A turn ends **done** or **failed**; either way the agent is ready for its next prompt, and the state tells you whether to collect a result or unblock a problem.
 
-Two states are RimZ's own judgment rather than an agent report. **Paused** is derived: when a turn stops because the provider's budget window is spent, the API is overloaded, or the connection drops mid-response, the card parks at `⏸` instead of pretending to fail, and with [auto-continue](./configuration.md#resume) enabled it resumes by itself the moment the window resets or the backoff clears. **Stall** is the safety net: a running agent silent past the stall window (30 minutes by default) escalates to `!`, because silence that long usually means something needs a look; a parent quietly waiting on its subagents is exempt.
+RimZ also derives states rather than waiting for an agent report. **Paused** is derived: when a turn stops because the provider's budget window is spent, the API is overloaded, or the connection drops mid-response, the card parks at `⏸` instead of pretending to fail, and with [auto-continue](./configuration.md#resume) enabled it resumes by itself the moment the window resets or the backoff clears. **Stall** is the safety net: a running agent silent past the stall window (30 minutes by default) escalates to `!`, because silence that long usually means something needs a look; a parent quietly waiting on its subagents is exempt.
+
+**Sleeping** distinguishes a finished turn from finished work: after an agent arms a [one-shot wake](./loops.md#wake-a-running-agent) and rests, its card wears a static cool-toned moon and a description such as `wake in 12m` or `wake after: cargo test`. Working, waiting, failed, paused, and waiting on live subagents take precedence; standing subscriptions do not make an agent sleep. You can message it now without canceling the future wake. Its last result can still be unread, but sleeping itself needs no answer and sends no notification. Sleeping cards rank below running and above idle, and their cockpit bucket sits between those two on the right; click it or press `z` to filter the cards.
 
 ## Attention: the funnel
 
@@ -163,7 +166,7 @@ Glance, jump, answer: that loop is the product. Desktop, bell, and command notif
 
 ### The unread inbox surfaces in place
 
-A card turns *unread* the moment it enters `waiting`, `failed`, `paused`, or `done`, and stays unread until you focus its pane or mark it read, even after the agent recovers and moves on. The wash and blink mark it, the jump key walks unread rows oldest-actionable-first, and notifications ring it. The card keeps its place in the time and status order while the inbox gets you to it.
+A card turns *unread* the moment it enters `waiting`, `failed`, `paused`, `done`, or `sleeping`, and stays unread until you focus its pane or mark it read, even after the agent recovers and moves on. The wash and blink mark it, and the jump key walks unread rows oldest-actionable-first; sleeping preserves the result's unread cue without sending a notification. The card keeps its place in the time and status order while the inbox gets you to it.
 
 ## How the column is ordered
 
@@ -175,13 +178,13 @@ Measured from each card's last activity, in three windows:
 
 1. **Inside the first hour, blocked work climbs.** An ask, failure, or park grows more urgent the longer it waits, so a failure overdue fifty minutes outranks an ask from two minutes ago and blocked work reads oldest-first — the cheapest order to clear. Calm work keeps a flat weight, so live agents hold their place while they run. (The hour matches the agent's prompt-cache lifetime: answer inside it and the agent resumes warm.)
 2. **Between one hour and twenty-four, everything cools.** Urgency decays instead of climbing: a stale ask still leads stale calm work, but the whole window sinks beneath anything currently hot, so yesterday's unanswered question stops competing with the agent blocked right now.
-3. **Past twenty-four hours, a card sleeps.** It parks in an archive at the back, keeping only its state order, so an archived ask still reads above an archived idle agent.
+3. **Past twenty-four hours, a card archives.** It parks at the back, keeping only its state order, so an archived ask still reads above an archived idle agent. This age band is separate from the sleeping status of an agent awaiting a wake.
 
 A non-dirty merged or closed line of work with no running or attention member skips the clock and enters the archive immediately. A new run, ask, failure, or park revives it into the activity-ranked bands.
 
 ### Teams read as one
 
-A co-launched team is one line of work, so it holds one contiguous block and takes one state derived from its members: any member asking or failed makes the team **blocked**, else a parked member makes it **paused**, else a running member makes it **working**, else a finished member makes it **done**, else it is **idle**. One blocked member lifts the whole block, so a planner waiting on you blocks its coder and reviewer too, whatever they are doing; a team where one member finished while others still run reads as working, because the team is done only when every member is. The block ranks by that derived state on its oldest blocked member's clock and stays contiguous, so teammates sit side by side in their declared role order.
+A co-launched team is one line of work, so it holds one contiguous block. For sidebar ordering, any member asking or failed makes the block **blocked**, else a parked member makes it **paused**, else a running member makes it **working**, else a finished member makes it **done**, else it ranks with **idle**; sleeping members count as calm rest here. One blocked member lifts the whole block, so a planner waiting on you blocks its coder and reviewer too, whatever they are doing. The block ranks by that derived state on its oldest blocked member's clock and stays contiguous, so teammates sit side by side in their declared role order. The [`rimz teams` report](../reference/cli/teams.md#inspect-one-team) distinguishes **sleeping** between working and done, and a pending one-shot wake keeps the team from emitting `team.idle`.
 
 ### Activity decides among the calm
 
@@ -198,7 +201,7 @@ The six-row cap trims only a worktree's idle and process tail while the line of 
 
 ## Tuning
 
-Five `[agents.attention]` knobs move the boundaries: `stalled_after_secs` (a silent agent escalates to `!`, 30 minutes), `tool_repeat_warn_after` (an identical-tool run gains `⟲`, 3 calls), `tool_repeat_attention_after` (that run escalates to `!`, 20 calls), `inactive_after_secs` (hot work ends, one hour), and `archive_after_secs` (a card sleeps, 24 hours). Details in [configuration.md](./configuration.md#sidebar-rendering).
+Five `[agents.attention]` knobs move the boundaries: `stalled_after_secs` (a silent agent escalates to `!`, 30 minutes), `tool_repeat_warn_after` (an identical-tool run gains `⟲`, 3 calls), `tool_repeat_attention_after` (that run escalates to `!`, 20 calls), `inactive_after_secs` (hot work ends, one hour), and `archive_after_secs` (a card archives, 24 hours). Details in [configuration.md](./configuration.md#sidebar-rendering).
 
 ## See also
 

@@ -2,6 +2,7 @@
 
 use super::*;
 use rimz::agents::{HookIngressOwner, SubagentCorrelationInput, SubagentSpawnInput};
+use rimz::harness::schedule::{catalog::TaskCatalog, pending::pending_wakes_by_session};
 
 const MAX_SUBAGENT_PARENT_CANDIDATES: usize = 64;
 
@@ -221,8 +222,15 @@ fn record_mapped_lifecycle_observation(
                     Some(cohort.team) == member.team.as_deref() && cohort.channel == channel
                 })
                 .map_or(&[][..], |cohort| cohort.members.as_slice());
+            let sleeping = pending_wakes_by_session(
+                &TaskCatalog::load_lenient(Some(&workspace.project_root)),
+                &workspace.project_root,
+                event.at,
+            )
+            .into_keys()
+            .collect();
             for signal in rimz::harness::schedule::signal::team_lifecycle_signals(
-                event, member, live, pending,
+                event, member, live, pending, &sleeping,
             ) {
                 match store.append_signal(&workspace.session_name, (&signal).into()) {
                     Ok(_) => signals.push(signal),

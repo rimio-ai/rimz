@@ -25,6 +25,8 @@ Unknown fields print a warning, are ignored, and can be removed with `rimz setup
 
 ## Inspect one team
 
+An instance's `state` follows member-status priority: `blocked` (any waiting or failed member), then `paused`, `working` (running), `sleeping`, `done` (success), and finally `idle`. Thus a resting member with an armed one-shot delivery keeps the cohort `sleeping` rather than `done`, unless a higher-priority member state wins. Standing subscriptions do not make members sleep. Any live member's pending one-shot wake withholds `team.idle`; cancellation is reevaluated on the caller's following lifecycle boundary, not immediately on row removal.
+
 ```sh
 rimz teams show forge
 rimz teams show forge#feat-rate-limits

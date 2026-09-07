@@ -595,6 +595,8 @@ fn instance_state(counts: &BTreeMap<String, usize>) -> &'static str {
         "paused"
     } else if counts.contains_key("running") {
         "working"
+    } else if counts.contains_key("sleeping") {
+        "sleeping"
     } else if counts.contains_key("success") {
         "done"
     } else {

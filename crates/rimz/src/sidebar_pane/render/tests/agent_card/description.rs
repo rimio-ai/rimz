@@ -2,6 +2,55 @@ use super::*;
 use ratatui::text::Span;
 
 #[test]
+fn sleeping_card_describes_its_wake_using_the_snapshot_clock() {
+    let mut sleeper = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Success,
+        Some("/repo/main"),
+        Some("main"),
+        Some("finished work"),
+    );
+    sleeper.pending_wakes.push(crate::agents::PendingWake {
+        name: "wake-test".to_owned(),
+        trigger: crate::agents::PendingWakeTrigger::Timer {
+            due: fixed_now() + jiff::SignedDuration::from_mins(12),
+        },
+        armed_at: Some(fixed_now()),
+    });
+    let mut snapshot = snapshot_with(vec![sleeper]);
+    let screen = snapshot_to_screen(&snapshot, 44, 20);
+    assert!(screen.contains(Theme::fixed(false).glyph(GlyphRole::StatusSleeping)));
+    assert!(screen.contains("wake in 12m"));
+    assert!(!screen.contains("finished work"));
+    assert_snapshot("sleeping_card", screen);
+
+    let theme = Theme::fixed(false);
+    let lines = group_lines(&snapshot, &theme, 0);
+    let style = span_for(&lines, "wake in 12m").style;
+    assert_eq!(style.fg, theme.body().fg);
+    assert!(style.add_modifier.contains(Modifier::ITALIC));
+
+    snapshot.now += jiff::SignedDuration::from_mins(12);
+    assert!(snapshot_to_screen(&snapshot, 44, 20).contains("wake due"));
+
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .turn_error_label = Some("api error".to_owned());
+    let screen = snapshot_to_screen(&snapshot, 44, 20);
+    assert!(screen.contains("api error"));
+    assert!(!screen.contains("wake due"));
+
+    let card = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    card.turn_error_label = None;
+    card.status = AgentStatus::Running;
+    let screen = snapshot_to_screen(&snapshot, 44, 20);
+    assert!(screen.contains("finished work"));
+    assert!(!screen.contains("wake due"));
+}
+
+#[test]
 fn line_one_prefers_session_name_over_task() {
     let mut claude = agent(
         "claude-1",

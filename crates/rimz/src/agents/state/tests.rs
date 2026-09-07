@@ -25,6 +25,7 @@ fn seed_sets_status_phase_clocks_and_empty_enrichment() {
     assert!(running.usage.total_tokens.is_none());
     assert!(running.context.is_none());
     assert!(running.budget_park.is_none());
+    assert!(running.pending_wakes.is_empty());
     assert!(running.subagent_description.is_none());
     assert!(running.open_ask.is_none());
     assert_eq!(running.compaction_count, 0);
@@ -71,6 +72,111 @@ fn agent_status_labels_are_stable() {
     assert_eq!(AgentStatus::Success.as_str(), "success");
     assert_eq!(AgentStatus::Failed.as_str(), "failed");
     assert_eq!(AgentStatus::Paused.as_str(), "paused");
+    assert_eq!(AgentStatus::Sleeping.as_str(), "sleeping");
+}
+
+#[test]
+fn effective_status_projects_pending_wake_to_sleeping() {
+    let wake = PendingWake {
+        name: "watch".into(),
+        trigger: PendingWakeTrigger::Command {
+            command: "cargo test".into(),
+        },
+        armed_at: None,
+    };
+    for status in [
+        AgentStatus::Idle,
+        AgentStatus::Success,
+        AgentStatus::Running,
+        AgentStatus::Waiting,
+        AgentStatus::Failed,
+        AgentStatus::Paused,
+    ] {
+        let mut agent = test_agent(status, 1_000);
+        agent.pending_wakes.push(wake.clone());
+        let expected = if matches!(status, AgentStatus::Idle | AgentStatus::Success) {
+            AgentStatus::Sleeping
+        } else {
+            status
+        };
+        assert_eq!(agent.effective_status(), expected, "{status:?}");
+        agent.pending_wakes.clear();
+        assert_eq!(agent.effective_status(), status);
+    }
+    let mut parked = test_agent(AgentStatus::Running, 1_000);
+    parked.phase = TurnPhase::Parked;
+    parked.pending_wakes.push(wake);
+    assert_eq!(parked.effective_status(), AgentStatus::Sleeping);
+    assert!(!parked.holds_open_turn());
+    assert!(!AgentStatus::Sleeping.is_attention());
+    assert!(!AgentStatus::Sleeping.is_actionable());
+    assert!(AgentStatus::Sleeping.needs_a_look());
+}
+
+#[test]
+fn pending_wake_labels_and_wire_preserve_trigger_details() {
+    let now = Timestamp::from_second(1_000).unwrap();
+    let due = Timestamp::from_second(1_720).unwrap();
+    for (trigger, label) in [
+        (PendingWakeTrigger::Timer { due }, "wake in 12m"),
+        (PendingWakeTrigger::Timer { due: now }, "wake due"),
+        (
+            PendingWakeTrigger::Command {
+                command: "cargo test".into(),
+            },
+            "wake after: cargo test",
+        ),
+        (
+            PendingWakeTrigger::Signal {
+                selector: "pr.merged".into(),
+                deadline: None,
+            },
+            "wake on pr.merged",
+        ),
+        (
+            PendingWakeTrigger::Signal {
+                selector: "pr.merged".into(),
+                deadline: Some(due),
+            },
+            "wake on pr.merged · 12m left",
+        ),
+        (
+            PendingWakeTrigger::Signal {
+                selector: "pr.merged".into(),
+                deadline: Some(now),
+            },
+            "wake on pr.merged · 0m left",
+        ),
+    ] {
+        let wake = PendingWake {
+            name: "wake".into(),
+            trigger,
+            armed_at: Some(now),
+        };
+        assert_eq!(wake.label(now), label);
+        let mut agent = test_agent(AgentStatus::Success, 1_000);
+        agent.pending_wakes.push(wake.clone());
+        let value = serde_json::to_value(&agent).unwrap();
+        let decoded: AgentState = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.pending_wakes, vec![wake]);
+        assert_eq!(decoded.effective_status(), AgentStatus::Sleeping);
+    }
+    assert_eq!(
+        serde_json::to_string(&AgentStatus::Sleeping).unwrap(),
+        "\"sleeping\""
+    );
+    assert_eq!(
+        serde_json::from_str::<AgentStatus>("\"sleeping\"").unwrap(),
+        AgentStatus::Sleeping
+    );
+    let empty = serde_json::to_value(test_agent(AgentStatus::Success, 1_000)).unwrap();
+    assert!(empty.get("pending_wakes").is_none());
+    assert!(
+        serde_json::from_value::<AgentState>(empty)
+            .unwrap()
+            .pending_wakes
+            .is_empty()
+    );
 }
 
 #[test]

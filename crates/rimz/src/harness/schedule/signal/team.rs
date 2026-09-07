@@ -1,5 +1,7 @@
 //! Pure cohort edges derived from an appended member lifecycle event.
 
+use std::collections::BTreeSet;
+
 use serde_json::{Map, Value, json};
 
 use super::Signal;
@@ -7,16 +9,19 @@ use crate::agents::{
     AgentState, AgentStatus, LifecycleEvent, LifecycleSignal, LifecycleTransition,
 };
 use crate::harness::target::agent_handle;
+use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::event::SignalSource;
 use crate::store::message::MessageRecord;
 
 /// Derive team signals from the transitioning audit row and its live cohort members.
 /// `pending` is the complete pending queue, including delayed and resume-gated messages.
+/// `sleeping` contains sessions with a pending one-shot wake in this workspace.
 pub fn team_lifecycle_signals(
     event: &LifecycleEvent,
     member: &AgentState,
     live_cohort: &[&AgentState],
     pending: &[MessageRecord],
+    sleeping: &BTreeSet<(AgentKind, AgentSessionId)>,
 ) -> Vec<Signal> {
     let Some(team) = member.team.as_deref().filter(|team| !team.is_empty()) else {
         return Vec::new();
@@ -52,6 +57,11 @@ pub fn team_lifecycle_signals(
         })
     };
     let others_at_rest = others.iter().all(|agent| at_rest(agent.status));
+    let has_wake = |members: &[&AgentState]| {
+        members
+            .iter()
+            .any(|agent| sleeping.contains(&(agent.kind.clone(), agent.agent_id.clone())))
+    };
     let mut names = Vec::new();
     if !terminal
         && event.status == AgentStatus::Waiting
@@ -68,11 +78,14 @@ pub fn team_lifecycle_signals(
     let post_idle = !live.is_empty()
         && others_at_rest
         && (terminal || at_rest(event.status))
-        && !has_pending(&live);
+        && !has_pending(&live)
+        && !has_wake(&live);
     let mut members = others;
     members.push(member);
-    let prior_idle =
-        others_at_rest && event.prior_status.is_some_and(at_rest) && !has_pending(&members);
+    let prior_idle = others_at_rest
+        && event.prior_status.is_some_and(at_rest)
+        && !has_pending(&members)
+        && !has_wake(&members);
     if post_idle && !prior_idle {
         names.push("team.idle");
     }
@@ -161,6 +174,15 @@ mod tests {
         rows: &[AgentState],
         pending: &[MessageRecord],
     ) -> Vec<Signal> {
+        derive_with_sleeping(event, rows, pending, &BTreeSet::new())
+    }
+
+    fn derive_with_sleeping(
+        event: &LifecycleEvent,
+        rows: &[AgentState],
+        pending: &[MessageRecord],
+        sleeping: &BTreeSet<(AgentKind, AgentSessionId)>,
+    ) -> Vec<Signal> {
         let member = rows
             .iter()
             .find(|row| row.kind == event.kind && row.agent_id == event.agent_id)
@@ -171,7 +193,7 @@ mod tests {
             .iter()
             .find(|cohort| Some(cohort.team) == member.team.as_deref() && cohort.channel == channel)
             .map_or(&[][..], |cohort| cohort.members.as_slice());
-        team_lifecycle_signals(event, member, live, pending)
+        team_lifecycle_signals(event, member, live, pending, sleeping)
     }
 
     fn turn_end() -> LifecycleSignal {
@@ -192,6 +214,10 @@ mod tests {
         let mut rows = [coder, reviewer];
         assert!(derive(&event, &rows, &[]).is_empty());
         rows[1].status = AgentStatus::Idle;
+        for row in &rows {
+            let sleeping = BTreeSet::from([(row.kind.clone(), row.agent_id.clone())]);
+            assert!(derive_with_sleeping(&event, &rows, &[], &sleeping).is_empty());
+        }
         let signals = derive(&event, &rows, &[]);
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0].name.as_str(), "team.idle");
@@ -238,7 +264,12 @@ mod tests {
             true,
             DeliveryGate::Resume,
         );
-        let signals = derive(&event, &[coder, docs, other_team], &[queued]);
+        let sleeping = BTreeSet::from([
+            (docs.kind.clone(), docs.agent_id.clone()),
+            (other_team.kind.clone(), other_team.agent_id.clone()),
+        ]);
+        let signals =
+            derive_with_sleeping(&event, &[coder, docs, other_team], &[queued], &sleeping);
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0].payload["team"], "forge");
         assert_eq!(signals[0].payload["instance"], "forge#auth");
@@ -346,12 +377,21 @@ mod tests {
                 coder.ended_at = Some(event.at);
             }
             let mut rows = [coder, reviewer];
+            let sleeping = BTreeSet::from([(rows[1].kind.clone(), rows[1].agent_id.clone())]);
+            assert!(derive_with_sleeping(&event, &rows, &[], &sleeping).is_empty());
             let signals = derive(&event, &rows, &[]);
             assert_eq!(signals.len(), 1);
             assert_eq!(signals[0].name.as_str(), "team.idle");
             let mut already_idle = event.clone();
             already_idle.prior_status = Some(AgentStatus::Idle);
             assert!(derive(&already_idle, &rows, &[]).is_empty());
+            let sleeping = BTreeSet::from([(rows[0].kind.clone(), rows[0].agent_id.clone())]);
+            assert_eq!(
+                derive_with_sleeping(&already_idle, &rows, &[], &sleeping)[0]
+                    .name
+                    .as_str(),
+                "team.idle"
+            );
             rows[1].status = AgentStatus::Running;
             assert!(derive(&event, &rows, &[]).is_empty());
         }

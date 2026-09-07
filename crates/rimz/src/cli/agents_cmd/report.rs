@@ -37,6 +37,7 @@ pub(super) struct AgentReportEntry {
     pub mode: Option<PermissionMode>,
     pub me: bool,
     pub status: AgentStatus,
+    pub pending_wakes: Vec<rimz::agents::state::PendingWake>,
     pub phase: TurnPhase,
     pub turn_error: Option<TurnErrorReport>,
     pub ask: Option<AskReport>,
@@ -299,6 +300,7 @@ pub(super) fn build_entry(
         mode: agent.mode,
         me: me == Some(&agent.agent_id),
         status,
+        pending_wakes: agent.pending_wakes.clone(),
         phase,
         turn_error,
         ask: agent

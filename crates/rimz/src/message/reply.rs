@@ -531,7 +531,9 @@ fn step(
 
 fn step_reply(turn_started_at: Option<Timestamp>, card: CardView) -> Step {
     match card.status {
-        AgentStatus::Idle | AgentStatus::Success => Step::Finish(RunStatus::Completed),
+        AgentStatus::Idle | AgentStatus::Success | AgentStatus::Sleeping => {
+            Step::Finish(RunStatus::Completed)
+        }
         AgentStatus::Failed => Step::Finish(RunStatus::Failed),
         AgentStatus::Running
             if turn_started_at.is_some()

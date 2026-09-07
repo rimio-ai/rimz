@@ -155,14 +155,16 @@ pub(super) fn project_display_status(
             tool_repeat: agent.tool_repeat.as_ref(),
             tool_repeat_attention_after,
         });
+        let projected = source_agent.map_or(projected, |state| state.sleeping_over(projected));
         if let Some(label) = turn_error_label {
             agent.turn_error_label = label;
         }
         agent.status = projected;
         if projected != AgentStatus::Running
-            && !(projected == AgentStatus::Success && agent.phase == TurnPhase::Parked)
+            && !(matches!(projected, AgentStatus::Success | AgentStatus::Sleeping)
+                && agent.phase == TurnPhase::Parked)
         {
-            // Phase is a head on Running, plus the settled Success/Parked shape
+            // Phase is a head on Running, plus the settled Success/Sleeping/Parked shape
             // that keeps pending background work visible. Other projections to
             // a resting or attention status drop it.
             agent.phase = TurnPhase::Idle;

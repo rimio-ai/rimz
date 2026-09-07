@@ -476,6 +476,7 @@ impl ResolvedAnimations {
             AgentStatus::Idle => AnimationRole::Idle,
             AgentStatus::Success => AnimationRole::Success,
             AgentStatus::Paused => AnimationRole::Paused,
+            AgentStatus::Sleeping => AnimationRole::Sleeping,
         }
     }
 
@@ -502,6 +503,7 @@ impl ResolvedAnimations {
     pub(crate) fn has_resting_motion(&self) -> bool {
         [
             AnimationRole::Paused,
+            AnimationRole::Sleeping,
             AnimationRole::Idle,
             AnimationRole::Success,
         ]
@@ -631,6 +633,12 @@ fn builtin(role: AnimationRole, glyphs: &GlyphSet, palette: &Palette) -> Animati
             AnimationEffect::Static,
             AnimationSpeed::Normal,
         ),
+        AnimationRole::Sleeping => (
+            head(GlyphRole::StatusSleeping),
+            tone_color(palette.animation_color(AnimationColor::Cool)),
+            AnimationEffect::Static,
+            AnimationSpeed::Normal,
+        ),
         AnimationRole::Waiting => (
             head(GlyphRole::StatusWaiting),
             tone_color(palette.animation_color(AnimationColor::Warn)),
@@ -737,6 +745,17 @@ mod tests {
             );
         }
         assert_eq!(nerd.role(AnimationRole::Idle).frames(), ["\u{f2dd}"]);
+        let sleeping = indexed.role(AnimationRole::Sleeping);
+        assert_eq!(
+            sleeping.frames(),
+            [crate::theme::unicode_glyph(GlyphRole::StatusSleeping)]
+        );
+        assert_eq!(
+            sleeping.color(),
+            indexed.role(AnimationRole::Paused).color()
+        );
+        assert!(!sleeping.has_motion());
+        assert_eq!(nerd.role(AnimationRole::Sleeping).frames(), ["\u{f186}"]);
         assert_eq!(nerd.role(AnimationRole::Success).frames(), ["\u{f00c}"]);
         assert_eq!(nerd.role(AnimationRole::Failed).frames(), ["\u{f12a}"]);
     }

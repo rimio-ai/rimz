@@ -129,6 +129,20 @@ fn calm_activity_precedes_git_for_working_and_success_groups() {
 }
 
 #[test]
+fn sleeping_group_uses_idle_calm_tier() {
+    let mut snapshot = ranked_snapshot(vec![
+        agent_in("sleeping", "/repo/sleeping", AgentStatus::Sleeping, 1_000),
+        agent_in("idle", "/repo/idle", AgentStatus::Idle, 1_000),
+    ]);
+    for group in &mut snapshot.worktree_groups {
+        group.clean = Some(group.label == "sleeping");
+    }
+    snapshot.sort_groups_for_presentation();
+
+    assert_eq!(labels(&snapshot), vec!["idle", "sleeping"]);
+}
+
+#[test]
 fn clean_success_group_leads_merged_success_group() {
     let mut snapshot = ranked_snapshot(vec![
         agent_in("merged", "/repo/merged", AgentStatus::Success, 1_000),

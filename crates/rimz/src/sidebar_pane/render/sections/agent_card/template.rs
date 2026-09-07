@@ -81,9 +81,10 @@ pub(super) fn template(
         return match status {
             AgentStatus::Idle => IDENTITY,
             AgentStatus::Running | AgentStatus::Waiting => IDENTITY_DESCRIPTION_GAUGE,
-            AgentStatus::Paused | AgentStatus::Success | AgentStatus::Failed => {
-                IDENTITY_DESCRIPTION
-            }
+            AgentStatus::Paused
+            | AgentStatus::Success
+            | AgentStatus::Failed
+            | AgentStatus::Sleeping => IDENTITY_DESCRIPTION,
         };
     }
 
@@ -108,11 +109,12 @@ mod tests {
         CardStage::Fresh { labeled: true },
         CardStage::Engaged,
     ];
-    const STATUSES: [AgentStatus; 6] = [
+    const STATUSES: [AgentStatus; 7] = [
         AgentStatus::Idle,
         AgentStatus::Running,
         AgentStatus::Waiting,
         AgentStatus::Paused,
+        AgentStatus::Sleeping,
         AgentStatus::Success,
         AgentStatus::Failed,
     ];
@@ -132,9 +134,10 @@ mod tests {
             return match status {
                 AgentStatus::Idle => IDENTITY,
                 AgentStatus::Running | AgentStatus::Waiting => IDENTITY_DESCRIPTION_GAUGE,
-                AgentStatus::Paused | AgentStatus::Success | AgentStatus::Failed => {
-                    IDENTITY_DESCRIPTION
-                }
+                AgentStatus::Paused
+                | AgentStatus::Success
+                | AgentStatus::Failed
+                | AgentStatus::Sleeping => IDENTITY_DESCRIPTION,
             };
         }
         match (stage, expanded, density) {

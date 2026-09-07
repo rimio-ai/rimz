@@ -27,6 +27,7 @@ mod config_edit;
 pub mod fire;
 pub mod instances;
 mod overlay_store;
+pub mod pending;
 pub mod run_log;
 pub mod runner;
 pub mod signal;
