@@ -46,7 +46,7 @@ Combined stdout and stderr go to `~/.local/state/rimz/workspaces/<workspace-id>/
 
 ## List and cancel
 
-`rimz wake list` shows pending instance delivery rows in this workspace, including loop and team subscriptions. An identified agent sees only rows targeting its session; a user shell can read every delivery row in the room. The list includes name, state, target, age, and trigger, including signal matches. A command row reports `watching pid <PID>` or `watcher lost`.
+`rimz wake list` shows pending instance delivery rows in this workspace, including loop and team subscriptions. An identified agent sees only rows targeting its session; a user shell can read every delivery row in the room. The list includes name, state, target, age, and trigger, including signal matches. Disabled or paused rows show their held state rather than waiting or due. An active command row reports `watching pid <PID>` or `watcher lost`.
 
 `rimz wake cancel <name>` cancels a pending row targeting the caller; `rimz wake cancel --all` cancels every such row, including loop and team deliveries. A name and `--all` are mutually exclusive. Cancellation removes rows first and sends SIGTERM to each watcher's process group, stopping its command too. Every cancel prints the canceled names followed by the remaining pending rows, including an explicit empty state. JSON returns `{"canceled":[…],"pending":[…]}`.
 

@@ -3,6 +3,7 @@ use serde::Serialize;
 use std::io::Write;
 
 use rimz::harness::schedule::Trigger;
+use rimz::harness::schedule::arming::{self, ArmState};
 use rimz::harness::schedule::catalog::{LoadedTask, TaskCatalog, TaskSource};
 use rimz::harness::schedule::signal::watcher_info;
 
@@ -29,6 +30,8 @@ pub(super) fn run(json: bool, globals: &GlobalFlags) -> Result<()> {
 pub(super) fn pending_rows(ctx: &Ctx) -> Result<Vec<WakeRow>> {
     let caller_session = caller_session(ctx)?;
     let catalog = TaskCatalog::load(Some(&ctx.workspace.project_root))?;
+    let arming = arming::load();
+    let now = jiff::Timestamp::now();
     catalog
         .visible()
         .iter()
@@ -43,7 +46,10 @@ pub(super) fn pending_rows(ctx: &Ctx) -> Result<Vec<WakeRow>> {
                     .is_some_and(|target| target.kind == *kind && target.session == *session)
             })
         })
-        .map(|(name, task)| row(ctx, name, task))
+        .map(|(name, task)| {
+            let state = ArmState::resolve(arming.get(&task.key(name)), task.source(), now);
+            row(ctx, name, task, state)
+        })
         .collect()
 }
 
@@ -67,7 +73,7 @@ pub(super) fn write_rows(out: &mut impl Write, rows: Vec<WakeRow>) -> Result<()>
     Ok(())
 }
 
-fn row(ctx: &Ctx, name: &str, task: &LoadedTask) -> Result<WakeRow> {
+fn row(ctx: &Ctx, name: &str, task: &LoadedTask, arm_state: ArmState) -> Result<WakeRow> {
     let parsed = task.trigger().as_ref().map_err(Clone::clone)?;
     let target = task
         .entry()
@@ -114,6 +120,13 @@ fn row(ctx: &Ctx, name: &str, task: &LoadedTask) -> Result<WakeRow> {
         },
         target: target.handle.clone(),
         age,
-        state,
+        state: match arm_state {
+            ArmState::Live => state,
+            ArmState::Disabled(_) => "disabled".to_owned(),
+            ArmState::Paused(until) => format!(
+                "paused · {}",
+                super::super::render::rel_until(until, jiff::Timestamp::now())
+            ),
+        },
     })
 }
