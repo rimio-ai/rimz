@@ -65,7 +65,8 @@ path = "crates/rimz/src/agents"
 upward-dependencies = ["harness::target"]
 # The parent-link predicate is shared by store, harness and CLI consumers.
 # Attribution adds lifetime values, boundary queries and unreadable-path warnings.
-surface-budget = 999
+# Pending-wake vocabulary and rest projection are shared by harness and renderers.
+surface-budget = 1005
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -136,7 +137,8 @@ upward-dependencies = ["sidebar::refresh"]
 # Launch-row selection is shared by ancestry and CLI parent consumers.
 # Team inspection shares scratch discovery and board-stage records with launch reminders.
 # Delivery specs and team subscriptions share the CLI/library boundary.
-surface-budget = 574
+# Read-only pending deliveries are shared by wake listings, hooks and enrichment.
+surface-budget = 577
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
