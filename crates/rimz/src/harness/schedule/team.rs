@@ -1,6 +1,6 @@
 //! Team-declared standing subscriptions pinned to registered member sessions.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use super::arm::{
     self, DeliveryName, DeliveryPrompt, DeliveryProvenance, DeliverySpec, DeliveryTrigger,
@@ -94,7 +94,7 @@ pub fn arm_member(
         session: member.agent_id.clone(),
         handle: crate::harness::target::agent_handle(member, &peers, true),
     };
-    let mut ordinals = BTreeMap::new();
+    let mut names = BTreeSet::new();
     let mut specs = Vec::new();
     for (index, binding) in team
         .signals
@@ -103,10 +103,14 @@ pub fn arm_member(
         .filter(|(_, b)| b.role == role)
     {
         let result = (|| -> Result<DeliverySpec, TeamBindingFailure> {
-            let base = member_task_name(name, &channel, role, &binding.signal, 1)?;
-            let ordinal = ordinals.entry(base.to_string()).or_insert(0);
-            *ordinal += 1;
-            let task_name = member_task_name(name, &channel, role, &binding.signal, *ordinal)?;
+            let mut ordinal = 1;
+            let task_name = loop {
+                let candidate = member_task_name(name, &channel, role, &binding.signal, ordinal)?;
+                if names.insert(candidate.to_string()) {
+                    break candidate;
+                }
+                ordinal += 1;
+            };
             let selector = super::parse_signal_selector(
                 &task_name.to_string(),
                 &binding.signal,
@@ -176,6 +180,8 @@ fn member_task_name(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     #[test]
