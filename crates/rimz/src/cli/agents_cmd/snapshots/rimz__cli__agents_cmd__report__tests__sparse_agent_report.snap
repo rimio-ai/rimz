@@ -14,6 +14,7 @@ expression: entry
   "mode": null,
   "me": false,
   "status": "idle",
+  "pending_wakes": [],
   "phase": "idle",
   "turn_error": null,
   "ask": null,
