@@ -2932,6 +2932,21 @@ fn malformed_schedule_stays_visible_and_manual_action_remains_runnable() {
             && fire.contains("check passed"),
         "{list}\n{show}\n{fire}"
     );
+
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "manual-invalid-session", "feature-manual");
+    let mut config: LoopConfig =
+        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
+    let entry = config.tasks.0.get_mut("invalid").unwrap();
+    entry.check = None;
+    entry.wake = Some(TaskTarget {
+        kind: AgentKind::new_unchecked("claude"),
+        session: AgentSessionId::from("manual-invalid-session"),
+        handle: "@claude#feature-manual".to_owned(),
+    });
+    write_loop_config(&env, &toml::to_string(&config).unwrap());
+    let fire = loop_ok(&env, &["loop", "fire", "invalid"]);
+    assert!(fire.contains("delivered"), "{fire}");
 }
 
 #[test]
