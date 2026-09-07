@@ -1,6 +1,6 @@
 //! Integration coverage for `rimz loop` instance-bound delivery.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -100,6 +100,39 @@ fn team_signal_binding_registers_delivers_and_retires() {
     assert_eq!(read_loop_instances(&env), armed);
     team_signal_hook(&env, &cwd, "sess-team-coder", "SessionEnd");
     assert!(read_loop_instances(&env).0.is_empty());
+}
+
+#[test]
+fn team_signal_slug_collisions_preserve_distinct_subscriptions() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    write_team_signal_config(&env);
+    std::fs::write(
+        env.config_root().join("rimz/agents.toml"),
+        r#"
+[agents.teams.forge]
+roles = [{ role = "coder", profile = "claude" }]
+[[agents.teams.forge.signals]]
+signal = "deploy.foo-bar"
+role = "coder"
+[[agents.teams.forge.signals]]
+signal = "deploy.foo.bar"
+role = "coder"
+"#,
+    )
+    .unwrap();
+    seed_team_signal_member(&env, &env.project_root, "slug-session", None);
+    team_signal_hook(&env, &env.project_root, "slug-session", "SessionStart");
+    let tasks = read_loop_instances(&env);
+    assert_eq!(tasks.0.len(), 2);
+    assert_eq!(
+        tasks
+            .0
+            .values()
+            .filter_map(|entry| entry.signal.as_deref())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["deploy.foo-bar", "deploy.foo.bar"])
+    );
 }
 
 #[test]
