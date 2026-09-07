@@ -4,7 +4,9 @@
 
 A team is a configured set of role bindings and a layout.
 Each role keeps its own model, prompt, context window, and address while the team shares one lane.
-The definition may set `leader`, `layout`, and `scratch-files` alongside its `roles`; `scratch-files` is a list of verbatim gitignore patterns for ephemeral team memory, registered on launch and resume.
+
+The definition may set `leader`, `layout`, `stages`, and `scratch-files` alongside its `roles`. `stages` declares an optional ordered pipeline, such as `["Explore", "Plan", "Implement", "Review", "Submit", "Reflect"]`; names must be nonblank and unique, and an empty list means undeclared. `scratch-files` is a list of verbatim gitignore patterns for ephemeral team memory, registered on launch and resume.
+
 The [teams guide](../../guide/teams.md) explains how to design a team; this page owns the command forms.
 
 ## List teams
@@ -16,9 +18,7 @@ rimz teams list
 rimz teams ls --json
 ```
 
-The bare command and `list`/`ls` merge the effective team definitions with live team instances.
-It shows the resolved role, model, and effort summary, each live lane and member count, and either the live state or the definition error.
-Live instances remain visible when their definition has since been removed.
+The bare command and `list`/`ls` merge the effective team definitions with live team instances. The columns are `TEAM LANE STAGE PR STATUS`, with one row per live cohort; `PR` includes the projected PR number and CI indicator when available. A definition with no live cohort gets one row with `-` for lane, stage, and PR, and `ready` or a definition error for status. Definition errors remain visible on live rows, and live instances remain visible when their definition has since been removed. Resolved roles, models, and effort stay in `show`.
 
 The effective catalogue merges the machine `agents.toml`, fragments under `~/.agents/teams/`, and a trusted repository overlay.
 An unreadable or invalid effective config fails at entry with the source error.
@@ -37,9 +37,27 @@ rimz teams show forge --json
 
 `show` and its `inspect` alias name the best-effort definition source, layout, leader, and validation result, then list each resolved role's profile or kind, model, effort, and mode.
 When a role has system-prompt files, the human report points to `--json`, whose `system_prompt_file` and `append_system_prompt_files` fields expose the complete resolved stack.
-Live instances include the lane, member handle and status, context fill, and tracked session cost.
+
+Each live cohort gets its own block: lane and advisory board stage with optional owner; absolute worktree path and branch; declared stages; cached PR/CI facts and URL; and matching memory files with absolute paths, line counts, and modification ages. The member table is `MEMBER STATUS ACTIVITY CTX COST AGE`; `AGE` measures time since last activity, not the last heartbeat. Undeclared stages and empty memory scans omit their lines. If members disagree on the worktree or branch, that value is unavailable rather than chosen from an arbitrary member.
+
+The current stage comes from the first `Stage:` line in `<worktree>/blackboard.md`, for example `Stage: Plan (@planner)`. A terminal ` (@owner)` suffix supplies the owner; other parenthesized text stays part of the stage name. This is advisory text maintained by the team, never inferred from member status and never proof of completion. The stages line brackets the declared name equal to the board stage's first whitespace-delimited word, case-sensitively; an unknown stage brackets nothing. A missing or unreadable board omits the header's stage suffix, even when a pipeline is declared.
+
+PR/CI comes from the sidebar-refreshed cache; `teams` and `show` do not contact the forge. Only available facts are shown, and `pr none` means nothing is projected, not that RimZ verified there is no PR. Before a room snapshot is published, live cohorts can still be inspected without projected PR or activity enrichment.
+
 Use `team#worktree` or `-w NAME` to narrow the live section by exact lane or member worktree; an ended or not-yet-live lane reports that no instance is live and still exits successfully.
 The report ends with copy-ready launch and resume forms when no instance is live, or lane-qualified reach and focus forms when exactly one live cohort is shown.
+
+`rimz teams --json` emits an array of team records; `rimz teams show <team> --json` emits one team record. Both retain the definition, resolved `roles`, validation, and `instances` array. Each instance retains `channel`, `state`, `status_counts`, and `members` and adds:
+
+| Field | Meaning |
+| --- | --- |
+| `worktree`, `branch` | Absolute checkout path and branch, or `null` when unavailable or conflicting. |
+| `stages` | Ordered declared stage names; `[]` when undeclared or the definition is gone. |
+| `stage` | `{ "name": "Plan", "owner": "planner" }`, with the owner stored without `@`; `owner` can be `null`, and absent board stage is `null`. |
+| `pr` | `number`, `state`, `ci`, and `url`, each nullable; the whole value is `null` when no facts are projected. |
+| `memory` | An array of `{ "path": …, "lines": …, "modified_at": … }` records with absolute paths and UTC timestamps; unavailable modification times are `null`. |
+
+Each member also exposes `phase`, nullable `activity`, and `last_activity_at` as a UTC timestamp alongside its handle, kind, status, context fill, and cost. The new optional values serialize as `null`, and arrays remain present even when empty.
 
 ## Launch a team
 
@@ -56,8 +74,18 @@ rimz teams launch forge
 The bare-name form and `launch` verb accept a configured team name and send an optional trailing prompt to its configured leader.
 It uses the same launch and relaunch-reconciliation path as `rimz agents <team>`, including worktree creation, channel placement, pull-request checkout, and existing-cohort focus or recovery.
 When an agent launches a team, its members are top-level peers rather than children of the caller.
-After opening the panes, a fresh launch prints the minted member handles as `starting`, marks the effective leader, and includes copy-ready `Check` and `Reach` commands.
-Members report their live status asynchronously, so `rimz teams show team#worktree` remains the source of truth rather than the receipt.
+
+After opening new panes, a fresh launch prints the team and lane, absolute worktree path and actual branch when available, declared stages when present, and the absolute `<worktree>/blackboard.md` path even if the board does not exist yet. Each member row shows its minted handle, provider, and resolved model (`-` when unset), marking the effective leader rather than printing `starting`. An optional `prompt` line names its recipient and echoes the supplied prompt, before reminders, with whitespace collapsed, quotes escaped, and text clipped to terminal width. The receipt records launch inputs, not confirmation that a provider received or acted on the prompt.
+
+The receipt ends with these lane-qualified hints (shown here for `forge#feat-rate-limits`):
+
+```text
+Check: rimz teams show forge#feat-rate-limits
+Reach: rimz message @planner#feat-rate-limits '<text>'
+Wait:  rimz wake --signal team.idle --match instance=forge#feat-rate-limits
+```
+
+Startup remains asynchronous: the receipt is not a readiness barrier, and members may not yet appear in `teams show`. Inspect the cohort for live status. `Wait` arms a one-shot wake on a future transition to `team.idle`; it does not block until readiness or completion, and idle does not mean the task is done. Signals do not replay: if the cohort was already idle before the wake was armed, that transition will not wake you. Inspect current state as well as arming the wake; [signal-wake deadlines and delivery](./wake.md#triggers) apply. Launch has no JSON receipt; `--json` is for list and inspection.
 
 `rimz teams` sets where a cohort runs, whether it resumes, and what each member may spend.
 `rimz agents` sets what an agent is — model, effort, prompts, permission posture, name, pane placement, supervised runs.

@@ -102,6 +102,7 @@ fn team() -> crate::config::Team {
         leader: Some("planner".to_owned()),
         layout: None,
         scratch_files: vec!["blackboard.md".to_owned()],
+        stages: Vec::new(),
     }
 }
 

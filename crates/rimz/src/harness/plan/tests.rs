@@ -334,6 +334,7 @@ fn subagent_doorway_keeps_team_roles_on_agent_profiles() {
             leader: None,
             layout: None,
             scratch_files: Vec::new(),
+            stages: Vec::new(),
         },
     );
     let launch = effective_launch(&machine, dir.path());

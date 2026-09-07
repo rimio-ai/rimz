@@ -101,6 +101,16 @@ impl Ctx {
         super::alive_snapshot(&self.store, &self.workspace.session_name)
     }
 
+    pub(crate) fn published_snapshot(&self) -> Result<SidebarSnapshot> {
+        rimz::sidebar::consumer::PublishedSnapshotReader::new(
+            self.runtime().clone(),
+            self.workspace.session_name.clone(),
+            None,
+        )
+        .read(self.store.paths())
+        .context("reading the room snapshot")
+    }
+
     /// The snapshot a command resolves an address against. Unlike the
     /// rollup-only `cached_snapshot`, this folds a *fresh* live pane frame onto the
     /// rollup without the render spine, so a just-started sessionless pane is

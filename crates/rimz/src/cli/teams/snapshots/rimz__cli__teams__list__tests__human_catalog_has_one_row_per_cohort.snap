@@ -1,0 +1,7 @@
+---
+source: crates/rimz/src/cli/teams/list.rs
+expression: "String::from_utf8(rendered.into_inner()).unwrap()"
+---
+TEAM   LANE     STAGE                       PR     STATUS
+forge  #first   Implement (delta) (@coder)  #41 ✓  working
+forge  #second  -                           #42 ✓  working

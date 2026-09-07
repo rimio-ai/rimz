@@ -84,6 +84,7 @@ fn default_machine_teams() -> TeamsConfig {
             leader: None,
             layout: Some("claude,codex".to_owned()),
             scratch_files: Vec::new(),
+            stages: Vec::new(),
         },
     )]))
 }
@@ -172,6 +173,8 @@ pub struct Team {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub scratch_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stages: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

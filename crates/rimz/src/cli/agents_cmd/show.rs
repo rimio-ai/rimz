@@ -191,13 +191,7 @@ pub(super) fn show_agent(
 ) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let runtime = ctx.runtime();
-    let snapshot = rimz::sidebar::consumer::PublishedSnapshotReader::new(
-        runtime.clone(),
-        ctx.workspace.session_name.clone(),
-        None,
-    )
-    .read(ctx.store.paths())
-    .context("reading the room snapshot")?;
+    let snapshot = ctx.published_snapshot()?;
     let (report, deferred_error) = collect_show_report(
         &ctx.store,
         &ctx.workspace,

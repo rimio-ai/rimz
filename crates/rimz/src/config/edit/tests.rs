@@ -380,6 +380,7 @@ fn dynamic_profile_and_team_field_lists_match_serialized_schema() {
         leader: Some("lead".to_owned()),
         layout: Some("lead".to_owned()),
         scratch_files: vec!["notes/".to_owned()],
+        stages: vec!["Explore".to_owned(), "Plan".to_owned()],
     };
 
     let profile_keys: std::collections::BTreeSet<_> = toml::Value::try_from(profile)
@@ -412,6 +413,30 @@ fn dynamic_profile_and_team_field_lists_match_serialized_schema() {
             .map(|field| (*field).to_owned())
             .collect(),
         "TEAM_FIELDS drifted from Team serialization"
+    );
+}
+
+#[test]
+fn team_stages_parse_default_and_round_trip() {
+    use crate::config::Team;
+
+    let undeclared: Team = toml::from_str("layout = 'claude,codex'").expect("team");
+    assert!(undeclared.stages.is_empty());
+    assert!(
+        !toml::to_string(&undeclared)
+            .expect("serialize team")
+            .contains("stages")
+    );
+
+    let declared: Team = toml::from_str(
+        "layout = 'claude,codex'\nstages = ['Explore', 'Plan', 'Implement (delta)']",
+    )
+    .expect("stages");
+    assert_eq!(declared.stages, ["Explore", "Plan", "Implement (delta)"]);
+    let serialized = toml::to_string(&declared).expect("serialize stages");
+    assert_eq!(
+        toml::from_str::<Team>(&serialized).expect("round trip"),
+        declared
     );
 }
 

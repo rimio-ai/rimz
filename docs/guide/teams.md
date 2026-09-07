@@ -67,11 +67,11 @@ The planner comes back to you at its design gates; the sidebar lifts the whole t
 
 ## See and drive your teams
 
-The team catalogue merges configured definitions with the cohorts alive in this room:
+When several copies of a team are working in parallel, checking each pane loses the overview. The team catalogue gives each live cohort its own row with lane, stage, PR/CI, and status; `show` opens the detail for one line of work:
 
 ```sh
 rimz teams                              # every definition and live instance
-rimz teams show forge#feat-query        # roles, models, validation, and one live cohort
+rimz teams show forge#feat-query        # stage, PR/CI, memory files, and member activity
 rimz teams forge -w feat-query          # launch or reconcile one cohort
 rimz teams resume forge                 # reopen its newest closed cohort
 rimz teams focus forge                  # jump to the role that needs attention
@@ -81,7 +81,19 @@ rimz teams stop forge                   # close the whole live cohort
 
 Add `--json` to `rimz teams` or `show` for the structured report.
 The bare team name and the longer `launch` form use the same reconciliation engine as `rimz agents <team>`, while `resume`, `focus`, `restart`, and `stop` keep the cohort lifecycle together.
-Fresh launches that open a new pane or tab print the handles RimZ minted as `starting`, followed by copy-ready commands to check the cohort and reach its leader; live status arrives asynchronously and stays authoritative in `teams show`.
+
+Fresh launches that open a new pane or tab print the absolute worktree path and branch, declared stages, board path, each member's handle and resolved model, and the effective leader. If you supplied a task, the receipt names its recipient and echoes a shortened version of that prompt. This tells you how the team was launched, not whether its providers are ready: startup is asynchronous, and members may not yet appear in `teams show`.
+
+Follow the receipt's `Check` command to see each cohort's member status, activity, context fill, cost, and time since last activity. The report also lists existing memory files by absolute path with line counts and modification ages, so you can open the board or notes directly rather than read every pane. Stage comes from the team's `Stage:` line in the worktree's `blackboard.md`; it is an advisory progress note, not a state inferred from idle or running agents. PR/CI reflects the room's cached observations, not a fresh forge query; `none` means no PR information is available in the report, not a verified absence of a PR.
+
+Use `Reach` to message the leader, or the receipt's `Wait` command to be woken on the cohort's next idle transition instead of polling. For an agent waiting on this cohort:
+
+```sh
+rimz wake --signal team.idle --match instance=forge#feat-query
+```
+
+This arms a future notification, not a startup or completion barrier. Signals are transition-only and never replay: if the team was already idle before you armed the wake, that event is missed. Check current state too, and do not treat idle as proof that the work is complete. The [wake reference](../reference/cli/wake.md#triggers) covers targets, timeouts, and delivery.
+
 When the same team is live in several lanes, run the lifecycle command inside the lane you mean or select it with `team#worktree` or `-w NAME`.
 The `COST` in `rimz teams show`, the team's collapsed finished sidebar receipt, and attribution use the same all-in lifetime fold across every resumed session of each role and every subagent it spawned. Attribution's `subagents` line breaks that spend down by task. Expanding a finished receipt puts each role's lifetime cost on its card, and those cards add back to the receipt; live cards remain scoped to the current provider session.
 All three figures cover the worktree's current life, so a name reused by a later cohort in a recreated worktree reports that cohort alone, and a removed worktree contributes nothing anywhere.
@@ -98,7 +110,8 @@ A team in `agents.toml` (or a drop-in fragment like forge's `team.toml`) is a li
 
 [agents.teams.forge]
 layout = "planner,coder+reviewer"
-scratch-files = ["/plan.md", "/result.md", "/review.md"]
+scratch-files = ["/blackboard.md", "/*-notes.md"]
+stages = ["Explore", "Plan", "Implement", "Review", "Submit", "Reflect"]
 
 [[agents.teams.forge.roles]]
 role = "planner"
@@ -112,7 +125,6 @@ system-prompt-file = "planner.md"
 [[agents.teams.forge.roles]]
 role = "coder"
 profile = "codex"
-model = "gpt-5.6-sol"
 effort = "xhigh"
 args = "--strict-config -c 'web_search=\"cached\"' -c 'features.goals=false' -c 'features.multi_agent=false' -c 'features.shell_snapshot=true' -c 'features.shell_tool=true' -c 'features.skill_mcp_dependency_install=false' -c 'features.tool_call_mcp_elicitation=false' -c 'features.unified_exec=true' -c 'features.browser_use=false' -c 'features.browser_use_external=false' -c 'features.computer_use=false' -c 'features.in_app_browser=false' -c 'features.image_generation=false' -c 'features.tool_suggest=false' -c 'features.memories=false' -c 'features.default_mode_request_user_input=false' -c 'skills.include_instructions=true'"
 system-prompt-file = "coder.md"
@@ -129,7 +141,9 @@ system-prompt-file = "reviewer.md"
 
 `scratch-files` declares the workflow's ephemeral team memory as verbatim gitignore patterns. On every launch or resume, RimZ appends missing patterns to the repository's `.git/info/exclude`; the leading `/` anchors these names at the checkout root. Linked worktrees commonly share that exclude file with the main checkout, so a declared name is ignored as untracked everywhere in the repository, not only in this team's worktree. To reverse it, delete those pattern lines from `.git/info/exclude`. Once the branch content has landed, excluded scratch files no longer keep the worktree dirty: post-exit cleanup and `rimz gc` may remove the tree without a dirty-tree prompt, deleting the scratch files with it.
 
-At launch, adapters with reminder support (currently Claude, Codex, Qwen, and Droid) tell each member its worktree, team, role, channel, leader and teammates; which model and effort it runs on; whether the session is fresh or resumed; and which declared scratch files existed then, with line counts. The model line comes from the role's resolved launch settings and is switched off per profile with [`model-reminder = false`](./configuration.md#profiles). On a reused worktree, RimZ reports leftover scratch files as earlier run state rather than touching them, so the member can read them before acting.
+Declare `stages` when the team follows a repeatable pipeline, so the receipt shows what lies ahead and `show` can mark its current step. The team writes and updates `blackboard.md`, for example with `Stage: Implement (@coder)`, and creates its own notes; RimZ does not create these files or advance stages. The board path is fixed at the worktree root, even if it is not listed in `scratch-files`. Stage ordering and validation are covered in [configuration](./configuration.md#teams).
+
+At launch, adapters with reminder support (currently Claude, Codex, Qwen, and Droid) tell each member its worktree, team, role, channel, leader and teammates; which model and effort it runs on; whether the session is fresh or resumed; and which declared scratch files existed then, with line counts. `teams show` scans those same patterns again when you inspect the cohort. The model line comes from the role's resolved launch settings and is switched off per profile with [`model-reminder = false`](./configuration.md#profiles). On a reused worktree, RimZ reports leftover scratch files as earlier run state rather than touching them, so the member can read them before acting.
 
 Launching the team name opens every member in that layout, and each answers to its role handle: `@reviewer` inside the team's channel, `forge.reviewer` from anywhere in the workspace. A team launched by another agent is still a top-level peer cohort, not a child of the caller. The optional `leader` names the role that receives a trailing launch prompt; without it, the first declared role leads. `rimz teams forge -w feat-x "task"` therefore seeds the planner directly, while the rest of the team starts ready for its hand-offs. `rimz agents forge.reviewer` launches or re-adds that one role with the same identity it has inside the full team, and from a pane in the team's own channel the bare `rimz agents reviewer` means the same thing.
 
@@ -143,7 +157,7 @@ Point any co-launched layout — a named team or an inline multi-agent spec — 
 
 When the cohort is closed and the tree still carries work, `rimz teams forge -w feat-rate-limits` asks whether to resume the team, launch it fresh, or cancel, offering `(resume/fresh/cancel)` with `resume` as the default.
 
-Choose `fresh` when you want new sessions without losing the previous run's work. The branch, uncommitted changes, and declared scratch files such as `plan.md` and `result.md` stay in the same checkout. The new members receive a reminder of existing scratch files so they can read the old run before acting.
+Choose `fresh` when you want new sessions without losing the previous run's work. The branch, uncommitted changes, and declared scratch files such as `blackboard.md` and `plan-notes.md` stay in the same checkout. The new members receive a reminder of existing scratch files so they can read the old run before acting.
 
 When the tree is instead clean and its content has landed, the choices are `remove`, `fresh`, and `cancel`, defaulting to `cancel`, because removing a merged worktree deletes the checkout and its branch. Pressing Enter takes the default, and any answer the prompt does not recognize cancels.
 

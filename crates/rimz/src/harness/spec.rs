@@ -287,6 +287,12 @@ pub enum LayoutErr {
         pattern: String,
         reason: &'static str,
     },
+    #[error(
+        "invalid stage name {name:?} in team `{team}`; stages cannot be empty or whitespace-only"
+    )]
+    InvalidStageName { team: String, name: String },
+    #[error("duplicate stage `{name}` in team `{team}`")]
+    DuplicateStage { team: String, name: String },
     #[error("invalid profile `{profile}`: {reason}")]
     InvalidProfile { profile: String, reason: String },
     #[error(
@@ -1513,6 +1519,21 @@ fn prepare_team<'a>(
     profiles: &ProfilesConfig,
     base_override: Option<&ResolvedProfile>,
 ) -> Result<PreparedTeam<'a>> {
+    let mut stages = BTreeSet::new();
+    for stage in &team.stages {
+        if stage.trim().is_empty() {
+            return Err(LayoutErr::InvalidStageName {
+                team: name.to_owned(),
+                name: stage.clone(),
+            });
+        }
+        if !stages.insert(stage) {
+            return Err(LayoutErr::DuplicateStage {
+                team: name.to_owned(),
+                name: stage.clone(),
+            });
+        }
+    }
     for pattern in &team.scratch_files {
         if let Some(reason) = invalid_scratch_pattern(pattern) {
             return Err(LayoutErr::InvalidScratchPattern {

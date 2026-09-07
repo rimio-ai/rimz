@@ -57,6 +57,7 @@ fn team(roles: Vec<RoleBinding>) -> Team {
         leader: None,
         layout: None,
         scratch_files: Vec::new(),
+        stages: Vec::new(),
     }
 }
 
@@ -66,6 +67,7 @@ fn team_with_layout(roles: Vec<RoleBinding>, layout: &str) -> Team {
         leader: None,
         layout: Some(layout.to_owned()),
         scratch_files: Vec::new(),
+        stages: Vec::new(),
     }
 }
 
@@ -1218,6 +1220,38 @@ fn team_validation_rejects_invalid_roles_and_layouts() {
 }
 
 #[test]
+fn team_validation_rejects_empty_and_duplicate_stages() {
+    let validate = |stages: &[&str]| {
+        let mut candidate = team_with_layout(Vec::new(), "claude,codex");
+        candidate.stages = stages.iter().map(|stage| (*stage).to_owned()).collect();
+        validate_config(
+            &no_profiles(),
+            &no_commands(),
+            &TeamsConfig(BTreeMap::from([("review".to_owned(), candidate)])),
+        )
+    };
+    for name in ["", " \t ", "\u{2003}"] {
+        assert_eq!(
+            validate(&["Explore", name]),
+            Err(LayoutErr::InvalidStageName {
+                team: "review".to_owned(),
+                name: name.to_owned(),
+            })
+        );
+    }
+    assert_eq!(
+        validate(&["Plan", "Implement", "Plan"]),
+        Err(LayoutErr::DuplicateStage {
+            team: "review".to_owned(),
+            name: "Plan".to_owned(),
+        })
+    );
+    validate(&[]).expect("undeclared stages");
+    validate(&["Explore", "Plan", "Implement (delta)"]).expect("ordered stages");
+    validate(&["Plan", "plan"]).expect("stage names are case-sensitive");
+}
+
+#[test]
 fn team_validation_rejects_unsafe_scratch_patterns() {
     let profiles = profiles([("planner", profile("claude"))]);
     let error = |pattern: &str| {
@@ -1340,6 +1374,7 @@ fn team_leader_validation_accepts_one_target() {
         leader: Some(leader.to_owned()),
         layout: Some(layout.to_owned()),
         scratch_files: Vec::new(),
+        stages: Vec::new(),
     };
     validate(layout_only("claude", "claude,codex")).expect("unique layout leader");
     assert!(matches!(
