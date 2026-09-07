@@ -503,16 +503,48 @@ mod tests {
     }
 
     #[test]
+    fn sleeping_cycle_notifies_only_when_the_result_finishes() {
+        let mut episodes = UnreadEpisodes::empty();
+        let mut notifications = crate::sidebar::notify::NotificationState::default();
+        let prefs = crate::config::NotificationsPrefs {
+            triggers: vec![crate::config::NotificationTrigger::Success],
+            coalesce_ms: 0,
+            ..Default::default()
+        };
+        for (status, at) in [
+            (AgentStatus::Sleeping, 1_000),
+            (AgentStatus::Running, 2_000),
+            (AgentStatus::Success, 3_000),
+        ] {
+            let mut snapshot = snapshot(vec![row("a", status, at)]);
+            let out = episodes.reconcile(&mut snapshot, &ReadMarks::empty(), false);
+            let sent = notifications.evaluate(&snapshot, &out.opened, &prefs, at as u64);
+            let finished = status == AgentStatus::Success;
+            assert_eq!(snapshot.worktree_groups[0].rows[0].unread, finished);
+            assert_eq!(out.opened.len(), usize::from(finished));
+            assert_eq!(sent.len(), usize::from(finished));
+            if finished {
+                assert_eq!(
+                    sent[0].notification_kind,
+                    crate::config::NotificationKind::Success
+                );
+            }
+        }
+    }
+
+    #[test]
     fn stays_unread_across_return_to_running() {
         let mut episodes = UnreadEpisodes::empty();
         let mut waiting = snapshot(vec![row("a", AgentStatus::Waiting, 1_000)]);
         episodes.reconcile(&mut waiting, &ReadMarks::empty(), false);
 
-        let mut running = snapshot(vec![row("a", AgentStatus::Running, 2_000)]);
-        let out = episodes.reconcile(&mut running, &ReadMarks::empty(), false);
+        for status in [AgentStatus::Running, AgentStatus::Sleeping] {
+            let mut resumed = snapshot(vec![row("a", status, 2_000)]);
+            let out = episodes.reconcile(&mut resumed, &ReadMarks::empty(), false);
 
-        assert!(out.opened.is_empty());
-        assert!(running.worktree_groups[0].rows[0].unread);
+            assert!(out.opened.is_empty());
+            assert!(resumed.worktree_groups[0].rows[0].unread);
+        }
     }
 
     #[test]

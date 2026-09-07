@@ -67,12 +67,12 @@ The tables show the default Unicode set. `[theme.glyphs]` can select Nerd Font o
 | `⠙`   | resolving  | a working-family spinner (the themable `resolving` animation, kin to `⠁` and `⢿`); a row wearing it is active and counts as working | no |
 | `○`   | idle       | alive, nothing to do | no |
 | `✓`   | done       | finished cleanly | a look, not the lead |
-| `☾`   | sleeping   | resting until an armed one-shot wake fires; the description names the wake | a look, not an answer |
+| `☾`   | sleeping   | resting until an armed one-shot wake fires; the description names the wake | nothing yet |
 | `○`/`⢿` | process  | a pane with no agent (shell, editor): hollow `○` when idle, `⢿` while it does real work — the same shapes the idle and working agent rows wear, one soft step quieter, never a cockpit tally | no |
 
 Mux tab names reuse the fixed representatives from this table as one suffix (`!`, `?`, `⏸`, `⢿`, or `✓`), choosing the tab's most urgent live agent. They do not animate: each glyph is a state label, while the sidebar row can animate within that same role.
 
-The sleeping moon is static and cool-toned, not an attention animation. It replaces only an idle or done status: working, waiting, failed, paused, and delegation to live children take precedence. Standing subscriptions do not make an agent sleep. A sleeping result can still be unread, but sleeping sends no notification and contributes only a resting status to the mux tab.
+The sleeping moon is static and cool-toned, not an attention animation. It replaces only an idle or done status: working, waiting, failed, paused, and delegation to live children take precedence. Standing subscriptions do not make an agent sleep. Sleeping opens no unread mark and sends no notification; unread and any configured success notification arrive when the wake cycle finishes at done. An earlier unread result stays unread across the sleep. Sleeping contributes only a resting status to the mux tab.
 
 Three short-lived **heads** ride over the base status on the leading cell, so they never earn a cockpit bucket of their own — every running agent, whichever head it wears, counts as **working** (`⢿`) in the make-up:
 
