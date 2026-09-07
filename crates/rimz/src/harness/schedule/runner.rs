@@ -688,10 +688,12 @@ impl<'a> TaskFire<'a> {
             root: self.context_root()?,
             target,
             prompt,
-            intent: if matches!(
-                self.task.trigger().as_ref().map_err(Clone::clone)?.trigger,
-                Trigger::Signal { .. }
-            ) {
+            intent: if self
+                .task
+                .trigger()
+                .as_ref()
+                .is_ok_and(|parsed| matches!(parsed.trigger, Trigger::Signal { .. }))
+            {
                 DeliveryIntent::Signal
             } else if self.entry.wake_meta.is_some() {
                 DeliveryIntent::SelfWake
