@@ -163,7 +163,7 @@ upward-dependencies = [
     "harness::target",
     "sidebar::produce",
 ]
-surface-budget = 90
+surface-budget = 97
 
 [[module]]
 path = "crates/rimz/src/mux"
