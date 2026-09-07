@@ -117,7 +117,7 @@ fn should_compact(
         || agent.is_awaiting_input()
         || !matches!(
             agent.effective_status(),
-            AgentStatus::Idle | AgentStatus::Success
+            AgentStatus::Idle | AgentStatus::Success | AgentStatus::Sleeping
         )
     {
         return false;
@@ -226,7 +226,7 @@ fn spawn_idle_compact(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::AgentStatus;
+    use crate::agents::{AgentStatus, PendingWake, PendingWakeTrigger};
     use crate::forge::pr_state::{PrLink, PrStateCache};
     use crate::ids::{MuxName, WorkspaceId};
     use crate::store::snapshot::{PaneAgent, WorktreePrState};
@@ -309,6 +309,17 @@ mod tests {
 
     #[test]
     fn predicate_skips_busy_parked_compacting_and_child_agents() {
+        let mut sleeping = agent(AgentStatus::Idle, 6_000, 50_000);
+        sleeping.pending_wakes.push(PendingWake {
+            name: "wake-command".to_owned(),
+            trigger: PendingWakeTrigger::Command {
+                command: "cargo xtask gate".to_owned(),
+            },
+            armed_at: Some(ts(6_000)),
+        });
+        assert_eq!(sleeping.effective_status(), AgentStatus::Sleeping);
+        assert!(due(&sleeping));
+
         for status in [
             AgentStatus::Running,
             AgentStatus::Waiting,
