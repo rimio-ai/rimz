@@ -183,6 +183,65 @@ fn idle_compact_command_delivers_at_boundary_and_stamps_the_rollup() {
     let (_, agents, _) = crate::store::snapshot::catch_up_rollup(&q.inner.paths).unwrap();
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0].last_compact_command_tokens, Some(80_000));
+    assert!(agents[0].compacted_awaiting_prompt.is_some());
+}
+
+#[test]
+fn compact_delivery_ack_after_a_prompt_does_not_rearm_the_rollup() {
+    let q = Queue::new();
+    let append_lifecycle = |signal| {
+        let observation = AgentLifecycleObservation::new(Some("sess-1".into()), signal);
+        q.append_event(&EventEnvelope::agent_lifecycle(
+            q.workspace_id.clone(),
+            "session",
+            "claude",
+            "hook",
+            &observation,
+        ))
+        .unwrap();
+    };
+    append_lifecycle(LifecycleSignal::Registered);
+    let sent = q.sent_with(1, |message| {
+        message.text = "/compact".to_owned();
+        message.body = MessageBody::Command;
+    });
+    let (_, agents, _) = crate::store::snapshot::catch_up_rollup(&q.inner.paths).unwrap();
+    assert!(agents[0].compacted_awaiting_prompt.is_some());
+    assert_eq!(agents[0].last_compact_command_tokens, None);
+
+    // Hooks append lifecycle observations before confirming the queue. A new
+    // prompt can land between a compaction observation and its delayed ack.
+    append_lifecycle(LifecycleSignal::Compacting);
+    append_lifecycle(LifecycleSignal::CompactionEnded {
+        auto: Some(false),
+        failed: false,
+    });
+    append_lifecycle(LifecycleSignal::TurnStarted);
+    assert!(
+        q.confirm_delivered_for_card(
+            &sent.kind,
+            &sent.agent_id,
+            sent.agent_name.as_deref(),
+            DeliveryAck::TurnStarted { prompt: None },
+            "session",
+        )
+        .unwrap()
+        .is_empty()
+    );
+    let delivered = q
+        .confirm_delivered_for_card(
+            &sent.kind,
+            &sent.agent_id,
+            sent.agent_name.as_deref(),
+            DeliveryAck::Compaction,
+            "session",
+        )
+        .unwrap();
+    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered[0].status, MessageStatus::Delivered);
+    let (_, agents, _) = crate::store::snapshot::catch_up_rollup(&q.inner.paths).unwrap();
+    assert_eq!(agents[0].compacted_awaiting_prompt, None);
+    assert_eq!(q.count("message.delivered"), 1);
 }
 
 #[test]

@@ -73,6 +73,7 @@ Each event is a *partial* update. How the reducer treats a field the event omits
 | activity | replaced by the latest event, where *clearing* it is meaningful: an idle agent has no `task` | `status`, `task`, `last_activity` |
 | carry-forward | persists until a newer value arrives; a missing value never resets it | `model`, `effort`, `context_pct`, `context_window`, `prompt`, `description`, `transcript_path`, `recent_prompts` |
 | accumulated | increments from durable named events and survives replay | `tool_calls` |
+| compaction guard | carries across events and rotation; set by a sent compact command or successful manual compaction, cleared by `TurnStarted` or `Registered` | `compacted_awaiting_prompt` |
 | live-derived | computed at snapshot time from the live pane or git over the stored fallback | `worktree_path`, `worktree_branch` |
 | transient heads | opened and closed by signals, painted over the base status | the turn [phase](#turn-phase), the [compaction bracket](#the-compaction-bracket) |
 

@@ -113,7 +113,7 @@ fn merge_agent_rollups(base: &[AgentState], live: &[AgentState]) -> Vec<AgentSta
 
 /// Bump when [`RollupCache`]'s shape changes — a mismatched cache reads as
 /// absent and cold-rebuilds.
-const ROLLUP_CACHE_VERSION: u32 = 16;
+const ROLLUP_CACHE_VERSION: u32 = 17;
 
 /// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
 /// the raw pre-projection fold map stamped with the log extent folded so far.
@@ -221,24 +221,34 @@ fn fold_delta(
     let mut carried_by_key = None;
 
     // Any agent event can be the first observation after rotation. Hydrate only
-    // observed keys before reducing so `carried_base` remains the single owner
+    // observed keys and linked predecessors before reducing so `carried_base` remains the single owner
     // of lifetime fields without changing raw_agents into a carryover union.
     for event in events {
         let Some(key) = agent_event_key(event) else {
             continue;
         };
-        if seed.agents.contains_key(&key) {
-            continue;
-        }
-        let carried_by_key = carried_by_key.get_or_insert_with(|| {
-            carryover
-                .agents
-                .iter()
-                .map(|agent| ((agent.kind.clone(), agent.agent_id.clone()), agent))
-                .collect::<BTreeMap<_, _>>()
-        });
-        if let Some(carried) = carried_by_key.get(&key) {
-            seed.agents.insert(key, (*carried).clone());
+        let predecessor = match &event.kind {
+            EventKind::AgentLifecycle(payload) => payload
+                .observation
+                .compacted_from
+                .as_ref()
+                .map(|id| (key.0.clone(), id.clone())),
+            _ => None,
+        };
+        for key in std::iter::once(key).chain(predecessor) {
+            if seed.agents.contains_key(&key) {
+                continue;
+            }
+            let carried_by_key = carried_by_key.get_or_insert_with(|| {
+                carryover
+                    .agents
+                    .iter()
+                    .map(|agent| ((agent.kind.clone(), agent.agent_id.clone()), agent))
+                    .collect::<BTreeMap<_, _>>()
+            });
+            if let Some(carried) = carried_by_key.get(&key) {
+                seed.agents.insert(key, (*carried).clone());
+            }
         }
     }
 
