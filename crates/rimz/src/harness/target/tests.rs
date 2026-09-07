@@ -653,6 +653,26 @@ fn message_header_parser_round_trips_attributed_senders() {
         parse_message_header(&report),
         Some((HeaderKind::Subagent, "@rimz".to_owned(), body.to_owned()))
     );
+    for (notice, kind, header_type) in [
+        (HarnessNotice::Wake, HeaderKind::Wake, "WAKE"),
+        (HarnessNotice::Signal, HeaderKind::Signal, "SIGNAL"),
+    ] {
+        let sender = MessageSender::Harness { notice };
+        let prompt = message_header(&sender, &[], None).unwrap() + body;
+        assert_eq!(
+            prompt,
+            format!("Type: {header_type}\nFrom: @rimz\nContent:\n{body}")
+        );
+        assert_eq!(
+            parse_message_header(&prompt),
+            Some((kind, "@rimz".to_owned(), body.to_owned()))
+        );
+        let encoded = serde_json::to_string(&sender).expect("encode notice");
+        assert_eq!(
+            serde_json::from_str::<MessageSender>(&encoded).expect("decode notice"),
+            sender
+        );
+    }
 }
 
 #[test]
@@ -662,6 +682,8 @@ fn message_header_parser_rejects_near_misses() {
         "Type: AGENT_MESSAGE\nFrom: @coder\nship it",
         "Type: AGENT_MESSAGE\nFrom: coder\nContent:\nship it",
         "Type: AGENT_MESSAGE\nFrom: @code r\nContent:\nship it",
+        "Type: SIGNAL\nFrom: @\nContent:\nship it",
+        "Type: SIGNAL_EXTRA\nFrom: @rimz\nContent:\nship it",
         "ordinary text: with colon",
     ] {
         assert_eq!(parse_message_header(text), None, "{text}");
@@ -692,6 +714,25 @@ fn unknown_harness_notice_header_and_ack_agree() {
         crate::store::message::align_submitted_prompt(&prompt, &[&record]).expect("aligned notice");
     assert_eq!((leading, trailing), (None, None));
     assert_eq!(segments, vec![prompt.as_str()]);
+}
+
+#[test]
+fn signal_headers_split_mixed_batches() {
+    let agent = "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst";
+    let signal = "Type: SIGNAL\nFrom: @rimz\nContent:\nCI failed\n\ninspect the log";
+    let wake = "Type: WAKE\nFrom: @rimz\nContent:\ncheck back";
+    let human = "Type: USER_MESSAGE\nFrom: @user\nContent:\nsecond";
+    let report = "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nfinished";
+    let sections = [agent, signal, wake, report, human, signal];
+    let prompt = sections.join("\n\n");
+    assert_eq!(split_batched_prompt(&prompt), sections);
+    assert!(
+        split_batched_prompt(&prompt)
+            .iter()
+            .all(|section| parse_message_header(section).is_some())
+    );
+    let near_miss = format!("{signal}\n\nType: SIGNAL_EXTRA\nFrom: @rimz\nContent:\nnot a signal");
+    assert_eq!(split_batched_prompt(&near_miss), vec![near_miss.as_str()]);
 }
 
 #[test]

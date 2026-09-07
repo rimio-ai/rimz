@@ -860,22 +860,39 @@ fn align_submitted_prompt_consumes_human_header() {
 #[test]
 fn align_submitted_prompt_consumes_harness_report_header() {
     let recipient = agent("session-recipient", None);
-    let record = MessageRecord::new(
-        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
-        &recipient,
-        "ship it".to_owned(),
-        true,
-        crate::store::message::DeliveryGate::Done,
-    )
-    .with_sender(MessageSender::Harness {
-        notice: HarnessNotice::SubagentReport,
-    });
-    let prompt = "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nship it";
+    for (notice, header_type) in [
+        (HarnessNotice::SubagentReport, "SUBAGENT_REPORT"),
+        (HarnessNotice::Wake, "WAKE"),
+        (HarnessNotice::Signal, "SIGNAL"),
+    ] {
+        let record = MessageRecord::new(
+            WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
+            &recipient,
+            "ship it".to_owned(),
+            true,
+            crate::store::message::DeliveryGate::Done,
+        )
+        .with_sender(MessageSender::Harness { notice });
+        let prompt = format!("Type: {header_type}\nFrom: @rimz\nContent:\nship it");
 
-    let (leading, segments, trailing) =
-        align_submitted_prompt(prompt, &[&record]).expect("aligned prompt");
-    assert_eq!((leading, trailing), (None, None));
-    assert_eq!(segments, vec![prompt]);
+        let (leading, segments, trailing) =
+            align_submitted_prompt(&prompt, &[&record]).expect("aligned prompt");
+        assert_eq!((leading, trailing), (None, None));
+        assert_eq!(segments, vec![prompt.as_str()]);
+        let mixed = format!("before{prompt}after");
+        let (leading, segments, trailing) =
+            align_submitted_prompt(&mixed, &[&record]).expect("embedded notice");
+        assert_eq!((leading, trailing), (Some("before"), Some("after")));
+        assert_eq!(segments, vec![prompt.as_str()]);
+        assert_eq!(
+            align_submitted_prompt(&prompt.replace("@rimz", "@other"), &[&record]),
+            None
+        );
+        assert_eq!(
+            align_submitted_prompt(&prompt.replace("ship it", "ship"), &[&record]),
+            None
+        );
+    }
 }
 
 #[test]
