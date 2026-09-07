@@ -106,7 +106,7 @@ pub enum WatchVerdict {
 }
 
 impl WatchVerdict {
-    pub fn is_terminal(&self) -> bool {
+    pub(super) fn is_terminal(&self) -> bool {
         !matches!(self, Self::Running { .. })
     }
 
