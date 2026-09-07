@@ -1,6 +1,10 @@
 //! Add, remove, and rename configured loop tasks.
 
 use super::*;
+use rimz::harness::schedule::arm::{
+    self, ArmOutcome, DeliveryCheck, DeliveryName, DeliveryPrompt, DeliveryProvenance,
+    DeliverySpec, DeliverySurplus, DeliveryTrigger, SubscriptionLifetime,
+};
 
 struct AddTiming {
     at: Option<String>,
@@ -23,7 +27,7 @@ impl AddTaskAction {
     fn provider_kind(&self) -> Option<&str> {
         match self {
             Self::Spawn { resolved, .. } => Some(resolved.kind()),
-            Self::Deliver { target, .. } => Some(&target.kind),
+            Self::Deliver { target, .. } => Some(target.kind.as_str()),
             Self::CheckOnly => None,
         }
     }
@@ -36,6 +40,12 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     let workspace = resolve_add_workspace(&args)?;
     let project_root = workspace.project_root.clone();
     let action = resolve_add_action(&args, &workspace, action_kind)?;
+    let action = match action {
+        AddTaskAction::Deliver { target, matches } => {
+            return add_delivery(&args, &workspace, target, matches);
+        }
+        action => action,
+    };
     let provider_kind = action.provider_kind().map(ToOwned::to_owned);
     let (entry, resolved_for_preflight) = build_task_entry(&args, action, &project_root)?;
     // Compile once before writing, so validation and feedback share one shape.
@@ -85,6 +95,105 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
             )?;
         }
     }
+    Ok(())
+}
+
+fn add_delivery(
+    args: &AddArgs,
+    workspace: &rimz::ResolvedWorkspace,
+    target: TaskTarget,
+    matches: BTreeMap<String, String>,
+) -> Result<()> {
+    let timing = resolve_add_timing(args)?;
+    let trigger = if let Some(raw) = &args.signal {
+        DeliveryTrigger::Signal {
+            selector: schedule::parse_signal_selector(&args.name, raw, Some(&matches))?,
+            matches,
+            lifetime: if args.once {
+                SubscriptionLifetime::Once
+            } else {
+                SubscriptionLifetime::Standing
+            },
+        }
+    } else {
+        let parsed = schedule::parse_trigger(
+            &args.name,
+            &TaskEntry {
+                at: timing.at,
+                every: args.every.clone(),
+                cron: args.cron.clone(),
+                ..TaskEntry::default()
+            },
+        )?;
+        let schedule::Trigger::Schedule(clock) = parsed.trigger else {
+            unreachable!("the entry contains only clock fields")
+        };
+        DeliveryTrigger::Clock(clock)
+    };
+    if let Some(timeout) = args.timeout.as_deref() {
+        parse_task_timeout(timeout).map_err(anyhow::Error::msg)?;
+    }
+    let prompt = match (&args.prompt, &args.prompt_file) {
+        (Some(prompt), _) => DeliveryPrompt::Inline(prompt.clone()),
+        (_, Some(path)) => DeliveryPrompt::File(path.clone()),
+        _ => DeliveryPrompt::None,
+    };
+    let on = args.on.as_deref().map(parse_check_on).transpose()?;
+    let surplus = args
+        .surplus
+        .as_deref()
+        .map(schedule::parse_surplus)
+        .transpose()
+        .map_err(anyhow::Error::msg)?
+        .map(|ratio| format!("{ratio}x"));
+    if let Some(after) = args.surplus_after.as_deref() {
+        schedule::parse_surplus_after(after).map_err(anyhow::Error::msg)?;
+    }
+    let outcome = arm::arm_delivery(
+        workspace,
+        DeliverySpec {
+            name: DeliveryName::Named(args.name.parse()?),
+            target,
+            trigger,
+            prompt,
+            provenance: DeliveryProvenance::Loop,
+            check: args.check.as_ref().map(|command| DeliveryCheck {
+                command: command.clone(),
+                on,
+                timeout: args.timeout.clone(),
+            }),
+            deadline: timing.deadline,
+            max_strikes: args.max_strikes,
+            surplus: (surplus.is_some() || args.surplus_after.is_some()).then(|| DeliverySurplus {
+                ratio: surplus,
+                after: args.surplus_after.clone(),
+            }),
+        },
+    )?;
+    let mut out = ui::out();
+    let ArmOutcome::Armed { name, entry } = outcome else {
+        let ArmOutcome::AlreadySubscribed { name } = outcome else {
+            unreachable!()
+        };
+        writeln!(out, "already subscribed as {name}")?;
+        return Ok(());
+    };
+    writeln!(out, "added loop task `{name}`")?;
+    let shape = schedule::TaskShape::compile(&name, &entry);
+    let parsed = shape.trigger().as_ref().map_err(Clone::clone)?;
+    let action = shape.action().map_err(Clone::clone)?;
+    write_add_feedback(
+        &mut out,
+        &entry,
+        parsed,
+        action,
+        entry.wake.as_ref().map(|target| target.kind.as_str()),
+    )?;
+    writeln!(
+        out,
+        "live while a room for {} is open",
+        entry.root.display()
+    )?;
     Ok(())
 }
 
@@ -304,11 +413,7 @@ fn build_task_entry(
             entry.system_prompt_file = args.system_prompt_file.clone();
             entry.timeout = args.timeout.clone();
         }
-        AddTaskAction::Deliver { target, matches } => {
-            entry.wake = Some(target);
-            entry.matches = (!matches.is_empty()).then_some(matches);
-            entry.timeout = uses_check_timeout.then(|| args.timeout.clone()).flatten();
-        }
+        AddTaskAction::Deliver { .. } => unreachable!("deliveries use the shared domain builder"),
         AddTaskAction::CheckOnly => {
             entry.timeout = uses_check_timeout.then(|| args.timeout.clone()).flatten();
         }
@@ -467,12 +572,14 @@ fn resolve_delivery_target(
     let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     let channel = crate::cli::current_channel(workspace);
     let agent = match crate::cli::resolve_agent_one(
+        &store,
         &snapshot,
         address,
         args.worktree.as_deref(),
         channel.as_deref(),
     ) {
         Ok(agent) => agent,
+        Err(err) if address == "@me" => return Err(err),
         Err(_) => {
             bail!("no live agent matches `{address}`; run /schedule from inside the agent pane")
         }
@@ -490,17 +597,14 @@ fn resolve_delivery_target(
         .transpose()?
         .unwrap_or(agent);
     let mut matches = parse_matches(&args.matches)?;
-    crate::cli::wake::default_signal_matches(
-        workspace,
-        &snapshot.agents,
-        scope,
-        args.signal.as_deref(),
-        &mut matches,
-    )?;
+    if let Some(raw) = args.signal.as_deref() {
+        let selector = schedule::parse_signal_selector(&args.name, raw, Some(&matches))?;
+        arm::default_signal_matches(workspace, &snapshot.agents, scope, &selector, &mut matches)?;
+    }
     Ok((
         TaskTarget {
-            kind: agent.kind.as_str().to_owned(),
-            session: agent.agent_id.as_str().to_owned(),
+            kind: agent.kind.clone(),
+            session: agent.agent_id.clone(),
             handle: rimz::harness::target::agent_handle(agent, &peers, true),
         },
         matches,
@@ -522,30 +626,12 @@ fn parse_matches(raw: &[String]) -> Result<BTreeMap<String, String>> {
 }
 
 fn validate_self_wake(args: &AddArgs, target: &TaskTarget) -> Result<()> {
-    if !args
-        .signal
-        .as_deref()
-        .is_some_and(|name| name.starts_with("agent."))
-    {
+    let Some(raw) = args.signal.as_deref() else {
         return Ok(());
-    }
+    };
     let matches = parse_matches(&args.matches)?;
-    fn unqualified_handle(handle: &str) -> &str {
-        handle.split_once('#').map_or(handle, |(name, _)| name)
-    }
-    let names_other_agent = matches.get("handle").is_some_and(|handle| {
-        unqualified_handle(handle) != unqualified_handle(&target.handle)
-            && args
-                .wake
-                .as_deref()
-                .is_none_or(|address| unqualified_handle(handle) != unqualified_handle(address))
-    }) || matches
-        .get("session")
-        .is_some_and(|session| session != &target.session);
-    if names_other_agent {
-        return Ok(());
-    }
-    bail!(self_wake_guard_message())
+    let selector = schedule::parse_signal_selector(&args.name, raw, Some(&matches))?;
+    Ok(arm::validate_self_signal(&selector, &matches, target)?)
 }
 
 fn self_wake_guard_message() -> &'static str {

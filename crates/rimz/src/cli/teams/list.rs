@@ -8,7 +8,10 @@ use serde::Serialize;
 use super::super::{Ctx, GlobalFlags, render, report_unknown_config_keys};
 use rimz::agents::attribution::LaneLifetimes;
 use rimz::agents::{AgentState, AgentStatus, TurnPhase};
-use rimz::config::{CommandsConfig, MachineConfig, ProfilesConfig, Team, TeamsConfig, ThemeConfig};
+use rimz::config::{
+    CommandsConfig, MachineConfig, ProfilesConfig, TaskEntry, Team, TeamsConfig, ThemeConfig,
+};
+use rimz::harness::schedule::catalog::{LoadedTask, TaskCatalog, TaskSource};
 use rimz::harness::spec::{AgentCell, LayoutSpec};
 use rimz::store::snapshot::{SidebarSnapshot, WorktreePrCi, WorktreePrState};
 use rimz::utils::path::normalize_path_lexical;
@@ -33,6 +36,7 @@ pub(super) struct TeamReport {
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct RoleReport {
+    pub signals: Vec<DeclaredSignal>,
     pub role: String,
     pub profile: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -86,6 +90,8 @@ pub(super) struct MemoryReport {
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct LiveMember {
+    pub role: Option<String>,
+    pub signals: Vec<LiveSignal>,
     pub handle: String,
     pub kind: String,
     pub status: AgentStatus,
@@ -96,6 +102,21 @@ pub(super) struct LiveMember {
     pub context_fill_pct: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct DeclaredSignal {
+    pub signal: String,
+    #[serde(rename = "match")]
+    pub matches: BTreeMap<String, String>,
+    pub prompt: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct LiveSignal {
+    pub name: String,
+    pub selector: String,
+    pub matches: BTreeMap<String, String>,
 }
 
 pub(super) fn run(json: bool, globals: &GlobalFlags) -> Result<()> {
@@ -128,12 +149,14 @@ pub(super) fn load_catalog(
     let lifetimes = rimz::worktree::lane_lifetimes(audit.agents.iter());
     render::warn_unreadable_lanes(&lifetimes);
     let prices = rimz::agents::pricing::cached_book(&ctx.runtime().shared_pricing_cache_path());
+    let tasks = TaskCatalog::load(Some(&ctx.workspace.project_root))?;
     Ok(build_catalog(
         &effective.teams,
         &effective.profiles,
         &machine.agents.commands,
         LiveCatalog {
             snapshot: &snapshot,
+            tasks: tasks.visible(),
             audit_agents: &audit.agents,
             lifetimes: &lifetimes,
             prices: &prices,
@@ -201,6 +224,7 @@ fn build_catalog(
 
 struct LiveCatalog<'a> {
     snapshot: &'a SidebarSnapshot,
+    tasks: &'a BTreeMap<String, LoadedTask>,
     audit_agents: &'a [AgentState],
     lifetimes: &'a LaneLifetimes,
     prices: &'a rimz::agents::PriceBook,
@@ -228,10 +252,22 @@ fn definition_report(
         }
         Err(error) => (None, Err(error)),
     };
-    let roles = layout
+    let mut roles = layout
         .as_ref()
         .map(|layout| resolved_roles(team, layout))
         .unwrap_or_else(|| unresolved_roles(team, profiles));
+    for role in &mut roles {
+        role.signals = team
+            .signals
+            .iter()
+            .filter(|binding| binding.role == role.role)
+            .map(|binding| DeclaredSignal {
+                signal: binding.signal.clone(),
+                matches: binding.matches.clone(),
+                prompt: binding.prompt.clone(),
+            })
+            .collect();
+    }
     let leader = team
         .leader
         .clone()
@@ -285,6 +321,7 @@ fn resolved_roles(team: &Team, layout: &LayoutSpec) -> Vec<RoleReport> {
 
 fn role_report(role: String, cell: &AgentCell) -> RoleReport {
     RoleReport {
+        signals: Vec::new(),
         role,
         profile: cell
             .launch
@@ -306,6 +343,7 @@ fn unresolved_roles(team: &Team, profiles: &ProfilesConfig) -> Vec<RoleReport> {
         .map(|binding| {
             let resolved = rimz::harness::spec::resolve_profile(&binding.profile, profiles).ok();
             RoleReport {
+                signals: Vec::new(),
                 role: binding.role.clone(),
                 profile: binding.profile.clone(),
                 kind: resolved.as_ref().map(|profile| profile.kind.to_string()),
@@ -390,6 +428,7 @@ fn live_instances(
     }
     let mut by_team: BTreeMap<String, Vec<LiveInstance>> = BTreeMap::new();
     for cohort in cohorts {
+        let instance = format!("{}#{}", cohort.team, cohort.channel);
         let members = cohort.members;
         let team = teams.0.get(cohort.team);
         let worktree = unique_value(members.iter().map(|agent| {
@@ -473,6 +512,14 @@ fn live_instances(
                     .find(|row| row.is_agent() && row.id == agent.agent_id.as_str())
                     .and_then(|row| row.as_agent());
                 LiveMember {
+                    role: agent.role.clone(),
+                    signals: catalog
+                        .tasks
+                        .iter()
+                        .filter_map(|(name, task)| {
+                            live_signal(name, task.entry(), task.source(), &instance, agent)
+                        })
+                        .collect(),
                     handle: rimz::harness::target::agent_handle(agent, &members, false),
                     kind: agent.kind.to_string(),
                     status,
@@ -514,6 +561,31 @@ fn unique_value<T: Eq>(mut values: impl Iterator<Item = Option<T>>) -> Option<T>
     values
         .all(|value| value.as_ref() == Some(&first))
         .then_some(first)
+}
+
+fn live_signal(
+    name: &str,
+    entry: &TaskEntry,
+    source: TaskSource,
+    instance: &str,
+    agent: &AgentState,
+) -> Option<LiveSignal> {
+    let target = entry.wake.as_ref()?;
+    if source != TaskSource::Instance
+        || entry
+            .team
+            .as_ref()
+            .is_none_or(|team| team.to_string() != instance)
+        || target.kind != agent.kind
+        || target.session != agent.agent_id
+    {
+        return None;
+    }
+    Some(LiveSignal {
+        name: name.to_owned(),
+        selector: entry.signal.clone()?,
+        matches: entry.matches.clone().unwrap_or_default(),
+    })
 }
 
 fn instance_state(counts: &BTreeMap<String, usize>) -> &'static str {

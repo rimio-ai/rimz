@@ -3,18 +3,13 @@
 use jiff::Timestamp;
 use serde_json::{Map, Value};
 
-use super::status::ForgeView;
-use crate::config::{TaskEntry, WakeArmer, WakeMeta};
+use crate::config::{TaskEntry, WakeMeta};
 use crate::harness::schedule::signal::{Signal, elapsed_label};
 
 pub(super) enum Evidence<'a> {
     Scheduled,
     Signal(&'a Signal),
     Manual,
-    Expired {
-        view: Option<&'a ForgeView>,
-        rearm: &'a str,
-    },
 }
 
 pub(super) fn compose_wake(
@@ -26,12 +21,8 @@ pub(super) fn compose_wake(
     now: Timestamp,
 ) -> String {
     let mut body = String::new();
-    if let Some(armer) = armer_line(meta, task) {
-        body.push_str(&armer);
-        body.push('\n');
-    }
     body.push_str(&wait_line(task, meta, &evidence));
-    if let Some(verdict) = verdict_line(&evidence, task, meta, now, name) {
+    if let Some(verdict) = verdict_line(&evidence, meta, now, name) {
         body.push('\n');
         body.push_str(&verdict);
     } else {
@@ -49,9 +40,16 @@ pub(super) fn compose_wake(
             }
         }
     }
-    if let Evidence::Expired { rearm, .. } = evidence {
-        body.push_str("\nre-arm: ");
-        body.push_str(rearm);
+    if let Evidence::Signal(signal) = &evidence
+        && signal
+            .watch
+            .as_ref()
+            .is_some_and(|watch| !watch.verdict.is_terminal())
+    {
+        let delay = task.timeout.as_deref().unwrap_or("30m");
+        body.push_str(&format!(
+            "\n\nStop it: rimz wake cancel {name}\nAnother check-in: rimz wake --in {delay}"
+        ));
     }
     if !note.is_empty() {
         body.push_str("\n\n");
@@ -60,35 +58,17 @@ pub(super) fn compose_wake(
     body
 }
 
-fn armer_line(meta: Option<&WakeMeta>, task: &TaskEntry) -> Option<String> {
-    match &meta?.armed_by {
-        WakeArmer::Human => Some("armed on you from the shell.".to_owned()),
-        WakeArmer::Agent { handle }
-            if task
-                .wake
-                .as_ref()
-                .is_some_and(|target| target.handle == *handle) =>
-        {
-            None
-        }
-        WakeArmer::Agent { handle } => Some(format!("{handle} armed this wake on you.")),
-    }
-}
-
 fn wait_line(task: &TaskEntry, meta: Option<&WakeMeta>, evidence: &Evidence<'_>) -> String {
     if let Some(command) = &task.watch {
-        return format!("waited on `{command}`");
+        return format!(
+            "waited on `{}`",
+            crate::theme::fmt::command_preview(command)
+        );
     }
     if let Evidence::Signal(signal) = evidence {
         return format!("waited on {}", signal_headline(signal));
     }
     if let Some(selector) = &task.signal {
-        if let Evidence::Expired {
-            view: Some(view), ..
-        } = evidence
-        {
-            return format!("waited on {selector} on {}", view.headline);
-        }
         return format!("waited on {selector}{}", subscription_scope(task));
     }
     if let Some(delay) = meta.and_then(|meta| meta.delay.as_deref()) {
@@ -99,7 +79,6 @@ fn wait_line(task: &TaskEntry, meta: Option<&WakeMeta>, evidence: &Evidence<'_>)
 
 fn verdict_line(
     evidence: &Evidence<'_>,
-    task: &TaskEntry,
     meta: Option<&WakeMeta>,
     now: Timestamp,
     name: &str,
@@ -118,16 +97,6 @@ fn verdict_line(
                 None => "fired".to_owned(),
             },
         },
-        Evidence::Expired { view, .. } => {
-            let mut verdict = format!(
-                "nothing in {}; wake closed",
-                task.timeout.as_deref().unwrap_or_default()
-            );
-            if let Some(view) = view {
-                verdict.push_str(&format!(" · {}", view.label));
-            }
-            verdict
-        }
         Evidence::Manual => "fired by hand".to_owned(),
         Evidence::Scheduled if meta.is_some_and(|meta| meta.delay.is_some()) => return None,
         Evidence::Scheduled => "fired".to_owned(),

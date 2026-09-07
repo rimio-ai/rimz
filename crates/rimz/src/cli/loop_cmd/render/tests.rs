@@ -54,8 +54,8 @@ fn task_rules_and_check_rows_use_action_specific_verbs() {
 
     let wake = TaskEntry {
         wake: Some(TaskTarget {
-            kind: "claude".to_owned(),
-            session: "sess-planner".to_owned(),
+            kind: rimz::ids::AgentKind::new_unchecked("claude"),
+            session: "sess-planner".into(),
             handle: "@planner".to_owned(),
         }),
         check: Some("cargo test".to_owned()),
@@ -420,6 +420,34 @@ fn run_result_marks_and_static_labels_cover_every_variant() {
             assert_eq!(status.label, label, "{result:?}");
         }
     }
+}
+
+#[test]
+fn team_source_label_requires_an_instance_row() {
+    let entry = TaskEntry {
+        root: PathBuf::from("/tmp/project"),
+        team: Some("forge#feat-x".parse().unwrap()),
+        ..TaskEntry::default()
+    };
+    assert_eq!(
+        source_description(TaskSource::Instance, &entry),
+        "team forge#feat-x"
+    );
+    assert_eq!(source_description(TaskSource::Config, &entry), "machine");
+    assert_eq!(
+        source_description(
+            TaskSource::Project {
+                state: TrustState::Untrusted
+            },
+            &entry
+        ),
+        "project · untrusted"
+    );
+    assert_eq!(
+        source_description(TaskSource::Instance, &TaskEntry::default()),
+        "state"
+    );
+    assert!(source_detail(TaskSource::Instance, &entry).starts_with("team forge#feat-x — "));
 }
 
 #[test]

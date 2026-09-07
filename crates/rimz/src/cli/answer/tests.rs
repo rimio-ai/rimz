@@ -140,8 +140,7 @@ fn ask_id_resolution_includes_waiting_subagents_in_every_scope() {
 
     for awaiting_only in [true, false] {
         assert_eq!(
-            crate::cli::resolve_open_ask(&snapshot, ask_id.as_str(), None, awaiting_only)
-                .unwrap()
+            crate::cli::find_open_ask(&snapshot, &ask_id, awaiting_only)
                 .unwrap()
                 .agent_id
                 .as_str(),

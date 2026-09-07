@@ -38,6 +38,7 @@ fn collect_show_report(
     ansi: bool,
 ) -> Result<(ShowReport, Option<anyhow::Error>)> {
     let agent_result = crate::cli::resolve_agent_one(
+        store,
         snapshot,
         reference,
         None,
@@ -225,7 +226,7 @@ pub(super) fn resolve_audit_agent(
         jiff::Timestamp::now(),
     )
     .with_agent_context(rimz::store::agent_context::read_all(runtime));
-    match crate::cli::resolve_agent_one(&snapshot, reference, None, None) {
+    match crate::cli::resolve_agent_one(store, &snapshot, reference, None, None) {
         Ok(agent) => Ok(Some(agent.clone())),
         Err(err) => Err(err),
     }
@@ -732,7 +733,8 @@ fn recent_agent_transcript(
 pub(super) fn focus_agent(reference: String, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let snapshot = ctx.cached_snapshot()?;
-    let agent = crate::cli::resolve_agent_one(&snapshot, &reference, None, ctx.channel())?;
+    let agent =
+        crate::cli::resolve_agent_one(&ctx.store, &snapshot, &reference, None, ctx.channel())?;
     focus_resolved(&ctx, agent)
 }
 

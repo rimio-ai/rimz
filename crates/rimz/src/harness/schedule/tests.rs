@@ -46,8 +46,8 @@ fn spawn_entry() -> TaskEntry {
 
 fn wake_target() -> TaskTarget {
     TaskTarget {
-        kind: "claude".to_owned(),
-        session: "sess".to_owned(),
+        kind: crate::ids::AgentKind::new_unchecked("claude"),
+        session: "sess".into(),
         handle: "@claude".to_owned(),
     }
 }

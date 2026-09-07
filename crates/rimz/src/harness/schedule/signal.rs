@@ -14,10 +14,8 @@ use serde_json::{Map, Value};
 
 use super::arming;
 use super::catalog::TaskCatalog;
-use super::run_log::LoopRunMode;
 use super::runner::{
-    CheckEcho, CheckOutcome, check_record, configured_timeout, effective_spawn_timeout, run_check,
-    task_timeout,
+    CheckEcho, CheckOutcome, WatchDeadline, check_record, run_command, task_timeout,
 };
 use crate::RuntimePaths;
 use crate::disk::paths::StatePaths;
@@ -101,15 +99,21 @@ pub(super) const WAKE_TAIL_CAP: usize = 4 * 1024;
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum WatchVerdict {
+    Running { elapsed_ms: u64 },
     Exited { code: Option<i32>, elapsed_ms: u64 },
     TimedOut { elapsed_ms: u64 },
     Lost { detail: String, elapsed_ms: u64 },
 }
 
 impl WatchVerdict {
+    pub fn is_terminal(&self) -> bool {
+        !matches!(self, Self::Running { .. })
+    }
+
     pub fn label(&self) -> String {
         let elapsed = elapsed_label(self.elapsed_ms());
         match self {
+            Self::Running { .. } => format!("still running after {elapsed}"),
             Self::Exited {
                 code: Some(code), ..
             } => format!("exit {code} after {elapsed}"),
@@ -123,7 +127,8 @@ impl WatchVerdict {
 
     pub fn elapsed_ms(&self) -> u64 {
         match self {
-            Self::Exited { elapsed_ms, .. }
+            Self::Running { elapsed_ms }
+            | Self::Exited { elapsed_ms, .. }
             | Self::TimedOut { elapsed_ms }
             | Self::Lost { elapsed_ms, .. } => *elapsed_ms,
         }
@@ -336,6 +341,11 @@ pub fn lifecycle_signal(event: &crate::agents::LifecycleEvent) -> Option<Signal>
 }
 
 pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> anyhow::Result<()> {
+    let Some(_guard) =
+        acquire_watch_lock(store.runtime_paths(), name).context("locking wake watcher")?
+    else {
+        return Ok(());
+    };
     let catalog = TaskCatalog::load(Some(&workspace.project_root))?;
     let Some(task) = catalog.for_run(name) else {
         anyhow::bail!("no wake named {name} in the catalog");
@@ -350,59 +360,54 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
     let Some(command) = task.entry().watch.as_deref() else {
         anyhow::bail!("wake {name} has no watched command");
     };
-    let Some(_guard) =
-        acquire_watch_lock(store.runtime_paths(), name).context("locking wake watcher")?
-    else {
-        return Ok(());
-    };
-    let configured = configured_timeout(&crate::config::MachineConfig::load_lenient())?;
-    // Scheduled mode always supplies the built-in timeout when neither source does.
-    let timeout = effective_spawn_timeout(
-        LoopRunMode::Scheduled,
-        task_timeout(task.entry())?,
-        configured,
-    )
-    .expect("scheduled mode always resolves a timeout");
+    let timeout = task_timeout(task.entry())?.unwrap_or(std::time::Duration::from_secs(30 * 60));
     let output_path = wake_log_path(store.paths(), name);
     let file = OpenOptions::new()
         .append(true)
         .open(&output_path)
         .with_context(|| format!("opening wake output {}", output_path.display()))?;
     let started = std::time::Instant::now();
-    let outcome = run_check(
+    let emit = |verdict, output| {
+        let signal = Signal {
+            name: format!("wake.{name}")
+                .parse()
+                .expect("generated wake signal name is valid"),
+            payload: Map::new(),
+            source: SignalSource::Watch,
+            watch: Some(WatchOutcome {
+                verdict,
+                output,
+                output_path: Some(output_path.clone()),
+            }),
+        };
+        if let Err(err) = store.append_signal(&workspace.session_name, (&signal).into()) {
+            tracing::warn!(task = name, error = %err, "appending wake signal");
+        }
+        if let Err(err) = fire_signal_with_wait(
+            store.runtime_paths(),
+            &workspace.project_root,
+            &signal,
+            true,
+        ) {
+            tracing::warn!(task = name, error = %err, "firing watched wake");
+        }
+    };
+    let outcome = run_command(
         &workspace.project_root,
         command,
-        timeout,
+        WatchDeadline::CheckInOnce(timeout),
         CheckEcho::Tee { file },
+        |elapsed_ms, output| emit(WatchVerdict::Running { elapsed_ms }, output),
     )?;
     let elapsed_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     let check = check_record(&outcome);
-    let verdict = if check.timed_out {
-        WatchVerdict::TimedOut { elapsed_ms }
-    } else {
+    emit(
         WatchVerdict::Exited {
             code: check.code,
             elapsed_ms,
-        }
-    };
-    let watch = WatchOutcome {
-        verdict,
-        output: check.output,
-        output_path: Some(output_path),
-    };
-    let signal = Signal {
-        name: format!("wake.{name}")
-            .parse()
-            .expect("generated wake signal name is valid"),
-        payload: Map::new(),
-        source: SignalSource::Watch,
-        watch: Some(watch),
-    };
-    store
-        .append_signal(&workspace.session_name, (&signal).into())
-        .context("appending wake signal")?;
-    fire_signal(store.runtime_paths(), &workspace.project_root, &signal)
-        .context("firing watched wake")?;
+        },
+        check.output,
+    );
     Ok(())
 }
 
@@ -411,6 +416,15 @@ pub fn fire_signal(
     runtime: &RuntimePaths,
     project_root: &Path,
     signal: &Signal,
+) -> Result<Vec<String>, serde_json::Error> {
+    fire_signal_with_wait(runtime, project_root, signal, false)
+}
+
+fn fire_signal_with_wait(
+    runtime: &RuntimePaths,
+    project_root: &Path,
+    signal: &Signal,
+    wait: bool,
 ) -> Result<Vec<String>, serde_json::Error> {
     let tasks = super::fire::runnable_tasks_for(runtime, Some(project_root));
     let arming_entries = arming::load();
@@ -446,20 +460,11 @@ pub fn fire_signal(
             super::run_log::record_transition(&task, &record);
             continue;
         }
-        let wake_armed_at = task
-            .entry()
-            .wake_meta
-            .as_ref()
-            .filter(|_| task.entry().signal.is_some())
-            .map(|meta| meta.armed_at);
-        super::fire::spawn_loop_run(
-            runtime,
-            Some(project_root),
-            &name,
-            Some(&encoded),
-            wake_armed_at,
-            false,
-        );
+        if wait && matches!(parsed.trigger, super::Trigger::Watch { .. }) {
+            super::fire::wait_loop_run(runtime, Some(project_root), &name, &encoded);
+        } else {
+            super::fire::spawn_loop_run(runtime, Some(project_root), &name, Some(&encoded));
+        }
         fired.push(name);
     }
     Ok(fired)
@@ -538,12 +543,15 @@ pub fn stop_watcher(runtime: &RuntimePaths, name: &str) -> std::io::Result<bool>
     let Ok(pid) = i32::try_from(info.pid) else {
         return Ok(false);
     };
-    match nix::sys::signal::kill(
+    if pid <= 0 {
+        return Ok(false);
+    }
+    match nix::sys::signal::killpg(
         nix::unistd::Pid::from_raw(pid),
         nix::sys::signal::Signal::SIGTERM,
     ) {
         Ok(()) => Ok(true),
-        Err(nix::errno::Errno::ESRCH) => Ok(false),
+        Err(nix::errno::Errno::ESRCH) => Ok(true),
         Err(err) => Err(std::io::Error::other(err)),
     }
 }
@@ -559,6 +567,15 @@ mod tests {
     #[test]
     fn watch_verdicts_share_labels_and_check_semantics() {
         for (verdict, label, passed, timed_out, code) in [
+            (
+                WatchVerdict::Running {
+                    elapsed_ms: 1_800_000,
+                },
+                "still running after 30m",
+                false,
+                false,
+                None,
+            ),
             (
                 WatchVerdict::Exited {
                     code: Some(0),
@@ -610,6 +627,10 @@ mod tests {
             ),
         ] {
             assert_eq!(verdict.label(), label);
+            assert_eq!(
+                verdict.is_terminal(),
+                !matches!(verdict, WatchVerdict::Running { .. })
+            );
             assert_eq!(verdict.passed(), passed);
             let outcome = WatchOutcome {
                 verdict,

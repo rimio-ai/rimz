@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
+use crate::ids::{AgentKind, AgentSessionId};
 use crate::utils::time::{DurationUnit, parse_duration_units};
 
 const DEFAULT_TIMEOUT_UNITS: &[DurationUnit] = &[
@@ -69,6 +70,8 @@ pub struct TaskEntry {
     #[serde(rename = "wake-meta", skip_serializing_if = "Option::is_none")]
     pub wake_meta: Option<WakeMeta>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub team: Option<crate::ids::TeamInstanceId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
     #[serde(rename = "prompt-file", skip_serializing_if = "Option::is_none")]
     pub prompt_file: Option<PathBuf>,
@@ -121,17 +124,9 @@ pub struct TaskEntry {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct WakeMeta {
-    pub armed_by: WakeArmer,
     pub armed_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delay: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum WakeArmer {
-    Human,
-    Agent { handle: String },
 }
 
 impl TaskEntry {
@@ -217,11 +212,10 @@ pub enum TaskBudgetError {
 
 /// A loop delivery target pinned to the exact live agent session that scheduled
 /// it. The handle is display-only; `session` is the durable address.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TaskTarget {
-    pub kind: String,
-    pub session: String,
+    pub kind: AgentKind,
+    pub session: AgentSessionId,
     pub handle: String,
 }
 
@@ -288,14 +282,11 @@ mod tests {
         let deadline = Timestamp::from_second(1_783_000_000).expect("deadline");
         let entry = TaskEntry {
             wake: Some(TaskTarget {
-                kind: "claude".to_owned(),
-                session: "sess-1".to_owned(),
+                kind: AgentKind::new_unchecked("claude"),
+                session: "sess-1".into(),
                 handle: "@claude".to_owned(),
             }),
             wake_meta: Some(WakeMeta {
-                armed_by: WakeArmer::Agent {
-                    handle: "@planner".to_owned(),
-                },
                 armed_at: deadline,
                 delay: Some("30m".to_owned()),
             }),
@@ -329,6 +320,7 @@ mod tests {
 
         let toml = toml::to_string(&loop_config).expect("toml");
         let toml_round: LoopConfig = toml::from_str(&toml).expect("toml round trip");
+        assert_eq!(toml_round.tasks.0["ci"], entry);
         assert_eq!(toml_round.tasks.0["ci"].wake_meta, entry.wake_meta);
         assert_eq!(
             toml_round
@@ -391,6 +383,20 @@ mod tests {
         let json = serde_json::to_string(&loop_config.tasks).expect("json");
         let json_round: Tasks = serde_json::from_str(&json).expect("json round trip");
         assert_eq!(json_round.0.get("ci"), Some(&entry));
+        let mut legacy = serde_json::to_value(&loop_config.tasks).expect("json value");
+        assert_eq!(
+            legacy["ci"]["wake"],
+            serde_json::json!({"kind": "claude", "session": "sess-1", "handle": "@claude"})
+        );
+        assert!(legacy["ci"]["wake-meta"].get("armed_by").is_none());
+        for armed_by in [
+            serde_json::json!({"kind": "human"}),
+            serde_json::json!({"kind": "agent", "handle": "@planner"}),
+        ] {
+            legacy["ci"]["wake-meta"]["armed_by"] = armed_by;
+            let decoded: Tasks = serde_json::from_value(legacy.clone()).expect("legacy json");
+            assert_eq!(decoded.0.get("ci"), Some(&entry));
+        }
     }
 
     #[test]

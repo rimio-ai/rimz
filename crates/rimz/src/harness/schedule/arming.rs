@@ -161,6 +161,10 @@ pub(super) fn rename(old: &str, new: &str) -> Result<bool> {
     rename_in(&state_home(), old, new)
 }
 
+pub(super) fn migrate_instance_keys(state_root: &Path, keys: &[(String, String)]) -> Result<()> {
+    Ok(STORE.copy_missing::<Arming>(state_root, keys)?)
+}
+
 pub(super) fn prune_orphans(known: &BTreeSet<String>, scopes: &BTreeSet<String>) -> Result<usize> {
     prune_orphans_in(&state_home(), known, scopes)
 }

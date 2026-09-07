@@ -105,6 +105,18 @@ pub(super) fn launch_layout(
         layout,
         team_name,
     } = resolved;
+    if !args.launch.cohort.resume
+        && args.launch.cohort.from_pr.is_none()
+        && let Some(name) = team_name.as_deref()
+        && let Some(team) = teams.0.get(name)
+    {
+        rimz::harness::schedule::team::validate_launch(
+            name,
+            team,
+            workspace,
+            explicit_worktree_name.as_deref(),
+        )?;
+    }
     let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
     let ancestry = rimz::harness::ancestry::resolve_launch_ancestry_here(
         &projection.agents,
@@ -738,6 +750,17 @@ fn write_launch_receipt(w: &mut impl Write, receipt: &LaunchReceipt<'_>) -> Resu
             render::paint(render::palette::muted(), &model)
         )?;
     }
+    if let Some((_, team)) = receipt.team
+        && !team.signals.is_empty()
+    {
+        let signals = team
+            .signals
+            .iter()
+            .map(|binding| format!("{} → {}", binding.signal, binding.role))
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(w, "signals: {signals}")?;
+    }
     writeln!(w)?;
     write_launch_hints(
         w,
@@ -973,6 +996,7 @@ mod tests {
         identities[1].launch.model = Some("gpt-6-astra".to_owned());
         identities[0].prompt = Some("Read the handoff at /tmp/handoff-feat-x.md.".to_owned());
         let team = rimz::config::Team {
+            leader: Some("planner".to_owned()),
             stages: vec![
                 "Explore".to_owned(),
                 "Plan".to_owned(),
@@ -997,6 +1021,37 @@ mod tests {
         .unwrap();
 
         insta::assert_snapshot!(String::from_utf8(output.into_inner()).unwrap());
+
+        let mut output = Vec::new();
+        write_launch_receipt(
+            &mut output,
+            &LaunchReceipt {
+                team: Some((
+                    "forge",
+                    &rimz::config::Team {
+                        signals: vec![rimz::config::TeamSignalBinding {
+                            signal: "ci.failed".to_owned(),
+                            role: "coder".to_owned(),
+                            matches: Default::default(),
+                            prompt: None,
+                        }],
+                        ..Default::default()
+                    },
+                )),
+                channel: Some("feat-x"),
+                cwd: Path::new("/repo-worktrees/feat-x"),
+                branch: None,
+                identities: &identities,
+                leader_index: None,
+                terminal_width: 100,
+            },
+        )
+        .unwrap();
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .contains("signals: ci.failed → coder\n")
+        );
     }
 
     #[test]

@@ -1,12 +1,158 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use rimz::ids::{MuxName, PaneId};
+use rimz::agents::{AgentLifecycleObservation, AgentStatus, LaunchParams, LifecycleSignal};
+use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use rimz::mux::{LayoutPanes, MuxBackend, PaneCmd, SidebarPaneOptions, TabOptions, ZellijBackend};
+use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 
 use crate::common::{CommandTimeoutExt, Env, ZellijNamespace};
 
 use super::support::*;
+
+#[test]
+fn self_wake_steers_to_live_consumer_when_idle_and_working() {
+    require_zellij!();
+
+    for working in [false, true] {
+        let env = Env::new();
+        env.install_agent_hooks("claude");
+        let workspace =
+            rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+        let room = LiveZellijSession::from_namespace(
+            ZellijNamespace::new(),
+            workspace.session_name.clone(),
+        );
+        let xdg = room.path();
+        let backend = ZellijBackend::with_runtime_dir(xdg);
+        let (_stub_dir, stub) = sidebar_stub_alive_for(600);
+        let mut sidebar = sidebar_opts(room.name(), &env.project_root, stub, 160);
+        sidebar.workspace_id = workspace.workspace_id.clone();
+        publish_room_bin(xdg, &sidebar);
+        backend.open_sidebar(&sidebar, None).expect("open sidebar");
+        wait_for_pane_count(xdg, room.name(), 2);
+        let _client = AttachedClient::attach(&room, 160, 40);
+
+        let agent_id = AgentSessionId::from("self-wake-session");
+        let launch_id = AgentSessionId::from("self-wake-launch");
+        let agent_bin = write_sleeping_agent_shim(&env, "claude");
+        let ready = env.home_root.join("self-wake-agent-ready");
+        let command = zellij_agent_exec_command(&env, xdg, &agent_bin, &ready, agent_id.as_str());
+        let tab_name = "#self-wake";
+        backend
+            .open_tab(&TabOptions {
+                title: tab_name.to_owned(),
+                panes: LayoutPanes {
+                    columns: vec![tiled_column(vec![PaneCmd {
+                        argv: command,
+                        name: None,
+                    }])],
+                },
+                focus: true,
+                dock_sidebar: true,
+                after: None,
+                sidebar,
+            })
+            .expect("open agent tab");
+        wait_for_path(&ready, "agent shim did not start");
+        let work = wait_for_named_work_pane_count(xdg, room.name(), tab_name, 1);
+        let pane_id = PaneId::from_parts(MuxName::Zellij, &format!("terminal_{}", work[0].id));
+        let store = env.store();
+        store
+            .append_event(&EventEnvelope::agent_launched(
+                workspace.workspace_id.clone(),
+                room.name(),
+                &AgentKind::new_unchecked("claude"),
+                AgentLaunchPayload {
+                    agent_id: agent_id.clone(),
+                    launch_id: Some(launch_id.clone()),
+                    agent_name: "planner".to_owned(),
+                    agent_name_explicit: true,
+                    launch: LaunchParams::default(),
+                    state: AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: Some(pane_id.clone()),
+                    runtime_owner: None,
+                    worktree_path: Some(env.project_root.display().to_string()),
+                    worktree_branch: None,
+                    prompt: None,
+                    description: None,
+                },
+            ))
+            .expect("seed bound live agent");
+        for signal in std::iter::once(LifecycleSignal::Registered)
+            .chain(working.then_some(LifecycleSignal::TurnStarted))
+        {
+            let mut observation = AgentLifecycleObservation::new(Some(agent_id.clone()), signal);
+            observation.agent_name = Some("planner".to_owned());
+            observation.pane_id = Some(pane_id.clone());
+            store
+                .append_event(&EventEnvelope::agent_lifecycle(
+                    workspace.workspace_id.clone(),
+                    room.name(),
+                    "claude",
+                    "test",
+                    &observation,
+                ))
+                .expect("seed live agent lifecycle");
+        }
+        let expected_status = if working {
+            AgentStatus::Running
+        } else {
+            AgentStatus::Idle
+        };
+        let snapshot = store.snapshot().expect("snapshot before wake");
+        let agent = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id == agent_id)
+            .expect("registered live agent");
+        assert_eq!(agent.status, expected_status);
+
+        let output = env
+            .rimz()
+            .env("XDG_RUNTIME_DIR", xdg)
+            .env("RIMZ_AGENT_KIND", "claude")
+            .env("RIMZ_AGENT_ID", launch_id.as_str())
+            .env("RIMZ_AGENT_NAME", "planner")
+            .args([
+                "--mux",
+                "zellij",
+                "wake",
+                "--",
+                "printf",
+                "self-wake-marker",
+            ])
+            .bounded_output()
+            .expect("arm self wake");
+        assert!(
+            output.status.success(),
+            "self wake failed (working={working}): {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+        poll_until(
+            Duration::from_secs(20),
+            || {
+                backend
+                    .capture_pane(&pane_id, Some(100), false)
+                    .map(|capture| capture.raw_text)
+                    .map_err(|err| err.to_string())
+            },
+            |capture| capture.contains("Type: WAKE") && capture.contains("self-wake-marker"),
+            &format!("self wake in original live pane (working={working})"),
+        );
+        let snapshot = store.snapshot().expect("snapshot after wake");
+        let agent = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id == agent_id)
+            .expect("registered live agent");
+        assert_eq!(
+            agent.status, expected_status,
+            "delivery must not require Done"
+        );
+    }
+}
 
 #[test]
 fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() {

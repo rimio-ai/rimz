@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::disk::atomic::{AtomicErr, write_temp_then_rename_cache};
+use crate::disk::atomic::{AtomicErr, write_temp_then_rename, write_temp_then_rename_cache};
 use crate::disk::lock::{LockErr, WorkspaceLock};
 
 #[derive(Debug, thiserror::Error)]
@@ -74,6 +74,27 @@ impl OverlayStore {
             let removed = entries.remove(name).is_some();
             (removed, removed)
         })
+    }
+
+    pub(super) fn copy_missing<V>(&self, state_root: &Path, keys: &[(String, String)]) -> Result<()>
+    where
+        V: Clone + DeserializeOwned + Serialize,
+    {
+        let _guard = WorkspaceLock::acquire(&self.lock_path(state_root))?;
+        let mut entries = self.load::<V>(state_root);
+        let mut changed = false;
+        for (old, new) in keys {
+            if !entries.contains_key(new)
+                && let Some(value) = entries.get(old).cloned()
+            {
+                entries.insert(new.clone(), value);
+                changed = true;
+            }
+        }
+        if changed {
+            write_temp_then_rename(&self.path(state_root), &entries)?;
+        }
+        Ok(())
     }
 
     pub(super) fn rename<V>(&self, state_root: &Path, old: &str, new: &str) -> Result<bool>

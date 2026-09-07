@@ -193,9 +193,10 @@ mod tests {
     fn task_entry_serialization_uses_canonical_schema_and_store_policy() {
         let entry = TaskEntry {
             agent: Some("claude".to_owned()),
+            team: None,
             wake: Some(TaskTarget {
-                kind: "claude".to_owned(),
-                session: "session-1".to_owned(),
+                kind: crate::ids::AgentKind::new_unchecked("claude"),
+                session: "session-1".into(),
                 handle: "@claude".to_owned(),
             }),
             wake_meta: None,

@@ -170,7 +170,7 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
     let store = &ctx.store;
     let snapshot = ctx.cached_snapshot()?;
     let peers = rimz::harness::target::addressable_agents(&snapshot);
-    let agent = resolve_open_ask(&snapshot, target, ctx.channel(), true)?
+    let agent = resolve_open_ask(&ctx.store, &snapshot, target, ctx.channel(), true)?
         .ok_or_else(|| anyhow::anyhow!("ask `{target}` is no longer open"))?;
     if !agent.is_awaiting_input() || agent.open_ask.is_none() {
         bail!(

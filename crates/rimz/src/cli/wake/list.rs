@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde::Serialize;
+use std::io::Write;
 
 use rimz::harness::schedule::Trigger;
 use rimz::harness::schedule::catalog::{LoadedTask, TaskCatalog, TaskSource};
@@ -8,8 +9,8 @@ use rimz::harness::schedule::signal::watcher_info;
 use super::*;
 
 #[derive(Serialize)]
-struct WakeRow {
-    name: String,
+pub(super) struct WakeRow {
+    pub(super) name: String,
     trigger: String,
     target: String,
     age: String,
@@ -18,26 +19,38 @@ struct WakeRow {
 
 pub(super) fn run(json: bool, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
-    let caller_session = caller_session(&ctx)?;
+    let rows = pending_rows(&ctx)?;
+    if json {
+        return super::super::render::json(&rows);
+    }
+    write_rows(&mut super::super::render::out(), rows)
+}
+
+pub(super) fn pending_rows(ctx: &Ctx) -> Result<Vec<WakeRow>> {
+    let caller_session = caller_session(ctx)?;
     let catalog = TaskCatalog::load(Some(&ctx.workspace.project_root))?;
-    let rows = catalog
+    catalog
         .visible()
         .iter()
         .filter(|(_, task)| task.source() == TaskSource::Instance)
         .filter(|(_, task)| task.entry().resolved_root() == ctx.workspace.project_root)
         .filter(|(_, task)| task.entry().wake.is_some())
         .filter(|(_, task)| {
-            caller_session.as_ref().is_none_or(|session| {
+            caller_session.as_ref().is_none_or(|(kind, session)| {
                 task.entry()
                     .wake
                     .as_ref()
-                    .is_some_and(|target| target.session == session.as_str())
+                    .is_some_and(|target| target.kind == *kind && target.session == *session)
             })
         })
-        .map(|(name, task)| row(&ctx, name, task))
-        .collect::<Result<Vec<_>>>()?;
-    if json {
-        return super::super::render::json(&rows);
+        .map(|(name, task)| row(ctx, name, task))
+        .collect()
+}
+
+pub(super) fn write_rows(out: &mut impl Write, rows: Vec<WakeRow>) -> Result<()> {
+    if rows.is_empty() {
+        writeln!(out, "no pending wakes")?;
+        return Ok(());
     }
     let mut table = super::super::render::Table::new(["NAME", "STATE", "TARGET", "AGE", "TRIGGER"])
         .max_width(super::super::render::terminal_columns(120));
@@ -50,7 +63,7 @@ pub(super) fn run(json: bool, globals: &GlobalFlags) -> Result<()> {
             super::super::render::cell(row.trigger),
         ]);
     }
-    table.render(&mut super::super::render::out())?;
+    table.render(out)?;
     Ok(())
 }
 
@@ -93,7 +106,12 @@ fn row(ctx: &Ctx, name: &str, task: &LoadedTask) -> Result<WakeRow> {
     };
     Ok(WakeRow {
         name: name.to_owned(),
-        trigger: parsed.describe(),
+        trigger: match &parsed.trigger {
+            Trigger::Watch { command } => {
+                format!("watch: {}", rimz::theme::fmt::command_preview(command))
+            }
+            _ => parsed.describe(),
+        },
         target: target.handle.clone(),
         age,
         state,

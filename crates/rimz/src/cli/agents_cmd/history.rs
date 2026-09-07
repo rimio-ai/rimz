@@ -11,7 +11,8 @@ pub(super) fn history_agent(
 ) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let snapshot = ctx.alive_snapshot()?;
-    let live_result = crate::cli::resolve_agent_one(&snapshot, &reference, None, ctx.channel());
+    let live_result =
+        crate::cli::resolve_agent_one(&ctx.store, &snapshot, &reference, None, ctx.channel());
     let (agent, resolved_live) = match live_result {
         Ok(agent) => (agent.clone(), true),
         Err(live_error) => {

@@ -4,6 +4,16 @@ use jiff::Timestamp;
 
 use crate::agents::RateLimitWindow;
 
+pub fn command_preview(command: &str) -> std::borrow::Cow<'_, str> {
+    let count = command.chars().count();
+    if count <= 120 {
+        return std::borrow::Cow::Borrowed(command);
+    }
+    let start = command.chars().take(60).collect::<String>();
+    let end = command.chars().skip(count - 59).collect::<String>();
+    std::borrow::Cow::Owned(format!("{start}…{end}"))
+}
+
 /// A budget reset countdown in two units.
 pub fn reset_countdown(deadline: Timestamp, now: Timestamp) -> String {
     reset_secs(deadline.duration_since(now).as_secs())
@@ -81,6 +91,20 @@ pub fn compact_count(value: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_preview_bounds_unicode_without_changing_short_commands() {
+        assert!(matches!(
+            command_preview("echo short"),
+            std::borrow::Cow::Borrowed("echo short")
+        ));
+        let long = format!("start{}end", "é".repeat(130));
+        let preview = command_preview(&long);
+        assert_eq!(preview.chars().count(), 120);
+        assert!(preview.starts_with("start"));
+        assert!(preview.ends_with("end"));
+        assert!(preview.contains('…'));
+    }
 
     #[test]
     fn money_groups_and_rounds() {

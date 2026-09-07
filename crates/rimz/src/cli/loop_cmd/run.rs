@@ -33,30 +33,15 @@ pub(super) fn run_one(
     mode: LoopRunMode,
     keep: bool,
     signal: Option<rimz::harness::schedule::signal::Signal>,
-    wake_armed_at: Option<Timestamp>,
-    expired: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
     let catalog = task_catalog(globals)?;
-    if expired && catalog.for_run(name).is_none() {
-        return Ok(());
-    }
     let loaded = catalog
         .for_run(name)
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
     let entry = loaded.entry().clone();
-    if wake_armed_at.is_some_and(|armed_at| {
-        entry.wake_meta.as_ref().map(|meta| meta.armed_at) != Some(armed_at)
-    }) {
-        return Ok(());
-    }
     let source = loaded.source();
-    if expired
-        && project_root_for_globals(globals).is_some_and(|root| root != entry.resolved_root())
-    {
-        return Ok(());
-    }
     gate_project_trust(name, &entry, source, mode)?;
     let key = loaded.key(name);
     let arm_state = ArmState::resolve(arming::load().get(&key), source, Timestamp::now());
@@ -106,15 +91,7 @@ pub(super) fn run_one(
         check_echo,
         started,
     )?;
-    let plan = if expired {
-        match fire.prepare_expired() {
-            Ok(Some(plan)) => Ok(plan),
-            Ok(None) => return Ok(()),
-            Err(err) => Err(err),
-        }
-    } else {
-        fire.prepare()
-    };
+    let plan = fire.prepare();
     if mode == LoopRunMode::Manual
         && let Some(trip) = fire.take_check_trip()
         && let Err(source) = write_check_trip_line(
@@ -330,11 +307,16 @@ fn execute_prepared_delivery(
     let store = crate::cli::open_store(&workspace)?;
     let channel = crate::cli::current_channel(&workspace);
     let sender = rimz::store::message::MessageSender::Harness {
-        notice: rimz::store::message::HarnessNotice::Wake,
+        notice: match prepared.intent {
+            rimz::harness::schedule::runner::DeliveryIntent::Signal => {
+                rimz::store::message::HarnessNotice::Signal
+            }
+            _ => rimz::store::message::HarnessNotice::Wake,
+        },
     };
     tracing::debug!(
-        kind = prepared.target.kind,
-        session = prepared.target.session,
+        kind = %prepared.target.kind,
+        session = %prepared.target.session,
         "queueing loop wake-up"
     );
     let dispatched = rimz::message::dispatch::dispatch(
@@ -351,15 +333,23 @@ fn execute_prepared_delivery(
             allow_fanout: false,
             reply: None,
             mux: globals.mux,
-            mode: rimz::message::dispatch::DispatchMode::Boundary {
-                enter: true,
-                gate: DeliveryGate::Done,
-                force: false,
-                // Domain dispatch resolves this from [harness] smart_compact.
-                auto_compact: None,
-                not_before: None,
-                after: Vec::new(),
-                when: Vec::new(),
+            mode: if prepared.intent == rimz::harness::schedule::runner::DeliveryIntent::SelfWake {
+                rimz::message::dispatch::DispatchMode::Steer {
+                    enter: true,
+                    force: false,
+                    auto_compact: None,
+                }
+            } else {
+                rimz::message::dispatch::DispatchMode::Boundary {
+                    enter: true,
+                    gate: DeliveryGate::Done,
+                    force: false,
+                    // Domain dispatch resolves this from [harness] smart_compact.
+                    auto_compact: None,
+                    not_before: None,
+                    after: Vec::new(),
+                    when: Vec::new(),
+                }
             },
         },
     );
@@ -381,7 +371,11 @@ fn execute_prepared_delivery(
                 })
                 .context("loop wake dispatch returned no outcome")?;
             crate::cli::send::report_dispatch(
-                crate::cli::send::ReportMode::Boundary,
+                if prepared.intent == rimz::harness::schedule::runner::DeliveryIntent::SelfWake {
+                    crate::cli::send::ReportMode::Steer
+                } else {
+                    crate::cli::send::ReportMode::Boundary
+                },
                 &prepared.target.handle,
                 &result.outcomes,
                 &result.compacted,

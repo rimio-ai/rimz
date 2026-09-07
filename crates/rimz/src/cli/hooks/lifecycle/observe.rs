@@ -168,20 +168,45 @@ fn record_mapped_lifecycle_observation(
         }
     };
     log_lifecycle_receipt(agent.spec().kind, &observation, &receipt);
-    let team_state = (|| -> anyhow::Result<_> {
-        let audit = store.runtime_projection(rimz::store::runtime::RuntimeScope::Audit)?;
-        let pending = store.list_pending_messages()?;
-        Ok((audit, pending))
-    })()
-    .inspect_err(|err| {
-        warn!(error = %err, "lifecycle: failed to read team signal state");
-    })
-    .ok();
+    let audit = store
+        .runtime_projection(rimz::store::runtime::RuntimeScope::Audit)
+        .inspect_err(|err| {
+            warn!(error = %err, "lifecycle: failed to read team member state");
+        })
+        .ok();
+    let pending = store
+        .list_pending_messages()
+        .inspect_err(|err| {
+            warn!(error = %err, "lifecycle: failed to read team signal state");
+        })
+        .ok();
     for event in &receipt.events {
+        if matches!(event.signal, LifecycleSignal::Ended | LifecycleSignal::Lost)
+            && let Err(err) = rimz::harness::schedule::arm::retire_session(
+                workspace,
+                &event.kind,
+                &event.agent_id,
+            )
+        {
+            warn!(error = %err, "lifecycle: failed to retire session deliveries");
+        }
+        if matches!(event.signal, LifecycleSignal::Registered)
+            && event.parent_agent_id.is_none()
+            && let Some(audit) = &audit
+            && let Some(member) = audit
+                .agents
+                .iter()
+                .find(|member| member.kind == event.kind && member.agent_id == event.agent_id)
+            && member.team.is_some()
+            && member.parent_agent_id.is_none()
+            && let Err(err) = arm_team_member(workspace, &audit.agents, member)
+        {
+            warn!(error = %err, "lifecycle: failed to arm team signal bindings");
+        }
         let mut signals: Vec<_> = rimz::harness::schedule::signal::lifecycle_signal(event)
             .into_iter()
             .collect();
-        if let Some((audit, pending)) = &team_state
+        if let (Some(audit), Some(pending)) = (&audit, &pending)
             && let Some(member) = audit
                 .agents
                 .iter()
@@ -229,6 +254,35 @@ fn record_mapped_lifecycle_observation(
         rotation_due: receipt.rotation_due,
         waiting_cleared: receipt.waiting_cleared,
     }
+}
+
+fn arm_team_member(
+    workspace: &ResolvedWorkspace,
+    agents: &[rimz::agents::AgentState],
+    member: &rimz::agents::AgentState,
+) -> anyhow::Result<()> {
+    let Some(name) = member.team.as_deref() else {
+        return Ok(());
+    };
+    let machine = rimz::config::MachineConfig::load()?;
+    let effective = rimz::config::effective::load(
+        &machine.agents,
+        &machine.subagents.profiles,
+        &workspace.project_root,
+        &rimz::disk::paths::config_home(),
+    )?;
+    effective.block_untrusted_reference(
+        rimz::config::effective::ProfileScope::Agents,
+        Some(name),
+        &machine.agents.commands,
+    )?;
+    let team = effective
+        .teams
+        .0
+        .get(name)
+        .ok_or_else(|| anyhow::anyhow!("team `{name}` is no longer configured"))?;
+    rimz::harness::schedule::team::arm_member(workspace, agents, member, team)?;
+    Ok(())
 }
 
 fn correlate_subagent_observation(

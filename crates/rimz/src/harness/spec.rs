@@ -263,6 +263,26 @@ pub enum LayoutErr {
     },
     #[error("team `{team}` must declare at least one role")]
     EmptyTeam { team: String },
+    #[error("team `{team}` signal binding {index} targets undeclared role `{role}`")]
+    UnknownTeamSignalRole {
+        team: String,
+        index: usize,
+        role: String,
+    },
+    #[error("team `{team}` signal binding {index}: {source}")]
+    InvalidTeamSignal {
+        team: String,
+        index: usize,
+        source: crate::harness::schedule::ScheduleErr,
+    },
+    #[error(
+        "team `{team}` signal binding {index} (`{signal}`) requires match.handle or match.session"
+    )]
+    UnscopedTeamAgentSignal {
+        team: String,
+        index: usize,
+        signal: String,
+    },
     #[error("team `{team}` role `{role}` references unknown profile `{profile}`")]
     UnknownRoleProfile {
         team: String,
@@ -1607,7 +1627,46 @@ fn prepare_team<'a>(
             valid_roles: valid_team_roles(team),
         });
     }
+    validate_team_signals(name, team)?;
     Ok(PreparedTeam { team, roles })
+}
+
+fn validate_team_signals(name: &str, team: &Team) -> Result<()> {
+    for (index, binding) in team.signals.iter().enumerate() {
+        let index = index + 1;
+        if !team.roles.iter().any(|role| role.role == binding.role) {
+            return Err(LayoutErr::UnknownTeamSignalRole {
+                team: name.to_owned(),
+                index,
+                role: binding.role.clone(),
+            });
+        }
+        let selector = crate::harness::schedule::parse_signal_selector(
+            name,
+            &binding.signal,
+            Some(&binding.matches),
+        )
+        .map_err(|source| LayoutErr::InvalidTeamSignal {
+            team: name.to_owned(),
+            index,
+            source,
+        })?;
+        if selector.family() == "agent"
+            && !["handle", "session"].iter().any(|key| {
+                binding
+                    .matches
+                    .get(*key)
+                    .is_some_and(|value| !value.trim().is_empty())
+            })
+        {
+            return Err(LayoutErr::UnscopedTeamAgentSignal {
+                team: name.to_owned(),
+                index,
+                signal: binding.signal.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) -> ResolvedProfile {

@@ -32,6 +32,7 @@ pub(super) fn run_refresh(args: RefreshArgs, globals: &GlobalFlags) -> Result<()
     let current_channel = ctx.channel();
     let targets = match (args.reference.as_deref(), args.all) {
         (Some(reference), _) => vec![crate::cli::resolve_agent_one(
+            &ctx.store,
             &snapshot,
             reference,
             None,

@@ -177,7 +177,8 @@ pub(super) fn list_messages(
     }
     if let Some(raw) = target {
         rimz::harness::target::require_mention(&raw)?;
-        let agent = crate::cli::resolve_agent_one(&snapshot, &raw, None, lane_scope.named())?;
+        let agent =
+            crate::cli::resolve_agent_one(store, &snapshot, &raw, None, lane_scope.named())?;
         messages.retain(|message| {
             rimz::agents::AgentCardRef::new(
                 &message.kind,

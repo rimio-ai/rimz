@@ -1537,6 +1537,7 @@ mod tests {
                 layout: None,
                 scratch_files: vec!["blackboard.md".to_owned()],
                 stages: Vec::new(),
+                signals: Vec::new(),
             },
         );
         let mut request = request(

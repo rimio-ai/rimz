@@ -27,6 +27,73 @@ fn team() -> Team {
         layout: None,
         scratch_files: Vec::new(),
         stages: Vec::new(),
+        signals: Vec::new(),
+    }
+}
+
+#[test]
+fn team_signal_report_matches_origin_and_session() {
+    let agent = AgentState::stub("claude", "sess-planner", AgentStatus::Running);
+    let entry = TaskEntry {
+        team: Some("forge#feat-x".parse().unwrap()),
+        wake: Some(rimz::config::TaskTarget {
+            kind: rimz::ids::AgentKind::new_unchecked("claude"),
+            session: "sess-planner".into(),
+            handle: "@old-handle".to_owned(),
+        }),
+        signal: Some("ci.failed".to_owned()),
+        matches: Some(BTreeMap::from([(
+            "path".to_owned(),
+            "/repo/feat-x".to_owned(),
+        )])),
+        ..TaskEntry::default()
+    };
+    let report = live_signal(
+        "binding",
+        &entry,
+        TaskSource::Instance,
+        "forge#feat-x",
+        &agent,
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(report).unwrap(),
+        serde_json::json!({
+            "name": "binding", "selector": "ci.failed", "matches": {"path": "/repo/feat-x"}
+        })
+    );
+    for instance in ["forge#feat-y", "peer#feat-x"] {
+        assert!(live_signal("binding", &entry, TaskSource::Instance, instance, &agent).is_none());
+    }
+    for source in [
+        TaskSource::Config,
+        TaskSource::Project {
+            state: rimz::trust::TrustState::Trusted,
+        },
+    ] {
+        assert!(live_signal("binding", &entry, source, "forge#feat-x", &agent).is_none());
+    }
+    let mut wrong_kind = entry.clone();
+    wrong_kind.wake.as_mut().unwrap().kind = rimz::ids::AgentKind::new_unchecked("codex");
+    let mut old_session = entry.clone();
+    old_session.wake.as_mut().unwrap().session = "previous-planner".into();
+    let mut manual = entry.clone();
+    manual.team = None;
+    let mut timer = entry.clone();
+    timer.signal = None;
+    let mut spawn = entry;
+    spawn.wake = None;
+    for entry in [wrong_kind, old_session, manual, timer, spawn] {
+        assert!(
+            live_signal(
+                "binding",
+                &entry,
+                TaskSource::Instance,
+                "forge#feat-x",
+                &agent
+            )
+            .is_none()
+        );
     }
 }
 
@@ -93,6 +160,7 @@ fn catalog_projects_cohort_observability_by_worktree() {
             &ProfilesConfig::default(),
             &CommandsConfig::default(),
             LiveCatalog {
+                tasks: &BTreeMap::new(),
                 snapshot,
                 audit_agents: &[],
                 lifetimes: &rimz::worktree::lane_lifetimes([]),
@@ -168,7 +236,14 @@ fn catalog_projects_cohort_observability_by_worktree() {
 
 #[test]
 fn catalog_merges_definition_and_live_instance() {
-    let teams = TeamsConfig(BTreeMap::from([("forge".to_owned(), team())]));
+    let mut definition = team();
+    definition.signals.push(rimz::config::TeamSignalBinding {
+        signal: "ci.failed".to_owned(),
+        role: "planner".to_owned(),
+        matches: BTreeMap::from([("branch".to_owned(), "feat-x".to_owned())]),
+        prompt: None,
+    });
+    let teams = TeamsConfig(BTreeMap::from([("forge".to_owned(), definition)]));
     let mut agent = AgentState::stub("claude", "sess-planner", AgentStatus::Running);
     agent.team = Some("forge".to_owned());
     agent.role = Some("planner".to_owned());
@@ -179,6 +254,7 @@ fn catalog_merges_definition_and_live_instance() {
         &ProfilesConfig::default(),
         &CommandsConfig::default(),
         LiveCatalog {
+            tasks: &BTreeMap::new(),
             snapshot: &snapshot,
             audit_agents: &[],
             lifetimes: &rimz::worktree::lane_lifetimes([]),
@@ -195,6 +271,17 @@ fn catalog_merges_definition_and_live_instance() {
     assert_eq!(reports[0].instances[0].members.len(), 1);
     assert_eq!(reports[0].instances[0].state, "working");
     let json = serde_json::to_value(&reports).unwrap();
+    assert_eq!(
+        json[0]["roles"][0]["signals"],
+        serde_json::json!([{
+            "signal": "ci.failed", "match": {"branch": "feat-x"}, "prompt": null
+        }])
+    );
+    assert_eq!(json[0]["instances"][0]["members"][0]["role"], "planner");
+    assert_eq!(
+        json[0]["instances"][0]["members"][0]["signals"],
+        serde_json::json!([])
+    );
     assert_eq!(json[0]["roles"][0]["system_prompt_file"], "planner.md");
     assert_eq!(
         json[0]["roles"][0]["append_system_prompt_files"],
@@ -209,6 +296,7 @@ fn catalog_merges_definition_and_live_instance() {
         &ProfilesConfig::default(),
         &CommandsConfig::default(),
         LiveCatalog {
+            tasks: &BTreeMap::new(),
             snapshot: &snapshot,
             audit_agents: &[],
             lifetimes: &rimz::worktree::lane_lifetimes([]),
@@ -255,6 +343,7 @@ fn live_member_cost_comes_from_its_audit_slot() {
         &ProfilesConfig::default(),
         &CommandsConfig::default(),
         LiveCatalog {
+            tasks: &BTreeMap::new(),
             snapshot: &snapshot(vec![agent.clone()]),
             audit_agents: &[agent],
             lifetimes: &lifetimes,
@@ -329,6 +418,7 @@ fn live_member_cost_counts_only_the_current_lane_lifetime() {
             &ProfilesConfig::default(),
             &CommandsConfig::default(),
             LiveCatalog {
+                tasks: &BTreeMap::new(),
                 snapshot: &snapshot(vec![current.clone()]),
                 audit_agents: &audit_agents,
                 lifetimes: &lifetimes,
@@ -383,11 +473,18 @@ fn live_member_cost_counts_only_the_current_lane_lifetime() {
 fn invalid_team_stays_visible_with_its_error() {
     let mut broken = team();
     broken.roles[0].profile = "missing".to_owned();
+    broken.signals.push(rimz::config::TeamSignalBinding {
+        signal: "ci.failed".to_owned(),
+        role: "planner".to_owned(),
+        matches: BTreeMap::new(),
+        prompt: Some("Fix CI".to_owned()),
+    });
     let reports = build_catalog(
         &TeamsConfig(BTreeMap::from([("broken".to_owned(), broken)])),
         &ProfilesConfig::default(),
         &CommandsConfig::default(),
         LiveCatalog {
+            tasks: &BTreeMap::new(),
             snapshot: &snapshot(Vec::new()),
             audit_agents: &[],
             lifetimes: &rimz::worktree::lane_lifetimes([]),
@@ -398,11 +495,39 @@ fn invalid_team_stays_visible_with_its_error() {
     );
 
     assert!(!reports[0].valid);
+    assert_eq!(reports[0].roles[0].signals[0].signal, "ci.failed");
+    assert_eq!(
+        reports[0].roles[0].signals[0].prompt.as_deref(),
+        Some("Fix CI")
+    );
     assert!(
         reports[0]
             .error
             .as_deref()
             .is_some_and(|error| error.contains("unknown profile"))
+    );
+
+    let mut invalid_signal = team();
+    invalid_signal
+        .signals
+        .push(rimz::config::TeamSignalBinding {
+            signal: "ci.failed".to_owned(),
+            role: "builder".to_owned(),
+            matches: BTreeMap::new(),
+            prompt: None,
+        });
+    let report = definition_report(
+        "forge",
+        &invalid_signal,
+        &ProfilesConfig::default(),
+        &CommandsConfig::default(),
+        None,
+        Vec::new(),
+    );
+    assert!(!report.valid);
+    assert_eq!(
+        report.error.as_deref(),
+        Some("team `forge` signal binding 1 targets undeclared role `builder`")
     );
 }
 
@@ -435,6 +560,7 @@ fn human_catalog_and_empty_state_teach_the_command() {
         &ProfilesConfig::default(),
         &CommandsConfig::default(),
         LiveCatalog {
+            tasks: &BTreeMap::new(),
             snapshot: &snapshot(Vec::new()),
             audit_agents: &[],
             lifetimes: &rimz::worktree::lane_lifetimes([]),
@@ -494,6 +620,7 @@ fn catalog_filter_matches_an_exact_lane_or_member_worktree() {
             &ProfilesConfig::default(),
             &CommandsConfig::default(),
             LiveCatalog {
+                tasks: &BTreeMap::new(),
                 snapshot: &snapshot(vec![agent.clone()]),
                 audit_agents: &[],
                 lifetimes: &rimz::worktree::lane_lifetimes([]),

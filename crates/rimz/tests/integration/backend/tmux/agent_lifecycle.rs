@@ -1,6 +1,9 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use super::support::*;
+use rimz::agents::{AgentStatus, LaunchParams};
+use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
+use rimz::store::writer::AgentLifecycleIntent;
 
 fn write_sleeping_agent_shim(env: &Env, agent: &str) -> PathBuf {
     let dir = env.home_root.join("agent-bin");
@@ -239,6 +242,148 @@ fn git(cwd: &Path, args: &[&str]) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
+}
+
+#[test]
+fn self_wake_steers_to_live_consumer_when_idle_and_working() {
+    require_tmux!();
+    for status in [AgentStatus::Idle, AgentStatus::Running] {
+        let env = Env::new();
+        env.install_agent_hooks("claude");
+        let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+        let server = TmuxServer::in_runtime_root(&env.runtime_root);
+        server
+            .backend
+            .ensure_session(&session_opts(
+                &workspace.session_name,
+                workspace.workspace_id.clone(),
+                &workspace.project_root,
+                &workspace.worktree_root,
+                Some((160, 40)),
+            ))
+            .expect("ensure session");
+        let agent_id = "self-wake-provider";
+        let launch_id = "self-wake-launch";
+        let agent_bin = write_sleeping_agent_shim(&env, "claude");
+        let ready = env.home_root.join("self-wake-ready");
+        let command = tmux_direct_resume_command(&env, &agent_bin, &ready, "claude", agent_id);
+        let (_stub_dir, stub) = sidebar_command_stub();
+        server
+            .backend
+            .open_tab(&TabOptions {
+                title: "#self-wake".to_owned(),
+                panes: LayoutPanes {
+                    columns: vec![tiled_column(vec![PaneCmd {
+                        argv: command,
+                        name: None,
+                    }])],
+                },
+                focus: false,
+                dock_sidebar: false,
+                after: None,
+                sidebar: SidebarPaneOptions {
+                    workspace_id: workspace.workspace_id.clone(),
+                    project_root: workspace.project_root.clone(),
+                    cwd: env.project_root.clone(),
+                    ..sidebar_opts(&workspace.session_name, stub, Some(160))
+                },
+            })
+            .expect("open live agent pane");
+        wait_for_path(&ready, "self-wake agent shim did not start");
+        let target = format!("{}:#self-wake", workspace.session_name);
+        let pane_id = PaneId::from_parts(MuxName::Tmux, server.display(&target, "#{pane_id}"));
+        let store = env.store();
+        let kind = AgentKind::new_unchecked("claude");
+        store
+            .append_event(&EventEnvelope::agent_launched(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                &kind,
+                AgentLaunchPayload {
+                    agent_id: agent_id.into(),
+                    launch_id: Some(launch_id.into()),
+                    agent_name: "planner".to_owned(),
+                    agent_name_explicit: true,
+                    launch: LaunchParams::default(),
+                    state: AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: Some(pane_id.clone()),
+                    runtime_owner: None,
+                    worktree_path: Some(env.project_root.display().to_string()),
+                    worktree_branch: None,
+                    prompt: None,
+                    description: None,
+                },
+            ))
+            .expect("seed bound live target");
+        let mut observation =
+            AgentLifecycleObservation::new(Some(agent_id.into()), LifecycleSignal::Registered);
+        observation.agent_name = Some("planner".to_owned());
+        observation.pane_id = Some(pane_id.clone());
+        store
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: &workspace.session_name,
+                agent_kind: kind.clone(),
+                event_name: "test",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .expect("register live target");
+        if status == AgentStatus::Running {
+            let observation =
+                AgentLifecycleObservation::new(Some(agent_id.into()), LifecycleSignal::TurnStarted);
+            store
+                .append_agent_lifecycle(AgentLifecycleIntent {
+                    session_name: &workspace.session_name,
+                    agent_kind: kind,
+                    event_name: "test",
+                    observation: &observation,
+                    spawned_subagents: &[],
+                })
+                .expect("start working turn");
+        }
+        let assert_status = || {
+            let projection = store
+                .runtime_projection(rimz::RuntimeScope::Runtime)
+                .expect("live target projection");
+            let agent = projection
+                .agents
+                .iter()
+                .find(|agent| agent.agent_id.as_str() == agent_id)
+                .expect("live target remains registered");
+            assert_eq!(agent.status, status);
+            assert_eq!(
+                agent.pane.as_ref().expect("live target pane").pane_id,
+                pane_id
+            );
+        };
+        assert_status();
+        let output = env
+            .rimz()
+            .env("RIMZ_AGENT_KIND", "claude")
+            .env("RIMZ_AGENT_ID", launch_id)
+            .env("RIMZ_AGENT_NAME", "planner")
+            .args(["--mux", "tmux", "wake", "--", "printf", "self-wake-marker"])
+            .bounded_output()
+            .expect("arm live self wake");
+        assert!(
+            output.status.success(),
+            "{status:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let capture = capture_pane_until(
+            &server.backend,
+            &pane_id,
+            "self-wake-marker",
+            Duration::from_secs(15),
+        );
+        assert!(capture.contains("Type: WAKE"), "{status:?}: {capture}");
+        assert!(
+            capture.contains("self-wake-marker"),
+            "{status:?}: {capture}"
+        );
+        assert_status();
+    }
 }
 
 #[test]

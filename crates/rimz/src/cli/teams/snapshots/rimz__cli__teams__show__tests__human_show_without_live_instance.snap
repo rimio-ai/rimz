@@ -12,6 +12,10 @@ forge
   planner  claude   claude  fable  high    auto
   (prompt stack: rimz teams show forge --json)
 
+Declared signals
+  ROLE     SIGNAL     MATCH  PROMPT
+  planner  ci.failed  -      Fix CI
+
 no live instance in #ended-lane
 
 Launch: rimz teams forge -w <worktree>

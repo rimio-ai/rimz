@@ -11,8 +11,8 @@ fn vanished_delivery_root_still_resolves_and_finds_no_active_run() {
         ..TaskEntry::default()
     };
     let target = TaskTarget {
-        kind: "claude".to_owned(),
-        session: "session".to_owned(),
+        kind: crate::ids::AgentKind::new_unchecked("claude"),
+        session: "session".into(),
         handle: "@claude".to_owned(),
     };
 
@@ -339,6 +339,20 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
             output_path: Some(dir.path().join("watch.log")),
         }),
     };
+    for on in [CheckOn::Success, CheckOn::Fail, CheckOn::Any] {
+        let mut running = signal.clone();
+        running.watch.as_mut().unwrap().verdict = WatchVerdict::Running { elapsed_ms: 1_000 };
+        let mut fire = skipped_fire(watch_name, &catalog, Some(running));
+        fire.entry.on = Some(on);
+        let check = fire.prepare_check().expect("running watch always delivers");
+        assert!(check.done.is_none());
+        fire.consume_ephemeral().expect("retain running watch");
+        assert!(
+            crate::harness::schedule::instances::load_from(&state.root)
+                .0
+                .contains_key(watch_name)
+        );
+    }
     let mut watch_fire = skipped_fire(watch_name, &catalog, Some(signal));
     let watch_check = watch_fire.prepare_check().expect("read watch check");
     let finished = watch_check.done.expect("skipped watch result");
@@ -414,6 +428,36 @@ fn run_check_captures_output_status_and_timeout() {
     let expired = check("sleep 1", Duration::from_millis(50));
     assert!(!expired.passed);
     assert!(expired.timed_out);
+}
+
+#[test]
+fn watch_exit_during_checkin_delivery_is_not_lost() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("watch.log");
+    let mut notices = 0;
+    let output = run_command(
+        dir.path(),
+        "printf interim; printf '%s' \"$$\" > command.pid; while [ ! -e release ]; do sleep 0.01; done; printf final; exit 3",
+        WatchDeadline::CheckInOnce(Duration::from_millis(100)),
+        CheckEcho::Tee { file: File::create(&path).unwrap() },
+        |elapsed_ms, tail| {
+            notices += 1;
+            assert!(elapsed_ms >= 100);
+            assert_eq!(tail, "interim");
+            std::fs::write(dir.path().join("release"), "").unwrap();
+            let pid = std::fs::read_to_string(dir.path().join("command.pid")).unwrap().parse().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while crate::proc::process_is_live(pid, None) {
+                assert!(Instant::now() < deadline, "command did not exit during notice");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        },
+    ).unwrap();
+    assert_eq!(notices, 1);
+    assert_eq!(output.code, Some(3));
+    assert!(!output.timed_out);
+    assert_eq!(output.output, "interimfinal");
+    assert_eq!(std::fs::read_to_string(path).unwrap(), output.output);
 }
 
 #[test]
@@ -533,8 +577,8 @@ fn loop_signal_prompts_keep_braces_and_check_evidence() {
 fn wake_prompt_is_optional_but_spawn_prompt_is_required() {
     let mut entry = TaskEntry {
         wake: Some(TaskTarget {
-            kind: "claude".to_owned(),
-            session: "session".to_owned(),
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
+            session: "session".into(),
             handle: "@coder".to_owned(),
         }),
         ..TaskEntry::default()

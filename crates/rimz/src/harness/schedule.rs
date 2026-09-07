@@ -19,6 +19,7 @@ use crate::config::{TaskEntry, TaskTarget};
 use crate::utils::time::{ClockTime, DurationUnit, parse_duration_units};
 use jiff::{SignedDuration, Timestamp, Zoned};
 
+pub mod arm;
 pub mod arming;
 pub mod catalog;
 mod config_edit;
@@ -30,6 +31,7 @@ pub mod run_log;
 pub mod runner;
 pub mod signal;
 pub mod strikes;
+pub mod team;
 
 pub use fire::last_stamps;
 
@@ -692,21 +694,7 @@ pub fn parse_trigger(name: &str, entry: &TaskEntry) -> Result<ParsedTrigger, Sch
         });
     }
     let trigger = if let Some(raw) = entry.signal.as_deref() {
-        let selector: signal::SignalSelector = raw.parse().map_err(|_| ScheduleErr::BadSignal {
-            name: name.to_owned(),
-            value: raw.to_owned(),
-        })?;
-        if raw == "ci.finished"
-            || (selector.family() == "ci"
-                && entry
-                    .matches
-                    .as_ref()
-                    .is_some_and(|matches| matches.contains_key("conclusion")))
-        {
-            return Err(ScheduleErr::ObsoleteCiSignal {
-                name: name.to_owned(),
-            });
-        }
+        let selector = parse_signal_selector(name, raw, entry.matches.as_ref())?;
         Trigger::Signal {
             selector,
             matches: entry.matches.clone().unwrap_or_default(),
@@ -727,6 +715,26 @@ pub fn parse_trigger(name: &str, entry: &TaskEntry) -> Result<ParsedTrigger, Sch
         once: matches!(trigger, Trigger::Watch { .. }) || entry.once == Some(true),
         trigger,
     })
+}
+
+pub fn parse_signal_selector(
+    name: &str,
+    raw: &str,
+    matches: Option<&std::collections::BTreeMap<String, String>>,
+) -> Result<signal::SignalSelector, ScheduleErr> {
+    let selector: signal::SignalSelector = raw.parse().map_err(|_| ScheduleErr::BadSignal {
+        name: name.to_owned(),
+        value: raw.to_owned(),
+    })?;
+    if raw == "ci.finished"
+        || (selector.family() == "ci"
+            && matches.is_some_and(|matches| matches.contains_key("conclusion")))
+    {
+        return Err(ScheduleErr::ObsoleteCiSignal {
+            name: name.to_owned(),
+        });
+    }
+    Ok(selector)
 }
 
 enum TimingFields<'a> {
