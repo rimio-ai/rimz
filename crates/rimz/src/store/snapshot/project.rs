@@ -198,7 +198,7 @@ pub(super) fn stamp_compact_commands_in_agents(
         let EventKind::Message { payload, .. } = &event.kind else {
             continue;
         };
-        stamp_compact_command(agents.iter_mut(), payload);
+        stamp_compact_command(agents.iter_mut(), payload, event.envelope.timestamp);
     }
 }
 
@@ -276,7 +276,7 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
                 );
             }
             EventKind::Message { payload, .. } => {
-                stamp_compact_command(map.values_mut(), payload);
+                stamp_compact_command(map.values_mut(), payload, envelope.timestamp);
             }
             EventKind::SessionDeath(_) => {}
             EventKind::Signal(_) => {}
@@ -435,6 +435,18 @@ fn reduce_lifecycle_event(
         establishes_identity,
         card_identity,
     });
+    if prior.is_none()
+        && matches!(
+            observation.signal,
+            lifecycle::LifecycleSignal::CompactionEnded { .. }
+        )
+    {
+        state.compacted_awaiting_prompt = state.compacted_awaiting_prompt.or_else(|| {
+            let predecessor = observation.compacted_from.as_ref()?;
+            map.get(&(kind.clone(), predecessor.clone()))?
+                .compacted_awaiting_prompt
+        });
+    }
     inherit_compaction_registration(map, &mut state);
     inherit_launch_identity(map, launch_identity, &mut state);
     launch_identity.replace(&key, &state);
@@ -584,39 +596,38 @@ fn reduce_agent_launch(
 fn stamp_compact_command<'a>(
     agents: impl IntoIterator<Item = &'a mut AgentState>,
     payload: &MessageEventPayload,
+    timestamp: Timestamp,
 ) {
-    let Some(tokens) = compact_command_tokens(payload) else {
-        return;
-    };
-    let mut agents = agents.into_iter().collect::<Vec<_>>();
-    if let Some(agent) = agents
-        .iter_mut()
-        .find(|agent| agent.kind == payload.kind && agent.agent_id == payload.agent_id)
-    {
-        agent.last_compact_command_tokens = Some(tokens);
-        return;
-    }
-    let Some(agent_name) = payload.agent_name.as_deref() else {
-        return;
-    };
-    if let Some(agent) = agents
-        .iter_mut()
-        .find(|agent| agent.kind == payload.kind && agent.name.as_deref() == Some(agent_name))
-    {
-        agent.last_compact_command_tokens = Some(tokens);
-    }
-}
-
-fn compact_command_tokens(payload: &MessageEventPayload) -> Option<u64> {
     if payload.body != MessageBody::Command
         || !matches!(
             payload.status,
             MessageStatus::Sent | MessageStatus::Delivered
         )
     {
-        return None;
+        return;
     }
-    payload.compacted_context_tokens
+    let mut agents = agents.into_iter().collect::<Vec<_>>();
+    let index = agents
+        .iter()
+        .position(|agent| agent.kind == payload.kind && agent.agent_id == payload.agent_id)
+        .or_else(|| {
+            let agent_name = payload.agent_name.as_deref()?;
+            agents.iter().position(|agent| {
+                agent.kind == payload.kind && agent.name.as_deref() == Some(agent_name)
+            })
+        });
+    let Some(index) = index else {
+        return;
+    };
+    let agent = &mut agents[index];
+    if let Some(tokens) = payload.compacted_context_tokens {
+        agent.last_compact_command_tokens = Some(tokens);
+    }
+    // The lifecycle hook is recorded before its acknowledgement. A delayed
+    // Delivered event must not undo a newer prompt's clear.
+    if payload.status == MessageStatus::Sent {
+        agent.compacted_awaiting_prompt = Some(timestamp);
+    }
 }
 
 struct AgentStateInput<'a> {
@@ -669,6 +680,7 @@ fn carried_base(
         state.compaction_count = prior.compaction_count;
         state.tool_calls = prior.tool_calls.clone();
         state.last_compact_command_tokens = prior.last_compact_command_tokens;
+        state.compacted_awaiting_prompt = prior.compacted_awaiting_prompt;
         state.registered_at = prior.registered_at.or(Some(event_ts));
     }
     state
@@ -807,6 +819,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     state.interrupted_turn_id = lifecycle.interrupted_turn_id;
     state.compacting_since = lifecycle.compacting_since;
     state.compaction_count = lifecycle.compaction_count;
+    state.compacted_awaiting_prompt = lifecycle.compacted_awaiting_prompt;
     state.tool_calls = lifecycle.tool_calls;
     state
 }
@@ -941,6 +954,7 @@ struct LifecycleProjection {
     phase: lifecycle::TurnPhase,
     compacting_since: Option<Timestamp>,
     compaction_count: u32,
+    compacted_awaiting_prompt: Option<Timestamp>,
     tool_calls: BTreeMap<String, u32>,
     turn_started_at: Option<Timestamp>,
     waiting_since: Option<Timestamp>,
@@ -979,6 +993,14 @@ fn lifecycle_projection(
         );
     let compaction_count =
         prior.map_or(0, |p| p.compaction_count) + u32::from(completed_compaction);
+    let compacted_awaiting_prompt = match &signal {
+        lifecycle::LifecycleSignal::CompactionEnded {
+            auto: Some(false),
+            failed: false,
+        } => Some(timestamp),
+        lifecycle::LifecycleSignal::TurnStarted | lifecycle::LifecycleSignal::Registered => None,
+        _ => prior.and_then(|p| p.compacted_awaiting_prompt),
+    };
     let mut tool_calls = prior.map_or_else(BTreeMap::new, |p| p.tool_calls.clone());
     if let lifecycle::LifecycleSignal::ToolUsed {
         name: Some(name), ..
@@ -1048,6 +1070,7 @@ fn lifecycle_projection(
         phase: next.phase,
         compacting_since,
         compaction_count,
+        compacted_awaiting_prompt,
         tool_calls,
         turn_started_at,
         waiting_since,

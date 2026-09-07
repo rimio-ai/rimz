@@ -681,6 +681,11 @@ pub struct AgentState {
     /// old message events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_compact_command_tokens: Option<u64>,
+    /// The next input must not be another compaction. Set by a sent compact
+    /// command or successful manual compaction; cleared by `TurnStarted` or
+    /// `Registered`. Delivery acknowledgements do not rearm a cleared marker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compacted_awaiting_prompt: Option<Timestamp>,
     pub last_seen: Timestamp,
     pub last_activity: Timestamp,
     /// When this session first entered the rollup — the timestamp of its
@@ -770,6 +775,8 @@ struct AgentStateWire {
     #[serde(default)]
     tool_repeat: Option<ToolRepeat>,
     last_compact_command_tokens: Option<u64>,
+    #[serde(default)]
+    compacted_awaiting_prompt: Option<Timestamp>,
     last_seen: Timestamp,
     last_activity: Timestamp,
     registered_at: Option<Timestamp>,
@@ -839,6 +846,7 @@ impl From<AgentStateWire> for AgentState {
             tool_calls: wire.tool_calls,
             tool_repeat: wire.tool_repeat,
             last_compact_command_tokens: wire.last_compact_command_tokens,
+            compacted_awaiting_prompt: wire.compacted_awaiting_prompt,
             last_seen: wire.last_seen,
             last_activity: wire.last_activity,
             registered_at: wire.registered_at,
@@ -924,6 +932,7 @@ impl AgentState {
             tool_calls: BTreeMap::new(),
             tool_repeat: None,
             last_compact_command_tokens: None,
+            compacted_awaiting_prompt: None,
             last_seen: at,
             last_activity: at,
             registered_at: Some(at),
