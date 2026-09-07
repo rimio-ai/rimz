@@ -213,10 +213,21 @@ pub enum TaskBudgetError {
 /// A loop delivery target pinned to the exact live agent session that scheduled
 /// it. The handle is display-only; `session` is the durable address.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct TaskTarget {
     pub kind: AgentKind,
     pub session: AgentSessionId,
     pub handle: String,
+}
+
+impl Default for TaskTarget {
+    fn default() -> Self {
+        Self {
+            kind: crate::ids::AgentKind::new_unchecked(""),
+            session: crate::ids::AgentSessionId::from(""),
+            handle: String::new(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
