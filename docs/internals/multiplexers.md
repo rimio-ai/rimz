@@ -32,6 +32,7 @@ Shared seam, `crates/rimz/src/mux/`:
 | [`mod.rs`](../../crates/rimz/src/mux/mod.rs) | The `MuxBackend` trait, its option and result types, `MuxErr`, and the one env→`PaneId` mapping. |
 | [`selection.rs`](../../crates/rimz/src/mux/selection.rs) | Backend selection precedence. |
 | [`command.rs`](../../crates/rimz/src/mux/command.rs) | `CommandSpec`: the bounded subprocess engine every control command runs through. |
+| [`pane_writer.rs`](../../crates/rimz/src/mux/pane_writer.rs) | `PaneWriter`: the per-pane user-scoped runtime advisory write lock, addressed by `RuntimePaths::pane_write_lock`. |
 | [`reconcile.rs`](../../crates/rimz/src/mux/reconcile.rs) | The structural sidebar repair planner, pane-role precedence, and transaction executor. |
 | [`mount_proof.rs`](../../crates/rimz/src/mux/mount_proof.rs) | Current-build heartbeat proof for panes mounted during repair. |
 | [`width.rs`](../../crates/rimz/src/mux/width.rs) | Sidebar sizing: share resolution, native steps, and target spellings. |
@@ -44,7 +45,7 @@ Shared seam, `crates/rimz/src/mux/`:
 | [`capabilities.rs`](../../crates/rimz/src/mux/capabilities.rs) | Static backend facts, such as whether a view is a tab or a window. |
 | [`binaries.rs`](../../crates/rimz/src/mux/binaries.rs) | PATH and live-server binary probes for `rimz doctor`. |
 
-Both backends import named keys and bracketed-paste markers from [`pane::keys`](../../crates/rimz/src/pane/keys.rs).
+Both backends import named keys and bracketed-paste markers from [`pane::keys`](../../crates/rimz/src/pane/keys.rs). RimZ pane writes use `PaneWriter` to hold one per-pane user-scoped runtime advisory lock across the entire write batch, including paced command segments and the final Enter; `message`, `answer`, and `pane send` share it across workspaces, and steer waits rather than preempting an in-flight write. Identical Zellij pane IDs in separate sessions conservatively share a lock.
 
 Zellij, `crates/rimz/src/mux/zellij/` plus [`zellij.rs`](../../crates/rimz/src/mux/zellij.rs):
 

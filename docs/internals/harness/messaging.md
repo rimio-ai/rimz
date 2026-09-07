@@ -42,7 +42,7 @@ The layering is one-directional: `dispatch` calls `deliver` and `send`, `deliver
 
 ## The record
 
-A record is keyed on a **card**, the logical agent identity the rollup tracks: a kind plus a session id, with the stable `agent_name` as a second key ([model.md § The rollup](../agents/model.md#the-rollup)). The name matters because an agent can be addressed before it registers a session. A message queued against a provisional `launch_*` id keeps that id, and `same_card` folds it into the real session's queue once registration lands. One card, one FIFO queue.
+A record is keyed on a **card**, the logical agent identity the rollup tracks: a kind plus a session id, with the stable `agent_name` as a second key ([model.md § The rollup](../agents/model.md#the-rollup)). The name matters because an agent can be addressed before it registers a session. A message queued against a provisional `launch_*` id keeps that id, and `same_card` folds it into the real session's queue once registration lands. One card, one FIFO queue, with `Resume` control messages in a separate lane.
 
 `msg_` ids are workspace-unique and time-sortable, so string order is FIFO order. The module relies on this everywhere; do not replace the id scheme without replacing the ordering.
 
@@ -126,7 +126,7 @@ All three resolve targets through the same parser, write the same record shape, 
 
 | Mode | Flag | Behaviour |
 | --- | --- | --- |
-| Steer | `--steer` | Write to the live pane now, interrupting the turn. Conflicts with `--schedule` and `--on`, which are gates it has no use for. |
+| Steer | `--steer` | Write to the live pane without waiting for a turn boundary, interrupting the turn but waiting for any in-flight pane write. Conflicts with `--schedule` and `--on`, which are gates it has no use for. |
 | Boundary | default | Write now if the receiver can take it, otherwise park for the next qualifying turn boundary. |
 | Schedule | `--schedule <DUR\|HH:MM>` | Always park, with a `not_before` floor. |
 
@@ -150,7 +150,7 @@ The raw-versus-effective distinction is load-bearing. Delivery gates read `effec
 3. **Resolve targets.** Live agents and live panes both, combined so one agent with a bound pane yields one target rather than two. When the live view finds nothing, the durable audit rollup is the fallback, with pane-shadowed co-resident sessions filtered out first. For intrinsic `@all`, the agent caller captured by the CLI is resolved against that durable rollup and removed before arity checks, condition binding, reply preparation, or delivery; no peers is a dispatch error. Human callers and explicit selector fan-outs are unchanged. A multi-match without `--all` or `@all` is an ambiguity error listing the candidates.
 4. **Bind conditions.** Each `after` and `when` address resolves once and pins a card. A condition that is already satisfied gets its `met_at` stamped immediately, which is why upstream work must be queued *before* the message that waits on it.
 5. **Preflight hooks.** Any target that will park requires installed, trusted hooks for its kind, checked once per kind. Turn-end hooks are the delivery trigger, so parking without them would queue text nothing will ever release.
-6. **Decide park or live, per target.** A schedule or unmet condition parks first. Receiver readiness then comes from the exact pane binding when available or the durable card on the rollup-only path; a rejected write carries either the effective status or the native-input wait through `DispatchOutcome::Queued`. After that readiness decision, an unresolved pane or ready queued backlog parks without adding a reason. Jumping an existing queue would reorder the conversation. Boundary receipts say `delivered to @handle (msg_...)` after a live write, add the status and `rimz message steer msg_...` to a reasoned park (plus `--force` for native input), and keep reason-free parks at `queued for @handle (msg_...)`. Because the rollup-only decision deliberately skips the multiplexer, a status-aware receipt does not prove a pane is still live; `message show` performs the full check.
+6. **Decide park or live, per target.** A schedule or unmet condition parks first. Receiver readiness then comes from the exact pane binding when available or the durable card on the rollup-only path; a rejected write carries either the effective status or the native-input wait through `DispatchOutcome::Queued`. After that readiness decision, an unresolved pane, ready queued backlog, or unexpired non-`Resume` claim for the same card parks a fresh boundary send without adding a reason. Jumping an existing queue or in-flight claim would reorder the conversation; expired claims and the separate `Resume` lane do not block this decision. Boundary receipts say `delivered to @handle (msg_...)` after a live write, add the status and `rimz message steer msg_...` to a reasoned park (plus `--force` for native input), and keep reason-free parks at `queued for @handle (msg_...)`. Because the rollup-only decision deliberately skips the multiplexer, a status-aware receipt does not prove a pane is still live; `message show` performs the full check.
 7. **Enqueue and attempt.** Every target gets its durable record. Live targets go straight into a delivery attempt; parked ones stop at `Queued`.
 8. **Rearm the wake stamp** so the elder knows when to look again.
 
@@ -229,7 +229,7 @@ The guard stays in `attempt_delivery`: delivery causality belongs to `message/`,
 
 A guard that cannot answer never sends. A failed run scan or a failed cancel warns with the message id. Before claim, it skips the claim. After claim, it calls `release_message_claims` to return the digest to `Queued` without an attempt penalty, refreshes the message wake, and defers delivery. Errors from release or wake refresh propagate. If claim release and wake refresh succeed, an unreadable run file does not abort the whole sweep. Sending without a successful check would risk the duplicate the guard exists to stop. While the record remains queued it still holds FIFO head position on its own card, like any head that cannot deliver.
 
-The post-claim scan closes the window where stale pre-claim truth survives a successful claim. The final check and external pane I/O remain separate: a join after that check can still race with the send. No workspace lock spans pane I/O. The join-side cancel still accepts a `Queued` or `Claimed` record and leaves a `Sent` record live for confirmation or reconciliation; a cancel cannot retract a paste already on its way to the pane.
+The post-claim scan closes the window where stale pre-claim truth survives a successful claim. The final check and external pane I/O remain separate: a join after that check can still race with the send. The store's workspace lock does not span pane I/O; the separate per-pane write lock does, serializing writers rather than store transitions. The join-side cancel still accepts a `Queued` or `Claimed` record and leaves a `Sent` record live for confirmation or reconciliation; a cancel cannot retract a paste already on its way to the pane.
 
 ### Batching
 
@@ -274,6 +274,8 @@ While the receiver's compaction bracket is open, the reconciler pushes the held 
 **Neither.** A record whose agent simply has not reached a qualifying boundary is not a failure. It stays `Queued` with no counter moving.
 
 ## Writing to the pane
+
+`mux::PaneWriter` holds one per-pane user-scoped runtime advisory lock, at `RuntimePaths::pane_write_lock`, across the entire write batch: any compact-first command, every raw-typed segment and pacing delay, the prompt paste, the `Sent` transition, and the final Enter. `rimz answer` holds the same lock across its answer steps, and `rimz pane send` across its text and keys, even when invoked from another workspace. Different pane IDs remain independent; identical Zellij pane IDs in separate sessions conservatively share the lock. Steer waits for this lock rather than preempting another writer: it interrupts an agent's turn, not a write already in progress. Lock acquisition times out after 30 seconds as a mux error and follows existing send-error recovery. The lock also covers the `Sent`-before-Enter gap; `Sent` records do not need to block the fresh boundary dispatch decision.
 
 ### Paste, then submit
 

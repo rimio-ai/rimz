@@ -650,6 +650,111 @@ fn queue_head_selects_oldest_deliverable_record_per_lane() {
 }
 
 #[test]
+fn in_flight_claim_selects_only_unexpired_ordinary_claims_for_the_card() {
+    let now = Timestamp::from_second(1_700_000_100).unwrap();
+    let receiver = agent("receiver", Some("coder"));
+    let provisional = agent("launch_1", Some("coder"));
+    let other = agent("other", Some("reviewer"));
+    let mut other_kind = receiver.clone();
+    other_kind.kind = AgentKind::new_unchecked("codex");
+
+    for (claim_agent, status, gate, last_attempt_at, selected) in [
+        (
+            &receiver,
+            MessageStatus::Claimed,
+            DeliveryGate::Done,
+            Some(now),
+            true,
+        ),
+        (
+            &receiver,
+            MessageStatus::Claimed,
+            DeliveryGate::Any,
+            Some(now - CLAIM_TTL + Duration::from_secs(1)),
+            true,
+        ),
+        (
+            &receiver,
+            MessageStatus::Claimed,
+            DeliveryGate::Done,
+            Some(now - CLAIM_TTL),
+            false,
+        ),
+        (
+            &receiver,
+            MessageStatus::Claimed,
+            DeliveryGate::Done,
+            Some(now - CLAIM_TTL - Duration::from_secs(1)),
+            false,
+        ),
+        (
+            &receiver,
+            MessageStatus::Claimed,
+            DeliveryGate::Resume,
+            Some(now),
+            false,
+        ),
+        (
+            &other,
+            MessageStatus::Claimed,
+            DeliveryGate::Done,
+            Some(now),
+            false,
+        ),
+        (
+            &other_kind,
+            MessageStatus::Claimed,
+            DeliveryGate::Done,
+            Some(now),
+            false,
+        ),
+        (
+            &provisional,
+            MessageStatus::Claimed,
+            DeliveryGate::Done,
+            Some(now),
+            true,
+        ),
+        (
+            &receiver,
+            MessageStatus::Queued,
+            DeliveryGate::Done,
+            Some(now),
+            false,
+        ),
+        (
+            &receiver,
+            MessageStatus::Sent,
+            DeliveryGate::Done,
+            Some(now),
+            false,
+        ),
+        (
+            &receiver,
+            MessageStatus::Claimed,
+            DeliveryGate::Done,
+            None,
+            false,
+        ),
+    ] {
+        let mut message = delivery_message(1, claim_agent, gate, None);
+        message.status = status;
+        message.last_attempt_at = last_attempt_at;
+        assert_eq!(
+            in_flight_claim(
+                [&message],
+                &receiver.kind,
+                &receiver.agent_id,
+                receiver.name.as_deref(),
+                now,
+            ),
+            selected.then_some(&message),
+            "{message:?}"
+        );
+    }
+}
+
+#[test]
 fn delivery_batch_selector_pins_fifo_lanes_and_compatible_prefix() {
     let now = Timestamp::from_second(1_700_000_100).unwrap();
     let receiver = agent("receiver", Some("coder"));

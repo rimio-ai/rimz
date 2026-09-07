@@ -12,7 +12,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::ids::{SidebarInstanceId, WorkspaceId};
+use crate::ids::{PaneId, SidebarInstanceId, WorkspaceId};
 use crate::sock::SockBudget;
 
 #[derive(Debug, thiserror::Error)]
@@ -384,6 +384,13 @@ impl RuntimePaths {
     /// Serializes nonce-gated focus action intent transitions.
     pub fn focus_anchor_lock(&self) -> PathBuf {
         self.root.join("focus-anchor.lock")
+    }
+
+    /// Serializes complete pane writes, including their submit key.
+    pub fn pane_write_lock(&self, pane: &PaneId) -> PathBuf {
+        self.shared_root
+            .join("pane-write")
+            .join(format!("{}.lock", hex::encode(pane.as_str())))
     }
 
     /// The per-session Codex app-server broker socket. The broker

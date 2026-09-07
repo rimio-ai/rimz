@@ -13,7 +13,7 @@ use serde::Deserialize;
 use super::{Ctx, GlobalFlags, resolve_open_ask};
 use rimz::agents::{AnswerPlanErr, AnswerStep, AskKind, AskReply};
 use rimz::ids::AskId;
-use rimz::mux::{paste_into_pane, press_pane_key, type_into_pane};
+use rimz::mux::PaneWriter;
 use rimz::transcript::{AskAnswer, AskQuestion, TranscriptEntry, TranscriptKind};
 use rimz::utils::time::{DurationUnit, parse_duration_units};
 
@@ -96,6 +96,21 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
         .answer_plan(detail.open.kind, &detail.questions, &replies)
         .unwrap_or_else(|err| answer_exit(3, &err.to_string()));
 
+    let live = ctx.resolution_snapshot()?;
+    let target = live
+        .agent_panes
+        .iter()
+        .find(|pane| {
+            pane.kind == pane_kind
+                && pane
+                    .agent_id
+                    .as_ref()
+                    .is_some_and(|id| id == &pane_agent_id)
+        })
+        .unwrap_or_else(|| answer_exit(2, &format!("{handle} has no live bound pane")));
+    let writer = PaneWriter::open(store.runtime_paths(), &target.pane_id)
+        .unwrap_or_else(|err| answer_exit(2, &format!("sending answer to {handle}: {err}")));
+
     // Re-read immediately before the first keystroke. This is the compare half
     // of the ask-id CAS; a prompt answered or superseded during validation gets
     // no input from this command.
@@ -110,30 +125,19 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
         answer_exit(2, &format!("ask `{ask_id}` is no longer current"));
     }
 
-    let live = ctx.resolution_snapshot()?;
-    let target = live
-        .agent_panes
-        .iter()
-        .find(|pane| {
-            pane.kind == pane_kind
-                && pane
-                    .agent_id
-                    .as_ref()
-                    .is_some_and(|id| id == &pane_agent_id)
-        })
-        .unwrap_or_else(|| answer_exit(2, &format!("{handle} has no live bound pane")));
     let mut pacer = rimz::message::send::Pacer::new(rimz::message::message_interval_from_env());
     for step in steps {
         pacer.tick();
         let result = match step {
-            AnswerStep::Text(text) => type_into_pane(&target.pane_id, &text),
-            AnswerStep::Key(key) => press_pane_key(&target.pane_id, key),
-            AnswerStep::Paste(text) => paste_into_pane(&target.pane_id, &text),
+            AnswerStep::Text(text) => writer.type_text(&text),
+            AnswerStep::Key(key) => writer.press(key),
+            AnswerStep::Paste(text) => writer.paste(&text),
         };
         if let Err(err) = result {
             answer_exit(2, &format!("sending answer to {handle}: {err}"));
         }
     }
+    drop(writer);
 
     if args.no_wait {
         let mut out = super::render::out();

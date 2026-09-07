@@ -34,7 +34,7 @@ Every message becomes a durable record the instant you send it, so a busy agent,
 | mode | flag | when it lands |
 |------|------|---------------|
 | park | default | at the turn boundary — held until the agent's current turn finishes |
-| steer | `--steer` | immediately, interrupting the live turn |
+| steer | `--steer` | without waiting for a turn boundary, after any RimZ write already in progress |
 | schedule | `--schedule <when>` | at a wall-clock moment: a duration (`90m`) or a time (`07:30`) |
 
 **Park for the next turn (the default).** The text holds until the agent finishes its current turn, then lands at the boundary — it never cuts into work in flight. This is how you hand off follow-up without watching for the agent to free up.
@@ -48,7 +48,7 @@ By default a parked message waits for a successful or idle turn (`--on done`); `
 
 The confirmation tells you whether the text delivered or queued. When a busy target caused the queue, it also names the target's status and prints `rimz message steer msg_…`, which promotes that exact record if you decide it should interrupt now.
 
-**Steer the live turn now.** `--steer` interrupts the pane immediately, the way typing into it would, so you can redirect an agent mid-thought.
+**Steer the live turn now.** `--steer` interrupts the agent's turn, the way typing into its pane would, so you can redirect it mid-thought. If RimZ is already writing a command, message, or answer to that pane, steer waits for that write to finish, including its submit key, rather than inserting text halfway through it.
 
 ```sh
 rimz message --steer @claude "stop — rebase on main first, the parser moved"
@@ -69,7 +69,7 @@ A parked message delivers the moment the agent can take it. All of these hold:
 
 - The turn boundary is open — a successful or idle turn for `--on done`, plus failures for `--on any`.
 - The agent isn't holding a question for you. An open prompt reserves the next input for your answer; `--force` sends past it.
-- It's the agent's turn for this text — messages to one agent deliver oldest first.
+- It's the agent's turn for this text — messages to one agent deliver oldest first, and a new message parks behind one already claimed for delivery.
 - A live pane exists to receive it, and the agent's reporting hooks are installed, since hooks are how RimZ learns the turn ended.
 
 `rimz message show msg_…` names the first unmet condition when a message is still waiting, so you never have to guess why.

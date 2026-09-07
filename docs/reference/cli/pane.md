@@ -29,6 +29,8 @@ The agent labels are a best-effort overlay folded from the workspace snapshot, s
 
 `capture` prints visible pane text and changes nothing. `send` types literal text and named keys in order — the write your keyboard would make. `focus` moves attention. These three target a pane id, an agent address, or the literal `sidebar`; `sidebar` resolves the sidebar in the caller's own view first, then the focused tab's sidebar, then any sidebar in the session. Pane ids choose their own backend (`tmux:%3` uses tmux, `zellij:terminal_4` uses Zellij) instead of the ambient session. Named keys are `enter`, `escape`, `tab`, `shift-tab`, `backspace`, the four arrows, `ctrl-c`, `ctrl-d`, and `ctrl-u`, with aliases like `return`, `esc`, `backtab`, and `bs`.
 
+`send` waits for any in-flight RimZ write to the same pane, then keeps its text and keys together through the final Enter when requested. It cannot interleave with `message` or `answer` writes.
+
 `zoom` toggles fullscreen for the pane held by the session's one unambiguous attached-client view. When that pane is the sidebar, it focuses a working sibling in the same tab and fullscreens that pane instead; a sidebar-only tab is left unchanged. The configured `[sidebar] zoom_key` invokes this same command.
 
 `split` opens a shell beside the current pane along its longer visual edge, matching the room's native new-pane behavior. `detach` detaches the attached client; the session keeps running in the background and comes back on the next attach.

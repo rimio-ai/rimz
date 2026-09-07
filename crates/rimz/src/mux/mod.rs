@@ -3,7 +3,7 @@
 //! Everything correctness-critical (store, hooks, schemas) sits
 //! above this trait and is identical across backends. Raw pane IDs live
 //! only inside the adapter — see [`crate::ids::PaneId`] for the normalized
-//! form that travels everywhere else.
+//! form that travels everywhere else. [`PaneWriter`] serializes complete input batches.
 
 pub mod binaries;
 mod capabilities;
@@ -13,6 +13,7 @@ pub mod domain;
 pub mod focus_anchor;
 mod focus_key;
 mod mount_proof;
+mod pane_writer;
 mod reconcile;
 pub mod recovery;
 mod selection;
@@ -26,6 +27,7 @@ pub use command::CommandSpec;
 pub(crate) use command::{COMMAND_TIMEOUT, LIST_SESSIONS_TIMEOUT};
 pub use companion_layout::COMPANION_PANE_LIMIT;
 pub use focus_key::RoomKeyBinding;
+pub use pane_writer::PaneWriter;
 pub(crate) use reconcile::{
     ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, execute_reconcile_plan,
     group_reconcile_panes, plan_reconcile,
@@ -69,6 +71,12 @@ pub const PRESENCE_STAMP_FRESH: Duration = Duration::from_secs(150);
 
 #[derive(Debug, thiserror::Error)]
 pub enum MuxErr {
+    #[error("could not acquire writer for pane {pane}: {source}")]
+    PaneWriteLock {
+        pane: PaneId,
+        #[source]
+        source: crate::disk::lock::LockErr,
+    },
     #[error("multiplexer command `{program}` not found on PATH")]
     NotInstalled { program: String },
     #[error("no multiplexer found: install zellij or tmux")]
@@ -1021,21 +1029,6 @@ pub fn backend_for(mux: MuxName) -> Box<dyn MuxBackend> {
         MuxName::Zellij => Box::new(ZellijBackend::new()),
         MuxName::Tmux => Box::new(TmuxBackend::new()),
     }
-}
-
-/// Type raw text into one pane using its owning backend.
-pub fn type_into_pane(pane: &PaneId, text: &str) -> Result<()> {
-    backend_for(pane.mux()).send_keys(pane, text)
-}
-
-/// Paste bracketed text into one pane using its owning backend.
-pub fn paste_into_pane(pane: &PaneId, text: &str) -> Result<()> {
-    backend_for(pane.mux()).paste_text(pane, text)
-}
-
-/// Press one named key in a pane using its owning backend.
-pub fn press_pane_key(pane: &PaneId, key: NamedKey) -> Result<()> {
-    backend_for(pane.mux()).send_key(pane, key)
 }
 
 /// Run `spec` once for its version string and memoize it in `cache`.

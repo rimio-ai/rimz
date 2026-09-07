@@ -3777,6 +3777,150 @@ fn agents_compact_refuses_an_adapter_without_durable_turn_starts() {
 }
 
 #[test]
+fn pane_writer_lock_is_shared_across_workspaces_and_released_on_drop() {
+    use rimz::disk::lock::WorkspaceLock;
+    use rimz::disk::paths::RuntimePaths;
+    use rimz::ids::WorkspaceId;
+    use rimz::mux::PaneWriter;
+
+    let runtime_root = tempfile::tempdir().unwrap();
+    let first = RuntimePaths::under(
+        WorkspaceId::from_project_root(Path::new("/first")),
+        runtime_root.path(),
+    )
+    .unwrap();
+    let second = RuntimePaths::under(
+        WorkspaceId::from_project_root(Path::new("/second")),
+        runtime_root.path(),
+    )
+    .unwrap();
+    let pane = PaneId::parse("tmux:%3").unwrap();
+    let other = PaneId::parse("tmux:%4").unwrap();
+    assert_eq!(first.pane_write_lock(&pane), second.pane_write_lock(&pane));
+    let writer = PaneWriter::open(&first, &pane).unwrap();
+    assert!(
+        WorkspaceLock::try_acquire(&second.pane_write_lock(&pane))
+            .unwrap()
+            .is_none()
+    );
+    let other_writer = PaneWriter::open(&second, &other).unwrap();
+    drop(writer);
+    assert!(
+        WorkspaceLock::try_acquire(&second.pane_write_lock(&pane))
+            .unwrap()
+            .is_some()
+    );
+    drop(other_writer);
+    let unusual = PaneId::parse("tmux:../../outside").unwrap();
+    assert_eq!(
+        first.pane_write_lock(&unusual).parent(),
+        first.pane_write_lock(&pane).parent()
+    );
+}
+
+#[test]
+fn boundary_dispatch_parks_behind_a_claimed_record() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    run_hook(
+        &env,
+        json!({"hook_event_name": "SessionStart", "session_id": "sess-claim-blocker"}),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let store = env.store();
+    let snapshot = store.snapshot_cached().unwrap();
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.kind.as_str() == "claude")
+        .unwrap();
+    let mut command = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "/compact".to_owned(),
+        true,
+        DeliveryGate::Done,
+    );
+    command.body = MessageBody::Command;
+    queue_messages(&env, &[&command]);
+    assert!(
+        store
+            .claim_delivery_batch(
+                &command.message_id,
+                rimz::agents::AgentStatus::Idle,
+                jiff::Timestamp::now(),
+            )
+            .unwrap()
+            .is_some()
+    );
+    let trace = env.project_root.join("claimed-boundary.log");
+    let output = run_success(
+        traced_rimz(&env, &trace).args(["message", "@claude", "--", "after the command"]),
+        "park behind claim",
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with("queued for @claude"));
+    let queued = queued_id_from_stdout(&output.stdout);
+    assert_eq!(
+        message_by_id(&env, &MessageId::parse(&queued).unwrap()).status,
+        MessageStatus::Queued
+    );
+    assert_no_report_pane_write(&trace);
+}
+
+#[test]
+fn pane_write_lock_holds_a_steer_behind_an_in_flight_command() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    run_hook(
+        &env,
+        json!({"hook_event_name": "SessionStart", "session_id": "sess-pane-lock"}),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let trace = env.project_root.join("pane-lock.log");
+    let token = DeliveryRendezvous::new(&env, "token-written");
+    let command = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_COMMAND_TOKEN_WRITTEN", &token.path)
+        .env("RIMZ_MESSAGE_COMMAND_SUBMIT_DELAY_MS", "0")
+        .args(["agents", "compact", "@claude"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut release = token.arrive();
+    let before_lock = DeliveryRendezvous::new(&env, "before-lock");
+    let mut steer = traced_rimz(&env, &trace)
+        .env("RIMZ_TEST_PANE_WRITE_BEFORE_LOCK", &before_lock.path)
+        .args(["message", "--steer", "@claude", "--", "hello from coder"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    before_lock.arrive().write_all(&[1]).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let waiting = steer.try_wait().unwrap().is_none();
+    let pasted = trace_lines(&trace)
+        .iter()
+        .any(|line| is_paste(line, &user_message("hello from coder")));
+    release.write_all(&[1]).unwrap();
+    assert!(command.wait_with_output().unwrap().status.success());
+    assert!(steer.wait_with_output().unwrap().status.success());
+    assert!(waiting && !pasted, "steer wrote inside the compact command");
+    let lines = trace_lines(&trace);
+    assert_compact_segments_then_enter(&lines, rimz::config::DEFAULT_COMPACT_INSTRUCTION);
+    let paste_at = lines
+        .iter()
+        .position(|line| is_paste(line, &user_message("hello from coder")))
+        .unwrap();
+    let enters: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| is_enter_key(line).then_some(index))
+        .collect();
+    assert_eq!(enters.len(), 2);
+    assert!(enters[0] < paste_at && paste_at < enters[1], "{lines:?}");
+}
+
+#[test]
 fn agents_compact_types_the_native_command_and_refuses_a_repeat() {
     let env = Env::new();
     env.install_agent_hooks("claude");

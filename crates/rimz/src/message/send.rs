@@ -1,4 +1,4 @@
-//! Live-pane payload construction, paced writes, and the durable Sent-before-submit barrier.
+//! Live-pane payload construction, exclusive paced writes, and the durable Sent-before-submit barrier.
 
 use std::thread::sleep;
 use std::time::Duration;
@@ -6,7 +6,7 @@ use std::time::Duration;
 use crate::Store;
 use crate::agents::AgentState;
 use crate::message::{MessageDraft, Recipient, command_segments};
-use crate::mux::{paste_into_pane, press_pane_key, type_into_pane};
+use crate::mux::PaneWriter;
 use crate::pane::keys::NamedKey;
 use crate::store::message::{AutoCompact, MessageBody, MessageRecord, MessageSender};
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
@@ -65,10 +65,11 @@ pub(crate) fn send_batch_to_live_pane(
     let head = batch
         .first()
         .expect("send_batch_to_live_pane requires at least one message");
+    let writer = PaneWriter::open(store.runtime_paths(), &target.pane_id)?;
     if head.body == MessageBody::Command {
         debug_assert_eq!(batch.len(), 1);
         return Ok(
-            match write_batch(workspace, store, snapshot, target, bound, batch, send)? {
+            match write_batch(workspace, store, snapshot, &writer, bound, batch, send)? {
                 PaneWrite::Sent => Receipt::Sent { compacted: false },
                 PaneWrite::SkippedWaiting => Receipt::SkippedWaiting,
             },
@@ -89,7 +90,7 @@ pub(crate) fn send_batch_to_live_pane(
             workspace,
             store,
             snapshot,
-            target,
+            &writer,
             bound,
             std::slice::from_ref(&command),
             send,
@@ -120,7 +121,7 @@ pub(crate) fn send_batch_to_live_pane(
         }
     }
     Ok(
-        match write_batch(workspace, store, snapshot, target, bound, batch, send)? {
+        match write_batch(workspace, store, snapshot, &writer, bound, batch, send)? {
             PaneWrite::Sent => Receipt::Sent { compacted },
             PaneWrite::SkippedWaiting => Receipt::SkippedWaiting,
         },
@@ -160,7 +161,7 @@ fn write_batch(
     workspace: &ResolvedWorkspace,
     store: &Store,
     snapshot: &SidebarSnapshot,
-    target: &PaneAgent,
+    writer: &PaneWriter,
     bound: Option<&AgentState>,
     batch: &[MessageRecord],
     send: &mut LiveSend,
@@ -173,19 +174,18 @@ fn write_batch(
     if !send.force && bound.is_some_and(AgentState::is_awaiting_input) {
         return Ok(PaneWrite::SkippedWaiting);
     }
-    let pane_id = &target.pane_id;
     send.pacer.tick();
     match head.body {
         MessageBody::Command => {
             debug_assert_eq!(batch.len(), 1);
-            let declared = crate::agents::spec_by_kind(target.kind.as_str())
+            let declared = crate::agents::spec_by_kind(head.kind.as_str())
                 .and_then(|spec| spec.launch.compact_command)
                 .map(|compact| compact.command);
             type_command_with(
                 &head.text,
                 declared,
                 send,
-                |segment| type_into_pane(pane_id, segment),
+                |segment| writer.type_text(segment),
                 sleep,
             )?;
         }
@@ -210,7 +210,7 @@ fn write_batch(
                 })
                 .collect::<Vec<_>>()
                 .join("\n\n");
-            paste_into_pane(pane_id, &payload)?;
+            writer.paste(&payload)?;
         }
     }
     // Record the send once the text lands and before the submit keystroke, so a
@@ -220,7 +220,7 @@ fn write_batch(
         // Raw-typed commands carry no paste close marker, so wait for composer
         // paste-burst state to flush before submitting.
         send.pause_raw_typing(head.body);
-        press_pane_key(pane_id, NamedKey::Enter)?;
+        writer.press(NamedKey::Enter)?;
     }
     Ok(PaneWrite::Sent)
 }
@@ -235,6 +235,8 @@ fn type_command_with<E>(
     let (token, arguments) =
         declared.map_or((text, None), |command| command_segments(text, command));
     write(token)?;
+    #[cfg(feature = "testkit")]
+    crate::testkit::rendezvous("RIMZ_TEST_COMMAND_TOKEN_WRITTEN");
     if let Some(arguments) = arguments {
         send.pause_raw_typing_with(MessageBody::Command, sleeper);
         write(arguments)?;
