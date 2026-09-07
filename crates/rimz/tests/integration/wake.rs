@@ -526,6 +526,92 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
 }
 
 #[test]
+fn once_wake_subscriber_is_consumed_by_watcher_checkin() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    wake_ok(
+        &env,
+        &[
+            "loop", "add", "audit", "--signal", "wake.*", "--wake", "@me", "--once",
+        ],
+    );
+    let release = env.home_root.join("release");
+    let receipt = wake_ok(
+        &env,
+        &[
+            "wake",
+            "--json",
+            "--timeout",
+            "1s",
+            "--",
+            "sh",
+            "-c",
+            "printf checkin-marker; while [ ! -e \"$1\" ]; do sleep 0.05; done; printf final-marker",
+            "checkin",
+            release.to_str().unwrap(),
+        ],
+    );
+    let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
+    let name = receipt["name"].as_str().unwrap();
+    let records = wait_for_wake_records(&env, 2);
+    assert_eq!(records.len(), 2);
+    let audit = records
+        .iter()
+        .find(|record| record.task == "audit")
+        .unwrap();
+    assert!(matches!(
+        audit.watch.as_ref().unwrap(),
+        rimz::harness::schedule::signal::WatchVerdict::Running { .. }
+    ));
+    let messages = wait_for_wake_messages(&env, 2);
+    let notice = messages
+        .iter()
+        .find(|message| Some(&message.message_id) == audit.message_id.as_ref())
+        .expect("subscriber check-in reached the durable message consumer");
+    assert_eq!(
+        notice.sender,
+        MessageSender::Harness {
+            notice: HarnessNotice::Signal
+        }
+    );
+    let tasks = wake_instances(&env);
+    assert!(
+        tasks.0.contains_key(name),
+        "check-in consumed the watched task"
+    );
+    assert!(
+        !tasks.0.contains_key("audit"),
+        "check-in did not consume the once subscriber"
+    );
+
+    std::fs::write(&release, "").unwrap();
+    wait_for_no_wake_instances(&env);
+    wait_until("watcher did not finish its exit delivery", || {
+        rimz::harness::schedule::signal::watcher_info(env.store().runtime_paths(), name)
+            .unwrap()
+            .is_none()
+    });
+    let records = wait_for_wake_records(&env, 3);
+    assert_eq!(records.len(), 3);
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record.task == "audit")
+            .count(),
+        1
+    );
+    assert!(records.iter().any(|record| {
+        record.task == name
+            && matches!(
+                record.watch.as_ref(),
+                Some(rimz::harness::schedule::signal::WatchVerdict::Exited { code: Some(0), .. })
+            )
+    }));
+    assert_eq!(wait_for_wake_messages(&env, 3).len(), 3);
+}
+
+#[test]
 fn wake_cancel_before_watcher_start_prevents_command() {
     let env = Env::new();
     register_calling_agent(&env);
@@ -608,6 +694,34 @@ fn wake_receipts_and_list_share_pending_rows() {
     assert_eq!(first["pending"].as_array().unwrap().len(), 1);
     assert_eq!(second["pending"].as_array().unwrap().len(), 2);
     assert_eq!(second["pending"], listed);
+    wake_ok(&env, &["loop", "disable", first["name"].as_str().unwrap()]);
+    wake_ok(
+        &env,
+        &[
+            "loop",
+            "pause",
+            second["name"].as_str().unwrap(),
+            "--for",
+            "1h",
+        ],
+    );
+    let held = wake_ok(&env, &["wake", "list", "--json"]);
+    let held: serde_json::Value = serde_json::from_str(&held).unwrap();
+    let held = held.as_array().unwrap();
+    assert_eq!(
+        held.iter()
+            .find(|row| row["name"] == first["name"])
+            .unwrap()["state"],
+        "disabled"
+    );
+    assert!(
+        held.iter()
+            .find(|row| row["name"] == second["name"])
+            .unwrap()["state"]
+            .as_str()
+            .unwrap()
+            .starts_with("paused")
+    );
     let canceled = wake_ok(
         &env,
         &["wake", "cancel", first["name"].as_str().unwrap(), "--json"],

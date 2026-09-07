@@ -710,10 +710,15 @@ impl<'a> TaskFire<'a> {
 
     fn consume_ephemeral(&self) -> Result<()> {
         if self
-            .signal
+            .task
+            .trigger()
             .as_ref()
-            .and_then(|signal| signal.watch.as_ref())
-            .is_some_and(|watch| !watch.verdict.is_terminal())
+            .is_ok_and(|parsed| matches!(parsed.trigger, Trigger::Watch { .. }))
+            && self
+                .signal
+                .as_ref()
+                .and_then(|signal| signal.watch.as_ref())
+                .is_some_and(|watch| !watch.verdict.is_terminal())
         {
             return Ok(());
         }
