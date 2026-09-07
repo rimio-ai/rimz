@@ -26,3 +26,4 @@ Topic detail lives in [messaging.md](../../../../docs/internals/harness/messagin
 - `fire.rs` runs on the renderer's cache-refresh tick, so keep it as light as that path demands. It reads the wake stamp and spawns `message sweep`; store reads and writes stay in that helper.
 - Address grammar, handle rendering, and channel resolution live in `harness/target.rs`. This module resolves targets through it and never parses addresses itself.
 - CLI handlers own flag parsing, rendering, and exit codes. Dispatch conditions, delivery causality, and reply-wait state live here.
+- `compact.rs` owns standalone native compaction for operator and idle-compaction callers, including repeat refusal and boundary delivery through `deliver`.

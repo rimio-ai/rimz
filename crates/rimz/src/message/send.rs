@@ -258,7 +258,7 @@ fn compact_message_for_target<'a>(
     if !threshold.triggered(agent) {
         return None;
     }
-    if agent.compacting_since.is_some() {
+    if agent.is_compacting(jiff::Timestamp::now()) || agent.compacted_awaiting_prompt.is_some() {
         return None;
     }
     let config = crate::config::MachineConfig::load_lenient();

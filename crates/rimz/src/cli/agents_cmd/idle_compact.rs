@@ -1,8 +1,6 @@
 //! `rimz agents idle-compact` — the hidden helper the sidebar producer spawns
 //! to compact an eligible idle agent through the durable message path.
 
-use std::time::Duration;
-
 use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
 
@@ -10,10 +8,12 @@ use rimz::agents::AgentStatus;
 use rimz::config::{IdleCompactMode, MachineConfig};
 use rimz::harness::assist_log::{Assist, AssistRecord};
 use rimz::harness::idle_compact::IdleCompactRequest;
-#[cfg(test)]
-use rimz::ids::WorkspaceId;
-use rimz::message::{deliver, send::already_compacted_at};
-use rimz::store::message::{DeliveryGate, MessageBody, MessageRecord, MessageSender};
+use rimz::ids::MessageId;
+use rimz::message::compact::{
+    CompactErr, CompactOutcome, CompactRequest, refuse_repeat, send_compact,
+};
+use rimz::message::send::already_compacted_at;
+use rimz::store::message::MessageSender;
 
 use super::Ctx;
 
@@ -62,7 +62,6 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
     let idle_secs = Timestamp::now().as_second() - agent.last_activity.as_second();
     if agent.is_provider_subagent()
         || agent.agent_id.is_empty()
-        || agent.compacting_since.is_some()
         || agent.budget_park.is_some()
         || agent.is_awaiting_input()
         || !matches!(
@@ -86,82 +85,33 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
             "idle-compaction context reading changed before helper validation",
         );
     }
-    if already_compacted_at(store, agent, occupied_tokens)
-        || latest_delivered_was_compaction(
-            &store
-                .list_message_history()
-                .context("reading idle-compaction message history")?,
-            agent,
-        )
-    {
+    if already_compacted_at(store, agent, occupied_tokens) {
         return Ok(());
     }
-
-    let mut message = MessageRecord::new(
-        request.workspace_id,
-        agent,
-        expected_command.to_owned(),
-        true,
-        DeliveryGate::Done,
-    )
-    .with_channel(agent.channel())
-    .with_sender(MessageSender::System)
-    .with_automated(true)
-    .with_body(MessageBody::Command)
-    .with_pane_id(request.pane_id.clone());
-    message.compacted_context_tokens = Some(occupied_tokens);
-    let message_id = message.message_id.clone();
-    if let Err(err) = store.queue_message(&message, &workspace.session_name) {
-        append_assist(
-            &request.label,
-            request.kind,
-            request.agent_id,
-            idle_secs,
-            occupied_tokens,
-            &message_id,
-            false,
-            Some(err.to_string()),
-        );
-        return Err(err).context("queueing idle-compaction command");
+    match refuse_repeat(store, agent, Timestamp::now()) {
+        Ok(()) => {}
+        Err(CompactErr::Compacting | CompactErr::Pending { .. } | CompactErr::Repeated { .. }) => {
+            return Ok(());
+        }
+        Err(err) => return Err(err).context("checking idle-compaction eligibility"),
     }
-
-    let delivered = match deliver::deliver_one(
+    let message_id = MessageId::new();
+    let outcome = send_compact(
         workspace,
         store,
-        &message_id,
-        Duration::ZERO,
-        Some(request.pane_id.mux()),
-        deliver::DeliveryPolicy::Boundary,
-    ) {
-        Ok(delivered) => delivered,
-        Err(err) => {
-            append_assist(
-                &request.label,
-                request.kind,
-                request.agent_id,
-                idle_secs,
-                occupied_tokens,
-                &message_id,
-                false,
-                Some(err.to_string()),
-            );
-            return Err(err).context("delivering idle-compaction command");
-        }
-    };
-    let delivery_error = if delivered {
-        None
-    } else {
-        let reason = "idle-compaction delivery gate closed".to_owned();
-        match store.record_message_delivery_failures(
-            std::slice::from_ref(&message_id),
-            None,
-            rimz::store::writer::DeliveryFailureDisposition::Retry,
-            &reason,
-            &workspace.session_name,
-        ) {
-            Ok(_) => Some(reason),
-            Err(err) => Some(format!("{reason}; recording retry failed: {err}")),
-        }
+        CompactRequest {
+            message_id: message_id.clone(),
+            agent,
+            pane_id: request.pane_id,
+            command: expected_command,
+            sender: MessageSender::System,
+            automated: true,
+        },
+    );
+    let delivery_error = match &outcome {
+        Ok(CompactOutcome::Sent) => None,
+        Ok(CompactOutcome::Queued) => Some("compaction delivery gate closed".to_owned()),
+        Err(err) => Some(err.to_string()),
     };
     append_assist(
         &request.label,
@@ -170,29 +120,11 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         idle_secs,
         occupied_tokens,
         &message_id,
-        delivered,
-        delivery_error.clone(),
+        matches!(outcome, Ok(CompactOutcome::Sent)),
+        delivery_error,
     );
-    if let Some(error) = delivery_error.filter(|error| error.contains("recording retry failed")) {
-        bail!("{error}");
-    }
+    outcome.context("sending idle-compaction command")?;
     Ok(())
-}
-
-fn latest_delivered_was_compaction(
-    history: &[MessageRecord],
-    agent: &rimz::agents::AgentState,
-) -> bool {
-    history
-        .iter()
-        .filter(|message| {
-            message.status == rimz::store::message::MessageStatus::Delivered
-                && message.same_agent_card(agent)
-        })
-        .max_by(|left, right| left.message_id.as_str().cmp(right.message_id.as_str()))
-        .is_some_and(|message| {
-            message.body == MessageBody::Command && message.compacted_context_tokens.is_some()
-        })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -219,41 +151,4 @@ fn append_assist(
             error,
         },
     });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn delivered(
-        agent: &rimz::agents::AgentState,
-        text: &str,
-        body: MessageBody,
-        tokens: Option<u64>,
-    ) -> MessageRecord {
-        let mut message = MessageRecord::new(
-            WorkspaceId::from_project_root(std::path::Path::new("/repo")),
-            agent,
-            text.to_owned(),
-            true,
-            DeliveryGate::Done,
-        )
-        .with_body(body);
-        message.status = rimz::store::message::MessageStatus::Delivered;
-        message.compacted_context_tokens = tokens;
-        message
-    }
-
-    #[test]
-    fn only_a_latest_delivered_compaction_suppresses_the_idle_reflex() {
-        let agent = rimz::agents::AgentState::stub("claude", "session-1", AgentStatus::Idle);
-        let compact = delivered(&agent, "/compact", MessageBody::Command, Some(80_000));
-        assert!(latest_delivered_was_compaction(
-            std::slice::from_ref(&compact),
-            &agent
-        ));
-
-        let prompt = delivered(&agent, "continue", MessageBody::Prompt, None);
-        assert!(!latest_delivered_was_compaction(&[compact, prompt], &agent));
-    }
 }
