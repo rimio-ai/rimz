@@ -124,7 +124,8 @@ allowed-dependencies = [
     "ids",
     "sock",
 ]
-surface-budget = 123
+# Pane writers share one user-scoped lock path across workspace boundaries.
+surface-budget = 124
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -233,7 +234,8 @@ upward-dependencies = [
     "diag",
     "diag::record",
 ]
-surface-budget = 337
+# Fresh boundary dispatch shares the queue's in-flight claim predicate.
+surface-budget = 338
 
 [[module]]
 path = "crates/rimz/src/theme"
