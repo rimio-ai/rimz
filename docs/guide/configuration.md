@@ -500,6 +500,22 @@ base = "fresh"
 
 ## loop.toml: scheduled turns
 
+### Team signal bindings
+
+A team can route events to the role responsible for acting on them, instead of making the agent that pushed relay a failed build:
+
+```toml
+[[agents.teams.forge.signals]]
+signal = "ci.failed"
+role = "coder"
+# match = { branch = "feat-x" }
+# prompt = "Read the failed job and repair it."
+```
+
+Each binding requires a `signal` selector and a declared `role`; optional `match` is an all-of map of string values against top-level payload fields, and optional `prompt` is appended verbatim after the event evidence. Selectors use an exact name or a family such as `ci.*`. An `agent.*` binding requires `match.handle` or `match.session` naming another agent. Invalid bindings fail team preparation and stay visible in `rimz teams show`.
+
+CI/PR bindings default to the member's worktree; team signals default to its cohort. Fresh root-checkout launches with implicit CI/PR scope are refused before side effects: launch with `-w <worktree>`, work from a linked worktree, or supply an explicit branch/path match. Registration materializes session-pinned workspace rows; end, loss, and stop remove them. `rimz teams show` separates declarations from live rows. The complete ordered list, including selectors, roles, matches, and prompts, is trust-hashed; changing a project binding requires a fresh `rimz trust grant`. See [teams](./teams.md#define-your-own-team) for the workflow.
+
 ### Loop tasks
 
 ```toml
@@ -526,28 +542,6 @@ max-strikes = 3
 surplus = "1.5x"
 surplus-after = "3d"
 
-[tasks.ci_green]
-prompt = "CI is green; merge the PR"
-root = "/home/you/code/app"
-every = "2m"
-check = "gh run watch --exit-status"
-on = "success"
-deadline = "2026-07-01T12:00:00Z"
-
-[tasks.ci_green.wake]
-kind = "claude"
-session = "sess-abc123"
-handle = "@planner"
-
-[tasks.self_wake]
-prompt = "resume the review: inspect the latest comments and fix the next blocking item"
-root = "/home/you/code/app"
-at = "09:30"
-
-[tasks.self_wake.wake]
-kind = "claude"
-session = "sess-abc123"
-handle = "@planner"
 ```
 
 Loop tasks live in `~/.config/rimz/loop.toml` under `[tasks.<name>]`; shared project tasks use the same shape in `<repo>/.rimz/config.toml`, are trust-hashed, and need both `rimz trust grant` and a machine-local `rimz loop enable <name>` before they run unattended. The scheduling model (shapes, watchdogs, self-wakes) is [loops.md](./loops.md); this section is the field shape.
@@ -557,7 +551,7 @@ Loop tasks live in `~/.config/rimz/loop.toml` under `[tasks.<name>]`; shared pro
 Each task chooses `agent`, `wake`, `check`, or `check` plus one agent action:
 
 - `agent` drives one supervised turn for a single agent cell on a calendar, interval, cron, or one-shot schedule.
-- `[tasks.<name>.wake]` pins delivery to one live agent session through the message path: `kind` supports hook preflight, `session` is the durable target, and `handle` is display-only.
+- `rimz loop add --wake @handle` pins delivery to one live agent session in workspace instance state, never `loop.toml`; bare `--wake` or `--wake @me` targets the caller. Its stored target carries `kind`, durable `session`, and display-only `handle`.
 - `check` runs a shell command at the task root before the agent action; `on = "fail"` wakes on non-zero exit or timeout, `on = "success"` on zero exit. Check output is appended to the agent prompt when the guard fires.
 - `verify` runs a shell command after a spawned agent turn and re-prompts that same supervised session on failure; `max-attempts` is the total agent-turn cap and defaults to `3`.
 - `max-strikes` auto-disables the task after that many consecutive failed or no-progress fires, defaults to `3`, and accepts `0` to disable the strike gate; `rimz loop enable` clears the machine-local counter.
@@ -569,9 +563,9 @@ Field notes:
 
 - Calendar and cron wall-clock fields resolve in the top-level `timezone`, falling back to the system zone when unset.
 - Machine tasks carry a `root`: `rimz loop add` writes an absolute path, and a hand-edited `~` or relative root is normalized before room matching, firing, and display.
-- Project tasks run at the project root implicitly, resolve `prompt-file` and `system-prompt-file` relative to `.rimz/`, reject `root`, `wake`, and `deadline`, and require `every` or `cron` because one-shots are machine state.
+- Project tasks run at the project root implicitly, resolve `prompt-file` and `system-prompt-file` relative to `.rimz/`, reject `root`, `wake`, and `deadline`, and require `every`, `cron`, or `signal` because one-shots are machine state.
 - Trusted project tasks win over same-named machine tasks and state instances but default disabled until locally enabled; an untrusted or stale project task stays visible but inert, so a same-named machine task keeps running until grant. `rimz loop add --project` writes `.rimz/config.toml`, enables that task for its author, and removing or renaming a project-owned task edits the project file.
-- RimZ-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json`; machine-local task enablement and bounded pauses live in `~/.local/state/rimz/loop-arming.json`.
+- Every session delivery (including recurring clocks and standing signals), generated one-shot, and poll-until instance lives in `~/.local/state/rimz/workspaces/<workspace-id>/loop-instances.json`; machine-local task enablement and bounded pauses live in `~/.local/state/rimz/loop-arming.json`.
 
 The full model is in [loops.md](../internals/harness/loops.md), and the CLI is in [loop.md](../reference/cli/loop.md).
 

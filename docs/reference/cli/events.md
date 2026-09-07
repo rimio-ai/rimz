@@ -52,7 +52,7 @@ rimz events emit deploy.finished
 rimz events emit deploy.finished --json '{"env":"prod","version":"1.4.2"}'
 ```
 
-`emit` appends one durable signal record, then fires every wake and loop task in this workspace whose `--signal` subscription matches, in the emitting process:
+`emit` appends one durable signal record, then fires every loop task in this workspace whose `--signal` subscription matches, in the emitting process:
 
 ```console
 $ rimz events emit deploy.finished --json '{"env":"prod","version":"1.4.2"}'
@@ -62,7 +62,7 @@ emitted deploy.finished (evt_01a06d7d112171d0bdaceff9e4a3c6aa) · fired 1 tasks
 
 A name is lowercase dot-separated words, at most 64 bytes, each segment starting with a lowercase letter or digit and otherwise using letters, digits, `-`, or `_`. `--json` takes one top-level JSON object of at most 64 KiB; subscribers filter on its top-level fields with `--match KEY=VALUE`, and the whole payload reaches the woken agent as one compact JSON line.
 
-Firing has no daemon behind it and no queue in front of it. The emitting process resolves the subscribers itself and spawns one detached run per match, so a signal reaches only the tasks armed for this workspace at that instant: a task armed a second later does not see it, and nothing is replayed when a room opens. A wake armed on a signal fires without a room open, unlike a `--in` delay or that wake's own [deadline](./wake.md#a-signal-wake-is-one-question), which wait for the room's elder or the loop timer.
+Firing has no daemon behind it and no queue in front of it. The emitting process resolves the subscribers itself and spawns one detached run per match, so a signal reaches only the tasks armed for this workspace at that instant: a task armed a second later does not see it, and nothing is replayed when a room opens. A signal subscription fires without a room open; clock delays instead need the room's elder or the loop timer. Signal-triggered deliveries carry `Type: SIGNAL` and park at the receiver's next `done` boundary.
 
 ### Reserved families
 
@@ -85,7 +85,7 @@ The hidden `--source forge` that the refresh uses accepts exactly `ci.passed`, `
 
 ### A subscription observes its whole family
 
-A subscriber names one signal (`--signal deploy.finished`) or one family (`--signal 'deploy.*'`), and the family is the first name segment. A subscription observes every signal in its family whose `--match` fields match, then delivers on an exact name match and records `skipped` for another member. That is why a wake on `ci.failed` is not woken by a green build; the skip is a run-log row and nothing else, so the wake stays armed on its original deadline ([one question](./wake.md#a-signal-wake-is-one-question)). A signal from another family, or one that fails a `--match`, is ignored.
+A subscriber names one signal (`--signal deploy.finished`) or one family (`--signal 'deploy.*'`), and the family is the first name segment. A subscription observes every signal in its family whose `--match` fields match, then delivers on an exact name match and records `skipped` for another member. That is why a wake on `ci.failed` is not woken by a green build; the skip is a run-log row and nothing else, so the subscription stays armed. A signal from another family, or one that fails a `--match`, is ignored.
 
 Emitted signals rejoin the stream `follow` prints:
 
@@ -94,4 +94,4 @@ $ rimz events follow --replay
 {"event":"signal","v":1,"event_id":"evt_01a06d7d112171d0bdaceff9e4a3c6aa","at":"2026-09-04T17:35:08.065761436Z","workspace_id":"ws_f89e49906df0621ad2765112","name":"deploy.finished","payload":{"env":"prod","version":"1.4.2"},"source":"cli"}
 ```
 
-`source` is `cli` for `rimz events emit`, `forge` for a pull-request or CI transition the room's sidebar observed, `watch` for a `rimz wake -- <command>` completion, and `lifecycle` for a `team.*` edge the agent lifecycle hook derived. An `agent.*` signal fires its subscribers but carries no separate `signal` line, because the `lifecycle` line it was derived from is already its durable record. Arming a subscription is [`rimz wake --signal`](./wake.md#triggers) for one agent, or [`rimz loop add --signal`](./loop.md#signals) for a standing task.
+`source` is `cli` for `rimz events emit`, `forge` for a pull-request or CI transition the room's sidebar observed, `watch` for a `rimz wake -- <command>` completion, and `lifecycle` for a `team.*` edge the agent lifecycle hook derived. An `agent.*` signal fires its subscribers but carries no separate `signal` line, because the `lifecycle` line it was derived from is already its durable record. Arm a subscription with [`rimz loop add --signal`](./loop.md#signals): add bare `--wake` or `--wake @me` for the caller, `--wake @handle` for another live agent, and `--once` for one delivery. Team definitions can [bind signals to roles](../../guide/teams.md#define-your-own-team).
