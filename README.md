@@ -67,7 +67,7 @@ Read that as: ready for personal, daily use today; for production workflows that
 - **Teams, cross-model by design:** pair a Fable planner with a Sol coder and launch them as one team, each role on the model best at its job (reasoning depth, instruction following, speed, price); a mixed team catches what a single model lets through, and delivers better results faster for less
 - **Messages, agents chat as in Slack:** every agent answers to a handle (`@codex`, `@planner`); steer/queue delivery guarantees the message lands, respecting agent state and the context window, and agents talk to each other and to you inside channels
 - **Scriptable, End to End:** `rimz agents -p` is `claude -p` for every agent, with exit codes, JSON output, streaming, and the full transcript kept, so agents drop into scripts, CI, and workflows
-- **Loops, Yours to Engineer:** `rimz loop` schedules supervised runs on a clock (calendar, interval, cron, or a check-guarded watchdog that runs a command and wakes an agent on the result) or on a signal anything can emit, `rimz wake` gives an agent the one-shot version to arm for itself instead of sleeping, and notification handlers run your own command the moment a row needs eyes
+- **Loops, Yours to Engineer:** `rimz loop` schedules supervised runs on a clock (calendar, interval, cron, or a check-guarded watchdog that runs a command and wakes an agent on the result) or on a signal anything can emit, `rimz wake` lets an agent arm its own timer or command wait instead of sleeping, and notification handlers run your own command the moment a row needs eyes
 - **Auto Continue, while you're Away:** a rate-limit pause resumes the moment the budget window resets and transient API overload retries on a backoff ramp; agents recover themselves and keep working while you're gone
 - **Steer the Fleet from your Phone:** when an agent stops to ask, the question reaches you in the official Claude and ChatGPT mobile apps, exactly as if you were driving the CLI by hand; answer there and it lands in the same terminal session, the fleet moving on in its panes as if you had typed it, with RimZ never between you and the official apps
 - **Pets, your beloved Companion:** an animated sprite on the provider dashboard that keeps you company, running while the agents run and waving when one waits
@@ -219,17 +219,17 @@ rimz loop add watchdog --check "cargo test" --on fail \
     --agent codex --prompt "fix the failing test" --every 15m
 ```
 
-**Wait without a pane.** [`rimz wake`](./docs/reference/cli/wake.md) is the alarm an agent sets for itself instead of holding its turn open on `sleep`: it ends the turn, and when the delay, the command, or the signal arrives RimZ delivers a message back into the same conversation naming what fired and on what.
+**Wait without a pane.** [`rimz wake`](./docs/reference/cli/wake.md) is the alarm an agent sets for itself instead of holding its turn open on `sleep`: it ends the turn, and when the delay elapses or the command finishes RimZ delivers a message back into the same conversation naming what fired and on what.
 
 ```sh
 # One-shot wake after a delay
-rimz wake --in 30m --prompt "resume the review"
+rimz wake --in 30m
 
 # Wake when the command exits, with its output in the message
 rimz wake -- gh run watch --exit-status
 
 # Wake when CI fails on the branch this agent is working on
-rimz wake --signal ci.failed
+rimz loop add ci-red --signal ci.failed --wake
 
 # Wake on an event anything can emit: a git hook, a deploy script, another agent
 rimz events emit deploy.finished --json '{"env":"prod","version":"1.4.2"}'

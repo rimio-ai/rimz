@@ -33,7 +33,7 @@ zellij setup --check
 
 ## Forge agent team — `teams/forge/`
 
-[`teams/forge`](./teams/forge/) is one RimZ drop-in fragment for the plan → code → review loop: `@planner` runs Claude, `@coder` runs Codex, and `@reviewer` runs Claude. Its `team.toml` declares the three profiles, layout, and git-excluded scratch files, and the three Markdown files are the role prompts. The [teams README](./teams/README.md) walks the whole loop: roles, hand-offs, install, and customization.
+[`teams/forge`](./teams/forge/) is one RimZ drop-in fragment for the plan → code → review loop: `@planner` runs Claude, `@coder` runs Codex, and `@reviewer` runs Claude. Its `team.toml` declares the three profiles, layout, git-excluded scratch files, and a `ci.failed` → `coder` signal binding, and the three Markdown files are the role prompts. The [teams README](./teams/README.md) walks the whole loop: roles, hand-offs, install, and customization.
 
 Install the release-matched bundle from GitHub:
 
@@ -50,14 +50,14 @@ cp -r examples/teams/forge ~/.agents/teams/
 
 `rimz teams install forge --force` replaces files in a same-named installed directory; the plain install preserves it. Entries in `~/.config/rimz/agents.toml` override fragment entries with the same names.
 
-Launch with `rimz teams forge`; the lifecycle grammar lives in the [teams CLI reference](../docs/reference/cli/teams.md). Each role answers to `@planner`, `@coder`, or `@reviewer`.
+Launch with `rimz teams forge -w feat-x`; the lifecycle grammar lives in the [teams CLI reference](../docs/reference/cli/teams.md). Each role answers to `@planner`, `@coder`, or `@reviewer`. The binding is armed when the coder registers, scoped to its worktree, and retired with that session. Failed CI delivers a `Type: SIGNAL` message directly to the coder, not whoever pushed. Without an explicit branch/path match, launching this binding on the root checkout is refused; use `-w` or launch from a linked worktree. `rimz teams show forge#feat-x` separates declared bindings from live subscriptions.
 
 The `claude` and `codex` CLIs must be on `PATH`. The profiles in `team.toml` pin models (`fable`, `opus`) and Codex feature flags; adjust them there to taste. The coder's PR step expects a `pr` skill and falls back to plain `gh` or `tea` without it.
 
 Try the team before installing by pointing RimZ at this checkout:
 
 ```sh
-RIMZ_AGENTS_HOME="$PWD/examples" rimz agents forge
+RIMZ_AGENTS_HOME="$PWD/examples" rimz agents forge -w feat-x
 ```
 
 ## Third-party agent plugin — `agent-plugin/`

@@ -31,3 +31,7 @@ model = "opus"
 effort = "xhigh"
 args = "--strict-mcp-config --tools 'Bash,Read,Edit,Write,WebFetch,WebSearch,Skill'"
 system-prompt-file = "reviewer.md"
+
+[[agents.teams.forge.signals]]
+signal = "ci.failed"
+role = "coder"

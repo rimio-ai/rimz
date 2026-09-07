@@ -149,6 +149,20 @@ Launching the team name opens every member in that layout, and each answers to i
 
 Start from the forge directory or from scratch: rename the roles, add or drop some, swap the models and prompts — a pair, a trio, or a whole bench of specialists. The role prompts do the heavy lifting: each one states the role's craft, how the roles hand work to each other, and who owns which decision, which is what turns co-launched agents into a team instead of a row of panes. The full config shape, override fields included, is in [configuration → agent profiles, commands, and teams](./configuration.md#agent-profiles-commands-and-teams).
 
+### Send events to the responsible role
+
+A PR script knows who pushed, not who owns the repair. Put that routing in the team instead, so a failed check reaches the coder without the reviewer relaying it:
+
+```toml
+[[agents.teams.forge.signals]]
+signal = "ci.failed"
+role = "coder"
+```
+
+Launch with `rimz teams forge -w feat-x`, or from an existing linked worktree. RimZ refuses a fresh root-checkout launch of this binding because its forge poll watches worktree branches; an explicit branch or worktree-path match is the alternative. When the coder registers, RimZ writes a standing subscription pinned to that session and scoped to its worktree. Failed CI sends the coder a `Type: SIGNAL` message with the branch, PR when known, and event payload. A busy coder takes it at the next turn boundary; this is not a self-alarm interrupt.
+
+`rimz teams show forge#feat-x` separates declared bindings from live subscriptions. Resume, restart, and re-adding a role arm at registration too; subagents do not inherit bindings. Stopping or losing the session removes its subscriptions, and missed signals are not replayed. Use `rimz loop remove <name>` to remove an individual subscription or `rimz teams stop forge#feat-x` to stop the cohort. The rows live in workspace state, not the team file.
+
 ## Relaunch reconciles instead of duplicating
 
 Point any co-launched layout — a named team or an inline multi-agent spec — at an explicit worktree name, and RimZ reads the state first: a live cohort focuses its tab, and a closed cohort asks what you want done with the worktree it left behind.

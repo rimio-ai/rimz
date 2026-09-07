@@ -4,9 +4,7 @@
 
 A team is a configured set of role bindings and a layout.
 Each role keeps its own model, prompt, context window, and address while the team shares one lane.
-
-The definition may set `leader`, `layout`, `stages`, and `scratch-files` alongside its `roles`. `stages` declares an optional ordered pipeline, such as `["Explore", "Plan", "Implement", "Review", "Submit", "Reflect"]`; names must be nonblank and unique, and an empty list means undeclared. `scratch-files` is a list of verbatim gitignore patterns for ephemeral team memory, registered on launch and resume.
-
+The definition may set `leader`, `layout`, `stages`, `scratch-files`, and `signals` alongside its `roles`. `stages` declares an optional ordered pipeline, such as `["Explore", "Plan", "Implement", "Review", "Submit", "Reflect"]`; names must be nonblank and unique, and an empty list means undeclared. `scratch-files` is a list of verbatim gitignore patterns for ephemeral team memory, registered on launch and resume.
 The [teams guide](../../guide/teams.md) explains how to design a team; this page owns the command forms.
 
 ## List teams
@@ -45,6 +43,8 @@ The current stage comes from the first `Stage:` line in `<worktree>/blackboard.m
 PR/CI comes from the sidebar-refreshed cache; `teams` and `show` do not contact the forge. Only available facts are shown, and `pr none` means nothing is projected, not that RimZ verified there is no PR. Before a room snapshot is published, live cohorts can still be inspected without projected PR or activity enrichment.
 
 Use `team#worktree` or `-w NAME` to narrow the live section by exact lane or member worktree; an ended or not-yet-live lane reports that no instance is live and still exits successfully.
+`Declared signals` lists ROLE, SIGNAL, MATCH, and PROMPT from config even before launch. `Live signals` lists LANE, MEMBER, NAME, SIGNAL, and MATCH from materialized workspace rows whose team instance and pinned kind/session match that member. JSON exposes `roles[].signals` and `instances[].members[].role`/`signals`; an invalid definition stays visible with its validation error.
+
 The report ends with copy-ready launch and resume forms when no instance is live, or lane-qualified reach and focus forms when exactly one live cohort is shown.
 
 `rimz teams --json` emits an array of team records; `rimz teams show <team> --json` emits one team record. Both retain the definition, resolved `roles`, validation, and `instances` array. Each instance retains `channel`, `state`, `status_counts`, and `members` and adds:
@@ -62,13 +62,13 @@ Each member also exposes `phase`, nullable `activity`, and `last_activity_at` as
 ## Launch a team
 
 ```sh
-rimz teams forge
+rimz teams forge -w feat-rate-limits
 rimz teams forge#feat-rate-limits "add rate limiting"
 rimz teams forge -w feat-rate-limits "add rate limiting"
 rimz teams forge#feat-rate-limits --fresh
-rimz teams forge --channel triage
+rimz teams peer --channel triage
 rimz teams forge --from-pr 91 --bg
-rimz teams launch forge
+rimz teams launch forge -w feat-rate-limits
 ```
 
 The bare-name form and `launch` verb accept a configured team name and send an optional trailing prompt to its configured leader.
@@ -82,10 +82,16 @@ The receipt ends with these lane-qualified hints (shown here for `forge#feat-rat
 ```text
 Check: rimz teams show forge#feat-rate-limits
 Reach: rimz message @planner#feat-rate-limits '<text>'
-Wait:  rimz wake --signal team.idle --match instance=forge#feat-rate-limits
+Wait:  rimz loop add --wake @me --signal team.idle --match instance=forge#feat-rate-limits --once
 ```
 
-Startup remains asynchronous: the receipt is not a readiness barrier, and members may not yet appear in `teams show`. Inspect the cohort for live status. `Wait` arms a one-shot wake on a future transition to `team.idle`; it does not block until readiness or completion, and idle does not mean the task is done. Signals do not replay: if the cohort was already idle before the wake was armed, that transition will not wake you. Inspect current state as well as arming the wake; [signal-wake deadlines and delivery](./wake.md#triggers) apply. Launch has no JSON receipt; `--json` is for list and inspection.
+Startup remains asynchronous: the receipt is not a readiness barrier, and members may not yet appear in `teams show`. Inspect the cohort for live status. `Wait` arms a one-shot subscription on a future transition to `team.idle`; it does not block until readiness or completion, and idle does not mean the task is done. Signals do not replay: if the cohort was already idle before the subscription was armed, that transition will not wake you. Inspect current state as well as arming the subscription; [signal delivery](./loop.md#signal-triggers) applies. Launch has no JSON receipt; `--json` is for list and inspection.
+
+For a configured binding the receipt also prints `signals: ci.failed → coder`; this describes intent, not an already-armed row. Root members arm their bindings when their real sessions register, including resume, restart, and role re-add; children do not. End, loss, or stop retires the session's subscriptions, and missed signals are never replayed.
+
+A fresh launch on the root checkout refuses CI/PR bindings with no explicit `match.path` or `match.branch`, before creating panes or worktrees. Use `-w <worktree>`, launch from a linked worktree, or set an explicit match. The full ordered binding list enters project trust.
+
+Members report their live status asynchronously, so `rimz teams show team#worktree` remains the source of truth rather than the receipt.
 
 `rimz teams` sets where a cohort runs, whether it resumes, and what each member may spend.
 `rimz agents` sets what an agent is — model, effort, prompts, permission posture, name, pane placement, supervised runs.
