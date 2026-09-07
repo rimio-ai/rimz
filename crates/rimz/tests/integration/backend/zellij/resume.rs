@@ -56,7 +56,7 @@ fn self_wake_steers_to_live_consumer_when_idle_and_working() {
             .expect("open agent tab");
         wait_for_path(&ready, "agent shim did not start");
         let work = wait_for_named_work_pane_count(xdg, room.name(), tab_name, 1);
-        let pane_id = PaneId::from_parts(MuxName::Zellij, &format!("terminal_{}", work[0].id));
+        let pane_id = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", work[0].id));
         let store = env.store();
         store
             .append_event(&EventEnvelope::agent_launched(
