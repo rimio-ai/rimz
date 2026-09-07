@@ -362,6 +362,34 @@ pub(crate) fn execute_attempt(
         .iter()
         .map(|message| message.message_id.clone())
         .collect::<Vec<_>>();
+    if head.body == MessageBody::Command {
+        let current = store.runtime_projection(crate::RuntimeScope::Audit)?;
+        let refusal = match current
+            .agents
+            .iter()
+            .find(|agent| head.same_agent_card(agent))
+        {
+            Some(agent) if agent.compacted_awaiting_prompt.is_some() => Some((
+                crate::store::writer::DeliveryFailureDisposition::Terminal,
+                "a compaction never follows a compaction; the agent has not taken a turn since its last one",
+            )),
+            Some(agent) if agent.is_compacting(Timestamp::now()) => Some((
+                crate::store::writer::DeliveryFailureDisposition::Retry,
+                "parked: waiting for compaction to finish",
+            )),
+            _ => None,
+        };
+        if let Some((disposition, reason)) = refusal {
+            store.record_message_delivery_failures(
+                &ids,
+                Some(head),
+                disposition,
+                reason,
+                &workspace.session_name,
+            )?;
+            return Ok(AttemptOutcome::Queued);
+        }
+    }
     match send::send_batch_to_live_pane(
         workspace, store, snapshot, target, bound, records, live_send,
     ) {

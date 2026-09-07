@@ -6,6 +6,7 @@ mod auto_redeem;
 mod budget;
 mod budget_park;
 mod check;
+mod compact;
 mod exec;
 mod fork;
 mod history;
@@ -459,6 +460,13 @@ enum AgentsSubcmd {
     },
     /// Stop an agent and relaunch it in place, resuming its session.
     Restart { reference: String },
+    /// Compact an agent's context at its next turn boundary.
+    Compact {
+        #[arg(add = clap_complete::ArgValueCandidates::new(crate::cli::complete::agent_refs))]
+        reference: String,
+        /// Replace the configured compaction brief; an empty string sends the bare command.
+        instruction: Option<String>,
+    },
     /// Resume a lane's closed agents where they left off.
     Resume {
         /// Lane to resume: `#channel`, worktree, branch, or directory name.
@@ -661,6 +669,12 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         }
         Some(AgentsSubcmd::Stop { reference, all }) => return stop_agent(reference, all, globals),
         Some(AgentsSubcmd::Restart { reference }) => return restart_agent(reference, globals),
+        Some(AgentsSubcmd::Compact {
+            reference,
+            instruction,
+        }) => {
+            return compact::compact_agent(reference, instruction, globals);
+        }
         Some(AgentsSubcmd::Resume {
             scope,
             worktree,

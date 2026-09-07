@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 
+pub mod compact;
 pub mod deliver;
 pub mod dispatch;
 pub(crate) mod fire;

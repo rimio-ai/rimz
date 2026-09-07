@@ -3405,6 +3405,379 @@ fn message_inherits_smart_compact_default() {
 }
 
 #[test]
+fn agents_compact_types_the_native_command_and_refuses_a_repeat() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    run_hook(
+        &env,
+        json!({"hook_event_name": "SessionStart", "session_id": "sess-manual-compact"}),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let trace = env.project_root.join("manual-compact.log");
+    let output = run_success(
+        traced_rimz(&env, &trace).args(["agents", "compact", "@claude"]),
+        "manual compact",
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with("compacting @claude (msg_"));
+    assert_compact_segments_then_enter(
+        &trace_lines(&trace),
+        rimz::config::DEFAULT_COMPACT_INSTRUCTION,
+    );
+    let messages = env.store().list_messages().expect("messages");
+    assert_eq!(messages.len(), 1);
+    let command = &messages[0];
+    assert_eq!(command.body, MessageBody::Command);
+    assert_eq!(command.status, MessageStatus::Sent);
+    assert_eq!(command.sender, MessageSender::Human);
+    assert!(!command.automated);
+
+    for hook in [
+        None,
+        Some("PreCompact"),
+        Some("PostCompact"),
+        Some("SessionStart"),
+    ] {
+        if let Some(hook) = hook {
+            run_hook(
+                &env,
+                json!({
+                    "hook_event_name": hook,
+                    "session_id": "sess-manual-compact",
+                    "trigger": "manual",
+                    "source": "compact",
+                }),
+                &[("ZELLIJ_PANE_ID", "3")],
+            );
+        }
+        let refused = traced_rimz(&env, &trace)
+            .args(["agents", "compact", "@claude"])
+            .output()
+            .expect("repeat compact");
+        assert_eq!(refused.status.code(), Some(1), "after {hook:?}");
+        assert!(refused.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(stderr.contains("compaction"), "after {hook:?}: {stderr}");
+        if matches!(hook, Some("PostCompact" | "SessionStart")) {
+            assert!(stderr.contains("never follows a compaction"), "{stderr}");
+        }
+        assert_eq!(
+            trace_lines(&trace)
+                .iter()
+                .filter(|line| is_compact_command(line))
+                .count(),
+            1,
+            "repeat must not write after {hook:?}"
+        );
+    }
+    let delivered = env.store().list_message_history().expect("history");
+    assert!(delivered.iter().any(|message| {
+        message.message_id == command.message_id && message.status == MessageStatus::Delivered
+    }));
+
+    for hook in ["UserPromptSubmit", "Stop"] {
+        run_hook(
+            &env,
+            json!({
+                "hook_event_name": hook,
+                "session_id": "sess-manual-compact",
+                "prompt": "continue the actual task",
+            }),
+            &[("ZELLIJ_PANE_ID", "3")],
+        );
+    }
+    let next_trace = env.project_root.join("manual-compact-after-prompt.log");
+    let output = run_success(
+        traced_rimz(&env, &next_trace).args(["agents", "compact", "@claude"]),
+        "compact after a real prompt",
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with("compacting @claude (msg_"));
+    assert_compact_segments_then_enter(
+        &trace_lines(&next_trace),
+        rimz::config::DEFAULT_COMPACT_INSTRUCTION,
+    );
+}
+
+#[test]
+fn agents_compact_uses_configured_custom_and_bare_instructions() {
+    for (configured, instruction, expected) in [
+        (
+            "keep the configured context",
+            None,
+            "keep the configured context",
+        ),
+        (
+            "keep the configured context",
+            Some("keep the open questions"),
+            "keep the open questions",
+        ),
+        ("keep the configured context", Some(""), ""),
+        ("", None, ""),
+    ] {
+        let env = Env::new();
+        run_hook(
+            &env,
+            json!({"hook_event_name": "SessionStart", "session_id": "sess-manual-instruction"}),
+            &[("ZELLIJ_PANE_ID", "3")],
+        );
+        run_success(
+            env.rimz()
+                .args(["config", "set", "harness.compact_instruction", configured]),
+            "set compact instruction",
+        );
+        let trace = env.project_root.join("manual-instruction.log");
+        let mut cmd = traced_rimz(&env, &trace);
+        cmd.args(["agents", "compact", "@claude"]);
+        if let Some(instruction) = instruction {
+            cmd.arg(instruction);
+        }
+        run_success(&mut cmd, "compact with instruction");
+        let messages = env.store().list_messages().expect("messages");
+        assert_eq!(messages.len(), 1);
+        if !expected.is_empty() {
+            assert_eq!(messages[0].text, format!("/compact {expected}"));
+            assert_compact_segments_then_enter(&trace_lines(&trace), expected);
+            continue;
+        }
+        assert_eq!(messages[0].text, "/compact");
+        let lines = trace_lines(&trace);
+        let writes: Vec<_> = lines
+            .iter()
+            .filter(|line| line.contains("\taction\twrite-chars\t"))
+            .collect();
+        assert_eq!(writes.len(), 1, "{lines:?}");
+        assert!(writes[0].ends_with("\t--\t/compact"), "{lines:?}");
+        assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 1);
+    }
+}
+
+#[test]
+fn agents_compact_uses_native_commands_and_refuses_unsupported_instructions() {
+    for (kind, native) in [
+        ("codex", Some("/compact")),
+        ("cursor", Some("/summarize")),
+        ("qwen", Some("/compress")),
+        ("amp", None),
+    ] {
+        let env = Env::new();
+        register_role_agent(
+            &env,
+            kind,
+            "sess-native-compact",
+            "coder",
+            false,
+            Some(TRACE_PANE),
+        );
+        let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, kind)]);
+        let trace = env.project_root.join("native-compact.log");
+        let refused = traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args([
+                "agents",
+                "compact",
+                "@coder-agent",
+                "keep the open questions",
+            ])
+            .output()
+            .expect("unsupported compact instruction");
+        assert_eq!(refused.status.code(), Some(1));
+        assert!(refused.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(stderr.contains(kind), "{stderr}");
+        assert!(
+            stderr.contains(if native.is_some() {
+                "does not accept a compaction instruction"
+            } else {
+                "has no native compaction command"
+            }),
+            "{stderr}"
+        );
+        assert!(env.store().list_messages().expect("messages").is_empty());
+        assert!(
+            trace_lines(&trace)
+                .iter()
+                .all(|line| !line.contains("\taction\twrite"))
+        );
+
+        let output = traced_rimz(&env, &trace)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["agents", "compact", "@coder-agent"])
+            .output()
+            .expect("native compact");
+        let Some(native) = native else {
+            assert_eq!(output.status.code(), Some(1));
+            assert!(
+                String::from_utf8_lossy(&output.stderr)
+                    .contains("has no native compaction command")
+            );
+            assert!(env.store().list_messages().expect("messages").is_empty());
+            assert!(
+                trace_lines(&trace)
+                    .iter()
+                    .all(|line| !line.contains("\taction\twrite"))
+            );
+            continue;
+        };
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let messages = env.store().list_messages().expect("messages");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].text, native);
+        assert_eq!(messages[0].body, MessageBody::Command);
+        assert_eq!(messages[0].status, MessageStatus::Sent);
+        let lines = trace_lines(&trace);
+        let writes: Vec<_> = lines
+            .iter()
+            .filter(|line| line.contains("\taction\twrite-chars\t"))
+            .collect();
+        assert_eq!(writes.len(), 1, "{lines:?}");
+        assert!(writes[0].ends_with(&format!("\t--\t{native}")), "{lines:?}");
+        assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 1);
+    }
+}
+
+#[test]
+fn agents_compact_queues_for_a_running_agent() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(
+        &env,
+        "sess-queued-compact",
+        "feature-queued-compact",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let trace = env.project_root.join("queued-compact.log");
+    let output = run_success(
+        traced_rimz(&env, &trace).args(["agents", "compact", "@claude"]),
+        "queue running compact",
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).starts_with("queued compaction for @claude (msg_")
+    );
+    let messages = env.store().list_messages().expect("messages");
+    assert_eq!(messages.len(), 1);
+    let command = &messages[0];
+    assert_eq!(command.status, MessageStatus::Queued);
+    assert_eq!(command.body, MessageBody::Command);
+    assert_eq!(command.gate, DeliveryGate::Done);
+    assert_eq!(
+        list_message_ids(
+            &env,
+            &["message", "list", "--all", "--status", "queued", "--json"],
+            None
+        ),
+        vec![command.message_id.to_string()]
+    );
+    let refused = traced_rimz(&env, &trace)
+        .args(["agents", "compact", "@claude"])
+        .output()
+        .expect("repeat queued compact");
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(refused.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains(command.message_id.as_str()));
+    assert!(
+        trace_lines(&trace)
+            .iter()
+            .all(|line| !line.contains("\taction\twrite"))
+    );
+
+    let shim = zellij_trace_shim();
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-queued-compact",
+            "worktree_branch": "feature-queued-compact",
+        }),
+        &[
+            ("ZELLIJ_PANE_ID", "3"),
+            ("RIMZ_ZELLIJ_BIN", shim.to_str().expect("shim path")),
+            ("RIMZ_TEST_ZELLIJ_LOG", trace.to_str().expect("trace path")),
+            ("RIMZ_MESSAGE_SETTLE_MS", "0"),
+            ("RIMZ_MESSAGE_INTERVAL_MS", "0"),
+            ("RIMZ_MESSAGE_COMMAND_SUBMIT_DELAY_MS", "0"),
+        ],
+    );
+    wait_for_message_event(&env, "message.sent", Duration::from_secs(5));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !trace_lines(&trace).iter().any(|line| is_enter_key(line)) {
+        assert!(
+            Instant::now() < deadline,
+            "queued compact never pressed Enter"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert_compact_segments_then_enter(
+        &trace_lines(&trace),
+        rimz::config::DEFAULT_COMPACT_INSTRUCTION,
+    );
+    assert_eq!(
+        message_by_id(&env, &command.message_id).status,
+        MessageStatus::Sent
+    );
+}
+
+#[test]
+fn queued_compaction_is_rejected_after_a_native_manual_compaction() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(
+        &env,
+        "sess-native-repeat",
+        "feature-native-repeat",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let trace = env.project_root.join("native-repeat.log");
+    run_success(
+        traced_rimz(&env, &trace).args(["agents", "compact", "@claude"]),
+        "queue compact before native compaction",
+    );
+    let command = env.store().list_messages().unwrap().remove(0);
+    let shim = zellij_trace_shim();
+    for hook in ["PreCompact", "PostCompact", "SessionStart"] {
+        run_hook(
+            &env,
+            json!({"hook_event_name": hook, "session_id": "sess-native-repeat", "trigger": "manual", "source": "compact"}),
+            &[
+                ("ZELLIJ_PANE_ID", "3"),
+                ("RIMZ_ZELLIJ_BIN", shim.to_str().unwrap()),
+                ("RIMZ_TEST_ZELLIJ_LOG", trace.to_str().unwrap()),
+                ("RIMZ_MESSAGE_SETTLE_MS", "0"),
+                ("RIMZ_MESSAGE_INTERVAL_MS", "0"),
+                ("RIMZ_MESSAGE_COMMAND_SUBMIT_DELAY_MS", "0"),
+            ],
+        );
+    }
+    run_success(
+        traced_rimz(&env, &trace).args(["message", "sweep"]),
+        "sweep obsolete compaction",
+    );
+    wait_for_message_event(&env, "message.errored", Duration::from_secs(5));
+    let settled = env
+        .store()
+        .list_message_history()
+        .unwrap()
+        .into_iter()
+        .find(|record| record.message_id == command.message_id)
+        .expect("settled command");
+    assert_eq!(settled.status, MessageStatus::Errored);
+    assert!(
+        settled
+            .last_error
+            .as_deref()
+            .unwrap()
+            .contains("a compaction never follows a compaction")
+    );
+    assert!(
+        trace_lines(&trace)
+            .iter()
+            .all(|line| !line.contains("\taction\twrite"))
+    );
+}
+
+#[test]
 fn smart_compact_sends_the_configured_instruction() {
     for (configured, expected_instruction) in [
         ("keep the open questions", Some("keep the open questions")),
@@ -3670,6 +4043,19 @@ fn steer_auto_compact_suppresses_only_an_unchanged_baseline() {
     assert!(!second_lines.iter().any(|line| is_compact_command(line)));
 
     seed_context_tokens(&env, "sess-ac-dupe", 160_000, 200_000);
+    let changed_trace = env.project_root.join("zellij-ac-dupe-changed-trace.log");
+    run_traced_smart_compact(&env, &changed_trace, "still no prompt");
+    assert!(
+        !trace_lines(&changed_trace)
+            .iter()
+            .any(|line| is_compact_command(line))
+    );
+
+    run_hook(
+        &env,
+        json!({"hook_event_name": "UserPromptSubmit", "session_id": "sess-ac-dupe", "prompt": "a real prompt"}),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
     let third_trace = env.project_root.join("zellij-ac-dupe-third-trace.log");
     run_traced_smart_compact(&env, &third_trace, "go3");
     let third_lines = trace_lines(&third_trace);
