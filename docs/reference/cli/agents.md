@@ -28,6 +28,7 @@ The [`pane` commands](./pane.md) additionally accept the literal `sidebar` for t
 - `@swift-otter` — a pet name.
 - `@claude-2` — a kind plus ordinal (the ordinal appears only when two of a kind share one worktree).
 - `@<session-prefix>` — a leading slice of the session id.
+- `@me` — the identifiable calling agent for single-agent commands, direct messages, and loop delivery targets. Run it from an agent pane; `me` is reserved and cannot name an agent, profile, command, or team.
 
 **Handles that name a type and fan out:**
 
