@@ -89,10 +89,10 @@ Follow the receipt's `Check` command to see each cohort's member status, activit
 Use `Reach` to message the leader, or the receipt's `Wait` command to be woken on the cohort's next idle transition instead of polling. For an agent waiting on this cohort:
 
 ```sh
-rimz wake --signal team.idle --match instance=forge#feat-query
+rimz loop add --wake @me --signal team.idle --match instance=forge#feat-query --once
 ```
 
-This arms a future notification, not a startup or completion barrier. Signals are transition-only and never replay: if the team was already idle before you armed the wake, that event is missed. Check current state too, and do not treat idle as proof that the work is complete. The [wake reference](../reference/cli/wake.md#triggers) covers targets, timeouts, and delivery.
+This arms a future notification, not a startup or completion barrier. Signals are transition-only and never replay: if the team was already idle before you armed the subscription, that event is missed. Check current state too, and do not treat idle as proof that the work is complete. The [loop reference](../reference/cli/loop.md#signals) covers signal subscriptions and delivery.
 
 When the same team is live in several lanes, run the lifecycle command inside the lane you mean or select it with `team#worktree` or `-w NAME`.
 The `COST` in `rimz teams show`, the team's collapsed finished sidebar receipt, and attribution use the same all-in lifetime fold across every resumed session of each role and every subagent it spawned. Attribution's `subagents` line breaks that spend down by task. Expanding a finished receipt puts each role's lifetime cost on its card, and those cards add back to the receipt; live cards remain scoped to the current provider session.
