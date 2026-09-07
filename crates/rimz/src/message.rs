@@ -164,6 +164,7 @@ fn synthetic_session_for_pane(pane_id: &PaneId) -> AgentSessionId {
 }
 
 pub fn parse_when_status(raw: &str) -> Result<AgentStatus, String> {
+    // Derived statuses (`paused`, `sleeping`) are not raw states.
     match raw {
         "running" => Ok(AgentStatus::Running),
         "waiting" => Ok(AgentStatus::Waiting),

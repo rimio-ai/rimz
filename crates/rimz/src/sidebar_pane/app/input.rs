@@ -133,6 +133,7 @@ pub(super) fn encode_key(keymap: &NavKeymap, code: KeyCode, mods: KeyModifiers) 
         KeyCode::Char('p') => "key:filter:paused",
         KeyCode::Char('w') => "key:filter:running",
         KeyCode::Char('s') => "key:filter:success",
+        KeyCode::Char('z') => "key:filter:sleeping",
         KeyCode::Char('x') => "key:dismiss",
         KeyCode::Char(c @ '1'..='9') => return Some(format!("key:digit:{c}")),
         KeyCode::Char('r') => "key:reload",
@@ -219,6 +220,9 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
         )))),
         "key:filter:success" => Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
             AgentStatus::Success,
+        )))),
+        "key:filter:sleeping" => Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
+            AgentStatus::Sleeping,
         )))),
         "key:dismiss" => Wakeup::Key(KeyAction::Dismiss),
         "scroll:up" => Wakeup::Scroll { down: false },
@@ -577,6 +581,14 @@ mod tests {
                     AgentStatus::Success,
                 )))),
             ),
+            (
+                "z → sleeping",
+                KeyCode::Char('z'),
+                KeyModifiers::NONE,
+                Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
+                    AgentStatus::Sleeping,
+                )))),
+            ),
         ];
         for (label, key, mods, wakeup) in cases {
             let encoded = encode_key(&keymap, key, mods).expect("key is encoded");
@@ -634,11 +646,12 @@ mod tests {
             (KeyCode::Char('p'), KeyModifiers::NONE),
             (KeyCode::Char('w'), KeyModifiers::NONE),
             (KeyCode::Char('s'), KeyModifiers::NONE),
+            (KeyCode::Char('z'), KeyModifiers::NONE),
             (KeyCode::Char('x'), KeyModifiers::NONE),
             (KeyCode::Char('r'), KeyModifiers::NONE),
             (KeyCode::Char('1'), KeyModifiers::NONE),
             (KeyCode::Esc, KeyModifiers::NONE),
-            (KeyCode::Char('z'), KeyModifiers::NONE),
+            (KeyCode::Char('y'), KeyModifiers::NONE),
         ] {
             if let Some(w) = encode_key(&keymap, code, mods) {
                 words.push(w);
@@ -681,7 +694,7 @@ mod tests {
     #[test]
     fn unbound_keys_round_trip_as_other() {
         let keymap = default_keymap();
-        for code in [KeyCode::Esc, KeyCode::Char('z')] {
+        for code in [KeyCode::Esc, KeyCode::Char('y')] {
             let encoded =
                 encode_key(&keymap, code, KeyModifiers::NONE).expect("unbound key is encoded");
             assert_eq!(

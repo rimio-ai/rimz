@@ -106,6 +106,62 @@ impl BudgetPark {
     }
 }
 
+/// One armed one-shot delivery aimed at this session, read from the loop
+/// instance catalog when a snapshot is enriched. Never folded from the log.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingWake {
+    pub name: String,
+    pub trigger: PendingWakeTrigger,
+    pub armed_at: Option<Timestamp>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum PendingWakeTrigger {
+    Timer {
+        due: Timestamp,
+    },
+    Command {
+        command: String,
+    },
+    Signal {
+        selector: String,
+        deadline: Option<Timestamp>,
+    },
+}
+
+impl PendingWake {
+    pub fn label(&self, now: Timestamp) -> String {
+        use crate::theme::fmt::{command_preview, duration_label};
+
+        match &self.trigger {
+            PendingWakeTrigger::Timer { due } if *due <= now => "wake due".to_owned(),
+            PendingWakeTrigger::Timer { due } => {
+                let minutes = (due.duration_since(now).as_secs() as u64)
+                    .div_ceil(60)
+                    .max(1);
+                format!("wake in {}", duration_label(minutes))
+            }
+            PendingWakeTrigger::Command { command } => {
+                format!("wake after: {}", command_preview(command))
+            }
+            PendingWakeTrigger::Signal { selector, deadline } => {
+                let mut label = format!("wake on {selector}");
+                if let Some(deadline) = deadline {
+                    let seconds = deadline.duration_since(now).as_secs().max(0) as u64;
+                    let left = if *deadline <= now {
+                        "0m".to_owned()
+                    } else {
+                        duration_label(seconds.div_ceil(60).max(1))
+                    };
+                    label.push_str(&format!(" · {left} left"));
+                }
+                label
+            }
+        }
+    }
+}
+
 /// One hour: the shared ceiling for attention heat and breath tempo, and the
 /// default inactive window below which a card sinks beneath live work.
 pub const ATTENTION_AGE_CEILING_SECS: i64 = 3_600;
@@ -120,11 +176,9 @@ pub const DEFAULT_INACTIVE_AFTER_SECS: u32 = ATTENTION_AGE_CEILING_SECS as u32;
 pub const DEFAULT_ARCHIVE_AFTER_SECS: u32 = 24 * 60 * 60;
 
 /// Agent status as the sidebar reads it. The first five are the lifecycle
-/// rollup the agent owns and RimZ observes; [`Paused`](AgentStatus::Paused) is
-/// the one RimZ-*derived* projection — never emitted by a hook, only projected
-/// at snapshot time when a live running turn is known to have stopped on a
-/// provider limit, the same way a stalled `Running` agent is projected to
-/// `Failed`. It lives in the one status enum so it shares the cockpit tally,
+/// rollup the agent owns and RimZ observes; `Paused` and `Sleeping` are
+/// RimZ-derived projections, never emitted by a hook. They live in the one
+/// status enum so they share the cockpit tally,
 /// ranking, and glyph machinery the lifecycle states flow through.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -139,6 +193,10 @@ pub enum AgentStatus {
     /// provider recovers or its window resets. Projected from a `Running`
     /// status, never reported by the agent.
     Paused,
+    /// Resting (`idle`/`success`) with a one-shot delivery armed in the loop
+    /// catalog: a wake timer, watched command, or one-shot subscription.
+    /// Projected from `pending_wakes`, never reported by a hook.
+    Sleeping,
 }
 
 impl AgentStatus {
@@ -150,6 +208,7 @@ impl AgentStatus {
             Self::Success => "success",
             Self::Failed => "failed",
             Self::Paused => "paused",
+            Self::Sleeping => "sleeping",
         }
     }
 
@@ -174,7 +233,7 @@ impl AgentStatus {
     /// Rows that deserve one human look before returning to the read queue:
     /// attention-class states plus a finished result.
     pub fn needs_a_look(self) -> bool {
-        self.is_attention() || matches!(self, Self::Success)
+        self.is_attention() || matches!(self, Self::Success | Self::Sleeping)
     }
 }
 
@@ -603,6 +662,9 @@ pub struct AgentState {
     /// the budget cache; the event reducer never treats it as durable truth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget_park: Option<BudgetPark>,
+    /// Loop-catalog projection rebuilt at enrichment, never reduced from events.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_wakes: Vec<PendingWake>,
     /// What the parent asked this *subagent* to do, harvested from Claude's
     /// `subagentStatusLine`. Folded in at snapshot time by
     /// `SidebarSnapshot::with_subagent_context`, never reduced from the event
@@ -756,6 +818,8 @@ struct AgentStateWire {
     context: Option<AgentContext>,
     #[serde(default)]
     budget_park: Option<BudgetPark>,
+    #[serde(default)]
+    pending_wakes: Vec<PendingWake>,
     subagent_description: Option<String>,
     #[serde(default)]
     subagent_cost_usd: Option<f64>,
@@ -834,6 +898,7 @@ impl From<AgentStateWire> for AgentState {
             context: wire.context,
             estimated_active_secs: None,
             budget_park: wire.budget_park,
+            pending_wakes: wire.pending_wakes,
             subagent_description: wire.subagent_description,
             subagent_cost_usd: wire.subagent_cost_usd,
             subagent_started_at: wire.subagent_started_at,
@@ -920,6 +985,7 @@ impl AgentState {
             context: None,
             estimated_active_secs: None,
             budget_park: None,
+            pending_wakes: Vec::new(),
             subagent_description: None,
             subagent_cost_usd: None,
             subagent_started_at: None,
@@ -1031,8 +1097,23 @@ impl AgentState {
     /// rows to `success`, interruption markers settle falsely-running or waiting
     /// rows to `idle`, and a clean turn parked on background work reads as
     /// `success`, which opens message delivery gates. Budget-aware callers may
-    /// still upgrade a paused projection to `failed`.
+    /// still upgrade a paused projection to `failed`. Resting rows with an
+    /// armed one-shot delivery read as `sleeping`.
     pub fn effective_status(&self) -> AgentStatus {
+        self.sleeping_over(self.rested_status())
+    }
+
+    pub fn sleeping_over(&self, status: AgentStatus) -> AgentStatus {
+        if matches!(status, AgentStatus::Idle | AgentStatus::Success)
+            && !self.pending_wakes.is_empty()
+        {
+            AgentStatus::Sleeping
+        } else {
+            status
+        }
+    }
+
+    fn rested_status(&self) -> AgentStatus {
         let settled = settled_outcome(self.status, self.context.as_ref(), self.last_activity);
         if matches!(
             settled,
@@ -1102,7 +1183,8 @@ impl AgentState {
             AgentStatus::Idle
             | AgentStatus::Success
             | AgentStatus::Failed
-            | AgentStatus::Paused => false,
+            | AgentStatus::Paused
+            | AgentStatus::Sleeping => false,
         }
     }
 

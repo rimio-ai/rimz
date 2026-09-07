@@ -62,6 +62,8 @@ fn fleet_header_is_fixed_and_splits_the_make_up() {
     assert!(buckets.contains("⏸\u{FE0E} 0"), "{buckets}");
     assert!(buckets.contains("✓ 0"), "{buckets}");
     assert!(buckets.contains("⢿ 2"), "{buckets}");
+    let sleeping_bucket = format!("{} 0", Theme::fixed(false).glyph(GlyphRole::StatusSleeping));
+    assert!(buckets.contains(&sleeping_bucket), "{buckets}");
     assert!(buckets.contains("○ 0"), "{buckets}");
     let bucket_positions = [
         buckets.find("? 0").expect("waiting bucket"),
@@ -69,11 +71,12 @@ fn fleet_header_is_fixed_and_splits_the_make_up() {
         buckets.find("⏸\u{FE0E} 0").expect("paused bucket"),
         buckets.find("✓ 0").expect("success bucket"),
         buckets.find("⢿ 2").expect("running bucket"),
+        buckets.find(&sleeping_bucket).expect("sleeping bucket"),
         buckets.find("○ 0").expect("idle bucket"),
     ];
     assert!(
         bucket_positions.windows(2).all(|pair| pair[0] < pair[1]),
-        "make-up order is ? ! ⏸ ✓ | ⢿ ○: {buckets}"
+        "make-up order is waiting failed paused success | running sleeping idle: {buckets}"
     );
     assert!(!buckets.contains('⠁'), "no thinking bucket: {buckets}");
     // The default selection lands on the first row, so its worktree reads as
@@ -262,6 +265,20 @@ fn state_glyphs_keep_their_cockpit_tier() {
         "zero counts rest at the soft stat tier"
     );
     assert_eq!(labels::status_style(&theme, AgentStatus::Idle).fg, None);
+    assert_eq!(
+        glyph_style(theme.glyph(GlyphRole::StatusSleeping)),
+        labels::status_style(&theme, AgentStatus::Sleeping),
+        "sleeping keeps its cool tone even in an empty bucket"
+    );
+    let text = line_texts(&lines).join("\n");
+    assert!(
+        text.find(theme.glyph(GlyphRole::StatusWorking)).unwrap()
+            < text.find(theme.glyph(GlyphRole::StatusSleeping)).unwrap()
+    );
+    assert!(
+        text.find(theme.glyph(GlyphRole::StatusSleeping)).unwrap()
+            < text.find(theme.glyph(GlyphRole::StatusIdle)).unwrap()
+    );
     assert_eq!(
         labels::status_style(&theme, AgentStatus::Success),
         theme.good(Modifier::empty()),

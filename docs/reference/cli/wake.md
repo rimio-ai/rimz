@@ -17,6 +17,8 @@ Exactly one trigger is required when arming: `--in` or a command after `--`. Bar
 
 ## Triggers
 
+Once the caller rests, an armed one-shot wake makes its status `sleeping` rather than `idle` or `success`. The sidebar shows a static cool-toned `☾` and names the wake, for example `wake in 12m` or `wake after: cargo test`. Running, waiting, failed, paused, and delegation to live children take precedence. A normal message can start another turn immediately without canceling the wake. The same projection covers one-shot loop deliveries, but standing subscriptions listed by `wake list` do not make an agent sleep. A pending one-shot wake also withholds `team.idle`; cancellation is reevaluated at the caller's following lifecycle boundary, not by emitting an idle signal when the row is removed.
+
 **`--in <DURATION>`** fires once after a positive delay shorter than 24 hours. The delay resolves in the configured timezone and rounds up to the next scheduler minute. It needs the room's elder tick or the [loop timer](./loop.md#timer).
 
 **A command after `--`** runs through `sh -c` at the project root with stdin closed, in a detached watcher that outlives the arming turn. `--on fail|success|any` filters its final outcome, defaulting to `any`: `fail` covers a non-zero exit or a lost watcher, and `success` a zero exit. A filtered outcome records `skipped` and retires the row without a final message.

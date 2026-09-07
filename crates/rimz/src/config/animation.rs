@@ -35,6 +35,8 @@ pub struct ThemeAnimationsConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub paused: Option<AnimationSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub sleeping: Option<AnimationSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub waiting: Option<AnimationSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failed: Option<AnimationSpec>,
@@ -56,6 +58,7 @@ impl ThemeAnimationsConfig {
             AnimationRole::Idle => self.idle.as_ref(),
             AnimationRole::Success => self.success.as_ref(),
             AnimationRole::Paused => self.paused.as_ref(),
+            AnimationRole::Sleeping => self.sleeping.as_ref(),
             AnimationRole::Waiting => self.waiting.as_ref(),
             AnimationRole::Failed => self.failed.as_ref(),
         }
@@ -73,6 +76,7 @@ pub enum AnimationRole {
     Idle,
     Success,
     Paused,
+    Sleeping,
     Waiting,
     Failed,
 }
@@ -87,6 +91,7 @@ impl AnimationRole {
         Self::Idle,
         Self::Success,
         Self::Paused,
+        Self::Sleeping,
         Self::Waiting,
         Self::Failed,
     ];
@@ -103,6 +108,7 @@ impl AnimationRole {
             Self::Idle => "idle",
             Self::Success => "success",
             Self::Paused => "paused",
+            Self::Sleeping => "sleeping",
             Self::Waiting => "waiting",
             Self::Failed => "failed",
         }

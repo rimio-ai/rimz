@@ -490,6 +490,123 @@ mod tests {
     }
 
     #[test]
+    fn pending_deliveries_filter_scope_and_sort_one_shot_triggers() {
+        use super::super::pending::{pending_wakes_by_session, session_deliveries};
+        use crate::config::TaskTarget;
+        use crate::ids::{AgentKind, AgentSessionId};
+
+        let target = TaskTarget {
+            kind: AgentKind::new_unchecked("claude"),
+            session: AgentSessionId::from("session"),
+            handle: "coder".into(),
+        };
+        let command = TaskEntry {
+            root: PathBuf::from("/repo"),
+            wake: Some(target.clone()),
+            watch: Some("cargo test".into()),
+            ..TaskEntry::default()
+        };
+        let signal = TaskEntry {
+            watch: None,
+            signal: Some("pr.merged".into()),
+            once: Some(true),
+            ..command.clone()
+        };
+        let timer = TaskEntry {
+            watch: None,
+            at: Some("12:00".into()),
+            wake_meta: Some(crate::config::WakeMeta {
+                armed_at: "2026-06-01T10:00:00Z".parse().unwrap(),
+                delay: None,
+            }),
+            ..command.clone()
+        };
+        let catalog = TaskCatalog::from_layers(
+            Tasks(BTreeMap::from([
+                ("z-command".into(), command.clone()),
+                ("a-command".into(), command.clone()),
+                ("a-later-timer".into(), timer.clone()),
+                (
+                    "z-sooner-timer".into(),
+                    TaskEntry {
+                        at: Some("11:00".into()),
+                        ..timer
+                    },
+                ),
+                ("signal".into(), signal.clone()),
+                (
+                    "standing".into(),
+                    TaskEntry {
+                        once: None,
+                        ..signal
+                    },
+                ),
+                (
+                    "other-root".into(),
+                    TaskEntry {
+                        root: PathBuf::from("/elsewhere"),
+                        ..command.clone()
+                    },
+                ),
+                (
+                    "other-session".into(),
+                    TaskEntry {
+                        wake: Some(TaskTarget {
+                            session: AgentSessionId::from("other"),
+                            ..target.clone()
+                        }),
+                        ..command.clone()
+                    },
+                ),
+                (
+                    "no-delivery".into(),
+                    TaskEntry {
+                        wake: None,
+                        agent: Some("claude".into()),
+                        ..command.clone()
+                    },
+                ),
+            ])),
+            Tasks(BTreeMap::from([("machine".into(), command)])),
+            None,
+            Some(Path::new("/repo")),
+        );
+        let session = (target.kind, target.session);
+        assert_eq!(
+            session_deliveries(&catalog, Path::new("/repo"), Some(&session))
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>(),
+            vec![
+                "a-command",
+                "a-later-timer",
+                "signal",
+                "standing",
+                "z-command",
+                "z-sooner-timer"
+            ]
+        );
+        let wakes = pending_wakes_by_session(
+            &catalog,
+            Path::new("/repo"),
+            "2026-06-01T10:00:00Z".parse().unwrap(),
+        );
+        assert_eq!(
+            wakes[&session]
+                .iter()
+                .map(|wake| wake.name.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "z-sooner-timer",
+                "a-later-timer",
+                "a-command",
+                "z-command",
+                "signal"
+            ]
+        );
+        assert_eq!(wakes.len(), 2);
+    }
+
+    #[test]
     fn visible_and_runnable_precedence_diverge_for_untrusted_project() {
         let catalog = TaskCatalog::from_layers(
             Tasks(BTreeMap::from([("same".to_owned(), task("instance"))])),

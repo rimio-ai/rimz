@@ -894,7 +894,10 @@ pub(crate) fn evaluate_when_condition(
         match condition.status {
             AgentStatus::Running => agent.turn_started_at,
             AgentStatus::Waiting => agent.waiting_since,
-            AgentStatus::Idle | AgentStatus::Success | AgentStatus::Failed => None,
+            AgentStatus::Idle
+            | AgentStatus::Success
+            | AgentStatus::Sleeping
+            | AgentStatus::Failed => None,
             AgentStatus::Paused => None,
         }
         .unwrap_or(agent.last_activity)

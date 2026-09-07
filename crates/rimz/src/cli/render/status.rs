@@ -41,6 +41,7 @@ pub(crate) fn agent(status: AgentStatus, phase: TurnPhase) -> anstyle::Style {
         AgentStatus::Running if phase == TurnPhase::Reasoning => role(StateRole::Working),
         AgentStatus::Running | AgentStatus::Success => role(StateRole::Success),
         AgentStatus::Idle => role(StateRole::Neutral),
+        AgentStatus::Sleeping => role(StateRole::Working),
         AgentStatus::Waiting => role(StateRole::Waiting),
         AgentStatus::Paused => role(StateRole::Paused),
         AgentStatus::Failed => role(StateRole::Failed),

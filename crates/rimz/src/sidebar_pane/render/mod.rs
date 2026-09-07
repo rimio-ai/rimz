@@ -393,7 +393,9 @@ fn row_pet_action(row: &SidebarRow) -> PetAction {
         return match (status, agent.phase) {
             (AgentStatus::Running, TurnPhase::Reasoning) => PetAction::Thinking,
             (AgentStatus::Running, _) => PetAction::Running,
-            (AgentStatus::Idle | AgentStatus::Success, _) => PetAction::Idle,
+            (AgentStatus::Idle | AgentStatus::Success | AgentStatus::Sleeping, _) => {
+                PetAction::Idle
+            }
             (AgentStatus::Waiting, _) => PetAction::Ask,
             (AgentStatus::Failed, _) => PetAction::Failed,
             (AgentStatus::Paused, _) => PetAction::Waiting,

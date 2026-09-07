@@ -9,6 +9,7 @@ fn bucket_order_puts_attention_first_and_idle_last() {
     // Scrambled input proves the sort, not the insertion order.
     let agents = [
         AgentStatus::Running,
+        AgentStatus::Sleeping,
         AgentStatus::Success,
         AgentStatus::Idle,
         AgentStatus::Paused,
@@ -35,6 +36,7 @@ fn bucket_order_puts_attention_first_and_idle_last() {
             Some(AgentStatus::Paused),
             Some(AgentStatus::Success),
             Some(AgentStatus::Running),
+            Some(AgentStatus::Sleeping),
             Some(AgentStatus::Idle),
         ],
         "attention leads; parked idle agents sink to the bottom of the group"
@@ -53,6 +55,7 @@ fn bucket_order_puts_attention_first_and_idle_last() {
             AgentStatus::Paused,
             AgentStatus::Success,
             AgentStatus::Running,
+            AgentStatus::Sleeping,
             AgentStatus::Idle,
         ],
         "status tallies stay in cockpit make-up order"

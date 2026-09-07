@@ -11,7 +11,14 @@ use rimz::store::writer::AgentLifecycleIntent;
 #[test]
 fn wake_delay_arms_instance_for_the_calling_agent() {
     let env = Env::new();
-    register_calling_agent(&env);
+    register_calling_agent_with_launch(
+        &env,
+        LaunchParams {
+            team: Some("forge".to_owned()),
+            role: Some("planner".to_owned()),
+            ..LaunchParams::default()
+        },
+    );
     let stdout = wake_ok(&env, &["wake", "--in", "5m"]);
     assert!(stdout.starts_with("armed wake-"), "{stdout}");
     assert!(stdout.contains("in 5m"), "{stdout}");
@@ -29,6 +36,42 @@ fn wake_delay_arms_instance_for_the_calling_agent() {
     assert_eq!(target.kind.as_str(), "claude");
     assert_eq!(target.session.as_str(), "provider-session");
     assert_eq!(target.handle, "@planner#project");
+
+    for signal in [
+        LifecycleSignal::TurnStarted,
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+        },
+    ] {
+        let observation =
+            AgentLifecycleObservation::new(Some(AgentSessionId::from("provider-session")), signal);
+        env.store()
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "rimz-test",
+                agent_kind: AgentKind::new_unchecked("claude"),
+                event_name: "test",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .expect("record the arming turn");
+    }
+    let report: serde_json::Value =
+        serde_json::from_str(&wake_ok(&env, &["agents", "show", "@planner", "--json"]))
+            .expect("agent report");
+    assert_eq!(report["agent"]["status"], "sleeping");
+    assert_eq!(report["agent"]["pending_wakes"][0]["name"], *name);
+    let teams: serde_json::Value =
+        serde_json::from_str(&wake_ok(&env, &["teams", "--json"])).expect("team report");
+    assert_eq!(teams[0]["instances"][0]["state"], "sleeping", "{teams}");
+    wake_ok(&env, &["wake", "cancel", name]);
+    let report: serde_json::Value =
+        serde_json::from_str(&wake_ok(&env, &["agents", "show", "@planner", "--json"]))
+            .expect("agent report after cancellation");
+    assert_eq!(report["agent"]["status"], "success");
+    let teams: serde_json::Value = serde_json::from_str(&wake_ok(&env, &["teams", "--json"]))
+        .expect("team report after cancellation");
+    assert_eq!(teams[0]["instances"][0]["state"], "done");
 }
 
 #[test]
@@ -452,6 +495,14 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
             }
         );
         assert_eq!(notice.gate, DeliveryGate::Any);
+        let report: serde_json::Value =
+            serde_json::from_str(&wake_ok(&env, &["agents", "show", "@planner", "--json"]))
+                .unwrap();
+        assert_eq!(report["agent"]["status"], "sleeping");
+        assert_eq!(
+            report["agent"]["pending_wakes"][0]["trigger"]["kind"],
+            "command"
+        );
         let pid: u32 = std::fs::read_to_string(&pid_path).unwrap().parse().unwrap();
         let observe_until = std::time::Instant::now() + std::time::Duration::from_millis(1200);
         while std::time::Instant::now() < observe_until {
@@ -490,6 +541,11 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
                 if code.to_string() == exit
         ));
         wait_for_no_wake_instances(&env);
+        let report: serde_json::Value =
+            serde_json::from_str(&wake_ok(&env, &["agents", "show", "@planner", "--json"]))
+                .unwrap();
+        assert_eq!(report["agent"]["status"], "idle");
+        assert_eq!(report["agent"]["pending_wakes"], serde_json::json!([]));
         let messages = wait_for_wake_messages(&env, if delivers_exit { 2 } else { 1 });
         assert_eq!(messages.len(), if delivers_exit { 2 } else { 1 });
         assert_eq!(
@@ -841,6 +897,10 @@ fn wait_for_wake_records(
 }
 
 fn register_calling_agent(env: &Env) {
+    register_calling_agent_with_launch(env, LaunchParams::default());
+}
+
+fn register_calling_agent_with_launch(env: &Env, launch: LaunchParams) {
     let store = env.store();
     let workspace =
         rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
@@ -854,7 +914,7 @@ fn register_calling_agent(env: &Env) {
                 launch_id: Some(AgentSessionId::from("launch-session")),
                 agent_name: "planner".to_owned(),
                 agent_name_explicit: true,
-                launch: LaunchParams::default(),
+                launch,
                 state: AgentLaunchState::Bound,
                 run_id: None,
                 pane_id: None,

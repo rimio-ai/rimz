@@ -177,7 +177,7 @@ A signal is a name, a JSON object payload, a source, and, for watched commands, 
 | --- | --- |
 | `team.waiting` | the member entered `Waiting` from a non-waiting prior status |
 | `team.failed` | the member's turn ended errored |
-| `team.idle` | the live cohort is non-empty, every member is at rest (`Idle` or `Success`), and no member has a queued message; emitted only on the false-to-true edge, computed by overlaying `prior_status` on the member for the prior view |
+| `team.idle` | the live cohort is non-empty, every member is at rest (`Idle` or `Success`), and no live member has a queued message or pending one-shot wake; emitted only on the false-to-true edge, computed by overlaying `prior_status` on the member for the prior view |
 | `team.ended` | a terminal event for the member and no other live member remains |
 
 The payload carries `team`, `instance` (`team#channel`), `member` (the qualified handle that tripped it), and `members` with each handle and status. Membership is whatever `team_cohorts` counts as live for that `team#channel`, and a provider-native subagent's transition derives nothing. **The gap to know**: a member the reaper stops (a pane closed with no lifecycle hook, [`store/writer/reap.rs`](../../../crates/rimz/src/store/writer/reap.rs)) passes through no hook, so it derives neither `agent.ended` nor `team.ended`.
@@ -212,6 +212,8 @@ A watched command's signal carries a `WatchOutcome`: a `WatchVerdict` plus its e
 `WatchOutcome` travels only the `rimz loop run` argv and the process memory around it, so reshaping it is not a durable-format change; the verdict becomes durable one level up, in the run record ([below](#history-strikes-and-arming)).
 
 ## Wakes
+
+An armed instance-sourced one-shot delivery row projects its resting target (`idle` or `success`) to `sleeping` in the sidebar and `rimz agents`; `rimz teams` gains a `sleeping` rung below `working` and above `done`. Projection matches the workspace root and target kind/session and covers timers, watched commands, and one-shot or deadline signal deliveries, not standing subscriptions or recurring clocks. Working, waiting, failed, paused, and live-child delegating states take precedence. Any live member's pending one-shot wake withholds `team.idle`, regardless of its displayed status. Reevaluation remains lifecycle-only: cancellation is self-only and the caller's following turn boundary reevaluates the cohort; row removal itself emits no immediate idle signal. If no lifecycle event follows a removal, evaluation waits for the next member lifecycle event. `agent.idle` remains the ordinary turn-boundary signal.
 
 `rimz wake` accepts only a positive delay shorter than 24 hours or a command after `--`, and resolves the live calling agent through `@me`. A user shell cannot arm or cancel. Both this CLI and `loop add --wake` call `schedule::arm::arm_delivery`; neither command imports the other.
 

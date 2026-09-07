@@ -186,7 +186,7 @@ clean end with background work still in flight ──► parked (rollup running;
 - Any turn boundary rests the phase. `turn_ended` and `subagent_stopped` drop it, and the next prompt re-arms it. A clean end with background work still in flight parks it instead.
 - Subagents own separate `agent_id`s, so a child observation never mutates its parent's phase. Providers with bracket-only identity fold `subagent_started` and `subagent_stopped` and keep child per-tool work on its heartbeat; Codex hooks carry distinct child identity on prompt, tool, permission, and compaction progress, so those signals fold onto the child row with rollout enrichment.
 
-A `parked` row displays `success` immediately and retains its phase solely to paint `⋯ bg`, while silent `reasoning` and `acting` rows escalate as stalled. The phase vocabulary is painted once, in [the interface legend](../../interface/sidebar.md#reading-the-glyphs).
+A `parked` row settles to `success` immediately, or `sleeping` with a pending one-shot wake, and retains its phase solely to paint `⋯ bg`, while silent `reasoning` and `acting` rows escalate as stalled. The phase vocabulary is painted once, in [the interface legend](../../interface/sidebar.md#reading-the-glyphs).
 
 ### The compaction bracket
 
@@ -238,9 +238,15 @@ Rung by rung:
 9. **Stall** is the backstop for any other `running` agent silent past the configurable window. A kind with a spent, unreset budget window reads `paused`. Everything else escalates to the attention `!` ([Liveness and presence](#liveness-and-presence)).
 10. **The bottom rung** is `effective_status`, which is where the hookless plan-approval projection lands: a `running` Codex row whose completed planning turn rests on a rollout `Plan` item reads as `waiting`. The normal `Stop` hook records the durable plan ask, so this marker is the missed-hook backstop that keeps the row and the message-delivery gate safe without inventing an ask record ([adapter_codex.md](./adapter_codex.md#plan-approval-marker)).
 
+After the ladder settles, an `idle` or `success` result with `pending_wakes` becomes `sleeping`; `effective_status` applies the same rest-only projection. Enrichment reads these wakes from instance-sourced, one-shot delivery rows in the loop catalog, matching the workspace root and target kind/session, without writing a store event. Timers, watched commands, and one-shot or deadline signal deliveries count; standing subscriptions and recurring clocks do not. `running`, `waiting`, `failed`, and `paused` remain unchanged, and a parent with a live child remains `running`/delegating. A parked clean turn can therefore display `sleeping` while retaining its `parked` phase.
+
+The read-side projection requires a parsed trigger. Self-wake timers anchor their due time at `wake_meta.armed_at`; human one-shot `loop add --wake --at HH:MM` rows have no arm timestamp, so their due time is the next occurrence after the snapshot clock in the configured timezone. Recurring clocks do not count even when their row has a deadline.
+
+`Sleeping` is neither attention nor actionable, but `needs_a_look` is true, preserving the completed turn's unread episode. Its score weight is 150, below `running` (200) and above `idle` (100); cockpit counts read `waiting → failed → paused → success → running → sleeping → idle`. `Done` and `Any` delivery gates open for it, so a message can start a turn without consuming the armed wake; `Resume` does not open for it. Reply waits treat it as completed. `--when` still reads raw lifecycle status and does not accept `sleeping`; `agent.idle` remains a turn-boundary event.
+
 Each rung reads enrichment plus liveness, and each leaves the rollup holding the true lifecycle status: Claude transcript-death can leave the rollup `running` while Codex Stop-over-rollout-error records the rollup `failed`, and projection refines either display to `paused`. The [`displayed_status_precedence_ladder_holds`](../../../crates/rimz/src/store/snapshot/view/tests/status/stall.rs) test stacks the causes against each other, so a reordering fails the suite even when every single-cause test still passes.
 
-The phase and head paints ride over this base: a `running` agent in `reasoning` renders the thinking head, and an open compaction bracket pulses over any base status. A projection to a non-running status drops the phase except for `success` with `parked`, the one settled shape that keeps pending background work visible.
+The phase and head paints ride over this base: a `running` agent in `reasoning` renders the thinking head, and an open compaction bracket pulses over any base status. A projection to a non-running status drops the phase except for `success` or `sleeping` with `parked`, the settled shapes that keep pending background work visible.
 
 ## The instance lifecycle
 

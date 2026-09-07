@@ -31,7 +31,7 @@ use super::{pin_right, trim_spans_to_width};
 /// `✓` green — at any age). The
 /// right cluster is the
 /// live-capacity tail — working `⢿` (every running agent; the thinking head
-/// is a per-row animation head, not a bucket), then a free `idle` `○`. Every
+/// is a per-row animation head, not a bucket), sleeping, then a free `idle` `○`. Every
 /// bucket renders; colored statuses use their semantic tone, idle rests at the
 /// soft stat gray, and every zero count sits at the same soft gray beside its
 /// glyph.
@@ -65,6 +65,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
         (AgentStatus::Paused, BucketCluster::Left),
         (AgentStatus::Success, BucketCluster::Left),
         (AgentStatus::Running, BucketCluster::Right),
+        (AgentStatus::Sleeping, BucketCluster::Right),
         (AgentStatus::Idle, BucketCluster::Right),
     ];
     let total = buckets
@@ -83,7 +84,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     // gathers the rows worth a glance: `waiting` `?` and `failed` `!` (unread
     // rows blink; read rows rest on their fixed status tone), parked
     // `paused` `⏸`, then success. The right cluster is the live-capacity tail:
-    // working, then idle. Every bucket shows its count.
+    // working, sleeping, then idle. Every bucket shows its count.
     let mut left = Cluster::new(theme, status_filter);
     let mut right = Cluster::new(theme, status_filter);
     for (status, target) in buckets {
@@ -263,7 +264,10 @@ fn bucket_tone(theme: &Theme, status: AgentStatus) -> (Style, Option<Color>) {
             let color = theme.animations.status(status).color();
             (theme.style(color, Modifier::empty()), Some(color))
         }
-        AgentStatus::Paused | AgentStatus::Success | AgentStatus::Running => (
+        AgentStatus::Paused
+        | AgentStatus::Success
+        | AgentStatus::Running
+        | AgentStatus::Sleeping => (
             status_rest_style(theme, status),
             status_chip_color(theme, status),
         ),

@@ -477,6 +477,10 @@ fn help_body_rows(
             Some(status_entry(theme, AgentStatus::Idle, "o", "idle")),
         ),
         (
+            status_entry(theme, AgentStatus::Sleeping, "z", "sleeping"),
+            None,
+        ),
+        (
             key_entry(
                 theme,
                 Some(key_icon(theme, GlyphRole::KeysUnread)),

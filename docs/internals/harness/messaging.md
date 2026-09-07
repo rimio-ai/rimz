@@ -172,7 +172,7 @@ A genuine no-match, after the durable fallback, writes a terminal `message.error
 | 4 | oldest deliverable record for this card and lane | `BehindFifo` | the blocking record settling |
 | 5 | the receiver card exists in the snapshot | `ReceiverGone` | the agent reappearing, or GC archiving the record |
 | 6 | not inside the compaction window | `Compacting` | `CompactionEnded`, or the 90 s window expiring |
-| 7 | the gate is open for the effective status | `GateClosed` | the agent reaching `Idle`/`Success`, plus `Failed` under `--on any` |
+| 7 | the gate is open for the effective status | `GateClosed` | the agent reaching `Idle`/`Success`/`Sleeping`, plus `Failed` under `--on any` |
 | 8 | a `Resume` gate's park is genuinely recoverable | `ResumeUnrecovered` | the budget window resetting or the overload marker clearing |
 | 9 | no open blocking prompt reserving input | `AskWaiting` | answering the ask, or `--force` |
 | 10 | a live pane can receive a paste | `NoPane` | the pane reappearing; affinity is cleared so any pane will do |
@@ -187,7 +187,7 @@ Two clarifications the table cannot carry:
 
 **The compaction window at check 6 closes every gate, including `Resume`.** A receiver carrying a `compacting_since` marker inside 90 seconds takes nothing at all. The window expires by design: a lost compaction-end signal degrades to a delay rather than a wedged queue. This bounded window governs the delivery gate only; stale-`Sent` reconciliation uses the full compaction bracket.
 
-`DeliveryGate::Resume` has no flag. Auto-continue stamps it on its own nudge, and check 8 re-verifies at delivery time that the park is still resumable. Ordinary `Done` and `Any` messages stay parked while an agent is paused, which is what keeps a rate-limited agent from receiving a pile of user text the moment it wakes.
+`DeliveryGate::Resume` has no flag. Auto-continue stamps it on its own nudge, and check 8 re-verifies at delivery time that the park is still resumable. Ordinary `Done` and `Any` messages stay parked while an agent is paused, which is what keeps a rate-limited agent from receiving a pile of user text the moment it wakes. Both open for `Sleeping`: a resting agent with an armed one-shot delivery can receive a message now without consuming that wake. `Resume` does not open for `Sleeping`, and `--when` remains raw-status only.
 
 Records that are scheduled, condition-blocked, or `Resume`-gated are filtered out of the FIFO scan, so they never block a later record that could deliver now. Resume nudges additionally live in their own control lane, so a wakeup does not queue behind user text that cannot deliver until after the wakeup.
 
@@ -354,7 +354,7 @@ Dispatch captures one frame-aligned event-log base before enqueue and copies it 
 Each leg is a two-phase machine:
 
 - **Delivery.** Waits for `Delivered`, stamped by the prompt's own `TurnStarted`. A steer into an already-running turn opens the next phase from `Sent + Running` instead, because the interrupted turn emits no second `TurnStarted`: the remainder of that turn *is* the reply.
-- **Reply.** `Idle` or `Success` completes the leg; `Failed`, a delivery failure, a vanished card, or a skipped Waiting input fails it while the other legs keep gathering. `Waiting` and `Paused` stay inside the reply. A changed `turn_started_at` while the card is still `Running` proves the reply turn ended and another began between polls.
+- **Reply.** `Idle`, `Success`, or `Sleeping` completes the leg; `Failed`, a delivery failure, a vanished card, or a skipped Waiting input fails it while the other legs keep gathering. `Waiting` and `Paused` stay inside the reply. A changed `turn_started_at` while the card is still `Running` proves the reply turn ended and another began between polls.
 
 One 500 ms poll reads the message list and cached snapshot once per tick and advances every unfinished leg. On entry and every tenth tick it also folds agent-context sidecars and re-checks for dependency cycles.
 
