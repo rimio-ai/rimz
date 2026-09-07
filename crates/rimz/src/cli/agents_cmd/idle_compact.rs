@@ -66,7 +66,7 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
         || agent.is_awaiting_input()
         || !matches!(
             agent.effective_status(),
-            AgentStatus::Idle | AgentStatus::Success
+            AgentStatus::Idle | AgentStatus::Success | AgentStatus::Sleeping
         )
         || idle_secs < idle_after.as_secs().min(i64::MAX as u64) as i64
     {
