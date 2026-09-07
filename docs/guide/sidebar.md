@@ -118,7 +118,7 @@ Every card wears one state, and seven cover the life of a session:
 | `!` | failed | the turn errored, died on a provider API error, or a running agent went silent past the stall window | **yes** |
 | `⏸` | paused | stopped mid-turn on a provider rate limit or overload | when it recovers |
 | `✓` | done | the turn finished cleanly and holds a result | a look, when convenient |
-| `☾` | sleeping | resting until an armed one-shot wake fires; the description names the wake | a look, when convenient |
+| `☾` | sleeping | resting until an armed one-shot wake fires; the description names the wake | nothing yet |
 
 The full glyph vocabulary, including the transient heads that ride over a running card (thinking before the first file edit, compacting, waiting on subagents, parked on background work), is the [interface legend](../interface/sidebar.md#reading-the-glyphs).
 
@@ -166,7 +166,7 @@ Glance, jump, answer: that loop is the product. Desktop, bell, and command notif
 
 ### The unread inbox surfaces in place
 
-A card turns *unread* the moment it enters `waiting`, `failed`, `paused`, `done`, or `sleeping`, and stays unread until you focus its pane or mark it read, even after the agent recovers and moves on. The wash and blink mark it, and the jump key walks unread rows oldest-actionable-first; sleeping preserves the result's unread cue without sending a notification. The card keeps its place in the time and status order while the inbox gets you to it.
+A card turns *unread* the moment it enters `waiting`, `failed`, `paused`, or `done`, and stays unread until you focus its pane or mark it read, even after the agent recovers and moves on. The wash and blink mark it, and the jump key walks unread rows oldest-actionable-first. Sleeping opens no unread mark and sends no notification; the mark and any configured success notification arrive when the wake cycle finishes at done. An earlier unread result stays unread across the sleep. The card keeps its place in the time and status order while the inbox gets you to it.
 
 ## How the column is ordered
 

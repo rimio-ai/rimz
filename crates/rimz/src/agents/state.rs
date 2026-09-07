@@ -233,7 +233,7 @@ impl AgentStatus {
     /// Rows that deserve one human look before returning to the read queue:
     /// attention-class states plus a finished result.
     pub fn needs_a_look(self) -> bool {
-        self.is_attention() || matches!(self, Self::Success | Self::Sleeping)
+        self.is_attention() || matches!(self, Self::Success)
     }
 }
 

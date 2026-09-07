@@ -110,7 +110,7 @@ fn effective_status_projects_pending_wake_to_sleeping() {
     assert!(!parked.holds_open_turn());
     assert!(!AgentStatus::Sleeping.is_attention());
     assert!(!AgentStatus::Sleeping.is_actionable());
-    assert!(AgentStatus::Sleeping.needs_a_look());
+    assert!(!AgentStatus::Sleeping.needs_a_look());
 }
 
 #[test]
