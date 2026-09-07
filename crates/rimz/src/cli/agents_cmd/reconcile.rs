@@ -23,10 +23,6 @@ pub(super) fn reconcile_cohort_launch(
     if !path.exists() {
         return Ok(Reconciled::Continue);
     }
-    let Some(marker) = rimz::worktree::read_marker_for_worktree(&path)? else {
-        return Ok(Reconciled::Continue);
-    };
-
     let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
     let subject = cohort_subject(spec_display, team);
     match rimz::harness::resume::inspect_cohort_relaunch(&projection.agents, &path, cells, team) {
@@ -53,6 +49,9 @@ pub(super) fn reconcile_cohort_launch(
             Ok(Reconciled::Done)
         }
         rimz::harness::resume::CohortRelaunchState::Closed => {
+            let Some(marker) = rimz::worktree::read_marker_for_worktree(&path)? else {
+                return Ok(Reconciled::Continue);
+            };
             if fresh {
                 return launch_fresh(name, &subject);
             }

@@ -58,6 +58,8 @@ A launch that names its worktree reuses an existing one; `rimz worktree new` ref
 
 For an unmarked named checkout, agent and team launch entry points validate that it is a linked worktree of the launch repository, then ask for terminal confirmation (default no). Acceptance selects its cwd and channel without writing an ownership marker or seeding files; removal and cleanup remain managed-only. Non-terminal launches refuse with a terminal-confirmation hint. PR launches do not take this path because their reuse requires recorded PR provenance.
 
+A live cohort in an unmarked tree is focused before entry confirmation, just like a managed cohort. Closed cohorts in unmarked trees remain on the entry-confirmation path, never the remove/recreate path. Checkout validation canonicalizes paths for Git identity checks but preserves the configured path spelling for launch records, reconciliation, and resume filtering.
+
 `resolve_launch_checkout` is the seam the agent launcher enters. It returns the cwd every pane in the layout gets, plus the worktree name that becomes the channel, and it fails fast with `LaunchWorktreeRequiresRepo` when neither the current path nor the room root is a Git repository. Before that seam, the CLI compares the current repository root with the room pin: a mismatch is printed with both paths and requires a default-no confirmation, while non-terminal stdin refuses with an explicit `--root` hint. Cohort relaunch reconciliation uses the same selected repository root.
 
 ### From a pull request

@@ -627,7 +627,7 @@ fn execute_attempt(
         launch_id: Some(&launch_identity.agent_id),
         cwd: &prepared.launch.cwd,
         prompt,
-        cleanup_worktree: prepared.launch.is_managed_worktree() && retries == 0,
+        cleanup_worktree: prepared.launch.owns_checkout_lifecycle() && retries == 0,
         permission_args: &agent_cell.args,
         system_prompt_file: agent_cell.system_prompt_file.as_deref(),
         append_system_prompt_files: &agent_cell.append_system_prompt_files,
@@ -881,7 +881,7 @@ pub(in crate::cli) fn run_supervised(
         }
         if !record.status.is_retryable() || attempt == retries {
             if retries > 0
-                && prepared.launch.is_managed_worktree()
+                && prepared.launch.owns_checkout_lifecycle()
                 && let Err(err) =
                     crate::cli::worktree::cleanup_worktree(&prepared.launch.cwd, globals, false)
             {
