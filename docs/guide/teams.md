@@ -89,7 +89,7 @@ Follow the receipt's `Check` command to see each cohort's member status, activit
 Use `Reach` to message the leader, or the receipt's `Wait` command to be woken on the cohort's next idle transition instead of polling. For an agent waiting on this cohort:
 
 ```sh
-rimz loop add --wake @me --signal team.idle --match instance=forge#feat-query --once
+rimz loop add team-idle --wake @me --signal team.idle --match instance=forge#feat-query --once
 ```
 
 This arms a future notification, not a startup or completion barrier. Signals are transition-only and never replay: if the team was already idle before you armed the subscription, that event is missed. Check current state too, and do not treat idle as proof that the work is complete. The [loop reference](../reference/cli/loop.md#signals) covers signal subscriptions and delivery.

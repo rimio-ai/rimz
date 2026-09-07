@@ -809,7 +809,7 @@ fn write_launch_hints(
     if let (Some(team), Some(channel)) = (team, channel) {
         writeln!(
             w,
-            "Wait:  rimz loop add --wake @me --signal team.idle --match instance={team}#{channel} --once"
+            "Wait:  rimz loop add team-idle --wake @me --signal team.idle --match instance={team}#{channel} --once"
         )?;
     }
     Ok(())
@@ -1220,8 +1220,13 @@ mod tests {
         );
         assert!(output.contains("Reach: rimz message @planner#feat-x '<text>'"));
         assert!(
-            output.contains("Wait:  rimz loop add --wake @me --signal team.idle --match instance=forge#feat-x --once")
+            output.contains("Wait:  rimz loop add team-idle --wake @me --signal team.idle --match instance=forge#feat-x --once")
         );
+        let wait = output
+            .lines()
+            .find_map(|line| line.strip_prefix("Wait:  "))
+            .unwrap();
+        <crate::cli::Cli as clap::Parser>::try_parse_from(shlex::split(wait).unwrap()).unwrap();
         assert!(!output.contains("starting"));
 
         let mut output = anstream::StripStream::new(Vec::new());
