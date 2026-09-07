@@ -373,7 +373,7 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
     let instances = crate::harness::schedule::instances::load_from(&state.root);
     assert!(instances.0.contains_key(poll_name));
     assert!(!instances.0.contains_key(watch_name));
-    crate::harness::schedule::instances::remove(&state.root, poll_name)
+    crate::harness::schedule::instances::remove(&state.root, poll_name, None)
         .expect("remove poll fixture");
 }
 

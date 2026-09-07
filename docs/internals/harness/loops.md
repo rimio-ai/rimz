@@ -229,6 +229,8 @@ After a committed lifecycle `Registered`, the hook reads strict effective truste
 
 Names are `team-<team>-<channel>-<role>-<signal slug>`, lowercased with dots and characters outside `[a-z0-9_-]` replaced by `-`; a role's repeated or colliding signal slugs get a declaration-order `-<n>` suffix. A slug collision between lanes in one room is accepted. Repeated registration deduplicates; an already-subscribed manual row is not relabeled as a team row. Signals are never replayed.
 
+Automatic team arming never replaces machine or project configuration. A generated name that conflicts with a configured task is reported in hook diagnostics; rename that task before rearming the member.
+
 `schedule::retire_session` removes all instance rows pinned to a kind/session, including paused and disabled rows, stops their watcher groups, and clears arming/strike overlays, attempting all cleanup and aggregating failures. Lifecycle `Ended`/`Lost` calls it after the durable event and before event signals; explicit agent-tree stop calls it after each successful node stop. `delivery_target_alive` rejects `ended_at.is_some()`, and gc remains the backstop. Hook config, arming, and retirement failures are warning-logged, never printed to hook stdout.
 
 ## Watched commands

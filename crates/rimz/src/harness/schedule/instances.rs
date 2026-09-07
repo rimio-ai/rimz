@@ -52,8 +52,8 @@ pub(super) fn insert(state_root: &Path, name: &str, entry: &TaskEntry) -> Result
     insert_into(state_root, name, entry)
 }
 
-pub(super) fn remove(state_root: &Path, name: &str) -> Result<bool> {
-    remove_from(state_root, name)
+pub(super) fn remove(state_root: &Path, name: &str, expected: Option<&TaskEntry>) -> Result<bool> {
+    remove_from(state_root, name, expected)
 }
 
 pub(super) fn rename(state_root: &Path, old: &str, new: &str) -> Result<bool> {
@@ -144,8 +144,11 @@ fn insert_into(state_root: &Path, name: &str, entry: &TaskEntry) -> Result<()> {
     })
 }
 
-fn remove_from(state_root: &Path, name: &str) -> Result<bool> {
+fn remove_from(state_root: &Path, name: &str, expected: Option<&TaskEntry>) -> Result<bool> {
     mutate(state_root, |tasks| {
+        if expected.is_some_and(|entry| tasks.get(name) != Some(entry)) {
+            return Ok((false, false));
+        }
         let removed = tasks.remove(name).is_some();
         Ok((removed, removed))
     })
@@ -305,9 +308,9 @@ mod tests {
             Some(Some("wake"))
         );
 
-        assert!(remove_from(dir.path(), "wake").expect("remove"));
+        assert!(remove_from(dir.path(), "wake", None).expect("remove"));
         assert!(load_from(dir.path()).0.is_empty());
-        assert!(!remove_from(dir.path(), "wake").expect("remove absent"));
+        assert!(!remove_from(dir.path(), "wake", None).expect("remove absent"));
     }
 
     #[test]

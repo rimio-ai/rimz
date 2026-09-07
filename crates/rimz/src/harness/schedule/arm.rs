@@ -112,8 +112,8 @@ pub enum ArmFailure {
     Watcher(#[source] std::io::Error),
     #[error("{0}")]
     Scope(#[from] DeliveryScopeFailure),
-    #[error("loop task `{0}` is project-owned; choose another name")]
-    ProjectOwned(String),
+    #[error("loop task `{0}` is configuration-owned; rename it or choose another delivery name")]
+    ConfigOwned(String),
 }
 
 pub fn arm_delivery(
@@ -128,12 +128,12 @@ pub fn arm_delivery(
         DeliveryName::Named(name) => Some(name.0.as_str()),
     };
     if let Some(name) = name
-        && catalog
-            .visible()
-            .get(name)
-            .is_some_and(|task| matches!(task.source(), super::catalog::TaskSource::Project { .. }))
+        && catalog.visible().get(name).is_some_and(|task| {
+            matches!(task.source(), super::catalog::TaskSource::Project { .. })
+                || (entry.team.is_some() && task.source() == super::catalog::TaskSource::Config)
+        })
     {
-        return Err(ArmFailure::ProjectOwned(name.to_owned()));
+        return Err(ArmFailure::ConfigOwned(name.to_owned()));
     }
     let paths = crate::disk::paths::StatePaths::for_workspace(workspace.workspace_id.clone())
         .map_err(|err| ArmFailure::State(Box::new(err)))?;
@@ -148,8 +148,10 @@ pub fn arm_delivery(
     if duplicate {
         return Ok(ArmOutcome::AlreadySubscribed { name });
     }
-    super::config_edit::remove(super::config_edit::TaskStore::Machine, &name)
-        .map_err(|err| ArmFailure::State(err.into()))?;
+    if entry.team.is_none() {
+        super::config_edit::remove(super::config_edit::TaskStore::Machine, &name)
+            .map_err(|err| ArmFailure::State(err.into()))?;
+    }
     if entry.watch.is_some() {
         let spawn = || -> std::io::Result<()> {
             std::fs::create_dir_all(&paths.wakes_dir)?;
@@ -173,7 +175,7 @@ pub fn arm_delivery(
             Ok(())
         };
         if let Err(error) = spawn() {
-            super::instances::remove(&paths.root, &name)
+            super::instances::remove(&paths.root, &name, Some(&entry))
                 .map_err(|err| ArmFailure::State(Box::new(err)))?;
             return Err(ArmFailure::Watcher(error));
         }
