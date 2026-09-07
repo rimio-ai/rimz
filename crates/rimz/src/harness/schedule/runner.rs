@@ -5,7 +5,6 @@
 //! supervised-run or message effect and returns its typed result.
 
 mod prompt;
-mod status;
 
 use std::cell::OnceCell;
 use std::fs::File;
@@ -89,11 +88,19 @@ pub struct PreparedSpawn {
     pub stream: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeliveryIntent {
+    SelfWake,
+    Wake,
+    Signal,
+}
+
 #[derive(Clone, Debug)]
 pub struct PreparedDelivery {
     pub root: PathBuf,
     pub target: TaskTarget,
     pub prompt: String,
+    pub intent: DeliveryIntent,
 }
 
 #[derive(Clone, Debug)]
@@ -207,11 +214,7 @@ impl FireContext {
             TaskAction::Deliver(target) => {
                 let workspace_id = WorkspaceResolver::persisted_workspace_id(&root)?;
                 let runtime = RuntimePaths::for_workspace(workspace_id)?;
-                let mut scope = FireScope::new(
-                    crate::ids::AgentKind::new_unchecked(target.kind.clone()),
-                    runtime,
-                    None,
-                );
+                let mut scope = FireScope::new(target.kind.clone(), runtime, None);
                 scope.managed_launch = unresolved_managed_state(entry, &target.kind);
                 scope
             }
@@ -225,10 +228,6 @@ impl FireContext {
     }
 }
 
-struct ExpiredWake {
-    view: Option<status::ForgeView>,
-}
-
 /// One loop fire from ordered gates through exactly one history transition.
 pub struct TaskFire<'a> {
     name: String,
@@ -237,7 +236,6 @@ pub struct TaskFire<'a> {
     catalog: &'a TaskCatalog,
     action: Option<TaskAction>,
     ephemeral: bool,
-    expired: Option<ExpiredWake>,
     context: Option<FireContext>,
     mode: LoopRunMode,
     keep: bool,
@@ -280,7 +278,6 @@ impl<'a> TaskFire<'a> {
             catalog,
             action: Some(action),
             ephemeral,
-            expired: None,
             context: None,
             mode,
             keep,
@@ -300,60 +297,6 @@ impl<'a> TaskFire<'a> {
         self.check_trip.take()
     }
 
-    pub fn prepare_expired(&mut self) -> Result<Option<TaskFirePlan>> {
-        if self.task.source() != catalog::TaskSource::Instance
-            || self.entry.signal.is_none()
-            || self.entry.wake_meta.is_none()
-        {
-            return Ok(None);
-        }
-        let Some(entry) = super::instances::claim_expired(
-            &StatePaths::for_workspace(WorkspaceId::from_project_root(
-                &self.entry.resolved_root(),
-            ))?
-            .root,
-            &self.name,
-            &self.entry,
-            Timestamp::now(),
-        )?
-        else {
-            return Ok(None);
-        };
-        self.entry = entry;
-        let runtime = RuntimePaths::for_workspace(WorkspaceResolver::persisted_workspace_id(
-            self.entry.resolved_root(),
-        )?)?;
-        let parsed = self.task.trigger().as_ref().map_err(Clone::clone)?;
-        let view = match status::resolve(&parsed.trigger, &runtime) {
-            status::WaitStatus::Answered { label, signal } => {
-                return Ok(Some(TaskFirePlan::Done(self.record_terminal_with(
-                    LoopRunResult::Expired,
-                    LoopRunPresentation::default(),
-                    TaskFireNotice::Gate {
-                        reason: format!("answered · {label}"),
-                    },
-                    None,
-                    |record| record.signal = Some(signal),
-                ))));
-            }
-            status::WaitStatus::Open(view) => view,
-        };
-        self.expired = Some(ExpiredWake { view });
-        let action = self
-            .action
-            .take()
-            .context("expiry action already prepared")?;
-        self.context = Some(FireContext::resolve(
-            &self.entry,
-            action.clone(),
-            &self.config,
-        )?);
-        let TaskAction::Deliver(target) = action else {
-            anyhow::bail!("signal wake has no delivery target");
-        };
-        self.prepare_delivery(target, None).map(Some)
-    }
-
     pub fn prepare(&mut self) -> Result<TaskFirePlan> {
         if let Some(done) = self.prepare_scope_gates()? {
             return Ok(TaskFirePlan::Done(done));
@@ -362,10 +305,8 @@ impl<'a> TaskFire<'a> {
             return Ok(TaskFirePlan::Done(done));
         }
 
-        if deadline_expired_at(&self.entry, self.now)
-            && !(self.entry.wake_meta.is_some() && self.entry.signal.is_some())
-        {
-            if self.mode == LoopRunMode::Scheduled && self.expired.is_none() {
+        if deadline_expired_at(&self.entry, self.now) {
+            if self.mode == LoopRunMode::Scheduled {
                 self.remove_schedule()?;
             }
             return Ok(TaskFirePlan::Done(self.record_terminal(
@@ -485,11 +426,7 @@ impl<'a> TaskFire<'a> {
             (PendingEffect::Deliver { target, check }, TaskFireEffect::Delivered(message_id)) => {
                 let handle = target.handle;
                 Ok(self.record_terminal_with(
-                    if self.expired.is_some() {
-                        LoopRunResult::Expired
-                    } else {
-                        LoopRunResult::Delivered
-                    },
+                    LoopRunResult::Delivered,
                     LoopRunPresentation::default(),
                     TaskFireNotice::None,
                     None,
@@ -501,7 +438,7 @@ impl<'a> TaskFire<'a> {
                 ))
             }
             (PendingEffect::Deliver { target, check }, TaskFireEffect::TargetGone) => {
-                if self.mode == LoopRunMode::Scheduled && self.expired.is_none() {
+                if self.mode == LoopRunMode::Scheduled {
                     self.remove_schedule()?;
                 }
                 let handle = target.handle;
@@ -549,6 +486,20 @@ impl<'a> TaskFire<'a> {
                 .as_ref()
                 .and_then(|signal| signal.watch.as_ref()),
         );
+        if let Some((command, watch)) = supplied_watch
+            && !watch.verdict.is_terminal()
+        {
+            return Ok(PreparedCheck::fire(Some(FiredCheck {
+                command: command.clone(),
+                outcome: CheckOutcome::new(false, false, watch.output.clone(), None),
+                record: CheckRecord {
+                    code: None,
+                    timed_out: false,
+                    output: watch.output.clone(),
+                    output_path: watch.output_path.clone(),
+                },
+            })));
+        }
         let (command, outcome, duration_ms) = if let Some((command, outcome)) = supplied_watch {
             (
                 command.clone(),
@@ -710,7 +661,7 @@ impl<'a> TaskFire<'a> {
     ) -> Result<TaskFirePlan> {
         let check = fired_check.as_ref().map(|check| check.record.clone());
         if !catalog::delivery_target_alive(&self.entry, &target)? {
-            if self.mode == LoopRunMode::Scheduled && self.expired.is_none() {
+            if self.mode == LoopRunMode::Scheduled {
                 self.remove_schedule()?;
             }
             let handle = target.handle;
@@ -728,29 +679,7 @@ impl<'a> TaskFire<'a> {
             )));
         }
         let prompt = self.resolve_effect_prompt(fired_check.as_ref())?;
-        if self.mode == LoopRunMode::Scheduled
-            && self.task.source() == catalog::TaskSource::Instance
-            && self.entry.wake_meta.is_some()
-            && self.entry.signal.is_some()
-        {
-            if self.expired.is_none()
-                && !super::instances::remove_signal_wake(
-                    &StatePaths::for_workspace(WorkspaceId::from_project_root(
-                        &self.entry.resolved_root(),
-                    ))?
-                    .root,
-                    &self.name,
-                    &self.entry,
-                )?
-            {
-                return Ok(TaskFirePlan::Done(self.record_gate(
-                    LoopRunResult::Canceled,
-                    "wake already consumed, canceled, or replaced".to_owned(),
-                )));
-            }
-        } else {
-            self.consume_ephemeral()?;
-        }
+        self.consume_ephemeral()?;
         self.pending = Some(PendingEffect::Deliver {
             target: target.clone(),
             check: check.clone(),
@@ -759,29 +688,33 @@ impl<'a> TaskFire<'a> {
             root: self.context_root()?,
             target,
             prompt,
+            intent: if matches!(
+                self.task.trigger().as_ref().map_err(Clone::clone)?.trigger,
+                Trigger::Signal { .. }
+            ) {
+                DeliveryIntent::Signal
+            } else if self.entry.wake_meta.is_some() {
+                DeliveryIntent::SelfWake
+            } else {
+                DeliveryIntent::Wake
+            },
         }))
     }
 
     fn remove_schedule(&self) -> Result<()> {
-        if self.task.source() == catalog::TaskSource::Instance
-            && self.entry.wake_meta.is_some()
-            && self.entry.signal.is_some()
-        {
-            super::instances::remove_signal_wake(
-                &StatePaths::for_workspace(WorkspaceId::from_project_root(
-                    &self.entry.resolved_root(),
-                ))?
-                .root,
-                &self.name,
-                &self.entry,
-            )?;
-        } else {
-            self.catalog.consume_scheduled(&self.name)?;
-        }
+        self.catalog.consume_scheduled(&self.name)?;
         Ok(())
     }
 
     fn consume_ephemeral(&self) -> Result<()> {
+        if self
+            .signal
+            .as_ref()
+            .and_then(|signal| signal.watch.as_ref())
+            .is_some_and(|watch| !watch.verdict.is_terminal())
+        {
+            return Ok(());
+        }
         if self.mode == LoopRunMode::Scheduled && self.ephemeral {
             self.remove_schedule()?;
         }
@@ -799,17 +732,7 @@ impl<'a> TaskFire<'a> {
         let mut body = resolve_task_prompt(&self.name, &self.entry)?;
         let signal_trigger = self.entry.signal.is_some() || self.entry.watch.is_some();
         if self.entry.wake.is_some() || signal_trigger || self.signal.is_some() {
-            let rearm = self
-                .expired
-                .as_ref()
-                .map(|_| status::rearm_command(&self.entry))
-                .transpose()?;
-            let evidence = if let Some(expired) = &self.expired {
-                prompt::Evidence::Expired {
-                    view: expired.view.as_ref(),
-                    rearm: rearm.as_deref().context("expired wake re-arm command")?,
-                }
-            } else if let Some(signal) = &self.signal {
+            let evidence = if let Some(signal) = &self.signal {
                 prompt::Evidence::Signal(signal)
             } else if signal_trigger {
                 prompt::Evidence::Manual
@@ -1528,6 +1451,21 @@ pub fn run_check(
     timeout: Duration,
     echo: CheckEcho,
 ) -> Result<CheckOutcome> {
+    run_command(dir, cmd, WatchDeadline::KillAfter(timeout), echo, |_, _| {})
+}
+
+pub(super) enum WatchDeadline {
+    KillAfter(Duration),
+    CheckInOnce(Duration),
+}
+
+pub(super) fn run_command(
+    dir: &Path,
+    cmd: &str,
+    deadline: WatchDeadline,
+    echo: CheckEcho,
+    mut check_in: impl FnMut(u64, String),
+) -> Result<CheckOutcome> {
     let (prefix, file, cap) = match echo {
         CheckEcho::Capture => (None, None, CHECK_OUTPUT_CAP),
         CheckEcho::Tee { file } => (None, Some(file), WAKE_TAIL_CAP),
@@ -1569,7 +1507,12 @@ pub fn run_check(
         Arc::clone(&capture),
         prefix.map(|prefix| PipeForward::new(PipeDestination::Stderr, prefix)),
     );
-    let deadline = Instant::now() + timeout;
+    let started = Instant::now();
+    let mut check_in_at = match deadline {
+        WatchDeadline::KillAfter(timeout) | WatchDeadline::CheckInOnce(timeout) => {
+            Some(started + timeout)
+        }
+    };
     let (status, timed_out) = loop {
         if let Some(status) = child
             .try_wait()
@@ -1577,12 +1520,20 @@ pub fn run_check(
         {
             break (status, false);
         }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let status = child
-                .wait()
-                .with_context(|| format!("reaping timed-out loop check `{cmd}`"))?;
-            break (status, true);
+        if check_in_at.is_some_and(|at| Instant::now() >= at) {
+            if matches!(deadline, WatchDeadline::KillAfter(_)) {
+                let _ = child.kill();
+                let status = child
+                    .wait()
+                    .with_context(|| format!("reaping timed-out loop check `{cmd}`"))?;
+                break (status, true);
+            }
+            check_in_at = None;
+            let output = capture
+                .lock()
+                .map_err(|_| anyhow::anyhow!("loop check output lock poisoned"))?
+                .output();
+            check_in(elapsed_millis(started), output);
         }
         std::thread::sleep(CHECK_POLL_INTERVAL);
     };
@@ -1594,12 +1545,7 @@ pub fn run_check(
     let capture = capture
         .lock()
         .map_err(|_| anyhow::anyhow!("loop check output lock poisoned"))?;
-    let output = String::from_utf8_lossy(&capture.tail);
-    let mut start = output.len().saturating_sub(cap);
-    while !output.is_char_boundary(start) {
-        start += 1;
-    }
-    let output = output[start..].to_owned();
+    let output = capture.output();
     Ok(CheckOutcome {
         passed: status.success() && !timed_out,
         timed_out,
@@ -1682,6 +1628,15 @@ struct CheckCapture {
 }
 
 impl CheckCapture {
+    fn output(&self) -> String {
+        let output = String::from_utf8_lossy(&self.tail);
+        let mut start = output.len().saturating_sub(self.cap);
+        while !output.is_char_boundary(start) {
+            start += 1;
+        }
+        output[start..].to_owned()
+    }
+
     fn push(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         if let Some(file) = &mut self.file {
             file.write_all(bytes)?;

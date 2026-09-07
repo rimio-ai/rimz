@@ -85,6 +85,7 @@ fn default_machine_teams() -> TeamsConfig {
             layout: Some("claude,codex".to_owned()),
             scratch_files: Vec::new(),
             stages: Vec::new(),
+            signals: Vec::new(),
         },
     )]))
 }
@@ -175,6 +176,18 @@ pub struct Team {
     pub scratch_files: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stages: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signals: Vec<TeamSignalBinding>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct TeamSignalBinding {
+    pub signal: String,
+    pub role: String,
+    #[serde(default, rename = "match")]
+    pub matches: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

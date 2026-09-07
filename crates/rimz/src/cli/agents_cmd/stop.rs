@@ -15,7 +15,7 @@ pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) ->
     let (workspace, store) = (&ctx.workspace, &ctx.store);
     let snapshot = ctx.cached_snapshot()?;
     let current_channel = ctx.channel();
-    if all {
+    if all && reference != "@me" {
         let agents =
             rimz::harness::target::resolve_many(&snapshot, &reference, None, current_channel)?;
         let peers = rimz::harness::target::addressable_agents(&snapshot);
@@ -47,7 +47,7 @@ pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) ->
         return Ok(());
     }
     let live_agent_result =
-        crate::cli::resolve_agent_one(&snapshot, &reference, None, current_channel);
+        crate::cli::resolve_agent_one(store, &snapshot, &reference, None, current_channel);
     let live_agent = live_agent_result.as_ref().ok().copied();
     if let Some(live_agent) = live_agent {
         let peers = rimz::harness::target::addressable_agents(&snapshot);
@@ -154,6 +154,13 @@ fn stop_live_agent_tree(
     match stop_live_agent(workspace, store, globals, agent) {
         Ok(()) => {
             tracker.stopped.insert(key);
+            if let Err(err) = rimz::harness::schedule::arm::retire_session(
+                workspace,
+                &agent.kind,
+                &agent.agent_id,
+            ) {
+                failures.push(format!("{parent_label}: {err}"));
+            }
         }
         Err(err) => failures.push(format!("{parent_label}: {err:#}")),
     }

@@ -56,7 +56,7 @@ pub use accounts::{AccountBudgetConfigError, AccountsConfig, UsageLimitUsd};
 pub(crate) use agents::retired_agents_key;
 pub use agents::{
     AgentsConfig, CommandsConfig, LaunchPlacement, Profile, ProfilesConfig, RoleBinding,
-    SubagentProfilesConfig, SubagentsConfig, Team, TeamsConfig,
+    SubagentProfilesConfig, SubagentsConfig, Team, TeamSignalBinding, TeamsConfig,
 };
 pub use animation::{
     AnimationColor, AnimationEffect, AnimationFrames, AnimationRole, AnimationSpec, AnimationSpeed,
@@ -85,9 +85,7 @@ pub use harness::{
     DEFAULT_COMPACT_INSTRUCTION, DEFAULT_IDLE_COMPACT_AFTER, DayCap, DayCapParseError,
     HarnessConfig, IdleCompactMode, RtkMode, TurnCap, TurnCapParseError,
 };
-pub use loop_::{
-    CheckOn, LoopConfig, TaskBudgetError, TaskEntry, TaskTarget, Tasks, WakeArmer, WakeMeta,
-};
+pub use loop_::{CheckOn, LoopConfig, TaskBudgetError, TaskEntry, TaskTarget, Tasks, WakeMeta};
 pub use mux::{
     MultiplexerConfig, MuxConfig, TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderLines,
     TmuxPaneBorderStatus, TmuxSetClipboard, ZellijClipboard, ZellijConfig, ZellijForceClose,

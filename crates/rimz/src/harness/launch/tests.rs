@@ -103,6 +103,7 @@ fn team() -> crate::config::Team {
         layout: None,
         scratch_files: vec!["blackboard.md".to_owned()],
         stages: Vec::new(),
+        signals: Vec::new(),
     }
 }
 

@@ -243,6 +243,7 @@ pub(super) fn clear_messages(
     if let Some(target) = target {
         rimz::harness::target::require_mention(&target)?;
         let agent = crate::cli::resolve_agent_one(
+            store,
             &snapshot,
             &target,
             worktree.as_deref().or(channel_flag.as_deref()),

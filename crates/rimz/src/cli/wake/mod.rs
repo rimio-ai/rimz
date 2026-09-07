@@ -1,7 +1,5 @@
-//! `rimz wake` — caller-pinned one-shot wakeups for agents.
+//! `rimz wake` — self-only timer and command waits over the loop scheduler.
 
-use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -9,7 +7,8 @@ use clap::{Args, Subcommand};
 
 use rimz::config::{CheckOn, TaskTarget};
 use rimz::harness::ancestry::CallerIdentity;
-use rimz::ids::AgentSessionId;
+use rimz::harness::schedule::arm::TaskName;
+use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::store::snapshot::SidebarSnapshot;
 
 use super::{Ctx, GlobalFlags};
@@ -17,7 +16,6 @@ use super::{Ctx, GlobalFlags};
 mod add;
 mod cancel;
 mod list;
-mod wait;
 mod watch;
 
 #[derive(Debug, Args)]
@@ -31,62 +29,37 @@ pub struct WakeCommand {
 
 #[derive(Debug, Subcommand)]
 enum WakeSubcmd {
-    /// List pending wakeups.
+    /// List pending wakes and subscriptions aimed at you.
     #[command(alias = "ls")]
     List {
-        /// Emit JSON.
         #[arg(long)]
         json: bool,
     },
-    /// Cancel a pending wakeup.
+    /// Cancel your pending wake or subscription, including its watched command.
     Cancel {
-        /// Wake name.
-        name: String,
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        name: Option<TaskName>,
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        json: bool,
     },
-    /// Run a watched command and emit its completion signal.
+    /// Run a watched command and emit its outcome.
     #[command(hide = true)]
-    Watch {
-        /// Wake name.
-        name: String,
-    },
+    Watch { name: String },
 }
 
 #[derive(Debug, Default, Args)]
 struct WakeArgs {
-    /// Agent to wake. Omit from an agent pane to wake yourself.
-    #[arg(value_name = "@TARGET")]
-    target: Option<String>,
-    /// Optional note delivered verbatim after the wake evidence.
-    #[arg(long, conflicts_with = "prompt_file")]
-    prompt: Option<String>,
-    /// File containing an optional note delivered verbatim after the wake evidence.
-    #[arg(long = "prompt-file", value_name = "PATH")]
-    prompt_file: Option<PathBuf>,
-    /// Wake once after this duration (less than 24h).
+    /// Wake yourself once after this duration (less than 24h).
     #[arg(long = "in", value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
     in_after: Option<Duration>,
-    /// Wake once for this signal or family selector (for example, ci.failed or ci.*).
-    #[arg(long, value_name = "NAME")]
-    signal: Option<String>,
-    /// Require a top-level signal payload field to equal this value.
-    #[arg(long = "match", value_name = "KEY=VALUE", requires = "signal")]
-    matches: Vec<String>,
     /// Deliver for a failed, successful, or any command outcome (default: any).
     #[arg(long, value_name = "fail|success|any", value_parser = ["fail", "success", "any"])]
     on: Option<String>,
-    /// Signal wake deadline or command watch timeout (default: 59m; less than 24h).
+    /// Send one still-running notice after this duration; do not stop the command (default: 30m).
     #[arg(long, value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
     timeout: Option<Duration>,
-    /// Wait inline for the command outcome; use `--wait=5m` for a deadline.
-    #[arg(
-        long,
-        value_name = "DURATION",
-        num_args = 0..=1,
-        require_equals = true,
-        value_parser = super::supervised::parse_timeout
-    )]
-    wait: Option<Option<Duration>>,
-    /// Emit JSON.
     #[arg(long)]
     json: bool,
     /// Command to watch.
@@ -97,7 +70,7 @@ struct WakeArgs {
 pub fn run(args: WakeCommand, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         Some(WakeSubcmd::List { json }) => list::run(json, globals),
-        Some(WakeSubcmd::Cancel { name }) => cancel::run(&name, globals),
+        Some(WakeSubcmd::Cancel { name, all, json }) => cancel::run(name, all, json, globals),
         Some(WakeSubcmd::Watch { name }) => watch::run(&name, globals),
         None if args.wake.is_empty() => list::run(args.wake.json, globals),
         None => add::run(args.wake, globals),
@@ -106,15 +79,9 @@ pub fn run(args: WakeCommand, globals: &GlobalFlags) -> Result<()> {
 
 impl WakeArgs {
     fn is_empty(&self) -> bool {
-        self.target.is_none()
-            && self.prompt.is_none()
-            && self.prompt_file.is_none()
-            && self.in_after.is_none()
-            && self.signal.is_none()
-            && self.matches.is_empty()
+        self.in_after.is_none()
             && self.on.is_none()
             && self.timeout.is_none()
-            && self.wait.is_none()
             && self.command.is_empty()
     }
 }
@@ -137,119 +104,11 @@ fn caller_agent<'a>(
     Ok(Some(agent))
 }
 
-fn caller_session(ctx: &Ctx) -> Result<Option<AgentSessionId>> {
+fn caller_session(ctx: &Ctx) -> Result<Option<(AgentKind, AgentSessionId)>> {
     let caller = caller(ctx)?;
     let snapshot = ctx.resolution_snapshot()?;
-    Ok(caller_agent(&snapshot, caller.as_ref())?.map(|agent| agent.agent_id.clone()))
-}
-
-fn delivery_target(
-    ctx: &Ctx,
-    snapshot: &SidebarSnapshot,
-    caller: Option<&rimz::agents::AgentState>,
-    address: Option<&str>,
-) -> Result<TaskTarget> {
-    if let Some(address) = address {
-        if !address.starts_with('@') {
-            bail!("wake target must start with `@`");
-        }
-        let agent = super::resolve_agent_one(snapshot, address, None, ctx.channel())
-            .map_err(|_| anyhow::anyhow!("no live agent matches `{address}`"))?;
-        if agent.agent_id.is_provisional() {
-            bail!("`{address}` has not registered a real session yet");
-        }
-        let peers = rimz::harness::target::addressable_agents(snapshot);
-        return Ok(TaskTarget {
-            kind: agent.kind.as_str().to_owned(),
-            session: agent.agent_id.as_str().to_owned(),
-            handle: rimz::harness::target::agent_handle(agent, &peers, true),
-        });
-    }
-
-    let agent = caller.ok_or_else(|| {
-        anyhow::anyhow!(
-            "arming a wake without an explicit @target is only available to an agent RimZ can identify; from a user shell, pass the live agent address"
-        )
-    })?;
-    if agent.agent_id.is_provisional() {
-        bail!("the calling agent has not registered a real session yet");
-    }
-    let handle = rimz::harness::target::agent_handle(
-        agent,
-        &rimz::harness::target::addressable_agents(snapshot),
-        true,
-    );
-    Ok(TaskTarget {
-        kind: agent.kind.as_str().to_owned(),
-        session: agent.agent_id.as_str().to_owned(),
-        handle,
-    })
-}
-
-pub(super) fn default_signal_matches(
-    workspace: &rimz::ResolvedWorkspace,
-    agents: &[rimz::agents::AgentState],
-    scope: &rimz::agents::AgentState,
-    signal: Option<&str>,
-    matches: &mut BTreeMap<String, String>,
-) -> Result<()> {
-    let Some(signal) = signal else { return Ok(()) };
-    let parsed = rimz::harness::schedule::parse_trigger(
-        "wake",
-        &rimz::config::TaskEntry {
-            signal: Some(signal.to_owned()),
-            matches: Some(matches.clone()),
-            ..rimz::config::TaskEntry::default()
-        },
-    )?;
-    let rimz::harness::schedule::Trigger::Signal { selector, .. } = parsed.trigger else {
-        unreachable!("the entry has only a signal trigger")
-    };
-    match selector.family() {
-        "ci" | "pr" if !matches.contains_key("path") && !matches.contains_key("branch") => {
-            let path = scope
-                .worktree_path
-                .as_deref()
-                .map(std::path::Path::new)
-                .unwrap_or(&workspace.worktree_root);
-            if path == workspace.project_root {
-                bail!(
-                    "CI on the root checkout is not watched: RimZ polls the forge for worktree branches. Pass --match branch=<name>, or watch it with: rimz wake -- gh run watch --exit-status"
-                );
-            }
-            matches.insert("path".to_owned(), path.display().to_string());
-        }
-        "team" if !matches.contains_key("team") && !matches.contains_key("instance") => {
-            let cohort = rimz::harness::target::team_cohorts(agents)
-                .into_iter()
-                .find(|cohort| {
-                    cohort.members.iter().any(|member| {
-                        member.kind == scope.kind && member.agent_id == scope.agent_id
-                    })
-                })
-                .context("team.* wakes need a team member; pass --match instance=<team#channel>")?;
-            matches.insert(
-                "instance".to_owned(),
-                format!("{}#{}", cohort.team, cohort.channel),
-            );
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-fn parse_matches(raw: &[String]) -> Result<BTreeMap<String, String>> {
-    raw.iter()
-        .map(|pair| {
-            let (key, value) = pair
-                .split_once('=')
-                .ok_or_else(|| anyhow::anyhow!("invalid --match `{pair}`; expected KEY=VALUE"))?;
-            if key.is_empty() {
-                bail!("invalid --match `{pair}`; KEY must not be empty");
-            }
-            Ok((key.to_owned(), value.to_owned()))
-        })
-        .collect()
+    Ok(caller_agent(&snapshot, caller.as_ref())?
+        .map(|agent| (agent.kind.clone(), agent.agent_id.clone())))
 }
 
 fn parse_on(raw: Option<&str>) -> CheckOn {
@@ -267,29 +126,4 @@ fn command_string(argv: &[String]) -> Result<String> {
         .collect::<std::result::Result<Vec<_>, _>>()
         .map(|argv| argv.join(" "))
         .context("quoting watched command")
-}
-
-fn self_wake_guard(
-    signal: Option<&str>,
-    matches: &BTreeMap<String, String>,
-    target: &TaskTarget,
-) -> Result<()> {
-    if !signal.is_some_and(|name| name.starts_with("agent.")) {
-        return Ok(());
-    }
-    fn unqualified_handle(handle: &str) -> &str {
-        handle.split_once('#').map_or(handle, |(name, _)| name)
-    }
-    let names_other_agent = matches
-        .get("handle")
-        .is_some_and(|handle| unqualified_handle(handle) != unqualified_handle(&target.handle))
-        || matches
-            .get("session")
-            .is_some_and(|session| session != &target.session);
-    if names_other_agent {
-        return Ok(());
-    }
-    bail!(
-        "wake on an agent.* signal requires --match handle=<other> or --match session=<other> to avoid waking the target from its own lifecycle signal"
-    )
 }

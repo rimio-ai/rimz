@@ -145,7 +145,7 @@ fn task_row(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Vec<ui::Ce
     vec![
         ui::cell(task.name).fg(ui::palette::body()),
         ui::cell(task_subject(task.task)),
-        source_cell(task.task.source()),
+        source_cell(task.task),
         ui::cell(when),
         last,
         status,
@@ -190,9 +190,9 @@ fn blocked_next_cell(state: TrustState) -> ui::Cell {
     ui::cell("blocked · trust").fg(ui::status::trust(state))
 }
 
-fn source_cell(source: TaskSource) -> ui::Cell {
-    let cell = ui::cell(source_label(source));
-    match source.blocked_state() {
+fn source_cell(task: &LoadedTask) -> ui::Cell {
+    let cell = ui::cell(source_label(task));
+    match task.source().blocked_state() {
         Some(state) => cell.fg(ui::status::trust(state)),
         None => cell,
     }
@@ -375,7 +375,16 @@ fn check_on_label(on: CheckOn) -> &'static str {
     }
 }
 
-fn source_label(source: TaskSource) -> String {
+fn source_label(task: &LoadedTask) -> String {
+    source_description(task.source(), task.entry())
+}
+
+fn source_description(source: TaskSource, entry: &TaskEntry) -> String {
+    if source == TaskSource::Instance
+        && let Some(team) = &entry.team
+    {
+        return format!("team {team}");
+    }
     if let Some(state) = source.blocked_state() {
         format!("project · {}", state.as_str())
     } else {
@@ -471,7 +480,7 @@ fn spend_label(
 fn source_detail(source: TaskSource, entry: &TaskEntry) -> String {
     format!(
         "{} — {}",
-        source_label(source),
+        source_description(source, entry),
         display_path(&source_path(source, entry))
     )
 }

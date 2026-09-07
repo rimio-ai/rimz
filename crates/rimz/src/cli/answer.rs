@@ -60,7 +60,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
     let store = &ctx.store;
     let snapshot = ctx.cached_snapshot()?;
     let peers = rimz::harness::target::addressable_agents(&snapshot);
-    let agent = resolve_current_agent(&snapshot, &args.target, ctx.channel())
+    let agent = resolve_current_agent(store, &snapshot, &args.target, ctx.channel())
         .unwrap_or_else(|message| answer_exit(2, &message));
     let detail = rimz::agents::read_open_ask(store.paths(), agent)
         .unwrap_or_else(|err| answer_exit(2, &err.to_string()))
@@ -157,11 +157,12 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn resolve_current_agent<'a>(
+    store: &rimz::Store,
     snapshot: &'a rimz::store::snapshot::SidebarSnapshot,
     target: &str,
     channel: Option<&str>,
 ) -> std::result::Result<&'a rimz::agents::AgentState, String> {
-    let agent = resolve_open_ask(snapshot, target, channel, false)
+    let agent = resolve_open_ask(store, snapshot, target, channel, false)
         .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("ask `{target}` is no longer current"))?;
     if !agent.is_awaiting_input() || agent.open_ask.is_none() {

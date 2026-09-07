@@ -65,6 +65,14 @@ pub(super) fn send_message(
     let text = resolve_message(&text, file.as_deref(), piped.as_deref())?;
     let mode = dispatch_mode(mode, !no_enter, force, create, smart_compact)?;
     rimz::harness::target::require_mention(&target)?;
+    let target = if target == "@me" {
+        let snapshot = ctx.cached_snapshot()?;
+        let agent =
+            crate::cli::resolve_agent_one(&ctx.store, &snapshot, &target, None, ctx.channel())?;
+        format!("@{}", agent.agent_id)
+    } else {
+        target
+    };
     let (workspace, store) = (&ctx.workspace, &ctx.store);
     let current_channel = ctx.channel().map(ToOwned::to_owned);
     let sender = send::sender_for(caller.as_ref(), current_channel.as_deref(), no_from);

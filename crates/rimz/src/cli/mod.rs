@@ -291,11 +291,29 @@ pub(crate) fn ambiguous_fanout(verb: &str, target: &str, labels: &[String]) -> a
 /// Resolve a ref to exactly one agent (`show`/`focus`/`wait`/`stop`,
 /// `message clear`/`list`). `@all` or a fan-out kind is an explicit ambiguity.
 pub(crate) fn resolve_agent_one<'a>(
+    store: &rimz::Store,
     snapshot: &'a SidebarSnapshot,
     raw: &str,
     worktree_flag: Option<&str>,
     current_channel: Option<&str>,
 ) -> Result<&'a AgentState> {
+    if raw == "@me" {
+        let unidentified = || {
+            anyhow::anyhow!(
+                "@me requires an agent RimZ can identify; run this command from an agent pane"
+            )
+        };
+        let caller = send::resolve_caller(store)?.ok_or_else(unidentified)?;
+        let agent = rimz::harness::ancestry::resolve_launch_caller(&snapshot.agents, &caller)
+            .map_err(|_| unidentified())?;
+        if agent.ended_at.is_some() {
+            anyhow::bail!("@me requires a live agent; the calling agent has ended");
+        }
+        if agent.agent_id.is_provisional() {
+            anyhow::bail!("@me requires a registered session; the calling agent is still starting");
+        }
+        return Ok(agent);
+    }
     map_resolve(
         raw,
         rimz::harness::target::resolve_one(snapshot, raw, worktree_flag, current_channel),
@@ -307,6 +325,7 @@ pub(crate) fn resolve_agent_one<'a>(
 /// `asks show` folds the awaiting state into ask-id lookup; `answer` may target
 /// a stale agent and reports a matched-but-stale ask as "not asking" instead.
 pub(crate) fn resolve_open_ask<'a>(
+    store: &rimz::Store,
     snapshot: &'a SidebarSnapshot,
     raw: &str,
     current_channel: Option<&str>,
@@ -314,12 +333,20 @@ pub(crate) fn resolve_open_ask<'a>(
 ) -> Result<Option<&'a AgentState>> {
     if raw.starts_with("ask_") {
         let ask_id = AskId::parse(raw)?;
-        return Ok(snapshot.agents.iter().find(|agent| {
-            (!awaiting_only || agent.is_awaiting_input())
-                && agent.open_ask.as_ref().is_some_and(|ask| ask.id == ask_id)
-        }));
+        return Ok(find_open_ask(snapshot, &ask_id, awaiting_only));
     }
-    resolve_agent_one(snapshot, raw, None, current_channel).map(Some)
+    resolve_agent_one(store, snapshot, raw, None, current_channel).map(Some)
+}
+
+fn find_open_ask<'a>(
+    snapshot: &'a SidebarSnapshot,
+    ask_id: &AskId,
+    awaiting_only: bool,
+) -> Option<&'a AgentState> {
+    snapshot.agents.iter().find(|agent| {
+        (!awaiting_only || agent.is_awaiting_input())
+            && agent.open_ask.as_ref().is_some_and(|ask| &ask.id == ask_id)
+    })
 }
 
 /// Resolve a ref to every matching live agent pane for `message --steer` and

@@ -27,6 +27,320 @@ use crate::common::write_fake_login_shell;
 use crate::common::{Env, ScrubSessionEnvExt};
 
 #[test]
+fn team_signal_binding_registers_delivers_and_retires() {
+    let env = Env::new();
+    let Some(cwd) = team_signal_fixture(&env) else {
+        return;
+    };
+    seed_team_signal_member(&env, &cwd, "sess-team-coder", None);
+    team_signal_hook(&env, &cwd, "sess-team-coder", "SessionStart");
+    let audit = env
+        .store()
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap();
+    let member = audit
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "sess-team-coder")
+        .unwrap();
+    assert_eq!(
+        member.launch_id.as_ref().unwrap().as_str(),
+        "launch_sess-team-coder"
+    );
+    let armed = read_loop_instances(&env);
+    assert_eq!(armed.0.len(), 1);
+    let entry = &armed.0["team-forge-feature-team-coder-ci-failed"];
+    assert_eq!(
+        entry.team.as_ref().unwrap().to_string(),
+        "forge#feature-team"
+    );
+    assert_eq!(entry.signal.as_deref(), Some("ci.failed"));
+    assert!(entry.once.is_none() && entry.deadline.is_none());
+    assert_eq!(
+        entry.matches.as_ref().unwrap()["path"],
+        cwd.display().to_string()
+    );
+    assert_eq!(
+        entry.wake.as_ref().unwrap().session.as_str(),
+        "sess-team-coder"
+    );
+    team_signal_hook(&env, &cwd, "sess-team-coder", "SessionStart");
+    assert_eq!(read_loop_instances(&env), armed);
+    team_signal_hook(&env, &cwd, "sess-team-coder", "UserPromptSubmit");
+    for (path, matching) in [(&env.project_root, false), (&cwd, true)] {
+        loop_ok(
+            &env,
+            &[
+                "events",
+                "emit",
+                "ci.failed",
+                "--source",
+                "forge",
+                "--json",
+                &json!({"path": path}).to_string(),
+            ],
+        );
+        if !matching {
+            assert!(env.store().list_pending_messages().unwrap().is_empty());
+            assert!(read_loop_run_records(&env).is_empty());
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while read_loop_run_records(&env).is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert_pending_message(&env, "sess-team-coder", "ci.failed");
+    assert_eq!(
+        env.store().list_pending_messages().unwrap()[0].sender,
+        rimz::store::message::MessageSender::Harness {
+            notice: rimz::store::message::HarnessNotice::Signal,
+        }
+    );
+    assert_eq!(last_loop_record(&env).result, LoopRunResult::Delivered);
+    assert_eq!(read_loop_instances(&env), armed);
+    team_signal_hook(&env, &cwd, "sess-team-coder", "SessionEnd");
+    assert!(read_loop_instances(&env).0.is_empty());
+}
+
+#[test]
+fn team_signal_bindings_ignore_child_registration() {
+    let env = Env::new();
+    let Some(cwd) = team_signal_fixture(&env) else {
+        return;
+    };
+    seed_team_signal_member(&env, &cwd, "sess-team-child", Some("sess-parent"));
+    team_signal_hook(&env, &cwd, "sess-team-child", "SessionStart");
+    let audit = env
+        .store()
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap();
+    let child = audit
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "sess-team-child")
+        .unwrap();
+    assert!(child.parent_agent_id.is_some());
+    assert!(read_loop_instances(&env).0.is_empty());
+}
+
+#[test]
+fn team_signal_binding_resume_keeps_session_rows_separate() {
+    let env = Env::new();
+    let Some(cwd) = team_signal_fixture(&env) else {
+        return;
+    };
+    seed_team_signal_member(&env, &cwd, "sess-team-old", None);
+    team_signal_hook(&env, &cwd, "sess-team-old", "SessionStart");
+    seed_team_signal_member(&env, &cwd, "sess-team-new", None);
+    team_signal_hook(&env, &cwd, "sess-team-new", "SessionStart");
+    team_signal_hook(&env, &cwd, "sess-team-old", "SessionEnd");
+    let armed = read_loop_instances(&env);
+    assert_eq!(armed.0.len(), 1);
+    assert_eq!(
+        armed
+            .0
+            .values()
+            .next()
+            .unwrap()
+            .wake
+            .as_ref()
+            .unwrap()
+            .session
+            .as_str(),
+        "sess-team-new"
+    );
+    team_signal_hook(&env, &cwd, "sess-team-new", "UserPromptSubmit");
+    loop_ok(
+        &env,
+        &[
+            "events",
+            "emit",
+            "ci.failed",
+            "--source",
+            "forge",
+            "--json",
+            &json!({"path": cwd}).to_string(),
+        ],
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while read_loop_run_records(&env).is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert_pending_message(&env, "sess-team-new", "ci.failed");
+}
+
+#[test]
+fn team_idle_and_root_end_hooks_deliver_only_to_the_matching_instance() {
+    for (signal, hook) in [("team.idle", "Stop"), ("team.ended", "SessionEnd")] {
+        let env = Env::new();
+        let Some(cwd) = team_signal_fixture(&env) else {
+            return;
+        };
+        register_running_agent(&env, "sess-team-observer", "main");
+        seed_team_signal_member(&env, &cwd, "sess-team-member", None);
+        team_signal_hook(&env, &cwd, "sess-team-member", "SessionStart");
+        team_signal_hook(&env, &cwd, "sess-team-member", "UserPromptSubmit");
+        for (name, instance) in [
+            ("matching", "forge#feature-team"),
+            ("sibling", "forge#sibling"),
+        ] {
+            loop_ok(
+                &env,
+                &[
+                    "loop",
+                    "add",
+                    name,
+                    "--wake",
+                    "@claude#project",
+                    "--signal",
+                    signal,
+                    "--match",
+                    &format!("instance={instance}"),
+                    "--once",
+                ],
+            );
+        }
+        team_signal_hook(&env, &cwd, "sess-team-member", hook);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while read_loop_run_records(&env).is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let records = read_loop_run_records(&env);
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records[0].result, LoopRunResult::Delivered);
+        let evidence = records[0].signal.as_ref().unwrap();
+        assert_eq!(evidence.name.as_str(), signal);
+        assert_eq!(evidence.payload["instance"], "forge#feature-team");
+        assert_pending_message(&env, "sess-team-observer", signal);
+        let instances = read_loop_instances(&env);
+        assert!(!instances.0.contains_key("matching"));
+        assert!(instances.0.contains_key("sibling"));
+    }
+}
+
+#[test]
+fn team_signal_launch_refuses_root_before_side_effects() {
+    let env = Env::new();
+    write_team_signal_config(&env);
+    let before = env
+        .store()
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap();
+    let (_, error) = loop_fail(&env, &["teams", "forge"]);
+    assert!(error.contains("team `forge` signal binding 1"), "{error}");
+    assert!(
+        error.contains("CI on the root checkout is not watched"),
+        "{error}"
+    );
+    assert!(error.contains("launch with -w"), "{error}");
+    assert_eq!(
+        env.store()
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .unwrap()
+            .agents,
+        before.agents
+    );
+    assert!(read_loop_instances(&env).0.is_empty());
+    assert!(!env.project_root.join(".worktrees").exists());
+}
+
+fn write_team_signal_config(env: &Env) {
+    let path = env.config_root().join("rimz/agents.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        path,
+        r#"
+[agents.teams.forge]
+roles = [{ role = "coder", profile = "claude" }]
+[[agents.teams.forge.signals]]
+signal = "ci.failed"
+role = "coder"
+"#,
+    )
+    .unwrap();
+}
+
+fn team_signal_fixture(env: &Env) -> Option<std::path::PathBuf> {
+    if !init_git_repo(&env.project_root) {
+        return None;
+    }
+    let cwd = env.home_root.join("feature-team");
+    assert!(git_ok(
+        &env.project_root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature-team",
+            cwd.to_str().unwrap()
+        ]
+    ));
+    env.install_agent_hooks("claude");
+    write_team_signal_config(env);
+    Some(cwd)
+}
+
+fn seed_team_signal_member(env: &Env, cwd: &Path, session: &str, parent: Option<&str>) {
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).unwrap();
+    env.store()
+        .append_event(&rimz::store::event::EventEnvelope::agent_launched(
+            workspace.workspace_id,
+            &workspace.session_name,
+            &AgentKind::new_unchecked("claude"),
+            rimz::store::event::AgentLaunchPayload {
+                agent_id: AgentSessionId::from(format!("launch_{session}")),
+                launch_id: Some(AgentSessionId::from(format!("launch_{session}"))),
+                agent_name: session.to_owned(),
+                agent_name_explicit: true,
+                launch: rimz::agents::LaunchParams {
+                    team: Some("forge".to_owned()),
+                    role: Some("coder".to_owned()),
+                    channel: Some("feature-team".to_owned()),
+                    parent_agent_id: parent.map(AgentSessionId::from),
+                    parent_agent_kind: parent.map(|_| AgentKind::new_unchecked("claude")),
+                    launch_depth: parent.map(|_| 1),
+                    ..Default::default()
+                },
+                state: rimz::store::event::AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(cwd.display().to_string()),
+                worktree_branch: Some("feature-team".to_owned()),
+                prompt: None,
+                description: None,
+            },
+        ))
+        .unwrap();
+}
+
+fn team_signal_hook(env: &Env, cwd: &Path, session: &str, event: &str) {
+    let mut command = env.hook_command("claude");
+    command
+        .current_dir(cwd)
+        .env(rimz::harness::launch::ENV_AGENT_NAME, session)
+        .env(rimz::workspace::ENV_CHANNEL, "feature-team");
+    let payload =
+        json!({"hook_event_name": event, "session_id": session, "cwd": cwd, "prompt": "work"})
+            .to_string();
+    let output = env
+        .spawn_payload(command, &payload)
+        .wait_with_output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("failed to arm team"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn loop_deliveries_always_persist_as_instances() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -63,6 +377,376 @@ fn loop_deliveries_always_persist_as_instances() {
         ],
     );
     assert!(error.contains("--project"), "{error}");
+}
+
+#[test]
+fn loop_wake_me_and_bare_wake_pin_the_calling_session() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-loop-caller", "feature-loop");
+    for (name, wake) in [
+        ("explicit", vec!["--wake", "@me"]),
+        ("bare", vec!["--wake"]),
+    ] {
+        let output = calling_loop(&env, "sess-loop-caller")
+            .args(["loop", "add", name, "--every", "15m"])
+            .args(wake)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let instances = read_loop_instances(&env);
+        let target = instances.0[name].wake.as_ref().unwrap();
+        assert_eq!(target.kind, AgentKind::new_unchecked("claude"));
+        assert_eq!(target.session, AgentSessionId::from("sess-loop-caller"));
+        assert!(instances.0[name].wake_meta.is_none());
+    }
+}
+
+#[test]
+fn loop_signal_dedupe_preserves_the_existing_definition_and_overlays() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-loop-dedupe", "feature-loop");
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "original",
+            "--wake",
+            "@claude",
+            "--signal",
+            "deploy.done",
+            "--match",
+            "zone=west",
+            "--match",
+            "status=green",
+            "--prompt",
+            "keep this prompt",
+        ],
+    );
+    let mut original = read_loop_instances(&env);
+    original.0.get_mut("original").unwrap().team = Some("forge#feature-loop".parse().unwrap());
+    write_loop_instances(&env, original.clone());
+    let key = project_task_key(&env.project_root, "original");
+    let arming = BTreeMap::from([(
+        key.clone(),
+        Arming {
+            enabled: true,
+            at: Some(Timestamp::from_second(1).unwrap()),
+            pause_until: Some(Timestamp::from_second(2).unwrap()),
+            strikes: None,
+        },
+    )]);
+    write_loop_arming(&env, &arming);
+    let strikes = BTreeMap::from([(key, 2_u32)]);
+    std::fs::write(
+        loop_strikes_path(&env),
+        serde_json::to_vec(&strikes).unwrap(),
+    )
+    .unwrap();
+    let output = loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "replacement",
+            "--wake",
+            "@claude",
+            "--signal",
+            "deploy.done",
+            "--match",
+            "status=green",
+            "--match",
+            "zone=west",
+            "--once",
+            "--prompt",
+            "discard this prompt",
+        ],
+    );
+    assert!(output.contains("original"), "{output}");
+    assert_eq!(read_loop_instances(&env), original);
+    assert_eq!(read_loop_arming(&env), arming);
+    assert_eq!(read_loop_strikes(&env), strikes);
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "different-match",
+            "--wake",
+            "@claude",
+            "--signal",
+            "deploy.done",
+            "--match",
+            "zone=east",
+            "--match",
+            "status=green",
+        ],
+    );
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "different-selector",
+            "--wake",
+            "@claude",
+            "--signal",
+            "deploy.failed",
+            "--match",
+            "zone=west",
+            "--match",
+            "status=green",
+        ],
+    );
+    assert_eq!(read_loop_instances(&env).0.len(), 3);
+    register_running_agent(&env, "sess-loop-other-target", "feature-other");
+    let output = calling_loop(&env, "sess-loop-other-target")
+        .args([
+            "loop",
+            "add",
+            "different-target",
+            "--wake",
+            "@me",
+            "--signal",
+            "deploy.done",
+            "--match",
+            "status=green",
+            "--match",
+            "zone=west",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let instances = read_loop_instances(&env);
+    assert_eq!(instances.0.len(), 4);
+    assert_eq!(
+        instances.0["different-target"]
+            .wake
+            .as_ref()
+            .unwrap()
+            .session,
+        AgentSessionId::from("sess-loop-other-target")
+    );
+}
+
+#[test]
+fn concurrent_signal_adds_return_one_existing_name() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-loop-concurrent", "feature-loop");
+    let children = ["first", "second"].map(|name| {
+        env.rimz()
+            .args([
+                "loop",
+                "add",
+                name,
+                "--wake",
+                "@claude",
+                "--signal",
+                "deploy.done",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    });
+    let outputs = children.map(|child| {
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    });
+    let instances = read_loop_instances(&env);
+    assert_eq!(instances.0.len(), 1);
+    let name = instances.0.keys().next().unwrap();
+    for output in outputs {
+        assert!(output.contains(name), "{output}");
+    }
+}
+
+#[test]
+fn loop_signal_defaults_follow_the_caller_worktree_and_team() {
+    let env = Env::new();
+    let Some(cwd) = team_signal_fixture(&env) else {
+        return;
+    };
+    register_running_agent(&env, "sess-scope-target", "main");
+    seed_team_signal_member(&env, &cwd, "sess-scope-caller", None);
+    team_signal_hook(&env, &cwd, "sess-scope-caller", "SessionStart");
+    for (name, signal, key, expected) in [
+        ("caller-ci", "ci.passed", "path", cwd.display().to_string()),
+        (
+            "caller-team",
+            "team.idle",
+            "instance",
+            "forge#feature-team".to_owned(),
+        ),
+    ] {
+        let output = calling_loop(&env, "launch_sess-scope-caller")
+            .env("RIMZ_AGENT_NAME", "sess-scope-caller")
+            .args([
+                "loop",
+                "add",
+                name,
+                "--wake",
+                "@claude#project",
+                "--signal",
+                signal,
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let instances = read_loop_instances(&env);
+        assert_eq!(instances.0[name].matches.as_ref().unwrap()[key], expected);
+        assert_eq!(
+            instances.0[name].wake.as_ref().unwrap().session,
+            AgentSessionId::from("sess-scope-target")
+        );
+    }
+    let output = calling_loop(&env, "sess-scope-target")
+        .args(["loop", "add", "root-ci", "--wake", "--signal", "ci.failed"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains("CI on the root checkout is not watched"),
+        "{error}"
+    );
+    assert!(!read_loop_instances(&env).0.contains_key("root-ci"));
+}
+
+#[test]
+fn signal_siblings_keep_subscriptions_and_matches_consume_only_once() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-signal-lifetimes", "feature-loop");
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "standing",
+            "--wake",
+            "@claude",
+            "--signal",
+            "deploy.done",
+            "--match",
+            "branch=feature-loop",
+        ],
+    );
+    let mut instances = read_loop_instances(&env);
+    let mut once = instances.0["standing"].clone();
+    once.once = Some(true);
+    instances.0.insert("once".to_owned(), once);
+    write_loop_instances(&env, instances.clone());
+    loop_ok(
+        &env,
+        &[
+            "events",
+            "emit",
+            "deploy.done",
+            "--json",
+            r#"{"branch":"sibling"}"#,
+        ],
+    );
+    assert_eq!(read_loop_instances(&env), instances);
+    assert!(read_loop_run_records(&env).is_empty());
+    assert!(env.store().list_pending_messages().unwrap().is_empty());
+    loop_ok(
+        &env,
+        &[
+            "events",
+            "emit",
+            "deploy.done",
+            "--json",
+            r#"{"branch":"feature-loop"}"#,
+        ],
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while read_loop_run_records(&env).len() < 2 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), 2, "{records:?}");
+    assert!(
+        records
+            .iter()
+            .all(|record| record.result == LoopRunResult::Delivered)
+    );
+    instances.0.remove("once");
+    assert_eq!(read_loop_instances(&env), instances);
+    let messages = env.store().list_pending_messages().unwrap();
+    assert_eq!(messages.len(), 2);
+    assert!(messages.iter().all(|message| message.sender
+        == rimz::store::message::MessageSender::Harness {
+            notice: rimz::store::message::HarnessNotice::Signal,
+        }));
+}
+
+#[test]
+fn session_end_hook_retires_all_own_deliveries_and_their_overlays() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-retire", "feature-loop");
+    for (name, trigger) in [
+        ("clock", ["--every", "15m"]),
+        ("signal", ["--signal", "deploy.done"]),
+    ] {
+        loop_ok(
+            &env,
+            &[
+                "loop", "add", name, "--wake", "@claude", trigger[0], trigger[1],
+            ],
+        );
+    }
+    loop_ok(&env, &["loop", "disable", "clock"]);
+    loop_ok(&env, &["loop", "pause", "signal", "--for", "2h"]);
+    let mut instances = read_loop_instances(&env);
+    let mut sibling = instances.0["clock"].clone();
+    sibling.wake.as_mut().unwrap().session = AgentSessionId::from("sess-retire-sibling");
+    instances.0.insert("sibling".to_owned(), sibling.clone());
+    write_loop_instances(&env, instances);
+    std::fs::write(
+        loop_strikes_path(&env),
+        serde_json::to_vec(&BTreeMap::from([
+            (project_task_key(&env.project_root, "clock"), 2_u32),
+            (project_task_key(&env.project_root, "signal"), 1),
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    run_hook(
+        &env,
+        json!({"hook_event_name": "SessionEnd", "session_id": "sess-retire"}),
+        &env.project_root,
+    );
+    assert_eq!(
+        read_loop_instances(&env).0,
+        BTreeMap::from([("sibling".to_owned(), sibling)])
+    );
+    for name in ["clock", "signal"] {
+        let key = project_task_key(&env.project_root, name);
+        assert!(!read_loop_arming(&env).contains_key(&key));
+        assert!(!read_loop_strikes(&env).contains_key(&key));
+    }
 }
 
 #[test]
@@ -105,7 +789,11 @@ fn same_task_name_in_two_rooms_does_not_collide() {
     );
     let arming = read_loop_arming(&env);
     assert!(!arming[&project_task_key(&env.project_root, "same")].enabled);
-    assert!(arming[&project_task_key(&other, "same")].enabled);
+    assert!(
+        arming
+            .get(&project_task_key(&other, "same"))
+            .is_none_or(|state| state.enabled)
+    );
     loop_ok(&env, &["loop", "remove", "same"]);
     assert!(!read_loop_instances(&env).0.contains_key("same"));
     assert_eq!(
@@ -135,6 +823,7 @@ fn legacy_instances_are_rehomed_once_by_workspace() {
     );
     let legacy_path = env.state_root().join("rimz/loop-instances.json");
     let legacy = Tasks(BTreeMap::from([
+        ("disabled".to_owned(), entry.clone()),
         ("same".to_owned(), entry),
         (
             "other".to_owned(),
@@ -151,17 +840,62 @@ fn legacy_instances_are_rehomed_once_by_workspace() {
         serde_json::to_vec(&legacy).expect("legacy json"),
     )
     .expect("legacy");
+    let disabled = Arming {
+        enabled: false,
+        at: Some(Timestamp::from_second(1).unwrap()),
+        pause_until: None,
+        strikes: Some(3),
+    };
+    let paused = Arming {
+        enabled: true,
+        at: Some(Timestamp::from_second(2).unwrap()),
+        pause_until: Some("2099-01-01T00:00:00Z".parse().unwrap()),
+        strikes: None,
+    };
+    let destination_key = project_task_key(&env.project_root, "same");
+    let other_key = project_task_key(&other, "other");
+    write_loop_arming(
+        &env,
+        &BTreeMap::from([
+            (machine_task_key("disabled"), disabled),
+            (machine_task_key("same"), paused),
+            (destination_key.clone(), disabled),
+            (machine_task_key("other"), paused),
+        ]),
+    );
+    std::fs::write(
+        loop_strikes_path(&env),
+        serde_json::to_vec(&BTreeMap::from([
+            (machine_task_key("disabled"), 3_u32),
+            (machine_task_key("same"), 1_u32),
+            (destination_key.clone(), 3),
+            (machine_task_key("other"), 2),
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
     loop_ok(&env, &["loop", "list"]);
     assert!(!legacy_path.exists());
     assert_eq!(
         read_loop_instances(&env).0,
-        BTreeMap::from([("same".to_owned(), existing)])
+        BTreeMap::from([
+            ("same".to_owned(), existing),
+            ("disabled".to_owned(), legacy.0["disabled"].clone()),
+        ])
     );
     let other_path = env.state_path_for(&other).root.join("loop-instances.json");
     let migrated: Tasks =
         serde_json::from_slice(&std::fs::read(&other_path).expect("migrated")).expect("tasks");
     assert_eq!(migrated.0["other"], legacy.0["other"]);
+    assert_eq!(read_loop_arming(&env)[&destination_key], disabled);
+    assert_eq!(read_loop_arming(&env)[&other_key], paused);
+    assert_eq!(read_loop_strikes(&env)[&destination_key], 3);
+    assert_eq!(read_loop_strikes(&env)[&other_key], 2);
+    let disabled_key = project_task_key(&env.project_root, "disabled");
+    assert_eq!(read_loop_arming(&env)[&disabled_key], disabled);
+    assert_eq!(read_loop_strikes(&env)[&disabled_key], 3);
     loop_ok(&env, &["loop", "remove", "same"]);
+    loop_ok(&env, &["loop", "remove", "disabled"]);
     loop_ok(&env, &["loop", "list"]);
     assert!(read_loop_instances(&env).0.is_empty());
     assert!(!legacy_path.exists());
@@ -521,6 +1255,12 @@ fn loop_wake_workflow_pins_and_delivers_to_live_session() {
     loop_ok(&env, &["loop", "run", "wake"]);
     assert_pending_message(&env, "sess-loop-live", "next step");
     assert_eq!(
+        env.store().list_pending_messages().unwrap()[0].sender,
+        rimz::store::message::MessageSender::Harness {
+            notice: rimz::store::message::HarnessNotice::Wake,
+        }
+    );
+    assert_eq!(
         env.store().list_pending_messages().unwrap()[0].auto_compact,
         Some(AutoCompact::Percent(70))
     );
@@ -642,12 +1382,12 @@ fn emitted_signal_reaches_the_matching_wake_consumer() {
     assert_eq!(
         message.sender,
         rimz::store::message::MessageSender::Harness {
-            notice: rimz::store::message::HarnessNotice::Wake,
+            notice: rimz::store::message::HarnessNotice::Signal,
         }
     );
     assert_eq!(
         rimz::harness::target::message_header(&message.sender, &[], None).as_deref(),
-        Some("Type: WAKE\nFrom: @rimz\nContent:\n")
+        Some("Type: SIGNAL\nFrom: @rimz\nContent:\n")
     );
     assert!(
         message.text.contains("Inspect deployment"),
@@ -1337,7 +2077,7 @@ fn loop_repeated_failures_auto_disable_notify_once_and_enable() {
     );
     assert_eq!(
         read_loop_arming(&env)
-            .get(&machine_task_key("watchdog"))
+            .get(&project_task_key(&env.project_root, "watchdog"))
             .and_then(|arming| arming.strikes),
         Some(3)
     );
@@ -1345,12 +2085,12 @@ fn loop_repeated_failures_auto_disable_notify_once_and_enable() {
     let fire = loop_ok(&env, &["loop", "fire", "watchdog"]);
     assert!(fire.contains("task is disabled; firing anyway") && fire.contains("delivered"));
     assert_eq!(
-        read_loop_strikes(&env).get(&machine_task_key("watchdog")),
+        read_loop_strikes(&env).get(&project_task_key(&env.project_root, "watchdog")),
         Some(&4)
     );
     assert_eq!(
         read_loop_arming(&env)
-            .get(&machine_task_key("watchdog"))
+            .get(&project_task_key(&env.project_root, "watchdog"))
             .and_then(|arming| arming.strikes),
         Some(3),
         "manual fire must not replace an existing disable"
@@ -1368,10 +2108,12 @@ fn loop_repeated_failures_auto_disable_notify_once_and_enable() {
     assert_eq!(notification.lines().count(), 1, "{notification}");
 
     loop_ok(&env, &["loop", "enable", "watchdog"]);
-    assert!(!read_loop_strikes(&env).contains_key(&machine_task_key("watchdog")));
+    assert!(
+        !read_loop_strikes(&env).contains_key(&project_task_key(&env.project_root, "watchdog"))
+    );
     assert!(
         read_loop_arming(&env)
-            .get(&machine_task_key("watchdog"))
+            .get(&project_task_key(&env.project_root, "watchdog"))
             .is_some_and(|arming| arming.enabled
                 && arming.pause_until.is_none()
                 && arming.strikes.is_none())
@@ -2033,8 +2775,8 @@ fn loop_poll_until_delivers_once_or_expires() {
             "expired".to_owned(),
             TaskEntry {
                 wake: Some(TaskTarget {
-                    kind: "claude".to_owned(),
-                    session: "sess-expired".to_owned(),
+                    kind: AgentKind::new_unchecked("claude"),
+                    session: AgentSessionId::from("sess-expired"),
                     handle: "@claude".to_owned(),
                 }),
                 prompt: Some("too late".to_owned()),
@@ -2746,6 +3488,14 @@ fn loop_ok(env: &Env, args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).expect("stdout")
+}
+
+fn calling_loop(env: &Env, session: &str) -> Command {
+    let mut command = env.rimz();
+    command
+        .env("RIMZ_AGENT_KIND", "claude")
+        .env("RIMZ_AGENT_ID", session);
+    command
 }
 
 fn loop_ok_root(env: &Env, root: &Path, args: &[&str]) -> String {

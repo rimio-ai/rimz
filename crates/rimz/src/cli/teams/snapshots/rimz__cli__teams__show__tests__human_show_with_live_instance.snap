@@ -12,6 +12,10 @@ forge
   planner  claude   claude  fable  high    auto
   (prompt stack: rimz teams show forge --json)
 
+Declared signals
+  ROLE     SIGNAL     MATCH  PROMPT
+  planner  ci.failed  -      Fix CI
+
 #feat-x · Plan (delta) (@planner)
   worktree: /repo/worktrees/feat-x · branch feat-x
   stages:   Explore → [Plan] → Implement
@@ -19,6 +23,10 @@ forge
 
   MEMBER    STATUS   ACTIVITY         CTX   COST  AGE
   @planner  running  reading show.rs  42%  $0.25   2m
+
+Live signals
+  LANE     MEMBER    NAME                                 SIGNAL     MATCH
+  #feat-x  @planner  team-forge-feat-x-planner-ci-failed  ci.failed  path=/repo/feat-x
 
 Reach: rimz message @planner#feat-x '<text>'
 Focus: rimz teams focus forge#feat-x

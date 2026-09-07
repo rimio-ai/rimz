@@ -3,78 +3,49 @@
 use crate::common::Env;
 use rimz::agents::{AgentLifecycleObservation, LaunchParams, LifecycleSignal};
 use rimz::config::Tasks;
-use rimz::forge::pr_state::{PrLink, PrStateCache};
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
-use rimz::store::snapshot::{WorktreePrCi, WorktreePrState};
+use rimz::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
 use rimz::store::writer::AgentLifecycleIntent;
 
 #[test]
-fn wake_signal_arms_one_shot_instance_for_the_calling_agent() {
+fn wake_delay_arms_instance_for_the_calling_agent() {
     let env = Env::new();
     register_calling_agent(&env);
-    let output = agent_wake(&env)
-        .args([
-            "wake",
-            "--signal",
-            "deploy.failed",
-            "--match",
-            "branch=feature",
-            "--prompt",
-            "inspect CI",
-        ])
-        .output()
-        .expect("arm signal wake");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = wake_ok(&env, &["wake", "--in", "5m"]);
     assert!(stdout.starts_with("armed wake-"), "{stdout}");
-    assert!(stdout.contains("on deploy.failed [branch=feature]"));
-    assert!(stdout.contains("→ @planner"));
-
-    let tasks: Tasks = serde_json::from_slice(
-        &std::fs::read(loop_instances_path(&env)).expect("wake instance store"),
-    )
-    .expect("wake instances JSON");
-    let (name, entry) = tasks.0.iter().next().expect("one wake row");
+    assert!(stdout.contains("in 5m"), "{stdout}");
+    assert!(stdout.contains("→ @planner"), "{stdout}");
+    let tasks = wake_instances(&env);
+    assert_eq!(tasks.0.len(), 1);
+    let (name, entry) = tasks.0.iter().next().unwrap();
     assert!(name.starts_with("wake-"));
-    assert_eq!(entry.signal.as_deref(), Some("deploy.failed"));
-    assert_eq!(
-        entry
-            .matches
-            .as_ref()
-            .and_then(|matches| matches.get("branch"))
-            .map(String::as_str),
-        Some("feature")
-    );
-    assert_eq!(entry.once, None);
-    assert_eq!(entry.timeout.as_deref(), Some("59m"));
-    let meta = entry.wake_meta.as_ref().expect("wake provenance");
-    assert_eq!(
-        entry
-            .deadline
-            .unwrap()
-            .duration_since(meta.armed_at)
-            .as_secs(),
-        59 * 60
-    );
-    assert_eq!(entry.prompt.as_deref(), Some("inspect CI"));
+    assert!(entry.at.is_some());
+    assert!(entry.signal.is_none());
+    assert!(entry.deadline.is_none());
+    assert!(entry.prompt.is_none());
+    assert!(entry.wake_meta.is_some());
     let target = entry.wake.as_ref().expect("pinned wake target");
-    assert_eq!(target.kind, "claude");
-    assert_eq!(target.session, "provider-session");
+    assert_eq!(target.kind.as_str(), "claude");
+    assert_eq!(target.session.as_str(), "provider-session");
     assert_eq!(target.handle, "@planner#project");
 }
 
 #[test]
-fn calling_agent_can_list_and_cancel_human_armed_wake_by_launch_identity() {
+fn calling_agent_can_list_and_cancel_human_armed_loop_delivery_by_launch_identity() {
     let env = Env::new();
     register_calling_agent(&env);
     let armed = env
         .rimz()
-        .args(["wake", "@planner", "--signal", "deploy.failed"])
+        .args([
+            "loop",
+            "add",
+            "deployment",
+            "--wake",
+            "@planner",
+            "--signal",
+            "deploy.failed",
+        ])
         .output()
         .expect("arm wake from human shell");
     assert!(
@@ -82,12 +53,7 @@ fn calling_agent_can_list_and_cancel_human_armed_wake_by_launch_identity() {
         "{}",
         String::from_utf8_lossy(&armed.stderr)
     );
-    let stdout = String::from_utf8_lossy(&armed.stdout);
-    let name = stdout
-        .strip_prefix("armed ")
-        .and_then(|receipt| receipt.split_once(':'))
-        .map(|(name, _)| name)
-        .expect("armed wake name");
+    let name = "deployment";
 
     let listed = agent_wake(&env)
         .args(["wake", "list", "--json"])
@@ -113,12 +79,12 @@ fn calling_agent_can_list_and_cancel_human_armed_wake_by_launch_identity() {
     );
     assert_eq!(
         String::from_utf8_lossy(&canceled.stdout),
-        format!("canceled {name}\n")
+        format!("canceled {name}\nno pending wakes\n")
     );
 }
 
 #[test]
-fn wake_without_target_refuses_a_plain_shell() {
+fn wake_arm_refuses_a_plain_shell() {
     let env = Env::new();
     let output = env
         .rimz()
@@ -128,7 +94,7 @@ fn wake_without_target_refuses_a_plain_shell() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("without an explicit @target is only available to an agent"),
+        stderr.contains("arming a wake is only available to an agent"),
         "{stderr}"
     );
 }
@@ -146,14 +112,14 @@ fn wake_rejects_delays_the_minute_scheduler_cannot_represent() {
 }
 
 #[test]
-fn wake_rejects_signal_timeouts_at_or_above_24_hours() {
+fn wake_rejects_watch_checkins_at_or_above_24_hours() {
     let env = Env::new();
     register_calling_agent(&env);
     for timeout in ["24h", "25h"] {
         let output = agent_wake(&env)
-            .args(["wake", "--signal", "deploy.failed", "--timeout", timeout])
+            .args(["wake", "--timeout", timeout, "--", "true"])
             .output()
-            .expect("reject long signal timeout");
+            .expect("reject long watch check-in");
         assert!(!output.status.success(), "accepted --timeout {timeout}");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
@@ -164,28 +130,27 @@ fn wake_rejects_signal_timeouts_at_or_above_24_hours() {
 }
 
 #[test]
-fn wake_wait_reports_a_watched_failure_and_settles_its_message() {
+fn watched_failure_preserves_full_output_and_delivers_its_tail() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
-    let store = env.store();
-
     let output = agent_wake(&env)
         .args([
             "wake",
-            "--wait=5s",
+            "--json",
             "--",
             "sh",
             "-c",
             "sleep 1; seq 1 5000; printf watched; exit 3",
         ])
         .output()
-        .expect("wait for watched wake");
-    assert!(!output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("delivered · exit 3 after"), "{stdout}");
-    assert!(stdout.contains("watched"), "{stdout}");
-    let records = wake_records(&env);
+        .expect("arm watched wake");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = wait_for_wake_records(&env, 1);
     let check = records[0].check.as_ref().unwrap();
     let path = check.output_path.as_ref().expect("watch output path");
     let full = std::fs::read_to_string(path).expect("full watch output");
@@ -200,7 +165,6 @@ fn wake_wait_reports_a_watched_failure_and_settles_its_message() {
     );
     assert!(check.output.len() <= 4096);
     assert!(full.ends_with(&check.output));
-    assert!(stdout.contains(&path.display().to_string()), "{stdout}");
     let message_id = records[0].message_id.as_ref().unwrap();
     let message = wake_ok(&env, &["message", "show", message_id.as_str()]);
     assert!(message.contains("waited on `"), "{message}");
@@ -224,13 +188,9 @@ fn wake_wait_reports_a_watched_failure_and_settles_its_message() {
         "{shown}"
     );
     assert!(!message.contains("--- watch"), "{message}");
-    assert!(store.list_pending_messages().unwrap().is_empty());
+    assert_eq!(wait_for_wake_messages(&env, 1).len(), 1);
 
-    let instances: Tasks = serde_json::from_slice(
-        &std::fs::read(loop_instances_path(&env)).expect("wake instance store"),
-    )
-    .expect("wake instances JSON");
-    assert!(instances.0.is_empty());
+    wait_for_no_wake_instances(&env);
 }
 
 #[test]
@@ -268,7 +228,7 @@ fn watched_wake_survives_the_arming_process_group_exiting() {
     assert!(
         matches!(records[0].watch.as_ref().unwrap(), rimz::harness::schedule::signal::WatchVerdict::Exited { code: Some(0), elapsed_ms } if *elapsed_ms >= 1_000)
     );
-    let message = env.store().list_pending_messages().unwrap().pop().unwrap();
+    let message = wait_for_wake_messages(&env, 1).pop().unwrap();
     assert!(message.text.starts_with("waited on `"), "{}", message.text);
     assert!(message.text.contains("survived"), "{}", message.text);
 }
@@ -370,7 +330,7 @@ fn lost_watcher_delivers_elapsed_and_the_existing_log_tail() {
         records[0].check.as_ref().unwrap().output_path.as_ref(),
         Some(&path)
     );
-    let message = store.list_pending_messages().unwrap().pop().unwrap();
+    let message = wait_for_wake_messages(&env, 1).pop().unwrap();
     assert!(message.text.contains(&verdict.label()), "{}", message.text);
     assert!(message.text.contains("started"), "{}", message.text);
     let logs = wake_ok(&env, &["loop", "logs", name]);
@@ -385,485 +345,330 @@ fn lost_watcher_delivers_elapsed_and_the_existing_log_tail() {
 
 #[test]
 fn watch_retires_without_delivery_when_its_polarity_does_not_match() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    register_calling_agent(&env);
-
-    let output = agent_wake(&env)
-        .args(["wake", "--on", "fail", "--wait=5s", "--", "true"])
-        .output()
-        .expect("wait for successful watched command");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("skipped · exit 0"), "{stdout}");
-    assert!(env.store().list_pending_messages().unwrap().is_empty());
-    let instances: Tasks = serde_json::from_slice(
-        &std::fs::read(loop_instances_path(&env)).expect("wake instance store"),
-    )
-    .expect("wake instances JSON");
-    assert!(instances.0.is_empty());
+    for (on, command) in [("fail", "true"), ("success", "false")] {
+        let env = Env::new();
+        env.install_agent_hooks("claude");
+        register_calling_agent(&env);
+        wake_ok(&env, &["wake", "--on", on, "--", command]);
+        let records = wait_for_wake_records(&env, 1);
+        assert_eq!(records[0].result.label(), "skipped");
+        assert!(records[0].message_id.is_none());
+        assert!(env.store().list_pending_messages().unwrap().is_empty());
+        wait_for_no_wake_instances(&env);
+    }
 }
 
 #[test]
-fn signal_wake_siblings_do_not_deliver_or_extend_deadline() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    register_calling_agent(&env);
-    let name = arm_subscription(&env);
-    let deadline = wake_instances(&env).0[&name].deadline;
-
-    wake_ok(
-        &env,
-        &[
-            "events",
-            "emit",
-            "deploy.passed",
-            "--json",
-            r#"{"branch":"other"}"#,
-        ],
-    );
-    assert!(wake_records(&env).is_empty());
-    assert_eq!(wake_instances(&env).0[&name].deadline, deadline);
-
-    wake_ok(
-        &env,
-        &[
-            "events",
-            "emit",
-            "deploy.passed",
-            "--json",
-            r#"{"branch":"feature"}"#,
-        ],
-    );
-    let records = wait_for_wake_records(&env, 1);
-    assert_eq!(records[0].result.label(), "skipped");
-    assert!(records[0].message_id.is_none());
-    assert!(env.store().list_pending_messages().unwrap().is_empty());
-    assert_eq!(
-        serde_json::to_value(records[0].result).unwrap(),
-        "signal_skipped"
-    );
-    assert_eq!(wake_instances(&env).0[&name].deadline, deadline);
+fn self_wake_queues_with_any_gate_for_working_and_idle_targets() {
+    for working in [false, true] {
+        let env = Env::new();
+        env.install_agent_hooks("claude");
+        register_calling_agent(&env);
+        if working {
+            let observation = AgentLifecycleObservation::new(
+                Some(AgentSessionId::from("provider-session")),
+                LifecycleSignal::TurnStarted,
+            );
+            env.store()
+                .append_agent_lifecycle(AgentLifecycleIntent {
+                    session_name: "rimz-test",
+                    agent_kind: AgentKind::new_unchecked("claude"),
+                    event_name: "test",
+                    observation: &observation,
+                    spawned_subagents: &[],
+                })
+                .unwrap();
+        }
+        wake_ok(&env, &["wake", "--", "printf", "self-wake-marker"]);
+        let messages = wait_for_wake_messages(&env, 1);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].agent_id.as_str(), "provider-session");
+        assert_eq!(messages[0].gate, DeliveryGate::Any);
+        assert_eq!(
+            messages[0].sender,
+            MessageSender::Harness {
+                notice: HarnessNotice::Wake
+            }
+        );
+        assert!(messages[0].text.contains("self-wake-marker"));
+        wait_for_no_wake_instances(&env);
+    }
 }
 
 #[test]
-fn signal_wake_retires_after_one_delivery_and_ignores_repeated_match() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    register_calling_agent(&env);
-    let name = arm_subscription(&env);
-
-    for fired in [1, 0] {
+fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
+    for (on, exit, delivers_exit) in [
+        ("any", "0", true),
+        ("success", "0", true),
+        ("fail", "3", true),
+        ("success", "3", false),
+        ("fail", "0", false),
+    ] {
+        let env = Env::new();
+        env.install_agent_hooks("claude");
+        register_calling_agent(&env);
+        let release = env.home_root.join("release");
+        let pid_path = env.home_root.join("command.pid");
         let receipt = wake_ok(
             &env,
             &[
-                "events",
-                "emit",
-                "deploy.failed",
+                "wake",
                 "--json",
-                r#"{"branch":"feature","reason":"red"}"#,
+                "--on",
+                on,
+                "--timeout",
+                "1s",
+                "--",
+                "sh",
+                "-c",
+                "printf '%s' \"$$\" > \"$1\"; printf checkin-marker; while [ ! -e \"$2\" ]; do sleep 0.05; done; printf final-marker; exit \"$3\"",
+                "checkin",
+                pid_path.to_str().unwrap(),
+                release.to_str().unwrap(),
+                exit,
             ],
         );
+        let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
+        let name = receipt["name"].as_str().unwrap();
+        let messages = wait_for_wake_messages(&env, 1);
+        let notice = &messages[0];
         assert!(
-            receipt.contains(&format!("fired {fired} tasks")),
-            "{receipt}"
+            notice.text.contains("still running after"),
+            "--on {on}: {}",
+            notice.text
         );
+        assert!(notice.text.contains("checkin-marker"), "{}", notice.text);
+        assert!(
+            notice.text.contains(&format!("rimz wake cancel {name}")),
+            "{}",
+            notice.text
+        );
+        assert!(notice.text.contains("rimz wake --in 1s"), "{}", notice.text);
+        assert_eq!(notice.agent_id.as_str(), "provider-session");
+        assert_eq!(
+            notice.sender,
+            MessageSender::Harness {
+                notice: HarnessNotice::Wake
+            }
+        );
+        assert_eq!(notice.gate, DeliveryGate::Any);
+        let pid: u32 = std::fs::read_to_string(&pid_path).unwrap().parse().unwrap();
+        let observe_until = std::time::Instant::now() + std::time::Duration::from_millis(1200);
+        while std::time::Instant::now() < observe_until {
+            assert!(
+                rimz::proc::process_is_live(pid, None),
+                "check-in killed the command"
+            );
+            assert!(
+                wake_instances(&env).0.contains_key(name),
+                "check-in consumed the instance"
+            );
+            assert_eq!(
+                env.store().list_pending_messages().unwrap().len(),
+                1,
+                "duplicate check-in"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
         let records = wait_for_wake_records(&env, 1);
-        let record = records.last().unwrap();
-        assert_eq!(record.result.label(), "delivered");
-        let message_id = record.message_id.as_ref().expect("delivered message");
-        let message = wake_ok(&env, &["message", "show", message_id.as_str()]);
-        assert!(message.contains("deploy.failed"), "{message}");
-        assert!(message.contains("feature"), "{message}");
-        assert!(!wake_instances(&env).0.contains_key(&name));
-    }
-    assert_eq!(wake_records(&env).len(), 1);
-    assert_eq!(env.store().list_pending_messages().unwrap().len(), 1);
-}
-
-#[test]
-fn pending_ci_cache_at_deadline_delivers_status_and_rearm_once() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    let worktree = env.project_root.join("feat-x");
-    register_calling_agent_in(&env, &worktree, LaunchParams::default());
-    let receipt = wake_ok(&env, &["wake", "--signal", "ci.failed", "--json"]);
-    let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
-    let name = receipt["name"].as_str().unwrap();
-    write_ci_cache(&env, &worktree, WorktreePrCi::Pending);
-    expire_subscription(&env, name);
-    wake_ok(&env, &["loop", "tick"]);
-    let records = wait_for_wake_records(&env, 1);
-    assert_eq!(records[0].result.label(), "expired");
-    let message = env.store().list_pending_messages().unwrap().pop().unwrap();
-    assert!(
-        message.text.contains("ci pending on feat-x (PR #91)"),
-        "{}",
-        message.text
-    );
-    assert!(
-        message
-            .text
-            .contains("waited on ci.failed on feat-x (PR #91)")
-    );
-    assert!(message.text.contains("nothing in 59m; wake closed"));
-    assert_eq!(
-        rearm_args(&message.text),
-        [
-            "rimz",
-            "wake",
-            "--signal",
-            "ci.failed",
-            "--match",
-            &format!("path={}", worktree.display())
-        ]
-    );
-    assert!(!wake_instances(&env).0.contains_key(name));
-    wake_ok(&env, &["loop", "run", name, "--expired"]);
-    assert_eq!(wake_records(&env).len(), 1);
-    assert_eq!(env.store().list_pending_messages().unwrap().len(), 1);
-}
-
-#[test]
-fn signal_spawn_cannot_consume_a_wake_rearmed_before_child_startup() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    register_calling_agent(&env);
-    let name = arm_subscription(&env);
-    let armed_at = wake_instances(&env).0[&name]
-        .wake_meta
-        .as_ref()
-        .unwrap()
-        .armed_at;
-    let captured = env.home_root.join("signal-spawn.args");
-    let shim = env.home_root.join("capture-signal-spawn");
-    std::fs::write(&shim, "#!/bin/sh\nprintf '%s\\0' \"$@\" > \"$RIMZ_TEST_SPAWN_ARGS.tmp\"\nmv \"$RIMZ_TEST_SPAWN_ARGS.tmp\" \"$RIMZ_TEST_SPAWN_ARGS\"\n").unwrap();
-    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let output = agent_wake(&env)
-        .env("RIMZ_BIN", &shim)
-        .env("RIMZ_TEST_SPAWN_ARGS", &captured)
-        .args([
-            "events",
-            "emit",
-            "deploy.failed",
-            "--json",
-            r#"{"branch":"feature"}"#,
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while !captured.exists() {
+        assert_eq!(records.len(), 1);
+        let check = records[0].check.as_ref().unwrap();
+        assert!(!check.timed_out);
+        assert_eq!(check.code, None);
         assert!(
-            std::time::Instant::now() < deadline,
-            "signal helper was not spawned"
+            notice
+                .text
+                .contains(&check.output_path.as_ref().unwrap().display().to_string())
         );
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    let args = std::fs::read(&captured)
-        .unwrap()
-        .split(|byte| *byte == 0)
-        .filter(|arg| !arg.is_empty())
-        .map(|arg| String::from_utf8(arg.to_vec()).unwrap())
-        .collect::<Vec<_>>();
-    let receipt = wake_ok(
-        &env,
-        &[
-            "wake",
-            "--signal",
-            "deploy.failed",
-            "--match",
-            "branch=feature",
-            "--prompt",
-            "replacement note",
-            "--json",
-        ],
-    );
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&receipt).unwrap()["name"],
-        name
-    );
-    let replacement = wake_instances(&env).0[&name].clone();
-    assert_ne!(replacement.wake_meta.as_ref().unwrap().armed_at, armed_at);
 
-    let delayed = env.rimz().args(&args).output().unwrap();
-    assert!(
-        delayed.status.success(),
-        "{}",
-        String::from_utf8_lossy(&delayed.stderr)
-    );
-    assert_eq!(
-        wake_instances(&env).0.get(&name),
-        Some(&replacement),
-        "the older signal consumed the replacement wake"
-    );
-    assert!(env.store().list_pending_messages().unwrap().is_empty());
-    assert!(wake_records(&env).is_empty());
-    assert!(
-        args.windows(2)
-            .any(|pair| pair == ["--wake-armed-at", &armed_at.to_string()])
-    );
-
-    wake_ok(
-        &env,
-        &[
-            "events",
-            "emit",
-            "deploy.failed",
-            "--json",
-            r#"{"branch":"feature"}"#,
-        ],
-    );
-    let records = wait_for_wake_records(&env, 1);
-    assert_eq!(records[0].result.label(), "delivered");
-    assert!(!wake_instances(&env).0.contains_key(&name));
-    let messages = env.store().list_pending_messages().unwrap();
-    assert_eq!(messages.len(), 1);
-    assert!(messages[0].text.contains("replacement note"));
-}
-
-#[test]
-fn passing_ci_cache_at_deadline_closes_silently_without_a_signal() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    let worktree = env.project_root.join("feat-x");
-    register_calling_agent_in(&env, &worktree, LaunchParams::default());
-    write_ci_cache(&env, &worktree, WorktreePrCi::Passing);
-    let receipt = wake_ok(&env, &["wake", "--signal", "ci.failed", "--json"]);
-    let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
-    let name = receipt["name"].as_str().unwrap();
-    expire_subscription(&env, name);
-    let output = wake_ok(&env, &["loop", "run", name, "--expired"]);
-    let records = wake_records(&env);
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].result.label(), "expired");
-    assert!(records[0].message_id.is_none(), "{records:?}");
-    let signal = records[0].signal.as_ref().expect("durable cached answer");
-    assert_eq!(signal.name.as_str(), "ci.passed");
-    assert_eq!(signal.payload["path"], worktree.display().to_string());
-    assert_eq!(signal.payload["branch"], "feat-x");
-    assert_eq!(signal.payload["number"], 91);
-    assert!(env.store().list_pending_messages().unwrap().is_empty());
-    assert!(
-        output.contains("answered · ci passing on feat-x (PR #91)"),
-        "{output}"
-    );
-    assert!(!wake_instances(&env).0.contains_key(name));
-    for command in ["logs", "show"] {
-        let output = wake_ok(&env, &["loop", command, name]);
-        assert!(output.contains("ci.passed"), "{output}");
+        std::fs::write(&release, "").unwrap();
+        let records = wait_for_wake_records(&env, 2);
+        assert_eq!(records.len(), 2);
+        assert!(matches!(
+            records[1].watch.as_ref().unwrap(),
+            rimz::harness::schedule::signal::WatchVerdict::Exited { code: Some(code), .. }
+                if code.to_string() == exit
+        ));
+        wait_for_no_wake_instances(&env);
+        let messages = wait_for_wake_messages(&env, if delivers_exit { 2 } else { 1 });
+        assert_eq!(messages.len(), if delivers_exit { 2 } else { 1 });
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|message| message.text.contains("still running after"))
+                .count(),
+            1
+        );
+        if delivers_exit {
+            let final_message = messages
+                .iter()
+                .find(|message| message.message_id != notice.message_id)
+                .unwrap();
+            assert!(
+                final_message.text.contains(&format!("exit {exit} after")),
+                "{}",
+                final_message.text
+            );
+            assert!(
+                final_message.text.contains("final-marker"),
+                "{}",
+                final_message.text
+            );
+            assert_eq!(
+                records[1].message_id.as_ref(),
+                Some(&final_message.message_id)
+            );
+        } else {
+            assert_eq!(records[1].result.label(), "skipped");
+            assert!(records[1].message_id.is_none());
+        }
     }
 }
 
-fn write_ci_cache(env: &Env, worktree: &std::path::Path, ci: WorktreePrCi) {
-    let mut cache = PrStateCache::default();
-    cache.states.insert(
-        worktree.display().to_string(),
-        PrLink {
-            branch: Some("feat-x".to_owned()),
-            incarnation: None,
-            state: WorktreePrState::Open,
-            number: Some(91),
-            url: None,
-            ci: Some(ci),
-            merge_sha: None,
-        },
-    );
-    std::fs::write(
-        env.store().runtime_paths().pr_state_path(),
-        serde_json::to_vec(&cache).unwrap(),
-    )
-    .unwrap();
-}
-
 #[test]
-fn custom_signal_wake_expires_with_a_closing_message_and_rearm() {
+fn wake_cancel_before_watcher_start_prevents_command() {
     let env = Env::new();
-    env.install_agent_hooks("claude");
     register_calling_agent(&env);
-    let name = arm_subscription(&env);
-    expire_subscription(&env, &name);
-    wake_ok(&env, &["loop", "tick"]);
-    let records = wait_for_wake_records(&env, 1);
-    assert_eq!(records[0].result.label(), "expired");
-    let message_id = records[0].message_id.as_ref().expect("expiry message");
-    let message = wake_ok(&env, &["message", "show", message_id.as_str()]);
-    assert!(
-        message.contains(&format!("wake closed [{name}]")),
-        "{message}"
-    );
-    assert!(
-        message.contains("waited on deploy.failed on feature")
-            && message.contains("nothing in 59m"),
-        "{message}"
-    );
-    assert_eq!(
-        rearm_args(&message),
-        [
-            "rimz",
-            "wake",
-            "--signal",
-            "deploy.failed",
-            "--match",
-            "branch=feature"
-        ]
-    );
-    assert!(!wake_instances(&env).0.contains_key(&name));
-}
-
-#[test]
-fn missing_ci_cache_at_deadline_delivers_unknown_status_and_rearm() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    let worktree = env.project_root.join("feat-x");
-    register_calling_agent_in(&env, &worktree, LaunchParams::default());
-    let receipt = wake_ok(&env, &["wake", "--signal", "ci.failed", "--json"]);
+    let receipt = wake_ok(&env, &["wake", "--in", "5m", "--json"]);
     let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
     let name = receipt["name"].as_str().unwrap();
-    assert!(!env.store().runtime_paths().pr_state_path().exists());
-    expire_subscription(&env, name);
-    wake_ok(&env, &["loop", "run", name, "--expired"]);
-    let records = wake_records(&env);
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].result.label(), "expired");
-    assert!(records[0].message_id.is_some());
-    let message = env.store().list_pending_messages().unwrap().pop().unwrap();
-    assert!(
-        message.text.contains("nothing in 59m; wake closed"),
-        "{}",
-        message.text
-    );
-    assert!(
-        message.text.contains("no PR or CI seen on"),
-        "{}",
-        message.text
-    );
-    assert_eq!(
-        rearm_args(&message.text),
-        [
-            "rimz",
-            "wake",
-            "--signal",
-            "ci.failed",
-            "--match",
-            &format!("path={}", worktree.display())
-        ]
-    );
-    assert!(!wake_instances(&env).0.contains_key(name));
-}
-
-#[test]
-fn signal_wake_rearm_replaces_note_and_deadline_and_cancel_wins_lapse() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    register_calling_agent(&env);
-    let name = arm_subscription(&env);
     let mut tasks = wake_instances(&env);
-    let entry = tasks.0.get_mut(&name).unwrap();
-    let previous_arm = jiff::Timestamp::UNIX_EPOCH;
-    entry.wake_meta.as_mut().unwrap().armed_at = previous_arm;
-    entry.prompt = Some("old note".to_owned());
-    let previous_deadline = entry.deadline;
+    let entry = tasks.0.get_mut(name).unwrap();
+    entry.at = None;
+    entry.watch = Some("touch command-started".to_owned());
     std::fs::write(
         loop_instances_path(&env),
         serde_json::to_vec(&tasks).unwrap(),
     )
     .unwrap();
-    let receipt = wake_ok(
-        &env,
-        &[
-            "wake",
-            "--signal",
-            "deploy.failed",
-            "--match",
-            "branch=feature",
-            "--timeout",
-            "10m",
-            "--prompt",
-            "new note",
-        ],
-    );
-    assert!(receipt.starts_with(&format!("armed {name}:")), "{receipt}");
-    let tasks = wake_instances(&env);
-    assert_eq!(tasks.0.len(), 1);
-    let entry = &tasks.0[&name];
-    assert_eq!(entry.prompt.as_deref(), Some("new note"));
-    assert_eq!(entry.timeout.as_deref(), Some("10m"));
-    let armed_at = entry.wake_meta.as_ref().unwrap().armed_at;
-    assert!(armed_at > previous_arm);
-    assert_ne!(entry.deadline, previous_deadline);
-    assert_eq!(
-        entry.deadline.unwrap().duration_since(armed_at).as_secs(),
-        600
-    );
-    let listed = wake_ok(&env, &["wake", "list"]);
-    assert!(listed.contains("waiting"), "{listed}");
-    assert!(!listed.contains("listening"), "{listed}");
-    wake_ok(&env, &["loop", "run", &name, "--expired"]);
-    assert!(wake_records(&env).is_empty());
-    assert!(wake_instances(&env).0.contains_key(&name));
-    wake_ok(&env, &["wake", "cancel", &name]);
-    wake_ok(&env, &["loop", "run", &name, "--expired"]);
-    assert!(wake_records(&env).is_empty());
+
+    wake_ok(&env, &["wake", "cancel", name]);
+    let output = env.rimz().args(["wake", "watch", name]).output().unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("no wake named"));
+    assert!(!env.project_root.join("command-started").exists());
+    assert!(wake_instances(&env).0.is_empty());
     assert!(env.store().list_pending_messages().unwrap().is_empty());
 }
 
 #[test]
-fn loop_signal_siblings_preserve_forever_and_once_subscriptions() {
-    for once in [false, true] {
-        let env = Env::new();
-        env.install_agent_hooks("claude");
-        register_calling_agent(&env);
-        let mut args = vec![
-            "loop",
-            "add",
-            "deployment",
-            "--wake",
-            "@planner",
-            "--signal",
-            "deploy.failed",
-        ];
-        if once {
-            args.push("--once");
-        }
-        wake_ok(&env, &args);
-        wake_ok(&env, &["events", "emit", "deploy.passed"]);
-        let records = wake_records(&env);
-        assert_eq!(records.len(), 1, "skip is recorded before emit returns");
-        assert_eq!(
-            serde_json::to_value(records[0].result).unwrap(),
-            "signal_skipped"
+fn wake_cancel_all_stops_command_groups_and_prints_pending() {
+    let env = Env::new();
+    register_calling_agent(&env);
+    let mut pids = Vec::new();
+    for index in 0..2 {
+        let path = env.home_root.join(format!("command-{index}.pids"));
+        wake_ok(
+            &env,
+            &[
+                "wake",
+                "--",
+                "sh",
+                "-c",
+                "sleep 30 & printf '%s %s' \"$$\" \"$!\" > \"$1\"; wait",
+                "cancel",
+                path.to_str().unwrap(),
+            ],
         );
-        assert_eq!(
-            records[0].signal.as_ref().unwrap().name.as_str(),
-            "deploy.passed"
-        );
-        assert!(env.store().list_pending_messages().unwrap().is_empty());
-        wake_ok(&env, &["loop", "show", "deployment"]);
-        wake_ok(&env, &["events", "emit", "deploy.failed"]);
-        let records = wait_for_wake_records(&env, 2);
-        assert_eq!(records[1].result.label(), "delivered");
-        if once {
-            assert!(!wake_instances(&env).0.contains_key("deployment"));
-        } else {
-            wake_ok(&env, &["loop", "show", "deployment"]);
-            wake_ok(&env, &["events", "emit", "deploy.failed"]);
-            assert_eq!(
-                wait_for_wake_records(&env, 3)[2].result.label(),
-                "delivered"
-            );
+        wait_until("command group did not start", || {
+            std::fs::read_to_string(&path).is_ok_and(|text| text.split_whitespace().count() == 2)
+        });
+        let command_pids = std::fs::read_to_string(&path).unwrap();
+        for pid in command_pids.split_whitespace() {
+            let pid = pid.parse::<u32>().unwrap();
+            assert!(rimz::proc::process_is_live(pid, None));
+            pids.push(pid);
         }
     }
+    let names = wake_instances(&env).0.into_keys().collect::<Vec<_>>();
+    let canceled = wake_ok(&env, &["wake", "cancel", "--all"]);
+    assert!(canceled.starts_with("canceled "), "{canceled}");
+    for name in names {
+        assert!(canceled.contains(&name), "{canceled}");
+    }
+    assert!(canceled.ends_with("no pending wakes\n"), "{canceled}");
+    wait_until("cancel left watched descendants alive", || {
+        pids.iter()
+            .all(|pid| !rimz::proc::process_is_live(*pid, None))
+    });
+    assert!(wake_instances(&env).0.is_empty());
+    assert!(env.store().list_pending_messages().unwrap().is_empty());
+}
+
+#[test]
+fn wake_receipts_and_list_share_pending_rows() {
+    let env = Env::new();
+    register_calling_agent(&env);
+    let first = wake_ok(&env, &["wake", "--in", "5m", "--json"]);
+    let first: serde_json::Value = serde_json::from_str(&first).unwrap();
+    let second = wake_ok(&env, &["wake", "--in", "10m", "--json"]);
+    let second: serde_json::Value = serde_json::from_str(&second).unwrap();
+    let listed = wake_ok(&env, &["wake", "list", "--json"]);
+    let listed: serde_json::Value = serde_json::from_str(&listed).unwrap();
+    assert_eq!(first["pending"].as_array().unwrap().len(), 1);
+    assert_eq!(second["pending"].as_array().unwrap().len(), 2);
+    assert_eq!(second["pending"], listed);
+    let canceled = wake_ok(
+        &env,
+        &["wake", "cancel", first["name"].as_str().unwrap(), "--json"],
+    );
+    let canceled: serde_json::Value = serde_json::from_str(&canceled).unwrap();
+    assert_eq!(canceled["canceled"], serde_json::json!([first["name"]]));
+    assert_eq!(canceled["pending"].as_array().unwrap().len(), 1);
+    assert_eq!(canceled["pending"][0]["name"], second["name"]);
+    let listed = wake_ok(&env, &["wake", "list", "--json"]);
+    assert_eq!(
+        canceled["pending"],
+        serde_json::from_str::<serde_json::Value>(&listed).unwrap()
+    );
+    let human = wake_ok(&env, &["wake", "--in", "15m"]);
+    assert!(human.starts_with("armed wake-"), "{human}");
+    assert!(human.contains(second["name"].as_str().unwrap()), "{human}");
+}
+
+#[test]
+fn wake_rejects_removed_target_prompt_and_signal_flags() {
+    let env = Env::new();
+    register_calling_agent(&env);
+    for args in [
+        vec!["wake", "@planner", "--in", "5m"],
+        vec!["wake", "--in", "5m", "--prompt", "note"],
+        vec!["wake", "--in", "5m", "--prompt-file", "note.txt"],
+        vec!["wake", "--signal", "deploy.failed"],
+        vec!["wake", "--in", "5m", "--match", "branch=feature"],
+        vec!["wake", "--wait=5s", "--", "true"],
+    ] {
+        let output = agent_wake(&env).args(&args).output().unwrap();
+        assert!(
+            !output.status.success(),
+            "accepted removed arguments: {args:?}"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("unexpected argument"), "{args:?}: {stderr}");
+    }
+}
+
+fn wait_until(description: &str, mut ready: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !ready() {
+        assert!(std::time::Instant::now() < deadline, "{description}");
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+
+fn wait_for_wake_messages(env: &Env, count: usize) -> Vec<MessageRecord> {
+    let mut messages = Vec::new();
+    wait_until("expected durable wake message at the consumer", || {
+        messages = env.store().list_pending_messages().unwrap();
+        messages.len() >= count
+    });
+    messages
+}
+
+fn wait_for_no_wake_instances(env: &Env) {
+    wait_until("wake instance was not retired", || {
+        wake_instances(env).0.is_empty()
+    });
 }
 
 fn wake_ok(env: &Env, args: &[&str]) -> String {
@@ -879,32 +684,10 @@ fn wake_ok(env: &Env, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
-fn arm_subscription(env: &Env) -> String {
-    let receipt = wake_ok(
-        env,
-        &[
-            "wake",
-            "--signal",
-            "deploy.failed",
-            "--match",
-            "branch=feature",
-            "--json",
-        ],
-    );
-    let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
-    receipt["name"].as_str().unwrap().to_owned()
-}
-
-fn rearm_args(body: &str) -> Vec<String> {
-    let command = body
-        .lines()
-        .find_map(|line| line.trim_start().strip_prefix("re-arm: "))
-        .expect("closing message re-arm command");
-    shlex::split(command).expect("shell-safe re-arm command")
-}
-
 fn loop_instances_path(env: &Env) -> std::path::PathBuf {
-    env.state_root().join("rimz").join("loop-instances.json")
+    env.state_path_for(&env.project_root)
+        .root
+        .join("loop-instances.json")
 }
 
 fn loop_runs_path(env: &Env) -> std::path::PathBuf {
@@ -914,13 +697,6 @@ fn loop_runs_path(env: &Env) -> std::path::PathBuf {
 fn wake_instances(env: &Env) -> Tasks {
     let path = loop_instances_path(env);
     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
-}
-
-fn expire_subscription(env: &Env, name: &str) {
-    let mut tasks = wake_instances(env);
-    tasks.0.get_mut(name).unwrap().deadline = Some(jiff::Timestamp::UNIX_EPOCH);
-    let path = loop_instances_path(env);
-    std::fs::write(path, serde_json::to_vec(&tasks).unwrap()).unwrap();
 }
 
 fn wake_records(env: &Env) -> Vec<rimz::harness::schedule::run_log::LoopRunRecord> {
@@ -950,210 +726,7 @@ fn wait_for_wake_records(
     }
 }
 
-#[test]
-fn wake_defaults_scope_from_caller_worktree() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    let worktree = env.project_root.join("feature");
-    register_calling_agent_in(&env, &worktree, LaunchParams::default());
-    wake_ok(&env, &["wake", "--signal", "ci.*"]);
-    let tasks = wake_instances(&env);
-    let entry = tasks.0.values().next().unwrap();
-    assert_eq!(
-        entry.matches.as_ref().unwrap()["path"],
-        worktree.display().to_string()
-    );
-    let output = env
-        .rimz()
-        .args(["wake", "@planner", "--signal", "pr.merged"])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        wake_instances(&env)
-            .0
-            .values()
-            .all(|entry| entry.matches.as_ref().unwrap()["path"] == worktree.display().to_string())
-    );
-    wake_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "ci-loop",
-            "--wake",
-            "@planner",
-            "--signal",
-            "ci.failed",
-            "--prompt",
-            "inspect CI",
-        ],
-    );
-    let listed = wake_ok(&env, &["loop", "show", "ci-loop"]);
-    assert!(
-        listed.contains(&format!("path={}", worktree.display())),
-        "{listed}"
-    );
-}
-
-#[test]
-fn wake_on_ci_from_root_checkout_refuses_with_fixes() {
-    let env = Env::new();
-    register_calling_agent(&env);
-    let output = agent_wake(&env)
-        .args(["wake", "--signal", "ci.failed"])
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    let error = String::from_utf8_lossy(&output.stderr);
-    assert!(error.contains("root checkout is not watched"), "{error}");
-    assert!(error.contains("--match branch=<name>"), "{error}");
-    assert!(
-        error.contains("rimz wake -- gh run watch --exit-status"),
-        "{error}"
-    );
-    wake_ok(
-        &env,
-        &["wake", "--signal", "ci.failed", "--match", "branch=feature"],
-    );
-    let output = agent_wake(&env)
-        .args(["wake", "--signal", "ci.finished"])
-        .output()
-        .unwrap();
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("was replaced by ci.passed, ci.failed")
-    );
-}
-
-#[test]
-fn wake_on_team_defaults_to_own_instance() {
-    let env = Env::new();
-    register_calling_agent_in(
-        &env,
-        &env.project_root,
-        LaunchParams {
-            team: Some("forge".to_owned()),
-            channel: Some("feature".to_owned()),
-            ..LaunchParams::default()
-        },
-    );
-    wake_ok(&env, &["wake", "--signal", "team.idle"]);
-    let tasks = wake_instances(&env);
-    assert_eq!(
-        tasks.0.values().next().unwrap().matches.as_ref().unwrap()["instance"],
-        "forge#feature"
-    );
-}
-
 fn register_calling_agent(env: &Env) {
-    register_calling_agent_in(env, &env.project_root, LaunchParams::default());
-}
-
-fn register_calling_agent_in(env: &Env, worktree: &std::path::Path, launch: LaunchParams) {
-    register_agent_in(
-        env,
-        worktree,
-        launch,
-        "planner",
-        "provider-session",
-        "launch-session",
-    );
-}
-
-#[test]
-fn lifecycle_hooks_deliver_team_idle_and_root_ended_signals() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    register_calling_agent(&env);
-    register_agent_in(
-        &env,
-        &env.project_root,
-        LaunchParams {
-            team: Some("forge".to_owned()),
-            channel: Some("feature".to_owned()),
-            ..LaunchParams::default()
-        },
-        "coder",
-        "worker-session",
-        "worker-launch",
-    );
-    for (signal, filter) in [
-        ("team.idle", "instance=forge#feature"),
-        ("team.ended", "instance=forge#feature"),
-        ("agent.ended", "session=worker-session"),
-    ] {
-        wake_ok(&env, &["wake", "--signal", signal, "--match", filter]);
-    }
-    for event in ["UserPromptSubmit", "Stop", "SessionEnd"] {
-        let mut command = env.hook_command("claude");
-        command
-            .env("RIMZ_AGENT_PID", std::process::id().to_string())
-            .env("RIMZ_CHANNEL", "feature")
-            .env("RIMZ_AGENT_NAME", "coder");
-        let payload = serde_json::json!({
-            "hook_event_name": event,
-            "session_id": "worker-session",
-            "prompt": "finish work",
-            "last_assistant_message": "work complete",
-            "reason": "other"
-        })
-        .to_string();
-        let output = env
-            .spawn_payload(command, &payload)
-            .wait_with_output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        if event == "Stop" {
-            let records = wait_for_wake_records(&env, 3);
-            assert!(records.iter().any(|record| {
-                record.result.label() == "delivered"
-                    && record
-                        .signal
-                        .as_ref()
-                        .is_some_and(|signal| signal.name.as_str() == "team.idle")
-            }));
-        }
-    }
-    let records = wait_for_wake_records(&env, 5);
-    for signal in ["team.idle", "team.ended", "agent.ended"] {
-        let record = records
-            .iter()
-            .find(|record| {
-                record.result.label() == "delivered"
-                    && record
-                        .signal
-                        .as_ref()
-                        .is_some_and(|value| value.name.as_str() == signal)
-            })
-            .expect("delivered lifecycle wake");
-        let message = wake_ok(
-            &env,
-            &[
-                "message",
-                "show",
-                record.message_id.as_ref().unwrap().as_str(),
-            ],
-        );
-        assert!(message.contains(signal), "{message}");
-    }
-}
-
-fn register_agent_in(
-    env: &Env,
-    worktree: &std::path::Path,
-    launch: LaunchParams,
-    name: &str,
-    session: &str,
-    launch_id: &str,
-) {
     let store = env.store();
     let workspace =
         rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace resolves");
@@ -1163,27 +736,27 @@ fn register_agent_in(
             &workspace.session_name,
             &AgentKind::new_unchecked("claude"),
             AgentLaunchPayload {
-                agent_id: AgentSessionId::from(session),
-                launch_id: Some(AgentSessionId::from(launch_id)),
-                agent_name: name.to_owned(),
+                agent_id: AgentSessionId::from("provider-session"),
+                launch_id: Some(AgentSessionId::from("launch-session")),
+                agent_name: "planner".to_owned(),
                 agent_name_explicit: true,
-                launch,
+                launch: LaunchParams::default(),
                 state: AgentLaunchState::Bound,
                 run_id: None,
                 pane_id: None,
                 runtime_owner: None,
-                worktree_path: Some(worktree.display().to_string()),
-                worktree_branch: Some(name.to_owned()),
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: Some("planner".to_owned()),
                 prompt: None,
                 description: None,
             },
         ))
         .expect("seed launched target");
     let mut observation = AgentLifecycleObservation::new(
-        Some(AgentSessionId::from(session)),
+        Some(AgentSessionId::from("provider-session")),
         LifecycleSignal::Registered,
     );
-    observation.agent_name = Some(name.to_owned());
+    observation.agent_name = Some("planner".to_owned());
     store
         .append_agent_lifecycle(AgentLifecycleIntent {
             session_name: "rimz-test",

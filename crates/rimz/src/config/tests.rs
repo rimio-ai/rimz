@@ -1419,6 +1419,45 @@ fn agent_profiles_commands_and_teams_parse() {
 }
 
 #[test]
+fn team_signal_bindings_parse_default_and_round_trip() {
+    let config: AgentsConfig = toml::from_str(
+        r#"
+        [[teams.forge.roles]]
+        role = "coder"
+        profile = "codex"
+        [[teams.forge.signals]]
+        signal = "ci.failed"
+        role = "coder"
+        [[teams.forge.signals]]
+        signal = "agent.idle"
+        role = "coder"
+        match = { handle = "reviewer" }
+        prompt = "Review the result"
+        "#,
+    )
+    .expect("parse bindings");
+    let team = &config.teams.0["forge"];
+    assert_eq!(team.signals.len(), 2);
+    assert_eq!(team.signals[0].signal, "ci.failed");
+    assert_eq!(team.signals[0].role, "coder");
+    assert!(team.signals[0].matches.is_empty());
+    assert!(team.signals[0].prompt.is_none());
+    assert_eq!(team.signals[1].matches["handle"], "reviewer");
+    assert_eq!(team.signals[1].prompt.as_deref(), Some("Review the result"));
+    let encoded = toml::to_string(team).expect("serialize bindings");
+    assert_eq!(toml::from_str::<Team>(&encoded).expect("round trip"), *team);
+    for raw in ["", "signals = []"] {
+        let empty: Team = toml::from_str(raw).expect("default bindings");
+        assert!(empty.signals.is_empty());
+        assert!(
+            !toml::to_string(&empty)
+                .expect("serialize empty")
+                .contains("signals")
+        );
+    }
+}
+
+#[test]
 fn team_scratch_files_parse_default_and_round_trip() {
     let team: Team = toml::from_str(
         "layout = \"planner\"\n\

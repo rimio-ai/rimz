@@ -160,6 +160,52 @@ impl FromStr for WorkspaceId {
     }
 }
 
+/// A configured team in one room lane, rendered as `team#channel`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct TeamInstanceId(String);
+
+#[derive(Debug, thiserror::Error)]
+#[error("invalid team instance `{0}`; expected team#channel")]
+pub struct InvalidTeamInstanceId(String);
+
+impl FromStr for TeamInstanceId {
+    type Err = InvalidTeamInstanceId;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let valid = value.split_once('#').is_some_and(|(team, channel)| {
+            !team.is_empty()
+                && !channel.is_empty()
+                && !channel.contains('#')
+                && !value.chars().any(char::is_whitespace)
+        });
+        if !valid {
+            return Err(InvalidTeamInstanceId(value.to_owned()));
+        }
+        Ok(Self(value.to_owned()))
+    }
+}
+
+impl TryFrom<String> for TeamInstanceId {
+    type Error = InvalidTeamInstanceId;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+
+impl From<TeamInstanceId> for String {
+    fn from(value: TeamInstanceId) -> Self {
+        value.0
+    }
+}
+
+impl fmt::Display for TeamInstanceId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// Macro: define a UUIDv7-backed newtype with a fixed prefix.
 macro_rules! uuid_v7_id {
     ($name:ident, $prefix:literal, $doc:literal) => {

@@ -121,8 +121,8 @@ fn spawn_entry(check: bool, on: CheckOn) -> TaskEntry {
 fn wake_entry(check: bool, on: CheckOn) -> TaskEntry {
     TaskEntry {
         wake: Some(TaskTarget {
-            kind: "claude".to_owned(),
-            session: "sess-planner".to_owned(),
+            kind: rimz::ids::AgentKind::new_unchecked("claude"),
+            session: "sess-planner".into(),
             handle: "@planner".to_owned(),
         }),
         check: check.then(|| "cargo test".to_owned()),

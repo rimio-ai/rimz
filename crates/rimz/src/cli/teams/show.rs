@@ -103,6 +103,36 @@ fn write_report(
         )?;
     }
 
+    if report.roles.iter().any(|role| !role.signals.is_empty()) {
+        writeln!(w)?;
+        writeln!(
+            w,
+            "{}",
+            render::paint(render::palette::header(), "Declared signals")
+        )?;
+        let mut signals = render::Table::new(["ROLE", "SIGNAL", "MATCH", "PROMPT"])
+            .indent(2)
+            .max_width(render::terminal_columns(120));
+        for role in &report.roles {
+            for signal in &role.signals {
+                signals.row([
+                    render::cell(&role.role).fg(render::palette::accent()),
+                    render::cell(&signal.signal),
+                    render::cell(signal_matches(&signal.matches)).dash(),
+                    render::cell(
+                        signal
+                            .prompt
+                            .as_deref()
+                            .map(render::one_line)
+                            .unwrap_or_else(|| "-".to_owned()),
+                    )
+                    .dash(),
+                ]);
+            }
+        }
+        signals.render(w)?;
+    }
+
     if report.instances.is_empty() && lane.is_some() {
         writeln!(w)?;
         writeln!(
@@ -116,6 +146,37 @@ fn write_report(
     }
     for instance in &report.instances {
         write_instance(w, instance, now)?;
+    }
+
+    if report
+        .instances
+        .iter()
+        .flat_map(|instance| &instance.members)
+        .any(|member| !member.signals.is_empty())
+    {
+        writeln!(w)?;
+        writeln!(
+            w,
+            "{}",
+            render::paint(render::palette::header(), "Live signals")
+        )?;
+        let mut signals = render::Table::new(["LANE", "MEMBER", "NAME", "SIGNAL", "MATCH"])
+            .indent(2)
+            .max_width(render::terminal_columns(120));
+        for instance in &report.instances {
+            for member in &instance.members {
+                for signal in &member.signals {
+                    signals.row([
+                        render::cell(format!("#{}", instance.channel)).fg(render::palette::meta()),
+                        render::cell(&member.handle).fg(render::palette::identity(&member.kind)),
+                        render::cell(&signal.name),
+                        render::cell(&signal.selector),
+                        render::cell(signal_matches(&signal.matches)).dash(),
+                    ]);
+                }
+            }
+        }
+        signals.render(w)?;
     }
 
     if report.instances.is_empty() {
@@ -247,6 +308,17 @@ fn write_instance(w: &mut impl Write, instance: &LiveInstance, now: jiff::Timest
     Ok(())
 }
 
+fn signal_matches(matches: &std::collections::BTreeMap<String, String>) -> String {
+    if matches.is_empty() {
+        return "-".to_owned();
+    }
+    matches
+        .iter()
+        .map(|(key, value)| render::one_line(&format!("{key}={value}")))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn live_target(report: &TeamReport) -> Option<(&str, &str)> {
     if report.instances.len() != 1 {
         return None;
@@ -315,6 +387,11 @@ mod tests {
             layout: Some("planner,coder+reviewer".to_owned()),
             leader: Some("planner".to_owned()),
             roles: vec![RoleReport {
+                signals: vec![super::super::list::DeclaredSignal {
+                    signal: "ci.failed".to_owned(),
+                    matches: BTreeMap::new(),
+                    prompt: Some("Fix CI".to_owned()),
+                }],
                 role: "planner".to_owned(),
                 profile: "claude".to_owned(),
                 kind: Some("claude".to_owned()),
@@ -345,6 +422,12 @@ mod tests {
             pr: None,
             memory: Vec::new(),
             members: vec![LiveMember {
+                role: Some("planner".to_owned()),
+                signals: vec![super::super::list::LiveSignal {
+                    name: "team-forge-feat-x-planner-ci-failed".to_owned(),
+                    selector: "ci.failed".to_owned(),
+                    matches: BTreeMap::from([("path".to_owned(), "/repo/feat-x".to_owned())]),
+                }],
                 handle: "@planner".to_owned(),
                 kind: "claude".to_owned(),
                 status: AgentStatus::Running,
@@ -396,6 +479,26 @@ mod tests {
         );
         instance.stage.as_mut().unwrap().name = "Done".into();
         assert!(rendered(&report(vec![instance]), None).contains("Explore → Plan → Implement"));
+    }
+
+    #[test]
+    fn json_show_includes_declared_and_live_signals() {
+        let json = serde_json::to_value(report(vec![live_instance()])).unwrap();
+        assert_eq!(
+            json["roles"][0]["signals"],
+            serde_json::json!([{
+                "signal": "ci.failed", "match": {}, "prompt": "Fix CI"
+            }])
+        );
+        let member = &json["instances"][0]["members"][0];
+        assert_eq!(member["role"], "planner");
+        assert_eq!(
+            member["signals"],
+            serde_json::json!([{
+                "name": "team-forge-feat-x-planner-ci-failed",
+                "selector": "ci.failed", "matches": {"path": "/repo/feat-x"}
+            }])
+        );
     }
 
     #[test]

@@ -244,30 +244,6 @@ impl TaskCatalog {
         clear_overlays(&TaskKey::for_task(name, source, &entry.resolved_root()))
     }
 
-    /// Atomically replace a live signal wake in place or mint a new instance.
-    pub fn arm_signal_wake(&self, entry: &TaskEntry, now: jiff::Timestamp) -> Result<String> {
-        let arming_entries = arming::load();
-        let taken = self
-            .visible
-            .iter()
-            .filter(|(name, task)| {
-                task.source() != TaskSource::Instance
-                    || arming::ArmState::resolve(
-                        arming_entries.get(&task.key(name)),
-                        task.source(),
-                        now,
-                    ) != arming::ArmState::Live
-            })
-            .map(|(name, _)| name.clone())
-            .collect();
-        Ok(instances::arm_signal_wake(
-            &instance_root(&entry.resolved_root()),
-            entry,
-            &taken,
-            now,
-        )?)
-    }
-
     pub fn replace_project(
         &self,
         name: &str,
@@ -493,8 +469,8 @@ pub(super) fn delivery_target_alive(
     Ok(snapshot.agents.iter().any(|agent| {
         !agent.is_provider_subagent()
             && agent.ended_at.is_none()
-            && agent.kind.as_str() == target.kind.as_str()
-            && agent.agent_id.as_str() == target.session
+            && agent.kind == target.kind
+            && agent.agent_id == target.session
     }))
 }
 
@@ -620,7 +596,6 @@ mod tests {
         entry.every = None;
         entry.signal = Some("ci.failed".to_owned());
         entry.wake_meta = Some(crate::config::WakeMeta {
-            armed_by: crate::config::WakeArmer::Human,
             armed_at: jiff::Timestamp::UNIX_EPOCH,
             delay: None,
         });
@@ -636,8 +611,8 @@ mod tests {
             ..TaskEntry::default()
         };
         let target = crate::config::TaskTarget {
-            kind: "claude".to_owned(),
-            session: "missing-session".to_owned(),
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
+            session: "missing-session".into(),
             handle: "@claude".to_owned(),
         };
 

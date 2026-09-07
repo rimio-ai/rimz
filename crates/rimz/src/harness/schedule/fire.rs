@@ -28,7 +28,6 @@ enum Action {
     Arm,
     Fire,
     WatchLost,
-    Expire,
 }
 
 const WATCH_LOST_GRACE_SECS: i64 = 30;
@@ -68,11 +67,7 @@ fn fire_tasks(
         match action {
             Action::Arm => {}
             Action::Fire => {
-                spawn_loop_run(runtime, project_root, &name, None, None, false);
-                fired.push(name);
-            }
-            Action::Expire => {
-                spawn_loop_run(runtime, project_root, &name, None, None, true);
+                spawn_loop_run(runtime, project_root, &name, None);
                 fired.push(name);
             }
             Action::WatchLost => {
@@ -106,7 +101,7 @@ fn fire_tasks(
                     watch: Some(watch),
                 };
                 if let Ok(encoded) = serde_json::to_string(&signal) {
-                    spawn_loop_run(runtime, project_root, &name, Some(&encoded), None, false);
+                    spawn_loop_run(runtime, project_root, &name, Some(&encoded));
                     fired.push(name);
                 }
             }
@@ -192,16 +187,6 @@ fn plan(
         let key = TaskKey::for_task(name, task.source(), &task.entry().resolved_root());
         let arming = arming_entries.get(&key);
         let arm_state = ArmState::resolve(arming, task.source(), now.timestamp());
-        if arm_state == ArmState::Live
-            && task.source() == super::catalog::TaskSource::Instance
-            && task.entry().wake_meta.is_some()
-            && matches!(parsed.trigger, Trigger::Signal { .. })
-            && deadline_expired_at(task.entry(), now.timestamp())
-        {
-            actions.push((name.clone(), Action::Expire));
-            next_state.insert(name.clone(), now.timestamp());
-            continue;
-        }
         match state.get(name).copied() {
             None => {
                 actions.push((name.clone(), Action::Arm));
@@ -298,29 +283,8 @@ pub(super) fn spawn_loop_run(
     project_root: Option<&Path>,
     name: &str,
     signal_json: Option<&str>,
-    wake_armed_at: Option<Timestamp>,
-    expired: bool,
 ) {
-    let mut args = Vec::<OsString>::new();
-    if let Some(project_root) = project_root {
-        args.extend([
-            OsString::from("--root"),
-            project_root.as_os_str().to_owned(),
-        ]);
-    }
-    args.extend([OsString::from("loop"), OsString::from("run"), name.into()]);
-    if expired {
-        args.push(OsString::from("--expired"));
-    }
-    if let Some(signal_json) = signal_json {
-        args.extend([OsString::from("--signal-json"), signal_json.into()]);
-    }
-    if let Some(armed_at) = wake_armed_at {
-        args.extend([
-            OsString::from("--wake-armed-at"),
-            armed_at.to_string().into(),
-        ]);
-    }
+    let args = loop_run_args(project_root, name, signal_json);
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         task = name,
@@ -334,6 +298,40 @@ pub(super) fn spawn_loop_run(
             "sidebar: failed to spawn loop task",
         );
     }
+}
+
+pub(super) fn wait_loop_run(
+    runtime: &RuntimePaths,
+    project_root: Option<&Path>,
+    name: &str,
+    signal_json: &str,
+) {
+    let mut command = crate::child_process::detached_rimz_command(crate::proc::rimz_exe(), runtime);
+    command.args(loop_run_args(project_root, name, Some(signal_json)));
+    match command.status() {
+        Ok(status) if status.success() => {}
+        Ok(status) => tracing::warn!(task = name, %status, "watched wake delivery failed"),
+        Err(err) => tracing::warn!(task = name, error = %err, "running watched wake delivery"),
+    }
+}
+
+fn loop_run_args(
+    project_root: Option<&Path>,
+    name: &str,
+    signal_json: Option<&str>,
+) -> Vec<OsString> {
+    let mut args = Vec::<OsString>::new();
+    if let Some(project_root) = project_root {
+        args.extend([
+            OsString::from("--root"),
+            project_root.as_os_str().to_owned(),
+        ]);
+    }
+    args.extend([OsString::from("loop"), OsString::from("run"), name.into()]);
+    if let Some(signal_json) = signal_json {
+        args.extend([OsString::from("--signal-json"), signal_json.into()]);
+    }
+    args
 }
 
 #[cfg(test)]
@@ -539,7 +537,6 @@ mod tests {
         std::fs::write(&path, "watcher failed before launching command").unwrap();
         let watch = loaded(TaskEntry {
             wake_meta: Some(crate::config::WakeMeta {
-                armed_by: crate::config::WakeArmer::Human,
                 armed_at: prior,
                 delay: None,
             }),
@@ -549,39 +546,6 @@ mod tests {
         assert_eq!(outcome.verdict.elapsed_ms(), 300_000);
         assert_eq!(outcome.output, "watcher failed before launching command");
         std::fs::remove_file(path).unwrap();
-    }
-
-    #[test]
-    fn signal_expiry_is_detected_on_first_tick_and_rechecks_the_deadline() {
-        let now = zdt(2026, 6, 24, 8, 5, 0);
-        let entry = TaskEntry {
-            agent: Some("claude".to_owned()),
-            signal: Some("ci.failed".to_owned()),
-            deadline: Some(now.timestamp()),
-            wake_meta: Some(crate::config::WakeMeta {
-                armed_by: crate::config::WakeArmer::Human,
-                armed_at: now.timestamp(),
-                delay: None,
-            }),
-            ..TaskEntry::default()
-        };
-        let expired = loaded_from(entry.clone(), TaskSource::Instance);
-        assert_eq!(Tick::default().run(&expired, &now).0, Some(Action::Expire));
-        let refreshed = loaded_from(
-            TaskEntry {
-                deadline: Some(
-                    now.timestamp()
-                        .checked_add(std::time::Duration::from_secs(60))
-                        .expect("deadline"),
-                ),
-                ..entry
-            },
-            TaskSource::Instance,
-        );
-        assert_eq!(
-            Tick::armed(now.timestamp()).run(&refreshed, &now),
-            carry(now.timestamp())
-        );
     }
 
     #[test]

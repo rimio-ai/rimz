@@ -29,6 +29,13 @@ pub struct StrikesError(#[from] OverlayError);
 type Result<T> = std::result::Result<T, StrikesError>;
 
 pub(super) fn classify(record: &LoopRunRecord) -> Signal {
+    if record
+        .watch
+        .as_ref()
+        .is_some_and(|watch| !watch.is_terminal())
+    {
+        return Signal::Neutral;
+    }
     match record.result {
         LoopRunResult::Failed
         | LoopRunResult::VerifyFailed
@@ -90,6 +97,10 @@ pub fn clear(key: &str) -> Result<bool> {
 
 pub(super) fn rename(old: &str, new: &str) -> Result<bool> {
     rename_in(&state_home(), old, new)
+}
+
+pub(super) fn migrate_instance_keys(state_root: &Path, keys: &[(String, String)]) -> Result<()> {
+    Ok(STORE.copy_missing::<u32>(state_root, keys)?)
 }
 
 pub(super) fn prune_orphans(known: &BTreeSet<String>, scopes: &BTreeSet<String>) -> Result<usize> {
@@ -215,6 +226,24 @@ mod tests {
             LoopRunResult::BudgetExceeded,
         ] {
             assert_eq!(classify(&record(result, None)), Signal::Strike);
+        }
+    }
+
+    #[test]
+    fn running_watch_notice_is_strike_neutral() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = "instance::watch";
+        note_in(dir.path(), key, Signal::Strike).unwrap();
+        for result in [
+            LoopRunResult::Delivered,
+            LoopRunResult::Failed,
+            LoopRunResult::CheckSkipped,
+        ] {
+            let mut notice = record(result, check(None, false));
+            notice.watch =
+                Some(crate::harness::schedule::signal::WatchVerdict::Running { elapsed_ms: 1_000 });
+            assert_eq!(classify(&notice), Signal::Neutral);
+            assert_eq!(note_in(dir.path(), key, classify(&notice)).unwrap(), 1);
         }
     }
 

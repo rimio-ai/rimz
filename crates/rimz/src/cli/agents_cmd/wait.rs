@@ -187,6 +187,7 @@ impl WaitStyle {
                 if matches!(&outcome.payload, TerminalPayload::Disappeared) {
                     let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
                     crate::cli::resolve_agent_one(
+                        store,
                         &snapshot,
                         waits.targets[selected].name(),
                         None,
@@ -431,7 +432,7 @@ fn resolve_wait_target(
     current_channel: Option<&str>,
 ) -> Result<WaitTarget> {
     let live_agent_result =
-        crate::cli::resolve_agent_one(snapshot, reference, None, current_channel);
+        crate::cli::resolve_agent_one(store, snapshot, reference, None, current_channel);
     let live_agent = live_agent_result.as_ref().ok().copied();
     if let Some(run) = newest_run_by_ref(store, reference, live_agent)?
         && (!run.status.is_terminal()
@@ -479,7 +480,7 @@ fn poll_target(
         }
         WaitTarget::Agent { reference, .. } => {
             let snapshot = agent_snapshot.context("pending agent target without snapshot")?;
-            match crate::cli::resolve_agent_one(snapshot, reference, None, current_channel) {
+            match crate::cli::resolve_agent_one(store, snapshot, reference, None, current_channel) {
                 Ok(agent) => {
                     let terminal = gate_open(DeliveryGate::Done, agent.status)
                         || agent.status == rimz::agents::AgentStatus::Failed;
@@ -763,7 +764,8 @@ fn wait_interactive_agent_stream(
     };
     let deadline = options.timeout.map(|duration| Instant::now() + duration);
     loop {
-        let agent = crate::cli::resolve_agent_one(&snapshot, reference, None, current_channel)?;
+        let agent =
+            crate::cli::resolve_agent_one(store, &snapshot, reference, None, current_channel)?;
         for text in cursor.messages(
             agent.transcript_path.as_deref(),
             Some(&agent.agent_id),

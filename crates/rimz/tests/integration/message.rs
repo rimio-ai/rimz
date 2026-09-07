@@ -1490,6 +1490,210 @@ fn message_warns_when_ignoring_buffered_stdin() {
 }
 
 #[test]
+fn message_me_resolves_launch_and_process_ancestry() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let [caller, peer] = ReplyAgentFixture::pair(&env, "me");
+    caller.stamp_launch_identity(&env, "launch-me", "planner");
+    peer.stamp_launch_identity(&env, "launch-me-peer", "reviewer");
+    caller.start(&env, "work");
+    run_success(
+        env.rimz()
+            .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+            .env(rimz::harness::launch::ENV_AGENT_ID, "launch-me")
+            .env(rimz::harness::launch::ENV_AGENT_NAME, "reviewer")
+            .env("ZELLIJ_PANE_ID", peer.pane_id)
+            .args(["message", "@me", "launch identity"]),
+        "message self by authoritative launch id",
+    );
+    let messages = env.store().list_messages().expect("messages");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].agent_id, caller.session_id);
+    assert_eq!(messages[0].kind.as_str(), "claude");
+
+    let mut provider = std::process::Command::new("sh");
+    provider
+        .args([
+            "-c",
+            "read _; \"$0\" message @me 'ancestry identity'; exit $?",
+        ])
+        .arg(env.rimz_bin());
+    let command = env.rimz();
+    for (key, value) in command.get_envs() {
+        if let Some(value) = value {
+            provider.env(key, value);
+        } else {
+            provider.env_remove(key);
+        }
+    }
+    if let Some(dir) = command.get_current_dir() {
+        provider.current_dir(dir);
+    }
+    scrub_bare_agent_identity(&mut provider);
+    provider.env("ZELLIJ_PANE_ID", "terminal_5");
+    let mut provider = provider
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn stand-in provider");
+    register_running_agent_owned_by(
+        &env,
+        "claude",
+        "sess-me-ancestor",
+        "project",
+        &[("ZELLIJ_PANE_ID", "terminal_5")],
+        provider.id(),
+    );
+    provider
+        .stdin
+        .take()
+        .expect("provider stdin")
+        .write_all(b"\n")
+        .expect("signal provider");
+    let output = wait_with_output_bounded(provider, Duration::from_secs(2));
+    assert!(
+        output.status.success(),
+        "ancestry self-send failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = env.store().list_messages().expect("messages");
+    let message = messages
+        .iter()
+        .find(|message| message.text == "ancestry identity")
+        .expect("ancestry self message");
+    assert_eq!(message.agent_id, "sess-me-ancestor");
+    assert!(
+        matches!(&message.sender, MessageSender::Agent { kind, .. } if kind.as_str() == "claude")
+    );
+}
+
+#[test]
+fn message_me_rejects_unidentified_shell_and_snapshot_only_owner() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let caller = ReplyAgentFixture::single(&env, "me-shell");
+    caller.stamp_launch_identity(&env, "launch-me-shell", "planner");
+    caller.start(&env, "work");
+    let store = env.store();
+    let mut snapshot = store.snapshot_cached().expect("snapshot");
+    let agent = snapshot
+        .agents
+        .iter_mut()
+        .find(|agent| agent.agent_id == caller.session_id)
+        .expect("caller row");
+    agent.runtime_owner = Some(rimz::pane::RuntimeOwner::new(
+        rimz::pane::RuntimeOwnerKind::Agent,
+        caller.session_id.clone(),
+        std::process::id(),
+        rimz::proc::process_start_token(std::process::id()),
+    ));
+    for snapshot_only_owner in [false, true] {
+        if snapshot_only_owner {
+            rimz::disk::atomic::write_temp_then_rename_cache(
+                &store.paths().latest_snapshot,
+                &snapshot,
+            )
+            .expect("seed snapshot-only owner");
+            assert!(
+                store
+                    .snapshot_cached()
+                    .expect("poisoned snapshot")
+                    .agents
+                    .iter()
+                    .any(|agent| {
+                        agent
+                            .runtime_owner
+                            .as_ref()
+                            .is_some_and(|owner| owner.pid == std::process::id())
+                    })
+            );
+            assert!(
+                store
+                    .runtime_projection(rimz::RuntimeScope::Audit)
+                    .expect("durable owners")
+                    .agents
+                    .iter()
+                    .all(|agent| {
+                        agent
+                            .runtime_owner
+                            .as_ref()
+                            .is_none_or(|owner| owner.pid != std::process::id())
+                    })
+            );
+        }
+        let mut command = env.rimz();
+        scrub_bare_agent_identity(&mut command);
+        let output = command
+            .env("ZELLIJ_PANE_ID", caller.pane_id)
+            .args(["message", "@me", "must not queue"])
+            .output()
+            .expect("shell self-send");
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(
+                "@me requires an agent RimZ can identify; run this command from an agent pane"
+            ),
+            "snapshot-only owner {snapshot_only_owner}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(store.list_messages().expect("messages").is_empty());
+    }
+}
+
+#[test]
+fn message_me_rejects_stale_identity_and_unregistered_session() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let caller = ReplyAgentFixture::single(&env, "me-stale");
+    caller.stamp_launch_identity(&env, "launch-me-stale", "planner");
+    caller.start(&env, "work");
+    for (kind, launch_id) in [("claude", "missing-launch"), ("codex", "launch-me-stale")] {
+        let output = env
+            .rimz()
+            .env(rimz::harness::launch::ENV_AGENT_KIND, kind)
+            .env(rimz::harness::launch::ENV_AGENT_ID, launch_id)
+            .env("ZELLIJ_PANE_ID", caller.pane_id)
+            .args(["message", "@me", "must not queue"])
+            .output()
+            .expect("stale identity self-send");
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("@me requires an agent RimZ can identify")
+        );
+    }
+    run_hook(
+        &env,
+        json!({"hook_event_name": "SessionEnd", "session_id": caller.session_id}),
+        &[("ZELLIJ_PANE_ID", caller.pane_id)],
+    );
+    let output = env
+        .rimz()
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+        .env(rimz::harness::launch::ENV_AGENT_ID, "launch-me-stale")
+        .args(["agents", "show", "@me"])
+        .output()
+        .expect("ended caller resolution");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("the calling agent has ended"));
+
+    seed_provisional_codex_launch(&env, "launch_me", "starting", None, "terminal_5", None);
+    let output = env
+        .rimz()
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "codex")
+        .env(rimz::harness::launch::ENV_AGENT_ID, "launch_me")
+        .args(["message", "@me", "must not queue"])
+        .output()
+        .expect("provisional caller resolution");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("the calling agent is still starting")
+    );
+    assert!(env.store().list_messages().expect("messages").is_empty());
+}
+
+#[test]
 fn bare_resumed_agent_message_is_attributed_by_process_ancestry() {
     let env = Env::new();
     env.install_agent_hooks("claude");

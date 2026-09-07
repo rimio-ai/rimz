@@ -6,19 +6,16 @@ use crate::store::event::SignalSource;
 fn task() -> TaskEntry {
     TaskEntry {
         wake: Some(TaskTarget {
-            kind: "claude".to_owned(),
-            session: "session".to_owned(),
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
+            session: "session".into(),
             handle: "@coder#feat-x".to_owned(),
         }),
         ..TaskEntry::default()
     }
 }
 
-fn meta(handle: &str) -> WakeMeta {
+fn meta(_handle: &str) -> WakeMeta {
     WakeMeta {
-        armed_by: WakeArmer::Agent {
-            handle: handle.to_owned(),
-        },
         armed_at: "2026-01-01T14:02:00Z".parse().unwrap(),
         delay: None,
     }
@@ -113,6 +110,48 @@ fn watch_killed_by_signal_keeps_output_path_tail_and_note() {
 }
 
 #[test]
+fn watch_checkin_keeps_tail_path_and_next_actions() {
+    for timeout in [None, Some("1s"), Some("12m")] {
+        let task = TaskEntry {
+            watch: Some("cargo test".to_owned()),
+            timeout: timeout.map(str::to_owned),
+            ..task()
+        };
+        for output in ["", "last line\n"] {
+            let signal = Signal {
+                watch: Some(WatchOutcome {
+                    verdict: WatchVerdict::Running {
+                        elapsed_ms: 1_800_000,
+                    },
+                    output: output.to_owned(),
+                    output_path: Some("/state/wakes/wake-test.log".into()),
+                }),
+                ..signal("wake.test", serde_json::json!({}))
+            };
+            let tail = if output.is_empty() {
+                "(no output)"
+            } else {
+                output
+            };
+            let delay = timeout.unwrap_or("30m");
+            assert_eq!(
+                compose_wake(
+                    "wake-test",
+                    &task,
+                    None,
+                    Evidence::Signal(&signal),
+                    "",
+                    now()
+                ),
+                format!(
+                    "waited on `cargo test`\nstill running after 30m · output: /state/wakes/wake-test.log [wake-test]\n{tail}\n\nStop it: rimz wake cancel wake-test\nAnother check-in: rimz wake --in {delay}"
+                )
+            );
+        }
+    }
+}
+
+#[test]
 fn watch_timeout_keeps_output_path_tail_and_note() {
     assert_watch(
         WatchVerdict::TimedOut {
@@ -191,31 +230,7 @@ fn signal_without_metadata_keeps_scope_and_has_no_elapsed_time() {
 }
 
 #[test]
-fn expiry_names_scope_deadline_and_rearm() {
-    let task = TaskEntry {
-        signal: Some("ci.*".to_owned()),
-        matches: Some([("path".to_owned(), "/home/you/code/app-feat-x".to_owned())].into()),
-        timeout: Some("59m".to_owned()),
-        ..task()
-    };
-    assert_eq!(
-        compose_wake(
-            "wake-test",
-            &task,
-            Some(&meta("@coder#feat-x")),
-            Evidence::Expired {
-                view: None,
-                rearm: "rimz wake --signal 'ci.*' --match path=/home/you/code/app-feat-x"
-            },
-            "{{branch}}",
-            now()
-        ),
-        "waited on ci.* on /home/you/code/app-feat-x\nnothing in 59m; wake closed [wake-test]\nre-arm: rimz wake --signal 'ci.*' --match path=/home/you/code/app-feat-x\n\n{{branch}}"
-    );
-}
-
-#[test]
-fn delay_ends_with_name_and_suppresses_same_target_armer() {
+fn delay_ends_with_name() {
     let meta = WakeMeta {
         delay: Some("30m".to_owned()),
         ..meta("@coder#feat-x")
@@ -239,6 +254,22 @@ fn scheduled_wake_without_metadata_does_not_fabricate_delay() {
         compose_wake("wake-test", &task(), None, Evidence::Scheduled, "", now()),
         "scheduled wake\nfired [wake-test]"
     );
+}
+
+#[test]
+fn watch_command_preview_preserves_both_ends() {
+    let command = format!("cargo test {} --all-targets", "界".repeat(140));
+    let task = TaskEntry {
+        watch: Some(command.clone()),
+        ..task()
+    };
+    let body = compose_wake("wake-test", &task, None, Evidence::Manual, "", now());
+    let headline = body.lines().next().unwrap();
+    assert!(headline.starts_with("waited on `cargo test "));
+    assert!(headline.ends_with(" --all-targets`"));
+    assert!(headline.contains('…'));
+    assert_eq!(headline.chars().count(), "waited on ``".len() + 120);
+    assert_eq!(task.watch.as_deref(), Some(command.as_str()));
 }
 
 #[test]
@@ -275,7 +306,7 @@ fn manual_watch_and_signal_name_subject_and_fire_by_hand() {
 }
 
 #[test]
-fn foreign_armer_leads_and_note_is_verbatim() {
+fn signal_note_is_verbatim_regardless_of_armer() {
     let signal = signal(
         "ci.passed",
         serde_json::json!({"branch":"feat-x","number":91}),
@@ -290,65 +321,9 @@ fn foreign_armer_leads_and_note_is_verbatim() {
                 "  the migration window is open\n{{branch}}  \n",
                 now()
             ),
-            format!(
-                "{handle} armed this wake on you.\nwaited on ci.passed on feat-x (PR #91)\nfired after 18m [wake-test]\n{{\"branch\":\"feat-x\",\"number\":91,\"signal\":\"ci.passed\"}}\n\n  the migration window is open\n{{{{branch}}}}  \n"
-            )
+            "waited on ci.passed on feat-x (PR #91)\nfired after 18m [wake-test]\n{\"branch\":\"feat-x\",\"number\":91,\"signal\":\"ci.passed\"}\n\n  the migration window is open\n{{branch}}  \n"
         );
     }
-}
-
-#[test]
-fn shell_armer_leads_even_when_wake_expires() {
-    let task = TaskEntry {
-        signal: Some("ci.failed".to_owned()),
-        timeout: Some("59m".to_owned()),
-        ..task()
-    };
-    let meta = WakeMeta {
-        armed_by: WakeArmer::Human,
-        ..meta("@coder#feat-x")
-    };
-    assert_eq!(
-        compose_wake(
-            "wake-test",
-            &task,
-            Some(&meta),
-            Evidence::Expired {
-                view: None,
-                rearm: "rimz wake --signal ci.failed"
-            },
-            "",
-            now()
-        ),
-        "armed on you from the shell.\nwaited on ci.failed\nnothing in 59m; wake closed [wake-test]\nre-arm: rimz wake --signal ci.failed"
-    );
-}
-
-#[test]
-fn expiry_carries_room_status_before_rearm_and_verbatim_note() {
-    let task = TaskEntry {
-        signal: Some("ci.failed".to_owned()),
-        timeout: Some("59m".to_owned()),
-        ..task()
-    };
-    let view = ForgeView {
-        headline: "feat-x (PR #91)".to_owned(),
-        label: "ci pending on feat-x (PR #91)".to_owned(),
-    };
-    assert_eq!(
-        compose_wake(
-            "wake-test",
-            &task,
-            Some(&meta("@coder#feat-x")),
-            Evidence::Expired {
-                view: Some(&view),
-                rearm: "rimz wake --signal ci.failed"
-            },
-            "  inspect {{branch}}\n",
-            now()
-        ),
-        "waited on ci.failed on feat-x (PR #91)\nnothing in 59m; wake closed · ci pending on feat-x (PR #91) [wake-test]\nre-arm: rimz wake --signal ci.failed\n\n  inspect {{branch}}\n"
-    );
 }
 
 #[test]

@@ -2,30 +2,45 @@ use std::io::Write;
 
 use anyhow::{Result, bail};
 
-use rimz::harness::schedule::catalog::{TaskCatalog, TaskSource};
+use rimz::harness::schedule::catalog::TaskCatalog;
 use rimz::harness::schedule::signal::stop_watcher;
 
 use super::*;
 
-pub(super) fn run(name: &str, globals: &GlobalFlags) -> Result<()> {
+pub(super) fn run(
+    name: Option<TaskName>,
+    all: bool,
+    json: bool,
+    globals: &GlobalFlags,
+) -> Result<()> {
     let ctx = Ctx::open(globals)?;
-    let caller_session = caller_session(&ctx)?;
-    let catalog = TaskCatalog::load(Some(&ctx.workspace.project_root))?;
-    let Some(task) = catalog.visible().get(name) else {
-        bail!("no pending wake named `{name}`; see `rimz wake list`");
+    caller_session(&ctx)?.context(
+        "canceling a wake requires an agent RimZ can identify; run this command from an agent pane",
+    )?;
+    let pending = list::pending_rows(&ctx)?;
+    let names = if all {
+        pending.into_iter().map(|row| row.name).collect::<Vec<_>>()
+    } else {
+        let name = name.expect("clap requires a name or --all").to_string();
+        if !pending.iter().any(|row| row.name == name) {
+            bail!("no pending wake named `{name}`; see `rimz wake list`");
+        }
+        vec![name]
     };
-    let target = task.entry().wake.as_ref();
-    let belongs_here = task.source() == TaskSource::Instance
-        && task.entry().resolved_root() == ctx.workspace.project_root
-        && target.is_some();
-    let belongs_to_caller = caller_session
-        .as_ref()
-        .is_none_or(|session| target.is_some_and(|target| target.session == session.as_str()));
-    if !belongs_here || !belongs_to_caller {
-        bail!("no pending wake named `{name}`; see `rimz wake list`");
+    let catalog = TaskCatalog::load(Some(&ctx.workspace.project_root))?;
+    for name in &names {
+        catalog.remove(name)?;
+        stop_watcher(ctx.runtime(), name)?;
     }
-    catalog.remove(name)?;
-    stop_watcher(ctx.runtime(), name)?;
-    writeln!(super::super::render::out(), "canceled {name}")?;
-    Ok(())
+    let pending = list::pending_rows(&ctx)?;
+    if json {
+        return super::super::render::json(
+            &serde_json::json!({ "canceled": names, "pending": pending }),
+        );
+    }
+    let mut out = super::super::render::out();
+    if !names.is_empty() {
+        writeln!(out, "canceled {}", names.join(", "))?;
+    }
+    list::write_rows(&mut out, pending)
 }

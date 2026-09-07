@@ -211,7 +211,13 @@ fn resolve_pane_target(raw: &str, globals: &GlobalFlags) -> Result<ResolvedPaneT
         PaneTarget::Address(address) => {
             let ctx = crate::cli::Ctx::open(globals)?;
             let snapshot = ctx.cached_snapshot()?;
-            let agent = crate::cli::resolve_agent_one(&snapshot, &address, None, ctx.channel())?;
+            let agent = crate::cli::resolve_agent_one(
+                &ctx.store,
+                &snapshot,
+                &address,
+                None,
+                ctx.channel(),
+            )?;
             let pane = agent
                 .pane
                 .as_ref()
