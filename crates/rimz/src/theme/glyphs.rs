@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 
 use crate::agents::AgentStatus;
-use crate::config::{GlyphRole, ThemeConfig, ThemeStyle};
+use crate::config::{GlyphRole, ThemeConfig};
 
 use super::ramp_tone;
 
@@ -158,11 +158,7 @@ impl GlyphSet {
     /// Resolve style-derived set selection, explicit `glyphs.set` precedence,
     /// preset fallback, and matching inline overrides in one pass.
     pub(crate) fn resolve(theme: &ThemeConfig) -> Self {
-        let source = theme.glyphs.set.as_deref().or(match theme.style {
-            Some(ThemeStyle::Modern) => Some("nerd_font"),
-            _ => None,
-        });
-        let kind = GlyphSetKind::from_source(source);
+        let kind = GlyphSetKind::from_source(theme.glyph_set_source());
         let mut glyphs = GlyphRole::ALL
             .iter()
             .copied()
@@ -310,7 +306,9 @@ pub fn nerd_font_probe_gradient(width: usize) -> Vec<(u8, u8, u8)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ThemeGlyphsConfig, validate_glyph_cells, validate_single_cell};
+    use crate::config::{
+        ThemeGlyphsConfig, ThemeStyle, validate_glyph_cells, validate_single_cell,
+    };
 
     /// One walk of the catalog pinning every per-row invariant: the table is
     /// indexed by [`GlyphRole`] discriminant, both presets fit their cell

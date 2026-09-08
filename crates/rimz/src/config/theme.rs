@@ -103,9 +103,9 @@ impl ThemeConfig {
     /// The glyph-set source after folding in the [`style`](Self::style) preset.
     /// An explicit `theme.glyphs.set` wins; otherwise `modern` selects
     /// `nerd_font` and every other case keeps the Unicode default.
-    pub fn glyph_set_source(&self) -> Option<String> {
-        self.glyphs.set.clone().or_else(|| match self.style {
-            Some(ThemeStyle::Modern) => Some("nerd_font".to_owned()),
+    pub fn glyph_set_source(&self) -> Option<&str> {
+        self.glyphs.set.as_deref().or(match self.style {
+            Some(ThemeStyle::Modern) => Some("nerd_font"),
             _ => None,
         })
     }

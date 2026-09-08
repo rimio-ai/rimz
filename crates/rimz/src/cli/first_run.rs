@@ -29,7 +29,7 @@ impl Defaults {
                 .effective_theme_mode()
                 .depth(truecolor_advertised)
                 == ColorDepth::Truecolor,
-            nerd_font: config.theme.glyph_set_source().as_deref() == Some("nerd_font"),
+            nerd_font: config.theme.glyph_set_source() == Some("nerd_font"),
             pet_enabled: config.theme.pets.enabled,
             automation: config.resume.auto_continue && config.resume.auto_redeem,
         }
