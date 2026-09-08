@@ -77,6 +77,8 @@ Head resolution picks one of three strategies:
 
 Review-only and fork checkouts fetch the host's PR ref (`refs/pull/<N>/head` on GitHub, Gitea, and Forgejo; `refs/merge-requests/<N>/head` on GitLab) into a per-process temporary ref, `refs/rimz/pr/<N>-<pid>-<nonce>`, resolve its object ID, and delete the ref through a `Drop` guard. Shared `FETCH_HEAD` state never becomes checkout authority, so concurrent PR checkouts cannot cross-contaminate.
 
+Head metadata comes from `gh pr view <N> --json headRefName,headRepository,headRepositoryOwner,isCrossRepository` on GitHub and `tea api repos/<owner>/<repo>/pulls/<N> --repo <owner>/<repo>` on Gitea/Forgejo. Tea's `tea pr <N> --output json` presentation reports only a bare head branch name, so it cannot drive the same-repository decision. The decision uses the cross-repository verdict when available (for Tea, derived from the API head and base repositories), otherwise compares the head repository with the `origin` slug.
+
 An existing local branch is adopted only when its tip is an ancestor of the remote head, in which case it fast-forwards; a diverged or ahead branch refuses with the reason. Reusing a named PR worktree requires the marker's `from_pr` to equal the requested number.
 
 Network calls are bounded: 10 seconds for the forge CLI head query, 120 seconds for a fetch, with `GIT_TERMINAL_PROMPT=0` so a credential prompt fails instead of hanging a launch.
