@@ -153,17 +153,11 @@ fn lifecycle_event_projection_owns_carry_forward_wire_fields() {
             .difference(&projected_keys)
             .cloned()
             .collect::<Vec<_>>(),
-        [
-            "channel",
-            "profile",
-            "role",
-            "team",
-            "transcript_path",
-            "worktree_path",
-        ]
+        ["channel", "profile", "role", "team", "transcript_path",]
     );
     assert_eq!(projected.pane_id.as_ref().map(PaneId::raw), Some("%1"));
     assert_eq!(projected.worktree_branch.as_deref(), Some("feature"));
+    assert_eq!(projected.worktree_path.as_deref(), Some("/tmp/project"));
 
     full.signal = LifecycleSignal::TurnEnded {
         errored: false,

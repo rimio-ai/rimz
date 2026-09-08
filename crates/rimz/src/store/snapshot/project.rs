@@ -794,14 +794,9 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     state.runtime_owner = runtime_owner;
     state.parent_agent_id = parent_agent_id;
     state.worktree_path = worktree.path;
-    state.worktree_branch = worktree.branch;
-    if let Some(branch) = input
-        .observation
-        .worktree_branch
-        .as_ref()
-        .filter(|branch| !branch.is_empty())
-    {
+    if let Some(branch) = worktree.observed_branch {
         state.worktree_branches.insert(branch.clone());
+        state.worktree_branch = Some(branch);
     }
     state.task = prompt.task;
     state.first_prompt = prompt.first_prompt;
@@ -1116,7 +1111,7 @@ fn lifecycle_projection(
 
 struct WorktreeProjection {
     path: Option<String>,
-    branch: Option<String>,
+    observed_branch: Option<String>,
 }
 
 fn worktree_projection(
@@ -1126,17 +1121,23 @@ fn worktree_projection(
     event_name: Option<&str>,
 ) -> WorktreeProjection {
     let event_path = observation.worktree_path.clone();
-    let event_branch = observation.worktree_branch.clone();
     let prior_path = prior.and_then(|p| p.worktree_path.clone());
-    let prior_branch = prior.and_then(|p| p.worktree_branch.clone());
     let event_first = establishes_identity || event_name.is_none();
+    let path = if event_first {
+        event_path.or(prior_path)
+    } else {
+        prior_path.or(event_path)
+    };
+    let observed_branch = observation.worktree_branch.as_ref().filter(|branch| {
+        !branch.is_empty()
+            && observation
+                .worktree_path
+                .as_ref()
+                .is_none_or(|event_path| Some(event_path) == path.as_ref())
+    });
     WorktreeProjection {
-        path: if event_first {
-            event_path.or(prior_path)
-        } else {
-            prior_path.or(event_path)
-        },
-        branch: event_branch.or(prior_branch),
+        path,
+        observed_branch: observed_branch.cloned(),
     }
 }
 
