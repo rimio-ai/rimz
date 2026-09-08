@@ -5,28 +5,6 @@
 
 use std::time::Instant;
 
-/// Decide whether the sidebar should exit so its own pane closes. The sidebar
-/// shares a tab/view with the user's working pane(s); when the last of them
-/// exits, the sidebar is alone and has no reason to stay.
-///
-/// A zero-sibling read after a real sibling was observed closes immediately:
-/// the producer verified the shrink before publishing the empty count. The
-/// confirm window guards only session birth or resurrection, where the sidebar
-/// can run before Zellij materializes sibling panes; a tab born permanently
-/// sidebar-only still cleans itself up once the window elapses.
-///
-/// `sibling_count` is `None` when the count could not be determined (the
-/// snapshot carries no `own_view` — no mux pane env var, so no
-/// `--exclude-pane-id`, or our own pane was missing from the live list); in
-/// that case we never close.
-pub(super) fn self_close_decision(
-    state: &mut SelfCloseState,
-    sibling_count: Option<usize>,
-    now: Instant,
-) -> bool {
-    state.should_close(sibling_count, now)
-}
-
 /// A resize that grows the pane width is one precondition for the self-close
 /// full-width flash. An unknown previous width (the first resize) counts as a
 /// grow; the loop combines it with the legitimate-width bound and a prior
@@ -55,7 +33,12 @@ impl SelfCloseState {
         self.empty_since.is_some()
     }
 
-    fn should_close(&mut self, sibling_count: Option<usize>, now: Instant) -> bool {
+    /// Decide whether the sidebar should exit so its own pane closes. The sidebar shares a tab/view with the user's working pane(s); when the last of them exits, the sidebar is alone and has no reason to stay.
+    ///
+    /// A zero-sibling read after a real sibling was observed closes immediately: the producer verified the shrink before publishing the empty count. The confirm window guards only session birth or resurrection, where the sidebar can run before Zellij materializes sibling panes; a tab born permanently sidebar-only still cleans itself up once the window elapses.
+    ///
+    /// `sibling_count` is `None` when the count could not be determined (the snapshot carries no `own_view` — no mux pane env var, so no `--exclude-pane-id`, or our own pane was missing from the live list); in that case we never close.
+    pub(super) fn should_close(&mut self, sibling_count: Option<usize>, now: Instant) -> bool {
         match sibling_count {
             Some(0) => {
                 // A working pane we had observed is gone. The producer verifies

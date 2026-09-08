@@ -51,7 +51,7 @@ impl Rig {
             crate::sidebar::body_filter::write(&runtime, filter).expect("write initial filter");
         }
         let instance_id = SidebarInstanceId::new();
-        let socket_path = sidebar_socket_path(&runtime, &instance_id);
+        let socket_path = runtime.sidebar_socket_path(&instance_id);
         let mut config = serve_config(&ws);
         config.mux = own_pane.as_ref().map_or(MuxName::Tmux, PaneId::mux);
         config.own_pane = own_pane;
@@ -355,7 +355,7 @@ fn failed_anomaly_send_preserves_carried_drop_count() {
     let (tx, _rx) = std::sync::mpsc::sync_channel(0);
     let mut config = serve_config(&ws);
     config.mux = MuxName::Tmux;
-    let socket_path = sidebar_socket_path(&runtime, &config.instance_id);
+    let socket_path = runtime.sidebar_socket_path(&config.instance_id);
     let (_result_tx, result_rx) = std::sync::mpsc::channel();
     let mut state = LoopState::new(
         config,

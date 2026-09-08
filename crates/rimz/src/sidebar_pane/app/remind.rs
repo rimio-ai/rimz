@@ -160,7 +160,7 @@ fn unread_reminder_scope(snapshot: &SidebarSnapshot, prefs: &NotificationsPrefs)
         .iter()
         .flat_map(|group| group.rows.iter())
     {
-        if !row.unread || !row.status().is_some_and(is_reminder_status) {
+        if !row.unread || !row.status().is_some_and(AgentStatus::is_actionable) {
             continue;
         }
         if let Some(pane) = row.pane.as_ref() {
@@ -208,10 +208,6 @@ fn worktree_target_panes(
         }
     }
     targets
-}
-
-fn is_reminder_status(status: AgentStatus) -> bool {
-    status.is_actionable()
 }
 
 #[cfg(test)]
