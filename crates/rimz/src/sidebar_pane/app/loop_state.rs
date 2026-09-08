@@ -1,30 +1,66 @@
 use std::collections::HashSet;
+use std::io;
+use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, SyncSender};
+use std::time::{Duration, Instant};
+
+use crate::diag::record::{RendererExitCause, SidebarWidthControlTrigger as WidthControlTrigger};
+use crate::ids::PaneId;
+use crate::mux::focus_anchor::{
+    FocusObservation, FocusObservationOutcome, FocusOrigin, FocusPresentation,
+};
+use crate::observability::SIDEBAR_HEALTH_TARGET;
+use crate::sidebar::event_store::EventStore;
+use crate::sidebar::fuse::{focus_intent_confirmed_from, fuse, fuse_owned};
+use crate::sidebar::observe::{self, ObserveMsg};
+use crate::sidebar::read_marks::{ReadMarkStore, ReadMarks, write_manual_read_marks};
+use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, TAB_READ_DWELL};
+use crate::sidebar::unread::{self, UnreadClearCause};
+use crate::sidebar_pane::pixel::PixelRenderCaps;
+use crate::sidebar_pane::render::{self, UiState};
+use crate::sidebar_pane::view::BodyFilter;
+use crate::store::snapshot::{
+    ProcessState, RowCard, SidebarOwnView, SidebarPresence, SidebarRow, SidebarSnapshot,
+};
+use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
+use crate::{MuxName, RuntimePaths};
 
 use jiff::Timestamp;
+use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
+use tracing::{debug, warn};
 
-use super::fetch::{FetchPhase, FetchRole, FetchUpdate, PaneFrame, SnapshotSource};
-use super::gate::{apply_gate, gate_remaining};
+use super::fetch::{
+    FetchDispatcher, FetchPhase, FetchRequest, FetchRole, FetchUpdate, PaneFrame, SnapshotSource,
+};
+use super::gate::{GateState, apply_gate, gate_remaining};
 use super::health::{Health, degraded_too_long};
-use super::lifecycle::grow_beyond_legit;
+use super::input::Wakeup;
+use super::lifecycle::{
+    PaintHold, SELF_CLOSE_WATCHDOG, SelfCloseState, grow_beyond_legit, resize_grew,
+};
+use super::notify::{BellNotice, emit_terminal_notification};
+use super::order_hold;
 use super::paint::FramePainter;
 use super::reload::{ReloadAction, reload_action};
 use super::remind::RemindState;
-use super::selection::{reconcile_selection, set_make_up_filter};
+use super::selection::{
+    InputEffect, InputOutcome, handle_key, handle_mouse_click, handle_scroll, reconcile_selection,
+    row_index_of_pane, set_make_up_filter,
+};
+use super::socket::{heartbeat_write_due, write_heartbeat};
 use super::state::{
     ApplyOutcome, FetchDiagnostics, ReadClear, RenderState, apply_manual_unread_guard,
     compute_next_state, emit_diagnostics, emit_unread_cleared_trace, read_receipt_for_row,
     read_receipts_for_all, read_receipts_for_tab, row_id_of_pane, session_focus_baseline,
     set_rows_unread,
 };
+use super::timing::{
+    FOCUS_RESUME_WATCH_WINDOW, FRAME_MIN_TIMEOUT, animation_frame, duration_millis, frame_interval,
+    is_animating, next_frame_after, tick_for, wall_clock_phase,
+};
 use super::width_control::WidthController;
-use super::*;
-use crate::diag::record::{RendererExitCause, SidebarWidthControlTrigger as WidthControlTrigger};
-use crate::observability::SIDEBAR_HEALTH_TARGET;
-use crate::sidebar::read_marks::{ReadMarkStore, ReadMarks, write_manual_read_marks};
-use crate::sidebar::unread::{self, UnreadClearCause};
-use crate::sidebar_pane::pixel::PixelRenderCaps;
-use crate::sidebar_pane::view::BodyFilter;
-use crate::store::snapshot::{ProcessState, RowCard, SidebarOwnView, SidebarPresence, SidebarRow};
+use super::{Result, ServeConfig};
 
 /// Compact projection of the glanceable sidebar content an off-screen pane
 /// keeps fresh. It deliberately skips animation state, turn phase, gauges,

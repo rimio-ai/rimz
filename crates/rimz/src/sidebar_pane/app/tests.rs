@@ -1,10 +1,21 @@
 use super::input::{KeyAction, Wakeup};
+use super::loop_state::handle_wakeup;
+use super::notify::{
+    BellDecision, bell_decision, desktop_notification_targets_renderer,
+    notification_targets_own_view,
+};
+use super::selection::InputOutcome;
+use super::socket::heartbeat_write_due;
+use super::timing::{frame_interval, is_animating, next_frame_after, tick_for};
 use super::*;
+use crate::ids::PaneId;
+use crate::sidebar::timing::HEARTBEAT_WRITE_INTERVAL;
 use crate::sidebar_pane::app::fixtures::{
     agent_snapshot, focus_fixture, pane, snapshot, snapshot_with_panes, workspace,
 };
 use crate::sidebar_pane::pets::{PetAssets, PetPixelView};
 use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelRenderCaps, placeholder_cluster};
+use crate::sidebar_pane::render::{self, UiState};
 use jiff::Timestamp;
 
 #[test]

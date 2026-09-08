@@ -16,7 +16,8 @@ use crate::sidebar::consumer::RollupCursor;
 use crate::sidebar::meter::TickMeter;
 use crate::{RuntimePaths, StatePaths};
 
-use super::{ServeConfig, tick_for};
+use super::ServeConfig;
+use super::timing::tick_for;
 
 const DAEMON_VIEW_REPAIR_TTL: Duration = Duration::from_secs(30);
 

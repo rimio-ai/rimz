@@ -12,33 +12,20 @@
 
 use std::cell::Cell;
 use std::io::{self, Write};
-use std::os::unix::net::UnixDatagram;
-use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, SyncSender};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::config::NotificationsPrefs;
 use crate::diag::record::DiagEvent;
 use crate::disk::paths::PathErr;
-use crate::ids::PaneId;
-use crate::mux::focus_anchor::{
-    FocusObservation, FocusObservationOutcome, FocusOrigin, FocusPresentation,
-};
-use crate::sidebar::event_store::EventStore;
-use crate::sidebar::fuse::{focus_intent_confirmed_from, fuse, fuse_owned};
 use crate::sidebar::observe::{self, ObserveMsg};
-use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL, TAB_READ_DWELL};
 use crate::sidebar_pane::pixel::probe::escalate_own_pane_passthrough;
 use crate::sidebar_pane::pixel::{PixelRenderCaps, detect_pixel_render_caps};
-use crate::store::snapshot::SidebarSnapshot;
-use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, WorkspaceId};
 use ratatui::Terminal;
 use ratatui::backend::{ClearType, CrosstermBackend};
-use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use tracing::{debug, warn};
 
-use crate::sidebar_pane::render::{self, UiState};
 use crate::tui::{MouseCapture, Screen, TerminalModeGuard};
 
 mod cache_refresh;
@@ -65,19 +52,11 @@ mod tmux_watch;
 mod transcript_watch;
 mod width_control;
 
-#[cfg(test)]
-use self::loop_state::handle_wakeup;
 use self::loop_state::{LoopFlow, LoopState};
-use self::notify::*;
-use self::socket::*;
-use self::timing::*;
+use self::socket::{bind_socket, spawn_event_waker, write_heartbeat};
+use self::timing::FRAME_MIN_TIMEOUT;
 use fetch::{FetchDispatcher, FetchRequest, FetchUpdate, spawn_fetch_worker};
-use gate::GateState;
-use input::{Wakeup, encode_key, encode_mouse, wait_for_wakeup};
-use lifecycle::{PaintHold, SELF_CLOSE_WATCHDOG, SelfCloseState, resize_grew};
-use selection::{
-    InputEffect, InputOutcome, handle_key, handle_mouse_click, handle_scroll, row_index_of_pane,
-};
+use input::wait_for_wakeup;
 
 pub use demo::{serve_fixture, serve_gallery};
 pub use keymap::NavKeymap;

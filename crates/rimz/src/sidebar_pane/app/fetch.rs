@@ -26,8 +26,9 @@ use crate::store::snapshot::SidebarSnapshot;
 use crate::wakeup::events::SidebarEvent;
 use crate::{RuntimePaths, StatePaths};
 
+use super::ServeConfig;
 use super::input::SNAPSHOT_WAKEUP;
-use super::{ServeConfig, tick_for};
+use super::timing::tick_for;
 
 /// Run one in-process produce behind a panic guard. The produce pipeline
 /// folds store truth, runtime caches, and `/proc` on this worker thread; a
