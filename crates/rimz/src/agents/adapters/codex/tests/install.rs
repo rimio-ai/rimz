@@ -1,3 +1,7 @@
+use super::super::install::{
+    has_rimz_hook_command, hooks_installed_at, install_into, snake_event_token, uninstall_from,
+    untrusted_hook_events_at, untrusted_preflight_hook_events_at,
+};
 use super::*;
 
 const EXPECTED_EVENTS: &[&str] = &[

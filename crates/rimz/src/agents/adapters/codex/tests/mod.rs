@@ -1,5 +1,8 @@
 use serde_json::json;
 
+use super::transcript::{
+    configured_model_at, configured_reasoning_effort_at, with_codex_config_path,
+};
 use super::*;
 use crate::agents::PermissionMode;
 use crate::agents::testkit::hook_output;

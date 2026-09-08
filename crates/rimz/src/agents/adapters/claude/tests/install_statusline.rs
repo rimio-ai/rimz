@@ -1,4 +1,8 @@
+use super::super::install::read_existing_json;
 use super::*;
+use crate::agents::StatusLineChange;
+use crate::agents::managed_statusline::{classify, upsert, wrapped_command};
+use serde_json::Map;
 
 #[test]
 fn install_wraps_and_restores_existing_subagent_status_line() {
@@ -30,7 +34,7 @@ fn install_wraps_and_restores_existing_subagent_status_line() {
     // target, never the recursive RimZ one.
     let root = read_existing_json(&path).unwrap();
     assert_eq!(
-        wrapped_status_line_command_from(&root, &SUBAGENT_STATUS_LINE).as_deref(),
+        wrapped_command(&root, &SUBAGENT_STATUS_LINE).as_deref(),
         Some("my-subagent-line")
     );
 
@@ -69,7 +73,7 @@ fn install_wraps_and_restores_user_status_line() {
     assert_eq!(parsed["statusLine"]["_rimz_wrapped"]["refreshInterval"], 10);
     let root = read_existing_json(&path).unwrap();
     assert_eq!(
-        wrapped_status_line_command_from(&root, &STATUS_LINE).as_deref(),
+        wrapped_command(&root, &STATUS_LINE).as_deref(),
         Some("npx -y ccstatusline@latest")
     );
     MANAGED_SOURCE.uninstall_from(&path).unwrap();
@@ -88,7 +92,7 @@ fn install_wraps_and_restores_user_status_line() {
     assert_eq!(parsed["statusLine"]["_rimz_wrapped"], "echo hi");
     let root = read_existing_json(&path).unwrap();
     assert_eq!(
-        wrapped_status_line_command_from(&root, &STATUS_LINE).as_deref(),
+        wrapped_command(&root, &STATUS_LINE).as_deref(),
         Some("echo hi")
     );
     MANAGED_SOURCE.uninstall_from(&path).unwrap();
@@ -193,7 +197,7 @@ fn uninstall_removes_status_line_when_none_existed() {
 fn classify_status_line_change_reports_each_case() {
     let none = Map::new();
     assert_eq!(
-        classify_status_line_change(&none, &STATUS_LINE),
+        classify(&none, &STATUS_LINE).expect("Claude wraps every statusline shape"),
         StatusLineChange::Added
     );
 
@@ -202,16 +206,16 @@ fn classify_status_line_change_reports_each_case() {
     )
     .unwrap();
     assert_eq!(
-        classify_status_line_change(&user, &STATUS_LINE),
+        classify(&user, &STATUS_LINE).expect("Claude wraps every statusline shape"),
         StatusLineChange::Wrapping {
             original: "npx ccstatusline".to_owned()
         }
     );
 
     let mut managed = Map::new();
-    upsert_rimz_status_line(&mut managed, &STATUS_LINE);
+    upsert(&mut managed, &STATUS_LINE);
     assert_eq!(
-        classify_status_line_change(&managed, &STATUS_LINE),
+        classify(&managed, &STATUS_LINE).expect("Claude wraps every statusline shape"),
         StatusLineChange::Unchanged
     );
 }

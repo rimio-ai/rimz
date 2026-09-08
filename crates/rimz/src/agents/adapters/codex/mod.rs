@@ -25,19 +25,19 @@
 //! read-only methods via [`refresh_app_server_enrichment`], spawned out-of-band
 //! by `rimz agents refresh-context`.
 
-pub(crate) mod account;
-pub(crate) mod app_server;
+mod account;
+mod app_server;
 mod ask;
-pub mod broker;
+pub(in crate::agents) mod broker;
 mod install;
 mod local_sessions;
-pub(crate) mod oauth_usage;
-pub(crate) mod payloads;
-pub mod process;
+pub(in crate::agents) mod oauth_usage;
+mod payloads;
+mod process;
 mod project_trust;
 mod rollout;
 mod session_index;
-pub(crate) mod spend;
+mod spend;
 mod transcript;
 
 pub(crate) use crate::agents::capabilities::*;
@@ -49,12 +49,7 @@ use serde_json::Value;
 use jiff::Timestamp;
 
 use self::app_server::CodexAppServer;
-pub use self::app_server::{app_server_due, merge_app_server_context};
-#[cfg(test)]
-use self::install::{
-    has_rimz_hook_command, hooks_installed_at, install_into, snake_event_token, uninstall_from,
-    untrusted_hook_events_at, untrusted_preflight_hook_events_at,
-};
+use self::app_server::{app_server_due, merge_app_server_context};
 use self::payloads::{
     CodexChildIdentity, CodexCommon, CodexPermissionRequest, CodexPostCompact, CodexPostToolUse,
     CodexPreCompact, CodexPreToolUse, CodexSessionStart, CodexStop, CodexSubagentStart,
@@ -62,30 +57,19 @@ use self::payloads::{
     parse_post_tool_use, parse_pre_compact, parse_pre_tool_use, parse_session_start, parse_stop,
     parse_subagent_start, parse_subagent_stop, parse_user_prompt_submit,
 };
-pub use self::process::{codex_daemon_pids, codex_resumed_session_id_from_cmdline};
+use self::process::{codex_daemon_pids, codex_resumed_session_id_from_cmdline};
 use self::rollout::{CodexRolloutHeader, parse_messages, read_rollout_header};
-pub(crate) use self::transcript::infer_turn_death_from_spent_window;
-#[cfg(test)]
-pub(crate) use self::transcript::with_codex_sessions_root;
+use self::transcript::infer_turn_death_from_spent_window;
 use self::transcript::{
     RestingTurnOutcome, TranscriptScanNeed, TranscriptUsage, configured_model,
     configured_reasoning_effort, find_session_transcript, payload_reasoning_effort,
     scan_transcript_tail, session_forked_from,
 };
-#[cfg(test)]
 use self::transcript::{
-    configured_model_at, configured_reasoning_effort_at, death_warning_from_frame,
-    detect_plan_proposed, detect_turn_complete, detect_turn_error, detect_turn_interrupted,
-    find_session_transcript_under, transcript_enrichment, usage_from_transcript,
-    with_codex_config_path,
-};
-pub use self::transcript::{
     refine_turn_death_from_frame, refresh_transcript_context, session_origin,
     turn_death_needs_pane_confirmation,
 };
 use super::AskKind;
-#[cfg(test)]
-use super::TranscriptRole;
 use super::context::AgentContext;
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
@@ -107,7 +91,7 @@ use super::{
 use crate::transcript::{AskOption, AskQuestion};
 
 /// Codex's shared config, credentials, and control-socket home.
-pub(super) fn codex_home() -> Option<PathBuf> {
+fn codex_home() -> Option<PathBuf> {
     if let Some(raw) = std::env::var_os("CODEX_HOME").filter(|v| !v.is_empty()) {
         return Some(PathBuf::from(raw));
     }
@@ -147,12 +131,12 @@ const DEFAULT_CONTEXT_WINDOW: u64 = 272_000;
 /// `refresh-context → cold-spawn app-server → SessionStart hook →
 /// context_refresh_spawn → refresh-context` recursion that would otherwise
 /// spawn unboundedly. Empty value means unset.
-pub const ENV_INTERNAL_APP_SERVER: &str = "RIMZ_CODEX_INTERNAL_APP_SERVER";
+const ENV_INTERNAL_APP_SERVER: &str = "RIMZ_CODEX_INTERNAL_APP_SERVER";
 
 /// True when the current process was spawned as a RimZ-internal enrichment
 /// `codex app-server` (the [`ENV_INTERNAL_APP_SERVER`] marker is present and
 /// non-empty). The hook entrypoint reads this to suppress re-entrant feeds.
-pub fn spawned_as_internal_app_server() -> bool {
+fn spawned_as_internal_app_server() -> bool {
     std::env::var_os(ENV_INTERNAL_APP_SERVER).is_some_and(|value| !value.is_empty())
 }
 
@@ -467,7 +451,7 @@ const RIMZ_HOOK_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --sou
 const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source codex";
 
 #[derive(Clone, Debug, Default)]
-pub struct CodexAdapter;
+pub(in crate::agents) struct CodexAdapter;
 
 fn hook_ingress_decision(
     pid: Option<u32>,
@@ -864,7 +848,7 @@ impl crate::agents::capabilities::ContextCapability for CodexAdapter {
         {
             return None;
         }
-        refresh_local_context_under(ctx, app_server::codex_home().as_deref())
+        refresh_local_context_under(ctx, codex_home().as_deref())
     }
 }
 
@@ -1529,13 +1513,13 @@ fn build_codex_observation(
 /// and version.
 /// Transcript-derived tokens and cost are refreshed separately from the local
 /// rollout tail, so an unreachable app-server never suppresses them.
-pub struct AppServerEnrichment {
-    pub context: AgentContext,
-    pub extra_credits: Option<ExtraCredits>,
-    pub reset_credits: Option<ResetCredits>,
+struct AppServerEnrichment {
+    context: AgentContext,
+    extra_credits: Option<ExtraCredits>,
+    reset_credits: Option<ResetCredits>,
 }
 
-pub fn refresh_app_server_enrichment(
+fn refresh_app_server_enrichment(
     session_id: Option<&str>,
     model_hint: Option<&str>,
     broker_socket: Option<&Path>,
@@ -1556,7 +1540,7 @@ pub fn refresh_app_server_enrichment(
 /// would mass-reap — and reads `thread/loaded/list`. `None` when there is no daemon
 /// to ask or its list cannot be trusted, which the caller reads as "unknown, keep
 /// all". Spawned out-of-band by the sidebar producer; read-only, best-effort.
-pub fn loaded_daemon_threads() -> Option<std::collections::BTreeSet<String>> {
+fn loaded_daemon_threads() -> Option<std::collections::BTreeSet<String>> {
     let mut client = CodexAppServer::connect_daemon()?;
     let ids = client.loaded_threads().ok()?;
     Some(ids.into_iter().collect())

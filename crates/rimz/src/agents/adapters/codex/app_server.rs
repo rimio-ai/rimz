@@ -49,7 +49,7 @@ mod tests;
 mod transport;
 mod wire;
 
-pub(super) use super::codex_home;
+use super::codex_home;
 pub(crate) use transport::{
     AppServerErr, JsonRpcTransport, codex_bin, recv_response, spawn_frame_reader, write_frame,
 };
@@ -427,18 +427,6 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
     /// [`AgentContext`]. Each read is independent and best-effort: a failed
     /// `account/rateLimits/read` (e.g. API-key account) still yields the model
     /// and version. Assumes [`Self::handshake`] already ran.
-    #[cfg(test)]
-    pub(crate) fn observe_context(
-        &mut self,
-        source: &str,
-        session_id: Option<&str>,
-        model_hint: Option<&str>,
-        observed_at: Timestamp,
-    ) -> AgentContext {
-        self.observe(source, session_id, model_hint, observed_at)
-            .context
-    }
-
     pub(crate) fn observe(
         &mut self,
         source: &str,

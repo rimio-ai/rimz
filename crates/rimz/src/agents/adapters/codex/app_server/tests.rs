@@ -115,7 +115,9 @@ fn handshake_initializes_then_acknowledges_before_reads() {
         .with("model/list", model_list_result());
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
-    let _ = client.observe_context("codex", None, Some("gpt-5.5-codex"), ts());
+    let _ = client
+        .observe("codex", None, Some("gpt-5.5-codex"), ts())
+        .context;
 
     assert_eq!(client.transport.calls[0], "initialize");
     assert_eq!(client.transport.calls[1], "notify:initialized");
@@ -135,7 +137,7 @@ fn rate_limits_and_account_shapes_map_tolerantly() {
     let transport = CannedTransport::new().with("account/rateLimits/read", rate_limits_result());
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
-    let ctx = client.observe_context("codex", None, None, ts());
+    let ctx = client.observe("codex", None, None, ts()).context;
     let limits = ctx.rate_limits.expect("rate limits present");
     assert_eq!(limits.windows.len(), 2);
     assert_eq!(limits.windows[0].duration_mins, Some(300));
@@ -160,7 +162,7 @@ fn rate_limits_and_account_shapes_map_tolerantly() {
     let transport = CannedTransport::new().with("account/rateLimits/read", result);
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
-    let ctx = client.observe_context("codex", None, None, ts());
+    let ctx = client.observe("codex", None, None, ts()).context;
     let limits = ctx.rate_limits.expect("single window");
     assert_eq!(limits.windows.len(), 2);
     assert_eq!(limits.windows[0].duration_mins, Some(300));
@@ -182,7 +184,8 @@ fn rate_limits_and_account_shapes_map_tolerantly() {
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
     let limits = client
-        .observe_context("codex", None, None, ts())
+        .observe("codex", None, None, ts())
+        .context
         .rate_limits
         .unwrap();
     assert_eq!(limits.windows[0].used_percentage, Some(100));
@@ -194,7 +197,7 @@ fn rate_limits_and_account_shapes_map_tolerantly() {
         CannedTransport::new().with("account/rateLimits/read", json!({ "rateLimits": {} }));
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
-    let ctx = client.observe_context("codex", None, None, ts());
+    let ctx = client.observe("codex", None, None, ts()).context;
     assert_eq!(ctx.account, None);
     assert_eq!(ctx.rate_limits, None);
 }
@@ -385,7 +388,9 @@ fn context_enrichment_reads_model_thread_version_and_survives_partial_failures()
     let transport = CannedTransport::new().with("model/list", model_list_result());
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
-    let ctx = client.observe_context("codex", None, Some("gpt-5.5-codex"), ts());
+    let ctx = client
+        .observe("codex", None, Some("gpt-5.5-codex"), ts())
+        .context;
     assert_eq!(ctx.model_id.as_deref(), Some("gpt-5.5-codex"));
     assert_eq!(ctx.model_display_name.as_deref(), Some("GPT-5.5 Codex"));
     assert_eq!(ctx.effort, None);
@@ -399,7 +404,7 @@ fn context_enrichment_reads_model_thread_version_and_survives_partial_failures()
     );
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
-    let ctx = client.observe_context("codex", Some("sess-1"), None, ts());
+    let ctx = client.observe("codex", Some("sess-1"), None, ts()).context;
     assert_eq!(ctx.session_preview.as_deref(), Some("Create a TUI"));
     assert_eq!(ctx.session_name.as_deref(), Some("TUI prototype"));
     assert!(
@@ -423,7 +428,7 @@ fn context_enrichment_reads_model_thread_version_and_survives_partial_failures()
         );
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
-    let ctx = client.observe_context("codex", Some("sess-1"), None, ts());
+    let ctx = client.observe("codex", Some("sess-1"), None, ts()).context;
     assert_eq!(ctx.session_preview.as_deref(), Some("Create a TUI"));
     assert_eq!(ctx.session_name.as_deref(), Some("TUI prototype"));
 
@@ -432,7 +437,7 @@ fn context_enrichment_reads_model_thread_version_and_survives_partial_failures()
         .with("model/list", model_list_result());
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
-    let ctx = client.observe_context("codex", None, Some("o4-mini"), ts());
+    let ctx = client.observe("codex", None, Some("o4-mini"), ts()).context;
     assert_eq!(ctx.rate_limits, None);
     assert_eq!(ctx.model_display_name.as_deref(), Some("o4-mini"));
     assert_eq!(ctx.agent_version.as_deref(), Some("0.135.0"));
@@ -443,13 +448,15 @@ fn context_enrichment_reads_model_thread_version_and_survives_partial_failures()
     client.handshake().unwrap();
     assert_eq!(
         client
-            .observe_context("codex", None, Some("does-not-exist"), ts())
+            .observe("codex", None, Some("does-not-exist"), ts())
+            .context
             .model_display_name,
         None
     );
     assert_eq!(
         client
-            .observe_context("codex", None, None, ts())
+            .observe("codex", None, None, ts())
+            .context
             .model_display_name,
         None
     );
