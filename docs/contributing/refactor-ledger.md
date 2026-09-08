@@ -31,6 +31,12 @@ Ordered. A seam pass at the head is proposed before any module pass. Status is `
 | 7 | `store` → `harness` upward dependencies (signal vocabulary, petname, prompt alignment, run schema, run wake sender): close the direction | pass-6 admission intent `store → harness::schedule::signal` close: later seam; survey at `97a947974`: 17 sites into harness (run 6, signal 5, petname 4, run_wake 1, target 1), cycle harness ↔ store 47/17 cross-layer | landed pass-7 |
 | 8 | `store` → `remote::link` and `store` → `disk_usage` remaining non-diag upward dependencies and the four small upward edges: `harness` → `sidebar::refresh::pr`, `osc` → `config`/`mux`, `diag` → `sidebar::presence`, `build_id` → `proc` | survey at `6d13498b3`: store upward sites 6 = diag 4, disk_usage 1, remote::link 1; worktree → disk_usage 1 | landed pass-8 |
 
+The queue has been empty since pass 8; every pass from pass 9 on is a module pass unless a pass row records a `close: later seam` intent, which reopens the queue.
+
+## Pass targets
+
+The direction each pass wrote, kept so a later pass can quote it rather than re-derive it. A target that a later pass supersedes keeps its text and gains a pointer.
+
 ### Pass 2 family verdicts
 
 | family | members reviewed | verdict and pins |
@@ -80,7 +86,7 @@ Codex and Claude expose only registry adapters, delegated OAuth usage, and the C
 
 ## Module verdicts
 
-One row per module reviewed, at the granularity `survey` ranks. `holds` names the SHA reviewed and the scoped-commit count that reopens it (`git log --oneline <sha>.. -- <path> | wc -l`); `survey` reads these two cells and flags the module `held` until the count is reached, then `reopen`. `landed` points at the pass row. `candidate` is a survey pick not yet reviewed, with the signal that made it one.
+One row per module reviewed, at the granularity `survey` ranks. `holds` names the SHA reviewed and the scoped-commit count that reopens it (`git log --oneline <sha>.. -- <path> | wc -l`); `survey` reads these two cells and flags the module `held` until the count is reached, then `reopen`. A module pass that landed ends the same way, spelled `holds; landed pass-N` with the record commit as the SHA, since only a `holds` status demotes the module in the rank; a bare `landed` marks a seam pass that reviewed the module's edges and left its interior a candidate. `candidate` is a survey pick not yet reviewed, with the signal that made it one.
 
 | module | status | sha | reopen at | note |
 | --- | --- | --- | --- | --- |
@@ -91,21 +97,21 @@ One row per module reviewed, at the granularity `survey` ranks. `holds` names th
 | `pane` | landed pass-3; pass-5 | — | — | seam reviewed; interior remains a candidate. Pass 5: it gains `ClientPaneView` (`pane.rs:21`) |
 | `workspace` | landed pass-3; pass-5 | — | — | seam reviewed; interior remains a candidate. Pass 5: it gains the channel and worktree env keys and the channel shell argv (`workspace.rs:56-100`) |
 | `mux` | landed pass-4; pass-5; pass-10 | — | — | seam reviewed; it now owns the focus anchor, the room width target, and the Zellij topology/presence-desired caches; interior remains a candidate. Pass 5: it imports no `harness` item. Pass 10: `mux/zellij` interior reviewed; `PresencePluginOptions::from_config` owns the config projection |
-| `mux/zellij` | landed pass-10 | — | — | presence lifecycle (upgrade, converge, dump, fresh-topology wait) reviewed and deepened; backend, sidebar, session, layout and raw_pane interiors reviewed; topology schema stays the public wire; socket, pane_pid, parse and reap interiors hold |
+| `mux/zellij` | holds; landed pass-10 | `173682d90` | 30 | presence lifecycle (upgrade, converge, dump, fresh-topology wait) reviewed and deepened; backend, sidebar, session, layout and raw_pane interiors reviewed; topology schema stays the public wire; socket, pane_pid, parse and reap interiors hold |
 | `sidebar` | landed pass-4 | — | — | seam reviewed; it keeps producer election, fusion, refresh lanes, and its own cadences; interior remains a candidate |
 | `wakeup` | landed pass-5 | — | — | new module in pass 4: the wire lifted out of `sidebar` (heartbeat record, event vocabulary, datagram send). Pass 5 re-layers it to L2, a leaf below `store` |
 | `ids` | landed pass-5 | — | — | seam reviewed: it owns shared identifiers, gaining `MuxClientId` and `FocusNonce`; interior remains a candidate |
 | `proc` | landed pass-5 | — | — | seam reviewed: it owns process and environment facts including shell selection; interior remains a candidate |
 | `harness` | landed pass-5; pass-7; pass-8 | — | — | seam reviewed: policy over the agent record (budget parsing, ledgers, `RunStatus`, `agent_handle`), with record vocabulary in `agents`; interior remains a candidate, and `harness/schedule` keeps its own row. Pass 7: policy over store records (run transitions and their workspace lock, the run waiter, signal selectors and firing); the run record and `RunStatus` live in `store::run`, `petname` in `agents`. Pass 8: reaches forge for PR state; two account-cache writer sites stay until the agents::account lift |
-| `agents/adapters/codex` | landed pass-9 | — | — | app-server, broker, rollout, install, account and spend interiors reviewed; private transport/schema duplication removed; discovery, rollout presence semantics, pane-confirmation seam and conformance fixture hold |
-| `agents/adapters/claude` | landed pass-9 | — | — | remote-control, install, lifecycle, statusline, account and spend interiors reviewed; neutral control outcomes and shared priced-record gate; remote-control trio, typed Stop validation and discovery remain separate |
+| `agents/adapters/codex` | holds; landed pass-9 | `7af6d9f74` | 30 | app-server, broker, rollout, install, account and spend interiors reviewed; private transport/schema duplication removed; discovery, rollout presence semantics, pane-confirmation seam and conformance fixture hold |
+| `agents/adapters/claude` | holds; landed pass-9 | `7af6d9f74` | 30 | remote-control, install, lifecycle, statusline, account and spend interiors reviewed; neutral control outcomes and shared priced-record gate; remote-control trio, typed Stop validation and discovery remain separate |
 | `config` | candidate | — | — | esc 182, depth 35.9, churn 8.9%; 38 admitted upward sites |
 | `message` | landed pass-1 | — | — | seam reviewed; module interior remains a candidate (baseline esc 157, depth 25.2) |
-| `harness/schedule` | landed pass-6 | — | — | baseline esc 168, depth 22.2; pass 6: esc 147, depth 34.4; watcher and stop lifetimes hidden in the harness |
+| `harness/schedule` | holds; landed pass-6 | `97a947974` | 30 | baseline esc 168, depth 22.2; pass 6: esc 147, depth 34.4; watcher and stop lifetimes hidden in the harness |
 | `agents/spending` | candidate | — | — | esc 118, depth 39.9 |
 | `cli/remote` | candidate | — | — | pin, thin, cx 34.0, pace 1.32; pins are the prerequisite |
 | `sidebar_pane/render/sections` | candidate | — | — | thin (t/c 0.06) with 3.7k code; pins are the prerequisite |
-| `sidebar_pane/app` | landed pass-11 | — | — | loop transitions/context, event dispatch, folds, maintenance, focus repair, fetch/state and input interiors reviewed; width control and the three distinct elder-gated workers hold |
+| `sidebar_pane/app` | holds; landed pass-11 | `f0d27f230` | 30 | loop transitions/context, event dispatch, folds, maintenance, focus repair, fetch/state and input interiors reviewed; width control and the three distinct elder-gated workers hold |
 | `remote` | landed pass-8 | — | — | keeps classifier and thresholds, imports the tier downward; module interior remains a candidate |
 | `disk` | landed pass-8 | — | — | gains `disk::usage`, the unchanged byte walk and storage-root measurement |
 | `worktree` | landed pass-8 | — | — | reaches `disk::usage` downward; interior remains a candidate |
