@@ -252,7 +252,6 @@ impl TabNameMemo {
 struct FetchWorker {
     config: ServeConfig,
     runtime: RuntimePaths,
-    notification_prefs: NotificationsPrefs,
     diag: crate::diag::DiagSink,
     election: ProducerElectionTracker,
     reader: PublishedSnapshotReader,
@@ -276,7 +275,6 @@ impl FetchWorker {
     fn new(
         config: ServeConfig,
         runtime: RuntimePaths,
-        notification_prefs: NotificationsPrefs,
         diag: crate::diag::DiagSink,
         election: ProducerElectionTracker,
     ) -> Self {
@@ -289,7 +287,6 @@ impl FetchWorker {
         Self {
             config,
             runtime,
-            notification_prefs,
             diag,
             election,
             reader,
@@ -599,7 +596,7 @@ impl FetchWorker {
         let deliveries = if final_producer {
             evaluate_notifications(
                 &self.runtime,
-                &self.notification_prefs,
+                &self.config.notification_prefs,
                 &mut self.notifications,
                 &mut self.link_notifications,
                 &self.diag,
@@ -618,7 +615,7 @@ impl FetchWorker {
         deliver_notifications(
             &self.config,
             &self.runtime,
-            &self.notification_prefs,
+            &self.config.notification_prefs,
             &self.diag,
             deliveries,
         );
@@ -948,11 +945,7 @@ impl ResultSink {
 
 impl FetchWorker {
     fn run(mut self, request_rx: std::sync::mpsc::Receiver<FetchRequest>, mut sink: ResultSink) {
-        while let Ok(first) = request_rx.recv() {
-            let mut request = first;
-            while let Ok(extra) = request_rx.try_recv() {
-                request.merge(extra);
-            }
+        while let Ok(request) = request_rx.recv() {
             // Re-resolved every cycle so `workspace migrate` repoints reads
             // without restarting the renderer.
             match StatePaths::for_workspace(self.config.workspace_id.clone()) {
@@ -984,7 +977,6 @@ impl FetchWorker {
 pub(super) fn spawn_fetch_worker(
     config: ServeConfig,
     runtime: RuntimePaths,
-    notification_prefs: NotificationsPrefs,
     diag: crate::diag::DiagSink,
     election: ProducerElectionTracker,
     request_rx: std::sync::mpsc::Receiver<FetchRequest>,
@@ -993,7 +985,7 @@ pub(super) fn spawn_fetch_worker(
     std::thread::spawn(move || {
         crate::lane::set(crate::lane::WorkLane::Fetch);
         let refresh_override = config.refresh_ms_override;
-        let worker = FetchWorker::new(config, runtime, notification_prefs, diag, election);
+        let worker = FetchWorker::new(config, runtime, diag, election);
         let (result_tx, socket_path) = result;
         worker.run(
             request_rx,

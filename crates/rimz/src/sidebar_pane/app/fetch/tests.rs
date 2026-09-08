@@ -237,13 +237,7 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
         published_frame_hint: false,
         force_fold: false,
     };
-    let mut worker = FetchWorker::new(
-        config,
-        runtime,
-        NotificationsPrefs::default(),
-        crate::diag::DiagSink::disabled(),
-        election,
-    );
+    let mut worker = FetchWorker::new(config, runtime, crate::diag::DiagSink::disabled(), election);
     let outcomes = run_cycle(&mut worker, &state, request);
 
     assert_eq!(
@@ -552,7 +546,6 @@ impl ConsumerFixture {
         FetchWorker::new(
             config,
             self.runtime.clone(),
-            NotificationsPrefs::default(),
             crate::diag::DiagSink::disabled(),
             election,
         )
