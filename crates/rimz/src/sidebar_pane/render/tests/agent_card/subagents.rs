@@ -235,6 +235,7 @@ fn subagent_stats_line_outlives_the_turn() {
         Some("delegate"),
     );
     parent.turn_started_at = Some(fixed_now() - Duration::from_secs(10));
+    parent.user_turn_started_at = parent.turn_started_at;
 
     let mut child = agent(
         "codex-child",

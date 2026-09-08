@@ -86,6 +86,7 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(WorktreeDotted, "┄", None),
     glyph!(ChannelHash, "#", Some("\u{f292}")),
     glyph!(CardSubagents, "⧉", Some("\u{ed50}")),
+    glyph!(CardWaits, "⧖", Some("\u{f00a0}")),
     glyph!(CardParkedBg, "⋯", None),
     glyph!(ProcessCpu, "C", Some("\u{ef8f}")),
     glyph!(ProcessMem, "M", Some("\u{efc5}")),

@@ -115,6 +115,7 @@ glyph_roles! {
     }
     "card" {
         CardSubagents => "subagents",
+        CardWaits => "waits",
         CardParkedBg => "parked_bg",
     }
     "process" {

@@ -27,14 +27,12 @@ fn parked_pending_wake_projects_sleeping_and_keeps_phase() {
             },
         ];
 
+        let expected_wakes = session.pending_wakes.clone();
         let snapshot = room_with_agent_panes(vec![session]);
         let projected = row(&snapshot, "sleeper");
         assert_eq!(projected.status(), Some(AgentStatus::Sleeping));
         assert_eq!(projected.phase(), TurnPhase::Parked);
-        assert_eq!(
-            projected.as_agent().unwrap().pending_wake,
-            Some(pending_wake())
-        );
+        assert_eq!(projected.as_agent().unwrap().pending_wakes, expected_wakes);
         assert_eq!(
             rollup_agent(&snapshot, "sleeper").status,
             AgentStatus::Running
@@ -42,7 +40,8 @@ fn parked_pending_wake_projects_sleeping_and_keeps_phase() {
 
         let json = serde_json::to_value(projected).unwrap();
         assert_eq!(json["status"], "sleeping");
-        assert_eq!(json["pending_wake"]["name"], "wake-soon");
+        assert_eq!(json["pending_wakes"][0]["name"], "wake-soon");
+        assert_eq!(json["pending_wakes"][1]["name"], "wake-later");
         assert_eq!(
             serde_json::from_value::<SidebarRow>(json).unwrap(),
             *projected

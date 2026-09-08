@@ -136,6 +136,7 @@ pub(super) fn row_lines(
                 CardSlot::Subagents => {
                     inner.extend(sub_agent_entry_lines(ctx, &agent.sub_agents));
                 }
+                CardSlot::Waits => inner.extend(pending_wakes_line(ctx, agent)),
             }
         }
     }
@@ -178,6 +179,24 @@ fn sub_agent_stats_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'sta
         })
         .unwrap_or_default();
     Some(pin_right(left, right, width))
+}
+
+fn pending_wakes_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>> {
+    if agent.pending_wakes.is_empty() {
+        return None;
+    }
+    let theme = ctx.theme;
+    let left = vec![
+        Span::styled(
+            format!("  {}", theme.glyph(GlyphRole::CardWaits)),
+            theme.styled(Component::WakeHeader, Modifier::empty()),
+        ),
+        Span::styled(
+            format!(" waits ({})", agent.pending_wakes.len()),
+            theme.body(),
+        ),
+    ];
+    Some(pin_right(left, Vec::new(), content_width(ctx.width)))
 }
 
 /// Up to two indented lines for each child visible in this turn. Line 1 leads

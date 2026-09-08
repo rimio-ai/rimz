@@ -46,6 +46,8 @@ pub(super) enum CardSlot {
     /// session has spawned a child.
     SubagentStats,
     Subagents,
+    /// Standing pending-wake count; data keeps it empty until a wake is armed.
+    Waits,
 }
 
 const IDENTITY: &[CardSlot] = &[CardSlot::Identity];
@@ -60,6 +62,7 @@ const ENGAGED: &[CardSlot] = &[
     CardSlot::Gauge,
     CardSlot::Tokens,
     CardSlot::SubagentStats,
+    CardSlot::Waits,
 ];
 const ENGAGED_WITH_SUBAGENTS: &[CardSlot] = &[
     CardSlot::Identity,
@@ -68,6 +71,7 @@ const ENGAGED_WITH_SUBAGENTS: &[CardSlot] = &[
     CardSlot::Tokens,
     CardSlot::SubagentStats,
     CardSlot::Subagents,
+    CardSlot::Waits,
 ];
 
 /// The ordered line skeleton for one agent-card state.
@@ -182,6 +186,7 @@ mod tests {
                         assert!(!template.contains(&CardSlot::Tokens));
                         assert!(!template.contains(&CardSlot::SubagentStats));
                         assert!(!template.contains(&CardSlot::Subagents));
+                        assert!(!template.contains(&CardSlot::Waits));
                     }
                 }
             }
