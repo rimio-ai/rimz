@@ -19,7 +19,7 @@ mod raw_pane;
 mod reap;
 mod session;
 mod sidebar;
-pub(crate) mod socket;
+pub(in crate::mux) mod socket;
 
 #[doc(hidden)]
 pub use pane_pid::ZellijPaneResolver;
@@ -279,9 +279,6 @@ pub struct ZellijBackend {
     /// Test-only root for Zellij's socket, state, config, cache, home, and log
     /// env pins. Production inherits the process environment.
     runtime_dir: Option<PathBuf>,
-    /// Test-scoped cache root paired with `runtime_dir`; production uses the
-    /// process XDG cache root.
-    cache_root: Option<PathBuf>,
     /// Memoized `zellij --version` stdout ([`MuxBackend::version`]).
     version: std::sync::OnceLock<String>,
     /// Test-only command override that avoids process-global env mutation.
@@ -314,11 +311,10 @@ impl ZellijBackend {
     /// Pin every Zellij command this backend runs to `dir` as the full XDG,
     /// HOME, and TMPDIR surface, so a test's server, sessions, sockets,
     /// permission grants, cache, and logs never touch the user's.
+    #[cfg(any(test, feature = "testkit"))]
     pub fn with_runtime_dir(dir: impl Into<PathBuf>) -> Self {
-        let dir = dir.into();
         Self {
-            runtime_dir: Some(dir.clone()),
-            cache_root: Some(dir),
+            runtime_dir: Some(dir.into()),
             ..Self::default()
         }
     }
@@ -336,10 +332,8 @@ impl ZellijBackend {
         program: impl Into<PathBuf>,
         runtime_dir: impl Into<PathBuf>,
     ) -> Self {
-        let runtime_dir = runtime_dir.into();
         Self {
-            runtime_dir: Some(runtime_dir.clone()),
-            cache_root: Some(runtime_dir),
+            runtime_dir: Some(runtime_dir.into()),
             program: Some(program.into()),
             ..Self::default()
         }

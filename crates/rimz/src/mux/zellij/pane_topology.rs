@@ -181,7 +181,7 @@ impl ZellijPaneId {
     }
 
     /// Native target syntax accepted by Zellij actions.
-    pub fn action_target(self) -> String {
+    pub(super) fn action_target(self) -> String {
         match self {
             Self::Terminal(id) => format!("terminal_{id}"),
             Self::Plugin(id) => format!("plugin_{id}"),
@@ -274,7 +274,7 @@ pub struct PaneTopologyPane {
 }
 
 impl PaneTopologyPane {
-    pub fn native_id(&self) -> ZellijPaneId {
+    pub(crate) fn native_id(&self) -> ZellijPaneId {
         if self.is_plugin {
             ZellijPaneId::Plugin(self.id)
         } else {
@@ -348,7 +348,7 @@ pub fn read_presence_desired(runtime: &RuntimePaths) -> Option<PresenceDesired> 
     serde_json::from_slice(&bytes).ok()
 }
 
-pub fn write_presence_desired(
+pub(crate) fn write_presence_desired(
     runtime: &RuntimePaths,
     desired: &PresenceDesired,
 ) -> crate::disk::atomic::Result<()> {
@@ -358,7 +358,7 @@ pub fn write_presence_desired(
 /// Path of the Zellij presence-plugin topology cache, beside the producer's
 /// `snapshot.json` pane frame. The topology cache is Zellij's pane roster; the
 /// normal producer frame still carries the rendered view-model.
-pub fn pane_topology_cache_path(runtime: &RuntimePaths) -> PathBuf {
+pub(crate) fn pane_topology_cache_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join("pane-topology.json")
 }
 

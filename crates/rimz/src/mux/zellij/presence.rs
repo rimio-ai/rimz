@@ -519,7 +519,7 @@ impl ZellijBackend {
     }
 
     fn seed_presence_permissions(&self, opts: &super::super::PresencePluginOptions) {
-        let cache_root = self.cache_root.clone().unwrap_or_else(paths::cache_home);
+        let cache_root = self.runtime_dir.clone().unwrap_or_else(paths::cache_home);
         seed_presence_permissions_in(&cache_root, opts);
     }
 

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::mux::{MuxErr, Result};
 
-pub(crate) const ZELLIJ_SOCKET_PATH_LIMIT: usize = crate::sock::AF_UNIX_PATH_LIMIT;
+const ZELLIJ_SOCKET_PATH_LIMIT: usize = crate::sock::AF_UNIX_PATH_LIMIT;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZellijSocketHeadroom {
@@ -23,7 +23,7 @@ pub fn socket_headroom(session_name: &str) -> ZellijSocketHeadroom {
     socket_headroom_with_xdg_override(session_name, None)
 }
 
-pub(crate) fn socket_headroom_with_xdg_override(
+pub(super) fn socket_headroom_with_xdg_override(
     session_name: &str,
     xdg_override: Option<&Path>,
 ) -> ZellijSocketHeadroom {
@@ -49,7 +49,7 @@ pub(super) fn stderr_reports_socket_overflow(stderr: &str) -> bool {
         || lower.contains("zellij_socket_dir")
 }
 
-pub(crate) fn socket_headroom_from(
+fn socket_headroom_from(
     session_name: &str,
     zellij_socket_dir: Option<&Path>,
     xdg_runtime_dir: Option<&Path>,
@@ -70,7 +70,7 @@ pub(crate) fn socket_headroom_from(
     }
 }
 
-pub(crate) fn expected_socket_path_from(
+fn expected_socket_path_from(
     session_name: &str,
     zellij_socket_dir: Option<&Path>,
     xdg_runtime_dir: Option<&Path>,
@@ -82,7 +82,7 @@ pub(crate) fn expected_socket_path_from(
         .join(session_name)
 }
 
-pub(crate) fn socket_base_from(
+pub(in crate::mux) fn socket_base_from(
     zellij_socket_dir: Option<&Path>,
     xdg_runtime_dir: Option<&Path>,
     temp_dir: &Path,
@@ -99,7 +99,7 @@ pub(crate) fn socket_base_from(
     }
 }
 
-pub(crate) fn validate_headroom(headroom: ZellijSocketHeadroom) -> Result<()> {
+fn validate_headroom(headroom: ZellijSocketHeadroom) -> Result<()> {
     if headroom.len >= headroom.limit {
         return Err(MuxErr::SocketPathTooLong {
             path: headroom.path,
