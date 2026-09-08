@@ -13,7 +13,15 @@ rimz remote connect dev-box --force-version      # bypass one minor version mism
 rimz remote connect agent@prod-box:/srv/query-engine
 ```
 
-A raw target is `[user@]host:<session-or-path>`. After the colon, a value containing `/` or starting with `~` is a remote path and runs remote `rimz start`; a bare word is a remote session name and runs remote `rimz attach`. Valid targets include `dev-box:query-engine`, `dev-box:~/code/query-engine`, `agent@prod-box:/srv/query-engine`, and `user@[::1]:query-engine`. Spell another user's home as an absolute path (`/home/alice/code`), because `~user` does not expand through the guarded command. A supervised terminal connect also forwards qualifying listeners that start after attach to the same local port.
+A raw target is `[user@]host:<session-or-path>`, with a host-and-path spelling like `scp`. RimZ resolves the suffix as follows:
+
+| Suffix | Resolution on the remote host |
+| --- | --- |
+| `session:<name>` | Force `rimz attach` by session name, even when a directory has that name; for example, `dev-box:session:query-engine`. |
+| Contains `/` or starts with `~` | Explicit path: run `rimz start` for that directory, failing if it is missing. `./query-engine` and `~/query-engine` force this behavior. |
+| Anything else, including `.agents` or `query-engine` | An existing directory relative to remote `HOME` wins and runs `rimz start`; otherwise retain the legacy `rimz attach` by session name. |
+
+All relative paths are anchored to remote `HOME`, never the SSH startup directory. The same resolution applies to saved aliases, terminal connections, `--web`, and link probes; aliases need no migration. Valid targets also include `dev-box:~/code/query-engine`, `agent@prod-box:/srv/query-engine`, and `user@[::1]:query-engine`. Spell another user's home as an absolute path (`/home/alice/code`), because `~user` does not expand through the guarded command. A supervised terminal connect also forwards qualifying listeners that start after attach to the same local port.
 
 | Subcommand | Effect |
 | --- | --- |
