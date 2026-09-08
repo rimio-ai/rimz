@@ -195,8 +195,8 @@ fn parses_tea_pr_heads() {
     assert_eq!(
         parse_tea_pr_head_json(
             r#"{
-                "head":{"label":"feature","ref":"feature","sha":"abc123","repo":{"full_name":"org/repo","owner":{"login":"org"}}},
-                "base":{"ref":"main","repo":{"full_name":"ORG/Repo"}}
+                "head":{"label":"feature","ref":"refs/pull/1/head","sha":"abc123","repo":{"full_name":"org/repo","owner":{"login":"org"}}},
+                "base":{"label":"main","ref":"main","repo":{"full_name":"ORG/Repo"}}
             }"#
         )
         .unwrap(),
@@ -210,8 +210,8 @@ fn parses_tea_pr_heads() {
     assert_eq!(
         parse_tea_pr_head_json(
             r#"{
-                "head":{"label":"feature","ref":"feature","sha":"abc123","repo":{"full_name":"alice/fork","owner":{"login":"alice"}}},
-                "base":{"ref":"main","repo":{"full_name":"org/repo"}}
+                "head":{"label":"feature","ref":"refs/pull/1/head","sha":"abc123","repo":{"full_name":"alice/fork","owner":{"login":"alice"}}},
+                "base":{"label":"main","ref":"main","repo":{"full_name":"org/repo"}}
             }"#
         )
         .unwrap(),
@@ -225,8 +225,8 @@ fn parses_tea_pr_heads() {
     assert_eq!(
         parse_tea_pr_head_json(
             r#"{
-                "head":{"label":"feature","ref":"feature","repo":null},
-                "base":{"ref":"main","repo":{"full_name":"org/repo"}}
+                "head":{"label":"feature","ref":"refs/pull/1/head","repo":null},
+                "base":{"label":"main","ref":"main","repo":{"full_name":"org/repo"}}
             }"#
         )
         .unwrap(),
@@ -238,7 +238,7 @@ fn parses_tea_pr_heads() {
         }
     );
     assert_eq!(
-        parse_tea_pr_head_json(r#"{"head":{"ref":"feature","repo":{"full_name":"org/repo"}}}"#)
+        parse_tea_pr_head_json(r#"{"head":{"label":"feature","repo":{"full_name":"org/repo"}}}"#)
             .unwrap(),
         PrHead {
             branch: "feature".to_owned(),
@@ -253,6 +253,10 @@ fn parses_tea_pr_heads() {
         )
         .unwrap_err()
         .contains("tea PR payload")
+    );
+    assert_eq!(
+        parse_tea_pr_head_json(r#"{"head":{"label":"","ref":"refs/pull/1/head"}}"#).unwrap_err(),
+        "tea PR head branch is empty"
     );
 }
 
@@ -625,7 +629,7 @@ fn forge_cli_builds_and_decodes_head_commands() {
     );
     assert_eq!(
         ForgeCli::Tea
-            .decode_pr_head(r#"{"head":{"ref":"feature"}}"#)
+            .decode_pr_head(r#"{"head":{"label":"feature"}}"#)
             .unwrap()
             .branch,
         "feature"

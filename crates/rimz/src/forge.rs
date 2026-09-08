@@ -357,8 +357,7 @@ pub fn parse_tea_pr_head_json(raw: &str) -> Result<PrHead, String> {
 
     #[derive(Deserialize)]
     struct Branch {
-        #[serde(rename = "ref")]
-        ref_name: String,
+        label: String,
         repo: Option<Repository>,
     }
 
@@ -368,7 +367,7 @@ pub fn parse_tea_pr_head_json(raw: &str) -> Result<PrHead, String> {
     }
 
     let pull: Pull = serde_json::from_str(raw).map_err(|err| format!("tea PR payload: {err}"))?;
-    let branch = required_json_text(&pull.head.ref_name, "tea PR head branch")?;
+    let branch = required_json_text(&pull.head.label, "tea PR head branch")?;
     let repo_full_name = pull.head.repo.and_then(|repo| nonempty(repo.full_name));
     let owner = repo_full_name
         .as_deref()

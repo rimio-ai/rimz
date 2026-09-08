@@ -2658,12 +2658,12 @@ fn gh_fork_head() -> &'static str {
 
 #[cfg(unix)]
 fn tea_same_repo_head() -> &'static str {
-    r#"{"head":{"label":"feature","ref":"feature","repo":{"full_name":"org/repo","owner":{"login":"org"}}},"base":{"ref":"main","repo":{"full_name":"org/repo"}}}"#
+    r#"{"head":{"label":"feature","ref":"refs/pull/1/head","repo":{"full_name":"org/repo","owner":{"login":"org"}}},"base":{"label":"main","ref":"main","repo":{"full_name":"org/repo"}}}"#
 }
 
 #[cfg(unix)]
 fn tea_fork_head() -> &'static str {
-    r#"{"head":{"label":"feature","ref":"feature","repo":{"full_name":"alice/fork","owner":{"login":"alice"}}},"base":{"ref":"main","repo":{"full_name":"org/repo"}}}"#
+    r#"{"head":{"label":"feature","ref":"refs/pull/1/head","repo":{"full_name":"alice/fork","owner":{"login":"alice"}}},"base":{"label":"main","ref":"main","repo":{"full_name":"org/repo"}}}"#
 }
 
 fn commit_file(repo: &Path, name: &str, contents: &str, message: &str) {
