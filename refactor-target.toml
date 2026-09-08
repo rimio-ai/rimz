@@ -231,11 +231,11 @@ surface-budget = 361
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
-surface-budget = 180
+surface-budget = 173
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane/app"
-surface-budget = 11
+surface-budget = 6
 
 [[module]]
 path = "crates/rimz/src/sock.rs"
@@ -744,3 +744,48 @@ reason = "Provider header wrappers sit over the shared credits transport; a comm
 kind = "item"
 key = "agents::adapters::codex::rollout::decode_line"
 reason = "Null versus absent and the reported-field mask preserve cache-write presence (5951e11bd); these are distinct wire states."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::app::width_control::WidthController"
+reason = "Actuator steps, explicit width intent, and settled-resize attribution are distinct decisions with fix-pinned feedback, attach, and width behavior (pass 11)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::app::fetch::FetchDispatcher"
+reason = "Owns single-flight coalescing while on_snapshot retains consumer gate deferral and completion-driven follow-up dispatch (732161ced, 8b904eff2, 187f9f16c, a70ba54fc; pass 11)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::app::fetch::FetchRequest"
+reason = "All five constructors have production callers and hard_refresh distinguishes consumer-may-produce recovery rather than a redundant flag combination (c1b1685ee; pass 11)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::app::tmux_watch::spawn"
+reason = "The elder-gated control-mode topology stream has its own seed-window lifecycle, not the cache or transcript refresher's loop (41c38b052, eba9816e6; pass 11)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::app::transcript_watch::spawn"
+reason = "The elder-gated transcript watcher reconciles adapter-capable file paths and delegates refresh policy, sharing only election scaffolding with the other workers (4f1041a6d; pass 11)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::app::cache_refresh::spawn"
+reason = "The elder-gated heavy refresher owns periodic cache deadlines and daemon-view repair TTL rather than either push watcher's lifecycle (9881b7951, 6485e18a8; pass 11)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::app::remind::RemindState"
+reason = "Renderer-scoped repeated attention over the current own view differs from producer episode triggers and preserves the consumer-time unread check (4fe7d2d83; pass 11)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::app::selection::row_index_of_pane"
+reason = "Production passes no filter but this capped-roster lookup cannot become the full-row scan; a baseline-membership predicate is deferred (6e8381f2f; pass 11)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::app::state::compute_next_state"
+reason = "The health-recovery split with commit_fetch preserves producer fast-fold provenance; a provenance-aware reducer is a deferred deepen (732161ced, 25a16ed5c; pass 11)."
