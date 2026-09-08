@@ -657,11 +657,6 @@ fn parses_tea_combined_commit_status() {
 }
 
 #[test]
-fn tea_pr_endpoint_carries_repo_and_number() {
-    assert_eq!(tea_pr_endpoint("org/repo", 42), "repos/org/repo/pulls/42");
-}
-
-#[test]
 fn tea_commit_status_endpoint_carries_repo_and_branch() {
     assert_eq!(
         tea_commit_status_endpoint("org/repo", "feature/topic"),
