@@ -306,9 +306,7 @@ pub fn nerd_font_probe_gradient(width: usize) -> Vec<(u8, u8, u8)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{
-        ThemeGlyphsConfig, ThemeStyle, validate_glyph_cells, validate_single_cell,
-    };
+    use crate::config::{ThemeGlyphsConfig, ThemeStyle};
 
     /// One walk of the catalog pinning every per-row invariant: the table is
     /// indexed by [`GlyphRole`] discriminant, both presets fit their cell
@@ -348,13 +346,24 @@ mod tests {
             // chrome, where the layout measures the whole badge span.
             let unicode = unicode_glyph(role);
             if role == GlyphRole::ChromePresenceAway {
-                validate_glyph_cells(unicode).unwrap_or_else(|err| panic!("unicode {name}: {err}"));
+                assert!(
+                    (1..=2).contains(&ratatui::text::Span::raw(unicode).width()),
+                    "unicode {name}"
+                );
             } else {
-                validate_single_cell(unicode).unwrap_or_else(|err| panic!("unicode {name}: {err}"));
+                assert_eq!(
+                    ratatui::text::Span::raw(unicode).width(),
+                    1,
+                    "unicode {name}"
+                );
             }
 
             if let Some(nerd) = nerd_font_glyph(role) {
-                validate_single_cell(nerd).unwrap_or_else(|err| panic!("nerd-font {name}: {err}"));
+                assert_eq!(
+                    ratatui::text::Span::raw(nerd).width(),
+                    1,
+                    "nerd-font {name}"
+                );
                 assert_ne!(nerd, unicode, "{name} carries a real Nerd Font icon");
             }
         }
@@ -508,7 +517,7 @@ mod tests {
             theme: crate::config::ThemeConfig,
         }
 
-        let files = crate::config::MachineConfigFiles::machine().ordered();
+        let files = crate::config::ConfigEditor::machine().files().ordered();
         let parsed: ThemeFile = toml::from_str(files[1].template()).expect("theme template parses");
         let mut unicode_theme = parsed.theme.clone();
         unicode_theme.glyphs.set = Some("unicode".to_owned());

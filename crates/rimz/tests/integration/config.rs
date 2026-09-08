@@ -276,23 +276,6 @@ fn config_init_refuses_a_lone_existing_loop_file() {
 }
 
 #[test]
-fn config_editor_non_force_defaults_write_nothing_when_one_file_exists() {
-    let env = Env::new();
-    let files = rimz::config::MachineConfigFiles::from_paths(
-        machine_config_path(&env),
-        env.home_root.join(".agents"),
-    );
-    let editor = rimz::config::ConfigEditor::new(files);
-    let existing = editor.files().ordered()[2].path().to_path_buf();
-    write_machine_file(&existing, "# existing agents config\n[agents]\n");
-
-    assert!(!editor.write_defaults(false).expect("write defaults"));
-    for file in editor.files().ordered() {
-        assert_eq!(file.path().exists(), file.path() == existing);
-    }
-}
-
-#[test]
 fn config_get_json_distinguishes_unset_and_unknown_keys() {
     let env = Env::new();
 
@@ -1267,7 +1250,7 @@ fn setup_yes_preserves_template_comments_for_untouched_config() {
     let env = Env::new();
     write_machine_file(
         &machine_config_path(&env),
-        rimz::config::MachineConfigFiles::machine().ordered()[0].template(),
+        rimz::config::ConfigEditor::machine().files().ordered()[0].template(),
     );
 
     env.rimz().args(["setup", "--yes"]).assert().success();

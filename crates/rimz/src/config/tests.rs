@@ -2317,7 +2317,7 @@ fn sidebar_fields_parse_defaults_and_reject_zero() {
     assert_eq!(defaults.timezone, None);
     assert_eq!(
         defaults.sidebar.afk_after_secs.get(),
-        DEFAULT_AFK_AFTER_SECS
+        SidebarConfig::default().afk_after_secs.get()
     );
     assert_eq!(defaults.sidebar.afk_after_ms(), 15 * 60 * 1_000);
     assert_eq!(

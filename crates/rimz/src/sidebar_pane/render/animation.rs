@@ -666,7 +666,6 @@ fn builtin(role: AnimationRole, glyphs: &GlyphSet, palette: &Palette) -> Animati
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::validate_single_cell;
 
     fn test_palette() -> Palette {
         Palette::resolve(
@@ -1117,8 +1116,11 @@ mod tests {
             AnimationRole::Resolving,
         ] {
             for frame in animations.role(role).frames() {
-                validate_single_cell(frame)
-                    .unwrap_or_else(|err| panic!("{role:?} frame {frame:?}: {err}"));
+                assert_eq!(
+                    ratatui::text::Span::raw(frame).width(),
+                    1,
+                    "{role:?} frame {frame:?}"
+                );
             }
         }
     }

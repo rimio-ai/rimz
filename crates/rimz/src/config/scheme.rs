@@ -106,7 +106,7 @@ pub(crate) fn parse_scheme_text(text: &str) -> Result<ParsedScheme, String> {
     parse_scheme(text).map(|scheme| scheme.parsed)
 }
 
-pub fn theme_lookup_hint() -> String {
+fn theme_lookup_hint() -> String {
     format!(
         "{} bundled Alacritty themes in crates/rimz/themes/alacritty (see `rimz list-themes`); or a path to an Alacritty .toml",
         theme_count()

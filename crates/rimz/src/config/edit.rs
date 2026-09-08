@@ -95,7 +95,7 @@ impl ConfigEditor {
         Self::new(MachineConfigFiles::machine())
     }
 
-    pub fn new(files: MachineConfigFiles) -> Self {
+    fn new(files: MachineConfigFiles) -> Self {
         Self { files }
     }
 
