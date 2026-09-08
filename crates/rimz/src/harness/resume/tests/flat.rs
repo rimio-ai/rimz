@@ -142,7 +142,7 @@ fn resume_reports_why_a_candidate_was_not_seeded() {
     ] {
         let plan = plan_with(
             &[agent],
-            DEFAULT_RESUME_MAX,
+            crate::config::ResumeConfig::default().max,
             None,
             |_| on_disk,
             |_| redeemable,
@@ -314,7 +314,7 @@ fn resume_tab_labels_and_replayed_channel() {
     ] {
         let plan = plan_with(
             &[agent],
-            DEFAULT_RESUME_MAX,
+            crate::config::ResumeConfig::default().max,
             project_root,
             |_| true,
             |_| true,

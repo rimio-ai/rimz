@@ -455,7 +455,7 @@ fn plan_from_env(env: &Env) -> rimz::harness::resume::ResumePlan {
             project_root: Some(&env.project_root),
             rimz_bin: &env.rimz_bin(),
             profiles: &rimz::config::ProfilesConfig::default(),
-            max: rimz::harness::resume::DEFAULT_RESUME_MAX,
+            max: rimz::config::ResumeConfig::default().max,
         },
         |path| path.is_dir(),
         |_| true,

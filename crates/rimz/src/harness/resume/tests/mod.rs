@@ -204,7 +204,7 @@ fn single_pane_argv(plan: &ResumePlan) -> Vec<String> {
 /// [`plan_resume`] with the permissive defaults every rebirth test shares:
 /// every worktree on disk, every session redeemable, nothing cleanly ended.
 fn plan(agents: &[AgentState]) -> ResumePlan {
-    plan_capped(agents, DEFAULT_RESUME_MAX)
+    plan_capped(agents, crate::config::ResumeConfig::default().max)
 }
 
 fn plan_capped(agents: &[AgentState], max: usize) -> ResumePlan {
@@ -218,7 +218,11 @@ fn plan_excluding(
     plan_resume(
         agents,
         ended,
-        ctx(DEFAULT_RESUME_MAX, None, &no_profiles()),
+        ctx(
+            crate::config::ResumeConfig::default().max,
+            None,
+            &no_profiles(),
+        ),
         |_| true,
         |_| true,
     )
@@ -273,7 +277,7 @@ fn plan_profiled(agent: AgentState, profiles: &ProfilesConfig) -> ResumePlan {
     plan_resume(
         &[agent],
         &BTreeSet::new(),
-        ctx(DEFAULT_RESUME_MAX, None, profiles),
+        ctx(crate::config::ResumeConfig::default().max, None, profiles),
         |_| true,
         |_| true,
     )

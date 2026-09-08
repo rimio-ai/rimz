@@ -32,11 +32,6 @@ use crate::mux::ResumeTab;
 use crate::store::runtime::AgentLiveness;
 use crate::store::writer::AgentLaunchScope;
 
-/// The default ceiling on agents auto-resumed into one reborn session, so a
-/// long-lived workspace cannot fork-bomb a fleet of agent processes on birth.
-/// Anything past it is reported, never silently dropped.
-pub const DEFAULT_RESUME_MAX: usize = 128;
-
 /// One local worktree available to lane resume resolution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaneWorktree {
