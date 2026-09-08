@@ -1,12 +1,21 @@
 use super::*;
 
-#[cfg(unix)]
 use super::super::pane_topology::TopologyWriter;
 use super::super::tests::support::presence_opts;
 #[cfg(unix)]
-use super::super::tests::support::{
-    current_writer, failing_roster_shim, logging_shim, pane_roster_shim, shim_log,
-};
+use super::super::tests::support::{failing_roster_shim, logging_shim, pane_roster_shim, shim_log};
+
+/// A writer record carrying this host's build and config identity — what the
+/// presence retire path accepts as proof that a replacement plugin is live.
+pub(crate) fn current_writer(plugin_id: u32, loaded_at_ms: u64) -> TopologyWriter {
+    let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
+    TopologyWriter {
+        plugin_id,
+        loaded_at_ms,
+        build: Some(presence_plugin_build().to_owned()),
+        config: Some(presence_plugin_config_hash_for(&opts)),
+    }
+}
 
 /// A roster covering every discrimination [`is_presence_plugin_pane`] must make:
 /// the `file:` URL title Zellij gives a pipe-launched plugin, a stale
