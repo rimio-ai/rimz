@@ -102,26 +102,14 @@ pub(super) fn bell_decision(
     if !recheck_unread {
         return BellDecision::Fired;
     }
-    if panes
-        .iter()
-        .any(|pane| view.working_pane_ids.contains(pane) && pane_row_unread(snapshot, pane))
-    {
+    if panes.iter().any(|pane| {
+        view.working_pane_ids.contains(pane)
+            && super::state::row_of_pane(snapshot, pane).is_some_and(|row| row.unread)
+    }) {
         BellDecision::Fired
     } else {
         BellDecision::NotUnread
     }
-}
-
-/// Whether the agent row bound to `pane` is currently unread. Mirrors the row
-/// lookup the producer uses in [`crate::sidebar::notify`], reading the unread
-/// bit the fold already stamped onto each row.
-fn pane_row_unread(snapshot: &SidebarSnapshot, pane: &PaneId) -> bool {
-    snapshot
-        .worktree_groups
-        .iter()
-        .flat_map(|group| &group.rows)
-        .find(|row| row.pane.as_ref().is_some_and(|p| &p.pane_id == pane))
-        .is_some_and(|row| row.unread)
 }
 
 pub(super) fn desktop_notification_targets_renderer(

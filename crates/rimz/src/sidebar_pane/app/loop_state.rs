@@ -9,7 +9,7 @@ use super::lifecycle::grow_beyond_legit;
 use super::paint::FramePainter;
 use super::reload::{ReloadAction, reload_action};
 use super::remind::RemindState;
-use super::selection::{reconcile_selection, row_index_of_pane, set_make_up_filter};
+use super::selection::{reconcile_selection, set_make_up_filter};
 use super::state::{
     ApplyOutcome, FetchDiagnostics, ReadClear, RenderState, apply_manual_unread_guard,
     compute_next_state, emit_diagnostics, emit_unread_cleared_trace, read_receipt_for_row,
@@ -1542,15 +1542,13 @@ impl LoopState {
         // deliberately blind to the make-up filter — the focused pane is real
         // however the body is narrowed, so a hidden baseline holds rather than
         // blanks.
-        let derived =
-            focused_pane.filter(|pane| row_index_of_pane(&self.current, None, pane).is_some());
-        let derived_focus_pane = derived.is_some();
+        let derived_focus_pane = focused_pane.is_some();
         if authoritative_filter_fold {
             let shared_filter = crate::sidebar::body_filter::load(&self.runtime);
             set_make_up_filter(&mut self.ui, &self.current, shared_filter);
         }
         let previous_filter = self.ui.make_up_filter;
-        reconcile_selection(&mut self.ui, &self.current, derived);
+        reconcile_selection(&mut self.ui, &self.current, focused_pane);
         if authoritative_filter_fold
             && !self.current.worktree_groups.is_empty()
             && previous_filter.is_some()

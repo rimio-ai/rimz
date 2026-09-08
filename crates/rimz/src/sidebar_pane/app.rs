@@ -220,7 +220,6 @@ pub fn serve(config: ServeConfig) -> Result<ServeOutcome> {
     let _fetch_handle = spawn_fetch_worker(
         config.clone(),
         runtime.clone(),
-        config.notification_prefs.clone(),
         diag.clone(),
         election.clone(),
         request_rx,
