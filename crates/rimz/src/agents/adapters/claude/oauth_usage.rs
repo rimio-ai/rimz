@@ -33,7 +33,7 @@ const ACCOUNT_KEY_DOMAIN: &[u8] = b"rimz/claude-oauth-account-key/v1";
 const KEYCHAIN_TIMEOUT: Duration = Duration::from_millis(1_500);
 
 #[derive(Debug, thiserror::Error)]
-pub(in crate::agents) enum ClaudeOauthUsageErr {
+pub(crate) enum ClaudeOauthUsageErr {
     #[error("claude OAuth credentials not found")]
     NoCredentials,
     #[error("claude OAuth token is expired")]
