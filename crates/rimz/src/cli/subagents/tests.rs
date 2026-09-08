@@ -486,8 +486,9 @@ fn bare_wait_lists_the_children_instead_of_joining() {
     let mut running =
         rimz::agents::AgentState::stub("codex", "running", rimz::agents::AgentStatus::Running);
     running.name = Some("bright-owl".to_owned());
-    let untracked =
+    let mut untracked =
         rimz::agents::AgentState::stub("claude", "interactive", rimz::agents::AgentStatus::Idle);
+    untracked.name = None;
     let children = vec![&finished, &running, &untracked];
 
     assert_eq!(
