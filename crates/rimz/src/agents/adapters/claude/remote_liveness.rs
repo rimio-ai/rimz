@@ -10,21 +10,12 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::agents::runtime_control::RuntimeControlLiveness;
+
 use super::local_sessions::project_directory_names;
 use super::spend::claude_config_dirs;
 
 const POINTER_FILE: &str = "bridge-pointer.json";
-
-/// What the bridge pointer says about the host serving one project root.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum HostLiveness {
-    /// No pointer for this project root — the host has not run here.
-    Unknown,
-    /// A pointer names a process that is gone or was replaced by a recycled pid.
-    Down,
-    /// The recorded process is still serving.
-    Up { pid: u32 },
-}
 
 #[derive(Debug, Deserialize)]
 struct BridgePointer {
@@ -57,14 +48,14 @@ fn pointer_paths_under(
 /// Probe the host serving `project_root`. The first readable pointer decides;
 /// a pointer that names a dead process reports `Down` rather than falling
 /// through to another config root, because that pointer is the live answer.
-pub fn probe(project_root: &Path) -> HostLiveness {
+pub fn probe(project_root: &Path) -> RuntimeControlLiveness {
     probe_with(project_root, crate::proc::process_is_live)
 }
 
 fn probe_with(
     project_root: &Path,
     mut is_live: impl FnMut(u32, Option<&str>) -> bool,
-) -> HostLiveness {
+) -> RuntimeControlLiveness {
     for path in pointer_paths(project_root) {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
@@ -74,24 +65,24 @@ fn probe_with(
                 path = %path.display(),
                 "Claude bridge pointer did not parse; treating the host as down",
             );
-            return HostLiveness::Down;
+            return RuntimeControlLiveness::Down;
         };
         return liveness_from(&pointer, &mut is_live);
     }
-    HostLiveness::Unknown
+    RuntimeControlLiveness::Unknown
 }
 
 fn liveness_from(
     pointer: &BridgePointer,
     is_live: &mut impl FnMut(u32, Option<&str>) -> bool,
-) -> HostLiveness {
+) -> RuntimeControlLiveness {
     let Some(pid) = pointer.pid else {
-        return HostLiveness::Down;
+        return RuntimeControlLiveness::Down;
     };
     if is_live(pid, pointer.proc_start.as_deref()) {
-        HostLiveness::Up { pid }
+        RuntimeControlLiveness::Up
     } else {
-        HostLiveness::Down
+        RuntimeControlLiveness::Down
     }
 }
 
@@ -113,7 +104,7 @@ mod tests {
         };
         assert_eq!(
             liveness_from(&recorded, &mut is_live),
-            HostLiveness::Up { pid: 42 }
+            RuntimeControlLiveness::Up
         );
     }
 
@@ -121,14 +112,20 @@ mod tests {
     fn a_dead_or_recycled_pid_is_down() {
         let recorded = pointer(r#"{"pid": 42, "procStart": "440836208"}"#);
         let mut is_live = |_: u32, _: Option<&str>| false;
-        assert_eq!(liveness_from(&recorded, &mut is_live), HostLiveness::Down);
+        assert_eq!(
+            liveness_from(&recorded, &mut is_live),
+            RuntimeControlLiveness::Down
+        );
     }
 
     #[test]
     fn a_pointer_without_a_pid_is_down() {
         let recorded = pointer(r#"{"procStart": "440836208"}"#);
         let mut is_live = |_: u32, _: Option<&str>| panic!("must not probe without a pid");
-        assert_eq!(liveness_from(&recorded, &mut is_live), HostLiveness::Down);
+        assert_eq!(
+            liveness_from(&recorded, &mut is_live),
+            RuntimeControlLiveness::Down
+        );
     }
 
     #[test]
@@ -140,7 +137,7 @@ mod tests {
         };
         assert_eq!(
             liveness_from(&recorded, &mut is_live),
-            HostLiveness::Up { pid: 42 }
+            RuntimeControlLiveness::Up
         );
     }
 
@@ -152,7 +149,7 @@ mod tests {
         let mut is_live = |_: u32, _: Option<&str>| true;
         assert_eq!(
             liveness_from(&recorded, &mut is_live),
-            HostLiveness::Up { pid: 42 }
+            RuntimeControlLiveness::Up
         );
     }
 
@@ -161,7 +158,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         assert_eq!(
             probe_with(dir.path(), |_: u32, _: Option<&str>| true),
-            HostLiveness::Unknown,
+            RuntimeControlLiveness::Unknown,
             "an unseen project root has no pointer to read",
         );
     }
