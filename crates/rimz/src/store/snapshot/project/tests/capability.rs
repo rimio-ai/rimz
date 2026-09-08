@@ -15,7 +15,7 @@ fn worktree_branches_accumulate_and_scalar_follows_latest() {
                 "agent_id": "sess-1",
                 "event_name": "UserPromptSubmit",
                 "signal": {"signal": "turn_started"},
-                "worktree_path": "/tmp/other",
+                "worktree_path": "/tmp/x",
                 "worktree_branch": branch,
             }),
         ));
@@ -30,6 +30,19 @@ fn worktree_branches_accumulate_and_scalar_follows_latest() {
         );
         assert_eq!(agents[0].worktree_path.as_deref(), Some("/tmp/x"));
     }
+    events.push(raw_lifecycle_at(
+        "codex",
+        4,
+        json!({
+            "agent_id": "sess-1",
+            "event_name": "UserPromptSubmit",
+            "signal": {"signal": "turn_started"},
+            "worktree_branch": "legacy",
+        }),
+    ));
+    let agents = reduce_agent_states(&events);
+    assert_eq!(agents[0].worktree_branch.as_deref(), Some("legacy"));
+    assert!(agents[0].worktree_branches.contains("legacy"));
 }
 
 #[test]
@@ -146,7 +159,7 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
             "signal": { "signal": "turn_started" },
             "task": "fix auth flow",
             "worktree_path": "/tmp/hook-subprocess-cwd",
-            "worktree_branch": "feat/x",
+            "worktree_branch": "wrong-branch",
         }),
     );
 
@@ -172,11 +185,8 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
     assert_eq!(agent.role.as_deref(), Some("coder"));
     assert_eq!(agent.team.as_deref(), Some("forge"));
     assert_eq!(agent.worktree_path.as_deref(), Some("/tmp/x"));
-    assert_eq!(agent.worktree_branch.as_deref(), Some("feat/x"));
-    assert_eq!(
-        agent.worktree_branches,
-        BTreeSet::from(["main".to_owned(), "feat/x".to_owned()])
-    );
+    assert_eq!(agent.worktree_branch.as_deref(), Some("main"));
+    assert_eq!(agent.worktree_branches, BTreeSet::from(["main".to_owned()]));
 }
 
 #[test]

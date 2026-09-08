@@ -143,6 +143,19 @@ fn attribution_scopes_to_the_checkout_branch() {
             turn_id: None,
         },
     );
+    let mut foreign =
+        AgentLifecycleObservation::new(Some("feature-only".into()), LifecycleSignal::TurnStarted);
+    foreign.worktree_path = Some(env.home_root.join("librarian").display().to_string());
+    foreign.worktree_branch = Some("main".to_owned());
+    store
+        .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+            session_name: &workspace.session_name,
+            agent_kind: rimz::ids::AgentKind::new_unchecked("codex"),
+            event_name: "UserPromptSubmit",
+            observation: &foreign,
+            spawned_subagents: &[],
+        })
+        .expect("append foreign checkout observation");
 
     let assert_report = |args: &[&str], branch: Option<&str>, expected: &[&str]| {
         let output = attribution_output(&env, args);
