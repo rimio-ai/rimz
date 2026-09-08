@@ -69,6 +69,14 @@ upward-dependencies = ["harness::target"]
 surface-budget = 1005
 
 [[module]]
+path = "crates/rimz/src/agents/adapters/codex"
+surface-budget = 8
+
+[[module]]
+path = "crates/rimz/src/agents/adapters/claude"
+surface-budget = 5
+
+[[module]]
 path = "crates/rimz/src/bin"
 surface-budget = 0
 
@@ -174,7 +182,7 @@ surface-budget = 97
 path = "crates/rimz/src/mux"
 # Companion append adds one deep operation, its outcome, and the shared tab cap.
 # Geometry planning and native balancing remain private to mux.
-surface-budget = 276
+surface-budget = 274
 
 [[module]]
 path = "crates/rimz/src/observability"
@@ -711,3 +719,33 @@ reason = "Account-cache publication is the refresh lane's fusion (authoritative 
 kind = "item"
 key = "mux::capabilities::drops_desktop_osc"
 reason = "Backend facts stay behind the mux seam (270fcff83); osc is policy over them and sits above mux."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::claude::remote_control::readiness"
+reason = "Settings and launch argv, consent seeding, and bridge-pointer liveness are separate decisions; keep the three modules while returning neutral outcomes."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::local_sessions::fixture_observation"
+reason = "The provider fixture follows the adapter-family conformance pattern; it is not a production facade."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::transcript::with_codex_sessions_root"
+reason = "Test injection retains one home per environment key, avoiding competing global overrides."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::local_sessions::discover"
+reason = "Codex and Claude discovery use different roots, budgets, and date windows; separate walks preserve provider policy."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::claude::oauth_usage::fetch_usage_with_url"
+reason = "Provider header wrappers sit over the shared credits transport; a common bearer helper saves at most one line and can add seven."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::rollout::RawField"
+reason = "Null versus absent and the reported-field mask preserve cache-write presence (5951e11bd); these are distinct wire states."
