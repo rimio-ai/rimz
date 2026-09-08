@@ -13,6 +13,7 @@ Topic detail lives in the internals leaves the root map describes — [adapter.m
 - `spend.rs` is the read-only, sidebar-safe full-history cost parser; a CI grep keeps every `spend.rs` free of store-write, run-wake, and broker imports.
 - Amp, Pi, and OpenCode own their wire: each integrates through RimZ-authored in-process TypeScript installed whole-file — [`amp/plugin.ts`](./adapters/amp/plugin.ts), [`pi/extension.ts`](./adapters/pi/extension.ts), and [`opencode/plugin.ts`](./adapters/opencode/plugin.ts) — so the payload schema is RimZ's by design and drift is a RimZ bug, never an upstream one.
 - OpenCode's provider-local [`database.rs`](./adapters/opencode/database.rs) owns storage discovery and read-only SQLite access below account, transcript, and spend consumers.
+- Codex and Claude expose registry adapters and delegated OAuth usage; Codex also exposes its broker entrypoint. Their provider interiors stay private. Codex enrichment and broker share child transport and handshake; the broker retains credential-stamp, retry, and request-budget policy. Both adapters return neutral runtime-control outcomes directly.
 
 ## The boundary
 
