@@ -7,6 +7,31 @@ use crate::store::snapshot::SidebarSnapshot;
 use crate::{MuxName, SidebarInstanceId, WorkspaceId};
 use jiff::Timestamp;
 
+pub(super) fn focus_fixture() -> (SidebarSnapshot, PaneId, PaneId, PaneId) {
+    let ws = workspace();
+    let sidebar = PaneId::from_parts(MuxName::Zellij, "terminal_10");
+    let first_work = PaneId::from_parts(MuxName::Zellij, "terminal_11");
+    let second_work = PaneId::from_parts(MuxName::Zellij, "terminal_12");
+    let mut snapshot = snapshot_with_panes(
+        &ws,
+        vec![
+            pane("terminal_11", "tab_1", false),
+            pane("terminal_12", "tab_1", false),
+        ],
+    );
+    snapshot.own_view = Some(crate::store::snapshot::SidebarOwnView {
+        sibling_count: 3,
+        working_pane_ids: vec![first_work.clone(), second_work.clone()],
+        own_view_is_daemon: false,
+    });
+    snapshot.presence = Some(crate::store::snapshot::SidebarPresence::Active);
+    snapshot.client_views = vec![crate::pane::ClientPaneView {
+        client_id: crate::ids::MuxClientId::Zellij(1),
+        pane_id: sidebar.clone(),
+    }];
+    (snapshot, sidebar, first_work, second_work)
+}
+
 pub(crate) fn workspace() -> WorkspaceId {
     WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap()
 }

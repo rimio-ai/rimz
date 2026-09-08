@@ -1,7 +1,7 @@
 use super::input::{KeyAction, Wakeup};
 use super::*;
 use crate::sidebar_pane::app::fixtures::{
-    agent_snapshot, pane, snapshot, snapshot_with_panes, workspace,
+    agent_snapshot, focus_fixture, pane, snapshot, snapshot_with_panes, workspace,
 };
 use crate::sidebar_pane::pets::{PetAssets, PetPixelView};
 use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC, PixelRenderCaps, placeholder_cluster};
@@ -22,31 +22,6 @@ fn deferred_fetch_deadline_caps_event_loop_timeout() {
         fetch_deadline_timeout(Duration::from_secs(10), Some(now), now),
         FRAME_MIN_TIMEOUT,
     );
-}
-
-fn focus_fixture() -> (SidebarSnapshot, PaneId, PaneId, PaneId) {
-    let ws = workspace();
-    let sidebar = PaneId::from_parts(MuxName::Zellij, "terminal_10");
-    let first_work = PaneId::from_parts(MuxName::Zellij, "terminal_11");
-    let second_work = PaneId::from_parts(MuxName::Zellij, "terminal_12");
-    let mut snapshot = snapshot_with_panes(
-        &ws,
-        vec![
-            pane("terminal_11", "tab_1", false),
-            pane("terminal_12", "tab_1", false),
-        ],
-    );
-    snapshot.own_view = Some(crate::store::snapshot::SidebarOwnView {
-        sibling_count: 3,
-        working_pane_ids: vec![first_work.clone(), second_work.clone()],
-        own_view_is_daemon: false,
-    });
-    snapshot.presence = Some(crate::store::snapshot::SidebarPresence::Active);
-    snapshot.client_views = vec![crate::pane::ClientPaneView {
-        client_id: crate::ids::MuxClientId::Zellij(1),
-        pane_id: sidebar.clone(),
-    }];
-    (snapshot, sidebar, first_work, second_work)
 }
 
 #[test]
@@ -804,140 +779,5 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
     assert_eq!(
         bell_decision(&snapshot(&ws), std::slice::from_ref(&work), false),
         BellDecision::NoOwnView
-    );
-}
-
-#[test]
-fn focus_stranded_targets_recent_own_pane_events_only() {
-    let (snapshot, sidebar, _first_work, second_work) = focus_fixture();
-    let ui = UiState {
-        baseline_pane: Some(second_work.clone()),
-        ..UiState::default()
-    };
-
-    assert_eq!(
-        focus_stranded_target(
-            &snapshot,
-            &ui,
-            &sidebar,
-            &snapshot.client_views,
-            Some(&sidebar),
-            1_000,
-            1_050,
-        ),
-        Some(second_work.clone()),
-    );
-
-    let foreign = PaneId::from_parts(MuxName::Zellij, "terminal_99");
-    let ui = UiState {
-        baseline_pane: Some(second_work.clone()),
-        ..UiState::default()
-    };
-    assert_eq!(
-        focus_stranded_target(
-            &snapshot,
-            &ui,
-            &sidebar,
-            &snapshot.client_views,
-            Some(&foreign),
-            1_000,
-            1_050,
-        ),
-        None,
-    );
-
-    let now = 1_000 + duration_millis(FOCUS_STRANDED_EVENT_TTL) + 1;
-    assert_eq!(
-        focus_stranded_target(
-            &snapshot,
-            &ui,
-            &sidebar,
-            &snapshot.client_views,
-            Some(&sidebar),
-            1_000,
-            now,
-        ),
-        None,
-    );
-}
-
-/// A deferred repair is retried for exactly as long as its evidence can still
-/// authorize one: the retry window and `focus_stranded_target`'s freshness
-/// bound are the same TTL, so a repair is never dropped while it would still be
-/// honored, nor retried once it would be refused.
-#[test]
-fn focus_repair_retry_window_matches_the_strand_event_ttl() {
-    let ttl = duration_millis(FOCUS_STRANDED_EVENT_TTL);
-    assert!(focus_repair_still_viable(1_000, 1_000));
-    assert!(focus_repair_still_viable(1_000, 1_000 + ttl));
-    assert!(!focus_repair_still_viable(1_000, 1_000 + ttl + 1));
-    // A clock that steps backwards leaves the repair viable rather than
-    // abandoning it on a negative age.
-    assert!(focus_repair_still_viable(1_000, 0));
-}
-
-#[test]
-fn focus_stranded_falls_back_to_working_sibling_when_baseline_is_missing() {
-    let (snapshot, sidebar, first_work, _second_work) = focus_fixture();
-    let ui = UiState {
-        baseline_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_99")),
-        ..UiState::default()
-    };
-
-    assert_eq!(
-        focus_stranded_target(
-            &snapshot,
-            &ui,
-            &sidebar,
-            &snapshot.client_views,
-            Some(&sidebar),
-            1_000,
-            1_050,
-        ),
-        Some(first_work),
-    );
-
-    let (mut snapshot, sidebar, _first_work, _second_work) = focus_fixture();
-    if let Some(view) = &mut snapshot.own_view {
-        view.working_pane_ids.clear();
-    }
-
-    assert_eq!(
-        focus_stranded_target(
-            &snapshot,
-            &UiState::default(),
-            &sidebar,
-            &snapshot.client_views,
-            Some(&sidebar),
-            1_000,
-            1_050,
-        ),
-        None,
-    );
-}
-
-#[test]
-fn focus_stranded_skips_when_client_focus_is_ambiguous() {
-    let (mut snapshot, sidebar, _first_work, second_work) = focus_fixture();
-    snapshot.viewed_panes = vec![
-        sidebar.clone(),
-        PaneId::from_parts(MuxName::Zellij, "terminal_42"),
-    ];
-    let ui = UiState {
-        baseline_pane: Some(second_work),
-        ..UiState::default()
-    };
-
-    assert_eq!(
-        focus_stranded_target(
-            &snapshot,
-            &ui,
-            &sidebar,
-            &snapshot.client_views,
-            Some(&sidebar),
-            1_000,
-            1_050,
-        ),
-        None,
     );
 }
