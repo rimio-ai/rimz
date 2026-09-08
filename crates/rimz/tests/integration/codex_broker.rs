@@ -5,11 +5,12 @@
 //! unix socket: `initialize` is answered from the cached handshake, the
 //! read-only methods are forwarded to the child and routed back by id.
 
+use std::fs::{File, FileTimes};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
@@ -120,4 +121,76 @@ fn broker_serves_a_warm_app_server_over_its_socket() {
     let _ = broker.kill();
     let _ = broker.wait();
     outcome.expect("broker round-trips succeed");
+}
+
+#[test]
+fn broker_respawns_after_credentials_stamp_changes() {
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    let codex_home = tempfile::tempdir().expect("codex home");
+    let auth_path = codex_home.path().join("auth.json");
+    let auth_a = r#"{"marker":"A"}"#;
+    let auth_b = r#"{"marker":"B"}"#;
+    let mtime = UNIX_EPOCH + Duration::from_secs(1_790_000_000);
+    std::fs::write(&auth_path, auth_a).expect("write original auth");
+    File::open(&auth_path)
+        .expect("open original auth")
+        .set_times(FileTimes::new().set_modified(mtime))
+        .expect("set original auth stamp");
+
+    let mut broker = env
+        .rimz()
+        .args([
+            "codex",
+            "app-server",
+            "serve",
+            "--workspace-id",
+            env.workspace_id.as_str(),
+        ])
+        .env("RIMZ_CODEX_BIN", codex_appserver_stub())
+        .env("CODEX_HOME", codex_home.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn broker");
+
+    let socket = env.runtime_paths().codex_app_server_socket_path();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut stream = connect_with_deadline(&socket, Duration::from_secs(10))
+            .expect("broker socket should appear and accept a connection");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+
+        let init = rpc(&mut stream, &mut reader, 1, "initialize");
+        assert_eq!(init["rimzFixture"]["auth"], auth_a);
+        let original_pid = init["rimzFixture"]["pid"].as_u64().expect("child pid");
+        let limits = rpc(&mut stream, &mut reader, 2, "account/rateLimits/read");
+        assert_eq!(limits["rimzFixture"], init["rimzFixture"]);
+
+        std::fs::write(&auth_path, auth_b).expect("write replacement auth");
+        File::open(&auth_path)
+            .expect("open replacement auth")
+            .set_times(FileTimes::new().set_modified(mtime + Duration::from_secs(1)))
+            .expect("set replacement auth stamp");
+
+        // Cached initialize precedes the stamp check; only an ordinary request respawns.
+        assert_eq!(rpc(&mut stream, &mut reader, 3, "initialize"), init);
+        let replacement = rpc(&mut stream, &mut reader, 4, "account/rateLimits/read");
+        assert_eq!(replacement["rimzFixture"]["auth"], auth_b);
+        let replacement_pid = replacement["rimzFixture"]["pid"]
+            .as_u64()
+            .expect("replacement child pid");
+        assert_ne!(replacement_pid, original_pid);
+
+        let replacement_init = rpc(&mut stream, &mut reader, 5, "initialize");
+        assert_eq!(replacement_init["rimzFixture"], replacement["rimzFixture"]);
+        let stable = rpc(&mut stream, &mut reader, 6, "account/rateLimits/read");
+        assert_eq!(stable["rimzFixture"], replacement["rimzFixture"]);
+    }));
+
+    let _ = broker.kill();
+    let _ = broker.wait();
+    outcome.expect("broker credential-stamp round-trips succeed");
 }
