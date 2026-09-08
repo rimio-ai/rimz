@@ -78,7 +78,7 @@ pub(super) fn description_line(
         left.extend(body_spans(&label, true));
     } else if let Some(wake) = agent(row)
         .filter(|agent| agent.status == AgentStatus::Sleeping)
-        .and_then(|agent| agent.pending_wake.as_ref())
+        .and_then(|agent| agent.pending_wakes.first())
     {
         left.push(Span::styled(
             wake.label(ctx.now),

@@ -28,7 +28,7 @@ pub(in crate::store::snapshot) fn row_from_agent(agent: &AgentState, now: Timest
         last_activity: agent.last_activity,
         card: RowCard::Agent(Box::new(AgentCard {
             status,
-            pending_wake: agent.pending_wakes.first().cloned(),
+            pending_wakes: agent.pending_wakes.clone(),
             phase,
             task: agent.task.clone(),
             first_prompt: agent.first_prompt.clone(),

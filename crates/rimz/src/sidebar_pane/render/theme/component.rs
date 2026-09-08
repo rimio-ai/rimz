@@ -88,6 +88,8 @@ pub(crate) enum Component {
     Compaction,
     /// The `⧉` subagents header.
     SubagentHeader,
+    /// The `⧖` pending-wakes header.
+    WakeHeader,
     /// The `⇅ rc` remote-control flag.
     RemoteControl,
     /// The `⇅ rc` remote-control flag when its managed server is down.
@@ -139,6 +141,7 @@ impl Component {
         Component::CacheWrite,
         Component::Compaction,
         Component::SubagentHeader,
+        Component::WakeHeader,
         Component::RemoteControl,
         Component::RemoteControlDown,
         Component::HelpKey,
@@ -163,7 +166,7 @@ impl Component {
             WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu | WindowLarge => {
                 palette.cool
             }
-            TeamLabel | SubagentHeader | ProcIo | CacheWrite => palette.meta,
+            TeamLabel | SubagentHeader | WakeHeader | ProcIo | CacheWrite => palette.meta,
             RemoteControlDown | WorktreePrClosed | PrCiFailing => palette.alarm,
             Input => palette.expense,
             WorktreeQualifier | WorktreeMerged | WindowMedium => palette.muted,
