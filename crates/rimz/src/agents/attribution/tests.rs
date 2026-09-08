@@ -302,6 +302,58 @@ fn branch_scope_admits_roots_seen_on_the_branch() {
 }
 
 #[test]
+fn orphaned_launched_child_does_not_join_a_recycled_pane_seat() {
+    let lane = Path::new("/repo/lane");
+    let mut excluded = agent(lane, "excluded", "claude", 10);
+    excluded.worktree_branches.insert("b".to_owned());
+    let mut child = agent(lane, "child", "claude", 20);
+    child.parent_agent_id = Some(excluded.agent_id.clone());
+    child.parent_agent_kind = Some(excluded.kind.clone());
+    child.launch_depth = Some(1);
+    child.pane = Some(crate::pane::PaneRef::from_id(PaneId::from_parts(
+        crate::ids::MuxName::Tmux,
+        "%3",
+    )));
+    let mut unrelated = agent(lane, "unrelated", "claude", 30);
+    unrelated.worktree_branches.insert("a".to_owned());
+    unrelated.pane = child.pane.clone();
+    unrelated.tool_calls.insert("exec".to_owned(), 1);
+    let agents = [excluded, child, unrelated];
+    let refs = agents.iter().collect::<Vec<_>>();
+
+    for (branch, lifetime) in [
+        (Some("a"), LaneLifetime::Unbounded),
+        (None, LaneLifetime::Since(at(20))),
+    ] {
+        let lifetimes = LaneLifetimes::new(HashMap::from([(lane.to_owned(), lifetime)]));
+        let folded = fold_seats(&refs, &lifetimes, branch);
+        assert_eq!(folded.len(), 2);
+        let (key, records) = folded
+            .iter()
+            .find(|(_, records)| {
+                records
+                    .iter()
+                    .any(|record| record.agent_id == agents[1].agent_id)
+            })
+            .expect("retained orphan slot");
+        assert_eq!(key.slot, Slot::Session(agents[1].agent_id.clone()));
+        assert_eq!(records.len(), 1);
+        if branch.is_none() {
+            let groups = slot_groups(&refs, &lifetimes);
+            assert_eq!(groups.len(), 2);
+            assert!(groups.iter().all(|records| records.len() == 1));
+        }
+
+        let report = build_branch_scoped(&agents, &[], &[], &lifetimes, branch);
+        assert_eq!(report.totals.agents, 1);
+        assert_eq!(report.totals.tool_calls, 1);
+        let member = &report.groups[0].members[0];
+        assert_eq!(member.sessions, 1);
+        assert!(member.subagents.is_empty());
+    }
+}
+
+#[test]
 fn branch_scope_children_follow_admitted_parents() {
     let lane = Path::new("/repo/lane");
     let mut parent = agent(lane, "parent", "claude", 10);
