@@ -3,7 +3,7 @@
 //! Reads newline-delimited JSON-RPC requests on stdin and replies with canned
 //! results so the Codex context refresh (`rimz agents refresh-context`) can be
 //! exercised without the real `codex` binary. Tests point `RIMZ_CODEX_BIN` at
-//! this binary; the client spawns it as `<bin> app-server` (argv ignored).
+//! this binary; the client spawns it as `<bin> app-server` with the internal marker.
 //! Notifications (no `id`) get no reply; the process exits on stdin EOF.
 
 use std::io::{BufRead, Write};
@@ -11,6 +11,19 @@ use std::io::{BufRead, Write};
 use serde_json::{Value, json};
 
 fn main() {
+    if !std::env::args_os()
+        .skip(1)
+        .eq([std::ffi::OsString::from("app-server")])
+        || std::env::var("RIMZ_CODEX_INTERNAL_APP_SERVER").as_deref() != Ok("1")
+    {
+        std::process::exit(1);
+    }
+    let auth = std::env::var_os("CODEX_HOME")
+        .and_then(|home| {
+            std::fs::read_to_string(std::path::PathBuf::from(home).join("auth.json")).ok()
+        })
+        .unwrap_or_default();
+    let fixture = json!({ "pid": std::process::id(), "auth": auth });
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
@@ -26,7 +39,7 @@ fn main() {
         // notification and carries none.
         let Some(id) = value.get("id") else { continue };
         let method = value.get("method").and_then(Value::as_str).unwrap_or("");
-        let frame = json!({ "id": id, "result": response_for(method) });
+        let frame = json!({ "id": id, "result": response_for(method, &fixture) });
         // Exit promptly when the client closes the pipe rather than spinning on
         // stdin until EOF with every write silently dropped.
         if writeln!(stdout, "{frame}").is_err() || stdout.flush().is_err() {
@@ -35,15 +48,17 @@ fn main() {
     }
 }
 
-fn response_for(method: &str) -> Value {
+fn response_for(method: &str, fixture: &Value) -> Value {
     match method {
         "initialize" => json!({
             "userAgent": "rimz/9.9.9 (Test 1.0; x86_64)",
             "codexHome": "/tmp/.codex",
             "platformFamily": "unix",
-            "platformOs": "linux"
+            "platformOs": "linux",
+            "rimzFixture": fixture
         }),
         "account/rateLimits/read" => json!({
+            "rimzFixture": fixture,
             "rateLimits": {
                 "limitId": "codex",
                 "primary": { "usedPercent": 42, "windowDurationMins": 300, "resetsAt": 1_790_000_000_i64 },
