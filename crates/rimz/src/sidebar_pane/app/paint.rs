@@ -41,6 +41,7 @@ impl FramePainter {
         }
     }
 
+    #[cfg(feature = "testkit")]
     pub(super) fn with_id_base(id_base: u32, pixel_wrap: bool, caps: PixelRenderCaps) -> Self {
         Self {
             assets: PetAssets::default(),
