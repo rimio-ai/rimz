@@ -74,7 +74,8 @@ impl JsonRpcTransport for CannedTransport {
         Ok(self.results.get(method).cloned().unwrap_or(Value::Null))
     }
 
-    fn notify(&mut self, method: &str, _params: Value) -> Result<(), AppServerErr> {
+    fn notify_frame(&mut self, frame: &Value) -> Result<(), AppServerErr> {
+        let method = frame["method"].as_str().unwrap();
         self.calls.push(format!("notify:{method}"));
         Ok(())
     }
@@ -533,13 +534,9 @@ fn loaded_threads_follows_next_cursor_pages() {
     assert_eq!(client.transport.params[2], json!({ "cursor": "page-2" }));
 }
 
-fn assert_spawn(attempt: &ConnectAttempt, args: &[&str], deadline: Duration) {
+fn assert_spawn(attempt: &ConnectAttempt, deadline: Duration) {
     match attempt {
-        ConnectAttempt::Spawn(got_args, got_deadline) => {
-            assert_eq!(
-                got_args,
-                &args.iter().map(|s| s.to_string()).collect::<Vec<_>>()
-            );
+        ConnectAttempt::Spawn(got_deadline) => {
             assert_eq!(*got_deadline, deadline);
         }
         ConnectAttempt::Broker(path) => panic!("expected a spawn attempt, got broker {path:?}"),
@@ -560,13 +557,13 @@ fn assert_daemon_ws(attempt: &ConnectAttempt, expected: &Path) {
 fn connection_attempts_prefer_warm_paths_before_cold_spawn() {
     let attempts = attempts_for(None, None);
     assert_eq!(attempts.len(), 1);
-    assert_spawn(&attempts[0], &["app-server"], APP_SERVER_DEADLINE);
+    assert_spawn(&attempts[0], APP_SERVER_DEADLINE);
 
     let daemon = Path::new("/run/codex/app-server-control.sock");
     let attempts = attempts_for(None, Some(daemon));
     assert_eq!(attempts.len(), 2);
     assert_daemon_ws(&attempts[0], daemon);
-    assert_spawn(&attempts[1], &["app-server"], APP_SERVER_DEADLINE);
+    assert_spawn(&attempts[1], APP_SERVER_DEADLINE);
 
     let broker = Path::new("/run/user/1000/rimz/w/sock/codex-app-server.sock");
     let attempts = attempts_for(Some(broker), Some(daemon));
@@ -576,7 +573,7 @@ fn connection_attempts_prefer_warm_paths_before_cold_spawn() {
         other => panic!("broker must come first, got {other:?}"),
     }
     assert_daemon_ws(&attempts[1], daemon);
-    assert_spawn(&attempts[2], &["app-server"], APP_SERVER_DEADLINE);
+    assert_spawn(&attempts[2], APP_SERVER_DEADLINE);
 
     let attempts = attempts_for(Some(broker), None);
     assert_eq!(attempts.len(), 2);
@@ -584,7 +581,7 @@ fn connection_attempts_prefer_warm_paths_before_cold_spawn() {
         ConnectAttempt::Broker(path) => assert_eq!(path, broker),
         other => panic!("broker must come first, got {other:?}"),
     }
-    assert_spawn(&attempts[1], &["app-server"], APP_SERVER_DEADLINE);
+    assert_spawn(&attempts[1], APP_SERVER_DEADLINE);
 }
 
 #[test]

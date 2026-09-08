@@ -40,7 +40,23 @@ pub(crate) enum AppServerErr {
 /// a process.
 pub(crate) trait JsonRpcTransport {
     fn request(&mut self, method: &str, params: Value) -> Result<Value, AppServerErr>;
-    fn notify(&mut self, method: &str, params: Value) -> Result<(), AppServerErr>;
+    fn notify_frame(&mut self, frame: &Value) -> Result<(), AppServerErr>;
+}
+
+pub(super) fn initialize(
+    transport: &mut impl JsonRpcTransport,
+    ack_params: Option<Value>,
+) -> Result<Value, AppServerErr> {
+    let result = transport.request(
+        "initialize",
+        json!({"clientInfo": {"name": "rimz", "version": env!("CARGO_PKG_VERSION")}}),
+    )?;
+    let mut acknowledgement = json!({"jsonrpc": "2.0", "method": "initialized"});
+    if let Some(params) = ack_params {
+        acknowledgement["params"] = params;
+    }
+    transport.notify_frame(&acknowledgement)?;
+    Ok(result)
 }
 
 /// Resolve the `codex` binary: explicit override, then `PATH`, then the bare
@@ -189,15 +205,11 @@ pub(crate) struct FramedTransport {
 }
 
 impl FramedTransport {
-    /// Spawn `bin` with `args` (e.g. `["app-server"]`), giving the handshake +
+    /// Spawn `bin app-server`, giving the handshake +
     /// reads `total` wall-clock.
-    pub(super) fn spawn(
-        bin: &Path,
-        args: &[String],
-        total: Duration,
-    ) -> Result<Self, AppServerErr> {
+    pub(super) fn spawn(bin: &Path, total: Duration) -> Result<Self, AppServerErr> {
         let mut child = Command::new(bin)
-            .args(args)
+            .arg("app-server")
             // Mark this as a RimZ-internal enrichment server so the lifecycle
             // hooks it fires on startup no-op instead of spawning another
             // `refresh-context` (which would cold-spawn another app-server …).
@@ -254,11 +266,8 @@ impl JsonRpcTransport for FramedTransport {
         recv_response(&self.rx, self.deadline, id)
     }
 
-    fn notify(&mut self, method: &str, params: Value) -> Result<(), AppServerErr> {
-        write_frame(
-            &mut self.writer,
-            &json!({"jsonrpc": "2.0", "method": method, "params": params}),
-        )
+    fn notify_frame(&mut self, frame: &Value) -> Result<(), AppServerErr> {
+        write_frame(&mut self.writer, frame)
     }
 }
 
@@ -328,8 +337,8 @@ impl JsonRpcTransport for WsTransport {
         }
     }
 
-    fn notify(&mut self, method: &str, params: Value) -> Result<(), AppServerErr> {
-        self.send_value(&json!({"jsonrpc": "2.0", "method": method, "params": params}))
+    fn notify_frame(&mut self, frame: &Value) -> Result<(), AppServerErr> {
+        self.send_value(frame)
     }
 }
 
@@ -392,7 +401,9 @@ mod tests {
             transport.request("ping", json!({})).unwrap(),
             json!({"ok": true})
         );
-        transport.notify("initialized", json!({})).unwrap();
+        transport
+            .notify_frame(&json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}))
+            .unwrap();
         handle.join().unwrap();
     }
 

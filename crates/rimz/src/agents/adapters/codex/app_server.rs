@@ -176,8 +176,8 @@ enum ConnectAttempt {
     /// Connect to the per-user daemon's WebSocket control socket.
     DaemonWs(PathBuf),
     /// Spawn a `codex` invocation for the throwaway cold-spawn fallback. Carries
-    /// argv (program omitted) + budget.
-    Spawn(Vec<String>, Duration),
+    /// its wall-clock budget.
+    Spawn(Duration),
 }
 
 pub(crate) enum Transport {
@@ -193,10 +193,10 @@ impl JsonRpcTransport for Transport {
         }
     }
 
-    fn notify(&mut self, method: &str, params: Value) -> Result<(), AppServerErr> {
+    fn notify_frame(&mut self, frame: &Value) -> Result<(), AppServerErr> {
         match self {
-            Self::Framed(transport) => transport.notify(method, params),
-            Self::Ws(transport) => transport.notify(method, params),
+            Self::Framed(transport) => transport.notify_frame(frame),
+            Self::Ws(transport) => transport.notify_frame(frame),
         }
     }
 }
@@ -217,8 +217,8 @@ impl CodexAppServer<Transport> {
                 ConnectAttempt::DaemonWs(path) => WsTransport::connect(path, DAEMON_PROBE_DEADLINE)
                     .map(Box::new)
                     .map(Transport::Ws),
-                ConnectAttempt::Spawn(args, deadline) => {
-                    FramedTransport::spawn(&bin, args, *deadline).map(Transport::Framed)
+                ConnectAttempt::Spawn(deadline) => {
+                    FramedTransport::spawn(&bin, *deadline).map(Transport::Framed)
                 }
             };
             let Ok(transport) = transport else {
@@ -273,10 +273,7 @@ fn attempts_for(broker: Option<&Path>, daemon: Option<&Path>) -> Vec<ConnectAtte
     if let Some(daemon) = daemon {
         attempts.push(ConnectAttempt::DaemonWs(daemon.to_path_buf()));
     }
-    attempts.push(ConnectAttempt::Spawn(
-        vec!["app-server".to_owned()],
-        APP_SERVER_DEADLINE,
-    ));
+    attempts.push(ConnectAttempt::Spawn(APP_SERVER_DEADLINE));
     attempts
 }
 
@@ -306,17 +303,11 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
     /// `initialize` then the `initialized` acknowledgement. Every other method
     /// is rejected by the server until this completes.
     fn handshake(&mut self) -> Result<(), AppServerErr> {
-        let result = self.transport.request(
-            "initialize",
-            json!({
-                "clientInfo": { "name": "rimz", "version": env!("CARGO_PKG_VERSION") }
-            }),
-        )?;
+        let result = transport::initialize(&mut self.transport, Some(json!({})))?;
         self.user_agent = result
             .get("userAgent")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
-        self.transport.notify("initialized", json!({}))?;
         Ok(())
     }
 
