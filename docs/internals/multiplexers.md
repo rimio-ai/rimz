@@ -54,10 +54,10 @@ Zellij, `crates/rimz/src/mux/zellij/` plus [`zellij.rs`](../../crates/rimz/src/m
 | [`backend.rs`](../../crates/rimz/src/mux/zellij/backend.rs) | The `MuxBackend` implementation. |
 | [`layout.rs`](../../crates/rimz/src/mux/zellij/layout.rs) | KDL layout rendering: birth, daemon view, resumed agents, background tabs. Pure `&options → String`. |
 | [`sidebar.rs`](../../crates/rimz/src/mux/zellij/sidebar.rs) | Sidebar birth, in-place recovery, and geometry convergence. |
-| [`presence.rs`](../../crates/rimz/src/mux/zellij/presence.rs) | Plugin materialization, identity, load and retire pipes. |
+| [`presence.rs`](../../crates/rimz/src/mux/zellij/presence.rs) | Plugin materialization, identity, load, retire and upgrade pipes; the reload upgrade outcome. |
 | [`pane_topology.rs`](../../crates/rimz/src/mux/zellij/pane_topology.rs) | The topology cache the plugin publishes: schema, path, freshness window, and the desired-presence record beside it. |
 | [`raw_pane.rs`](../../crates/rimz/src/mux/zellij/raw_pane.rs) | Topology projection and sidebar classification. |
-| [`session.rs`](../../crates/rimz/src/mux/zellij/session.rs) | Session discovery, topology-cache reads, and serialized-session cache discovery and purge. |
+| [`session.rs`](../../crates/rimz/src/mux/zellij/session.rs) | Session discovery, topology-cache reads, the fresh-topology wait reload shares, and serialized-session cache discovery and purge. |
 | [`socket.rs`](../../crates/rimz/src/mux/zellij/socket.rs) | IPC socket path budgeting, which is tight on macOS. |
 | [`reap.rs`](../../crates/rimz/src/mux/zellij/reap.rs) | Pre-attach retirement of orphaned clients from one remote lineage. |
 | [`parse.rs`](../../crates/rimz/src/mux/zellij/parse.rs), [`pane_pid.rs`](../../crates/rimz/src/mux/zellij/pane_pid.rs) | Command-output parsing helpers. |
