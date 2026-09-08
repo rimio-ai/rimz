@@ -71,18 +71,14 @@ const APP_SERVER_DEADLINE: Duration = Duration::from_secs(APP_SERVER_DEADLINE_SE
 /// two close turn boundaries (a quick `UserPromptSubmit` then `Stop`) do not
 /// each spawn an app-server. Transcript context is stat-gated separately and
 /// always gets a chance to merge.
-#[cfg(test)]
 const REFRESH_THROTTLE_SECS: i64 = 20;
 
 /// Whether app-server-owned context fields need another refresh.
-pub fn app_server_due(
-    record: Option<&crate::agents::context::record::AgentContextRecord>,
-    within: i64,
-) -> bool {
+pub fn app_server_due(record: Option<&crate::agents::context::record::AgentContextRecord>) -> bool {
     let now = Timestamp::now().as_second();
     record
         .and_then(|record| record.rate_limits_observed_at)
-        .is_none_or(|observed_at| now - observed_at.as_second() >= within)
+        .is_none_or(|observed_at| now - observed_at.as_second() >= REFRESH_THROTTLE_SECS)
 }
 
 /// Merge app-server-owned fields onto the record while preserving
@@ -146,6 +142,21 @@ pub(crate) struct AppServerObservation {
     pub(crate) context: AgentContext,
     pub(crate) extra_credits: Option<ExtraCredits>,
     pub(crate) reset_credits: Option<ResetCredits>,
+}
+
+impl AppServerObservation {
+    pub(super) fn account_usage(&self) -> crate::AccountUsageSnapshot {
+        crate::AccountUsageSnapshot {
+            plan: self
+                .context
+                .account
+                .as_ref()
+                .and_then(|account| account.plan.clone()),
+            rate_limits: self.context.rate_limits.clone(),
+            extra_credits: self.extra_credits.clone(),
+            reset_credits: self.reset_credits.clone(),
+        }
+    }
 }
 
 type RateLimitRead = (

@@ -595,18 +595,18 @@ fn app_server_due_uses_app_server_stamp_not_whole_sidecar() {
         "sess-1",
         crate::agents::AgentContext::new("codex", now),
     );
-    assert!(app_server_due(None, REFRESH_THROTTLE_SECS));
+    assert!(app_server_due(None));
     assert!(
-        app_server_due(Some(&record), REFRESH_THROTTLE_SECS),
+        app_server_due(Some(&record)),
         "a fresh transcript-only sidecar has no app-server stamp and is due"
     );
 
     record.rate_limits_observed_at = Some(now);
-    assert!(!app_server_due(Some(&record), REFRESH_THROTTLE_SECS));
+    assert!(!app_server_due(Some(&record)));
 
     record.rate_limits_observed_at =
         Some(Timestamp::from_second(now.as_second() - REFRESH_THROTTLE_SECS - 1).unwrap());
-    assert!(app_server_due(Some(&record), REFRESH_THROTTLE_SECS));
+    assert!(app_server_due(Some(&record)));
 }
 
 #[test]
