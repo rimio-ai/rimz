@@ -367,13 +367,10 @@ impl ZellijBackend {
 
     /// Ask existing presence-plugin instances to publish topology. Readers
     /// broadcast by name and degrade when none runs; only owner flows launch.
-    pub(crate) fn dump_topology_for(
-        &self,
-        opts: &super::super::PresencePluginOptions,
-    ) -> Result<()> {
+    pub(crate) fn dump_topology_for(&self, session_name: &str) -> Result<()> {
         // Generic readers reach whichever presence-plugin instances already
         // serve the session and degrade if none do; owner flows launch them.
-        match self.broadcast_presence_pipe(&opts.session_name, PRESENCE_TOPOLOGY_PIPE, "dump") {
+        match self.broadcast_presence_pipe(session_name, PRESENCE_TOPOLOGY_PIPE, "dump") {
             Ok(()) | Err(MuxErr::Timeout { .. }) => Ok(()),
             Err(err) => Err(err),
         }
