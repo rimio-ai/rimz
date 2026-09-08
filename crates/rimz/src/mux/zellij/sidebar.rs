@@ -643,14 +643,8 @@ impl ZellijBackend {
         raw_id: u64,
         floor: Option<u64>,
     ) -> (Option<u64>, bool) {
-        let listing = self.read_topology(
-            Some(&opts.session_name),
-            None,
-            Some(&opts.workspace_id),
-            floor,
-            PaneReadConsistency::PreferAuthoritative,
-            RECONCILE_LIST_TIMEOUT,
-        );
+        let listing =
+            self.structural_geometry_listing(&opts.session_name, &opts.workspace_id, floor);
         let Ok(listing) = listing else {
             return (floor, false);
         };
@@ -710,7 +704,7 @@ impl ZellijBackend {
         match sidebar_dock_verdict(sidebar, &panes, &excluded) {
             Some(SidebarDock::SwapReachable) => true,
             Some(SidebarDock::NestedRow) => {
-                repairable_nested_work_pane_ids(sidebar, &panes, &excluded).is_some()
+                repairable_nested_work_pane_ids(sidebar, &panes).is_some()
             }
             Some(SidebarDock::Docked) | None => false,
         }
@@ -742,9 +736,9 @@ impl ZellijBackend {
             let sidebar = sidebar_pane(&panes, tab_position, raw_id)?;
             let excluded = HashSet::new();
             let work = if allow_multicolumn {
-                nested_work_pane_ids(sidebar, &panes, &excluded)
+                nested_work_pane_ids(sidebar, &panes)
             } else {
-                repairable_nested_work_pane_ids(sidebar, &panes, &excluded)
+                repairable_nested_work_pane_ids(sidebar, &panes)
             };
             if let Some(work) = work {
                 break work;

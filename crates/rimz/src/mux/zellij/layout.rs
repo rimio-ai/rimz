@@ -176,9 +176,9 @@ pub(super) fn render_session_layout(
 
     // The free working terminal: focused only when no resumed agent took focus.
     let work_focus = if resume.is_empty() { " focus=true" } else { "" };
-    let work_pane = render_plain_terminal_pane(16)?;
+    let work_pane = render_plain_terminal_pane()?;
     let work_body = render_sidebar_work_area(&sidebar, &work_pane, 8);
-    let new_tab_pane = render_plain_terminal_pane(16)?;
+    let new_tab_pane = render_plain_terminal_pane()?;
     let new_tab_body = render_sidebar_work_area(&sidebar, &new_tab_pane, 8);
     Ok(format!(
         r#"layout {{
@@ -306,7 +306,7 @@ fn render_daemon_columns(
 ) -> Result<String> {
     let base = " ".repeat(indent);
     let child = " ".repeat(indent + 4);
-    let content_col = render_content_column(content, false, indent + 4)?;
+    let content_col = render_content_column(content, indent + 4)?;
     let daemon_column = render_daemon_column(daemons, loop_panel, width_percent, indent + 4)?;
     Ok(format!(
         r#"{base}pane split_direction="vertical" {{
@@ -316,20 +316,20 @@ fn render_daemon_columns(
     ))
 }
 
-fn render_content_column(content: &[HostPane], focus_first: bool, indent: usize) -> Result<String> {
+fn render_content_column(content: &[HostPane], indent: usize) -> Result<String> {
     match content {
         [] => Err(MuxErr::Output {
             program: "zellij".to_owned(),
             reason: "daemon view has no content panes".to_owned(),
         }),
-        [pane] => render_managed_command_pane(&pane.argv, &pane.cwd, focus_first, indent, None),
+        [pane] => render_managed_command_pane(&pane.argv, &pane.cwd, false, indent, None),
         panes => {
             let mut rendered = String::new();
-            for (index, pane) in panes.iter().enumerate() {
+            for pane in panes {
                 rendered.push_str(&render_managed_command_pane(
                     &pane.argv,
                     &pane.cwd,
-                    focus_first && index == 0,
+                    false,
                     indent + 4,
                     None,
                 )?);
@@ -401,11 +401,11 @@ fn render_sidebar_work_area(sidebar: &str, work_panes: &str, indent: usize) -> S
     )
 }
 
-fn render_plain_terminal_pane(indent: usize) -> Result<String> {
+fn render_plain_terminal_pane() -> Result<String> {
     let name = crate::proc::shell_pane_name();
     Ok(format!(
         "{}pane focus=true name={}\n",
-        " ".repeat(indent),
+        " ".repeat(16),
         kdl_string(&name)?,
     ))
 }
@@ -420,13 +420,13 @@ fn render_tab_column(
     if rows.is_empty() {
         let focus = !*focused;
         *focused = true;
-        return render_command_pane(first, cwd, focus, indent, None);
+        return render_command_pane(first, cwd, focus, indent);
     }
     let mut rendered = String::new();
     for pane in std::iter::once(first).chain(rows) {
         let focus = !*focused;
         *focused = true;
-        rendered.push_str(&render_command_pane(pane, cwd, focus, indent + 4, None)?);
+        rendered.push_str(&render_command_pane(pane, cwd, focus, indent + 4)?);
     }
     let base = " ".repeat(indent);
     let container = if column.stacked {
@@ -443,19 +443,16 @@ fn render_tab_column(
 
 /// One command pane in a tab's right side (`argv` run in `cwd`), indented to
 /// nest under the split that contains it. Born unsuspended and closing with its
-/// process — an exit means the pane is gone. `focus` pins the tab's focus on it;
-/// `size` pins a daemon edge column to the same percentage verdict as the
-/// sidebar while content remains sizeless and absorbs the center remainder.
+/// process — an exit means the pane is gone. `focus` pins the tab's focus on it.
 fn render_command_pane(
     pane: &crate::mux::PaneCmd,
     cwd: &Path,
     focus: bool,
     indent: usize,
-    size: Option<&str>,
 ) -> Result<String> {
     let fallback = super::pane_short_name(&pane.argv);
     let name = pane.name.as_deref().or(fallback.as_deref());
-    render_named_command_pane(&pane.argv, cwd, focus, indent, size, name)
+    render_named_command_pane(&pane.argv, cwd, focus, indent, None, name)
 }
 
 fn render_managed_command_pane(
