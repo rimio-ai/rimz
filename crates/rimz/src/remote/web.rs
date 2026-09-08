@@ -9,9 +9,8 @@ use std::ops::RangeInclusive;
 use std::path::Path;
 
 use super::{
-    REMOTE_CLIENT_VERSION_ENV, REMOTE_FORCE_VERSION_ENV, RemoteSpec, RemoteTarget,
-    client_size_env_setup, quote_remote_path, remote_exec_snippet, remote_path_guard, sh_quote,
-    ssh_program,
+    REMOTE_CLIENT_VERSION_ENV, REMOTE_FORCE_VERSION_ENV, RemoteTarget, client_size_env_setup,
+    remote_exec_snippet, remote_path_guard, sh_quote, ssh_program,
 };
 use crate::mux::CommandSpec;
 
@@ -75,15 +74,13 @@ pub fn web_prep_spec(
     if options.no_resume {
         flags.push_str(" --no-resume");
     }
-    let rimz_args = match &target.spec {
-        RemoteSpec::Path(path) => format!("{flags} -- {}", quote_remote_path(path)),
-        RemoteSpec::Session(name) => {
-            format!("{flags} --session {}", sh_quote(name))
-        }
-    };
+    let command = target.exec_snippet(
+        &format!("rimz web {flags} --"),
+        &format!("rimz web {flags} --session"),
+    );
     one_shot_spec(
         target,
-        &format!("rimz web {rimz_args}"),
+        &command,
         options.client_size,
         options.force_version,
         control,
@@ -249,7 +246,7 @@ mod tests {
     #[test]
     fn web_prep_builds_session_and_path_one_shots() {
         let session = web_prep_spec(
-            &parse("dev-box:rimz-project-a1b2c3"),
+            &parse("dev-box:session:rimz-project-a1b2c3"),
             WebPrepOptions {
                 confirm_resume: true,
                 no_resume: true,

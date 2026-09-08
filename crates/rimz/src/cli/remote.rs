@@ -110,6 +110,7 @@ enum LinkStatsSubcmd {
 
 #[derive(Debug, Args)]
 struct SavedAliasArgs {
+    /// `[user@]host:<session-or-path>`; use `host:session:<name>` to force a session.
     target: String,
     /// Hand the link to a single ssh run instead of supervising reconnects.
     #[arg(long)]
@@ -137,6 +138,7 @@ impl SavedAliasArgs {
 
 #[derive(Debug, Args)]
 struct ConnectionArgs {
+    /// Alias or `[user@]host:<session-or-path>`; bare names prefer remote home directories, `host:session:<name>` forces a session.
     #[arg(add = clap_complete::ArgValueCandidates::new(
         crate::cli::complete::remote_aliases
     ))]
