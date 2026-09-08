@@ -1214,6 +1214,33 @@ fn worktree_new_from_pr_adopts_matching_local_branch() {
 
 #[cfg(unix)]
 #[test]
+fn worktree_new_from_pr_adopts_matching_local_branch_from_tea() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    let (pr_head, _) = publish_pr_ref(&env, "refs/pull/1/head");
+    git(&env.project_root, &["branch", "feature", pr_head.as_str()]);
+    configure_gitea_origin_rewrite(&env);
+    let shim_dir = write_tea_pr_head_shim(&env, tea_same_repo_head());
+
+    env.rimz()
+        .args(["worktree", "new", "--from-pr", "1"])
+        .env("PATH", path_with_front(&shim_dir))
+        .assert()
+        .success()
+        .stdout(contains("branch : feature"));
+
+    let path = env.home_root.join("project-worktrees/pr-1");
+    assert_eq!(git_stdout(&path, &["rev-parse", "HEAD"]), pr_head);
+    assert_eq!(
+        git_stdout(&path, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
+        "origin/feature"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn worktree_new_from_pr_fast_forwards_ancestor_local_branch() {
     if git_missing() {
         return;
@@ -1356,6 +1383,53 @@ fn worktree_new_from_fork_pr_tracks_fork_from_gh() {
     assert_eq!(
         git_stdout(&path, &["config", "--get", "branch.feature.remote"]),
         "https://github.com/alice/fork.git"
+    );
+    assert_eq!(
+        git_stdout(&path, &["config", "--get", "branch.feature.merge"]),
+        "refs/heads/feature"
+    );
+    assert_eq!(
+        git_stdout(&env.project_root, &["for-each-ref", "refs/rimz/"]),
+        "",
+        "temporary PR ref is cleaned up"
+    );
+    commit_file(&path, "fork-push.txt", "pushed\n", "push fork PR worktree");
+    git(&path, &["push"]);
+    assert_eq!(
+        git_stdout(
+            &env.home_root.join("origin.git"),
+            &["rev-parse", "refs/heads/feature"]
+        ),
+        git_stdout(&path, &["rev-parse", "HEAD"])
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn worktree_new_from_fork_pr_tracks_fork_from_tea() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    let (pr_head, _) = publish_pr_ref(&env, "refs/pull/1/head");
+    configure_gitea_origin_rewrite(&env);
+    let shim_dir = write_tea_pr_head_shim(&env, tea_fork_head());
+
+    env.rimz()
+        .args(["worktree", "new", "--from-pr", "1"])
+        .env("PATH", path_with_front(&shim_dir))
+        .assert()
+        .success()
+        .stdout(contains("branch : feature"))
+        .stdout(contains(
+            "pushes : https://gitea.example.test/alice/fork.git refs/heads/feature",
+        ));
+
+    let path = env.home_root.join("project-worktrees/pr-1");
+    assert_eq!(git_stdout(&path, &["rev-parse", "HEAD"]), pr_head);
+    assert_eq!(
+        git_stdout(&path, &["config", "--get", "branch.feature.remote"]),
+        "https://gitea.example.test/alice/fork.git"
     );
     assert_eq!(
         git_stdout(&path, &["config", "--get", "branch.feature.merge"]),
@@ -2496,6 +2570,23 @@ fn configure_github_origin_rewrite(env: &Env) {
     );
 }
 
+#[cfg(unix)]
+fn configure_gitea_origin_rewrite(env: &Env) {
+    configure_origin_rewrite(env, "https://gitea.example.test/org/repo.git");
+    let remote = env.home_root.join("origin.git");
+    let remote = remote.to_str().expect("utf8 remote path");
+    let key = format!("url.{remote}.insteadOf");
+    git(
+        &env.project_root,
+        &[
+            "config",
+            "--add",
+            key.as_str(),
+            "https://gitea.example.test/alice/fork.git",
+        ],
+    );
+}
+
 fn configure_origin_rewrite(env: &Env, origin_url: &str) {
     let remote = env.home_root.join("origin.git");
     let remote = remote.to_str().expect("utf8 remote path");
@@ -2528,6 +2619,34 @@ fn write_gh_pr_head_shim(env: &Env, payload: &str) -> std::path::PathBuf {
 }
 
 #[cfg(unix)]
+fn write_tea_pr_head_shim(env: &Env, payload: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = env.home_root.join("forge-bin");
+    std::fs::create_dir_all(&dir).expect("mkdir forge bin");
+    let shim = dir.join("tea");
+    std::fs::write(
+        &shim,
+        format!(
+            r#"#!/bin/sh
+if [ "$#" -ne 4 ] || [ "$1" != "api" ] || [ "$2" != "repos/org/repo/pulls/1" ] || [ "$3" != "--repo" ] || [ "$4" != "org/repo" ]; then
+    printf 'tea shim: unexpected argv: <%s>\n' "$@" >&2
+    exit 2
+fi
+printf '%s\n' '{payload}'
+"#
+        ),
+    )
+    .expect("write tea shim");
+    let mut perms = std::fs::metadata(&shim)
+        .expect("tea shim metadata")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&shim, perms).expect("chmod tea shim");
+    dir
+}
+
+#[cfg(unix)]
 fn gh_same_repo_head() -> &'static str {
     r#"{"headRefName":"feature","headRepository":{"name":"repo"},"headRepositoryOwner":{"login":"org"},"isCrossRepository":false}"#
 }
@@ -2535,6 +2654,16 @@ fn gh_same_repo_head() -> &'static str {
 #[cfg(unix)]
 fn gh_fork_head() -> &'static str {
     r#"{"headRefName":"feature","headRepository":{"name":"fork"},"headRepositoryOwner":{"login":"alice"},"isCrossRepository":true}"#
+}
+
+#[cfg(unix)]
+fn tea_same_repo_head() -> &'static str {
+    r#"{"head":{"label":"feature","ref":"feature","repo":{"full_name":"org/repo","owner":{"login":"org"}}},"base":{"ref":"main","repo":{"full_name":"org/repo"}}}"#
+}
+
+#[cfg(unix)]
+fn tea_fork_head() -> &'static str {
+    r#"{"head":{"label":"feature","ref":"feature","repo":{"full_name":"alice/fork","owner":{"login":"alice"}}},"base":{"ref":"main","repo":{"full_name":"org/repo"}}}"#
 }
 
 fn commit_file(repo: &Path, name: &str, contents: &str, message: &str) {
