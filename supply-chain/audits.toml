@@ -1,7 +1,41 @@
 
 # cargo-vet audits file
 
-[audits]
+[[audits.scip]]
+who = "GPT 6 Astra <noreply@openai.com>"
+criteria = "safe-to-run"
+delta = "0.9.0 -> 0.10.0"
+notes = "AI source review compared all ten files from freshly extracted published archives, whose SHA-256 values match the workspace lockfile checksums. Changed files are Cargo.toml, Cargo.toml.orig, Cargo.lock, .cargo_vcs_info.json and src/generated/scip.rs. Manifests and lockfile change only the package version; protobuf remains exactly 3.7.2. Generated code adds Language::Odin = 111, conversions, membership and reflection-index shifts. Independently decoded the embedded descriptor: only the Odin schema addition and corresponding source-location metadata change. Existing descriptor initialization and explicit file-writing helper are unchanged. No new build script, procedural macro, filesystem, network, subprocess or unsafe operation appears. This is a delta review from the safe-to-run exempted baseline, not a full baseline or dependency audit."
+
+[[audits.serde]]
+who = "GPT 6 Astra <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.228 -> 1.0.229"
+notes = "AI source review verified published archive SHA-256 values against the lockfile revisions and compared extracted content. Reviewed all changed production/build hunks and relevant context in build.rs, src/lib.rs, src/core/lib.rs and src/core/de/impls.rs, plus manifests, packaged lockfile, README and VCS metadata. The derive compatibility cutoff rises to Rust 1.71, below the repository toolchain; never_type gating narrows to documentation builds. The duplicated collection visitor change explicitly reborrows the underlying collection without changing allocation sizing, insertion order or error propagation. Read the complete build script: its existing OUT_DIR private.rs generation and RUSTC version probe gain no new ambient capabilities. Remaining changes are documentation and lint settings. Delta review only, based on the imported 1.0.228 audit; serde_core and serde_derive are reviewed separately."
+
+[[audits.serde_core]]
+who = "GPT 6 Astra <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.228 -> 1.0.229"
+notes = "AI source review verified published archive SHA-256 values against the lockfile revisions and compared extracted content. Reviewed all changed production/build hunks in build.rs, src/lib.rs and src/de/impls.rs, complete build script and manifests, package metadata, seq_impl! invocations and private/size_hint.rs. The in-place collection visitor changes &mut self.0 to an explicit &mut *self.0 reborrow; clear/reserve/insert order, cautious allocation sizing and error propagation remain unchanged. Documentation-only never_type gating and lint updates introduce no deployed operation. Existing OUT_DIR generation and RUSTC version probing gain no new capability. No introduced unsafe code or unexpected runtime behavior was found. Delta review only, based on the imported 1.0.228 audit."
+
+[[audits.serde_derive]]
+who = "GPT 6 Astra <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.228 -> 1.0.229"
+notes = "AI source review verified published archive SHA-256 values against the lockfile revisions and compared extracted content. Reviewed every production-source delta and enclosing functions/callees in src/{bound.rs,de.rs,lib.rs,pretend.rs,ser.rs}, src/de/{enum_adjacently.rs,enum_externally.rs} and src/internals/{ast.rs,attr.rs,ctxt.rs,receiver.rs}, plus complete manifests and package metadata. Checked Syn 3.0.4 AST definitions for type-default removal, generic bounds, function-pointer and parenthesized-argument traversal, and receiver substitution. Iterator-to-loop rewrites preserve field/variant ordering and generated expressions; explicit Result matches preserve error types and missing-element handling. Attribute defaults, borrowing, diagnostics and remote/packed-field handling retain prior behavior. No introduced unsafe code or ambient capability was found. MSRV rises to 1.71; no build script is added. Delta review only, based on the imported 1.0.228 audit; Syn 3.0.4 remains covered separately by existing policy, not this review."
+
+[[audits.toml_edit]]
+who = "GPT 6 Astra <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "0.25.12+spec-1.1.0 -> 0.25.13+spec-1.1.0"
+notes = "Reviewed the published crate delta, including Cargo.toml, Cargo.toml.orig, Cargo.lock, VCS metadata, src/index.rs and src/table.rs. Archive SHA-256 values match the old and new workspace lockfile checksums. Production changes replace equivalent Option::and_then filters with Option::filter and require toml_writer 1.1.2, reviewed separately. Other changes update package metadata and development dependencies; build remains disabled. No new I/O, unsafe code, or execution path is introduced. This is a delta review from the existing exempted version, not a full audit."
+
+[[audits.toml_writer]]
+who = "GPT 6 Astra <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "1.1.1+spec-1.1.0 -> 1.1.2+spec-1.1.0"
+notes = "Reviewed the published crate delta, manifests, lockfile, VCS metadata and src/string.rs, including ValueMetrics::calculate and its formatting consumers. Archive SHA-256 values match the old and new workspace lockfile checksums. Quote-run counters now use Saturating<u8>, preventing overflow while preserving the consumers' zero and two thresholds. The scan remains linear and resets counters on other bytes. Remaining changes affect package inclusion paths, version, lint settings and development lockfile dependencies; build remains disabled. No new I/O or unsafe code is introduced. This is a delta review from the existing exempted version, not a full audit."
 
 [[trusted.addr2line]]
 criteria = "safe-to-deploy"
