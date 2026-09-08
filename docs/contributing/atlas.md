@@ -12,7 +12,8 @@ The verbs map onto an architecture review pass, and the pass contract is where t
 
 ```toml
 version = 2
-base = "main"
+# base: pin the merge-base SHA; changed-path checking diffs against the ref as written
+base = "<merge-base SHA>"
 paths = ["crates/rimz/src/message", "crates/rimz/src/cli/agents_cmd"]
 max-production-sloc-delta = -60
 
@@ -98,7 +99,8 @@ cargo xtask atlas inspect --module crates/rimz/src/store --json --section verdic
 
 ```toml
 version = 2
-base = "main"
+# base: pin the merge-base SHA; changed-path checking diffs against the ref as written
+base = "<merge-base SHA>"
 kind = "seam"
 paths = ["crates/rimz/src/store", "crates/rimz/src/agents"]
 max-production-sloc-delta = 0
@@ -189,3 +191,4 @@ Method keys are name-only within their module. If several public items share tha
 10. `assemblers` resolves a callee through the file's `use` lines and explicit `crate`/`self`/`super` paths; a method call, a `Self::` call, or a name the file does not import is not attributed, so the count is a floor.
 11. `[[rehome]]` counts every `pub` item with the name under `to`, a `pub use` re-export included, so the destination declares the item once and re-exports it nowhere.
 12. `[[delete]]` resolves only `pub`/`pub(...)` definitions, excluding `pub(self)`; private items do not resolve. Prove private deletions by source search instead, for example `rg -n '<symbol>' crates/rimz/src` returning no matches.
+13. `narrow to` and the `pins` table count named references only; they do not account for public field or signature constraints. A type exposed by a public field or `pub` signature cannot narrow below its owner under `private_interfaces` (`-D warnings`); public associated types such as `FromStr::Err` must also remain visible. Read `surface` for functions, constants and methods, and treat the remaining types as `keep` until a spike proves otherwise.
