@@ -212,21 +212,15 @@ impl ZellijBackend {
             reason: "Zellij presence plugin artifact is unavailable; run `rimz doctor` or use the tmux backend".to_owned(),
         })?;
         let machine_config = crate::config::MachineConfig::load_lenient();
-        let presence = PresencePluginOptions {
-            session_name: opts.session_name.clone(),
-            workspace_id: opts.workspace_id.clone(),
+        let presence = PresencePluginOptions::from_config(
+            &opts.session_name,
+            &opts.workspace_id,
             wasm,
-            rimz_bin: self
-                .state_paths_for_workspace(opts.workspace_id.clone())?
+            self.state_paths_for_workspace(opts.workspace_id.clone())?
                 .room_bin,
-            converge: false,
-            focus_key: crate::config::SidebarConfig::key_label(&machine_config.sidebar.focus_key)
-                .map(str::to_owned),
-            zoom_key: crate::config::SidebarConfig::key_label(&machine_config.sidebar.zoom_key)
-                .map(str::to_owned),
-            focus_follows_mouse: opts.config.zellij.focus_follows_mouse,
-            mouse_click_through: opts.config.zellij.mouse_click_through,
-        };
+            &machine_config.sidebar,
+            &opts.config.zellij,
+        );
         let floor_ms = unix_now_ms();
         self.ensure_presence_plugin_for(&presence)?;
         self.retire_proven_presence_plugin_for(

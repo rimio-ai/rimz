@@ -1681,11 +1681,7 @@ impl MuxBackend for ZellijBackend {
     }
 
     fn ensure_presence_plugin(&self, opts: &super::super::PresencePluginOptions) -> Result<()> {
-        if opts.converge {
-            self.converge_presence_plugin_for(opts)
-        } else {
-            self.ensure_presence_plugin_for(opts)
-        }
+        self.ensure_presence_plugin_for(opts)
     }
 
     fn version(&self) -> Result<String> {

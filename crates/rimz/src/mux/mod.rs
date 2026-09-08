@@ -52,6 +52,7 @@ use crate::pane::keys::NamedKey;
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::{SidebarConfig, ZellijConfig};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
 
@@ -613,7 +614,8 @@ pub enum SplitDirection {
 /// Inputs for [`MuxBackend::ensure_presence_plugin`] — one session's presence
 /// push channel. The caller resolves the artifact
 /// ([`zellij::presence_plugin_path`]) and the `rimz` the plugin pokes; the
-/// backend owns the load verbs and the version gate.
+/// backend owns the load verbs and the version gate. The constructor owns the
+/// config projection.
 #[derive(Clone, Debug)]
 pub struct PresencePluginOptions {
     pub session_name: String,
@@ -625,9 +627,6 @@ pub struct PresencePluginOptions {
     /// Stable absolute `rimz` pointer the plugin runs, insulating the poke from
     /// the host PATH without changing the plugin configuration per build.
     pub rimz_bin: PathBuf,
-    /// Also converge the session onto this identity — the explicit upgrade
-    /// verb `rimz reload` passes; routine loads leave a healthy writer alone.
-    pub converge: bool,
     /// The focus-key chord (`[sidebar] focus_key`, e.g. `Alt+p`) the plugin
     /// binds at load so the key reaches the sidebar from any pane; `None` when
     /// the user disabled it. tmux binds the same chord through `bind-key`
@@ -641,6 +640,28 @@ pub struct PresencePluginOptions {
     /// user's `config.kdl`.
     pub focus_follows_mouse: bool,
     pub mouse_click_through: bool,
+}
+
+impl PresencePluginOptions {
+    pub(crate) fn from_config(
+        session_name: &str,
+        workspace_id: &WorkspaceId,
+        wasm: PathBuf,
+        rimz_bin: PathBuf,
+        sidebar: &SidebarConfig,
+        zellij: &ZellijConfig,
+    ) -> Self {
+        Self {
+            session_name: session_name.to_owned(),
+            workspace_id: workspace_id.clone(),
+            wasm,
+            rimz_bin,
+            focus_key: SidebarConfig::key_label(&sidebar.focus_key).map(str::to_owned),
+            zoom_key: SidebarConfig::key_label(&sidebar.zoom_key).map(str::to_owned),
+            focus_follows_mouse: zellij.focus_follows_mouse,
+            mouse_click_through: zellij.mouse_click_through,
+        }
+    }
 }
 
 /// One long-lived process hosted by the daemon view. The view is born as three
@@ -1026,7 +1047,7 @@ pub trait MuxBackend: Send + Sync {
 /// Construct a boxed backend for the named multiplexer.
 pub fn backend_for(mux: MuxName) -> Box<dyn MuxBackend> {
     match mux {
-        MuxName::Zellij => Box::new(ZellijBackend::new()),
+        MuxName::Zellij => Box::new(ZellijBackend::default()),
         MuxName::Tmux => Box::new(TmuxBackend::new()),
     }
 }

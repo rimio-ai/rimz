@@ -163,7 +163,7 @@ pub fn log_file() -> PathBuf {
 
 /// List the RimZ presence-plugin pane ids loaded in a live Zellij session.
 pub fn live_presence_plugin_ids(session_name: &str) -> Result<Vec<u32>> {
-    ZellijBackend::new().live_presence_plugin_ids(session_name)
+    ZellijBackend::default().live_presence_plugin_ids(session_name)
 }
 
 /// Parse `"zellij 0.41.2"` (and tolerant of leading/trailing whitespace).
@@ -297,10 +297,6 @@ pub struct ZellijBackend {
 }
 
 impl ZellijBackend {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     fn health_probe_timeout(&self) -> Duration {
         #[cfg(test)]
         if let Some(timeout) = self.health_probe_timeout {

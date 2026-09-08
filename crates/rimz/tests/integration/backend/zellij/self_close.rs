@@ -78,7 +78,6 @@ fn sidebar_self_closes_when_its_tab_empties() {
             workspace_id: WorkspaceId::parse(SELF_CLOSE_WORKSPACE_ID).expect("fixed id"),
             wasm,
             rimz_bin: rimz,
-            converge: false,
             focus_key: None,
             zoom_key: None,
             focus_follows_mouse: false,
