@@ -362,7 +362,7 @@ Several references form a join. Text mode prints each final answer in completion
 
 `--any` returns on the first terminal target regardless of success or failure, prints the same labeled answer block for the winner, and exits with that target's status code; JSON mode prints the labeled map with only the winner. The other targets keep running. `--timeout` caps the whole wait and exits `124` without changing pending targets; text mode names each unfinished target on stderr as `--- <name> (timed out) ---`, while JSON mode stamps unfinished targets `timed_out` in the result map before exiting.
 
-`rimz subagents wait` delegates to this join after restricting references to the calling agent's own children. With no names it supplies every live child automatically.
+`rimz subagents wait` delegates to this join after restricting references to the calling agent's own children; it requires at least one name and lists the children when given none.
 
 #### `refresh`
 
