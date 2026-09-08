@@ -127,9 +127,9 @@ fn pending_wakes_line_counts_armed_wakes() {
         .iter()
         .position(|line| line.contains("⧉ subagents (1)"))
         .unwrap();
-    assert!(rows[stats + 1].contains("inspect the renderer"));
-    assert!(rows[stats + 2].contains("12k"));
-    assert!(rows[stats + 3].contains("⧖ waits (2)"));
+    assert!(rows[stats + 1].contains("⧖ waits (2)"));
+    assert!(rows[stats + 2].contains("inspect the renderer"));
+    assert!(rows[stats + 3].contains("12k"));
 
     snapshot.worktree_groups[0].rows[0]
         .as_agent_mut()

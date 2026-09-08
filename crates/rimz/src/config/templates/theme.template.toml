@@ -205,6 +205,7 @@
 
 [theme.glyphs.unicode.card]
 ## subagents = "⧉"
+## waits = "⧖"
 ## parked_bg = "⋯"
 
 [theme.glyphs.unicode.process]
@@ -310,6 +311,7 @@
 
 [theme.glyphs.nerd_font.card]
 ## subagents = ""
+## waits = "󰂠"
 ## parked_bg = "⋯"
 
 [theme.glyphs.nerd_font.process]

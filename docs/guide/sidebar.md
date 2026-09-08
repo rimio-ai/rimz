@@ -101,9 +101,9 @@ Each agent is a small stacked card, four lines at rest, plus a subagent stats li
 
 The stats line stays after older entries retire. Selecting a card reveals more detail: the **subagent entries** for the agent's current task appear underneath, each with its own live state, what the parent asked it to do, and, while it runs, tokens, model, and elapsed time. A child launched with `rimz subagents` also shows its launch profile, cumulative displayed session tokens (excluding cache reads), and own session cost. When that agent belongs to a named team, every visible teammate's card expands with it, while only the selected card carries the highlight. A finished subagent keeps its `✓` or `!` verdict on the list until you send the parent a new prompt or reset its context with `/clear` or manual `/compact`; messages from other agents and RimZ's automatic deliveries keep it listed. Provider-native subagents are headless; a launched child has its own pane and transcript while it runs, then normally closes that pane while keeping the verdict here. `--keep` holds the pane instead. Both kinds stay nested under their parent rather than becoming duplicate top-level cards.
 
-How much of the card shows at rest is yours to tune with `card_density` ([theme.md → Display](./theme.md#display)): `compact` trims resting cards, `expanded` shows subagents everywhere.
+How much of the card shows at rest is yours to tune with `card_density` ([theme.md → Display](./theme.md#display)): `compact` trims resting cards, including the subagent stats and waits lines, `expanded` shows subagents everywhere.
 
-The **waits line** counts armed one-shot wakes: timers, watched commands, and one-shot signals. It follows the subagent stats, or the child entries when expanded, and disappears when none remain. It stays visible on standard cards while the agent works as well as while it sleeps.
+The **waits line** counts armed one-shot wakes: timers, watched commands, and one-shot signals. It follows the subagent stats, before any expanded child entries, and disappears when none remain. It stays visible on standard cards while the agent works as well as while it sleeps.
 
 ## Process rows
 
