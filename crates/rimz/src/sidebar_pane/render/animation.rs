@@ -755,7 +755,7 @@ mod tests {
             indexed.role(AnimationRole::Paused).color()
         );
         assert!(!sleeping.has_motion());
-        assert_eq!(nerd.role(AnimationRole::Sleeping).frames(), ["\u{f186}"]);
+        assert_eq!(nerd.role(AnimationRole::Sleeping).frames(), ["\u{f0904}"]);
         assert_eq!(nerd.role(AnimationRole::Success).frames(), ["\u{f00c}"]);
         assert_eq!(nerd.role(AnimationRole::Failed).frames(), ["\u{f12a}"]);
     }

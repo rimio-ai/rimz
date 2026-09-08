@@ -31,7 +31,7 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(StatusWaiting, "?", Some("\u{f128}")),
     glyph!(StatusAttention, "!", Some("\u{f12a}")),
     glyph!(StatusPaused, "⏸\u{FE0E}", Some("\u{f04c}")),
-    glyph!(StatusSleeping, "☾", Some("\u{f186}")),
+    glyph!(StatusSleeping, "☾", Some("\u{f0904}")),
     glyph!(StatusDone, "✓", Some("\u{f00c}")),
     glyph!(StatusIdle, "○", Some("\u{f2dd}")),
     glyph!(StatusWorking, "⢿", None),
@@ -86,7 +86,7 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(WorktreeDotted, "┄", None),
     glyph!(ChannelHash, "#", Some("\u{f292}")),
     glyph!(CardSubagents, "⧉", Some("\u{ed50}")),
-    glyph!(CardWaits, "⧖", Some("\u{f00a0}")),
+    glyph!(CardWaits, "⧖", Some("\u{f0904}")),
     glyph!(CardParkedBg, "⋯", None),
     glyph!(ProcessCpu, "C", Some("\u{ef8f}")),
     glyph!(ProcessMem, "M", Some("\u{efc5}")),
@@ -319,7 +319,11 @@ mod tests {
     #[test]
     fn catalog_rows_are_ordered_complete_and_renderable() {
         assert_eq!(unicode_glyph(GlyphRole::StatusSleeping), "\u{263e}");
-        assert_eq!(nerd_font_glyph(GlyphRole::StatusSleeping), Some("\u{f186}"));
+        assert_eq!(
+            nerd_font_glyph(GlyphRole::StatusSleeping),
+            Some("\u{f0904}")
+        );
+        assert_eq!(nerd_font_glyph(GlyphRole::CardWaits), Some("\u{f0904}"));
         assert_eq!(
             agent_status_glyph_role(AgentStatus::Sleeping),
             GlyphRole::StatusSleeping
