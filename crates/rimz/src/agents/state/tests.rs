@@ -2,6 +2,21 @@ use super::*;
 use crate::agents::TurnSettle;
 
 #[test]
+fn legacy_state_defaults_to_no_observed_branches() {
+    let mut agent = test_agent(AgentStatus::Idle, 1_000);
+    agent.worktree_branch = Some("main".to_owned());
+    let legacy = serde_json::to_value(&agent).unwrap();
+    assert!(legacy.get("worktree_branches").is_none());
+    let decoded: AgentState = serde_json::from_value(legacy).unwrap();
+    assert!(decoded.worktree_branches.is_empty());
+
+    agent.worktree_branches = BTreeSet::from(["main".to_owned(), "feat/x".to_owned()]);
+    let decoded: AgentState =
+        serde_json::from_value(serde_json::to_value(&agent).unwrap()).unwrap();
+    assert_eq!(decoded.worktree_branches, agent.worktree_branches);
+}
+
+#[test]
 fn seed_sets_status_phase_clocks_and_empty_enrichment() {
     let at = Timestamp::from_second(1_700_000_000).unwrap();
     let running = AgentState::seed(

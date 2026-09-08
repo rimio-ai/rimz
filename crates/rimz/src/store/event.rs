@@ -41,13 +41,15 @@ macro_rules! lifetime_fields {
 
         pub(super) fn carry_lifetime_fields(state: &mut AgentState, prior: &AgentState) {
             state.$transcript.clone_from(&prior.$transcript);
+            state.worktree_branch.clone_from(&prior.worktree_branch);
+            state.worktree_branches.clone_from(&prior.worktree_branches);
             $(state.$observation.clone_from(&prior.$observation);)*
             $(state.$launch.clone_from(&prior.$launch);)*
         }
     };
 }
 
-lifetime_fields!(transcript_path; worktree_path, worktree_branch, account_key; role, team, channel, profile);
+lifetime_fields!(transcript_path; worktree_path, account_key; role, team, channel, profile);
 
 pub(crate) const MAX_SIGNAL_NAME_BYTES: usize = 64;
 

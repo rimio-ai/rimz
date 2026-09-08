@@ -1,6 +1,94 @@
 use super::*;
 
 #[test]
+fn promptless_launch_never_opens_a_turn() {
+    let mut payload = launch_payload("launch_a", "lucid-atlas");
+    payload.prompt = None;
+    payload.state = AgentLaunchState::Starting;
+    let mut launch = launch_event("codex", payload.clone());
+    launch.timestamp = epoch();
+    payload.state = AgentLaunchState::Bound;
+    payload.pane_id = Some(PaneId::parse("tmux:%1").unwrap());
+    let mut bound = launch_event("codex", payload.clone());
+    bound.timestamp = epoch() + jiff::SignedDuration::from_secs(1);
+    let mut events = vec![launch, bound];
+    for (offset, event_name, signal) in [
+        (2, "SessionStart", json!({"signal": "registered"})),
+        (3, "SessionStart", json!({"signal": "registered"})),
+        (
+            4,
+            "SessionStart",
+            json!({"signal": "compaction_ended", "failed": false, "auto": false}),
+        ),
+        (5, "ReapedDead", json!({"signal": "ended"})),
+    ] {
+        events.push(raw_lifecycle_at(
+            "codex",
+            offset,
+            json!({
+                "event_name": event_name,
+                "agent_id": "native-a",
+                "agent_name": "lucid-atlas",
+                "pane_id": "tmux:%1",
+                "signal": signal,
+            }),
+        ));
+    }
+    for len in 1..=events.len() {
+        let agents = reduce_agent_states(&events[..len]);
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].turn_started_at, None, "prefix {len}");
+        assert_eq!(agents[0].user_turn_started_at, None, "prefix {len}");
+    }
+    let prompt = raw_lifecycle_at(
+        "codex",
+        6,
+        json!({
+            "event_name": "UserPromptSubmit", "agent_id": "native-a",
+            "signal": {"signal": "turn_started"},
+        }),
+    );
+    events.push(prompt.clone());
+    assert_eq!(
+        reduce_agent_states(&events)[0].turn_started_at,
+        Some(prompt.timestamp)
+    );
+
+    payload.state = AgentLaunchState::Failed;
+    let failed = launch_event("codex", payload);
+    assert_eq!(
+        reduce_agent_states(&[events[0].clone(), failed])[0].turn_started_at,
+        None
+    );
+}
+
+#[test]
+fn prompted_launch_opens_a_turn_and_sparse_updates_preserve_it() {
+    let mut payload = launch_payload("launch-a", "lucid-atlas");
+    payload.state = AgentLaunchState::Starting;
+    let mut launch = launch_event("codex", payload.clone());
+    launch.timestamp = epoch();
+    let mut events = vec![launch.clone()];
+    for (offset, state) in [(1, AgentLaunchState::Bound), (2, AgentLaunchState::Failed)] {
+        payload.state = state;
+        payload.prompt = None;
+        let mut event = launch_event("codex", payload.clone());
+        event.timestamp = epoch() + jiff::SignedDuration::from_secs(offset);
+        events.push(event);
+    }
+    for len in 1..=events.len() {
+        assert_eq!(
+            reduce_agent_states(&events[..len])[0].turn_started_at,
+            Some(launch.timestamp)
+        );
+        assert_eq!(
+            reduce_agent_states(&events[..len])[0].user_turn_started_at,
+            Some(launch.timestamp)
+        );
+    }
+}
+
+#[test]
 fn registered_at_stamps_first_event_and_survives_end_and_restart() {
     let start = raw_lifecycle_at(
         "claude",
