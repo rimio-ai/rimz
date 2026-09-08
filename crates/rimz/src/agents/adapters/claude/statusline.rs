@@ -69,16 +69,7 @@ struct ContextWindowField {
     /// Older Claude reports null before the first API call and right after
     /// `/compact`; newer Claude reports the same state as explicit zeros.
     /// Both shapes project to `None`.
-    current_usage: Option<CurrentUsageField>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct CurrentUsageField {
-    input_tokens: Option<u64>,
-    output_tokens: Option<u64>,
-    cache_creation_input_tokens: Option<u64>,
-    cache_read_input_tokens: Option<u64>,
+    current_usage: Option<AgentCurrentUsage>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -146,15 +137,8 @@ fn parse_rate_window(
     )
 }
 
-fn current_usage(field: Option<CurrentUsageField>) -> Option<AgentCurrentUsage> {
-    let field = field?;
-    let usage = AgentCurrentUsage {
-        input_tokens: field.input_tokens,
-        output_tokens: field.output_tokens,
-        cache_creation_input_tokens: field.cache_creation_input_tokens,
-        cache_read_input_tokens: field.cache_read_input_tokens,
-    };
-    (!usage.is_zero()).then_some(usage)
+fn current_usage(field: Option<AgentCurrentUsage>) -> Option<AgentCurrentUsage> {
+    field.filter(|usage| !usage.is_zero())
 }
 
 /// Cap on the surfaced error text. The upstream message is one short line
