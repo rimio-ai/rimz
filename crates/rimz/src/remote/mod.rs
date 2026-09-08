@@ -451,8 +451,7 @@ impl SshAttachPlan {
             .args(["--", self.options.target.ssh_destination().as_str()])
     }
 
-    /// Probe a path target over an established ControlMaster before the tty
-    /// attach. Session targets need no filesystem precondition.
+    /// Probe an explicit path before tty attach; sessions need no directory and automatic targets retain their session fallback.
     pub fn path_preflight(&self, control_path: &Path) -> Option<(CommandSpec, &str)> {
         let path = self.options.target.remote_path()?;
         let spec = CommandSpec::new(ssh_program())

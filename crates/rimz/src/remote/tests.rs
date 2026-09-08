@@ -330,12 +330,13 @@ fn path_preflight_reuses_the_master_and_quotes_the_remote_path() {
     );
     assert_eq!(path, "$HOME/code/query engine");
 
-    let session = attach_plan("dev-box:query-engine", false, None, TermPlan::Keep, false);
-    assert!(
-        session
-            .path_preflight(Path::new("/tmp/rimz.sock"))
-            .is_none()
-    );
+    for target in ["dev-box:query-engine", "dev-box:session:query-engine"] {
+        assert!(
+            attach_plan(target, false, None, TermPlan::Keep, false)
+                .path_preflight(Path::new("/tmp/rimz.sock"))
+                .is_none()
+        );
+    }
 }
 
 #[test]
@@ -521,14 +522,17 @@ fn ssh_attach_plan_compiles_session_path_flags_control_and_term() {
         },
         SpecCase {
             name: "control master",
-            target: "dev-box:session:query-engine",
+            target: "dev-box:query-engine",
             no_resume: false,
             mux: None,
             term: TermPlan::Keep,
             truecolor: false,
             control: Some(Path::new("/tmp/rimz.sock")),
             destination_index: 16,
-            snippet_contains: &["exec rimz attach --attach -- 'query-engine'"],
+            snippet_contains: &[
+                "if test -d \"$HOME\"/'query-engine'; then exec rimz start --attach -- \"$HOME\"/'query-engine';",
+                "else exec rimz attach --attach -- 'query-engine'; fi",
+            ],
         },
         SpecCase {
             name: "term downgrade",
@@ -653,9 +657,9 @@ fn ssh_attach_plan_compiles_session_path_flags_control_and_term() {
             );
         }
         assert_eq!(
-            snippet.contains("test -d"),
-            case.target.contains('/'),
-            "only path targets carry the directory guard: {snippet}"
+            snippet.contains(&format!("exit {REMOTE_PATH_MISSING_EXIT}")),
+            plan.options.target.remote_path().is_some(),
+            "only explicit paths fail the missing-directory guard: {snippet}"
         );
         assert!(
             !snippet.contains(crate::mux::CLIENT_SIZE_ENV),

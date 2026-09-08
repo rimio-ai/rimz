@@ -51,6 +51,8 @@ A remote target is `[user@]host:<session-or-path>`, a RimZ grammar with a host-a
 
 Every relative path is anchored to remote `HOME`, independent of the SSH startup cwd. `host:./name` or `host:~/name` forces path handling and missing-path failure; `host:session:name` forces session handling. Terminal attach, web prep, and link probes share this resolution, so a directory target's probe selects the workspace rather than treating its suffix as a session name.
 
+Automatic resolution is re-evaluated for each launch, reconnect, and probe start. Creating or removing a same-named directory between those operations can make attach and its link probe select different workspaces; use an explicit `session:` or path target to pin the interpretation.
+
 Parsing lives in `RemoteTarget::parse` and every failure carries the expected shape plus a fix. Three cases are worth knowing before touching that function: a bracketed IPv6 host may open the string or follow the `@` that ends the user prefix, and an `@[` after the first colon belongs to the suffix rather than the host; `~` and `~/…` normalize to `$HOME` so the remote shell expands them past the snippet's quoting; and `~user` is rejected at parse time, because the single-quoted snippet would carry it literally into a junk path.
 
 `SshDestination::parse` handles the colon-less `[user@]host` form that `rimz remote setup` accepts.

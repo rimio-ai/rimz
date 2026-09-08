@@ -1077,11 +1077,14 @@ mod tests {
             path_spec.args[6]
                 .contains("rimz remote link-stats ingest --dir \"$HOME\"'/code/query-engine'")
         );
-        let session_spec = probe_stream_spec(&target("dev-box:query-engine"), &control);
+        let auto_spec = probe_stream_spec(&target("dev-box:query-engine"), &control);
         assert!(
-            session_spec.args[6].contains("rimz remote link-stats ingest --session 'query-engine'"),
+            auto_spec.args[6].contains(concat!(
+                "if test -d \"$HOME\"/'query-engine'; then exec rimz remote link-stats ingest --dir \"$HOME\"/'query-engine'; ",
+                "else exec rimz remote link-stats ingest --session 'query-engine'; fi",
+            )),
             "{:?}",
-            session_spec.args
+            auto_spec.args
         );
 
         let check = control_check_spec(&target("dev-box:query-engine"), &control);

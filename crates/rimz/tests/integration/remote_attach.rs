@@ -940,20 +940,20 @@ fn supervised_existing_remote_path_preflights_before_attach() {
 }
 
 #[test]
-fn supervised_session_target_skips_path_preflight() {
+fn supervised_auto_target_skips_path_preflight() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
 
     let out = remote_connect_command(&env, &log)
         .bounded_output()
-        .expect("run session remote connect");
+        .expect("run automatic remote connect");
 
-    assert!(out.status.success(), "session attach succeeds");
+    assert!(out.status.success(), "automatic attach succeeds");
     assert!(
         !shim_invocations(&log)
             .iter()
             .any(|argv| is_path_preflight_invocation(argv)),
-        "session targets have no filesystem preflight"
+        "automatic targets retain their session fallback without a directory preflight"
     );
 }
 
