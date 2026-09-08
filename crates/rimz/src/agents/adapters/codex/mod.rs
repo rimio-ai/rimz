@@ -22,7 +22,7 @@
 //! The local session index supplies Codex's automatic thread name inline.
 //! Remaining metadata Claude gets from its statusline (rate-limit windows,
 //! model display name, thread preview, version) comes from the app-server
-//! read-only methods via [`refresh_app_server_enrichment`], spawned out-of-band
+//! read-only methods via [`refresh_app_server_enrichment`], gated by [`app_server_due`] and spawned out-of-band
 //! by `rimz agents refresh-context`.
 
 mod account;
@@ -48,7 +48,7 @@ use serde_json::Value;
 
 use jiff::Timestamp;
 
-use self::app_server::CodexAppServer;
+use self::app_server::{AppServerObservation, CodexAppServer};
 use self::app_server::{app_server_due, merge_app_server_context};
 use self::payloads::{
     CodexChildIdentity, CodexCommon, CodexPermissionRequest, CodexPostCompact, CodexPostToolUse,
@@ -82,11 +82,11 @@ use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
     AccountUsageSnapshot, AgentLifecycleObservation, AgentTurnError, AnswerPlanErr, AnswerStep,
-    AskReply, ExtraCredits, FieldPatch, HookOutput, HookRouting, LifecycleRefreshCtx,
-    LocalContextRefresh, LocalContextRefreshCtx, RefreshSpawn, RefreshTrigger, ResetCredits,
-    Result, RootIdentity, SessionContextInput, SessionContextRefresh, SubagentIdentity,
-    TranscriptMessage, non_empty_trimmed, optional_payload_string, read_transcript_tail,
-    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    AskReply, FieldPatch, HookOutput, HookRouting, LifecycleRefreshCtx, LocalContextRefresh,
+    LocalContextRefreshCtx, RefreshSpawn, RefreshTrigger, Result, RootIdentity,
+    SessionContextInput, SessionContextRefresh, SubagentIdentity, TranscriptMessage,
+    non_empty_trimmed, optional_payload_string, read_transcript_tail, resolve_root_identity,
+    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::transcript::{AskOption, AskQuestion};
 
@@ -108,11 +108,6 @@ const CODEX_HOOK_TIMEOUT_SECS: i64 = 10;
 /// three-second ceiling), so keep Ctrl-C responsive and let an overrun fall
 /// back to the flushed rollout's `turn_aborted` record.
 const CODEX_INTERRUPT_HOOK_TIMEOUT_SECS: i64 = 1;
-
-/// How stale the app-server-owned half of the sidecar may get before the next
-/// turn-boundary refresh re-reads it. The rollout tail refreshes every pass;
-/// this throttles only the expensive app-server round trip.
-const RICH_REFRESH_THROTTLE_SECS: i64 = 20;
 
 /// Codex's GPT-5.5 backend input ceiling — the observed 272k-token limit above
 /// which the Codex backend rejects a prompt, listed by litellm and models.dev
@@ -777,8 +772,7 @@ impl crate::agents::capabilities::ContextCapability for CodexAdapter {
     /// Two sources in one pass: the local rollout tail always, and the
     /// app-server's read-only enrichment (rate-limit windows, model display
     /// name, thread name/preview, version) only when its own fields are stale.
-    /// The app-server read is the expensive half, so its throttle lives here
-    /// rather than at the call site.
+    /// The expensive app-server read is throttled by [`app_server_due`].
     fn refresh_session_context(
         &self,
         input: &SessionContextInput<'_>,
@@ -800,29 +794,20 @@ impl crate::agents::capabilities::ContextCapability for CodexAdapter {
             input.prior.and_then(|record| record.spend_fold.as_ref()),
             input.pricing_cache_path,
         );
-        if !app_server_due(input.prior, RICH_REFRESH_THROTTLE_SECS) {
+        if !app_server_due(input.prior) {
             return local.map(|local| SessionContextRefresh {
                 local: Some(local),
                 ..SessionContextRefresh::default()
             });
         }
-        let enrichment =
+        let observation =
             refresh_app_server_enrichment(Some(input.session_id), input.model, input.broker_socket);
-        let realtime_usage = enrichment
+        let realtime_usage = observation
             .as_ref()
-            .map(|enrichment| crate::AccountUsageSnapshot {
-                plan: enrichment
-                    .context
-                    .account
-                    .as_ref()
-                    .and_then(|account| account.plan.clone()),
-                rate_limits: enrichment.context.rate_limits.clone(),
-                extra_credits: enrichment.extra_credits.clone(),
-                reset_credits: enrichment.reset_credits.clone(),
-            });
+            .map(AppServerObservation::account_usage);
         Some(SessionContextRefresh {
             local,
-            observed: enrichment.map(|enrichment| enrichment.context),
+            observed: observation.map(|observation| observation.context),
             realtime_usage,
         })
     }
@@ -926,19 +911,7 @@ impl crate::agents::capabilities::AccountCapability for CodexAdapter {
         runtime: &crate::RuntimePaths,
     ) -> Option<AccountUsageSnapshot> {
         refresh_app_server_enrichment(None, None, Some(&runtime.codex_app_server_socket_path()))
-            .map(|enrichment| {
-                let plan = enrichment
-                    .context
-                    .account
-                    .as_ref()
-                    .and_then(|account| account.plan.clone());
-                AccountUsageSnapshot {
-                    plan,
-                    rate_limits: enrichment.context.rate_limits,
-                    extra_credits: enrichment.extra_credits,
-                    reset_credits: enrichment.reset_credits,
-                }
-            })
+            .map(|observation| observation.account_usage())
     }
 }
 
@@ -1513,24 +1486,13 @@ fn build_codex_observation(
 /// and version.
 /// Transcript-derived tokens and cost are refreshed separately from the local
 /// rollout tail, so an unreachable app-server never suppresses them.
-struct AppServerEnrichment {
-    context: AgentContext,
-    extra_credits: Option<ExtraCredits>,
-    reset_credits: Option<ResetCredits>,
-}
-
 fn refresh_app_server_enrichment(
     session_id: Option<&str>,
     model_hint: Option<&str>,
     broker_socket: Option<&Path>,
-) -> Option<AppServerEnrichment> {
+) -> Option<AppServerObservation> {
     let mut client = CodexAppServer::connect(broker_socket)?;
-    let observation = client.observe("codex", session_id, model_hint, Timestamp::now());
-    Some(AppServerEnrichment {
-        context: observation.context,
-        extra_credits: observation.extra_credits,
-        reset_credits: observation.reset_credits,
-    })
+    Some(client.observe("codex", session_id, model_hint, Timestamp::now()))
 }
 
 /// The thread ids the per-user Codex app-server daemon currently holds in memory,
