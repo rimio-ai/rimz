@@ -18,7 +18,7 @@ fn standalone_bin_resolves_only_when_install_exists() {
 
 #[test]
 fn missing_standalone_guidance_uses_official_install_command() {
-    let issue = Issue::StandaloneMissing.to_string();
+    let issue = standalone_missing_guidance();
     assert!(issue.contains(INSTALL_COMMAND));
     assert!(issue.contains("[remote_control] codex"));
 }
