@@ -343,10 +343,8 @@ fn presence_plugin_gate_requires_fresh_matching_build_and_config() {
 fn topology_dumps_broadcast_without_launching_plugins() {
     let (temp, shim) = logging_shim();
     let backend = ZellijBackend::with_program_for_test(&shim);
-    let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
-
-    backend.dump_topology_for(&opts).expect("first dump");
-    backend.dump_topology_for(&opts).expect("second dump");
+    backend.dump_topology_for("rimz-test").expect("first dump");
+    backend.dump_topology_for("rimz-test").expect("second dump");
 
     let log = shim_log(&temp);
     assert_eq!(log.matches("--name rimz:dump_topology -- dump").count(), 2);

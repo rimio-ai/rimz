@@ -9,11 +9,10 @@ use super::pane_topology::{
 };
 use super::parse::{is_no_active_sessions, session_state_from_line};
 use super::{TOPOLOGY_CACHE_POLL_STEP, ZellijBackend, health_probe_timeout};
-use crate::config::{MachineConfig, MultiplexerConfig};
 use crate::disk::paths::{self, RuntimePaths, StatePaths};
 use crate::ids::WorkspaceId;
+use crate::mux::PaneReadConsistency;
 use crate::mux::{MuxErr, Result, SessionLiveness};
-use crate::mux::{PaneReadConsistency, PresencePluginOptions};
 use crate::utils::time::unix_now_ms;
 use crate::workspace::{self, KnownWorkspace};
 
@@ -192,21 +191,32 @@ impl ZellijBackend {
         }
         let floor_ms = min_topology_produced_at_ms.unwrap_or(now_ms);
         self.request_topology_dump(&known);
+        Self::wait_for_fresh_topology(runtime, &session, floor_ms, timeout).ok_or_else(|| {
+            MuxErr::Output {
+                program: "zellij".to_owned(),
+                reason: format!(
+                    "Zellij topology unavailable for session `{session}`; run `rimz doctor`"
+                ),
+            }
+        })
+    }
+
+    pub(crate) fn wait_for_fresh_topology(
+        runtime: &RuntimePaths,
+        session: &str,
+        floor_ms: u64,
+        timeout: Duration,
+    ) -> Option<PaneTopologyCache> {
         let deadline = Instant::now() + timeout;
         loop {
             let now_ms = unix_now_ms();
             if let Some(cache) =
-                Self::fresh_cached_topology(runtime, &session, now_ms, Some(floor_ms))
+                Self::fresh_cached_topology(runtime, session, now_ms, Some(floor_ms))
             {
-                return Ok(cache);
+                return Some(cache);
             }
             if Instant::now() >= deadline {
-                return Err(MuxErr::Output {
-                    program: "zellij".to_owned(),
-                    reason: format!(
-                        "Zellij topology unavailable for session `{session}`; run `rimz doctor`"
-                    ),
-                });
+                return None;
             }
             std::thread::sleep(TOPOLOGY_CACHE_POLL_STEP);
         }
@@ -236,7 +246,7 @@ impl ZellijBackend {
             })
     }
 
-    pub(super) fn resolve_topology_workspace(
+    fn resolve_topology_workspace(
         &self,
         session: &str,
         workspace_id: Option<&WorkspaceId>,
@@ -309,24 +319,14 @@ impl ZellijBackend {
     }
 
     fn request_topology_dump(&self, known: &KnownWorkspace) {
-        let Some(wasm) = self.presence_plugin_path() else {
+        if self.presence_plugin_path().is_none() {
             tracing::debug!(
                 session = %known.session_name,
                 "Zellij topology refresh skipped because the presence plugin artifact is unavailable",
             );
             return;
-        };
-        let machine_config = MachineConfig::load_lenient();
-        let mux_config = MultiplexerConfig::from(machine_config.as_ref());
-        let opts = PresencePluginOptions::from_config(
-            &known.session_name,
-            &known.workspace_id,
-            wasm,
-            workspace::resolve_recorded_rimz_bin(&known.workspace_id, known.rimz_bin.as_deref()),
-            &machine_config.sidebar,
-            &mux_config.zellij,
-        );
-        if let Err(err) = self.dump_topology_for(&opts) {
+        }
+        if let Err(err) = self.dump_topology_for(&known.session_name) {
             tracing::debug!(
                 session = %known.session_name,
                 error = %err,

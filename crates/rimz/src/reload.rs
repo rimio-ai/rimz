@@ -23,7 +23,7 @@ use crate::diag::record::DiagEvent;
 use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::ids::{MuxName, PaneId};
 use crate::mux::recovery;
-use crate::mux::zellij::{RECONCILE_LIST_TIMEOUT, pane_topology};
+use crate::mux::zellij::RECONCILE_LIST_TIMEOUT;
 use crate::mux::{
     MuxBackend, PaneListOptions, PaneListing, PaneReadConsistency, SidebarLiveness,
     SidebarPaneOptions, SidebarWidth, backend_for,
@@ -550,7 +550,9 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
                     "sidebar repair: presence plugin ensure failed",
                 );
             }
-            if let Err(err) = crate::mux::ZellijBackend::default().dump_topology_for(&presence) {
+            if let Err(err) =
+                crate::mux::ZellijBackend::default().dump_topology_for(&ws.session_name)
+            {
                 tracing::warn!(
                     session = %ws.session_name,
                     tags.operation = "sidebar.repair.presence_probe",
@@ -559,7 +561,14 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
                 );
             }
         }
-        if !presence_channel_is_live(*mux, runtime, &ws.session_name, presence_floor_ms) {
+        if crate::mux::ZellijBackend::wait_for_fresh_topology(
+            runtime,
+            &ws.session_name,
+            presence_floor_ms,
+            RELOAD_PRESENCE_PROBE_TIMEOUT,
+        )
+        .is_none()
+        {
             outcome.presence_dead += 1;
             crate::sidebar::sweep_orphan_runtime(runtime);
             return outcome;
@@ -617,30 +626,6 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
 }
 
 const RELOAD_PRESENCE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-
-fn presence_channel_is_live(
-    mux: MuxName,
-    runtime: &RuntimePaths,
-    session_name: &str,
-    min_produced_at_ms: u64,
-) -> bool {
-    if mux != MuxName::Zellij {
-        return true;
-    }
-    let deadline = Instant::now() + RELOAD_PRESENCE_PROBE_TIMEOUT;
-    loop {
-        let now_ms = unix_now_ms();
-        if pane_topology::read_pane_topology_cache(runtime, session_name).is_some_and(|cache| {
-            pane_topology::pane_topology_cache_is_fresh(&cache, now_ms, Some(min_produced_at_ms))
-        }) {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(crate::mux::zellij::TOPOLOGY_CACHE_POLL_STEP);
-    }
-}
 
 fn record_live_room_bin(
     ws: &KnownWorkspace,
