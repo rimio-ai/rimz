@@ -185,7 +185,8 @@ fn wake_pid_checks_in_then_delivers_after_process_disappears_without_empty_path(
     let pid = process.id().to_string();
     let receipt = wake_ok(&env, &["wake", "--pid", &pid, "--timeout", "1s", "--json"]);
     let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
-    assert_eq!(receipt["trigger"], format!("watch: process {pid}"));
+    assert!(receipt["trigger"].as_str().unwrap().contains(&pid));
+    assert_eq!(receipt["trigger"], receipt["pending"][0]["trigger"]);
     let checkin = wait_for_wake_messages(&env, 1);
     assert!(checkin[0].text.contains("still running after"));
     assert!(checkin[0].text.contains("(no output)"));
@@ -235,6 +236,31 @@ fn canceling_pid_wake_leaves_the_existing_process_running() {
     assert!(env.store().list_pending_messages().unwrap().is_empty());
     process.kill().unwrap();
     process.wait().unwrap();
+}
+
+#[test]
+fn wake_pid_refuses_a_process_it_cannot_observe() {
+    if nix::sys::signal::kill(nix::unistd::Pid::from_raw(1), None) != Err(nix::errno::Errno::EPERM)
+    {
+        return;
+    }
+    let env = Env::new();
+    register_calling_agent(&env);
+    let output = agent_wake(&env)
+        .args(["wake", "--pid", "1"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot watch PID 1: permission denied"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("choose a process owned by your user"),
+        "{stderr}"
+    );
+    assert!(!loop_instances_path(&env).exists());
 }
 
 #[test]
