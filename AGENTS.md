@@ -10,15 +10,13 @@ Two kinds of statement live here, and they earn different deference.
 
 **Everything else is a default** — the choice that has been right most of the time here. Follow it absent better information; depart when the work in front of you argues otherwise, and say why in the PR or hand-off. A default that keeps losing is a bug in this file, so fix the file.
 
-Exercise judgment without asking on how to decompose a change, which tests earn their cost, and when a rule's rationale does not reach the case at hand. Push back when a request looks wrong, rests on a false premise, or has a simpler shape — an early correction beats a faithful implementation of the wrong thing. Ask when a wrong guess is expensive and a question is cheap.
-
 Match the size of the change to the size of the ask, and leave the refactor you noticed on the way as a note unless it blocks you. When this map and the territory disagree, the code is what ships: follow the code, then fix the map in the same change.
 
 ## Engineering principles
 
 The house style is explicit Rust — typed IDs across module boundaries, structured parsers over ad-hoc string work, state machines where a bool would drift, typed `Result` errors at library boundaries — and [rust-conventions.md](./docs/contributing/rust-conventions.md) is its authority. `unwrap`/`expect`/panic belong in tests, build scripts, and provably-impossible states — leave a comment naming why the state is impossible.
 
-For an event or timing bug, write the red end-to-end test first and prove the proposed signal reaches the consumer's decision point: producer emission and timestamp freshness are not evidence of consumer freshness.
+An event or timing fix is proven at the consumer's decision point: producer emission and timestamp freshness are not evidence of consumer freshness.
 
 Two invariants sit underneath that style:
 
