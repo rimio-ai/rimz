@@ -2558,6 +2558,7 @@ rimz wake
     --json  [action=set-true takes=0..=0]
     --mux <MUX>  [action=set takes=1..=1 global]
     --on <fail|success|any>  [action=set takes=1..=1 values=fail|success|any]
+    --pid <PID>  [action=set takes=1..=1]
     --root <ROOT>  [action=set takes=1..=1 global]
     --timeout <DURATION>  [action=set takes=1..=1]
     --tmux  [action=set-true takes=0..=0 global]
