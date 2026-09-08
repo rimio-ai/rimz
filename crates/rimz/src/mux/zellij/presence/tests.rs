@@ -7,13 +7,13 @@ use super::super::tests::support::{failing_roster_shim, logging_shim, pane_roste
 
 /// A writer record carrying this host's build and config identity — what the
 /// presence retire path accepts as proof that a replacement plugin is live.
-pub(crate) fn current_writer(plugin_id: u32, loaded_at_ms: u64) -> TopologyWriter {
+fn current_writer(plugin_id: u32, loaded_at_ms: u64) -> TopologyWriter {
     let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
     TopologyWriter {
         plugin_id,
         loaded_at_ms,
         build: Some(presence_plugin_build().to_owned()),
-        config: Some(presence_plugin_config_hash_for(&opts)),
+        config: Some(presence_plugin_identity(&opts).config_hash),
     }
 }
 
@@ -170,17 +170,34 @@ fn live_presence_plugin_ids_list_only_matching_plugin_panes() {
 #[cfg(unix)]
 #[test]
 fn current_presence_cleanup_preserves_a_single_accepted_writer() {
+    use crate::disk::paths::RuntimePaths;
+    use crate::mux::zellij::pane_topology::write_pane_topology_cache;
+
     let (temp, shim) = pane_roster_shim(
         r#"[{"id":2,"is_plugin":true,"title":"file:/tmp/rimz-presence-zellij.wasm"}]"#,
     );
-    let backend = ZellijBackend::with_program_for_test(&shim);
+    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, temp.path());
     let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
+    let runtime = RuntimePaths::under(opts.workspace_id.clone(), temp.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    write_pane_topology_cache(
+        &runtime,
+        &PaneTopologyCache {
+            session_name: opts.session_name.clone(),
+            produced_at_ms: unix_now_ms(),
+            writer: Some(current_writer(2, u64::MAX)),
+            focused_pane: None,
+            clients: None,
+            panes: Vec::new(),
+        },
+    )
+    .unwrap();
 
     assert_eq!(
         backend
-            .cleanup_current_presence_plugin_for(&opts, &current_writer(2, u64::MAX))
+            .upgrade_presence_plugin(&opts)
             .expect("inspect current presence plugin"),
-        PresencePluginCleanup::Current,
+        PresenceUpgrade::Current,
     );
 
     let log = shim_log(&temp);
@@ -200,17 +217,34 @@ fn current_presence_cleanup_preserves_a_single_accepted_writer() {
 #[cfg(unix)]
 #[test]
 fn current_presence_cleanup_retires_a_stale_loaded_id() {
+    use crate::disk::paths::RuntimePaths;
+    use crate::mux::zellij::pane_topology::write_pane_topology_cache;
+
     let (temp, shim) = pane_roster_shim(
         r#"[{"id":2,"is_plugin":true,"title":"file:/tmp/rimz-presence-zellij.wasm"},{"id":3,"is_plugin":true,"title":"rimz-presence-zellij stale"},{"id":4,"is_plugin":true,"title":"status-bar"}]"#,
     );
-    let backend = ZellijBackend::with_program_for_test(&shim);
+    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, temp.path());
     let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
+    let runtime = RuntimePaths::under(opts.workspace_id.clone(), temp.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    write_pane_topology_cache(
+        &runtime,
+        &PaneTopologyCache {
+            session_name: opts.session_name.clone(),
+            produced_at_ms: unix_now_ms(),
+            writer: Some(current_writer(2, u64::MAX)),
+            focused_pane: None,
+            clients: None,
+            panes: Vec::new(),
+        },
+    )
+    .unwrap();
 
     assert_eq!(
         backend
-            .cleanup_current_presence_plugin_for(&opts, &current_writer(2, u64::MAX))
+            .upgrade_presence_plugin(&opts)
             .expect("clean up stale presence plugin"),
-        PresencePluginCleanup::Reconciled,
+        PresenceUpgrade::Reconciled,
     );
 
     let log = shim_log(&temp);
@@ -231,6 +265,76 @@ fn current_presence_cleanup_retires_a_stale_loaded_id() {
     assert!(
         log.contains("--name rimz_presence_boot -- load"),
         "cleanup should heal any accepted writer closed with a same-id clone:\n{log}",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn presence_upgrade_without_current_writer_boots_and_dumps() {
+    let (temp, shim) = logging_shim();
+    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, temp.path());
+    let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
+
+    assert_eq!(
+        backend
+            .upgrade_presence_plugin_with(&opts, Duration::ZERO, Duration::ZERO)
+            .expect("upgrade presence plugin"),
+        PresenceUpgrade::Upgraded,
+    );
+
+    let log = shim_log(&temp);
+    assert!(log.contains("--name rimz_presence_boot -- load"), "{log}");
+    assert!(log.contains("--name rimz:dump_topology -- dump"), "{log}");
+}
+
+#[test]
+fn presence_plugin_gate_requires_fresh_matching_build_and_config() {
+    use crate::mux::zellij::pane_topology::{PaneTopologyCache, TopologyWriter};
+
+    let cache = |produced_at_ms, build: Option<&str>, config: Option<&str>| PaneTopologyCache {
+        session_name: "rimz-test".to_owned(),
+        produced_at_ms,
+        writer: Some(TopologyWriter {
+            plugin_id: 7,
+            loaded_at_ms: 10,
+            build: build.map(str::to_owned),
+            config: config.map(str::to_owned),
+        }),
+        focused_pane: None,
+        clients: None,
+        panes: Vec::new(),
+    };
+    let current = cache(1_000, Some("wasm"), Some("config"));
+    assert!(current_presence_writer(Some(&current), 1_000, "wasm", "config").is_some());
+    assert!(
+        current_presence_writer(Some(&cache(1_000, None, None)), 1_000, "wasm", "config").is_none()
+    );
+    assert!(
+        current_presence_writer(
+            Some(&cache(1_000, Some("old"), Some("config"))),
+            1_000,
+            "wasm",
+            "config"
+        )
+        .is_none()
+    );
+    assert!(
+        current_presence_writer(
+            Some(&cache(1_000, Some("wasm"), Some("old"))),
+            1_000,
+            "wasm",
+            "config"
+        )
+        .is_none()
+    );
+    assert!(
+        current_presence_writer(
+            Some(&current),
+            1_000 + crate::mux::PRESENCE_STAMP_FRESH.as_millis() as u64 + 1,
+            "wasm",
+            "config"
+        )
+        .is_none()
     );
 }
 

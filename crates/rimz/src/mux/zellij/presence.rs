@@ -12,7 +12,10 @@ use std::{env, fs};
 use kdl::{KdlDocument, KdlNode};
 
 use super::backend::RawListedPane;
-use super::pane_topology::{PresenceDesired, read_pane_topology_cache, write_presence_desired};
+use super::pane_topology::{
+    PaneTopologyCache, PresenceDesired, TopologyWriter, pane_topology_cache_is_fresh,
+    read_pane_topology_cache, write_presence_desired,
+};
 use super::{
     PRESENCE_BOOT_PIPE, PRESENCE_PIPE_TIMEOUT, PRESENCE_RETIRE_PIPE, PRESENCE_RETIRE_PROOF_TIMEOUT,
     PRESENCE_TOPOLOGY_PIPE, TOPOLOGY_CACHE_POLL_STEP, ZellijBackend,
@@ -34,10 +37,12 @@ const PRESENCE_PLUGIN_BASE_PERMISSIONS: [&str; 4] = [
 static PRESENCE_PLUGIN_BUILD: LazyLock<String> =
     LazyLock::new(|| crate::build_id::of_bytes(EMBEDDED_PRESENCE_PLUGIN));
 
+/// Outcome of upgrading the session's presence plugin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PresencePluginCleanup {
+pub(crate) enum PresenceUpgrade {
     Current,
     Reconciled,
+    Upgraded,
 }
 
 /// Digest of the embedded wasm generation this host loads.
@@ -213,14 +218,25 @@ fn presence_plugin_identity(opts: &super::super::PresencePluginOptions) -> Prese
     }
 }
 
-pub(crate) fn presence_plugin_config_hash_for(
-    opts: &super::super::PresencePluginOptions,
-) -> String {
-    presence_plugin_identity(opts).config_hash
+fn current_presence_writer<'a>(
+    cache: Option<&'a PaneTopologyCache>,
+    now_ms: u64,
+    build: &str,
+    config: &str,
+) -> Option<&'a TopologyWriter> {
+    let cache = cache.filter(|cache| pane_topology_cache_is_fresh(cache, now_ms, None))?;
+    cache
+        .writer
+        .as_ref()
+        .filter(|writer| writer_matches(writer, build, config))
+}
+
+fn writer_matches(writer: &TopologyWriter, build: &str, config: &str) -> bool {
+    writer.build.as_deref() == Some(build) && writer.config.as_deref() == Some(config)
 }
 
 impl ZellijBackend {
-    pub(crate) fn live_presence_plugin_ids(&self, session_name: &str) -> Result<Vec<u32>> {
+    pub(super) fn live_presence_plugin_ids(&self, session_name: &str) -> Result<Vec<u32>> {
         let mut ids = self
             .raw_listed_panes(session_name, super::super::COMMAND_TIMEOUT)?
             .into_iter()
@@ -230,6 +246,50 @@ impl ZellijBackend {
         ids.sort_unstable();
         ids.dedup();
         Ok(ids)
+    }
+
+    pub(crate) fn upgrade_presence_plugin(
+        &self,
+        opts: &super::super::PresencePluginOptions,
+    ) -> Result<PresenceUpgrade> {
+        self.upgrade_presence_plugin_with(
+            opts,
+            PRESENCE_RETIRE_PROOF_TIMEOUT,
+            TOPOLOGY_CACHE_POLL_STEP,
+        )
+    }
+
+    fn upgrade_presence_plugin_with(
+        &self,
+        opts: &super::super::PresencePluginOptions,
+        timeout: Duration,
+        poll_step: Duration,
+    ) -> Result<PresenceUpgrade> {
+        let identity = presence_plugin_identity(opts);
+        let current = self
+            .runtime_paths_for_workspace(opts.workspace_id.clone())
+            .and_then(|runtime| {
+                let cache = read_pane_topology_cache(&runtime, &opts.session_name);
+                current_presence_writer(
+                    cache.as_ref(),
+                    unix_now_ms(),
+                    presence_plugin_build(),
+                    &identity.config_hash,
+                )
+                .map(|writer| self.cleanup_current_presence_plugin_for(opts, writer))
+                .transpose()
+            });
+        match current {
+            Ok(Some(outcome)) => return Ok(outcome),
+            Ok(None) => {}
+            Err(err) => tracing::debug!(
+                session = %opts.session_name,
+                error = &err as &dyn std::error::Error,
+                "presence live-id inspection failed; falling back to full convergence",
+            ),
+        }
+        self.converge_presence_plugin_for_with(opts, timeout, poll_step)?;
+        Ok(PresenceUpgrade::Upgraded)
     }
 
     /// Explicit convergence for reload and live-session callers.
@@ -359,17 +419,17 @@ impl ZellijBackend {
     /// Reconcile stale loaded ids around a fresh, identity-matching writer
     /// without reloading that accepted writer. The live roster closes the gap
     /// between "the writer is current" and "only the writer is loaded".
-    pub(crate) fn cleanup_current_presence_plugin_for(
+    fn cleanup_current_presence_plugin_for(
         &self,
         opts: &super::super::PresencePluginOptions,
         writer: &crate::mux::zellij::pane_topology::TopologyWriter,
-    ) -> Result<PresencePluginCleanup> {
+    ) -> Result<PresenceUpgrade> {
         let live_ids = self.live_presence_plugin_ids(&opts.session_name)?;
         if live_ids.as_slice() == [writer.plugin_id] {
-            return Ok(PresencePluginCleanup::Current);
+            return Ok(PresenceUpgrade::Current);
         }
         self.retire_accepted_presence_plugin_for(opts, writer);
-        Ok(PresencePluginCleanup::Reconciled)
+        Ok(PresenceUpgrade::Reconciled)
     }
 
     fn retire_accepted_presence_plugin_for(
@@ -520,8 +580,7 @@ fn wait_for_presence_replacement(
             .and_then(|cache| cache.writer)
             .filter(|writer| {
                 writer.loaded_at_ms >= floor_ms
-                    && writer.build.as_deref() == Some(expected_build)
-                    && writer.config.as_deref() == Some(expected_config)
+                    && writer_matches(writer, expected_build, expected_config)
             })
         {
             return Some(writer);

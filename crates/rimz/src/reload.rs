@@ -479,48 +479,17 @@ fn upgrade_live(
             &machine_config.sidebar,
             &machine_config.zellij,
         );
-        let desired_config = crate::mux::zellij::presence_plugin_config_hash_for(&presence);
-        let cache = pane_topology::read_pane_topology_cache(runtime, &ws.session_name);
-        let current_writer = current_presence_plugin_writer(
-            cache.as_ref(),
-            unix_now_ms(),
-            crate::mux::zellij::presence_plugin_build(),
-            &desired_config,
-        );
-        let needs_convergence = match current_writer {
-            Some(writer) => match crate::mux::ZellijBackend::default()
-                .cleanup_current_presence_plugin_for(&presence, writer)
-            {
-                Ok(crate::mux::zellij::PresencePluginCleanup::Current) => {
-                    outcome.plugin_current += 1;
-                    false
-                }
-                Ok(crate::mux::zellij::PresencePluginCleanup::Reconciled) => {
-                    outcome.plugin_reconciled += 1;
-                    false
-                }
-                Err(err) => {
-                    tracing::debug!(
-                        session = %ws.session_name,
-                        error = &err as &dyn std::error::Error,
-                        "presence live-id inspection failed; falling back to full convergence",
-                    );
-                    true
-                }
-            },
-            None => true,
-        };
-        if needs_convergence {
-            match crate::mux::ZellijBackend::default().converge_presence_plugin_for(&presence) {
-                Ok(()) => outcome.plugin_upgraded += 1,
-                Err(err) => {
-                    tracing::warn!(
-                        session = %ws.session_name,
-                        tags.operation = "reload.presence_converge",
-                        error = &err as &dyn std::error::Error,
-                        "reload: presence plugin convergence failed",
-                    );
-                }
+        match crate::mux::ZellijBackend::default().upgrade_presence_plugin(&presence) {
+            Ok(crate::mux::zellij::PresenceUpgrade::Current) => outcome.plugin_current += 1,
+            Ok(crate::mux::zellij::PresenceUpgrade::Reconciled) => outcome.plugin_reconciled += 1,
+            Ok(crate::mux::zellij::PresenceUpgrade::Upgraded) => outcome.plugin_upgraded += 1,
+            Err(err) => {
+                tracing::warn!(
+                    session = %ws.session_name,
+                    tags.operation = "reload.presence_converge",
+                    error = &err as &dyn std::error::Error,
+                    "reload: presence plugin convergence failed",
+                );
             }
         }
     }
@@ -645,20 +614,6 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
     outcome.reaped += reap_orphan_sidebars(backend.as_ref(), *mux, ws);
     crate::sidebar::sweep_orphan_runtime(runtime);
     outcome
-}
-
-fn current_presence_plugin_writer<'a>(
-    cache: Option<&'a pane_topology::PaneTopologyCache>,
-    now_ms: u64,
-    desired_build: &str,
-    desired_config: &str,
-) -> Option<&'a pane_topology::TopologyWriter> {
-    let cache =
-        cache.filter(|cache| pane_topology::pane_topology_cache_is_fresh(cache, now_ms, None))?;
-    cache.writer.as_ref().filter(|writer| {
-        writer.build.as_deref() == Some(desired_build)
-            && writer.config.as_deref() == Some(desired_config)
-    })
 }
 
 const RELOAD_PRESENCE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -1314,63 +1269,6 @@ mod tests {
                 redocked: 49,
                 misdocked: 51,
             }
-        );
-    }
-
-    #[test]
-    fn presence_plugin_gate_requires_fresh_matching_build_and_config() {
-        use crate::mux::zellij::pane_topology::{PaneTopologyCache, TopologyWriter};
-
-        let cache = |produced_at_ms, build: Option<&str>, config: Option<&str>| PaneTopologyCache {
-            session_name: "rimz-test".to_owned(),
-            produced_at_ms,
-            writer: Some(TopologyWriter {
-                plugin_id: 7,
-                loaded_at_ms: 10,
-                build: build.map(str::to_owned),
-                config: config.map(str::to_owned),
-            }),
-            focused_pane: None,
-            clients: None,
-            panes: Vec::new(),
-        };
-        let current = cache(1_000, Some("wasm"), Some("config"));
-        assert!(current_presence_plugin_writer(Some(&current), 1_000, "wasm", "config").is_some());
-        assert!(
-            current_presence_plugin_writer(
-                Some(&cache(1_000, None, None)),
-                1_000,
-                "wasm",
-                "config"
-            )
-            .is_none()
-        );
-        assert!(
-            current_presence_plugin_writer(
-                Some(&cache(1_000, Some("old"), Some("config"))),
-                1_000,
-                "wasm",
-                "config"
-            )
-            .is_none()
-        );
-        assert!(
-            current_presence_plugin_writer(
-                Some(&cache(1_000, Some("wasm"), Some("old"))),
-                1_000,
-                "wasm",
-                "config"
-            )
-            .is_none()
-        );
-        assert!(
-            current_presence_plugin_writer(
-                Some(&current),
-                1_000 + crate::mux::PRESENCE_STAMP_FRESH.as_millis() as u64 + 1,
-                "wasm",
-                "config"
-            )
-            .is_none()
         );
     }
 
