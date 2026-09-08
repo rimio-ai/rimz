@@ -95,8 +95,9 @@ On the renderer side, `render/` paints and `app/` runs the loop and the threads 
 
 | Module | What it owns |
 | --- | --- |
-| [`app.rs`](../../../crates/rimz/src/sidebar_pane/app.rs) | The fixed-timestep serve loop, its thread wiring, and the fuse-and-paint path. |
-| [`app/fetch.rs`](../../../crates/rimz/src/sidebar_pane/app/fetch.rs) | The fetch worker: request coalescing, role observation, the two-speed cycle, and result publication. |
+| [`app.rs`](../../../crates/rimz/src/sidebar_pane/app.rs) | The process shell: terminal setup, runtime-file guards, worker wiring, the fixed-timestep serve loop, and exit handling. |
+| [`app/loop_state.rs`](../../../crates/rimz/src/sidebar_pane/app/loop_state.rs) | Renderer state transitions, the loop-lifetime context, focus repair, maintenance deadlines, and paint eligibility. |
+| [`app/fetch.rs`](../../../crates/rimz/src/sidebar_pane/app/fetch.rs) | Dispatcher request coalescing and the worker's role observation, two-speed cycle, and result publication. |
 | [`app/cache_refresh.rs`](../../../crates/rimz/src/sidebar_pane/app/cache_refresh.rs) | The elder-gated heavy-lane refresher and the elder's timers. |
 | [`app/tmux_watch.rs`](../../../crates/rimz/src/sidebar_pane/app/tmux_watch.rs), [`app/transcript_watch.rs`](../../../crates/rimz/src/sidebar_pane/app/transcript_watch.rs) | The two elder-gated push channels. |
 | [`app/gate.rs`](../../../crates/rimz/src/sidebar_pane/app/gate.rs), [`app/health.rs`](../../../crates/rimz/src/sidebar_pane/app/health.rs) | The last-known-good commit gate and the debounced degraded-health verdict. |

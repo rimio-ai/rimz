@@ -1,3 +1,5 @@
+//! Renderer-owned terminal notification delivery, with desktop targeting, unread-aware tab bell decisions, and notification tracing.
+
 use std::io::{self, Write};
 
 use crate::MuxName;

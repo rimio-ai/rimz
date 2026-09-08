@@ -1,3 +1,5 @@
+//! Fixture and gallery serve loops for previewing supplied snapshots with the renderer's animation and pixel-painting paths.
+
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 

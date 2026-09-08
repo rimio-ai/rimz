@@ -158,7 +158,7 @@ pub(super) fn encode_mouse(kind: MouseEventKind, column: u16, row: u16) -> Optio
     }
 }
 
-pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
+fn decode_wakeup(bytes: &[u8]) -> Wakeup {
     // External wakeups post JSON sidebar event envelopes; no control or input wire
     // word starts with `{` (asserted by `control_words_never_start_with_brace`),
     // so the leading brace is an unambiguous, allocation-free discriminator.

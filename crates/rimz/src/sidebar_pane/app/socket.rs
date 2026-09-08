@@ -1,3 +1,5 @@
+//! Renderer wakeup socket binding, liveness heartbeat refresh, and terminal event forwarding onto the serve loop's wakeup path.
+
 use std::io;
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};

@@ -1,3 +1,5 @@
+//! Renderer state transitions and loop-lifetime context, including fetch application, focus repair, maintenance deadlines, and paint eligibility.
+
 use std::collections::HashSet;
 use std::io;
 use std::path::PathBuf;

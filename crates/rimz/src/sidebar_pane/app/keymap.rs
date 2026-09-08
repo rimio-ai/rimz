@@ -106,7 +106,7 @@ impl NavKeymap {
         Self { bindings }
     }
 
-    pub fn wire_for(&self, code: KeyCode, mods: KeyModifiers) -> Option<&'static str> {
+    pub(super) fn wire_for(&self, code: KeyCode, mods: KeyModifiers) -> Option<&'static str> {
         self.bindings
             .iter()
             .find_map(|(chord, wire)| chord.matches(code, mods).then_some(*wire))

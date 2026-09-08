@@ -1,3 +1,5 @@
+//! Renderer animation eligibility, frame cadence, and wall-clock phase helpers, with receive and focus-resume timing bounds.
+
 use std::time::{Duration, Instant};
 
 use crate::sidebar_pane::render::{self, UiState};

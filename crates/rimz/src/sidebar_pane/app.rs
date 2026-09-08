@@ -1,14 +1,6 @@
 //! Runtime loop for the native sidebar process.
 //!
-//! `serve` owns the fixed-timestep event loop shell and wiring; [`loop_state`]
-//! dispatches wakeups, and each concern the loop folds lives in its own
-//! submodule — [`fetch`] (the two-speed off-thread fetch cycle), [`state`]
-//! (fetch-state and unread-fold reducers), [`gate`] (the last-known-good
-//! regression hold), [`health`]
-//! (failure debounce and give-up), [`lifecycle`] (self-close and the bounded
-//! resize-grow paint hold), [`order_hold`] (renderer-local row/group order
-//! freeze), [`reload`] (binary-change detection), and [`selection`] (the
-//! identity-keyed highlight and input handlers).
+//! `serve` owns the fixed-timestep process shell and worker wiring; [`loop_state`] owns renderer transitions and loop-lifetime context. Its collaborators own the fetch cycle, state and unread folds, regression gate, health debounce, lifecycle latches, order holds, reload decisions, and selection.
 
 use std::cell::Cell;
 use std::io::{self, Write};
@@ -98,7 +90,7 @@ pub enum SidebarAppErr {
     Heartbeat(String),
 }
 
-pub type Result<T> = std::result::Result<T, SidebarAppErr>;
+pub(super) type Result<T> = std::result::Result<T, SidebarAppErr>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ServeOutcome {
@@ -110,7 +102,7 @@ fn initial_pet_render_caps(mux: MuxName, session_name: &str) -> PixelRenderCaps 
     detect_pixel_render_caps(mux, session_name, PixelRenderCaps::default())
 }
 
-pub fn serve(config: ServeConfig) -> Result<ServeOutcome> {
+pub(super) fn serve(config: ServeConfig) -> Result<ServeOutcome> {
     crate::build_id::warm();
     reap_inherited_zombies();
     set_terminal_title()?;
@@ -225,11 +217,7 @@ pub fn serve(config: ServeConfig) -> Result<ServeOutcome> {
         );
     }
 
-    // Codex rollout fast path: the elected producer watches each live root
-    // Codex session's transcript file and runs the stat-gated sidecar refresh
-    // on the write, so mid-turn token/cost updates repaint without waiting for
-    // the next hook push or producer tick. Latency only — the tick backstop
-    // stays truth. Backend-independent; the elder gate inside scopes the work.
+    // The elected producer watches every session whose adapter declares transcript-tail context and has a transcript path, so mid-turn token/cost updates repaint without waiting for the next hook or tick. Latency only — the tick backstop stays truth; the elder gate scopes the work on both backends.
     let _ = transcript_watch::spawn(runtime.clone(), election);
 
     // Write the heartbeat immediately so the freshness gate never sees a gap.
