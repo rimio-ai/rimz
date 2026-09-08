@@ -151,6 +151,14 @@ fn merge_topology_enrichment(cache: &mut PaneTopologyCache, prior: PaneTopologyC
 }
 
 impl ZellijBackend {
+    fn supports_no_focus(&self) -> bool {
+        self.version()
+            .ok()
+            .as_deref()
+            .and_then(super::parse_version)
+            .is_some_and(|version| version >= super::MIN_NO_FOCUS_ZELLIJ_VERSION)
+    }
+
     fn companion_geometry(
         &self,
         session: &str,
@@ -280,16 +288,9 @@ impl ZellijBackend {
                 break;
             }
             confirmed_targets = Some(targets.clone());
-            let right = panes
-                .iter()
-                .map(|pane| pane.x + pane.cols)
-                .max()
-                .unwrap_or(0);
-            let bottom = panes
-                .iter()
-                .map(|pane| pane.y + pane.rows)
-                .max()
-                .unwrap_or(0);
+            let (_, _, right, bottom) = bounds(&panes);
+            let right = right.unwrap_or(0);
+            let bottom = bottom.unwrap_or(0);
             let mut steps = Vec::new();
             for target in &targets {
                 let Some(pane) = panes.iter().find(|pane| pane.pane_id == target.pane_id) else {
@@ -951,13 +952,7 @@ impl MuxBackend for ZellijBackend {
             ensure_pane_backend(target_pane, MuxName::Zellij)?;
         }
         let anchored_stack = opts.placement == SplitPlacement::Stacked && target_pane.is_some();
-        let no_focus = !opts.focus
-            && self
-                .version()
-                .ok()
-                .as_deref()
-                .and_then(super::parse_version)
-                .is_some_and(|version| version >= super::MIN_NO_FOCUS_ZELLIJ_VERSION);
+        let no_focus = !opts.focus && self.supports_no_focus();
         // Zellij gives `--tab-id` precedence over the CLI pane context. On
         // 0.45+, `--no-focus` lets both tab-targeted and pane-targeted spawns
         // preserve every attached client's view and the exact split anchor. On 0.44 an anchored stack
@@ -1060,13 +1055,7 @@ impl MuxBackend for ZellijBackend {
         };
         let session = session_name.clone();
         let anchor = pane_id.clone();
-        if !self
-            .version()
-            .ok()
-            .as_deref()
-            .and_then(super::parse_version)
-            .is_some_and(|version| version >= super::MIN_NO_FOCUS_ZELLIJ_VERSION)
-        {
+        if !self.supports_no_focus() {
             return Ok(CompanionPaneAppend::Full);
         }
         let Some((panes, chrome)) =
@@ -1476,10 +1465,7 @@ impl MuxBackend for ZellijBackend {
                 })?;
                 let added = self.add_sidebar_to_tab(opts, tab_position, width_floor)?;
                 if !prove_sidebar_mount(opts, MuxName::Zellij, &added.pane, &build, || {
-                    if let Some(raw_id) = ZellijPaneId::try_from(&added.pane)
-                        .ok()
-                        .and_then(ZellijPaneId::terminal_id)
-                    {
+                    if let Some(raw_id) = parse_zellij_raw(&added.pane) {
                         self.cleanup_failed_add(opts, raw_id);
                     }
                 }) {
