@@ -43,7 +43,7 @@ pub(crate) trait JsonRpcTransport {
     fn notify_frame(&mut self, frame: &Value) -> Result<(), AppServerErr>;
 }
 
-pub(super) fn initialize(
+pub(in crate::agents::adapters::codex) fn initialize(
     transport: &mut impl JsonRpcTransport,
     ack_params: Option<Value>,
 ) -> Result<Value, AppServerErr> {
@@ -70,9 +70,8 @@ pub(crate) fn codex_bin() -> PathBuf {
 }
 
 /// Spawn a thread draining newline-framed lines from `reader` into a channel, so
-/// a request can wait with its remaining deadline. Shared by both transports and
-/// the broker ([`crate::agents::adapters::codex::broker`]).
-pub(crate) fn spawn_frame_reader<R: BufRead + Send + 'static>(reader: R) -> Receiver<String> {
+/// a request can wait with its remaining deadline.
+fn spawn_frame_reader<R: BufRead + Send + 'static>(reader: R) -> Receiver<String> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut reader = reader;
@@ -105,11 +104,7 @@ pub(crate) fn write_frame(writer: &mut dyn Write, frame: &Value) -> Result<(), A
 /// Wait for the response frame matching `id`, skipping non-JSON noise,
 /// server notifications, and server-initiated requests (a different id or none),
 /// until `deadline`.
-pub(crate) fn recv_response(
-    rx: &Receiver<String>,
-    deadline: Instant,
-    id: i64,
-) -> Result<Value, AppServerErr> {
+fn recv_response(rx: &Receiver<String>, deadline: Instant, id: i64) -> Result<Value, AppServerErr> {
     loop {
         let remaining = deadline
             .checked_duration_since(Instant::now())
@@ -207,7 +202,10 @@ pub(crate) struct FramedTransport {
 impl FramedTransport {
     /// Spawn `bin app-server`, giving the handshake +
     /// reads `total` wall-clock.
-    pub(super) fn spawn(bin: &Path, total: Duration) -> Result<Self, AppServerErr> {
+    pub(in crate::agents::adapters::codex) fn spawn(
+        bin: &Path,
+        total: Duration,
+    ) -> Result<Self, AppServerErr> {
         let mut child = Command::new(bin)
             .arg("app-server")
             // Mark this as a RimZ-internal enrichment server so the lifecycle
@@ -237,6 +235,19 @@ impl FramedTransport {
             deadline: Instant::now() + total,
             child: Some(child),
         })
+    }
+
+    pub(in crate::agents::adapters::codex) fn set_deadline(&mut self, total: Duration) {
+        self.deadline = Instant::now() + total;
+    }
+
+    pub(in crate::agents::adapters::codex) fn stop_child(&mut self) {
+        // Kill+reap a spawned child so no wedged server lingers. A unix-socket
+        // connection has no child; dropping `writer` closes it.
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 
     /// Connect to the per-session broker socket at `path`, giving the handshake +
@@ -344,12 +355,7 @@ impl JsonRpcTransport for WsTransport {
 
 impl Drop for FramedTransport {
     fn drop(&mut self) {
-        // Kill+reap a spawned child so no wedged server lingers. A unix-socket
-        // connection has no child; dropping `writer` closes it.
-        if let Some(child) = self.child.as_mut() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+        self.stop_child();
     }
 }
 

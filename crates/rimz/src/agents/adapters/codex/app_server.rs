@@ -50,10 +50,10 @@ mod transport;
 mod wire;
 
 use super::codex_home;
-pub(crate) use transport::{
-    AppServerErr, JsonRpcTransport, codex_bin, recv_response, spawn_frame_reader, write_frame,
+use transport::WsTransport;
+pub(super) use transport::{
+    AppServerErr, FramedTransport, JsonRpcTransport, codex_bin, initialize, write_frame,
 };
-use transport::{FramedTransport, WsTransport};
 use wire::{
     MatchedModel, ModelListResponse, RateLimitsResponse, ThreadListResponse, ThreadReadResponse,
     ThreadSummary, codex_version_from_user_agent, collect_reset_credits, collect_usage,
