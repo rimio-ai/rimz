@@ -43,8 +43,16 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
             format!("in {}", duration_label(delay)),
         )
     } else {
-        let command = command_string(&args.command)?;
-        let description = format!("watch: {}", rimz::theme::fmt::command_preview(&command));
+        let (command, description) = if let Some(pid) = args.pid {
+            (
+                format!("while kill -0 {pid} 2>/dev/null; do sleep 1; done"),
+                format!("watch: process {pid}"),
+            )
+        } else {
+            let command = command_string(&args.command)?;
+            let description = format!("watch: {}", rimz::theme::fmt::command_preview(&command));
+            (command, description)
+        };
         (
             DeliveryTrigger::Watch {
                 command,
@@ -69,7 +77,7 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
         },
     )?
     else {
-        unreachable!("timer and command wakes are not subscriptions")
+        unreachable!("timer, process, and command wakes are not subscriptions")
     };
     let pending = list::pending_rows(&ctx)?;
     if args.json {
@@ -86,14 +94,18 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn validate_shape(args: &WakeArgs) -> Result<()> {
-    if usize::from(args.in_after.is_some()) + usize::from(!args.command.is_empty()) != 1 {
-        bail!("choose exactly one wake trigger: --in or a command after --");
+    if usize::from(args.in_after.is_some())
+        + usize::from(args.pid.is_some())
+        + usize::from(!args.command.is_empty())
+        != 1
+    {
+        bail!("choose exactly one wake trigger: --in, --pid, or a command after --");
     }
     if args.on.is_some() && args.command.is_empty() {
         bail!("--on requires a command after --");
     }
-    if args.timeout.is_some() && args.command.is_empty() {
-        bail!("--timeout requires a command after --");
+    if args.timeout.is_some() && args.command.is_empty() && args.pid.is_none() {
+        bail!("--timeout requires --pid or a command after --");
     }
     for (name, duration) in [("--in", args.in_after), ("--timeout", args.timeout)] {
         if duration.is_some_and(|duration| duration.is_zero()) {

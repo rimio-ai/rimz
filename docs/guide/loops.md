@@ -64,11 +64,14 @@ A wake inverts that. The agent arms its own alarm, ends its turn, and receives t
 
 ```sh
 rimz wake --in 30m
+rimz wake --pid 16776
 rimz wake -- gh run watch --exit-status
 rimz wake --on fail -- cargo test
 ```
 
-The timer must be shorter than 24 hours and uses the room's clock or the [loop timer](#who-keeps-time). A command runs in a detached watcher with stdin closed at the project root. Its final message names the command, exit status, elapsed time, and output path, with the last 4 KiB of combined output. The complete output stays in `~/.local/state/rimz/workspaces/<workspace-id>/wakes/<name>.log`.
+The timer must be shorter than 24 hours and uses the room's clock or the [loop timer](#who-keeps-time). A command runs in a detached watcher with stdin closed at the project root. Its final message names the command, exit status, and elapsed time, with the last 4 KiB of combined output and a path to the complete log. Silent commands say `(no output)` without an empty log path. The complete output stays in `~/.local/state/rimz/workspaces/<workspace-id>/wakes/<name>.log`.
+
+Already started the work elsewhere? `--pid 16776` replaces `tail --pid=16776 -f /dev/null`: it checks once per second until that PID is no longer accessible, without requiring GNU `tail`. It cannot recover the process's output or exit status; `exit 0` reports the wait completing. Canceling the wake leaves the existing process alone.
 
 A long command checks in once after 30 minutes by default. `--timeout 1h` changes that check-in time: it does not kill the command or stop watching. The notice says `still running after 30m`, includes current output, and offers `rimz wake cancel <name>` to stop it or `rimz wake --in 30m` for another alarm. The final exit verdict follows later. `--on fail|success` filters only the final outcome, never the check-in.
 

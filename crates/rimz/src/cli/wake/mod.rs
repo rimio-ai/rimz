@@ -1,4 +1,4 @@
-//! `rimz wake` — self-only timer and command waits over the loop scheduler.
+//! `rimz wake` — self-only timer, process, and command waits over the loop scheduler.
 
 use std::time::Duration;
 
@@ -54,6 +54,9 @@ struct WakeArgs {
     /// Wake yourself once after this duration (less than 24h).
     #[arg(long = "in", value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
     in_after: Option<Duration>,
+    /// Wake when this existing process disappears; its exit status is not available.
+    #[arg(long, value_name = "PID", value_parser = clap::value_parser!(u32).range(1..=i32::MAX as i64))]
+    pid: Option<u32>,
     /// Deliver for a failed, successful, or any command outcome (default: any).
     #[arg(long, value_name = "fail|success|any", value_parser = ["fail", "success", "any"])]
     on: Option<String>,
@@ -80,6 +83,7 @@ pub fn run(args: WakeCommand, globals: &GlobalFlags) -> Result<()> {
 impl WakeArgs {
     fn is_empty(&self) -> bool {
         self.in_after.is_none()
+            && self.pid.is_none()
             && self.on.is_none()
             && self.timeout.is_none()
             && self.command.is_empty()
