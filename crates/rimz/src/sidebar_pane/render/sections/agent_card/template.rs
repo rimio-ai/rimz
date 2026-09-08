@@ -70,8 +70,8 @@ const ENGAGED_WITH_SUBAGENTS: &[CardSlot] = &[
     CardSlot::Gauge,
     CardSlot::Tokens,
     CardSlot::SubagentStats,
-    CardSlot::Subagents,
     CardSlot::Waits,
+    CardSlot::Subagents,
 ];
 
 /// The ordered line skeleton for one agent-card state.
@@ -158,6 +158,7 @@ mod tests {
 
     #[test]
     fn table_pins_every_state_status_density_and_expansion_combination() {
+        assert!(ENGAGED_WITH_SUBAGENTS.starts_with(ENGAGED));
         for stage in STAGES {
             for status in STATUSES {
                 for density in DENSITIES {
