@@ -2,6 +2,142 @@
 //! keep the frame still while the user acts, and the read-mark receipts.
 
 use super::*;
+use crate::sidebar_pane::app::fixtures::focus_fixture;
+
+#[test]
+fn focus_stranded_targets_recent_own_pane_events_only() {
+    let (snapshot, sidebar, _first_work, second_work) = focus_fixture();
+    let ui = UiState {
+        baseline_pane: Some(second_work.clone()),
+        ..UiState::default()
+    };
+
+    assert_eq!(
+        focus_stranded_target(
+            &snapshot,
+            &ui,
+            &sidebar,
+            &snapshot.client_views,
+            Some(&sidebar),
+            1_000,
+            1_050,
+        ),
+        Some(second_work.clone()),
+    );
+
+    let foreign = PaneId::from_parts(MuxName::Zellij, "terminal_99");
+    let ui = UiState {
+        baseline_pane: Some(second_work.clone()),
+        ..UiState::default()
+    };
+    assert_eq!(
+        focus_stranded_target(
+            &snapshot,
+            &ui,
+            &sidebar,
+            &snapshot.client_views,
+            Some(&foreign),
+            1_000,
+            1_050,
+        ),
+        None,
+    );
+
+    let now = 1_000 + duration_millis(FOCUS_STRANDED_EVENT_TTL) + 1;
+    assert_eq!(
+        focus_stranded_target(
+            &snapshot,
+            &ui,
+            &sidebar,
+            &snapshot.client_views,
+            Some(&sidebar),
+            1_000,
+            now,
+        ),
+        None,
+    );
+}
+
+/// A deferred repair is retried for exactly as long as its evidence can still
+/// authorize one: the retry window and `focus_stranded_target`'s freshness
+/// bound are the same TTL, so a repair is never dropped while it would still be
+/// honored, nor retried once it would be refused.
+#[test]
+fn focus_repair_retry_window_matches_the_strand_event_ttl() {
+    let ttl = duration_millis(FOCUS_STRANDED_EVENT_TTL);
+    assert!(focus_repair_still_viable(1_000, 1_000));
+    assert!(focus_repair_still_viable(1_000, 1_000 + ttl));
+    assert!(!focus_repair_still_viable(1_000, 1_000 + ttl + 1));
+    // A clock that steps backwards leaves the repair viable rather than
+    // abandoning it on a negative age.
+    assert!(focus_repair_still_viable(1_000, 0));
+}
+
+#[test]
+fn focus_stranded_falls_back_to_working_sibling_when_baseline_is_missing() {
+    let (snapshot, sidebar, first_work, _second_work) = focus_fixture();
+    let ui = UiState {
+        baseline_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_99")),
+        ..UiState::default()
+    };
+
+    assert_eq!(
+        focus_stranded_target(
+            &snapshot,
+            &ui,
+            &sidebar,
+            &snapshot.client_views,
+            Some(&sidebar),
+            1_000,
+            1_050,
+        ),
+        Some(first_work),
+    );
+
+    let (mut snapshot, sidebar, _first_work, _second_work) = focus_fixture();
+    if let Some(view) = &mut snapshot.own_view {
+        view.working_pane_ids.clear();
+    }
+
+    assert_eq!(
+        focus_stranded_target(
+            &snapshot,
+            &UiState::default(),
+            &sidebar,
+            &snapshot.client_views,
+            Some(&sidebar),
+            1_000,
+            1_050,
+        ),
+        None,
+    );
+}
+
+#[test]
+fn focus_stranded_skips_when_client_focus_is_ambiguous() {
+    let (mut snapshot, sidebar, _first_work, second_work) = focus_fixture();
+    snapshot.viewed_panes = vec![
+        sidebar.clone(),
+        PaneId::from_parts(MuxName::Zellij, "terminal_42"),
+    ];
+    let ui = UiState {
+        baseline_pane: Some(second_work),
+        ..UiState::default()
+    };
+
+    assert_eq!(
+        focus_stranded_target(
+            &snapshot,
+            &ui,
+            &sidebar,
+            &snapshot.client_views,
+            Some(&sidebar),
+            1_000,
+            1_050,
+        ),
+        None,
+    );
+}
 
 fn zellij(raw: &str) -> PaneId {
     PaneId::from_parts(crate::MuxName::Zellij, raw)
