@@ -437,7 +437,7 @@ fn spawn_notify_command(command: &str, notification: &Notification) -> std::io::
 }
 
 fn notification_template_vars(notification: &Notification) -> TemplateVars {
-    let mut vars = TemplateVars::new();
+    let mut vars = TemplateVars::default();
     vars.insert("kind", notification.kind_env());
     vars.insert("agent", notification.handle_env());
     vars.insert("handle", notification.handle_env());

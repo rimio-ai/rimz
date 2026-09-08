@@ -161,10 +161,6 @@ pub struct TemplateVars {
 }
 
 impl TemplateVars {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn insert(&mut self, key: &'static str, value: impl Into<String>) {
         self.values.insert(key, value.into());
     }
@@ -406,7 +402,7 @@ mod tests {
     use super::*;
 
     fn vars() -> TemplateVars {
-        let mut vars = TemplateVars::new();
+        let mut vars = TemplateVars::default();
         vars.insert("kind", "waiting");
         vars.insert("agent", "codex");
         vars.insert("title", "RimZ: codex needs you");

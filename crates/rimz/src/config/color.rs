@@ -200,16 +200,6 @@ pub enum ThemeColor {
     Rgb(u8, u8, u8),
 }
 
-impl ThemeColor {
-    pub fn indexed(self) -> u8 {
-        match self {
-            Self::Role(_) => 7,
-            Self::Indexed(index) => index,
-            Self::Rgb(red, green, blue) => nearest_xterm_index(red, green, blue),
-        }
-    }
-}
-
 impl Serialize for ThemeColor {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where

@@ -78,8 +78,7 @@ pub use edit::{
     MergeAction, MergeReport, SkippedKey,
 };
 pub use glyphs::{
-    GlyphOverrides, GlyphRole, ThemeGlyphsConfig, glyph_lookup_hint, is_named_glyph_set,
-    validate_glyph_source,
+    GlyphOverrides, GlyphRole, ThemeGlyphsConfig, is_named_glyph_set, validate_glyph_source,
 };
 pub use harness::{
     DEFAULT_COMPACT_INSTRUCTION, DEFAULT_IDLE_COMPACT_AFTER, DayCap, DayCapParseError,
@@ -101,7 +100,7 @@ pub(crate) use resume::parse_auto_redeem_min_gain;
 pub use resume::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, DEFAULT_AUTO_REDEEM_MIN_GAIN, ResumeConfig};
 #[cfg(test)]
 pub(crate) use scheme::parse_scheme_text;
-pub(crate) use scheme::{DEFAULT_SCHEME, ParsedScheme, explicit_scheme, parsed_inline_palette};
+pub(crate) use scheme::{DEFAULT_SCHEME, ParsedScheme, explicit_scheme, parse_colors};
 pub use scheme::{SchemeSwatch, resolve_inline_palette, scheme_swatches, theme_lookup_hint};
 pub use sentry::SentryConfig;
 pub use sidebar::{DEFAULT_AFK_AFTER_SECS, SidebarConfig, SidebarKeys};
@@ -772,11 +771,6 @@ impl MachineConfig {
                 .collect::<Vec<_>>()
                 .join("\n\n")
         })
-    }
-
-    /// Serialize the effective config into a traversable TOML value.
-    pub fn to_toml_value(&self) -> std::result::Result<toml::Value, toml::ser::Error> {
-        toml::Value::try_from(self)
     }
 
     pub fn headline_spec(&self) -> crate::agents::spending::HeadlineSpec {

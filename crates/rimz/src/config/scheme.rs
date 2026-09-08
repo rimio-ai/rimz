@@ -101,10 +101,6 @@ pub(crate) fn explicit_scheme(name_or_path: &str) -> Option<ParsedScheme> {
         .map(|scheme| scheme.parsed)
 }
 
-pub(crate) fn parsed_inline_palette(colors: &InlinePalette) -> Result<ParsedScheme, String> {
-    parse_colors(colors)
-}
-
 #[cfg(test)]
 pub(crate) fn parse_scheme_text(text: &str) -> Result<ParsedScheme, String> {
     parse_scheme(text).map(|scheme| scheme.parsed)
@@ -178,7 +174,7 @@ fn default_inline_palette() -> InlinePalette {
         .unwrap_or_default()
 }
 
-fn parse_colors(colors: &InlinePalette) -> Result<ParsedScheme, String> {
+pub(crate) fn parse_colors(colors: &InlinePalette) -> Result<ParsedScheme, String> {
     let primary = colors.primary.clone().unwrap_or_default();
     let normal = colors.normal.clone().unwrap_or_default();
     let background =

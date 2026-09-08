@@ -351,7 +351,7 @@ pub(crate) fn sessions() -> Vec<CompletionCandidate> {
 }
 
 pub(crate) fn config_keys() -> Vec<CompletionCandidate> {
-    let Ok(value) = MachineConfig::load_lenient().to_toml_value() else {
+    let Ok(value) = toml::Value::try_from(&*MachineConfig::load_lenient()) else {
         return Vec::new();
     };
     let mut leaves = Vec::new();

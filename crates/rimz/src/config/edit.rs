@@ -108,9 +108,8 @@ impl ConfigEditor {
             .map_err(|source| ConfigEditErr::Load {
                 source: Box::new(source),
             })?;
-        let root = config
-            .to_toml_value()
-            .map_err(|source| ConfigEditErr::Serialize { source })?;
+        let root =
+            toml::Value::try_from(&config).map_err(|source| ConfigEditErr::Serialize { source })?;
         let Some(key) = key else {
             return Ok(root);
         };
