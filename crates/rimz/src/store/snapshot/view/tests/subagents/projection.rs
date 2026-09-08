@@ -75,6 +75,7 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
 fn launched_child_projects_profile_cost_and_lifetime_delegated_spend() {
     let mut parent = agent("claude", "root", AgentStatus::Running, 100);
     parent.turn_started_at = Some(ago(30));
+    parent.user_turn_started_at = parent.turn_started_at;
     let mut child = agent("codex", "child", AgentStatus::Success, 0);
     child.name = Some("helper".to_owned());
     child.parent_agent_id = Some(parent.agent_id.clone());
@@ -216,6 +217,7 @@ fn sub_agent_retention_tracks_the_parent_turn_boundary() {
     ] {
         let mut parent = agent("claude", "sess-root", AgentStatus::Running, 100);
         parent.turn_started_at = Some(ago(parent_turn_started_secs));
+        parent.user_turn_started_at = parent.turn_started_at;
         let child = child_state("sess-root", "child-1", child_status, child_secs);
         let mut rows = vec![row_from_agent(&parent, epoch())];
         attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
@@ -318,6 +320,7 @@ fn mixed_children_attach_to_rendered_successor_not_live_predecessor() {
     let mut parent = agent("claude", "NEW", AgentStatus::Success, 20);
     parent.launch_id = old.launch_id.clone();
     parent.turn_started_at = Some(ago(30));
+    parent.user_turn_started_at = parent.turn_started_at;
     let mut child = agent("codex", "launched", AgentStatus::Success, 30);
     child.parent_agent_id = Some("L".into());
     child.parent_agent_kind = Some(parent.kind.clone());
@@ -432,6 +435,7 @@ fn host_pane_reap_keeps_children_with_a_live_parent_launch_sibling() {
 fn launched_child_stays_while_live_and_retires_at_the_parents_next_turn() {
     let mut parent = agent("claude", "root", AgentStatus::Running, 100);
     parent.turn_started_at = Some(ago(10));
+    parent.user_turn_started_at = parent.turn_started_at;
     let mut child = agent("codex", "child", AgentStatus::Running, 5).active_ago(60);
     child.parent_agent_id = Some(parent.agent_id.clone());
     child.parent_agent_kind = Some(parent.kind.clone());

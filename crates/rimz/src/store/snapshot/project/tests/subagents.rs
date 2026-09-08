@@ -1,6 +1,101 @@
 use super::*;
 
 #[test]
+fn harness_prompt_keeps_finished_children_listed() {
+    for header in ["AGENT_MESSAGE", "SUBAGENT_REPORT", "WAKE", "SIGNAL"] {
+        let mut events = vec![
+            raw_lifecycle_at(
+                "claude",
+                0,
+                json!({
+                    "agent_id": "parent", "signal": { "signal": "registered" },
+                }),
+            ),
+            raw_lifecycle_at(
+                "claude",
+                1,
+                json!({
+                    "agent_id": "parent", "prompt": "do X",
+                    "signal": { "signal": "turn_started" },
+                }),
+            ),
+            raw_lifecycle_at(
+                "claude",
+                2,
+                json!({
+                    "agent_id": "child", "parent_agent_id": "parent", "task": "Explore",
+                    "signal": { "signal": "subagent_started" },
+                }),
+            ),
+            raw_lifecycle_at(
+                "claude",
+                3,
+                json!({
+                    "agent_id": "child",
+                    "signal": { "signal": "subagent_stopped", "errored": false },
+                }),
+            ),
+            raw_lifecycle_at(
+                "claude",
+                4,
+                json!({
+                    "agent_id": "parent",
+                    "signal": { "signal": "turn_ended", "errored": false, "parked_on_background": false },
+                }),
+            ),
+            raw_lifecycle_at(
+                "claude",
+                5,
+                json!({
+                    "agent_id": "parent", "prompt": format!("Type: {header}\nFrom: @coder\nContent:\nping"),
+                    "signal": { "signal": "turn_started" },
+                }),
+            ),
+        ];
+        let agents = reduce_agent_states(&events);
+        let parent = agents
+            .iter()
+            .find(|agent| agent.agent_id == "parent")
+            .unwrap();
+        assert_eq!(parent.turn_started_at, Some(events[5].timestamp));
+        assert_eq!(parent.user_turn_started_at, Some(events[1].timestamp));
+        let encoded = serde_json::to_value(parent).unwrap();
+        let decoded: AgentState = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.user_turn_started_at, parent.user_turn_started_at);
+        let snapshot = room_with_agent_panes(agents);
+        assert_eq!(row(&snapshot, "parent").sub_agents().len(), 1, "{header}");
+
+        for prompt in [
+            Some("Type: USER_MESSAGE\nFrom: @user\nContent:\nnext"),
+            Some("next"),
+            None,
+        ] {
+            events.truncate(6);
+            events.push(raw_lifecycle_at(
+                "claude",
+                6,
+                json!({
+                    "agent_id": "parent", "prompt": prompt,
+                    "signal": { "signal": "turn_started" },
+                }),
+            ));
+            let agents = reduce_agent_states(&events);
+            let parent = agents
+                .iter()
+                .find(|agent| agent.agent_id == "parent")
+                .unwrap();
+            assert_eq!(parent.turn_started_at, Some(events[6].timestamp));
+            assert_eq!(parent.user_turn_started_at, parent.turn_started_at);
+            let snapshot = room_with_agent_panes(agents);
+            assert!(
+                row(&snapshot, "parent").sub_agents().is_empty(),
+                "{prompt:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn answered_parent_ask_keeps_children_from_both_sides_of_the_tool_completion() {
     let event = |at: i64, agent_id: &str, params: serde_json::Value| {
         let mut params = params;
