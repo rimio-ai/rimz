@@ -158,12 +158,14 @@ fn common_optional(values: impl IntoIterator<Item = Option<String>>) -> Option<S
 }
 
 pub(super) fn render_panel(w: &mut impl Write, report: &Attribution) -> std::io::Result<()> {
-    if let Some(since) = report.scope.since {
-        writeln!(
-            w,
-            "{}",
-            render::paint(render::palette::muted(), &since_label(since))
-        )?;
+    let scope = match (report.scope.branch.as_deref(), report.scope.since) {
+        (Some(branch), Some(since)) => Some(format!("branch {branch} · {}", since_label(since))),
+        (Some(branch), None) => Some(format!("branch {branch}")),
+        (None, Some(since)) => Some(since_label(since)),
+        (None, None) => None,
+    };
+    if let Some(scope) = scope {
+        writeln!(w, "{}", render::paint(render::palette::muted(), &scope))?;
     }
     if report.groups.is_empty() {
         return writeln!(
