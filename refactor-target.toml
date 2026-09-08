@@ -182,7 +182,7 @@ surface-budget = 97
 path = "crates/rimz/src/mux"
 # Companion append adds one deep operation, its outcome, and the shared tab cap.
 # Geometry planning and native balancing remain private to mux.
-surface-budget = 274
+surface-budget = 260
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
@@ -407,7 +407,6 @@ surface-budget = 14
 [[module]]
 path = "crates/rimz/src/mux/zellij/session.rs"
 allowed-dependencies = [
-    "config",
     "ids",
     "mux",
     "disk::paths",
