@@ -4,7 +4,6 @@ use crate::sidebar_pane::app::fixtures::{
 };
 use crate::sidebar_pane::app::input::KeyAction;
 use std::collections::HashSet;
-use std::path::PathBuf;
 
 mod fetch;
 mod focus;
@@ -18,9 +17,8 @@ struct Rig {
     _dir: tempfile::TempDir,
     ws: WorkspaceId,
     runtime: RuntimePaths,
-    socket_path: PathBuf,
-    config: ServeConfig,
     state: LoopState,
+    result_tx: std::sync::mpsc::Sender<FetchUpdate>,
     fetch: FetchDispatcher,
     requests: Receiver<FetchRequest>,
     terminal: Terminal<CrosstermBackend<io::Stdout>>,
@@ -54,26 +52,29 @@ impl Rig {
         }
         let instance_id = SidebarInstanceId::new();
         let socket_path = sidebar_socket_path(&runtime, &instance_id);
-        let read_marks = ReadMarkStore::new(runtime.clone(), instance_id);
+        let mut config = serve_config(&ws);
+        config.mux = own_pane.as_ref().map_or(MuxName::Tmux, PaneId::mux);
+        config.own_pane = own_pane;
+        config.instance_id = instance_id;
+        config.tick_seconds = 60;
         let (observe_tx, _observe_rx) = std::sync::mpsc::sync_channel(64);
         let (request_tx, requests) = std::sync::mpsc::channel();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
         Self {
             state: LoopState::new(
-                ws.clone(),
-                own_pane.as_ref().map_or(MuxName::Tmux, PaneId::mux),
-                "rimz-test".to_owned(),
-                own_pane,
+                config,
+                runtime.clone(),
+                socket_path,
+                crate::diag::DiagSink::disabled(),
+                result_rx,
                 None,
                 observe_tx,
-                read_marks,
                 PixelRenderCaps::default(),
-                true,
             ),
-            config: serve_config(&ws),
+            result_tx,
             fetch: FetchDispatcher::new(request_tx),
             requests,
             terminal: terminal_with_width(80),
-            socket_path,
             runtime,
             ws,
             _dir: dir,
@@ -87,14 +88,8 @@ impl Rig {
             crate::utils::time::unix_now_ms(),
             event,
         );
-        self.state.on_event(
-            &self.config,
-            &mut self.fetch,
-            &mut self.terminal,
-            envelope,
-            Instant::now(),
-            &crate::diag::DiagSink::disabled(),
-        );
+        self.state
+            .on_event(&mut self.fetch, &mut self.terminal, envelope);
     }
 
     fn fold(&mut self, snapshot: SidebarSnapshot, pane_frame: PaneFrame, source: SnapshotSource) {
@@ -109,15 +104,8 @@ impl Rig {
 
     /// Drive `on_snapshot` over a channel carrying exactly `update`.
     fn deliver(&mut self, update: FetchUpdate) {
-        let (result_tx, result_rx) = std::sync::mpsc::channel();
-        result_tx.send(update).expect("send fetch outcome");
-        self.state.on_snapshot(
-            &self.config,
-            &mut self.fetch,
-            &result_rx,
-            Instant::now(),
-            &crate::diag::DiagSink::disabled(),
-        );
+        self.result_tx.send(update).expect("send fetch outcome");
+        self.state.on_snapshot(&mut self.fetch);
     }
 
     /// A maintenance sweep over an idle result channel. The heartbeat and
@@ -128,41 +116,22 @@ impl Rig {
     }
 
     fn maintenance_draining(&mut self, update: Option<FetchUpdate>) {
-        let (result_tx, result_rx) = std::sync::mpsc::channel();
         if let Some(update) = update {
-            result_tx.send(update).expect("send fetch outcome");
+            self.result_tx.send(update).expect("send fetch outcome");
         }
         self.state.last_heartbeat.get_or_insert_with(Instant::now);
-        self.state.run_maintenance(
-            &mut self.fetch,
-            MaintenanceContext {
-                config: &self.config,
-                runtime: &self.runtime,
-                socket_path: &self.socket_path,
-                result_rx: &result_rx,
-                anim_start: Instant::now(),
-                diag: &crate::diag::DiagSink::disabled(),
-                tick: Duration::from_secs(60),
-            },
-        );
+        self.state.run_maintenance(&mut self.fetch);
     }
 
     fn input(&mut self, action: KeyAction) {
         self.state
-            .on_input(
-                &self.config,
-                Wakeup::Key(action),
-                &mut self.terminal,
-                &mut self.fetch,
-                Instant::now(),
-                &crate::diag::DiagSink::disabled(),
-            )
+            .on_input(Wakeup::Key(action), &mut self.terminal, &mut self.fetch)
             .expect("input");
     }
 
     fn paint(&mut self, active: bool) {
         self.state
-            .paint_frame_if_due(&mut self.terminal, Instant::now(), active)
+            .paint_frame_if_due(&mut self.terminal, active)
             .expect("paint");
     }
 
@@ -192,10 +161,9 @@ impl Rig {
         self.state.overlay_baseline = Some(snapshot.clone());
     }
 
-    fn frame_active(&self) -> bool {
-        self.state
-            .frame_timing(Duration::from_secs(10), Instant::now())
-            .0
+    fn frame_active(&mut self) -> bool {
+        self.state.tick = Duration::from_secs(10);
+        self.state.frame_timing().0
     }
 }
 
@@ -385,16 +353,19 @@ fn failed_anomaly_send_preserves_carried_drop_count() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
     let (tx, _rx) = std::sync::mpsc::sync_channel(0);
+    let mut config = serve_config(&ws);
+    config.mux = MuxName::Tmux;
+    let socket_path = sidebar_socket_path(&runtime, &config.instance_id);
+    let (_result_tx, result_rx) = std::sync::mpsc::channel();
     let mut state = LoopState::new(
-        ws.clone(),
-        MuxName::Tmux,
-        "rimz-test".to_owned(),
-        None,
+        config,
+        runtime,
+        socket_path,
+        crate::diag::DiagSink::disabled(),
+        result_rx,
         None,
         tx,
-        ReadMarkStore::new(runtime, SidebarInstanceId::new()),
         PixelRenderCaps::default(),
-        true,
     );
     let mut current = agent_snapshot(&ws);
     let mut duplicate = current.worktree_groups[0].rows[0].clone();

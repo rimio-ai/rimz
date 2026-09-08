@@ -27,7 +27,6 @@ use crate::mux::focus_anchor::{
 use crate::sidebar::event_store::EventStore;
 use crate::sidebar::fuse::{focus_intent_confirmed_from, fuse, fuse_owned};
 use crate::sidebar::observe::{self, ObserveMsg};
-use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL, TAB_READ_DWELL};
 use crate::sidebar_pane::pixel::probe::escalate_own_pane_passthrough;
 use crate::sidebar_pane::pixel::{PixelRenderCaps, detect_pixel_render_caps};
@@ -68,7 +67,7 @@ mod width_control;
 
 #[cfg(test)]
 use self::loop_state::handle_wakeup;
-use self::loop_state::{LoopFlow, LoopState, MaintenanceContext};
+use self::loop_state::{LoopFlow, LoopState};
 use self::notify::*;
 use self::socket::*;
 use self::timing::*;
@@ -159,8 +158,6 @@ pub fn serve(config: ServeConfig) -> Result<ServeOutcome> {
     let _heartbeat_cleanup = RuntimeFileGuard {
         path: runtime.sidebar_heartbeat_path(&config.instance_id),
     };
-    let tick = tick_for(config.tick_seconds);
-
     // Redraw the instant the pane is resized — most importantly when a user
     // attaches to a background session and Zellij sizes the pane for the first
     // time. The watcher nudges this loop through the same wakeup socket the
@@ -190,17 +187,17 @@ pub fn serve(config: ServeConfig) -> Result<ServeOutcome> {
     let _observe_handle = diag.is_enabled().then(|| {
         observe::writer::spawn(runtime.clone(), diag.clone(), election.clone(), observe_rx)
     });
-    let read_marks = ReadMarkStore::new(runtime.clone(), config.instance_id.clone());
+    let (request_tx, request_rx) = std::sync::mpsc::channel::<FetchRequest>();
+    let (result_tx, result_rx) = std::sync::mpsc::channel::<FetchUpdate>();
     let mut state = LoopState::new(
-        config.workspace_id.clone(),
-        config.mux,
-        config.session_name.clone(),
-        config.own_pane.clone(),
+        config.clone(),
+        runtime.clone(),
+        socket_path.clone(),
+        diag.clone(),
+        result_rx,
         initial_width,
         observe_tx,
-        read_marks,
         pet_render_caps,
-        config.mux == MuxName::Tmux,
     );
     // Zellij's percentage template needs a startup trim on capped wide views.
     // tmux births through its live absolute-column hook; its resize wakeups
@@ -210,13 +207,8 @@ pub fn serve(config: ServeConfig) -> Result<ServeOutcome> {
         state.run_width_control(
             &mut terminal,
             crate::diag::record::SidebarWidthControlTrigger::Retarget,
-            &diag,
         );
     }
-    // Monotonic base for the animation frame. Deriving the phase from elapsed
-    // wall-clock (rather than a per-tick counter) keeps the spin continuous
-    // across re-fetches and store deltas, so no redraw path can stall it.
-    let anim_start = Instant::now();
 
     // The snapshot fetch (fast in-process fold plus optional produce) runs on a
     // background worker, so animation and input never block on it. The worker
@@ -224,8 +216,6 @@ pub fn serve(config: ServeConfig) -> Result<ServeOutcome> {
     // drains the result channel so that wakeup stays a latency hint. The
     // dispatcher coalesces requests so a store-delta storm or a slow produce
     // can never queue more than one extra run.
-    let (request_tx, request_rx) = std::sync::mpsc::channel::<FetchRequest>();
-    let (result_tx, result_rx) = std::sync::mpsc::channel::<FetchUpdate>();
     // `JoinHandle` drops without blocking: the thread runs to completion on its
     // own when `request_tx` is dropped at function exit.
     let _fetch_handle = spawn_fetch_worker(
@@ -293,38 +283,19 @@ pub fn serve(config: ServeConfig) -> Result<ServeOutcome> {
     // subprocess on the render thread and a busy fetch never freezes the spin
     // or swallows a keypress.
     while !state.should_exit {
-        let (active, mut timeout) = state.frame_timing(tick, anim_start);
+        let (active, mut timeout) = state.frame_timing();
         timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), Instant::now());
         socket.set_read_timeout(Some(timeout))?;
-        match state.on_wakeup(
-            &config,
-            &mut fetch,
-            &mut terminal,
-            &result_rx,
-            anim_start,
-            &diag,
-            wait_for_wakeup(&socket)?,
-        )? {
+        match state.on_wakeup(&mut fetch, &mut terminal, wait_for_wakeup(&socket)?)? {
             LoopFlow::Continue => {}
             LoopFlow::Repoll => continue,
             LoopFlow::Exit => break,
         }
 
-        state.run_maintenance(
-            &mut fetch,
-            MaintenanceContext {
-                config: &config,
-                runtime: &runtime,
-                socket_path: &socket_path,
-                result_rx: &result_rx,
-                anim_start,
-                diag: &diag,
-                tick,
-            },
-        );
-        state.run_width_control_backstop(&mut terminal, &diag);
-        state.maybe_remind(&config, &mut terminal, &diag);
-        state.paint_frame_if_due(&mut terminal, anim_start, active)?;
+        state.run_maintenance(&mut fetch);
+        state.run_width_control_backstop(&mut terminal);
+        state.maybe_remind(&mut terminal);
+        state.paint_frame_if_due(&mut terminal, active)?;
     }
     if !state.reload_requested
         && !state.tab_emptied

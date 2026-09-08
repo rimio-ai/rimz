@@ -216,14 +216,7 @@ fn attach_sized_grow_repaints_with_a_seen_sibling() {
     rig.state.self_close.seen_sibling = true;
 
     rig.state
-        .on_resize(
-            &rig.config,
-            &mut rig.fetch,
-            &mut rig.terminal,
-            Some(57),
-            Instant::now(),
-            &crate::diag::DiagSink::disabled(),
-        )
+        .on_resize(&mut rig.fetch, &mut rig.terminal, Some(57))
         .expect("handle attach resize");
 
     assert!(

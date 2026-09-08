@@ -1,8 +1,6 @@
 use super::*;
 use crate::agents::AgentStatus;
 use crate::diag::record::{DiagEvent, GateRule};
-use crate::sidebar::read_marks::ReadMarkStore;
-use crate::sidebar_pane::app::ServeConfig;
 use crate::sidebar_pane::app::fetch::{
     FetchPhase, FetchRole, FetchUpdate, PaneFrame, SnapshotSource,
 };
@@ -284,7 +282,6 @@ fn force_tab_dwell_elapsed(harness: &mut ApplyHarness) {
 }
 
 struct ApplyHarness {
-    config: ServeConfig,
     state: LoopState,
 }
 
@@ -302,22 +299,34 @@ impl ApplyHarness {
         runtime: RuntimePaths,
         instance_id: SidebarInstanceId,
     ) -> Self {
+        Self::for_runtime_with_diag(ws, runtime, instance_id, crate::diag::DiagSink::disabled())
+    }
+
+    fn for_runtime_with_diag(
+        ws: &WorkspaceId,
+        runtime: RuntimePaths,
+        instance_id: SidebarInstanceId,
+        diag: crate::diag::DiagSink,
+    ) -> Self {
         let mut config = serve_config(ws);
         config.instance_id = instance_id.clone();
+        config.mux = crate::MuxName::Tmux;
+        config.own_pane = Some(PaneId::from_parts(crate::MuxName::Tmux, "%sidebar"));
+        let socket_path = runtime.sidebar_socket_path(&instance_id);
         let (observe_tx, _observe_rx) = std::sync::mpsc::sync_channel(64);
+        let (_result_tx, result_rx) = std::sync::mpsc::channel();
         let mut state = LoopState::new(
-            ws.clone(),
-            crate::MuxName::Tmux,
-            config.session_name.clone(),
-            Some(PaneId::from_parts(crate::MuxName::Tmux, "%sidebar")),
+            config,
+            runtime,
+            socket_path,
+            diag,
+            result_rx,
             None,
             observe_tx,
-            ReadMarkStore::new(runtime, instance_id),
             PixelRenderCaps::default(),
-            true,
         );
         state.current = snapshot(ws);
-        Self { config, state }
+        Self { state }
     }
 
     fn apply(&mut self, snapshot: SidebarSnapshot) -> ApplyOutcome {
@@ -331,31 +340,15 @@ impl ApplyHarness {
     }
 
     fn apply_outcome(&mut self, outcome: FetchUpdate) -> ApplyOutcome {
-        self.apply_outcome_with_diag(outcome, &crate::diag::DiagSink::disabled())
-    }
-
-    fn apply_outcome_with_diag(
-        &mut self,
-        outcome: FetchUpdate,
-        diag: &crate::diag::DiagSink,
-    ) -> ApplyOutcome {
-        self.state
-            .apply_fetch_outcome(&self.config, outcome, true, std::time::Instant::now(), diag)
+        self.state.apply_fetch_outcome(outcome, true)
     }
 
     fn fail(&mut self, reason: &str) -> ApplyOutcome {
-        self.fail_with_diag(reason, &crate::diag::DiagSink::disabled())
-    }
-
-    fn fail_with_diag(&mut self, reason: &str, diag: &crate::diag::DiagSink) -> ApplyOutcome {
-        self.apply_outcome_with_diag(
-            FetchUpdate::Failed {
-                error: reason.to_owned(),
-                role: FetchRole::Producer,
-                pane_frame: PaneFrame::Held,
-            },
-            diag,
-        )
+        self.apply_outcome(FetchUpdate::Failed {
+            error: reason.to_owned(),
+            role: FetchRole::Producer,
+            pane_frame: PaneFrame::Held,
+        })
     }
 }
 
@@ -637,26 +630,23 @@ fn focused_read_clear_survives_failure_without_duplicate_trace() {
     let ws = workspace();
     let (dir, runtime) = runtime_for(&ws);
     let instance_id = SidebarInstanceId::new();
-    let mut h = ApplyHarness::for_runtime(&ws, runtime, instance_id.clone());
     let diag = crate::diag::DiagSink::under(
         dir.path().to_path_buf(),
         ws.clone(),
         "rimz-test",
-        Some(instance_id),
+        Some(instance_id.clone()),
     );
+    let mut h = ApplyHarness::for_runtime_with_diag(&ws, runtime, instance_id, diag.clone());
     let mut focused = row_snapshot(&ws, AgentStatus::Waiting, true);
     focused.worktree_groups[0].rows[0].unread = true;
 
-    h.apply_outcome_with_diag(
-        FetchUpdate::Snapshot {
-            snapshot: Box::new(focused),
-            role: FetchRole::Producer,
-            phase: FetchPhase::Final,
-            pane_frame: PaneFrame::Fresh,
-            source: SnapshotSource::Produced,
-        },
-        &diag,
-    );
+    h.apply_outcome(FetchUpdate::Snapshot {
+        snapshot: Box::new(focused),
+        role: FetchRole::Producer,
+        phase: FetchPhase::Final,
+        pane_frame: PaneFrame::Fresh,
+        source: SnapshotSource::Produced,
+    });
     assert!(!row_unread(&h.current));
     assert_eq!(
         notification_trace_events(dir.path())
@@ -669,7 +659,7 @@ fn focused_read_clear_survives_failure_without_duplicate_trace() {
         1
     );
 
-    h.fail_with_diag("store not found", &diag);
+    h.fail("store not found");
 
     assert!(!row_unread(&h.current));
     assert_eq!(
