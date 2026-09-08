@@ -105,7 +105,7 @@ upward-dependencies = [
     "harness::spec",
     "store::message",
 ]
-surface-budget = 187
+surface-budget = 167
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -147,7 +147,7 @@ upward-dependencies = ["sidebar::refresh"]
 # Delivery specs and team subscriptions share the CLI/library boundary.
 # Read-only pending deliveries are shared by wake listings, hooks and enrichment.
 # Submitted-prompt header grammar now belongs to store.
-surface-budget = 574
+surface-budget = 573
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -338,19 +338,17 @@ surface-budget = 2
 [[module]]
 path = "crates/rimz/src/config/notifications.rs"
 allowed-dependencies = ["agents"]
-surface-budget = 23
+surface-budget = 22
 
 [[module]]
 path = "crates/rimz/src/config/resume.rs"
-allowed-dependencies = [
-    "utils::time",
-]
-surface-budget = 5
+allowed-dependencies = ["utils::time"]
+surface-budget = 4
 
 [[module]]
 path = "crates/rimz/src/config/sidebar.rs"
 allowed-dependencies = ["agents::spending"]
-surface-budget = 5
+surface-budget = 4
 
 [[module]]
 path = "crates/rimz/src/config/worktree.rs"
@@ -477,7 +475,6 @@ allowed-dependencies = [
     "ids",
     "mux",
     "proc",
-    "disk::paths",
     "store::writer",
     "workspace",
 ]
@@ -500,7 +497,7 @@ allowed-dependencies = [
     "utils::path",
     "worktree",
 ]
-surface-budget = 59
+surface-budget = 58
 
 [[module]]
 path = "crates/rimz/src/harness/launch.rs"
@@ -836,3 +833,153 @@ reason = "Pass 10: MuxBackend member forwards to the Zellij implementation; the 
 kind = "shape"
 key = "SplitPlacement::Directional+companion_geometry+plan_append+split_pane"
 reason = "Pass 10: companion_layout already shares the policy; backend-native remainders differ in gap width, the 0.45 no-focus gate, target kind and native convergence (one origin bce9d5d75)."
+
+[[verdict]]
+kind = "pass-through"
+key = "config::parse_core_text_collecting"
+reason = "Pass 12: lifetime adapter making parse_toml_collecting late-bound for the fn(&Path, &str) loader callbacks; inlining needs a closure at each site and saves no surface."
+
+[[verdict]]
+kind = "item"
+key = "config::harness::DayCap"
+reason = "Pass 12: DayCap requires /day while TurnCap forbids it, with distinct errors (9aa7a3192, d8e3abc9a); one wrapper parameterizes policy without shrinking a caller."
+
+[[verdict]]
+kind = "item"
+key = "config::harness::TurnCap"
+reason = "Pass 12: TurnCap forbids /day while DayCap requires it, with distinct errors (9aa7a3192, d8e3abc9a); one wrapper parameterizes policy without shrinking a caller."
+
+[[verdict]]
+kind = "item"
+key = "config::harness::HarnessConfig"
+reason = "Pass 12: idle compaction, task timeout and auto_redeem_min_gain share utils::time::parse_duration_units but keep units and storage explicit at each boundary (ffc1f2340)."
+
+[[verdict]]
+kind = "item"
+key = "config::loop_::TaskEntry"
+reason = "Pass 12: timeout uses the shared duration parser with its own accepted units and storage; unifying it with idle compaction or redemption hides boundary policy (ffc1f2340)."
+
+[[verdict]]
+kind = "item"
+key = "config::resume::ResumeConfig"
+reason = "Pass 12: auto_redeem_min_gain uses the shared duration parser with boundary-specific units and storage; backoff and typed-duration redesign remain deferred (ffc1f2340, ce0c00897, e6a4e8829)."
+
+[[verdict]]
+kind = "item"
+key = "config::notifications::NotifyCondition"
+reason = "Pass 12: glob::Pattern is the one grammar; validation compiles for file-attributed rejection, matching compiles for a boolean. Handle normalization is pinned by a1ce795bb."
+
+[[verdict]]
+kind = "item"
+key = "config::effective::ProfileScope"
+reason = "Pass 12: both values are live (3f4254979); the selector chooses the catalog and project namespace together."
+
+[[verdict]]
+kind = "item"
+key = "config::notifications::render_template"
+reason = "Pass 12: both modes are live, one caller for shell handlers and one for display text; the flag encodes different escaping policies."
+
+[[verdict]]
+kind = "item"
+key = "config::effective::LaunchAgents"
+reason = "Pass 12: profiles, subagent_profiles and teams each have production readers; provenance, trust state and project path remain private."
+
+[[verdict]]
+kind = "item"
+key = "config::edit::validate_set_value"
+reason = "Pass 12: front-loaded editor validation delegates to owning parsers; enum-string checks repeat only to reject before a write."
+
+[[verdict]]
+kind = "item"
+key = "config::glyphs::ThemeGlyphsConfig"
+reason = "Pass 12: unicode and nerd_font are wire vocabulary in an Option<String> field and template selectors; a typed set kind changes schema shape rather than narrowing."
+
+[[verdict]]
+kind = "item"
+key = "config::MachineConfigFile"
+reason = "Pass 12: public registry return type; narrowing beneath its public owner violates private_interfaces under -D warnings."
+
+[[verdict]]
+kind = "item"
+key = "config::edit::ConfigEditErr"
+reason = "Pass 12: public error signatures and their section error types must stay visible under private_interfaces and -D warnings."
+
+[[verdict]]
+kind = "item"
+key = "config::theme::InlineAnsiColors"
+reason = "Pass 12: Inline*Colors are public field types of kept wire records; narrowing violates private_interfaces under -D warnings."
+
+[[verdict]]
+kind = "item"
+key = "config::notifications::NotifyHandler"
+reason = "Pass 12: Notify* records are public field and signature types of kept owners; narrowing violates private_interfaces under -D warnings."
+
+[[verdict]]
+kind = "item"
+key = "config::mux::ZellijConfig"
+reason = "Pass 12: Zellij* records and enums are field types of kept public config records; narrowing violates private_interfaces under -D warnings."
+
+[[verdict]]
+kind = "item"
+key = "config::mux::TmuxConfig"
+reason = "Pass 12: Tmux* records and enums are field types of kept public config records; narrowing violates private_interfaces under -D warnings."
+
+[[verdict]]
+kind = "item"
+key = "config::animation::AnimationFrames"
+reason = "Pass 12: public field type of AnimationSpec; narrowing beneath its owner violates private_interfaces under -D warnings."
+
+[[verdict]]
+kind = "item"
+key = "config::ConfigNotices"
+reason = "Pass 12: public machine record field type; narrowing beneath its owner violates private_interfaces under -D warnings."
+
+[[verdict]]
+kind = "item"
+key = "config::UnknownConfigKey"
+reason = "Pass 12: public notice field type; narrowing beneath its owner violates private_interfaces under -D warnings."
+
+[[verdict]]
+kind = "item"
+key = "config::AgentsFragmentError"
+reason = "Pass 12: public notice field type; narrowing beneath its owner violates private_interfaces under -D warnings."
+
+[[verdict]]
+kind = "item"
+key = "config::edit::FileMergeOutcome"
+reason = "Pass 12: public merge report field type; narrowing beneath its owner violates private_interfaces under -D warnings."
+
+[[verdict]]
+kind = "item"
+key = "config::edit::SkippedKey"
+reason = "Pass 12: public merge outcome field type; narrowing beneath its owner violates private_interfaces under -D warnings."
+
+[[verdict]]
+kind = "item"
+key = "config::edit::FragmentRepairOutcome"
+reason = "Pass 12: public fragment repair report field type; narrowing beneath its owner violates private_interfaces under -D warnings."
+
+[[verdict]]
+kind = "item"
+key = "config::effective::ProjectTasks"
+reason = "Pass 12: public project_tasks return type; narrowing beneath its owner violates private_interfaces under -D warnings."
+
+[[verdict]]
+kind = "item"
+key = "config::effective::project_tasks"
+reason = "Pass 12: public library entry is consumed across the binary boundary; pub(crate) would not reduce esc and is invisible to CLI."
+
+[[verdict]]
+kind = "item"
+key = "config::parse_text"
+reason = "Pass 12: schedule editor entry stays public; pub(crate) would not reduce esc and is invisible to the binary CLI."
+
+[[verdict]]
+kind = "item"
+key = "config::template_loop"
+reason = "Pass 12: shared loop template entry stays public; pub(crate) would not reduce esc and is invisible to the binary CLI."
+
+[[verdict]]
+kind = "item"
+key = "config::load_loop"
+reason = "Pass 12: loop config entry stays public; pub(crate) would not reduce esc and is invisible to the binary CLI."
