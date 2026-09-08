@@ -1,7 +1,7 @@
 //! Codex agent JSONL transcript parser.
 //!
 //! Codex JSONL records **token usage events** and carries **no** `costUSD`
-//! field, so [`parse_codex_spend`] multiplies each [`wire::CodexTokenEvent`]
+//! field, so [`parse_codex_spend`] multiplies each [`parse::CodexTokenEvent`]
 //! through the [`pricing`](crate::agents::pricing) table to a USD cost.
 //! Discovery and parsing stay pure and network-free.
 //!
@@ -45,13 +45,12 @@ use crate::agents::transcript_fs::home_dir;
 mod parse;
 #[cfg(test)]
 mod tests;
-pub(super) mod wire;
 
+#[cfg(test)]
+use parse::CodexLogEntry;
 #[cfg(test)]
 use parse::codex_line_kind;
 use parse::{CodexSpendState, parse_codex_session};
-#[cfg(test)]
-use wire::CodexLogEntry;
 
 // ── Path discovery ────────────────────────────────────────────────────────────
 
@@ -191,7 +190,7 @@ fn codex_billed_split(price: Pricing, split: TokenSplit) -> TokenSplit {
     }
 }
 
-fn codex_event_dedup_key(timestamp: &str, model: &str, event: &wire::CodexTokenEvent) -> String {
+fn codex_event_dedup_key(timestamp: &str, model: &str, event: &parse::CodexTokenEvent) -> String {
     format!(
         "codex:{}:{timestamp}:{}:{model}:{}:{}:{}:{}:{}",
         timestamp.len(),
