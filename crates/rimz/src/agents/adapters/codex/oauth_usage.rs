@@ -25,7 +25,7 @@ const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const OFFICIAL_HOST: &str = "chatgpt.com";
 
 #[derive(Debug, thiserror::Error)]
-pub(in crate::agents) enum CodexOauthUsageErr {
+pub(crate) enum CodexOauthUsageErr {
     #[error("codex OAuth credentials not found")]
     NoCredentials,
     #[error("codex auth file contains only an API key")]

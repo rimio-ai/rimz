@@ -85,10 +85,6 @@ pub struct ClaudeStop {
 }
 
 /// One scheduled wakeup in a Claude `Stop.session_crons` array.
-#[expect(
-    dead_code,
-    reason = "typed wire shape: label types are validated, never read"
-)]
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct SessionCron {
