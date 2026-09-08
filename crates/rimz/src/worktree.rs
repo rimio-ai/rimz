@@ -1377,7 +1377,7 @@ fn resolve_explicit_base_branch(repo_root: &Path, value: &str) -> Option<String>
     Some(value.to_owned())
 }
 
-fn current_branch(repo_root: &Path) -> Option<String> {
+pub fn current_branch(repo_root: &Path) -> Option<String> {
     git_stdout(repo_root, ["symbolic-ref", "--short", "HEAD"]).ok()
 }
 

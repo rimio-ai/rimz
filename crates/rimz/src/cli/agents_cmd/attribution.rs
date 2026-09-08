@@ -13,6 +13,7 @@ const REPO_URL: &str = "https://github.com/rimio-ai/rimz";
 
 pub(super) fn attribution(
     scope: Option<String>,
+    branch: Option<String>,
     all: bool,
     json: bool,
     md: bool,
@@ -64,7 +65,22 @@ pub(super) fn attribution(
     let agents = roots.iter().copied().chain(children).collect::<Vec<_>>();
     let lifetimes = rimz::worktree::lane_lifetimes(agents.iter().copied());
     render::warn_unreadable_lanes(&lifetimes);
-    let report_scope = report_scope(scope, channel, default_worktree, &roots, &lifetimes);
+    let branch = branch.or_else(|| {
+        if all {
+            return None;
+        }
+        if default_worktree.is_some() {
+            return ctx.workspace.worktree_branch.clone();
+        }
+        let path = common_optional(roots.iter().map(|agent| agent.worktree_path.clone()))?;
+        let path = std::path::Path::new(&path);
+        if path == ctx.workspace.worktree_root {
+            ctx.workspace.worktree_branch.clone()
+        } else {
+            rimz::worktree::current_branch(path)
+        }
+    });
+    let report_scope = report_scope(scope, channel, branch, default_worktree, &roots, &lifetimes);
     let transcript =
         rimz::transcript::read_all(ctx.store.paths()).context("reading conversation transcript")?;
     let me = super::report::SelfIdentity::from_env().resolve(&snapshot);
@@ -116,6 +132,7 @@ pub(super) fn attribution(
 fn report_scope(
     selector: Option<String>,
     filter: Option<String>,
+    branch: Option<String>,
     default_worktree: Option<&std::path::Path>,
     agents: &[&AgentState],
     lifetimes: &LaneLifetimes,
@@ -124,7 +141,7 @@ fn report_scope(
     AttributionScope {
         selector,
         channel,
-        branch: common_optional(agents.iter().map(|agent| agent.worktree_branch.clone())),
+        branch,
         worktree: default_worktree
             .map(|path| path.display().to_string())
             .or_else(|| common_optional(agents.iter().map(|agent| agent.worktree_path.clone()))),

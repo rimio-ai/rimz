@@ -226,6 +226,16 @@ fn build_scoped(
     transcript: &[TranscriptEntry],
     lifetimes: &LaneLifetimes,
 ) -> Attribution {
+    build_branch_scoped(agents, subagents, transcript, lifetimes, None)
+}
+
+fn build_branch_scoped(
+    agents: &[AgentState],
+    subagents: &[AgentState],
+    transcript: &[TranscriptEntry],
+    lifetimes: &LaneLifetimes,
+    branch: Option<&str>,
+) -> Attribution {
     let dir = tempfile::tempdir().expect("tempdir");
     let refs = agents.iter().collect::<Vec<_>>();
     let subagent_refs = subagents.iter().collect::<Vec<_>>();
@@ -241,9 +251,93 @@ fn build_scoped(
         active_secs: &active_secs,
         pricing_cache_path: &pricing_cache_path,
         require_contribution: false,
-        scope: AttributionScope::default(),
+        scope: AttributionScope {
+            branch: branch.map(ToOwned::to_owned),
+            ..AttributionScope::default()
+        },
         now: at(100),
     })
+}
+
+#[test]
+fn branch_scope_admits_roots_seen_on_the_branch() {
+    let lane = Path::new("/repo/lane");
+    let mut agents = [
+        agent(lane, "on-a", "claude", 10),
+        agent(lane, "on-b", "claude", 20),
+        agent(lane, "unknown", "claude", 30),
+        agent(lane, "old-a", "claude", 1),
+    ];
+    for (record, branches) in agents
+        .iter_mut()
+        .zip([vec!["a", "b"], vec!["b"], vec![], vec!["a"]])
+    {
+        record.worktree_branches = branches.into_iter().map(ToOwned::to_owned).collect();
+        record.worktree_branch = Some("b".to_owned());
+        record.tool_calls.insert("exec".to_owned(), 1);
+        record.team = Some("forge".to_owned());
+        record.role = Some("coder".to_owned());
+    }
+    let lifetimes = LaneLifetimes::new(HashMap::from([(
+        lane.to_owned(),
+        LaneLifetime::Since(at(10)),
+    )]));
+
+    let report = build_branch_scoped(&agents, &[], &[], &lifetimes, Some("a"));
+    assert_eq!(report.totals.agents, 1);
+    assert_eq!(report.totals.tool_calls, 1);
+    assert_eq!(report.groups[0].members[0].sessions, 1);
+    let report = build_branch_scoped(&agents, &[], &[], &lifetimes, None);
+    assert_eq!(report.totals.tool_calls, 3);
+    assert_eq!(report.groups[0].members[0].sessions, 3);
+    assert!(
+        build_branch_scoped(&agents, &[], &[], &lifetimes, Some("missing"))
+            .groups
+            .is_empty()
+    );
+    assert_eq!(
+        slot_groups(&agents.iter().collect::<Vec<_>>(), &lifetimes)[0].len(),
+        3
+    );
+}
+
+#[test]
+fn branch_scope_children_follow_admitted_parents() {
+    let lane = Path::new("/repo/lane");
+    let mut parent = agent(lane, "parent", "claude", 10);
+    parent.worktree_branches.insert("a".to_owned());
+    parent.tool_calls.insert("exec".to_owned(), 1);
+    let mut excluded = agent(lane, "excluded", "claude", 10);
+    excluded.worktree_branches.insert("b".to_owned());
+    excluded.tool_calls.insert("exec".to_owned(), 10);
+    let child = |id, parent: &AgentState, registered| {
+        let mut child = agent(lane, id, "claude", registered);
+        child.parent_agent_id = Some(parent.agent_id.clone());
+        child.parent_agent_kind = Some(parent.kind.clone());
+        child.launch_depth = Some(1);
+        child
+    };
+    let mut elsewhere = child("elsewhere", &parent, 20);
+    elsewhere.worktree_branches.insert("b".to_owned());
+    let unknown = child("unknown", &parent, 20);
+    let mut orphan = child("orphan", &excluded, 20);
+    orphan.worktree_branches.insert("a".to_owned());
+    let stale = child("stale", &parent, 1);
+    let agents = [parent, excluded, elsewhere, unknown, orphan, stale];
+    let lifetimes = LaneLifetimes::new(HashMap::from([(
+        lane.to_owned(),
+        LaneLifetime::Since(at(10)),
+    )]));
+
+    let report = build_branch_scoped(&agents, &[], &[], &lifetimes, Some("a"));
+    assert_eq!(report.totals.agents, 1);
+    assert_eq!(report.totals.tool_calls, 1);
+    let member = &report.groups[0].members[0];
+    assert_eq!(member.sessions, 1);
+    assert_eq!(
+        member.subagents.iter().map(|stat| stat.count).sum::<u32>(),
+        2
+    );
 }
 
 fn mixed_origin_report() -> Attribution {

@@ -6,7 +6,7 @@
 //! tokens and dollars cover its seat and every subagent it spawned; the subagent
 //! breakdown groups that spend by task, and model rows split the same all-in spend
 //! by the transcript's model id. Records enter the seat fold only within their
-//! stamped checkout's current lifetime.
+//! stamped checkout's current lifetime and on the scope branch; children follow admitted parents.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -235,7 +235,11 @@ struct FoldedMember {
 }
 
 pub fn build(request: AttributionRequest<'_>) -> Attribution {
-    let folded = fold_seats(request.agents, request.lifetimes);
+    let folded = fold_seats(
+        request.agents,
+        request.lifetimes,
+        request.scope.branch.as_deref(),
+    );
     let peer_representatives = representatives(request.peers);
     let conversation_counts = conversation_counts(request.transcript);
     let prices = pricing::cached_book(request.pricing_cache_path);
@@ -393,11 +397,16 @@ fn fold<'a>(agents: &[&'a AgentState]) -> Vec<(SlotKey, Vec<&'a AgentState>)> {
 fn fold_seats<'a>(
     agents: &[&'a AgentState],
     lifetimes: &LaneLifetimes,
+    branch: Option<&str>,
 ) -> Vec<(SlotKey, Vec<&'a AgentState>)> {
     let (children, parents): (Vec<_>, Vec<_>) = agents
         .iter()
         .copied()
         .filter(|agent| lifetimes.admits(agent))
+        .filter(|agent| {
+            agent.is_launched_child()
+                || branch.is_none_or(|branch| agent.worktree_branches.contains(branch))
+        })
         .partition(|agent| agent.is_launched_child());
     let mut slots = fold(&parents).into_iter().collect::<HashMap<_, _>>();
     for child in children {
@@ -424,7 +433,7 @@ pub fn slot_groups<'a>(
     agents: &[&'a AgentState],
     lifetimes: &LaneLifetimes,
 ) -> Vec<Vec<&'a AgentState>> {
-    fold_seats(agents, lifetimes)
+    fold_seats(agents, lifetimes, None)
         .into_iter()
         .map(|(_, records)| records)
         .collect()
