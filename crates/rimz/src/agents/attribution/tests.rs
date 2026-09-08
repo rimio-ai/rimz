@@ -336,7 +336,7 @@ fn orphaned_launched_child_does_not_join_a_recycled_pane_seat() {
                     .any(|record| record.agent_id == agents[1].agent_id)
             })
             .expect("retained orphan slot");
-        assert_eq!(key.slot, Slot::Session(agents[1].agent_id.clone()));
+        assert_eq!(key.slot, Slot::Orphan(Box::new(slot(&agents[1]).slot)));
         assert_eq!(records.len(), 1);
         if branch.is_none() {
             let groups = slot_groups(&refs, &lifetimes);
