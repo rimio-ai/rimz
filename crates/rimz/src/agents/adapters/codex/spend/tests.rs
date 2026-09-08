@@ -270,7 +270,7 @@ fn implicit_cache_read_billing_preserves_cache_write() {
 
 #[test]
 fn dedup_key_separates_events_differing_only_in_reasoning_or_total() {
-    let base = wire::CodexTokenEvent {
+    let base = parse::CodexTokenEvent {
         timestamp: "2026-01-01T10:00:00.000Z".to_string(),
         model: Some("gpt-5".to_string()),
         input_tokens: 100,
@@ -281,7 +281,7 @@ fn dedup_key_separates_events_differing_only_in_reasoning_or_total() {
         total_tokens: 155,
         tool_calls: BTreeMap::new(),
     };
-    let key = |event: &wire::CodexTokenEvent| {
+    let key = |event: &parse::CodexTokenEvent| {
         codex_event_dedup_key(&event.timestamp, event.model.as_deref().unwrap(), event)
     };
 
