@@ -480,7 +480,6 @@ fn token_counts_change_units_at_decimal_boundaries() {
 
 #[test]
 fn attribution_only_panel_shows_the_lane_boundary() {
-    let mut report = report();
     let timestamp = "2026-09-06T13:26:00.155953104Z"
         .parse::<jiff::Timestamp>()
         .unwrap();
@@ -491,27 +490,46 @@ fn attribution_only_panel_shows_the_lane_boundary() {
         local.hour(),
         local.minute()
     );
-    for since in [None, Some(timestamp)] {
-        report.scope.since = since;
+    for empty in [false, true] {
+        let mut report = report();
+        if empty {
+            report.groups.clear();
+        }
         let mut panel = anstream::StripStream::new(Vec::new());
         render_panel(&mut panel, &report).expect("render panel");
-        let panel = String::from_utf8(panel.into_inner()).expect("utf8");
-        let mut markdown = Vec::new();
-        render_markdown(&mut markdown, &report).expect("render markdown");
-        let markdown = String::from_utf8(markdown).expect("utf8");
-        assert_eq!(panel.starts_with(&format!("{boundary}\n")), since.is_some());
-        assert!(!markdown.contains("since "));
+        let unscoped_panel = String::from_utf8(panel.into_inner()).expect("utf8");
+        let mut unscoped_markdown = Vec::new();
+        render_markdown(&mut unscoped_markdown, &report).expect("render markdown");
+        if empty {
+            assert_eq!(
+                unscoped_panel,
+                "No agent attribution records in this scope.\n"
+            );
+            assert!(unscoped_markdown.is_empty());
+        }
+        for (branch, since, header) in [
+            (None, None, String::new()),
+            (None, Some(timestamp), format!("{boundary}\n")),
+            (Some("feat/credit"), None, "branch feat/credit\n".to_owned()),
+            (
+                Some("feat/credit"),
+                Some(timestamp),
+                format!("branch feat/credit · {boundary}\n"),
+            ),
+        ] {
+            report.scope.branch = branch.map(str::to_owned);
+            report.scope.since = since;
+            let mut panel = anstream::StripStream::new(Vec::new());
+            render_panel(&mut panel, &report).expect("render panel");
+            assert_eq!(
+                String::from_utf8(panel.into_inner()).expect("utf8"),
+                format!("{header}{unscoped_panel}")
+            );
+            let mut markdown = Vec::new();
+            render_markdown(&mut markdown, &report).expect("render markdown");
+            assert_eq!(markdown, unscoped_markdown);
+        }
     }
-    report.groups.clear();
-    let mut panel = anstream::StripStream::new(Vec::new());
-    render_panel(&mut panel, &report).expect("render empty panel");
-    assert_eq!(
-        String::from_utf8(panel.into_inner()).expect("utf8"),
-        format!("{boundary}\nNo agent attribution records in this scope.\n")
-    );
-    let mut markdown = Vec::new();
-    render_markdown(&mut markdown, &report).expect("render empty markdown");
-    assert!(markdown.is_empty());
 }
 
 #[test]
