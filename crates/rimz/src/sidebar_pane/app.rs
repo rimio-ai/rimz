@@ -58,7 +58,7 @@ mod paint;
 mod reload;
 mod remind;
 mod selection;
-pub(crate) mod socket;
+mod socket;
 mod state;
 mod timing;
 mod tmux_watch;
@@ -80,7 +80,6 @@ use selection::{
 };
 
 pub use demo::{serve_fixture, serve_gallery};
-pub use health::Health;
 pub use keymap::NavKeymap;
 
 thread_local! {
@@ -146,7 +145,7 @@ pub fn serve(config: ServeConfig) -> Result<ServeOutcome> {
         Some(config.instance_id.clone()),
     );
     install_panic_diagnostic_hook(diag.clone());
-    let socket_path = sidebar_socket_path(&runtime, &config.instance_id);
+    let socket_path = runtime.sidebar_socket_path(&config.instance_id);
     let socket = bind_socket(&socket_path)?;
     let _socket_cleanup = RuntimeFileGuard {
         path: socket_path.clone(),

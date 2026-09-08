@@ -1033,7 +1033,7 @@ fn remove_orphan_runtime_files(config: &ServeConfig) {
     };
     for path in [
         runtime.sidebar_heartbeat_path(&config.instance_id),
-        crate::sidebar_pane::app::socket::sidebar_socket_path(&runtime, &config.instance_id),
+        runtime.sidebar_socket_path(&config.instance_id),
     ] {
         match std::fs::remove_file(&path) {
             Ok(()) => {}

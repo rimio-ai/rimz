@@ -6,8 +6,8 @@ fn seen_sibling_zero_closes_immediately() {
     let now = Instant::now();
     let mut state = SelfCloseState::default();
 
-    assert!(!self_close_decision(&mut state, Some(1), now));
-    assert!(self_close_decision(&mut state, Some(0), now));
+    assert!(!state.should_close(Some(1), now));
+    assert!(state.should_close(Some(0), now));
     assert!(
         state.seen_sibling,
         "seeing a sibling must stay latched for resize holds"
@@ -23,16 +23,12 @@ fn birth_empty_resets_when_a_sibling_appears_then_closes_at_once() {
     let now = Instant::now();
     let mut state = SelfCloseState::default();
 
-    assert!(!self_close_decision(&mut state, Some(0), now));
+    assert!(!state.should_close(Some(0), now));
     assert!(state.confirming_empty());
-    assert!(!self_close_decision(&mut state, Some(1), now));
+    assert!(!state.should_close(Some(1), now));
     assert!(!state.confirming_empty());
     assert!(state.seen_sibling, "a non-empty read latches the sibling");
-    assert!(self_close_decision(
-        &mut state,
-        Some(0),
-        now + SELF_CLOSE_EMPTY_CONFIRM / 2
-    ));
+    assert!(state.should_close(Some(0), now + SELF_CLOSE_EMPTY_CONFIRM / 2));
 }
 
 #[test]
@@ -40,14 +36,10 @@ fn from_birth_empty_tab_self_closes_after_confirm_window() {
     let now = Instant::now();
     let mut state = SelfCloseState::default();
 
-    assert!(!self_close_decision(&mut state, Some(0), now));
+    assert!(!state.should_close(Some(0), now));
     assert!(!state.seen_sibling);
     assert!(state.confirming_empty());
-    assert!(self_close_decision(
-        &mut state,
-        Some(0),
-        now + SELF_CLOSE_EMPTY_CONFIRM
-    ));
+    assert!(state.should_close(Some(0), now + SELF_CLOSE_EMPTY_CONFIRM));
 }
 
 #[test]
@@ -55,18 +47,14 @@ fn unknown_counts_do_not_advance_or_reset_self_close() {
     let now = Instant::now();
     let mut state = SelfCloseState::default();
 
-    assert!(!self_close_decision(&mut state, Some(1), now));
+    assert!(!state.should_close(Some(1), now));
     assert!(state.seen_sibling, "seeing a sibling must latch");
-    assert!(!self_close_decision(
-        &mut state,
-        None,
-        now + SELF_CLOSE_EMPTY_CONFIRM
-    ));
+    assert!(!state.should_close(None, now + SELF_CLOSE_EMPTY_CONFIRM));
     assert!(
         state.seen_sibling,
         "an unknown count must not clear the latch"
     );
-    assert!(self_close_decision(&mut state, Some(0), now));
+    assert!(state.should_close(Some(0), now));
 }
 
 #[test]

@@ -157,12 +157,8 @@ fn select_to_index_in(ui: &mut UiState, roster: &VisibleRoster<'_>, target: usiz
     InputOutcome::redraw()
 }
 
-fn visible_row_span(ui: &UiState) -> Option<(usize, usize)> {
-    ui.interactions.visible_row_span()
-}
-
 fn select_screen_edge(ui: &mut UiState, snapshot: &SidebarSnapshot, end: End) -> InputOutcome {
-    let Some((first, last)) = visible_row_span(ui) else {
+    let Some((first, last)) = ui.interactions.visible_row_span() else {
         return InputOutcome::default();
     };
     let target = match end {
@@ -173,7 +169,7 @@ fn select_screen_edge(ui: &mut UiState, snapshot: &SidebarSnapshot, end: End) ->
 }
 
 fn select_page(ui: &mut UiState, snapshot: &SidebarSnapshot, down: bool) -> InputOutcome {
-    let Some((first, last)) = visible_row_span(ui) else {
+    let Some((first, last)) = ui.interactions.visible_row_span() else {
         return InputOutcome::default();
     };
     let page = last.saturating_sub(first).saturating_add(1).max(1);
@@ -190,9 +186,6 @@ pub(super) fn handle_key(
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
 ) -> InputOutcome {
-    if action == KeyAction::Other {
-        return InputOutcome::default();
-    }
     match action {
         KeyAction::WidthNarrower => InputOutcome::width(WidthAdjust::Narrower),
         KeyAction::WidthWider => InputOutcome::width(WidthAdjust::Wider),

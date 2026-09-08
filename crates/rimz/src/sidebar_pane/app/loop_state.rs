@@ -4,8 +4,8 @@ use jiff::Timestamp;
 
 use super::fetch::{FetchPhase, FetchRole, FetchUpdate, PaneFrame, SnapshotSource};
 use super::gate::{apply_gate, gate_remaining};
-use super::health::degraded_too_long;
-use super::lifecycle::{grow_beyond_legit, self_close_decision};
+use super::health::{Health, degraded_too_long};
+use super::lifecycle::grow_beyond_legit;
 use super::paint::FramePainter;
 use super::reload::{ReloadAction, reload_action};
 use super::remind::RemindState;
@@ -840,7 +840,7 @@ impl LoopState {
             Some(width) => {
                 let grew = resize_grew(self.prev_width, width);
                 self.prev_width = Some(width);
-                grew && grow_beyond_legit(width, self.max_legit_cols())
+                grew && grow_beyond_legit(width, self.width_control.max_legit_cols())
             }
             None => false,
         };
@@ -1302,17 +1302,13 @@ impl LoopState {
         if !self.paint_hold.is_engaged()
             && self.self_close.seen_sibling
             && resize_grew(self.prev_width, width)
-            && grow_beyond_legit(width, self.max_legit_cols())
+            && grow_beyond_legit(width, self.width_control.max_legit_cols())
         {
             self.paint_hold
                 .engage(now, crate::utils::time::unix_now_ms());
             return true;
         }
         false
-    }
-
-    fn max_legit_cols(&self) -> u16 {
-        self.width_control.max_legit_cols()
     }
 
     /// Fold one fetch outcome into the render state: gate it against the
@@ -1386,8 +1382,7 @@ impl LoopState {
         // it from the same pane list it already enumerated. Presence publication and
         // the poll backstop feed this latch; resize only decides whether to hold a
         // grown-width paint while the fresh fold is pending.
-        if self_close_decision(
-            &mut self.self_close,
+        if self.self_close.should_close(
             self.current
                 .own_view
                 .as_ref()

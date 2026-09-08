@@ -25,13 +25,6 @@ pub(super) fn write_heartbeat(
     .map_err(|err| SidebarAppErr::Heartbeat(err.to_string()))
 }
 
-pub(crate) fn sidebar_socket_path(
-    runtime: &RuntimePaths,
-    instance_id: &SidebarInstanceId,
-) -> PathBuf {
-    runtime.sidebar_socket_path(instance_id)
-}
-
 pub(super) fn bind_socket(path: &Path) -> io::Result<UnixDatagram> {
     crate::sock::validate_socket_path(path).map_err(io::Error::other)?;
     match std::fs::remove_file(path) {
