@@ -40,6 +40,7 @@ impl PixelPainter {
         }
     }
 
+    #[cfg(feature = "testkit")]
     pub(crate) fn runtime_id_base() -> u32 {
         runtime_image_id_base()
     }
