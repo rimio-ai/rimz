@@ -9,22 +9,8 @@ use super::input::{
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ChordCode {
-    Char(char),
-    Up,
-    Down,
-    Left,
-    Right,
-    Home,
-    End,
-    PageUp,
-    PageDown,
-    Enter,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct KeyChord {
-    code: ChordCode,
+    code: KeyCode,
     ctrl: bool,
     alt: bool,
 }
@@ -59,39 +45,27 @@ impl KeyChord {
     fn matches(&self, code: KeyCode, mods: KeyModifiers) -> bool {
         self.ctrl == mods.contains(KeyModifiers::CONTROL)
             && self.alt == mods.contains(KeyModifiers::ALT)
-            && match (self.code, code) {
-                (ChordCode::Char(expected), KeyCode::Char(actual)) => expected == actual,
-                (ChordCode::Up, KeyCode::Up) => true,
-                (ChordCode::Down, KeyCode::Down) => true,
-                (ChordCode::Left, KeyCode::Left) => true,
-                (ChordCode::Right, KeyCode::Right) => true,
-                (ChordCode::Home, KeyCode::Home) => true,
-                (ChordCode::End, KeyCode::End) => true,
-                (ChordCode::PageUp, KeyCode::PageUp) => true,
-                (ChordCode::PageDown, KeyCode::PageDown) => true,
-                (ChordCode::Enter, KeyCode::Enter) => true,
-                _ => false,
-            }
+            && self.code == code
     }
 }
 
-fn parse_code(raw: &str) -> Option<ChordCode> {
+fn parse_code(raw: &str) -> Option<KeyCode> {
     let mut chars = raw.chars();
     let first = chars.next()?;
     if chars.next().is_none() {
-        return Some(ChordCode::Char(first));
+        return Some(KeyCode::Char(first));
     }
     match raw.to_ascii_lowercase().as_str() {
-        "up" => Some(ChordCode::Up),
-        "down" => Some(ChordCode::Down),
-        "left" => Some(ChordCode::Left),
-        "right" => Some(ChordCode::Right),
-        "home" => Some(ChordCode::Home),
-        "end" => Some(ChordCode::End),
-        "pageup" => Some(ChordCode::PageUp),
-        "pagedown" => Some(ChordCode::PageDown),
-        "enter" => Some(ChordCode::Enter),
-        "space" => Some(ChordCode::Char(' ')),
+        "up" => Some(KeyCode::Up),
+        "down" => Some(KeyCode::Down),
+        "left" => Some(KeyCode::Left),
+        "right" => Some(KeyCode::Right),
+        "home" => Some(KeyCode::Home),
+        "end" => Some(KeyCode::End),
+        "pageup" => Some(KeyCode::PageUp),
+        "pagedown" => Some(KeyCode::PageDown),
+        "enter" => Some(KeyCode::Enter),
+        "space" => Some(KeyCode::Char(' ')),
         _ => None,
     }
 }
@@ -148,7 +122,7 @@ mod tests {
         assert_eq!(
             KeyChord::parse("H"),
             Some(KeyChord {
-                code: ChordCode::Char('H'),
+                code: KeyCode::Char('H'),
                 ctrl: false,
                 alt: false,
             })
@@ -156,7 +130,7 @@ mod tests {
         assert_eq!(
             KeyChord::parse("h"),
             Some(KeyChord {
-                code: ChordCode::Char('h'),
+                code: KeyCode::Char('h'),
                 ctrl: false,
                 alt: false,
             })
@@ -164,7 +138,7 @@ mod tests {
         assert_eq!(
             KeyChord::parse("ctrl+f"),
             Some(KeyChord {
-                code: ChordCode::Char('f'),
+                code: KeyCode::Char('f'),
                 ctrl: true,
                 alt: false,
             })
@@ -172,7 +146,7 @@ mod tests {
         assert_eq!(
             KeyChord::parse("M-v"),
             Some(KeyChord {
-                code: ChordCode::Char('v'),
+                code: KeyCode::Char('v'),
                 ctrl: false,
                 alt: true,
             })
@@ -180,7 +154,7 @@ mod tests {
         assert_eq!(
             KeyChord::parse("alt+,"),
             Some(KeyChord {
-                code: ChordCode::Char(','),
+                code: KeyCode::Char(','),
                 ctrl: false,
                 alt: true,
             })
@@ -188,7 +162,7 @@ mod tests {
         assert_eq!(
             KeyChord::parse("M->"),
             Some(KeyChord {
-                code: ChordCode::Char('>'),
+                code: KeyCode::Char('>'),
                 ctrl: false,
                 alt: true,
             })
@@ -196,7 +170,7 @@ mod tests {
         assert_eq!(
             KeyChord::parse("PageDown"),
             Some(KeyChord {
-                code: ChordCode::PageDown,
+                code: KeyCode::PageDown,
                 ctrl: false,
                 alt: false,
             })
@@ -204,7 +178,7 @@ mod tests {
         assert_eq!(
             KeyChord::parse("space"),
             Some(KeyChord {
-                code: ChordCode::Char(' '),
+                code: KeyCode::Char(' '),
                 ctrl: false,
                 alt: false,
             })
