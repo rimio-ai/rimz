@@ -43,8 +43,11 @@ pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
     }
 
     print_report(&report)?;
-    let paths = default_config_paths();
-    let exists = paths.iter().any(|path| path.exists());
+    let exists = ConfigEditor::machine()
+        .files()
+        .ordered()
+        .iter()
+        .any(|file| file.path().exists());
     if exists {
         if super::confirm_with_default("Keep your current config?", true)? {
             let merge = ConfigEditor::machine().merge_defaults()?;
@@ -170,18 +173,11 @@ impl SetupReport {
     }
 }
 
-fn default_config_paths() -> [PathBuf; 3] {
-    [
-        rimz::config::MachineConfig::config_path(),
-        rimz::config::MachineConfig::theme_path(),
-        rimz::config::MachineConfig::agents_path(),
-    ]
-}
-
 fn write_fresh_config() -> Result<()> {
-    ConfigEditor::machine().write_defaults(true)?;
-    for path in default_config_paths() {
-        print_line(&format!("Wrote {}", path.display()))?;
+    let editor = ConfigEditor::machine();
+    editor.write_defaults(true)?;
+    for file in editor.files().ordered() {
+        print_line(&format!("Wrote {}", file.path().display()))?;
     }
     Ok(())
 }

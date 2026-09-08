@@ -737,6 +737,7 @@ fn setup_pty_writes_and_reruns_first_run_answers() {
 
     let output = run_setup_pty(&env, "y\ny\ny\ny\n", None, &[]);
 
+    assert!(output.contains(&format!("Wrote {}", loop_config_path(&env).display())));
     assert!(output.contains("Use truecolor?"));
     assert!(output.contains("Use Nerd Font icons?"));
     assert!(output.contains("Want a pet?"));
@@ -804,6 +805,25 @@ fn setup_pty_writes_and_reruns_first_run_answers() {
     assert!(
         text.contains("auto_continue = false") && text.contains("auto_redeem = false"),
         "automation disabled:\n{text}"
+    );
+}
+
+#[test]
+fn setup_pty_preserves_a_lone_loop_file_when_config_is_kept() {
+    let env = Env::new();
+    let path = loop_config_path(&env);
+    write_machine_file(
+        &path,
+        "[tasks.keep]\nagent = \"codex\"\nprompt = \"keep this task\"\nroot = \"/r\"\nevery = \"15m\"\n",
+    );
+
+    let output = run_setup_pty(&env, "\nn\nn\nn\nn\n", None, &[]);
+
+    assert!(output.contains("Keep your current config? [Y/n]"));
+    assert!(
+        std::fs::read_to_string(path)
+            .expect("read loop config")
+            .contains("prompt = \"keep this task\"")
     );
 }
 
