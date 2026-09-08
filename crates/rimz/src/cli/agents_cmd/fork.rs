@@ -126,7 +126,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         AgentLaunchScope {
             session_name: workspace.session_name.clone(),
             cwd: seed.cwd.clone(),
-            worktree_name: None,
+            branch: None,
             channel: channel.clone(),
             description: None,
         },

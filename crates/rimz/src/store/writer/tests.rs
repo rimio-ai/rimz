@@ -71,7 +71,7 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
             AgentLaunchScope {
                 session_name: "rimz-test".to_owned(),
                 cwd: PathBuf::from("/repo-worktrees/auth"),
-                worktree_name: Some("auth".to_owned()),
+                branch: Some("feat/auth".to_owned()),
                 channel: Some("fallback-channel".to_owned()),
                 description: Some("  launch description  ".to_owned()),
             },
@@ -134,7 +134,7 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
         starting.worktree_path.as_deref(),
         Some("/repo-worktrees/auth")
     );
-    assert_eq!(starting.worktree_branch.as_deref(), Some("auth"));
+    assert_eq!(starting.worktree_branch.as_deref(), Some("feat/auth"));
     assert_eq!(starting.description.as_deref(), Some("launch description"));
 
     let bound = &payloads[1];
@@ -166,7 +166,10 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
         same_process_failed.worktree_path.as_deref(),
         Some("/repo-worktrees/auth")
     );
-    assert_eq!(same_process_failed.worktree_branch.as_deref(), Some("auth"));
+    assert_eq!(
+        same_process_failed.worktree_branch.as_deref(),
+        Some("feat/auth")
+    );
     assert_eq!(same_process_failed.description, None);
     assert_eq!(
         same_process_failed.launch.channel.as_deref(),
@@ -248,7 +251,7 @@ fn launch_event_builder_uses_scope_channel_and_omits_blank_text() {
             AgentLaunchScope {
                 session_name: "rimz-test".to_owned(),
                 cwd: PathBuf::from("/repo"),
-                worktree_name: None,
+                branch: None,
                 channel: Some("fallback-channel".to_owned()),
                 description: Some("  ".to_owned()),
             },
@@ -284,7 +287,7 @@ fn launch_batch_keeps_request_and_follow_up_order() {
             AgentLaunchScope {
                 session_name: "rimz-test".to_owned(),
                 cwd: dir.path().to_path_buf(),
-                worktree_name: None,
+                branch: None,
                 channel: None,
                 description: None,
             },
@@ -344,7 +347,7 @@ fn launch_batch_failure_keeps_earlier_identity_committed() {
             AgentLaunchScope {
                 session_name: "rimz-test".to_owned(),
                 cwd: dir.path().to_path_buf(),
-                worktree_name: None,
+                branch: None,
                 channel: None,
                 description: None,
             },
@@ -408,7 +411,7 @@ fn launch_state_appends_preserve_allocated_identity_and_fold_state() {
             AgentLaunchScope {
                 session_name: "rimz-test".to_owned(),
                 cwd: dir.path().to_path_buf(),
-                worktree_name: Some("auth".to_owned()),
+                branch: Some("auth".to_owned()),
                 channel: Some("fallback".to_owned()),
                 description: None,
             },

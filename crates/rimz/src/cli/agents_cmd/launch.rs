@@ -302,7 +302,7 @@ pub(super) fn launch_layout(
         AgentLaunchScope {
             session_name: workspace.session_name.clone(),
             cwd: launch.cwd.clone(),
-            worktree_name: launch.worktree_name.clone(),
+            branch: launch.branch.clone(),
             channel: room_channel.clone(),
             description: args.launch.cohort.description.clone(),
         },
@@ -483,7 +483,7 @@ fn launch_resume_layout(
         AgentLaunchScope {
             session_name: workspace.session_name.clone(),
             cwd: cwd.clone(),
-            worktree_name: None,
+            branch: None,
             channel: channel.clone(),
             description: None,
         },

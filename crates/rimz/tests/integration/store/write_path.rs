@@ -272,7 +272,7 @@ fn launch_allocation_reserves_ended_name_until_retention_prunes_it() {
     let scope = AgentLaunchScope {
         session_name: "rimz-test".to_owned(),
         cwd: h.store.paths().root.clone(),
-        worktree_name: Some("main".to_owned()),
+        branch: Some("main".to_owned()),
         channel: None,
         description: None,
     };

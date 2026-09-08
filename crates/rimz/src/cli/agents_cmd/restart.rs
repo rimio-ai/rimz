@@ -309,7 +309,7 @@ fn append_fresh_launch(
         AgentLaunchScope {
             session_name: workspace.session_name.clone(),
             cwd: cwd.to_path_buf(),
-            worktree_name: agent.worktree_branch.clone(),
+            branch: None,
             channel: agent.channel.clone(),
             description: None,
         },

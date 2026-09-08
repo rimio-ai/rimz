@@ -611,7 +611,7 @@ fn execute_attempt(
         AgentLaunchScope {
             session_name: prepared.workspace.session_name.clone(),
             cwd: prepared.launch.cwd.clone(),
-            worktree_name: prepared.launch.worktree_name.clone(),
+            branch: prepared.launch.branch.clone(),
             channel: prepared.room_channel.clone(),
             description: request.description.clone(),
         },

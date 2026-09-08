@@ -90,7 +90,7 @@ pub struct AgentLaunchIdentity {
 pub struct AgentLaunchScope {
     pub session_name: String,
     pub cwd: PathBuf,
-    pub worktree_name: Option<String>,
+    pub branch: Option<String>,
     pub channel: Option<String>,
     pub description: Option<String>,
 }
@@ -349,7 +349,7 @@ impl Store {
                         AgentLaunchState::Starting,
                         &scope.session_name,
                         &scope.cwd,
-                        scope.worktree_name.as_deref(),
+                        scope.branch.as_deref(),
                         scope.channel.as_deref(),
                         scope.description.as_deref(),
                         None,
@@ -393,7 +393,7 @@ impl Store {
                 AgentLaunchState::Failed,
                 &scope.session_name,
                 &scope.cwd,
-                scope.worktree_name.as_deref(),
+                scope.branch.as_deref(),
                 scope.channel.as_deref(),
                 None,
                 None,
@@ -483,7 +483,7 @@ impl Store {
         state: AgentLaunchState,
         session_name: &str,
         cwd: &Path,
-        worktree_name: Option<&str>,
+        branch: Option<&str>,
         scope_channel: Option<&str>,
         description: Option<&str>,
         pane_id: Option<&crate::ids::PaneId>,
@@ -510,7 +510,7 @@ impl Store {
                 pane_id: pane_id.cloned(),
                 runtime_owner,
                 worktree_path: Some(cwd.to_string_lossy().into_owned()),
-                worktree_branch: worktree_name.map(ToOwned::to_owned),
+                worktree_branch: branch.map(ToOwned::to_owned),
                 prompt: identity
                     .prompt
                     .as_deref()

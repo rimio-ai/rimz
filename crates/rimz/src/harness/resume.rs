@@ -1433,7 +1433,7 @@ pub fn materialize_team_restore_tab(
             AgentLaunchScope {
                 session_name: session_name.to_owned(),
                 cwd: planned.cwd.clone(),
-                worktree_name: None,
+                branch: None,
                 channel: planned.channel.clone(),
                 description: None,
             },
