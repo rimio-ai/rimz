@@ -46,7 +46,7 @@ pub(super) fn read_rollout_header(path: &Path) -> Option<CodexRolloutHeader> {
         .take(MAX_ROLLOUT_HEADER_BYTES)
         .read_until(b'\n', &mut line)
         .ok()?;
-    let record = decode_line(trim_ascii(&line))?;
+    let record = decode_line(line.trim_ascii())?;
     let RolloutKind::SessionMeta(payload) = record.kind else {
         return None;
     };
@@ -894,16 +894,6 @@ fn normalize_agent_path(path: &str) -> Option<String> {
     (!normalized.is_empty()).then(|| normalized.join("/"))
 }
 
-fn trim_ascii(mut bytes: &[u8]) -> &[u8] {
-    while bytes.first().is_some_and(u8::is_ascii_whitespace) {
-        bytes = &bytes[1..];
-    }
-    while bytes.last().is_some_and(u8::is_ascii_whitespace) {
-        bytes = &bytes[..bytes.len() - 1];
-    }
-    bytes
-}
-
 fn deserialize_cow_str<'de, D>(deserializer: D) -> Result<Cow<'de, str>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -1004,17 +994,6 @@ where
 
         fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
             Ok(value.trim().parse().ok())
-        }
-
-        fn visit_borrowed_str<E: serde::de::Error>(
-            self,
-            value: &'de str,
-        ) -> Result<Self::Value, E> {
-            self.visit_str(value)
-        }
-
-        fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Self::Value, E> {
-            self.visit_str(&value)
         }
 
         fn visit_some<D: serde::Deserializer<'de>>(self, d: D) -> Result<Self::Value, D::Error> {

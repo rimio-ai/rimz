@@ -319,8 +319,7 @@ impl WsTransport {
     fn send_value(&mut self, value: &Value) -> Result<(), AppServerErr> {
         self.ws
             .send(Message::Text(encode_frame(value)?.into()))
-            .map_err(map_ws_err)?;
-        self.ws.flush().map_err(map_ws_err)
+            .map_err(map_ws_err)
     }
 }
 

@@ -124,31 +124,25 @@ fn install_candidate(path: &Path) -> Result<(toml::Table, Vec<String>)> {
 
 pub(super) fn uninstall_from(path: &Path) -> Result<HookUninstallReport> {
     let existed = path.exists();
-    if !existed {
-        return Ok(HookUninstallReport {
-            agent: "codex",
-            files: vec![HookInstallFileReport {
-                path: path.to_path_buf(),
-                existed: false,
-            }],
-            removed_events: Vec::new(),
-        });
-    }
-
-    let mut root = read_existing_table(path)?;
-    let mut removed = strip_rimz_hook_commands(&mut root);
-    removed.extend(remove_rimz_block(&mut root));
-    removed.sort();
-    removed.dedup();
-    write_table(path, &root)?;
+    let removed_events = if existed {
+        let mut root = read_existing_table(path)?;
+        let mut removed = strip_rimz_hook_commands(&mut root);
+        removed.extend(remove_rimz_block(&mut root));
+        removed.sort();
+        removed.dedup();
+        write_table(path, &root)?;
+        removed
+    } else {
+        Vec::new()
+    };
 
     Ok(HookUninstallReport {
         agent: "codex",
         files: vec![HookInstallFileReport {
             path: path.to_path_buf(),
-            existed: true,
+            existed,
         }],
-        removed_events: removed,
+        removed_events,
     })
 }
 
@@ -225,19 +219,16 @@ pub(super) fn snake_event_token(event: &str) -> String {
 }
 
 pub(super) fn read_existing_table(path: &Path) -> Result<toml::Table> {
-    match std::fs::read_to_string(path) {
-        Ok(text) if text.trim().is_empty() => Ok(toml::Table::new()),
-        Ok(text) => toml::from_str::<toml::Table>(&text).map_err(|source| AgentErr::InstallParse {
-            agent: "codex",
-            path: path.to_path_buf(),
-            source: Box::new(source),
-        }),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(toml::Table::new()),
-        Err(source) => Err(AgentErr::InstallIo {
-            agent: "codex",
-            path: path.to_path_buf(),
-            source,
-        }),
+    match read_optional_file("codex", path)? {
+        None => Ok(toml::Table::new()),
+        Some(text) if text.trim().is_empty() => Ok(toml::Table::new()),
+        Some(text) => {
+            toml::from_str::<toml::Table>(&text).map_err(|source| AgentErr::InstallParse {
+                agent: "codex",
+                path: path.to_path_buf(),
+                source: Box::new(source),
+            })
+        }
     }
 }
 

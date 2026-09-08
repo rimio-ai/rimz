@@ -218,10 +218,6 @@ pub(super) struct CodexTokens {
     pub(super) account_id: Option<String>,
 }
 
-pub(super) fn decode_auth(auth_json: &[u8]) -> serde_json::Result<CodexAuth> {
-    serde_json::from_slice(auth_json)
-}
-
 /// Map a `~/.codex/auth.json` payload onto a probe outcome by login shape: a
 /// non-empty `OPENAI_API_KEY` is an unmetered API-key login (the dashboard's `∞`
 /// bar), and a `tokens` block is a metered ChatGPT subscription login. The plan
@@ -230,7 +226,7 @@ pub(super) fn decode_auth(auth_json: &[u8]) -> serde_json::Result<CodexAuth> {
 /// file is unparseable — a corrupt auth file is rewritten on the next login, and
 /// the read is cheap, so there is nothing a short retry would recover.
 fn parse_codex_auth(auth_json: &[u8]) -> AccountProbe {
-    let Ok(auth) = decode_auth(auth_json) else {
+    let Ok(auth) = serde_json::from_slice::<CodexAuth>(auth_json) else {
         return AccountProbe::LoggedOut;
     };
     if auth
