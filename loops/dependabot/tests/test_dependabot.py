@@ -181,7 +181,7 @@ class RepairTests(unittest.TestCase):
             query.assert_not_called()
             launch.assert_not_called()
 
-    def test_launch_passes_prompt_as_data_and_always_uses_named_worktree(self):
+    def test_launch_passes_prompt_as_data_in_unattended_named_worktree(self):
         plan = select([source(1)], {1: "failed"})
         plan["sources"][0]["title"] = "$(do-not-execute) `neither-this`"
         with patch.object(repair.subprocess, "run") as run:
@@ -189,7 +189,7 @@ class RepairTests(unittest.TestCase):
         args, = run.call_args.args
         self.assertEqual(args[:3], ["rimz", "agents", "astra"])
         self.assertIn("$(do-not-execute)", args[3])
-        self.assertEqual(args[4:], ["-w", "deps/repair-1", "-p", "--timeout", "60m"])
+        self.assertEqual(args[4:], ["-w", "deps/repair-1", "--yolo", "-p", "--timeout", "60m"])
         self.assertNotIn("shell", run.call_args.kwargs)
         self.assertEqual(run.call_args.kwargs["cwd"], repair.ROOT)
 
