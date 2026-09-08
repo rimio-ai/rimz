@@ -24,27 +24,27 @@ use super::super::rollout::{
 /// Produced by `parse_codex_session`.  Cost computation requires a pricing
 /// table keyed on `model`.
 #[derive(Debug, Clone)]
-pub struct CodexTokenEvent {
+pub(super) struct CodexTokenEvent {
     /// ISO-8601 / RFC-3339 timestamp string from the event.
-    pub timestamp: String,
+    pub(super) timestamp: String,
     /// Model name, resolved from the event payload and tracked `turn_context`.
     /// `None` only when the file contained no model hint at all.
-    pub model: Option<String>,
-    pub input_tokens: u64,
+    pub(super) model: Option<String>,
+    pub(super) input_tokens: u64,
     /// Cached (prompt-cache-hit) input tokens, capped to `input_tokens`.
-    pub cached_input_tokens: u64,
+    pub(super) cached_input_tokens: u64,
     /// Prompt-cache-write input tokens, a subset of `input_tokens`.
-    pub cache_write_input_tokens: u64,
-    pub output_tokens: u64,
+    pub(super) cache_write_input_tokens: u64,
+    pub(super) output_tokens: u64,
     /// Reasoning tokens, already folded into `output_tokens` for pricing. Kept
     /// here only to strengthen the cross-file dedup fingerprint so two distinct
     /// same-second events with identical input/output but differing reasoning
     /// stay separate.
-    pub reasoning_output_tokens: u64,
+    pub(super) reasoning_output_tokens: u64,
     /// Total tokens as reported (or summed) for the event. Fingerprint-only, for
     /// the same reason as `reasoning_output_tokens`.
-    pub total_tokens: u64,
-    pub tool_calls: BTreeMap<String, u32>,
+    pub(super) total_tokens: u64,
+    pub(super) tool_calls: BTreeMap<String, u32>,
 }
 
 // ── Typed structs — headless format ──────────────────────────────────────────
@@ -55,66 +55,66 @@ pub struct CodexTokenEvent {
 /// or nested under `data`, `result`, or `response`.  Multiple field-name
 /// aliases exist across different executor versions.
 #[derive(Deserialize)]
-pub(crate) struct CodexLogEntry<'a> {
+pub(super) struct CodexLogEntry<'a> {
     #[serde(borrow, default)]
-    pub(crate) timestamp: Option<CodexTimestamp<'a>>,
+    timestamp: Option<CodexTimestamp<'a>>,
     #[serde(rename = "created_at", borrow, default)]
-    pub(crate) created_at: Option<CodexTimestamp<'a>>,
+    created_at: Option<CodexTimestamp<'a>>,
     #[serde(rename = "createdAt", borrow, default)]
-    pub(crate) created_at_camel: Option<CodexTimestamp<'a>>,
+    created_at_camel: Option<CodexTimestamp<'a>>,
     #[serde(
         borrow,
         default,
         deserialize_with = "deserialize_optional_object_lossy"
     )]
-    pub(crate) data: Option<CodexResultFields<'a>>,
+    data: Option<CodexResultFields<'a>>,
     #[serde(
         borrow,
         default,
         deserialize_with = "deserialize_optional_object_lossy"
     )]
-    pub(crate) result: Option<CodexResultFields<'a>>,
+    result: Option<CodexResultFields<'a>>,
     #[serde(
         borrow,
         default,
         deserialize_with = "deserialize_optional_object_lossy"
     )]
-    pub(crate) response: Option<CodexResultFields<'a>>,
+    response: Option<CodexResultFields<'a>>,
     #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
-    pub(crate) usage: Option<CodexRawUsage>,
+    pub(super) usage: Option<CodexRawUsage>,
     #[serde(borrow, default)]
-    pub(crate) model: Option<Cow<'a, str>>,
+    model: Option<Cow<'a, str>>,
     #[serde(rename = "model_name", borrow, default)]
-    pub(crate) model_name: Option<Cow<'a, str>>,
+    model_name: Option<Cow<'a, str>>,
     #[serde(
         borrow,
         default,
         deserialize_with = "deserialize_optional_object_lossy"
     )]
-    pub(crate) metadata: Option<CodexModelMetadata<'a>>,
+    metadata: Option<CodexModelMetadata<'a>>,
 }
 
 /// Nested fields shared by `data`, `result`, and `response` wrappers.
 #[derive(Default, Deserialize)]
-pub(crate) struct CodexResultFields<'a> {
+struct CodexResultFields<'a> {
     #[serde(borrow, default)]
-    pub(crate) timestamp: Option<CodexTimestamp<'a>>,
+    timestamp: Option<CodexTimestamp<'a>>,
     #[serde(rename = "created_at", borrow, default)]
-    pub(crate) created_at: Option<CodexTimestamp<'a>>,
+    created_at: Option<CodexTimestamp<'a>>,
     #[serde(rename = "createdAt", borrow, default)]
-    pub(crate) created_at_camel: Option<CodexTimestamp<'a>>,
+    created_at_camel: Option<CodexTimestamp<'a>>,
     #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
-    pub(crate) usage: Option<CodexRawUsage>,
+    usage: Option<CodexRawUsage>,
     #[serde(borrow, default)]
-    pub(crate) model: Option<Cow<'a, str>>,
+    model: Option<Cow<'a, str>>,
     #[serde(rename = "model_name", borrow, default)]
-    pub(crate) model_name: Option<Cow<'a, str>>,
+    model_name: Option<Cow<'a, str>>,
     #[serde(
         borrow,
         default,
         deserialize_with = "deserialize_optional_object_lossy"
     )]
-    pub(crate) metadata: Option<CodexModelMetadata<'a>>,
+    metadata: Option<CodexModelMetadata<'a>>,
 }
 
 // ── Line-kind detection ───────────────────────────────────────────────────────
