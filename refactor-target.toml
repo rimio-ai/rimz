@@ -139,7 +139,8 @@ upward-dependencies = ["sidebar::refresh"]
 # Team inspection shares scratch discovery and board-stage records with launch reminders.
 # Delivery specs and team subscriptions share the CLI/library boundary.
 # Read-only pending deliveries are shared by wake listings, hooks and enrichment.
-surface-budget = 577
+# Submitted-prompt header grammar now belongs to store.
+surface-budget = 574
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -235,7 +236,8 @@ upward-dependencies = [
     "diag::record",
 ]
 # Fresh boundary dispatch shares the queue's in-flight claim predicate.
-surface-budget = 338
+# Header grammar moved from harness; lifecycle projection also shares prompt-origin classification.
+surface-budget = 342
 
 [[module]]
 path = "crates/rimz/src/theme"
