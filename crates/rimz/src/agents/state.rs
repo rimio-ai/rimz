@@ -4,7 +4,7 @@
 //! sidebar projects. The rollup itself lives with the agent integration layer.
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -599,7 +599,11 @@ pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_depth: Option<u8>,
     pub worktree_path: Option<String>,
+    /// Latest observed branch for this identity.
     pub worktree_branch: Option<String>,
+    /// Every branch this identity was observed on, including its launch branch.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub worktree_branches: BTreeSet<String>,
     pub task: Option<String>,
     /// The session's first usable user prompt. Set once and carried for the
     /// whole session so an unnamed card has a stable label across later turns.
@@ -683,7 +687,7 @@ pub struct AgentState {
     /// `None` for a root agent or before the first render.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_started_at: Option<Timestamp>,
-    /// When the current provider turn began, stamped from `opened_turn` or a context reset that rests an existing session (manual `/compact` or `/clear`). Used for budgets, delivery, and status; child retention uses `user_turn_started_at`.
+    /// When the current provider turn began, stamped from `opened_turn` or a context reset that rests a session after a turn opened (manual `/compact` or `/clear`). Used for budgets, delivery, and status; child retention uses `user_turn_started_at`.
     ///
     /// First registration leaves it `None` until a turn opens. Stop, automatic mid-turn compaction, and a prompt waking a parked running row carry the stamp forward.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -789,6 +793,8 @@ struct AgentStateWire {
     launch_depth: Option<u8>,
     worktree_path: Option<String>,
     worktree_branch: Option<String>,
+    #[serde(default)]
+    worktree_branches: BTreeSet<String>,
     task: Option<String>,
     #[serde(default)]
     first_prompt: Option<String>,
@@ -877,6 +883,7 @@ impl From<AgentStateWire> for AgentState {
             launch_depth: wire.launch_depth,
             worktree_path: wire.worktree_path,
             worktree_branch: wire.worktree_branch,
+            worktree_branches: wire.worktree_branches,
             task: wire.task,
             first_prompt: wire.first_prompt,
             prompt: wire.prompt,
@@ -965,6 +972,7 @@ impl AgentState {
             launch_depth: None,
             worktree_path: None,
             worktree_branch: None,
+            worktree_branches: BTreeSet::new(),
             task: None,
             first_prompt: None,
             prompt: None,

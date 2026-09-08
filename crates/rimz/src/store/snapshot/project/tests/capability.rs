@@ -3,6 +3,36 @@ use crate::agents::{AgentLifecycleObservation, LifecycleSignal};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 
 #[test]
+fn worktree_branches_accumulate_and_scalar_follows_latest() {
+    let mut launch = launch_event("codex", launch_payload("sess-1", "lucid-atlas"));
+    launch.timestamp = epoch();
+    let mut events = vec![launch];
+    for (offset, branch) in [(1, Some("feat/x")), (2, Some("main")), (3, None)] {
+        events.push(raw_lifecycle_at(
+            "codex",
+            offset,
+            json!({
+                "agent_id": "sess-1",
+                "event_name": "UserPromptSubmit",
+                "signal": {"signal": "turn_started"},
+                "worktree_path": "/tmp/other",
+                "worktree_branch": branch,
+            }),
+        ));
+        let agents = reduce_agent_states(&events);
+        assert_eq!(
+            agents[0].worktree_branches,
+            BTreeSet::from(["main".to_owned(), "feat/x".to_owned()])
+        );
+        assert_eq!(
+            agents[0].worktree_branch.as_deref(),
+            Some(if offset == 1 { "feat/x" } else { "main" })
+        );
+        assert_eq!(agents[0].worktree_path.as_deref(), Some("/tmp/x"));
+    }
+}
+
+#[test]
 fn projected_lifecycle_events_preserve_schema_owned_lifetime_fields() {
     let mut identity = AgentLifecycleObservation::new(
         Some(AgentSessionId::from("sess-1")),
@@ -116,7 +146,7 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
             "signal": { "signal": "turn_started" },
             "task": "fix auth flow",
             "worktree_path": "/tmp/hook-subprocess-cwd",
-            "worktree_branch": "wrong-branch",
+            "worktree_branch": "feat/x",
         }),
     );
 
@@ -141,7 +171,12 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
     assert_eq!(agent.mode, Some(crate::agents::PermissionMode::Yolo));
     assert_eq!(agent.role.as_deref(), Some("coder"));
     assert_eq!(agent.team.as_deref(), Some("forge"));
-    assert_eq!(agent.worktree_branch.as_deref(), Some("main"));
+    assert_eq!(agent.worktree_path.as_deref(), Some("/tmp/x"));
+    assert_eq!(agent.worktree_branch.as_deref(), Some("feat/x"));
+    assert_eq!(
+        agent.worktree_branches,
+        BTreeSet::from(["main".to_owned(), "feat/x".to_owned()])
+    );
 }
 
 #[test]

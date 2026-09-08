@@ -159,11 +159,11 @@ fn lifecycle_event_projection_owns_carry_forward_wire_fields() {
             "role",
             "team",
             "transcript_path",
-            "worktree_branch",
             "worktree_path",
         ]
     );
     assert_eq!(projected.pane_id.as_ref().map(PaneId::raw), Some("%1"));
+    assert_eq!(projected.worktree_branch.as_deref(), Some("feature"));
 
     full.signal = LifecycleSignal::TurnEnded {
         errored: false,

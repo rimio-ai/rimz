@@ -795,6 +795,14 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     state.parent_agent_id = parent_agent_id;
     state.worktree_path = worktree.path;
     state.worktree_branch = worktree.branch;
+    if let Some(branch) = input
+        .observation
+        .worktree_branch
+        .as_ref()
+        .filter(|branch| !branch.is_empty())
+    {
+        state.worktree_branches.insert(branch.clone());
+    }
     state.task = prompt.task;
     state.first_prompt = prompt.first_prompt;
     state.prompt = prompt.prompt;
@@ -945,11 +953,22 @@ fn assemble_launch_state(
     }
     if let Some(worktree_branch) = &payload.worktree_branch {
         state.worktree_branch = Some(worktree_branch.clone());
+        if !worktree_branch.is_empty() {
+            state.worktree_branches.insert(worktree_branch.clone());
+        }
     }
     state.status = status;
     state.phase = phase;
-    state.turn_started_at = Some(event.timestamp);
-    state.user_turn_started_at = Some(event.timestamp);
+    state.turn_started_at = if status == AgentStatus::Running {
+        Some(event.timestamp)
+    } else {
+        prior.and_then(|prior| prior.turn_started_at)
+    };
+    state.user_turn_started_at = if status == AgentStatus::Running {
+        Some(event.timestamp)
+    } else {
+        prior.and_then(|prior| prior.user_turn_started_at)
+    };
     state
 }
 
@@ -1028,8 +1047,9 @@ fn lifecycle_projection(
     // Matching the signal — not `compaction_closed` — still fires when the
     // `PreCompact` bracket open was missed. A first-event `Registered` leaves
     // `turn_started_at` unset because the session has never opened a turn; pane
-    // recovery reads that absence as first-turn-start eligibility.
-    let resets_context = prior.is_some()
+    // recovery reads that absence as first-turn-start eligibility. A reset
+    // before any turn has nothing to retire.
+    let resets_context = prior.is_some_and(|prior| prior.turn_started_at.is_some())
         && !matches!(next.status, AgentStatus::Running | AgentStatus::Waiting)
         && matches!(
             &signal,
@@ -1116,11 +1136,7 @@ fn worktree_projection(
         } else {
             prior_path.or(event_path)
         },
-        branch: if event_first {
-            event_branch.or(prior_branch)
-        } else {
-            prior_branch.or(event_branch)
-        },
+        branch: event_branch.or(prior_branch),
     }
 }
 
