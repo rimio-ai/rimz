@@ -195,8 +195,23 @@ fn parses_tea_pr_heads() {
     assert_eq!(
         parse_tea_pr_head_json(
             r#"{
-                "head":{"label":"alice:feature","repo":{"full_name":"alice/fork"}},
-                "base":{"repo":{"full_name":"org/repo"}}
+                "head":{"label":"feature","ref":"feature","sha":"abc123","repo":{"full_name":"org/repo","owner":{"login":"org"}}},
+                "base":{"ref":"main","repo":{"full_name":"ORG/Repo"}}
+            }"#
+        )
+        .unwrap(),
+        PrHead {
+            branch: "feature".to_owned(),
+            owner: Some("org".to_owned()),
+            repo_full_name: Some("org/repo".to_owned()),
+            is_cross_repository: Some(false),
+        }
+    );
+    assert_eq!(
+        parse_tea_pr_head_json(
+            r#"{
+                "head":{"label":"feature","ref":"feature","sha":"abc123","repo":{"full_name":"alice/fork","owner":{"login":"alice"}}},
+                "base":{"ref":"main","repo":{"full_name":"org/repo"}}
             }"#
         )
         .unwrap(),
@@ -204,6 +219,21 @@ fn parses_tea_pr_heads() {
             branch: "feature".to_owned(),
             owner: Some("alice".to_owned()),
             repo_full_name: Some("alice/fork".to_owned()),
+            is_cross_repository: Some(true),
+        }
+    );
+    assert_eq!(
+        parse_tea_pr_head_json(
+            r#"{
+                "head":{"label":"feature","ref":"feature","repo":null},
+                "base":{"ref":"main","repo":{"full_name":"org/repo"}}
+            }"#
+        )
+        .unwrap(),
+        PrHead {
+            branch: "feature".to_owned(),
+            owner: None,
+            repo_full_name: None,
             is_cross_repository: None,
         }
     );
@@ -216,6 +246,13 @@ fn parses_tea_pr_heads() {
             repo_full_name: Some("org/repo".to_owned()),
             is_cross_repository: None,
         }
+    );
+    assert!(
+        parse_tea_pr_head_json(
+            r#"{"head":"feat/native-boros-adapter","headSha":"9c94455afb3cd7a58a6403e8e5cb423e6cdaa52d"}"#
+        )
+        .unwrap_err()
+        .contains("tea PR payload")
     );
 }
 
@@ -571,7 +608,7 @@ fn forge_cli_builds_and_decodes_head_commands() {
             .pr_head_args(42, Some("org/repo"))
             .unwrap()
             .join(" "),
-        "pr 42 --output json --repo org/repo"
+        "api repos/org/repo/pulls/42 --repo org/repo"
     );
     assert_eq!(
         ForgeCli::Tea.pr_head_args(42, None).unwrap_err(),
@@ -588,7 +625,7 @@ fn forge_cli_builds_and_decodes_head_commands() {
     );
     assert_eq!(
         ForgeCli::Tea
-            .decode_pr_head(r#"{"head":{"label":"org:feature"}}"#)
+            .decode_pr_head(r#"{"head":{"ref":"feature"}}"#)
             .unwrap()
             .branch,
         "feature"
@@ -617,6 +654,11 @@ fn parses_tea_combined_commit_status() {
         assert_eq!(parse_tea_combined_status(raw).unwrap(), None);
     }
     assert!(parse_tea_combined_status("[]").is_err());
+}
+
+#[test]
+fn tea_pr_endpoint_carries_repo_and_number() {
+    assert_eq!(tea_pr_endpoint("org/repo", 42), "repos/org/repo/pulls/42");
 }
 
 #[test]

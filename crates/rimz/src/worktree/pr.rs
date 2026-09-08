@@ -110,9 +110,9 @@ pub fn create_from_pr(
         );
     }
     let head = resolve_pr_head_with_cli(repo_root, context.number, cli, remote_repo)?;
-    let same_repo = match (cli, head.is_cross_repository) {
-        (forge::ForgeCli::Gh, Some(cross_repository)) => !cross_repository,
-        _ => head
+    let same_repo = match head.is_cross_repository {
+        Some(cross_repository) => !cross_repository,
+        None => head
             .repo_full_name
             .as_deref()
             .zip(remote_repo.repo_slug())

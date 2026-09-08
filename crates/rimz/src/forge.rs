@@ -346,37 +346,47 @@ pub fn parse_gh_pr_view_json(raw: &str) -> Result<PrHead, String> {
     })
 }
 
+/// Parse the Gitea pull request from `tea api repos/<slug>/pulls/<N>`.
+/// The branch-only presentation from `tea pr <N> --output json` is rejected.
 pub fn parse_tea_pr_head_json(raw: &str) -> Result<PrHead, String> {
-    let value: Value = serde_json::from_str(raw).map_err(|err| err.to_string())?;
-    let branch = pr_head_branch(&value)
-        .ok_or_else(|| "tea PR output has no usable head branch".to_owned())?;
-    let head = value.get("head");
-    let label = head.and_then(|head| {
-        head.as_str().or_else(|| {
-            head.as_object()
-                .and_then(|object| object.get("label"))
-                .and_then(Value::as_str)
-        })
-    });
-    let label_owner = label
-        .and_then(|label| label.trim().rsplit_once(':'))
+    #[derive(Deserialize)]
+    struct Pull {
+        head: Branch,
+        base: Option<Branch>,
+    }
+
+    #[derive(Deserialize)]
+    struct Branch {
+        #[serde(rename = "ref")]
+        ref_name: String,
+        repo: Option<Repository>,
+    }
+
+    #[derive(Deserialize)]
+    struct Repository {
+        full_name: String,
+    }
+
+    let pull: Pull = serde_json::from_str(raw).map_err(|err| format!("tea PR payload: {err}"))?;
+    let branch = required_json_text(&pull.head.ref_name, "tea PR head branch")?;
+    let repo_full_name = pull.head.repo.and_then(|repo| nonempty(repo.full_name));
+    let owner = repo_full_name
+        .as_deref()
+        .and_then(|repo| repo.split_once('/'))
         .and_then(|(owner, _)| nonempty(owner));
-    let repo_full_name = head
-        .and_then(|head| head.get("repo"))
-        .and_then(|repo| repo.get("full_name"))
-        .and_then(Value::as_str)
-        .and_then(nonempty);
-    let owner = label_owner.or_else(|| {
-        repo_full_name
-            .as_deref()
-            .and_then(|repo| repo.split_once('/'))
-            .and_then(|(owner, _)| nonempty(owner))
-    });
+    let base_full_name = pull
+        .base
+        .and_then(|base| base.repo)
+        .and_then(|repo| nonempty(repo.full_name));
+    let is_cross_repository = repo_full_name
+        .as_deref()
+        .zip(base_full_name.as_deref())
+        .map(|(head, base)| !head.eq_ignore_ascii_case(base));
     Ok(PrHead {
         branch,
         owner,
         repo_full_name,
-        is_cross_repository: None,
+        is_cross_repository,
     })
 }
 
@@ -420,15 +430,14 @@ impl ForgeCli {
         number: u64,
         repo: Option<&str>,
     ) -> Result<Vec<String>, String> {
-        let number = number.to_string();
         Ok(match self {
-            Self::Gh => ["pr", "view", &number, "--json", GH_HEAD_FIELDS]
+            Self::Gh => ["pr", "view", &number.to_string(), "--json", GH_HEAD_FIELDS]
                 .map(str::to_owned)
                 .into(),
             Self::Tea => {
                 let repo = repo
                     .ok_or_else(|| "could not derive the origin repository for tea".to_owned())?;
-                ["pr", &number, "--output", "json", "--repo", repo]
+                ["api", &tea_pr_endpoint(repo, number), "--repo", repo]
                     .map(str::to_owned)
                     .into()
             }
@@ -711,6 +720,11 @@ pub fn tea_pr_list_args<'a>(state: &'a str, repo: Option<&'a str>) -> Vec<&'a st
         args.extend_from_slice(&["--repo", repo]);
     }
     args
+}
+
+/// Build the Gitea pull-request endpoint used for head resolution and PR-state detail.
+pub(crate) fn tea_pr_endpoint(repo_slug: &str, number: u64) -> String {
+    format!("repos/{repo_slug}/pulls/{number}")
 }
 
 /// Build the Gitea combined commit-status endpoint used for CI enrichment.
