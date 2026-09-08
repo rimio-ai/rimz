@@ -4,6 +4,16 @@ use crate::ids::MuxName;
 use std::num::NonZeroU16;
 use tempfile::tempdir;
 
+#[test]
+fn glyph_set_source_folds_style_after_explicit_set() {
+    let mut theme = ThemeConfig::default();
+    assert_eq!(theme.glyph_set_source().as_deref(), None);
+    theme.style = Some(ThemeStyle::Modern);
+    assert_eq!(theme.glyph_set_source().as_deref(), Some("nerd_font"));
+    theme.glyphs.set = Some("unicode".to_owned());
+    assert_eq!(theme.glyph_set_source().as_deref(), Some("unicode"));
+}
+
 fn write(dir: &tempfile::TempDir, text: &str) -> PathBuf {
     let path = dir.path().join("config.toml");
     std::fs::write(&path, text).expect("write config");
