@@ -158,9 +158,8 @@ fn effective_launch(
     machine: &MachineConfig,
     project_root: &Path,
 ) -> crate::config::effective::LaunchAgents {
-    crate::config::effective::load(
-        &machine.agents,
-        &machine.subagents.profiles,
+    crate::config::effective::load_with_roots(
+        machine,
         project_root,
         &project_root.join("config-home"),
     )

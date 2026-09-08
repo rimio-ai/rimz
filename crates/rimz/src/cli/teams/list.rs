@@ -135,12 +135,7 @@ pub(super) fn load_catalog(
 ) -> Result<Vec<TeamReport>> {
     let ctx = Ctx::open(globals)?;
     report_unknown_config_keys(machine)?;
-    let effective = rimz::config::effective::load(
-        &machine.agents,
-        &machine.subagents.profiles,
-        &ctx.workspace.project_root,
-        &rimz::disk::paths::config_home(),
-    )?;
+    let effective = rimz::config::effective::load(machine, &ctx.workspace.project_root)?;
     let snapshot = ctx.published_snapshot()?;
     let audit = ctx
         .store
@@ -171,13 +166,7 @@ pub(super) fn effective_teams(globals: &GlobalFlags) -> Result<TeamsConfig> {
         .context("resolving current workspace")?;
     let machine = rimz::config::MachineConfig::load().context("loading machine config")?;
     report_unknown_config_keys(&machine)?;
-    Ok(rimz::config::effective::load(
-        &machine.agents,
-        &machine.subagents.profiles,
-        &workspace.project_root,
-        &rimz::disk::paths::config_home(),
-    )?
-    .teams)
+    Ok(rimz::config::effective::load(&machine, &workspace.project_root)?.teams)
 }
 
 fn build_catalog(

@@ -70,12 +70,7 @@ pub(super) fn prepare_supervised_launch_layout(
     machine_config: &rimz::config::MachineConfig,
     scope: rimz::config::effective::ProfileScope,
 ) -> Result<rimz::harness::plan::ResolvedLaunch> {
-    let effective = rimz::config::effective::load(
-        &machine_config.agents,
-        &machine_config.subagents.profiles,
-        &workspace.project_root,
-        &rimz::disk::paths::config_home(),
-    )?;
+    let effective = rimz::config::effective::load(machine_config, &workspace.project_root)?;
     let mut resolved = rimz::harness::plan::resolve_launch(
         &effective,
         scope,
@@ -417,12 +412,7 @@ fn prepare_supervised(
     // Inside a team's lane, a bare role names that team's role, exactly as it
     // does for an interactive launch: in `#forge`, `reviewer` means
     // `forge.reviewer`.
-    let effective = rimz::config::effective::load(
-        &machine_config.agents,
-        &machine_config.subagents.profiles,
-        &workspace.project_root,
-        &rimz::disk::paths::config_home(),
-    )?;
+    let effective = rimz::config::effective::load(&machine_config, &workspace.project_root)?;
     let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
     let caller_identity = rimz::harness::ancestry::resolve_caller(&projection.agents);
     let caller = caller_identity

@@ -5,8 +5,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::config::{
-    AgentSpecSources, AgentsConfig, CommandsConfig, ConfigFileDiagnosis, ProfilesConfig, TaskEntry,
-    Tasks, TeamsConfig,
+    AgentSpecSources, CommandsConfig, ConfigFileDiagnosis, MachineConfig, ProfilesConfig,
+    TaskEntry, Tasks, TeamsConfig,
 };
 use crate::harness::schedule::{self, ScheduleErr};
 use crate::harness::spec::{self as agents_spec, LayoutErr};
@@ -108,12 +108,18 @@ pub struct LaunchAgents {
     config_path: PathBuf,
 }
 
-pub fn load(
-    machine: &AgentsConfig,
-    machine_subagent_profiles: &ProfilesConfig,
+/// Read `agents` and `subagents.profiles` from the machine snapshot without reloading it.
+pub fn load(machine: &MachineConfig, project_root: &Path) -> Result<LaunchAgents> {
+    load_with_roots(machine, project_root, &crate::disk::paths::config_home())
+}
+
+pub fn load_with_roots(
+    machine: &MachineConfig,
     project_root: &Path,
     config_root: &Path,
 ) -> Result<LaunchAgents> {
+    let machine_subagent_profiles = &machine.subagents.profiles;
+    let machine = &machine.agents;
     let report = trust::status_with_roots(project_root, config_root)?;
     let config_path = project_root.join(PROJECT_CONFIG_REL);
     if report.state != TrustState::Trusted {

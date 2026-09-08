@@ -61,13 +61,10 @@ pub(super) fn resume_lane(
         rimz::store::runtime::agent_liveness,
         discover_lane_sessions,
         || {
-            LaneRestoreConfig::load(
-                &machine_config,
-                &workspace.project_root,
-                &rimz::disk::paths::config_home(),
-            )
-            .map_err(|error| LaneResumeError::RestoreConfig {
-                message: error.to_string(),
+            LaneRestoreConfig::load(&machine_config, &workspace.project_root).map_err(|error| {
+                LaneResumeError::RestoreConfig {
+                    message: error.to_string(),
+                }
             })
         },
     )?;
