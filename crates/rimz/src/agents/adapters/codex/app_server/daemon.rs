@@ -28,18 +28,6 @@ const RECYCLE_COMMAND: &str = "cd ~; \
     \"${CODEX_HOME:-$HOME/.codex}/packages/standalone/current/codex\" \
     app-server daemon bootstrap --remote-control";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Readiness {
-    Disabled,
-    Ready,
-    Uninstalled(Issue),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Issue {
-    StandaloneMissing,
-}
-
 /// A live managed updater still executes a different standalone release from
 /// the current managed binary. Codex's update loop can restart the shared
 /// app-server while this skew persists, disconnecting every attached client.
@@ -51,12 +39,9 @@ pub struct UpdaterSkew {
     pub updater_exe_deleted: bool,
 }
 
-impl std::fmt::Display for Issue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::StandaloneMissing => write!(
-                f,
-                "Codex remote-control is enabled (`[remote_control] codex = true`) but the \
+fn standalone_missing_guidance() -> String {
+    format!(
+        "Codex remote-control is enabled (`[remote_control] codex = true`) but the \
                  managed standalone Codex install is missing, so `rimz start` brings the \
                  room up without the Codex remote-control host.\n\
                  `codex remote-control start` boots its app-server daemon from \
@@ -65,12 +50,8 @@ impl std::fmt::Display for Issue {
                  Install it with:\n    {INSTALL_COMMAND}\n\n\
                  then re-run to enable the host, or set `[remote_control] codex = false` to \
                  silence this."
-            ),
-        }
-    }
+    )
 }
-
-impl std::error::Error for Issue {}
 
 impl std::fmt::Display for UpdaterSkew {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -101,13 +82,19 @@ impl std::fmt::Display for UpdaterSkew {
     }
 }
 
-pub fn readiness(enabled: bool) -> Readiness {
+pub fn readiness(enabled: bool) -> crate::agents::runtime_control::RuntimeControlReadiness {
+    use crate::agents::runtime_control::{RuntimeControlIssue, RuntimeControlReadiness};
+
     if !enabled {
-        Readiness::Disabled
+        RuntimeControlReadiness::Disabled
     } else if standalone_bin().is_some() {
-        Readiness::Ready
+        RuntimeControlReadiness::Ready { host_argv: None }
     } else {
-        Readiness::Uninstalled(Issue::StandaloneMissing)
+        RuntimeControlReadiness::Uninstalled(RuntimeControlIssue::new(
+            "codex",
+            "standalone_missing",
+            &standalone_missing_guidance(),
+        ))
     }
 }
 

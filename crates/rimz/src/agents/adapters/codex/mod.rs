@@ -1023,23 +1023,7 @@ impl crate::agents::capabilities::RuntimeControlCapability for CodexAdapter {
         &self,
         enabled: bool,
     ) -> super::runtime_control::RuntimeControlReadiness {
-        match app_server::daemon::readiness(enabled) {
-            app_server::daemon::Readiness::Disabled => {
-                super::runtime_control::RuntimeControlReadiness::Disabled
-            }
-            app_server::daemon::Readiness::Ready => {
-                super::runtime_control::RuntimeControlReadiness::Ready { host_argv: None }
-            }
-            app_server::daemon::Readiness::Uninstalled(issue) => {
-                super::runtime_control::RuntimeControlReadiness::Uninstalled(
-                    super::runtime_control::RuntimeControlIssue::new(
-                        "codex",
-                        "standalone_missing",
-                        &issue,
-                    ),
-                )
-            }
-        }
+        app_server::daemon::readiness(enabled)
     }
 
     fn ensure_runtime_control(&self, enabled: bool) {
