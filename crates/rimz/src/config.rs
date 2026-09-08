@@ -499,11 +499,6 @@ impl MachineConfig {
         MachineConfigFiles::machine().path(MachineConfigFileKind::Core)
     }
 
-    /// The theme per-machine config path: `$XDG_CONFIG_HOME/rimz/theme.toml`.
-    pub fn theme_path() -> PathBuf {
-        MachineConfigFiles::machine().path(MachineConfigFileKind::Theme)
-    }
-
     /// The agents per-machine config path: `$XDG_CONFIG_HOME/rimz/agents.toml`.
     pub fn agents_path() -> PathBuf {
         MachineConfigFiles::machine().path(MachineConfigFileKind::Agents)
