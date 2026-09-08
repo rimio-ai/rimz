@@ -123,6 +123,11 @@ mod tests {
     use super::*;
 
     #[test]
+    fn default_resume_ceiling_is_128() {
+        assert_eq!(ResumeConfig::default().max, 128);
+    }
+
+    #[test]
     fn auto_redeem_min_gain_defaults_and_parses_supported_units() {
         let default: ResumeConfig = toml::from_str("").unwrap();
         assert_eq!(
