@@ -7,11 +7,11 @@ use tempfile::tempdir;
 #[test]
 fn glyph_set_source_folds_style_after_explicit_set() {
     let mut theme = ThemeConfig::default();
-    assert_eq!(theme.glyph_set_source().as_deref(), None);
+    assert_eq!(theme.glyph_set_source(), None);
     theme.style = Some(ThemeStyle::Modern);
-    assert_eq!(theme.glyph_set_source().as_deref(), Some("nerd_font"));
+    assert_eq!(theme.glyph_set_source(), Some("nerd_font"));
     theme.glyphs.set = Some("unicode".to_owned());
-    assert_eq!(theme.glyph_set_source().as_deref(), Some("unicode"));
+    assert_eq!(theme.glyph_set_source(), Some("unicode"));
 }
 
 fn write(dir: &tempfile::TempDir, text: &str) -> PathBuf {
