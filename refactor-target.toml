@@ -185,6 +185,11 @@ path = "crates/rimz/src/mux"
 surface-budget = 274
 
 [[module]]
+path = "crates/rimz/src/mux/zellij"
+# Presence lifecycle stays behind upgrade_presence_plugin; public schema serves sidebar, doctor and integration fixtures.
+surface-budget = 50
+
+[[module]]
 path = "crates/rimz/src/observability"
 surface-budget = 11
 
@@ -581,11 +586,6 @@ allowed-dependencies = [
 surface-budget = 37
 
 [[strangler]]
-symbol = "purge_zellij_session_cache_in"
-path = "crates/rimz/src/mux/recovery.rs"
-baseline = 0
-
-[[strangler]]
 symbol = "invalidate_snapshot_caches"
 path = "crates/rimz/src/store"
 baseline = 3
@@ -789,3 +789,53 @@ reason = "Production passes no filter but this capped-roster lookup cannot becom
 kind = "item"
 key = "sidebar_pane::app::state::compute_next_state"
 reason = "The health-recovery split with commit_fetch preserves producer fast-fold provenance; a provenance-aware reducer is a deferred deepen (732161ced, 25a16ed5c; pass 11)."
+
+[[verdict]]
+kind = "item"
+key = "mux::zellij::ZellijBackend"
+reason = "Pass 10: the concrete backend is driven by the separate integration crate through LiveZellijSession::backend; crate-private reach would sever those callers."
+
+[[verdict]]
+kind = "item"
+key = "mux::zellij::with_runtime_dir"
+reason = "Pass 10: per-backend XDG pinning is compiled only under test/testkit; the integration crate needs independent roots (900c5ced2)."
+
+[[verdict]]
+kind = "item"
+key = "mux::zellij::pane_topology::PaneTopologyPane"
+reason = "Pass 10: public topology wire schema nested in PaneTopologyCache, constructed by integration fixtures and sidebar renderer tests."
+
+[[verdict]]
+kind = "item"
+key = "mux::zellij::pane_topology::pane_topology_cache_is_fresh"
+reason = "Pass 10: one predicate supports distinct decisions: doctor displays a writer, while sidebar accepts or rejects one; the shared call is use, not duplicate policy."
+
+[[verdict]]
+kind = "item"
+key = "mux::zellij::converge_presence_plugin_for"
+reason = "Pass 10: explicit unconditional convergence stays public for the live integration tests that drive the reload protocol against real sessions."
+
+[[verdict]]
+kind = "pass-through"
+key = "mux::zellij::backend::attach_readonly_command"
+reason = "Pass 10: MuxBackend member forwards to the Zellij implementation; the seam is the trait."
+
+[[verdict]]
+kind = "pass-through"
+key = "mux::zellij::backend::kill_session"
+reason = "Pass 10: MuxBackend member forwards to the Zellij implementation; the seam is the trait."
+
+[[verdict]]
+kind = "pass-through"
+key = "mux::zellij::backend::session_liveness"
+reason = "Pass 10: MuxBackend member forwards to the Zellij implementation; the seam is the trait."
+
+[[verdict]]
+kind = "pass-through"
+key = "mux::zellij::backend::close_pane"
+reason = "Pass 10: MuxBackend member forwards to the Zellij implementation; the seam is the trait."
+
+[[verdict]]
+kind = "shape"
+key = "SplitPlacement::Directional+companion_geometry+plan_append+split_pane"
+reason = "Pass 10: companion_layout already shares the policy; backend-native remainders differ in gap width, the 0.45 no-focus gate, target kind and native convergence (one origin bce9d5d75)."
