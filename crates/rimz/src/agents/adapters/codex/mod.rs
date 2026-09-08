@@ -22,7 +22,7 @@
 //! The local session index supplies Codex's automatic thread name inline.
 //! Remaining metadata Claude gets from its statusline (rate-limit windows,
 //! model display name, thread preview, version) comes from the app-server
-//! read-only methods via [`refresh_app_server_enrichment`], gated by [`app_server_due`] and spawned out-of-band
+//! read-only methods, throttled by [`app_server_due`] and spawned out-of-band
 //! by `rimz agents refresh-context`.
 
 mod account;

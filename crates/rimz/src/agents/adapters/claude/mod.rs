@@ -1157,7 +1157,7 @@ fn claude_effort(payload: &Value, parts: &ClaudeLifecycleParts) -> Option<String
         .or_else(|| optional_payload_string(payload, &["thinking_level"]))
 }
 
-/// Claude v2.1.145+ parks on nonterminal background tasks or any scheduled wakeup. Older builds omit both arrays and genuinely end the turn.
+/// Claude v2.1.145+ parks on pending tasks or scheduled wakeups.
 fn has_pending_background(tasks: &[BackgroundTask], crons: &[payloads::SessionCron]) -> bool {
     tasks.iter().any(|task| {
         task.status

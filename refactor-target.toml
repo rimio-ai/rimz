@@ -727,25 +727,15 @@ reason = "Settings and launch argv, consent seeding, and bridge-pointer liveness
 
 [[verdict]]
 kind = "item"
-key = "agents::adapters::codex::local_sessions::fixture_observation"
-reason = "The provider fixture follows the adapter-family conformance pattern; it is not a production facade."
-
-[[verdict]]
-kind = "item"
-key = "agents::adapters::codex::transcript::with_codex_sessions_root"
-reason = "Test injection retains one home per environment key, avoiding competing global overrides."
-
-[[verdict]]
-kind = "item"
 key = "agents::adapters::codex::local_sessions::discover"
 reason = "Codex and Claude discovery use different roots, budgets, and date windows; separate walks preserve provider policy."
 
 [[verdict]]
 kind = "item"
-key = "agents::adapters::claude::oauth_usage::fetch_usage_with_url"
+key = "agents::adapters::claude::oauth_usage::fetch_usage_with_token"
 reason = "Provider header wrappers sit over the shared credits transport; a common bearer helper saves at most one line and can add seven."
 
 [[verdict]]
 kind = "item"
-key = "agents::adapters::codex::rollout::RawField"
+key = "agents::adapters::codex::rollout::decode_line"
 reason = "Null versus absent and the reported-field mask preserve cache-write presence (5951e11bd); these are distinct wire states."

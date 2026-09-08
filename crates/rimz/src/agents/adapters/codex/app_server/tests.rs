@@ -17,6 +17,7 @@ struct CannedTransport {
     errors: HashSet<&'static str>,
     calls: Vec<String>,
     params: Vec<Value>,
+    notifications: Vec<Value>,
 }
 
 impl CannedTransport {
@@ -37,6 +38,7 @@ impl CannedTransport {
             errors: HashSet::new(),
             calls: Vec::new(),
             params: Vec::new(),
+            notifications: Vec::new(),
         }
     }
 
@@ -77,6 +79,7 @@ impl JsonRpcTransport for CannedTransport {
     fn notify_frame(&mut self, frame: &Value) -> Result<(), AppServerErr> {
         let method = frame["method"].as_str().unwrap();
         self.calls.push(format!("notify:{method}"));
+        self.notifications.push(frame.clone());
         Ok(())
     }
 }
@@ -122,6 +125,10 @@ fn handshake_initializes_then_acknowledges_before_reads() {
 
     assert_eq!(client.transport.calls[0], "initialize");
     assert_eq!(client.transport.calls[1], "notify:initialized");
+    assert_eq!(
+        client.transport.notifications,
+        [json!({"jsonrpc": "2.0", "method": "initialized", "params": {}})]
+    );
     assert!(
         client
             .transport
@@ -130,6 +137,17 @@ fn handshake_initializes_then_acknowledges_before_reads() {
             .position(|c| c == "account/rateLimits/read")
             .unwrap()
             > 1
+    );
+}
+
+#[test]
+fn initialize_without_ack_params_omits_the_key() {
+    let mut transport = CannedTransport::new();
+    transport::initialize(&mut transport, None).unwrap();
+    assert_eq!(transport.calls, ["initialize", "notify:initialized"]);
+    assert_eq!(
+        transport.notifications,
+        [json!({"jsonrpc": "2.0", "method": "initialized"})]
     );
 }
 
