@@ -230,7 +230,7 @@ fn env_config_dir(raw: &str) -> Option<PathBuf> {
 ///
 /// These are the same field names rejected by ccusage's `has_unsupported_null_field`.
 /// Skipping them prevents silently including entries with missing cost or IDs.
-pub(super) fn has_unsupported_null_field(line: &[u8]) -> bool {
+fn has_unsupported_null_field(line: &[u8]) -> bool {
     const NULL_PATTERNS: &[&[u8]] = &[
         b"\"id\":null",
         b"\"model\":null",
@@ -286,6 +286,15 @@ fn is_semver_prefix(value: &str) -> bool {
 
 // ── Parser ────────────────────────────────────────────────────────────────────
 
+pub(super) fn priced_entry(line: &[u8]) -> Option<ClaudeEntry> {
+    const USAGE_MARKER: &[u8] = br#""usage":{"#;
+
+    if line.is_empty() || !bytes_contains(line, USAGE_MARKER) || has_unsupported_null_field(line) {
+        return None;
+    }
+    serde_json::from_slice(line).ok()
+}
+
 /// Parse a Claude JSONL file into raw `CachedEntry` values, resuming from
 /// `from_offset` (0 = the whole file). Lines are independent — no cross-line
 /// state — so the cursor is just the consumed-byte offset.
@@ -314,23 +323,12 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
             replace_entries: false,
         };
     };
-    const USAGE_MARKER: &[u8] = br#""usage":{"#;
-
     let mut entries: Vec<CachedEntry> = Vec::new();
     let mut origin = None;
     let mut unknown_models = BTreeMap::new();
 
     for line in content.split(|&b| b == b'\n') {
-        if line.is_empty() {
-            continue;
-        }
-        if !bytes_contains(line, USAGE_MARKER) {
-            continue;
-        }
-        if has_unsupported_null_field(line) {
-            continue;
-        }
-        let Ok(entry) = serde_json::from_slice::<ClaudeEntry>(line) else {
+        let Some(entry) = priced_entry(line) else {
             continue;
         };
         if !is_valid_claude_entry(&entry) {

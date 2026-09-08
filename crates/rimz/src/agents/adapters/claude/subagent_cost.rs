@@ -5,12 +5,10 @@ use std::path::Path;
 use crate::agents::context::{PricedRequest, SubagentUsageCursor};
 use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::spending::{SplitPrice, lookup_split_price, should_replace_usage_duplicate};
-use crate::agents::transcript_fs::{bytes_contains, read_transcript_lines};
+use crate::agents::transcript_fs::read_transcript_lines;
 
-use super::spend::{ClaudeEntry, ClaudeUsage, has_unsupported_null_field, request_split};
+use super::spend::{ClaudeEntry, ClaudeUsage, priced_entry, request_split};
 use super::subagents::subagents_dir;
-
-const USAGE_MARKER: &[u8] = br#""usage":{"#;
 
 /// Advance one child's cumulative cost through complete records appended since
 /// `prior`. An unreadable child transcript returns `None` so the caller can
@@ -50,13 +48,7 @@ pub(super) fn advance_cursor(
         return Some(cursor);
     };
     for line in content.split(|byte| *byte == b'\n') {
-        if line.is_empty()
-            || !bytes_contains(line, USAGE_MARKER)
-            || has_unsupported_null_field(line)
-        {
-            continue;
-        }
-        let Ok(entry) = serde_json::from_slice::<ClaudeEntry>(line) else {
+        let Some(entry) = priced_entry(line) else {
             continue;
         };
         if entry.agent_id.as_deref() != Some(child_id) {
