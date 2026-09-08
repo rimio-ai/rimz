@@ -218,6 +218,7 @@ enum Slot {
     Name(String),
     Pane(PaneId),
     Session(AgentSessionId),
+    Orphan(Box<Slot>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -392,7 +393,7 @@ fn fold<'a>(agents: &[&'a AgentState]) -> Vec<(SlotKey, Vec<&'a AgentState>)> {
 }
 
 /// Fold each pane-backed child record into the durable seat that launched it.
-/// Orphaned children retain a session-keyed slot for `slot_groups` consumers;
+/// Orphaned children retain their continuation slot in a separate namespace;
 /// attribution drops slots that contain no parent identity.
 fn fold_seats<'a>(
     agents: &[&'a AgentState],
@@ -414,10 +415,10 @@ fn fold_seats<'a>(
             .iter()
             .copied()
             .find(|parent| is_launched_child_of(child, parent));
-        let key = parent.map(slot).unwrap_or_else(|| SlotKey {
-            channel: child.channel(),
-            kind: child.kind.clone(),
-            slot: Slot::Session(child.agent_id.clone()),
+        let key = parent.map(slot).unwrap_or_else(|| {
+            let mut key = slot(child);
+            key.slot = Slot::Orphan(Box::new(key.slot));
+            key
         });
         slots.entry(key).or_default().push(child);
     }
