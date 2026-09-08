@@ -105,6 +105,7 @@ fn verdict_line(
         && let Some(path) = signal
             .watch
             .as_ref()
+            .filter(|watch| !watch.output.is_empty())
             .and_then(|watch| watch.output_path.as_ref())
     {
         verdict.push_str(&format!(" · output: {}", path.display()));

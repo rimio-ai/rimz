@@ -49,7 +49,7 @@ fn assert_watch(verdict: WatchVerdict, label: &str) {
                 }),
                 ..signal("wake.test", serde_json::json!({}))
             };
-            let path = if output_path.is_some() {
+            let path = if output_path.is_some() && !output.is_empty() {
                 " · output: /state/wakes/wake-test.log"
             } else {
                 ""
@@ -134,6 +134,11 @@ fn watch_checkin_keeps_tail_path_and_next_actions() {
                 output
             };
             let delay = timeout.unwrap_or("30m");
+            let path = if output.is_empty() {
+                ""
+            } else {
+                " · output: /state/wakes/wake-test.log"
+            };
             assert_eq!(
                 compose_wake(
                     "wake-test",
@@ -144,7 +149,7 @@ fn watch_checkin_keeps_tail_path_and_next_actions() {
                     now()
                 ),
                 format!(
-                    "waited on `cargo test`\nstill running after 30m · output: /state/wakes/wake-test.log [wake-test]\n{tail}\n\nStop it: rimz wake cancel wake-test\nAnother check-in: rimz wake --in {delay}"
+                    "waited on `cargo test`\nstill running after 30m{path} [wake-test]\n{tail}\n\nStop it: rimz wake cancel wake-test\nAnother check-in: rimz wake --in {delay}"
                 )
             );
         }

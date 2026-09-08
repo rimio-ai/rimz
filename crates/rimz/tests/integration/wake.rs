@@ -173,6 +173,96 @@ fn wake_rejects_watch_checkins_at_or_above_24_hours() {
 }
 
 #[test]
+fn wake_pid_checks_in_then_delivers_after_process_disappears_without_empty_path() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    let mut process = std::process::Command::new("sleep")
+        .arg("30")
+        .env("HOME", &env.home_root)
+        .spawn()
+        .unwrap();
+    let pid = process.id().to_string();
+    let receipt = wake_ok(&env, &["wake", "--pid", &pid, "--timeout", "1s", "--json"]);
+    let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
+    assert_eq!(receipt["trigger"], format!("watch: process {pid}"));
+    let checkin = wait_for_wake_messages(&env, 1);
+    assert!(checkin[0].text.contains("still running after"));
+    assert!(checkin[0].text.contains("(no output)"));
+    assert!(!checkin[0].text.contains("output:"));
+    assert!(process.try_wait().unwrap().is_none());
+    assert_eq!(wake_instances(&env).0.len(), 1);
+    process.kill().unwrap();
+    process.wait().unwrap();
+    let messages = wait_for_wake_messages(&env, 2);
+    let completed = messages
+        .iter()
+        .find(|message| message.text.contains("exit 0 after"))
+        .expect("process disappearance delivered");
+    assert!(completed.text.contains(&pid));
+    assert!(completed.text.contains("(no output)"));
+    assert!(!completed.text.contains("output:"));
+    wait_for_no_wake_instances(&env);
+
+    wake_ok(&env, &["wake", "--pid", &pid]);
+    assert_eq!(wait_for_wake_messages(&env, 3).len(), 3);
+    wait_for_no_wake_instances(&env);
+}
+
+#[test]
+fn canceling_pid_wake_leaves_the_existing_process_running() {
+    let env = Env::new();
+    register_calling_agent(&env);
+    let mut process = std::process::Command::new("sleep")
+        .arg("30")
+        .env("HOME", &env.home_root)
+        .spawn()
+        .unwrap();
+    let receipt = wake_ok(
+        &env,
+        &["wake", "--pid", &process.id().to_string(), "--json"],
+    );
+    let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
+    let name = receipt["name"].as_str().unwrap();
+    wait_until("process watcher did not start", || {
+        rimz::harness::schedule::signal::watcher_info(env.store().runtime_paths(), name)
+            .unwrap()
+            .is_some()
+    });
+    wake_ok(&env, &["wake", "cancel", name]);
+    assert!(process.try_wait().unwrap().is_none());
+    assert!(wake_instances(&env).0.is_empty());
+    assert!(env.store().list_pending_messages().unwrap().is_empty());
+    process.kill().unwrap();
+    process.wait().unwrap();
+}
+
+#[test]
+fn wake_pid_rejects_invalid_pids_and_conflicting_triggers() {
+    let env = Env::new();
+    for args in [
+        vec!["wake", "--pid", "0"],
+        vec!["wake", "--pid=-1"],
+        vec!["wake", "--pid", "2147483648"],
+        vec!["wake", "--pid", "not-a-pid"],
+        vec!["wake", "--pid", "123;true"],
+        vec!["wake", "--pid", "123", "--in", "5m"],
+        vec!["wake", "--pid", "123", "--", "true"],
+        vec!["wake", "--pid", "123", "--on", "success"],
+    ] {
+        let output = agent_wake(&env).args(&args).output().unwrap();
+        assert!(!output.status.success(), "accepted {args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("invalid value")
+                || stderr.contains("choose exactly one wake trigger")
+                || stderr.contains("--on requires a command"),
+            "{args:?}: {stderr}"
+        );
+    }
+}
+
+#[test]
 fn watched_failure_preserves_full_output_and_delivers_its_tail() {
     let env = Env::new();
     env.install_agent_hooks("claude");

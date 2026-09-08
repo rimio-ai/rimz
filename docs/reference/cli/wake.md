@@ -1,9 +1,10 @@
 # Wake CLI
 
-`rimz wake` is a self-only alarm: wake the calling agent after a delay or when a watched command exits, without holding its turn open. It pins the caller's live session from its launch environment or process ancestry; arming and canceling require an identifiable agent, not a user shell. To target another agent, attach a note, or subscribe to a signal, use [`rimz loop add --wake`](./loop.md#wakes-and-checks). The [loops guide](../../guide/loops.md#wake-a-running-agent) covers the workflow.
+`rimz wake` is a self-only alarm: wake the calling agent after a delay, when an existing process disappears, or when a watched command exits, without holding its turn open. It pins the caller's live session from its launch environment or process ancestry; arming and canceling require an identifiable agent, not a user shell. To target another agent, attach a note, or subscribe to a signal, use [`rimz loop add --wake`](./loop.md#wakes-and-checks). The [loops guide](../../guide/loops.md#wake-a-running-agent) covers the workflow.
 
 ```sh
 rimz wake --in 30m
+rimz wake --pid 16776
 rimz wake -- gh run watch --exit-status
 rimz wake --on fail -- cargo test
 rimz wake --timeout 1h -- cargo build
@@ -13,7 +14,7 @@ rimz wake cancel wake-bold-comet
 rimz wake cancel --all
 ```
 
-Exactly one trigger is required when arming: `--in` or a command after `--`. Bare `rimz wake` lists pending deliveries. Each arm mints a workspace-unique `wake-<adjective>-<noun>` name and prints a receipt followed by the caller's pending rows; `--json` includes `pending` alongside `name`, `trigger`, and `target`.
+Exactly one trigger is required when arming: `--in`, `--pid`, or a command after `--`. Bare `rimz wake` lists pending deliveries. Each arm mints a workspace-unique `wake-<adjective>-<noun>` name and prints a receipt followed by the caller's pending rows; `--json` includes `pending` alongside `name`, `trigger`, and `target`.
 
 ## Triggers
 
@@ -21,15 +22,17 @@ Once the caller rests, an armed one-shot wake makes its status `sleeping` rather
 
 **`--in <DURATION>`** fires once after a positive delay shorter than 24 hours. The delay resolves in the configured timezone and rounds up to the next scheduler minute. It needs the room's elder tick or the [loop timer](./loop.md#timer).
 
+**`--pid <PID>`** waits for an existing process without needing `tail --pid=<PID> -f /dev/null`. It watches a positive PID using a portable `kill -0` check once per second, so no GNU `tail` is required. An already-absent or inaccessible PID completes immediately. This observes PID presence, not the original process identity or its exit status: an unreaped zombie or a reused PID can keep the wait open. `exit 0` means the wait finished, not that the process succeeded; `--on` is therefore command-only. No process output is captured, and canceling this wake stops only the watcher, not the existing process.
+
 **A command after `--`** runs through `sh -c` at the project root with stdin closed, in a detached watcher that outlives the arming turn. `--on fail|success|any` filters its final outcome, defaulting to `any`: `fail` covers a non-zero exit or a lost watcher, and `success` a zero exit. A filtered outcome records `skipped` and retires the row without a final message.
 
-**`--timeout <DURATION>` is a check-in, not a kill deadline.** It defaults to `30m`, independent of `loop.default-timeout`, and must be positive and shorter than 24 hours. If the command is still running then, RimZ sends one notice with the current output tail, leaves the command and row running, and later delivers the exit verdict. The check-in is never filtered by `--on` and does not repeat automatically. Both `--on` and `--timeout` require a command.
+**`--timeout <DURATION>` is a check-in, not a kill deadline.** It defaults to `30m`, independent of `loop.default-timeout`, and must be positive and shorter than 24 hours. If the command or PID wait is still running then, RimZ sends one notice with the current output tail, leaves the watcher and row running, and later delivers the exit verdict. The check-in is never filtered by `--on` and does not repeat automatically. `--timeout` requires `--pid` or a command.
 
 ## The delivered message
 
 Self wakes are durable messages from `@rimz` with `Type: WAKE`, dispatched as steer: they interrupt a working agent rather than waiting for its next `done` boundary. Scheduled and signal [loop deliveries](./loop.md#signals) instead park at that boundary. Delivered wakes are hidden from the rendered transcript and retained by [`rimz transcript --json`](./transcript.md).
 
-The body names the wait, its elapsed outcome, the output path and task name, then the last 4 KiB of combined output or `(no output)`. A timer reads `waited 30m [<name>]`. A command check-in has this shape:
+The body names the wait, its elapsed outcome and task name, then the last 4 KiB of combined output or `(no output)`. The output path is included only when there is output. A timer reads `waited 30m [<name>]`. A command check-in has this shape:
 
 ```text
 waited on `cargo build`
