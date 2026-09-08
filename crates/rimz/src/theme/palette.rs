@@ -197,7 +197,7 @@ fn raw_palette_for_theme(theme: &ThemeConfig) -> RawPalette {
     theme
         .colors
         .as_ref()
-        .and_then(|colors| crate::config::parsed_inline_palette(colors).ok())
+        .and_then(|colors| crate::config::parse_colors(colors).ok())
         .map(RawPalette::from)
         .or_else(|| {
             theme

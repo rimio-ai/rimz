@@ -324,10 +324,6 @@ pub fn validate_glyph_source(name: &str) -> Result<(), String> {
     }
 }
 
-pub fn glyph_lookup_hint() -> String {
-    "named sets: unicode, nerd_font".to_owned()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
