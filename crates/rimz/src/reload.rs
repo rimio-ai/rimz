@@ -468,23 +468,17 @@ fn upgrade_live(
     //    replacement publishes topology from its new writer generation; a
     //    detached or degraded session keeps its prior plugin and retries on a
     //    later reload. Best-effort like every step here.
-    let mux_config = MultiplexerConfig::from(machine_config);
     if *mux == MuxName::Zellij
         && let Some(wasm) = crate::mux::zellij::ensure_presence_plugin_artifact()
     {
-        let presence = crate::mux::PresencePluginOptions {
-            session_name: ws.session_name.clone(),
-            workspace_id: ws.workspace_id.clone(),
+        let presence = crate::mux::PresencePluginOptions::from_config(
+            &ws.session_name,
+            &ws.workspace_id,
             wasm,
-            rimz_bin: room_bin.clone(),
-            converge: true,
-            focus_key: crate::config::SidebarConfig::key_label(&machine_config.sidebar.focus_key)
-                .map(str::to_owned),
-            zoom_key: crate::config::SidebarConfig::key_label(&machine_config.sidebar.zoom_key)
-                .map(str::to_owned),
-            focus_follows_mouse: mux_config.zellij.focus_follows_mouse,
-            mouse_click_through: mux_config.zellij.mouse_click_through,
-        };
+            room_bin.clone(),
+            &machine_config.sidebar,
+            &machine_config.zellij,
+        );
         let desired_config = crate::mux::zellij::presence_plugin_config_hash_for(&presence);
         let cache = pane_topology::read_pane_topology_cache(runtime, &ws.session_name);
         let current_writer = current_presence_plugin_writer(
@@ -494,7 +488,7 @@ fn upgrade_live(
             &desired_config,
         );
         let needs_convergence = match current_writer {
-            Some(writer) => match crate::mux::ZellijBackend::new()
+            Some(writer) => match crate::mux::ZellijBackend::default()
                 .cleanup_current_presence_plugin_for(&presence, writer)
             {
                 Ok(crate::mux::zellij::PresencePluginCleanup::Current) => {
@@ -517,7 +511,7 @@ fn upgrade_live(
             None => true,
         };
         if needs_convergence {
-            match backend.ensure_presence_plugin(&presence) {
+            match crate::mux::ZellijBackend::default().converge_presence_plugin_for(&presence) {
                 Ok(()) => outcome.plugin_upgraded += 1,
                 Err(err) => {
                     tracing::warn!(
@@ -569,23 +563,16 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
     let topology_floor_ms = if *mux == MuxName::Zellij {
         let presence_floor_ms = unix_now_ms();
         if let Some(wasm) = crate::mux::zellij::ensure_presence_plugin_artifact() {
-            let presence = crate::mux::PresencePluginOptions {
-                session_name: ws.session_name.clone(),
-                workspace_id: ws.workspace_id.clone(),
+            let presence = crate::mux::PresencePluginOptions::from_config(
+                &ws.session_name,
+                &ws.workspace_id,
                 wasm,
-                rimz_bin: StatePaths::for_workspace(ws.workspace_id.clone())
+                StatePaths::for_workspace(ws.workspace_id.clone())
                     .map(|paths| paths.room_bin)
                     .unwrap_or_else(|_| rimz_bin.clone()),
-                converge: false,
-                focus_key: crate::config::SidebarConfig::key_label(
-                    &machine_config.sidebar.focus_key,
-                )
-                .map(str::to_owned),
-                zoom_key: crate::config::SidebarConfig::key_label(&machine_config.sidebar.zoom_key)
-                    .map(str::to_owned),
-                focus_follows_mouse: mux_config.zellij.focus_follows_mouse,
-                mouse_click_through: mux_config.zellij.mouse_click_through,
-            };
+                &machine_config.sidebar,
+                &mux_config.zellij,
+            );
             if let Err(err) = backend.ensure_presence_plugin(&presence) {
                 tracing::warn!(
                     session = %ws.session_name,
@@ -594,7 +581,7 @@ fn repair_live(target: &LiveTarget, machine_config: &MachineConfig) -> ReloadOut
                     "sidebar repair: presence plugin ensure failed",
                 );
             }
-            if let Err(err) = crate::mux::ZellijBackend::new().dump_topology_for(&presence) {
+            if let Err(err) = crate::mux::ZellijBackend::default().dump_topology_for(&presence) {
                 tracing::warn!(
                     session = %ws.session_name,
                     tags.operation = "sidebar.repair.presence_probe",

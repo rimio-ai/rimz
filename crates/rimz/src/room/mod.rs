@@ -341,25 +341,16 @@ impl RoomContext {
 
     fn presence_options(&self) -> Option<PresencePluginOptions> {
         let wasm = crate::mux::zellij::presence_plugin_path()?;
-        Some(PresencePluginOptions {
-            session_name: self.workspace.session_name.clone(),
-            workspace_id: self.workspace.workspace_id.clone(),
+        Some(PresencePluginOptions::from_config(
+            &self.workspace.session_name,
+            &self.workspace.workspace_id,
             wasm,
-            rimz_bin: StatePaths::for_workspace(self.workspace.workspace_id.clone())
+            StatePaths::for_workspace(self.workspace.workspace_id.clone())
                 .ok()?
                 .room_bin,
-            converge: false,
-            focus_key: crate::config::SidebarConfig::key_label(
-                &self.machine_config.sidebar.focus_key,
-            )
-            .map(str::to_owned),
-            zoom_key: crate::config::SidebarConfig::key_label(
-                &self.machine_config.sidebar.zoom_key,
-            )
-            .map(str::to_owned),
-            focus_follows_mouse: self.machine_config.zellij.focus_follows_mouse,
-            mouse_click_through: self.machine_config.zellij.mouse_click_through,
-        })
+            &self.machine_config.sidebar,
+            &self.machine_config.zellij,
+        ))
     }
 
     fn load_presence(&self) {

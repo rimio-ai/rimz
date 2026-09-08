@@ -427,12 +427,11 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
 
     let backend = ZellijBackend::with_runtime_dir(room.path());
     let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id");
-    let mut opts = rimz::mux::PresencePluginOptions {
+    let opts = rimz::mux::PresencePluginOptions {
         session_name: name.clone(),
         workspace_id: workspace_id.clone(),
         wasm,
         rimz_bin: rimz_shim,
-        converge: false,
         focus_key: None,
         zoom_key: None,
         focus_follows_mouse: false,
@@ -515,9 +514,8 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
     // identity case proves the pipe stays idempotent and the explicit dump,
     // rather than an in-place reload, republishes topology.
     let before = lines.len();
-    opts.converge = true;
     backend
-        .ensure_presence_plugin(&opts)
+        .converge_presence_plugin_for(&opts)
         .expect("converge against a live session");
     let lines = wait_for_poke_lines(&poke_log, before + 1);
     assert!(
@@ -569,7 +567,6 @@ fn presence_identity_transition_keeps_global_background_updates() {
         workspace_id: workspace_id.clone(),
         wasm,
         rimz_bin: crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz")),
-        converge: false,
         focus_key: None,
         zoom_key: None,
         focus_follows_mouse: false,
@@ -618,9 +615,8 @@ fn presence_identity_transition_keeps_global_background_updates() {
     // A configuration change is the same Zellij identity transition as a wasm
     // upgrade. Converge while tab one owns the attached client's focus.
     opts.focus_key = Some("Alt+p".to_owned());
-    opts.converge = true;
     backend
-        .ensure_presence_plugin(&opts)
+        .converge_presence_plugin_for(&opts)
         .expect("converge changed presence identity");
     let changed_cache = poll_until(
         SPAWN_TIMEOUT,
@@ -858,12 +854,11 @@ fn tab_switch_repairs_sidebar_focus_from_attached_client_views() {
         .expect("room state paths")
         .room_bin;
     backend
-        .ensure_presence_plugin(&rimz::mux::PresencePluginOptions {
+        .converge_presence_plugin_for(&rimz::mux::PresencePluginOptions {
             session_name: name.clone(),
             workspace_id: sidebar.workspace_id.clone(),
             wasm,
             rimz_bin: room_bin,
-            converge: true,
             focus_key: Some("Alt+p".to_owned()),
             zoom_key: Some("Alt+g".to_owned()),
             focus_follows_mouse: false,
@@ -1035,7 +1030,6 @@ fn room_key_presses_from_different_cwd_reach_the_plugin() {
             workspace_id: WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id"),
             wasm,
             rimz_bin: rimz_shim,
-            converge: false,
             focus_key: Some("Alt+p".to_owned()),
             zoom_key: Some("Alt+g".to_owned()),
             focus_follows_mouse: false,

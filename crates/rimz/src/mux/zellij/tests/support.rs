@@ -81,7 +81,6 @@ pub(crate) fn presence_opts(session_name: &str, rimz_bin: &str) -> PresencePlugi
         workspace_id: WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
         wasm: PathBuf::from("/tmp/rimz-presence-zellij.wasm"),
         rimz_bin: PathBuf::from(rimz_bin),
-        converge: false,
         focus_key: None,
         zoom_key: None,
         focus_follows_mouse: false,

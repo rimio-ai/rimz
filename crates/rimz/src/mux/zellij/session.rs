@@ -318,22 +318,14 @@ impl ZellijBackend {
         };
         let machine_config = MachineConfig::load_lenient();
         let mux_config = MultiplexerConfig::from(machine_config.as_ref());
-        let opts = PresencePluginOptions {
-            session_name: known.session_name.clone(),
-            workspace_id: known.workspace_id.clone(),
+        let opts = PresencePluginOptions::from_config(
+            &known.session_name,
+            &known.workspace_id,
             wasm,
-            rimz_bin: workspace::resolve_recorded_rimz_bin(
-                &known.workspace_id,
-                known.rimz_bin.as_deref(),
-            ),
-            converge: false,
-            focus_key: crate::config::SidebarConfig::key_label(&machine_config.sidebar.focus_key)
-                .map(str::to_owned),
-            zoom_key: crate::config::SidebarConfig::key_label(&machine_config.sidebar.zoom_key)
-                .map(str::to_owned),
-            focus_follows_mouse: mux_config.zellij.focus_follows_mouse,
-            mouse_click_through: mux_config.zellij.mouse_click_through,
-        };
+            workspace::resolve_recorded_rimz_bin(&known.workspace_id, known.rimz_bin.as_deref()),
+            &machine_config.sidebar,
+            &mux_config.zellij,
+        );
         if let Err(err) = self.dump_topology_for(&opts) {
             tracing::debug!(
                 session = %known.session_name,

@@ -232,7 +232,8 @@ impl ZellijBackend {
         Ok(ids)
     }
 
-    pub(super) fn converge_presence_plugin_for(
+    /// Explicit convergence for reload and live-session callers.
+    pub fn converge_presence_plugin_for(
         &self,
         opts: &super::super::PresencePluginOptions,
     ) -> Result<()> {

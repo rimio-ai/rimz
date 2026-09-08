@@ -108,8 +108,7 @@ fn presence_convergence_log(writer: Option<TopologyWriter>) -> String {
 
     let (temp, shim) = pane_roster_shim(MIXED_PLUGIN_ROSTER);
     let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, temp.path());
-    let mut opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
-    opts.converge = true;
+    let opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
     if let Some(writer) = writer {
         let runtime =
             RuntimePaths::under(opts.workspace_id.clone(), temp.path()).expect("runtime paths");
