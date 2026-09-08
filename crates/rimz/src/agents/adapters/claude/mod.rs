@@ -836,30 +836,7 @@ impl crate::agents::capabilities::RuntimeControlCapability for ClaudeAdapter {
         &self,
         enabled: bool,
     ) -> super::runtime_control::RuntimeControlReadiness {
-        match remote_control::readiness(enabled) {
-            remote_control::Readiness::Disabled => {
-                super::runtime_control::RuntimeControlReadiness::Disabled
-            }
-            remote_control::Readiness::Ready { host_argv } => {
-                super::runtime_control::RuntimeControlReadiness::Ready {
-                    host_argv: Some(host_argv),
-                }
-            }
-            remote_control::Readiness::Uninstalled(issue) => {
-                super::runtime_control::RuntimeControlReadiness::Uninstalled(
-                    super::runtime_control::RuntimeControlIssue::new(
-                        "claude",
-                        "uninstalled",
-                        &issue,
-                    ),
-                )
-            }
-            remote_control::Readiness::Blocked(issue) => {
-                super::runtime_control::RuntimeControlReadiness::Blocked(
-                    super::runtime_control::RuntimeControlIssue::new("claude", "blocked", &issue),
-                )
-            }
-        }
+        remote_control::readiness(enabled)
     }
 
     fn prepare_runtime_control(&self, enabled: bool) {
@@ -870,12 +847,7 @@ impl crate::agents::capabilities::RuntimeControlCapability for ClaudeAdapter {
         &self,
         project_root: &Path,
     ) -> super::runtime_control::RuntimeControlLiveness {
-        use super::runtime_control::RuntimeControlLiveness;
-        match remote_liveness::probe(project_root) {
-            remote_liveness::HostLiveness::Unknown => RuntimeControlLiveness::Unknown,
-            remote_liveness::HostLiveness::Down => RuntimeControlLiveness::Down,
-            remote_liveness::HostLiveness::Up { .. } => RuntimeControlLiveness::Up,
-        }
+        remote_liveness::probe(project_root)
     }
 
     fn runtime_control_wiring_input_path(&self) -> Option<PathBuf> {

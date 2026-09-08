@@ -1,12 +1,13 @@
 //! Claude Code remote-control readiness, host argv, settings, and version gates.
 //!
 //! This module owns provider probing and setup guidance so room start, doctor,
-//! daemon views, and runtime toggles consume one native readiness result.
+//! daemon views, and runtime toggles consume one neutral readiness result.
 
 use serde_json::{Map, Value};
 use std::ffi::OsStr;
 use std::path::PathBuf;
 
+use crate::agents::runtime_control::{RuntimeControlIssue, RuntimeControlReadiness};
 use crate::agents::version::{CliVersion, probe_cli_version};
 
 use super::install::{claude_settings_path, read_existing_json};
@@ -221,15 +222,6 @@ fn endpoint_is_conflicting(value: &str) -> bool {
     !value.trim().is_empty() && !is_anthropic_api_url(value)
 }
 
-/// Claude-native readiness plus the host argv when launchable.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Readiness {
-    Disabled,
-    Ready { host_argv: Vec<String> },
-    Uninstalled(Issue),
-    Blocked(Issue),
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Issue {
     Uninstalled,
@@ -340,12 +332,16 @@ impl std::fmt::Display for Issue {
 impl std::error::Error for Issue {}
 
 /// Probe configured Claude readiness once and return launch argv with success.
-pub fn readiness(enabled: bool) -> Readiness {
+pub fn readiness(enabled: bool) -> RuntimeControlReadiness {
     if !enabled {
-        return Readiness::Disabled;
+        return RuntimeControlReadiness::Disabled;
     }
     if which::which("claude").is_err() {
-        return Readiness::Uninstalled(Issue::Uninstalled);
+        return RuntimeControlReadiness::Uninstalled(RuntimeControlIssue::new(
+            "claude",
+            "uninstalled",
+            &Issue::Uninstalled,
+        ));
     }
     let (settings_path, settings) = read_rc_settings();
     let version = (!settings.disable_remote_control)
@@ -361,8 +357,12 @@ pub fn readiness(enabled: bool) -> Readiness {
         launch_endpoint_conflict(),
         remote_consent::read_consent(),
     ) {
-        Ok(host_argv) => Readiness::Ready { host_argv },
-        Err(issue) => Readiness::Blocked(issue),
+        Ok(host_argv) => RuntimeControlReadiness::Ready {
+            host_argv: Some(host_argv),
+        },
+        Err(issue) => {
+            RuntimeControlReadiness::Blocked(RuntimeControlIssue::new("claude", "blocked", &issue))
+        }
     }
 }
 
