@@ -157,6 +157,41 @@ fn panel_groups_team_and_stray_members() {
 }
 
 #[test]
+fn report_scope_reports_the_applied_branch() {
+    let record: AgentState = serde_json::from_value(serde_json::json!({
+        "agent_id": "session",
+        "kind": "codex",
+        "status": "idle",
+        "phase": "idle",
+        "last_seen": jiff::Timestamp::UNIX_EPOCH,
+        "last_activity": jiff::Timestamp::UNIX_EPOCH,
+        "worktree_path": "/repo/lane",
+        "worktree_branch": "old",
+        "channel": "lane"
+    }))
+    .expect("agent fixture");
+    let since = jiff::Timestamp::UNIX_EPOCH;
+    let lifetimes = LaneLifetimes::new(std::collections::HashMap::from([(
+        std::path::PathBuf::from("/repo/lane"),
+        rimz::agents::attribution::LaneLifetime::Since(since),
+    )]));
+    for branch in [None, Some("current".to_owned())] {
+        let scope = report_scope(
+            Some("#lane".to_owned()),
+            None,
+            branch.clone(),
+            None,
+            &[&record],
+            &lifetimes,
+        );
+        assert_eq!(scope.branch, branch);
+        assert_eq!(scope.channel.as_deref(), Some("lane"));
+        assert_eq!(scope.worktree.as_deref(), Some("/repo/lane"));
+        assert_eq!(scope.since, Some(since));
+    }
+}
+
+#[test]
 fn panel_omits_redundant_caption_for_single_teamless_group() {
     let mut report = report();
     let teamless = report.groups.pop().expect("teamless fixture group");

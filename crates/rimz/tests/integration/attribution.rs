@@ -5,6 +5,217 @@ use serde_json::Value;
 
 use crate::common::Env;
 
+fn attribution_output(env: &Env, args: &[&str]) -> std::process::Output {
+    let output = env
+        .rimz()
+        .arg("--root")
+        .arg(&env.project_root)
+        .args(["agents", "attribution"])
+        .args(args)
+        .output()
+        .expect("run attribution");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+#[test]
+fn attribution_omits_a_promptless_launch_in_every_mode() {
+    use rimz::store::writer::{AgentLaunchName, AgentLaunchRequest, AgentLaunchScope};
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let store = env.store();
+    store
+        .begin_agent_launch_batch(
+            &[AgentLaunchRequest {
+                kind: rimz::ids::AgentKind::new_unchecked("codex"),
+                agent_id: "promptless-seat".into(),
+                name: AgentLaunchName::Explicit("quiet-seat".to_owned()),
+                launch: rimz::agents::LaunchParams::default(),
+                run_id: None,
+                prompt: None,
+            }],
+            AgentLaunchScope {
+                session_name: workspace.session_name,
+                cwd: env.project_root.clone(),
+                branch: None,
+                channel: None,
+                description: None,
+            },
+        )
+        .expect("record promptless launch");
+    let projection = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("audit");
+    assert_eq!(projection.agents.len(), 1);
+    assert_eq!(projection.agents[0].turn_started_at, None);
+
+    let panel = attribution_output(&env, &[]);
+    let panel = String::from_utf8(panel.stdout).expect("panel utf8");
+    assert!(!panel.contains("@quiet-seat"));
+    assert!(panel.contains("No agent attribution records in this scope."));
+    let json = attribution_output(&env, &["--json"]);
+    let report: Value = serde_json::from_slice(&json.stdout).expect("attribution json");
+    assert_eq!(report["totals"]["agents"], 0);
+    assert_eq!(report["groups"], serde_json::json!([]));
+    assert!(attribution_output(&env, &["--md"]).stdout.is_empty());
+}
+
+#[test]
+fn attribution_scopes_to_the_checkout_branch() {
+    if std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        tracing::warn!("skipping: git unavailable");
+        return;
+    }
+    let env = Env::new();
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .current_dir(&env.project_root)
+            .env("HOME", &env.home_root)
+            .args(args)
+            .output()
+            .expect("run fixture git");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "initial",
+    ]);
+    env.record(&env.project_root);
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let store = env.store();
+    let observe = |id: &str, branch: Option<&str>, signal| {
+        let mut observation = AgentLifecycleObservation::new(Some(id.into()), signal);
+        observation.worktree_path = Some(env.project_root.display().to_string());
+        observation.worktree_branch = branch.map(ToOwned::to_owned);
+        observation.launch.role = Some(id.to_owned());
+        store
+            .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+                session_name: &workspace.session_name,
+                agent_kind: rimz::ids::AgentKind::new_unchecked("codex"),
+                event_name: "attribution-fixture",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .expect("append lifecycle observation");
+    };
+    for (id, branch) in [
+        ("main-only", Some("main")),
+        ("switched", Some("main")),
+        ("unknown", None),
+    ] {
+        observe(id, branch, LifecycleSignal::Registered);
+        observe(id, branch, LifecycleSignal::TurnStarted);
+    }
+    git(&["checkout", "-qb", "feat/x"]);
+    observe("feature-only", Some("feat/x"), LifecycleSignal::Registered);
+    observe("feature-only", Some("feat/x"), LifecycleSignal::TurnStarted);
+    observe(
+        "switched",
+        Some("feat/x"),
+        LifecycleSignal::ToolUsed {
+            mutates: false,
+            edits: false,
+            name: Some("exec".to_owned()),
+            native_key: None,
+            turn_id: None,
+        },
+    );
+
+    let assert_report = |args: &[&str], branch: Option<&str>, expected: &[&str]| {
+        let output = attribution_output(&env, args);
+        let report: Value = serde_json::from_slice(&output.stdout).expect("attribution json");
+        assert_eq!(report["scope"]["branch"], serde_json::json!(branch));
+        let mut roles = report["groups"]
+            .as_array()
+            .expect("groups")
+            .iter()
+            .flat_map(|group| group["members"].as_array().expect("members"))
+            .map(|member| member["role"].as_str().expect("role"))
+            .collect::<Vec<_>>();
+        roles.sort_unstable();
+        assert_eq!(roles, expected);
+        assert_eq!(report["totals"]["agents"], expected.len());
+    };
+    assert_report(&["--json"], Some("feat/x"), &["feature-only", "switched"]);
+    assert_report(
+        &["--json", "--branch", "main"],
+        Some("main"),
+        &["main-only", "switched"],
+    );
+    assert_report(
+        &["--json", "--all"],
+        None,
+        &["feature-only", "main-only", "switched", "unknown"],
+    );
+    assert_report(
+        &["--json", "--all", "--branch", "main"],
+        Some("main"),
+        &["main-only", "switched"],
+    );
+    assert_report(&["--json", "--branch", "missing"], Some("missing"), &[]);
+    git(&["checkout", "-q", "--detach"]);
+    assert_report(
+        &["--json"],
+        None,
+        &["feature-only", "main-only", "switched", "unknown"],
+    );
+    assert_report(
+        &["--json", "--branch", "feat/x"],
+        Some("feat/x"),
+        &["feature-only", "switched"],
+    );
+
+    let other = env.home_root.join("other");
+    git(&[
+        "worktree",
+        "add",
+        "-qb",
+        "feat/other",
+        other.to_str().expect("fixture path"),
+    ]);
+    for signal in [LifecycleSignal::Registered, LifecycleSignal::TurnStarted] {
+        let mut observation = AgentLifecycleObservation::new(Some("other-session".into()), signal);
+        observation.worktree_path = Some(other.display().to_string());
+        observation.worktree_branch = Some("feat/other".to_owned());
+        observation.launch.role = Some("other".to_owned());
+        observation.launch.channel = Some("other".to_owned());
+        store
+            .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+                session_name: &workspace.session_name,
+                agent_kind: rimz::ids::AgentKind::new_unchecked("codex"),
+                event_name: "attribution-fixture",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .expect("append selected checkout observation");
+    }
+    assert_report(&["#other", "--json"], Some("feat/other"), &["other"]);
+    assert_report(&["#other", "--json", "--branch", "main"], Some("main"), &[]);
+}
+
 #[test]
 fn attribution_credits_exited_team_members_and_transcript_spend() {
     let env = Env::new();

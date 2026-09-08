@@ -23,7 +23,7 @@ The marker lives in the worktree's Git admin directory (`.git/worktrees/<name>/r
 | `repo_root`, `worktree_path` | Where the tree came from and where it lives. |
 | `created_at` | Creation timestamp, and the boundary that scopes [attribution](../agents/model.md#attribution) to this incarnation of the tree. |
 
-`created_at` is also the attribution boundary. Creation writes it once, reuse of an existing tree keeps the marker it finds, and a tree removed and recreated under the same name gets a fresh one, which makes it the durable birth of the lane's current incarnation. Attribution reads it to admit only the agent records registered at or after that birth, so the sessions of an earlier tree at the same path stop being counted the moment a new one replaces it.
+`created_at` is also the attribution lifetime boundary, composed with the report's observed-branch scope. Creation writes it once, reuse of an existing tree keeps the marker it finds, and a tree removed and recreated under the same name gets a fresh one, which makes it the durable birth of the lane's current incarnation. Attribution reads it to admit only the agent records registered at or after that birth, so the sessions of an earlier tree at the same path stop being counted the moment a new one replaces it.
 
 `base_branch` arrived in version 3 and `from_pr` in version 4, both as `#[serde(default)]` options, so markers written by older builds still deserialize and their trees still clean up. Two tests in [`worktree/tests.rs`](../../../crates/rimz/src/worktree/tests.rs) pin that compatibility. Any field added later needs the same treatment.
 

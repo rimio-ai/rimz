@@ -97,7 +97,7 @@ This arms a future notification, not a startup or completion barrier. Signals ar
 When the same team is live in several lanes, run the lifecycle command inside the lane you mean or select it with `team#worktree` or `-w NAME`.
 The `COST` in `rimz teams show`, the team's collapsed finished sidebar receipt, and attribution use the same all-in lifetime fold across every resumed session of each role and every subagent it spawned. Attribution's `subagents` line breaks that spend down by task. Expanding a finished receipt puts each role's lifetime cost on its card, and those cards add back to the receipt; live cards remain scoped to the current provider session.
 All three figures cover the worktree's current life, so a name reused by a later cohort in a recreated worktree reports that cohort alone, and a removed worktree contributes nothing anywhere.
-Use [`rimz agents attribution --md`](../reference/cli/agents.md#attribution) when the team's pull request is ready; it credits every contributing role from durable lane history, including members that exited before the PR opened.
+Use [`rimz agents attribution --md`](../reference/cli/agents.md#attribution) when the team's pull request is ready; it credits contributing roles observed on the checkout's current branch, including members that exited before the PR opened. Add `--branch BRANCH` to credit another branch; this branch filter applies only to attribution, not team or sidebar lifetime costs.
 The full flag surface lives in the [teams CLI reference](../reference/cli/teams.md).
 
 ## Define your own team

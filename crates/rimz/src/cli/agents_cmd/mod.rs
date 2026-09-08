@@ -396,13 +396,16 @@ enum AgentsSubcmd {
     },
     /// Credit the agents and models that worked a lane.
     Attribution {
-        /// Scope to one lane: `#channel`, worktree, branch, or directory name.
+        /// Scope to one lane: `#channel`, worktree, path, or directory name.
         #[arg(
             value_name = "SCOPE",
             conflicts_with = "all",
             add = clap_complete::ArgValueCandidates::new(crate::cli::complete::scope_names)
         )]
         scope: Option<String>,
+        /// Scope to one branch; defaults to the selected checkout's HEAD, none with `--all`.
+        #[arg(long, value_name = "BRANCH")]
+        branch: Option<String>,
         /// Include every lane, not just the current channel.
         #[arg(long)]
         all: bool,
@@ -650,10 +653,11 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         }) => return history_agent(reference, tail, json, globals),
         Some(AgentsSubcmd::Attribution {
             scope,
+            branch,
             all,
             json,
             md,
-        }) => return attribution(scope, all, json, md, globals),
+        }) => return attribution(scope, branch, all, json, md, globals),
         Some(AgentsSubcmd::Top(args)) => return run_top(args, globals),
         Some(AgentsSubcmd::Focus { reference }) => return focus_agent(reference, globals),
         Some(AgentsSubcmd::Fork(args)) => return run_fork(args, globals),
