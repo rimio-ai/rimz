@@ -30,6 +30,100 @@ fn delivery_gates_follow_agent_lifecycle() {
 }
 
 #[test]
+fn prompt_origin_requires_only_non_user_headers() {
+    let agent = "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst";
+    let report = "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nfinished";
+    let wake = "Type: WAKE\nFrom: @rimz\nContent:\ncheck back";
+    let signal = "Type: SIGNAL\nFrom: @rimz\nContent:\nCI failed";
+    let human = "Type: USER_MESSAGE\nFrom: @user\nContent:\nnext task";
+    for prompt in [
+        agent.to_owned(),
+        report.to_owned(),
+        wake.to_owned(),
+        signal.to_owned(),
+        format!("{report}\n\n{wake}"),
+        format!("\n\n{agent}\n\n"),
+        "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\n".to_owned(),
+    ] {
+        assert!(prompt_is_harness_delivered(&prompt), "{prompt:?}");
+    }
+    for prompt in [
+        human.to_owned(),
+        "bare composer text".to_owned(),
+        format!("composer text\n\n{agent}"),
+        format!("{agent}\n\n{human}"),
+        format!("{human}\n\n{wake}"),
+        format!("{agent}\n\nType: WAKE\nFrom: rimz\nContent:\ninvalid"),
+        "Type: FUTURE_NOTICE\nFrom: @rimz\nContent:\nunknown".to_owned(),
+        String::new(),
+        " \n\t\n".to_owned(),
+    ] {
+        assert!(!prompt_is_harness_delivered(&prompt), "{prompt:?}");
+    }
+}
+
+#[test]
+fn message_header_parser_rejects_near_misses() {
+    for text in [
+        "Type: SYSTEM_MESSAGE\nFrom: @rimz\nContent:\nship it",
+        "Type: AGENT_MESSAGE\nFrom: @coder\nship it",
+        "Type: AGENT_MESSAGE\nFrom: coder\nContent:\nship it",
+        "Type: AGENT_MESSAGE\nFrom: @code r\nContent:\nship it",
+        "Type: SIGNAL\nFrom: @\nContent:\nship it",
+        "Type: SIGNAL_EXTRA\nFrom: @rimz\nContent:\nship it",
+        "ordinary text: with colon",
+    ] {
+        assert_eq!(parse_message_header(text), None, "{text}");
+    }
+}
+
+#[test]
+fn signal_headers_split_mixed_batches() {
+    let agent = "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst";
+    let signal = "Type: SIGNAL\nFrom: @rimz\nContent:\nCI failed\n\ninspect the log";
+    let wake = "Type: WAKE\nFrom: @rimz\nContent:\ncheck back";
+    let human = "Type: USER_MESSAGE\nFrom: @user\nContent:\nsecond";
+    let report = "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nfinished";
+    let sections = [agent, signal, wake, report, human, signal];
+    let prompt = sections.join("\n\n");
+    assert_eq!(split_batched_prompt(&prompt), sections);
+    assert!(
+        split_batched_prompt(&prompt)
+            .iter()
+            .all(|section| parse_message_header(section).is_some())
+    );
+    let near_miss = format!("{signal}\n\nType: SIGNAL_EXTRA\nFrom: @rimz\nContent:\nnot a signal");
+    assert_eq!(split_batched_prompt(&near_miss), vec![near_miss.as_str()]);
+}
+
+#[test]
+fn split_batched_prompt_splits_only_on_typed_sections() {
+    let agent = "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst";
+    let subagent = "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nreport";
+    let human = "Type: USER_MESSAGE\nFrom: @user\nContent:\nsecond";
+    assert_eq!(
+        split_batched_prompt(&format!("{agent}\n\n{human}")),
+        vec![agent, human]
+    );
+    assert_eq!(
+        split_batched_prompt(&format!("human note\n\n{agent}")),
+        vec!["human note", agent]
+    );
+    assert_eq!(
+        split_batched_prompt(&format!("{agent}\n\n\n{human}")),
+        vec![agent, human]
+    );
+    assert_eq!(
+        split_batched_prompt(&format!("{agent}\n\n{subagent}\n\n{human}")),
+        vec![agent, subagent, human]
+    );
+    assert_eq!(
+        split_batched_prompt(&format!("{agent}\n\nsecond paragraph")),
+        vec![format!("{agent}\n\nsecond paragraph")]
+    );
+}
+
+#[test]
 fn message_status_classifies_queue_and_terminal_lifecycle() {
     assert!(MessageStatus::Queued.is_open());
     assert!(MessageStatus::Claimed.is_open());

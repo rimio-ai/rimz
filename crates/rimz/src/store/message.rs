@@ -1,4 +1,4 @@
-//! Durable message vocabulary, FIFO/claim/batch selection, and queue codec.
+//! Durable message vocabulary, header grammar, FIFO/claim/batch selection, and queue codec.
 //!
 //! Status transitions remain in `writer/queue.rs`.
 
@@ -890,6 +890,82 @@ pub fn claim_expired(last_attempt_at: Option<Timestamp>, now: Timestamp) -> bool
     };
     let age = now.duration_since(last);
     age.is_negative() || (age.as_secs() as u64) >= CLAIM_TTL.as_secs()
+}
+
+/// The sender class named by a structured message header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeaderKind {
+    Agent,
+    Subagent,
+    Wake,
+    Signal,
+    User,
+}
+
+fn classify_header_line(line: &str) -> Option<HeaderKind> {
+    match line {
+        "Type: AGENT_MESSAGE" => Some(HeaderKind::Agent),
+        "Type: SUBAGENT_REPORT" => Some(HeaderKind::Subagent),
+        "Type: WAKE" => Some(HeaderKind::Wake),
+        "Type: SIGNAL" => Some(HeaderKind::Signal),
+        "Type: USER_MESSAGE" => Some(HeaderKind::User),
+        _ => None,
+    }
+}
+
+/// Split a delivered prompt into its structured header and body.
+///
+/// The handle keeps its leading `@` and any `#channel` suffix. System and `--no-from` text carry no header.
+pub fn parse_message_header(text: &str) -> Option<(HeaderKind, String, String)> {
+    let (kind, rest) = text.split_once('\n')?;
+    let kind = classify_header_line(kind)?;
+    let (from, rest) = rest.split_once('\n')?;
+    let handle = from.strip_prefix("From: @")?;
+    if handle.is_empty() || handle.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let body = rest.strip_prefix("Content:\n")?;
+    Some((kind, format!("@{handle}"), body.to_owned()))
+}
+
+/// Split a batched pane paste into prompt sections. A blank-line boundary starts a new section only when the following first line names a message type.
+pub fn split_batched_prompt(text: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    let mut start = 0;
+    let mut cursor = 0;
+    while let Some(relative) = text[cursor..].find("\n\n") {
+        let boundary = cursor + relative;
+        let mut next_start = boundary + 2;
+        while text[next_start..].starts_with('\n') {
+            next_start += 1;
+        }
+        let first_line = text[next_start..].lines().next().unwrap_or_default();
+        if classify_header_line(first_line).is_some() {
+            segments.push(&text[start..boundary]);
+            start = next_start;
+        }
+        cursor = next_start;
+    }
+    if segments.is_empty() {
+        vec![text]
+    } else {
+        segments.push(&text[start..]);
+        segments
+    }
+}
+
+/// True when every section of a submitted prompt was pasted by RimZ on behalf of an agent or the harness; a `USER_MESSAGE` section or bare composer text makes the prompt the user's.
+pub(crate) fn prompt_is_harness_delivered(prompt: &str) -> bool {
+    if prompt.trim().is_empty() {
+        return false;
+    }
+    split_batched_prompt(prompt)
+        .into_iter()
+        .filter(|segment| !segment.trim().is_empty())
+        .all(|segment| {
+            parse_message_header(segment.trim_start())
+                .is_some_and(|(kind, _, _)| kind != HeaderKind::User)
+        })
 }
 
 /// Align one submitted pane paste with the records written as its batch.
