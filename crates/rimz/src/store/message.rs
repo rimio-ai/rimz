@@ -954,7 +954,7 @@ pub fn split_batched_prompt(text: &str) -> Vec<&str> {
     }
 }
 
-/// True when every section of a submitted prompt was pasted by RimZ on behalf of an agent or the harness; a `USER_MESSAGE` section or bare composer text makes the prompt the user's.
+/// True when every section has an agent or harness header; a `USER_MESSAGE` section or leading bare composer text makes the prompt the user's. Text appended to a header's body remains part of that message.
 pub(crate) fn prompt_is_harness_delivered(prompt: &str) -> bool {
     if prompt.trim().is_empty() {
         return false;

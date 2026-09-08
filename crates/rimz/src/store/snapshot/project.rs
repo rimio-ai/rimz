@@ -735,7 +735,12 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     fold_launch_params(&mut state, &input.observation.launch);
     let ended_at =
         matches!(&input.signal, lifecycle::LifecycleSignal::Ended).then_some(input.event.timestamp);
-    let mut lifecycle = lifecycle_projection(input.prior, input.event.timestamp, input.signal);
+    let mut lifecycle = lifecycle_projection(
+        input.prior,
+        input.event.timestamp,
+        input.signal,
+        input.observation.prompt.as_deref(),
+    );
     // A reaper's end stamp is a liveness guess, not a failed-turn verdict.
     // Resting at Idle lets later activity recover a session that raced the reap.
     if ended_at.is_some()
@@ -811,6 +816,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     }
     state.usage = usage;
     state.turn_started_at = lifecycle.turn_started_at;
+    state.user_turn_started_at = lifecycle.user_turn_started_at;
     state.waiting_since = lifecycle.waiting_since;
     state.open_ask = lifecycle.open_ask;
     state.interrupted_turn_id = lifecycle.interrupted_turn_id;
@@ -943,6 +949,7 @@ fn assemble_launch_state(
     state.status = status;
     state.phase = phase;
     state.turn_started_at = Some(event.timestamp);
+    state.user_turn_started_at = Some(event.timestamp);
     state
 }
 
@@ -954,6 +961,7 @@ struct LifecycleProjection {
     compacted_awaiting_prompt: Option<Timestamp>,
     tool_calls: BTreeMap<String, u32>,
     turn_started_at: Option<Timestamp>,
+    user_turn_started_at: Option<Timestamp>,
     waiting_since: Option<Timestamp>,
     open_ask: Option<crate::agents::OpenAsk>,
     interrupted_turn_id: Option<String>,
@@ -963,6 +971,7 @@ fn lifecycle_projection(
     prior: Option<&AgentState>,
     timestamp: Timestamp,
     signal: lifecycle::LifecycleSignal,
+    prompt: Option<&str>,
 ) -> LifecycleProjection {
     let prev_state = prior.map(AgentState::lifecycle);
     let Transition {
@@ -1032,6 +1041,14 @@ fn lifecycle_projection(
     } else {
         prior.and_then(|p| p.turn_started_at)
     };
+    // A delivered prompt opens a provider turn but continues the user's task.
+    let harness_prompt = matches!(signal, lifecycle::LifecycleSignal::TurnStarted)
+        && prompt.is_some_and(crate::store::message::prompt_is_harness_delivered);
+    let user_turn_started_at = if (opened_turn && !harness_prompt) || resets_context {
+        Some(timestamp)
+    } else {
+        prior.and_then(|p| p.user_turn_started_at)
+    };
     let waiting_since = if matches!(&signal, lifecycle::LifecycleSignal::AwaitingInput { .. }) {
         Some(timestamp)
     } else if next.status == AgentStatus::Waiting {
@@ -1070,6 +1087,7 @@ fn lifecycle_projection(
         compacted_awaiting_prompt,
         tool_calls,
         turn_started_at,
+        user_turn_started_at,
         waiting_since,
         open_ask,
         interrupted_turn_id,

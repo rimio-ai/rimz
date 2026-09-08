@@ -35,13 +35,13 @@ pub(super) fn attach_sub_agents_indexed(
         .collect::<BTreeMap<AgentKey, usize>>();
 
     for (parent_key, children) in index.children() {
-        let parent_turn_started_at = index
+        let parent_user_turn_started_at = index
             .root(parent_key)
-            .and_then(|parent| parent.turn_started_at);
+            .and_then(|parent| parent.user_turn_started_at);
         let visible = children
             .iter()
             .copied()
-            .filter(|child| child_is_visible(child, parent_turn_started_at, now))
+            .filter(|child| child_is_visible(child, parent_user_turn_started_at, now))
             .collect::<Vec<_>>();
         let Some(row_index) = row_by_parent.get(parent_key).copied() else {
             for child in visible {
@@ -115,14 +115,15 @@ fn newest_by_id<'a>(
 
 fn child_is_visible(
     child: &AgentState,
-    parent_turn_started_at: Option<Timestamp>,
+    parent_user_turn_started_at: Option<Timestamp>,
     now: Timestamp,
 ) -> bool {
     if child.is_launched_child() && child.ended_at.is_none() {
         return true;
     }
     let parent_id = child.parent_agent_id.as_deref().unwrap_or_default();
-    let superseded = parent_turn_started_at.is_some_and(|started| started > child.last_activity);
+    let superseded =
+        parent_user_turn_started_at.is_some_and(|started| started > child.last_activity);
     if child.status == AgentStatus::Running {
         if superseded {
             // Projection diagnostics stay at debug because persisted state
@@ -132,7 +133,7 @@ fn child_is_visible(
                 kind = %child.kind,
                 parent = parent_id,
                 child = %child.agent_id,
-                "running subagent superseded by a newer parent turn — reaped",
+                "running subagent superseded by a newer user turn — reaped",
             );
             return false;
         }
@@ -149,7 +150,7 @@ fn child_is_visible(
         return true;
     }
     !superseded
-        && (parent_turn_started_at.is_some()
+        && (parent_user_turn_started_at.is_some()
             || now.duration_since(child.last_activity).as_secs() < GHOST_SESSION_TTL_SECS)
 }
 

@@ -587,6 +587,7 @@ fn merge_bound_local_session(
                 state.recent_prompts.clear();
                 state.usage.context_pct = None;
                 state.turn_started_at = None;
+                state.user_turn_started_at = None;
                 state.waiting_since = None;
                 state.open_ask = None;
                 state.compacting_since = None;
@@ -595,6 +596,7 @@ fn merge_bound_local_session(
             }
             LocalSessionProjection::Lifecycle(projection) => {
                 state.turn_started_at = observation.first_event_at;
+                state.user_turn_started_at = observation.first_event_at;
                 apply_local_lifecycle(&mut state, observation, projection);
             }
         }

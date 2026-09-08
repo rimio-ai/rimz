@@ -683,21 +683,14 @@ pub struct AgentState {
     /// `None` for a root agent or before the first render.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_started_at: Option<Timestamp>,
-    /// When this agent's current turn began, stamped from the lifecycle state
-    /// machine's `opened_turn` fact and from a context reset that rests an existing
-    /// session — a manual `/compact` (`CompactionEnded` landing on idle) or a
-    /// `/clear` (`Registered`). Each boundary retires the prior turn's children;
-    /// otherwise the existing stamp is carried forward. A first-event registration
-    /// leaves it `None` until the first turn opens. Automatic compaction *mid-turn*
-    /// resumes the same turn and leaves this stamp untouched, so its in-flight
-    /// children stay listed. Unlike `last_seen` it does *not* advance on `Stop`, so
-    /// it marks the "next prompt" boundary the sidebar uses to clear a finished
-    /// subagent: a completed child older than its parent's `turn_started_at`
-    /// belongs to a past turn and drops from the parent's expanded list. A prompt
-    /// waking a parked running row resumes the same logical turn and carries this
-    /// stamp forward.
+    /// When the current provider turn began, stamped from `opened_turn` or a context reset that rests an existing session (manual `/compact` or `/clear`). Used for budgets, delivery, and status; child retention uses `user_turn_started_at`.
+    ///
+    /// First registration leaves it `None` until a turn opens. Stop, automatic mid-turn compaction, and a prompt waking a parked running row carry the stamp forward.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_started_at: Option<Timestamp>,
+    /// The user-task boundary used to retire older finished children. Follows `turn_started_at` except that agent and harness prompt headers carry it forward; context resets advance both stamps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_turn_started_at: Option<Timestamp>,
     /// Timestamp of the native prompt that put this session in `Waiting`.
     /// Activity after this instant proves a keyless prompt was answered in the
     /// agent's own UI, so read paths project the row back to work even before
@@ -826,6 +819,8 @@ struct AgentStateWire {
     subagent_started_at: Option<Timestamp>,
     turn_started_at: Option<Timestamp>,
     #[serde(default)]
+    user_turn_started_at: Option<Timestamp>,
+    #[serde(default)]
     waiting_since: Option<Timestamp>,
     #[serde(default)]
     open_ask: Option<OpenAsk>,
@@ -903,6 +898,7 @@ impl From<AgentStateWire> for AgentState {
             subagent_cost_usd: wire.subagent_cost_usd,
             subagent_started_at: wire.subagent_started_at,
             turn_started_at: wire.turn_started_at,
+            user_turn_started_at: wire.user_turn_started_at,
             waiting_since: wire.waiting_since,
             open_ask: wire.open_ask,
             interrupted_turn_id: wire.interrupted_turn_id,
@@ -990,6 +986,7 @@ impl AgentState {
             subagent_cost_usd: None,
             subagent_started_at: None,
             turn_started_at: None,
+            user_turn_started_at: None,
             waiting_since: None,
             open_ask: None,
             interrupted_turn_id: None,
