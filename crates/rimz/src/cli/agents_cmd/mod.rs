@@ -988,12 +988,7 @@ pub(crate) fn create_on_miss(
     let machine_config = crate::cli::machine_config();
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
-    let launch = rimz::config::effective::load(
-        &machine_config.agents,
-        &machine_config.subagents.profiles,
-        &workspace.project_root,
-        &rimz::disk::paths::config_home(),
-    )?;
+    let launch = rimz::config::effective::load(&machine_config, &workspace.project_root)?;
     if !is_launchable_type(&create.selector, &launch.profiles) {
         launch.block_untrusted_reference(
             rimz::config::effective::ProfileScope::Agents,

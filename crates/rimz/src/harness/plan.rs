@@ -154,12 +154,7 @@ pub fn resolve_single_agent_launch(
     if let Some(message) = machine_config.agents_fragment_failure() {
         bail!("{message}");
     }
-    let launch = crate::config::effective::load(
-        &machine_config.agents,
-        &machine_config.subagents.profiles,
-        &workspace.project_root,
-        &crate::disk::paths::config_home(),
-    )?;
+    let launch = crate::config::effective::load(&machine_config, &workspace.project_root)?;
     let layout = match crate::harness::spec::resolve_spec(
         Some(spec),
         &launch.profiles,

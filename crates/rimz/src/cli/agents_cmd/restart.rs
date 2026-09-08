@@ -207,12 +207,7 @@ fn restart_posture(
     workspace: &rimz::ResolvedWorkspace,
     machine_config: &rimz::config::MachineConfig,
 ) -> Result<ResumePosture> {
-    let launch = rimz::config::effective::load(
-        &machine_config.agents,
-        &machine_config.subagents.profiles,
-        &workspace.project_root,
-        &rimz::disk::paths::config_home(),
-    )?;
+    let launch = rimz::config::effective::load(machine_config, &workspace.project_root)?;
     let posture = rimz::harness::resume::resolve_posture(
         rimz::harness::resume::PostureRequest {
             profile: agent.profile.as_deref(),

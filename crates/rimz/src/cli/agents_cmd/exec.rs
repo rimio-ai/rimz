@@ -218,21 +218,17 @@ fn exec_launch_reminders(
     project_root: &std::path::Path,
     config_root: &std::path::Path,
 ) -> LaunchReminders {
-    let effective = match rimz::config::effective::load(
-        &machine_config.agents,
-        &machine_config.subagents.profiles,
-        project_root,
-        config_root,
-    ) {
-        Ok(effective) => effective,
-        Err(err) => {
-            let _ = writeln!(
-                std::io::stderr().lock(),
-                "rimz: {err}; launching with default RimZ launch reminders"
-            );
-            return LaunchReminders::default();
-        }
-    };
+    let effective =
+        match rimz::config::effective::load_with_roots(machine_config, project_root, config_root) {
+            Ok(effective) => effective,
+            Err(err) => {
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "rimz: {err}; launching with default RimZ launch reminders"
+                );
+                return LaunchReminders::default();
+            }
+        };
     let profiles = if request.subagent {
         &effective.subagent_profiles
     } else {

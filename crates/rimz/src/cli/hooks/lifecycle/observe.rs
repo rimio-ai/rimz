@@ -275,12 +275,7 @@ fn arm_team_member(
         return Ok(());
     };
     let machine = rimz::config::MachineConfig::load()?;
-    let effective = rimz::config::effective::load(
-        &machine.agents,
-        &machine.subagents.profiles,
-        &workspace.project_root,
-        &rimz::disk::paths::config_home(),
-    )?;
+    let effective = rimz::config::effective::load(&machine, &workspace.project_root)?;
     effective.block_untrusted_reference(
         rimz::config::effective::ProfileScope::Agents,
         Some(name),

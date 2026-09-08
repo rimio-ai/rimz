@@ -69,14 +69,8 @@ impl LaneRestoreConfig {
     pub fn load(
         machine: &crate::config::MachineConfig,
         project_root: &Path,
-        config_root: &Path,
     ) -> anyhow::Result<Self> {
-        let launch = crate::config::effective::load(
-            &machine.agents,
-            &machine.subagents.profiles,
-            project_root,
-            config_root,
-        )?;
+        let launch = crate::config::effective::load(machine, project_root)?;
         Ok(Self {
             teams: launch.teams,
             profiles: launch.profiles,

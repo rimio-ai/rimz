@@ -7,12 +7,11 @@ use std::collections::BTreeMap;
 use tempfile::tempdir;
 
 fn load(machine: &AgentsConfig, project_root: &Path, config_root: &Path) -> Result<LaunchAgents> {
-    super::load(
-        machine,
-        &ProfilesConfig::default(),
-        project_root,
-        config_root,
-    )
+    let config = MachineConfig {
+        agents: machine.clone(),
+        ..Default::default()
+    };
+    super::load_with_roots(&config, project_root, config_root)
 }
 
 fn profile(agent: &str, args: Option<&str>) -> Profile {
@@ -107,7 +106,9 @@ fn effective_subagent_profiles(
     project_root: &std::path::Path,
     config_root: &std::path::Path,
 ) -> Result<ProfilesConfig> {
-    super::load(&AgentsConfig::default(), machine, project_root, config_root)
+    let mut config = MachineConfig::default();
+    config.subagents.profiles = machine.clone();
+    super::load_with_roots(&config, project_root, config_root)
         .map(|launch| launch.subagent_profiles)
 }
 
@@ -554,13 +555,9 @@ fn trusted_repo_allowlist_can_reference_repo_subagent_profile() {
     );
     crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
 
-    let effective = super::load(
-        &AgentsConfig::default(),
-        &ProfilesConfig::default(),
-        project.path(),
-        config.path(),
-    )
-    .expect("merged catalogs validate together");
+    let effective =
+        super::load_with_roots(&MachineConfig::default(), project.path(), config.path())
+            .expect("merged catalogs validate together");
 
     assert_eq!(
         effective
@@ -592,13 +589,10 @@ fn untrusted_repo_subagent_profiles_are_inert_and_block_on_reference() {
         "[subagents.profiles.reviewer]\nagent = \"codex\"\n",
     );
     let machine = profiles([("local", profile("claude", Some("--local")))]);
-    let launch = super::load(
-        &AgentsConfig::default(),
-        &machine,
-        project.path(),
-        config.path(),
-    )
-    .expect("effective");
+    let mut machine_config = MachineConfig::default();
+    machine_config.subagents.profiles = machine.clone();
+    let launch =
+        super::load_with_roots(&machine_config, project.path(), config.path()).expect("effective");
 
     assert_eq!(launch.subagent_profiles, machine);
     assert!(matches!(

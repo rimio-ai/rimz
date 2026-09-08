@@ -31,12 +31,7 @@ pub(super) fn launch_layout(
     let machine_config = machine_config();
     require_agents_fragments(&machine_config)?;
     report_unknown_config_keys(&machine_config)?;
-    let effective = rimz::config::effective::load(
-        &machine_config.agents,
-        &machine_config.subagents.profiles,
-        &workspace.project_root,
-        &rimz::disk::paths::config_home(),
-    )?;
+    let effective = rimz::config::effective::load(&machine_config, &workspace.project_root)?;
     // Inside a team's lane, a bare role names that team's role: in `#forge`,
     // `reviewer` means `forge.reviewer`. The lane's agents carry the team, since
     // the channel string alone does not name it. An explicit `--channel` picks

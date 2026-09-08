@@ -965,9 +965,8 @@ mod launch_options {
 
         let dir = tempfile::tempdir().expect("temp dir");
         let machine = MachineConfig::default();
-        let effective = rimz::config::effective::load(
-            &machine.agents,
-            &machine.subagents.profiles,
+        let effective = rimz::config::effective::load_with_roots(
+            &machine,
             dir.path(),
             &dir.path().join("config"),
         )
@@ -994,12 +993,8 @@ mod launch_options {
         machine: &MachineConfig,
         root: &Path,
     ) -> Result<(ResolvedLaunch, LaunchPreset)> {
-        let effective = rimz::config::effective::load(
-            &machine.agents,
-            &machine.subagents.profiles,
-            root,
-            &root.join("config-home"),
-        )?;
+        let effective =
+            rimz::config::effective::load_with_roots(machine, root, &root.join("config-home"))?;
         let resolved = rimz::harness::plan::resolve_launch(
             &effective,
             rimz::config::effective::ProfileScope::Agents,
@@ -1108,9 +1103,8 @@ mod launch_options {
             },
         );
         let args = parse_agents(&["rimz", "warn,codex", "--name", "one"]);
-        let effective = rimz::config::effective::load(
-            &machine.agents,
-            &machine.subagents.profiles,
+        let effective = rimz::config::effective::load_with_roots(
+            &machine,
             dir.path(),
             &dir.path().join("config-home"),
         )

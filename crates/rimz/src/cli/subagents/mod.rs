@@ -653,12 +653,7 @@ fn list_profiles(json: bool, path: bool, globals: &GlobalFlags) -> Result<()> {
             .context("resolving current project")?
             .project_root
     };
-    let effective = rimz::config::effective::load(
-        &config.agents,
-        &config.subagents.profiles,
-        &project_root,
-        &rimz::disk::paths::config_home(),
-    )?;
+    let effective = rimz::config::effective::load(&config, &project_root)?;
     effective.overlay_profile_sources(&mut sources);
     let catalog = rimz::harness::subagent_policy::catalog(
         caller.as_ref().and_then(|caller| caller.profile.as_deref()),

@@ -9,7 +9,7 @@ use jiff::Timestamp;
 
 use crate::agents::AgentState;
 use crate::config::{MachineConfig, ProfilesConfig, TeamsConfig};
-use crate::disk::paths::{RuntimePaths, StatePaths, cache_home, config_home};
+use crate::disk::paths::{RuntimePaths, StatePaths, cache_home};
 use crate::harness::resume::{
     MaterializedRecovery, RecoveryMaterializer, RecoveryPlan, ResumePlan, plan_resume_detailed,
     resume_session_present, split_team_and_flat,
@@ -306,12 +306,7 @@ fn effective_teams_and_profiles(
     machine: &MachineConfig,
     project_root: &Path,
 ) -> (TeamsConfig, ProfilesConfig) {
-    match crate::config::effective::load(
-        &machine.agents,
-        &machine.subagents.profiles,
-        project_root,
-        &config_home(),
-    ) {
+    match crate::config::effective::load(machine, project_root) {
         Ok(launch) => (launch.teams, launch.profiles),
         Err(err) => {
             let (config, detail) = err
