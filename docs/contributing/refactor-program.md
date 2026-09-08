@@ -24,7 +24,7 @@ Seam passes go first because they change what the module passes would see. When 
 
 Read, in this order, before running anything:
 
-1. [refactor-ledger.md](./refactor-ledger.md) in full: the seam queue, the module verdict table, the pass log, and the admission intents. A module with a current `holds` verdict is skipped unless its churn since the verdict's SHA has crossed the threshold the row names; `survey` reads the row and flags the rank line `held` or `reopen` accordingly, keeping a held module out of the probes.
+1. [refactor-ledger.md](./refactor-ledger.md) in full: the seam queue, the pass targets, the module verdict table, the admission intents, and the pass log. A module with a current `holds` verdict is skipped unless its churn since the verdict's SHA has crossed the threshold the row names; `survey` reads the row and flags the rank line `held` or `reopen` accordingly, keeping a held module out of the probes.
 2. `refactor-target.toml`: the `layers`, every `[[module]]` admission that touches the scope, every `[[strangler]]`, and every `[[verdict]]`. A `[[verdict]]` is a recorded decision; do not re-litigate it unless the friction is real enough to reopen it, and then mark the candidate as contradicting the record.
 3. `git worktree list` and `git branch -a`: in-flight work names the modules a pass must not touch and the collisions a plan has to name.
 4. The scope's own `AGENTS.md` contract and the internals page the [documentation map](../../AGENTS.md#documentation-map) names for it.
@@ -82,7 +82,7 @@ max-items = 3
 A pass ends with the last commit of the branch, which records it; every number in the record is measured on the tree that commit ships:
 
 1. A pass row in the ledger's pass log: date, scope, base SHA, the verbs landed, the deltas copied from `diff --expect` on that commit (production SLOC, `esc`, dependency sites), and every candidate deferred with the reason.
-2. A module verdict row for every module the pass reviewed: `landed` with the pass row it points at, or `holds` with the SHA reviewed and the churn threshold that reopens it (default: 30 scoped commits, `git log --oneline <sha>.. -- <path> | wc -l`).
+2. A module verdict row for every module the pass reviewed, carrying the SHA reviewed and the churn threshold that reopens it (default: 30 scoped commits, `git log --oneline <sha>.. -- <path> | wc -l`): `holds` when nothing landed, `holds; landed pass-N` when the pass rethought the module's interior, since only a `holds` status demotes the module in the next survey. A seam pass that reviewed a module's edges and left its interior a candidate writes a bare `landed pass-N`.
 3. `[[verdict]]` rows in `refactor-target.toml` for every item, pass-through, guard family, or shape family the pass judged and kept, each with the reason. These are what stop the next survey from surfacing the same family; a pass that judges a family and writes no verdict has left the next agent to re-derive it.
 4. An admission intent in the ledger for every upward dependency the pass reviewed: `keep` with the reason it is the intended shape, or `close` with the seam pass that would close it.
 5. The tightened `refactor-target.toml` from `conform --tighten`.
@@ -127,9 +127,9 @@ Trunk moves at tens of commits a day, so a pass that takes more than a few days 
 
 ## What the ledger covers that atlas does not
 
-The ledger carries four things the tool cannot yet express. Each is a candidate to retire into atlas when the tool grows the feature; until then the ledger section is authoritative.
+The ledger carries four things the tool does not express on its own. `survey` reads the first two tables from the ledger's Markdown (`xtask/src/atlas/ledger.rs`), so their column shapes are a contract; the other two are prose atlas never reads.
 
-- **Module verdicts.** Atlas has no module-level "reviewed and holds" record, so the rank re-surfaces the same large healthy module every run. The verdict table with its SHA and churn threshold is the demotion.
-- **Admission intents.** A `[[module]]` admission in `refactor-target.toml` is a ratchet, not a decision, and the survey cannot tell a reviewed admission from an unreviewed one. The intents table marks each `keep` or `close`, so the largest structural findings (the upward sites out of `store`) exist as candidates.
+- **Module verdicts.** Atlas has no module-level "reviewed and holds" record of its own; the verdict table's `holds` status with its SHA and churn threshold is what demotes a reviewed module (`held`/`reopen` on the rank line), and a row without them leaves the module at the top of the rank every run.
+- **Admission intents.** A `[[module]]` admission in `refactor-target.toml` is a ratchet, not a decision. The intents table marks each edge `keep` or `close`; the survey lists every admitted edge with no row as `unreviewed`, and that column is the review backlog.
 - **Pass records.** `diff --expect` proves a pass but writes nothing durable. The pass log is that record.
-- **Family dossiers.** `inspect` reads one module; a sibling family spans several. The seam queue row for a family collapse carries the member list and the divergences found so the next pass does not re-derive them.
+- **Pass targets and family dossiers.** `inspect` reads one module; a sibling family spans several, and a direction spans a pass. The pass targets section carries the direction each pass wrote and, for a family collapse, the member list and the divergences found, so the next pass quotes rather than re-derives them.
