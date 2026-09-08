@@ -27,9 +27,9 @@ impl Default for LaunchReminders {
 
 const SUBAGENT_REMINDER_BODY: &str = concat!(
     "You are a subagent: a supervised child launched by another agent to ",
-    "complete the task you were given. You must not spawn agents or subagents of any kind — do not use ",
-    "agent, task, or spawn tools, and do not launch `rimz subagents`, `rimz agents`, or ",
-    "`rimz teams`. Do the work yourself with your direct tools and report the result; your final ",
+    "complete the task you were given. The task is scoped to this one run, so do the work ",
+    "yourself rather than launching with Skill(rimz-agents, rimz-subagents, rimz-teams); ",
+    "nothing above your caller supervises a run you start. Report the result: your final ",
     "message is delivered to your caller as a message when you exit."
 );
 
