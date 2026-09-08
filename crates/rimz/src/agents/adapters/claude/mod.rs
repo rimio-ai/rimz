@@ -866,7 +866,6 @@ struct ClaudeLifecycleParts {
     post_tool_use: Option<ClaudePostToolUse>,
     permission_request: Option<ClaudePermissionRequest>,
     post_compact: Option<ClaudePostCompact>,
-    pending_background: Vec<String>,
 }
 
 impl ClaudeLifecycleParts {
@@ -883,10 +882,6 @@ impl ClaudeLifecycleParts {
         let permission_request =
             (event_name == "PermissionRequest").then(|| parse_permission_request(payload));
         let post_compact = (event_name == "PostCompact").then(|| parse_post_compact(payload));
-        let pending_background = stop
-            .as_ref()
-            .map(|p| pending_background_work(&p.background_tasks, &p.session_crons))
-            .unwrap_or_default();
         Self {
             session_start,
             user_prompt,
@@ -898,7 +893,6 @@ impl ClaudeLifecycleParts {
             post_tool_use,
             permission_request,
             post_compact,
-            pending_background,
         }
     }
 
@@ -925,7 +919,9 @@ fn map_claude_lifecycle_signal(
         "SubagentStop" => Some(LifecycleSignal::SubagentStopped { errored: false }),
         "Stop" => Some(LifecycleSignal::TurnEnded {
             errored: stop_payload_errored(payload),
-            parked_on_background: !parts.pending_background.is_empty(),
+            parked_on_background: parts.stop.as_ref().is_some_and(|stop| {
+                has_pending_background(&stop.background_tasks, &stop.session_crons)
+            }),
         }),
         "PermissionRequest" => spec
             .blocking_tool_kind(
@@ -1161,39 +1157,13 @@ fn claude_effort(payload: &Value, parts: &ClaudeLifecycleParts) -> Option<String
         .or_else(|| optional_payload_string(payload, &["thinking_level"]))
 }
 
-/// Pending work from a typed Claude `Stop` payload (`background_tasks` and
-/// `session_crons`, Claude Code v2.1.145+), as display labels. Pending work
-/// means the main thread parked and will reawaken, so the row stays live.
-/// Terminal background entries are skipped; every scheduled wakeup remains
-/// pending until Claude removes it from the array. Older builds omit both
-/// fields, which degrades to a genuine turn end through `Vec::default()`.
-fn pending_background_work(
-    tasks: &[BackgroundTask],
-    crons: &[payloads::SessionCron],
-) -> Vec<String> {
-    let mut pending = tasks
-        .iter()
-        .filter(|task| {
-            task.status
-                .as_deref()
-                .is_none_or(|status| !matches!(status, "completed" | "failed"))
-        })
-        .map(|task| {
-            [&task.description, &task.command, &task.id]
-                .into_iter()
-                .find_map(|opt| opt.as_deref().filter(|label| !label.is_empty()))
-                .unwrap_or("background task")
-                .to_owned()
-        })
-        .collect::<Vec<_>>();
-    pending.extend(crons.iter().map(|cron| {
-        [&cron.prompt, &cron.schedule, &cron.id]
-            .into_iter()
-            .find_map(|opt| opt.as_deref().filter(|label| !label.is_empty()))
-            .unwrap_or("scheduled wakeup")
-            .to_owned()
-    }));
-    pending
+/// Claude v2.1.145+ parks on nonterminal background tasks or any scheduled wakeup. Older builds omit both arrays and genuinely end the turn.
+fn has_pending_background(tasks: &[BackgroundTask], crons: &[payloads::SessionCron]) -> bool {
+    tasks.iter().any(|task| {
+        task.status
+            .as_deref()
+            .is_none_or(|status| !matches!(status, "completed" | "failed"))
+    }) || !crons.is_empty()
 }
 
 /// Context-window usage derived from a Claude transcript tail. Carries the
