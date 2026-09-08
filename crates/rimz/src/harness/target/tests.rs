@@ -6,7 +6,9 @@ use super::*;
 use crate::agents::AgentStatus;
 use crate::ids::{AgentKind, AgentSessionId, MuxName, WorkspaceId};
 use crate::pane::PaneRef;
-use crate::store::message::{HarnessNotice, MessageRecord, MessageSender};
+use crate::store::message::{
+    HarnessNotice, HeaderKind, MessageRecord, MessageSender, parse_message_header,
+};
 
 #[test]
 fn resolve_prefers_name_ordinal_kind_then_session_prefix() {
@@ -676,21 +678,6 @@ fn message_header_parser_round_trips_attributed_senders() {
 }
 
 #[test]
-fn message_header_parser_rejects_near_misses() {
-    for text in [
-        "Type: SYSTEM_MESSAGE\nFrom: @rimz\nContent:\nship it",
-        "Type: AGENT_MESSAGE\nFrom: @coder\nship it",
-        "Type: AGENT_MESSAGE\nFrom: coder\nContent:\nship it",
-        "Type: AGENT_MESSAGE\nFrom: @code r\nContent:\nship it",
-        "Type: SIGNAL\nFrom: @\nContent:\nship it",
-        "Type: SIGNAL_EXTRA\nFrom: @rimz\nContent:\nship it",
-        "ordinary text: with colon",
-    ] {
-        assert_eq!(parse_message_header(text), None, "{text}");
-    }
-}
-
-#[test]
 fn unknown_harness_notice_header_and_ack_agree() {
     let sender: MessageSender = serde_json::from_value(serde_json::json!({
         "origin": "harness", "notice": "future_notice"
@@ -714,52 +701,6 @@ fn unknown_harness_notice_header_and_ack_agree() {
         crate::store::message::align_submitted_prompt(&prompt, &[&record]).expect("aligned notice");
     assert_eq!((leading, trailing), (None, None));
     assert_eq!(segments, vec![prompt.as_str()]);
-}
-
-#[test]
-fn signal_headers_split_mixed_batches() {
-    let agent = "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst";
-    let signal = "Type: SIGNAL\nFrom: @rimz\nContent:\nCI failed\n\ninspect the log";
-    let wake = "Type: WAKE\nFrom: @rimz\nContent:\ncheck back";
-    let human = "Type: USER_MESSAGE\nFrom: @user\nContent:\nsecond";
-    let report = "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nfinished";
-    let sections = [agent, signal, wake, report, human, signal];
-    let prompt = sections.join("\n\n");
-    assert_eq!(split_batched_prompt(&prompt), sections);
-    assert!(
-        split_batched_prompt(&prompt)
-            .iter()
-            .all(|section| parse_message_header(section).is_some())
-    );
-    let near_miss = format!("{signal}\n\nType: SIGNAL_EXTRA\nFrom: @rimz\nContent:\nnot a signal");
-    assert_eq!(split_batched_prompt(&near_miss), vec![near_miss.as_str()]);
-}
-
-#[test]
-fn split_batched_prompt_splits_only_on_typed_sections() {
-    let agent = "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst";
-    let subagent = "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nreport";
-    let human = "Type: USER_MESSAGE\nFrom: @user\nContent:\nsecond";
-    assert_eq!(
-        split_batched_prompt(&format!("{agent}\n\n{human}")),
-        vec![agent, human]
-    );
-    assert_eq!(
-        split_batched_prompt(&format!("human note\n\n{agent}")),
-        vec!["human note", agent]
-    );
-    assert_eq!(
-        split_batched_prompt(&format!("{agent}\n\n\n{human}")),
-        vec![agent, human]
-    );
-    assert_eq!(
-        split_batched_prompt(&format!("{agent}\n\n{subagent}\n\n{human}")),
-        vec![agent, subagent, human]
-    );
-    assert_eq!(
-        split_batched_prompt(&format!("{agent}\n\nsecond paragraph")),
-        vec![format!("{agent}\n\nsecond paragraph")]
-    );
 }
 
 #[test]

@@ -262,7 +262,7 @@ pub(super) fn record_conversation(
                     }
                     segments
                 } else {
-                    rimz::harness::target::split_batched_prompt(prompt)
+                    rimz::store::message::split_batched_prompt(prompt)
                         .into_iter()
                         .map(|segment| (segment, false))
                         .collect()
@@ -273,28 +273,28 @@ pub(super) fn record_conversation(
                         continue;
                     }
                     let (mut entry, delivered_text) =
-                        match rimz::harness::target::parse_message_header(segment) {
+                        match rimz::store::message::parse_message_header(segment) {
                             Some((
-                                header @ (rimz::harness::target::HeaderKind::Agent
-                                | rimz::harness::target::HeaderKind::Subagent
-                                | rimz::harness::target::HeaderKind::Wake
-                                | rimz::harness::target::HeaderKind::Signal),
+                                header @ (rimz::store::message::HeaderKind::Agent
+                                | rimz::store::message::HeaderKind::Subagent
+                                | rimz::store::message::HeaderKind::Wake
+                                | rimz::store::message::HeaderKind::Signal),
                                 sender,
                                 body,
                             )) => {
                                 let delivered_text = body.clone();
                                 let kind = match header {
-                                    rimz::harness::target::HeaderKind::Agent => {
+                                    rimz::store::message::HeaderKind::Agent => {
                                         rimz::transcript::TranscriptKind::Message
                                     }
-                                    rimz::harness::target::HeaderKind::Subagent => {
+                                    rimz::store::message::HeaderKind::Subagent => {
                                         rimz::transcript::TranscriptKind::SubagentReport
                                     }
-                                    rimz::harness::target::HeaderKind::Wake
-                                    | rimz::harness::target::HeaderKind::Signal => {
+                                    rimz::store::message::HeaderKind::Wake
+                                    | rimz::store::message::HeaderKind::Signal => {
                                         rimz::transcript::TranscriptKind::Wake
                                     }
-                                    rimz::harness::target::HeaderKind::User => {
+                                    rimz::store::message::HeaderKind::User => {
                                         unreachable!("user header matched separately")
                                     }
                                 };
@@ -302,7 +302,7 @@ pub(super) fn record_conversation(
                                 entry.from = Some(sender);
                                 (entry, delivered_text)
                             }
-                            Some((rimz::harness::target::HeaderKind::User, _, body)) => {
+                            Some((rimz::store::message::HeaderKind::User, _, body)) => {
                                 let delivered_text = body.clone();
                                 (
                                     entry_base(rimz::transcript::TranscriptKind::Prompt, body),
