@@ -41,18 +41,21 @@ Four collaborators sit outside the module and are easy to miss:
 
 ## Targets and aliases
 
-A remote target is `[user@]host:<session-or-path>`. What follows the colon decides which remote command RimZ compiles:
+A remote target is `[user@]host:<session-or-path>`, a RimZ grammar with a host-and-path spelling like `scp`. What follows the colon decides which remote command RimZ compiles; ambiguous suffixes are resolved on the remote host, not against the local filesystem:
 
-| Suffix shape | `RemoteSpec` | Remote command |
+| Suffix shape | Resolution | Remote command |
 | --- | --- | --- |
-| Contains `/`, or starts with `~` | `Path` | `rimz start --attach -- <dir>` |
-| Anything else | `Session` | `rimz attach --attach -- <name>` |
+| `session:<name>` | Explicit session, even if a directory has the same name | `rimz attach --attach -- <name>` |
+| Contains `/`, or starts with `~` | Explicit path; missing directory fails | `rimz start --attach -- <dir>` |
+| Anything else, including `.agents` and bare names | Existing directory relative to remote `HOME` wins; otherwise legacy session attach | `rimz start --attach -- <dir>` or `rimz attach --attach -- <name>` |
+
+Every relative path is anchored to remote `HOME`, independent of the SSH startup cwd. `host:./name` or `host:~/name` forces path handling and missing-path failure; `host:session:name` forces session handling. Terminal attach, web prep, and link probes share this resolution, so a directory target's probe selects the workspace rather than treating its suffix as a session name.
 
 Parsing lives in `RemoteTarget::parse` and every failure carries the expected shape plus a fix. Three cases are worth knowing before touching that function: a bracketed IPv6 host may open the string or follow the `@` that ends the user prefix, and an `@[` after the first colon belongs to the suffix rather than the host; `~` and `~/…` normalize to `$HOME` so the remote shell expands them past the snippet's quoting; and `~user` is rejected at parse time, because the single-quoted snippet would carry it literally into a junk path.
 
 `SshDestination::parse` handles the colon-less `[user@]host` form that `rimz remote setup` accepts.
 
-Aliases persist per machine at `$XDG_CONFIG_HOME/rimz/remote.toml`, one `[[remote]]` table per entry, sorted by name and written with temp-file-plus-rename.
+Aliases persist per machine at `$XDG_CONFIG_HOME/rimz/remote.toml`, one `[[remote]]` table per entry, sorted by name and written with temp-file-plus-rename. Saved targets use the same remote-side resolution without a schema change or alias migration.
 
 | Field | Default | Effect |
 | --- | --- | --- |
@@ -71,11 +74,11 @@ Every remote invocation ships one shell word to the remote login shell. The atta
 
 1. Repair `PATH`, because a non-login shell often lacks `~/.cargo/bin`, `~/.local/bin`, `/opt/homebrew/bin`, and `/usr/local/bin`.
 2. `command -v rimz` or exit `127` after printing the install fix. The supervisor special-cases that sentinel and prints `rimz remote setup <original-input>` instead of its reconnect-policy tail.
-3. For a path target, `test -d` or exit `67` after naming the missing path. This guard stays in the snippet so one-shot connections, interactive fallback, and older remote RimZ versions refuse before room birth.
+3. For an explicit path target, `test -d` or exit `67` after naming the missing path. Relative paths start at remote `HOME`. This guard stays in the snippet so one-shot connections, interactive fallback, and older remote RimZ versions refuse missing explicit paths before room birth.
 4. Export the environment the remote room reads.
-5. `exec` into `rimz`, so no shell survives between SSH and the room.
+5. For an ambiguous suffix, select the remote-HOME directory if it exists and otherwise select the session; then `exec` into `rimz`, so no shell survives between SSH and the room.
 
-The probe stream is the exception: it repairs `PATH` and execs `rimz remote link-stats ingest` without the missing-binary guard, because a probe that cannot start is best-effort and must not print into the user's session.
+The probe stream is the exception: it repairs `PATH` and execs `rimz remote link-stats ingest` without the missing-binary guard, because a probe that cannot start is best-effort and must not print into the user's session. It uses the same remote-HOME path resolution and directory-versus-session choice as attach and web prep.
 
 The exported environment is the whole channel from client to host:
 
