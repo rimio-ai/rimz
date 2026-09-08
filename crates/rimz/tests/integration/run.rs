@@ -2719,6 +2719,29 @@ fn completed_subagent_wait_prints_the_durable_result_after_the_child_ends() {
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("subagent run JSON");
     assert_eq!(json["run_id"], record.run_id.as_str());
     assert_eq!(json["last_message"], "durable child answer\n");
+
+    for args in [
+        vec!["subagents", "wait"],
+        vec!["subagents", "wait", "--any"],
+    ] {
+        let out = env
+            .rimz()
+            .args(args)
+            .env(rimz::harness::launch::ENV_AGENT_KIND, parent_kind.as_str())
+            .env(
+                rimz::harness::launch::ENV_AGENT_ID,
+                parent_launch_id.as_str(),
+            )
+            .output()
+            .expect("reject nameless subagent wait");
+
+        assert!(!out.status.success());
+        assert!(out.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("needs at least one child name"), "{stderr}");
+        assert!(stderr.contains("quiet-fox"), "{stderr}");
+        assert!(stderr.contains("rimz subagents list"), "{stderr}");
+    }
 }
 
 #[test]

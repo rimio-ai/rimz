@@ -49,10 +49,10 @@ enum SubagentsSubcmd {
     },
     /// Wait for this agent's supervised children.
     Wait {
-        /// Child names. With none, wait for every live child.
+        /// Child names; at least one.
         #[arg(value_name = "NAME")]
         names: Vec<String>,
-        /// Return when the first child finishes; print its name.
+        /// Return when the first named child finishes; print its name.
         #[arg(long, conflicts_with = "stream")]
         any: bool,
         /// Stop waiting after this duration.
@@ -351,7 +351,7 @@ fn fanout_launch_error_context(index: usize, launched: &[agents_cmd::BackgroundL
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "launching fanout task {} after starting {names}; the launched children keep running, so join or stop them with `rimz subagents wait` or `rimz subagents stop --all`",
+        "launching fanout task {} after starting {names}; the launched children keep running, so join or stop them with `rimz subagents wait <name>…` or `rimz subagents stop --all`",
         index + 1
     )
 }
@@ -705,29 +705,23 @@ fn wait_children(
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading agent history")?;
     let (_, children) = caller_and_children(&audit.agents)?;
-    let runs = rimz::harness::run::list(ctx.store.paths())?;
-    let references = wait_references(&children, &runs, &names, any)?;
-    if references.is_empty() {
-        bail!("this agent has no supervised subagents to wait for");
-    }
+    let references = wait_references(&children, &names)?;
     agents_cmd::wait_agent(references, any, timeout, stream, false, json, globals)
 }
 
-fn wait_references(
-    children: &[&AgentState],
-    runs: &[rimz::store::run::RunRecord],
-    names: &[String],
-    any: bool,
-) -> Result<Vec<String>> {
+fn wait_references(children: &[&AgentState], names: &[String]) -> Result<Vec<String>> {
     if names.is_empty() {
-        return Ok(children
+        if children.is_empty() {
+            bail!("this agent has no supervised subagents to wait for");
+        }
+        let names = children
             .iter()
-            .copied()
-            .filter_map(|child| {
-                let run = newest_run_for_child(runs, child)?;
-                (!any || !run.status.is_terminal()).then(|| child_reference(child))
-            })
-            .collect());
+            .map(|child| child_reference(child))
+            .collect::<Vec<_>>()
+            .join(", ");
+        bail!(
+            "`rimz subagents wait` needs at least one child name; this agent's subagents: {names} (see `rimz subagents list`)"
+        );
     }
     Ok(resolve_child_names(children, names)?
         .into_iter()

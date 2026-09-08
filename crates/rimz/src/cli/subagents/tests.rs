@@ -478,7 +478,7 @@ fn list_and_profiles_are_the_user_shell_subcommands() {
 }
 
 #[test]
-fn default_wait_keeps_finished_supervised_children() {
+fn bare_wait_lists_the_children_instead_of_joining() {
     let mut finished =
         rimz::agents::AgentState::stub("codex", "finished", rimz::agents::AgentStatus::Success);
     finished.name = Some("swift-otter".to_owned());
@@ -490,33 +490,20 @@ fn default_wait_keeps_finished_supervised_children() {
         rimz::agents::AgentState::stub("claude", "interactive", rimz::agents::AgentStatus::Idle);
     let children = vec![&finished, &running, &untracked];
 
-    let mut finished_run = rimz::store::run::RunRecord::new(
-        rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/subagent-wait")),
-        rimz::ids::AgentKind::new_unchecked("codex"),
-        rimz::agents::PermissionMode::Auto,
-        "review".to_owned(),
-        PathBuf::from("/tmp/subagent-wait"),
-    );
-    finished_run.agent_id = Some(finished.agent_id.clone());
-    finished_run.agent_name = finished.name.clone();
-    finished_run.status = rimz::store::run::RunStatus::Completed;
-    let mut running_run = rimz::store::run::RunRecord::new(
-        rimz::WorkspaceId::from_project_root(std::path::Path::new("/tmp/subagent-wait")),
-        rimz::ids::AgentKind::new_unchecked("codex"),
-        rimz::agents::PermissionMode::Auto,
-        "implement".to_owned(),
-        PathBuf::from("/tmp/subagent-wait"),
-    );
-    running_run.agent_id = Some(running.agent_id.clone());
-    running_run.agent_name = running.name.clone();
-    let runs = [finished_run, running_run];
-
     assert_eq!(
-        wait_references(&children, &runs, &[], false).expect("default join"),
-        vec!["swift-otter", "bright-owl"]
+        wait_references(&children, &[])
+            .expect_err("names required")
+            .to_string(),
+        "`rimz subagents wait` needs at least one child name; this agent's subagents: swift-otter, bright-owl, interactive (see `rimz subagents list`)"
     );
     assert_eq!(
-        wait_references(&children, &runs, &[], true).expect("default any"),
+        wait_references(&[], &[])
+            .expect_err("no children")
+            .to_string(),
+        "this agent has no supervised subagents to wait for"
+    );
+    assert_eq!(
+        wait_references(&children, &["bright-owl".into()]).expect("named join"),
         vec!["bright-owl"]
     );
 }
