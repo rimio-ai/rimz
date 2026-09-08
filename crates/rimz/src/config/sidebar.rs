@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_AFK_AFTER_SECS: u32 = 15 * 60;
+const DEFAULT_AFK_AFTER_SECS: u32 = 15 * 60;
 
 /// Sidebar behavior preferences.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

@@ -13,8 +13,7 @@
 //! points use [`MachineConfig::load_lenient`], which degrades a broken machine
 //! file to built-in defaults. A broken `~/.agents` fragment drops only that
 //! fragment from read-only views and blocks launches with its source error.
-//! Strict [`MachineConfig::load`] and [`MachineConfig::load_from`] back config
-//! inspection and report precise errors.
+//! Strict [`MachineConfig::load`] backs config inspection and reports precise errors.
 
 use std::collections::{BTreeMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
@@ -58,9 +57,10 @@ pub use agents::{
     AgentsConfig, CommandsConfig, LaunchPlacement, Profile, ProfilesConfig, RoleBinding,
     SubagentProfilesConfig, SubagentsConfig, Team, TeamSignalBinding, TeamsConfig,
 };
+use animation::validate_glyph_cells;
 pub use animation::{
     AnimationColor, AnimationEffect, AnimationFrames, AnimationRole, AnimationSpec, AnimationSpeed,
-    ThemeAnimationsConfig, UnreadEffect, validate_glyph_cells, validate_single_cell,
+    ThemeAnimationsConfig, UnreadEffect,
 };
 pub use attention::AttentionConfig;
 pub(crate) use color::xterm_rgb;
@@ -77,12 +77,10 @@ pub use edit::{
     ConfigEditErr, ConfigEditor, FileMergeOutcome, FragmentRepairOutcome, FragmentRepairReport,
     MergeAction, MergeReport, SkippedKey,
 };
-pub use glyphs::{
-    GlyphOverrides, GlyphRole, ThemeGlyphsConfig, is_named_glyph_set, validate_glyph_source,
-};
+pub use glyphs::{GlyphOverrides, GlyphRole, ThemeGlyphsConfig};
+use glyphs::{is_named_glyph_set, validate_glyph_source};
 pub use harness::{
-    DEFAULT_COMPACT_INSTRUCTION, DEFAULT_IDLE_COMPACT_AFTER, DayCap, DayCapParseError,
-    HarnessConfig, IdleCompactMode, RtkMode, TurnCap, TurnCapParseError,
+    DayCap, DayCapParseError, HarnessConfig, IdleCompactMode, RtkMode, TurnCap, TurnCapParseError,
 };
 pub use loop_::{CheckOn, LoopConfig, TaskBudgetError, TaskEntry, TaskTarget, Tasks, WakeMeta};
 pub use mux::{
@@ -96,14 +94,14 @@ pub use notifications::{
 };
 pub use pets::{CellAspect, PetsConfig, PetsGlyphMode};
 pub use remote_control::RemoteControlConfig;
-pub(crate) use resume::parse_auto_redeem_min_gain;
-pub use resume::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, DEFAULT_AUTO_REDEEM_MIN_GAIN, ResumeConfig};
+use resume::parse_auto_redeem_min_gain;
+pub use resume::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, ResumeConfig};
 #[cfg(test)]
 pub(crate) use scheme::parse_scheme_text;
 pub(crate) use scheme::{DEFAULT_SCHEME, ParsedScheme, explicit_scheme, parse_colors};
-pub use scheme::{SchemeSwatch, resolve_inline_palette, scheme_swatches, theme_lookup_hint};
+pub use scheme::{SchemeSwatch, resolve_inline_palette, scheme_swatches};
 pub use sentry::SentryConfig;
-pub use sidebar::{DEFAULT_AFK_AFTER_SECS, SidebarConfig, SidebarKeys};
+pub use sidebar::{SidebarConfig, SidebarKeys};
 pub use theme::{
     InlineAnsiColors, InlineCursorColors, InlinePalette, InlinePrimaryColors,
     InlineSelectionColors, ThemeConfig, ThemeProviderStyle, ThemeStyle,
@@ -112,15 +110,15 @@ pub use web::WebPrefs;
 pub use worktree::{WorktreeBase, WorktreeBaseParseError, WorktreeConfig};
 
 /// Default render base grid: 100ms, or 10Hz.
-pub(crate) const DEFAULT_REFRESH_MS: u16 = 100;
+const DEFAULT_REFRESH_MS: u16 = 100;
 
 /// Minimum accepted render base grid. Prevents accidental busy-spins from
 /// config typos while leaving room for faster test or local tuning.
-pub(crate) const MIN_REFRESH_MS: u16 = 16;
+const MIN_REFRESH_MS: u16 = 16;
 
 /// Maximum accepted render base grid. Higher values make input and overlay
 /// event latency visibly worse, so keep slow data polling on `--tick-seconds`.
-pub(crate) const MAX_REFRESH_MS: u16 = 1_000;
+const MAX_REFRESH_MS: u16 = 1_000;
 
 const CONFIG_FILE: &str = "config.toml";
 const THEME_FILE: &str = "theme.toml";
@@ -192,7 +190,7 @@ pub struct MachineConfigFiles {
 
 impl MachineConfigFiles {
     /// Resolve the current machine's config roots.
-    pub fn machine() -> Self {
+    fn machine() -> Self {
         Self::from_paths(
             config_home().join(RIMZ_CONFIG_SUBDIR).join(CONFIG_FILE),
             paths::agents_home(),
@@ -200,7 +198,7 @@ impl MachineConfigFiles {
     }
 
     /// Build an explicit config set for tests and tooling.
-    pub fn from_paths(core_path: impl Into<PathBuf>, agents_home: impl Into<PathBuf>) -> Self {
+    fn from_paths(core_path: impl Into<PathBuf>, agents_home: impl Into<PathBuf>) -> Self {
         Self {
             core_path: core_path.into(),
             agents_home: agents_home.into(),
@@ -211,7 +209,7 @@ impl MachineConfigFiles {
         &self.core_path
     }
 
-    pub fn agents_home(&self) -> &Path {
+    fn agents_home(&self) -> &Path {
         &self.agents_home
     }
 
@@ -320,7 +318,7 @@ impl ConfigErr {
 
     /// The validation failure without file/location context, for callers
     /// reporting a value error rather than a broken file.
-    pub fn validation_message(&self) -> String {
+    fn validation_message(&self) -> String {
         match self {
             Self::Parse { diagnosis, .. } => diagnosis.raw_message().to_owned(),
             Self::Agents { source, .. } => source.to_string(),
@@ -539,8 +537,7 @@ impl MachineConfig {
 
     /// Load per-machine config for a runtime entry point. A file that fails to
     /// load degrades to its built-in defaults with a warning instead of
-    /// aborting the room; the strict [`Self::load`] and [`Self::load_from`]
-    /// report the precise error for `rimz config` and `rimz doctor`.
+    /// aborting the room; the strict [`Self::load`] reports the precise error for `rimz config` and `rimz doctor`.
     pub fn load_lenient() -> Arc<Self> {
         let files = MachineConfigFiles::machine();
         Self::load_lenient_with_memo(files.core_path(), files.agents_home())
@@ -550,7 +547,7 @@ impl MachineConfig {
     /// agents.toml, and loop.toml files, merging fragments from the explicit
     /// agents-home root before validation — the test and tooling seam. A
     /// nonexistent fragment root means no fragments.
-    pub fn load_from(config_path: &Path, agents_home: &Path) -> Result<Self> {
+    fn load_from(config_path: &Path, agents_home: &Path) -> Result<Self> {
         Self::load_from_with_agent_spec_sources(config_path, agents_home).map(|(config, _)| config)
     }
 

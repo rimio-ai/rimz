@@ -310,11 +310,11 @@ impl<'de> Deserialize<'de> for ThemeGlyphsConfig {
     }
 }
 
-pub fn is_named_glyph_set(name: &str) -> bool {
+pub(super) fn is_named_glyph_set(name: &str) -> bool {
     matches!(name, "unicode" | "nerd_font")
 }
 
-pub fn validate_glyph_source(name: &str) -> Result<(), String> {
+pub(super) fn validate_glyph_source(name: &str) -> Result<(), String> {
     if is_named_glyph_set(name) {
         Ok(())
     } else {

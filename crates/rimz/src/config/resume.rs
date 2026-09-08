@@ -19,7 +19,7 @@ pub const DEFAULT_AUTO_CONTINUE_BACKOFF_SECS: &[u64] = &[180, 300];
 const DEFAULT_AUTO_CONTINUE_MAX_RETRIES: u32 = 12;
 
 /// Minimum blocked time an automatic reset-credit redemption buys by default.
-pub const DEFAULT_AUTO_REDEEM_MIN_GAIN: &str = "12h";
+const DEFAULT_AUTO_REDEEM_MIN_GAIN: &str = "12h";
 
 const AUTO_REDEEM_DURATION_UNITS: &[DurationUnit] = &[
     DurationUnit::Second,
@@ -114,7 +114,7 @@ where
     Ok(value)
 }
 
-pub(crate) fn parse_auto_redeem_min_gain(value: &str) -> Result<Duration, String> {
+pub(super) fn parse_auto_redeem_min_gain(value: &str) -> Result<Duration, String> {
     parse_duration_units(value, AUTO_REDEEM_DURATION_UNITS).map_err(|err| err.to_string())
 }
 
