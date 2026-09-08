@@ -118,43 +118,33 @@ pub(super) fn probe_usage() -> crate::agents::AccountUsageProbe {
     let Some(home) = codex_home() else {
         return crate::agents::AccountUsageProbe::NoCredentials(Default::default());
     };
-    let credentials_stamp = file_mtime_ms(&home.join("auth.json"));
-    let base_url = match configured_base_url(&home) {
-        Ok(base_url) => base_url,
-        Err(err) => {
-            return crate::agents::credits::map_account_usage_probe(
-                Err(err),
-                crate::agents::AccountUsageIdentity {
-                    credentials_stamp,
-                    ..Default::default()
+    let auth_path = home.join("auth.json");
+    let credentials_stamp = file_mtime_ms(&auth_path);
+    let (identity, result) = match configured_base_url(&home).and_then(|base_url| {
+        load_credentials_from(&auth_path).map(|credentials| (base_url, credentials))
+    }) {
+        Ok((base_url, credentials)) => (
+            crate::agents::AccountUsageIdentity {
+                credentials_stamp,
+                ..credentials.account_usage_identity()
+            },
+            fetch_usage_with_url(&usage_url(base_url.as_deref()), &credentials).map(
+                |mut snapshot| {
+                    snapshot.reset_credits =
+                        fetch_reset_credits(&reset_credits_url(base_url.as_deref()), &credentials)
+                            .ok();
+                    snapshot
                 },
-                "codex",
-            );
-        }
+            ),
+        ),
+        Err(err) => (
+            crate::agents::AccountUsageIdentity {
+                credentials_stamp,
+                ..Default::default()
+            },
+            Err(err),
+        ),
     };
-    let credentials = match load_credentials_from(&home.join("auth.json")) {
-        Ok(credentials) => credentials,
-        Err(err) => {
-            return crate::agents::credits::map_account_usage_probe(
-                Err(err),
-                crate::agents::AccountUsageIdentity {
-                    credentials_stamp,
-                    ..Default::default()
-                },
-                "codex",
-            );
-        }
-    };
-    let identity = crate::agents::AccountUsageIdentity {
-        credentials_stamp,
-        ..credentials.account_usage_identity()
-    };
-    let result =
-        fetch_usage_with_url(&usage_url(base_url.as_deref()), &credentials).map(|mut snapshot| {
-            snapshot.reset_credits =
-                fetch_reset_credits(&reset_credits_url(base_url.as_deref()), &credentials).ok();
-            snapshot
-        });
     crate::agents::credits::map_account_usage_probe(result, identity, "codex")
 }
 
@@ -194,7 +184,7 @@ fn load_credentials_from(path: &Path) -> Result<CodexOauthCredentials> {
 }
 
 fn parse_credentials(bytes: &[u8]) -> Result<CodexOauthCredentials> {
-    let auth = super::account::decode_auth(bytes)?;
+    let auth = serde_json::from_slice::<super::account::CodexAuth>(bytes)?;
     if auth
         .openai_api_key
         .as_deref()
