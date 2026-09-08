@@ -101,7 +101,6 @@ path = "crates/rimz/src/config"
 upward-dependencies = [
     "agents",
     "harness::budget",
-    "harness::resume",
     "harness::schedule",
     "harness::spec",
     "store::message",
@@ -344,7 +343,6 @@ surface-budget = 23
 [[module]]
 path = "crates/rimz/src/config/resume.rs"
 allowed-dependencies = [
-    "harness::resume",
     "utils::time",
 ]
 surface-budget = 5
