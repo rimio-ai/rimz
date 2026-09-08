@@ -117,52 +117,33 @@ struct ExtraUsageWire {
 
 pub(super) fn probe_usage(cli_version: Option<&str>) -> crate::agents::AccountUsageProbe {
     let credentials_stamp = credentials_stamp();
-    let url = match usage_url() {
-        Ok(url) => url,
-        Err(err) => {
-            return crate::agents::credits::map_account_usage_probe(
-                Err(err),
-                crate::agents::AccountUsageIdentity {
-                    credentials_stamp,
-                    ..Default::default()
-                },
-                "claude",
-            );
-        }
-    };
-    match load_credentials() {
-        Ok(credentials) => crate::agents::credits::map_account_usage_probe(
-            fetch_usage_with_url(&url, &credentials, cli_version),
+    let (identity, result) = match usage_url()
+        .and_then(|url| load_credentials().map(|credentials| (url, credentials)))
+    {
+        Ok((url, credentials)) => (
             crate::agents::AccountUsageIdentity {
                 account_key: Some(credentials.account_key.clone()),
                 credentials_stamp,
                 ..Default::default()
             },
-            "claude",
+            fetch_usage_with_url(&url, &credentials.access_token, cli_version),
         ),
-        Err(err) => crate::agents::credits::map_account_usage_probe(
-            Err(err),
+        Err(err) => (
             crate::agents::AccountUsageIdentity {
                 credentials_stamp,
                 ..Default::default()
             },
-            "claude",
+            Err(err),
         ),
-    }
+    };
+    crate::agents::credits::map_account_usage_probe(result, identity, "claude")
 }
 
 pub(in crate::agents) fn fetch_usage_with_token(
     access_token: &str,
     cli_version: Option<&str>,
 ) -> Result<AccountUsageSnapshot> {
-    fetch_usage_with_url(
-        &usage_url()?,
-        &ClaudeOauthCredentials {
-            access_token: access_token.trim().to_owned(),
-            account_key: account_key("access-token", access_token.trim()),
-        },
-        cli_version,
-    )
+    fetch_usage_with_url(&usage_url()?, access_token.trim(), cli_version)
 }
 
 fn load_credentials() -> Result<ClaudeOauthCredentials> {
@@ -264,10 +245,10 @@ fn parse_account_key(bytes: &[u8]) -> Result<String> {
 
 fn fetch_usage_with_url(
     url: &str,
-    credentials: &ClaudeOauthCredentials,
+    access_token: &str,
     cli_version: Option<&str>,
 ) -> Result<AccountUsageSnapshot> {
-    let body = http_get(url, &credentials.access_token, cli_version)?;
+    let body = http_get(url, access_token, cli_version)?;
     parse_usage_response(&body)
 }
 
