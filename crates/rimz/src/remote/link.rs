@@ -14,7 +14,7 @@ use crate::mux::CommandSpec;
 use crate::sock;
 use crate::store::snapshot::LinkTier;
 
-use super::{RemoteSpec, RemoteTarget, env_ms, quote_remote_path, remote_path_prefix, sh_quote};
+use super::{RemoteTarget, env_ms, remote_path_prefix};
 
 const LINK_SCHEMA_VERSION: &str = "rimz.link.v1";
 const LINK_STATS_FILE: &str = "link-stats.json";
@@ -410,13 +410,13 @@ pub fn probe_stream_spec(target: &RemoteTarget, control_path: &Path) -> CommandS
 }
 
 fn link_ingest_snippet(target: &RemoteTarget) -> String {
-    let target_arg = match &target.spec {
-        RemoteSpec::Session(name) => format!("--session {}", sh_quote(name)),
-        RemoteSpec::Path(path) => format!("--dir {}", quote_remote_path(path)),
-    };
     format!(
-        "{}; exec rimz remote link-stats ingest {target_arg}",
+        "{}; {}",
         remote_path_prefix(),
+        target.exec_snippet(
+            "rimz remote link-stats ingest --dir",
+            "rimz remote link-stats ingest --session",
+        ),
     )
 }
 

@@ -220,6 +220,206 @@ fn snippet(argv: &[String]) -> &str {
     argv.last().expect("snippet")
 }
 
+fn remote_dispatch_env() -> Env {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let env = Env::new();
+    let bin = env.home_root.join(".cargo/bin");
+    std::fs::create_dir_all(&bin).expect("mkdir fake remote bin");
+    let rimz = bin.join("rimz");
+    std::fs::write(&rimz, "#!/bin/sh\nprintf '%s\\0' \"$@\"\n").expect("write remote argv printer");
+    std::fs::set_permissions(&rimz, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod remote argv printer");
+    for name in [".agents", "bare", "nested/project", "a'\"$HOME`pwd`$(pwd)"] {
+        std::fs::create_dir_all(env.home_root.join(name)).expect("mkdir remote workspace");
+    }
+    // A directory in the SSH shell's cwd must not satisfy a HOME-relative target.
+    std::fs::create_dir_all(env.project_root.join("absent")).expect("mkdir cwd decoy");
+    env
+}
+
+fn run_remote_snippet(env: &Env, command: &str) -> Output {
+    env.rimz_at(Path::new("/bin/sh"))
+        .args(["-c", command])
+        .env("PATH", "/usr/bin:/bin")
+        .bounded_output()
+        .expect("execute remote snippet")
+}
+
+fn remote_argv(out: &Output) -> Vec<String> {
+    stdout_line(out);
+    String::from_utf8(out.stdout.clone())
+        .expect("remote argv is UTF-8")
+        .split_terminator('\0')
+        .map(str::to_owned)
+        .collect()
+}
+
+fn printed_remote_snippet(env: &Env, target: &str, flags: &[&str]) -> String {
+    let out = env
+        .rimz()
+        .args(["remote", "connect", target, "--print"])
+        .args(flags)
+        .env("TERM", "xterm-256color")
+        .bounded_output()
+        .expect("print remote connect");
+    let argv = shlex::split(&stdout_line(&out)).expect("parse printed SSH argv");
+    snippet(&argv).to_owned()
+}
+
+fn remote_dispatch_cases() -> [(&'static str, &'static str, bool); 10] {
+    [
+        (".agents", ".agents", true),
+        ("bare", "bare", true),
+        ("./bare", "./bare", true),
+        ("~/.agents", ".agents", true),
+        ("nested/project", "nested/project", true),
+        ("session:bare", "bare", false),
+        ("absent", "absent", false),
+        ("a'\"$HOME`pwd`$(pwd)", "a'\"$HOME`pwd`$(pwd)", true),
+        (
+            "session:a'\"$HOME`pwd`$(pwd)",
+            "a'\"$HOME`pwd`$(pwd)",
+            false,
+        ),
+        (
+            "missing'\"$HOME`pwd`$(pwd)",
+            "missing'\"$HOME`pwd`$(pwd)",
+            false,
+        ),
+    ]
+}
+
+#[test]
+fn remote_print_and_saved_alias_dispatch_from_home_with_mux_and_reset() {
+    let local = Env::new();
+    let remote = remote_dispatch_env();
+    std::fs::create_dir_all(local.home_root.join("absent")).expect("mkdir local decoy");
+    for mux in ["tmux", "zellij"] {
+        for (suffix, value, is_path) in remote_dispatch_cases() {
+            let target = format!("dev-box:{suffix}");
+            let expected_target = if is_path {
+                remote.home_root.join(value).display().to_string()
+            } else {
+                value.to_owned()
+            };
+            let expected = vec![
+                if is_path { "start" } else { "attach" },
+                "--attach",
+                "--no-resume",
+                "--mux",
+                mux,
+                "--",
+                &expected_target,
+            ];
+            let raw = printed_remote_snippet(&local, &target, &["--mux", mux, "--reset"]);
+            assert_eq!(
+                remote_argv(&run_remote_snippet(&remote, &raw)),
+                expected,
+                "{target}"
+            );
+
+            let alias = format!("case-{mux}");
+            let verb = if suffix == ".agents" { "add" } else { "update" };
+            let saved = local
+                .rimz()
+                .args(["remote", verb, &alias, &target, "--mux", mux, "--no-resume"])
+                .bounded_output()
+                .expect("save remote alias");
+            stdout_line(&saved);
+            let saved = printed_remote_snippet(&local, &alias, &[]);
+            assert_eq!(
+                remote_argv(&run_remote_snippet(&remote, &saved)),
+                expected,
+                "{alias}: {target}"
+            );
+        }
+    }
+}
+
+#[test]
+fn remote_web_and_probe_snippets_share_home_directory_and_session_dispatch() {
+    use rimz::remote::RemoteTarget;
+    use rimz::remote::link::probe_stream_spec;
+    use rimz::remote::web::{WebPrepOptions, web_prep_spec};
+
+    let env = remote_dispatch_env();
+    for (suffix, value, is_path) in remote_dispatch_cases() {
+        let target = RemoteTarget::parse(&format!("dev-box:{suffix}")).expect("remote target");
+        let expected_target = if is_path {
+            env.home_root.join(value).display().to_string()
+        } else {
+            value.to_owned()
+        };
+        let web = web_prep_spec(&target, WebPrepOptions::default(), None);
+        assert_eq!(
+            remote_argv(&run_remote_snippet(&env, snippet(&web.args))),
+            [
+                "web",
+                "open",
+                "--print",
+                "--json",
+                if is_path { "--" } else { "--session" },
+                &expected_target
+            ],
+            "web: {suffix}"
+        );
+        let probe = probe_stream_spec(&target, &env.home_root.join("control.sock"));
+        assert_eq!(
+            remote_argv(&run_remote_snippet(&env, snippet(&probe.args))),
+            [
+                "remote",
+                "link-stats",
+                "ingest",
+                if is_path { "--dir" } else { "--session" },
+                &expected_target
+            ],
+            "probe: {suffix}"
+        );
+    }
+}
+
+#[test]
+fn remote_explicit_missing_paths_refuse_instead_of_attaching() {
+    use rimz::remote::RemoteTarget;
+    use rimz::remote::web::{WebPrepOptions, web_prep_spec};
+
+    let env = remote_dispatch_env();
+    for suffix in ["./absent", "~/absent", "./missing'\"$HOME`pwd`$(pwd)"] {
+        let target = format!("dev-box:{suffix}");
+        let saved = env
+            .rimz()
+            .args([
+                "remote",
+                if suffix == "./absent" {
+                    "add"
+                } else {
+                    "update"
+                },
+                "missing",
+                &target,
+            ])
+            .bounded_output()
+            .expect("save missing path alias");
+        stdout_line(&saved);
+        let web = web_prep_spec(
+            &RemoteTarget::parse(&target).expect("remote target"),
+            WebPrepOptions::default(),
+            None,
+        );
+        for command in [
+            printed_remote_snippet(&env, &target, &[]),
+            printed_remote_snippet(&env, "missing", &[]),
+            snippet(&web.args).to_owned(),
+        ] {
+            let out = run_remote_snippet(&env, &command);
+            assert_eq!(out.status.code(), Some(67), "{target}: {out:?}");
+            assert!(out.stdout.is_empty(), "must not execute rimz: {out:?}");
+            assert!(String::from_utf8_lossy(&out.stderr).contains("remote path does not exist"));
+        }
+    }
+}
+
 fn write_link_notify_command_config(env: &Env) {
     let dir = env.config_root().join("rimz");
     std::fs::create_dir_all(&dir).expect("mkdir rimz config dir");
@@ -541,7 +741,7 @@ fn supervised_connect_opens_new_remote_listener_forwards() {
 fn exec_downgrades_or_copies_terminal_at_the_cli_boundary() {
     let downgrade = run_exec_with_term(None, InfocmpFixture::Missing);
     assert!(
-        snippet(&downgrade).contains("export TERM=xterm-256color; exec rimz"),
+        snippet(&downgrade).contains("export TERM=xterm-256color; if test -d"),
         "{}",
         snippet(&downgrade)
     );

@@ -86,8 +86,10 @@ enum RemoteSpec {
     /// against the remote `$HOME`, scp-style; a leading `~` is normalized to
     /// `$HOME` so it expands remotely despite quoting.
     Path(String),
-    /// A bare word — a session name the remote `rimz attach` reattaches.
+    /// An explicit `session:<name>` target, independent of directories.
     Session(String),
+    /// A home-relative directory if it exists remotely, otherwise a session.
+    Auto(String),
 }
 
 /// A parsed `[user@]host:<session-or-path>` SSH attach target.
@@ -136,9 +138,11 @@ pub enum RemoteTargetError {
     EmptyHost(String),
     #[error(
         "remote target `{0}` has nothing after the `:`; give a session name \
-         (`dev-box:query-engine`) or a path (`dev-box:~/code/query-engine`)"
+         (`dev-box:session:query-engine`) or a path (`dev-box:~/code/query-engine`)"
     )]
     EmptyTarget(String),
+    #[error("remote target `{0}` has an empty session name; use `host:session:<name>`")]
+    EmptySession(String),
     #[error(
         "remote target `{0}` has an unclosed `[` for an IPv6 host; \
          write it as `user@[::1]:<session-or-path>`"
@@ -168,10 +172,15 @@ impl RemoteTarget {
         if target.starts_with('~') && target != "~" && !target.starts_with("~/") {
             return Err(RemoteTargetError::TildeUser(input.to_owned()));
         }
-        let spec = if target.contains('/') || target.starts_with('~') {
+        let spec = if let Some(name) = target.strip_prefix("session:") {
+            if name.is_empty() {
+                return Err(RemoteTargetError::EmptySession(input.to_owned()));
+            }
+            RemoteSpec::Session(name.to_owned())
+        } else if target.contains('/') || target.starts_with('~') {
             RemoteSpec::Path(normalize_tilde(target))
         } else {
-            RemoteSpec::Session(target.to_owned())
+            RemoteSpec::Auto(target.to_owned())
         };
         Ok(Self {
             destination: parsed.destination,
@@ -189,11 +198,26 @@ impl RemoteTarget {
         &self.destination
     }
 
-    /// The remote workspace path, when this target births or enters by path.
+    /// An explicit remote workspace path; bare targets resolve on the host.
     pub fn remote_path(&self) -> Option<&str> {
         match &self.spec {
             RemoteSpec::Path(path) => Some(path),
-            RemoteSpec::Session(_) => None,
+            RemoteSpec::Session(_) | RemoteSpec::Auto(_) => None,
+        }
+    }
+
+    fn exec_snippet(&self, path_command: &str, session_command: &str) -> String {
+        match &self.spec {
+            RemoteSpec::Path(path) => format!("exec {path_command} {}", quote_remote_path(path)),
+            RemoteSpec::Session(name) => format!("exec {session_command} {}", sh_quote(name)),
+            RemoteSpec::Auto(name) => {
+                let path = format!("\"$HOME\"/{}", sh_quote(name));
+                format!(
+                    "if test -d {path}; then exec {path_command} {path}; \
+                     else exec {session_command} {}; fi",
+                    sh_quote(name),
+                )
+            }
         }
     }
 }
@@ -324,6 +348,7 @@ pub fn remote_lineage(target: &RemoteTarget, local_hostname: &str, local_user: &
     let (spec_kind, spec) = match &target.spec {
         RemoteSpec::Path(path) => ("path", path.as_str()),
         RemoteSpec::Session(session) => ("session", session.as_str()),
+        RemoteSpec::Auto(name) => ("auto", name.as_str()),
     };
     let mut hasher = Sha256::new();
     hasher.update(b"rimz.remote-lineage.v1");
@@ -586,16 +611,12 @@ fn guarded_snippet(
     mark: bool,
     outer_scroll_bracket: bool,
 ) -> String {
-    let (verb, arg) = match &options.target.spec {
-        RemoteSpec::Path(path) => ("start", quote_remote_path(path)),
-        RemoteSpec::Session(name) => ("attach", sh_quote(name)),
-    };
-    let mut rimz = format!("rimz {verb} --attach");
+    let mut flags = String::from("--attach");
     if options.no_resume {
-        rimz.push_str(" --no-resume");
+        flags.push_str(" --no-resume");
     }
     if let Some(mux) = options.mux {
-        rimz.push_str(&format!(" --mux {mux}"));
+        flags.push_str(&format!(" --mux {mux}"));
     }
     let mut env_setup = String::new();
     env_setup.push_str(&format!(
@@ -630,7 +651,10 @@ fn guarded_snippet(
         options.target.host_display(),
         &env_setup,
         &remote_path_guard(&options.target),
-        &format!("{rimz} -- {arg}"),
+        &options.target.exec_snippet(
+            &format!("rimz start {flags} --"),
+            &format!("rimz attach {flags} --"),
+        ),
     )
 }
 
@@ -664,7 +688,7 @@ fn remote_exec_snippet(
     format!(
         "{}; \
          command -v rimz >/dev/null 2>&1 || {{ echo {not_found} >&2; exit {code}; }}; \
-         {path_guard}{env_setup}exec {rimz_command}",
+         {path_guard}{env_setup}{rimz_command}",
         remote_path_prefix(),
         code = REMOTE_RIMZ_MISSING_EXIT,
     )
@@ -705,12 +729,13 @@ fn normalize_tilde(target: &str) -> String {
 
 /// Quote a normalized remote path, keeping a leading `$HOME` outside the
 /// single quotes (double-quoted) so the remote shell expands it while the
-/// tail stays literal.
+/// tail stays literal. Relative paths start at the remote home, not its shell's cwd.
 fn quote_remote_path(path: &str) -> String {
     match path.strip_prefix("$HOME") {
         Some("") => "\"$HOME\"".to_owned(),
         Some(rest) => format!("\"$HOME\"{}", sh_quote(rest)),
-        None => sh_quote(path),
+        None if path.starts_with('/') => sh_quote(path),
+        None => format!("\"$HOME\"/{}", sh_quote(path)),
     }
 }
 

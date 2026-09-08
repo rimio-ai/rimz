@@ -38,7 +38,19 @@ fn target_grammar_accepts_supported_forms() {
             input: "dev-box:query-engine",
             destination: "dev-box",
             host: "dev-box",
-            spec: RemoteSpec::Session("query-engine".to_owned()),
+            spec: RemoteSpec::Auto("query-engine".to_owned()),
+        },
+        TargetCase {
+            input: "dev-box:.agents",
+            destination: "dev-box",
+            host: "dev-box",
+            spec: RemoteSpec::Auto(".agents".to_owned()),
+        },
+        TargetCase {
+            input: "dev-box:session:.agents",
+            destination: "dev-box",
+            host: "dev-box",
+            spec: RemoteSpec::Session(".agents".to_owned()),
         },
         TargetCase {
             input: "dev-box:~/code/query-engine",
@@ -74,7 +86,7 @@ fn target_grammar_accepts_supported_forms() {
             input: "dev-box:build@2",
             destination: "dev-box",
             host: "dev-box",
-            spec: RemoteSpec::Session("build@2".to_owned()),
+            spec: RemoteSpec::Auto("build@2".to_owned()),
         },
         TargetCase {
             input: "dev-box:~/code/foo@v2",
@@ -86,7 +98,7 @@ fn target_grammar_accepts_supported_forms() {
             input: "alice@corp.com@dev-box:query-engine",
             destination: "alice@corp.com@dev-box",
             host: "dev-box",
-            spec: RemoteSpec::Session("query-engine".to_owned()),
+            spec: RemoteSpec::Auto("query-engine".to_owned()),
         },
         TargetCase {
             input: "user@[::1]:/srv/app",
@@ -98,7 +110,7 @@ fn target_grammar_accepts_supported_forms() {
             input: "[::1]:query-engine",
             destination: "[::1]",
             host: "::1",
-            spec: RemoteSpec::Session("query-engine".to_owned()),
+            spec: RemoteSpec::Auto("query-engine".to_owned()),
         },
     ] {
         let target = parse(case.input);
@@ -119,6 +131,7 @@ fn target_grammar_rejects_malformed_forms() {
         Empty,
         MissingColon,
         EmptyTarget,
+        EmptySession,
         EmptyHost,
         UnclosedBracket,
         TildeUser,
@@ -128,6 +141,7 @@ fn target_grammar_rejects_malformed_forms() {
         ("", ErrorKind::Empty),
         ("dev-box", ErrorKind::MissingColon),
         ("dev-box:", ErrorKind::EmptyTarget),
+        ("dev-box:session:", ErrorKind::EmptySession),
         (":query-engine", ErrorKind::EmptyHost),
         ("user@:", ErrorKind::EmptyHost),
         ("user@:query-engine", ErrorKind::EmptyHost),
@@ -142,6 +156,7 @@ fn target_grammar_rejects_malformed_forms() {
                 (ErrorKind::Empty, RemoteTargetError::Empty)
                     | (ErrorKind::MissingColon, RemoteTargetError::MissingColon(_))
                     | (ErrorKind::EmptyTarget, RemoteTargetError::EmptyTarget(_))
+                    | (ErrorKind::EmptySession, RemoteTargetError::EmptySession(_))
                     | (ErrorKind::EmptyHost, RemoteTargetError::EmptyHost(_))
                     | (
                         ErrorKind::UnclosedBracket,
@@ -216,6 +231,10 @@ fn quote_and_display_are_shell_safe() {
         "\"$HOME\"'/code/query-engine'"
     );
     assert_eq!(quote_remote_path("/abs path"), "'/abs path'");
+    assert_eq!(
+        quote_remote_path("code/query-engine"),
+        "\"$HOME\"/'code/query-engine'"
+    );
 
     let line = display_ssh_command(
         &attach_plan("dev-box:query-engine", false, None, TermPlan::Keep, false)
@@ -458,7 +477,7 @@ fn ssh_attach_plan_compiles_session_path_flags_control_and_term() {
     for case in [
         SpecCase {
             name: "session attach",
-            target: "dev-box:query-engine",
+            target: "dev-box:session:query-engine",
             no_resume: false,
             mux: None,
             term: TermPlan::Keep,
@@ -491,7 +510,7 @@ fn ssh_attach_plan_compiles_session_path_flags_control_and_term() {
         },
         SpecCase {
             name: "no resume and mux",
-            target: "dev-box:query-engine",
+            target: "dev-box:session:query-engine",
             no_resume: true,
             mux: Some(MuxName::Tmux),
             term: TermPlan::Keep,
@@ -502,7 +521,7 @@ fn ssh_attach_plan_compiles_session_path_flags_control_and_term() {
         },
         SpecCase {
             name: "control master",
-            target: "dev-box:query-engine",
+            target: "dev-box:session:query-engine",
             no_resume: false,
             mux: None,
             term: TermPlan::Keep,
@@ -513,7 +532,7 @@ fn ssh_attach_plan_compiles_session_path_flags_control_and_term() {
         },
         SpecCase {
             name: "term downgrade",
-            target: "dev-box:query-engine",
+            target: "dev-box:session:query-engine",
             no_resume: false,
             mux: None,
             term: TermPlan::Downgrade,
@@ -524,7 +543,7 @@ fn ssh_attach_plan_compiles_session_path_flags_control_and_term() {
         },
         SpecCase {
             name: "truecolor keep",
-            target: "dev-box:query-engine",
+            target: "dev-box:session:query-engine",
             no_resume: false,
             mux: None,
             term: TermPlan::Keep,
@@ -535,7 +554,7 @@ fn ssh_attach_plan_compiles_session_path_flags_control_and_term() {
         },
         SpecCase {
             name: "truecolor and term downgrade",
-            target: "dev-box:query-engine",
+            target: "dev-box:session:query-engine",
             no_resume: false,
             mux: None,
             term: TermPlan::Downgrade,
@@ -548,7 +567,7 @@ fn ssh_attach_plan_compiles_session_path_flags_control_and_term() {
         },
         SpecCase {
             name: "term copy",
-            target: "dev-box:query-engine",
+            target: "dev-box:session:query-engine",
             no_resume: false,
             mux: None,
             term: TermPlan::Copy {
@@ -649,7 +668,7 @@ fn ssh_attach_plan_compiles_session_path_flags_control_and_term() {
 #[test]
 fn ssh_attach_plan_exports_client_size_when_present() {
     let plan = SshAttachPlan::new(SshAttachOptions {
-        target: parse("dev-box:query-engine"),
+        target: parse("dev-box:session:query-engine"),
         lineage: "0123456789abcdef".to_owned(),
         supervised: true,
         force_version: false,
@@ -806,6 +825,10 @@ fn remote_lineage_is_stable_and_room_scoped() {
 
     assert_eq!(lineage, remote_lineage(&target, "laptop", "alice"));
     assert_eq!(lineage.len(), 16);
+    assert_ne!(
+        lineage,
+        remote_lineage(&parse("dev-box:session:query-engine"), "laptop", "alice")
+    );
     assert_ne!(
         lineage,
         remote_lineage(&parse("other-box:query-engine"), "laptop", "alice")
