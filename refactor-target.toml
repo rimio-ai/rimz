@@ -886,7 +886,7 @@ reason = "Pass 12: profiles, subagent_profiles and teams each have production re
 
 [[verdict]]
 kind = "item"
-key = "config::edit::validate_set_value"
+key = "config::edit::set"
 reason = "Pass 12: front-loaded editor validation delegates to owning parsers; enum-string checks repeat only to reject before a write."
 
 [[verdict]]
