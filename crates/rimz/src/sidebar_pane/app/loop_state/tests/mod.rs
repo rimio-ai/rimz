@@ -3,6 +3,7 @@ use crate::sidebar_pane::app::fixtures::{
     agent_snapshot, pane, serve_config, snapshot, snapshot_with_panes, workspace,
 };
 use crate::sidebar_pane::app::input::KeyAction;
+use crate::{SidebarInstanceId, WorkspaceId};
 use std::collections::HashSet;
 
 mod fetch;

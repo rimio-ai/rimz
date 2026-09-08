@@ -1,4 +1,15 @@
-use super::*;
+use std::io;
+use std::os::unix::net::UnixDatagram;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use crate::RuntimePaths;
+use crate::sidebar::timing::HEARTBEAT_WRITE_INTERVAL;
+use ratatui::crossterm::event::{self, Event, KeyEventKind};
+use tracing::warn;
+
+use super::input::{encode_key, encode_mouse};
+use super::{NavKeymap, Result, ServeConfig, SidebarAppErr};
 
 pub(super) fn heartbeat_write_due(last_heartbeat: Option<Instant>) -> bool {
     last_heartbeat.is_none_or(|last| last.elapsed() >= HEARTBEAT_WRITE_INTERVAL)

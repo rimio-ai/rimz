@@ -1,5 +1,13 @@
-use super::*;
+use std::io::{self, Write};
+
+use crate::MuxName;
+use crate::ids::PaneId;
 use crate::osc;
+use crate::store::snapshot::SidebarSnapshot;
+use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
+
+use super::ServeConfig;
 
 /// One notification to render in this renderer's terminal: the desktop text, the
 /// owned panes it targets, whether the tab bell re-checks unread, and the

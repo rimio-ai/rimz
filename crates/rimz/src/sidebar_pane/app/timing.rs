@@ -1,4 +1,7 @@
-use super::*;
+use std::time::{Duration, Instant};
+
+use crate::sidebar_pane::render::{self, UiState};
+use crate::store::snapshot::SidebarSnapshot;
 
 pub(super) fn is_animating(
     snapshot: &SidebarSnapshot,
