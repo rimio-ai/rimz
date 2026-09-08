@@ -400,7 +400,7 @@ fn sidebar_geometry_classifies_dock_shapes() {
         Some(SidebarDock::NestedRow),
     );
     assert_eq!(
-        repairable_nested_work_pane_ids(by_id(9), &panes, &excluded),
+        repairable_nested_work_pane_ids(by_id(9), &panes),
         Some(vec![10, 11]),
         "the narrow one-right-column nested shape can be repaired by stacking",
     );
@@ -432,7 +432,7 @@ fn sidebar_geometry_classifies_dock_shapes() {
         Some(SidebarDock::NestedRow),
     );
     assert_eq!(
-        repairable_nested_work_pane_ids(by_id(23), &panes, &excluded),
+        repairable_nested_work_pane_ids(by_id(23), &panes),
         None,
         "a dead intruder is reportable but not a repair candidate",
     );
@@ -441,12 +441,12 @@ fn sidebar_geometry_classifies_dock_shapes() {
         Some(SidebarDock::NestedRow),
     );
     assert_eq!(
-        repairable_nested_work_pane_ids(by_id(26), &panes, &excluded),
+        repairable_nested_work_pane_ids(by_id(26), &panes),
         None,
         "multi-column work layouts are left untouched instead of collapsed",
     );
     assert_eq!(
-        nested_work_pane_ids(by_id(26), &panes, &excluded),
+        nested_work_pane_ids(by_id(26), &panes),
         Some(vec![28, 27, 29]),
         "a newly added nested sidebar can stack every live work pane without replacing it",
     );

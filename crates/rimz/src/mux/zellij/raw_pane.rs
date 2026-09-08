@@ -146,9 +146,8 @@ pub(super) fn sidebar_dock_verdict(
 pub(super) fn nested_work_pane_ids(
     sidebar: &PaneTopologyPane,
     panes: &[PaneTopologyPane],
-    excluded: &HashSet<u64>,
 ) -> Option<Vec<u64>> {
-    if sidebar_dock_verdict(sidebar, panes, excluded) != Some(SidebarDock::NestedRow) {
+    if sidebar_dock_verdict(sidebar, panes, &HashSet::new()) != Some(SidebarDock::NestedRow) {
         return None;
     }
     let mut work: Vec<_> = panes
@@ -157,7 +156,6 @@ pub(super) fn nested_work_pane_ids(
             pane.tab_position == sidebar.tab_position
                 && pane.is_live_terminal()
                 && !is_sidebar_pane(pane)
-                && !excluded.contains(&pane.id)
         })
         .collect();
     if work.len() < 2 || work.iter().any(|pane| pane.pane_x.is_none()) {
@@ -175,10 +173,9 @@ pub(super) fn nested_work_pane_ids(
 pub(super) fn repairable_nested_work_pane_ids(
     sidebar: &PaneTopologyPane,
     panes: &[PaneTopologyPane],
-    excluded: &HashSet<u64>,
 ) -> Option<Vec<u64>> {
     let sidebar_cols = sidebar.pane_columns?;
-    if sidebar_dock_verdict(sidebar, panes, excluded) != Some(SidebarDock::NestedRow) {
+    if sidebar_dock_verdict(sidebar, panes, &HashSet::new()) != Some(SidebarDock::NestedRow) {
         return None;
     }
 
@@ -188,7 +185,6 @@ pub(super) fn repairable_nested_work_pane_ids(
             pane.tab_position == sidebar.tab_position
                 && pane.is_live_terminal()
                 && !is_sidebar_pane(pane)
-                && !excluded.contains(&pane.id)
         })
         .collect();
     if work.len() < 2 {
