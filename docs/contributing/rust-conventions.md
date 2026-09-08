@@ -254,6 +254,8 @@ Every PR gate runs in CI with warnings treated as errors; each has a local `carg
 
 `cargo xtask check` (singular) is the fast `cargo check --workspace --all-targets --all-features --locked` structural compile pass. It is intentionally distinct from `cargo xtask checks` (plural), the non-test gate composite above; use singular `check` for early broad iteration.
 
+Repository loop tasks each own a directory under [loops/](../../loops/README.md), with schedules declared in `.rimz/config.toml`. `uv run --script loops/dependabot/dependabot.py plan|run` selects failed Dependabot updates and starts one worktree-isolated Astra repair batch using Python >=3.14. The [Dependabot loop runbook](./dependabot-loop.md) owns setup, duplicate prevention, and the project schedule.
+
 Run one Cargo-family command at a time in a worktree. Concurrent builds only wait on the same target-directory lock: batch focused names in one `cargo xtask test` invocation, let that run finish before starting `gate`, and use `check` for an early broad compile signal. Reserve `test-archive` plus partitioned execution for genuinely large CI suites.
 
 Escalate past `gate` when the change touches the matching surface: `cargo xtask test -P live` for live-backend and deep-mux-smoke coverage, `cargo xtask test -P journey` for rendered journeys, `cargo xtask externals` when dependencies change, and `cargo xtask ci` for both checks and the full suite.

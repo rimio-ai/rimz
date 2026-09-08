@@ -8,3 +8,10 @@ on = "fail"
 mode = "yolo"
 timeout = "2h"
 every = "5m"
+
+# Dispatch is read-only here; coordination runs in the dependabot-loop worktree.
+[tasks.dependabot-repair]
+check = "uv run --no-project --script loops/dependabot/dependabot.py dispatch"
+timeout = "2h"
+every = "8h"
+max-strikes = 3

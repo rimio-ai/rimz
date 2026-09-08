@@ -489,9 +489,13 @@ fn unsupported_adapter_keeps_subagent_reminder_in_user_prompt() {
 
     let adapter = rimz::agents::find_definition("amp").unwrap();
     let prompt = super::run::supervised_prompt(&request, adapter);
-    assert!(prompt.starts_with("amp\n\n<system_reminder>\n"));
-    assert!(prompt.contains("must not spawn agents or subagents"));
-    assert!(prompt.ends_with("\n</system_reminder>"));
+    assert_eq!(
+        prompt,
+        format!(
+            "amp\n\n{}",
+            rimz::harness::launch_reminders::subagent_reminder()
+        )
+    );
 
     let ordinary = supervised_request("amp", false);
     assert_eq!(super::run::supervised_prompt(&ordinary, adapter), "amp");
