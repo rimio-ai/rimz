@@ -254,9 +254,7 @@ fn frame_timing_wakes_for_elapsed_tab_read_dwell() {
     rig.state.dirty = false;
     rig.state.tab_read_dwell_until = Some(Instant::now() - Duration::from_secs(1));
 
-    let (active, timeout) = rig
-        .state
-        .frame_timing(Duration::from_secs(60), Instant::now());
+    let (active, timeout) = rig.state.frame_timing();
 
     assert!(!active);
     assert_eq!(timeout, FRAME_MIN_TIMEOUT);
@@ -268,9 +266,7 @@ fn frame_timing_caps_long_tick_at_gate_deadline() {
     rig.state.dirty = false;
     rig.state.gate = armed_gate(1, 800);
 
-    let (_active, timeout) = rig
-        .state
-        .frame_timing(Duration::from_secs(60), Instant::now());
+    let (_active, timeout) = rig.state.frame_timing();
 
     assert!(
         timeout <= Duration::from_millis(200),
@@ -289,9 +285,8 @@ fn frame_timing_caps_idle_timeout_at_order_hold_expiry() {
         expires_ms: jiff::Timestamp::now().as_millisecond() + 200,
     });
 
-    let (_active, timeout) = rig
-        .state
-        .frame_timing(Duration::from_secs(10), Instant::now());
+    rig.state.tick = Duration::from_secs(10);
+    let (_active, timeout) = rig.state.frame_timing();
 
     assert!(
         timeout <= Duration::from_millis(200),
