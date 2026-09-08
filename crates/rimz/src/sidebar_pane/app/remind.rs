@@ -1,3 +1,5 @@
+//! Renderer-local unread reminder timing, actionable attention scope, and delivery through terminal notifications and configured handlers.
+
 use std::collections::{HashMap, HashSet};
 use std::io;
 

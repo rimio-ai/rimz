@@ -1,7 +1,4 @@
-//! Pure reducers and unread-fold helpers for the sidebar serve loop.
-//!
-//! `LoopState` owns fetch-outcome application; this module keeps the testable
-//! state reducer, diagnostics projection, and read-receipt helpers it calls.
+//! State reduction, diagnostic emission, and unread-fold helpers for the sidebar serve loop; `LoopState` owns fetch-outcome application.
 
 use std::collections::HashMap;
 
@@ -36,7 +33,7 @@ pub(super) fn compute_next_state(
     }
 }
 
-/// Bundle returned by [`compute_next_state`]; the loop applies it verbatim.
+/// Snapshot and health returned by [`compute_next_state`] for the loop's commit policy.
 #[derive(Clone, Debug)]
 pub(super) struct RenderState {
     pub(super) snapshot: SidebarSnapshot,
