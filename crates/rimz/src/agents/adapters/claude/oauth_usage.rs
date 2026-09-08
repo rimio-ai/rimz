@@ -33,7 +33,7 @@ const ACCOUNT_KEY_DOMAIN: &[u8] = b"rimz/claude-oauth-account-key/v1";
 const KEYCHAIN_TIMEOUT: Duration = Duration::from_millis(1_500);
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ClaudeOauthUsageErr {
+pub(in crate::agents) enum ClaudeOauthUsageErr {
     #[error("claude OAuth credentials not found")]
     NoCredentials,
     #[error("claude OAuth token is expired")]
@@ -69,10 +69,10 @@ impl crate::agents::credits::AccountUsageReportable for ClaudeOauthUsageErr {
     }
 }
 
-pub(crate) type Result<T> = std::result::Result<T, ClaudeOauthUsageErr>;
+type Result<T> = std::result::Result<T, ClaudeOauthUsageErr>;
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ClaudeOauthCredentials {
+struct ClaudeOauthCredentials {
     access_token: String,
     account_key: String,
 }
@@ -115,7 +115,7 @@ struct ExtraUsageWire {
     monthly_limit: Option<f64>,
 }
 
-pub(crate) fn probe_usage(cli_version: Option<&str>) -> crate::agents::AccountUsageProbe {
+pub(super) fn probe_usage(cli_version: Option<&str>) -> crate::agents::AccountUsageProbe {
     let credentials_stamp = credentials_stamp();
     let url = match usage_url() {
         Ok(url) => url,
@@ -151,7 +151,7 @@ pub(crate) fn probe_usage(cli_version: Option<&str>) -> crate::agents::AccountUs
     }
 }
 
-pub(crate) fn fetch_usage_with_token(
+pub(in crate::agents) fn fetch_usage_with_token(
     access_token: &str,
     cli_version: Option<&str>,
 ) -> Result<AccountUsageSnapshot> {
@@ -165,11 +165,11 @@ pub(crate) fn fetch_usage_with_token(
     )
 }
 
-pub(crate) fn load_credentials() -> Result<ClaudeOauthCredentials> {
+fn load_credentials() -> Result<ClaudeOauthCredentials> {
     parse_credentials(&read_credentials_bytes()?)
 }
 
-pub(crate) fn load_account_key() -> Result<String> {
+pub(super) fn load_account_key() -> Result<String> {
     parse_account_key(&read_credentials_bytes()?)
 }
 
@@ -213,11 +213,11 @@ fn credentials_path() -> PathBuf {
     home_dir().join(".claude").join(".credentials.json")
 }
 
-pub(crate) fn credentials_stamp() -> Option<u64> {
+pub(super) fn credentials_stamp() -> Option<u64> {
     file_mtime_ms(&credentials_path())
 }
 
-pub(crate) fn parse_credentials(bytes: &[u8]) -> Result<ClaudeOauthCredentials> {
+fn parse_credentials(bytes: &[u8]) -> Result<ClaudeOauthCredentials> {
     let parsed: CredentialsFile = serde_json::from_slice(bytes)?;
     let Some(oauth) = parsed.claude_ai_oauth else {
         return Err(ClaudeOauthUsageErr::NoCredentials);
@@ -248,7 +248,7 @@ pub(crate) fn parse_credentials(bytes: &[u8]) -> Result<ClaudeOauthCredentials> 
     })
 }
 
-pub(crate) fn parse_account_key(bytes: &[u8]) -> Result<String> {
+fn parse_account_key(bytes: &[u8]) -> Result<String> {
     let parsed: CredentialsFile = serde_json::from_slice(bytes)?;
     let Some(oauth) = parsed.claude_ai_oauth else {
         return Err(ClaudeOauthUsageErr::NoCredentials);
@@ -262,7 +262,7 @@ pub(crate) fn parse_account_key(bytes: &[u8]) -> Result<String> {
     Ok(account_key("access-token", &access_token))
 }
 
-pub(crate) fn fetch_usage_with_url(
+fn fetch_usage_with_url(
     url: &str,
     credentials: &ClaudeOauthCredentials,
     cli_version: Option<&str>,
@@ -322,7 +322,7 @@ fn normalized_version(version: &str) -> Option<String> {
     (!trimmed.is_empty()).then_some(trimmed.to_owned())
 }
 
-pub(crate) fn parse_usage_response(body: &str) -> Result<AccountUsageSnapshot> {
+fn parse_usage_response(body: &str) -> Result<AccountUsageSnapshot> {
     Ok(serde_json::from_str::<UsageWire>(body)?.into_account_usage())
 }
 

@@ -17,18 +17,18 @@
 //! `docs/internals/agents/adapter_claude.md`). The `PreToolUse` blocking sub-events ride the
 //! broad `PreToolUse` hook and self-classify from `tool_name`.
 
-pub(crate) mod account;
+mod account;
 mod ask;
 mod install;
 mod local_context;
 mod local_sessions;
 mod managed_pricing;
-pub(crate) mod oauth_usage;
-pub(crate) mod payloads;
-pub(crate) mod remote_consent;
-pub mod remote_control;
-pub mod remote_liveness;
-pub(crate) mod spend;
+pub(in crate::agents) mod oauth_usage;
+mod payloads;
+mod remote_consent;
+mod remote_control;
+mod remote_liveness;
+mod spend;
 mod statusline;
 mod subagent_cost;
 mod subagent_statusline;
@@ -39,15 +39,9 @@ pub(crate) use crate::agents::capabilities::*;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
-#[cfg(test)]
-use serde_json::Map;
 use serde_json::Value;
 
 use self::install::MANAGED_SOURCE;
-#[cfg(test)]
-use self::install::{classify_status_line_change, upsert_rimz_status_line};
-#[cfg(test)]
-use self::install::{read_existing_json, wrapped_status_line_command_from};
 use self::payloads::{
     ClaudeCommon, ClaudePermissionRequest, ClaudePostCompact, ClaudePostToolUse, ClaudePreToolUse,
     ClaudeSessionStart, ClaudeStop, ClaudeStopFailure, ClaudeSubagentStart, ClaudeSubagentStop,
@@ -57,8 +51,6 @@ use self::payloads::{
 };
 use super::AskKind;
 use super::RemoteControlStatus;
-#[cfg(test)]
-use super::StatusLineChange;
 use super::definition::{
     AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
     HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability, ThreadKey,
@@ -395,7 +387,7 @@ const SUBAGENT_STATUS_LINE: super::managed_statusline::ManagedStatusLineSpec =
     };
 
 #[derive(Clone, Debug, Default)]
-pub struct ClaudeAdapter;
+pub(in crate::agents) struct ClaudeAdapter;
 
 fn hook_ingress_decision(
     pid: Option<u32>,

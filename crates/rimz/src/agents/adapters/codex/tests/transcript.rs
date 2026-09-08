@@ -1,6 +1,13 @@
+use super::super::transcript::{
+    death_warning_from_frame, detect_plan_proposed, detect_turn_complete, detect_turn_error,
+    detect_turn_interrupted, find_session_transcript_under, transcript_enrichment,
+    usage_from_transcript, with_codex_config_path, with_codex_sessions_root,
+};
 use super::*;
 use crate::agents::adapters::codex::spend::live_fold_needs_token_counter_backfill;
-use crate::agents::{LocalSpendFold, PriceBook, SessionOrigin, TokenSplit, TranscriptStat};
+use crate::agents::{
+    LocalSpendFold, PriceBook, SessionOrigin, TokenSplit, TranscriptRole, TranscriptStat,
+};
 
 #[test]
 fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {

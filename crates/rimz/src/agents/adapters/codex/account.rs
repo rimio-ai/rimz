@@ -118,7 +118,7 @@ pub(crate) fn parse_balance(value: &Value) -> Option<f64> {
 /// A readable file remains authoritative; an unexpected file IO error is the
 /// transient `Unavailable` arm.
 pub(crate) fn probe() -> AccountProbe {
-    let Some(home) = super::app_server::codex_home() else {
+    let Some(home) = super::codex_home() else {
         return AccountProbe::LoggedOut;
     };
     let path = home.join("auth.json");

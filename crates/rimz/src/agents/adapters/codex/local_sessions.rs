@@ -55,7 +55,7 @@ thread_local! {
 }
 
 pub(super) fn discover(workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
-    let Some(home) = super::app_server::codex_home() else {
+    let Some(home) = super::codex_home() else {
         return Vec::new();
     };
     let today = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date();

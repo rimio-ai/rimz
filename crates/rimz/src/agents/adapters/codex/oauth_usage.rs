@@ -19,13 +19,13 @@ use crate::agents::{AccountUsageSnapshot, HttpErrKind, ResetCredits};
 
 use super::account::{UsageCredits, UsageWindow, normalize_usage, parse_balance};
 
-use super::app_server::codex_home;
+use super::codex_home;
 
 const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const OFFICIAL_HOST: &str = "chatgpt.com";
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum CodexOauthUsageErr {
+pub(in crate::agents) enum CodexOauthUsageErr {
     #[error("codex OAuth credentials not found")]
     NoCredentials,
     #[error("codex auth file contains only an API key")]
@@ -59,16 +59,16 @@ impl crate::agents::credits::AccountUsageReportable for CodexOauthUsageErr {
     }
 }
 
-pub(crate) type Result<T> = std::result::Result<T, CodexOauthUsageErr>;
+type Result<T> = std::result::Result<T, CodexOauthUsageErr>;
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct CodexOauthCredentials {
+pub(super) struct CodexOauthCredentials {
     access_token: String,
     account_id: Option<String>,
 }
 
 impl CodexOauthCredentials {
-    pub(crate) fn account_usage_identity(&self) -> crate::agents::AccountUsageIdentity {
+    pub(super) fn account_usage_identity(&self) -> crate::agents::AccountUsageIdentity {
         crate::agents::AccountUsageIdentity {
             account_key: self.account_id.clone(),
             ..Default::default()
@@ -114,7 +114,7 @@ struct CreditsWire {
     overage_limit_reached: Option<bool>,
 }
 
-pub(crate) fn probe_usage() -> crate::agents::AccountUsageProbe {
+pub(super) fn probe_usage() -> crate::agents::AccountUsageProbe {
     let Some(home) = codex_home() else {
         return crate::agents::AccountUsageProbe::NoCredentials(Default::default());
     };
@@ -158,18 +158,18 @@ pub(crate) fn probe_usage() -> crate::agents::AccountUsageProbe {
     crate::agents::credits::map_account_usage_probe(result, identity, "codex")
 }
 
-pub(crate) fn credentials_stamp() -> Option<u64> {
+pub(super) fn credentials_stamp() -> Option<u64> {
     file_mtime_ms(&codex_home()?.join("auth.json"))
 }
 
-pub(crate) fn load_configured_credentials() -> Result<(CodexOauthCredentials, Option<String>)> {
+pub(super) fn load_configured_credentials() -> Result<(CodexOauthCredentials, Option<String>)> {
     let home = codex_home().ok_or(CodexOauthUsageErr::NoCredentials)?;
     let base_url = configured_base_url(&home)?;
     let credentials = load_credentials_from(&home.join("auth.json"))?;
     Ok((credentials, base_url))
 }
 
-pub(crate) fn fetch_usage_with_token(
+pub(in crate::agents) fn fetch_usage_with_token(
     access_token: &str,
     account_id: Option<&str>,
 ) -> Result<AccountUsageSnapshot> {
@@ -182,7 +182,7 @@ pub(crate) fn fetch_usage_with_token(
     )
 }
 
-pub(crate) fn load_credentials_from(path: &Path) -> Result<CodexOauthCredentials> {
+fn load_credentials_from(path: &Path) -> Result<CodexOauthCredentials> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -193,7 +193,7 @@ pub(crate) fn load_credentials_from(path: &Path) -> Result<CodexOauthCredentials
     parse_credentials(&bytes)
 }
 
-pub(crate) fn parse_credentials(bytes: &[u8]) -> Result<CodexOauthCredentials> {
+fn parse_credentials(bytes: &[u8]) -> Result<CodexOauthCredentials> {
     let auth = super::account::decode_auth(bytes)?;
     if auth
         .openai_api_key
@@ -215,7 +215,7 @@ pub(crate) fn parse_credentials(bytes: &[u8]) -> Result<CodexOauthCredentials> {
     })
 }
 
-pub(crate) fn configured_base_url(home: &Path) -> Result<Option<String>> {
+fn configured_base_url(home: &Path) -> Result<Option<String>> {
     let path = home.join("config.toml");
     match std::fs::read_to_string(path) {
         Ok(text) => {
@@ -236,15 +236,15 @@ pub(crate) fn configured_base_url(home: &Path) -> Result<Option<String>> {
     }
 }
 
-pub(crate) fn usage_url(chatgpt_base_url: Option<&str>) -> String {
+pub(super) fn usage_url(chatgpt_base_url: Option<&str>) -> String {
     endpoint_url(chatgpt_base_url, "usage")
 }
 
-pub(crate) fn reset_credits_url(chatgpt_base_url: Option<&str>) -> String {
+pub(super) fn reset_credits_url(chatgpt_base_url: Option<&str>) -> String {
     endpoint_url(chatgpt_base_url, "rate-limit-reset-credits")
 }
 
-pub(crate) fn consume_url(chatgpt_base_url: Option<&str>) -> String {
+fn consume_url(chatgpt_base_url: Option<&str>) -> String {
     endpoint_url(chatgpt_base_url, "rate-limit-reset-credits/consume")
 }
 
@@ -261,7 +261,7 @@ fn endpoint_url(chatgpt_base_url: Option<&str>, endpoint: &str) -> String {
     }
 }
 
-pub(crate) fn fetch_usage_with_url(
+pub(super) fn fetch_usage_with_url(
     url: &str,
     credentials: &CodexOauthCredentials,
 ) -> Result<AccountUsageSnapshot> {
@@ -289,7 +289,7 @@ fn http_headers(credentials: &CodexOauthCredentials) -> Vec<(&'static str, Strin
     headers
 }
 
-pub(crate) fn parse_usage_response(body: &str) -> Result<AccountUsageSnapshot> {
+fn parse_usage_response(body: &str) -> Result<AccountUsageSnapshot> {
     Ok(serde_json::from_str::<UsageWire>(body)?.into_account_usage())
 }
 
@@ -309,9 +309,9 @@ struct ResetCreditWire {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ResetCreditDetail {
-    pub id: Option<String>,
-    pub expires_at: Option<Timestamp>,
+pub(super) struct ResetCreditDetail {
+    id: Option<String>,
+    expires_at: Option<Timestamp>,
 }
 
 fn parse_reset_credit_response(body: &str) -> Result<(Option<u32>, Vec<ResetCreditDetail>)> {
@@ -331,7 +331,7 @@ fn parse_reset_credit_response(body: &str) -> Result<(Option<u32>, Vec<ResetCred
     Ok((wire.available_count, details))
 }
 
-pub(crate) fn parse_reset_credits(body: &str) -> Result<ResetCredits> {
+fn parse_reset_credits(body: &str) -> Result<ResetCredits> {
     let (available_count, details) = parse_reset_credit_response(body)?;
     Ok(summarize_reset_credits(available_count, &details))
 }
@@ -350,7 +350,7 @@ fn summarize_reset_credits(
     )
 }
 
-pub(crate) fn select_reset_credit_id(details: &[ResetCreditDetail]) -> Option<&str> {
+pub(super) fn select_reset_credit_id(details: &[ResetCreditDetail]) -> Option<&str> {
     details
         .iter()
         .filter_map(|detail| detail.expires_at.map(|expiry| (expiry, detail)))
@@ -365,7 +365,7 @@ fn fetch_reset_credits(url: &str, credentials: &CodexOauthCredentials) -> Result
     parse_reset_credits(&body)
 }
 
-pub(crate) fn fetch_reset_credit_state(
+pub(super) fn fetch_reset_credit_state(
     url: &str,
     credentials: &CodexOauthCredentials,
 ) -> Result<(ResetCredits, Vec<ResetCreditDetail>)> {
@@ -377,7 +377,7 @@ pub(crate) fn fetch_reset_credit_state(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ConsumeCode {
+pub(super) enum ConsumeCode {
     Reset,
     NothingToReset,
     NoCredit,
@@ -387,10 +387,10 @@ pub enum ConsumeCode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-pub(crate) struct ConsumeOutcome {
-    pub code: ConsumeCode,
+pub(super) struct ConsumeOutcome {
+    pub(super) code: ConsumeCode,
     #[serde(default)]
-    pub windows_reset: i64,
+    pub(super) windows_reset: i64,
 }
 
 #[derive(Serialize)]
@@ -400,7 +400,7 @@ struct ConsumeRequest<'a> {
     credit_id: Option<&'a str>,
 }
 
-pub(crate) fn consume_reset_credit(
+pub(super) fn consume_reset_credit(
     credentials: &CodexOauthCredentials,
     base_url: Option<&str>,
     redeem_request_id: &str,

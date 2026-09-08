@@ -57,11 +57,11 @@ const CLEAR_SCREEN: &str = "\x1b[2J\x1b[H";
 /// Display context for the broker pane's status banner. Presentation only — never
 /// consulted on the serving path, so a render that fails or lies cannot affect
 /// enrichment.
-pub struct BrokerInfo<'a> {
+pub(in crate::agents) struct BrokerInfo<'a> {
     /// Session name shown in the banner; the session line is omitted when `None`.
-    pub session: Option<&'a str>,
+    pub(in crate::agents) session: Option<&'a str>,
     /// The per-session broker socket the pane binds and serves on.
-    pub socket_path: &'a Path,
+    pub(in crate::agents) socket_path: &'a Path,
 }
 
 /// The broker pane's status banner: a screen-clear followed by the daemon's
@@ -259,7 +259,7 @@ fn handle_client(stream: UnixStream, shared: Arc<Mutex<ChildIo>>) {
 /// Run the broker: bring up the warm child, bind the per-session socket, and
 /// serve clients until the pane closes. Returns `Ok(())` and exits cleanly when
 /// `codex` is unavailable so the pane closes and enrichment cold-spawns instead.
-pub fn serve(info: BrokerInfo<'_>) -> std::io::Result<()> {
+pub(in crate::agents) fn serve(info: BrokerInfo<'_>) -> std::io::Result<()> {
     let socket_path = info.socket_path;
     let child = match spawn_and_handshake() {
         Ok(io) => io,
