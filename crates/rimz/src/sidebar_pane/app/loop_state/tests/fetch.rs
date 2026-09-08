@@ -81,6 +81,47 @@ fn unwatched_consumer_coalesces_identity_free_fetches_until_clamp_deadline() {
 }
 
 #[test]
+fn store_delta_requests_default_or_panes_changed_freshness() {
+    use crate::agents::LifecycleSignal;
+
+    for (event, expected) in [
+        (store_delta(), FetchRequest::default()),
+        (
+            SidebarEvent::PanesChanged,
+            FetchRequest::producer_fresh_panes(),
+        ),
+        (
+            SidebarEvent::StoreDelta {
+                event_method: Some(crate::store::event::AGENT_LIFECYCLE_METHOD.to_owned()),
+                agent_signal: Some(LifecycleSignal::Registered.tag().to_owned()),
+            },
+            FetchRequest::producer_fresh_panes(),
+        ),
+        (
+            SidebarEvent::StoreDelta {
+                event_method: Some(crate::store::event::AGENT_LIFECYCLE_METHOD.to_owned()),
+                agent_signal: Some(LifecycleSignal::Ended.tag().to_owned()),
+            },
+            FetchRequest::producer_fresh_panes(),
+        ),
+    ] {
+        let mut rig = Rig::new();
+        rig.state.last_known_elder = true;
+
+        rig.event(event.clone());
+
+        let request = rig.requests.try_recv().expect("immediate event fetch");
+        assert_eq!(
+            request.is_producer_fresh_panes(),
+            expected.is_producer_fresh_panes(),
+            "{event:?}",
+        );
+        assert_eq!(request.forces_fold(), expected.forces_fold(), "{event:?}");
+        assert!(rig.next_request().is_none(), "one fetch for {event:?}");
+    }
+}
+
+#[test]
 fn lifecycle_store_delta_preserves_fresh_pane_verification() {
     for signal in [
         crate::agents::LifecycleSignal::Registered.tag(),

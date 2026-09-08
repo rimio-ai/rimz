@@ -234,6 +234,10 @@ path = "crates/rimz/src/sidebar_pane"
 surface-budget = 180
 
 [[module]]
+path = "crates/rimz/src/sidebar_pane/app"
+surface-budget = 11
+
+[[module]]
 path = "crates/rimz/src/sock.rs"
 surface-budget = 17
 

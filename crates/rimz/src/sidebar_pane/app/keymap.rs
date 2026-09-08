@@ -238,6 +238,48 @@ mod tests {
     }
 
     #[test]
+    fn configured_named_keys_match_exact_ctrl_alt_and_ignore_shift() {
+        let modifiers = [
+            ("", KeyModifiers::NONE),
+            ("ctrl+", KeyModifiers::CONTROL),
+            ("alt+", KeyModifiers::ALT),
+            ("ctrl+alt+", KeyModifiers::CONTROL | KeyModifiers::ALT),
+        ];
+        for (name, code) in [
+            ("Up", KeyCode::Up),
+            ("Down", KeyCode::Down),
+            ("Left", KeyCode::Left),
+            ("Right", KeyCode::Right),
+            ("Home", KeyCode::Home),
+            ("End", KeyCode::End),
+            ("PageUp", KeyCode::PageUp),
+            ("PageDown", KeyCode::PageDown),
+            ("Enter", KeyCode::Enter),
+        ] {
+            for (prefix, expected_mods) in modifiers {
+                let keys = SidebarKeys {
+                    narrower: format!("{prefix}{name}"),
+                    up: String::new(),
+                    down: String::new(),
+                    page_up: String::new(),
+                    page_down: String::new(),
+                    ..SidebarKeys::default()
+                };
+                let keymap = NavKeymap::from_config(&keys);
+                for (_, mods) in modifiers {
+                    for shift in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
+                        assert_eq!(
+                            keymap.wire_for(code, mods | shift),
+                            (mods == expected_mods).then_some(KEY_WIDTH_NARROWER),
+                            "{prefix}{name}: {mods:?} | {shift:?}",
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn default_config_binds_all_motion_actions() {
         let keymap = NavKeymap::from_config(&SidebarKeys::default());
         let cases = [
