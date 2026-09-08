@@ -21,6 +21,7 @@ use tracing::{debug, warn};
 use crate::tui::{MouseCapture, Screen, TerminalModeGuard};
 
 mod cache_refresh;
+#[cfg(feature = "testkit")]
 mod demo;
 mod fetch;
 #[cfg(test)]
@@ -50,6 +51,7 @@ use self::timing::FRAME_MIN_TIMEOUT;
 use fetch::{FetchDispatcher, FetchRequest, FetchUpdate, spawn_fetch_worker};
 use input::wait_for_wakeup;
 
+#[cfg(feature = "testkit")]
 pub use demo::{serve_fixture, serve_gallery};
 pub use keymap::NavKeymap;
 
