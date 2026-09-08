@@ -169,7 +169,7 @@ pub fn live_presence_plugin_ids(session_name: &str) -> Result<Vec<u32>> {
 /// Parse `"zellij 0.41.2"` (and tolerant of leading/trailing whitespace).
 /// Returns None when the shape is unexpected so `doctor` can render the raw
 /// string verbatim.
-pub(super) fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
+fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
     let trimmed = raw.trim();
     let after_prefix = trimmed.strip_prefix("zellij ").unwrap_or(trimmed);
     let mut parts = after_prefix
