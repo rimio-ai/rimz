@@ -926,7 +926,7 @@ struct ProbeState {
 }
 
 fn tea_pr_detail_args(number: u64, repo: &str) -> Vec<String> {
-    vec!["api".to_owned(), forge::tea_pr_endpoint(repo, number)]
+    vec!["api".to_owned(), format!("repos/{repo}/pulls/{number}")]
 }
 
 fn probe_tea(target: &Target, prior_number: Option<u64>) -> ProbeState {

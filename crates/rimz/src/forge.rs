@@ -437,9 +437,14 @@ impl ForgeCli {
             Self::Tea => {
                 let repo = repo
                     .ok_or_else(|| "could not derive the origin repository for tea".to_owned())?;
-                ["api", &tea_pr_endpoint(repo, number), "--repo", repo]
-                    .map(str::to_owned)
-                    .into()
+                [
+                    "api",
+                    &format!("repos/{repo}/pulls/{number}"),
+                    "--repo",
+                    repo,
+                ]
+                .map(str::to_owned)
+                .into()
             }
         })
     }
@@ -720,11 +725,6 @@ pub fn tea_pr_list_args<'a>(state: &'a str, repo: Option<&'a str>) -> Vec<&'a st
         args.extend_from_slice(&["--repo", repo]);
     }
     args
-}
-
-/// Build the Gitea pull-request endpoint used for head resolution and PR-state detail.
-pub(crate) fn tea_pr_endpoint(repo_slug: &str, number: u64) -> String {
-    format!("repos/{repo_slug}/pulls/{number}")
 }
 
 /// Build the Gitea combined commit-status endpoint used for CI enrichment.
