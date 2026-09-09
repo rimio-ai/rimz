@@ -59,7 +59,7 @@ layers = [
 
 [[module]]
 path = "crates/rimz/src/address.rs"
-surface-budget = 40
+surface-budget = 32
 
 [[module]]
 path = "crates/rimz/src/agent_activity.rs"
@@ -159,7 +159,7 @@ upward-dependencies = ["sidebar::refresh"]
 # Read-only pending deliveries are shared by wake listings, hooks and enrichment.
 # Submitted-prompt header grammar now belongs to store.
 # Loop hosts and check ownership cross the scheduler/CLI/room seams.
-surface-budget = 577
+surface-budget = 543
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -314,7 +314,7 @@ path = "crates/rimz/src/worktree"
 # The read-only lifetime resolver supplies attribution consumers across modules.
 # Unmanaged-launch validation and lifecycle ownership also serve the binary CLI.
 # Attribution probes the selected checkout's branch through the shared resolver.
-surface-budget = 58
+surface-budget = 57
 
 [[module]]
 path = "crates/rimz/src/cli/remote/supervisor.rs"
@@ -1187,3 +1187,23 @@ reason = "Consumer policy over the shared exact reader: a sole surviving publica
 kind = "pass-through"
 key = "agents::spending::default"
 reason = "Delegates to new because clippy new_without_default runs under -D warnings and the invariant grep keys on SpendingWalker::new (pass 13)."
+
+[[verdict]]
+kind = "pass-through"
+key = "address::agent_in_worktree"
+reason = "Public channel-membership face of the private Candidate trait; exposing the trait would widen the interface for seven callers (pass 14)."
+
+[[verdict]]
+kind = "item"
+key = "address::pane_binding"
+reason = "The durable message pane pin reaches this guard through bind_agent; it rejects a different pane rather than redirecting delivery (pass 14)."
+
+[[verdict]]
+kind = "item"
+key = "harness::spec::resolve_room_channel"
+reason = "Launch-lane precedence belongs with layout policy; team is absent for bare-root current-channel lookup and present for team launches (pass 14)."
+
+[[verdict]]
+kind = "item"
+key = "cli::address::message_target"
+reason = "Uses the canonical live renderer when a peer exists, but preserves a readable durable address after the agent leaves the snapshot (pass 14)."
