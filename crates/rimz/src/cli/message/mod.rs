@@ -2,7 +2,6 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};

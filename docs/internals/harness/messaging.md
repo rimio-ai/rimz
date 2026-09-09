@@ -259,7 +259,7 @@ When a turn-start adapter reports no usable prompt text, confirmation falls back
 | `Claimed` + acknowledgement | Ignored; the in-flight write owns the pane and its subsequent acknowledgement settles the record |
 | Unconfirmed-send cap reached | `TimedOut` |
 
-The `Claimed` exclusion leaves one residual duplicate window between claim and the write's acknowledgement (normally the 400 ms settle plus the paste). Settling during that interval could not retract the in-flight paste, so the active deliverer keeps ownership. While the receiver's durable compaction bracket is open, reconciliation holds a stale `Sent` record in place rather than applying the elapsed-window transition. A composer queues a paste made during compaction and submits it when the bracket closes, so every resend would become another turn. The store applies this unbounded hold for every reconciler caller, including `message sweep` and `gc`.
+The `Claimed` exclusion leaves one residual duplicate window between claim and the write's acknowledgement (normally the paste and its submit). Settling during that interval could not retract the in-flight paste, so the active deliverer keeps ownership. While the receiver's durable compaction bracket is open, reconciliation holds a stale `Sent` record in place rather than applying the elapsed-window transition. A composer queues a paste made during compaction and submits it when the bracket closes, so every resend would become another turn. The store applies this unbounded hold for every reconciler caller, including `message sweep` and `gc`.
 
 Failure has three shapes:
 

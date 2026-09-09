@@ -118,7 +118,6 @@ pub(super) fn steer_queued_message(
         workspace,
         store,
         &message_id,
-        Duration::ZERO,
         globals.mux,
         deliver::DeliveryPolicy::Steer { force },
     )?;
@@ -294,11 +293,12 @@ pub(super) fn print_canceled_summary(scope: &str, canceled: &[MessageRecord]) {
 pub(super) fn deliver_message(message_id: MessageId, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let (workspace, store) = (&ctx.workspace, &ctx.store);
+    // Settle so the agent's state stabilizes after the hook fired; the ordered check below is the decision.
+    std::thread::sleep(rimz::message::settle_duration_from_env());
     deliver::deliver_one(
         workspace,
         store,
         &message_id,
-        rimz::message::settle_duration_from_env(),
         globals.mux,
         deliver::DeliveryPolicy::Boundary,
     )?;
