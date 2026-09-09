@@ -139,22 +139,122 @@ fn conform_directory_rule_covers_sibling_file() {
 
 #[test]
 fn conform_args_only_accept_report_ratchet_and_tighten() {
-    assert_eq!(parse_args(&[]).unwrap(), Some(Args { mode: Mode::Report }));
+    assert_eq!(
+        parse_args(&[]).unwrap(),
+        Some(Args {
+            mode: Mode::Report,
+            only: BTreeSet::new()
+        })
+    );
     assert_eq!(
         parse_args(&["--ratchet".into()]).unwrap(),
         Some(Args {
-            mode: Mode::Ratchet
+            mode: Mode::Ratchet,
+            only: BTreeSet::new(),
         })
     );
     assert_eq!(
         parse_args(&["--tighten".into()]).unwrap(),
         Some(Args {
-            mode: Mode::Tighten
+            mode: Mode::Tighten,
+            only: BTreeSet::new(),
         })
     );
     for removed in ["--status", "--init", "--json", "--file"] {
         assert!(parse_args(&[removed.to_owned()]).is_err());
     }
+    assert_eq!(
+        parse_args(&["--only", "a/", "--tighten", "--only", "b", "--only", "a"].map(String::from))
+            .unwrap(),
+        Some(Args {
+            mode: Mode::Tighten,
+            only: BTreeSet::from([PathBuf::from("a"), PathBuf::from("b")]),
+        })
+    );
+    for args in [
+        vec!["--only", "x"],
+        vec!["--ratchet", "--only", "x"],
+        vec!["--tighten", "--only"],
+        vec!["--tighten", "--ratchet"],
+        vec!["--tighten", "--only", "../x"],
+        vec!["--tighten", "--only", "/x"],
+    ] {
+        assert!(parse_args(&args.into_iter().map(String::from).collect::<Vec<_>>()).is_err());
+    }
+}
+
+#[test]
+fn conform_tighten_only_preserves_unselected_rules_and_selects_stranglers() {
+    let root = fixture_root();
+    fs::write(root.path().join("src/lib.rs"), "mod lower;\nmod upper;\n").unwrap();
+    fs::write(root.path().join("src/lower.rs"), "pub fn old() {}\n").unwrap();
+    fs::write(root.path().join("src/upper.rs"), "pub fn legacy() {}\n").unwrap();
+    let path = root.path().join(TARGET_FILE);
+    let raw = r#"version = 5
+layers = []
+
+[[module]]
+path = "src/lower.rs"
+upward-dependencies = ["unused"]
+# keep this budget comment
+surface-budget = 10
+
+[[module]]
+path = 'src/upper.rs'
+allowed-dependencies = [ 'unused' ]
+surface-budget = 20 # another pass owns this
+
+[[strangler]]
+path = 'src/upper.rs'
+symbol = 'legacy'
+baseline = 30
+"#;
+    fs::write(&path, raw).unwrap();
+
+    run(
+        root.path(),
+        &["--tighten", "--only", "src/lower.rs"].map(String::from),
+    )
+    .unwrap();
+    let expected = raw
+        .replace("upward-dependencies = [\"unused\"]\n", "")
+        .replace("surface-budget = 10", "surface-budget = 1");
+    assert_eq!(fs::read_to_string(&path).unwrap(), expected);
+    ratchet(root.path()).unwrap();
+
+    run(
+        root.path(),
+        &["--tighten", "--only", "src/upper.rs"].map(String::from),
+    )
+    .unwrap();
+    let target = target::load(&path).unwrap().unwrap();
+    assert_eq!(target.modules[1].surface_budget, 1);
+    assert_eq!(target.modules[1].allowed_dependencies, Some(Vec::new()));
+    assert_eq!(target.strangler[0].baseline, 1);
+    ratchet(root.path()).unwrap();
+}
+
+#[test]
+fn conform_only_rejects_unknown_paths_before_measuring_or_writing() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join(TARGET_FILE);
+    let args = ["--tighten", "--only", "src/typo", "--only", "src/other"].map(String::from);
+    assert!(
+        run(root.path(), &args)
+            .unwrap_err()
+            .to_string()
+            .contains("requires refactor-target.toml")
+    );
+    let raw = "version = 5\nlayers = []\n[[module]]\npath = 'missing'\nsurface-budget = 10\n";
+    fs::write(&path, raw).unwrap();
+
+    let error = run(root.path(), &args).unwrap_err().to_string();
+
+    assert_eq!(
+        error,
+        "atlas conform --only names no rule in refactor-target.toml:\n  src/other\n  src/typo"
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), raw);
 }
 
 #[test]
@@ -235,7 +335,7 @@ fn tighten_lowers_counts_drops_unused_admissions_and_preserves_verdicts() {
         parse_failure_paths: Vec::new(),
     };
 
-    tighten(&mut target, &report);
+    tighten(&mut target, &report, &BTreeSet::new());
 
     assert_eq!(target.modules[0].surface_budget, 3);
     assert_eq!(
