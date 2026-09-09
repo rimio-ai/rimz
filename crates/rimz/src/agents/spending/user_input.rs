@@ -39,7 +39,7 @@ pub fn append_in(state_root: &Path, record: &UserInputRecord) {
     crate::disk::rotating::append(&log_path(state_root), MAX_BYTES, &record);
 }
 
-pub fn load() -> Vec<UserInputRecord> {
+pub(super) fn load() -> Vec<UserInputRecord> {
     load_in(&state_home())
 }
 
