@@ -18,7 +18,7 @@ Four rules explain most of the design. When a piece of the code surprises you, o
 
 **One name for one agent.** A member is reachable by an address, `@handle#channel`, and the renderer that prints a handle is the exact inverse of the parser that reads one. Anything RimZ shows you, you can type back.
 
-**No daemon.** Nothing in the harness runs a resident background service. Scheduled work, message wakeups, and unattended recovery ride the tick of the room's elected sidebar producer, the elder. Loop tasks may also opt into one global OS timer that launches a one-off tick for roots without an open room; it exits after each pass and yields wherever an elder is live.
+**No daemon.** Nothing in the harness runs a resident background service. Scheduled work, message wakeups, and unattended recovery ride the tick of the room's elected sidebar producer, the elder. Loop tasks may also opt into one global OS timer that launches a one-off tick for roots without an open room; it exits after each pass and yields wherever an elder is live. Its fires outlive the tick through transient user scopes under systemd and their own process groups. Spawn and scheduled check-only fires open the root's room if needed and leave it open for the elder to take over ([loops.md](./loops.md#the-external-tick)).
 
 ## One launch, end to end
 

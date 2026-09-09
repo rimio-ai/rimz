@@ -32,7 +32,7 @@ rimz loop remove pr-watch
 
 `rimz loop timer install` installs one user-level one-minute timer: a systemd user timer on Linux or a launchd agent on macOS. Each tick re-reads task configuration, fires due tasks only for roots without an open room, and yields roots with a room to that room's elder. One timer covers every task root; adding or editing a task does not regenerate it. `rimz loop timer status` shows its backend, active state, executable, and the number of task roots it currently covers. `rimz loop timer remove` stops and removes it, and `rimz uninstall` removes it too.
 
-The timer does not bypass the task model. An `--agent` fire births the room through the normal supervised path and leaves it open, after which the elder owns that root's clock. A `--wake` task still needs its pinned live session, a check-only task runs without a room, and an untrusted project task stays blocked. First sight still arms rather than fires, so installing the timer does not replay missed occurrences.
+The timer does not bypass the task model. Under systemd, each fire runs in a transient user scope; every runner gets its own process group so it can outlive the tick. An `--agent` fire births the room through the normal supervised path. A scheduled check-only fire also ensures its root's room is open before the check, after budget, overlap, and deadline gates. Both leave the room open, after which the elder owns that root's clock. A `--wake` task still needs its pinned live session, and an untrusted project task stays blocked. First sight still arms rather than fires, so installing the timer does not replay missed occurrences.
 
 ## Schedule shapes
 

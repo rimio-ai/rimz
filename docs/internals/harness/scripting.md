@@ -78,7 +78,7 @@ The driver is `cli::supervised::run_supervised`. One call can contain several at
 6. **Write the record, then open the pane.** `run::create` persists the record, then the pane opens: a split of the current tab by default, a new tab when forced or when there is no ambient pane, and the locked `rimzd` loop zone for scheduled fires. The pane runs the exec wrapper with `RIMZ_RUN_ID` exported.
 7. **Wait.** The waiter blocks until the record is terminal. `--bg` prints the agent name and returns here.
 8. **Verify.** If `--verify` is set and the run completed, the [verify loop](#verification-re-arms-the-same-run) runs.
-9. **Reclaim.** Unless `--keep`, the pane closes. A `rimz subagents` wrapper also stamps its durable end so the finished child can remain projected after the pane disappears.
+9. **Reclaim.** Unless `--keep`, the pane closes. Loop-owned runs also enable wrapper self-cleanup on every terminal status, backing up a blocking waiter that dies. A `rimz subagents` wrapper also stamps its durable end so the finished child can remain projected after the pane disappears.
 10. **Retry or finish.** A `Failed` run with retries left starts a new attempt with an augmented prompt. Anything else returns the record, which the caller projects to stdout and turns into an exit code.
 
 ## Completion: folding lifecycle observations
@@ -188,7 +188,7 @@ Worktree cleanup interacts with retries: a single-attempt run marks its pane for
 
 ## Runs the scheduler starts
 
-A loop fire calls the same `run_supervised` driver with a `SupervisedRunRequest` built by the task runner, and differs in three ways: the request carries `loop_task` so the record can be found by task name, `loop_zone` targets the locked `rimzd` loop panel instead of splitting beside a caller, and a typed budget refusal is recorded as one history row rather than mapped to an exit code. The rest of this document applies unchanged. See [loops.md](./loops.md).
+A loop fire calls the same `run_supervised` driver with a `SupervisedRunRequest` built by the task runner: the request carries `loop_task` so the record can be found by task name, `loop_zone` targets the locked `rimzd` loop panel for scheduled fires instead of splitting beside a caller, and a typed budget refusal is recorded as one history row rather than mapped to an exit code. Loop-owned runs, including prompted agent launches converted inside a check, enable wrapper self-cleanup unless kept, so their panes close on every terminal status even if the blocking waiter dies. The rest of this document applies unchanged. See [loops.md](./loops.md).
 
 ## See also
 
