@@ -1,6 +1,6 @@
 //! Integration coverage for the agent-facing `rimz wake` doorway.
 
-use crate::common::Env;
+use crate::common::{Env, canonical};
 use rimz::agents::{AgentLifecycleObservation, LaunchParams, LifecycleSignal};
 use rimz::config::Tasks;
 use rimz::ids::{AgentKind, AgentSessionId};
@@ -110,6 +110,7 @@ fn calling_agent_can_list_and_cancel_human_armed_loop_delivery_by_launch_identit
     let rows: serde_json::Value = serde_json::from_slice(&listed.stdout).expect("wake list JSON");
     assert_eq!(rows.as_array().expect("wake rows").len(), 1);
     assert_eq!(rows[0]["name"], name);
+    assert!(rows[0].get("dir").is_none());
 
     let canceled = agent_wake(&env)
         .args(["wake", "cancel", name])
@@ -286,6 +287,83 @@ fn wake_pid_rejects_invalid_pids_and_conflicting_triggers() {
             "{args:?}: {stderr}"
         );
     }
+}
+
+#[test]
+fn watched_wake_runs_in_the_arming_worktree() {
+    let env = Env::new();
+    let initialized = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&env.project_root)
+        .status();
+    if !initialized.is_ok_and(|status| status.success()) {
+        tracing::warn!("skipping: git unavailable");
+        return;
+    }
+    let commit = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.email=rimz@example.invalid",
+            "-c",
+            "user.name=RimZ",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "initial",
+        ])
+        .current_dir(&env.project_root)
+        .status()
+        .expect("run git commit");
+    assert!(commit.success(), "git commit failed");
+    let linked = env.home_root.join("linked");
+    let add = std::process::Command::new("git")
+        .args(["worktree", "add", "-q", "-b", "linked"])
+        .arg(&linked)
+        .current_dir(&env.project_root)
+        .status()
+        .expect("run git worktree add");
+    assert!(add.success(), "git worktree add failed");
+    let linked = canonical(&linked);
+    let release = env.home_root.join("release-watch");
+    env.install_agent_hooks("claude");
+    register_calling_agent(&env);
+    let output = agent_wake(&env)
+        .current_dir(&linked)
+        .args([
+            "wake",
+            "--json",
+            "--",
+            "sh",
+            "-c",
+            "while [ ! -e \"$1\" ]; do sleep 0.025; done; pwd -P",
+            "watch-cwd",
+        ])
+        .arg(&release)
+        .output()
+        .expect("arm watched wake from linked worktree");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let name = receipt["name"].as_str().unwrap();
+    let tasks = wake_instances(&env);
+    let entry = &tasks.0[name];
+    assert_eq!(entry.root, canonical(&env.project_root));
+    assert_eq!(entry.dir.as_deref(), Some(linked.as_path()));
+    let listed: serde_json::Value =
+        serde_json::from_str(&wake_ok(&env, &["wake", "list", "--json"])).unwrap();
+    assert_eq!(listed[0]["name"], name);
+    assert_eq!(listed[0]["dir"], "~/linked");
+
+    std::fs::write(&release, "").expect("release watched command");
+    let records = wait_for_wake_records(&env, 1);
+    assert_eq!(records[0].root, Some(canonical(&env.project_root)));
+    let check = records[0].check.as_ref().unwrap();
+    assert_eq!(check.code, Some(0));
+    assert_eq!(check.output.trim(), linked.to_str().unwrap());
+    wait_for_no_wake_instances(&env);
 }
 
 #[test]
