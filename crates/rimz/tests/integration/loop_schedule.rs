@@ -2696,7 +2696,7 @@ fn loop_check_runs_in_the_arming_worktree() {
             "project-where",
             "--project",
             "--check",
-            "pwd -P",
+            "pwd -P; printf '%s\\n' \"$RIMZ_WORKTREE_PATH\"",
             "--every",
             "15m",
         ])
@@ -2718,14 +2718,25 @@ fn loop_check_runs_in_the_arming_worktree() {
     let entry = project["tasks"]["project-where"].as_table().unwrap();
     assert!(!entry.contains_key("root"));
     assert!(!entry.contains_key("dir"));
-    loop_ok(&env, &["loop", "fire", "project-where"]);
+    let output = env
+        .rimz()
+        .current_dir(&linked)
+        .env(rimz::workspace::ENV_WORKTREE_PATH, &linked)
+        .args(["loop", "fire", "project-where"])
+        .output()
+        .expect("fire project check with inherited worktree context");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let records = read_loop_run_records(&env);
     let record = records.last().unwrap();
     assert_eq!(record.task, "project-where");
     assert_eq!(record.root.as_deref(), Some(root.as_path()));
     assert_eq!(
-        record.check.as_ref().unwrap().output.trim(),
-        root.to_str().unwrap()
+        record.check.as_ref().unwrap().output,
+        format!("{0}\n{0}\n", root.display())
     );
 }
 

@@ -473,12 +473,14 @@ fn skipped_fire<'a>(
 #[test]
 fn check_room_hook_precedes_execution_and_pins_loop_identity() {
     let dir = tempfile::tempdir().unwrap();
-    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
+    let project_root = dir.path().canonicalize().unwrap();
+    let catalog = TaskCatalog::load(Some(&project_root)).unwrap();
     let worktree = tempfile::tempdir().unwrap();
+    let worktree_root = worktree.path().canonicalize().unwrap();
     let entry = TaskEntry {
-        check: Some("test -f \"$RIMZ_PROJECT_ROOT/room-ready\" && printf '%s|%s|%s|%s|%s|' \"$RIMZ_LOOP_TASK\" \"$RIMZ_PROJECT_ROOT\" \"$RIMZ_WORKSPACE_ID\" \"${RIMZ_AGENT_ID-unset}\" \"$RIMZ_WORKTREE_PATH\" && pwd".to_owned()),
-        root: dir.path().to_path_buf(),
-        dir: Some(worktree.path().to_path_buf()),
+        check: Some("test -f \"$RIMZ_PROJECT_ROOT/room-ready\" && printf '%s|%s|%s|%s|%s|' \"$RIMZ_LOOP_TASK\" \"$RIMZ_PROJECT_ROOT\" \"$RIMZ_WORKSPACE_ID\" \"${RIMZ_AGENT_ID-unset}\" \"$RIMZ_WORKTREE_PATH\" && pwd -P".to_owned()),
+        root: project_root.clone(),
+        dir: Some(worktree_root.clone()),
         every: Some("1m".to_owned()),
         ..TaskEntry::default()
     };
@@ -499,7 +501,7 @@ fn check_room_hook_precedes_execution_and_pins_loop_identity() {
     let TaskFirePlan::Done(done) = fire
         .prepare(&mut |root| {
             calls += 1;
-            assert_eq!(root, dir.path());
+            assert_eq!(root, &project_root);
             std::fs::write(root.join("room-ready"), "")?;
             Ok(())
         })
@@ -513,10 +515,10 @@ fn check_room_hook_precedes_execution_and_pins_loop_identity() {
         done.record.check.unwrap().output,
         format!(
             "room-check|{}|{}|unset|{}|{}\n",
-            dir.path().display(),
-            WorkspaceId::from_project_root(dir.path()),
-            worktree.path().display(),
-            worktree.path().display()
+            project_root.display(),
+            WorkspaceId::from_project_root(&project_root),
+            worktree_root.display(),
+            worktree_root.display()
         )
     );
 }

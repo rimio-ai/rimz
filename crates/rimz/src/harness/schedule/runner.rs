@@ -546,12 +546,10 @@ impl<'a> TaskFire<'a> {
             let mut env = crate::workspace::pin_env(&WorkspaceId::from_project_root(&root), &root);
             env.insert(LOOP_TASK_ENV.to_owned(), self.name.clone());
             let dir = self.entry.run_dir();
-            if self.entry.dir.is_some() {
-                env.insert(
-                    crate::workspace::ENV_WORKTREE_PATH.to_owned(),
-                    dir.to_string_lossy().into_owned(),
-                );
-            }
+            env.insert(
+                crate::workspace::ENV_WORKTREE_PATH.to_owned(),
+                dir.to_string_lossy().into_owned(),
+            );
             let check_started = Instant::now();
             let outcome = run_check(
                 &dir,
