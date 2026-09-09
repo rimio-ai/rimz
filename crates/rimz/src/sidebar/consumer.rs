@@ -418,7 +418,7 @@ fn consumer_projection_inputs_stamp(
 
 fn filtered_runtime_inputs(runtime: &RuntimePaths) -> Vec<StampedPath> {
     let mut paths = filtered_paths(&runtime.root, |name| {
-        (super::refresh::inputs::is_workspace_spending_file(name)
+        (crate::disk::paths::is_workspace_spending_file(name)
             || name.starts_with("budget.")
             || name.starts_with("auto-continue."))
             && name.ends_with(".json")

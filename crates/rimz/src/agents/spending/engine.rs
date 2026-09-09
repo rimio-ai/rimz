@@ -544,22 +544,9 @@ fn publish_workspace(runtime: &RuntimePaths, scope_hash: &str, cache: &Workspace
 }
 
 fn prune_workspace_spending_siblings(runtime: &RuntimePaths, current_scope_hash: &str) {
-    let current_prefix = current_scope_hash.get(..32).unwrap_or(current_scope_hash);
-    let Ok(entries) = std::fs::read_dir(&runtime.root) else {
-        return;
-    };
-    for entry in entries.filter_map(Result::ok) {
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        let Some(prefix) = name
-            .strip_prefix("workspace-spending.")
-            .and_then(|name| name.strip_suffix(".json"))
-        else {
-            continue;
-        };
-        if prefix != current_prefix {
+    let current = runtime.workspace_spending_path(current_scope_hash);
+    for path in runtime.workspace_spending_files() {
+        if path != current {
             let _ = std::fs::remove_file(path);
         }
     }

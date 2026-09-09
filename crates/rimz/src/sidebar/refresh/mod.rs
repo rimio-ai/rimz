@@ -148,15 +148,7 @@ fn is_current_workspace_cache(cache: &WorkspaceSpendingCache, scope_hash: Option
 /// figure the producer actually published, where defaulting reports an empty
 /// room. Anything other than exactly one candidate stays unknown.
 fn sole_published_workspace_cache(runtime: &RuntimePaths) -> Option<WorkspaceSpendingCache> {
-    let mut published = std::fs::read_dir(&runtime.root)
-        .ok()?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(inputs::is_workspace_spending_file)
-        });
+    let mut published = runtime.workspace_spending_files().into_iter();
     let candidate = published.next()?;
     if published.next().is_some() {
         return None;

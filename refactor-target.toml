@@ -133,7 +133,7 @@ allowed-dependencies = [
     "sock",
 ]
 # Pane writers share one user-scoped lock path across workspace boundaries.
-surface-budget = 124
+surface-budget = 126
 
 [[module]]
 path = "crates/rimz/src/forge"

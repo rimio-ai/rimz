@@ -1274,15 +1274,10 @@ fn current_workspace_day_cache(
     runtime: &RuntimePaths,
     cutoff: u64,
 ) -> Option<crate::agents::spending::WorkspaceSpendingCache> {
-    std::fs::read_dir(&runtime.root)
-        .ok()?
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let path = entry.path();
-            let name = path.file_name()?.to_str()?;
-            (name.starts_with("workspace-spending.") && name.ends_with(".json"))
-                .then(|| crate::agents::spending::read_workspace_spending_cache(&path))
-        })
+    runtime
+        .workspace_spending_files()
+        .into_iter()
+        .map(|path| crate::agents::spending::read_workspace_spending_cache(&path))
         .filter(|cache| cache.is_current_version() && cache.day_cutoff_secs == cutoff)
         .max_by_key(|cache| cache.refreshed_at_ms)
 }
