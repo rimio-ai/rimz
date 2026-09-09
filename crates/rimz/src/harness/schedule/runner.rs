@@ -7,6 +7,7 @@
 mod prompt;
 
 use std::cell::OnceCell;
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
@@ -45,6 +46,7 @@ use crate::utils::time::{DurationUnit, parse_duration_units};
 use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};
 
 pub const CHECK_DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
+pub const LOOP_TASK_ENV: &str = "RIMZ_LOOP_TASK";
 pub(super) const SCHEDULED_RUN_DEFAULT_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 pub const SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL: &str = "2h";
 const CHECK_POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -297,7 +299,10 @@ impl<'a> TaskFire<'a> {
         self.check_trip.take()
     }
 
-    pub fn prepare(&mut self) -> Result<TaskFirePlan> {
+    pub fn prepare(
+        &mut self,
+        before_check: &mut dyn FnMut(&Path) -> Result<()>,
+    ) -> Result<TaskFirePlan> {
         if let Some(done) = self.prepare_scope_gates()? {
             return Ok(TaskFirePlan::Done(done));
         }
@@ -317,7 +322,7 @@ impl<'a> TaskFire<'a> {
             )));
         }
 
-        let fired_check = self.prepare_check()?;
+        let fired_check = self.prepare_check(before_check)?;
         if let Some(done) = fired_check.done {
             return Ok(TaskFirePlan::Done(done));
         }
@@ -471,7 +476,10 @@ impl<'a> TaskFire<'a> {
         )
     }
 
-    fn prepare_check(&mut self) -> Result<PreparedCheck> {
+    fn prepare_check(
+        &mut self,
+        before_check: &mut dyn FnMut(&Path) -> Result<()>,
+    ) -> Result<PreparedCheck> {
         let watch_command =
             self.task
                 .trigger()
@@ -507,12 +515,17 @@ impl<'a> TaskFire<'a> {
                 outcome.verdict.elapsed_ms(),
             )
         } else if let Some(command) = self.entry.check.clone() {
+            let root = self.context_root()?;
+            before_check(&root)?;
+            let mut env = crate::workspace::pin_env(&WorkspaceId::from_project_root(&root), &root);
+            env.insert(LOOP_TASK_ENV.to_owned(), self.name.clone());
             let check_started = Instant::now();
             let outcome = run_check(
-                &self.entry.resolved_root(),
+                &root,
                 &command,
                 task_timeout(&self.entry)?.unwrap_or(CHECK_DEFAULT_TIMEOUT),
                 self.check_echo.take().unwrap_or(CheckEcho::Capture),
+                &env,
             )?;
             (command, outcome, elapsed_millis(check_started))
         } else {
@@ -1457,8 +1470,9 @@ pub fn run_check(
     cmd: &str,
     timeout: Duration,
     echo: CheckEcho,
+    env: &BTreeMap<String, String>,
 ) -> Result<CheckOutcome> {
-    run_command(dir, cmd, WatchDeadline::KillAfter(timeout), echo, |_, _| {})
+    run_command(dir, cmd, WatchDeadline::KillAfter(timeout), echo, env, |_, _| {})
 }
 
 pub(super) enum WatchDeadline {
@@ -1471,6 +1485,7 @@ pub(super) fn run_command(
     cmd: &str,
     deadline: WatchDeadline,
     echo: CheckEcho,
+    env: &BTreeMap<String, String>,
     mut check_in: impl FnMut(u64, String),
 ) -> Result<CheckOutcome> {
     let (prefix, file, cap) = match echo {
@@ -1493,10 +1508,14 @@ pub(super) fn run_command(
         tail: Vec::with_capacity(cap),
         cap,
     }));
-    let mut child = Command::new("sh")
-        .arg("-c")
+    let mut command = Command::new("sh");
+    if env.contains_key(LOOP_TASK_ENV) {
+        command.env_remove(crate::harness::launch::ENV_AGENT_ID);
+    }
+    let mut child = command.arg("-c")
         .arg(cmd)
         .current_dir(dir)
+        .envs(env)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

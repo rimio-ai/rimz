@@ -13,7 +13,7 @@ use rimz::store::run::RunRecord;
 use super::pane;
 
 pub(super) fn run_verify(cwd: &Path, cmd: &str, cap: Duration) -> Result<CheckOutcome> {
-    run_check(cwd, cmd, cap, CheckEcho::Capture)
+    run_check(cwd, cmd, cap, CheckEcho::Capture, &std::collections::BTreeMap::new())
 }
 
 pub(super) fn deliver_reprompt(

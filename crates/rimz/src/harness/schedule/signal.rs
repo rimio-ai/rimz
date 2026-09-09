@@ -412,6 +412,7 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
         command,
         WatchDeadline::CheckInOnce(timeout),
         CheckEcho::Tee { file },
+        &std::collections::BTreeMap::new(),
         |elapsed_ms, output| emit(WatchVerdict::Running { elapsed_ms }, output),
     )?;
     let elapsed_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;

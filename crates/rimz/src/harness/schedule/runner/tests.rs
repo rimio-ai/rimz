@@ -320,7 +320,7 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
     let catalog = TaskCatalog::load(Some(dir.path())).expect("load task catalog");
 
     let mut poll_fire = skipped_fire(poll_name, &catalog, None);
-    let poll_check = poll_fire.prepare_check().expect("run poll check");
+    let poll_check = poll_fire.prepare_check(&mut |_| Ok(())).expect("run poll check");
     assert_eq!(
         poll_check.done.expect("skipped poll result").record.result,
         LoopRunResult::CheckSkipped
@@ -344,7 +344,7 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
         running.watch.as_mut().unwrap().verdict = WatchVerdict::Running { elapsed_ms: 1_000 };
         let mut fire = skipped_fire(watch_name, &catalog, Some(running));
         fire.entry.on = Some(on);
-        let check = fire.prepare_check().expect("running watch always delivers");
+        let check = fire.prepare_check(&mut |_| panic!("supplied watch runs no check")).expect("running watch always delivers");
         assert!(check.done.is_none());
         fire.consume_ephemeral().expect("retain running watch");
         assert!(
@@ -354,7 +354,7 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
         );
     }
     let mut watch_fire = skipped_fire(watch_name, &catalog, Some(signal));
-    let watch_check = watch_fire.prepare_check().expect("read watch check");
+    let watch_check = watch_fire.prepare_check(&mut |_| panic!("supplied watch runs no check")).expect("read watch check");
     let finished = watch_check.done.expect("skipped watch result");
     assert_eq!(finished.record.result, LoopRunResult::CheckSkipped);
     assert_eq!(
@@ -407,10 +407,70 @@ fn skipped_fire<'a>(
 }
 
 #[test]
+fn check_room_hook_precedes_execution_and_pins_loop_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
+    let entry = TaskEntry {
+        check: Some("test -f room-ready && printf '%s|%s|%s|%s' \"$RIMZ_LOOP_TASK\" \"$RIMZ_PROJECT_ROOT\" \"$RIMZ_WORKSPACE_ID\" \"${RIMZ_AGENT_ID-unset}\"".to_owned()),
+        root: dir.path().to_path_buf(),
+        every: Some("1m".to_owned()),
+        ..TaskEntry::default()
+    };
+    let mut fire = TaskFire::new(
+        "room-check",
+        LoadedTask::new("room-check", entry, catalog::TaskSource::Config),
+        &catalog,
+        LoopRunMode::Scheduled,
+        false,
+        Timestamp::now(),
+        Arc::new(MachineConfig::default()),
+        None,
+        CheckEcho::Capture,
+        Instant::now(),
+    ).unwrap();
+    let mut calls = 0;
+    let TaskFirePlan::Done(done) = fire.prepare(&mut |root| {
+        calls += 1;
+        std::fs::write(root.join("room-ready"), "")?;
+        Ok(())
+    }).unwrap() else { panic!("check finishes without an effect") };
+    assert_eq!(calls, 1);
+    assert_eq!(done.record.result, LoopRunResult::Completed);
+    assert_eq!(done.record.check.unwrap().output, format!("room-check|{}|{}|unset", dir.path().display(), WorkspaceId::from_project_root(dir.path())));
+}
+
+#[test]
+fn check_room_hook_is_after_lock_and_deadline_and_records_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
+    let entry = TaskEntry {
+        check: Some("touch check-ran".to_owned()),
+        root: dir.path().to_path_buf(),
+        every: Some("1m".to_owned()),
+        ..TaskEntry::default()
+    };
+    let make_fire = |entry: TaskEntry| TaskFire::new(
+        "room-gates", LoadedTask::new("room-gates", entry, catalog::TaskSource::Config),
+        &catalog, LoopRunMode::Manual, false, Timestamp::now(),
+        Arc::new(MachineConfig::default()), None, CheckEcho::Capture, Instant::now(),
+    ).unwrap();
+    let mut fire = make_fire(entry.clone());
+    let error = fire.prepare(&mut |_| bail!("room unavailable")).unwrap_err();
+    assert_eq!(fire.finish_error(&error).record.result, LoopRunResult::Errored);
+    let mut overlap = make_fire(entry.clone());
+    assert!(matches!(overlap.prepare(&mut |_| panic!("lock refuses before room birth")).unwrap(), TaskFirePlan::Done(done) if done.record.result == LoopRunResult::Overlapped));
+    drop(overlap);
+    drop(fire);
+    let mut expired = make_fire(TaskEntry { deadline: Some(Timestamp::UNIX_EPOCH), ..entry });
+    assert!(matches!(expired.prepare(&mut |_| panic!("expired before room birth")).unwrap(), TaskFirePlan::Done(done) if done.record.result == LoopRunResult::Expired));
+    assert!(!dir.path().join("check-ran").exists());
+}
+
+#[test]
 fn run_check_captures_output_status_and_timeout() {
     let dir = tempfile::tempdir().expect("tempdir");
     let check = |cmd: &str, timeout| {
-        run_check(dir.path(), cmd, timeout, CheckEcho::Capture).expect("check ran")
+        run_check(dir.path(), cmd, timeout, CheckEcho::Capture, &BTreeMap::new()).expect("check ran")
     };
 
     let passed = check("printf out; printf err >&2", Duration::from_secs(1));
@@ -440,6 +500,7 @@ fn watch_exit_during_checkin_delivery_is_not_lost() {
         "printf interim; printf '%s' \"$$\" > command.pid; while [ ! -e release ]; do sleep 0.01; done; printf final; exit 3",
         WatchDeadline::CheckInOnce(Duration::from_millis(100)),
         CheckEcho::Tee { file: File::create(&path).unwrap() },
+        &BTreeMap::new(),
         |elapsed_ms, tail| {
             notices += 1;
             assert!(elapsed_ms >= 100);
@@ -471,6 +532,7 @@ fn watched_check_keeps_full_output_and_a_bounded_tail() {
         CheckEcho::Tee {
             file: File::create(&path).unwrap(),
         },
+        &BTreeMap::new(),
     )
     .unwrap();
     let full = std::fs::read_to_string(path).unwrap();
