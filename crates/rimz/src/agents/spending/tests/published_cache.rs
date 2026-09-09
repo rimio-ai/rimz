@@ -1,6 +1,36 @@
 use super::*;
 
 #[test]
+fn workspace_cache_is_current_only_at_the_published_version() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("workspace-spending.scope.json");
+    let now_ms = NOW_SECS * 1_000;
+    write_workspace_spending_cache(
+        &path,
+        &WorkspaceSpendingCache {
+            refreshed_at_ms: now_ms,
+            scope_hash: "scope".to_owned(),
+            ..Default::default()
+        },
+    );
+    let cache = read_workspace_spending_cache(&path);
+    assert_eq!(cache.version, WORKSPACE_SPENDING_VERSION);
+    assert!(cache.is_fresh(now_ms, "scope"));
+
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &path,
+        &WorkspaceSpendingCache {
+            version: WORKSPACE_SPENDING_VERSION - 1,
+            ..cache
+        },
+    )
+    .unwrap();
+    let cache = read_workspace_spending_cache(&path);
+    assert_eq!(cache.version, WORKSPACE_SPENDING_VERSION - 1);
+    assert!(!cache.is_fresh(now_ms, "scope"));
+}
+
+#[test]
 fn provider_cache_staleness_and_error_cases_are_explicit() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("provider-spending.json");
