@@ -730,8 +730,13 @@ fn dispatch_launch(launch: AgentLaunchArgs, json: bool, globals: &GlobalFlags) -
         launch,
         json,
     };
-    if args.launch.print {
-        let (request, presentation) = into_supervised_request(args)?;
+    let loop_task = rimz::harness::schedule::runner::loop_check_task();
+    if args.launch.print || loop_task.is_some() {
+        let (request, presentation) = if let Some(task) = loop_task {
+            into_loop_check_request(args, &task, &rimz::config::MachineConfig::load_lenient())?
+        } else {
+            into_supervised_request(args)?
+        };
         return match run_print(request, presentation, globals) {
             Ok(Some(record)) => std::process::exit(record.status.exit_code()),
             Ok(None) => Ok(()),
@@ -744,6 +749,32 @@ fn dispatch_launch(launch: AgentLaunchArgs, json: bool, globals: &GlobalFlags) -
         );
     }
     launch_layout(args, globals, true)
+}
+
+fn into_loop_check_request(
+    mut args: AgentsArgs,
+    task: &str,
+    config: &rimz::config::MachineConfig,
+) -> Result<(
+    rimz::harness::run::SupervisedRunRequest,
+    supervised::SupervisedPresentation,
+)> {
+    if args.launch.prompt.is_none() {
+        bail!("a loop check launches an agent with a prompt: `rimz agents <cell> \"<prompt>\"`");
+    }
+    if args.launch.cohort.bg {
+        bail!("a loop check waits for its agent; remove `--bg` to capture the completed run");
+    }
+    args.launch.print = true;
+    let (mut request, presentation) = into_supervised_request(args)?;
+    request.loop_zone = true;
+    rimz::harness::schedule::runner::shape_loop_owned(
+        &mut request,
+        task,
+        config,
+        rimz::harness::schedule::run_log::LoopRunMode::Scheduled,
+    )?;
+    Ok((request, presentation))
 }
 
 pub(in crate::cli) struct BackgroundLaunch {

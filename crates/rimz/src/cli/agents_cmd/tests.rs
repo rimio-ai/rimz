@@ -903,6 +903,39 @@ mod launch_options {
     use super::*;
 
     #[test]
+    fn loop_check_launch_is_blocking_bounded_and_owned() {
+        let mut config = MachineConfig::default();
+        config.r#loop.default_timeout = Some("17m".to_owned());
+        for (flags, keep, seconds) in [
+            (vec![], false, 17 * 60),
+            (vec!["-p", "--keep", "--timeout", "30s"], true, 30),
+        ] {
+            let mut argv = vec!["rimz", "claude", "check"];
+            argv.extend(flags);
+            let (request, _) =
+                into_loop_check_request(parse_agents(&argv), "nightly", &config).unwrap();
+            assert_eq!(request.loop_task.as_deref(), Some("nightly"));
+            assert!(request.loop_zone);
+            assert!(!request.background);
+            assert_eq!(request.keep, keep);
+            assert_eq!(request.self_cleanup_on_completion, !keep);
+            assert_eq!(
+                request.timeout,
+                Some(std::time::Duration::from_secs(seconds))
+            );
+        }
+        for (argv, expected) in [
+            (vec!["rimz", "claude"], "with a prompt"),
+            (vec!["rimz", "claude", "check", "--bg"], "remove `--bg`"),
+        ] {
+            let error = into_loop_check_request(parse_agents(&argv), "nightly", &config)
+                .err()
+                .expect("refused loop launch");
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+
+    #[test]
     fn supervised_request_carries_profile_base_model_and_effort_overrides() {
         let args = parse_agents(&[
             "rimz",
