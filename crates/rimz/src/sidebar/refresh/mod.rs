@@ -136,8 +136,7 @@ fn matching_workspace_cache(runtime: &RuntimePaths, scope_hash: &str) -> Workspa
 }
 
 fn is_current_workspace_cache(cache: &WorkspaceSpendingCache, scope_hash: Option<&str>) -> bool {
-    cache.version == crate::agents::spending::WORKSPACE_SPENDING_VERSION
-        && scope_hash.is_none_or(|scope_hash| cache.scope_hash == scope_hash)
+    cache.is_current_version() && scope_hash.is_none_or(|scope_hash| cache.scope_hash == scope_hash)
 }
 
 /// The producer's published tally when this reader's scope hash misses.
@@ -296,7 +295,6 @@ fn orphan_sweep_due(checked_at_ms: Option<u64>, now_ms: u64) -> bool {
 mod tests {
     use super::*;
     use crate::WorkspaceId;
-    use crate::agents::spending::WORKSPACE_SPENDING_VERSION;
 
     fn runtime_root() -> (tempfile::TempDir, RuntimePaths) {
         let dir = tempfile::tempdir().unwrap();
@@ -308,16 +306,14 @@ mod tests {
 
     fn publish(runtime: &RuntimePaths, scope_hash: &str, usd: f64) {
         let mut cache = WorkspaceSpendingCache {
-            version: WORKSPACE_SPENDING_VERSION,
             scope_hash: scope_hash.to_owned(),
             ..WorkspaceSpendingCache::default()
         };
         cache.tally.year.usd = usd;
-        crate::disk::atomic::write_temp_then_rename_cache(
+        crate::agents::spending::write_workspace_spending_cache(
             &runtime.workspace_spending_path(scope_hash),
             &cache,
-        )
-        .unwrap();
+        );
     }
 
     #[test]

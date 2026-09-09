@@ -71,7 +71,8 @@ pub use effort::{
 pub use engine::current_provider_spending_cache;
 #[doc(hidden)]
 pub use engine::refresh_global_spending_direct;
-pub(crate) use publish::{PROVIDER_SPENDING_VERSION, WORKSPACE_SPENDING_VERSION};
+pub(crate) use publish::PROVIDER_SPENDING_VERSION;
+use publish::WORKSPACE_SPENDING_VERSION;
 pub use publish::{
     ProviderSpendingCache, WorkspaceSpendingCache, read_provider_spending_cache,
     read_workspace_spending_cache, write_provider_spending_cache, write_workspace_spending_cache,

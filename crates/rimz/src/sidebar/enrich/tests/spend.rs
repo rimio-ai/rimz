@@ -209,7 +209,6 @@ fn cached_enrich_waits_for_producer_workspace_publication() {
     crate::agents::spending::write_workspace_spending_cache(
         &runtime.workspace_spending_path(&hash),
         &crate::agents::spending::WorkspaceSpendingCache {
-            version: crate::agents::spending::WORKSPACE_SPENDING_VERSION,
             refreshed_at_ms: published_ms,
             scope_hash: hash,
             tally,

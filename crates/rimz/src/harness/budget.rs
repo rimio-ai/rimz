@@ -1283,10 +1283,7 @@ fn current_workspace_day_cache(
             (name.starts_with("workspace-spending.") && name.ends_with(".json"))
                 .then(|| crate::agents::spending::read_workspace_spending_cache(&path))
         })
-        .filter(|cache| {
-            cache.version == crate::agents::spending::WORKSPACE_SPENDING_VERSION
-                && cache.day_cutoff_secs == cutoff
-        })
+        .filter(|cache| cache.is_current_version() && cache.day_cutoff_secs == cutoff)
         .max_by_key(|cache| cache.refreshed_at_ms)
 }
 

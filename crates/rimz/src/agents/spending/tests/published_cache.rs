@@ -15,6 +15,7 @@ fn workspace_cache_is_current_only_at_the_published_version() {
     );
     let cache = read_workspace_spending_cache(&path);
     assert_eq!(cache.version, WORKSPACE_SPENDING_VERSION);
+    assert!(cache.is_current_version());
     assert!(cache.is_fresh(now_ms, "scope"));
 
     crate::disk::atomic::write_temp_then_rename_cache(
@@ -27,6 +28,7 @@ fn workspace_cache_is_current_only_at_the_published_version() {
     .unwrap();
     let cache = read_workspace_spending_cache(&path);
     assert_eq!(cache.version, WORKSPACE_SPENDING_VERSION - 1);
+    assert!(!cache.is_current_version());
     assert!(!cache.is_fresh(now_ms, "scope"));
 }
 
