@@ -9,15 +9,17 @@ use super::sources::Source;
 use super::syntax::{self, Spelling};
 use super::target::{self, LayerRanks, TARGET_FILE, Target};
 
-const USAGE: &str = "cargo xtask atlas conform [--ratchet|--tighten]
+const USAGE: &str = "cargo xtask atlas conform [--ratchet|--tighten] [--only <path>]...
 
 Compares the working tree with root refactor-target.toml. `--ratchet` fails when
 current values exceed budgets or a dependency is outside its admission list.
-`--tighten` atomically lowers budgets and baselines to current values and removes
-unused dependency admissions; it never raises them. A missing target passes.
+`--tighten` lowers budgets and baselines in place and removes unused dependency
+admissions; it never raises them. Comments and untouched rules are preserved.
+A missing target passes unless --only names a rule.
 
   --ratchet  fail on regressions (the checks/gate mode)
-  --tighten  lower budgets/baselines and remove unused admissions";
+  --tighten  lower budgets/baselines and remove unused admissions
+  --only <path>  with --tighten: only the rules at this path (repeatable)";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
@@ -29,6 +31,7 @@ enum Mode {
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
     mode: Mode,
+    only: BTreeSet<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,11 +94,29 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
     };
     let target_path = root.join(TARGET_FILE);
     let Some(mut target) = target::load(&target_path)? else {
+        if !args.only.is_empty() {
+            bail!("atlas conform --only requires {TARGET_FILE}; restore it, then tighten");
+        }
         if args.mode == Mode::Report {
             println!("Atlas conform — no {TARGET_FILE}; nothing to check");
         }
         return Ok(());
     };
+    let unknown: Vec<_> = args
+        .only
+        .iter()
+        .filter(|path| {
+            !target.modules.iter().any(|rule| rule.path == **path)
+                && !target.strangler.iter().any(|rule| rule.path == **path)
+        })
+        .map(|path| path.display().to_string())
+        .collect();
+    if !unknown.is_empty() {
+        bail!(
+            "atlas conform --only names no rule in {TARGET_FILE}:\n  {}",
+            unknown.join("\n  ")
+        );
+    }
     let report = evaluate(root, &target, &target_path)?;
     match args.mode {
         Mode::Report => {
@@ -120,7 +141,7 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
                     }
                 );
             }
-            tighten(&mut target, &report);
+            tighten(&mut target, &report, &args.only);
             target::write(&target_path, &target)?;
             println!("tightened {}", target_path.display());
             Ok(())
@@ -140,14 +161,36 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     if args.iter().any(|arg| crate::is_help_flag(arg)) {
         return Ok(None);
     }
-    let mode = match args {
-        [] => Mode::Report,
-        [arg] if arg == "--ratchet" => Mode::Ratchet,
-        [arg] if arg == "--tighten" => Mode::Tighten,
-        [arg] => bail!("unknown atlas conform argument `{arg}`"),
-        _ => bail!("atlas conform --ratchet and --tighten are mutually exclusive"),
-    };
-    Ok(Some(Args { mode }))
+    let mut mode = Mode::Report;
+    let mut only = BTreeSet::new();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--ratchet" | "--tighten" => {
+                if mode != Mode::Report {
+                    bail!("atlas conform --ratchet and --tighten are mutually exclusive");
+                }
+                mode = if args[index] == "--ratchet" {
+                    Mode::Ratchet
+                } else {
+                    Mode::Tighten
+                };
+            }
+            "--only" => {
+                only.insert(super::validate_scope(
+                    super::value(args, index, "conform", "--only")?,
+                    "--only",
+                )?);
+                index += 1;
+            }
+            arg => bail!("unknown atlas conform argument `{arg}`"),
+        }
+        index += 1;
+    }
+    if !only.is_empty() && mode != Mode::Tighten {
+        bail!("atlas conform --only requires --tighten");
+    }
+    Ok(Some(Args { mode, only }))
 }
 
 pub(super) fn top_module(module: &str) -> &str {
@@ -545,8 +588,11 @@ fn render_site(site: &ImportSite) -> String {
     )
 }
 
-fn tighten(target: &mut Target, report: &Report) {
+fn tighten(target: &mut Target, report: &Report, only: &BTreeSet<PathBuf>) {
     for module in &mut target.modules {
+        if !only.is_empty() && !only.contains(&module.path) {
+            continue;
+        }
         let Some(result) = report
             .rules
             .iter()
@@ -566,6 +612,9 @@ fn tighten(target: &mut Target, report: &Report) {
         }
     }
     for strangler in &mut target.strangler {
+        if !only.is_empty() && !only.contains(&strangler.path) {
+            continue;
+        }
         if let Some(result) = report.rules.iter().find(|result| {
             result.symbol.as_deref() == Some(&strangler.symbol) && result.path == strangler.path
         }) {

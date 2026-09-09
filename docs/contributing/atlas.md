@@ -77,10 +77,11 @@ cargo xtask atlas diff --expect /tmp/atlas-pass-contract.toml
 
 ## `conform` — keep the target
 
-`conform` compares the working tree with root `refactor-target.toml`. `--ratchet` fails on excess surface, strangler counts, or unadmitted dependencies; `--tighten` only lowers measured ceilings and removes unused admissions. A ratchet failure names the measure that regressed (`surface`, `strangler`, or the admissions) and prints, per rule, the `[[module]]` or `[[strangler]]` block at its measured values, ready to paste over the rule or, for a module with no rule yet, to add; since `--tighten` never raises, that block is how a new or repointed rule is written. A missing target passes.
+`conform` compares the working tree with root `refactor-target.toml`. `--ratchet` fails on excess surface, strangler counts, or unadmitted dependencies; `--tighten` only lowers measured ceilings and removes unused admissions. Tightening edits the target in place, preserving comments and leaving untouched rules byte-identical. `--only <path>` (repeatable, requires `--tighten`) selects the `[[module]]` and `[[strangler]]` rules at that exact root-relative `path`, not descendant rules, so a pass can tighten only the rules it owns. An unknown path fails before measurement. A ratchet failure names the measure that regressed (`surface`, `strangler`, or the admissions) and prints, per rule, the `[[module]]` or `[[strangler]]` block at its measured values, ready to paste over the rule or, for a module with no rule yet, to add; since `--tighten` never raises, that block is how a new or repointed rule is written. A missing target passes unless `--only` names a rule.
 
 ```sh
 cargo xtask atlas conform --ratchet
+cargo xtask atlas conform --tighten --only crates/rimz/src/store
 ```
 
 ## Output flags
