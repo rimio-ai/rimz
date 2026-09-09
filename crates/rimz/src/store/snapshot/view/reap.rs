@@ -25,7 +25,7 @@ impl SidebarSnapshot {
     /// and can never reap it. Without this a closed remote-control conversation
     /// lingers as a ghost and binds its stale status, model, and tokens onto a
     /// live `codex` pane by cwd
-    /// ([`agent_pane_for_pane`]).
+    /// (`crate::store::snapshot::panes::lazy::agent_pane_for_pane`).
     ///
     /// Tri-state, and fail-safe by construction (the loaded-thread set and live
     /// panes are liveness improvements, not a perfect pane signal, so they never
@@ -34,7 +34,7 @@ impl SidebarSnapshot {
     ///   could not be trusted — keep every session;
     /// - `daemon_pids` is empty — no daemon is running, so every session is
     ///   standalone — keep every session;
-    /// - a session is daemon-owned ([`is_daemon_owned`]), its id is absent from
+    /// - a session is daemon-owned (`is_daemon_owned`), its id is absent from
     ///   `loaded`, and it has no pane or its stamped pane is absent from the
     ///   admitted live-pane set — reap it;
     /// - host-pane roots are hidden; children stay with a surviving live parent;
@@ -142,13 +142,13 @@ impl SidebarSnapshot {
     /// the workspace-level `rimz gc`. Three rules, all safe for the
     /// one-pane-one-row invariant:
     ///
-    /// (a) a **pidless** session past [`session_death::GHOST_SESSION_TTL_SECS`] — it never
+    /// (a) a **pidless** session past `session_death::GHOST_SESSION_TTL_SECS` — it never
     ///     captured a pid, so process liveness can never reap it, yet it has
     ///     not reported in hours. A recent pidless session (a just-launched
     ///     agent) is kept.
     /// (b) an older session **superseded** by a strictly-newer same-kind
     ///     session that *relaunched* in its pane — a provably different process
-    ///     ([`older_yields_pane`]) — or, for two paneless remnants, its
+    ///     (`session_death::older_yields_pane`) — or, for two paneless remnants, its
     ///     `(worktree_path, worktree_branch)`. This collapses relaunch-in-place
     ///     and shared-pid ghosts to the newest while never dropping a concurrent
     ///     agent that owns its own pane, nor an in-pane thread fork (Codex

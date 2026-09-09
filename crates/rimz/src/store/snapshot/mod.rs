@@ -2,11 +2,11 @@
 //! `rimz sidebar snapshot --json`; correctness lives in the event log this is
 //! derived from.
 //!
-//! The pipeline reads bottom-up: [`fold`] resumes the event-log rollup,
-//! [`project`] reduces lifecycle events into agent state, [`panes`] binds
-//! agents to live panes, [`process`] classifies non-agent commands, [`view`]
+//! The pipeline reads bottom-up: `fold` resumes the event-log rollup,
+//! `project` reduces lifecycle events into agent state, `panes` binds
+//! agents to live panes, `process` classifies non-agent commands, `view`
 //! assembles the renderer contract through its live/group/provider submodules,
-//! and [`assemble`] owns the read entry points and the persisted-snapshot fast
+//! and `assemble` owns the read entry points and the persisted-snapshot fast
 //! path.
 
 mod assemble;

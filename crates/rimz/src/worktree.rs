@@ -1544,7 +1544,7 @@ pub fn content_landed(cwd: &Path, comparison_ref: &str, head_ref: &str) -> Lande
 /// trunk itself advanced through. A HEAD there holds no work of its own: it only
 /// tracked the trunk by fresh fork, rebase onto a newer trunk, or fast-forward.
 /// Landed side-branch tips stay off this lineage. Scan capped at
-/// [`LANDED_BASE_SCAN_CAP`].
+/// `LANDED_BASE_SCAN_CAP`.
 pub fn on_trunk_first_parent(cwd: &Path, trunk: &str, head: &str) -> bool {
     let cap = LANDED_BASE_SCAN_CAP.to_string();
     let Ok(commits) = git_stdout(

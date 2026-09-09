@@ -153,7 +153,7 @@ thread_local! {
 /// This is the sidebar hot path: runtime activity files are disposable and may
 /// outlive their sessions until `rimz gc`, so a keyed read avoids parsing a
 /// directory full of stale sidecars on every renderer tick — and the per-key
-/// stat gate ([`TOUCH_PARSE_CACHE`]) caps the steady-state cost at one stat
+/// stat gate (`TOUCH_PARSE_CACHE`) caps the steady-state cost at one stat
 /// per key, re-parsing only a file whose stat moved.
 pub fn read_for_keys<'a>(
     runtime: &RuntimePaths,

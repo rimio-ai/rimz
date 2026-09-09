@@ -2,8 +2,8 @@
 //!
 //! `draw` is the entry point a Ratatui frame calls; `render_fixed` is the
 //! offscreen variant used by the vt100-backed snapshot tests. Section
-//! composition lives in [`sections`]; vocabulary labels in [`labels`];
-//! pure formatting helpers in [`fmt`].
+//! composition lives in `sections`; vocabulary labels in `labels`;
+//! pure formatting helpers in `fmt`.
 //!
 //! Every entry point takes an optional [`Alert`] alongside the snapshot. The
 //! alert is the sticky health line pinned to the bottom of the sidebar: while

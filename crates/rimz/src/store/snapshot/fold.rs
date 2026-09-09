@@ -543,9 +543,9 @@ pub(crate) fn reseed_rollup_cache_for_rotation(paths: &StatePaths) -> Result<()>
     )
 }
 
-/// A long-lived reader's in-memory fold base: the last [`RollupCache`] this
+/// A long-lived reader's in-memory fold base: the last `RollupCache` this
 /// cursor folded to, the merged rollup it produced, and the identity of the
-/// log file it folded. Where [`catch_up_rollup`] re-reads `rollup.json` per
+/// log file it folded. Where `catch_up_rollup` re-reads `rollup.json` per
 /// call, a cursor folds each delta from memory — O(new bytes) per wakeup with
 /// one `stat` of the log, no base parse — and an unchanged log returns the
 /// held rollup without opening a file. One cursor per reader thread (the
@@ -612,7 +612,7 @@ impl RollupCursor {
 
     /// Catch the held rollup up to the live log and return the extent it
     /// reflects beside the carryover-merged agents. The cursor twin of
-    /// [`catch_up_rollup`]; see the type docs for the staleness guards.
+    /// `catch_up_rollup`; see the type docs for the staleness guards.
     pub fn fold(
         &mut self,
         paths: &StatePaths,

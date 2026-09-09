@@ -8,10 +8,10 @@
 //!
 //! Ordered pricing passes feed one [`PriceBook`]:
 //!
-//! 1. **Embedded snapshot** ([`embedded`]) — the generated LiteLLM table
+//! 1. **Embedded snapshot** (`embedded`) — the generated LiteLLM table
 //!    `build.rs` gzips into release binaries. Fresh clones without the generated
 //!    file embed an empty table.
-//! 2. **Remote refresh** ([`source`]) — a weekly LiteLLM and models.dev
+//! 2. **Remote refresh** (`source`) — a weekly LiteLLM and models.dev
 //!    projection overwrites older embedded rows; an unknown-model chase can run
 //!    that same projection early.
 //!

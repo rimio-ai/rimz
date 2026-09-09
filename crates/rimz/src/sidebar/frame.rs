@@ -1,6 +1,6 @@
 //! Typed live pane topology published by the sidebar producer.
 //!
-//! The mux seam remains a flat [`PaneRef`](crate::pane::PaneRef) list because
+//! The mux seam remains a flat [`PaneRef`] list because
 //! non-sidebar callers route by pane. The sidebar producer lifts that list into
 //! tabs/windows, keeps process state as one record, and publishes the topology
 //! as cache-class `snapshot.json`. The frame admits every rendered sidebar

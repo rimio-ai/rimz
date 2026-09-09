@@ -4,7 +4,7 @@
 //! ladder picks the richest root the starting path offers: the *repo* root for
 //! a git checkout (the parent of `git rev-parse --git-common-dir`, so every
 //! worktree of the same repo shares one workspace; submodules get their own),
-//! a marker directory ([`PROJECT_MARKERS`]) for a non-git project, and the
+//! a marker directory (`PROJECT_MARKERS`) for a non-git project, and the
 //! directory itself as the last tier — a first-class directory workspace.
 //!
 //! The pane-scope worktree/channel pin extends the session pin and is rendered as argv for empty channel shells.
@@ -109,7 +109,7 @@ pub fn channel_label_shell_argv(
 pub enum RootClass {
     /// A git repository; worktrees of the repo collapse to one workspace.
     Repo,
-    /// A directory carrying a project marker ([`PROJECT_MARKERS`]).
+    /// A directory carrying a project marker (`PROJECT_MARKERS`).
     Marker,
     /// Any other directory — a directory workspace.
     Directory,
@@ -365,7 +365,7 @@ enum ResolveMode {
 type EnvReader<'a> = &'a dyn Fn(&str) -> Option<std::ffi::OsString>;
 
 /// Verified pin roots harvested from sibling agent processes at a cwd,
-/// injected like [`EnvReader`] so recovery unit-tests without `/proc`. The
+/// injected like `EnvReader` so recovery unit-tests without `/proc`. The
 /// caller owns process discovery and per-candidate verification
 /// ([`verify_pin`]); the resolver owns the agreement rule.
 pub type PinScan<'a> = &'a dyn Fn(&Path) -> Vec<PathBuf>;

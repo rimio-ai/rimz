@@ -7,7 +7,7 @@
 //! "auto-revoke" half of the contract — no separate sweep is required.
 //!
 //! Adding a new command-running field that isn't projected by
-//! [`ExecutableSurface`] is a CI invariant violation per
+//! `ExecutableSurface` is a CI invariant violation per
 //! [`docs/guide/security.md`](../../docs/guide/security.md).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -594,7 +594,7 @@ fn remove_birth_prompt_dismissal(path: &Path) {
 
 /// Hash the executable surface — every field that can cause a process to run.
 ///
-/// The hash input is canonical JSON over [`ExecutableSurface`], so struct
+/// The hash input is canonical JSON over `ExecutableSurface`, so struct
 /// field order is fixed, `BTreeMap` keys sort, and `Option::None` serializes
 /// as `null`. Empty subagent profiles are omitted for compatibility with
 /// grants made before that collection existed. The wire format is

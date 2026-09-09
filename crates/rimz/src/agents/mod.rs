@@ -568,7 +568,7 @@ pub enum RefreshTrigger<'a> {
     Watch,
 }
 
-/// Context for [`AgentDefinition::context_refresh_spawn`]: the session and
+/// Context for `ContextCapability::context_refresh_spawn`: the session and
 /// workspace to refresh, plus the model hint its latest observation resolved.
 /// On [`RefreshTrigger::Tick`] and [`RefreshTrigger::Watch`], callers pass
 /// `server_url: None`.
@@ -589,7 +589,7 @@ pub struct LifecycleRefreshRequest {
 }
 
 /// The detached `rimz agents refresh-context` helper request: the one command
-/// that runs [`AgentDefinition::refresh_session_context`] for any provider.
+/// that runs `ContextCapability::refresh_session_context` for any provider.
 pub fn refresh_context_argv(kind: &str, ctx: &LifecycleRefreshCtx<'_>) -> Vec<String> {
     crate::child_process::agent_helper_argv(
         "refresh-context",
@@ -838,7 +838,7 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-/// Context for [`AgentDefinition::local_context_refresh`]: the session to refresh,
+/// Context for `ContextCapability::local_context_refresh`: the session to refresh,
 /// its current model hint, and the local-source gate state from the latest
 /// sidecar.
 pub struct LocalContextRefreshCtx<'a> {

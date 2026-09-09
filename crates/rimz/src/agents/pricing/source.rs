@@ -1,7 +1,7 @@
 //! Upstream pricing fetch and projection.
 //!
 //! LiteLLM and models.dev publish different shapes. This module fetches both,
-//! projects them into the compact LiteLLM-shaped document [`embedded::parse`]
+//! projects them into the compact LiteLLM-shaped document `super::embedded::parse`
 //! already reads, and owns the authoritative provider and prefix allowlists.
 //! The hidden `rimz pricing-refresh` helper and the runtime refresh use the same
 //! projection, so release snapshots and post-release cache updates cannot drift.

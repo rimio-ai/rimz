@@ -234,7 +234,7 @@ Run `cargo xtask hooks` once per clone to activate the tracked git hooks (it poi
 
 ## Contributor command surface
 
-`cargo xtask <task>` is the entry point for contributor automation; new automation lands in `xtask/`, and the only tracked hook script is `.githooks/pre-commit`, which routes back to it. Tasks: `build`, `build-plugin`, `plugin-refresh`, `install`, `install-dev`, `install-system`, `stage-install`, `dist`, `brew-formula`, `profile-build`, `hooks`, `fmt`, `lint`, `check`, `test`, `test-archive`, `deps`, `deny`, `vet`, `semver`, `externals`, `coverage`, `perf`, `atlas`, `invariants`, `docs-links`, `gate`, `checks`, `ci`, `pricing-refresh`, `theme-refresh`, `screenshot`.
+`cargo xtask <task>` is the entry point for contributor automation; new automation lands in `xtask/`, and the only tracked hook script is `.githooks/pre-commit`, which routes back to it. Tasks: `build`, `build-plugin`, `plugin-refresh`, `install`, `install-dev`, `install-system`, `stage-install`, `dist`, `brew-formula`, `profile-build`, `hooks`, `fmt`, `lint`, `check`, `test`, `test-archive`, `deps`, `deny`, `vet`, `semver`, `externals`, `coverage`, `perf`, `atlas`, `invariants`, `docs-links`, `doc`, `gate`, `checks`, `ci`, `pricing-refresh`, `theme-refresh`, `screenshot`.
 
 Four deserve a note:
 
@@ -247,8 +247,8 @@ Four deserve a note:
 
 Every PR gate runs in CI with warnings treated as errors; each has a local `cargo xtask` equivalent. Four composites cover the everyday flows:
 
-- `cargo xtask gate` — the pre-PR default: `cargo fmt --all` in fix mode, then invariants, the optional refactor-target conform ratchet, docs-links, all-feature and install-host lint, and `cargo nextest run --profile gate --workspace --all-features --locked`. It captures each step's output, prints one compact success line per step, and fails fast with a trimmed excerpt plus a `NEXT:` hint.
-- `cargo xtask checks` — the registry-free non-test gates, ordered for speed: the instant text gates (`fmt` in check mode, `invariants`, the optional refactor-target conform ratchet, `docs-links`) run first and fail fast; `deps` overlaps the compile gates on its own thread; the compile gates run sequentially (`build-plugin`, its `plugin-provenance` byte comparison, then `lint`) because concurrent cargo builds serialize on the target-dir lock. Prints a per-gate timing summary to stderr.
+- `cargo xtask gate` — the pre-PR default: `cargo fmt --all` in fix mode, then invariants, the optional refactor-target conform ratchet, docs-links, all-feature and install-host lint, doc, and `cargo nextest run --profile gate --workspace --all-features --locked`. It captures each step's output, prints one compact success line per step, and fails fast with a trimmed excerpt plus a `NEXT:` hint.
+- `cargo xtask checks` — the registry-free non-test gates, ordered for speed: the instant text gates (`fmt` in check mode, `invariants`, the optional refactor-target conform ratchet, `docs-links`) run first and fail fast; `deps` overlaps the compile gates on its own thread; the compile gates run sequentially (`build-plugin`, its `plugin-provenance` byte comparison, `lint`, then `doc`) because concurrent cargo builds serialize on the target-dir lock. Prints a per-gate timing summary to stderr.
 - `cargo xtask externals` — the gates that talk to the crates.io registry: `deny` and `vet`. Both run so a single pass reports every signal.
 - `cargo xtask ci` — `checks` plus plain `cargo nextest run --workspace --all-features --locked`; the local full stack when a change calls for full validation.
 
@@ -275,6 +275,7 @@ The individual gates:
 - `cargo nextest archive --workspace --all-features --locked --archive-file <path>` — the `test-archive` task; compiles and packages the workspace test binaries for portable execution.
 - `cargo xtask sandbox -- <command> [args]` — runs an interactive target-binary smoke command with disposable host state and private tmux/Zellij servers.
 - `cargo xtask docs-links` — every relative markdown link target and `#anchor` resolves in the working tree (offline and deterministic; external URLs are out of scope).
+- `cargo xtask doc` — builds all-feature workspace documentation without dependencies using `cargo doc --no-deps --workspace --all-features --locked` with `RUSTDOCFLAGS="-D warnings"`; broken and private intra-doc links fail alongside other rustdoc warnings. The task replaces inherited rustdoc flags, including `CARGO_ENCODED_RUSTDOCFLAGS`, so they cannot weaken the gate. Links to `#[doc(hidden)]` items emit neither a page nor a warning: use plain backticks for them too, and inspect the rendered docs when changing their references.
 - `cargo xtask invariants` — the [architectural invariants](#architectural-invariants).
 - `cargo deny check -D warnings` — license, advisory, ban, and yanked-crate check. In CI it runs offline (`RIMZ_DENY_OFFLINE=1` adds the global `--offline` option) against the image's baked advisory DB and a local crates.io index prepared at the canonical cache path.
 - `cargo machete` — unused-dependency check (the `deps` task).

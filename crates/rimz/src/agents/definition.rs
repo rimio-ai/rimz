@@ -995,7 +995,7 @@ pub enum SamePaneSessionPolicy {
 }
 
 /// Static remote-control capability. Dynamic "enabled on this machine" state
-/// lives on [`AgentDefinition`](super::AgentDefinition), because it may read provider
+/// lives on [`AgentDefinition`], because it may read provider
 /// settings.
 #[derive(Clone, Copy, Debug)]
 pub struct RemoteControlCapability {

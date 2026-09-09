@@ -1,6 +1,6 @@
 //! The agent registry — the single registration point.
 //!
-//! Built-ins live in [`BUILTINS`]; validated machine-tier process plugins join
+//! Built-ins live in `BUILTINS`; validated machine-tier process plugins join
 //! them through [`all_definitions`]. Every behavioral dispatch site resolves
 //! through this module, so no consumer grows a per-agent match arm.
 
@@ -90,7 +90,7 @@ pub fn known_kinds() -> impl Iterator<Item = &'static str> {
 }
 
 /// Agent kind for an interactive command, after shell syntax and process
-/// wrappers are normalized by [`crate::proc::command`].
+/// wrappers are normalized by `crate::proc::command`.
 pub fn command_agent_kind(command: &str) -> Option<&'static str> {
     command_agent_kind_with_comm(command, None)
 }

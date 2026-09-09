@@ -1,6 +1,6 @@
 //! Runtime loop for the native sidebar process.
 //!
-//! `serve` owns the fixed-timestep process shell and worker wiring; [`loop_state`] owns renderer transitions and loop-lifetime context. Its collaborators own the fetch cycle, state and unread folds, regression gate, health debounce, lifecycle latches, order holds, reload decisions, and selection.
+//! `serve` owns the fixed-timestep process shell and worker wiring; `loop_state` owns renderer transitions and loop-lifetime context. Its collaborators own the fetch cycle, state and unread folds, regression gate, health debounce, lifecycle latches, order holds, reload decisions, and selection.
 
 use std::cell::Cell;
 use std::io::{self, Write};

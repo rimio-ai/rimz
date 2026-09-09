@@ -108,7 +108,7 @@ impl ProviderSpendingCache {
 /// consumer sidebar tabs read the fleet and per-provider totals — and the
 /// producer its own `SPENDING_TTL` gate — without re-walking the JSONL
 /// transcript history. Follows the same temp-then-rename durability contract
-/// as [`write_spending_cache`].
+/// as [`super::write_spending_cache`].
 pub fn write_provider_spending_cache(path: &Path, cache: &ProviderSpendingCache) -> bool {
     let cache = ProviderSpendingCache {
         version: PROVIDER_SPENDING_VERSION,

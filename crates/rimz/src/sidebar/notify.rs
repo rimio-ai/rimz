@@ -81,8 +81,8 @@ pub struct LinkAlert {
 
 /// Tracks remote-link health episodes for the diagnostic record. The badge owns
 /// the live user-facing signal while bytes flow; this layer only bounds an
-/// episode (degraded held past [`LINK_DEGRADED_HOLD_MS`], recovered past
-/// [`LINK_RECOVERY_HOLD_MS`]) and emits a [`LinkAlert`] at each edge.
+/// episode (degraded held past `LINK_DEGRADED_HOLD_MS`, recovered past
+/// `LINK_RECOVERY_HOLD_MS`) and emits a [`LinkAlert`] at each edge.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LinkNotificationState {
     seeded: bool,
