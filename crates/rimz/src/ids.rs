@@ -798,6 +798,11 @@ pub fn compose_channel(explicit: Option<&str>, dir_basename: Option<&str>) -> Op
         .map(ToOwned::to_owned)
 }
 
+/// The worktree directory name a branch-style request maps to: `/` joins as `-`.
+pub(crate) fn dashed_name(raw: &str) -> String {
+    raw.replace('/', "-")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

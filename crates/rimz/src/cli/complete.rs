@@ -57,7 +57,7 @@ fn handles_from_agents(agents: &[AgentState]) -> Vec<CompletionCandidate> {
         .collect();
     let unqualified: Vec<_> = peers
         .iter()
-        .map(|agent| rimz::harness::target::agent_handle(agent, &peers, false))
+        .map(|agent| rimz::address::agent_handle(agent, &peers, false))
         .collect();
     let mut candidates: Vec<_> = peers
         .iter()
@@ -66,7 +66,7 @@ fn handles_from_agents(agents: &[AgentState]) -> Vec<CompletionCandidate> {
             let collides = unqualified.iter().filter(|handle| *handle == base).count() > 1;
             candidate(
                 if collides {
-                    rimz::harness::target::agent_handle(agent, &peers, true)
+                    rimz::address::agent_handle(agent, &peers, true)
                 } else {
                     base.clone()
                 },

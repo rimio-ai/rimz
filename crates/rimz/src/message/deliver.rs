@@ -720,7 +720,7 @@ pub(super) struct WhenEvaluation {
 struct DeliveryEvaluation<'a> {
     check: DeliveryCheck,
     agent: Option<&'a crate::agents::AgentState>,
-    binding: Option<crate::harness::target::PaneBinding<'a, 'a>>,
+    binding: Option<crate::address::PaneBinding<'a, 'a>>,
     after_stamps: Vec<usize>,
     when_stamps: Vec<usize>,
     retry_at: Option<Timestamp>,
@@ -796,9 +796,8 @@ fn evaluate_delivery<'a>(
         _ => None,
     };
     let waiting = readiness.is_some_and(|readiness| readiness.waiting);
-    let binding = agent.and_then(|agent| {
-        crate::harness::target::bind_agent(snapshot, agent, message.pane_id.as_ref())
-    });
+    let binding = agent
+        .and_then(|agent| crate::address::bind_agent(snapshot, agent, message.pane_id.as_ref()));
     let retry_at = after
         .iter()
         .filter_map(|evaluation| (!evaluation.check.met).then_some(now + delivery_window))
@@ -965,7 +964,7 @@ fn delivery_candidate<'a>(
     let agent = evaluation.agent?;
     let status = agent.effective_status();
     let target = evaluation.binding.map(|binding| binding.pane)?;
-    let bound = crate::harness::target::pane_binding(snapshot, target, None)
+    let bound = crate::address::pane_binding(snapshot, target, None)
         .and_then(|binding| binding.exact_agent);
     Some(DeliveryCandidate {
         message,

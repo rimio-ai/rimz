@@ -176,7 +176,7 @@ pub(super) fn list_messages(
         messages.retain(|message| message.status != MessageStatus::Archived);
     }
     if let Some(raw) = target {
-        rimz::harness::target::require_mention(&raw)?;
+        rimz::address::require_mention(&raw)?;
         let agent =
             crate::cli::resolve_agent_one(store, &snapshot, &raw, None, lane_scope.named())?;
         messages.retain(|message| {
@@ -205,7 +205,7 @@ pub(super) fn list_messages(
     if json {
         render::json_pretty(&messages)?;
     } else {
-        let agents = rimz::harness::target::addressable_agents(&snapshot);
+        let agents = rimz::address::addressable_agents(&snapshot);
         let mut out = render::out();
         render_message_digest(&mut out, messages, &agents, &lane_scope, hidden, status)?;
     }
@@ -547,7 +547,7 @@ mod tests {
             DeliveryGate::Done,
         );
         let message = MessageListRow::from_record(message);
-        let agents = rimz::harness::target::addressable_agents(&snapshot);
+        let agents = rimz::address::addressable_agents(&snapshot);
         assert_eq!(message_target(&message, &agents), "@coder#project");
     }
 

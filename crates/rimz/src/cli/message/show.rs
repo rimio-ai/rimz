@@ -45,7 +45,7 @@ pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFl
         });
     }
 
-    let agents = rimz::harness::target::addressable_agents(&cached_snapshot);
+    let agents = rimz::address::addressable_agents(&cached_snapshot);
     let raw_target = message_target(&message, &agents);
     let target = scoped_handle(raw_target.clone(), message.channel.as_deref());
     let sender = scoped_handle(message.sender.render(), message.channel.as_deref());
@@ -103,7 +103,7 @@ fn open_delivery(
     };
     let snapshot = ctx.fold_agent_context(ctx.resolution_snapshot()?);
     let check = deliver::explain(record, live_messages, &snapshot, now);
-    let agents = rimz::harness::target::addressable_agents(&snapshot);
+    let agents = rimz::address::addressable_agents(&snapshot);
     let target = message_target(message, &agents);
     let verdict = check.verdict();
     let audit_receiver = if verdict == deliver::DeliveryVerdict::ReceiverGone {

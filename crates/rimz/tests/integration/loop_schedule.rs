@@ -1578,7 +1578,7 @@ fn emitted_signal_reaches_the_matching_wake_consumer() {
         }
     );
     assert_eq!(
-        rimz::harness::target::message_header(&message.sender, &[], None).as_deref(),
+        rimz::address::message_header(&message.sender, &[], None).as_deref(),
         Some("Type: SIGNAL\nFrom: @rimz\nContent:\n")
     );
     assert!(
@@ -4084,7 +4084,7 @@ fn run_hook(env: &Env, payload: serde_json::Value, cwd: &Path) {
     cmd.current_dir(cwd)
         .env("RIMZ_AGENT_PID", owner_pid.to_string());
     if let Some(channel) =
-        rimz::harness::target::resolve_room_channel(&env.project_root, cwd, None, None)
+        rimz::harness::spec::resolve_room_channel(&env.project_root, cwd, None, None)
     {
         cmd.env(rimz::workspace::ENV_CHANNEL, channel);
     }

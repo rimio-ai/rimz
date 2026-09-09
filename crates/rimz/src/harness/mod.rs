@@ -22,6 +22,5 @@ pub mod schedule;
 pub mod scratch;
 pub mod spec;
 pub mod subagent_policy;
-pub mod target;
 
 pub use auto_continue::AutoContinueRequest;

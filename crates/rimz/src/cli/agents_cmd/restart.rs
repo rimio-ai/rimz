@@ -21,7 +21,7 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
     let agent =
         crate::cli::resolve_agent_one(&ctx.store, &snapshot, &reference, None, ctx.channel())?
             .clone();
-    let peers = rimz::harness::target::addressable_agents(&snapshot);
+    let peers = rimz::address::addressable_agents(&snapshot);
     let message = restart_resolved(&ctx, &agent, &peers)?;
     writeln!(crate::cli::render::out(), "{message}")?;
     Ok(())
@@ -189,7 +189,7 @@ pub(in crate::cli) fn restart_resolved(
             reason.as_str()
         ))
     } else {
-        let handle = rimz::harness::target::agent_handle(agent, peers, true);
+        let handle = rimz::address::agent_handle(agent, peers, true);
         Ok(format!(
             "restarted {handle} (resumed session {})",
             agent.agent_id

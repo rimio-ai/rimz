@@ -103,7 +103,7 @@ fn list_channels(
     let snapshot = store.snapshot_cached().ok();
     let agents: Vec<&AgentState> = snapshot
         .as_ref()
-        .map(rimz::harness::target::addressable_agents)
+        .map(rimz::address::addressable_agents)
         .unwrap_or_default();
     let mut live_by_channel: BTreeMap<String, LiveChannelAgents<'_>> = BTreeMap::new();
     for agent in agents {
@@ -121,7 +121,7 @@ fn list_channels(
         let agents = here
             .agents
             .iter()
-            .map(|agent| rimz::harness::target::agent_handle(agent, &here.agents, false))
+            .map(|agent| rimz::address::agent_handle(agent, &here.agents, false))
             .collect();
         entries.insert(
             channel.clone(),

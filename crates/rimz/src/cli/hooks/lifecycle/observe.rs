@@ -214,7 +214,7 @@ fn record_mapped_lifecycle_observation(
                 .find(|member| member.kind == event.kind && member.agent_id == event.agent_id)
             && member.team.is_some()
         {
-            let cohorts = rimz::harness::target::team_cohorts(&audit.agents);
+            let cohorts = rimz::address::team_cohorts(&audit.agents);
             let channel = member.channel().unwrap_or_else(|| "external".to_owned());
             let live = cohorts
                 .iter()

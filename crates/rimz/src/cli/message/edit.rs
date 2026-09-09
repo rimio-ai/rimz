@@ -201,7 +201,7 @@ pub(super) fn message_target_for_record(
     snapshot: &SidebarSnapshot,
 ) -> String {
     let row = MessageListRow::from_record(record.clone());
-    let agents = rimz::harness::target::addressable_agents(snapshot);
+    let agents = rimz::address::addressable_agents(snapshot);
     scoped_handle(message_target(&row, &agents), row.channel.as_deref())
 }
 
@@ -240,7 +240,7 @@ pub(super) fn clear_messages(
     let snapshot = ctx.cached_snapshot()?;
     let channel = ctx.channel().map(ToOwned::to_owned);
     if let Some(target) = target {
-        rimz::harness::target::require_mention(&target)?;
+        rimz::address::require_mention(&target)?;
         let agent = crate::cli::resolve_agent_one(
             store,
             &snapshot,

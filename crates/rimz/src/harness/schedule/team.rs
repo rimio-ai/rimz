@@ -92,7 +92,7 @@ pub fn arm_member(
     let target = TaskTarget {
         kind: member.kind.clone(),
         session: member.agent_id.clone(),
-        handle: crate::harness::target::agent_handle(member, &peers, true),
+        handle: crate::address::agent_handle(member, &peers, true),
     };
     let mut names = BTreeSet::new();
     let mut specs = Vec::new();

@@ -11,8 +11,8 @@ pub(crate) mod fire;
 pub mod reply;
 pub mod send;
 
+use crate::address::recipient_channel;
 use crate::agents::{AgentState, AgentStatus};
-use crate::harness::target::recipient_channel;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::message::{
     AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,

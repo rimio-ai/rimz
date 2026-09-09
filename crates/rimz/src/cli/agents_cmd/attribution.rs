@@ -30,7 +30,7 @@ pub(super) fn attribution(
             projection.agents,
             jiff::Timestamp::now(),
         ));
-    let peers = rimz::harness::target::addressable_agents(&snapshot);
+    let peers = rimz::address::addressable_agents(&snapshot);
     let channel = super::list::list_channel_filter(all, scope.as_deref(), &ctx.workspace);
     let default_worktree =
         (!all && channel.is_none()).then_some(ctx.workspace.worktree_root.as_path());
@@ -50,7 +50,7 @@ pub(super) fn attribution(
         .into_iter()
         .filter(|agent| {
             if let Some(filter) = channel.as_deref() {
-                rimz::harness::target::agent_in_worktree(agent, filter)
+                rimz::address::agent_in_worktree(agent, filter)
             } else if let Some(worktree) = default_worktree {
                 agent
                     .worktree_path

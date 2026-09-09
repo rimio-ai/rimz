@@ -47,7 +47,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         Path::is_dir,
     )?;
     let source_name = source.name.as_deref().unwrap_or("unnamed").to_owned();
-    let channel = rimz::harness::target::resolve_room_channel(
+    let channel = rimz::harness::spec::resolve_room_channel(
         &workspace.project_root,
         &seed.cwd,
         source.team.as_deref(),

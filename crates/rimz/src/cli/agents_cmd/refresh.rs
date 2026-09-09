@@ -46,11 +46,11 @@ pub(super) fn run_refresh(args: RefreshArgs, globals: &GlobalFlags) -> Result<()
         return Ok(());
     }
 
-    let peers = rimz::harness::target::addressable_agents(&snapshot);
+    let peers = rimz::address::addressable_agents(&snapshot);
     let mut failed = false;
     let mut out = render::out();
     for agent in targets {
-        let label = rimz::harness::target::agent_handle(agent, &peers, true);
+        let label = rimz::address::agent_handle(agent, &peers, true);
         let kind = agent.kind.as_str();
         let model_hint = agent.model.as_deref().or_else(|| {
             agent
@@ -93,12 +93,12 @@ pub(super) fn refresh_targets<'a>(
     snapshot: &'a rimz::store::snapshot::SidebarSnapshot,
     channel: Option<&str>,
 ) -> Vec<&'a AgentState> {
-    rimz::harness::target::addressable_agents(snapshot)
+    rimz::address::addressable_agents(snapshot)
         .into_iter()
         .filter(|agent| !agent.agent_id.is_empty())
         .filter(|agent| rimz::agents::find_definition(agent.kind.as_str()).is_some())
         .filter(|agent| {
-            channel.is_none_or(|filter| rimz::harness::target::agent_in_worktree(agent, filter))
+            channel.is_none_or(|filter| rimz::address::agent_in_worktree(agent, filter))
         })
         .collect()
 }

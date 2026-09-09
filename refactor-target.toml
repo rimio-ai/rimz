@@ -26,6 +26,7 @@ layers = [
     ["agents"],
     ["store"],
     [
+    "address",
     "message",
     "mux",
     "remote",
@@ -57,12 +58,16 @@ layers = [
 ]
 
 [[module]]
+path = "crates/rimz/src/address.rs"
+surface-budget = 40
+
+[[module]]
 path = "crates/rimz/src/agent_activity.rs"
 surface-budget = 6
 
 [[module]]
 path = "crates/rimz/src/agents"
-upward-dependencies = ["harness::target"]
+upward-dependencies = ["address"]
 # The parent-link predicate is shared by store, harness and CLI consumers.
 # Attribution adds lifetime values, boundary queries and unreadable-path warnings.
 # Pending-wake vocabulary and rest projection are shared by harness and renderers.
@@ -158,7 +163,7 @@ surface-budget = 577
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
-surface-budget = 44
+surface-budget = 45
 
 [[module]]
 path = "crates/rimz/src/lane.rs"
@@ -179,7 +184,6 @@ upward-dependencies = [
     "harness::assist_log",
     "harness::auto_continue",
     "harness::run",
-    "harness::target",
     "sidebar::produce",
 ]
 surface-budget = 67
@@ -370,7 +374,7 @@ allowed-dependencies = [
     "agents",
     "config",
     "harness::assist_log",
-    "harness::target",
+    "address",
     "message",
     "mux",
     "pane::keys",
@@ -462,7 +466,7 @@ path = "crates/rimz/src/harness/ancestry.rs"
 allowed-dependencies = [
     "agents",
     "harness::launch",
-    "harness::target",
+    "address",
     "ids",
     "mux",
     "pane",
@@ -497,7 +501,7 @@ allowed-dependencies = [
     "harness::ancestry",
     "harness::plan",
     "harness::spec",
-    "harness::target",
+    "address",
     "ids",
     "mux",
     "store::runtime",
@@ -636,7 +640,7 @@ reason = "Stays the mux control engine; domain callers that need a bounded subpr
 
 [[verdict]]
 kind = "item"
-key = "harness::target::agent_handle"
+key = "address::agent_handle"
 reason = "Attribution's canonical routable address; the renderer is inseparable from target resolution, so agents keeps this one upward call (pass 3)"
 
 [[verdict]]

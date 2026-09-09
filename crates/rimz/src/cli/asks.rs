@@ -131,7 +131,7 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
     let store = &ctx.store;
     let snapshot = ctx.cached_snapshot()?;
     let channel = ctx.channel();
-    let peers = rimz::harness::target::addressable_agents(&snapshot);
+    let peers = rimz::address::addressable_agents(&snapshot);
     let mut views = snapshot
         .agents
         .iter()
@@ -169,13 +169,13 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let store = &ctx.store;
     let snapshot = ctx.cached_snapshot()?;
-    let peers = rimz::harness::target::addressable_agents(&snapshot);
+    let peers = rimz::address::addressable_agents(&snapshot);
     let agent = resolve_open_ask(&ctx.store, &snapshot, target, ctx.channel(), true)?
         .ok_or_else(|| anyhow::anyhow!("ask `{target}` is no longer open"))?;
     if !agent.is_awaiting_input() || agent.open_ask.is_none() {
         bail!(
             "{} is not asking anything",
-            rimz::harness::target::agent_handle(agent, &peers, true)
+            rimz::address::agent_handle(agent, &peers, true)
         );
     }
     let view = view_for_agent(store.paths(), agent, &snapshot.agents, &peers)?
@@ -252,13 +252,10 @@ fn view_for_agent(
         }) else {
             return Ok(None);
         };
-        let handle = rimz::harness::target::agent_handle(parent, peers, true);
+        let handle = rimz::address::agent_handle(parent, peers, true);
         (handle, Some(subagent_name(agent)))
     } else {
-        (
-            rimz::harness::target::agent_handle(agent, peers, true),
-            None,
-        )
+        (rimz::address::agent_handle(agent, peers, true), None)
     };
     Ok(Some(OpenAskView {
         agent: AskAgentView {

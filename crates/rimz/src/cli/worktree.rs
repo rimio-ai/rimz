@@ -295,7 +295,7 @@ fn append_worktree_row(
         "-".to_owned()
     } else {
         here.iter()
-            .map(|agent| rimz::harness::target::agent_handle(agent, &here, false))
+            .map(|agent| rimz::address::agent_handle(agent, &here, false))
             .collect::<Vec<_>>()
             .join(" ")
     };
@@ -624,7 +624,7 @@ fn holder_summary(agents: &[AgentState], path: &Path) -> String {
     }
     let handles = here
         .iter()
-        .map(|agent| rimz::harness::target::agent_handle(agent, &here, false))
+        .map(|agent| rimz::address::agent_handle(agent, &here, false))
         .collect::<Vec<_>>();
     handles.join(", ")
 }

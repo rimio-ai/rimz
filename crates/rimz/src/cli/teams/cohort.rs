@@ -4,8 +4,8 @@ use std::io::Write;
 use anyhow::{Result, bail};
 
 use super::super::{Ctx, GlobalFlags, agents_cmd, render};
+use rimz::address::TeamCohort;
 use rimz::agents::AgentState;
-use rimz::harness::target::TeamCohort;
 
 fn select<'a>(
     team: &str,
@@ -13,7 +13,7 @@ fn select<'a>(
     current_channel: Option<&str>,
     agents: &'a [AgentState],
 ) -> Result<TeamCohort<'a>> {
-    let team_cohorts = rimz::harness::target::team_cohorts(agents)
+    let team_cohorts = rimz::address::team_cohorts(agents)
         .into_iter()
         .filter(|cohort| cohort.team == team)
         .collect::<Vec<_>>();
@@ -65,19 +65,19 @@ pub(super) fn matches_worktree(cohort: &TeamCohort<'_>, worktree: &str) -> bool 
         || cohort
             .members
             .iter()
-            .any(|agent| rimz::harness::target::agent_in_worktree(agent, worktree))
+            .any(|agent| rimz::address::agent_in_worktree(agent, worktree))
 }
 
 pub(super) fn stop(team: &str, worktree: Option<&str>, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let snapshot = ctx.alive_snapshot()?;
     let cohort = select(team, worktree, ctx.channel(), &snapshot.agents)?;
-    let peers = rimz::harness::target::addressable_agents(&snapshot);
+    let peers = rimz::address::addressable_agents(&snapshot);
     let mut tracker = agents_cmd::StopTracker::default();
     let mut failed = false;
     let mut out = render::out();
     for agent in cohort.members.iter().copied() {
-        let label = rimz::harness::target::agent_handle(agent, &peers, true);
+        let label = rimz::address::agent_handle(agent, &peers, true);
         match agents_cmd::stop_resolved(&ctx, globals, &snapshot, agent, &mut tracker) {
             Ok(true) => writeln!(out, "stopped {label}")?,
             Ok(false) => {}
@@ -153,14 +153,14 @@ pub(super) fn restart(team: &str, worktree: Option<&str>, globals: &GlobalFlags)
     let ctx = Ctx::open(globals)?;
     let snapshot = ctx.alive_snapshot()?;
     let mut cohort = select(team, worktree, ctx.channel(), &snapshot.agents)?;
-    let peers = rimz::harness::target::addressable_agents(&snapshot);
+    let peers = rimz::address::addressable_agents(&snapshot);
     cohort
         .members
         .sort_by_key(|agent| agent.launch_ordinal.unwrap_or(u32::MAX));
     let mut failed = false;
     let mut out = render::out();
     for agent in cohort.members.iter().copied() {
-        let label = rimz::harness::target::agent_handle(agent, &peers, true);
+        let label = rimz::address::agent_handle(agent, &peers, true);
         match agents_cmd::restart_resolved(&ctx, agent, &peers) {
             Ok(message) => writeln!(out, "{message}")?,
             Err(err) => {
@@ -238,7 +238,7 @@ mod tests {
         let mut urgent = agent("urgent", "forge", "docs");
         urgent.status = rimz::agents::AgentStatus::Failed;
         let agents = vec![roster_first, urgent];
-        let cohort = rimz::harness::target::team_cohorts(&agents)
+        let cohort = rimz::address::team_cohorts(&agents)
             .into_iter()
             .next()
             .expect("cohort");
@@ -264,10 +264,10 @@ mod tests {
             vec![team_member, ad_hoc],
             jiff::Timestamp::UNIX_EPOCH,
         );
-        let peers = rimz::harness::target::addressable_agents(&snapshot);
+        let peers = rimz::address::addressable_agents(&snapshot);
 
         assert_eq!(
-            rimz::harness::target::agent_handle(peers[0], &peers, true),
+            rimz::address::agent_handle(peers[0], &peers, true),
             "@codex-1#feat-x"
         );
     }

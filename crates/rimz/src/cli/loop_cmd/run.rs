@@ -397,7 +397,8 @@ fn execute_prepared_delivery(
             ))
         }
         Err(rimz::message::dispatch::DispatchErr::Recipient(
-            rimz::TargetErr::NoMatch { .. } | rimz::TargetErr::NoMatchInChannel { .. },
+            rimz::address::TargetErr::NoMatch { .. }
+            | rimz::address::TargetErr::NoMatchInChannel { .. },
         )) => Ok(rimz::harness::schedule::runner::TaskFireEffect::TargetGone),
         Err(err) => Err(err.into()),
     }

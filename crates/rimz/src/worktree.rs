@@ -1075,14 +1075,9 @@ pub fn parse_requested_name(raw: &str) -> Result<RequestedName> {
         validate_requested_segment(raw, segment)?;
     }
     Ok(RequestedName {
-        name: dashed_name(raw),
+        name: crate::ids::dashed_name(raw),
         branch: raw.contains('/').then(|| raw.to_owned()),
     })
-}
-
-/// The worktree directory name a branch-style request maps to: `/` joins as `-`.
-pub fn dashed_name(raw: &str) -> String {
-    raw.replace('/', "-")
 }
 
 pub fn read_marker_for_worktree(path: &Path) -> Result<Option<WorktreeMarker>> {

@@ -8,8 +8,8 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers
 
 use super::GlobalFlags;
 use crate::cli::render;
+use rimz::address;
 use rimz::agents::{AgentState, AgentStatus};
-use rimz::harness::target;
 use rimz::ids::AgentSessionId;
 use rimz::pane::PaneRef;
 use rimz::proc::TreeTotals;
@@ -101,13 +101,13 @@ fn sample(
         .into_iter()
         .filter(|agent| !agent.is_provider_subagent())
         .filter(|agent| in_room.contains_key(&agent.agent_id))
-        .filter(|agent| channel.is_none_or(|filter| target::agent_in_worktree(agent, filter)))
+        .filter(|agent| channel.is_none_or(|filter| address::agent_in_worktree(agent, filter)))
         .collect();
     let peers: Vec<&AgentState> = agents.iter().collect();
     let now = jiff::Timestamp::now();
     let mut rows = BTreeMap::new();
     for agent in &agents {
-        let handle = target::agent_handle(agent, &peers, false);
+        let handle = address::agent_handle(agent, &peers, false);
         let live_pane_pid = in_room.get(&agent.agent_id).copied().flatten();
         let metrics =
             metrics_root_pid(live_pane_pid, agent.pane.as_ref()).and_then(rimz::proc::tree_totals);

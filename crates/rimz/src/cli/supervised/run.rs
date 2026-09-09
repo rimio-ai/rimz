@@ -442,7 +442,7 @@ fn prepare_supervised(
     let mut inferred_lane = None;
     if let Some(channel) = lane.as_deref() {
         let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-        if let Some(team) = rimz::harness::target::channel_team(&snapshot.agents, channel) {
+        if let Some(team) = rimz::address::channel_team(&snapshot.agents, channel) {
             let qualified = rimz::harness::spec::qualify_spec_in_channel(
                 &spec,
                 channel,
@@ -520,7 +520,7 @@ fn prepare_supervised(
     }
     // An inferred lane joins the exact channel it was inferred from, rather than
     // one recomputed from the caller's cwd.
-    let room_channel = rimz::harness::target::resolve_room_channel(
+    let room_channel = rimz::harness::spec::resolve_room_channel(
         &workspace.project_root,
         &launch.cwd,
         team_name.as_deref(),

@@ -288,7 +288,7 @@ fn cached_alive_snapshot_attaches_rest_certificates_for_team_ownership() {
         successor.transcript_path.as_deref(),
         Some("/repo/main/conversation-b.jsonl")
     );
-    let cohorts = crate::harness::target::team_cohorts(&snapshot.agents);
+    let cohorts = crate::address::team_cohorts(&snapshot.agents);
     assert_eq!(cohorts[0].members.len(), 1);
     assert_eq!(cohorts[0].members[0].agent_id.as_str(), "conversation-b");
 }

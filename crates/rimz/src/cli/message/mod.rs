@@ -308,7 +308,7 @@ fn parse_when_request(expression: &str) -> std::result::Result<WhenRequest, Stri
             "invalid --when `{expression}`; use `@handle <status> <duration>` (for example `@coder idle 58m`)"
         ));
     };
-    rimz::harness::target::require_mention(address).map_err(|err| err.to_string())?;
+    rimz::address::require_mention(address).map_err(|err| err.to_string())?;
     Ok(WhenRequest {
         address: (*address).to_owned(),
         status: rimz::message::parse_when_status(status)?,

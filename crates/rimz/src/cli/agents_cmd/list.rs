@@ -40,7 +40,7 @@ pub(super) fn list_agents(
         .filter(|agent| {
             channel
                 .as_deref()
-                .is_none_or(|filter| rimz::harness::target::agent_in_worktree(agent, filter))
+                .is_none_or(|filter| rimz::address::agent_in_worktree(agent, filter))
         })
         .collect();
     let now = jiff::Timestamp::now();

@@ -445,7 +445,7 @@ fn pane_row(
         render::cell("sidebar").fg(render::palette::muted())
     } else {
         match agent {
-            Some(agent) => render::cell(rimz::harness::target::agent_handle(agent, peers, true))
+            Some(agent) => render::cell(rimz::address::agent_handle(agent, peers, true))
                 .fg(render::palette::accent()),
             None => render::cell("process").fg(render::palette::muted()),
         }
@@ -539,7 +539,7 @@ fn pane_json<'a>(
         is_self,
         agent: agent.map(|agent| AgentJson {
             kind: agent.kind.to_string(),
-            handle: rimz::harness::target::agent_handle(agent, peers, true),
+            handle: rimz::address::agent_handle(agent, peers, true),
             status: agent.effective_status().as_str().to_owned(),
             worktree: agent.channel(),
         }),

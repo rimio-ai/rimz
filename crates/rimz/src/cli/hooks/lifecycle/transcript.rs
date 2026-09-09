@@ -420,7 +420,7 @@ fn launched_parent_handle(
     child: &rimz::agents::AgentState,
     child_channel: Option<&str>,
 ) -> Option<String> {
-    let sender = match rimz::harness::target::launched_parent(&snapshot.agents, child) {
+    let sender = match rimz::address::launched_parent(&snapshot.agents, child) {
         Some(parent) => rimz::store::message::MessageSender::Agent {
             kind: parent.kind.clone(),
             name: parent.name.clone(),
@@ -436,8 +436,8 @@ fn launched_parent_handle(
             channel: None,
         },
     };
-    let peers = rimz::harness::target::addressable_agents(snapshot);
-    rimz::harness::target::agent_sender_handle(&sender, &peers, child_channel)
+    let peers = rimz::address::addressable_agents(snapshot);
+    rimz::address::agent_sender_handle(&sender, &peers, child_channel)
 }
 
 fn append_turn_entry(

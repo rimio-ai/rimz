@@ -1021,7 +1021,7 @@ fn same_process_fork_inherits_launch_identity_and_owns_the_role() {
     assert_eq!(fork.role.as_deref(), Some("coder"));
     assert_eq!(fork.team.as_deref(), Some("forge"));
     let snapshot = SidebarSnapshot::build_with_agents(workspace(), agents, epoch());
-    let resolved = crate::harness::target::resolve_one(&snapshot, "@coder", None, None)
+    let resolved = crate::address::resolve_one(&snapshot, "@coder", None, None)
         .expect("the launch role has one occupant without pane context");
     assert_eq!(resolved.agent_id.as_str(), "side-thread");
 }

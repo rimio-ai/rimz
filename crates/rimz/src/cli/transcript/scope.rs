@@ -291,11 +291,11 @@ pub(super) fn parse_transcript_target(raw: &str) -> Result<(String, Option<Strin
     if matches!(raw.split_once('#'), Some((_, ""))) {
         bail!("channel suffix in target `{raw}` must name a channel");
     }
-    match rimz::harness::target::parse_selector(raw) {
+    match rimz::address::parse_selector(raw) {
         Ok(parsed) => Ok(parsed),
-        Err(rimz::TargetErr::NoMatch { .. } | rimz::TargetErr::InvalidPaneId(_)) => {
-            Ok(split_transcript_target(raw))
-        }
+        Err(
+            rimz::address::TargetErr::NoMatch { .. } | rimz::address::TargetErr::InvalidPaneId(_),
+        ) => Ok(split_transcript_target(raw)),
         Err(err) => Err(err.into()),
     }
 }
@@ -313,9 +313,9 @@ pub(super) fn reconcile_transcript_channel(
     flag: Option<&str>,
     fallback: Option<&str>,
 ) -> Result<Option<String>> {
-    match rimz::harness::target::reconcile_channel(raw, inline, flag, fallback) {
+    match rimz::address::reconcile_channel(raw, inline, flag, fallback) {
         Ok(channel) => Ok(channel),
-        Err(rimz::TargetErr::ChannelMismatch {
+        Err(rimz::address::TargetErr::ChannelMismatch {
             target,
             channel,
             flag,
