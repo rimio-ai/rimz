@@ -77,17 +77,17 @@ The bare-name form and `launch` verb accept a configured team name and send an o
 It uses the same launch and relaunch-reconciliation path as `rimz agents <team>`, including worktree creation, channel placement, pull-request checkout, and existing-cohort focus or recovery.
 When an agent launches a team, its members are top-level peers rather than children of the caller.
 
-After opening new panes, a fresh launch prints the team and lane, absolute worktree path and actual branch when available, declared stages when present, and the absolute `<worktree>/blackboard.md` path even if the board does not exist yet. Each member row shows its minted handle, provider, and resolved model (`-` when unset), marking the effective leader rather than printing `starting`. An optional `prompt` line names its recipient and echoes the supplied prompt, before reminders, with whitespace collapsed, quotes escaped, and text clipped to terminal width. The receipt records launch inputs, not confirmation that a provider received or acted on the prompt.
+After opening new panes, a fresh launch prints `launched <team> in worktree #<channel>`, the absolute worktree `path`, and `board blackboard.md` relative to that path even if the board does not exist yet. Each member row shows its role handle, provider, and resolved model (`-` when unset), marking the effective leader with `<- leader`. Branch, declared stages, and command hints are omitted. An optional `prompt` line names its recipient and echoes the supplied prompt, before reminders, with whitespace collapsed, quotes escaped, and text clipped to terminal width. The receipt records launch inputs, not confirmation that a provider received or acted on the prompt.
 
-The receipt ends with these lane-qualified hints (shown here for `forge#feat-rate-limits`):
+Inspect, message, or subscribe to the cohort with lane-qualified commands (shown here for `forge#feat-rate-limits`):
 
-```text
-Check: rimz teams show forge#feat-rate-limits
-Reach: rimz message @planner#feat-rate-limits '<text>'
-Wait:  rimz loop add team-idle --wake @me --signal team.idle --match instance=forge#feat-rate-limits --once
+```sh
+rimz teams show forge#feat-rate-limits
+rimz message @planner#feat-rate-limits '<text>'
+rimz loop add team-idle --wake @me --signal team.idle --match instance=forge#feat-rate-limits --once
 ```
 
-Startup remains asynchronous: the receipt is not a readiness barrier, and members may not yet appear in `teams show`. Inspect the cohort for live status. `Wait` arms a one-shot subscription on a future transition to `team.idle`; it does not block until readiness or completion, and idle does not mean the task is done. Signals do not replay: if the cohort was already idle before the subscription was armed, that transition will not wake you. Inspect current state as well as arming the subscription; [signal delivery](./loop.md#signals) applies. Launch has no JSON receipt; `--json` is for list and inspection.
+Startup remains asynchronous: the receipt is not a readiness barrier, and members may not yet appear in `teams show`. Inspect the cohort for live status. The `loop add` command above arms a one-shot subscription on a future transition to `team.idle`; it does not block until readiness or completion, and idle does not mean the task is done. Signals do not replay: if the cohort was already idle before the subscription was armed, that transition will not wake you. Inspect current state as well as arming the subscription; [signal delivery](./loop.md#signals) applies. Launch has no JSON receipt; `--json` is for list and inspection.
 
 For a configured binding the receipt also prints `signals: ci.failed → coder`; this describes intent, not an already-armed row. Root members arm their bindings when their real sessions register, including resume, restart, and role re-add; children do not. End, loss, or stop retires the session's subscriptions, and missed signals are never replayed.
 
