@@ -217,8 +217,6 @@ pub enum DispatchErr {
     #[error(transparent)]
     Store(#[from] crate::store::StoreErr),
     #[error(transparent)]
-    Send(#[from] send::SendErr),
-    #[error(transparent)]
     Deliver(#[from] deliver::DeliverErr),
     #[error("unknown agent kind `{0}`")]
     UnknownAgentKind(AgentKind),
