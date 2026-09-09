@@ -751,6 +751,9 @@ fn write_show_facts(
         );
     }
     kv.push("root", ui::cell(root_with_room(&root, room_is_open)));
+    if let Some(dir) = entry.dir.as_deref() {
+        kv.push("dir", ui::cell(display_path(dir)));
+    }
     kv.push("source", ui::cell(source_detail(source, entry)));
     if let Some(active) = active {
         kv.push("active", ui::cell(active));
