@@ -120,7 +120,7 @@ fn orphaned_child(
     if run.is_some_and(|run| run.keep) {
         return None;
     }
-    let parent = crate::harness::target::launched_parent(agents, child);
+    let parent = crate::address::launched_parent(agents, child);
     let orphaned_at = match parent {
         Some(parent) => parent.ended_at?,
         None => child
@@ -163,7 +163,7 @@ fn digest_parents_from(agents: &[AgentState], runs: &[RunRecord]) -> Vec<AgentSe
         .iter()
         .filter(|parent| parent.ended_at.is_none())
         .filter_map(|parent| {
-            let children = crate::harness::target::launched_children(agents, parent);
+            let children = crate::address::launched_children(agents, parent);
             if children.is_empty() {
                 return None;
             }

@@ -550,7 +550,7 @@ fn member(
         })
         .reduce(u64::saturating_add);
     AttributionMember {
-        handle: crate::harness::target::agent_handle(latest, peers, false),
+        handle: crate::address::agent_handle(latest, peers, false),
         role: latest.role.clone(),
         name: latest.name.clone(),
         kind: latest.kind.clone(),

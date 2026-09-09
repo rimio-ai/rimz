@@ -99,8 +99,7 @@ fn floating_agent_pane_stays_addressable_without_room_row() {
     );
     assert_eq!(snapshot.agent_panes[0].pane_id.raw(), "term1");
 
-    let targets =
-        crate::harness::target::resolve_targets(&snapshot, "@codex", None, Some("main")).unwrap();
+    let targets = crate::address::resolve_targets(&snapshot, "@codex", None, Some("main")).unwrap();
     assert_eq!(targets.len(), 1);
     assert_eq!(targets[0].pane_id.raw(), "term1");
 }

@@ -981,7 +981,7 @@ fn resolve_scope_lane(
     if let Some(agent) = agents
         .iter()
         .filter(|agent| full_session(agent))
-        .filter(|agent| crate::harness::target::agent_in_worktree(agent, scope))
+        .filter(|agent| crate::address::agent_in_worktree(agent, scope))
         .min_by(|left, right| {
             newest_cmp(
                 left.last_activity,
@@ -1207,7 +1207,7 @@ fn plan_live_lane_split(
     let peers = live.iter().chain(closed.iter()).collect::<Vec<_>>();
     let live_labels = live
         .iter()
-        .map(|agent| crate::harness::target::agent_handle(agent, &peers, true))
+        .map(|agent| crate::address::agent_handle(agent, &peers, true))
         .collect();
     let preflight_kinds = closed
         .iter()
@@ -1503,7 +1503,7 @@ pub fn plan_team_restore_tabs(
         };
         let channel = project_root
             .and_then(|project_root| {
-                crate::harness::target::resolve_room_channel(
+                crate::harness::spec::resolve_room_channel(
                     project_root,
                     &cwd,
                     Some(&team),
@@ -1783,7 +1783,7 @@ fn candidate_room_channel(
     candidate: &ResumeCandidate,
 ) -> Option<String> {
     match project_root {
-        Some(project_root) => crate::harness::target::resolve_room_channel(
+        Some(project_root) => crate::harness::spec::resolve_room_channel(
             project_root,
             &candidate.cwd,
             candidate.team.as_deref(),
@@ -1932,7 +1932,7 @@ fn match_cohort<'a>(
     cells: &[CohortCell],
     team: Option<&str>,
 ) -> Vec<Option<&'a AgentState>> {
-    let mut candidates = crate::harness::target::launch_occupants_from(candidates.iter().copied());
+    let mut candidates = crate::address::launch_occupants_from(candidates.iter().copied());
     candidates.sort_by(|left, right| {
         newest_cmp(
             left.last_activity,
@@ -1966,7 +1966,7 @@ pub fn inspect_cohort_relaunch(
         })
         .collect::<Vec<_>>();
     let members = match team {
-        Some(team) => crate::harness::target::launch_occupants_from(candidates)
+        Some(team) => crate::address::launch_occupants_from(candidates)
             .into_iter()
             .filter(|agent| agent.team.as_deref() == Some(team))
             .collect::<Vec<_>>(),

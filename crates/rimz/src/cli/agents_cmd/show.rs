@@ -99,7 +99,7 @@ fn collect_show_report(
         None => None,
     }
     .filter(|view| !view.entries.is_empty());
-    let peers = rimz::harness::target::addressable_agents(snapshot);
+    let peers = rimz::address::addressable_agents(snapshot);
     let me = SelfIdentity::from_env().resolve(snapshot);
     let report_agent = agent.as_ref().map(|agent| {
         build_entry(

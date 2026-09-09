@@ -110,13 +110,13 @@ pub(super) fn send_batch_to_live_pane(
         ) {
             Ok(PaneWrite::Sent) => {
                 compacted = true;
-                let peers = crate::harness::target::addressable_agents(snapshot);
+                let peers = crate::address::addressable_agents(snapshot);
                 crate::harness::assist_log::append(&crate::harness::assist_log::AssistRecord {
                     at: jiff::Timestamp::now(),
                     assist: crate::harness::assist_log::Assist::AutoCompact {
                         kind: target.kind.clone(),
                         agent_id: agent.agent_id.clone(),
-                        label: Some(crate::harness::target::agent_handle(agent, &peers, false)),
+                        label: Some(crate::address::agent_handle(agent, &peers, false)),
                         threshold,
                         occupied_tokens: command.compacted_context_tokens,
                         message_id: command.message_id.to_string(),
@@ -213,11 +213,11 @@ fn write_batch(
                     .iter()
                     .all(|message| message.body == MessageBody::Prompt)
             );
-            let peers = crate::harness::target::addressable_agents(snapshot);
+            let peers = crate::address::addressable_agents(snapshot);
             let payload = batch
                 .iter()
                 .map(|message| {
-                    match crate::harness::target::message_header(
+                    match crate::address::message_header(
                         &message.sender,
                         &peers,
                         message.channel.as_deref(),

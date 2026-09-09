@@ -31,9 +31,9 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
     let target = TaskTarget {
         kind: agent.kind.clone(),
         session: agent.agent_id.clone(),
-        handle: rimz::harness::target::agent_handle(
+        handle: rimz::address::agent_handle(
             agent,
-            &rimz::harness::target::addressable_agents(&snapshot),
+            &rimz::address::addressable_agents(&snapshot),
             true,
         ),
     };

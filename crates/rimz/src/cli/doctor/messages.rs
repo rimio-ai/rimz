@@ -41,7 +41,7 @@ pub(super) fn collect_messages(
     let snapshot = store.snapshot_cached().ok();
     let agents = snapshot
         .as_ref()
-        .map(rimz::harness::target::addressable_agents)
+        .map(rimz::address::addressable_agents)
         .unwrap_or_default();
     for message in &live {
         match message.status {

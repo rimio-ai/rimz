@@ -828,7 +828,7 @@ fn walk_edges(
     }
     for edge in edges.iter().filter(|edge| edge.sender == current) {
         path.push(WaitCycleHop {
-            handle: crate::harness::target::agent_handle(&agents[current], peers, true),
+            handle: crate::address::agent_handle(&agents[current], peers, true),
             message_id: edge.message_id.clone(),
         });
         if walk_edges(

@@ -67,7 +67,7 @@ pub(super) fn select_subagent_zone_strategy(
         .pane
         .as_ref()
         .and_then(|pane| live_panes.iter().find(|live| live.pane_id == pane.pane_id));
-    if let Some(pane) = rimz::harness::target::launched_children(agents, caller)
+    if let Some(pane) = rimz::address::launched_children(agents, caller)
         .into_iter()
         .filter(|agent| {
             agent.pane.as_ref().is_some_and(|pane| {

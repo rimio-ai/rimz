@@ -877,12 +877,9 @@ fn attach_own_launch_pane(invocation: &ExecInvocationContext<'_>, identity: &Lau
     let workspace = invocation.workspace;
     let attached = invocation.store().and_then(|store| {
         let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-        let current = rimz::harness::target::launch_row(
-            &projection.agents,
-            &identity.kind,
-            &identity.agent_id,
-        )
-        .context("resolving current agent row by launch id")?;
+        let current =
+            rimz::address::launch_row(&projection.agents, &identity.kind, &identity.agent_id)
+                .context("resolving current agent row by launch id")?;
         store.attach_agent_pane(
             &current.kind,
             &current.agent_id,

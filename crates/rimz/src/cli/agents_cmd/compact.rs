@@ -3,8 +3,8 @@
 use std::io::Write;
 
 use anyhow::{Context, Result, bail};
+use rimz::address::{addressable_agents, agent_handle};
 use rimz::agents::definition::CompactInstruction;
-use rimz::harness::target::{addressable_agents, agent_handle};
 use rimz::ids::MessageId;
 use rimz::message::compact::{CompactOutcome, CompactRequest, send_compact};
 

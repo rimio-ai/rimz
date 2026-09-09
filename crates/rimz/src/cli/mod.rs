@@ -257,7 +257,7 @@ pub(crate) fn current_channel(workspace: &rimz::ResolvedWorkspace) -> Option<Str
     {
         return Some(channel);
     }
-    rimz::harness::target::resolve_room_channel(
+    rimz::harness::spec::resolve_room_channel(
         &workspace.project_root,
         &workspace.worktree_root,
         None,
@@ -316,7 +316,7 @@ pub(crate) fn resolve_agent_one<'a>(
     }
     map_resolve(
         raw,
-        rimz::harness::target::resolve_one(snapshot, raw, worktree_flag, current_channel),
+        rimz::address::resolve_one(snapshot, raw, worktree_flag, current_channel),
     )
 }
 
@@ -361,20 +361,23 @@ pub(crate) fn resolve_pane_targets<'a>(
 ) -> Result<Vec<&'a PaneAgent>> {
     map_resolve(
         raw,
-        rimz::harness::target::resolve_targets(snapshot, raw, worktree_flag, current_channel),
+        rimz::address::resolve_targets(snapshot, raw, worktree_flag, current_channel),
     )
 }
 
 /// Turn a clean target miss into the launch-profile/command/layout hint when
 /// the ref names launch config rather than a running agent.
-fn map_resolve<T>(raw: &str, result: std::result::Result<T, rimz::TargetErr>) -> Result<T> {
+fn map_resolve<T>(
+    raw: &str,
+    result: std::result::Result<T, rimz::address::TargetErr>,
+) -> Result<T> {
     match result {
         Ok(value) => Ok(value),
-        Err(rimz::TargetErr::NoMatch { target, suggestion }) => {
+        Err(rimz::address::TargetErr::NoMatch { target, suggestion }) => {
             if let Some(hint) = launch_ref_hint(raw)? {
                 anyhow::bail!("{hint}; run `rimz agents list` to see live agents");
             }
-            Err(rimz::TargetErr::NoMatch { target, suggestion }.into())
+            Err(rimz::address::TargetErr::NoMatch { target, suggestion }.into())
         }
         Err(err) => Err(err.into()),
     }
@@ -1063,7 +1066,7 @@ mod tests {
         let workspace = workspace("/code/team-channel", "/code/team-channel", None);
 
         assert_eq!(
-            rimz::harness::target::resolve_room_channel(
+            rimz::harness::spec::resolve_room_channel(
                 &workspace.project_root,
                 &workspace.worktree_root,
                 Some("forge"),
@@ -1073,7 +1076,7 @@ mod tests {
             Some("team-channel/forge")
         );
         assert_eq!(
-            rimz::harness::target::resolve_room_channel(
+            rimz::harness::spec::resolve_room_channel(
                 &workspace.project_root,
                 &workspace.worktree_root,
                 None,
@@ -1087,7 +1090,7 @@ mod tests {
     fn room_channel_ignores_branch_for_lane_identity() {
         let branch = workspace("/code/project", "/code/project", Some("feat/auth"));
         assert_eq!(
-            rimz::harness::target::resolve_room_channel(
+            rimz::harness::spec::resolve_room_channel(
                 &branch.project_root,
                 &branch.worktree_root,
                 None,
@@ -1098,7 +1101,7 @@ mod tests {
 
         let child_worktree = workspace("/code/project", "/code/project-wt/auth", None);
         assert_eq!(
-            rimz::harness::target::resolve_room_channel(
+            rimz::harness::spec::resolve_room_channel(
                 &child_worktree.project_root,
                 &child_worktree.worktree_root,
                 None,
@@ -1236,13 +1239,13 @@ mod tests {
         let before = workspace("/code/project", "/code/project-wt/auth", Some("feat/auth"));
         let after = workspace("/code/project", "/code/project-wt/auth", Some("scratch"));
 
-        let before_channel = rimz::harness::target::resolve_room_channel(
+        let before_channel = rimz::harness::spec::resolve_room_channel(
             &before.project_root,
             &before.worktree_root,
             None,
             None,
         );
-        let after_channel = rimz::harness::target::resolve_room_channel(
+        let after_channel = rimz::harness::spec::resolve_room_channel(
             &after.project_root,
             &after.worktree_root,
             None,

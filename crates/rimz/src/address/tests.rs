@@ -380,49 +380,6 @@ fn channel_team_declines_a_lane_holding_two_teams() {
 }
 
 #[test]
-fn room_channel_resolver_prefers_explicit_worktree_then_in_place_team() {
-    assert_eq!(
-        resolve_room_channel(
-            std::path::Path::new("/code/project"),
-            std::path::Path::new("/code/project-wt/auth"),
-            Some("forge"),
-            None,
-        )
-        .as_deref(),
-        Some("auth")
-    );
-    assert_eq!(
-        resolve_room_channel(
-            std::path::Path::new("/code/project"),
-            std::path::Path::new("/code/project"),
-            Some("forge"),
-            None,
-        )
-        .as_deref(),
-        Some("project/forge")
-    );
-    assert_eq!(
-        resolve_room_channel(
-            std::path::Path::new("/code/project"),
-            std::path::Path::new("/code/project"),
-            None,
-            None,
-        ),
-        None
-    );
-    assert_eq!(
-        resolve_room_channel(
-            std::path::Path::new("/code/project"),
-            std::path::Path::new("/code/project-wt/auth"),
-            Some("forge"),
-            Some("design"),
-        )
-        .as_deref(),
-        Some("design")
-    );
-}
-
-#[test]
 fn launch_stamped_worktree_team_channel_renders_flat_worktree() {
     let mut team_agent = agent("claude", "session-feat", Some("feat/auth"), "terminal_1");
     team_agent.team = Some("forge".to_owned());

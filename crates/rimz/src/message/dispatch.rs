@@ -10,6 +10,8 @@ use std::collections::BTreeSet;
 
 use jiff::Timestamp;
 
+use crate::Store;
+use crate::address::TargetErr;
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, MessageId, MuxName};
 use crate::message::{MessageDraft, Recipient};
@@ -19,7 +21,6 @@ use crate::store::message::{
 };
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::workspace::ResolvedWorkspace;
-use crate::{Store, TargetErr};
 
 use super::reply::{PreparationTarget, ReplyJoin, ReplyPreparation, ReplyPrepareErr, ReplyWait};
 use super::{deliver, send};
@@ -295,9 +296,7 @@ pub fn dispatch(
             .as_deref()
             .or(request.current_channel.as_deref()),
     )?;
-    if targets.len() > 1
-        && !request.allow_fanout
-        && !crate::harness::target::is_broadcast(&request.target)
+    if targets.len() > 1 && !request.allow_fanout && !crate::address::is_broadcast(&request.target)
     {
         return Err(DispatchErr::Fanout {
             target: request.target,
@@ -332,8 +331,8 @@ pub fn dispatch(
             )
         })
         .transpose()?;
-    let text = if targets.len() > 1 || crate::harness::target::is_broadcast(&request.target) {
-        crate::harness::target::group_prefixed(&request.target, &request.text)
+    let text = if targets.len() > 1 || crate::address::is_broadcast(&request.target) {
+        crate::address::group_prefixed(&request.target, &request.text)
     } else {
         request.text
     };
@@ -375,8 +374,8 @@ struct ResolvedTarget {
 impl ResolvedTarget {
     fn label(&self, snapshot: &SidebarSnapshot) -> String {
         if let Some(agent) = self.agent.as_ref() {
-            let peers = crate::harness::target::addressable_agents(snapshot);
-            crate::harness::target::agent_handle(agent, &peers, true)
+            let peers = crate::address::addressable_agents(snapshot);
+            crate::address::agent_handle(agent, &peers, true)
         } else if let Some(pane) = self.pane.as_ref() {
             format!("@{}", pane.label())
         } else {
@@ -387,7 +386,7 @@ impl ResolvedTarget {
     fn bound<'a>(&self, snapshot: &'a SidebarSnapshot) -> Option<&'a AgentState> {
         self.pane
             .as_ref()
-            .and_then(|pane| crate::harness::target::pane_binding(snapshot, pane, None))
+            .and_then(|pane| crate::address::pane_binding(snapshot, pane, None))
             .and_then(|binding| binding.exact_agent)
     }
 }
@@ -399,7 +398,7 @@ fn exclude_broadcast_caller(
     caller_env: Option<&crate::harness::ancestry::CallerIdentity>,
     channel: Option<&str>,
 ) -> Result<()> {
-    if !crate::harness::target::is_broadcast(raw) {
+    if !crate::address::is_broadcast(raw) {
         return Ok(());
     }
     let Some(caller) = caller_env.and_then(|caller| {
@@ -448,10 +447,10 @@ fn targets_all_park_without_live(
     gate: DeliveryGate,
     force: bool,
 ) -> bool {
-    if crate::harness::target::is_broadcast(raw) {
+    if crate::address::is_broadcast(raw) {
         return false;
     }
-    let Ok(agents) = crate::harness::target::resolve_many(snapshot, raw, scope, channel) else {
+    let Ok(agents) = crate::address::resolve_many(snapshot, raw, scope, channel) else {
         return false;
     };
     let now = Timestamp::now();
@@ -497,15 +496,14 @@ struct ResolutionView<'a> {
 impl ResolutionView<'_> {
     fn resolve(&self, raw: &str) -> std::result::Result<Vec<ResolvedTarget>, TargetErr> {
         if self.rollup_only {
-            let agents =
-                crate::harness::target::resolve_many(self.snapshot, raw, self.scope, self.channel)
-                    .or_else(|_| self.durable_targets(raw))?;
+            let agents = crate::address::resolve_many(self.snapshot, raw, self.scope, self.channel)
+                .or_else(|_| self.durable_targets(raw))?;
             return Ok(self.combine_targets(agents, Vec::new()));
         }
         let agent_result =
-            crate::harness::target::resolve_many(self.snapshot, raw, self.scope, self.channel);
+            crate::address::resolve_many(self.snapshot, raw, self.scope, self.channel);
         let pane_result =
-            crate::harness::target::resolve_targets(self.snapshot, raw, self.scope, self.channel);
+            crate::address::resolve_targets(self.snapshot, raw, self.scope, self.channel);
         match (agent_result, pane_result) {
             (Ok(agents), Ok(panes)) => Ok(self.combine_targets(agents, panes)),
             (Ok(agents), Err(_)) => Ok(self.combine_targets(agents, Vec::new())),
@@ -523,9 +521,9 @@ impl ResolutionView<'_> {
         let candidates = self
             .durable_agents
             .iter()
-            .filter(|agent| !crate::harness::target::shadowed_by_pane_owner(self.snapshot, agent))
+            .filter(|agent| !crate::address::shadowed_by_pane_owner(self.snapshot, agent))
             .collect::<Vec<_>>();
-        crate::harness::target::resolve_agents(raw, self.scope, self.channel, &candidates)
+        crate::address::resolve_agents(raw, self.scope, self.channel, &candidates)
     }
 
     fn combine_targets(
@@ -541,7 +539,7 @@ impl ResolutionView<'_> {
                 .enumerate()
                 .find(|(index, pane)| {
                     !used_panes[*index]
-                        && crate::harness::target::pane_binding(self.snapshot, pane, None)
+                        && crate::address::pane_binding(self.snapshot, pane, None)
                             .is_some_and(|binding| binding.matches_agent(agent))
                 })
                 .map(|(index, _)| index);
@@ -558,7 +556,7 @@ impl ResolutionView<'_> {
             if used_panes[index] {
                 continue;
             }
-            let binding = crate::harness::target::pane_binding(self.snapshot, pane, None);
+            let binding = crate::address::pane_binding(self.snapshot, pane, None);
             targets.push(ResolvedTarget {
                 pane: Some(pane.clone()),
                 agent: binding.and_then(|binding| binding.agent).cloned(),
@@ -573,7 +571,7 @@ impl ResolutionView<'_> {
         address: &str,
         expression: &str,
     ) -> Result<ResolvedTarget> {
-        if crate::harness::target::is_broadcast(address) {
+        if crate::address::is_broadcast(address) {
             return Err(ConditionErr::Broadcast {
                 kind,
                 address: address.to_owned(),
@@ -1093,11 +1091,8 @@ mod tests {
         let launch = agent("launch_pending", AgentStatus::Running);
         let pane = pane_only("terminal_1", "coder");
         let snapshot = snapshot_with_panes(vec![launch.clone()], vec![pane.clone()]);
-        let binding = crate::harness::target::pane_binding(&snapshot, &pane, None).unwrap();
-        assert_eq!(
-            binding.kind,
-            crate::harness::target::PaneBindingKind::Provisional
-        );
+        let binding = crate::address::pane_binding(&snapshot, &pane, None).unwrap();
+        assert_eq!(binding.kind, crate::address::PaneBindingKind::Provisional);
         let target = ResolvedTarget {
             pane: Some(pane),
             agent: Some(launch),

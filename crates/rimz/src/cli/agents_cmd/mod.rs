@@ -1009,8 +1009,7 @@ pub(crate) fn create_on_miss(
     globals: &GlobalFlags,
 ) -> Result<()> {
     let channel_filter = worktree_flag.or(channel_flag);
-    let Some(create) =
-        rimz::harness::target::create_mention(target, channel_filter, current_channel)?
+    let Some(create) = rimz::address::create_mention(target, channel_filter, current_channel)?
     else {
         bail!(
             "`{target}` cannot create an agent; address a kind or profile like `@codex` or `@planner`"

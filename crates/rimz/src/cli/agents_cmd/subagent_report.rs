@@ -65,7 +65,7 @@ fn report_parent<'a>(
                 .kind
         }
     };
-    rimz::harness::target::launch_row(agents, kind, parent_id)
+    rimz::address::launch_row(agents, kind, parent_id)
 }
 
 fn report_fleet_with_kind(
@@ -84,7 +84,7 @@ fn report_fleet_with_kind(
 
     let runs = run::list(store.paths())?;
     let mut seen = HashSet::<RunId>::new();
-    let children = rimz::harness::target::launched_children(&projection.agents, parent)
+    let children = rimz::address::launched_children(&projection.agents, parent)
         .into_iter()
         .filter_map(|child| {
             let run = newest_run_for_agent(&runs, child)?;

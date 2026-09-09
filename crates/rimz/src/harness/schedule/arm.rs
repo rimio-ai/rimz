@@ -258,7 +258,7 @@ pub fn default_signal_matches(
             matches.insert("path".to_owned(), path.display().to_string());
         }
         "team" if !matches.contains_key("team") && !matches.contains_key("instance") => {
-            let cohort = crate::harness::target::team_cohorts(agents)
+            let cohort = crate::address::team_cohorts(agents)
                 .into_iter()
                 .find(|cohort| {
                     cohort.members.iter().any(|member| {

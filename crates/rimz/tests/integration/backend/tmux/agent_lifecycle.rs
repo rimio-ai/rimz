@@ -538,7 +538,7 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
     });
     let peers: Vec<&rimz::agents::AgentState> = snapshot.pane_bound_roots().collect();
     assert!(
-        rimz::harness::target::agent_handle(bound, &peers, true).starts_with("@coder"),
+        rimz::address::agent_handle(bound, &peers, true).starts_with("@coder"),
         "resumed session keeps its role address"
     );
 

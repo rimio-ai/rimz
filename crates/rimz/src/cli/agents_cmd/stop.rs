@@ -16,14 +16,13 @@ pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) ->
     let snapshot = ctx.cached_snapshot()?;
     let current_channel = ctx.channel();
     if all && reference != "@me" {
-        let agents =
-            rimz::harness::target::resolve_many(&snapshot, &reference, None, current_channel)?;
-        let peers = rimz::harness::target::addressable_agents(&snapshot);
+        let agents = rimz::address::resolve_many(&snapshot, &reference, None, current_channel)?;
+        let peers = rimz::address::addressable_agents(&snapshot);
         let mut tracker = StopTracker::default();
         let mut failed = false;
         let mut out = render::out();
         for agent in agents {
-            let label = rimz::harness::target::agent_handle(agent, &peers, true);
+            let label = rimz::address::agent_handle(agent, &peers, true);
             match stop_live_agent_tree(
                 workspace,
                 store,
@@ -50,7 +49,7 @@ pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) ->
         crate::cli::resolve_agent_one(store, &snapshot, &reference, None, current_channel);
     let live_agent = live_agent_result.as_ref().ok().copied();
     if let Some(live_agent) = live_agent {
-        let peers = rimz::harness::target::addressable_agents(&snapshot);
+        let peers = rimz::address::addressable_agents(&snapshot);
         stop_live_agent_tree(
             workspace,
             store,
@@ -71,10 +70,10 @@ pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) ->
 }
 
 fn stop_resolve_error(err: anyhow::Error, reference: &str) -> anyhow::Error {
-    let Some(target_err) = err.downcast_ref::<rimz::TargetErr>() else {
+    let Some(target_err) = err.downcast_ref::<rimz::address::TargetErr>() else {
         return err;
     };
-    if matches!(target_err, rimz::TargetErr::Ambiguous { .. }) {
+    if matches!(target_err, rimz::address::TargetErr::Ambiguous { .. }) {
         anyhow::anyhow!(
             "{target_err}; re-run `rimz agents stop {reference} --all` to stop every match"
         )
@@ -103,7 +102,7 @@ pub(in crate::cli) fn stop_resolved(
     agent: &AgentState,
     tracker: &mut StopTracker,
 ) -> Result<bool> {
-    let peers = rimz::harness::target::addressable_agents(snapshot);
+    let peers = rimz::address::addressable_agents(snapshot);
     let current = snapshot
         .agents
         .iter()
@@ -134,13 +133,13 @@ fn stop_live_agent_tree(
         return Ok(false);
     }
 
-    let parent_label = rimz::harness::target::agent_handle(agent, peers, true);
+    let parent_label = rimz::address::agent_handle(agent, peers, true);
     let mut failures = Vec::new();
-    for child in rimz::harness::target::launched_children(&snapshot.agents, agent)
+    for child in rimz::address::launched_children(&snapshot.agents, agent)
         .into_iter()
         .filter(|child| child.ended_at.is_none())
     {
-        let child_label = rimz::harness::target::agent_handle(child, peers, true);
+        let child_label = rimz::address::agent_handle(child, peers, true);
         match stop_live_agent_tree(workspace, store, globals, snapshot, peers, child, tracker) {
             Ok(true) => writeln!(
                 render::out(),

@@ -484,7 +484,7 @@ fn reject_launch_flags_without_spec(args: &SubagentLaunchArgs) -> Result<()> {
 
 fn caller_and_children(agents: &[AgentState]) -> Result<(&AgentState, Vec<&AgentState>)> {
     let caller = rimz::harness::ancestry::resolve_calling_agent(agents)?;
-    let children = rimz::harness::target::launched_children(agents, caller);
+    let children = rimz::address::launched_children(agents, caller);
     Ok((caller, children))
 }
 
@@ -542,8 +542,8 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
     });
     let scope = list_scope(caller.is_some());
     let children = match caller {
-        Some(caller) => rimz::harness::target::launched_children(&audit.agents, caller),
-        None => rimz::harness::target::launched_children_in_channel(&audit.agents, ctx.channel()),
+        Some(caller) => rimz::address::launched_children(&audit.agents, caller),
+        None => rimz::address::launched_children_in_channel(&audit.agents, ctx.channel()),
     };
     let runs = rimz::harness::run::list(ctx.store.paths())?;
     let reports = child_reports(&audit.agents, &children, &runs);
@@ -603,8 +603,8 @@ fn child_reports(
             ChildReport {
                 handle: format!("@{name}"),
                 name,
-                parent: rimz::harness::target::launched_parent(agents, child)
-                    .map(|parent| rimz::harness::target::agent_handle(parent, &peers, false))
+                parent: rimz::address::launched_parent(agents, child)
+                    .map(|parent| rimz::address::agent_handle(parent, &peers, false))
                     .unwrap_or_else(|| {
                         format!(
                             "@{}",
@@ -740,7 +740,7 @@ fn stop_children(names: Vec<String>, all: bool, globals: &GlobalFlags) -> Result
         bail!("this agent has no live subagents to stop");
     }
     let runs = rimz::harness::run::list(ctx.store.paths())?;
-    let peers = rimz::harness::target::addressable_agents(&snapshot);
+    let peers = rimz::address::addressable_agents(&snapshot);
     let mut tracker = agents_cmd::StopTracker::default();
     let mut out = render::out();
     // Prepare the whole fleet before any cancellation wakes a child reporter.
@@ -748,11 +748,11 @@ fn stop_children(names: Vec<String>, all: bool, globals: &GlobalFlags) -> Result
         prepare_children_for_stop(&ctx.store, &ctx.workspace.session_name, &runs, children);
     let mut failed = !errors.is_empty();
     for (child, err) in errors {
-        let label = rimz::harness::target::agent_handle(child, &peers, true);
+        let label = rimz::address::agent_handle(child, &peers, true);
         writeln!(out, "error {label}: {err:#}")?;
     }
     for child in children {
-        let label = rimz::harness::target::agent_handle(child, &peers, true);
+        let label = rimz::address::agent_handle(child, &peers, true);
         match agents_cmd::stop_resolved(&ctx, globals, &snapshot, child, &mut tracker) {
             Ok(true) => writeln!(out, "stopped {label}")?,
             Ok(false) => {}
@@ -804,7 +804,7 @@ fn resolve_child_names<'a>(
     names
         .iter()
         .map(|name| {
-            rimz::harness::target::resolve_agent(name, None, None, children)
+            rimz::address::resolve_agent(name, None, None, children)
                 .with_context(|| format!("`{name}` is not one of this agent's subagents"))
         })
         .collect()

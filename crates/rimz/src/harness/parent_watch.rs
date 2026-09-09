@@ -237,8 +237,8 @@ fn resolve_parent_and_child<'a>(
     child_kind: &AgentKind,
     child_launch_id: &AgentSessionId,
 ) -> Option<(&'a AgentState, &'a AgentState)> {
-    let child = crate::harness::target::launch_row(agents, child_kind, child_launch_id)?;
-    let parent = crate::harness::target::launched_parent(agents, child)?;
+    let child = crate::address::launch_row(agents, child_kind, child_launch_id)?;
+    let parent = crate::address::launched_parent(agents, child)?;
     Some((parent, child))
 }
 

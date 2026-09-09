@@ -6,7 +6,7 @@ use anyhow::{Result, bail};
 use jiff::Timestamp;
 
 use super::*;
-use rimz::TargetErr;
+use rimz::address::TargetErr;
 use rimz::message::dispatch::{
     ConditionErr, ConditionKind, DispatchErr, DispatchMode, DispatchRequest, ReplyRequest,
     WhenRequest,
@@ -64,7 +64,7 @@ pub(super) fn send_message(
     send::validate_reply_wait(wait, !no_enter, create, scheduled)?;
     let text = resolve_message(&text, file.as_deref(), piped.as_deref())?;
     let mode = dispatch_mode(mode, !no_enter, force, create, smart_compact)?;
-    rimz::harness::target::require_mention(&target)?;
+    rimz::address::require_mention(&target)?;
     let target = if target == "@me" {
         let snapshot = ctx.cached_snapshot()?;
         let agent =
@@ -356,10 +356,10 @@ pub(super) fn message_miss(
 ) -> Result<()> {
     let mut out = render::err();
     writeln!(out, "{err:#}")?;
-    let agents = rimz::harness::target::addressable_agents(snapshot)
+    let agents = rimz::address::addressable_agents(snapshot)
         .into_iter()
         .filter(|agent| {
-            channel.is_none_or(|filter| rimz::harness::target::agent_in_worktree(agent, filter))
+            channel.is_none_or(|filter| rimz::address::agent_in_worktree(agent, filter))
         })
         .collect::<Vec<_>>();
     if agents.is_empty() {

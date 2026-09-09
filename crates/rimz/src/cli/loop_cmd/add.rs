@@ -591,7 +591,7 @@ fn resolve_delivery_target(
             "`{address}` has not registered a real session yet; run /schedule from inside the agent pane"
         );
     }
-    let peers = rimz::harness::target::addressable_agents(&snapshot);
+    let peers = rimz::address::addressable_agents(&snapshot);
     let caller = crate::cli::send::resolve_caller(&store)?;
     let scope = caller
         .as_ref()
@@ -607,7 +607,7 @@ fn resolve_delivery_target(
         TaskTarget {
             kind: agent.kind.clone(),
             session: agent.agent_id.clone(),
-            handle: rimz::harness::target::agent_handle(agent, &peers, true),
+            handle: rimz::address::agent_handle(agent, &peers, true),
         },
         matches,
     ))

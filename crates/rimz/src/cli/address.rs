@@ -16,7 +16,7 @@ pub(in crate::cli) fn message_target(
         .iter()
         .copied()
         .find(|agent| AgentCardRef::new(kind, agent_id, agent_name).matches(agent.card_ref()))
-        .map(|agent| rimz::harness::target::agent_handle(agent, agents, true))
+        .map(|agent| rimz::address::agent_handle(agent, agents, true))
         .or_else(|| {
             let agent_name = agent_name.filter(|value| !value.is_empty())?;
             let mut rendered = format!("@{agent_name}");

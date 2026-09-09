@@ -1028,7 +1028,7 @@ fn tmux_resumed_parent_session_switch_keeps_subagent_nested() {
         .runtime_projection(rimz::RuntimeScope::Audit)
         .unwrap();
     let current_parent =
-        rimz::harness::target::launch_row(&before_exit.agents, &new.kind, &launch_id).unwrap();
+        rimz::address::launch_row(&before_exit.agents, &new.kind, &launch_id).unwrap();
     assert_eq!(
         current_parent.pane.as_ref().unwrap().pane_id.raw(),
         parent_pane,

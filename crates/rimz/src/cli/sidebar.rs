@@ -1338,7 +1338,7 @@ fn resolve_sidebar_targets(
     target: &str,
     worktree: Option<&str>,
 ) -> Result<ResolvedSidebarTargets> {
-    rimz::harness::target::require_mention(target)?;
+    rimz::address::require_mention(target)?;
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let state = StatePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing state paths")?;

@@ -59,7 +59,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let store = &ctx.store;
     let snapshot = ctx.cached_snapshot()?;
-    let peers = rimz::harness::target::addressable_agents(&snapshot);
+    let peers = rimz::address::addressable_agents(&snapshot);
     let agent = resolve_current_agent(store, &snapshot, &args.target, ctx.channel())
         .unwrap_or_else(|message| answer_exit(2, &message));
     let detail = rimz::agents::read_open_ask(store.paths(), agent)
@@ -82,7 +82,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
     } else {
         (kind.clone(), agent_id.clone())
     };
-    let handle = rimz::harness::target::agent_handle(agent, &peers, true);
+    let handle = rimz::address::agent_handle(agent, &peers, true);
     let adapter = rimz::agents::definition_by_kind(kind.as_str())
         .unwrap_or_else(|err| answer_exit(3, &err.to_string()));
     if let Err(AnswerPlanErr::Unsupported(kind)) =

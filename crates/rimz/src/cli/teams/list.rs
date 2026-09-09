@@ -381,7 +381,7 @@ fn live_instances(
     catalog: LiveCatalog<'_>,
 ) -> BTreeMap<String, Vec<LiveInstance>> {
     let snapshot = catalog.snapshot;
-    let cohorts = rimz::harness::target::team_cohorts(&snapshot.agents)
+    let cohorts = rimz::address::team_cohorts(&snapshot.agents)
         .into_iter()
         .filter(|cohort| {
             catalog
@@ -509,7 +509,7 @@ fn live_instances(
                             live_signal(name, task.entry(), task.source(), &instance, agent)
                         })
                         .collect(),
-                    handle: rimz::harness::target::agent_handle(agent, &members, false),
+                    handle: rimz::address::agent_handle(agent, &members, false),
                     kind: agent.kind.to_string(),
                     status,
                     phase: if status == AgentStatus::Running {

@@ -1011,6 +1011,31 @@ fn normalize_budget(budget: &mut Option<String>, profile: &str) -> Result<()> {
     Ok(())
 }
 
+/// The room channel a launch runs in: an explicit named lane wins, else a
+/// separate worktree's directory name, else an in-place `<dir>/<team>` stamped
+/// here, else `None`. This is the launch-side peer of the CLI's current-channel
+/// resolution, so stamped agent identity and human commands agree.
+pub fn resolve_room_channel(
+    project_root: &Path,
+    cwd: &Path,
+    team: Option<&str>,
+    explicit: Option<&str>,
+) -> Option<String> {
+    if let Some(channel) = explicit.filter(|channel| !channel.is_empty()) {
+        return Some(channel.to_owned());
+    }
+    if cwd != project_root {
+        return cwd
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned());
+    }
+    let team = team.filter(|team| !team.is_empty())?;
+    match project_root.file_name().and_then(|name| name.to_str()) {
+        Some(dir) if !dir.is_empty() => Some(format!("{dir}/{team}")),
+        _ => Some(team.to_owned()),
+    }
+}
+
 /// The default tab title for a launch. Worktree launches use the `#channel`
 /// spelling shared with agent addresses; a named-team launch uses
 /// `team:<name>`; otherwise the title lists up to three cells in layout order

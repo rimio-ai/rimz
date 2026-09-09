@@ -396,8 +396,8 @@ fn fire_if_due(agent: &AgentState, path: &Path, ctx: FireContext<'_>) {
     let Some(pane_id) = ctx.snapshot.live_agent_pane(&agent.kind, &agent.agent_id) else {
         return;
     };
-    let peers = crate::harness::target::addressable_agents(ctx.snapshot);
-    let label = crate::harness::target::agent_handle(agent, &peers, false);
+    let peers = crate::address::addressable_agents(ctx.snapshot);
+    let label = crate::address::agent_handle(agent, &peers, false);
     if !spawn_auto_continue(
         ctx.runtime,
         &agent.kind,

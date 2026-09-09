@@ -5,10 +5,10 @@ use std::collections::BTreeSet;
 use serde_json::{Map, Value, json};
 
 use super::Signal;
+use crate::address::agent_handle;
 use crate::agents::{
     AgentState, AgentStatus, LifecycleEvent, LifecycleSignal, LifecycleTransition,
 };
-use crate::harness::target::agent_handle;
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::event::SignalSource;
 use crate::store::message::MessageRecord;
@@ -135,8 +135,8 @@ pub fn team_lifecycle_signals(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::address::team_cohorts;
     use crate::agents::{AskKind, TurnPhase};
-    use crate::harness::target::team_cohorts;
     use crate::ids::{AgentSessionId, EventId, WorkspaceId};
     use crate::store::message::DeliveryGate;
 

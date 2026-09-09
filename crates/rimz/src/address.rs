@@ -1,4 +1,5 @@
 //! Agent-address parsing, rendering, and live pane binding.
+//! Owns the launch-instance grouping and lineage projections used by addresses.
 //!
 //! The address grammar is `@<handle>#<channel>` (the canonical handle is the
 //! inverse of the parser). Pane binding joins resolved panes to exact lifecycle
@@ -28,7 +29,6 @@
 //! agent.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use crate::agents::AgentState;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, compose_channel};
@@ -134,7 +134,7 @@ trait Candidate<'a>: Copy {
     fn in_worktree(self, filter: &str) -> bool {
         let branch_style_filter = filter
             .contains('/')
-            .then(|| crate::worktree::dashed_name(filter));
+            .then(|| crate::ids::dashed_name(filter));
         if let Some(channel) = self.channel().filter(|channel| !channel.is_empty()) {
             return channel == filter || branch_style_filter.as_deref() == Some(channel);
         }
@@ -860,31 +860,6 @@ pub fn path_basename(path: &str) -> Option<&str> {
     path.rsplit('/').next().filter(|value| !value.is_empty())
 }
 
-/// The room channel a launch runs in: an explicit named lane wins, else a
-/// separate worktree's directory name, else an in-place `<dir>/<team>` stamped
-/// here, else `None`. This is the launch-side peer of the CLI's current-channel
-/// resolution, so stamped agent identity and human commands agree.
-pub fn resolve_room_channel(
-    project_root: &Path,
-    cwd: &Path,
-    team: Option<&str>,
-    explicit: Option<&str>,
-) -> Option<String> {
-    if let Some(channel) = explicit.filter(|channel| !channel.is_empty()) {
-        return Some(channel.to_owned());
-    }
-    if cwd != project_root {
-        return cwd
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned());
-    }
-    let team = team.filter(|team| !team.is_empty())?;
-    match project_root.file_name().and_then(|name| name.to_str()) {
-        Some(dir) if !dir.is_empty() => Some(format!("{dir}/{team}")),
-        _ => Some(team.to_owned()),
-    }
-}
-
 /// One live launch of a configured team in a lane.
 #[derive(Clone, Debug)]
 pub struct TeamCohort<'a> {
@@ -990,7 +965,7 @@ fn launch_occupants(agents: &[AgentState]) -> impl Iterator<Item = &AgentState> 
         .filter_map(|group| launch_occupant(&group))
 }
 
-pub(super) fn launch_occupants_from<'a>(
+pub(crate) fn launch_occupants_from<'a>(
     agents: impl IntoIterator<Item = &'a AgentState>,
 ) -> Vec<&'a AgentState> {
     launch_groups_from(agents)

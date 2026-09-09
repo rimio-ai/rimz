@@ -75,8 +75,8 @@ pub(crate) fn compact_idle_agents(
         let (Some(command), Some(occupied)) = (command, occupied) else {
             continue;
         };
-        let peers = crate::harness::target::addressable_agents(snapshot);
-        let label = crate::harness::target::agent_handle(agent, &peers, false);
+        let peers = crate::address::addressable_agents(snapshot);
+        let label = crate::address::agent_handle(agent, &peers, false);
         if spawn_idle_compact(
             runtime,
             &agent.kind,

@@ -20,6 +20,7 @@
 #![deny(clippy::print_stdout)]
 #![deny(clippy::print_stderr)]
 
+pub mod address;
 pub mod agent_activity;
 pub mod agents;
 pub mod build_id;
@@ -69,7 +70,6 @@ pub use crate::agents::{
 };
 pub use crate::disk::paths::{RuntimePaths, StatePaths};
 pub use crate::harness::run_wake::RunWakeErr;
-pub use crate::harness::target::TargetErr;
 pub use crate::ids::{
     AskId, EventId, MessageId, MuxName, PaneId, RunId, SidebarInstanceId, ViewKind, WorkspaceId,
 };

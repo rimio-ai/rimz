@@ -45,7 +45,7 @@ pub(super) fn launch_layout(
     let mut inferred_lane = None;
     if let (Some(spec), Some(channel)) = (args.launch.spec.as_deref(), lane) {
         let snapshot = ctx.cached_snapshot()?;
-        if let Some(team) = rimz::harness::target::channel_team(&snapshot.agents, channel) {
+        if let Some(team) = rimz::address::channel_team(&snapshot.agents, channel) {
             let qualified = rimz::harness::spec::qualify_spec_in_channel(
                 spec,
                 channel,
@@ -268,7 +268,7 @@ pub(super) fn launch_layout(
     // An inferred lane joins the exact channel it was inferred from, rather than
     // one recomputed from the caller's cwd — a shell pane that has `cd`'d into a
     // subdirectory would otherwise stamp that subdirectory's basename.
-    let room_channel = rimz::harness::target::resolve_room_channel(
+    let room_channel = rimz::harness::spec::resolve_room_channel(
         &workspace.project_root,
         &launch.cwd,
         team_name.as_deref(),
@@ -417,7 +417,7 @@ fn launch_resume_layout(
     if let Some(team) = team_name.as_deref().and_then(|name| teams.0.get(name)) {
         rimz::worktree::exclude_team_scratch(&cwd, &team.scratch_files);
     }
-    let channel = rimz::harness::target::resolve_room_channel(
+    let channel = rimz::harness::spec::resolve_room_channel(
         &workspace.project_root,
         &cwd,
         team_name.as_deref(),

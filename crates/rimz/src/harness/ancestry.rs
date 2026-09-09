@@ -213,7 +213,7 @@ pub fn resolve_launch_caller<'a>(
     caller: &CallerIdentity,
 ) -> Result<&'a crate::agents::AgentState, LaunchAncestryError> {
     let resolved = if let Some(launch_id) = caller.launch_id.as_ref() {
-        super::target::launch_row(agents, &caller.kind, launch_id)
+        crate::address::launch_row(agents, &caller.kind, launch_id)
     } else {
         let pane_id = caller
             .pane_id
