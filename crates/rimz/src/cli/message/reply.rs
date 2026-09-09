@@ -84,8 +84,7 @@ fn present_update(
 ) -> Result<Option<RunStatus>> {
     let winner = update.join.as_ref().and_then(|join| join.winner.as_ref());
     for result in update.settled {
-        let is_winner = winner.is_none_or(|message_id| *message_id == result.message_id);
-        if wait.any && !is_winner {
+        if winner.is_some_and(|message_id| *message_id != result.message_id) {
             continue;
         }
         if total == 1
@@ -100,9 +99,6 @@ fn present_update(
             spinner.resume();
         }
         gathered.insert(result.label.clone(), result);
-        if wait.any && is_winner {
-            break;
-        }
     }
     let Some(join) = update.join else {
         return Ok(None);
