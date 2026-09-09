@@ -745,7 +745,7 @@ fn cohort_resume_selects_closed_profile_parent_over_live_child_and_dead_placehol
         .iter()
         .find(|agent| agent.agent_id == parent_id)
         .expect("closed parent");
-    assert!(parent.is_root() && parent.ended_at.is_some());
+    assert!(parent.parent_agent_id.is_none() && parent.ended_at.is_some());
     let placeholder = projection
         .agents
         .iter()
