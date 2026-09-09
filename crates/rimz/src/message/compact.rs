@@ -1,7 +1,5 @@
 //! Standalone native compaction through the durable, boundary-only command queue.
 
-use std::time::Duration;
-
 use jiff::Timestamp;
 
 use crate::Store;
@@ -106,7 +104,6 @@ pub fn send_compact(
         workspace,
         store,
         &message.message_id,
-        Duration::ZERO,
         Some(mux),
         DeliveryPolicy::Boundary,
     )? {

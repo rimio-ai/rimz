@@ -150,7 +150,6 @@ fn report_fleet_with_kind(
             workspace,
             store,
             &message_id,
-            std::time::Duration::ZERO,
             Some(pane_id.mux()),
             DeliveryPolicy::Boundary,
         )?,

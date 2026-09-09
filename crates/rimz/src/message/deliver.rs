@@ -195,7 +195,6 @@ pub fn nudge_now(
         workspace,
         store,
         &message.message_id,
-        Duration::ZERO,
         Some(pane_id.mux()),
         DeliveryPolicy::Boundary,
     )?;
@@ -206,13 +205,9 @@ pub fn deliver_one(
     workspace: &ResolvedWorkspace,
     store: &Store,
     message_id: &MessageId,
-    settle: Duration,
     mux: Option<MuxName>,
     policy: DeliveryPolicy,
 ) -> Result<bool> {
-    if !settle.is_zero() {
-        std::thread::sleep(settle);
-    }
     let pending = store.list_pending_messages()?;
     let mut snapshot = crate::sidebar::produce::resolution_snapshot(workspace, store, mux)?;
     if let Ok(runtime) = RuntimePaths::for_workspace(workspace.workspace_id.clone()) {
@@ -281,8 +276,7 @@ fn attempt_delivery(
             return Ok(false);
         }
     }
-    // Hook delivery handles one claimed batch; settle above owns any
-    // pre-delivery spacing, so this pacer's first tick stays a no-op.
+    // Hook delivery handles one claimed batch; the caller's settle owns any pre-delivery spacing, so this pacer's first tick stays a no-op.
     let mut live_send = send::LiveSend {
         force: claimed[0].force || matches!(policy, DeliveryPolicy::Steer { force: true }),
         steer: matches!(policy, DeliveryPolicy::Steer { .. }),

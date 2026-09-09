@@ -10,7 +10,6 @@
 
 use anyhow::{Context, Result};
 use jiff::Timestamp;
-use std::time::Duration;
 
 use rimz::harness::AutoContinueRequest;
 use rimz::harness::assist_log::{Assist, AssistRecord};
@@ -52,7 +51,6 @@ pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
                 workspace,
                 store,
                 &message_id,
-                Duration::ZERO,
                 Some(request.pane_id.mux()),
                 deliver::DeliveryPolicy::Boundary,
             )
