@@ -208,6 +208,10 @@ fn profile_scope_selects_the_doorway_namespace_and_kind_shadowing() {
     )
     .expect("agent profile");
     assert_eq!(
+        cohort_cells(&agent.layout)[0].profile.as_deref(),
+        Some("shared")
+    );
+    assert_eq!(
         agent
             .layout
             .agent_cells()

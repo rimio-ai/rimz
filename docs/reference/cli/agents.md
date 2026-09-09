@@ -123,11 +123,12 @@ rimz agents forge --resume                           # reopen the newest closed 
 rimz agents forge -w restore-living-team --resume    # reopen that exact team instance
 rimz agents claude,codex --resume                    # reopen the newest matching inline cohort
 rimz agents claude --resume                          # resume the freshest closed Claude session
+rimz agents astra --resume                           # resume the freshest closed session launched from the astra profile
 ```
 
 What matches what:
 
-- A team resumes by team name and role; an inline multi-agent spec resumes by the saved launch group and cell order; a single kind resumes the freshest closed root session of that kind.
+- A team resumes by team name and role; an inline multi-agent spec resumes by the saved launch group and cell order; a single kind resumes the freshest closed root session of that kind; a profile resumes the freshest closed root session launched from that profile.
 - Add `-w <NAME>` to resume that exact worktree's cohort. Use bare `-w`, or omit the flag while running inside a worktree, to scope resume to that worktree; run from the project root to keep the room-wide newest-by-spec behavior.
 - Cleanly closed cohort members still match when their worktree exists. Cells with no resumable prior member launch fresh in the matched cohort's cwd and channel. A matched member that is still live refuses the command, so the room does not duplicate the same address.
 

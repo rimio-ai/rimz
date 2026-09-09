@@ -38,6 +38,8 @@ pub struct ResolvedLaunch {
 pub struct CohortCell {
     pub kind: crate::ids::AgentKind,
     pub role: Option<String>,
+    /// The profile the spec resolved; absent for a bare kind.
+    pub profile: Option<String>,
 }
 
 /// One agent cell's explicit-resume seed.
@@ -702,6 +704,7 @@ pub fn cohort_cells(layout: &LayoutSpec) -> Vec<CohortCell> {
         .map(|cell| CohortCell {
             kind: cell.kind.clone(),
             role: cell.launch.role.clone(),
+            profile: cell.launch.profile.clone(),
         })
         .collect()
 }

@@ -4,6 +4,141 @@
 use super::*;
 
 #[test]
+fn cohort_resume_ignores_launched_children() {
+    let parent = AgentState {
+        profile: Some("astra".to_owned()),
+        launch_depth: Some(1),
+        ended_at: Some(Timestamp::UNIX_EPOCH),
+        ..agent("codex", "parent", "/code/feature", 30)
+    };
+    let child = AgentState {
+        profile: Some("general".to_owned()),
+        parent_agent_id: Some(parent.agent_id.clone()),
+        launch_depth: Some(2),
+        runtime_owner: Some(crate::store::runtime::current_process_owner(
+            crate::pane::RuntimeOwnerKind::Agent,
+            "child".to_owned(),
+        )),
+        ..agent("codex", "child", "/code/feature", 1)
+    };
+    let agents = [parent, child];
+    for child_live in [true, false] {
+        for cell in [profile_cell("codex", "astra"), cohort_cell("codex", None)] {
+            let plan = cohort_with(
+                &agents,
+                std::slice::from_ref(&cell),
+                None,
+                |row| {
+                    if row.is_launched_child() && child_live {
+                        live(row)
+                    } else {
+                        dead(row)
+                    }
+                },
+                |_| true,
+                |_| true,
+            )
+            .expect("child does not compete with root");
+            assert_eq!(resume_id(&plan.seeds[0]), Some("parent"));
+            assert_eq!(
+                inspect_cohort_relaunch(&agents, Path::new("/code/feature"), &[cell], None,),
+                CohortRelaunchState::Closed,
+            );
+        }
+    }
+    assert_eq!(closed_cohort_specs(&agents, dead), ["astra"]);
+}
+
+#[test]
+fn single_cell_resume_matches_requested_profile() {
+    let astra = AgentState {
+        profile: Some("astra".to_owned()),
+        ..agent("codex", "astra-session", "/code/feature", 30)
+    };
+    let debugger = AgentState {
+        profile: Some("debugger".to_owned()),
+        ..agent("codex", "debugger-session", "/code/feature", 10)
+    };
+    let agents = [astra, debugger, agent("codex", "bare", "/code/feature", 1)];
+    for (cell, expected) in [
+        (profile_cell("codex", "astra"), "astra-session"),
+        (profile_cell("codex", "debugger"), "debugger-session"),
+        (cohort_cell("codex", None), "bare"),
+    ] {
+        let plan = cohort(&agents, &[cell], None).expect("matching root");
+        assert_eq!(resume_id(&plan.seeds[0]), Some(expected));
+    }
+    assert_eq!(
+        cohort(&agents, &[profile_cell("codex", "nova")], None),
+        Err(CohortResumeErr::NothingToResume {
+            spec: "nova".to_owned(),
+        }),
+    );
+    assert!(matches!(
+        cohort_with(
+            &agents,
+            &[profile_cell("codex", "astra")],
+            None,
+            live,
+            |_| true,
+            |_| true,
+        ),
+        Err(CohortResumeErr::MembersStillLive { labels })
+            if labels == [cohort_agent_label(&agents[0])],
+    ));
+    let plan = cohort(&agents[..2], &[cohort_cell("codex", None)], None)
+        .expect("bare kind also matches profiled roots");
+    assert_eq!(resume_id(&plan.seeds[0]), Some("debugger-session"));
+}
+
+#[test]
+fn dead_placeholder_does_not_shadow_the_conversation() {
+    let session = AgentState {
+        profile: Some("astra".to_owned()),
+        ..agent("codex", "session", "/code/feature", 30)
+    };
+    let placeholder = AgentState {
+        profile: Some("astra".to_owned()),
+        ..agent(
+            "codex",
+            "launch_019f2cecea067320b667c5946d266e64",
+            "/code/feature",
+            1,
+        )
+    };
+    let agents = [session, placeholder];
+    let cells = [profile_cell("codex", "astra")];
+    for liveness in [AgentLiveness::Dead, AgentLiveness::Unknown] {
+        let plan = cohort_with(&agents, &cells, None, |_| liveness, |_| true, |_| true)
+            .expect("placeholder has no conversation to shadow the root");
+        assert_eq!(resume_id(&plan.seeds[0]), Some("session"));
+        assert_eq!(
+            cohort_with(&agents[1..], &cells, None, |_| liveness, |_| true, |_| true),
+            Err(CohortResumeErr::NothingToResume {
+                spec: "astra".to_owned(),
+            }),
+        );
+    }
+    assert_eq!(
+        cohort_with(
+            &agents,
+            &cells,
+            None,
+            |row| if row.agent_id.is_provisional() {
+                live(row)
+            } else {
+                dead(row)
+            },
+            |_| true,
+            |_| true,
+        ),
+        Err(CohortResumeErr::MembersStillLive {
+            labels: vec![cohort_agent_label(&agents[1])],
+        }),
+    );
+}
+
+#[test]
 fn cohort_resume_selects_newest_team_member_per_role() {
     let old_planner = team_agent("claude", "old-planner", "planner", "/code/forge", 30);
     let planner = AgentState {
@@ -199,8 +334,6 @@ fn cohort_refuses_live_and_unmatched_specs() {
 /// not there.
 #[test]
 fn cohort_relaunches_an_unresumable_match_fresh() {
-    let provisional = "launch_019f2cecea067320b667c5946d266e64";
-
     for (label, agents, cells, team, redeemable, fresh, cwd) in [
         (
             "a kind with no resume CLI",
@@ -210,15 +343,6 @@ fn cohort_relaunches_an_unresumable_match_fresh() {
             true,
             "ghost:query-engine",
             "/code/query-engine",
-        ),
-        (
-            "a provisional launch placeholder",
-            vec![team_agent("codex", provisional, "coder", "/code/pets-l", 4)],
-            vec![cohort_cell("codex", Some("coder"))],
-            Some("forge"),
-            true,
-            "codex:pets-l",
-            "/code/pets-l",
         ),
         (
             "a session the provider never persisted",
@@ -530,6 +654,18 @@ fn team_restore_tabs_seed_every_declared_role() {
             vec![coder, planner.clone()],
             teams.clone(),
             Some(vec![Some("planner"), Some("coder")]),
+        ),
+        (
+            "a team with only an unadopted placeholder has nothing to restore",
+            vec![team_agent(
+                "codex",
+                "launch_019f2cecea067320b667c5946d266e64",
+                "coder",
+                "/repo/forge",
+                1,
+            )],
+            teams.clone(),
+            None,
         ),
         (
             "a missing member launches fresh beside the resumed one",
