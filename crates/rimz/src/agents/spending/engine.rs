@@ -2,7 +2,7 @@
 //! walk feeding the enrichment spine's global `value_tally`, per-workspace
 //! `workspace_value_tally`, and per-provider dashboard folds.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -369,16 +369,11 @@ fn walk_fleet_spending_files(
             now_secs,
             context.headline,
         );
-        let workspace = WorkspaceSpendingCache {
-            version: WORKSPACE_SPENDING_VERSION,
+        let workspace = WorkspaceSpendingCache::from_scoped(
+            scope_hash.as_deref().unwrap_or_default(),
             refreshed_at_ms,
-            scope_hash: scope_hash.clone().unwrap_or_default(),
-            tally: scoped.tally,
-            headline_cutoff_secs: scoped.headline_cutoff_secs,
-            day: scoped.day,
-            day_cutoff_secs: scoped.day_cutoff_secs,
-            live_baselines: scoped.live_baselines,
-        };
+            scoped,
+        );
         let provider = ProviderSpendingCache::from_walk(&result, refreshed_at_ms);
         if publish {
             // Stamp the empty result too: an agentless machine must not re-run
@@ -442,15 +437,7 @@ fn walk_fleet_spending_files(
     let refreshed_at_ms = unix_now_ms();
     let provider = ProviderSpendingCache::from_walk(&result, refreshed_at_ms);
     let workspace = if let Some(scope_hash) = scope_hash.as_deref() {
-        reconciled_workspace_cache(
-            scope_hash,
-            refreshed_at_ms,
-            result.workspace_tally.clone(),
-            result.workspace_headline_cutoff_secs,
-            result.workspace_day,
-            result.day_cutoff_secs,
-            result.workspace_live_baselines,
-        )
+        WorkspaceSpendingCache::from_scoped(scope_hash, refreshed_at_ms, result.workspace)
     } else {
         WorkspaceSpendingCache {
             version: WORKSPACE_SPENDING_VERSION,
@@ -504,44 +491,14 @@ impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
         let provider = ProviderSpendingCache::from_walk(&result, refreshed_at_ms);
         crate::agents::spending::write_provider_spending_cache(&self.provider_path, &provider);
         if let Some(scope_hash) = self.scope_hash.as_deref() {
-            let workspace = reconciled_workspace_cache(
-                scope_hash,
-                refreshed_at_ms,
-                result.workspace_tally,
-                result.workspace_headline_cutoff_secs,
-                result.workspace_day,
-                result.day_cutoff_secs,
-                result.workspace_live_baselines,
-            );
+            let workspace =
+                WorkspaceSpendingCache::from_scoped(scope_hash, refreshed_at_ms, result.workspace);
             crate::agents::spending::write_workspace_spending_cache(
                 &self.runtime.workspace_spending_path(scope_hash),
                 &workspace,
             );
             prune_workspace_spending_siblings(self.runtime, scope_hash);
         }
-    }
-}
-
-fn reconciled_workspace_cache(
-    scope_hash: &str,
-    refreshed_at_ms: u64,
-    tally: crate::agents::spending::SpendTally,
-    headline_cutoff_secs: u64,
-    day: crate::agents::spending::SpendWindow,
-    day_cutoff_secs: u64,
-    live_baselines: BTreeMap<String, f64>,
-) -> crate::agents::spending::WorkspaceSpendingCache {
-    use crate::agents::spending::{WORKSPACE_SPENDING_VERSION, WorkspaceSpendingCache};
-
-    WorkspaceSpendingCache {
-        version: WORKSPACE_SPENDING_VERSION,
-        refreshed_at_ms,
-        scope_hash: scope_hash.to_owned(),
-        tally,
-        headline_cutoff_secs,
-        day,
-        day_cutoff_secs,
-        live_baselines,
     }
 }
 
@@ -583,16 +540,8 @@ fn workspace_cache_from_shared_entries_inner(
     if !provider.spending.total.is_zero() && !cached.has_discovered_file {
         return None;
     }
-    let scoped = cached.scoped;
-    let workspace = reconciled_workspace_cache(
-        scope_hash,
-        provider.refreshed_at_ms,
-        scoped.tally,
-        scoped.headline_cutoff_secs,
-        scoped.day,
-        scoped.day_cutoff_secs,
-        scoped.live_baselines,
-    );
+    let workspace =
+        WorkspaceSpendingCache::from_scoped(scope_hash, provider.refreshed_at_ms, cached.scoped);
     let workspace = serve_prev_on_young_regression(
         matching_workspace_cache(runtime, Some(scope_hash)),
         workspace,

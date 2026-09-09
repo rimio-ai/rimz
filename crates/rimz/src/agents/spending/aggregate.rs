@@ -11,9 +11,9 @@ use sha2::{Digest, Sha256};
 use crate::agents::AgentDefinition;
 use crate::agents::definition::ThreadKey;
 
-use super::SpendingWalkResult;
 use super::cache::{CachedEntry, FileCacheEntry, SpendingDiskCache};
 use super::user_input::UserInputRecord;
+use super::{ScopedSpending, SpendingWalkResult};
 
 type FastHashMap<K, V> = HashMap<K, V, foldhash::fast::RandomState>;
 type FastHashSet<K> = HashSet<K, foldhash::fast::RandomState>;
@@ -300,15 +300,19 @@ pub(crate) fn aggregate_counted_rollups(
 
     SpendingWalkResult {
         spending,
-        workspace_tally,
-        workspace_headline_cutoff_secs: workspace.map(|_| cutoffs.scoped()).unwrap_or_default(),
-        workspace_live_baselines: workspace_session_totals
-            .into_iter()
-            .filter_map(|(session, (youngest, usd))| {
-                within_raw_retain_window(youngest, now_secs).then_some((session.materialize(), usd))
-            })
-            .collect(),
-        workspace_day,
+        workspace: ScopedSpending {
+            tally: workspace_tally,
+            headline_cutoff_secs: workspace.map(|_| cutoffs.scoped()).unwrap_or_default(),
+            live_baselines: workspace_session_totals
+                .into_iter()
+                .filter_map(|(session, (youngest, usd))| {
+                    within_raw_retain_window(youngest, now_secs)
+                        .then_some((session.materialize(), usd))
+                })
+                .collect(),
+            day: workspace_day,
+            day_cutoff_secs,
+        },
         provider_day,
         day_cutoff_secs,
         days,
