@@ -90,7 +90,8 @@ surface-budget = 13
 
 [[module]]
 path = "crates/rimz/src/child_process.rs"
-surface-budget = 14
+# Loop dispatch shares isolated-program spawning with its cgroup handoff.
+surface-budget = 15
 
 [[module]]
 path = "crates/rimz/src/cli"
@@ -147,7 +148,8 @@ upward-dependencies = ["sidebar::refresh"]
 # Delivery specs and team subscriptions share the CLI/library boundary.
 # Read-only pending deliveries are shared by wake listings, hooks and enrichment.
 # Submitted-prompt header grammar now belongs to store.
-surface-budget = 573
+# Loop hosts and check ownership cross the scheduler/CLI/room seams.
+surface-budget = 577
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -253,7 +255,8 @@ upward-dependencies = [
 ]
 # Fresh boundary dispatch shares the queue's in-flight claim predicate.
 # Header grammar moved from harness; lifecycle projection also shares prompt-origin classification.
-surface-budget = 342
+# Exec cleanup probes waiter liveness without owning socket paths.
+surface-budget = 343
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -577,7 +580,8 @@ allowed-dependencies = [
     "utils::time",
     "workspace",
 ]
-surface-budget = 37
+# Check-launch conversion shares ownership lookup and supervised-run shaping.
+surface-budget = 39
 
 [[strangler]]
 symbol = "invalidate_snapshot_caches"
