@@ -1561,11 +1561,9 @@ fn cursor_transcript_recovery_does_not_settle_a_new_active_turn() {
         active.effective_status(),
         rimz::agents::AgentStatus::Running
     );
-    assert!(!rimz::message::gate_open_for_agent(
+    assert!(!rimz::store::message::gate_open(
         rimz::store::message::DeliveryGate::Done,
-        active,
-        false,
-        Timestamp::now(),
+        active.effective_status(),
     ));
 
     std::fs::write(&transcript_path, format!("{active_rewrite}{terminal}")).unwrap();
@@ -1600,11 +1598,9 @@ fn cursor_transcript_recovery_does_not_settle_a_new_active_turn() {
         settled.effective_status(),
         rimz::agents::AgentStatus::Success
     );
-    assert!(rimz::message::gate_open_for_agent(
+    assert!(rimz::store::message::gate_open(
         rimz::store::message::DeliveryGate::Done,
-        settled,
-        false,
-        Timestamp::now(),
+        settled.effective_status(),
     ));
     assert!(
         serde_json::to_string(&env.agent_contexts())

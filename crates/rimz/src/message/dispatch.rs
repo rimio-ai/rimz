@@ -186,7 +186,7 @@ pub enum ConditionErr {
     },
 }
 
-pub type Result<T> = std::result::Result<T, DispatchErr>;
+type Result<T> = std::result::Result<T, DispatchErr>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DispatchErr {

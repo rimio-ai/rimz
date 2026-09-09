@@ -5760,9 +5760,7 @@ fn queue_direct_channel_message(env: &Env, channel: &str, text: &str) -> String 
 }
 
 fn wake_stamp_path(env: &Env) -> PathBuf {
-    env.runtime_paths()
-        .root
-        .join(rimz::message::MESSAGE_WAKE_FILE)
+    env.runtime_paths().root.join("message-wake.json")
 }
 
 fn wait_for_message_event(env: &Env, method: &str, timeout: Duration) {

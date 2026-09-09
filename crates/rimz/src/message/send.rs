@@ -12,7 +12,7 @@ use crate::store::message::{AutoCompact, MessageBody, MessageRecord, MessageSend
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::workspace::ResolvedWorkspace;
 
-pub type Result<T> = std::result::Result<T, SendErr>;
+type Result<T> = std::result::Result<T, SendErr>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SendErr {
@@ -23,7 +23,7 @@ pub enum SendErr {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Receipt {
+pub(super) enum Receipt {
     Sent { compacted: bool },
     SkippedWaiting,
     CompactionPending,
@@ -31,7 +31,7 @@ pub(crate) enum Receipt {
 
 /// How a live-pane send is delivered: whether to send past Waiting, and pacing
 /// state.
-pub(crate) struct LiveSend {
+pub(super) struct LiveSend {
     pub force: bool,
     pub steer: bool,
     pub pacer: Pacer,
@@ -52,7 +52,7 @@ impl LiveSend {
     }
 }
 
-pub(crate) fn send_batch_to_live_pane(
+pub(super) fn send_batch_to_live_pane(
     workspace: &ResolvedWorkspace,
     store: &Store,
     snapshot: &SidebarSnapshot,
