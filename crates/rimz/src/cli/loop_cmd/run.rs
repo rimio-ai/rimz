@@ -95,31 +95,9 @@ pub(super) fn run_one(
         if mode != LoopRunMode::Scheduled || !matches!(action, TaskAction::CheckOnly) {
             return Ok(());
         }
-        let workspace = rimz::WorkspaceResolver::resolve(root, Some(root.to_path_buf()))?;
-        let mux =
-            crate::cli::render::room::present_mux_pick(rimz::room::session::pick_mux_for_session(
-                &workspace.session_name,
-                globals.mux,
-                rimz::room::session::MissingSessionReport::Silent,
-            ))?;
-        crate::cli::render::room::print_notices(rimz::room::session::ensure_single_backend_room(
-            mux,
-            &workspace.session_name,
-        )?)?;
-        let mut room = rimz::room::RoomContext::from_resolved(
-            &workspace,
-            MachineConfig::load_lenient(),
-            mux,
-            rimz::room::RoomSizing::Birth,
-        )?;
-        room.claim_owner()?;
-        crate::cli::render::room::present_birth_outcome(
-            room.birth(rimz::room::RoomBirth::Supervised {
-                cwd: root.to_path_buf(),
-                recovery: rimz::room::AttendedRecovery::RequireExplicitReset,
-            }),
-            room.session_name(),
-        )?;
+        let mut room_globals = globals.clone();
+        room_globals.root = Some(root.to_path_buf());
+        crate::cli::room::ensure_workspace_room_detached(root, &room_globals, true, false)?;
         Ok(())
     });
     if mode == LoopRunMode::Manual
