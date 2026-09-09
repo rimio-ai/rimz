@@ -15,7 +15,7 @@ Compares the working tree with root refactor-target.toml. `--ratchet` fails when
 current values exceed budgets or a dependency is outside its admission list.
 `--tighten` lowers budgets and baselines in place and removes unused dependency
 admissions; it never raises them. Comments and untouched rules are preserved.
-A missing target passes unless --only names a rule.
+A missing target passes; --only with no target fails.
 
   --ratchet  fail on regressions (the checks/gate mode)
   --tighten  lower budgets/baselines and remove unused admissions

@@ -205,6 +205,7 @@ pub(super) fn write(path: &Path, target: &Target) -> Result<()> {
     ] {
         match document.get(key) {
             None if count == 0 => {}
+            Some(item) if count == 0 && item.as_array().is_some_and(|array| array.is_empty()) => {}
             Some(item)
                 if item
                     .as_array_of_tables()
@@ -443,6 +444,20 @@ reason = 'keeps the persistence boundary explicit'
         let error = format!("{:#}", write(&path, &target).unwrap_err());
         assert!(error.contains("requires an existing `upward-dependencies` array"));
         assert_eq!(fs::read_to_string(&path).unwrap(), expected);
+    }
+
+    #[test]
+    fn write_preserves_explicit_empty_rule_arrays() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("target.toml");
+        let fixture =
+            "version = 5\nlayers = []\nmodule = [ ] # no modules\nstrangler = [] # no stranglers\n";
+        fs::write(&path, fixture).unwrap();
+        let target = load(&path).unwrap().unwrap();
+
+        write(&path, &target).unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), fixture);
     }
 
     #[test]
