@@ -116,10 +116,7 @@ pub struct SpendingCaches {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SpendingWalkResult {
     pub spending: Spending,
-    pub workspace_tally: SpendTally,
-    pub workspace_headline_cutoff_secs: u64,
-    pub workspace_live_baselines: BTreeMap<String, f64>,
-    pub workspace_day: SpendWindow,
+    pub workspace: ScopedSpending,
     pub provider_day: BTreeMap<String, SpendWindow>,
     pub day_cutoff_secs: u64,
     pub days: BTreeMap<i64, DaySpend>,
@@ -468,13 +465,7 @@ impl SpendingWalker {
                     .files
                     .contains_key(&file.to_string_lossy().into_owned())
             }),
-            scoped: ScopedSpending {
-                tally: aggregate.workspace_tally,
-                headline_cutoff_secs: aggregate.workspace_headline_cutoff_secs,
-                live_baselines: aggregate.workspace_live_baselines,
-                day: aggregate.workspace_day,
-                day_cutoff_secs: aggregate.day_cutoff_secs,
-            },
+            scoped: aggregate.workspace,
         }
     }
 
@@ -700,13 +691,7 @@ pub fn compute_scoped_spending(
         },
         false,
     );
-    ScopedSpending {
-        tally: aggregate.workspace_tally,
-        headline_cutoff_secs: aggregate.workspace_headline_cutoff_secs,
-        live_baselines: aggregate.workspace_live_baselines,
-        day: aggregate.workspace_day,
-        day_cutoff_secs: aggregate.day_cutoff_secs,
-    }
+    aggregate.workspace
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

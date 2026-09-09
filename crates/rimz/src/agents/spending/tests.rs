@@ -86,7 +86,7 @@ fn compute_spending_with_origins_and_scope(
         },
         false,
     );
-    (aggregate.spending, aggregate.workspace_tally)
+    (aggregate.spending, aggregate.workspace.tally)
 }
 
 fn aggregate_spending(

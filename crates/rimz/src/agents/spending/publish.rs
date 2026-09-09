@@ -9,7 +9,7 @@ use tracing::{debug, warn};
 
 use super::aggregate::{DaySpend, SpendTally, SpendWindow, Spending};
 use super::cache::peek_cache_version;
-use super::{SPENDING_TTL, SpendingWalkResult};
+use super::{SPENDING_TTL, ScopedSpending, SpendingWalkResult};
 
 /// Gates the aggregate meaning in provider-spending.json, independent of the
 /// raw per-file cache version. An older stamp reads as stale, so the producer
@@ -178,6 +178,23 @@ pub struct WorkspaceSpendingCache {
 }
 
 impl WorkspaceSpendingCache {
+    pub(super) fn from_scoped(
+        scope_hash: &str,
+        refreshed_at_ms: u64,
+        scoped: ScopedSpending,
+    ) -> Self {
+        Self {
+            version: WORKSPACE_SPENDING_VERSION,
+            refreshed_at_ms,
+            scope_hash: scope_hash.to_owned(),
+            tally: scoped.tally,
+            headline_cutoff_secs: scoped.headline_cutoff_secs,
+            day: scoped.day,
+            day_cutoff_secs: scoped.day_cutoff_secs,
+            live_baselines: scoped.live_baselines,
+        }
+    }
+
     pub fn is_fresh(&self, now_ms: u64, scope_hash: &str) -> bool {
         self.version == WORKSPACE_SPENDING_VERSION
             && self.scope_hash == scope_hash

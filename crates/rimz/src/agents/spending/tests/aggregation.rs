@@ -262,11 +262,11 @@ fn local_day_rollups_ignore_headline_mode_and_publish_live_baselines() {
             .as_second() as u64
     );
     assert!((rollups.provider_day["claude"].usd - 2.0).abs() < 1e-9);
-    assert_eq!(rollups.workspace_day.usd, 2.0);
-    assert_eq!(rollups.workspace_day.tokens, 15);
-    assert!((rollups.workspace_tally.headline.usd - 3.0).abs() < 1e-9);
+    assert_eq!(rollups.workspace.day.usd, 2.0);
+    assert_eq!(rollups.workspace.day.tokens, 15);
+    assert!((rollups.workspace.tally.headline.usd - 3.0).abs() < 1e-9);
     assert_eq!(
-        rollups.workspace_live_baselines,
+        rollups.workspace.live_baselines,
         BTreeMap::from([
             ("claude:before".to_owned(), 1.0),
             ("claude:live".to_owned(), 2.0),
