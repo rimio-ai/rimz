@@ -6,11 +6,11 @@
 //!   [`write_temp_then_rename_cache`] (rename-atomic, no fsync) for whole
 //!   files.
 //! - [`append_record_bytes`] for the event log — one `write()` per record,
-//!   no fsync; durability rides the write tail's debounced [`sync_file_data`]
+//!   no fsync; durability rides the write tail's debounced `sync_file_data`
 //!   group barrier and the pre-rotation sync.
 //!
 //! No module hand-rolls its own atomic dance, and every fsync syscall in the
-//! project lives in this file (CI grep), counted through [`testkit`]. Frame
+//! project lives in this file (CI grep), counted through `testkit`. Frame
 //! *encoding* lives with its decoder in [`crate::store::event_log`]; this
 //! module owns the syscall discipline alone.
 
@@ -293,7 +293,7 @@ fn create_temp_file(path: &Path, mode: Option<u32>) -> io::Result<File> {
 /// `write()` call per record so a partial write doesn't fragment, and a
 /// parent-dir sync when the append creates the file (file *existence* stays
 /// durable). The record itself carries no fsync — appended bytes ride the
-/// page cache until the write tail's debounced [`sync_file_data`] group
+/// page cache until the write tail's debounced `sync_file_data` group
 /// barrier, or the pre-rename sync in [`crate::store::event_log::rotate`].
 /// Recovery in [`crate::store::event_log::read_all`] tolerates a torn
 /// trailing record, and the frame CRC makes a power-cut's lost writeback

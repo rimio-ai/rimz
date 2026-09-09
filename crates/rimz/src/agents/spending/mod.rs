@@ -6,8 +6,8 @@
 //! elected [`service`] owner of one warm [`SpendingWalker`], aggregates
 //! account-global and workspace-scoped windows, and publishes stamped
 //! provider/workspace caches. Discovery and parsing
-//! dispatch through the adapter ([`AgentDefinition::spending_sources`] /
-//! [`AgentDefinition::parse_spend`]): a dollar-logging provider (Claude's legacy
+//! dispatch through the adapter (`SpendingCapability::spending_sources` /
+//! `SpendingCapability::parse_spend`): a dollar-logging provider (Claude's legacy
 //! `costUSD`, Pi) reads its figures verbatim, a token-only provider (Codex,
 //! current Claude) multiplies counts through the
 //! [`PriceBook`](super::pricing) — either way every file yields

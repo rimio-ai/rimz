@@ -391,7 +391,7 @@ fn pane_env_key(mux: MuxName) -> &'static str {
 }
 
 /// This process's normalized pane id, read from the multiplexer's per-pane env
-/// var via [`pane_from_env_value`]. `None` outside a pane.
+/// var via `pane_from_env_value`. `None` outside a pane.
 pub fn own_pane_id(mux: MuxName) -> Option<PaneId> {
     let raw = std::env::var(pane_env_key(mux))
         .ok()

@@ -68,6 +68,13 @@ const CHECK_ARGS: &[&str] = &[
     "--all-features",
     "--locked",
 ];
+const DOC_ARGS: &[&str] = &[
+    "doc",
+    "--no-deps",
+    "--workspace",
+    "--all-features",
+    "--locked",
+];
 const CARGO_PROGRESS_VERBS: &[&str] = &[
     "Compiling",
     "Checking",
@@ -92,6 +99,16 @@ pub(crate) fn lint(root: &Path) -> Result<()> {
         run(root, "cargo", args.iter().copied())?;
     }
     Ok(())
+}
+
+pub(crate) fn doc(root: &Path) -> Result<()> {
+    run_with_env_and_removed(
+        root,
+        "cargo",
+        DOC_ARGS.iter().copied(),
+        &[("RUSTDOCFLAGS", "-D warnings".into())],
+        &["CARGO_ENCODED_RUSTDOCFLAGS"],
+    )
 }
 
 pub(crate) fn deny(root: &Path) -> Result<()> {
@@ -244,6 +261,7 @@ pub(crate) fn gate(root: &Path, args: &[String]) -> Result<()> {
         ("conform", gate_conform),
         ("docs-links", gate_docs_links),
         ("lint", gate_lint),
+        ("doc", gate_doc),
         ("test", gate_test),
     ];
     let total = steps.len();
@@ -321,6 +339,17 @@ fn gate_lint(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> 
         }
     }
     Ok(GateResult::Pass { note: None })
+}
+
+fn gate_doc(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
+    captured_cargo_gate(
+        root,
+        DOC_ARGS.iter().copied(),
+        &[("RUSTDOCFLAGS", "-D warnings".into())],
+        &["CARGO_ENCODED_RUSTDOCFLAGS"],
+        None,
+        progress,
+    )
 }
 
 fn gate_test(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
@@ -466,6 +495,7 @@ pub(crate) fn checks(root: &Path) -> Result<()> {
         ("build-plugin", build_plugin as Gate),
         ("plugin-provenance", verify_vendored_plugin),
         ("lint", lint),
+        ("doc", doc),
     ] {
         let (name, elapsed, result) = timed(name, || gate(root));
         timings.push((name, elapsed));

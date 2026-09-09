@@ -99,7 +99,7 @@ thread_local! {
 /// file is skipped, never fatal — enrichment, not correctness. Liveness gating
 /// happens at the rollup join.
 /// Steady-state cost on a long-lived thread is one stat per file; only a
-/// changed file re-reads and re-parses (see [`SUBAGENT_PARSE_CACHE`]).
+/// changed file re-reads and re-parses (see `SUBAGENT_PARSE_CACHE`).
 pub fn read_all(runtime: &RuntimePaths) -> Vec<SubagentContextRecord> {
     SUBAGENT_PARSE_CACHE.with(|cache| sidecar::read_all(&runtime.subagent_context_dir, cache))
 }

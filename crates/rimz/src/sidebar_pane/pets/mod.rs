@@ -1,7 +1,7 @@
 //! Opt-in dashboard pet: asset loading, sprite slicing, cell-art conversion,
 //! animation track selection, and canned captions.
 //!
-//! The renderer receives only [`PetView`] data. Network, disk, decode, and
+//! The renderer receives only `PetView` data. Network, disk, decode, and
 //! memoized cell-art work stays here, owned by the serve loop.
 
 mod asset;

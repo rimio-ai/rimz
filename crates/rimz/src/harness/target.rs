@@ -824,7 +824,7 @@ fn prefer_exact_session<'a, C: Candidate<'a>>(selector: &str, candidates: Vec<C>
 
 /// Whether `agent` lives in the channel `filter` names — explicit channel,
 /// directory channel, worktree path, or that path's basename. A
-/// display-side wrapper over the resolver's [`Candidate::in_worktree`], so
+/// display-side wrapper over the resolver's `Candidate::in_worktree`, so
 /// channel membership keeps one definition.
 pub fn agent_in_worktree(agent: &AgentState, filter: &str) -> bool {
     agent.in_worktree(filter)
@@ -1123,7 +1123,7 @@ pub fn recipient_channel(
         .or_else(|| scope_channel.map(ToOwned::to_owned))
 }
 
-/// The canonical rendered address of an agent — the inverse of [`parse_target`].
+/// The canonical rendered address of an agent — the inverse of `parse_target`.
 ///
 /// Returns the shortest mention that names exactly this agent among `peers`: a
 /// role first, then an explicit name, then `@<kind>` when it is the only one of

@@ -118,7 +118,7 @@ impl CommandSpec {
     }
 
     /// Run the command to completion and capture its output, bounded by
-    /// [`COMMAND_TIMEOUT`]. A control command (`zellij action …`, `tmux …`)
+    /// `COMMAND_TIMEOUT`. A control command (`zellij action …`, `tmux …`)
     /// finishes in milliseconds; exceeding the bound means it wedged — a Zellij
     /// action client busy-loops at 100% CPU when its session server dies, which
     /// would otherwise hang the caller (and `rimz start`) forever. On the bound
@@ -133,7 +133,7 @@ impl CommandSpec {
     /// Like [`Self::run`], but with a caller-chosen bound. The health probe at
     /// `rimz start` uses a tight one so a wedged action client (spinning against
     /// a dead server) is killed in a few seconds rather than stalling the launch
-    /// for the full [`COMMAND_TIMEOUT`].
+    /// for the full `COMMAND_TIMEOUT`.
     pub fn run_with_timeout(&self, timeout: Duration) -> Result<Output> {
         let output = self.run_bounded(timeout)?;
         if !output.status.success() {

@@ -173,6 +173,11 @@ const TASKS: &[TaskInfo] = &[
         runs: "resolve every relative markdown link target and #anchor against the working tree",
     },
     TaskInfo {
+        name: "doc",
+        summary: "Build workspace documentation with warnings denied.",
+        runs: "RUSTDOCFLAGS='-D warnings' cargo doc --no-deps --workspace --all-features --locked",
+    },
+    TaskInfo {
         name: "pricing-refresh",
         summary: "Refresh the generated pricing snapshot.",
         runs: "cargo run -p rimz -- pricing-refresh, optionally with --check",
@@ -190,12 +195,12 @@ const TASKS: &[TaskInfo] = &[
     TaskInfo {
         name: "gate",
         summary: "Run the fast pre-PR gate stack; --check verifies formatting instead of applying it.",
-        runs: "fmt --all (fix, or check-only under --check), invariants, docs-links, all-feature + install-host lint, test (nextest -P gate)",
+        runs: "fmt --all (fix, or check-only under --check), invariants, docs-links, all-feature + install-host lint, doc, test (nextest -P gate)",
     },
     TaskInfo {
         name: "checks",
         summary: "Run the non-test CI gate stack.",
-        runs: "fmt, invariants, docs-links, deps, build-plugin, plugin-provenance, lint",
+        runs: "fmt, invariants, docs-links, deps, build-plugin, plugin-provenance, lint, doc",
     },
     TaskInfo {
         name: "ci",
@@ -302,6 +307,7 @@ const QUIET_PASS_TASKS: &[&str] = &[
     "lint",
     "invariants",
     "docs-links",
+    "doc",
     "deps",
     "deny",
     "vet",
@@ -344,6 +350,7 @@ fn dispatch(task: &str, args: &[String], root: &Path) -> Result<()> {
         "atlas" => atlas::atlas(root, args),
         "invariants" => invariants::invariants(root),
         "docs-links" => docs_links::docs_links(root),
+        "doc" => gates::doc(root),
         "gate" => gates::gate(root, args),
         "checks" => gates::checks(root),
         "pricing-refresh" => pricing::pricing_refresh(root, args),

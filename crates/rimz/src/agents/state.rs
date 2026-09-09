@@ -343,7 +343,7 @@ pub fn is_tool_looping(
 
 /// Whether a `running` agent's latest turn died on a provider API error with no
 /// `Stop` hook to record it — the transcript-tail marker
-/// ([`AgentTurnError`](crate::agents::AgentTurnError), folded in via the context
+/// ([`AgentTurnError`], folded in via the context
 /// sidecar) postdates the agent's `last_activity`. The faster, more-specific
 /// sibling of [`is_stalled`]: the death certificate is explicit, so the sidebar
 /// escalates within a statusline push instead of waiting out the stall window.

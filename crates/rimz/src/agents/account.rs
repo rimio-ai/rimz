@@ -3,7 +3,7 @@
 //! Account/plan facts are account-scoped, not session-scoped, and some never
 //! ride the session context: Claude's subscription tier comes from `claude auth
 //! status`, not its statusline. Each adapter probes those out-of-band facts in
-//! its own `account.rs` ([`AgentDefinition::probe_account`]); this module owns the
+//! its own `account.rs` (`AccountCapability::probe_account`); this module owns the
 //! shared [`AccountProbe`] outcome the sidebar producer folds onto the provider
 //! dashboard.
 //!
@@ -21,8 +21,6 @@
 //! Best-effort by contract: a missing binary, a logged-out account, or
 //! unparseable output yields no account. It never fails a snapshot — account is
 //! enrichment, never correctness.
-//!
-//! [`AgentDefinition::probe_account`]: super::AgentDefinition::probe_account
 
 use std::collections::BTreeMap;
 use std::path::Path;

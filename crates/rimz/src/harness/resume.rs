@@ -217,7 +217,7 @@ struct ResolvedLane {
 /// skipped agent stays visible rather than silently lost.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResumeSkipReason {
-    /// The agent's kind has no resume CLI ([`crate::agents::AgentDefinition::resume_command`]).
+    /// The agent's kind has no resume CLI (`crate::agents::capabilities::LaunchCapability::resume_command`).
     NoResumeSupport,
     /// The session id names a conversation the provider never persisted, so
     /// there is nothing to resume.
@@ -2228,7 +2228,7 @@ fn supports_candidate_resume(candidate: &ResumeCandidate) -> bool {
 /// from a command line or from local-session discovery, or a rollup that lost
 /// the hook that carried it. Ask the adapter, which resolves the same location
 /// its own resume resolves
-/// ([`crate::agents::AgentDefinition::local_conversation_present`]), so a
+/// (`crate::agents::capabilities::SessionCapability::local_conversation_present`), so a
 /// stored id the provider can no longer redeem plans fresh instead of launching
 /// into a resume that exits. Adapters that keep no inspectable store, as Pi and
 /// OpenCode do, abstain and the session stays resumable.

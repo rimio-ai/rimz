@@ -131,7 +131,7 @@ pub struct FileCacheEntry {
 /// last consumed line, plus the adapter's opaque cross-line state (Codex
 /// carries its cumulative token totals and tracked model so a resumed delta
 /// subtraction stays exact). Stored per file in the spending cache; a state
-/// shape change bumps [`SPENDING_CACHE_VERSION`].
+/// shape change bumps `SPENDING_CACHE_VERSION`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SpendCursor {
     #[serde(default, rename = "o", skip_serializing_if = "is_zero")]
@@ -142,7 +142,7 @@ pub struct SpendCursor {
 
 impl SpendCursor {
     /// Decode the adapter's cross-line state. The state was serialized by the
-    /// same adapter under the current [`SPENDING_CACHE_VERSION`] (a shape change
+    /// same adapter under the current `SPENDING_CACHE_VERSION` (a shape change
     /// bumps it and cold-rebuilds), so a missing or odd value degrades to a
     /// fresh fold rather than failing the pass.
     pub fn state_as<T: serde::de::DeserializeOwned + Default>(&self) -> T {
@@ -187,14 +187,14 @@ pub struct SpendParse {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CachedEntry {
     /// Unix timestamp (seconds) the entry was recorded, parsed from the JSONL
-    /// `timestamp` via [`iso_to_unix_secs`]. Drives the trailing-window bucketing
-    /// in [`accum`].
+    /// `timestamp` via `super::time::iso_to_unix_secs`. Drives the trailing-window bucketing
+    /// in `super::aggregate::accum`.
     #[serde(rename = "t")]
     pub ts_secs: u64,
     #[serde(rename = "u")]
     pub cost_usd: f64,
     /// Fresh input tokens (Claude `input_tokens`; Codex uncached input).
-    /// Per-entry components stay raw; [`SpendWindow::add`] folds `cache_write`
+    /// Per-entry components stay raw; `SpendWindow::add` folds `cache_write`
     /// into aggregate input/total. `#[serde(default)]` keeps an older cache
     /// parseable; `SPENDING_CACHE_VERSION` is what actually heals it — a
     /// pre-split cache is discarded on read so every file re-parses, since a
