@@ -12,7 +12,6 @@ use rimz::agents::BudgetWindow;
 use rimz::config::{DayCap, MachineConfig};
 use rimz::harness::budget::{BudgetSpec, DailyBudgetScope, read_scope_state, scope_interrupted};
 use rimz::ids::AgentKind;
-use rimz::store::message::DeliveryGate;
 
 #[derive(Debug, Args)]
 pub struct BudgetArgs {
@@ -85,10 +84,7 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
                 workspace,
                 store,
                 agent,
-                rimz::store::message::MessageSender::System,
                 continue_text.to_owned(),
-                DeliveryGate::Done,
-                None,
             )
             .context("queueing budget continue prompt")?;
         }

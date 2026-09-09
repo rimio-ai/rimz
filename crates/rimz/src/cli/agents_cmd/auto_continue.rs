@@ -46,34 +46,36 @@ pub fn run_auto_continue(request: AutoContinueRequest) -> Result<()> {
         })
         .context("auto-continue target pane is no longer bound to the agent")?;
 
-    let message_id = if let Some(message_id) = request.message_id {
-        message_id
-    } else {
-        let gate = if request.reason == "budget_day_reset" {
-            DeliveryGate::Done
-        } else {
-            DeliveryGate::Resume
-        };
-        deliver::queue_synthetic(
-            workspace,
-            store,
-            agent,
-            rimz::store::message::MessageSender::System,
-            text.to_owned(),
-            gate,
-            Some(&request.pane_id),
-        )
-        .context("queueing auto-continue resume message")?
+    let (message_id, delivered) = match request.message_id {
+        Some(message_id) => {
+            let delivered = deliver::deliver_one(
+                workspace,
+                store,
+                &message_id,
+                Duration::ZERO,
+                Some(request.pane_id.mux()),
+                deliver::DeliveryPolicy::Boundary,
+            )
+            .context("delivering auto-continue resume message")?;
+            (message_id, delivered)
+        }
+        None => {
+            let gate = if request.reason == "budget_day_reset" {
+                DeliveryGate::Done
+            } else {
+                DeliveryGate::Resume
+            };
+            deliver::nudge_now(
+                workspace,
+                store,
+                agent,
+                text.to_owned(),
+                gate,
+                &request.pane_id,
+            )
+            .context("queueing and delivering auto-continue resume message")?
+        }
     };
-    let delivered = deliver::deliver_one(
-        workspace,
-        store,
-        &message_id,
-        Duration::ZERO,
-        Some(request.pane_id.mux()),
-        deliver::DeliveryPolicy::Boundary,
-    )
-    .context("delivering auto-continue resume message")?;
     let delivery_failure = if !delivered {
         let failure_reason = format!("resume delivery gate closed ({})", request.reason);
         store
