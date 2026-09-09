@@ -333,7 +333,7 @@ fn walk_fleet_spending_files(
     use crate::agents::spending::{
         ProviderSpendingCache, SilentWalk, SpendProgress, SpendScope, SpendingCaches,
         SpendingWalkResult, WORKSPACE_SPENDING_VERSION, WalkRequest, WorkspaceSpendingCache,
-        read_provider_spending_cache, write_provider_spending_cache_value,
+        read_provider_spending_cache, write_provider_spending_cache,
         write_workspace_spending_cache,
     };
 
@@ -383,7 +383,7 @@ fn walk_fleet_spending_files(
         if publish {
             // Stamp the empty result too: an agentless machine must not re-run
             // the (empty) discovery readdirs every tick.
-            write_provider_spending_cache_value(&provider_path, &provider);
+            write_provider_spending_cache(&provider_path, &provider);
             if let Some(scope_hash) = scope_hash.as_deref() {
                 write_workspace_spending_cache(
                     &runtime.workspace_spending_path(scope_hash),
@@ -459,7 +459,7 @@ fn walk_fleet_spending_files(
         }
     };
     if publish {
-        write_provider_spending_cache_value(&provider_path, &provider);
+        write_provider_spending_cache(&provider_path, &provider);
         if let Some(scope_hash) = scope_hash.as_deref() {
             write_workspace_spending_cache(
                 &runtime.workspace_spending_path(scope_hash),
@@ -502,10 +502,7 @@ impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
         );
         let refreshed_at_ms = unix_now_ms();
         let provider = ProviderSpendingCache::from_walk(&result, refreshed_at_ms);
-        crate::agents::spending::write_provider_spending_cache_value(
-            &self.provider_path,
-            &provider,
-        );
+        crate::agents::spending::write_provider_spending_cache(&self.provider_path, &provider);
         if let Some(scope_hash) = self.scope_hash.as_deref() {
             let workspace = reconciled_workspace_cache(
                 scope_hash,

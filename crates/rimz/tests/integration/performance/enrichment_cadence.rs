@@ -138,8 +138,11 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
     .expect("seed accounts cache");
     rimz::agents::spending::write_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
-        unix_now_ms(),
-        &rimz::agents::spending::Spending::default(),
+        &rimz::agents::spending::ProviderSpendingCache {
+            refreshed_at_ms: unix_now_ms(),
+            spending: rimz::agents::spending::Spending::default(),
+            ..Default::default()
+        },
     );
 
     let mut cursor = RollupCursor::new();
@@ -161,8 +164,11 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
     // second refresh gate, not the first refresh's wall-clock duration.
     rimz::agents::spending::write_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
-        unix_now_ms(),
-        &rimz::agents::spending::Spending::default(),
+        &rimz::agents::spending::ProviderSpendingCache {
+            refreshed_at_ms: unix_now_ms(),
+            spending: rimz::agents::spending::Spending::default(),
+            ..Default::default()
+        },
     );
 
     let provider_bytes = std::fs::read(&provider_path).expect("provider cache");

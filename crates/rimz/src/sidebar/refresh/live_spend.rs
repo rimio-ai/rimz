@@ -228,8 +228,11 @@ mod tests {
 
         crate::agents::spending::write_provider_spending_cache(
             &runtime.shared_provider_spending_path(),
-            walk_ms,
-            &crate::agents::spending::Spending::default(),
+            &crate::agents::spending::ProviderSpendingCache {
+                refreshed_at_ms: walk_ms,
+                spending: crate::agents::spending::Spending::default(),
+                ..Default::default()
+            },
         );
         let mut tally = crate::agents::spending::SpendTally::default();
         tally.headline.usd = 10.0;

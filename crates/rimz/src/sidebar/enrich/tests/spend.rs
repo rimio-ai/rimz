@@ -19,8 +19,11 @@ fn cached_enrich_reads_workspace_spending_cache_separately_from_global() {
     global.total.year.usd = 50.0;
     crate::agents::spending::write_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
-        unix_now_ms(),
-        &global,
+        &crate::agents::spending::ProviderSpendingCache {
+            refreshed_at_ms: unix_now_ms(),
+            spending: global,
+            ..Default::default()
+        },
     );
 
     let mut scoped = crate::SpendTally::default();
@@ -147,8 +150,11 @@ fn cached_enrich_waits_for_producer_workspace_publication() {
     provider_spending.total.year.usd = 9.0;
     crate::agents::spending::write_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
-        published_ms,
-        &provider_spending,
+        &crate::agents::spending::ProviderSpendingCache {
+            refreshed_at_ms: published_ms,
+            spending: provider_spending,
+            ..Default::default()
+        },
     );
 
     let hash = workspace_scope_hash(&project);

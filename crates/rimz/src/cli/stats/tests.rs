@@ -159,12 +159,15 @@ fn published_stats_reads_rollups_and_windows() {
     spending
         .by_provider
         .insert("claude".to_owned(), tally(120, 12.0, 3));
-    rimz::agents::spending::write_provider_spending_cache_with_rollups(
+    rimz::agents::spending::write_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
-        123,
-        &spending,
-        &by_day,
-        &by_model,
+        &rimz::agents::spending::ProviderSpendingCache {
+            refreshed_at_ms: 123,
+            spending,
+            days: by_day.clone(),
+            models: by_model.clone(),
+            ..Default::default()
+        },
     );
 
     let stats = load_published_stats(&runtime).expect("current aggregate is readable");
@@ -199,12 +202,15 @@ fn stats_serves_published_cache_without_walking() {
     spending
         .by_provider
         .insert("claude".to_owned(), tally(120, 12.0, 3));
-    rimz::agents::spending::write_provider_spending_cache_with_rollups(
+    rimz::agents::spending::write_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
-        1,
-        &spending,
-        &by_day,
-        &by_model,
+        &rimz::agents::spending::ProviderSpendingCache {
+            refreshed_at_ms: 1,
+            spending,
+            days: by_day.clone(),
+            models: by_model.clone(),
+            ..Default::default()
+        },
     );
     let cursor_path = runtime.shared_spending_cursor_path();
     assert!(!cursor_path.exists());

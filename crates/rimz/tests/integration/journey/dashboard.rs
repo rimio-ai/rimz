@@ -27,8 +27,11 @@ fn provider_dashboard_renders_published_spend_and_session_cost() {
     let published_at_ms = unix_now_ms().saturating_add(SETTLE.as_millis() as u64);
     rimz::agents::spending::write_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
-        published_at_ms,
-        &spending(),
+        &rimz::agents::spending::ProviderSpendingCache {
+            refreshed_at_ms: published_at_ms,
+            spending: spending(),
+            ..Default::default()
+        },
     );
     rimz::agents::spending::write_workspace_spending_cache(
         &runtime.workspace_spending_path(&scope_hash),

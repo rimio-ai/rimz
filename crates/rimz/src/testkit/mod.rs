@@ -264,8 +264,11 @@ pub mod fleet {
 
         if !agents::spending::write_provider_spending_cache(
             &runtime.shared_provider_spending_path(),
-            now_ms,
-            &agents::spending::Spending::default(),
+            &agents::spending::ProviderSpendingCache {
+                refreshed_at_ms: now_ms,
+                spending: agents::spending::Spending::default(),
+                ..Default::default()
+            },
         ) {
             return Err(io::Error::other("provider spending cache write failed"));
         }

@@ -36,7 +36,14 @@ fn provider_cache_staleness_and_error_cases_are_explicit() {
     let path = dir.path().join("provider-spending.json");
     let spending = sample_spending();
 
-    write_provider_spending_cache(&path, 12_345, &spending);
+    write_provider_spending_cache(
+        &path,
+        &ProviderSpendingCache {
+            refreshed_at_ms: 12_345,
+            spending: spending.clone(),
+            ..Default::default()
+        },
+    );
     let cache = read_provider_spending_cache(&path);
     assert_eq!(cache.version, PROVIDER_SPENDING_VERSION);
     assert_eq!(cache.refreshed_at_ms, 12_345);
@@ -64,8 +71,17 @@ fn provider_cache_staleness_and_error_cases_are_explicit() {
             ..Default::default()
         },
     )]);
-    write_provider_spending_cache_with_day(
-        &path, 12_346, &spending, &days, &models, &local_day, 12_000,
+    write_provider_spending_cache(
+        &path,
+        &ProviderSpendingCache {
+            refreshed_at_ms: 12_346,
+            spending: spending.clone(),
+            days: days.clone(),
+            models: models.clone(),
+            day_by_provider: local_day.clone(),
+            day_cutoff_secs: 12_000,
+            ..Default::default()
+        },
     );
     let cache = read_provider_spending_cache(&path);
     assert_eq!(cache.version, PROVIDER_SPENDING_VERSION);
@@ -173,7 +189,14 @@ fn cache_version_prefix_gates_reads_and_writes() {
     }
 
     fn write_provider(path: &Path) {
-        write_provider_spending_cache(path, 12_345, &sample_spending());
+        write_provider_spending_cache(
+            path,
+            &ProviderSpendingCache {
+                refreshed_at_ms: 12_345,
+                spending: sample_spending(),
+                ..Default::default()
+            },
+        );
     }
 
     fn write_workspace(path: &Path) {
