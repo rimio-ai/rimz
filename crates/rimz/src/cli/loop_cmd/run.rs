@@ -91,7 +91,27 @@ pub(super) fn run_one(
         check_echo,
         started,
     )?;
-    let plan = fire.prepare();
+    let plan = fire.prepare(&mut |root| {
+        if mode != LoopRunMode::Scheduled || !matches!(action, TaskAction::CheckOnly) {
+            return Ok(());
+        }
+        let workspace = rimz::WorkspaceResolver::resolve(root, Some(root.to_path_buf()))?;
+        let mux = rimz::mux::auto_detect_backend(globals.mux)?;
+        let mut room = rimz::room::RoomContext::from_resolved(
+            &workspace,
+            MachineConfig::load_lenient(),
+            mux,
+            rimz::room::RoomSizing::Birth,
+        )?;
+        crate::cli::render::room::present_birth_outcome(
+            room.birth(rimz::room::RoomBirth::Supervised {
+                cwd: root.to_path_buf(),
+                recovery: rimz::room::AttendedRecovery::RequireExplicitReset,
+            }),
+            room.session_name(),
+        )?;
+        Ok(())
+    });
     if mode == LoopRunMode::Manual
         && let Some(trip) = fire.take_check_trip()
         && let Err(source) = write_check_trip_line(
