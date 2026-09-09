@@ -86,6 +86,9 @@ pub struct TaskEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub on: Option<CheckOn>,
     pub root: PathBuf,
+    /// Directory for check/watch commands; the arming worktree, or `root` when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dir: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -130,11 +133,18 @@ pub struct WakeMeta {
 }
 
 impl TaskEntry {
-    /// Root normalized for workspace identity and execution. CLI-added tasks
+    /// Root normalized for workspace identity. CLI-added tasks
     /// already store this shape; hand-edited tasks may use `~` or a relative
     /// path.
     pub fn resolved_root(&self) -> PathBuf {
         resolve_root_with(&self.root, home_dir())
+    }
+
+    pub fn run_dir(&self) -> PathBuf {
+        self.dir
+            .as_deref()
+            .map(|dir| resolve_root_with(dir, home_dir()))
+            .unwrap_or_else(|| self.resolved_root())
     }
 
     pub fn validate_budget(&self, task: &str) -> Result<(), TaskBudgetError> {
@@ -289,6 +299,23 @@ mod tests {
     }
 
     #[test]
+    fn task_run_dir_defaults_to_root_and_resolves_explicit_directory() {
+        let mut entry = TaskEntry {
+            root: PathBuf::from("~/repo"),
+            ..TaskEntry::default()
+        };
+        assert_eq!(entry.run_dir(), entry.resolved_root());
+        assert!(serde_json::to_value(&entry).unwrap().get("dir").is_none());
+        assert!(toml::Value::try_from(&entry).unwrap().get("dir").is_none());
+
+        entry.dir = Some(PathBuf::from("~/linked"));
+        assert_eq!(
+            entry.run_dir(),
+            resolve_root_with(Path::new("~/linked"), home_dir())
+        );
+    }
+
+    #[test]
     fn task_entry_check_fields_round_trip_toml_and_json() {
         let deadline = Timestamp::from_second(1_783_000_000).expect("deadline");
         let entry = TaskEntry {
@@ -308,6 +335,7 @@ mod tests {
             max_strikes: Some(5),
             on: Some(CheckOn::Success),
             root: PathBuf::from("/repo"),
+            dir: Some(PathBuf::from("/linked")),
             every: Some("weekday".to_owned()),
             at: Some("07:00".to_owned()),
             budget: Some("$5.00".to_owned()),

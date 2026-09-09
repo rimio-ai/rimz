@@ -545,9 +545,16 @@ impl<'a> TaskFire<'a> {
             before_check(&root)?;
             let mut env = crate::workspace::pin_env(&WorkspaceId::from_project_root(&root), &root);
             env.insert(LOOP_TASK_ENV.to_owned(), self.name.clone());
+            let dir = self.entry.run_dir();
+            if self.entry.dir.is_some() {
+                env.insert(
+                    crate::workspace::ENV_WORKTREE_PATH.to_owned(),
+                    dir.to_string_lossy().into_owned(),
+                );
+            }
             let check_started = Instant::now();
             let outcome = run_check(
-                &root,
+                &dir,
                 &command,
                 task_timeout(&self.entry)?.unwrap_or(CHECK_DEFAULT_TIMEOUT),
                 self.check_echo.take().unwrap_or(CheckEcho::Capture),

@@ -137,6 +137,10 @@ fn task_entry_table(entry: &TaskEntry, include_root: bool) -> Result<Table> {
     // lossy display form, so normalize only path values before serialization.
     let mut serializable = entry.clone();
     serializable.root = PathBuf::from(entry.root.to_string_lossy().into_owned());
+    serializable.dir = entry
+        .dir
+        .as_deref()
+        .map(|path| PathBuf::from(path.to_string_lossy().into_owned()));
     serializable.prompt_file = entry
         .prompt_file
         .as_deref()
@@ -150,6 +154,7 @@ fn task_entry_table(entry: &TaskEntry, include_root: bool) -> Result<Table> {
         .into_table();
     if !include_root {
         table.remove("root");
+        table.remove("dir");
     }
     if let Some(wake) = table.remove("wake") {
         table.insert(
@@ -208,6 +213,7 @@ mod tests {
             max_strikes: Some(4),
             on: Some(CheckOn::Success),
             root: PathBuf::from("/repo"),
+            dir: Some(PathBuf::from("/linked")),
             worktree: Some("task".to_owned()),
             mode: Some("plan".to_owned()),
             effort: Some("high".to_owned()),
@@ -237,6 +243,7 @@ mod tests {
             .insert("full", Item::Table(machine.clone()));
         let machine_text = doc.to_string();
         assert!(machine.contains_key("root"));
+        assert!(machine.contains_key("dir"));
         assert!(machine.contains_key("prompt-file"));
         assert!(machine.contains_key("max-attempts"));
         assert!(machine.contains_key("budget-per-day"));
@@ -252,10 +259,12 @@ mod tests {
 
         let project = task_entry_table(&entry, false).expect("serialize project");
         assert!(!project.contains_key("root"));
+        assert!(!project.contains_key("dir"));
         let mut project_round =
             toml_edit::de::from_document::<TaskEntry>(DocumentMut::from(project))
                 .expect("project round trip");
         project_round.root = entry.root.clone();
+        project_round.dir = entry.dir.clone();
         assert_eq!(project_round, entry);
     }
 
