@@ -479,7 +479,13 @@ fn fire_signal_with_wait(
         if wait && matches!(parsed.trigger, super::Trigger::Watch { .. }) {
             super::fire::wait_loop_run(runtime, Some(project_root), &name, &encoded);
         } else {
-            super::fire::spawn_loop_run(runtime, Some(project_root), &name, Some(&encoded));
+            super::fire::spawn_loop_run(
+                runtime,
+                Some(project_root),
+                &name,
+                Some(&encoded),
+                super::fire::LoopRunHost::Detached,
+            );
         }
         fired.push(name);
     }

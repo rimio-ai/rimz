@@ -32,13 +32,26 @@ enum Action {
 
 const WATCH_LOST_GRACE_SECS: i64 = 30;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoopRunHost {
+    /// Ordinary detached child, used by the elder and signal emitters.
+    Detached,
+    /// External systemd tick child that must leave the service cgroup.
+    TransientScope,
+}
+
 #[doc(hidden)]
-pub fn fire_due_tasks(runtime: &RuntimePaths, project_root: Option<&Path>, now: &Zoned) {
+pub fn fire_due_tasks(
+    runtime: &RuntimePaths,
+    project_root: Option<&Path>,
+    now: &Zoned,
+    host: LoopRunHost,
+) {
     let project_root = project_root
         .map(Path::to_path_buf)
         .or_else(|| workspace_project_root(runtime));
     let tasks = runnable_tasks_for(runtime, project_root.as_deref());
-    fire_tasks(runtime, project_root.as_deref(), tasks, now);
+    fire_tasks(runtime, project_root.as_deref(), tasks, now, host);
 }
 
 fn fire_tasks(
@@ -46,6 +59,7 @@ fn fire_tasks(
     project_root: Option<&Path>,
     tasks: BTreeMap<String, LoadedTask>,
     now: &Zoned,
+    host: LoopRunHost,
 ) -> Vec<String> {
     let path = state_path(runtime);
     let state = read_state(&path);
@@ -67,7 +81,7 @@ fn fire_tasks(
         match action {
             Action::Arm => {}
             Action::Fire => {
-                spawn_loop_run(runtime, project_root, &name, None);
+                spawn_loop_run(runtime, project_root, &name, None, host);
                 fired.push(name);
             }
             Action::WatchLost => {
@@ -101,7 +115,7 @@ fn fire_tasks(
                     watch: Some(watch),
                 };
                 if let Ok(encoded) = serde_json::to_string(&signal) {
-                    spawn_loop_run(runtime, project_root, &name, Some(&encoded));
+                    spawn_loop_run(runtime, project_root, &name, Some(&encoded), host);
                     fired.push(name);
                 }
             }
@@ -283,20 +297,75 @@ pub(super) fn spawn_loop_run(
     project_root: Option<&Path>,
     name: &str,
     signal_json: Option<&str>,
+    host: LoopRunHost,
 ) {
     let args = loop_run_args(project_root, name, signal_json);
+    let (program, args) = loop_run_command(host, &crate::proc::rimz_exe(), &args, name);
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         task = name,
         "loop scheduler firing task",
     );
-    if let Err(err) = crate::child_process::spawn_detached_rimz(runtime, args, "loop-run") {
-        tracing::warn!(
+    match crate::child_process::spawn_detached_program(&program, &args, runtime, "loop-run") {
+        Ok(Some(pid)) if host == LoopRunHost::TransientScope => wait_for_scope(pid, name),
+        Ok(_) => {}
+        Err(err) => tracing::warn!(
             task = name,
             tags.operation = "loop_fire.spawn",
             error = &err as &dyn std::error::Error,
             "sidebar: failed to spawn loop task",
-        );
+        ),
+    }
+}
+
+fn loop_run_command(
+    host: LoopRunHost,
+    exe: &Path,
+    args: &[OsString],
+    name: &str,
+) -> (OsString, Vec<OsString>) {
+    if host == LoopRunHost::Detached {
+        return (exe.as_os_str().to_owned(), args.to_vec());
+    }
+    let mut scoped = Vec::from([
+        "--user".into(),
+        "--scope".into(),
+        "--quiet".into(),
+        "--collect".into(),
+        "--description".into(),
+        format!("RimZ loop run {name}").into(),
+        "--".into(),
+        exe.as_os_str().to_owned(),
+    ]);
+    scoped.extend_from_slice(args);
+    ("systemd-run".into(), scoped)
+}
+
+fn cgroup_changed(parent: Option<&[u8]>, child: Option<&[u8]>) -> bool {
+    matches!((parent, child), (Some(parent), Some(child)) if !parent.is_empty() && !child.is_empty() && parent != child)
+}
+
+fn wait_for_scope(pid: u32, name: &str) {
+    use std::time::{Duration, Instant};
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let parent = std::fs::read("/proc/self/cgroup").ok();
+    let child_path = format!("/proc/{pid}/cgroup");
+    loop {
+        let child = std::fs::read(&child_path).ok();
+        if cgroup_changed(parent.as_deref(), child.as_deref()) {
+            return;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            tracing::warn!(
+                task = name,
+                pid,
+                "loop run did not leave the timer cgroup within 5 seconds"
+            );
+            return;
+        }
+        std::thread::sleep(remaining.min(Duration::from_millis(25)));
     }
 }
 
@@ -342,6 +411,76 @@ mod tests {
     use crate::config::TaskEntry;
 
     const NAME: &str = "task";
+
+    #[test]
+    fn loop_run_hosts_render_precise_argv() {
+        let exe = Path::new("/opt/RimZ build/rimz");
+        let args = loop_run_args(
+            Some(Path::new("/workspace with spaces")),
+            NAME,
+            Some(r#"{"name":"deploy.done"}"#),
+        );
+        assert_eq!(
+            loop_run_command(LoopRunHost::Detached, exe, &args, NAME),
+            (exe.as_os_str().to_owned(), args.clone()),
+        );
+        assert_eq!(
+            loop_run_command(LoopRunHost::TransientScope, exe, &args, NAME),
+            (
+                OsString::from("systemd-run"),
+                [
+                    "--user",
+                    "--scope",
+                    "--quiet",
+                    "--collect",
+                    "--description",
+                    "RimZ loop run task",
+                    "--",
+                    "/opt/RimZ build/rimz",
+                    "--root",
+                    "/workspace with spaces",
+                    "loop",
+                    "run",
+                    "task",
+                    "--signal-json",
+                    r#"{"name":"deploy.done"}"#,
+                ]
+                .map(OsString::from)
+                .to_vec(),
+            ),
+        );
+    }
+
+    #[test]
+    fn scope_handoff_requires_observed_distinct_cgroups() {
+        for (parent, child) in [
+            (
+                b"0::/user.slice/loop.service\n".as_slice(),
+                b"0::/user.slice/run-test.scope\n".as_slice(),
+            ),
+            (
+                b"1:name=systemd:/user.slice/loop.service\n".as_slice(),
+                b"1:name=systemd:/user.slice/run-test.scope\n".as_slice(),
+            ),
+        ] {
+            assert!(cgroup_changed(Some(parent), Some(child)));
+            assert!(!cgroup_changed(Some(parent), Some(parent)));
+            assert!(!cgroup_changed(Some(parent), None));
+            assert!(!cgroup_changed(None, Some(child)));
+            assert!(!cgroup_changed(Some(parent), Some(b"")));
+            assert!(!cgroup_changed(Some(b""), Some(child)));
+        }
+        assert!(!cgroup_changed(None, None));
+    }
+
+    #[test]
+    fn both_loop_run_hosts_suppress_subprocesses_in_unit_tests() {
+        let root = Path::new("/missing-loop-test-root");
+        let runtime = RuntimePaths::under(WorkspaceId::from_project_root(root), root).unwrap();
+        for host in [LoopRunHost::Detached, LoopRunHost::TransientScope] {
+            spawn_loop_run(&runtime, Some(root), NAME, None, host);
+        }
+    }
 
     fn one<T>(value: T) -> BTreeMap<String, T> {
         BTreeMap::from([(NAME.to_owned(), value)])
@@ -579,7 +718,13 @@ mod tests {
         ]);
 
         assert_eq!(
-            fire_tasks(&runtime, Some(root.path()), tasks, &now),
+            fire_tasks(
+                &runtime,
+                Some(root.path()),
+                tasks,
+                &now,
+                LoopRunHost::Detached
+            ),
             vec!["valid"]
         );
     }
