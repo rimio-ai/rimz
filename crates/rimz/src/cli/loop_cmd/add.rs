@@ -387,10 +387,8 @@ fn build_task_entry(
         max_strikes: args.max_strikes,
         on,
         root: workspace.project_root.clone(),
-        dir: workspace
-            .linked_worktree()
-            .filter(|_| !args.project)
-            .map(Path::to_path_buf),
+        dir: (!args.project && workspace.worktree_root != workspace.project_root)
+            .then(|| workspace.worktree_root.clone()),
         at: timing.at,
         every: args.every.clone(),
         cron: args.cron.clone(),

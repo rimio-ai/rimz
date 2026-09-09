@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::str::FromStr;
 use std::time::Duration;
@@ -333,7 +333,8 @@ fn build_entry(
     let mut entry = TaskEntry {
         wake: Some(spec.target),
         root: workspace.project_root.clone(),
-        dir: workspace.linked_worktree().map(Path::to_path_buf),
+        dir: (workspace.worktree_root != workspace.project_root)
+            .then(|| workspace.worktree_root.clone()),
         deadline: spec.deadline,
         max_strikes: spec.max_strikes,
         ..TaskEntry::default()
