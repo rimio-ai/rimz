@@ -18,7 +18,7 @@ Read the shape first: [DESIGN.md](../../DESIGN.md) states the attention problem,
 
 ## The harness
 
-The harness runs the fleet: spawn, address, message, and reclaim. It is a product area rather than a single module, spanning `harness/`, `message/`, `worktree.rs`, and `trust.rs`. Start at [fleet.md](./harness/fleet.md), which maps the area and names the source tree behind each page.
+The harness runs the fleet: spawn, address, message, and reclaim. It is a product area rather than a single module, spanning `harness/`, `address.rs`, `message/`, `worktree.rs`, and `trust.rs`. Start at [fleet.md](./harness/fleet.md), which maps the area and names the source tree behind each page.
 
 | Page | What it owns |
 | --- | --- |
