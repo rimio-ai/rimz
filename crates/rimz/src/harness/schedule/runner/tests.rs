@@ -597,6 +597,15 @@ fn run_check_captures_output_status_and_timeout() {
         expired.output.is_empty(),
         "timed-out descendants cannot keep writing to the check pipes"
     );
+    let orphan = check(
+        "( (sleep 1; printf orphaned) & ); sleep 30",
+        Duration::from_millis(50),
+    );
+    assert!(orphan.timed_out);
+    assert!(
+        orphan.output.is_empty(),
+        "a reparented pipe holder cannot prevent timeout recording"
+    );
 }
 
 #[test]

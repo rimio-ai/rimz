@@ -36,6 +36,8 @@ const WATCH_LOST_GRACE_SECS: i64 = 30;
 pub enum LoopRunHost {
     /// Ordinary detached child, used by the elder and signal emitters.
     Detached,
+    /// External non-systemd tick child that must outlive the timer's process group.
+    IsolatedProcessGroup,
     /// External systemd tick child that must leave the service cgroup.
     TransientScope,
 }
@@ -306,7 +308,12 @@ pub(super) fn spawn_loop_run(
         task = name,
         "loop scheduler firing task",
     );
-    match crate::child_process::spawn_detached_program(&program, &args, runtime, "loop-run") {
+    let spawned = if host == LoopRunHost::Detached {
+        crate::child_process::spawn_detached_rimz(runtime, &args, "loop-run").map(|()| None)
+    } else {
+        crate::child_process::spawn_detached_program(&program, &args, runtime, "loop-run")
+    };
+    match spawned {
         Ok(Some(pid)) if host == LoopRunHost::TransientScope => wait_for_scope(pid, name),
         Ok(_) => {}
         Err(err) => tracing::warn!(
@@ -324,7 +331,7 @@ fn loop_run_command(
     args: &[OsString],
     name: &str,
 ) -> (OsString, Vec<OsString>) {
-    if host == LoopRunHost::Detached {
+    if host != LoopRunHost::TransientScope {
         return (exe.as_os_str().to_owned(), args.to_vec());
     }
     let mut scoped = Vec::from([
@@ -425,6 +432,10 @@ mod tests {
             (exe.as_os_str().to_owned(), args.clone()),
         );
         assert_eq!(
+            loop_run_command(LoopRunHost::IsolatedProcessGroup, exe, &args, NAME),
+            (exe.as_os_str().to_owned(), args.clone()),
+        );
+        assert_eq!(
             loop_run_command(LoopRunHost::TransientScope, exe, &args, NAME),
             (
                 OsString::from("systemd-run"),
@@ -474,10 +485,14 @@ mod tests {
     }
 
     #[test]
-    fn both_loop_run_hosts_suppress_subprocesses_in_unit_tests() {
+    fn all_loop_run_hosts_suppress_subprocesses_in_unit_tests() {
         let root = Path::new("/missing-loop-test-root");
         let runtime = RuntimePaths::under(WorkspaceId::from_project_root(root), root).unwrap();
-        for host in [LoopRunHost::Detached, LoopRunHost::TransientScope] {
+        for host in [
+            LoopRunHost::Detached,
+            LoopRunHost::IsolatedProcessGroup,
+            LoopRunHost::TransientScope,
+        ] {
             spawn_loop_run(&runtime, Some(root), NAME, None, host);
         }
     }

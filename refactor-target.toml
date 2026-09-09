@@ -576,6 +576,7 @@ allowed-dependencies = [
     "harness::run",
     "harness::schedule",
     "ids",
+    "proc",
     "store::run",
     "utils::time",
     "workspace",

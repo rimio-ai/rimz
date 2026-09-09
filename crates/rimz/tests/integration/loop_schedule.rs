@@ -3214,6 +3214,55 @@ fn loop_stop_without_active_run_reports_no_active_run() {
 
 #[cfg(unix)]
 #[test]
+fn terminal_check_runs_interactive_shell_before_its_timeout() {
+    if which::which("bash").is_err() {
+        return;
+    }
+    let env = Env::new();
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "shell-probe",
+            "--every",
+            "15m",
+            "--timeout",
+            "1s",
+            "--check",
+            "bash -i -c 'printf shell-ready'; sleep 30",
+        ],
+    );
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut command = CommandBuilder::new(env.rimz_bin());
+    env.pin_pty_command(&mut command);
+    command.args(["loop", "fire", "shell-probe"]);
+    command.cwd(&env.project_root);
+    let mut child = pair.slave.spawn_command(command).unwrap();
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().unwrap();
+    let output = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = reader.read_to_end(&mut bytes);
+        bytes
+    });
+    child.wait().unwrap();
+    drop(pair.master);
+    output.join().unwrap();
+    let check = last_loop_record(&env).check.unwrap();
+    assert!(check.timed_out);
+    assert!(check.output.contains("shell-ready"), "{}", check.output);
+}
+
+#[cfg(unix)]
+#[test]
 fn manual_fire_forwards_interrupt_to_the_check_group() {
     let env = Env::new();
     loop_ok(
