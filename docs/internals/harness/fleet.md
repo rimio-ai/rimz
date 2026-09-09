@@ -38,11 +38,11 @@ Steps 1 through 7 are the same for every entry point. A `-p` run, a scheduled lo
 
 ## Where the code lives
 
-The harness is a product area, not a single Rust module. It spans four source trees, and the eight pages in this folder are grouped by the job they document rather than by the crate path they point at.
+The harness is a product area, not a single Rust module. It spans multiple source modules, and the eight pages in this folder are grouped by the job they document rather than by the crate path they point at.
 
 | Page | Owns | Source |
 | --- | --- | --- |
-| fleet.md (this page) | Spawn, address, resume, reclaim | [`harness/`](../../../crates/rimz/src/harness) |
+| fleet.md (this page) | Spawn, address, resume, reclaim | [`harness/`](../../../crates/rimz/src/harness), [`address.rs`](../../../crates/rimz/src/address.rs) |
 | [scripting.md](./scripting.md) | Supervised `-p` runs | [`store/run.rs`](../../../crates/rimz/src/store/run.rs), [`harness/run.rs`](../../../crates/rimz/src/harness/run.rs), [`run_wake.rs`](../../../crates/rimz/src/harness/run_wake.rs), [`cli/supervised/`](../../../crates/rimz/src/cli/supervised) |
 | [subagents.md](./subagents.md) | Agents launching supervised children | [`cli/subagents/`](../../../crates/rimz/src/cli/subagents), [`harness/plan.rs`](../../../crates/rimz/src/harness/plan.rs) |
 | [loops.md](./loops.md) | Scheduled tasks and unattended recovery | [`harness/schedule/`](../../../crates/rimz/src/harness/schedule), [`auto_continue.rs`](../../../crates/rimz/src/harness/auto_continue.rs), [`auto_redeem.rs`](../../../crates/rimz/src/harness/auto_redeem.rs) |
@@ -51,7 +51,7 @@ The harness is a product area, not a single Rust module. It spans four source tr
 | [worktrees.md](./worktrees.md) | RimZ-owned Git worktrees | [`worktree.rs`](../../../crates/rimz/src/worktree.rs) |
 | [trust.md](./trust.md) | Which parts of a project config may execute | [`trust.rs`](../../../crates/rimz/src/trust.rs) |
 
-Start here when you are looking for where a behaviour lives. Every file below is under `harness/` except the petname grammar in `agents/` and the durable run record in `store/`.
+Start here when you are looking for where a behaviour lives. Every file below is under `harness/` except the top-level `address.rs`, the petname grammar in `agents/`, and the durable run record in `store/`.
 
 | File | Owns |
 | --- | --- |
