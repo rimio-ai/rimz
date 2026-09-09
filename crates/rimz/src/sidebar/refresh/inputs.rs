@@ -16,7 +16,3 @@ pub(in crate::sidebar) fn published_lane_inputs(runtime: &RuntimePaths) -> [Path
         super::daemon_reap::codex_daemon_reap_path(runtime),
     ]
 }
-
-pub(in crate::sidebar) fn is_workspace_spending_file(name: &str) -> bool {
-    name.starts_with("workspace-spending.") && name.ends_with(".json")
-}

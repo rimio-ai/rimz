@@ -193,6 +193,12 @@ const LEGACY_RUNTIME_SHARED_CACHES: [&str; 6] = [
     "pricing-cache.json",
 ];
 
+pub fn is_workspace_spending_file(name: &str) -> bool {
+    name.strip_prefix("workspace-spending.")
+        .and_then(|rest| rest.strip_suffix(".json"))
+        .is_some()
+}
+
 impl RuntimePaths {
     pub fn for_workspace(workspace_id: WorkspaceId) -> Result<Self> {
         Self::for_workspace_with_shared_root(
@@ -490,6 +496,20 @@ impl RuntimePaths {
     pub fn workspace_spending_path(&self, scope_hash: &str) -> PathBuf {
         let prefix = scope_hash.get(..32).unwrap_or(scope_hash);
         self.root.join(format!("workspace-spending.{prefix}.json"))
+    }
+
+    pub fn workspace_spending_files(&self) -> Vec<PathBuf> {
+        fs::read_dir(&self.root)
+            .into_iter()
+            .flatten()
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(is_workspace_spending_file)
+            })
+            .collect()
     }
 
     /// Prepare only user-shared runtime ownership and persistent cache roots.
@@ -810,6 +830,20 @@ fn current_uid() -> u32 {
 mod tests {
     use super::*;
     use crate::ids::WorkspaceId;
+
+    #[test]
+    fn workspace_spending_file_names() {
+        for name in ["workspace-spending.abc.json", "workspace-spending..json"] {
+            assert!(is_workspace_spending_file(name));
+        }
+        for name in [
+            "workspace-spending.json",
+            "budget.json",
+            "workspace-spending.abc.json.tmp",
+        ] {
+            assert!(!is_workspace_spending_file(name));
+        }
+    }
 
     fn short_tempdir() -> tempfile::TempDir {
         tempfile::Builder::new()
