@@ -10,6 +10,7 @@ use std::cell::OnceCell;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Seek, Write};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
@@ -19,11 +20,11 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
 use nix::errno::Errno;
-use nix::sys::signal::{Signal, kill};
+use nix::sys::signal::{Signal, kill, killpg};
 use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 
-use super::fire::deadline_expired_at;
+use super::{LOOP_TASK_ENV, fire::deadline_expired_at};
 use crate::agents::PermissionMode;
 use crate::agents::{
     HookPreflightErr, ManagedLaunchState, ProviderCapacity, TurnLifecycleNeed, WindowSurplus,
@@ -46,7 +47,6 @@ use crate::utils::time::{DurationUnit, parse_duration_units};
 use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};
 
 pub const CHECK_DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
-pub const LOOP_TASK_ENV: &str = "RIMZ_LOOP_TASK";
 pub(super) const SCHEDULED_RUN_DEFAULT_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 pub const SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL: &str = "2h";
 const CHECK_POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -58,6 +58,31 @@ const TASK_TIMEOUT_UNITS: &[DurationUnit] = &[
     DurationUnit::Hour,
     DurationUnit::Day,
 ];
+
+/// Check-owned launches must not capture launches made by an agent in its pane.
+pub fn loop_check_task() -> Option<String> {
+    check_task_from_identity(
+        std::env::var(LOOP_TASK_ENV).ok(),
+        std::env::var_os(crate::harness::launch::ENV_AGENT_ID).is_some(),
+    )
+}
+
+fn check_task_from_identity(task: Option<String>, has_agent: bool) -> Option<String> {
+    task.filter(|task| !has_agent && !task.is_empty())
+}
+
+/// Apply the shared deadline and cleanup policy without changing placement.
+pub fn shape_loop_owned(
+    request: &mut SupervisedRunRequest,
+    task: &str,
+    config: &MachineConfig,
+    mode: LoopRunMode,
+) -> Result<()> {
+    request.timeout = effective_spawn_timeout(mode, request.timeout, configured_timeout(config)?);
+    request.loop_task = Some(task.to_owned());
+    request.self_cleanup_on_completion = !request.keep;
+    Ok(())
+}
 
 #[derive(Clone, Debug)]
 pub enum TaskFireNotice {
@@ -644,9 +669,6 @@ impl<'a> TaskFire<'a> {
             .map(parse_mode_value)
             .transpose()?
             .unwrap_or(PermissionMode::Auto);
-        let task_timeout = task_timeout(&self.entry)?;
-        let configured_timeout = configured_timeout(&self.config)?;
-        let timeout = effective_spawn_timeout(self.mode, task_timeout, configured_timeout);
         let budget = self
             .entry
             .budget
@@ -658,12 +680,12 @@ impl<'a> TaskFire<'a> {
         request.system_prompt_file = system_prompt_file;
         request.effort.clone_from(&self.entry.effort);
         request.budget = budget;
-        request.timeout = timeout;
+        request.timeout = task_timeout(&self.entry)?;
         request.keep = self.keep;
         request.verify.clone_from(&self.entry.verify);
         request.max_attempts = self.entry.max_attempts;
         request.loop_zone = self.mode == LoopRunMode::Scheduled;
-        request.loop_task = Some(self.name.clone());
+        shape_loop_owned(&mut request, &self.name, &self.config, self.mode)?;
         Ok(request)
     }
 
@@ -1472,7 +1494,14 @@ pub fn run_check(
     echo: CheckEcho,
     env: &BTreeMap<String, String>,
 ) -> Result<CheckOutcome> {
-    run_command(dir, cmd, WatchDeadline::KillAfter(timeout), echo, env, |_, _| {})
+    run_command(
+        dir,
+        cmd,
+        WatchDeadline::KillAfter(timeout),
+        echo,
+        env,
+        |_, _| {},
+    )
 }
 
 pub(super) enum WatchDeadline {
@@ -1509,10 +1538,14 @@ pub(super) fn run_command(
         cap,
     }));
     let mut command = Command::new("sh");
+    if matches!(deadline, WatchDeadline::KillAfter(_)) {
+        command.process_group(0);
+    }
     if env.contains_key(LOOP_TASK_ENV) {
         command.env_remove(crate::harness::launch::ENV_AGENT_ID);
     }
-    let mut child = command.arg("-c")
+    let mut child = command
+        .arg("-c")
         .arg(cmd)
         .current_dir(dir)
         .envs(env)
@@ -1548,6 +1581,7 @@ pub(super) fn run_command(
         }
         if check_in_at.is_some_and(|at| Instant::now() >= at) {
             if matches!(deadline, WatchDeadline::KillAfter(_)) {
+                let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
                 let _ = child.kill();
                 let status = child
                     .wait()

@@ -32,6 +32,63 @@ fn vanished_delivery_root_still_resolves_and_finds_no_active_run() {
 }
 
 #[test]
+fn loop_check_identity_excludes_agent_and_room_environments() {
+    assert_eq!(
+        check_task_from_identity(Some("nightly".to_owned()), false).as_deref(),
+        Some("nightly")
+    );
+    assert_eq!(
+        check_task_from_identity(Some("nightly".to_owned()), true),
+        None
+    );
+    assert_eq!(check_task_from_identity(Some(String::new()), false), None);
+    assert_eq!(check_task_from_identity(None, false), None);
+}
+
+#[test]
+fn spawn_requests_share_loop_cleanup_without_changing_manual_placement() {
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
+    for mode in [LoopRunMode::Scheduled, LoopRunMode::Manual] {
+        for keep in [false, true] {
+            let entry = TaskEntry {
+                agent: Some("claude".to_owned()),
+                prompt: Some("check".to_owned()),
+                root: dir.path().to_owned(),
+                ..TaskEntry::default()
+            };
+            let fire = TaskFire::new(
+                "nightly",
+                LoadedTask::new("nightly", entry, catalog::TaskSource::Config),
+                &catalog,
+                mode,
+                keep,
+                Timestamp::now(),
+                Arc::new(MachineConfig::default()),
+                None,
+                CheckEcho::Capture,
+                Instant::now(),
+            )
+            .unwrap();
+            let request = fire
+                .compile_spawn_request(
+                    "claude".to_owned(),
+                    "check".to_owned(),
+                    ManagedLaunchState::Unsupported,
+                )
+                .unwrap();
+            assert_eq!(request.loop_task.as_deref(), Some("nightly"));
+            assert_eq!(request.self_cleanup_on_completion, !keep);
+            assert_eq!(request.loop_zone, mode == LoopRunMode::Scheduled);
+            assert_eq!(
+                request.timeout,
+                (mode == LoopRunMode::Scheduled).then_some(SCHEDULED_RUN_DEFAULT_TIMEOUT)
+            );
+        }
+    }
+}
+
+#[test]
 fn spawn_timeout_prefers_task_then_config_then_builtin() {
     use LoopRunMode::{Manual, Scheduled};
     let task = Duration::from_secs(30);
@@ -320,7 +377,9 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
     let catalog = TaskCatalog::load(Some(dir.path())).expect("load task catalog");
 
     let mut poll_fire = skipped_fire(poll_name, &catalog, None);
-    let poll_check = poll_fire.prepare_check(&mut |_| Ok(())).expect("run poll check");
+    let poll_check = poll_fire
+        .prepare_check(&mut |_| Ok(()))
+        .expect("run poll check");
     assert_eq!(
         poll_check.done.expect("skipped poll result").record.result,
         LoopRunResult::CheckSkipped
@@ -344,7 +403,9 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
         running.watch.as_mut().unwrap().verdict = WatchVerdict::Running { elapsed_ms: 1_000 };
         let mut fire = skipped_fire(watch_name, &catalog, Some(running));
         fire.entry.on = Some(on);
-        let check = fire.prepare_check(&mut |_| panic!("supplied watch runs no check")).expect("running watch always delivers");
+        let check = fire
+            .prepare_check(&mut |_| panic!("supplied watch runs no check"))
+            .expect("running watch always delivers");
         assert!(check.done.is_none());
         fire.consume_ephemeral().expect("retain running watch");
         assert!(
@@ -354,7 +415,9 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
         );
     }
     let mut watch_fire = skipped_fire(watch_name, &catalog, Some(signal));
-    let watch_check = watch_fire.prepare_check(&mut |_| panic!("supplied watch runs no check")).expect("read watch check");
+    let watch_check = watch_fire
+        .prepare_check(&mut |_| panic!("supplied watch runs no check"))
+        .expect("read watch check");
     let finished = watch_check.done.expect("skipped watch result");
     assert_eq!(finished.record.result, LoopRunResult::CheckSkipped);
     assert_eq!(
@@ -427,16 +490,29 @@ fn check_room_hook_precedes_execution_and_pins_loop_identity() {
         None,
         CheckEcho::Capture,
         Instant::now(),
-    ).unwrap();
+    )
+    .unwrap();
     let mut calls = 0;
-    let TaskFirePlan::Done(done) = fire.prepare(&mut |root| {
-        calls += 1;
-        std::fs::write(root.join("room-ready"), "")?;
-        Ok(())
-    }).unwrap() else { panic!("check finishes without an effect") };
+    let TaskFirePlan::Done(done) = fire
+        .prepare(&mut |root| {
+            calls += 1;
+            std::fs::write(root.join("room-ready"), "")?;
+            Ok(())
+        })
+        .unwrap()
+    else {
+        panic!("check finishes without an effect")
+    };
     assert_eq!(calls, 1);
     assert_eq!(done.record.result, LoopRunResult::Completed);
-    assert_eq!(done.record.check.unwrap().output, format!("room-check|{}|{}|unset", dir.path().display(), WorkspaceId::from_project_root(dir.path())));
+    assert_eq!(
+        done.record.check.unwrap().output,
+        format!(
+            "room-check|{}|{}|unset",
+            dir.path().display(),
+            WorkspaceId::from_project_root(dir.path())
+        )
+    );
 }
 
 #[test]
@@ -449,20 +525,42 @@ fn check_room_hook_is_after_lock_and_deadline_and_records_failure() {
         every: Some("1m".to_owned()),
         ..TaskEntry::default()
     };
-    let make_fire = |entry: TaskEntry| TaskFire::new(
-        "room-gates", LoadedTask::new("room-gates", entry, catalog::TaskSource::Config),
-        &catalog, LoopRunMode::Manual, false, Timestamp::now(),
-        Arc::new(MachineConfig::default()), None, CheckEcho::Capture, Instant::now(),
-    ).unwrap();
+    let make_fire = |entry: TaskEntry| {
+        TaskFire::new(
+            "room-gates",
+            LoadedTask::new("room-gates", entry, catalog::TaskSource::Config),
+            &catalog,
+            LoopRunMode::Manual,
+            false,
+            Timestamp::now(),
+            Arc::new(MachineConfig::default()),
+            None,
+            CheckEcho::Capture,
+            Instant::now(),
+        )
+        .unwrap()
+    };
     let mut fire = make_fire(entry.clone());
-    let error = fire.prepare(&mut |_| bail!("room unavailable")).unwrap_err();
-    assert_eq!(fire.finish_error(&error).record.result, LoopRunResult::Errored);
+    let error = fire
+        .prepare(&mut |_| bail!("room unavailable"))
+        .unwrap_err();
+    assert_eq!(
+        fire.finish_error(&error).record.result,
+        LoopRunResult::Errored
+    );
     let mut overlap = make_fire(entry.clone());
-    assert!(matches!(overlap.prepare(&mut |_| panic!("lock refuses before room birth")).unwrap(), TaskFirePlan::Done(done) if done.record.result == LoopRunResult::Overlapped));
+    assert!(
+        matches!(overlap.prepare(&mut |_| panic!("lock refuses before room birth")).unwrap(), TaskFirePlan::Done(done) if done.record.result == LoopRunResult::Overlapped)
+    );
     drop(overlap);
     drop(fire);
-    let mut expired = make_fire(TaskEntry { deadline: Some(Timestamp::UNIX_EPOCH), ..entry });
-    assert!(matches!(expired.prepare(&mut |_| panic!("expired before room birth")).unwrap(), TaskFirePlan::Done(done) if done.record.result == LoopRunResult::Expired));
+    let mut expired = make_fire(TaskEntry {
+        deadline: Some(Timestamp::UNIX_EPOCH),
+        ..entry
+    });
+    assert!(
+        matches!(expired.prepare(&mut |_| panic!("expired before room birth")).unwrap(), TaskFirePlan::Done(done) if done.record.result == LoopRunResult::Expired)
+    );
     assert!(!dir.path().join("check-ran").exists());
 }
 
@@ -470,7 +568,14 @@ fn check_room_hook_is_after_lock_and_deadline_and_records_failure() {
 fn run_check_captures_output_status_and_timeout() {
     let dir = tempfile::tempdir().expect("tempdir");
     let check = |cmd: &str, timeout| {
-        run_check(dir.path(), cmd, timeout, CheckEcho::Capture, &BTreeMap::new()).expect("check ran")
+        run_check(
+            dir.path(),
+            cmd,
+            timeout,
+            CheckEcho::Capture,
+            &BTreeMap::new(),
+        )
+        .expect("check ran")
     };
 
     let passed = check("printf out; printf err >&2", Duration::from_secs(1));
@@ -485,9 +590,13 @@ fn run_check_captures_output_status_and_timeout() {
     assert_eq!(failed.code, Some(1));
     assert!(failed.output.contains("nope"));
 
-    let expired = check("sleep 1", Duration::from_millis(50));
+    let expired = check("(sleep 1; printf leaked) & wait", Duration::from_millis(50));
     assert!(!expired.passed);
     assert!(expired.timed_out);
+    assert!(
+        expired.output.is_empty(),
+        "timed-out descendants cannot keep writing to the check pipes"
+    );
 }
 
 #[test]

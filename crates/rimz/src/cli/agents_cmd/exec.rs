@@ -723,6 +723,18 @@ pub(super) struct RunExecContext {
 }
 
 impl RunExecContext {
+    fn ready_for_self_cleanup(&self) -> bool {
+        self.is_terminal()
+            && match rimz::store::run::run_waiter_is_live(self.store.runtime_paths(), &self.run_id)
+            {
+                Ok(live) => !live,
+                Err(error) => {
+                    tracing::debug!(run_id = %self.run_id, %error, "could not probe supervised run waiter");
+                    false
+                }
+            }
+    }
+
     fn is_terminal(&self) -> bool {
         match rimz::harness::run::load(self.store.paths(), &self.run_id) {
             Ok(record) => record.status.is_terminal(),
@@ -1240,7 +1252,7 @@ fn supervise_child(
             && now >= next_run_check
         {
             next_run_check = now + RUN_MONITOR_POLL;
-            if monitor.is_terminal() {
+            if monitor.ready_for_self_cleanup() {
                 run_completed = true;
                 child.signal_term();
                 term_sent_at = Some(now);
@@ -1388,6 +1400,61 @@ mod tests {
         AgentProcessStage, ExecAction, ExecIdentity, ExecRequest, ProviderAccountState,
     };
     use rimz::harness::prompt_compose::MaterializedSystemPrompt;
+
+    #[test]
+    fn terminal_self_cleanup_defers_to_waiter_and_survives_rearm() {
+        let state = tempfile::tempdir().unwrap();
+        let runtime_root = tempfile::tempdir_in("/tmp").unwrap();
+        let workspace_id = rimz::WorkspaceId::from_project_root(state.path());
+        let paths = rimz::StatePaths::under(workspace_id.clone(), state.path()).unwrap();
+        let runtime = rimz::RuntimePaths::under(workspace_id.clone(), runtime_root.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+        runtime.ensure_dirs().unwrap();
+        let mut record = rimz::store::run::RunRecord::new(
+            workspace_id.clone(),
+            AgentKind::new_unchecked("claude"),
+            PermissionMode::Auto,
+            "check".to_owned(),
+            state.path().to_owned(),
+        );
+        record.status = rimz::store::run::RunStatus::Completed;
+        rimz::harness::run::create(&paths, &record).unwrap();
+        let context = RunExecContext {
+            run_id: record.run_id.clone(),
+            store: rimz::Store::open(paths, runtime).unwrap(),
+            session_name: "room".to_owned(),
+        };
+        assert!(
+            context.ready_for_self_cleanup(),
+            "background run has no waiter"
+        );
+        let waiter = rimz::harness::run_wake::RunWaiter::bind(
+            context.store.runtime_paths(),
+            rimz::harness::run_wake::ExpectedRunFrame {
+                workspace_id,
+                run_id: record.run_id.clone(),
+            },
+            rimz::harness::run::RunCancellation::new(),
+        )
+        .unwrap();
+        assert!(
+            !context.ready_for_self_cleanup(),
+            "live waiter owns verification and evidence capture"
+        );
+        record.status = rimz::store::run::RunStatus::Running;
+        rimz::harness::run::create(context.store.paths(), &record).unwrap();
+        drop(waiter);
+        assert!(
+            !context.ready_for_self_cleanup(),
+            "rearmed run remains active even without a waiter"
+        );
+        record.status = rimz::store::run::RunStatus::Completed;
+        rimz::harness::run::create(context.store.paths(), &record).unwrap();
+        assert!(
+            context.ready_for_self_cleanup(),
+            "terminal run is reclaimed once waiter leaves"
+        );
+    }
 
     fn request(kind: &str, action: ExecAction) -> ExecRequest {
         ExecRequest {

@@ -36,6 +36,8 @@ pub mod team;
 
 pub use fire::last_stamps;
 
+pub const LOOP_TASK_ENV: &str = "RIMZ_LOOP_TASK";
+
 /// Executable action encoded by one loop task entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TaskAction {

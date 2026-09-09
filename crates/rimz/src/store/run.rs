@@ -255,6 +255,23 @@ pub(crate) fn run_socket_path(rt: &RuntimePaths, run_id: &RunId) -> PathBuf {
     rt.sock_dir.join(format!("run.{}.sock", run_id.short()))
 }
 
+/// A live waiter owns verification and pane cleanup; a stale socket does not.
+pub fn run_waiter_is_live(rt: &RuntimePaths, run_id: &RunId) -> std::io::Result<bool> {
+    let probe = StdUnixDatagram::unbound()?;
+    match probe.connect(run_socket_path(rt, run_id)) {
+        Ok(()) => Ok(true),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// Send a terminal datagram to the supervised-run waiter. Durable run state
 /// remains authoritative; sender creation and per-target failures are absorbed.
 pub fn wake_run(rt: &RuntimePaths, record: &RunRecord) {
@@ -348,6 +365,22 @@ mod tests {
     use crate::agents::PermissionMode;
     use crate::ids::{AgentKind, WorkspaceId};
     use tempfile::tempdir;
+
+    #[test]
+    fn waiter_liveness_distinguishes_bound_stale_and_absent_socket() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let id = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(id, dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let run_id = RunId::new();
+        assert!(!run_waiter_is_live(&runtime, &run_id).unwrap());
+        let path = run_socket_path(&runtime, &run_id);
+        let waiter = StdUnixDatagram::bind(&path).unwrap();
+        assert!(run_waiter_is_live(&runtime, &run_id).unwrap());
+        drop(waiter);
+        assert!(path.exists());
+        assert!(!run_waiter_is_live(&runtime, &run_id).unwrap());
+    }
 
     #[test]
     fn write_load_and_list_runs() {

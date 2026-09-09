@@ -1188,6 +1188,9 @@ fn loop_history_filters_workspace_and_keeps_legacy_records() {
 
 #[test]
 fn external_tick_fires_a_machine_task_without_a_workspace_record() {
+    if which::which("tmux").is_err() && which::which("zellij").is_err() {
+        return;
+    }
     let env = Env::new();
     let marker = env.project_root.join("machine-tick-ran");
     write_loop_config(
@@ -1211,10 +1214,18 @@ fn external_tick_fires_a_machine_task_without_a_workspace_record() {
 
     wait_for_path(&marker);
     assert!(env.runtime_paths().shared_root.is_dir());
+    assert!(
+        env.state_path_for(&env.project_root)
+            .workspace_record
+            .exists()
+    );
 }
 
 #[test]
 fn external_tick_discovers_a_trusted_project_without_a_workspace_record() {
+    if which::which("tmux").is_err() && which::which("zellij").is_err() {
+        return;
+    }
     let env = Env::new();
     let project = env.home_root.join("never-roomed-project");
     std::fs::create_dir(&project).expect("project root");
@@ -1262,6 +1273,7 @@ fn external_tick_discovers_a_trusted_project_without_a_workspace_record() {
     loop_ok(&env, &["loop", "tick"]);
 
     wait_for_path(&marker);
+    assert!(env.state_path_for(&project).workspace_record.exists());
 }
 
 #[test]
