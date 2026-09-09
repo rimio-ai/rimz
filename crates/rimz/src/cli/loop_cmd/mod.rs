@@ -94,6 +94,12 @@ enum LoopSubcmd {
     /// Run one task now. The sidebar elder calls this; humans rarely do.
     #[command(hide = true)]
     Run(RunArgs),
+    /// Execute a check without inheriting its caller's controlling terminal.
+    #[command(hide = true)]
+    CheckExec {
+        #[arg(long, allow_hyphen_values = true)]
+        command: String,
+    },
     /// Run one scheduler pass for roots without an open room.
     #[command(hide = true)]
     Tick,
@@ -318,6 +324,15 @@ struct WatchArgs {
 
 pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
+        LoopSubcmd::CheckExec { command } => {
+            use std::os::unix::process::CommandExt;
+
+            nix::unistd::setsid().context("detaching loop check from the caller's terminal")?;
+            Err(std::process::Command::new("sh")
+                .args(["-c", &command])
+                .exec()
+                .into())
+        }
         LoopSubcmd::Add(args) => add::add(*args, globals),
         LoopSubcmd::Remove(args) => add::remove(&args.name, globals),
         LoopSubcmd::Rename(args) => add::rename(&args.name, &args.new_name, globals),

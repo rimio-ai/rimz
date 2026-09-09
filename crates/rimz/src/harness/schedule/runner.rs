@@ -10,7 +10,6 @@ use std::cell::OnceCell;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Seek, Write};
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
@@ -50,6 +49,7 @@ pub const CHECK_DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 pub(super) const SCHEDULED_RUN_DEFAULT_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 pub const SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL: &str = "2h";
 const CHECK_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const CHECK_DRAIN_GRACE: Duration = Duration::from_millis(200);
 const RUN_LOCK_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const CHECK_OUTPUT_CAP: usize = 16 * 1024;
 const TASK_TIMEOUT_UNITS: &[DurationUnit] = &[
@@ -1509,6 +1509,23 @@ pub(super) enum WatchDeadline {
     CheckInOnce(Duration),
 }
 
+#[cfg(not(test))]
+fn check_command(command: &str) -> Command {
+    let mut child = Command::new(crate::proc::rimz_exe());
+    child.args(["loop", "check-exec", "--command", command]);
+    child
+}
+
+#[cfg(test)]
+fn check_command(command: &str) -> Command {
+    use std::os::unix::process::CommandExt;
+
+    // Unit tests cover the driver; CLI integration covers the session trampoline.
+    let mut child = Command::new("sh");
+    child.args(["-c", command]).process_group(0);
+    child
+}
+
 pub(super) fn run_command(
     dir: &Path,
     cmd: &str,
@@ -1537,20 +1554,24 @@ pub(super) fn run_command(
         tail: Vec::with_capacity(cap),
         cap,
     }));
-    let mut command = Command::new("sh");
     let mut interrupts = None;
-    if matches!(deadline, WatchDeadline::KillAfter(_)) {
-        command.process_group(0);
-        interrupts = Some(signal_hook::iterator::Signals::new([
-            signal_hook::consts::SIGINT,
-        ])?);
-    }
+    let mut command = match deadline {
+        WatchDeadline::KillAfter(_) => {
+            interrupts = Some(signal_hook::iterator::Signals::new([
+                signal_hook::consts::SIGINT,
+            ])?);
+            check_command(cmd)
+        }
+        WatchDeadline::CheckInOnce(_) => {
+            let mut command = Command::new("sh");
+            command.args(["-c", cmd]);
+            command
+        }
+    };
     if env.contains_key(LOOP_TASK_ENV) {
         command.env_remove(crate::harness::launch::ENV_AGENT_ID);
     }
     let mut child = command
-        .arg("-c")
-        .arg(cmd)
         .current_dir(dir)
         .envs(env)
         .stdin(Stdio::null())
@@ -1606,7 +1627,17 @@ pub(super) fn run_command(
         }
         std::thread::sleep(CHECK_POLL_INTERVAL);
     };
+    let drain_deadline = timed_out.then(|| Instant::now() + CHECK_DRAIN_GRACE);
     for drain in [stdout, stderr] {
+        if let Some(deadline) = drain_deadline {
+            while !drain.is_finished() && Instant::now() < deadline {
+                std::thread::sleep(CHECK_POLL_INTERVAL);
+            }
+            if !drain.is_finished() {
+                tracing::debug!("timed-out check output truncated while a survivor holds its pipe");
+                continue;
+            }
+        }
         drain
             .join()
             .map_err(|_| anyhow::anyhow!("loop check output reader panicked"))??;

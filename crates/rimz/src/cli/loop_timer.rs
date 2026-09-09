@@ -124,7 +124,7 @@ fn detect_host(under_systemd: bool, has_systemd_run: bool) -> Result<LoopRunHost
     match (under_systemd, has_systemd_run) {
         (true, true) => Ok(LoopRunHost::TransientScope),
         (true, false) => Err(TimerErr::MissingSystemdRun),
-        (false, _) => Ok(LoopRunHost::Detached),
+        (false, _) => Ok(LoopRunHost::IsolatedProcessGroup),
     }
 }
 
@@ -504,8 +504,14 @@ mod tests {
 
     #[test]
     fn tick_host_requires_scope_support_under_systemd() {
-        assert_eq!(detect_host(false, false).unwrap(), LoopRunHost::Detached);
-        assert_eq!(detect_host(false, true).unwrap(), LoopRunHost::Detached);
+        assert_eq!(
+            detect_host(false, false).unwrap(),
+            LoopRunHost::IsolatedProcessGroup
+        );
+        assert_eq!(
+            detect_host(false, true).unwrap(),
+            LoopRunHost::IsolatedProcessGroup
+        );
         assert_eq!(
             detect_host(true, true).unwrap(),
             LoopRunHost::TransientScope
