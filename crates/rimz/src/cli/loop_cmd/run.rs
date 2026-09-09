@@ -95,6 +95,10 @@ pub(super) fn run_one(
         if mode != LoopRunMode::Scheduled || !matches!(action, TaskAction::CheckOnly) {
             return Ok(());
         }
+        let runtime = RuntimePaths::for_workspace(WorkspaceId::from_project_root(root))?;
+        if fresh_sidebar_present(&runtime) {
+            return Ok(());
+        }
         let mut room_globals = globals.clone();
         room_globals.root = Some(root.to_path_buf());
         crate::cli::room::ensure_workspace_room_detached(root, &room_globals, true, false)?;

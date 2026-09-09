@@ -1315,6 +1315,14 @@ fn external_tick_yields_a_root_with_a_fresh_sidebar() {
     .expect("fire state json");
     assert_eq!(stamps.get("open-root"), Some(&prior));
     assert!(!marker.exists());
+
+    loop_ok(&env, &["loop", "run", "open-root"]);
+    assert!(marker.exists());
+    assert!(
+        !env.state_path_for(&env.project_root)
+            .workspace_record
+            .exists()
+    );
 }
 
 #[test]
@@ -3263,36 +3271,107 @@ fn terminal_check_runs_interactive_shell_before_its_timeout() {
 
 #[cfg(unix)]
 #[test]
-fn manual_fire_forwards_interrupt_to_the_check_group() {
+fn manual_check_clears_the_agent_identity_overlay() {
     let env = Env::new();
     loop_ok(
         &env,
         &[
             "loop",
             "add",
+            "identity",
+            "--every",
+            "15m",
+            "--check",
+            "test -z \"${RIMZ_AGENT_ID+x}${RIMZ_AGENT_KIND+x}${RIMZ_AGENT_NAME+x}${RIMZ_AGENT_PROFILE+x}${RIMZ_AGENT_ROLE+x}${RIMZ_AGENT_MODEL+x}${RIMZ_AGENT_EFFORT+x}${RIMZ_AGENT_BUDGET+x}${RIMZ_AGENT_PID+x}\" && printf clean",
+        ],
+    );
+    let output = env
+        .rimz()
+        .args(["loop", "fire", "identity"])
+        .envs([
+            ("RIMZ_AGENT_ID", "stale-launch"),
+            ("RIMZ_AGENT_KIND", "claude"),
+            ("RIMZ_AGENT_NAME", "old-name"),
+            ("RIMZ_AGENT_PROFILE", "old-profile"),
+            ("RIMZ_AGENT_ROLE", "old-role"),
+            ("RIMZ_AGENT_MODEL", "old-model"),
+            ("RIMZ_AGENT_EFFORT", "old-effort"),
+            ("RIMZ_AGENT_BUDGET", "99"),
+            ("RIMZ_AGENT_PID", "1"),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let record = last_loop_record(&env);
+    assert_eq!(record.result, LoopRunResult::Completed);
+    assert_eq!(record.check.unwrap().output, "clean");
+}
+
+#[cfg(unix)]
+#[test]
+fn manual_fire_forwards_interrupt_to_the_check_group() {
+    for (on, ignores_interrupt) in [
+        (None, false),
+        (Some("fail"), false),
+        (Some("success"), false),
+        (Some("any"), false),
+        (Some("fail"), true),
+    ] {
+        let env = Env::new();
+        let check = if ignores_interrupt {
+            "trap '' INT; printf ready > check-ready; sleep 30"
+        } else {
+            "trap 'printf stopped > interrupted; exit 130' INT; printf ready > check-ready; sleep 30"
+        };
+        let mut args = vec![
+            "loop",
+            "add",
             "interruptible",
             "--every",
             "15m",
             "--check",
-            "trap 'printf stopped > interrupted; exit 130' INT; printf ready > check-ready; sleep 30",
-        ],
-    );
-    let mut runner = env
-        .rimz()
-        .args(["loop", "fire", "interruptible"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
+            check,
+        ];
+        if let Some(on) = on {
+            env.install_agent_hooks("claude");
+            args.extend([
+                "--agent",
+                "claude",
+                "--prompt",
+                "must not launch",
+                "--on",
+                on,
+            ]);
+        }
+        loop_ok(&env, &args);
+        let mut runner = env
+            .rimz()
+            .args(["loop", "fire", "interruptible"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        wait_for_path(&env.project_root.join("check-ready"));
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(runner.id() as i32),
+            nix::sys::signal::Signal::SIGINT,
+        )
         .unwrap();
-    wait_for_path(&env.project_root.join("check-ready"));
-    nix::sys::signal::kill(
-        nix::unistd::Pid::from_raw(runner.id() as i32),
-        nix::sys::signal::Signal::SIGINT,
-    )
-    .unwrap();
-    wait_for_path(&env.project_root.join("interrupted"));
-    runner.wait().unwrap();
-    assert_eq!(last_loop_record(&env).check.unwrap().code, Some(130));
+        if !ignores_interrupt {
+            wait_for_path(&env.project_root.join("interrupted"));
+        }
+        assert_eq!(runner.wait().unwrap().code(), Some(130));
+        let record = last_loop_record(&env);
+        assert_eq!(record.result, LoopRunResult::Canceled);
+        assert!(record.run_id.is_none());
+        let check = record.check.unwrap();
+        assert_eq!(check.code, (!ignores_interrupt).then_some(130));
+        assert!(!check.timed_out);
+    }
 }
 
 #[cfg(unix)]
