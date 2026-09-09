@@ -283,9 +283,9 @@ Lane resume picks one of four actions, and `LaneResumeAction` names them: `List`
 
 - A **named team spec** matches prior root agents with the same `team`, then maps role cells by role, taking the newest member per role.
 - An **inline multi-agent spec** matches the newest `launch_group` that maps onto its agent cells by `launch_ordinal`, falling back to kind when old records lack ordinals.
-- A **single-agent spec** ignores cohort membership and resumes the newest dead or unknown root session of that kind.
+- A **single-agent spec** ignores cohort membership and resumes the newest dead or unknown root session of that kind, and of that profile when the spec named one.
 
-Missing cells launch fresh in the matched cohort's cwd and channel, so the layout stays whole. Cleanly ended members stay candidates, so a closed team resumes while its worktree still exists. Subagents, empty session ids, and missing worktrees are never candidates. A matched member whose process is still live refuses the whole resume and names it, because launching beside it would duplicate the addressable role or kind. A kind whose adapter has no native resume argv launches fresh and is reported as such.
+Missing cells launch fresh in the matched cohort's cwd and channel, so the layout stays whole. Cleanly ended members stay candidates, so a closed team resumes while its worktree still exists. Launched children and provider-native subagents, empty session ids, missing worktrees, and launch placeholders that never adopted a session and are no longer live are never candidates. A matched member whose process is still live refuses the whole resume and names it, because launching beside it would duplicate the addressable role or kind. A kind whose adapter has no native resume argv launches fresh and is reported as such.
 
 Flat resume keeps pane identity when a stamp survives: newest-first candidates sharing one pane collapse to the newest session. A rebirth boundary retires pane stamps, because pane ids renumber across a mux restart; an unstamped root stays a candidate and deduplicates by `(kind, session id)`. Subagents are excluded by their parent identity rather than by their lack of a pane.
 

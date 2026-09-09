@@ -113,6 +113,14 @@ fn cohort_cell(kind: &str, role: Option<&str>) -> CohortCell {
     CohortCell {
         kind: AgentKind::new_unchecked(kind),
         role: role.map(ToOwned::to_owned),
+        profile: None,
+    }
+}
+
+fn profile_cell(kind: &str, profile: &str) -> CohortCell {
+    CohortCell {
+        profile: Some(profile.to_owned()),
+        ..cohort_cell(kind, None)
     }
 }
 

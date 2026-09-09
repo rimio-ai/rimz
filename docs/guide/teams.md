@@ -179,6 +179,8 @@ When the tree is instead clean and its content has landed, the choices are `remo
 
 `--resume` (alias `--continue`) forces the resume path, reopening the newest matching set of sessions: by team name and role for a team, or by cell order for an inline spec. Resume takes identity, working directory, and channel from RimZ's durable records and each role's model, effort, system prompt, and permission mode from its profile, so a resumed team comes back configured exactly as it launched. It stands alone: no prompt, model, or channel flags ride with it.
 
+For one agent, a kind resumes its newest closed root conversation; a profile such as `rimz agents astra --resume` selects only conversations launched from that profile. Subagents never compete with their parent, and a matching root that is still live refuses the command.
+
 ```sh
 rimz teams resume forge            # reopen the newest closed forge team
 rimz agents claude,codex --resume  # reopen the newest matching inline pair

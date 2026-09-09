@@ -1024,6 +1024,11 @@ impl AgentState {
         self.parent_agent_id.is_some() && self.launch_depth.is_none()
     }
 
+    /// A top-level session, neither a launched child nor a provider-native subagent.
+    pub fn is_root(&self) -> bool {
+        self.parent_agent_id.is_none()
+    }
+
     /// Match the parent link to a candidate session or launch of the right kind.
     pub fn parent_is(&self, candidate: &AgentState) -> bool {
         self.parent_agent_id

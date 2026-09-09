@@ -1811,7 +1811,7 @@ pub fn plan_cohort_resume(
     session_backed: impl Fn(&AgentState) -> bool,
 ) -> Result<CohortResumePlan, CohortResumeErr> {
     let spec = cohort_spec_label(cells, team);
-    let candidates = cohort_candidates(agents, worktree_exists);
+    let candidates = cohort_candidates(agents, &liveness, worktree_exists);
     let matches = match_cohort(&candidates, cells, team);
 
     let matched_any = matches.iter().any(Option::is_some);
@@ -1892,34 +1892,39 @@ fn cohort_spec_label(cells: &[CohortCell], team: Option<&str>) -> String {
     if let Some(team) = team {
         return team.to_owned();
     }
-    let kinds = cells
+    let specs = cells
         .iter()
-        .map(|cell| cell.kind.as_str())
+        .map(|cell| cell.profile.as_deref().unwrap_or(cell.kind.as_str()))
         .collect::<Vec<_>>()
         .join(",");
-    if kinds.is_empty() {
+    if specs.is_empty() {
         "<empty>".to_owned()
     } else {
-        kinds
+        specs
     }
 }
 
-fn cohort_candidates(
-    agents: &[AgentState],
+fn cohort_candidates<'a>(
+    agents: &'a [AgentState],
+    liveness: &impl Fn(&AgentState) -> AgentLiveness,
     worktree_exists: impl Fn(&Path) -> bool,
-) -> Vec<&AgentState> {
+) -> Vec<&'a AgentState> {
     agents
         .iter()
-        .filter(|agent| !agent.is_provider_subagent())
+        .filter(|agent| agent.is_root())
         .filter(|agent| !agent.agent_id.is_empty())
+        // An unadopted placeholder has nothing to resume; only a live one needs protection.
+        .filter(|agent| {
+            !agent.agent_id.is_provisional()
+                || matches!(liveness(agent), AgentLiveness::Live { .. })
+        })
         .filter(|agent| agent_worktree(agent).is_some_and(|path| worktree_exists(&path)))
         .collect()
 }
 
 /// Match one launch layout to its newest prior cohort.
 ///
-/// Named teams match by team and role, single-agent inline specs match by kind,
-/// and multi-agent inline specs match by launch group and cell identity.
+/// Named teams match by team and role, single-agent inline specs match by kind and by profile when named, and multi-agent inline specs match by launch group and cell identity.
 fn match_cohort<'a>(
     candidates: &[&'a AgentState],
     cells: &[CohortCell],
@@ -1952,7 +1957,7 @@ pub fn inspect_cohort_relaunch(
     let candidates = agents
         .iter()
         .filter(|agent| {
-            !agent.is_provider_subagent()
+            agent.is_root()
                 && agent.worktree_path.as_deref().is_some_and(|path| {
                     crate::utils::path::normalize_path_lexical(Path::new(path)) == target
                 })
@@ -2040,12 +2045,13 @@ fn match_single_cohort<'a>(
     candidates: &[&'a AgentState],
     cell: &CohortCell,
 ) -> Vec<Option<&'a AgentState>> {
-    vec![
-        candidates
-            .iter()
-            .copied()
-            .find(|agent| agent.kind == cell.kind),
-    ]
+    vec![candidates.iter().copied().find(|agent| {
+        agent.kind == cell.kind
+            && cell
+                .profile
+                .as_deref()
+                .is_none_or(|profile| agent.profile.as_deref() == Some(profile))
+    })]
 }
 
 fn match_inline_cohort<'a>(
@@ -2194,8 +2200,6 @@ impl<'a> CohortAssignments<'a> {
 
 fn supports_agent_resume(agent: &AgentState) -> bool {
     // A provisional `launch_...` id only names RimZ's pre-adoption placeholder.
-    // Keep the matched cohort cell and relaunch it fresh instead of asking the
-    // adapter to resume an id outside the provider session store.
     if agent.agent_id.is_provisional() {
         return false;
     }
@@ -2353,7 +2357,7 @@ pub fn closed_cohort_specs(
 ) -> Vec<String> {
     let mut members = agents
         .iter()
-        .filter(|agent| !agent.is_provider_subagent())
+        .filter(|agent| agent.is_root())
         .filter(|agent| !agent.agent_id.is_empty())
         .filter(|agent| !matches!(liveness(agent), AgentLiveness::Live { .. }))
         .filter(|agent| supports_agent_resume(agent))
