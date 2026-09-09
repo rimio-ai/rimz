@@ -62,7 +62,7 @@ Start here when you are looking for where a behaviour lives. Every file below is
 | [`prompt_compose.rs`](../../../crates/rimz/src/harness/prompt_compose.rs) | Ordered system-prompt composition, content-addressed runtime artifacts, and adapter replacement argv or environment. |
 | [`launch_context.rs`](../../../crates/rimz/src/harness/launch_context.rs) | Team launch context and its launch-time scratch-file snapshot reminder. |
 | [`launch.rs`](../../../crates/rimz/src/harness/launch.rs) | The provider process: adapter argv for launch, resume, and fork; the hidden `ExecRequest` wire; launch environment composition; the login-shell wrapper; and preflight. |
-| [`target.rs`](../../../crates/rimz/src/harness/target.rs) | The address: parsing `@handle#channel`, resolving it against a snapshot, binding a match to a live pane, and rendering the canonical handle back. |
+| [`address.rs`](../../../crates/rimz/src/address.rs) | The address: parsing `@handle#channel`, resolving it against a snapshot, binding a match to a live pane, rendering the canonical handle back, and launch-instance grouping and lineage. |
 | [`agents/petname.rs`](../../../crates/rimz/src/agents/petname.rs) | The adjective-noun instance names, their collision check, and the deterministic fallback for records written before petnames existed. |
 | [`resume.rs`](../../../crates/rimz/src/harness/resume.rs) | Resume planning for room rebirth, explicit cohort resume, and lane resume, plus `resolve_posture`, the relaunch posture seam every path shares. |
 | [`rebirth.rs`](../../../crates/rimz/src/harness/rebirth.rs) | Two-phase inspection of the previous incarnation of a room, over the shared recovery plan. |
@@ -261,7 +261,7 @@ Resolution has two sources and one matcher set over both: rollup sessions (`&Age
 
 The petname is the stable per-instance fallback name. The store mints an adjective-noun pair at registration through [`agents::petname`](../../../crates/rimz/src/agents/petname.rs), collision-checked against the room's live names, refusing reserved command words and kind-shaped names, so a petname can never shadow `@all` or `@claude-2`. A session recorded before petnames existed re-derives one deterministically from its session id, so old logs still render a stable name.
 
-The rendered handle is the shortest address that names exactly that agent, and it round-trips through the parser. RimZ renders it role first: the role when unique in scope, then the explicit `--name`, then the profile when unique, else the kind, else `@<kind>-<n>`, else the petname. A listing therefore always shows a handle you could type back, and a handle appears only when typing it reaches that one agent. One canonical renderer, the exact inverse of the parser, is shared by every agent-bearing listing; `target.rs` owns both halves and they are tested against each other.
+The rendered handle is the shortest address that names exactly that agent, and it round-trips through the parser. RimZ renders it role first: the role when unique in scope, then the explicit `--name`, then the profile when unique, else the kind, else `@<kind>-<n>`, else the petname. A listing therefore always shows a handle you could type back, and a handle appears only when typing it reaches that one agent. One canonical renderer, the exact inverse of the parser, is shared by every agent-bearing listing; `address.rs` owns both halves and they are tested against each other.
 
 ## Resume and rebirth
 

@@ -25,6 +25,6 @@ Topic detail lives in [messaging.md](../../../../docs/internals/harness/messagin
 - Status transitions stay in `store/writer/queue.rs`, under the workspace lock, each with its audit event. The status enum carries vocabulary, not rules.
 - Message content never enters the event log. Terminal text lives in `messages/history.jsonl`, which is audit: the live queue commits ahead of it, and a failed history append or retention pass warns without undoing the transition.
 - `fire.rs` runs on the renderer's cache-refresh tick, so keep it as light as that path demands. It reads the wake stamp and spawns `message sweep`; store reads and writes stay in that helper.
-- Address grammar, handle rendering, and channel resolution live in `harness/target.rs`. This module resolves targets through it and never parses addresses itself.
+- The agent-address grammar, its renderer, pane binding, and the launch-instance grouping with its lineage projections live in the top-level `address` module at the message layer; `message`, `harness`, the CLI, and one verdicted `agents` renderer site reach it, and `address` reaches only `agents`, `store`, and `ids`. This module resolves targets through it and never parses addresses itself.
 - CLI handlers own flag parsing, rendering, and exit codes. Dispatch conditions, delivery causality, and reply-wait state live here.
 - `compact.rs` owns standalone native compaction for operator and idle-compaction callers, including repeat refusal and boundary delivery through `deliver`.
