@@ -233,22 +233,12 @@ pub fn resolve_one<'a>(
     worktree_flag: Option<&str>,
     current_channel: Option<&str>,
 ) -> Result<&'a AgentState, TargetErr> {
-    let candidates = addressable_agents(snapshot);
-    let launch_candidates = launch_occupants_from(candidates.iter().copied());
-    let matches = resolve_mentions_with_launch_candidates(
+    resolve_agent(
         raw,
         worktree_flag,
         current_channel,
-        &candidates,
-        &launch_candidates,
-    )?;
-    match matches.as_slice() {
-        [one] => Ok(one),
-        many => Err(TargetErr::Ambiguous {
-            target: raw.to_owned(),
-            candidates: render_candidates(many),
-        }),
-    }
+        &addressable_agents(snapshot),
+    )
 }
 
 /// Resolve a target to every matching rollup agent (fan-out). Empty is an error.
@@ -267,13 +257,13 @@ pub fn resolve_many<'a>(
 /// Resolve a target to every matching agent from a caller-supplied durable
 /// candidate set. Message dispatch uses this over audit-scope rollups when the
 /// live projection missed a receiver.
-pub fn resolve_agents<'a>(
+pub(crate) fn resolve_agents<'a>(
     raw: &str,
     worktree_flag: Option<&str>,
     current_channel: Option<&str>,
     candidates: &[&'a AgentState],
 ) -> Result<Vec<&'a AgentState>, TargetErr> {
-    let launch_candidates = launch_occupants_from(candidates.iter().copied());
+    let launch_candidates = launch_occupants(candidates.iter().copied());
     resolve_mentions_with_launch_candidates(
         raw,
         worktree_flag,
@@ -315,25 +305,16 @@ pub fn resolve_targets<'a>(
     resolve_mentions(raw, worktree_flag, current_channel, &candidates)
 }
 
-/// How one live pane relates to lifecycle state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PaneBindingKind {
-    Exact,
-    Provisional,
-    Lazy,
-}
-
 /// One resolved live pane and any lifecycle card it represents.
 ///
 /// `agent` includes a provisional launch card. `exact_agent` is present only
 /// after the pane carries a registered lifecycle session and is safe for
 /// Waiting, gate, and context decisions.
 #[derive(Clone, Copy, Debug)]
-pub struct PaneBinding<'snapshot, 'pane> {
+pub(crate) struct PaneBinding<'snapshot, 'pane> {
     pub pane: &'pane PaneAgent,
     pub agent: Option<&'snapshot AgentState>,
     pub exact_agent: Option<&'snapshot AgentState>,
-    pub kind: PaneBindingKind,
 }
 
 impl PaneBinding<'_, '_> {
@@ -346,7 +327,7 @@ impl PaneBinding<'_, '_> {
 /// Bind one pane to exact lifecycle state, a same-channel provisional launch,
 /// or a sessionless lazy target. A pinned pane filters this result in place;
 /// it never redirects to another pane.
-pub fn pane_binding<'snapshot, 'pane>(
+pub(crate) fn pane_binding<'snapshot, 'pane>(
     snapshot: &'snapshot SidebarSnapshot,
     pane: &'pane PaneAgent,
     pinned: Option<&PaneId>,
@@ -363,7 +344,6 @@ pub fn pane_binding<'snapshot, 'pane>(
             pane,
             agent: Some(agent),
             exact_agent: Some(agent),
-            kind: PaneBindingKind::Exact,
         });
     }
     if let Some(agent) = snapshot.agents.iter().find(|agent| {
@@ -376,19 +356,17 @@ pub fn pane_binding<'snapshot, 'pane>(
             pane,
             agent: Some(agent),
             exact_agent: None,
-            kind: PaneBindingKind::Provisional,
         });
     }
     Some(PaneBinding {
         pane,
         agent: None,
         exact_agent: None,
-        kind: PaneBindingKind::Lazy,
     })
 }
 
 /// Find the exact or provisional live pane associated with one logical card.
-pub fn bind_agent<'a>(
+pub(crate) fn bind_agent<'a>(
     snapshot: &'a SidebarSnapshot,
     agent: &AgentState,
     pinned: Option<&PaneId>,
@@ -460,7 +438,7 @@ fn resolve_mentions_with_launch_candidates<'a, C: Candidate<'a>>(
         Target::Pane(pane) => resolve_by_pane(raw, &pane, launch_candidates).map(|one| vec![one]),
         Target::Mention { selector, channel } => {
             let channel =
-                effective_channel(raw, channel.as_deref(), worktree_flag, current_channel)?;
+                reconcile_channel(raw, channel.as_deref(), worktree_flag, current_channel)?;
             // A full session id is a pinned instance address, so it resolves
             // across channels like a pane id. Short prefixes still use the
             // channel-scoped selector path below.
@@ -545,13 +523,13 @@ pub fn require_mention(raw: &str) -> Result<(), TargetErr> {
 /// Whether `raw` is the broadcast handle `@all` — the explicit "everyone in the
 /// channel" address. A broadcast opts into fan-out on its own, so it needs no
 /// `--all`; a pane id is never a broadcast.
-pub fn is_broadcast(raw: &str) -> bool {
+pub(crate) fn is_broadcast(raw: &str) -> bool {
     !raw.contains(':') && selector_of(raw) == "all"
 }
 
 /// Prefix a group send with the addressed selector so receivers read it as a
 /// group message, not a private one. The marker drops any `#channel` suffix.
-pub fn group_prefixed(raw: &str, text: &str) -> String {
+pub(crate) fn group_prefixed(raw: &str, text: &str) -> String {
     format!("@{}, {text}", selector_of(raw))
 }
 
@@ -584,7 +562,7 @@ pub fn create_mention(
         } => Ok(None),
         Target::Mention { channel, .. } => {
             let channel =
-                effective_channel(raw, channel.as_deref(), worktree_flag, current_channel)?;
+                reconcile_channel(raw, channel.as_deref(), worktree_flag, current_channel)?;
             Ok(Some(CreateMention {
                 selector: selector_of(raw).to_owned(),
                 channel,
@@ -612,7 +590,19 @@ pub fn reconcile_channel(
     flag: Option<&str>,
     current: Option<&str>,
 ) -> Result<Option<String>, TargetErr> {
-    effective_channel(raw, inline, flag, current)
+    let reconciled = match (inline, flag) {
+        (Some(channel), Some(flag)) if channel != flag => {
+            return Err(TargetErr::ChannelMismatch {
+                target: raw.to_owned(),
+                channel: channel.to_owned(),
+                flag: flag.to_owned(),
+            });
+        }
+        (Some(channel), _) => Some(channel.to_owned()),
+        (None, Some(flag)) => Some(flag.to_owned()),
+        (None, None) => None,
+    };
+    Ok(reconciled.or_else(|| current.map(ToOwned::to_owned)))
 }
 
 fn parse_target(raw: &str) -> Result<Target, TargetErr> {
@@ -779,31 +769,6 @@ fn resolve_by_pane<'a, C: Candidate<'a>>(
     }
 }
 
-/// Reconcile the inline `#channel` with the channel flag (`--channel` or
-/// `--worktree`; mismatch is an error), then fall back to the current channel
-/// when neither is given. Returns an owned channel so it can outlive the parsed
-/// target's borrow.
-fn effective_channel(
-    raw: &str,
-    inline: Option<&str>,
-    flag: Option<&str>,
-    current: Option<&str>,
-) -> Result<Option<String>, TargetErr> {
-    let reconciled = match (inline, flag) {
-        (Some(channel), Some(flag)) if channel != flag => {
-            return Err(TargetErr::ChannelMismatch {
-                target: raw.to_owned(),
-                channel: channel.to_owned(),
-                flag: flag.to_owned(),
-            });
-        }
-        (Some(channel), _) => Some(channel.to_owned()),
-        (None, Some(flag)) => Some(flag.to_owned()),
-        (None, None) => None,
-    };
-    Ok(reconciled.or_else(|| current.map(ToOwned::to_owned)))
-}
-
 fn parse_ordinal_selector(selector: &str) -> Option<(&str, u32)> {
     let (kind, raw_ordinal) = selector.rsplit_once('-')?;
     if !crate::agents::known_kinds().any(|known| known == kind) {
@@ -856,10 +821,6 @@ fn no_match_error<'a, C: Candidate<'a>>(
     }
 }
 
-pub fn path_basename(path: &str) -> Option<&str> {
-    path.rsplit('/').next().filter(|value| !value.is_empty())
-}
-
 /// One live launch of a configured team in a lane.
 #[derive(Clone, Debug)]
 pub struct TeamCohort<'a> {
@@ -871,13 +832,7 @@ pub struct TeamCohort<'a> {
 /// Group conversation rows by shared launch id and agent-process/pane
 /// incarnation. Relaunches that reuse a launch id remain separate groups, and
 /// unstamped rows form singleton groups.
-fn launch_groups(agents: &[AgentState]) -> Vec<Vec<&AgentState>> {
-    launch_groups_from(agents.iter())
-}
-
-fn launch_groups_from<'a>(
-    agents: impl IntoIterator<Item = &'a AgentState>,
-) -> Vec<Vec<&'a AgentState>> {
+fn launch_groups<'a>(agents: impl IntoIterator<Item = &'a AgentState>) -> Vec<Vec<&'a AgentState>> {
     let mut groups: Vec<Vec<&AgentState>> = Vec::new();
     for agent in agents
         .into_iter()
@@ -959,16 +914,10 @@ pub fn launch_row<'a>(
 /// instance shares its `launch_id`; this selector alone decides which row the
 /// launch currently is. It reads `holds_open_turn`, so callers that need the
 /// current answer must attach rest certificates first.
-fn launch_occupants(agents: &[AgentState]) -> impl Iterator<Item = &AgentState> {
-    launch_groups(agents)
-        .into_iter()
-        .filter_map(|group| launch_occupant(&group))
-}
-
-pub(crate) fn launch_occupants_from<'a>(
+pub(crate) fn launch_occupants<'a>(
     agents: impl IntoIterator<Item = &'a AgentState>,
 ) -> Vec<&'a AgentState> {
-    launch_groups_from(agents)
+    launch_groups(agents)
         .into_iter()
         .filter_map(|group| launch_occupant(&group))
         .collect()
@@ -980,7 +929,10 @@ pub(crate) fn launch_occupants_from<'a>(
 /// the teams catalogue.
 pub fn team_cohorts(agents: &[AgentState]) -> Vec<TeamCohort<'_>> {
     let mut grouped: BTreeMap<(&str, String), Vec<&AgentState>> = BTreeMap::new();
-    for agent in launch_occupants(agents).filter(|agent| agent.ended_at.is_none()) {
+    for agent in launch_occupants(agents.iter())
+        .into_iter()
+        .filter(|agent| agent.ended_at.is_none())
+    {
         let Some(team) = agent.team.as_deref().filter(|team| !team.is_empty()) else {
             continue;
         };
@@ -1087,7 +1039,7 @@ pub fn channel_team<'a>(agents: &'a [AgentState], channel: &str) -> Option<&'a s
 /// A freshly launched pane may not have captured its channel yet; the addressed
 /// scope keeps same-channel hand-offs from rendering a spurious `#channel` on
 /// the structured message header.
-pub fn recipient_channel(
+pub(crate) fn recipient_channel(
     target: &PaneAgent,
     bound: Option<&AgentState>,
     scope_channel: Option<&str>,
@@ -1133,7 +1085,7 @@ pub fn agent_handle(agent: &AgentState, peers: &[&AgentState], include_channel: 
 /// Agent-authored text uses the shortest live handle when the sender is visible
 /// in the snapshot and falls back to the launch environment identity.
 /// System-authored text stays verbatim.
-pub fn message_header(
+pub(crate) fn message_header(
     sender: &MessageSender,
     peers: &[&AgentState],
     target_channel: Option<&str>,
@@ -1205,7 +1157,7 @@ fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> Strin
     if target_peer.is_none() {
         return absent_agent_handle_base(agent, &scoped_peers, scoped);
     }
-    let launch_occupants = launch_occupants_from(scoped_peers.iter().copied());
+    let launch_occupants = launch_occupants(scoped_peers.iter().copied());
     let launch_occupant = launch_occupants
         .iter()
         .any(|occupant| target_peer.is_some_and(|target| std::ptr::eq(*occupant, target)));

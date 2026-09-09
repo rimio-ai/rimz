@@ -1577,10 +1577,6 @@ fn emitted_signal_reaches_the_matching_wake_consumer() {
             notice: rimz::store::message::HarnessNotice::Signal,
         }
     );
-    assert_eq!(
-        rimz::address::message_header(&message.sender, &[], None).as_deref(),
-        Some("Type: SIGNAL\nFrom: @rimz\nContent:\n")
-    );
     assert!(
         message.text.contains("Inspect deployment"),
         "{}",

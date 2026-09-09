@@ -963,9 +963,9 @@ fn delivery_candidate<'a>(
     }
     let agent = evaluation.agent?;
     let status = agent.effective_status();
-    let target = evaluation.binding.map(|binding| binding.pane)?;
-    let bound = crate::address::pane_binding(snapshot, target, None)
-        .and_then(|binding| binding.exact_agent);
+    let binding = evaluation.binding?;
+    let target = binding.pane;
+    let bound = binding.exact_agent;
     Some(DeliveryCandidate {
         message,
         status,

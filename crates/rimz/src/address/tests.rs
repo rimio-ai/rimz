@@ -1114,14 +1114,12 @@ fn pane_binding_distinguishes_exact_provisional_and_lazy_targets() {
     let lazy = lazy_pane("codex", "/repo/other", "terminal_3");
 
     let binding = pane_binding(&snapshot, &exact_pane, None).unwrap();
-    assert_eq!(binding.kind, PaneBindingKind::Exact);
     assert_eq!(
         binding.exact_agent.map(|agent| agent.agent_id.as_str()),
         Some("session-exact")
     );
 
     let binding = pane_binding(&snapshot, &provisional_pane, None).unwrap();
-    assert_eq!(binding.kind, PaneBindingKind::Provisional);
     assert_eq!(
         binding.agent.map(|agent| agent.agent_id.as_str()),
         Some("launch_pending")
@@ -1129,7 +1127,6 @@ fn pane_binding_distinguishes_exact_provisional_and_lazy_targets() {
     assert!(binding.exact_agent.is_none());
 
     let binding = pane_binding(&snapshot, &lazy, None).unwrap();
-    assert_eq!(binding.kind, PaneBindingKind::Lazy);
     assert!(binding.agent.is_none());
 }
 
@@ -1140,9 +1137,11 @@ fn pane_binding_rejects_wrong_channel_stale_and_wrong_pinned_panes() {
     snapshot.agents = vec![provisional];
 
     let wrong_channel = lazy_pane("claude", "/repo/auth", "terminal_1");
-    assert_eq!(
-        pane_binding(&snapshot, &wrong_channel, None).unwrap().kind,
-        PaneBindingKind::Lazy
+    assert!(
+        pane_binding(&snapshot, &wrong_channel, None)
+            .unwrap()
+            .agent
+            .is_none()
     );
 
     let stale = bound_pane("claude", 1, "stale", "session-gone", "docs", "terminal_2");
@@ -1618,7 +1617,7 @@ fn launch_groups_separate_relaunched_processes_reusing_an_id() {
     ));
 
     let agents = [crashed, relaunched];
-    let groups = launch_groups(&agents);
+    let groups = launch_groups(agents.iter());
 
     assert_eq!(groups.len(), 2);
     assert!(groups.iter().all(|group| group.len() == 1));
