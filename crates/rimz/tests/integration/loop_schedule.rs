@@ -3214,6 +3214,40 @@ fn loop_stop_without_active_run_reports_no_active_run() {
 
 #[cfg(unix)]
 #[test]
+fn manual_fire_forwards_interrupt_to_the_check_group() {
+    let env = Env::new();
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "interruptible",
+            "--every",
+            "15m",
+            "--check",
+            "trap 'printf stopped > interrupted; exit 130' INT; printf ready > check-ready; sleep 30",
+        ],
+    );
+    let mut runner = env
+        .rimz()
+        .args(["loop", "fire", "interruptible"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    wait_for_path(&env.project_root.join("check-ready"));
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(runner.id() as i32),
+        nix::sys::signal::Signal::SIGINT,
+    )
+    .unwrap();
+    wait_for_path(&env.project_root.join("interrupted"));
+    runner.wait().unwrap();
+    assert_eq!(last_loop_record(&env).check.unwrap().code, Some(130));
+}
+
+#[cfg(unix)]
+#[test]
 fn loop_stop_terminates_holder_and_records_cancellation() {
     let env = Env::new();
     loop_ok(
