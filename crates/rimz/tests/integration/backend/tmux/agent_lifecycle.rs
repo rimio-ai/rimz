@@ -808,7 +808,10 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
     std::fs::write(
         agent_bin.join("claude"),
         format!(
-            "#!/bin/bash\nprintf ready > '{}/'$$\nexec -a claude sleep 300\n",
+            "#!/bin/bash\nset -e\n\
+             printf '{{\"hook_event_name\":\"SessionStart\",\"session_id\":\"cohort-%s\"}}\\n' \"$$\" | \
+             RIMZ_AGENT_PID=$$ \"$RIMZ_TEST_RIMZ_BIN\" hooks feed --source claude >/dev/null\n\
+             printf ready > '{}/'$$\nexec -a claude sleep 300\n",
             ready.display()
         ),
     )
@@ -818,6 +821,7 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
         command
             .env("PATH", path_with_front(&agent_bin))
             .env("SHELL", "/definitely/not/a/shell")
+            .env("RIMZ_TEST_RIMZ_BIN", env.rimz_bin())
             .args(["--mux", "tmux", "agents", "claude,claude", "-w", "fresh"]);
         command
     };
@@ -924,6 +928,7 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
                 .count();
             if ready_count == count
                 && rows.iter().filter(|agent| agent.ended_at.is_none()).count() == 2
+                && rows.iter().all(|agent| !agent.agent_id.is_provisional())
             {
                 return rows;
             }
