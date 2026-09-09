@@ -1,15 +1,18 @@
+//! Target loading and in-place tightening that preserves untouched TOML text.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use toml_edit::{DocumentMut, Formatted, Item, Table, Value};
 
 use crate::files;
 
 pub(super) const TARGET_FILE: &str = "refactor-target.toml";
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub(super) struct Target {
     pub(super) version: u8,
     pub(super) layers: Vec<Vec<String>>,
@@ -182,13 +185,106 @@ fn validate(path: &Path, target: &Target, layers_line: usize) -> Result<()> {
     Ok(())
 }
 
+/// Edit the existing file, preserving everything outside the tightened values.
 pub(super) fn write(path: &Path, target: &Target) -> Result<()> {
     validate(path, target, 1)?;
-    let mut rendered = toml::to_string_pretty(target).context("rendering refactor target TOML")?;
-    if !rendered.ends_with('\n') {
-        rendered.push('\n');
+    let changed = || {
+        format!(
+            "{} changed while tightening; restore a valid target and rerun atlas conform --tighten",
+            path.display()
+        )
+    };
+    let raw = fs::read_to_string(path).with_context(changed)?;
+    let mut document = raw.parse::<DocumentMut>().with_context(changed)?;
+    if document.get("version").and_then(Item::as_integer) != Some(i64::from(target.version)) {
+        bail!("{}", changed());
+    }
+    for (key, count) in [
+        ("module", target.modules.len()),
+        ("strangler", target.strangler.len()),
+    ] {
+        match document.get(key) {
+            None if count == 0 => {}
+            Some(item)
+                if item
+                    .as_array_of_tables()
+                    .is_some_and(|tables| tables.len() == count) => {}
+            _ => bail!("{}", changed()),
+        }
+    }
+    if let Some(tables) = document
+        .get_mut("module")
+        .and_then(Item::as_array_of_tables_mut)
+    {
+        for (table, rule) in tables.iter_mut().zip(&target.modules) {
+            if table.get("path").and_then(Item::as_str).map(Path::new) != Some(rule.path.as_path())
+            {
+                bail!("{}", changed());
+            }
+            set_integer(table, "surface-budget", rule.surface_budget).with_context(changed)?;
+            retain_admissions(
+                table,
+                "allowed-dependencies",
+                rule.allowed_dependencies.as_deref(),
+            )
+            .with_context(changed)?;
+            retain_admissions(
+                table,
+                "upward-dependencies",
+                rule.upward_dependencies.as_deref(),
+            )
+            .with_context(changed)?;
+        }
+    }
+    if let Some(tables) = document
+        .get_mut("strangler")
+        .and_then(Item::as_array_of_tables_mut)
+    {
+        for (table, rule) in tables.iter_mut().zip(&target.strangler) {
+            if table.get("path").and_then(Item::as_str).map(Path::new) != Some(rule.path.as_path())
+                || table.get("symbol").and_then(Item::as_str) != Some(rule.symbol.as_str())
+            {
+                bail!("{}", changed());
+            }
+            set_integer(table, "baseline", rule.baseline).with_context(changed)?;
+        }
+    }
+    let mut rendered = document.to_string();
+    if !raw.ends_with('\n') && rendered.ends_with('\n') {
+        rendered.pop();
     }
     files::write_atomically(path, rendered.as_bytes())
+}
+
+fn set_integer(table: &mut Table, key: &str, number: usize) -> Result<()> {
+    let Some(Value::Integer(value)) = table.get_mut(key).and_then(Item::as_value_mut) else {
+        bail!("expected integer `{key}`");
+    };
+    let number =
+        i64::try_from(number).with_context(|| format!("`{key}` exceeds TOML integer range"))?;
+    if *value.value() != number {
+        let decor = value.decor().clone();
+        *value = Formatted::new(number);
+        *value.decor_mut() = decor;
+    }
+    Ok(())
+}
+
+fn retain_admissions(table: &mut Table, key: &str, list: Option<&[String]>) -> Result<()> {
+    let Some(list) = list else {
+        table.remove(key);
+        return Ok(());
+    };
+    let array = table
+        .get_mut(key)
+        .and_then(Item::as_array_mut)
+        .with_context(|| format!("tightening requires an existing `{key}` array"))?;
+    array.retain(|value| {
+        value
+            .as_str()
+            .is_some_and(|name| list.iter().any(|item| item == name))
+    });
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -251,36 +347,139 @@ mod tests {
     }
 
     #[test]
-    fn target_preserves_verdicts_through_write() {
-        let target = Target {
-            version: 5,
-            layers: vec![vec!["store".to_owned()], vec!["cli".to_owned()]],
-            modules: vec![ModuleRule {
-                path: PathBuf::from("src/store"),
-                allowed_dependencies: None,
-                upward_dependencies: Some(vec!["cli".to_owned()]),
-                surface_budget: 4,
-                config_line: 9,
-            }],
-            strangler: Vec::new(),
-            verdicts: vec![Verdict {
-                kind: VerdictKind::PassThrough,
-                key: "store::open".to_owned(),
-                reason: "keeps the persistence boundary explicit".to_owned(),
-            }],
-        };
+    fn write_tightens_values_in_place_and_preserves_the_rest() {
+        let fixture = r#"# Owned budgets
+version = 5
+layers = [["store"], ["cli", "message"]]
+
+[[module]]
+path = 'src/store'
+upward-dependencies = [
+    # retained admission
+    'cli',
+    "message",
+]
+# Keep this explanation.
+surface-budget  =  0x10 # measured ceiling
+
+[[module]]
+path = "src/cli"
+allowed-dependencies = [ 'store' ]
+surface-budget = 1_000
+
+[[strangler]]
+symbol = 'legacy'
+path = 'src/store'
+baseline = 8 # remaining uses
+
+[[verdict]]
+kind = "pass-through"
+key = "store::open"
+reason = 'keeps the persistence boundary explicit'
+# trailing comment
+
+"#;
+        let expected = r#"# Owned budgets
+version = 5
+layers = [["store"], ["cli", "message"]]
+
+[[module]]
+path = 'src/store'
+upward-dependencies = [
+    # retained admission
+    'cli',
+]
+# Keep this explanation.
+surface-budget  =  4 # measured ceiling
+
+[[module]]
+path = "src/cli"
+allowed-dependencies = [ 'store' ]
+surface-budget = 1_000
+
+[[strangler]]
+symbol = 'legacy'
+path = 'src/store'
+baseline = 2 # remaining uses
+
+[[verdict]]
+kind = "pass-through"
+key = "store::open"
+reason = 'keeps the persistence boundary explicit'
+# trailing comment
+
+"#;
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("target.toml");
+        fs::write(&path, fixture).unwrap();
+        let mut target = load(&path).unwrap().unwrap();
 
         write(&path, &target).unwrap();
-        let reparsed = load(&path).unwrap().unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), fixture);
 
-        assert_eq!(reparsed.layers, target.layers);
-        assert_eq!(reparsed.verdicts, target.verdicts);
-        assert_eq!(
-            reparsed.modules[0].upward_dependencies,
-            target.modules[0].upward_dependencies
-        );
+        target.modules[0].surface_budget = 4;
+        target.modules[0].upward_dependencies = Some(vec!["cli".to_owned()]);
+        target.strangler[0].baseline = 2;
+
+        write(&path, &target).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), expected);
+    }
+
+    #[test]
+    fn write_removes_empty_upward_admissions_but_keeps_explicit_allowed_admissions() {
+        let fixture = "version = 5\nlayers = []\n[[module]]\npath = 'src/store'\nupward-dependencies = ['cli']\nsurface-budget = 4\n[[module]]\npath = 'src/cli'\nallowed-dependencies = ['store']\nsurface-budget = 2";
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("target.toml");
+        fs::write(&path, fixture).unwrap();
+        let mut target = load(&path).unwrap().unwrap();
+        target.modules[0].upward_dependencies = None;
+        target.modules[1].allowed_dependencies = Some(Vec::new());
+
+        write(&path, &target).unwrap();
+        let expected = "version = 5\nlayers = []\n[[module]]\npath = 'src/store'\nsurface-budget = 4\n[[module]]\npath = 'src/cli'\nallowed-dependencies = []\nsurface-budget = 2";
+        assert_eq!(fs::read_to_string(&path).unwrap(), expected);
+
+        target.modules[0].upward_dependencies = Some(vec!["cli".to_owned()]);
+        let error = format!("{:#}", write(&path, &target).unwrap_err());
+        assert!(error.contains("requires an existing `upward-dependencies` array"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), expected);
+    }
+
+    #[test]
+    fn write_rejects_changed_rule_counts_and_identities_without_writing() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("target.toml");
+        let header = "version = 5\nlayers = []\n";
+        let first_module = "[[module]]\npath = 'src/store'\nsurface-budget = 4\n";
+        let second_module = "[[module]]\npath = 'src/cli'\nsurface-budget = 2\n";
+        let first_strangler =
+            "[[strangler]]\npath = 'src/store'\nsymbol = 'legacy'\nbaseline = 3\n";
+        let second_strangler = "[[strangler]]\npath = 'src/store'\nsymbol = 'old'\nbaseline = 2\n";
+        let fixture =
+            format!("{header}{first_module}{second_module}{first_strangler}{second_strangler}");
+        fs::write(&path, &fixture).unwrap();
+        let mut target = load(&path).unwrap().unwrap();
+        target.modules[0].surface_budget = 1;
+        target.strangler[0].baseline = 1;
+
+        for changed in [
+            format!("{header}{second_module}{first_module}{first_strangler}{second_strangler}"),
+            format!("{header}{first_module}{second_module}{second_strangler}{first_strangler}"),
+            format!("{header}{first_module}{first_strangler}{second_strangler}"),
+            format!("{header}{first_module}{second_module}{first_strangler}"),
+            fixture.replace("path = 'src/store'\nsymbol", "path = 'src/message'\nsymbol"),
+            "version = [".to_owned(),
+        ] {
+            fs::write(&path, &changed).unwrap();
+            let error = write(&path, &target).unwrap_err().to_string();
+            assert!(error.contains("changed while tightening"), "{error}");
+            assert_eq!(fs::read_to_string(&path).unwrap(), changed);
+        }
+
+        fs::remove_file(&path).unwrap();
+        let error = write(&path, &target).unwrap_err().to_string();
+        assert!(error.contains("changed while tightening"), "{error}");
+        assert!(!path.exists());
     }
 
     #[test]
