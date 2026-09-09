@@ -1911,7 +1911,7 @@ fn cohort_candidates<'a>(
 ) -> Vec<&'a AgentState> {
     agents
         .iter()
-        .filter(|agent| agent.is_root())
+        .filter(|agent| agent.parent_agent_id.is_none())
         .filter(|agent| !agent.agent_id.is_empty())
         // An unadopted placeholder has nothing to resume; only a live one needs protection.
         .filter(|agent| {
@@ -1957,7 +1957,7 @@ pub fn inspect_cohort_relaunch(
     let candidates = agents
         .iter()
         .filter(|agent| {
-            agent.is_root()
+            agent.parent_agent_id.is_none()
                 && agent.worktree_path.as_deref().is_some_and(|path| {
                     crate::utils::path::normalize_path_lexical(Path::new(path)) == target
                 })
@@ -2357,7 +2357,7 @@ pub fn closed_cohort_specs(
 ) -> Vec<String> {
     let mut members = agents
         .iter()
-        .filter(|agent| agent.is_root())
+        .filter(|agent| agent.parent_agent_id.is_none())
         .filter(|agent| !agent.agent_id.is_empty())
         .filter(|agent| !matches!(liveness(agent), AgentLiveness::Live { .. }))
         .filter(|agent| supports_agent_resume(agent))
