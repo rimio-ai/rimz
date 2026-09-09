@@ -1538,8 +1538,12 @@ pub(super) fn run_command(
         cap,
     }));
     let mut command = Command::new("sh");
+    let mut interrupts = None;
     if matches!(deadline, WatchDeadline::KillAfter(_)) {
         command.process_group(0);
+        interrupts = Some(signal_hook::iterator::Signals::new([
+            signal_hook::consts::SIGINT,
+        ])?);
     }
     if env.contains_key(LOOP_TASK_ENV) {
         command.env_remove(crate::harness::launch::ENV_AGENT_ID);
@@ -1573,6 +1577,11 @@ pub(super) fn run_command(
         }
     };
     let (status, timed_out) = loop {
+        if let Some(interrupts) = &mut interrupts
+            && interrupts.pending().next().is_some()
+        {
+            let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGINT);
+        }
         if let Some(status) = child
             .try_wait()
             .with_context(|| format!("waiting for loop check `{cmd}`"))?
