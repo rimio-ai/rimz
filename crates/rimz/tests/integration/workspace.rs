@@ -111,6 +111,7 @@ fn workspace_resolve_from_linked_worktree_uses_the_main_repo_root() {
 
     assert_eq!(resolved.project_root, canonical(&repo));
     assert_eq!(resolved.cwd_project_root, Some(canonical(&repo)));
+    assert_eq!(resolved.worktree_root, canonical(&linked));
     assert_normalized_root(&resolved.project_root);
 }
 

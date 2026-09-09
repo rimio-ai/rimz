@@ -24,7 +24,7 @@ use rimz::wakeup::heartbeat::SidebarHeartbeat;
 
 #[cfg(unix)]
 use crate::common::write_fake_login_shell;
-use crate::common::{Env, ScrubSessionEnvExt};
+use crate::common::{Env, ScrubSessionEnvExt, canonical};
 
 #[test]
 fn team_signal_binding_registers_delivers_and_retires() {
@@ -2615,6 +2615,117 @@ fn loop_qwen_exact_quota_skip_precedes_check_command() {
     assert!(
         !marker.exists(),
         "ordered gates must stop before the check command"
+    );
+}
+
+#[test]
+fn loop_check_runs_in_the_arming_worktree() {
+    let env = Env::new();
+    if !init_git_repo(&env.project_root) {
+        return;
+    }
+    let linked = env.home_root.join("linked");
+    let add = Command::new("git")
+        .args(["worktree", "add", "-q", "-b", "linked"])
+        .arg(&linked)
+        .current_dir(&env.project_root)
+        .status()
+        .expect("run git worktree add");
+    assert!(add.success(), "git worktree add failed");
+    let linked = canonical(&linked);
+    let output = env
+        .rimz()
+        .current_dir(&linked)
+        .args([
+            "loop",
+            "add",
+            "where",
+            "--check",
+            "pwd -P; printf '%s\\n' \"$RIMZ_WORKTREE_PATH\" \"$RIMZ_PROJECT_ROOT\" \"$RIMZ_WORKSPACE_ID\"",
+            "--every",
+            "15m",
+        ])
+        .output()
+        .expect("add check from linked worktree");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains(&format!("action: runs check in {}", linked.display()))
+    );
+    let stored: LoopConfig =
+        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
+    let entry = &stored.tasks.0["where"];
+    let root = canonical(&env.project_root);
+    assert_eq!(entry.root, root);
+    assert_eq!(entry.dir.as_deref(), Some(linked.as_path()));
+
+    loop_ok(&env, &["loop", "fire", "where"]);
+    let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].result, LoopRunResult::Completed);
+    assert_eq!(records[0].root.as_deref(), Some(root.as_path()));
+    let check = records[0].check.as_ref().unwrap();
+    assert_eq!(check.code, Some(0));
+    assert_eq!(
+        check.output,
+        format!(
+            "{0}\n{0}\n{1}\n{2}\n",
+            linked.display(),
+            root.display(),
+            WorkspaceId::from_project_root(&root)
+        )
+    );
+    let shown = loop_ok(&env, &["loop", "show", "where"]);
+    assert!(
+        shown
+            .lines()
+            .any(|line| line.contains("dir") && line.contains("~/linked")),
+        "{shown}"
+    );
+
+    let output = env
+        .rimz()
+        .current_dir(&linked)
+        .args([
+            "loop",
+            "add",
+            "project-where",
+            "--project",
+            "--check",
+            "pwd -P",
+            "--every",
+            "15m",
+        ])
+        .output()
+        .expect("add project check from linked worktree");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains(&format!("action: runs check in {}", root.display()))
+    );
+    let project: toml::Value = toml::from_str(
+        &std::fs::read_to_string(env.project_root.join(".rimz/config.toml")).unwrap(),
+    )
+    .unwrap();
+    let entry = project["tasks"]["project-where"].as_table().unwrap();
+    assert!(!entry.contains_key("root"));
+    assert!(!entry.contains_key("dir"));
+    loop_ok(&env, &["loop", "fire", "project-where"]);
+    let records = read_loop_run_records(&env);
+    let record = records.last().unwrap();
+    assert_eq!(record.task, "project-where");
+    assert_eq!(record.root.as_deref(), Some(root.as_path()));
+    assert_eq!(
+        record.check.as_ref().unwrap().output.trim(),
+        root.to_str().unwrap()
     );
 }
 
