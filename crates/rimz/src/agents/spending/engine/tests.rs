@@ -17,6 +17,26 @@ use std::time::Duration;
 
 use super::workspace_cache_from_shared_entries;
 
+#[test]
+fn prune_keeps_only_the_current_scope_publication() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+        .expect("runtime paths");
+    std::fs::create_dir_all(&runtime.root).expect("runtime directory");
+    let current = runtime.workspace_spending_path("a");
+    let sibling = runtime.workspace_spending_path("b");
+    let unrelated = runtime.root.join("budget.json");
+    for path in [&current, &sibling, &unrelated] {
+        std::fs::write(path, b"{}").expect("publication");
+    }
+
+    super::prune_workspace_spending_siblings(&runtime, "a");
+
+    assert!(current.exists());
+    assert!(!sibling.exists());
+    assert!(unrelated.exists());
+}
+
 fn compute_fleet_spending(
     runtime: &RuntimePaths,
     project_root: Option<&std::path::Path>,
