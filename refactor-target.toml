@@ -66,7 +66,7 @@ upward-dependencies = ["harness::target"]
 # The parent-link predicate is shared by store, harness and CLI consumers.
 # Attribution adds lifetime values, boundary queries and unreadable-path warnings.
 # Pending-wake vocabulary and rest projection are shared by harness and renderers.
-surface-budget = 1005
+surface-budget = 965
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/codex"
@@ -75,6 +75,11 @@ surface-budget = 8
 [[module]]
 path = "crates/rimz/src/agents/adapters/claude"
 surface-budget = 5
+
+[[module]]
+path = "crates/rimz/src/agents/spending"
+# Parser wire, walker, and cache records stay public for the adapters, bench, perf and example crates.
+surface-budget = 83
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -1133,3 +1138,48 @@ reason = "Pass 13: translates one typed failure stage into flag grammar or remed
 kind = "item"
 key = "cli::message::dispatch::map_reply_prepare_err"
 reason = "Pass 13: translates one typed failure stage into flag grammar or remediation; merging them erases the stages or pulls exit wording into the domain."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::SpendingWalker"
+reason = "Public with new, walk, walk_local, WalkRequest, SilentWalk, WalkStats, HeadlineSpec, SpendScope and the cache records for benches/hotpath.rs, performance/spending_incremental.rs and seed_perf_workspace.rs; cold/warm/incremental derive from cache stamps, generation and memo, not mode flags (pass 13)."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::cache::CachedEntry"
+reason = "One durable normalized row: aggregation, dedup and compaction read token, cost, tool, model and identity fields together (pass 13)."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::cache::SpendParse"
+reason = "Return type of the public SpendingCapability::parse_spend; the parser wire (SpendParse, SpendCursor, SpendingSource*) stays public for that trait and the adapters (pass 13)."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::aggregate::aggregate_counted_rollups"
+reason = "One fold for fleet, provider, workspace, day and model outputs; include_history_rollups is two behaviours (2ff96d1c3); raw-row session counts deliberately survive dedup (pass 13)."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::discovery::SpendingSourceGroup"
+reason = "Payload of the public SpendingSource::Group; discovery is a generic scan over each adapter's declared sources with no provider-root table (pass 13)."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::publish::ProviderSpendingCache"
+reason = "Shared read model for providers, stats, budget and sidebar; not a duplicated aggregate (pass 13)."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::service::request"
+reason = "Election, Busy, namespace/version validation and the direct-vs-framed paths implement 1d1e3506d and 33d98dc72; the impossible retry/coordination error arms are exhaustiveness, not behaviour (pass 13)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::consumer_spending_caches"
+reason = "Consumer policy over the shared exact reader: a sole surviving publication is the room's current one (6e2a0f7f6); the engine and budget keep their own selection rules (pass 13)."
+
+[[verdict]]
+kind = "pass-through"
+key = "agents::spending::default"
+reason = "Delegates to new because clippy new_without_default runs under -D warnings and the invariant grep keys on SpendingWalker::new (pass 13)."
