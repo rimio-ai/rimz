@@ -326,6 +326,7 @@ fn check_polarity_truth_table() {
     let outcome = |passed, timed_out, code| CheckOutcome {
         passed,
         timed_out,
+        interrupted: false,
         output: String::new(),
         code,
     };

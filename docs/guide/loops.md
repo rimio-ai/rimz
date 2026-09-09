@@ -149,6 +149,8 @@ The check runs at the project root before the configured agent action, every fir
 
 A check is killed after five minutes unless the task's `--timeout` says otherwise (the same flag caps the agent turn), and a killed check counts as a failure. `gh run watch` on a long pipeline is the case to watch: give the task a `--timeout` longer than the pipeline, or poll on `--every` with a command that returns at once.
 
+Ctrl-C during a manual fire cancels the check and the fire, rather than treating the interruption as a failed check and launching the task's agent.
+
 A `--check` with no agent action is still worth having. It is a scheduled command that logs `completed`, `failed`, or `timed out`, each with the exit code and output tail, into the run history, and it keeps recurring. It needs no prompt. Before a scheduled check runs, RimZ opens the task root's room if needed, even for a pure shell command, without resuming your closed agents; a fire refused by a budget, overlap lock, or deadline does not open one.
 
 If your check script sometimes needs an agent, it can call `rimz agents codex "inspect the failed deployment"`. RimZ supplies `RIMZ_LOOP_TASK` with the task name and pins nested commands to the task's root. Inside a check, that prompted launch implies `-p`: it waits for a supervised turn, captures the answer in the check output, and returns the turn's exit code. The turn uses the background loop area and closes its pane on success or failure, unless explicitly kept with `--keep`; its timeout is the launch's own `--timeout` or `loop.default-timeout` (two hours by default). An agent launch without a prompt or with `--bg` is refused: the check must wait for a turn to complete. The check's own timeout still bounds how long the script can wait.

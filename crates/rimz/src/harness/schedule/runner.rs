@@ -50,6 +50,7 @@ pub(super) const SCHEDULED_RUN_DEFAULT_TIMEOUT: Duration = Duration::from_secs(2
 pub const SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL: &str = "2h";
 const CHECK_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const CHECK_DRAIN_GRACE: Duration = Duration::from_millis(200);
+const CHECK_INTERRUPT_GRACE: Duration = Duration::from_secs(1);
 const RUN_LOCK_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const CHECK_OUTPUT_CAP: usize = 16 * 1024;
 const TASK_TIMEOUT_UNITS: &[DurationUnit] = &[
@@ -558,6 +559,22 @@ impl<'a> TaskFire<'a> {
         };
         let mut record = check_record(&outcome);
         record.output_path = supplied_watch.and_then(|(_, watch)| watch.output_path.clone());
+        if outcome.interrupted {
+            return Ok(PreparedCheck::done(self.record_terminal_with(
+                LoopRunResult::Canceled,
+                LoopRunPresentation {
+                    check_duration_ms: Some(duration_ms),
+                    exit_code: Some(130),
+                    ..LoopRunPresentation::default()
+                },
+                TaskFireNotice::None,
+                None,
+                |run| {
+                    run.check = Some(record);
+                    run.error = Some("check interrupted".to_owned());
+                },
+            )));
+        }
         if self
             .context
             .as_ref()
@@ -1396,6 +1413,7 @@ fn read_run_lock_info(file: &mut File) -> Option<RunLockInfo> {
 pub struct CheckOutcome {
     passed: bool,
     timed_out: bool,
+    interrupted: bool,
     output: String,
     code: Option<i32>,
 }
@@ -1405,6 +1423,7 @@ impl CheckOutcome {
         Self {
             passed,
             timed_out,
+            interrupted: false,
             output,
             code,
         }
@@ -1569,7 +1588,11 @@ pub(super) fn run_command(
         }
     };
     if env.contains_key(LOOP_TASK_ENV) {
-        command.env_remove(crate::harness::launch::ENV_AGENT_ID);
+        for (key, _) in std::env::vars_os()
+            .filter(|(key, _)| key.as_encoded_bytes().starts_with(b"RIMZ_AGENT_"))
+        {
+            command.env_remove(key);
+        }
     }
     let mut child = command
         .current_dir(dir)
@@ -1597,11 +1620,16 @@ pub(super) fn run_command(
             Some(started + timeout)
         }
     };
+    let mut interrupted = false;
     let (status, timed_out) = loop {
         if let Some(interrupts) = &mut interrupts
             && interrupts.pending().next().is_some()
         {
+            interrupted = true;
             let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGINT);
+            let interrupt_deadline = Instant::now() + CHECK_INTERRUPT_GRACE;
+            check_in_at =
+                Some(check_in_at.map_or(interrupt_deadline, |at| at.min(interrupt_deadline)));
         }
         if let Some(status) = child
             .try_wait()
@@ -1616,7 +1644,7 @@ pub(super) fn run_command(
                 let status = child
                     .wait()
                     .with_context(|| format!("reaping timed-out loop check `{cmd}`"))?;
-                break (status, true);
+                break (status, !interrupted);
             }
             check_in_at = None;
             let output = capture
@@ -1627,14 +1655,14 @@ pub(super) fn run_command(
         }
         std::thread::sleep(CHECK_POLL_INTERVAL);
     };
-    let drain_deadline = timed_out.then(|| Instant::now() + CHECK_DRAIN_GRACE);
+    let drain_deadline = (timed_out || interrupted).then(|| Instant::now() + CHECK_DRAIN_GRACE);
     for drain in [stdout, stderr] {
         if let Some(deadline) = drain_deadline {
             while !drain.is_finished() && Instant::now() < deadline {
                 std::thread::sleep(CHECK_POLL_INTERVAL);
             }
             if !drain.is_finished() {
-                tracing::debug!("timed-out check output truncated while a survivor holds its pipe");
+                tracing::debug!("stopped check output truncated while a survivor holds its pipe");
                 continue;
             }
         }
@@ -1647,8 +1675,9 @@ pub(super) fn run_command(
         .map_err(|_| anyhow::anyhow!("loop check output lock poisoned"))?;
     let output = capture.output();
     Ok(CheckOutcome {
-        passed: status.success() && !timed_out,
+        passed: status.success() && !timed_out && !interrupted,
         timed_out,
+        interrupted,
         output,
         code: status.code(),
     })
