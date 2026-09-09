@@ -5,14 +5,11 @@
 //! bridges the five-hour session window; every priced entry inside that window
 //! still contributes to the tally.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::disk::parse_cache::FileStamp;
 use crate::disk::paths::state_home;
 use crate::ids::AgentKind;
 
@@ -53,18 +50,6 @@ pub fn load_in(state_root: &Path) -> Vec<UserInputRecord> {
         records.push(record);
     });
     records
-}
-
-pub fn signature() -> u64 {
-    signature_in(&state_home())
-}
-
-pub fn signature_in(state_root: &Path) -> u64 {
-    let path = log_path(state_root);
-    let mut hasher = DefaultHasher::new();
-    FileStamp::of(&crate::disk::rotating::rotated_path(&path)).hash(&mut hasher);
-    FileStamp::of(&path).hash(&mut hasher);
-    hasher.finish()
 }
 
 fn log_path(state_root: &Path) -> PathBuf {
@@ -118,15 +103,5 @@ mod tests {
             load_in(dir.path()),
             vec![record(10, Some("/tmp/one")), record(20, Some("/tmp/two")),]
         );
-    }
-
-    #[test]
-    fn signature_changes_on_append() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let before = signature_in(dir.path());
-
-        append_in(dir.path(), &record(10, Some("/tmp/repo")));
-
-        assert_ne!(signature_in(dir.path()), before);
     }
 }
