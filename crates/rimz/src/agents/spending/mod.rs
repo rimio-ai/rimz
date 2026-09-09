@@ -37,26 +37,27 @@ use super::{AgentCost, AgentDefinition};
 use aggregate::{DedupPayload, SidechainDedup};
 
 /// How long a published fleet-spending walk remains fresh.
-pub const SPENDING_TTL: Duration = Duration::from_secs(15);
+const SPENDING_TTL: Duration = Duration::from_secs(15);
 
 /// Maximum age served while another producer owns the global walk.
-pub(crate) const SPENDING_STALE_GRACE: Duration = Duration::from_secs(90);
+const SPENDING_STALE_GRACE: Duration = Duration::from_secs(90);
 
 #[cfg(test)]
 pub(crate) use aggregate::CountedPayload;
-pub(crate) use aggregate::{
-    CountedLocation, HeadlineContext, NO_BURST_CUTOFF, SESSION_GAP_SECS, aggregate_counted_rollups,
-    dedup_cached_entries, dedup_cached_entry_locations, indexed_counted_entries, live_session_keys,
-    origin_path, should_replace_usage_duplicate, spending_files_signature,
+pub(in crate::agents) use aggregate::should_replace_usage_duplicate;
+use aggregate::{
+    CountedLocation, HeadlineContext, aggregate_counted_rollups, dedup_cached_entries,
+    dedup_cached_entry_locations, indexed_counted_entries, spending_files_signature,
 };
 pub use aggregate::{
     DaySpend, HeadlineSpec, SpendScope, SpendTally, SpendWindow, SpendWindowMode, Spending,
 };
+pub(crate) use aggregate::{NO_BURST_CUTOFF, SESSION_GAP_SECS, live_session_keys, origin_path};
 #[cfg(test)]
 pub(crate) use aggregate::{RAW_RETAIN_SECS, cold_parse_out_of_window};
 #[cfg(test)]
 pub(crate) use aggregate::{SKIP_PARSE_MARGIN_SECS, WIDEST_SPEND_WINDOW_SECS};
-pub(crate) use cache::{CacheStamp, SPENDING_CACHE_VERSION, cache_stamp};
+use cache::{CacheStamp, SPENDING_CACHE_VERSION, cache_stamp};
 pub use cache::{
     CachedEntry, FileCacheEntry, SpendCursor, SpendParse, SpendingDiskCache, read_spending_cache,
     write_spending_cache,
@@ -65,9 +66,10 @@ pub use cache::{
 pub(crate) use cache::{compact_spending_cache, peek_cache_version};
 pub use discovery::{SpendingSource, SpendingSourceGroup, SpendingSourceTree};
 pub use effort::{
-    EffortParseMemo, EffortSessionRef, EffortTokens, SlotEffort, SlotEffortBreakdown, slot_effort,
-    slot_effort_breakdown, slot_effort_with_memo, sum_optional_cost,
+    EffortParseMemo, EffortSessionRef, EffortTokens, SlotEffort, slot_effort,
+    slot_effort_with_memo, sum_optional_cost,
 };
+pub(in crate::agents) use effort::{SlotEffortBreakdown, slot_effort_breakdown};
 pub use engine::current_provider_spending_cache;
 #[doc(hidden)]
 pub use engine::refresh_global_spending_direct;
@@ -77,16 +79,16 @@ pub use publish::{
     ProviderSpendingCache, WorkspaceSpendingCache, read_provider_spending_cache,
     read_workspace_spending_cache, write_provider_spending_cache, write_workspace_spending_cache,
 };
-pub(crate) use refresh::{
-    RefreshCallbacks, SplitPrice, is_priceable_model_name, lookup_split_price, price_split,
-    record_unknown_model, recorded_unknown_models, refresh_spending_cache,
+use refresh::{RefreshCallbacks, recorded_unknown_models, refresh_spending_cache};
+pub(in crate::agents) use refresh::{
+    SplitPrice, is_priceable_model_name, lookup_split_price, price_split, record_unknown_model,
 };
-pub(crate) use time::iso_to_unix_secs;
+pub(in crate::agents) use time::iso_to_unix_secs;
 pub use time::{unix_secs_now, utc_date};
 
 /// Cadence for cursor-cache checkpoints and partial aggregate publishes during
 /// a cold spending-history walk.
-pub(crate) const WALK_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(1);
+const WALK_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(1);
 
 const SPENDING_PERSIST_MIN_INTERVAL: u64 = 5 * 60;
 const SPENDING_PERSIST_PARSE_BYTES: u64 = 1 << 20;
@@ -237,7 +239,7 @@ impl SpendingWalker {
 
     /// Discover the historical spend stores through this walker's warm,
     /// process-local directory frontier.
-    pub fn discover_spending_files(
+    fn discover_spending_files(
         &mut self,
         now_secs: u64,
     ) -> Vec<(&'static AgentDefinition, PathBuf)> {
@@ -253,7 +255,7 @@ impl SpendingWalker {
             .discover(crate::agents::all_definitions(), now_secs)
     }
 
-    pub(crate) fn spending_discovery_is_authoritative(&self) -> bool {
+    fn spending_discovery_is_authoritative(&self) -> bool {
         self.discovery.last_scan_authoritative()
     }
 
@@ -274,7 +276,7 @@ impl SpendingWalker {
             .collect()
     }
 
-    pub fn recorded_unknown_models(
+    fn recorded_unknown_models(
         &mut self,
         cache_path: &Path,
         files: &[(&'static AgentDefinition, PathBuf)],
@@ -475,7 +477,7 @@ impl SpendingWalker {
     /// A changed origin invalidates the compact location memo exactly once. The
     /// same five-minute gate as a walk bounds full cursor rewrites when newly
     /// live transcripts reveal their origins between global refreshes.
-    pub(crate) fn apply_origin_overrides(
+    fn apply_origin_overrides(
         &mut self,
         cache_path: &Path,
         origin_overrides: &HashMap<PathBuf, PathBuf>,
@@ -629,7 +631,7 @@ impl DedupPayload for IndexedSessionEntry<'_> {
     }
 }
 
-pub(crate) fn aggregate_walk_publish(
+fn aggregate_walk_publish(
     files: &[(&'static AgentDefinition, PathBuf)],
     cache: &SpendingDiskCache,
     user_inputs: &[user_input::UserInputRecord],
@@ -668,7 +670,7 @@ pub(crate) struct CachedScopedSpending {
 
 /// Compute the cockpit's workspace-scoped tally plus the headline epoch cutoff
 /// that resets presentation ratchets at window boundaries.
-pub fn compute_scoped_spending(
+fn compute_scoped_spending(
     files: &[(&'static AgentDefinition, PathBuf)],
     cache: &SpendingDiskCache,
     user_inputs: &[user_input::UserInputRecord],

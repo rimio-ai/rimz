@@ -288,7 +288,7 @@ pub const ACCEPT_REGRESSION_AFTER: Duration = Duration::from_secs(1);
 /// incoming fold carries none. A collapsed tally means the workspace spending
 /// cache was unreadable for that fold — a scope-hash miss or a walk in
 /// flight — and the figure returns on the producer's next publication, so the
-/// carry spans two [`SPENDING_TTL`](crate::agents::spending::SPENDING_TTL)
+/// carry spans two `SPENDING_TTL`
 /// cycles. A spend total moves by entries ageing out of a trailing year, never
 /// by dropping to nothing, so carrying costs no accuracy while it keeps the
 /// cockpit's headline from blanking between publications.

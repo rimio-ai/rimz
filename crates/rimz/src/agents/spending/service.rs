@@ -23,7 +23,7 @@ use super::{
 use crate::disk::paths::RuntimePaths;
 use crate::ids::WorkspaceId;
 
-pub const SPENDING_SERVICE_PROTOCOL_VERSION: u32 = 1;
+const SPENDING_SERVICE_PROTOCOL_VERSION: u32 = 1;
 const CONNECT_WAIT_STEP: Duration = Duration::from_millis(20);
 const CONNECT_WAIT_STEPS: u32 = 20;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
@@ -97,12 +97,12 @@ pub struct SpendingServiceRequest {
     provider_version: u32,
     workspace_version: u32,
     namespace: SpendingServiceNamespace,
-    pub(crate) workspace_id: Option<WorkspaceId>,
-    pub(crate) project_root: Option<PathBuf>,
-    pub(crate) worktree_roots: Vec<PathBuf>,
-    pub(crate) worktree_home: Option<PathBuf>,
-    pub(crate) origin_overrides: HashMap<PathBuf, PathBuf>,
-    pub(crate) headline: HeadlineSpec,
+    pub(super) workspace_id: Option<WorkspaceId>,
+    pub(super) project_root: Option<PathBuf>,
+    pub(super) worktree_roots: Vec<PathBuf>,
+    pub(super) worktree_home: Option<PathBuf>,
+    pub(super) origin_overrides: HashMap<PathBuf, PathBuf>,
+    pub(super) headline: HeadlineSpec,
 }
 
 impl SpendingServiceRequest {
@@ -123,7 +123,7 @@ impl SpendingServiceRequest {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn workspace(
+    pub(crate) fn workspace(
         runtime: &RuntimePaths,
         workspace_id: WorkspaceId,
         project_root: Option<PathBuf>,
@@ -242,7 +242,7 @@ fn normalize_absolute(
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
-pub enum SpendingServiceFrame {
+enum SpendingServiceFrame {
     #[serde(with = "spending_caches_json")]
     Complete(Box<SpendingCaches>),
     Error(SpendingServiceFailure),
@@ -312,7 +312,7 @@ pub enum SpendingServiceClientError {
     Service(#[from] SpendingServiceFailure),
 }
 
-pub type Result<T> = std::result::Result<T, SpendingServiceClientError>;
+type Result<T> = std::result::Result<T, SpendingServiceClientError>;
 
 /// Whether this caller has a process lifetime long enough to own the warm
 /// walker. One-shot CLI producers connect to an existing owner and otherwise
