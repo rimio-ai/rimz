@@ -44,7 +44,7 @@ pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 12;
 pub(crate) const WORKSPACE_SPENDING_VERSION: u32 = 7;
 
 /// The published provider-spending cache: the aggregated [`Spending`] plus the
-/// stamp the producer's [`SPENDING_TTL`] gate reads. A wrapper rather than a
+/// stamp the producer's `SPENDING_TTL` gate reads. A wrapper rather than a
 /// field on [`Spending`] keeps the in-memory value the fold path threads
 /// stamp-free; `#[serde(flatten)]` keeps a pre-stamp file (a bare `Spending`)
 /// readable — its values survive, with `version` and `refreshed_at_ms`
@@ -106,7 +106,7 @@ impl ProviderSpendingCache {
 
 /// Atomic write of the aggregated `Spending`, stamped `refreshed_at_ms`, so
 /// consumer sidebar tabs read the fleet and per-provider totals — and the
-/// producer its own [`SPENDING_TTL`] gate — without re-walking the JSONL
+/// producer its own `SPENDING_TTL` gate — without re-walking the JSONL
 /// transcript history. Follows the same temp-then-rename durability contract
 /// as [`write_spending_cache`].
 pub fn write_provider_spending_cache(path: &Path, cache: &ProviderSpendingCache) -> bool {
