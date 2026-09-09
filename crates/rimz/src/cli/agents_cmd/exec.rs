@@ -1113,6 +1113,14 @@ pub(super) fn fail_run_if_child_exited_first(
     terminal_grace: Duration,
 ) {
     if wait_for_terminal_run(context, terminal_grace) {
+        if let Ok(record) = rimz::harness::run::load(context.store.paths(), &context.run_id)
+            && record.status.is_terminal()
+            && record.status != rimz::store::run::RunStatus::Completed
+            && record.failure_tail.is_none()
+        {
+            // The provider exited independently; self-close must not race the waiter's capture.
+            record_own_run_failure_tail(context, globals);
+        }
         return;
     }
     record_own_run_failure_tail(context, globals);

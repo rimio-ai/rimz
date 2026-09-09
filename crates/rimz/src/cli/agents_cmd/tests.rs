@@ -1307,6 +1307,50 @@ mod runs {
 
     #[tokio::test(flavor = "current_thread")]
     async fn child_exit_marks_nonterminal_run_failed_and_wakes_waiter() {
+        #[cfg(unix)]
+        if std::env::var_os("RIMZ_TEST_EXIT_CAPTURE_LOG").is_none() {
+            use std::os::unix::fs::PermissionsExt;
+
+            let bin = tempfile::tempdir().expect("fake mux dir");
+            let tmux = bin.path().join("tmux");
+            std::fs::write(
+                &tmux,
+                "#!/bin/sh\n[ \"$1\" = '-S' ] || exit 1\nshift 2\n[ \"$*\" = 'capture-pane -p -t %7' ] || exit 1\nprintf 'capture\\n' >> \"$RIMZ_TEST_EXIT_CAPTURE_LOG\"\nprintf 'provider failure evidence\\n'\n",
+            )
+            .expect("fake tmux");
+            std::fs::set_permissions(&tmux, std::fs::Permissions::from_mode(0o755))
+                .expect("executable tmux");
+            let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+                .args([
+                    "--exact",
+                    concat!(
+                        module_path!(),
+                        "::child_exit_marks_nonterminal_run_failed_and_wakes_waiter"
+                    )
+                    .split_once("::")
+                    .expect("test module has a crate prefix")
+                    .1,
+                    "--nocapture",
+                ])
+                .env("PATH", bin.path())
+                .env("XDG_RUNTIME_DIR", bin.path())
+                .env("TMUX_PANE", "%7")
+                .env("RIMZ_TEST_EXIT_CAPTURE_LOG", bin.path().join("captures"))
+                .output()
+                .expect("isolated capture test");
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                std::fs::read_to_string(bin.path().join("captures")).expect("capture log"),
+                "capture\ncapture\ncapture\ncapture\ncapture\ncapture\n"
+            );
+            return;
+        }
+
         let state = tempfile::tempdir().expect("state dir");
         let runtime_root = tempfile::Builder::new()
             .prefix("rr")
@@ -1343,7 +1387,7 @@ mod runs {
         .expect("bind run");
 
         let globals = GlobalFlags {
-            mux: None,
+            mux: Some(MuxName::Tmux),
             zellij: false,
             tmux: false,
             root: None,
@@ -1359,6 +1403,40 @@ mod runs {
             .await
             .expect("run wait");
         assert_eq!(terminal.status, RunStatus::Failed);
+        #[cfg(unix)]
+        {
+            assert_eq!(
+                terminal.failure_tail.as_deref(),
+                Some("provider failure evidence")
+            );
+            for status in [
+                RunStatus::Failed,
+                RunStatus::VerifyFailed,
+                RunStatus::TimedOut,
+                RunStatus::BudgetExceeded,
+                RunStatus::Canceled,
+                RunStatus::Completed,
+            ] {
+                let mut record = terminal.clone();
+                record.status = status;
+                record.failure_tail = None;
+                rimz::harness::run::create(&paths, &record).expect("terminal run without evidence");
+                assert!(
+                    rimz::store::run::run_waiter_is_live(context.store.runtime_paths(), &run_id)
+                        .expect("probe waiter")
+                );
+
+                fail_run_if_child_exited_first(&context, &globals, Duration::ZERO);
+
+                let captured = rimz::harness::run::load(&paths, &run_id).expect("captured run");
+                assert_eq!(captured.status, status);
+                assert_eq!(
+                    captured.failure_tail.as_deref(),
+                    (status != RunStatus::Completed).then_some("provider failure evidence")
+                );
+                fail_run_if_child_exited_first(&context, &globals, Duration::ZERO);
+            }
+        }
     }
 }
 
