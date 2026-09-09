@@ -175,7 +175,7 @@ upward-dependencies = [
     "harness::target",
     "sidebar::produce",
 ]
-surface-budget = 97
+surface-budget = 67
 
 [[module]]
 path = "crates/rimz/src/mux"
@@ -983,3 +983,148 @@ reason = "Pass 12: shared loop template entry stays public; pub(crate) would not
 kind = "item"
 key = "config::load_loop"
 reason = "Pass 12: loop config entry stays public; pub(crate) would not reduce esc and is invisible to the binary CLI."
+
+[[verdict]]
+kind = "item"
+key = "message::deliver::DeliveryCheck"
+reason = "Pass 13: show renders the complete ordered check; the record and its field types are the text/JSON contract (messaging.md, The ordered check)."
+
+[[verdict]]
+kind = "item"
+key = "message::deliver::AfterConditionCheck"
+reason = "Pass 13: public field type of DeliveryCheck; narrowing violates private_interfaces under -D warnings, and show renders each."
+
+[[verdict]]
+kind = "item"
+key = "message::deliver::WhenConditionCheck"
+reason = "Pass 13: public field type of DeliveryCheck; narrowing violates private_interfaces under -D warnings, and show renders each."
+
+[[verdict]]
+kind = "item"
+key = "message::deliver::ScheduleCheck"
+reason = "Pass 13: public field type of DeliveryCheck; narrowing violates private_interfaces under -D warnings, and show renders each."
+
+[[verdict]]
+kind = "item"
+key = "message::deliver::FifoCheck"
+reason = "Pass 13: public field type of DeliveryCheck; narrowing violates private_interfaces under -D warnings, and show renders each."
+
+[[verdict]]
+kind = "item"
+key = "message::deliver::AgentCheck"
+reason = "Pass 13: public field type of DeliveryCheck; narrowing violates private_interfaces under -D warnings, and show renders each."
+
+[[verdict]]
+kind = "item"
+key = "message::deliver::GateCheck"
+reason = "Pass 13: public field type of DeliveryCheck; narrowing violates private_interfaces under -D warnings, and show renders each."
+
+[[verdict]]
+kind = "item"
+key = "message::deliver::AskCheck"
+reason = "Pass 13: public field type of DeliveryCheck; narrowing violates private_interfaces under -D warnings, and show renders each."
+
+[[verdict]]
+kind = "item"
+key = "message::deliver::PaneCheck"
+reason = "Pass 13: public field type of DeliveryCheck; narrowing violates private_interfaces under -D warnings, and show renders each."
+
+[[verdict]]
+kind = "item"
+key = "message::deliver::DeliveryVerdict"
+reason = "Pass 13: the first-blocker projection show and the sweep read; the ordered check keeps the met conditions it drops."
+
+[[verdict]]
+kind = "item"
+key = "message::dispatch::DispatchResult"
+reason = "Pass 13: dispatch's return type; callers destructure it, so narrow-to misreads inference-only reach."
+
+[[verdict]]
+kind = "item"
+key = "message::reply::ReplyJoinResult"
+reason = "Pass 13: ReplyUpdate.join's type; the winner travels with the settled batch so non-winners are never printed first."
+
+[[verdict]]
+kind = "item"
+key = "message::send::SendErr"
+reason = "Pass 13: DeliverErr::Send payload."
+
+[[verdict]]
+kind = "item"
+key = "message::reply::ReplyErr"
+reason = "Pass 13: DispatchErr::Reply payload and ReplyWait's error."
+
+[[verdict]]
+kind = "item"
+key = "message::dispatch::DispatchRequest"
+reason = "Pass 13: allow_fanout, mux and automated each gate one decision (arity, snapshot source, record stamp); none is timing state, so no field moves into DispatchMode (9000c0f24, 3128b2029)."
+
+[[verdict]]
+kind = "item"
+key = "message::dispatch::dispatch"
+reason = "Pass 13: one memoized config read inherits the smart-compact default for loop wakes (9000c0f24)."
+
+[[verdict]]
+kind = "item"
+key = "message::deliver::deliver_one"
+reason = "Pass 13: policy is two-valued in production: message steer passes Steer { force }; mux selects the snapshot."
+
+[[verdict]]
+kind = "item"
+key = "message::deliver::sweep"
+reason = "Pass 13: one caller, deep: single-flight lock, stale-Sent reconcile, condition stamps, FIFO heads, wake refresh."
+
+[[verdict]]
+kind = "item"
+key = "message::deliver::register_message_wake"
+reason = "Pass 13: small interface over the wake-stamp protocol, reached from dispatch, edit and delivery recovery."
+
+[[verdict]]
+kind = "item"
+key = "message::deliver::explain"
+reason = "Pass 13: the public projection of the private evaluation; exposing evaluate_delivery would widen the surface."
+
+[[verdict]]
+kind = "item"
+key = "message::compact::send_compact"
+reason = "Pass 13: standalone compaction; smart compaction in send.rs is a different policy (cc8b1bba6, f0355c61b, 055a5cc46); idle preflight absorption deferred."
+
+[[verdict]]
+kind = "item"
+key = "message::compact::refuse_repeat"
+reason = "Pass 13: idle compaction's preflight pair with already_compacted_at; stays public until the deferred compact_idle lands."
+
+[[verdict]]
+kind = "item"
+key = "message::send::already_compacted_at"
+reason = "Pass 13: idle compaction's preflight pair with refuse_repeat; stays public until the deferred compact_idle lands."
+
+[[verdict]]
+kind = "item"
+key = "message::send::Pacer"
+reason = "Pass 13: pane-write pacing cli::answer borrows; from_env is its one production constructor."
+
+[[verdict]]
+kind = "item"
+key = "message::reply::ReplyWait"
+reason = "Pass 13: progress/poll/timeout stay the CLI-driven protocol; a run owning cadence is deferred (timing pinned by 27077a848, cfe1240a3)."
+
+[[verdict]]
+kind = "item"
+key = "message::fire::wake_due_messages"
+reason = "Pass 13: renderer tick; hides stamp decode, due compare and the detached sweep spawn."
+
+[[verdict]]
+kind = "item"
+key = "cli::message::dispatch::map_dispatch_err"
+reason = "Pass 13: translates one typed failure stage into flag grammar or remediation; merging them erases the stages or pulls exit wording into the domain."
+
+[[verdict]]
+kind = "item"
+key = "cli::message::dispatch::map_condition_err"
+reason = "Pass 13: translates one typed failure stage into flag grammar or remediation; merging them erases the stages or pulls exit wording into the domain."
+
+[[verdict]]
+kind = "item"
+key = "cli::message::dispatch::map_reply_prepare_err"
+reason = "Pass 13: translates one typed failure stage into flag grammar or remediation; merging them erases the stages or pulls exit wording into the domain."
