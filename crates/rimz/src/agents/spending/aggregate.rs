@@ -742,45 +742,27 @@ impl DedupPayload for LocatedCounted<'_> {
     }
 }
 
-pub(crate) struct IndexedCounted<'a> {
-    kind: &'static str,
-    origin: Option<&'a Path>,
-    session_key: SessionKey<'a>,
-    entry: &'a CachedEntry,
-}
-
-impl DedupPayload for IndexedCounted<'_> {
-    fn entry(&self) -> &CachedEntry {
-        self.entry
-    }
-}
-
-impl CountedPayload for IndexedCounted<'_> {
-    fn kind(&self) -> &'static str {
-        self.kind
-    }
-
-    fn origin(&self) -> Option<&Path> {
-        self.origin
-    }
-
-    fn session_key(&self) -> SessionKey<'_> {
-        self.session_key
-    }
-}
-
 pub(crate) fn dedup_cached_entries<'a>(
     files: &'a [(&'static AgentDefinition, PathBuf)],
     cache: &'a SpendingDiskCache,
 ) -> SidechainDedup<Counted<'a>> {
-    dedup_cached_entries_with(files, cache, |adapter, file, kind, cached_file, entry| {
-        Counted {
-            kind,
-            origin: cached_file.origin_path.as_deref(),
-            session_key: session_key(adapter, file, entry),
-            entry,
+    let mut deduped = SidechainDedup::default();
+    for (adapter, file) in files {
+        let kind = adapter.spec().kind;
+        let key = file.to_string_lossy().into_owned();
+        let Some(cached_file) = cache.files.get(&key) else {
+            continue;
+        };
+        for entry in &cached_file.entries {
+            deduped.insert(Counted {
+                kind,
+                origin: cached_file.origin_path.as_deref(),
+                session_key: session_key(adapter, file, entry),
+                entry,
+            });
         }
-    })
+    }
+    deduped
 }
 
 pub(crate) fn dedup_cached_entry_locations(
@@ -814,7 +796,7 @@ pub(crate) fn indexed_counted_entries<'a>(
     files: &'a [(&'static AgentDefinition, PathBuf)],
     cache: &'a SpendingDiskCache,
     locations: &[CountedLocation],
-) -> Vec<IndexedCounted<'a>> {
+) -> Vec<Counted<'a>> {
     struct IndexedFile<'a> {
         adapter: &'static AgentDefinition,
         path: &'a Path,
@@ -848,7 +830,7 @@ pub(crate) fn indexed_counted_entries<'a>(
                 .entries
                 .get(location.entry_index)
                 .expect("counted entry must resolve under its memo key");
-            IndexedCounted {
+            Counted {
                 kind: file.adapter.spec().kind,
                 origin: file.cache.origin_path.as_deref(),
                 session_key: session_key(file.adapter, file.path, entry),
@@ -856,31 +838,6 @@ pub(crate) fn indexed_counted_entries<'a>(
             }
         })
         .collect()
-}
-
-fn dedup_cached_entries_with<'a, P: DedupPayload>(
-    files: &'a [(&'static AgentDefinition, PathBuf)],
-    cache: &'a SpendingDiskCache,
-    make: impl Fn(
-        &'static AgentDefinition,
-        &'a Path,
-        &'static str,
-        &'a FileCacheEntry,
-        &'a CachedEntry,
-    ) -> P,
-) -> SidechainDedup<P> {
-    let mut deduped = SidechainDedup::default();
-    for (adapter, file) in files {
-        let kind = adapter.spec().kind;
-        let key = file.to_string_lossy().into_owned();
-        let Some(cached_file) = cache.files.get(&key) else {
-            continue;
-        };
-        for entry in &cached_file.entries {
-            deduped.insert(make(adapter, file, kind, cached_file, entry));
-        }
-    }
-    deduped
 }
 
 fn uniform_headline_cutoff(spec: &HeadlineSpec, now_secs: u64) -> Option<u64> {
