@@ -37,7 +37,7 @@
 ## prompt = "tests are failing; fix the next failure"
 ## root = "/home/you/code/app"
 ## every = "15m"
-## check = "cargo test"                # shell command runs at the project root before the agent
+## check = "cargo test"                # shell command runs in task dir (project root when absent) before the agent
 ## on = "fail"                         # "fail" wakes on non-zero/timeout; "success" wakes on zero
 ##
 ## [tasks.ci_green]

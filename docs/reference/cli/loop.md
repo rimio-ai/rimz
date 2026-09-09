@@ -77,7 +77,7 @@ rimz loop add merged --signal pr.merged --once --wake @me
 
 `--wake @<handle>` resolves the address immediately and pins the exact session id. `--wake @me` and bare `--wake` pin the calling agent, identified from its launch environment or process ancestry; a user shell must name a live target. Provisional or ended sessions are refused. If the pinned session is gone when the task fires, RimZ skips delivery and removes the schedule. Clock and signal loop deliveries park at the next `done` boundary, even when aimed at yourself.
 
-`--check` runs in the directory it was armed from (a linked worktree stays a worktree); `--on fail` wakes on non-zero exit or timeout, while `--on success` wakes on zero exit.
+`--check` runs at the root of the checkout it was armed from (including linked worktrees); project tasks always run at the canonical project root. `--on fail` wakes on non-zero exit or timeout, while `--on success` wakes on zero exit.
 
 `--verify <CMD>` gives an `--agent` task a completion condition after its supervised turn; `--max-attempts <N>` caps total turns and defaults to `3`. Verification is unavailable for `--wake` and check-only tasks because those actions have no supervised session to re-prompt.
 

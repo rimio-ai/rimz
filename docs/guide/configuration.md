@@ -563,7 +563,7 @@ Field notes:
 
 - Calendar and cron wall-clock fields resolve in the top-level `timezone`, falling back to the system zone when unset.
 - Machine tasks carry a `root`: `rimz loop add` writes an absolute path, and a hand-edited `~` or relative root is normalized before room matching, firing, and display.
-- Project tasks run at the project root implicitly, resolve `prompt-file` and `system-prompt-file` relative to `.rimz/`, reject `root`, `wake`, and `deadline`, and require `every`, `cron`, or `signal` because one-shots are machine state.
+- Project tasks run at the canonical project root implicitly, resolve `prompt-file` and `system-prompt-file` relative to `.rimz/`, reject `root`, `dir`, `wake`, and `deadline`, and require `every`, `cron`, or `signal` because one-shots are machine state.
 - Trusted project tasks win over same-named machine tasks and state instances but default disabled until locally enabled; an untrusted or stale project task stays visible but inert, so a same-named machine task keeps running until grant. `rimz loop add --project` writes `.rimz/config.toml`, enables that task for its author, and removing or renaming a project-owned task edits the project file.
 - Every session delivery (including recurring clocks and standing signals), generated one-shot, and poll-until instance lives in `~/.local/state/rimz/workspaces/<workspace-id>/loop-instances.json`; machine-local task enablement and bounded pauses live in `~/.local/state/rimz/loop-arming.json`.
 
