@@ -1,5 +1,39 @@
 use super::*;
 
+#[test]
+fn transcript_target_channel_precedence_and_errors() {
+    assert_eq!(
+        scope::reconcile_transcript_channel("@codex#a", Some("a"), Some("b"), None)
+            .unwrap_err()
+            .to_string(),
+        "target `@codex#a` names channel `#a` but --worktree names `b`"
+    );
+    for (inline, flag, fallback, expected) in [
+        (Some("a"), Some("a"), Some("fallback"), Some("a")),
+        (Some("a"), None, Some("fallback"), Some("a")),
+        (None, Some("b"), Some("fallback"), Some("b")),
+        (None, None, Some("fallback"), Some("fallback")),
+        (None, None, None, None),
+    ] {
+        assert_eq!(
+            scope::reconcile_transcript_channel("@codex", inline, flag, fallback).unwrap(),
+            expected.map(str::to_owned)
+        );
+    }
+    assert_eq!(
+        scope::parse_transcript_target("@codex#")
+            .unwrap_err()
+            .to_string(),
+        "channel suffix in target `@codex#` must name a channel"
+    );
+    for raw in ["tmux:%1", "bare-name"] {
+        assert_eq!(
+            scope::parse_transcript_target(raw).unwrap(),
+            (raw.to_owned(), None)
+        );
+    }
+}
+
 fn ts(raw: &str) -> jiff::Timestamp {
     raw.parse().expect("timestamp")
 }
