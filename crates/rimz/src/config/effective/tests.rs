@@ -209,6 +209,10 @@ fn untrusted_project_tasks_stay_visible_with_state() {
 fn project_tasks_reject_machine_local_fields() {
     let cases = [
         (
+            "[tasks.wake]\nagent = \"codex\"\ndir = \"/tmp/linked\"\nevery = \"day\"\nat = \"08:00\"\n",
+            "dir",
+        ),
+        (
             "[tasks.wake]\nagent = \"codex\"\nroot = \"/tmp/other\"\nevery = \"day\"\nat = \"08:00\"\n",
             "root",
         ),

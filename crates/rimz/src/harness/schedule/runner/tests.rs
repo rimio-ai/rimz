@@ -474,9 +474,11 @@ fn skipped_fire<'a>(
 fn check_room_hook_precedes_execution_and_pins_loop_identity() {
     let dir = tempfile::tempdir().unwrap();
     let catalog = TaskCatalog::load(Some(dir.path())).unwrap();
+    let worktree = tempfile::tempdir().unwrap();
     let entry = TaskEntry {
-        check: Some("test -f room-ready && printf '%s|%s|%s|%s' \"$RIMZ_LOOP_TASK\" \"$RIMZ_PROJECT_ROOT\" \"$RIMZ_WORKSPACE_ID\" \"${RIMZ_AGENT_ID-unset}\"".to_owned()),
+        check: Some("test -f \"$RIMZ_PROJECT_ROOT/room-ready\" && printf '%s|%s|%s|%s|%s|' \"$RIMZ_LOOP_TASK\" \"$RIMZ_PROJECT_ROOT\" \"$RIMZ_WORKSPACE_ID\" \"${RIMZ_AGENT_ID-unset}\" \"$RIMZ_WORKTREE_PATH\" && pwd".to_owned()),
         root: dir.path().to_path_buf(),
+        dir: Some(worktree.path().to_path_buf()),
         every: Some("1m".to_owned()),
         ..TaskEntry::default()
     };
@@ -497,6 +499,7 @@ fn check_room_hook_precedes_execution_and_pins_loop_identity() {
     let TaskFirePlan::Done(done) = fire
         .prepare(&mut |root| {
             calls += 1;
+            assert_eq!(root, dir.path());
             std::fs::write(root.join("room-ready"), "")?;
             Ok(())
         })
@@ -509,9 +512,11 @@ fn check_room_hook_precedes_execution_and_pins_loop_identity() {
     assert_eq!(
         done.record.check.unwrap().output,
         format!(
-            "room-check|{}|{}|unset",
+            "room-check|{}|{}|unset|{}|{}\n",
             dir.path().display(),
-            WorkspaceId::from_project_root(dir.path())
+            WorkspaceId::from_project_root(dir.path()),
+            worktree.path().display(),
+            worktree.path().display()
         )
     );
 }
@@ -557,10 +562,30 @@ fn check_room_hook_is_after_lock_and_deadline_and_records_failure() {
     drop(fire);
     let mut expired = make_fire(TaskEntry {
         deadline: Some(Timestamp::UNIX_EPOCH),
-        ..entry
+        ..entry.clone()
     });
     assert!(
         matches!(expired.prepare(&mut |_| panic!("expired before room birth")).unwrap(), TaskFirePlan::Done(done) if done.record.result == LoopRunResult::Expired)
+    );
+    assert!(!dir.path().join("check-ran").exists());
+
+    drop(expired);
+    let vanished = dir.path().join("vanished-worktree");
+    std::fs::create_dir(&vanished).unwrap();
+    let mut fire = make_fire(TaskEntry {
+        dir: Some(vanished.clone()),
+        ..entry
+    });
+    std::fs::remove_dir(&vanished).unwrap();
+    let error = fire.prepare(&mut |_| Ok(())).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains(&vanished.to_string_lossy().to_string())
+    );
+    assert_eq!(
+        fire.finish_error(&error).record.result,
+        LoopRunResult::Errored
     );
     assert!(!dir.path().join("check-ran").exists());
 }

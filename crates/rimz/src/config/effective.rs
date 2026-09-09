@@ -430,13 +430,22 @@ fn reject_project_task_state_fields(
         let Some(table) = value.as_table() else {
             continue;
         };
-        for field in ["root", "wake", "wake-meta", "deadline", "watch", "once"] {
+        for field in [
+            "root",
+            "dir",
+            "wake",
+            "wake-meta",
+            "deadline",
+            "watch",
+            "once",
+        ] {
             if table.contains_key(field) {
                 return Err(ProjectTasksErr::UnsupportedField {
                     task: task.clone(),
                     field,
                     fix: match field {
                         "root" => "project tasks run at the project root; remove `root`",
+                        "dir" => "project tasks run at the project root; remove `dir`",
                         "wake" => "project tasks cannot pin a machine-local session; use `agent`",
                         "wake-meta" => "wake provenance is machine state; arm it with `rimz wake`",
                         "deadline" => {

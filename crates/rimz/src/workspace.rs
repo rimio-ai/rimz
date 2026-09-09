@@ -144,6 +144,10 @@ pub struct ResolvedWorkspace {
 }
 
 impl ResolvedWorkspace {
+    pub fn linked_worktree(&self) -> Option<&Path> {
+        (self.worktree_root != self.project_root).then_some(self.worktree_root.as_path())
+    }
+
     /// The repository launch-created worktrees belong to. A participant may
     /// keep coordinating through a pinned room while its cwd names another
     /// repository; outside Git, creation falls back to the room root.

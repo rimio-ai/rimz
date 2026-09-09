@@ -408,7 +408,7 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
         }
     };
     let outcome = run_command(
-        &workspace.project_root,
+        &task.entry().run_dir(),
         command,
         WatchDeadline::CheckInOnce(timeout),
         CheckEcho::Tee { file },

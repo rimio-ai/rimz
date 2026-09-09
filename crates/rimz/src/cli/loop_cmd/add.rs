@@ -47,7 +47,7 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
         action => action,
     };
     let provider_kind = action.provider_kind().map(ToOwned::to_owned);
-    let (entry, resolved_for_preflight) = build_task_entry(&args, action, &project_root)?;
+    let (entry, resolved_for_preflight) = build_task_entry(&args, action, &workspace)?;
     // Compile once before writing, so validation and feedback share one shape.
     let shape = schedule::TaskShape::compile(&args.name, &entry);
     let parsed = shape.trigger().as_ref().map_err(Clone::clone)?;
@@ -330,7 +330,7 @@ fn resolve_add_action(
 fn build_task_entry(
     args: &AddArgs,
     action: AddTaskAction,
-    project_root: &Path,
+    workspace: &rimz::ResolvedWorkspace,
 ) -> Result<(TaskEntry, Option<ResolvedSingleAgentLaunch>)> {
     if let Some(timeout) = args.timeout.as_deref() {
         parse_task_timeout(timeout).map_err(|err| anyhow::anyhow!("{err}"))?;
@@ -386,7 +386,11 @@ fn build_task_entry(
         check: args.check.clone(),
         max_strikes: args.max_strikes,
         on,
-        root: project_root.to_path_buf(),
+        root: workspace.project_root.clone(),
+        dir: workspace
+            .linked_worktree()
+            .filter(|_| !args.project)
+            .map(Path::to_path_buf),
         at: timing.at,
         every: args.every.clone(),
         cron: args.cron.clone(),
@@ -725,7 +729,7 @@ fn write_add_feedback(
             )?;
         }
         TaskAction::CheckOnly => {
-            writeln!(out, "action: runs check in {}", entry.root.display())?;
+            writeln!(out, "action: runs check in {}", entry.run_dir().display())?;
         }
     }
     let suffix = if parsed.once { "; then removed" } else { "" };
