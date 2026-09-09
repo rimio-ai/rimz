@@ -195,8 +195,12 @@ impl WorkspaceSpendingCache {
         }
     }
 
-    pub fn is_fresh(&self, now_ms: u64, scope_hash: &str) -> bool {
+    pub fn is_current_version(&self) -> bool {
         self.version == WORKSPACE_SPENDING_VERSION
+    }
+
+    pub fn is_fresh(&self, now_ms: u64, scope_hash: &str) -> bool {
+        self.is_current_version()
             && self.scope_hash == scope_hash
             && now_ms.saturating_sub(self.refreshed_at_ms) <= SPENDING_TTL.as_millis() as u64
     }

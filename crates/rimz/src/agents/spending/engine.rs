@@ -243,7 +243,7 @@ fn serve_prev_on_young_regression(
     next: WorkspaceSpendingCache,
     now_ms: u64,
 ) -> WorkspaceSpendingCache {
-    if prev.version == crate::agents::spending::WORKSPACE_SPENDING_VERSION
+    if prev.is_current_version()
         && prev.scope_hash == next.scope_hash
         && next.tally.headline.usd < prev.tally.headline.usd
         && now_ms.saturating_sub(prev.refreshed_at_ms) < SESSION_GAP_SECS * 1_000
@@ -589,9 +589,7 @@ fn matching_workspace_cache(
     let cache = crate::agents::spending::read_workspace_spending_cache(
         &runtime.workspace_spending_path(scope_hash),
     );
-    if cache.version == crate::agents::spending::WORKSPACE_SPENDING_VERSION
-        && cache.scope_hash == scope_hash
-    {
+    if cache.is_current_version() && cache.scope_hash == scope_hash {
         cache
     } else {
         Default::default()
