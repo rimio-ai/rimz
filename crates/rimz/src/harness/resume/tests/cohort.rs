@@ -588,18 +588,41 @@ fn cohort_relaunch_presence_table() {
         member("codex", "fresher", "launch_group", 1, 1),
     ];
 
-    for (label, agents, cells, expected) in [
-        ("absent", Vec::new(), &one_cell, CohortRelaunchState::Absent),
+    let placeholder = paneless(team_agent(
+        "codex",
+        "launch_019f2cecea067320b667c5946d266e64",
+        "coder",
+        "/code/feature",
+        1,
+    ));
+    let live_placeholder = AgentState {
+        runtime_owner: Some(crate::store::runtime::current_process_owner(
+            crate::pane::RuntimeOwnerKind::Agent,
+            placeholder.agent_id.to_string(),
+        )),
+        ..placeholder.clone()
+    };
+
+    for (label, agents, cells, team, expected) in [
+        (
+            "absent",
+            Vec::new(),
+            &one_cell,
+            None,
+            CohortRelaunchState::Absent,
+        ),
         (
             "ended",
             vec![closed(agent("codex", "ended", "/code/feature", 4))],
             &one_cell,
+            None,
             CohortRelaunchState::Closed,
         ),
         (
             "unknown with pane",
             vec![with_pane],
             &one_cell,
+            None,
             CohortRelaunchState::Present {
                 focus_pane: Some(pane_id("terminal_pane")),
             },
@@ -608,31 +631,65 @@ fn cohort_relaunch_presence_table() {
             "unknown without pane",
             vec![paneless(agent("codex", "paneless", "/code/feature", 2))],
             &one_cell,
+            None,
             CohortRelaunchState::Closed,
         ),
         (
             "live without pane",
             vec![live_without_pane],
             &one_cell,
+            None,
             CohortRelaunchState::Present { focus_pane: None },
         ),
         (
             "newest inline group decides, and it is closed",
             closed_newest_group,
             &two_cells,
+            None,
             CohortRelaunchState::Closed,
         ),
         (
             "focus lands on the freshest present pane",
             present_group,
             &two_cells,
+            None,
             CohortRelaunchState::Present {
                 focus_pane: Some(pane_id("terminal_fresher")),
             },
         ),
+        (
+            "an unadopted team has no cohort to resume",
+            vec![placeholder.clone()],
+            &one_cell,
+            Some("forge"),
+            CohortRelaunchState::Absent,
+        ),
+        (
+            "a live placeholder still protects the starting team",
+            vec![live_placeholder],
+            &one_cell,
+            Some("forge"),
+            CohortRelaunchState::Present { focus_pane: None },
+        ),
+        (
+            "a partially adopted team still offers resume",
+            vec![
+                placeholder,
+                closed(team_agent(
+                    "claude",
+                    "planner",
+                    "planner",
+                    "/code/feature",
+                    3,
+                )),
+            ],
+            &two_cells,
+            Some("forge"),
+            CohortRelaunchState::Closed,
+        ),
     ] {
         assert_eq!(
-            inspect_cohort_relaunch(&agents, Path::new("/code/feature"), cells, None),
+            inspect_cohort_relaunch(&agents, Path::new("/code/feature"), cells, team),
             expected,
             "{label}"
         );

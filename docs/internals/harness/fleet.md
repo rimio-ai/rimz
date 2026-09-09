@@ -287,6 +287,8 @@ Lane resume picks one of four actions, and `LaneResumeAction` names them: `List`
 
 Missing cells launch fresh in the matched cohort's cwd and channel, so the layout stays whole. Cleanly ended members stay candidates, so a closed team resumes while its worktree still exists. Launched children and provider-native subagents, empty session ids, missing worktrees, and launch placeholders that never adopted a session and are no longer live are never candidates. A matched member whose process is still live refuses the whole resume and names it, because launching beside it would duplicate the addressable role or kind. A kind whose adapter has no native resume argv launches fresh and is reported as such.
 
+Relaunch reconciliation uses the same admission rule, so a worktree containing only non-live launch placeholders has no cohort to offer for resume and proceeds to a fresh launch.
+
 Flat resume keeps pane identity when a stamp survives: newest-first candidates sharing one pane collapse to the newest session. A rebirth boundary retires pane stamps, because pane ids renumber across a mux restart; an unstamped root stays a candidate and deduplicates by `(kind, session id)`. Subagents are excluded by their parent identity rather than by their lack of a pane.
 
 `resume.max` bounds how many agents one reborn session auto-resumes (`DEFAULT_RESUME_MAX`, 128), so a long-lived workspace cannot fork-bomb the machine on birth. Anything past the cap is reported as a skip, never silently dropped, and every `ResumeSkip` carries its reason (`no resume CLI`, `no saved conversation`, `over the resume cap`, or `no prompt replacement`) into the start report.

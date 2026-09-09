@@ -1911,15 +1911,17 @@ fn cohort_candidates<'a>(
 ) -> Vec<&'a AgentState> {
     agents
         .iter()
-        .filter(|agent| agent.parent_agent_id.is_none())
-        .filter(|agent| !agent.agent_id.is_empty())
-        // An unadopted placeholder has nothing to resume; only a live one needs protection.
-        .filter(|agent| {
-            !agent.agent_id.is_provisional()
-                || matches!(liveness(agent), AgentLiveness::Live { .. })
-        })
+        .filter(|agent| cohort_admits(agent, liveness))
         .filter(|agent| agent_worktree(agent).is_some_and(|path| worktree_exists(&path)))
         .collect()
+}
+
+// An unadopted placeholder has nothing to resume; only a live one needs protection.
+fn cohort_admits(agent: &AgentState, liveness: impl Fn(&AgentState) -> AgentLiveness) -> bool {
+    agent.parent_agent_id.is_none()
+        && !agent.agent_id.is_empty()
+        && (!agent.agent_id.is_provisional()
+            || matches!(liveness(agent), AgentLiveness::Live { .. }))
 }
 
 /// Match one launch layout to its newest prior cohort.
@@ -1957,7 +1959,7 @@ pub fn inspect_cohort_relaunch(
     let candidates = agents
         .iter()
         .filter(|agent| {
-            agent.parent_agent_id.is_none()
+            cohort_admits(agent, crate::store::runtime::agent_liveness)
                 && agent.worktree_path.as_deref().is_some_and(|path| {
                     crate::utils::path::normalize_path_lexical(Path::new(path)) == target
                 })
@@ -1968,17 +1970,10 @@ pub fn inspect_cohort_relaunch(
             .into_iter()
             .filter(|agent| agent.team.as_deref() == Some(team))
             .collect::<Vec<_>>(),
-        None => match_cohort(
-            &candidates
-                .into_iter()
-                .filter(|agent| !agent.agent_id.is_empty())
-                .collect::<Vec<_>>(),
-            cells,
-            None,
-        )
-        .into_iter()
-        .flatten()
-        .collect(),
+        None => match_cohort(&candidates, cells, None)
+            .into_iter()
+            .flatten()
+            .collect(),
     };
     if members.is_empty() {
         return CohortRelaunchState::Absent;
