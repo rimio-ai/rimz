@@ -3,8 +3,8 @@ source: crates/rimz/src/cli/agents_cmd/launch.rs
 expression: "String::from_utf8(output.into_inner()).unwrap()"
 ---
 launched forge in worktree #feat-x
-  path     /repo-worktrees/feat-x
-  board    blackboard.md
+  path      /repo-worktrees/feat-x
+  board     blackboard.md
   prompt    → @planner  "Read the handoff at /tmp/handoff-feat-x.md."
 
   @planner   claude  fable        <- leader
