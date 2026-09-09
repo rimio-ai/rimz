@@ -190,6 +190,8 @@ Core test shapes keep their own discipline:
 - **Snapshot tests** — `insta::assert_snapshot!` for every protocol stdout (CLI, hook, `--json` events) **including failure shapes**. Normalize UUIDs, timestamps, absolute paths, and other transient identifiers at the assertion boundary before snapshotting; introduce a shared helper only when multiple suites need the same normalization. Sidebar render tests draw through a `vt100::Parser`-backed ratatui backend and snapshot the resulting screen contents — never widget internals.
 - **Property tests** — `proptest` for parsers (TOML override values, agent payloads, framing), serializers (round-trip schema types), and state-machine transitions (no path leaves a final state).
 
+An agent tool sandbox can deny Unix socket binds: `PermissionDenied` from `UnixListener::bind` in `agents::spending::service` tests is one known symptom. When the failure occurs only under that tool sandbox, rerun the affected tests unsandboxed (for example, `cargo xtask test 'agents::spending::service'`); xtask still supplies its disposable host-state roots.
+
 Snapshot churn caused by transient IDs is a test-helper bug, not a product failure — fix the normalization.
 
 When a change adds a verdict, marker, or timer to an existing state machine, enumerate how the new input interacts with each existing one and test the plausible simultaneous cases — at minimum a structural and a geometry change arriving together, and a pending classification against every backstop and retry path. Single-input tests pass on a machine whose bugs all live in the combined states.
