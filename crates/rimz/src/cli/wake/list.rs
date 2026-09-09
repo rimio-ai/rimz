@@ -14,6 +14,8 @@ use super::*;
 pub(super) struct WakeRow {
     pub(super) name: String,
     trigger: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dir: Option<String>,
     target: String,
     age: String,
     state: String,
@@ -102,14 +104,24 @@ fn row(ctx: &Ctx, name: &str, task: &LoadedTask, arm_state: ArmState) -> Result<
             None => ("-".to_owned(), "watcher lost".to_owned()),
         },
     };
+    let dir = task
+        .entry()
+        .dir
+        .as_deref()
+        .map(|dir| super::super::render::home_relative(&dir.to_string_lossy()));
     Ok(WakeRow {
         name: name.to_owned(),
         trigger: match &parsed.trigger {
             Trigger::Watch { command } => {
-                format!("watch: {}", rimz::theme::fmt::command_preview(command))
+                let preview = rimz::theme::fmt::command_preview(command);
+                match dir.as_deref() {
+                    Some(dir) => format!("watch: {preview} · in {dir}"),
+                    None => format!("watch: {preview}"),
+                }
             }
             _ => parsed.describe(),
         },
+        dir,
         target: target.handle.clone(),
         age,
         state: match arm_state {
