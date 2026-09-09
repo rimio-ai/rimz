@@ -687,8 +687,8 @@ fn write_launch_receipt(w: &mut impl Write, receipt: &LaunchReceipt<'_>) -> Resu
     let cwd = rimz::utils::path::normalize_path_lexical(receipt.cwd);
     if team.is_some() {
         writeln!(w, "launched {subject}{lane}")?;
-        writeln!(w, "  path     {}", cwd.display())?;
-        writeln!(w, "  board    blackboard.md")?;
+        writeln!(w, "  path      {}", cwd.display())?;
+        writeln!(w, "  board     blackboard.md")?;
     } else {
         writeln!(w, "launched {subject}{lane} ({})", cwd.display())?;
     }
@@ -1154,7 +1154,7 @@ mod tests {
         assert!(!output.contains("stages"));
         assert!(!output.contains("prompt"));
         assert!(!output.contains("branch"));
-        assert!(output.contains("  board    blackboard.md"));
+        assert!(output.contains("  board     blackboard.md"));
         assert!(!output.contains("Reach:"));
     }
 
@@ -1242,10 +1242,18 @@ mod tests {
 
         assert_eq!(resume_hint_handle(&plan, &[]), Some("planner"));
         let mut output = Vec::new();
-        write_resume_receipt(&mut output, &plan, None, Some("feat-x"), &[], None).unwrap();
+        write_resume_receipt(&mut output, &plan, Some("forge"), Some("feat-x"), &[], None).unwrap();
         let output = String::from_utf8(output).unwrap();
-        assert!(output.contains("\n\nReach:"));
+        assert!(output.contains("\n\nCheck: rimz teams show forge#feat-x"));
         assert!(output.contains("Reach: rimz message @planner#feat-x '<text>'"));
+        assert!(
+            output.contains("Wait:  rimz loop add team-idle --wake @me --signal team.idle --match instance=forge#feat-x --once")
+        );
+        let wait = output
+            .lines()
+            .find_map(|line| line.strip_prefix("Wait:  "))
+            .unwrap();
+        <crate::cli::Cli as clap::Parser>::try_parse_from(shlex::split(wait).unwrap()).unwrap();
     }
 
     #[test]
