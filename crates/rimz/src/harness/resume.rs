@@ -1932,7 +1932,7 @@ fn match_cohort<'a>(
     cells: &[CohortCell],
     team: Option<&str>,
 ) -> Vec<Option<&'a AgentState>> {
-    let mut candidates = crate::address::launch_occupants_from(candidates.iter().copied());
+    let mut candidates = crate::address::launch_occupants(candidates.iter().copied());
     candidates.sort_by(|left, right| {
         newest_cmp(
             left.last_activity,
@@ -1966,7 +1966,7 @@ pub fn inspect_cohort_relaunch(
         })
         .collect::<Vec<_>>();
     let members = match team {
-        Some(team) => crate::address::launch_occupants_from(candidates)
+        Some(team) => crate::address::launch_occupants(candidates)
             .into_iter()
             .filter(|agent| agent.team.as_deref() == Some(team))
             .collect::<Vec<_>>(),

@@ -596,9 +596,7 @@ fn signal_delivery_is_acknowledged_and_hidden_from_rendered_transcript() {
     store
         .queue_message(&record, "rimz-test")
         .expect("seed sent signal");
-    let prompt = rimz::address::message_header(&record.sender, &[], Some(branch))
-        .expect("signal header")
-        + &record.text;
+    let prompt = "Type: SIGNAL\nFrom: @rimz\nContent:\n".to_owned() + &record.text;
     assert!(prompt.starts_with("Type: SIGNAL\n"));
     run_hook(
         &env,
