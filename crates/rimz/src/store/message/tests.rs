@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 
-use super::super::super::message::deliver;
 use super::*;
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, MessageId, MuxName, PaneId, WorkspaceId};
@@ -334,15 +333,6 @@ fn requeue_preserves_intent_and_rearms_dependencies() {
     original.batch_id = Some(message_id(1));
 
     assert!(original.is_deliverable(now));
-    let latched = deliver::evaluate_after_condition(
-        &original.after[0],
-        original.gate,
-        &[],
-        &condition_snapshot(vec![upstream.clone()]),
-        now,
-    );
-    assert!(latched.check.met);
-    assert!(!latched.stamp_needed);
 
     let requeued = MessageRecord::requeue_from(&original);
 

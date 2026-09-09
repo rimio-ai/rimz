@@ -15,7 +15,7 @@ use crate::workspace::ResolvedWorkspace;
 
 use super::deliver::{self, DeliveryPolicy};
 
-pub type Result<T> = std::result::Result<T, CompactErr>;
+type Result<T> = std::result::Result<T, CompactErr>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CompactErr {

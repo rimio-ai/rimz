@@ -24,7 +24,7 @@ use crate::{RuntimePaths, Store};
 
 use super::send;
 
-pub type Result<T> = std::result::Result<T, DeliverErr>;
+type Result<T> = std::result::Result<T, DeliverErr>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeliverErr {
@@ -53,7 +53,7 @@ pub enum DeliveryPolicy {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ReceiverReadiness {
+pub(super) struct ReceiverReadiness {
     pub status: AgentStatus,
     pub compacting: bool,
     pub gate_open: bool,
@@ -66,7 +66,7 @@ impl ReceiverReadiness {
     }
 }
 
-pub(crate) fn receiver_readiness(
+pub(super) fn receiver_readiness(
     agent: &crate::agents::AgentState,
     gate: DeliveryGate,
     force: bool,
@@ -81,20 +81,20 @@ pub(crate) fn receiver_readiness(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AttemptSource {
+pub(super) enum AttemptSource {
     Fresh { durable_receiver: bool },
     Claimed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AttemptOutcome {
+pub(super) enum AttemptOutcome {
     Sent { compacted: bool },
     Queued,
     CompactionPending,
     SkippedWaiting,
 }
 
-pub(crate) struct Attempt<'a> {
+pub(super) struct Attempt<'a> {
     pub workspace: &'a ResolvedWorkspace,
     pub store: &'a Store,
     pub snapshot: &'a SidebarSnapshot,
@@ -341,7 +341,7 @@ fn cancel_joined_subagent_report(
     Ok(true)
 }
 
-pub(crate) fn execute_attempt(
+pub(super) fn execute_attempt(
     attempt: Attempt<'_>,
     live_send: &mut send::LiveSend,
 ) -> Result<AttemptOutcome> {
@@ -724,12 +724,12 @@ pub struct PaneCheck {
     pub pinned_pane_id: Option<PaneId>,
 }
 
-pub(crate) struct AfterEvaluation {
+pub(super) struct AfterEvaluation {
     pub check: AfterConditionCheck,
     pub stamp_needed: bool,
 }
 
-pub(crate) struct WhenEvaluation {
+pub(super) struct WhenEvaluation {
     pub check: WhenConditionCheck,
     pub stamp_needed: bool,
     retry_at: Option<Timestamp>,
@@ -878,7 +878,7 @@ fn evaluate_delivery<'a>(
     }
 }
 
-pub(crate) fn evaluate_when_condition(
+pub(super) fn evaluate_when_condition(
     condition: &WhenCondition,
     snapshot: &SidebarSnapshot,
     now: Timestamp,
@@ -928,7 +928,7 @@ pub(crate) fn evaluate_when_condition(
     }
 }
 
-pub(crate) fn evaluate_after_condition(
+pub(super) fn evaluate_after_condition(
     condition: &AfterCondition,
     gate: DeliveryGate,
     pending: &[MessageRecord],
@@ -1018,7 +1018,7 @@ fn refresh_wake_stamp(runtime: &RuntimePaths, store: &Store, now: Timestamp) -> 
     Ok(())
 }
 
-pub(crate) fn wake_stamp_path(runtime: &RuntimePaths) -> PathBuf {
+pub(super) fn wake_stamp_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join(crate::message::MESSAGE_WAKE_FILE)
 }
 

@@ -28,19 +28,19 @@ const MESSAGE_DURATION_UNITS: &[DurationUnit] = &[
     DurationUnit::Day,
 ];
 
-pub const DEFAULT_SETTLE: Duration = Duration::from_millis(400);
-pub const SETTLE_ENV: &str = "RIMZ_MESSAGE_SETTLE_MS";
-pub const MESSAGE_WAKE_FILE: &str = "message-wake.json";
+const DEFAULT_SETTLE: Duration = Duration::from_millis(400);
+const SETTLE_ENV: &str = "RIMZ_MESSAGE_SETTLE_MS";
+const MESSAGE_WAKE_FILE: &str = "message-wake.json";
 /// Default spacing between discrete message pane writes.
-pub const DEFAULT_MESSAGE_INTERVAL: Duration = Duration::from_secs(1);
-pub const MESSAGE_INTERVAL_ENV: &str = "RIMZ_MESSAGE_INTERVAL_MS";
+const DEFAULT_MESSAGE_INTERVAL: Duration = Duration::from_secs(1);
+const MESSAGE_INTERVAL_ENV: &str = "RIMZ_MESSAGE_INTERVAL_MS";
 /// Default gap between raw-typed command segments and before submission,
 /// allowing composer paste-burst heuristics to flush.
-pub const DEFAULT_COMMAND_SUBMIT_DELAY: Duration = Duration::from_secs(1);
-pub const COMMAND_SUBMIT_DELAY_ENV: &str = "RIMZ_MESSAGE_COMMAND_SUBMIT_DELAY_MS";
+const DEFAULT_COMMAND_SUBMIT_DELAY: Duration = Duration::from_secs(1);
+const COMMAND_SUBMIT_DELAY_ENV: &str = "RIMZ_MESSAGE_COMMAND_SUBMIT_DELAY_MS";
 /// Default cap for unconfirmed `Sent` reconciliation attempts.
-pub const DEFAULT_MAX_DELIVERY_ATTEMPTS: u32 = 3;
-pub const MAX_DELIVERY_ATTEMPTS_ENV: &str = "RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS";
+const DEFAULT_MAX_DELIVERY_ATTEMPTS: u32 = 3;
+const MAX_DELIVERY_ATTEMPTS_ENV: &str = "RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS";
 
 /// Split appended arguments from the adapter's declared compact command while
 /// keeping the separating space with the command. This keeps a slash out of a
@@ -187,7 +187,7 @@ pub fn parse_when_duration(raw: &str) -> Result<u64, String> {
     Ok(duration.as_secs())
 }
 
-pub fn gate_open_for_agent(
+fn gate_open_for_agent(
     gate: DeliveryGate,
     agent: &AgentState,
     force: bool,
@@ -240,7 +240,7 @@ pub fn message_interval_from_env() -> Duration {
 }
 
 /// Gap between raw-typed command text and its submit keystroke.
-pub fn command_submit_delay_from_env() -> Duration {
+fn command_submit_delay_from_env() -> Duration {
     env_ms(COMMAND_SUBMIT_DELAY_ENV).unwrap_or(DEFAULT_COMMAND_SUBMIT_DELAY)
 }
 

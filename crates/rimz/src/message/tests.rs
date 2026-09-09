@@ -345,6 +345,22 @@ fn delivery_checkpoint_recognizes_turn_boundaries() {
 }
 
 #[test]
+fn after_condition_with_a_stamp_stays_met_without_restamping() {
+    let now = Timestamp::from_second(1_000).unwrap();
+    let mut upstream = agent("sess-upstream", Some("planner"));
+    upstream.status = AgentStatus::Running;
+    let latched = deliver::evaluate_after_condition(
+        &after_condition(&upstream, Some(now)),
+        DeliveryGate::Any,
+        &[],
+        &condition_snapshot(vec![upstream]),
+        now,
+    );
+    assert!(latched.check.met);
+    assert!(!latched.stamp_needed);
+}
+
+#[test]
 fn after_condition_requires_an_open_gate_and_quiescent_ready_queue() {
     let now = Timestamp::now();
     let mut upstream = agent("sess-upstream", Some("planner"));
