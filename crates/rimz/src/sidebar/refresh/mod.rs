@@ -10,8 +10,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::agents::spending::{
-    ProviderSpendingCache, SpendScope, SpendingCaches, WorkspaceSpendingCache,
-    read_provider_spending_cache, read_workspace_spending_cache,
+    SpendScope, SpendingCaches, WorkspaceSpendingCache, read_workspace_spending_cache,
 };
 use crate::agents::{AgentAccount, AgentState};
 use crate::config::MachineConfig;
@@ -111,7 +110,7 @@ pub(super) fn consumer_spending_caches(
     runtime: &RuntimePaths,
     snapshot: &SidebarSnapshot,
 ) -> SpendingCaches {
-    let provider = current_provider_spending_cache(runtime);
+    let provider = crate::agents::spending::current_provider_spending_cache(runtime);
     let scope = SpendScope::for_workspace(
         snapshot.project_root.as_deref(),
         &snapshot.worktree_roots,
@@ -125,15 +124,6 @@ pub(super) fn consumer_spending_caches(
     SpendingCaches {
         provider,
         workspace,
-    }
-}
-
-fn current_provider_spending_cache(runtime: &RuntimePaths) -> ProviderSpendingCache {
-    let cache = read_provider_spending_cache(&runtime.shared_provider_spending_path());
-    if cache.is_current_version() {
-        cache
-    } else {
-        ProviderSpendingCache::default()
     }
 }
 
