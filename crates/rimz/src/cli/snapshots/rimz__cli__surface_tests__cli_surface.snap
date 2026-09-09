@@ -899,6 +899,8 @@ rimz help loop
 
 rimz help loop add
 
+rimz help loop check-exec [hidden]
+
 rimz help loop disable
 
 rimz help loop enable
@@ -1272,6 +1274,15 @@ rimz loop add
     --worktree <WORKTREE>  [action=set takes=1..=1]
     --zellij  [action=set-true takes=0..=0 global]
 
+rimz loop check-exec [hidden]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --command <COMMAND>  [action=set takes=1..=1 required]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
 rimz loop disable
     <name>  [action=set takes=1..=1]
     --all  [action=set-true takes=0..=0]
@@ -1305,6 +1316,8 @@ rimz loop fire
 rimz loop help
 
 rimz loop help add
+
+rimz loop help check-exec [hidden]
 
 rimz loop help disable
 
