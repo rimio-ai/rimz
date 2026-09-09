@@ -153,92 +153,61 @@ fn compute_fleet_spending(
         return caches;
     }
 
-    let fresh = || {
-        let now_ms = unix_now_ms();
-        let provider = read_provider_spending_cache(&provider_path);
-        if !provider.is_fresh(now_ms) {
-            return None;
-        }
-        fresh_workspace_cache(runtime, scope_hash.as_deref(), now_ms).map(|workspace| {
-            crate::agents::spending::SpendingCaches {
-                provider,
-                workspace,
-            }
-        })
-    };
-    match crate::disk::single_flight::coalesce(
+    let _guard = match crate::disk::single_flight::coalesce(
         &runtime.shared_spending_lock(),
         SPENDING_WAIT_STEP,
         SPENDING_WAIT_STEPS,
-        fresh,
+        || {
+            fresh_published_spending(
+                runtime,
+                context.project_root,
+                context.worktree_roots,
+                context.worktree_home,
+            )
+        },
     ) {
-        crate::disk::single_flight::Coalesced::Shared(cache) => cache,
-        crate::disk::single_flight::Coalesced::Produce(_guard) => {
-            let provider = read_provider_spending_cache(&provider_path);
-            let now_secs = crate::agents::spending::unix_secs_now();
-            let files = walker.discover_spending_files(now_secs);
-            if provider.is_fresh(unix_now_ms())
-                && let Some(workspace) = workspace_cache_from_shared_entries_inner(
-                    walker,
-                    runtime,
-                    &provider,
-                    &scope,
-                    scope_hash.as_deref(),
-                    &files,
-                    context.headline,
-                    &context.origin_overrides,
-                    true,
-                    now_secs,
-                )
-            {
-                SpendingCaches {
-                    provider,
-                    workspace,
-                }
-            } else {
-                walk_fleet_spending_files(
-                    walker, runtime, context, true, progress, &files, now_secs,
-                )
-            }
-        }
-        crate::disk::single_flight::Coalesced::ProduceLocal => {
-            let provider = read_provider_spending_cache(&provider_path);
-            let now_secs = crate::agents::spending::unix_secs_now();
-            let files = walker.discover_spending_files(now_secs);
-            if provider.is_fresh(unix_now_ms())
-                && let Some(workspace) = workspace_cache_from_shared_entries_inner(
-                    walker,
-                    runtime,
-                    &provider,
-                    &scope,
-                    scope_hash.as_deref(),
-                    &files,
-                    context.headline,
-                    &context.origin_overrides,
-                    false,
-                    now_secs,
-                )
-            {
-                SpendingCaches {
-                    provider,
-                    workspace,
-                }
-            } else if !context.allow_local_fallback {
-                served_within_grace(runtime, scope_hash.as_deref()).unwrap_or_else(|| {
-                    SpendingCaches {
-                        provider: current_provider_spending_cache(runtime),
-                        workspace: matching_workspace_cache(runtime, scope_hash.as_deref()),
-                    }
-                })
-            } else {
-                served_within_grace(runtime, scope_hash.as_deref()).unwrap_or_else(|| {
-                    walk_fleet_spending_files(
-                        walker, runtime, context, false, progress, &files, now_secs,
-                    )
-                })
-            }
-        }
+        crate::disk::single_flight::Coalesced::Shared(cache) => return cache,
+        crate::disk::single_flight::Coalesced::Produce(guard) => Some(guard),
+        crate::disk::single_flight::Coalesced::ProduceLocal => None,
+    };
+    let publish = _guard.is_some();
+    let provider = read_provider_spending_cache(&provider_path);
+    let now_secs = crate::agents::spending::unix_secs_now();
+    let files = walker.discover_spending_files(now_secs);
+    if provider.is_fresh(unix_now_ms())
+        && let Some(workspace) = workspace_cache_from_shared_entries_inner(
+            walker,
+            runtime,
+            &provider,
+            &scope,
+            scope_hash.as_deref(),
+            &files,
+            context.headline,
+            &context.origin_overrides,
+            publish,
+            now_secs,
+        )
+    {
+        return SpendingCaches {
+            provider,
+            workspace,
+        };
     }
+    if publish {
+        return walk_fleet_spending_files(
+            walker, runtime, context, true, progress, &files, now_secs,
+        );
+    }
+    served_within_grace(runtime, scope_hash.as_deref()).unwrap_or_else(|| {
+        if context.allow_local_fallback {
+            walk_fleet_spending_files(walker, runtime, context, false, progress, &files, now_secs)
+        } else {
+            SpendingCaches {
+                provider: current_provider_spending_cache(runtime),
+                workspace: matching_workspace_cache(runtime, scope_hash.as_deref()),
+            }
+        }
+    })
 }
 
 fn fresh_published_spending(
@@ -260,7 +229,7 @@ fn fresh_published_spending(
     })
 }
 
-fn current_provider_spending_cache(runtime: &RuntimePaths) -> ProviderSpendingCache {
+pub fn current_provider_spending_cache(runtime: &RuntimePaths) -> ProviderSpendingCache {
     let cache = read_provider_spending_cache(&runtime.shared_provider_spending_path());
     if cache.is_current_version() {
         cache
@@ -334,7 +303,6 @@ fn walk_fleet_spending_files(
         ProviderSpendingCache, SilentWalk, SpendProgress, SpendScope, SpendingCaches,
         SpendingWalkResult, WORKSPACE_SPENDING_VERSION, WalkRequest, WorkspaceSpendingCache,
         read_provider_spending_cache, write_provider_spending_cache,
-        write_workspace_spending_cache,
     };
 
     let provider_path = runtime.shared_provider_spending_path();
@@ -380,11 +348,7 @@ fn walk_fleet_spending_files(
             // the (empty) discovery readdirs every tick.
             write_provider_spending_cache(&provider_path, &provider);
             if let Some(scope_hash) = scope_hash.as_deref() {
-                write_workspace_spending_cache(
-                    &runtime.workspace_spending_path(scope_hash),
-                    &workspace,
-                );
-                prune_workspace_spending_siblings(runtime, scope_hash);
+                publish_workspace(runtime, scope_hash, &workspace);
             }
         }
         return SpendingCaches {
@@ -448,11 +412,7 @@ fn walk_fleet_spending_files(
     if publish {
         write_provider_spending_cache(&provider_path, &provider);
         if let Some(scope_hash) = scope_hash.as_deref() {
-            write_workspace_spending_cache(
-                &runtime.workspace_spending_path(scope_hash),
-                &workspace,
-            );
-            prune_workspace_spending_siblings(runtime, scope_hash);
+            publish_workspace(runtime, scope_hash, &workspace);
         }
     }
     SpendingCaches {
@@ -493,11 +453,7 @@ impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
         if let Some(scope_hash) = self.scope_hash.as_deref() {
             let workspace =
                 WorkspaceSpendingCache::from_scoped(scope_hash, refreshed_at_ms, result.workspace);
-            crate::agents::spending::write_workspace_spending_cache(
-                &self.runtime.workspace_spending_path(scope_hash),
-                &workspace,
-            );
-            prune_workspace_spending_siblings(self.runtime, scope_hash);
+            publish_workspace(self.runtime, scope_hash, &workspace);
         }
     }
 }
@@ -518,7 +474,6 @@ fn workspace_cache_from_shared_entries_inner(
     publish: bool,
     now_secs: u64,
 ) -> Option<crate::agents::spending::WorkspaceSpendingCache> {
-    use crate::agents::spending::write_workspace_spending_cache;
     let Some(scope_hash) = scope_hash else {
         return Some(Default::default());
     };
@@ -551,8 +506,7 @@ fn workspace_cache_from_shared_entries_inner(
         return Some(workspace);
     }
     if publish {
-        write_workspace_spending_cache(&runtime.workspace_spending_path(scope_hash), &workspace);
-        prune_workspace_spending_siblings(runtime, scope_hash);
+        publish_workspace(runtime, scope_hash, &workspace);
     }
     Some(workspace)
 }
@@ -579,6 +533,14 @@ fn workspace_cache_from_shared_entries(
         true,
         crate::agents::spending::unix_secs_now(),
     )
+}
+
+fn publish_workspace(runtime: &RuntimePaths, scope_hash: &str, cache: &WorkspaceSpendingCache) {
+    crate::agents::spending::write_workspace_spending_cache(
+        &runtime.workspace_spending_path(scope_hash),
+        cache,
+    );
+    prune_workspace_spending_siblings(runtime, scope_hash);
 }
 
 fn prune_workspace_spending_siblings(runtime: &RuntimePaths, current_scope_hash: &str) {

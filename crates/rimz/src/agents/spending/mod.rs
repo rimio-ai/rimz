@@ -68,6 +68,7 @@ pub use effort::{
     EffortParseMemo, EffortSessionRef, EffortTokens, SlotEffort, SlotEffortBreakdown, slot_effort,
     slot_effort_breakdown, slot_effort_with_memo, sum_optional_cost,
 };
+pub use engine::current_provider_spending_cache;
 #[doc(hidden)]
 pub use engine::refresh_global_spending_direct;
 pub(crate) use publish::{PROVIDER_SPENDING_VERSION, WORKSPACE_SPENDING_VERSION};
