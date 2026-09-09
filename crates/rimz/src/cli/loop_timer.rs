@@ -9,6 +9,7 @@ use jiff::Zoned;
 use rimz::disk::atomic::write_bytes_atomically;
 use rimz::disk::paths::{RuntimePaths, config_home, env_path};
 use rimz::harness::schedule::catalog::TaskCatalog;
+use rimz::harness::schedule::fire::LoopRunHost;
 use rimz::ids::WorkspaceId;
 
 const SYSTEMD_SERVICE: &str = "rimz-loop.service";
@@ -55,6 +56,10 @@ pub(super) struct TimerReport {
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum TimerErr {
+    #[error(
+        "loop tick under systemd requires `systemd-run`; install systemd-run and make it available on the timer's PATH"
+    )]
+    MissingSystemdRun,
     #[error("cannot resolve the RimZ executable: {0}")]
     CurrentExe(#[source] std::io::Error),
     #[error("cannot prepare loop timer file {path}: {source}")]
@@ -89,7 +94,11 @@ pub(super) enum TimerErr {
 
 type Result<T> = std::result::Result<T, TimerErr>;
 
-pub(super) fn tick(now: &Zoned) {
+pub(super) fn tick(now: &Zoned) -> Result<()> {
+    let host = detect_host(
+        std::env::var_os("INVOCATION_ID").is_some(),
+        which::which("systemd-run").is_ok(),
+    )?;
     for root in task_roots() {
         let workspace_id = WorkspaceId::from_project_root(&root);
         let runtime = match RuntimePaths::for_workspace(workspace_id) {
@@ -106,7 +115,16 @@ pub(super) fn tick(now: &Zoned) {
             tracing::warn!(root = %root.display(), error = %err, "loop tick could not prepare runtime paths");
             continue;
         }
-        rimz::harness::schedule::fire::fire_due_tasks(&runtime, Some(&root), now);
+        rimz::harness::schedule::fire::fire_due_tasks(&runtime, Some(&root), now, host);
+    }
+    Ok(())
+}
+
+fn detect_host(under_systemd: bool, has_systemd_run: bool) -> Result<LoopRunHost> {
+    match (under_systemd, has_systemd_run) {
+        (true, true) => Ok(LoopRunHost::TransientScope),
+        (true, false) => Err(TimerErr::MissingSystemdRun),
+        (false, _) => Ok(LoopRunHost::Detached),
     }
 }
 
@@ -483,6 +501,26 @@ fn installed_exec(path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tick_host_requires_scope_support_under_systemd() {
+        assert_eq!(detect_host(false, false).unwrap(), LoopRunHost::Detached);
+        assert_eq!(detect_host(false, true).unwrap(), LoopRunHost::Detached);
+        assert_eq!(
+            detect_host(true, true).unwrap(),
+            LoopRunHost::TransientScope
+        );
+        assert!(matches!(
+            detect_host(true, false),
+            Err(TimerErr::MissingSystemdRun)
+        ));
+        assert!(
+            detect_host(true, false)
+                .unwrap_err()
+                .to_string()
+                .contains("install systemd-run")
+        );
+    }
 
     #[test]
     fn renders_systemd_units_with_an_escaped_exec_path() {

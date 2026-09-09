@@ -293,6 +293,32 @@ where
     }
 }
 
+/// Spawn a detached program in its own process group. Unit tests suppress the
+/// subprocess and return no pid.
+pub(crate) fn spawn_detached_program(
+    program: &OsStr,
+    args: &[std::ffi::OsString],
+    runtime: &RuntimePaths,
+    label: &'static str,
+) -> io::Result<Option<u32>> {
+    let mut cmd = detached_rimz_command(PathBuf::from(program), runtime);
+    cmd.args(args);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    #[cfg(not(test))]
+    {
+        spawn_detached_reaped(&mut cmd, label).map(Some)
+    }
+    #[cfg(test)]
+    {
+        let _ = (cmd, label);
+        Ok(None)
+    }
+}
+
 /// Spawn `cmd` detached and hand its `Child` to the global reaper thread so the
 /// exited helper is `wait()`ed and never lingers as a zombie under a long-lived
 /// parent. Fire-and-forget: callers null stdio and set their own argv/timeouts.
@@ -464,6 +490,16 @@ mod tests {
 
         spawn_detached_rimz(&runtime, ["agents", "auto-continue"], "test-helper")
             .expect("unit-test spawn suppression");
+        assert_eq!(
+            spawn_detached_program(
+                OsStr::new("missing-loop-test-program"),
+                &["loop".into(), "run".into(), "task".into()],
+                &runtime,
+                "test-loop-run",
+            )
+            .expect("unit-test program spawn suppression"),
+            None,
+        );
     }
 
     #[test]
