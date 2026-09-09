@@ -57,7 +57,7 @@ pub(super) struct TimerReport {
 #[derive(Debug, thiserror::Error)]
 pub(super) enum TimerErr {
     #[error(
-        "loop tick under systemd requires `systemd-run`; install systemd-run and make it available on the timer's PATH"
+        "loop timer under systemd requires `systemd-run`; install systemd-run and make it available on the timer's PATH"
     )]
     MissingSystemdRun,
     #[error("cannot resolve the RimZ executable: {0}")]
@@ -303,6 +303,9 @@ fn install_launchd(exec: &Path) -> Result<TimerReport> {
 
 fn detect_for(os: &str, command_exists: impl Fn(&str) -> bool, exe: &Path) -> Result<TimerBackend> {
     if os == "linux" && command_exists("systemctl") {
+        if !command_exists("systemd-run") {
+            return Err(TimerErr::MissingSystemdRun);
+        }
         return Ok(TimerBackend::Systemd);
     }
     if os == "macos" {
@@ -526,6 +529,26 @@ mod tests {
                 .to_string()
                 .contains("install systemd-run")
         );
+    }
+
+    #[test]
+    fn timer_install_requires_systemd_run_only_for_systemd() {
+        let exe = Path::new("/opt/rimz");
+        let err = detect_for("linux", |program| program == "systemctl", exe).unwrap_err();
+        assert!(matches!(err, TimerErr::MissingSystemdRun));
+        assert!(err.to_string().contains("install systemd-run"));
+        assert_eq!(
+            detect_for("linux", |_| true, exe).unwrap(),
+            TimerBackend::Systemd
+        );
+        assert_eq!(
+            detect_for("macos", |_| panic!("launchd needs no systemd probe"), exe).unwrap(),
+            TimerBackend::Launchd
+        );
+        assert!(matches!(
+            detect_for("linux", |_| false, exe),
+            Err(TimerErr::Unsupported { .. })
+        ));
     }
 
     #[test]
