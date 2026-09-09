@@ -138,43 +138,36 @@ pub enum DeliveryVerdict {
     Ready,
 }
 
-/// Build automation or orchestration text against an agent card. The sender
-/// determines whether delivery stays verbatim or receives an attributed
-/// envelope; every synthetic record carries the agent's channel and submits.
+/// Build verbatim System text against an agent card; every synthetic record carries the agent's channel and submits.
 fn synthetic_record(
     workspace_id: crate::ids::WorkspaceId,
     agent: &crate::agents::AgentState,
-    sender: MessageSender,
     text: String,
     gate: DeliveryGate,
     pane_id: Option<&PaneId>,
 ) -> MessageRecord {
     let record = MessageRecord::new(workspace_id, agent, text, true, gate)
         .with_channel(agent.channel())
-        .with_sender(sender);
+        .with_sender(MessageSender::System);
     match pane_id {
         Some(pane_id) => record.with_pane_id(pane_id.clone()),
         None => record,
     }
 }
 
-/// Queue synthetic text against an agent card.
+/// Queue synthetic text with no pane affinity, delivered at the next `Done` boundary.
 pub fn queue_synthetic(
     workspace: &ResolvedWorkspace,
     store: &Store,
     agent: &crate::agents::AgentState,
-    sender: MessageSender,
     text: String,
-    gate: DeliveryGate,
-    pane_id: Option<&PaneId>,
 ) -> Result<MessageId> {
     let message = synthetic_record(
         workspace.workspace_id.clone(),
         agent,
-        sender,
         text,
-        gate,
-        pane_id,
+        DeliveryGate::Done,
+        None,
     );
     store.queue_message(&message, &workspace.session_name)?;
     Ok(message.message_id)
@@ -190,24 +183,23 @@ pub fn nudge_now(
     gate: DeliveryGate,
     pane_id: &PaneId,
 ) -> Result<(MessageId, bool)> {
-    let message_id = queue_synthetic(
-        workspace,
-        store,
+    let message = synthetic_record(
+        workspace.workspace_id.clone(),
         agent,
-        MessageSender::System,
         text,
         gate,
         Some(pane_id),
-    )?;
+    );
+    store.queue_message(&message, &workspace.session_name)?;
     let delivered = deliver_one(
         workspace,
         store,
-        &message_id,
+        &message.message_id,
         Duration::ZERO,
         Some(pane_id.mux()),
         DeliveryPolicy::Boundary,
     )?;
-    Ok((message_id, delivered))
+    Ok((message.message_id, delivered))
 }
 
 pub fn deliver_one(
@@ -1054,7 +1046,6 @@ mod tests {
         let resume = synthetic_record(
             workspace_id(),
             &agent,
-            MessageSender::System,
             "continue".to_owned(),
             DeliveryGate::Resume,
             Some(&pane_id),
@@ -1072,7 +1063,6 @@ mod tests {
         let parked = synthetic_record(
             workspace_id(),
             &agent,
-            MessageSender::System,
             "continue".to_owned(),
             DeliveryGate::Done,
             None,
