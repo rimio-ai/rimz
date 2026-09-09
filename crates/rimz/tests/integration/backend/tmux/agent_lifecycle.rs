@@ -565,6 +565,231 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
 }
 
 #[test]
+fn cohort_resume_selects_closed_profile_parent_over_live_child_and_dead_placeholder() {
+    require_tmux!();
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    std::fs::write(env.home_root.join(".zshrc"), "").expect("disable zsh first-run menu");
+    init_repo(&env.project_root);
+    let worktree = env.home_root.join("project-worktrees/resume");
+    git(
+        &env.project_root,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "resume",
+            worktree.to_str().expect("worktree path"),
+        ],
+    );
+    let config_dir = env.config_root().join("rimz");
+    std::fs::create_dir_all(&config_dir).expect("mkdir config");
+    std::fs::write(
+        config_dir.join("agents.toml"),
+        "[agents.profiles.astra]\nagent = \"codex\"\n",
+    )
+    .expect("write astra profile");
+    let agent_bin = write_sleeping_agent_shim(&env, "codex");
+    let argv_path = env.home_root.join("resume-argv");
+    let ready = env.home_root.join("resume-ready");
+    std::fs::write(
+        agent_bin.join("codex"),
+        "#!/bin/bash\n\
+         case \"$1\" in --version) printf 'codex 0.0.0\\n'; exit 0;; app-server) exit 0;; esac\n\
+         printf '%s\\n' \"$@\" >> \"$RIMZ_TEST_AGENT_ARGV\"\n\
+         printf ready > \"$RIMZ_TEST_AGENT_READY\"\n\
+         exec -a codex sleep 300\n",
+    )
+    .expect("write argv-recording codex shim");
+    let launch_command = || {
+        let mut command = env.rimz();
+        command
+            .current_dir(&worktree)
+            .env("PATH", path_with_front(&agent_bin))
+            .env("SHELL", "/definitely/not/a/shell")
+            .env("RIMZ_TEST_AGENT_ARGV", &argv_path)
+            .env("RIMZ_TEST_AGENT_READY", &ready)
+            .args(["--mux", "tmux", "agents", "astra", "--resume"])
+            .stdin(std::process::Stdio::null());
+        command
+    };
+    let workspace = WorkspaceResolver::resolve(&worktree, None).expect("resolve workspace");
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
+    let mut options = session_opts(
+        &workspace.session_name,
+        workspace.workspace_id.clone(),
+        &workspace.project_root,
+        &workspace.worktree_root,
+        Some((160, 40)),
+    );
+    options
+        .extra_env
+        .extend(launch_command().get_envs().filter_map(|(key, value)| {
+            value.map(|value| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.to_string_lossy().into_owned(),
+                )
+            })
+        }));
+    server
+        .backend
+        .ensure_session(&options)
+        .expect("ensure room");
+    let child_pane = server.stdout(&[
+        "new-window",
+        "-d",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "-t",
+        &workspace.session_name,
+        "-n",
+        "child",
+        "/bin/bash -c 'exec -a codex sleep 300'",
+    ]);
+    let child_pid = server
+        .display(&child_pane, "#{pane_pid}")
+        .parse()
+        .expect("child pid");
+    let parent_id = "cohort-parent-session";
+    let child_id = "cohort-child-session";
+    let placeholder_id = "launch_019f2cecea067320b667c5946d266e64";
+    let store = env.store();
+    let kind = AgentKind::new_unchecked("codex");
+    for (index, (agent_id, profile)) in [
+        (parent_id, "astra"),
+        (child_id, "general"),
+        (placeholder_id, "astra"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let is_child = agent_id == child_id;
+        let mut event = EventEnvelope::agent_launched(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            &kind,
+            AgentLaunchPayload {
+                agent_id: agent_id.into(),
+                launch_id: Some(agent_id.into()),
+                agent_name: if agent_id == placeholder_id {
+                    "empty-launch".to_owned()
+                } else {
+                    profile.to_owned()
+                },
+                agent_name_explicit: true,
+                launch: LaunchParams {
+                    profile: Some(profile.to_owned()),
+                    parent_agent_id: is_child.then(|| parent_id.into()),
+                    launch_depth: Some(if is_child { 2 } else { 1 }),
+                    ..LaunchParams::default()
+                },
+                state: if agent_id == placeholder_id {
+                    AgentLaunchState::Starting
+                } else {
+                    AgentLaunchState::Bound
+                },
+                run_id: None,
+                pane_id: is_child.then(|| PaneId::from_parts(MuxName::Tmux, &child_pane)),
+                runtime_owner: Some(rimz::pane::RuntimeOwner::new(
+                    rimz::pane::RuntimeOwnerKind::Agent,
+                    agent_id,
+                    if is_child { child_pid } else { u32::MAX },
+                    None,
+                )),
+                worktree_path: Some(worktree.display().to_string()),
+                worktree_branch: Some("resume".to_owned()),
+                prompt: None,
+                description: None,
+            },
+        );
+        event.timestamp = jiff::Timestamp::from_second(1_700_000_000 + index as i64 * 10).unwrap();
+        store.append_event(&event).expect("seed cohort member");
+        if agent_id == parent_id {
+            let transcript = env.home_root.join("parent.jsonl");
+            std::fs::write(&transcript, "{}\n").expect("write parent conversation");
+            let mut observation =
+                AgentLifecycleObservation::new(Some(parent_id.into()), LifecycleSignal::Ended);
+            observation.transcript_path = Some(transcript.display().to_string());
+            let mut ended = EventEnvelope::agent_lifecycle(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                "codex",
+                "SessionEnd",
+                &observation,
+            );
+            ended.timestamp = jiff::Timestamp::from_second(1_700_000_001).unwrap();
+            store
+                .append_event(&ended)
+                .expect("close parent conversation");
+        }
+    }
+    let projection = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("seeded cohort");
+    let child = projection
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id == child_id)
+        .expect("child");
+    assert!(child.is_launched_child());
+    assert!(matches!(
+        rimz::store::runtime::agent_liveness(child),
+        rimz::store::runtime::AgentLiveness::Live { .. }
+    ));
+    let parent = projection
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id == parent_id)
+        .expect("closed parent");
+    assert!(parent.is_root() && parent.ended_at.is_some());
+    let placeholder = projection
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id == placeholder_id)
+        .expect("dead placeholder");
+    assert!(placeholder.agent_id.is_provisional());
+    assert_eq!(
+        rimz::store::runtime::agent_liveness(placeholder),
+        rimz::store::runtime::AgentLiveness::Dead
+    );
+    assert!(parent.last_activity < child.last_activity);
+    assert!(child.last_activity < placeholder.last_activity);
+
+    let output = launch_command()
+        .bounded_output()
+        .expect("resume astra cohort");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    wait_for_path(&ready, "resumed provider did not start");
+    let argv = std::fs::read_to_string(&argv_path).expect("provider argv");
+    let args = argv.lines().collect::<Vec<_>>();
+    assert!(args.starts_with(&["resume", parent_id]), "{argv}");
+    assert!(!args.contains(&child_id));
+    assert!(!args.contains(&placeholder_id));
+
+    let output = launch_command()
+        .bounded_output()
+        .expect("refuse live parent resume");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("still live") && stderr.contains(parent_id),
+        "{stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&argv_path).expect("provider argv"),
+        argv
+    );
+}
+
+#[test]
 fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_agents() {
     use std::io::Write;
     use std::os::unix::fs::MetadataExt;
