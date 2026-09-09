@@ -718,6 +718,112 @@ fn resume_gate_waits_for_recovery_then_delivers() {
 }
 
 #[test]
+fn auto_continue_queues_a_pinned_system_resume_then_defers_on_a_closed_gate() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(
+        &env,
+        "sess-resume-ready",
+        "feature-resume",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    seed_turn_error(&env, "sess-resume-ready", TurnErrorClass::PausedRateLimit);
+    seed_rate_limit_budget(&env, 100);
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let request = rimz::harness::AutoContinueRequest {
+        workspace_id: env.workspace_id.clone(),
+        kind: AgentKind::new_unchecked("claude"),
+        agent_id: AgentSessionId::from("sess-resume-ready"),
+        pane_id: PaneId::from_parts(MuxName::Zellij, TRACE_PANE),
+        message_id: None,
+        parked_since: jiff::Timestamp::now(),
+        text: "continue".to_owned(),
+        reason: "overloaded_backoff_retry".to_owned(),
+        label: None,
+    };
+    run_success(
+        env.rimz().env("RIMZ_TEST_PANE_LIST", &pane_fixture).args(
+            rimz::child_process::agent_helper_argv("auto-continue", &request),
+        ),
+        "deferred auto-continue",
+    );
+    let pending = env.store().list_pending_messages().expect("pending resume");
+    assert_eq!(pending.len(), 1);
+    let message = &pending[0];
+    assert_eq!(message.agent_id, request.agent_id);
+    assert_eq!(message.sender, MessageSender::System);
+    assert_eq!(message.gate, DeliveryGate::Resume);
+    assert_eq!(message.pane_id, None);
+    let queued = env
+        .read_events()
+        .into_iter()
+        .filter(|event| event.method == "message.queued")
+        .map(|event| {
+            serde_json::from_str::<rimz::store::event::MessageEventPayload>(event.params.get())
+                .expect("queued message payload")
+        })
+        .find(|event| event.message_id == message.message_id)
+        .expect("queued resume event");
+    assert_eq!(queued.pane_id.as_ref(), Some(&request.pane_id));
+    assert_eq!(message.text, "continue");
+    assert!(message.enter);
+    assert_eq!(message.status, MessageStatus::Queued);
+    assert_eq!(
+        message.last_error.as_deref(),
+        Some("resume delivery gate closed (overloaded_backoff_retry)"),
+    );
+
+    let request = rimz::harness::AutoContinueRequest {
+        reason: "budget_day_reset".to_owned(),
+        text: "day reset".to_owned(),
+        ..request
+    };
+    run_success(
+        env.rimz().env("RIMZ_TEST_PANE_LIST", &pane_fixture).args(
+            rimz::child_process::agent_helper_argv("auto-continue", &request),
+        ),
+        "deferred day-reset auto-continue",
+    );
+    let pending = env
+        .store()
+        .list_pending_messages()
+        .expect("pending messages");
+    assert_eq!(pending.len(), 2);
+    let message = pending
+        .iter()
+        .find(|message| message.text == "day reset")
+        .expect("day-reset message");
+    assert_eq!(message.gate, DeliveryGate::Done);
+}
+
+#[test]
+fn deliver_helper_settles_before_reading_state() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(
+        &env,
+        "sess-settle",
+        "feature-settle",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let message_id = queue_add(&env, "@claude", "continue");
+    let started = Instant::now();
+    run_success(
+        env.rimz()
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "600")
+            .args(["message", "deliver", "--message-id", &message_id]),
+        "settled delivery helper",
+    );
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(600),
+        "elapsed: {elapsed:?}"
+    );
+}
+
+#[test]
 fn queue_add_for_bound_agent_does_not_enumerate_panes() {
     let env = Env::new();
     env.install_agent_hooks("claude");
