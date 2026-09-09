@@ -70,14 +70,10 @@ pub use effort::{
 };
 #[doc(hidden)]
 pub use engine::refresh_global_spending_direct;
-pub(crate) use publish::{
-    PROVIDER_SPENDING_VERSION, WORKSPACE_SPENDING_VERSION, write_provider_spending_cache_value,
-};
+pub(crate) use publish::{PROVIDER_SPENDING_VERSION, WORKSPACE_SPENDING_VERSION};
 pub use publish::{
     ProviderSpendingCache, WorkspaceSpendingCache, read_provider_spending_cache,
-    read_workspace_spending_cache, write_provider_spending_cache,
-    write_provider_spending_cache_with_day, write_provider_spending_cache_with_rollups,
-    write_workspace_spending_cache,
+    read_workspace_spending_cache, write_provider_spending_cache, write_workspace_spending_cache,
 };
 pub(crate) use refresh::{
     RefreshCallbacks, SplitPrice, is_priceable_model_name, lookup_split_price, price_split,

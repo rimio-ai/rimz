@@ -1030,14 +1030,17 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
             ..Default::default()
         },
     )]);
-    crate::agents::spending::write_provider_spending_cache_with_day(
+    crate::agents::spending::write_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
-        now.as_millisecond() as u64,
-        &spending,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        &provider_day,
-        cutoff,
+        &crate::agents::spending::ProviderSpendingCache {
+            refreshed_at_ms: now.as_millisecond() as u64,
+            spending,
+            days: BTreeMap::new(),
+            models: BTreeMap::new(),
+            day_by_provider: provider_day,
+            day_cutoff_secs: cutoff,
+            ..Default::default()
+        },
     );
     assert!(
         scope_gate(&runtime, &kind, &config, now)

@@ -109,63 +109,11 @@ impl ProviderSpendingCache {
 /// producer its own [`SPENDING_TTL`] gate — without re-walking the JSONL
 /// transcript history. Follows the same temp-then-rename durability contract
 /// as [`write_spending_cache`].
-pub fn write_provider_spending_cache(
-    path: &Path,
-    refreshed_at_ms: u64,
-    spending: &Spending,
-) -> bool {
-    let days = BTreeMap::new();
-    let models = BTreeMap::new();
-    write_provider_spending_cache_with_rollups(path, refreshed_at_ms, spending, &days, &models)
-}
-
-/// Atomic write of the provider aggregate plus the rollups consumed by
-/// `rimz stats`.
-pub fn write_provider_spending_cache_with_rollups(
-    path: &Path,
-    refreshed_at_ms: u64,
-    spending: &Spending,
-    days: &BTreeMap<i64, DaySpend>,
-    models: &BTreeMap<String, SpendTally>,
-) -> bool {
-    write_provider_spending_cache_with_day(
-        path,
-        refreshed_at_ms,
-        spending,
-        days,
-        models,
-        &BTreeMap::new(),
-        0,
-    )
-}
-
-/// Atomic publish including the local-day windows used by account caps.
-#[allow(clippy::too_many_arguments)]
-pub fn write_provider_spending_cache_with_day(
-    path: &Path,
-    refreshed_at_ms: u64,
-    spending: &Spending,
-    days: &BTreeMap<i64, DaySpend>,
-    models: &BTreeMap<String, SpendTally>,
-    day_by_provider: &BTreeMap<String, SpendWindow>,
-    day_cutoff_secs: u64,
-) -> bool {
+pub fn write_provider_spending_cache(path: &Path, cache: &ProviderSpendingCache) -> bool {
     let cache = ProviderSpendingCache {
         version: PROVIDER_SPENDING_VERSION,
-        refreshed_at_ms,
-        day_by_provider: day_by_provider.clone(),
-        day_cutoff_secs,
-        days: days.clone(),
-        models: models.clone(),
-        spending: spending.clone(),
+        ..cache.clone()
     };
-    write_provider_spending_cache_value(path, &cache)
-}
-
-pub(crate) fn write_provider_spending_cache_value(
-    path: &Path,
-    cache: &ProviderSpendingCache,
-) -> bool {
     if let Some(on_disk) = peek_cache_version(path)
         && on_disk > cache.version
     {

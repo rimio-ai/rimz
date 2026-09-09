@@ -165,8 +165,11 @@ fn fresh_shared_publish_returns_without_walking() {
     spending.total.headline.usd = 1.23;
     write_provider_spending_cache(
         &first.shared_provider_spending_path(),
-        published_at,
-        &spending,
+        &ProviderSpendingCache {
+            refreshed_at_ms: published_at,
+            spending: spending.clone(),
+            ..Default::default()
+        },
     );
     let cache = compute_fleet_spending(&second, None, &HeadlineSpec::default());
 
@@ -199,8 +202,11 @@ fn shared_spending_lock_serves_the_elected_publish_to_a_contender() {
         if polls.fetch_add(1, Ordering::SeqCst) == 1 {
             write_provider_spending_cache(
                 &runtime.shared_provider_spending_path(),
-                published_at,
-                &spending,
+                &ProviderSpendingCache {
+                    refreshed_at_ms: published_at,
+                    spending: spending.clone(),
+                    ..Default::default()
+                },
             );
         }
         let cache = crate::agents::spending::read_provider_spending_cache(
@@ -242,8 +248,11 @@ fn produce_local_serves_published_within_grace() {
     spending.total.year.usd = 4.56;
     write_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
-        published_at,
-        &spending,
+        &ProviderSpendingCache {
+            refreshed_at_ms: published_at,
+            spending: spending.clone(),
+            ..Default::default()
+        },
     );
     let _held = hold_shared_spending_lock(&runtime);
     let mut walker = SpendingWalker::new();
@@ -279,7 +288,14 @@ fn produce_local_walk_seeds_from_cursor_cache() {
     let mut stale = Spending::default();
     stale.total.headline.usd = 99.0;
     let stale_at = unix_now_ms().saturating_sub(SPENDING_STALE_GRACE.as_millis() as u64 + 1_000);
-    write_provider_spending_cache(&runtime.shared_provider_spending_path(), stale_at, &stale);
+    write_provider_spending_cache(
+        &runtime.shared_provider_spending_path(),
+        &ProviderSpendingCache {
+            refreshed_at_ms: stale_at,
+            spending: stale,
+            ..Default::default()
+        },
+    );
     let _held = hold_shared_spending_lock(&runtime);
     let mut walker = SpendingWalker::new();
 
@@ -997,7 +1013,14 @@ fn empty_discovery_preserves_prior_nonzero_provider_publish() {
     let mut spending = Spending::default();
     spending.total.headline.usd = 981.0;
     spending.total.year.usd = 981.0;
-    write_provider_spending_cache(&runtime.shared_provider_spending_path(), 1, &spending);
+    write_provider_spending_cache(
+        &runtime.shared_provider_spending_path(),
+        &ProviderSpendingCache {
+            refreshed_at_ms: 1,
+            spending,
+            ..Default::default()
+        },
+    );
     let mut workspace_tally = crate::agents::SpendTally::default();
     workspace_tally.headline.usd = 42.0;
     workspace_tally.year.usd = 42.0;

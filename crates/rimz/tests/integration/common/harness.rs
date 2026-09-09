@@ -64,8 +64,11 @@ impl Harness {
         .expect("publish pane frame");
         rimz::agents::spending::write_provider_spending_cache(
             &self.runtime_paths.shared_provider_spending_path(),
-            now_ms,
-            &rimz::agents::spending::Spending::default(),
+            &rimz::agents::spending::ProviderSpendingCache {
+                refreshed_at_ms: now_ms,
+                spending: rimz::agents::spending::Spending::default(),
+                ..Default::default()
+            },
         );
         let accounts = rimz::sidebar::refresh::AccountsCache {
             providers: rimz::agents::known_kinds()

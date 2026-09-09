@@ -966,8 +966,10 @@ mod tests {
         runtime.ensure_dirs().unwrap();
         super::super::write_provider_spending_cache(
             &runtime.shared_provider_spending_path(),
-            crate::utils::time::unix_now_ms(),
-            &Default::default(),
+            &super::super::ProviderSpendingCache {
+                refreshed_at_ms: crate::utils::time::unix_now_ms(),
+                ..Default::default()
+            },
         );
 
         let clients = 6;
@@ -1092,8 +1094,10 @@ mod tests {
         runtime.ensure_shared_dirs().unwrap();
         super::super::write_provider_spending_cache(
             &runtime.shared_provider_spending_path(),
-            crate::utils::time::unix_now_ms(),
-            &Default::default(),
+            &super::super::ProviderSpendingCache {
+                refreshed_at_ms: crate::utils::time::unix_now_ms(),
+                ..Default::default()
+            },
         );
         let namespace = SpendingServiceNamespace::for_runtime(&runtime);
         let request = SpendingServiceRequest::global(&runtime, HeadlineSpec::default());

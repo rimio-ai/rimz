@@ -206,8 +206,11 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
     .unwrap();
     crate::agents::spending::write_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
-        now_ms,
-        &crate::agents::spending::Spending::default(),
+        &crate::agents::spending::ProviderSpendingCache {
+            refreshed_at_ms: now_ms,
+            spending: crate::agents::spending::Spending::default(),
+            ..Default::default()
+        },
     );
     let accounts = crate::sidebar::refresh::AccountsCache {
         providers: crate::agents::known_kinds()
