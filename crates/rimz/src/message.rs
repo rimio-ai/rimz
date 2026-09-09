@@ -235,7 +235,7 @@ pub fn settle_duration_from_env() -> Duration {
 }
 
 /// Spacing between discrete message pane writes.
-pub fn message_interval_from_env() -> Duration {
+fn message_interval_from_env() -> Duration {
     env_ms(MESSAGE_INTERVAL_ENV).unwrap_or(DEFAULT_MESSAGE_INTERVAL)
 }
 
