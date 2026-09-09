@@ -36,7 +36,7 @@ Start here when you are looking for where a behaviour lives.
 | [`cli/message/`](../../../crates/rimz/src/cli/message) | Flag parsing, rendering, and the inbox verbs. No delivery logic. |
 | [`cli/hooks/lifecycle/delivery.rs`](../../../crates/rimz/src/cli/hooks/lifecycle/delivery.rs) | The hook side: confirm sent records, spawn the delivery helper at turn boundaries. |
 
-Three neighbours carry pieces this module leans on: [`harness/target.rs`](../../../crates/rimz/src/harness/target.rs) resolves `@handle#channel` addresses and renders handles, [`transcript.rs`](../../../crates/rimz/src/transcript.rs) is the durable conversation log, and [`channel.rs`](../../../crates/rimz/src/channel.rs) is the named-channel registry.
+Three neighbours carry pieces this module leans on: [`address.rs`](../../../crates/rimz/src/address.rs) resolves `@handle#channel` addresses and renders handles, [`transcript.rs`](../../../crates/rimz/src/transcript.rs) is the durable conversation log, and [`channel.rs`](../../../crates/rimz/src/channel.rs) is the named-channel registry.
 
 The layering is one-directional: `dispatch` calls `deliver` and `send`, `deliver` calls `send`, and `send` calls the store and the mux. Nothing calls back up.
 
@@ -384,7 +384,7 @@ Every target lives in a channel: the cooperation lane inside one room, the ident
 
 ### Where a lane comes from
 
-Launch resolves one lane and stamps it into `RIMZ_CHANNEL`, the launch event, and the rollup. [`resolve_room_channel`](../../../crates/rimz/src/harness/target.rs) takes the first that applies:
+Launch resolves one lane and stamps it into `RIMZ_CHANNEL`, the launch event, and the rollup. [`resolve_room_channel`](../../../crates/rimz/src/harness/spec.rs) takes the first that applies:
 
 1. An explicit `--channel`.
 2. The current directory's basename, whenever the agent runs below the project root. A RimZ-owned worktree is the common case; any nested checkout works the same way.
