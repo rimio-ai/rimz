@@ -352,6 +352,23 @@ fn cgroup_changed(parent: Option<&[u8]>, child: Option<&[u8]>) -> bool {
     matches!((parent, child), (Some(parent), Some(child)) if !parent.is_empty() && !child.is_empty() && parent != child)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScopeHandoff {
+    HandedOff,
+    ChildGone,
+    Pending,
+}
+
+fn scope_handoff(parent: Option<&[u8]>, child: Option<&[u8]>, live: bool) -> ScopeHandoff {
+    if !live {
+        return ScopeHandoff::ChildGone;
+    }
+    if cgroup_changed(parent, child) {
+        return ScopeHandoff::HandedOff;
+    }
+    ScopeHandoff::Pending
+}
+
 fn wait_for_scope(pid: u32, name: &str) {
     use std::time::{Duration, Instant};
 
@@ -360,8 +377,21 @@ fn wait_for_scope(pid: u32, name: &str) {
     let child_path = format!("/proc/{pid}/cgroup");
     loop {
         let child = std::fs::read(&child_path).ok();
-        if cgroup_changed(parent.as_deref(), child.as_deref()) {
-            return;
+        match scope_handoff(
+            parent.as_deref(),
+            child.as_deref(),
+            crate::proc::process_is_live(pid, None),
+        ) {
+            ScopeHandoff::HandedOff => return,
+            ScopeHandoff::ChildGone => {
+                tracing::warn!(
+                    task = name,
+                    pid,
+                    "loop run exited before the timer scope hand-off was confirmed"
+                );
+                return;
+            }
+            ScopeHandoff::Pending => {}
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
@@ -482,6 +512,21 @@ mod tests {
             assert!(!cgroup_changed(Some(b""), Some(child)));
         }
         assert!(!cgroup_changed(None, None));
+    }
+
+    #[test]
+    fn scope_handoff_distinguishes_exit_from_pending_migration() {
+        let parent = Some(b"0::/user.slice/loop.service\n".as_slice());
+        let scoped = Some(b"0::/user.slice/run-test.scope\n".as_slice());
+        for child in [parent, scoped, None, Some(b"".as_slice())] {
+            assert_eq!(scope_handoff(parent, child, false), ScopeHandoff::ChildGone);
+        }
+        for child in [parent, None, Some(b"".as_slice())] {
+            assert_eq!(scope_handoff(parent, child, true), ScopeHandoff::Pending);
+        }
+        assert_eq!(scope_handoff(parent, scoped, true), ScopeHandoff::HandedOff);
+        assert_eq!(scope_handoff(None, scoped, true), ScopeHandoff::Pending);
+        assert_eq!(scope_handoff(None, None, false), ScopeHandoff::ChildGone);
     }
 
     #[test]
