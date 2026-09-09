@@ -125,7 +125,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
         answer_exit(2, &format!("ask `{ask_id}` is no longer current"));
     }
 
-    let mut pacer = rimz::message::send::Pacer::new(rimz::message::message_interval_from_env());
+    let mut pacer = rimz::message::send::Pacer::from_env();
     for step in steps {
         pacer.tick();
         let result = match step {

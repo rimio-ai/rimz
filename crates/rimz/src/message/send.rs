@@ -5,7 +5,10 @@ use std::time::Duration;
 
 use crate::Store;
 use crate::agents::AgentState;
-use crate::message::{MessageDraft, Recipient, command_segments};
+use crate::message::{
+    MessageDraft, Recipient, command_segments, command_submit_delay_from_env,
+    message_interval_from_env,
+};
 use crate::mux::PaneWriter;
 use crate::pane::keys::NamedKey;
 use crate::store::message::{AutoCompact, MessageBody, MessageRecord, MessageSender};
@@ -32,13 +35,23 @@ pub(super) enum Receipt {
 /// How a live-pane send is delivered: whether to send past Waiting, and pacing
 /// state.
 pub(super) struct LiveSend {
-    pub force: bool,
-    pub steer: bool,
-    pub pacer: Pacer,
-    pub command_submit_delay: Duration,
+    force: bool,
+    steer: bool,
+    pacer: Pacer,
+    command_submit_delay: Duration,
 }
 
 impl LiveSend {
+    /// Pacing comes from the environment; one value per send batch.
+    pub(super) fn new(force: bool, steer: bool) -> Self {
+        Self {
+            force,
+            steer,
+            pacer: Pacer::from_env(),
+            command_submit_delay: command_submit_delay_from_env(),
+        }
+    }
+
     fn pause_raw_typing(&self, body: MessageBody) {
         self.pause_raw_typing_with(body, sleep);
     }
@@ -134,7 +147,12 @@ pub struct Pacer {
 }
 
 impl Pacer {
-    pub fn new(interval: Duration) -> Self {
+    /// Pace pane writes using `RIMZ_MESSAGE_INTERVAL_MS`.
+    pub fn from_env() -> Self {
+        Self::new(message_interval_from_env())
+    }
+
+    fn new(interval: Duration) -> Self {
         Self {
             interval,
             started: false,

@@ -12,9 +12,7 @@ use jiff::Timestamp;
 
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, MessageId, MuxName};
-use crate::message::{
-    MessageDraft, Recipient, command_submit_delay_from_env, message_interval_from_env,
-};
+use crate::message::{MessageDraft, Recipient};
 use crate::store::message::{
     AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
     WhenCondition, in_flight_claim, queue_head,
@@ -820,12 +818,7 @@ fn dispatch_targets(
             dispatch_decision(state.snapshot, state.pending.as_slice(), target, mode, now)
         })
         .collect::<Vec<_>>();
-    let mut live_send = send::LiveSend {
-        force: mode.draft.force,
-        steer: mode.steer,
-        pacer: send::Pacer::new(message_interval_from_env()),
-        command_submit_delay: command_submit_delay_from_env(),
-    };
+    let mut live_send = send::LiveSend::new(mode.draft.force, mode.steer);
     let mut preflighted_kinds = BTreeSet::new();
     let mut outcomes = Vec::with_capacity(targets.len());
     let mut compacted = Vec::new();

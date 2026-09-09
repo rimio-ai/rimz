@@ -10,10 +10,7 @@ use serde::Serialize;
 
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{MessageId, MuxName, PaneId};
-use crate::message::{
-    command_submit_delay_from_env, gate_open_for_agent, max_delivery_attempts_from_env,
-    message_interval_from_env,
-};
+use crate::message::{gate_open_for_agent, max_delivery_attempts_from_env};
 use crate::store::message::{
     AfterCondition, DeliveryGate, HarnessNotice, MessageBody, MessageRecord, MessageSender,
     MessageStatus, WhenCondition, older_ready_blocker, queue_head,
@@ -277,12 +274,10 @@ fn attempt_delivery(
         }
     }
     // Hook delivery handles one claimed batch; the caller's settle owns any pre-delivery spacing, so this pacer's first tick stays a no-op.
-    let mut live_send = send::LiveSend {
-        force: claimed[0].force || matches!(policy, DeliveryPolicy::Steer { force: true }),
-        steer: matches!(policy, DeliveryPolicy::Steer { .. }),
-        pacer: send::Pacer::new(message_interval_from_env()),
-        command_submit_delay: command_submit_delay_from_env(),
-    };
+    let mut live_send = send::LiveSend::new(
+        claimed[0].force || matches!(policy, DeliveryPolicy::Steer { force: true }),
+        matches!(policy, DeliveryPolicy::Steer { .. }),
+    );
     let send_messages: Vec<MessageRecord> = claimed
         .iter()
         .cloned()
