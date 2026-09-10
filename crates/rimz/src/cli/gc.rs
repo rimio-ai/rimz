@@ -98,7 +98,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         rimz::harness::schedule::catalog::TaskCatalog::load(project_root.as_deref())?
             .prune_orphan_overlays()
             .context("pruning orphan loop arming state")?;
-        let wake_logs = rimz::harness::schedule::signal::prune_wake_logs()
+        let wake_logs = rimz::harness::schedule::signal::prune_wake_outputs()
             .context("pruning old wake output")?;
         (reaped, wake_logs)
     };

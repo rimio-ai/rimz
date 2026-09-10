@@ -19,7 +19,9 @@ use super::runner::{
 };
 use crate::RuntimePaths;
 use crate::disk::paths::StatePaths;
+use crate::disk::summary::FileSummary;
 use crate::harness::schedule::runner::RunLockInfo;
+use crate::sandbox::TmpView;
 use crate::store::Store;
 use crate::store::event::{
     MAX_SIGNAL_NAME_BYTES, SignalEventPayload, SignalName, SignalNameErr, SignalSource,
@@ -154,10 +156,31 @@ pub struct WatchOutcome {
     pub verdict: WatchVerdict,
     #[serde(default)]
     pub output: String,
+    /// The agent-visible path to the full output file.
     pub output_path: Option<PathBuf>,
+    #[serde(default)]
+    pub summary: FileSummary,
 }
 
 impl WatchOutcome {
+    pub(super) fn measured(
+        verdict: WatchVerdict,
+        output: String,
+        host_path: &Path,
+        view: &TmpView,
+    ) -> Self {
+        let summary = FileSummary::measure(host_path).unwrap_or_else(|err| {
+            tracing::warn!(path = %host_path.display(), error = %err, "measuring wake output");
+            FileSummary::default()
+        });
+        Self {
+            verdict,
+            output,
+            output_path: Some(view.agent_path(host_path)),
+            summary,
+        }
+    }
+
     pub(super) fn to_check_outcome(&self) -> CheckOutcome {
         let code = match self.verdict {
             WatchVerdict::Exited { code, .. } => code,
@@ -172,8 +195,8 @@ impl WatchOutcome {
     }
 }
 
-pub(super) fn wake_log_path(paths: &StatePaths, name: &str) -> PathBuf {
-    paths.wakes_dir.join(format!("{name}.log"))
+pub(super) fn wake_output_path(paths: &StatePaths, name: &str) -> PathBuf {
+    paths.wakes_dir.join(format!("{name}.output"))
 }
 
 pub(super) fn read_wake_tail(path: &Path) -> std::io::Result<String> {
@@ -191,7 +214,7 @@ pub(super) fn read_wake_tail(path: &Path) -> std::io::Result<String> {
 }
 
 /// Prune old wake audit output, retaining definitions and running watchers.
-pub fn prune_wake_logs() -> anyhow::Result<usize> {
+pub fn prune_wake_outputs() -> anyhow::Result<usize> {
     let entries = match std::fs::read_dir(crate::disk::paths::workspaces_dir()) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(0),
@@ -236,7 +259,7 @@ pub fn prune_wake_logs() -> anyhow::Result<usize> {
                 .map(|(name, _)| name.clone())
                 .collect();
             let runtime = RuntimePaths::for_workspace(id.clone())?;
-            Ok(prune_wake_logs_in(
+            Ok(prune_wake_outputs_in(
                 &paths.wakes_dir,
                 &runtime,
                 &retained,
@@ -253,7 +276,7 @@ pub fn prune_wake_logs() -> anyhow::Result<usize> {
     Ok(removed)
 }
 
-fn prune_wake_logs_in(
+fn prune_wake_outputs_in(
     dir: &Path,
     runtime: &RuntimePaths,
     retained: &std::collections::BTreeSet<String>,
@@ -268,7 +291,9 @@ fn prune_wake_logs_in(
     for entry in entries {
         let entry = entry?;
         let path = entry.path();
-        if path.extension().is_none_or(|extension| extension != "log")
+        if path
+            .extension()
+            .is_none_or(|extension| extension != "output")
             || !entry.file_type()?.is_file()
         {
             continue;
@@ -376,7 +401,8 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
         anyhow::bail!("wake {name} has no watched command");
     };
     let timeout = task_timeout(task.entry())?.unwrap_or(std::time::Duration::from_secs(30 * 60));
-    let output_path = wake_log_path(store.paths(), name);
+    let output_path = wake_output_path(store.paths(), name);
+    let view = TmpView::current(store.paths());
     let file = OpenOptions::new()
         .append(true)
         .open(&output_path)
@@ -389,11 +415,7 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
                 .expect("generated wake signal name is valid"),
             payload: Map::new(),
             source: SignalSource::Watch,
-            watch: Some(WatchOutcome {
-                verdict,
-                output,
-                output_path: Some(output_path.clone()),
-            }),
+            watch: Some(WatchOutcome::measured(verdict, output, &output_path, &view)),
         };
         if let Err(err) = store.append_signal(&workspace.session_name, (&signal).into()) {
             tracing::warn!(task = name, error = %err, "appending wake signal");
@@ -657,12 +679,24 @@ mod tests {
             let outcome = WatchOutcome {
                 verdict,
                 output: "actual tail".to_owned(),
-                output_path: Some(PathBuf::from("/state/wakes/wake.log")),
+                output_path: Some(PathBuf::from("/tmp/rimz-wakes/wake.output")),
+                summary: FileSummary {
+                    bytes: 11,
+                    lines: 1,
+                },
             };
             let encoded = serde_json::to_string(&outcome).unwrap();
             assert_eq!(
                 serde_json::from_str::<WatchOutcome>(&encoded).unwrap(),
                 outcome
+            );
+            let mut legacy = serde_json::to_value(&outcome).unwrap();
+            legacy.as_object_mut().unwrap().remove("summary");
+            assert_eq!(
+                serde_json::from_value::<WatchOutcome>(legacy)
+                    .unwrap()
+                    .summary,
+                FileSummary::default()
             );
             let check = check_record(&outcome.to_check_outcome());
             assert_eq!(check.output, "actual tail");
@@ -687,7 +721,7 @@ mod tests {
     }
 
     #[test]
-    fn wake_log_gc_retains_recent_defined_and_live_output() {
+    fn wake_output_gc_retains_recent_defined_and_live_output() {
         let dir = tempfile::tempdir().unwrap();
         let id = WorkspaceId::from_project_root(dir.path());
         let runtime = RuntimePaths::under(id, dir.path()).unwrap();
@@ -698,14 +732,14 @@ mod tests {
         let old =
             now - crate::store::event_log::DEFAULT_RETENTION - std::time::Duration::from_secs(1);
         for name in [
-            "old.log",
-            "recent.log",
-            "defined.log",
-            "live.log",
+            "old.output",
+            "recent.output",
+            "defined.output",
+            "live.output",
             "unrelated.txt",
         ] {
             let file = File::create(logs.join(name)).unwrap();
-            if name != "recent.log" {
+            if name != "recent.output" {
                 file.set_times(std::fs::FileTimes::new().set_modified(old))
                     .unwrap();
             }
@@ -713,11 +747,16 @@ mod tests {
         let guard = acquire_watch_lock(&runtime, "live").unwrap().unwrap();
         let retained = std::collections::BTreeSet::from(["defined".to_owned()]);
         assert_eq!(
-            prune_wake_logs_in(&logs, &runtime, &retained, now).unwrap(),
+            prune_wake_outputs_in(&logs, &runtime, &retained, now).unwrap(),
             1
         );
-        assert!(!logs.join("old.log").exists());
-        for name in ["recent.log", "defined.log", "live.log", "unrelated.txt"] {
+        assert!(!logs.join("old.output").exists());
+        for name in [
+            "recent.output",
+            "defined.output",
+            "live.output",
+            "unrelated.txt",
+        ] {
             assert!(logs.join(name).exists(), "{name}");
         }
         drop(guard);

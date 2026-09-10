@@ -135,7 +135,7 @@ fn lost_watch_outcome(
     let paths = StatePaths::for_workspace(WorkspaceId::from_project_root(
         &task.entry().resolved_root(),
     ))?;
-    let path = super::signal::wake_log_path(&paths, name);
+    let path = super::signal::wake_output_path(&paths, name);
     let armed_at = task
         .entry()
         .wake_meta
@@ -151,14 +151,15 @@ fn lost_watch_outcome(
             String::new()
         }
     };
-    Ok(super::signal::WatchOutcome {
-        verdict: super::signal::WatchVerdict::Lost {
+    Ok(super::signal::WatchOutcome::measured(
+        super::signal::WatchVerdict::Lost {
             detail: "watcher process exited without reporting".to_owned(),
             elapsed_ms,
         },
         output,
-        output_path: Some(path),
-    })
+        &path,
+        &crate::sandbox::TmpView::current(&paths),
+    ))
 }
 
 pub(super) fn workspace_project_root(runtime: &RuntimePaths) -> Option<PathBuf> {
@@ -724,10 +725,14 @@ mod tests {
         let outcome = lost_watch_outcome(&watch, NAME, stale, now.timestamp()).unwrap();
         assert!(outcome.verdict.elapsed_ms() >= WATCH_LOST_GRACE_SECS as u64 * 1_000);
         assert!(outcome.output.is_empty());
+        assert_eq!(
+            outcome.summary,
+            crate::disk::summary::FileSummary::default()
+        );
         let paths = StatePaths::for_workspace(WorkspaceId::from_project_root(root.path())).unwrap();
-        let path = super::super::signal::wake_log_path(&paths, NAME);
+        let path = super::super::signal::wake_output_path(&paths, NAME);
         assert_eq!(outcome.output_path, Some(path.clone()));
-        std::fs::create_dir_all(&paths.wakes_dir).unwrap();
+        paths.ensure_tmp_dir().unwrap();
         std::fs::write(&path, "watcher failed before launching command").unwrap();
         let watch = loaded(TaskEntry {
             wake_meta: Some(crate::config::WakeMeta {
@@ -739,6 +744,19 @@ mod tests {
         let outcome = lost_watch_outcome(&watch, NAME, stale, now.timestamp()).unwrap();
         assert_eq!(outcome.verdict.elapsed_ms(), 300_000);
         assert_eq!(outcome.output, "watcher failed before launching command");
+        assert_eq!(outcome.summary.bytes, 39);
+        assert_eq!(outcome.summary.lines, 1);
+        let sandboxed = super::super::signal::WatchOutcome::measured(
+            outcome.verdict,
+            outcome.output,
+            &path,
+            &crate::sandbox::TmpView::new(crate::config::Isolation::Sandbox, &paths),
+        );
+        assert_eq!(
+            sandboxed.output_path,
+            Some(PathBuf::from(format!("/tmp/rimz-wakes/{NAME}.output")))
+        );
+        assert_eq!(sandboxed.summary, outcome.summary);
         std::fs::remove_file(path).unwrap();
     }
 

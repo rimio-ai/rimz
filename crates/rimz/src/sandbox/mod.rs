@@ -4,13 +4,44 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::agents::ManualSkill;
-use crate::config::{Isolation, SkillName};
+use crate::config::{Isolation, MachineConfig, SkillName};
+use crate::disk::paths::StatePaths;
 use crate::ids::AgentKind;
 
 #[cfg(target_os = "linux")]
 mod linux;
 mod rewrite;
 mod skills;
+
+const SANDBOX_TMP: &str = "/tmp";
+
+/// Where an agent sees room tmp: `/tmp` in a sandbox, the host path otherwise.
+pub struct TmpView {
+    tmp_dir: PathBuf,
+    sandboxed: bool,
+}
+
+impl TmpView {
+    pub fn new(isolation: Isolation, paths: &StatePaths) -> Self {
+        Self {
+            tmp_dir: paths.tmp_dir.clone(),
+            sandboxed: isolation == Isolation::Sandbox,
+        }
+    }
+
+    pub fn current(paths: &StatePaths) -> Self {
+        Self::new(MachineConfig::load_lenient().agents.isolation, paths)
+    }
+
+    pub fn agent_path(&self, host: &Path) -> PathBuf {
+        if self.sandboxed
+            && let Ok(relative) = host.strip_prefix(&self.tmp_dir)
+        {
+            return Path::new(SANDBOX_TMP).join(relative);
+        }
+        host.to_path_buf()
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum SandboxErr {
@@ -204,7 +235,7 @@ pub fn prepare(inputs: &SandboxInputs<'_>) -> Result<Prepared, SandboxErr> {
     validate_path(inputs.tmp_dir)?;
     mounts.push(Mount::Bind {
         source: inputs.tmp_dir.to_path_buf(),
-        target: PathBuf::from("/tmp"),
+        target: PathBuf::from(SANDBOX_TMP),
     });
     let mut reach = BTreeSet::new();
     for path in required {
@@ -300,6 +331,29 @@ pub fn bwrap_argv(bwrap: &Path, plan: &MountPlan, cwd: &Path, inner: &[String]) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tmp_view_maps_only_sandbox_room_paths() {
+        let paths = StatePaths::under(
+            crate::ids::WorkspaceId::from_project_root(Path::new("/project")),
+            Path::new("/state"),
+        )
+        .unwrap();
+        let output = paths.wakes_dir.join("wake-test.output");
+        let sandbox = TmpView::new(Isolation::Sandbox, &paths);
+        assert_eq!(
+            sandbox.agent_path(&output),
+            Path::new("/tmp/rimz-wakes/wake-test.output")
+        );
+        assert_eq!(
+            sandbox.agent_path(Path::new("/elsewhere/file")),
+            Path::new("/elsewhere/file")
+        );
+        assert_eq!(
+            TmpView::new(Isolation::Host, &paths).agent_path(&output),
+            output
+        );
+    }
 
     #[test]
     fn sandbox_preflight_errors_end_with_fix() {
