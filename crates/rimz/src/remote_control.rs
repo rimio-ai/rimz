@@ -11,7 +11,7 @@ use crate::agents::runtime_control::{
 };
 use crate::config::RemoteControlConfig;
 use crate::disk::paths::StatePaths;
-use crate::room::session::LiveSessions;
+use crate::mux::LiveSessions;
 use crate::workspace::record;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -22,6 +22,7 @@ use crate::config::{MachineConfig, MultiplexerConfig};
 use crate::diag::record::DiagEvent;
 use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::ids::{MuxName, PaneId};
+use crate::mux::LiveSessions;
 use crate::mux::recovery;
 use crate::mux::zellij::RECONCILE_LIST_TIMEOUT;
 use crate::mux::{
@@ -29,7 +30,6 @@ use crate::mux::{
     SidebarPaneOptions, SidebarWidth, backend_for,
 };
 use crate::proc::ProcInfo;
-use crate::room::session::LiveSessions;
 use crate::sidebar::timing::{RELOAD_CONVERGE_POLL, RELOAD_CONVERGE_TIMEOUT};
 use crate::utils::time::unix_now_ms;
 use crate::wakeup::heartbeat::SidebarHeartbeat;

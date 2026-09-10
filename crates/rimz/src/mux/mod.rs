@@ -33,6 +33,7 @@ pub(crate) use reconcile::{
     group_reconcile_panes, plan_reconcile,
 };
 pub use reconcile::{SidebarLiveness, SidebarRecovery};
+pub(crate) use selection::LiveSessions;
 pub use selection::auto_detect_backend;
 pub use tmux::TmuxBackend;
 pub use width::{

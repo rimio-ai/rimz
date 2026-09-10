@@ -203,7 +203,8 @@ path = "crates/rimz/src/mux"
 # Geometry planning and native balancing remain private to mux.
 # Sandbox reach uses mux-owned endpoint resolution rather than duplicating it.
 # Launch titles have their own operation, separate from temporary status renames.
-surface-budget = 262
+# The cross-backend live-session snapshot moves here from room (pass 15c).
+surface-budget = 263
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
