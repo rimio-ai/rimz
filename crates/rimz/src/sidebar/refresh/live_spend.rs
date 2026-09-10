@@ -19,7 +19,10 @@ struct LiveCardSpend {
 /// walked session baseline. Shared by the producing CLI and consumer folds, so
 /// every tab in a room paints the same figure; zero is explicit so the cockpit
 /// can render `$0.00`.
-pub fn apply_live_today_spend(snapshot: &mut SidebarSnapshot, workspace: &WorkspaceSpendingCache) {
+pub(in crate::sidebar) fn apply_live_today_spend(
+    snapshot: &mut SidebarSnapshot,
+    workspace: &WorkspaceSpendingCache,
+) {
     let live = if workspace.headline_cutoff_secs == NO_BURST_CUTOFF {
         0.0
     } else {

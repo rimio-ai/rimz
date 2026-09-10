@@ -19,7 +19,7 @@ use super::super::timing::CODEX_DAEMON_REAP_TTL;
 /// this cache so the fast lane can apply the same reap without proc scans or
 /// app-server probes.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct CodexDaemonReap {
+pub(in crate::sidebar) struct CodexDaemonReap {
     pub produced_at_ms: u64,
     pub daemon_pids: BTreeSet<u32>,
     pub loaded: Option<BTreeSet<String>>,
@@ -36,7 +36,9 @@ fn write_codex_daemon_reap(
     crate::disk::atomic::write_temp_then_rename_cache(&codex_daemon_reap_path(runtime), cache)
 }
 
-pub fn read_codex_daemon_reap(runtime: &RuntimePaths) -> Option<CodexDaemonReap> {
+pub(in crate::sidebar) fn read_codex_daemon_reap(
+    runtime: &RuntimePaths,
+) -> Option<CodexDaemonReap> {
     crate::disk::atomic::read_json_cache(&codex_daemon_reap_path(runtime))
 }
 

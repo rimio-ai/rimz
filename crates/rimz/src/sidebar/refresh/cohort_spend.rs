@@ -18,13 +18,13 @@ use super::super::timing::COHORT_SPEND_TTL;
 pub(in crate::sidebar) const COHORT_SPEND_CACHE_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct CohortSpendCache {
+pub(in crate::sidebar) struct CohortSpendCache {
     pub version: u32,
     pub refreshed_at_ms: u64,
     pub groups: BTreeMap<String, SidebarCohortEffort>,
 }
 
-pub fn read_cohort_spend_cache(path: &Path) -> CohortSpendCache {
+pub(in crate::sidebar) fn read_cohort_spend_cache(path: &Path) -> CohortSpendCache {
     let cache: CohortSpendCache = crate::disk::atomic::read_json_cache(path);
     if cache.version == COHORT_SPEND_CACHE_VERSION {
         cache
