@@ -16,9 +16,7 @@ use crate::store::snapshot::panes::{
 };
 
 use super::SidebarSnapshot;
-use super::aggregate::{AgentProjection, AttentionWindows, build_worktree_groups_from_rows};
-use super::layout::{GroupRoots, refresh_overlay_group};
-use projection::{LazyAgentPaneProjection, rows_from_panes};
+use super::layout::refresh_overlay_group;
 
 mod projection;
 
@@ -262,37 +260,13 @@ impl SidebarSnapshot {
         provider_capacities: &BTreeMap<AgentKind, ProviderCapacity>,
         exhausted_resumes: &BTreeSet<(AgentKind, AgentSessionId)>,
     ) -> Vec<DiagEvent> {
-        let mut projection = rows_from_panes(
-            &self.agents,
-            panes,
-            LazyAgentPaneProjection {
-                wired_kinds: &self.wired_kinds,
-                default_models: &self.wired_default_models,
-                pairings: lazy_pairings,
-            },
-            self.panes_observed_at_ms.or(self.panes_produced_at_ms),
-            self.now,
-        );
+        let mut projection = self.rows_from_panes(panes, lazy_pairings);
         if let Some(unread_row_ids) = unread_row_ids {
             stamp_unread_rows(&mut projection.rows, unread_row_ids);
         }
         self.agent_panes = projection.agent_panes;
-        self.worktree_groups = build_worktree_groups_from_rows(
-            projection.rows,
-            AgentProjection {
-                agents: &self.agents,
-                provider_capacities,
-                exhausted_resumes,
-            },
-            GroupRoots {
-                project_root: self.project_root.as_deref(),
-                worktree_roots: &self.worktree_roots,
-                worktree_home: self.worktree_home.as_deref(),
-                root_class: self.root_class,
-            },
-            self.now,
-            AttentionWindows::from_config(&self.attention),
-        );
+        self.worktree_groups =
+            self.build_worktree_groups(projection.rows, provider_capacities, exhausted_resumes);
         projection.diagnostics
     }
 

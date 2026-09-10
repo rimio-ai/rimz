@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 #[cfg(test)]
 use std::collections::{BTreeSet, HashSet};
 
@@ -15,13 +14,8 @@ use crate::store::snapshot::panes::{
 use crate::store::snapshot::process::row_from_process;
 use crate::store::snapshot::row::{PaneAgent, SidebarRow};
 
+use super::super::SidebarSnapshot;
 use super::super::rows::row_from_agent;
-
-pub(super) struct LazyAgentPaneProjection<'a> {
-    pub(super) wired_kinds: &'a [String],
-    pub(super) default_models: &'a BTreeMap<String, String>,
-    pub(super) pairings: Option<&'a LazyAgentPairingResult>,
-}
 
 pub(super) struct RowProjection {
     pub(super) rows: Vec<SidebarRow>,
@@ -52,102 +46,103 @@ pub(crate) fn row_identity_violations<'a>(
     violations
 }
 
-pub(super) fn rows_from_panes(
-    agents: &[AgentState],
-    panes: &[PaneRef],
-    lazy_agents: LazyAgentPaneProjection<'_>,
-    panes_produced_at_ms: Option<u64>,
-    now: Timestamp,
-) -> RowProjection {
-    let mut rows = Vec::new();
-    let mut agent_panes = Vec::new();
-    let mut nested_agents = Vec::new();
-    let mut rendered_agents = Vec::new();
-    let mut diagnostics = Vec::new();
-    let index = PaneBindingIndex::new(agents);
-    let computed_pairings;
-    let lazy_pairings = if let Some(pairings) = lazy_agents.pairings {
-        pairings
-    } else {
-        computed_pairings = compute_lazy_agent_pairings_with_index(panes, &index);
-        &computed_pairings
-    };
-    let mut binder = PaneBinder::new(
-        index,
-        lazy_pairings,
-        lazy_agents.wired_kinds,
-        lazy_agents.default_models,
-        panes_produced_at_ms,
-        now,
-    );
+impl SidebarSnapshot {
+    pub(super) fn rows_from_panes(
+        &self,
+        panes: &[PaneRef],
+        pairings: Option<&LazyAgentPairingResult>,
+    ) -> RowProjection {
+        let now = self.now;
+        let mut rows = Vec::new();
+        let mut agent_panes = Vec::new();
+        let mut nested_agents = Vec::new();
+        let mut rendered_agents = Vec::new();
+        let mut diagnostics = Vec::new();
+        let index = PaneBindingIndex::new(&self.agents);
+        let computed_pairings;
+        let lazy_pairings = if let Some(pairings) = pairings {
+            pairings
+        } else {
+            computed_pairings = compute_lazy_agent_pairings_with_index(panes, &index);
+            &computed_pairings
+        };
+        let mut binder = PaneBinder::new(
+            index,
+            lazy_pairings,
+            &self.wired_kinds,
+            &self.wired_default_models,
+            self.panes_observed_at_ms.or(self.panes_produced_at_ms),
+            now,
+        );
 
-    for pane in panes {
-        match binder.resolve(pane) {
-            PaneBindingDisposition::Agent(agent) => {
+        for pane in panes {
+            match binder.resolve(pane) {
+                PaneBindingDisposition::Agent(agent) => {
+                    agent_panes.push(push_agent_row(&mut rows, agent, pane, now));
+                    if !pane.is_floating {
+                        rendered_agents.push(agent);
+                    }
+                }
+                PaneBindingDisposition::NestedAgent(agent) => {
+                    nested_agents.push((agent, pane));
+                }
+                PaneBindingDisposition::Idle(row) => {
+                    let row = *row;
+                    agent_panes.push(pane_agent_from_idle(&row, pane));
+                    if !pane.is_floating {
+                        rows.push(row);
+                    }
+                }
+                PaneBindingDisposition::DuplicatePane => {
+                    diagnostics.push(DiagEvent::DuplicatePaneId {
+                        pane_id: pane.pane_id.clone(),
+                    });
+                }
+                PaneBindingDisposition::Conflict {
+                    kind,
+                    agent_id,
+                    bound_pane,
+                } => {
+                    diagnostics.push(DiagEvent::RowConflict {
+                        agent_kind: kind,
+                        agent_session_id: agent_id,
+                        bound_pane,
+                        conflicting_pane: pane.pane_id.clone(),
+                    });
+                }
+                PaneBindingDisposition::Quarantined => {
+                    diagnostics.push(DiagEvent::NewbornQuarantined {
+                        pane_id: pane.pane_id.clone(),
+                    });
+                }
+                PaneBindingDisposition::Process => {
+                    if !pane.is_floating {
+                        rows.push(row_from_process(pane, now));
+                    }
+                }
+                PaneBindingDisposition::Ignored => {}
+            }
+        }
+        for (agent, pane) in nested_agents {
+            let parent_rendered = rendered_agents.iter().any(|parent| agent.parent_is(parent));
+            if parent_rendered {
+                agent_panes.push(pane_agent_from_agent(agent, pane));
+            } else {
+                // A pane-backed child can outlive its launching parent. Keep the
+                // normal nested rendering while that parent has a row, but promote
+                // the live child rather than making its pane disappear with it.
                 agent_panes.push(push_agent_row(&mut rows, agent, pane, now));
                 if !pane.is_floating {
                     rendered_agents.push(agent);
                 }
             }
-            PaneBindingDisposition::NestedAgent(agent) => {
-                nested_agents.push((agent, pane));
-            }
-            PaneBindingDisposition::Idle(row) => {
-                let row = *row;
-                agent_panes.push(pane_agent_from_idle(&row, pane));
-                if !pane.is_floating {
-                    rows.push(row);
-                }
-            }
-            PaneBindingDisposition::DuplicatePane => {
-                diagnostics.push(DiagEvent::DuplicatePaneId {
-                    pane_id: pane.pane_id.clone(),
-                });
-            }
-            PaneBindingDisposition::Conflict {
-                kind,
-                agent_id,
-                bound_pane,
-            } => {
-                diagnostics.push(DiagEvent::RowConflict {
-                    agent_kind: kind,
-                    agent_session_id: agent_id,
-                    bound_pane,
-                    conflicting_pane: pane.pane_id.clone(),
-                });
-            }
-            PaneBindingDisposition::Quarantined => {
-                diagnostics.push(DiagEvent::NewbornQuarantined {
-                    pane_id: pane.pane_id.clone(),
-                });
-            }
-            PaneBindingDisposition::Process => {
-                if !pane.is_floating {
-                    rows.push(row_from_process(pane, now));
-                }
-            }
-            PaneBindingDisposition::Ignored => {}
         }
-    }
-    for (agent, pane) in nested_agents {
-        let parent_rendered = rendered_agents.iter().any(|parent| agent.parent_is(parent));
-        if parent_rendered {
-            agent_panes.push(pane_agent_from_agent(agent, pane));
-        } else {
-            // A pane-backed child can outlive its launching parent. Keep the
-            // normal nested rendering while that parent has a row, but promote
-            // the live child rather than making its pane disappear with it.
-            agent_panes.push(push_agent_row(&mut rows, agent, pane, now));
-            if !pane.is_floating {
-                rendered_agents.push(agent);
-            }
-        }
-    }
 
-    RowProjection {
-        rows,
-        agent_panes,
-        diagnostics,
+        RowProjection {
+            rows,
+            agent_panes,
+            diagnostics,
+        }
     }
 }
 
