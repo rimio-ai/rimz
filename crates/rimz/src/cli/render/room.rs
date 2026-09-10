@@ -81,7 +81,7 @@ pub(crate) fn print_reset_report(report: &rimz::room::RoomResetReport) -> Result
     )?;
     writeln!(
         stderr,
-        "Tmp: {}.",
+        "Tmp and skill copies: {}.",
         if teardown.tmp_removed {
             "cleared"
         } else {

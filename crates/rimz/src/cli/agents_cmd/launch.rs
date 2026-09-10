@@ -138,12 +138,15 @@ pub(super) fn launch_layout(
         )
         .ok()
     });
-    rimz::sandbox::preflight(machine_config.agents.isolation)?;
     for (index, cell) in layout.agent_cells().enumerate() {
-        if machine_config.agents.isolation == rimz::config::Isolation::Host && cell.skills.is_some()
-        {
-            return Err(rimz::sandbox::SandboxErr::SkillsNeedSandbox.into());
-        }
+        let adapter = rimz::agents::find_definition(cell.kind.as_str())
+            .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", cell.kind))?;
+        rimz::sandbox::preflight_skills(
+            machine_config.agents.isolation,
+            &cell.kind,
+            cell.skills.is_some(),
+            adapter.manual_skill(),
+        )?;
         let mut request =
             rimz::harness::launch::ExecRequest::bare_launch(cell.kind.clone(), Vec::new());
         request.skills.clone_from(&cell.skills);
@@ -160,6 +163,7 @@ pub(super) fn launch_layout(
             &workspace.worktree_root,
         )?;
     }
+    rimz::sandbox::preflight(machine_config.agents.isolation)?;
     // Resolve where the launch lands before any side effect — the live-session
     // probe, worktree creation, the store append, the sidebar build — so an
     // invalid `--new-pane` (a multi-cell layout, or run outside a room) refuses

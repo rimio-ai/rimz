@@ -572,6 +572,101 @@ fn resumed_lazy_agent_is_addressable_before_provider_registration() {
 }
 
 #[test]
+fn restart_unsupported_profile_skills_retains_old_pane_and_state() {
+    require_tmux!();
+    let env = Env::new();
+    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
+    server
+        .backend
+        .ensure_session(&session_opts(
+            &workspace.session_name,
+            workspace.workspace_id.clone(),
+            &workspace.project_root,
+            &workspace.worktree_root,
+            Some((160, 40)),
+        ))
+        .expect("ensure room");
+    let old_pane = server.stdout(&[
+        "new-window",
+        "-d",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "-t",
+        &workspace.session_name,
+        "/bin/bash -c 'exec -a amp sleep 300'",
+    ]);
+    let old_pid = server.display(&old_pane, "#{pane_pid}");
+    let store = env.store();
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            &AgentKind::new_unchecked("amp"),
+            AgentLaunchPayload {
+                agent_id: "amp-session".into(),
+                launch_id: Some("launch_amp".into()),
+                agent_name: "worker".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams {
+                    profile: Some("worker".to_owned()),
+                    ..LaunchParams::default()
+                },
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: Some(PaneId::from_parts(MuxName::Tmux, &old_pane)),
+                runtime_owner: Some(rimz::pane::RuntimeOwner::new(
+                    rimz::pane::RuntimeOwnerKind::Agent,
+                    "amp-session",
+                    old_pid.parse().expect("pane pid"),
+                    None,
+                )),
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .expect("seed live agent");
+    let config_dir = env.config_root().join("rimz");
+    std::fs::create_dir_all(&config_dir).expect("mkdir config");
+    std::fs::write(
+        config_dir.join("agents.toml"),
+        "[agents]\nisolation = \"sandbox\"\n\
+         [agents.profiles.worker]\nagent = \"amp\"\nskills = []\n",
+    )
+    .expect("configure unsupported skills after launch");
+    let panes_before = server.stdout(&["list-panes", "-a", "-F", "#{pane_id}"]);
+    let events_before = serde_json::to_value(store.read_events().expect("events before"))
+        .expect("serialize events");
+
+    let output = env
+        .rimz()
+        .args(["--mux", "tmux", "agents", "restart", "@worker"])
+        .bounded_output()
+        .expect("restart refusal");
+    assert!(!output.status.success(), "restart must refuse");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("provider amp cannot mark skills user-only; remove the profile skills list"),
+        "unexpected refusal: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(server.display(&old_pane, "#{pane_pid}"), old_pid);
+    assert_eq!(
+        server.stdout(&["list-panes", "-a", "-F", "#{pane_id}"]),
+        panes_before,
+        "restart refusal must neither open nor close panes",
+    );
+    assert_eq!(
+        serde_json::to_value(store.read_events().expect("events after")).expect("serialize events"),
+        events_before,
+        "restart refusal must preserve durable agent state",
+    );
+}
+
+#[test]
 fn cohort_resume_selects_closed_profile_parent_over_live_child_and_dead_placeholder() {
     require_tmux!();
     if git_missing() {

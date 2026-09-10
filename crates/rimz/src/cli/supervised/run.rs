@@ -408,7 +408,6 @@ fn prepare_supervised(
 ) -> Result<Option<PreparedRun>> {
     let workspace = supervised::resolve_run_workspace(globals)?;
     let machine_config = crate::cli::machine_config();
-    rimz::sandbox::preflight(machine_config.agents.isolation)?;
     let mode = request.permission_mode;
     let store = crate::cli::open_store(&workspace)?;
     // Inside a team's lane, a bare role names that team's role, exactly as it
@@ -471,13 +470,15 @@ fn prepare_supervised(
         bail!("--print requires a single-cell agent layout");
     }
     let agent_cell = agent_cells[0];
-    if machine_config.agents.isolation == rimz::config::Isolation::Host
-        && agent_cell.skills.is_some()
-    {
-        return Err(rimz::sandbox::SandboxErr::SkillsNeedSandbox.into());
-    }
     let adapter = rimz::agents::find_definition(&agent_cell.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent_cell.kind))?;
+    rimz::sandbox::preflight_skills(
+        machine_config.agents.isolation,
+        &agent_cell.kind,
+        agent_cell.skills.is_some(),
+        adapter.manual_skill(),
+    )?;
+    rimz::sandbox::preflight(machine_config.agents.isolation)?;
     let prompt = supervised_prompt(request, adapter);
     let worktree_launch = request.worktree.is_some() || request.from_pr.is_some();
     if worktree_launch && !crate::cli::confirm_cross_repo_worktree(&workspace)? {

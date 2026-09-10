@@ -371,7 +371,10 @@ fn teardown_rooms(
             &state,
         );
         if !report.tmp_removed {
-            failures.push(format!("remove tmp for {}", room.session_name));
+            failures.push(format!(
+                "remove tmp and skill copies for {}",
+                room.session_name
+            ));
         }
         if report.session_killed {
             writeln!(

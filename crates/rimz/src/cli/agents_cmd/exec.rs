@@ -16,6 +16,22 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let invocation = ExecInvocationContext::new(&workspace);
     let run_context = run_exec_context(envelope.request(), &invocation)?;
     let launch_identity = exec_launch_identity(envelope.request())?;
+    let machine_config = crate::cli::machine_config();
+    let isolation = machine_config.agents.isolation;
+    let adapter = rimz::agents::find_definition(envelope.request().kind.as_str());
+    let bwrap = rimz::sandbox::preflight_skills(
+        isolation,
+        &envelope.request().kind,
+        envelope.request().skills.is_some(),
+        adapter.map_or(rimz::agents::ManualSkill::Unsupported, |adapter| {
+            adapter.manual_skill()
+        }),
+    )
+    .and_then(|()| rimz::sandbox::preflight(isolation))
+    .inspect_err(|_| {
+        mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
+        fail_run_on_exec_precondition(run_context.as_ref());
+    })?;
     let mut request = match envelope.materialize() {
         Ok(request) => request,
         Err(err) => {
@@ -80,18 +96,6 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             .clone()
             .unwrap_or_else(|| workspace.worktree_root.clone()),
     };
-    let machine_config = crate::cli::machine_config();
-    let isolation = machine_config.agents.isolation;
-    let sandbox_preflight =
-        if isolation == rimz::config::Isolation::Host && request.skills.is_some() {
-            Err(rimz::sandbox::SandboxErr::SkillsNeedSandbox)
-        } else {
-            rimz::sandbox::preflight(isolation)
-        };
-    let bwrap = sandbox_preflight.inspect_err(|_| {
-        mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
-        fail_run_on_exec_precondition(run_context.as_ref());
-    })?;
     let reminders = exec_launch_reminders(
         &request,
         &machine_config,
@@ -139,7 +143,6 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
                 })
                 .collect();
             env.extend(process.env.clone());
-            let adapter = rimz::agents::registry::find_definition(request.kind.as_str());
             let provider_home = adapter
                 .and_then(|definition| definition.config_home(&env))
                 .map(|path| rimz::sandbox::ProviderHome {
