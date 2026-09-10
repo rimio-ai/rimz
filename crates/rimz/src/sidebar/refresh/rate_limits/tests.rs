@@ -641,6 +641,36 @@ fn producer_cache_tracks_logged_in_panels() {
     );
 }
 #[test]
+fn logged_out_producer_leaves_empty_cache_untouched() {
+    let (_dir, workspace, runtime) = runtime();
+    let mut seeded = snapshot_with_panels(
+        workspace.clone(),
+        vec![provider_panel("claude", vec![rl_window(40, None)])],
+    );
+    refresh_rate_limits(&mut seeded, &runtime);
+    let path = runtime.shared_rate_limits_path();
+    assert!(!read_rate_limits_cache(&path).entries.is_empty());
+
+    let mut logged_out = snapshot_with_panels(workspace, Vec::new());
+    refresh_rate_limits(&mut logged_out, &runtime);
+    assert!(read_rate_limits_cache(&path).entries.is_empty());
+    std::fs::File::open(&path)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH)
+        .unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+    refresh_rate_limits(&mut logged_out, &runtime);
+
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().modified().unwrap(),
+        modified
+    );
+}
+
+#[test]
 fn account_merge_preserves_other_kinds() {
     let (_dir, _workspace, runtime) = runtime();
     write_claude_windows(&runtime, vec![rl_window(20, None)]);
