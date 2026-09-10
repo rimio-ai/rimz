@@ -234,6 +234,13 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
         0,
     );
     parent.prompt = Some("delegated sweep".to_owned());
+    parent.pending_wakes.push(crate::agents::PendingWake {
+        name: "timer".to_owned(),
+        trigger: crate::agents::PendingWakeTrigger::Timer {
+            due: fixed_now() + Duration::from_secs(720),
+        },
+        armed_at: Some(fixed_now() - Duration::from_secs(240)),
+    });
     let mut child = density_agent(
         "child-1",
         "claude",
@@ -258,7 +265,7 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
             ..Default::default()
         },
         54,
-        23,
+        25,
     );
 
     let subagent_line = rendered
@@ -269,6 +276,16 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
         subagent_line.contains("▎  ⧉ subagents (1)"),
         "expanded mode opens the non-selected parent's subagents:\n{rendered}"
     );
+    let child_entry = rendered
+        .lines()
+        .position(|line| line.contains("map the render path"))
+        .unwrap();
+    let wait_entry = rendered
+        .lines()
+        .position(|line| line.contains("⧖ in 12m"))
+        .unwrap();
+    assert!(wait_entry > child_entry);
+    assert!(subagent_line.contains("· ⧖ waits (1)"));
     assert_snapshot("card_density_expanded_non_selected_subagents", rendered);
 }
 

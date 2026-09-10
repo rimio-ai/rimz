@@ -163,6 +163,7 @@ fn pending_wake_labels_and_wire_preserve_trigger_details() {
             "wake on pr.merged · 0m left",
         ),
     ] {
+        assert_eq!(trigger.summary(now), label.strip_prefix("wake ").unwrap());
         let wake = PendingWake {
             name: "wake".into(),
             trigger,

@@ -1,5 +1,4 @@
 use super::*;
-use crate::sidebar_pane::render::theme::Component;
 use ratatui::text::Span;
 
 #[test]
@@ -57,86 +56,6 @@ fn sleeping_card_describes_its_wake_using_the_snapshot_clock() {
         assert!(!screen.contains("wake due"), "{status:?}: {screen}");
         assert!(screen.contains("⧖ waits (1)"), "{status:?}: {screen}");
     }
-}
-
-#[test]
-fn pending_wakes_line_counts_armed_wakes() {
-    let mut parent = agent(
-        "claude-1",
-        "claude",
-        AgentStatus::Success,
-        Some("/repo/main"),
-        Some("main"),
-        Some("finished work"),
-    );
-    parent.pending_wakes = vec![
-        crate::agents::PendingWake {
-            name: "timer".to_owned(),
-            trigger: crate::agents::PendingWakeTrigger::Timer {
-                due: fixed_now() + jiff::SignedDuration::from_mins(12),
-            },
-            armed_at: Some(fixed_now()),
-        },
-        crate::agents::PendingWake {
-            name: "command".to_owned(),
-            trigger: crate::agents::PendingWakeTrigger::Command {
-                command: "make check".to_owned(),
-            },
-            armed_at: Some(fixed_now()),
-        },
-    ];
-    let mut child = agent(
-        "child-1",
-        "claude",
-        AgentStatus::Success,
-        None,
-        None,
-        Some("Explore"),
-    );
-    child.parent_agent_id = Some("claude-1".into());
-    child.subagent_description = Some("inspect the renderer".to_owned());
-    child.usage.total_tokens = Some(12_400);
-    let mut snapshot = snapshot_with(vec![parent, child]);
-    let theme = Theme::fixed(false);
-    let screen = snapshot_to_screen_with_alert_and_ui(
-        &snapshot,
-        None,
-        &UiState {
-            selected_index: usize::MAX,
-            ..Default::default()
-        },
-        54,
-        23,
-    );
-    let rows: Vec<_> = screen.lines().collect();
-    let stats = rows
-        .iter()
-        .position(|line| line.contains("⧉ subagents (1)"))
-        .unwrap();
-    assert!(rows[stats + 1].contains("⧖ waits (2)"));
-    assert_snapshot("pending_wakes_line", screen);
-
-    let lines = group_lines(&snapshot, &theme, 0);
-    assert_eq!(
-        span_for(&lines, "  ⧖").style.fg,
-        Some(theme.component(Component::WakeHeader))
-    );
-    assert_eq!(span_for(&lines, " waits (2)").style.fg, theme.body().fg);
-    let rows = line_texts(&lines);
-    let stats = rows
-        .iter()
-        .position(|line| line.contains("⧉ subagents (1)"))
-        .unwrap();
-    assert!(rows[stats + 1].contains("⧖ waits (2)"));
-    assert!(rows[stats + 2].contains("inspect the renderer"));
-    assert!(rows[stats + 3].contains("12k"));
-
-    snapshot.worktree_groups[0].rows[0]
-        .as_agent_mut()
-        .unwrap()
-        .pending_wakes
-        .clear();
-    assert!(!snapshot_to_screen(&snapshot, 54, 23).contains("waits ("));
 }
 
 #[test]
