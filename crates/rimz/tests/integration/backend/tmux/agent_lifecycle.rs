@@ -20,6 +20,96 @@ fn write_sleeping_agent_shim(env: &Env, agent: &str) -> PathBuf {
     dir
 }
 
+#[test]
+fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
+    require_tmux!();
+    for isolation in ["host", "sandbox"] {
+        if isolation == "sandbox"
+            && let Err(err) = rimz::sandbox::preflight(rimz::config::Isolation::Sandbox)
+        {
+            eprintln!("skipping sandbox tab-title case: {err}");
+            continue;
+        }
+        let env = Env::new();
+        std::fs::write(env.home_root.join(".zshrc"), "").expect("disable zsh first-run menu");
+        env.install_agent_hooks("claude");
+        let config_dir = env.config_root().join("rimz");
+        std::fs::create_dir_all(&config_dir).expect("config directory");
+        std::fs::write(
+            config_dir.join("agents.toml"),
+            format!(
+                "[agents]\nisolation = {isolation:?}\n[agents.profiles.opus]\nagent = \"claude\"\n"
+            ),
+        )
+        .expect("profile config");
+        let agent_bin = write_sleeping_agent_shim(&env, "claude");
+        let ready = env.home_root.join("agent-ready");
+        let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+        let server = TmuxServer::in_runtime_root(&env.runtime_root);
+        env.rimz()
+            .env("PATH", path_with_front(&agent_bin))
+            .env("SHELL", "/definitely/not/a/shell")
+            .env("RIMZ_TEST_AGENT_READY", &ready)
+            .args(["--mux", "tmux", "start", "--no-attach"])
+            .assert_success_within_timeout("start profile launch room");
+        let anchor = PaneId::from_parts(
+            MuxName::Tmux,
+            server.display(&workspace.session_name, "#{pane_id}"),
+        );
+        server
+            .backend
+            .rename_tab(&workspace.session_name, &anchor, "shell ?")
+            .expect("pending status rename");
+        let launch = shlex::try_join([
+            "/usr/bin/env",
+            "SHELL=/definitely/not/a/shell",
+            env.rimz_bin().to_str().expect("binary path"),
+            "--mux",
+            "tmux",
+            "agents",
+            "opus",
+        ])
+        .expect("quoted launch");
+        server
+            .backend
+            .send_keys(&anchor, &launch)
+            .expect("type profile launch");
+        server
+            .backend
+            .send_key(&anchor, NamedKey::Enter)
+            .expect("launch profile");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !ready.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "{isolation} profile did not start: {:?}",
+                server
+                    .backend
+                    .capture_pane(&anchor, Some(30), false)
+                    .map(|capture| capture.raw_text),
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
+
+        let title = "opus-project";
+        assert_eq!(server.display(anchor.raw(), "#{window_name}"), title);
+        assert_eq!(server.display(anchor.raw(), "#{automatic-rename}"), "0");
+        if isolation == "sandbox" {
+            server.wait_for_pane_command(&workspace.session_name, "bwrap");
+        }
+        server
+            .backend
+            .rename_tab(&workspace.session_name, &anchor, &format!("{title} ?"))
+            .expect("agent status");
+        server
+            .backend
+            .clear_tab_status(&workspace.session_name, &anchor, title)
+            .expect("idle agent");
+        assert_eq!(server.display(anchor.raw(), "#{window_name}"), title);
+        assert_eq!(server.display(anchor.raw(), "#{automatic-rename}"), "0");
+    }
+}
+
 fn tmux_agent_exec_command(
     env: &Env,
     agent_bin: &Path,

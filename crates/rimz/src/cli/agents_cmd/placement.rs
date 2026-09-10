@@ -132,6 +132,16 @@ pub(super) fn execute(
     batch: &AgentLaunchBatch,
     request: PlacementRequest,
 ) -> Result<()> {
+    if request.placement == Placement::SamePane
+        && let Some(anchor) = own_pane_id(request.mux)
+        && let Err(err) =
+            backend.set_tab_title(&request.sidebar.session_name, &anchor, &request.title)
+    {
+        tracing::warn!(
+            error = &err as &dyn std::error::Error,
+            "could not name the agent's tab",
+        );
+    }
     let errors = request.errors;
     let context = match request.placement {
         Placement::NewTab => errors.new_tab,

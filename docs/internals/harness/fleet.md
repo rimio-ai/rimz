@@ -196,7 +196,7 @@ The CLI placement resolver takes explicit flags first, then falls back to the pe
 
 An in-place launch resolves liveness from the pane rather than from an end trace, because no wrapper stays resident to write one.
 
-Tab titles follow the address vocabulary: a named-channel or worktree launch names its tab `#<NAME>`, a named team launch names it `team:<name>` and stamps its in-place lane as `<dir>/<team>`, and any other non-worktree launch names it `<kind>:<dir>`. Mux tab names stay display-only. They are mutable and live outside the store, so they never form an address.
+Tab titles follow the address vocabulary: a named-channel or worktree launch names its tab `#<NAME>`, a named team launch names it `team:<name>` and stamps its in-place lane as `<dir>/<team>`, and any other non-worktree launch names it `<profile-or-kind>:<dir>`. An in-place launch applies that same title to its existing tab before exec, replacing automatic process naming; tmux status suffix cleanup does not restore automatic naming over a launch title. Naming is best-effort display enrichment, not a launch precondition. Mux tab names stay display-only. They are mutable and live outside the store, so they never form an address.
 
 ### Cohort relaunch reconciliation
 

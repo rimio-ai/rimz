@@ -929,6 +929,20 @@ impl MuxBackend for TmuxBackend {
         Ok(())
     }
 
+    fn set_tab_title(&self, _session: &str, anchor: &PaneId, name: &str) -> Result<()> {
+        self.rename_window_command(anchor, name)?
+            .args([
+                ";",
+                "set-option",
+                "-wu",
+                "-t",
+                anchor.raw(),
+                super::options::RIMZ_RESTORE_AUTOMATIC_RENAME_OPTION,
+            ])
+            .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
+            .map(|_| ())
+    }
+
     fn rename_tab(&self, _session: &str, anchor: &PaneId, name: &str) -> Result<()> {
         let automatic = self
             .automatic_rename_probe_command(anchor)?
