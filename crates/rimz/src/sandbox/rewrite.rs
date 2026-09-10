@@ -256,7 +256,7 @@ fn flow_closes_on_line(node: &str) -> bool {
         let byte = bytes[index];
         match byte {
             b' ' | b'\t' => {}
-            b'?' if node_start && bytes.get(index + 1).is_some_and(u8::is_ascii_whitespace) => {}
+            b'?' if node_start => {}
             b'#' if node_start || index > 0 && bytes[index - 1].is_ascii_whitespace() => {
                 return false;
             }
@@ -597,6 +597,20 @@ mod tests {
 
     #[test]
     fn markers_refuse_flow_collections_that_span_lines_or_carry_anchors() {
+        for (open, close) in [('[', ']'), ('{', '}')] {
+            for quote in ['\'', '"'] {
+                let policy =
+                    format!("policy:\n  k: {open}?{quote}x{close}\n  y: 1\nz: a{quote}{close}\n");
+                assert!(openai_policy_user_only(Some(&policy)).is_err(), "{policy}");
+                let frontmatter = format!(
+                    "---\nk: {open}?{quote}x{close}\ndisable-model-invocation: false{quote}{close}\nz: 1\n---\nBody"
+                );
+                assert!(
+                    frontmatter_user_only(&frontmatter).is_err(),
+                    "{frontmatter}"
+                );
+            }
+        }
         for value in [
             "[\n  \"sentry\"\n]",
             "[\"sentry\"] trailing",

@@ -8,7 +8,7 @@ use rimz::agents::ManualSkill;
 use rimz::config::Isolation;
 use rimz::harness::launch::ExecRequest;
 use rimz::ids::AgentKind;
-use rimz::sandbox::{SandboxErr, SandboxInputs, SkillInputs, SkipReason};
+use rimz::sandbox::{Prepared, SandboxErr, SandboxInputs, SkillInputs, SkipReason};
 
 use crate::common::{
     CommandTimeoutExt, Env, exec_args, path_with_front, write_env_dump_shim, write_fake_login_shell,
@@ -44,13 +44,13 @@ fn environment(env: &Env) -> BTreeMap<String, String> {
     .collect()
 }
 
-fn skill_argv(
+fn skill_prepare(
     env: &Env,
     vars: &BTreeMap<String, String>,
     skills: SkillInputs<'_>,
-) -> Result<Vec<String>, SandboxErr> {
+) -> Result<Prepared, SandboxErr> {
     let state = env.store();
-    let prepared = rimz::sandbox::prepare(&SandboxInputs {
+    rimz::sandbox::prepare(&SandboxInputs {
         env: vars,
         cwd: &env.project_root,
         project_root: &env.project_root,
@@ -60,7 +60,15 @@ fn skill_argv(
         provider_home: None,
         provider_home_env_keys: &[],
         skills,
-    })?;
+    })
+}
+
+fn skill_argv(
+    env: &Env,
+    vars: &BTreeMap<String, String>,
+    skills: SkillInputs<'_>,
+) -> Result<Vec<String>, SandboxErr> {
+    let prepared = skill_prepare(env, vars, skills)?;
     Ok(rimz::sandbox::bwrap_argv(
         Path::new("/usr/bin/bwrap"),
         &prepared.plan,
@@ -192,24 +200,19 @@ fn sandbox_unusable_unlisted_skill_is_omitted_with_warning() {
     let metadata = "---\nname: bad\ndescription: &d x\nsummary: *d\n---\nbody\n";
     let bad = root.join("bad/SKILL.md");
     std::fs::write(&bad, metadata).unwrap();
+    std::fs::write(root.join("listed/SKILL.md"), metadata).unwrap();
     let vars = environment(&env);
     let state = env.store();
-    let prepared = rimz::sandbox::prepare(&SandboxInputs {
-        env: &vars,
-        cwd: &env.project_root,
-        project_root: &env.project_root,
-        worktree: None,
-        tmp_dir: &state.paths().tmp_dir,
-        skills_dir: &state.paths().skills_dir,
-        provider_home: None,
-        provider_home_env_keys: &[],
-        skills: SkillInputs {
+    let prepared = skill_prepare(
+        &env,
+        &vars,
+        SkillInputs {
             kind: "claude",
             home: Some(root.clone()),
             manual: ManualSkill::Frontmatter,
             callable: Some(&["listed".parse().unwrap()]),
         },
-    })
+    )
     .unwrap();
     assert_eq!(prepared.skipped.len(), 1);
     let skipped = &prepared.skipped[0];
@@ -274,23 +277,16 @@ fn sandbox_unreadable_unlisted_skill_is_omitted_with_warning() {
         return;
     }
     let vars = environment(&env);
-    let state = env.store();
-    let prepared = rimz::sandbox::prepare(&SandboxInputs {
-        env: &vars,
-        cwd: &env.project_root,
-        project_root: &env.project_root,
-        worktree: None,
-        tmp_dir: &state.paths().tmp_dir,
-        skills_dir: &state.paths().skills_dir,
-        provider_home: None,
-        provider_home_env_keys: &[],
-        skills: SkillInputs {
+    let prepared = skill_prepare(
+        &env,
+        &vars,
+        SkillInputs {
             kind: "claude",
             home: Some(root.clone()),
             manual: ManualSkill::Frontmatter,
             callable: Some(&[]),
         },
-    })
+    )
     .unwrap();
     assert_eq!(prepared.skipped.len(), 1);
     let skipped = &prepared.skipped[0];
