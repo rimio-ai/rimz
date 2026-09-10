@@ -178,6 +178,9 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
             fail_run_on_exec_precondition(run_context.as_ref());
         })?;
+        for skipped in &prepared.skipped {
+            let _ = writeln!(std::io::stderr().lock(), "rimz: {skipped}");
+        }
         process.pin_env(prepared.pins);
         process.argv =
             rimz::sandbox::bwrap_argv(&bwrap, &prepared.plan, &provider_cwd, &process.argv);

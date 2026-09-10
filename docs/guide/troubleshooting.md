@@ -93,6 +93,12 @@ The `MACHINE CONFIG` section names any `config.toml`, `theme.toml`, `agents.toml
 
 Check the `SANDBOX` section in `rimz doctor`: it reports the configured mode, bubblewrap path/version, probe result, and fix. Sandbox mode requires Linux and the `bubblewrap` package (`bwrap` on `PATH`). A failed probe can mean disabled unprivileged user namespaces (`kernel.unprivileged_userns_clone` or `user.max_user_namespaces`) or AppArmor/LSM policy. Follow the probe's error for your host, or use `rimz config set agents.isolation host`; profile `skills` lists can stay and are ignored in host mode. Host mode does not require bubblewrap. The switch affects new launches, not existing panes; [security](./security.md#sandbox-isolation) explains its limits and cleanup.
 
+### An agent pane says "starting without skill …"
+
+The agent is starting, but RimZ left an unlisted skill out of this launch because it could not prepare its user-only copy for the profile's `skills` list in sandbox mode. The warning names the skill, the source path, and why RimZ could not read or rewrite it. Nothing in the installed skill changed; unaffected skills remain available with their invocation restrictions intact.
+
+To restore the skill on the next launch, fix the source problem named in the warning. For metadata RimZ cannot rewrite, use block mappings and block sequences without anchors, aliases, tags, or flow collections; keep quoted values on one line and use block scalars for multiline descriptions. Alternatively, add the skill's bare name to the [profile's `skills` list](./configuration.md#profiles) to bind it exactly as installed, without rewriting its metadata. Listing it also makes it model-callable if its author's invocation restrictions allow that.
+
 ### RimZ says the workspace path does not exist
 
 `rimz start -- /path/to/project` only creates a room for a directory that already exists. Correct a typo in the path or create the directory first, then run the command again. Remote path targets follow the same rule before attach; run `rimz remote list` to inspect a saved alias and correct its target.

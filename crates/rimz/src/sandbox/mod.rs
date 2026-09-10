@@ -77,10 +77,6 @@ pub enum SandboxErr {
     SkillsNeedRoot { kind: String },
     #[error("provider {kind} cannot mark skills user-only; remove the profile skills list")]
     ManualSkillsUnsupported { kind: String },
-    #[error(
-        "cannot rewrite skill metadata {path}: {reason}; use block mappings for skill metadata or remove the profile skills list"
-    )]
-    SkillMetadata { path: PathBuf, reason: &'static str },
     #[error("invalid profile skills: {0}")]
     Skills(#[from] crate::config::SkillListErr),
 }
@@ -113,6 +109,42 @@ pub enum EnvPin {
 pub struct Prepared {
     pub plan: MountPlan,
     pub pins: BTreeMap<String, EnvPin>,
+    pub skipped: Vec<SkippedSkill>,
+}
+
+#[derive(Debug)]
+pub struct SkippedSkill {
+    pub name: String,
+    pub path: PathBuf,
+    pub reason: SkipReason,
+}
+
+#[derive(Debug)]
+pub enum SkipReason {
+    Unreadable(std::io::Error),
+    Metadata(&'static str),
+}
+
+impl std::fmt::Display for SkippedSkill {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "starting without skill {:?}: RimZ cannot ", self.name)?;
+        match &self.reason {
+            SkipReason::Unreadable(error) => {
+                write!(f, "read it ({}: {error})", self.path.display())?;
+            }
+            SkipReason::Metadata(reason) => {
+                write!(
+                    f,
+                    "yet rewrite its metadata ({}: {reason})",
+                    self.path.display()
+                )?;
+            }
+        }
+        write!(
+            f,
+            "; the installed skill is untouched and unaffected skills stay available"
+        )
+    }
 }
 
 pub struct ProviderHome {
@@ -259,7 +291,7 @@ pub fn prepare(inputs: &SandboxInputs<'_>) -> Result<Prepared, SandboxErr> {
         });
         bound.push(path);
     }
-    if let Some(view) = views {
+    if let Some(view) = views.dir {
         mounts.push(Mount::Tmpfs {
             target: view.root.clone(),
         });
@@ -274,6 +306,7 @@ pub fn prepare(inputs: &SandboxInputs<'_>) -> Result<Prepared, SandboxErr> {
     Ok(Prepared {
         plan: MountPlan { mounts },
         pins,
+        skipped: views.skipped,
     })
 }
 
@@ -331,6 +364,32 @@ pub fn bwrap_argv(bwrap: &Path, plan: &MountPlan, cwd: &Path, inner: &[String]) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skipped_skill_explains_the_omission() {
+        for (reason, explanation) in [
+            (
+                SkipReason::Metadata("YAML anchors, aliases, and tags are not supported"),
+                "yet rewrite its metadata (/skills/demo/SKILL.md: YAML anchors, aliases, and tags are not supported)",
+            ),
+            (
+                SkipReason::Unreadable(std::io::Error::other("permission denied")),
+                "read it (/skills/demo/SKILL.md: permission denied)",
+            ),
+        ] {
+            let skipped = SkippedSkill {
+                name: "demo".to_owned(),
+                path: "/skills/demo/SKILL.md".into(),
+                reason,
+            };
+            assert_eq!(
+                skipped.to_string(),
+                format!(
+                    "starting without skill \"demo\": RimZ cannot {explanation}; the installed skill is untouched and unaffected skills stay available"
+                )
+            );
+        }
+    }
 
     #[test]
     fn tmp_view_maps_only_sandbox_room_paths() {

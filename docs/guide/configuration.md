@@ -407,9 +407,11 @@ mode = "plan"
 
 #### Profiles
 
-To reserve some skills for your explicit requests in sandbox mode, set `skills = ["merge", "review"]` on a profile. Entries are bare names: listed skills are model-callable, and all unlisted skills remain visible but are user-invoked only. `skills = []` makes every skill user-invoked only; it does not disable the view. A child list replaces its parent's list rather than appending, and omitting the field inherits. A child cannot return to unconfigured behaviour after a parent sets a list. With no list anywhere in the profile chain, native invocation behaviour stays unchanged.
+To reserve some skills for your explicit requests in sandbox mode, set `skills = ["merge", "review"]` on a profile. Entries are bare names: listed skills are model-callable, and unlisted skills RimZ can prepare remain visible but are user-invoked only. `skills = []` makes every available skill user-invoked only; it does not disable the view. A child list replaces its parent's list rather than appending, and omitting the field inherits. A child cannot return to unconfigured behaviour after a parent sets a list. With no list anywhere in the profile chain, native invocation behaviour stays unchanged.
 
 Listing a skill never lifts a user-only marker already set by its author; native invocation restrictions still apply.
+
+An unlisted skill RimZ cannot prepare for the user-only view — because its source is unreadable or its metadata cannot be rewritten — is left out of that agent's launch, and the pane says so at startup. The installed skill is untouched, and unaffected skills remain available with their invocation restrictions intact. Listing the skill binds it exactly as installed; see [troubleshooting](./troubleshooting.md) for remedies.
 
 Put shared skills in `${XDG_CONFIG_HOME:-~/.config}/rimz/skills/`; sandbox launches merge them into the provider's user skill directory, with the provider's copy winning a name collision. Claude, Qwen, and Kiro use their config home's `skills/`; other built-ins use `~/.agents/skills`. Plugins declare no skill root. Project skills and host files stay untouched: user-only markers are written into room-owned copies. When there is no library entry to merge or skill to rewrite, no overlay is created. This changes discovery, not the agent's ability to reach host files by other paths ([security](./security.md#sandbox-isolation)).
 
