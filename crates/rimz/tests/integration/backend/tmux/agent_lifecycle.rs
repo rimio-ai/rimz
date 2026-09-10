@@ -129,6 +129,52 @@ fn producer_releases_profile_tab_after_agent_exit() {
 }
 
 #[test]
+fn producer_keeps_a_new_channel_tab_named_after_its_shell_pane() {
+    require_tmux!();
+    let env = Env::new();
+    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
+    env.rimz()
+        .args(["--mux", "tmux", "start", "--no-attach"])
+        .assert_success_within_timeout("start real sidebar producer");
+    let _client = AttachedTmuxClient::attach(&server.socket, &workspace.session_name, 160, 40);
+    env.rimz()
+        .args(["--mux", "tmux", "channel", "new", "feat"])
+        .assert_success_within_timeout("create named channel tab");
+    let anchor = list_session_panes(&server, &workspace.session_name)
+        .into_iter()
+        .find(|pane| pane.title.as_deref() == Some("#feat"))
+        .expect("channel shell carries the channel pin")
+        .pane_id;
+    let mut observed_generation = None;
+    let mut observations = 0;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while observations < 3 {
+        if let Some(frame) = rimz::sidebar::cache::read_snapshot_cache(
+            &env.runtime_paths().pane_frame_path(),
+            &workspace.session_name,
+        ) && observed_generation != Some(frame.observed_at_ms)
+            && let Some(tab) = frame
+                .tabs
+                .iter()
+                .find(|tab| tab.panes.iter().any(|pane| pane.pane_id == anchor))
+        {
+            assert_eq!(tab.name.as_deref(), Some("#feat"));
+            assert_eq!(server.display(anchor.raw(), "#{window_name}"), "#feat");
+            observed_generation = Some(frame.observed_at_ms);
+            observations += 1;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "producer did not observe the channel tab"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+    assert_eq!(server.display(anchor.raw(), "#{@rimz_title}"), "#feat");
+    assert_eq!(server.display(anchor.raw(), "#{automatic-rename}"), "0");
+}
+
+#[test]
 fn producer_keeps_profile_tab_until_both_agents_exit() {
     require_tmux!();
     assert_producer_releases_profile_tab(2);
