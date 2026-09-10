@@ -401,7 +401,7 @@ fn build_entry(
                             calendar
                                 .weekdays
                                 .iter()
-                                .map(|day| day.short_name())
+                                .map(|day| super::short_day_name(*day))
                                 .collect::<Vec<_>>()
                                 .join(",")
                         });
