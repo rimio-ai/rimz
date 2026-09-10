@@ -44,7 +44,7 @@ impl ReadinessSnapshot {
         )
     }
 
-    pub fn probe_transition(host: RemoteControlHost) -> Self {
+    fn probe_transition(host: RemoteControlHost) -> Self {
         match host {
             RemoteControlHost::Claude => Self::from_readiness(
                 runtime_control::readiness("claude", true),
@@ -106,11 +106,10 @@ pub fn prepare_hosts(config: &RemoteControlConfig) {
     }
 }
 
-/// Prepare one host as if already enabled, for a transition the config has not
-/// recorded yet. Turning a toggle on is the intent that authorizes the seed, so
-/// this runs before the gate judges whether that host can serve.
-pub fn prepare_host(host: RemoteControlHost) {
+/// Gate turning one host on before the config records it. Seeding runs first because the request to enable is the intent a host's own precondition needs; judging the pre-transition state would refuse the very configuration the toggle is about to create.
+pub fn preflight_enable(host: RemoteControlHost) -> Result<(), RuntimeControlIssue> {
     runtime_control::prepare(host.kind(), true);
+    ReadinessSnapshot::probe_transition(host).start_gate()
 }
 
 /// Advisory-only provider daemon findings. These never gate `rimz start`.

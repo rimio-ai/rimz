@@ -137,7 +137,7 @@ fn set(args: SetArgs) -> Result<()> {
     }
     let transition = remote_control_transition(&args.key, &args.value);
     if let Some((host, true)) = transition {
-        preflight_remote_control_toggle(host)?;
+        rimz::remote_control::preflight_enable(host)?;
     }
     ConfigEditor::machine().set(&args.key, &args.value)?;
     if let Some((host, _)) = transition {
@@ -162,16 +162,6 @@ fn remote_control_transition(
         .ok()?
         .as_bool()
         .map(|enabled| (host, enabled))
-}
-
-fn preflight_remote_control_toggle(host: rimz::remote_control::RemoteControlHost) -> Result<()> {
-    // Seed before the gate reads: the request to enable is the intent a host's
-    // own precondition needs, and judging the pre-transition state would refuse
-    // the very configuration this command is about to create.
-    rimz::remote_control::prepare_host(host);
-    rimz::remote_control::ReadinessSnapshot::probe_transition(host)
-        .start_gate()
-        .map_err(Into::into)
 }
 
 fn render_value(value: &toml::Value) -> Result<String> {
