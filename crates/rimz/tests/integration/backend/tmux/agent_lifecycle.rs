@@ -25,6 +25,20 @@ fn write_sleeping_agent_shim(env: &Env, agent: &str) -> PathBuf {
     dir
 }
 
+fn trust_claude_shim_path(env: &Env, agent_bin: &Path) {
+    let config = toml::to_string(&serde_json::json!({
+        "agents": [{
+            "name": "claude",
+            "env": { "PATH": path_with_front(agent_bin) },
+        }],
+    }))
+    .expect("serialize trusted shim PATH");
+    env.write_config(&env.project_root, &config);
+    env.rimz()
+        .args(["trust", "grant"])
+        .assert_success_within_timeout("trust fixture provider PATH after shell startup");
+}
+
 #[test]
 fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
     require_tmux!();
@@ -48,6 +62,7 @@ fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
         )
         .expect("profile config");
         let agent_bin = write_sleeping_agent_shim(&env, "claude");
+        trust_claude_shim_path(&env, &agent_bin);
         let ready = env.home_root.join("agent-ready");
         let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
         let server = TmuxServer::in_runtime_root(&env.runtime_root);
@@ -195,6 +210,7 @@ fn assert_producer_releases_profile_tab(count: usize) {
     )
     .expect("profile config");
     let agent_bin = write_sleeping_agent_shim(&env, "claude");
+    trust_claude_shim_path(&env, &agent_bin);
     let ready = env.home_root.join("tab-name-ready");
     std::fs::create_dir(&ready).expect("readiness directory");
     std::fs::write(
