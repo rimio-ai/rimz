@@ -342,6 +342,22 @@ fn rename_tab_uses_the_anchor_panes_stable_tab_id() {
     let anchor = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", target.id));
 
     room.backend()
+        .set_tab_title(room.name(), &anchor, "opus:project")
+        .expect("name existing launch tab");
+    poll_until(
+        Duration::from_secs(10),
+        || list_panes(room.path(), room.name()),
+        |snapshot| {
+            snapshot
+                .panes
+                .iter()
+                .filter(|pane| pane.tab_id == target_id)
+                .all(|pane| pane.tab_name.as_deref() == Some("opus:project"))
+        },
+        "launch title replaces default tab name",
+    );
+
+    room.backend()
         .rename_tab(room.name(), &anchor, "work ✓")
         .expect("rename shifted tab by its pane anchor");
 

@@ -1007,6 +1007,11 @@ pub trait MuxBackend: Send + Sync {
     /// layout. Contributor gallery tabs can opt out through
     /// [`TabOptions::dock_sidebar`].
     fn open_tab(&self, opts: &TabOptions) -> Result<()>;
+    /// Set a launch title for an existing tab, replacing automatic naming and
+    /// any pending restoration of it after a status suffix clears.
+    fn set_tab_title(&self, session: &str, anchor: &PaneId, name: &str) -> Result<()> {
+        self.rename_tab(session, anchor, name)
+    }
     /// Rename the tab/window containing `anchor`. The pane anchor keeps the
     /// cross-backend seam stable: tmux can address its window through a pane
     /// directly, while Zellij resolves the pane's stable tab id before using
