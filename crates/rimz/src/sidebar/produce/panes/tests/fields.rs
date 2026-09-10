@@ -937,6 +937,42 @@ fn active_command_liveness_matrix_matches_backend_contracts() {
             false,
         ),
         (
+            "tmux shell wrapper retains argv for process activity",
+            tmux_pane("sh"),
+            vec![(100, "zsh"), (200, "sh -c sleep 60; true")],
+            vec![(100, "zsh"), (200, "sh")],
+            vec![(100, vec![200])],
+            (Some("sh"), Some("sh -c sleep 60; true")),
+            false,
+        ),
+        (
+            "tmux bare shell matches its root",
+            tmux_pane("zsh"),
+            vec![(100, "zsh")],
+            vec![(100, "zsh")],
+            vec![],
+            (Some("zsh"), Some("zsh")),
+            false,
+        ),
+        (
+            "tmux elevation wrapper matches raw argv rather than cargo",
+            tmux_pane("sudo"),
+            vec![(100, "zsh"), (200, "sudo cargo build")],
+            vec![(100, "zsh"), (200, "sudo")],
+            vec![(100, vec![200])],
+            (Some("sudo"), Some("sudo cargo build")),
+            false,
+        ),
+        (
+            "tmux launcher retains argv without changing identity",
+            tmux_pane("node"),
+            vec![(100, "zsh"), (200, "node /usr/bin/codex")],
+            vec![(100, "zsh"), (200, "node")],
+            vec![(100, vec![200])],
+            (Some("node"), Some("node /usr/bin/codex")),
+            false,
+        ),
+        (
             "tmux comm-only match keeps command without enrichment",
             tmux_pane("cargo"),
             vec![(100, "zsh")],
@@ -1036,6 +1072,27 @@ fn idle_agent_and_chrome_commands_are_not_process_gated() {
             &|pid| -> Vec<u32> { panic!("children must not be read for {command}: {pid}") },
         );
 
+        assert_eq!(first(&frame).current.command.as_deref(), Some(command));
+    }
+}
+
+#[test]
+fn tmux_shells_are_probed_but_chrome_is_not() {
+    for command in ["zsh", "sh", "rimz-sidebar"] {
+        let mut frame = frame(vec![tmux_pane(command)]);
+        first_mut(&mut frame).current.pid = Some(100);
+        let reads = std::cell::Cell::new(0);
+        reconcile_active_commands(
+            &mut frame,
+            &|pid| {
+                assert_eq!(pid, 100);
+                reads.set(reads.get() + 1);
+                Some(command.to_owned())
+            },
+            &|_| panic!("matched root needs no comm fallback"),
+            &|_| panic!("matched root needs no descendant walk"),
+        );
+        assert_eq!(reads.get(), usize::from(command != "rimz-sidebar"));
         assert_eq!(first(&frame).current.command.as_deref(), Some(command));
     }
 }

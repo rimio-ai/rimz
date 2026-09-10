@@ -47,7 +47,12 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
         .unwrap_or_else(|| "process".to_owned());
     let state = if elevated.is_some() {
         ProcessState::Idle
-    } else if command.is_some_and(process_is_active) {
+    } else if pane
+        .foreground_cmdline
+        .as_deref()
+        .or(command)
+        .is_some_and(process_is_active)
+    {
         ProcessState::Busy
     } else {
         ProcessState::Idle
@@ -179,6 +184,11 @@ mod tests {
         // A sudo-wrapped build is real work; an agent host and bare shells are not.
         assert!(process_is_active("sudo npm install -g @openai/codex"));
         assert!(process_is_active("cargo build --release"));
+        assert!(process_is_active("sh -c 'cd /repo && cargo build'"));
+        assert!(process_is_active("sh -c cargo build && echo ok"));
+        assert!(process_is_active("env RUST_LOG=debug cargo build"));
+        assert!(!process_is_active("env X=1 sh -c 'node /usr/bin/codex'"));
+        assert!(!process_is_active("sh -c 'exec nvim src/main.rs'"));
         assert!(!process_is_active("codex"));
         assert!(!process_is_active("sudo codex"));
         assert!(!process_is_active("zsh"));
@@ -259,6 +269,16 @@ mod tests {
             Some("rimz loop fire sync-repo-rimz")
         );
 
+        let mut wrapped = pane("%10", "sh", "/repo");
+        wrapped.foreground_cmdline = Some("sh -c sleep 60; true".to_owned());
+        let wrapped = row_from_process(&wrapped, Timestamp::now());
+        assert_eq!(wrapped.name, "sh");
+        assert_eq!(wrapped.process_state(), Some(ProcessState::Busy));
+        assert_eq!(
+            wrapped.as_process().unwrap().command_detail.as_deref(),
+            Some("sh -c sleep 60; true")
+        );
+
         let spawn_only = row_from_process(
             &crate::pane::PaneRef {
                 command: None,
@@ -323,5 +343,6 @@ mod tests {
             Some("node --expose-gc /home/u/.local/lib/qwen-code/lib/cli.js".to_owned());
         let display_only = row_from_process(&display_only, Timestamp::now());
         assert_eq!(display_only.name, "node");
+        assert_eq!(display_only.process_state(), Some(ProcessState::Idle));
     }
 }
