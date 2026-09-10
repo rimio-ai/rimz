@@ -227,6 +227,14 @@ pub trait InstallationCapability: CoreCapability {
     }
 }
 
+/// How the provider marks a skill as user-invoked only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManualSkill {
+    Unsupported,
+    Frontmatter,
+    OpenAiPolicy,
+}
+
 #[doc(hidden)]
 pub trait LaunchCapability: CoreCapability {
     /// The directory the provider reads its user-level config and credentials from, as the launch env will resolve it. Never reads the ambient env.
@@ -234,6 +242,18 @@ pub trait LaunchCapability: CoreCapability {
     /// Providers with separate config and credential stores declare their config root; this is not an inventory of every provider-owned path.
     fn config_home(&self, _env: &BTreeMap<String, String>) -> Option<PathBuf> {
         None
+    }
+
+    /// Where the provider discovers user-level skills. Sandbox overlays this root; `None` means RimZ knows no skill discovery for the provider.
+    fn skills_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
+        env.get("HOME")
+            .filter(|home| !home.is_empty())
+            .map(|home| Path::new(home).join(".agents/skills"))
+    }
+
+    /// How the provider marks a skill as user-invoked only.
+    fn manual_skill(&self) -> ManualSkill {
+        ManualSkill::Unsupported
     }
 
     /// Provider-specific environment overrides consulted by `config_home`; HOME and XDG roots are owned and pinned by the sandbox.

@@ -263,6 +263,10 @@ impl crate::agents::capabilities::LaunchCapability for KiroAdapter {
             env.get("HOME").map(std::ffi::OsStr::new),
         )
     }
+
+    fn skills_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
+        Some(self.config_home(env)?.join("skills"))
+    }
 }
 
 impl crate::agents::capabilities::InstallationCapability for KiroAdapter {

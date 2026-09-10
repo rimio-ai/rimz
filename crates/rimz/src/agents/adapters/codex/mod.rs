@@ -699,6 +699,10 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
         )
     }
 
+    fn manual_skill(&self) -> ManualSkill {
+        ManualSkill::OpenAiPolicy
+    }
+
     fn is_interactive_process(&self, command: &str) -> bool {
         process::is_interactive_process(command)
     }

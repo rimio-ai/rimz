@@ -579,6 +579,10 @@ impl crate::agents::capabilities::LaunchCapability for CopilotAdapter {
         )
     }
 
+    fn manual_skill(&self) -> ManualSkill {
+        ManualSkill::Frontmatter
+    }
+
     fn parse_version(&self, stdout: &str, stderr: &str) -> Option<String> {
         parse_copilot_version(stdout).or_else(|| parse_copilot_version(stderr))
     }

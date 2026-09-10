@@ -64,6 +64,7 @@ pub use account::{
     AccountUsageIdentity, ManagedLaunchState, PendingRefill, ProviderAccountBinding,
     ProviderCapacity, RateLimitCacheEntry, RateLimitsCache,
 };
+pub use capabilities::ManualSkill;
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
     AgentSessionUsage, AgentTokenUsage, AgentTurnError, CacheHealth, ContextObservation,

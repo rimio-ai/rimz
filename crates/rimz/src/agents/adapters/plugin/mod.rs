@@ -248,6 +248,10 @@ impl crate::agents::capabilities::HookCapability for PluginAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for PluginAdapter {
+    fn skills_home(&self, _env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
+        None
+    }
+
     fn probe_version(&self) -> Option<String> {
         let argv = self.manifest.probes.version.as_deref()?;
         probes::version(self.spec.kind, self.plugin_dir, argv)
@@ -1120,6 +1124,14 @@ globs = ["history/**/*.jsonl"]
     #[test]
     fn renders_launch_resume_and_presets() {
         let adapter = adapter();
+        assert_eq!(
+            adapter.skills_home(&std::collections::BTreeMap::from([(
+                "HOME".into(),
+                "/fixture/home".into()
+            )])),
+            None
+        );
+        assert_eq!(adapter.manual_skill(), ManualSkill::Unsupported);
         assert_eq!(
             adapter.config_home(&std::collections::BTreeMap::from([(
                 "HOME".into(),

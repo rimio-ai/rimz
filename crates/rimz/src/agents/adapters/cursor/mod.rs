@@ -491,6 +491,10 @@ impl crate::agents::capabilities::LaunchCapability for CursorAdapter {
         session::cursor_home(env.get("HOME").map(std::ffi::OsStr::new))
     }
 
+    fn manual_skill(&self) -> ManualSkill {
+        ManualSkill::Frontmatter
+    }
+
     fn parse_version(&self, stdout: &str, stderr: &str) -> Option<String> {
         parse_cursor_version(stdout).or_else(|| parse_cursor_version(stderr))
     }

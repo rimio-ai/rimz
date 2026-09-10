@@ -279,6 +279,10 @@ impl crate::agents::capabilities::LaunchCapability for DroidAdapter {
             .map(|home| PathBuf::from(home).join(".factory"))
     }
 
+    fn manual_skill(&self) -> ManualSkill {
+        ManualSkill::Frontmatter
+    }
+
     fn append_system_text_channel(&self) -> Option<SystemTextChannel> {
         Some(SystemTextChannel::TextFlag {
             flags: vec!["--append-system-prompt".to_owned()],
