@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::agents::ManualSkill;
 
-use super::{DirEntry, DirView, SandboxErr, SkillInputs, SkippedSkill, rewrite};
+use super::{DirEntry, DirEntryKind, DirView, SandboxErr, SkillInputs, SkippedSkill, rewrite};
 
 #[derive(Default)]
 pub(super) struct SkillView {
@@ -48,7 +48,7 @@ fn prepare_view(
             kind: inputs.kind.to_owned(),
         });
     }
-    let mut entries = list_dir(home)?;
+    let mut entries = list_dir(home, true)?;
     let mut roots = vec![home.clone()];
     let mut changed = false;
     let mut skipped = Vec::new();
@@ -64,7 +64,7 @@ fn prepare_view(
     if let Some(config) = config {
         let library = config.join("rimz/skills");
         super::validate_path(&library)?;
-        for (name, source) in list_dir(&library)? {
+        for (name, source) in list_dir(&library, false)? {
             if let std::collections::btree_map::Entry::Vacant(entry) = entries.entry(name) {
                 entry.insert(source);
                 changed = true;
@@ -72,6 +72,7 @@ fn prepare_view(
         }
         roots.push(library);
     }
+    let mut shadows = BTreeMap::new();
     if let Some(callable) = inputs.callable {
         crate::config::validate_skill_list(callable)?;
         for name in callable {
@@ -82,12 +83,34 @@ fn prepare_view(
                 });
             }
         }
-        for (name, source) in &mut entries {
-            if callable.iter().any(|skill| skill.as_str() == name) || !source.is_dir() {
+        let mut policies = BTreeMap::new();
+        for (name, entry) in &entries {
+            if !entry.source.is_dir() || !entry.source.join("SKILL.md").is_file() {
                 continue;
             }
-            match rewrite::materialize(skills_dir, source, inputs.manual) {
-                Ok(copy) => *source = copy,
+            let listed = callable.iter().any(|skill| skill.as_str() == name);
+            if let Some((other_name, other_listed)) = policies.get(&entry.source) {
+                if listed != *other_listed {
+                    return Err(SandboxErr::ConflictingSkillAliases {
+                        listed: if listed { name } else { other_name }.clone(),
+                        unlisted: if listed { other_name } else { name }.clone(),
+                        path: entry.source.clone(),
+                    });
+                }
+                continue;
+            }
+            policies.insert(entry.source.clone(), (name.clone(), listed));
+        }
+        for (name, entry) in &entries {
+            if !matches!(policies.get(&entry.source), Some((_, false)))
+                || shadows.contains_key(&entry.source)
+            {
+                continue;
+            }
+            match rewrite::materialize(skills_dir, &entry.source, inputs.manual) {
+                Ok(copy) => {
+                    shadows.insert(entry.source.clone(), copy);
+                }
                 Err(rewrite::MaterializeErr::Unusable { path, reason }) => {
                     tracing::debug!(skill = %name, path = %path.display(), "omitting skill the view cannot prepare");
                     skipped.push(SkippedSkill {
@@ -120,22 +143,33 @@ fn prepare_view(
         }
     };
     super::validate_path(&root)?;
-    for source in entries.values() {
-        super::validate_path(source)?;
+    for entry in entries.values_mut() {
+        super::validate_path(&entry.source)?;
+        if matches!(entry.kind, DirEntryKind::Bind)
+            && let Some(copy) = shadows.get(&entry.source)
+        {
+            entry.source = copy.clone();
+        }
     }
+    shadows.retain(|target, _| {
+        !entries.values().any(|entry| {
+            matches!(entry.kind, DirEntryKind::Bind) && root.join(&entry.name) == *target
+        })
+    });
     Ok(SkillView {
         dir: Some(DirView {
             root,
-            entries: entries
-                .into_iter()
-                .map(|(name, source)| DirEntry { name, source })
-                .collect(),
+            entries: entries.into_values().collect(),
+            shadows,
         }),
         skipped,
     })
 }
 
-fn list_dir(root: &Path) -> Result<BTreeMap<String, PathBuf>, SandboxErr> {
+fn list_dir(
+    root: &Path,
+    preserve_symlinks: bool,
+) -> Result<BTreeMap<String, DirEntry>, SandboxErr> {
     let listing = match std::fs::read_dir(root) {
         Ok(listing) => listing,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
@@ -164,8 +198,18 @@ fn list_dir(root: &Path) -> Result<BTreeMap<String, PathBuf>, SandboxErr> {
         let name = entry
             .file_name()
             .into_string()
-            .map_err(|_| SandboxErr::InvalidPath(path))?;
-        entries.insert(name, source);
+            .map_err(|_| SandboxErr::InvalidPath(path.clone()))?;
+        let kind = if preserve_symlinks && path.is_symlink() {
+            let target =
+                std::fs::read_link(&path).map_err(|source| SandboxErr::Io { path, source })?;
+            if target.to_str().is_none() {
+                return Err(SandboxErr::InvalidPath(target));
+            }
+            DirEntryKind::Symlink { target }
+        } else {
+            DirEntryKind::Bind
+        };
+        entries.insert(name.clone(), DirEntry { name, source, kind });
     }
     Ok(entries)
 }
