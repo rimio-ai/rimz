@@ -7,15 +7,13 @@ use serde_json::{Map, Value};
 use super::RepoGroup;
 use crate::forge::RemoteRepo;
 use crate::forge::pr_state::{PrLink, PrStateCache, TargetStamp};
-use crate::harness::schedule::signal::Signal;
-use crate::store::event::SignalSource;
 use crate::store::snapshot::{WorktreePrCi, WorktreePrState};
 
 pub(super) fn transitions(
     prior: &PrStateCache,
     next: &PrStateCache,
     groups: &BTreeMap<String, RepoGroup>,
-) -> Vec<Signal> {
+) -> Vec<(&'static str, Map<String, Value>)> {
     let mut signals = Vec::new();
     for (path, next_link) in &next.states {
         let Some(stamp) = continuous_target(prior, next, path) else {
@@ -24,13 +22,7 @@ pub(super) fn transitions(
         let Some(repo) = successful_repo(next, path) else {
             continue;
         };
-        let remote = groups.get(repo).and_then(|group| {
-            group
-                .targets
-                .iter()
-                .find(|target| target.path == *path)
-                .map(|target| &target.remote)
-        });
+        let remote = target_remote(groups, repo, path);
         if !stamp.owns_link(next_link) {
             continue;
         }
@@ -47,7 +39,7 @@ pub(super) fn transitions(
                 WorktreePrState::Open => None,
             };
             if let Some(name) = name {
-                signals.push(signal(
+                signals.push((
                     name,
                     payload(
                         next,
@@ -64,7 +56,7 @@ pub(super) fn transitions(
         if let Some(name) = final_verdict_name(next_link.ci)
             && prior_link.ci != next_link.ci
         {
-            signals.push(signal(
+            signals.push((
                 name,
                 payload(next, path, stamp, repo, Some(next_link), None, remote),
             ));
@@ -87,19 +79,23 @@ pub(super) fn transitions(
         if prior.branch_ci.get(path) == Some(next_ci) {
             continue;
         }
-        let remote = groups.get(repo).and_then(|group| {
-            group
-                .targets
-                .iter()
-                .find(|target| target.path == *path)
-                .map(|target| &target.remote)
-        });
-        signals.push(signal(
-            name,
-            payload(next, path, stamp, repo, None, None, remote),
-        ));
+        let remote = target_remote(groups, repo, path);
+        signals.push((name, payload(next, path, stamp, repo, None, None, remote)));
     }
     signals
+}
+
+fn target_remote<'a>(
+    groups: &'a BTreeMap<String, RepoGroup>,
+    repo: &str,
+    path: &str,
+) -> Option<&'a RemoteRepo> {
+    groups
+        .get(repo)?
+        .targets
+        .iter()
+        .find(|target| target.path == path)
+        .map(|target| &target.remote)
 }
 
 fn continuous_target<'a>(
@@ -165,13 +161,4 @@ fn payload(
         payload.insert("state".to_owned(), Value::String(state.to_owned()));
     }
     payload
-}
-
-fn signal(name: &str, payload: Map<String, Value>) -> Signal {
-    Signal {
-        name: name.parse().expect("static forge signal name is valid"),
-        payload,
-        source: SignalSource::Forge,
-        watch: None,
-    }
 }

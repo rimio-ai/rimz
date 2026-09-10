@@ -11,6 +11,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use crate::RuntimePaths;
+use crate::disk::single_flight::{Coalesced, ProducerGuard};
 use crate::forge::pr_state::{PrLink, PrStateCache, RepoProbe, TargetStamp, read_pr_state_cache};
 use crate::forge::{self, ForgeCli};
 use crate::sidebar::refresh::git_stats::{
@@ -60,9 +61,13 @@ pub(super) fn produce_pr_states(
     let targets = build_targets(&needed, &diff_cache);
     let groups = group_targets(targets);
     let target_paths = current_target_paths(&groups);
-    let due = due_repo_keys(&groups, &cache, &hot, &focused, now_ms);
-    let needs_reconcile = needs_target_reconcile(&cache, &needed, &diff_cache, &target_paths)
-        || unsupported_probe_due(&cache, &needed, &hot, &focused, now_ms);
+    let due_and_reconcile = |cache: &PrStateCache, now_ms| {
+        let due = due_repo_keys(&groups, cache, &hot, &focused, now_ms);
+        let needs_reconcile = needs_target_reconcile(cache, &needed, &diff_cache, &target_paths)
+            || unsupported_probe_due(cache, &needed, &hot, &focused, now_ms);
+        (due, needs_reconcile)
+    };
+    let (due, needs_reconcile) = due_and_reconcile(&cache, now_ms);
     if due.is_empty() && !needs_reconcile {
         return cache;
     }
@@ -71,54 +76,37 @@ pub(super) fn produce_pr_states(
     let fresh = || {
         let cache = read_pr_state_cache(&path);
         let now_ms = unix_now_ms();
-        let due = due_repo_keys(&groups, &cache, &hot, &focused, now_ms);
-        let needs_reconcile = needs_target_reconcile(&cache, &needed, &diff_cache, &target_paths)
-            || unsupported_probe_due(&cache, &needed, &hot, &focused, now_ms);
+        let (due, needs_reconcile) = due_and_reconcile(&cache, now_ms);
         (due.is_empty() && !needs_reconcile).then_some(cache)
     };
-    match crate::disk::single_flight::coalesce(
+    let guard: Option<ProducerGuard> = match crate::disk::single_flight::coalesce(
         &lock_path,
         PR_STATE_WAIT_STEP,
         PR_STATE_WAIT_STEPS,
         fresh,
     ) {
-        crate::disk::single_flight::Coalesced::Shared(cache) => cache,
-        crate::disk::single_flight::Coalesced::Produce(_guard) => {
-            let prior = read_pr_state_cache(&path);
-            let now_ms = unix_now_ms();
-            let due = due_repo_keys(&groups, &prior, &hot, &focused, now_ms);
-            let needs_reconcile =
-                needs_target_reconcile(&prior, &needed, &diff_cache, &target_paths)
-                    || unsupported_probe_due(&prior, &needed, &hot, &focused, now_ms);
-            if due.is_empty() && !needs_reconcile {
-                return prior;
-            }
-            let cache = probe_due_repos(&groups, &due, &prior, &needed, &diff_cache, now_ms);
-            if write_pr_state_cache(&path, &cache)
-                && let Some(project_root) = snapshot.project_root.as_deref()
-            {
-                emit_transitions(
-                    runtime,
-                    project_root,
-                    transitions::transitions(&prior, &cache, &groups),
-                );
-            }
-            cache
-        }
-        crate::disk::single_flight::Coalesced::ProduceLocal => {
-            let prior = read_pr_state_cache(&path);
-            let now_ms = unix_now_ms();
-            let due = due_repo_keys(&groups, &prior, &hot, &focused, now_ms);
-            let needs_reconcile =
-                needs_target_reconcile(&prior, &needed, &diff_cache, &target_paths)
-                    || unsupported_probe_due(&prior, &needed, &hot, &focused, now_ms);
-            if due.is_empty() && !needs_reconcile {
-                prior
-            } else {
-                probe_due_repos(&groups, &due, &prior, &needed, &diff_cache, now_ms)
-            }
-        }
+        Coalesced::Shared(cache) => return cache,
+        Coalesced::Produce(guard) => Some(guard),
+        Coalesced::ProduceLocal => None,
+    };
+    let prior = read_pr_state_cache(&path);
+    let now_ms = unix_now_ms();
+    let (due, needs_reconcile) = due_and_reconcile(&prior, now_ms);
+    if due.is_empty() && !needs_reconcile {
+        return prior;
     }
+    let cache = probe_due_repos(&groups, &due, &prior, &needed, &diff_cache, now_ms);
+    if guard.is_some()
+        && write_pr_state_cache(&path, &cache)
+        && let Some(project_root) = snapshot.project_root.as_deref()
+    {
+        emit_transitions(
+            runtime,
+            project_root,
+            transitions::transitions(&prior, &cache, &groups),
+        );
+    }
+    cache
 }
 
 fn next_consecutive_failures(prior: Option<&RepoProbe>, ok: bool) -> u32 {
@@ -158,15 +146,10 @@ fn cached_due_repo_keys(
             }
             continue;
         };
-        if repo_key == UNSUPPORTED_REPO_KEY {
-            let input = inputs.entry(repo_key.clone()).or_default();
-            input.hot |= hot.contains(path) || focused.contains(path) || pending_ci;
-            input.has_uncached |= has_uncached;
-            continue;
-        }
         let input = inputs.entry(repo_key.clone()).or_default();
         input.hot |= hot.contains(path) || focused.contains(path) || pending_ci;
-        input.nudged |= head_nudged(&cache.head_seen, path, head_sha);
+        input.nudged |=
+            repo_key != UNSUPPORTED_REPO_KEY && head_nudged(&cache.head_seen, path, head_sha);
         input.has_uncached |= has_uncached;
     }
     Some(
@@ -621,15 +604,11 @@ fn probe_due_repos(
             },
         );
     }
-    let active_repo_keys = active_repo_keys(&cache);
+    let active_repo_keys = cache.path_repos.values().cloned().collect::<BTreeSet<_>>();
     cache
         .repos
         .retain(|repo_key, _| active_repo_keys.contains(repo_key));
     cache
-}
-
-fn active_repo_keys(cache: &PrStateCache) -> BTreeSet<String> {
-    cache.path_repos.values().cloned().collect()
 }
 
 struct RepoGroupProbe {
@@ -925,10 +904,6 @@ struct ProbeState {
     ok: bool,
 }
 
-fn tea_pr_detail_args(number: u64, repo: &str) -> Vec<String> {
-    vec!["api".to_owned(), format!("repos/{repo}/pulls/{number}")]
-}
-
 fn probe_tea(target: &Target, prior_number: Option<u64>) -> ProbeState {
     let worktree = &target.worktree;
     let branch = &target.branch;
@@ -987,10 +962,21 @@ fn probe_tea(target: &Target, prior_number: Option<u64>) -> ProbeState {
 }
 
 fn probe_tea_detail(target: &Target, repo: &str, number: u64) -> Option<ProbeState> {
+    probe_tea_detail_with(target, repo, number, command_stdout)
+}
+
+fn probe_tea_detail_with(
+    target: &Target,
+    repo: &str,
+    number: u64,
+    command_stdout: impl FnOnce(&Path, &str, &[&str]) -> Option<String>,
+) -> Option<ProbeState> {
     let worktree = &target.worktree;
-    let detail_args = tea_pr_detail_args(number, repo);
-    let refs = detail_args.iter().map(String::as_str).collect::<Vec<_>>();
-    let output = command_stdout(worktree, "tea", &refs)?;
+    let output = command_stdout(
+        worktree,
+        "tea",
+        &["api", &format!("repos/{repo}/pulls/{number}")],
+    )?;
     let detail = forge::parse_tea_pr_detail_json(&output).ok()?;
     let state = detail.state?;
     if state != WorktreePrState::Open && !target.accepts_terminal_pr(number, detail.created_at) {
@@ -1087,11 +1073,10 @@ fn write_pr_state_cache(path: &Path, cache: &PrStateCache) -> bool {
 fn emit_transitions(
     runtime: &RuntimePaths,
     project_root: &Path,
-    signals: Vec<crate::harness::schedule::signal::Signal>,
+    signals: Vec<(&'static str, serde_json::Map<String, serde_json::Value>)>,
 ) {
-    for signal in signals {
-        let name = signal.name.clone();
-        let args = transition_argv(project_root, &signal);
+    for (name, payload) in signals {
+        let args = transition_argv(project_root, name, &payload);
         if let Err(err) =
             crate::child_process::spawn_detached_rimz(runtime, args, "forge-signal-emit")
         {
@@ -1108,16 +1093,17 @@ fn emit_transitions(
 
 fn transition_argv(
     project_root: &Path,
-    signal: &crate::harness::schedule::signal::Signal,
+    name: &str,
+    payload: &serde_json::Map<String, serde_json::Value>,
 ) -> Vec<OsString> {
-    let payload = serde_json::to_string(&signal.payload)
+    let payload = serde_json::to_string(payload)
         .expect("forge signal payload contains only serializable JSON values");
     vec![
         "--root".into(),
         project_root.as_os_str().to_owned(),
         "events".into(),
         "emit".into(),
-        signal.name.as_str().into(),
+        name.into(),
         "--source".into(),
         "forge".into(),
         "--json".into(),
