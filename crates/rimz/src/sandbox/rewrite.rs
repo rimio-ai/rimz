@@ -182,20 +182,22 @@ fn rewrite(root: &Path, source: &Path, kind: ManualSkill) -> Result<(), SandboxE
 }
 
 fn mapping_key(line: &str) -> Option<(&str, &str)> {
-    let line = line.trim();
+    let line = line.trim_matches([' ', '\t', '\r', '\n']);
     let (key, value) = if line.starts_with(['\'', '"']) {
         let end = quoted_end(line)?;
         let key = &line[1..end - 1];
-        let value = line[end..].trim_start().strip_prefix(':')?;
+        let value = line[end..]
+            .trim_start_matches([' ', '\t'])
+            .strip_prefix(':')?;
         (key, value)
     } else {
         let (key, value) = line.split_once(':')?;
-        (key.trim(), value)
+        (key.trim_matches([' ', '\t']), value)
     };
-    if key.contains('\\') || (!value.is_empty() && !value.starts_with(char::is_whitespace)) {
+    if key.contains('\\') || (!value.is_empty() && !value.starts_with([' ', '\t', '\r', '\n'])) {
         return None;
     }
-    Some((key, value.trim()))
+    Some((key, value.trim_matches([' ', '\t', '\r', '\n'])))
 }
 
 fn quoted_end(text: &str) -> Option<usize> {
@@ -273,7 +275,7 @@ fn meaningful(line: &str) -> bool {
 }
 
 fn indentation(line: &str) -> &str {
-    &line[..line.len() - line.trim_start().len()]
+    &line[..line.len() - line.trim_start_matches([' ', '\t']).len()]
 }
 
 fn frontmatter_user_only(text: &str) -> Result<String, &'static str> {
@@ -515,6 +517,16 @@ mod tests {
 
     #[test]
     fn markers_preserve_quoted_keys_with_colons_and_spaces() {
+        let fields = "policy\u{a0}:\n  allow_implicit_invocation: true\n";
+        assert_eq!(
+            openai_policy_user_only(Some(fields)).unwrap(),
+            format!("{fields}policy:\n  allow_implicit_invocation: false\n")
+        );
+        let fields = "disable-model-invocation\u{a0}: false\n";
+        assert_eq!(
+            frontmatter_user_only(&format!("---\n{fields}---\nBody")).unwrap(),
+            format!("---\n{fields}disable-model-invocation: true\n---\nBody")
+        );
         for quote in ['\'', '"'] {
             let fields = format!(
                 "{quote}disable-model-invocation:extra{quote}: keep\n{quote}disable-model-invocation {quote}: keep\n"
