@@ -27,6 +27,7 @@ fn profile(agent: &str, args: Option<&str>) -> Profile {
         auto_compact: None,
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        skills: None,
         args: args.map(ToOwned::to_owned),
     }
 }

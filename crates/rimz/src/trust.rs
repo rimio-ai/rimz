@@ -707,6 +707,7 @@ pub struct AgentConfig {
 #[serde(default)]
 pub struct ProjectProfile {
     pub agent: String,
+    pub skills: Option<Vec<crate::config::SkillSpec>>,
     pub mode: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -782,6 +783,8 @@ struct ExecutableAgent<'a> {
 struct ExecutableProfile<'a> {
     name: &'a str,
     agent: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skills: Option<&'a [crate::config::SkillSpec]>,
     mode: Option<&'a str>,
     model: Option<&'a str>,
     effort: Option<&'a str>,
@@ -877,6 +880,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                 .map(|(name, p)| ExecutableProfile {
                     name: name.as_str(),
                     agent: p.agent.as_str(),
+                    skills: p.skills.as_deref(),
                     mode: p.mode.as_deref(),
                     model: p.model.as_deref(),
                     effort: p.effort.as_deref(),
@@ -893,6 +897,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                 .map(|(name, p)| ExecutableProfile {
                     name: name.as_str(),
                     agent: p.agent.as_str(),
+                    skills: p.skills.as_deref(),
                     mode: p.mode.as_deref(),
                     model: p.model.as_deref(),
                     effort: p.effort.as_deref(),

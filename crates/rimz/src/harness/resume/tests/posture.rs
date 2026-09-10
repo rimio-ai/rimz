@@ -13,6 +13,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         auto_compact: None,
         system_prompt_file: Some(PathBuf::from("system.md")),
         append_system_prompt_files: vec![PathBuf::from("append.md")],
+        skills: vec!["merge:off".parse().unwrap()],
         launch: LaunchParams {
             mode: Some(PermissionMode::Yolo),
             model: Some("o3".to_owned()),
@@ -27,6 +28,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         args,
         system_prompt_file,
         append_system_prompt_files,
+        skills,
         launch,
     } = cell.clone();
 
@@ -36,6 +38,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
             args,
             system_prompt_file,
             append_system_prompt_files,
+            skills,
             mode: launch.mode,
             model: launch.model,
             effort: launch.effort,

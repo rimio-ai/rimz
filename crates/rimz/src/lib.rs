@@ -45,6 +45,7 @@ pub mod reload;
 pub mod remote;
 pub mod remote_control;
 pub mod room;
+pub mod sandbox;
 pub mod sidebar;
 pub mod sidebar_pane;
 pub mod sock;

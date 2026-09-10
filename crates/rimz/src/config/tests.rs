@@ -1000,6 +1000,7 @@ fn agents_toml_entries_override_agents_home_fragments() {
             auto_compact: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
+            skills: None,
             args: None,
         },
     );
@@ -1136,6 +1137,7 @@ fn absent_agents_home_is_noop_and_malformed_fragment_leaves_config_unchanged() {
             auto_compact: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
+            skills: None,
             args: None,
         },
     );
@@ -1408,6 +1410,7 @@ fn agent_profiles_commands_and_teams_parse() {
             auto_compact: Some("200k".to_owned()),
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
+            skills: None,
             args: Some("--model gpt-5-codex -c model_reasoning_effort=high".to_owned())
         })
     );
@@ -1425,6 +1428,7 @@ fn agent_profiles_commands_and_teams_parse() {
             auto_compact: None,
             system_prompt_file: Some("/prompts/planner.md".into()),
             append_system_prompt_files: Vec::new(),
+            skills: None,
             args: None,
         })
     );

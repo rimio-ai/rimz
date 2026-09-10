@@ -26,6 +26,39 @@ fn terminal_fixture() -> Terminal {
 }
 
 #[test]
+fn sandbox_probe_failure_only_counts_when_sandbox_is_enabled() {
+    for mode in [
+        rimz::config::Isolation::Host,
+        rimz::config::Isolation::Sandbox,
+    ] {
+        let sandbox = super::super::model::Sandbox {
+            mode,
+            path: Some("/usr/bin/bwrap".into()),
+            version: Some("bubblewrap 0.11.0".to_owned()),
+            error: Some(
+                "probe failed; check user namespaces or set agents.isolation to host".to_owned(),
+            ),
+        };
+        let mut tally = Tally::default();
+        let out = strip(|w| render_sandbox(w, &sandbox, &mut tally));
+        for expected in [
+            "SANDBOX",
+            "/usr/bin/bwrap",
+            "bubblewrap 0.11.0",
+            "probe failed",
+            "check user namespaces",
+        ] {
+            assert!(out.contains(expected), "missing {expected}: {out}");
+        }
+        assert!(tally.warns.is_empty());
+        assert_eq!(
+            tally.alarms.is_empty(),
+            mode == rimz::config::Isolation::Host
+        );
+    }
+}
+
+#[test]
 fn machine_config_section_keeps_the_classified_problem_compact() {
     let config = MachineConfigHealth {
         broken_files: vec![MachineConfigProblem {
@@ -199,6 +232,14 @@ fn report_fixture() -> DoctorReport {
         terminal: terminal_fixture(),
         machine_config: MachineConfigHealth {
             broken_files: Vec::new(),
+        },
+        sandbox: super::super::model::Sandbox {
+            mode: rimz::config::Isolation::Host,
+            path: None,
+            version: None,
+            error: Some(
+                "bwrap not found; install bubblewrap or set agents.isolation to host".to_owned(),
+            ),
         },
         hooks: Vec::new(),
         plugins: Vec::new(),

@@ -138,9 +138,16 @@ pub(super) fn launch_layout(
         )
         .ok()
     });
+    rimz::sandbox::preflight(machine_config.agents.isolation)?;
     for (index, cell) in layout.agent_cells().enumerate() {
+        if machine_config.agents.isolation == rimz::config::Isolation::Host
+            && !cell.skills.is_empty()
+        {
+            return Err(rimz::sandbox::SandboxErr::SkillsNeedSandbox.into());
+        }
         let mut request =
             rimz::harness::launch::ExecRequest::bare_launch(cell.kind.clone(), Vec::new());
+        request.skills.clone_from(&cell.skills);
         request.action = rimz::harness::launch::ExecAction::Launch {
             prompt: prompt
                 .filter(|_| Some(index) == prompt_agent_index)

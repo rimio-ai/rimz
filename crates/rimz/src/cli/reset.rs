@@ -57,7 +57,7 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
         if !super::confirm(&format!(
             "Reset the '{}' room? This deletes the mux session, purges its \
              resurrection cache, archives its records, clears live coordination \
-             state, and signals its orphaned processes.",
+             state, signals its orphaned processes, and removes its scratch files.",
             workspace.session_name
         ))? {
             writeln!(std::io::stderr().lock(), "Reset aborted; nothing changed.")?;

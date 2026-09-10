@@ -37,6 +37,94 @@ fn write_machine_file(path: &std::path::Path, text: &str) {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn config_set_sandbox_probes_bwrap_before_writing() {
+    let env = Env::new();
+    let path = agents_config_path(&env);
+    let seed = "[agents]\nisolation = \"host\"\n";
+    write_machine_file(&path, seed);
+    let empty_bin = env.home_root.join("empty-bin");
+    std::fs::create_dir(&empty_bin).expect("mkdir empty PATH");
+    for value in ["sandbox", "\"sandbox\"", "'sandbox'", "\"sand\\u0062ox\""] {
+        env.rimz()
+            .args(["config", "set", "agents.isolation", value])
+            .env("PATH", &empty_bin)
+            .assert()
+            .failure()
+            .stderr(contains("bubblewrap"))
+            .stderr(contains("host"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), seed);
+    }
+    let bwrap = empty_bin.join("bwrap");
+    let marker = env.home_root.join("bwrap-probed");
+    std::fs::write(
+        &bwrap,
+        "#!/bin/sh\n: > \"$RIMZ_TEST_BWRAP_PROBE\"\nexit 0\n",
+    )
+    .expect("write working bwrap shim");
+    std::fs::set_permissions(&bwrap, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod bwrap shim");
+    env.rimz()
+        .args(["config", "set", "agents.isolation", "sandbox"])
+        .env("PATH", &empty_bin)
+        .env("RIMZ_TEST_BWRAP_PROBE", &marker)
+        .assert()
+        .success();
+    assert!(marker.exists(), "sandbox must execute the preflight probe");
+    let config: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(config["agents"]["isolation"].as_str(), Some("sandbox"));
+    assert!(
+        !machine_config_path(&env).exists(),
+        "isolation belongs in agents.toml"
+    );
+}
+
+#[test]
+fn config_set_host_never_probes_bwrap() {
+    let env = Env::new();
+    let path = agents_config_path(&env);
+    write_machine_file(&path, "[agents]\nisolation = \"sandbox\"\n");
+    let bin = env.home_root.join("sandbox-bin");
+    std::fs::create_dir(&bin).expect("mkdir bwrap PATH");
+    let bwrap = bin.join("bwrap");
+    let marker = env.home_root.join("bwrap-probed");
+    std::fs::write(
+        &bwrap,
+        "#!/bin/sh\n: > \"$RIMZ_TEST_BWRAP_PROBE\"\nexit 1\n",
+    )
+    .expect("write bwrap shim");
+    std::fs::set_permissions(&bwrap, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod bwrap shim");
+    for value in ["host", "\"host\"", "'host'"] {
+        env.rimz()
+            .args(["config", "set", "agents.isolation", value])
+            .env("PATH", &bin)
+            .env("RIMZ_TEST_BWRAP_PROBE", &marker)
+            .assert()
+            .success();
+        let config: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(config["agents"]["isolation"].as_str(), Some("host"));
+        assert!(!marker.exists(), "host must not execute bwrap");
+    }
+    for value in [
+        "\" sandbox\"",
+        "\"sandbox \"",
+        "\"sandbox\" trailing",
+        "[\"sandbox\"]",
+    ] {
+        let before = std::fs::read(&path).unwrap();
+        env.rimz()
+            .args(["config", "set", "agents.isolation", value])
+            .env("PATH", &bin)
+            .env("RIMZ_TEST_BWRAP_PROBE", &marker)
+            .assert()
+            .failure();
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert!(!marker.exists(), "invalid isolation must not execute bwrap");
+    }
+}
+
+#[test]
 fn agents_home_profile_fragment_feeds_both_profile_catalogues_without_kind_rows() {
     let env = Env::new();
     write_machine_file(

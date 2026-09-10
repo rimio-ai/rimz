@@ -39,6 +39,7 @@ fn planner_profiles() -> ProfilesConfig {
             budget: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
+            skills: None,
             args: None,
         },
     );
@@ -85,6 +86,7 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
             budget: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
+            skills: None,
             args: None,
         },
     );
@@ -102,6 +104,7 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
             budget: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
+            skills: None,
             args: None,
         },
     );
@@ -308,6 +311,7 @@ fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecRequest {
         action,
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        skills: Vec::new(),
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -675,6 +679,7 @@ mod parse {
             },
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
+            skills: Vec::new(),
             provider_account: ProviderAccountState::Unbound,
             run_id: Some(
                 "run_0123456789abcdef0123456789abcdef"
@@ -1139,6 +1144,7 @@ mod launch_options {
                 budget: None,
                 system_prompt_file: None,
                 append_system_prompt_files: Vec::new(),
+                skills: None,
                 args: Some("--model raw".to_owned()),
             },
         );
@@ -1923,6 +1929,7 @@ fn bare_exec_args() -> ExecRequest {
         },
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        skills: Vec::new(),
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,

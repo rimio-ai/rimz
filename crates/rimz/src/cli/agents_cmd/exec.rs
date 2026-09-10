@@ -81,6 +81,21 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             .unwrap_or_else(|| workspace.worktree_root.clone()),
     };
     let machine_config = crate::cli::machine_config();
+    let isolation = machine_config.agents.isolation;
+    let sandbox_preflight =
+        if isolation == rimz::config::Isolation::Host && !request.skills.is_empty() {
+            Err(rimz::sandbox::SandboxErr::SkillsNeedSandbox)
+        } else {
+            rimz::sandbox::preflight(isolation)
+        };
+    sandbox_preflight.inspect_err(|_| {
+        mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
+        fail_run_on_exec_precondition(run_context.as_ref());
+    })?;
+    let mut extra_env = materialized_prompt.env.clone();
+    if isolation == rimz::config::Isolation::Sandbox {
+        extra_env.insert("TMPDIR".to_owned(), "/tmp".to_owned());
+    }
     let reminders = exec_launch_reminders(
         &request,
         &machine_config,
@@ -94,7 +109,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         &provider_cwd,
         &rimz::proc::rimz_exe(),
         &runtime,
-        &materialized_prompt.env,
+        &extra_env,
         &reminders,
     );
     let stage = match stage {
@@ -105,7 +120,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             return Err(err.into());
         }
     };
-    let process = match stage {
+    let mut process = match stage {
         rimz::harness::launch::AgentProcessStage::Ready(process) => process,
         rimz::harness::launch::AgentProcessStage::LoginShellReentry { process, argv } => {
             let (program, rest) = argv.split_first().ok_or_else(|| {
@@ -119,6 +134,34 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             return Ok(());
         }
     };
+    if isolation == rimz::config::Isolation::Sandbox {
+        let prepare = || -> Result<_> {
+            let state = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())?;
+            let mut env: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+            env.extend(process.env.clone());
+            let provider_home = rimz::agents::registry::find_definition(request.kind.as_str())
+                .and_then(|definition| definition.config_home(&env))
+                .map(|path| rimz::sandbox::ProviderHome {
+                    source: path.clone(),
+                    target: path,
+                });
+            rimz::sandbox::prepare(&rimz::sandbox::SandboxInputs {
+                env: &env,
+                cwd: &provider_cwd,
+                project_root: &workspace.project_root,
+                worktree: request.worktree_path.as_deref(),
+                scratch_dir: &state.scratch_dir,
+                provider_home,
+                skills: &request.skills,
+            })
+            .map_err(Into::into)
+        };
+        let plan = prepare().inspect_err(|_| {
+            mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
+            fail_run_on_exec_precondition(run_context.as_ref());
+        })?;
+        process.argv = rimz::sandbox::bwrap_argv(&plan, &provider_cwd, &process.argv);
+    }
     if let Some(context) = run_context.as_ref() {
         record_own_run_pane(context);
     }
@@ -1479,6 +1522,7 @@ mod tests {
             action,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
+            skills: Vec::new(),
             provider_account: ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,

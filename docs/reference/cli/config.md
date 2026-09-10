@@ -19,6 +19,8 @@ rimz config set theme.pets.enabled true       # a real bool, validated before wr
 rimz config set resume.auto_continue true      # routes into config.toml
 ```
 
+`rimz config set agents.isolation sandbox` routes to `[agents]` in `agents.toml` and probes Linux bubblewrap before writing; failure leaves the file unchanged. `host` is the default and does not probe. The value is machine policy, not a per-profile override, and applies to subsequent agent launches. Profile `skills` grammar and inheritance are in the [configuration guide](../../guide/configuration.md#profiles).
+
 ## List themes
 
 ```sh

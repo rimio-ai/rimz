@@ -96,6 +96,42 @@ fn assert_health_before_presence(trace: &str) {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn start_refuses_sandbox_without_bwrap() {
+    let env = Env::new();
+    let config_dir = env.config_root().join("rimz");
+    std::fs::create_dir_all(&config_dir).expect("mkdir config");
+    let agents_path = config_dir.join("agents.toml");
+    let seed = "[agents]\nisolation = \"sandbox\"\n";
+    std::fs::write(&agents_path, seed).expect("write sandbox config");
+    let empty_bin = env.home_root.join("empty-bin");
+    std::fs::create_dir(&empty_bin).expect("mkdir empty PATH");
+    let mux_log = env.home_root.join("zellij.log");
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "start", "--no-attach"])
+        .env("PATH", &empty_bin)
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &mux_log)
+        .bounded_output()
+        .expect("run sandbox start");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains("bubblewrap"), "{stderr}");
+    assert!(stderr.contains("host"), "{stderr}");
+    assert_eq!(std::fs::read_to_string(agents_path).unwrap(), seed);
+    assert!(
+        !config_dir.join("config.toml").exists(),
+        "no config bootstrap"
+    );
+    assert!(
+        !config_dir.join("theme.toml").exists(),
+        "no theme bootstrap"
+    );
+    assert!(!mux_log.exists(), "no multiplexer calls before refusal");
+}
+
+#[test]
 fn singular_agent_is_unknown_subcommand_with_agents_suggestion() {
     let env = Env::new();
 
@@ -126,6 +162,17 @@ fn singular_agent_is_unknown_subcommand_with_agents_suggestion() {
 fn start_inside_selected_mux_reports_and_skips_launch() {
     let env = Env::new();
     let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
+    let bin = env.home_root.join("sandbox-bin");
+    std::fs::create_dir(&bin).expect("mkdir bwrap PATH");
+    let bwrap = bin.join("bwrap");
+    let marker = env.home_root.join("bwrap-probed");
+    std::fs::write(
+        &bwrap,
+        "#!/bin/sh\n: > \"$RIMZ_TEST_BWRAP_PROBE\"\nexit 1\n",
+    )
+    .expect("write bwrap shim");
+    std::fs::set_permissions(&bwrap, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod bwrap shim");
 
     let output = env
         .rimz()
@@ -133,8 +180,15 @@ fn start_inside_selected_mux_reports_and_skips_launch() {
         // Pretend we're already inside a Zellij session: `auto_detect_backend`
         // selects Zellij from `ZELLIJ` alone, with no binary on PATH.
         .env("ZELLIJ", "1")
+        .env("PATH", &bin)
+        .env("RIMZ_TEST_BWRAP_PROBE", &marker)
         .bounded_output()
         .expect("run rimz start");
+
+    assert!(
+        !marker.exists(),
+        "default host isolation must not execute bwrap"
+    );
 
     assert!(
         output.status.success(),

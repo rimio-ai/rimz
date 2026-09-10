@@ -24,7 +24,7 @@ The state is derived on every read from the live hash and the on-disk record ([`
 Every field that can cause a process to run enters the hash. The projection is [`ExecutableSurface`](../../../crates/rimz/src/trust.rs), and each entry below is one of its fields:
 
 - `[[agents]]` — `name`, `launch_command`, `env`.
-- `[profiles.<name>]` — `agent`, `mode`, `model`, `effort`, `auto-compact`, `system-prompt-file`, `args`.
+- `[profiles.<name>]` — `agent`, `skills`, `mode`, `model`, `effort`, `auto-compact`, `system-prompt-file`, `args`.
 - `[subagents.profiles.<name>]` — the same command-running profile fields, including `auto-compact`, in the child-launch namespace.
 - `[agents.teams.<name>]` — `layout`, plus each role's `role`, `profile`, `mode`, `model`, `effort`, `auto-compact`, `system-prompt-file`, `args`, `signals`.
 - `[tasks.<name>]` — `agent`, `prompt`, `prompt-file`, `check`, `verify`, `max-attempts`, `on`, `worktree`, `mode`, `effort`, `system-prompt-file`, `timeout`, `at`, `every`, `cron`.
@@ -38,6 +38,8 @@ Room layout is per-machine policy, so a project config carrying a `[layout]` tab
 To keep the hashed surface closed and machine-independent, repo profiles may inherit only repo profiles or built-in kinds, repo team roles bind only repo profiles, and repo tasks run only at the project root.
 
 ## Launch-time enforcement
+
+`agents.isolation` is also machine policy, outside the project trust hash: a repository cannot choose host versus sandbox mode. Profile skill views do not make untrusted project commands safe; the trust gate remains independent of the [mount view](../sandbox.md).
 
 Every agent launch funnels through the hidden `rimz agents exec` wrapper ([`exec.rs`](../../../crates/rimz/src/cli/agents_cmd/exec.rs)), which resolves the trust-gated env before it spawns the agent. That covers `rimz agents`, supervised `-p` runs, and [resume-on-rebirth seeds](../sidebar/sidebar.md#resume-on-rebirth). Loop tasks resolve through the same trust gate before firing.
 
@@ -67,6 +69,7 @@ Project config uses one `agents` shape at a time: `[[agents]]` for env entries, 
 3. trusted project `[[agents]]` env
 4. adapter launch built-ins ([`AgentDefinition::launch_env`](../../../crates/rimz/src/agents/mod.rs))
 5. `RIMZ_RUN_ID`, `RIMZ_AGENT_PROFILE`, `RIMZ_AGENT_ROLE`, `RIMZ_AGENT_MODEL`, `RIMZ_AGENT_EFFORT`, and the render-toolkit mode
+6. sandbox launches stamp `TMPDIR=/tmp` through extra launch env before compilation, so the wrapper reapplies it after shell startup
 
 Adapter built-ins apply after the project env so a trusted config tunes an agent's launch while the integration's own launch contract stays pinned. A malformed launch env key refuses before any tab, worktree, or run-record side effect: [`invalid_env_key`](../../../crates/rimz/src/harness/launch.rs) requires every key to be non-empty, free of `=`, and not start with `-`.
 

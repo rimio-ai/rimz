@@ -343,6 +343,16 @@ archive_after_secs = 86400
 
 This file configures what `rimz agents <spec>` and `rimz subagents <profile>` can launch and how worktrees are cut.
 
+### Agent isolation
+
+Your stock agent CLI uses the host's temporary directory and skill directories. To give a room shared scratch and choose which user-level skills a profile discovers, enable the Linux bubblewrap mount view:
+
+```sh
+rimz config set agents.isolation sandbox
+```
+
+This writes `isolation = "sandbox"` under `[agents]` in `agents.toml` after probing bubblewrap. The default is `host`; restore it with `rimz config set agents.isolation host`. New launches, including restarted agents, use the current setting; existing panes do not change. This is machine-wide policy, not a profile override. See [security](./security.md#sandbox-isolation) for what stays accessible and how scratch is removed.
+
 ### Agent profiles, commands, and teams
 
 Reusable main-agent **profiles**, raw **command** panes, and named **teams** live in `agents.toml` under `[agents.profiles]`, `[agents.commands]`, and `[agents.teams]`. Supervised-child profiles use the separate top-level `[subagents.profiles]` namespace.
@@ -396,6 +406,10 @@ mode = "plan"
 ```
 
 #### Profiles
+
+To hide a user-level skill from a profile's normal discovery, set `skills = ["merge:off"]` on that profile. Entries use `name[:mode]`: `auto` keeps a skill visible, `off` hides it, and omitted modes and unlisted skills mean `auto`. A child list replaces its parent's list rather than appending; omitting the field inherits, while `skills = []` clears the inherited view. A non-empty list requires `agents.isolation = "sandbox"`. Every named skill must exist in one of the searched roots at launch, even when marked `off`; duplicate names and the not-yet-supported `manual` mode are errors.
+
+Views cover the first `CLAUDE_CONFIG_DIR` directory's `skills/` (default `~/.claude/skills`) and `~/.agents/skills`, leaving project skills and host files untouched. No effective entries means no skill overlay. This changes discovery, not the agent's ability to reach host files by other paths ([security](./security.md#sandbox-isolation)).
 
 A profile is a named agent preset. `[agents.profiles]` entries belong to `rimz agents` and become addressable type handles; `[subagents.profiles]` entries belong only to `rimz subagents`. `agent` is the base, a built-in kind (`claude`, `codex`, …) or another profile in the same namespace, and the remaining **override fields** layer on top: `mode` (`auto` | `ask` | `plan` | `yolo`), `model`, `effort`, `budget`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, and raw `args`. Optional `description` is listing metadata shown by `rimz agents profiles` or `rimz subagents profiles`; it is not inherited, and neither is `model-reminder`, the switch for the launch line described below. `budget = "5"` caps the session and `budget = "20/day"` resets at the configured local day boundary. Team roles expose the launch fields; loop tasks expose the subset relevant to scheduled work.
 

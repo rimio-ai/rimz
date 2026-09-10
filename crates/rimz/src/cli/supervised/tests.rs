@@ -592,6 +592,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
         permission_args: &[],
         system_prompt_file: None,
         append_system_prompt_files: &[],
+        skills: &[],
         self_cleanup_on_completion: true,
         subagent: true,
         provider_account_binding: None,

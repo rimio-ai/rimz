@@ -51,6 +51,8 @@ The CLI and hook subprocesses are the only writers of product truth. The sidebar
 
 ### State ownership
 
+With machine `agents.isolation = "sandbox"`, the agent exec wrapper launches its ready process through Linux bubblewrap. Each agent pane gets a host-visible mount view with shared per-room `/tmp` and optional profile skill overlays; this is not process or network containment. The mux stays on the host and subagent panes build their own views ([sandbox.md](./docs/internals/sandbox.md)).
+
 | Owner | Owns | Does not own |
 | --- | --- | --- |
 | Multiplexer | panes, views, sessions, attach/detach, layout, scrollback | store state, agent status, handler trust |
@@ -69,6 +71,7 @@ State is five tiers of plain files, scoped by what each one outlives. [`disk/pat
 workspace store         ~/.local/state/rimz/workspaces/<workspace_id>/
   one room's durable truth: the framed event log and the records beside it,
   plus the producer caches that survive a reboot
+  tmp/ is room-owned sandbox scratch, not a durable record; teardown removes it
 
 per-workspace runtime   $XDG_RUNTIME_DIR/rimz/<workspace_id>/  (or /tmp/rimz-<uid>/…)
   one room's disposable tier: wakeup sockets, heartbeats, read receipts,

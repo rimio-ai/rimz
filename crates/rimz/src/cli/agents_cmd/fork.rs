@@ -63,6 +63,10 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", seed.kind))?;
     let effective = rimz::config::effective::load(&config, &workspace.project_root)?;
     let posture = fork_posture(&seed, &effective.profiles)?;
+    rimz::sandbox::preflight(config.agents.isolation)?;
+    if config.agents.isolation == rimz::config::Isolation::Host && !posture.skills.is_empty() {
+        return Err(rimz::sandbox::SandboxErr::SkillsNeedSandbox.into());
+    }
     if let Some(reason) = &posture.degraded {
         writeln!(
             crate::cli::render::err(),
@@ -85,6 +89,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             },
             system_prompt_file: posture.system_prompt_file.clone(),
             append_system_prompt_files: posture.append_system_prompt_files.clone(),
+            skills: posture.skills.clone(),
             provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,
@@ -138,6 +143,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             },
             system_prompt_file: posture.system_prompt_file.clone(),
             append_system_prompt_files: posture.append_system_prompt_files.clone(),
+            skills: posture.skills.clone(),
             provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,

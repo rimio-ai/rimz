@@ -345,6 +345,7 @@ fn available_profiles_include_profiles_and_commands_but_not_kinds_or_teams() {
             budget: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
+            skills: None,
             args: None,
         },
     );
@@ -362,6 +363,7 @@ fn available_profiles_include_profiles_and_commands_but_not_kinds_or_teams() {
             budget: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
+            skills: None,
             args: None,
         },
     );
@@ -379,6 +381,7 @@ fn available_profiles_include_profiles_and_commands_but_not_kinds_or_teams() {
             budget: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
+            skills: None,
             args: None,
         },
     );

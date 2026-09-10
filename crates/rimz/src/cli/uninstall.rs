@@ -353,13 +353,26 @@ fn teardown_rooms(
                 continue;
             }
         };
+        let state = match rimz::StatePaths::for_workspace(room.workspace_id.clone())
+            .with_context(|| format!("preparing state paths for {}", room.session_name))
+        {
+            Ok(state) => state,
+            Err(err) => {
+                failures.push(err.to_string());
+                continue;
+            }
+        };
         let backend = mux::backend_for(room.mux);
         let report = rimz::room::teardown::teardown_room(
             backend.as_ref(),
             &room.workspace_id,
             &room.session_name,
             &runtime,
+            &state,
         );
+        if !report.scratch_removed {
+            failures.push(format!("remove scratch for {}", room.session_name));
+        }
         if report.session_killed {
             writeln!(
                 stderr,

@@ -4,9 +4,9 @@
 
 use std::path::PathBuf;
 
-use crate::RuntimePaths;
 use crate::ids::WorkspaceId;
 use crate::mux::MuxBackend;
+use crate::{RuntimePaths, StatePaths};
 
 /// What [`teardown_room`] removed, for the user-facing `rimz reset` report.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -17,6 +17,8 @@ pub struct TeardownReport {
     pub cache_removed: Vec<PathBuf>,
     /// Orphaned server / leaked daemon pids signalled.
     pub processes_swept: Vec<u32>,
+    /// Room scratch was removed (or was already gone).
+    pub scratch_removed: bool,
 }
 
 /// Tear the room down to a clean slate: delete the session, purge the backend's
@@ -29,6 +31,7 @@ pub fn teardown_room(
     workspace_id: &WorkspaceId,
     session_name: &str,
     runtime: &RuntimePaths,
+    state: &StatePaths,
 ) -> TeardownReport {
     // Delete the session first, so the only server matching this exact name in
     // the sweep below is the corpse — never a freshly-born replacement.
@@ -39,9 +42,13 @@ pub fn teardown_room(
     // mux server is cleanup, not destruction.
     let processes_swept =
         crate::mux::recovery::sweep_orphan_processes(workspace_id.as_str(), session_name, true);
+    let scratch_removed = state.remove_scratch_dir().inspect_err(|err| {
+        tracing::warn!(path = %state.scratch_dir.display(), error = %err, "room scratch removal failed");
+    }).is_ok();
     TeardownReport {
         session_killed,
         cache_removed,
         processes_swept,
+        scratch_removed,
     }
 }

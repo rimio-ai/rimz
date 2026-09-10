@@ -123,6 +123,18 @@ fn get(args: GetArgs) -> Result<()> {
 }
 
 fn set(args: SetArgs) -> Result<()> {
+    if args.key == "agents.isolation"
+        && (args.value == "sandbox"
+            || args
+                .value
+                .parse::<toml_edit::Value>()
+                .ok()
+                .as_ref()
+                .and_then(toml_edit::Value::as_str)
+                == Some("sandbox"))
+    {
+        rimz::sandbox::preflight(rimz::config::Isolation::Sandbox)?;
+    }
     let transition = remote_control_transition(&args.key, &args.value);
     if let Some((host, true)) = transition {
         preflight_remote_control_toggle(host)?;

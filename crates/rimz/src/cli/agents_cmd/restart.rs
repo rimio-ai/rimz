@@ -46,6 +46,12 @@ pub(in crate::cli) fn restart_resolved(
         .unwrap_or_else(|| workspace.worktree_root.clone());
     let machine_config = crate::cli::machine_config();
     let posture = restart_posture(agent, workspace, &machine_config)?;
+    rimz::sandbox::preflight(machine_config.agents.isolation)?;
+    if machine_config.agents.isolation == rimz::config::Isolation::Host
+        && !posture.skills.is_empty()
+    {
+        return Err(rimz::sandbox::SandboxErr::SkillsNeedSandbox.into());
+    }
     let cell = restart_cell(agent, &posture);
     let extra_args = posture.args.clone();
 
@@ -123,6 +129,7 @@ pub(in crate::cli) fn restart_resolved(
         },
         system_prompt_file: posture.system_prompt_file.clone(),
         append_system_prompt_files: posture.append_system_prompt_files.clone(),
+        skills: posture.skills.clone(),
         provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -246,6 +253,7 @@ fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
         auto_compact: None,
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        skills: posture.skills.clone(),
         launch: rimz::agents::LaunchParams {
             profile: agent.profile.clone(),
             role: agent.role.clone(),

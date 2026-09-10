@@ -22,6 +22,7 @@ mod rate_limit;
 mod remote;
 mod resize_redraw;
 mod resume;
+mod sandbox;
 mod sidebar_phases;
 mod stats_refresh_resize;
 mod steer;

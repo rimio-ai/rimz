@@ -167,6 +167,7 @@ fn start_attended() -> bool {
 }
 
 pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
+    rimz::sandbox::preflight(machine_config().agents.isolation)?;
     validate_agent_plugins()?;
     let workspace = match rimz::WorkspaceResolver::resolve(&args.path, globals.root.clone()) {
         Ok(workspace) => workspace,
@@ -220,6 +221,7 @@ pub(crate) fn ensure_workspace_room_detached(
     no_resume: bool,
     confirm_resume: bool,
 ) -> Result<RoomContext> {
+    rimz::sandbox::preflight(machine_config().agents.isolation)?;
     validate_agent_plugins()?;
     let workspace = rimz::WorkspaceResolver::resolve(path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", path.display()))?;
