@@ -40,8 +40,9 @@ pub use model::{
     DailyBudgetView, LinkTier, PresenceSample, RemoteControlBadge, SidebarCohortEffort,
     SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence, SidebarProviderPanel,
     SidebarSeatEffort, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrCi,
-    WorktreePrState, WorktreeTrunkSync, actionable_unread_count, lead_unread_row, triage_key,
+    WorktreePrState, WorktreeTrunkSync, lead_unread_row,
 };
+pub(crate) use model::{actionable_unread_count, triage_key};
 pub use reap::RuntimeReapInputs;
 
 #[cfg(test)]
@@ -220,7 +221,7 @@ pub struct SidebarSnapshot {
     /// Per-provider dashboard blocks pinned to the bottom of the sidebar — the
     /// account-scoped budgets, aggregate spend/tokens, and brand emblem.
     /// One block folds every session of a kind. Built by
-    /// [`Self::with_provider_aggregates`] on the producer (it needs config and an
+    /// `Self::with_provider_aggregates` on the producer (it needs config and an
     /// account probe the pure reducer can't read), so the placeholder/persisted
     /// snapshot leaves it empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

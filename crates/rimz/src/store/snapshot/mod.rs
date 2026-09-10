@@ -40,7 +40,7 @@ pub use panes::{
 pub(crate) use panes::{
     LazyAgentPairingDiagnostic, LazyAgentPairingResult, compute_lazy_agent_pairings,
 };
-pub use panes::{SidebarOwnView, pane_start_allows_bind, stamped_agent_for_pane};
+pub use panes::{SidebarOwnView, stamped_agent_for_pane};
 pub use process::pane_agent_kind;
 pub(crate) use process::pane_worktree_path;
 pub(crate) use process::process_is_active;
@@ -54,8 +54,9 @@ pub use view::{
     SNAPSHOT_VERSION, SidebarCohortEffort, SidebarLinkFreshness, SidebarLinkHealth,
     SidebarPresence, SidebarProviderPanel, SidebarSeatEffort, SidebarSnapshot, SidebarStatusCount,
     SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice, WorktreePrCi, WorktreePrState,
-    WorktreeTrunkSync, actionable_unread_count, lead_unread_row, triage_key,
+    WorktreeTrunkSync, lead_unread_row,
 };
+pub(crate) use view::{actionable_unread_count, triage_key};
 pub(crate) use view::{format_plan_label, sort_windows};
 
 #[derive(Debug, thiserror::Error)]

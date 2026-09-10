@@ -525,7 +525,7 @@ impl AgentCard {
     }
 }
 
-pub(crate) fn derive_percent(used: u64, window: u64) -> Option<u8> {
+fn derive_percent(used: u64, window: u64) -> Option<u8> {
     (window > 0).then(|| (used.saturating_mul(100) / window).min(100) as u8)
 }
 
@@ -587,7 +587,7 @@ impl RowCallSplit {
 
 /// `skip_serializing_if` helper: the resting phase is the default and stays off
 /// the wire.
-pub(crate) fn turn_phase_is_idle(phase: &TurnPhase) -> bool {
+fn turn_phase_is_idle(phase: &TurnPhase) -> bool {
     *phase == TurnPhase::Idle
 }
 

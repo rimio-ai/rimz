@@ -486,7 +486,7 @@ fn stamp_owned_by_live_pane_root(agent: &AgentState, stamped: &PaneRef, pane: &P
 /// start is known, a session whose `last_activity` predates that start belongs
 /// to an older instance, not the process now in the pane. The cwd fallback has
 /// a stricter evidence gate and does not rely on this fail-open predicate.
-pub fn pane_start_allows_bind(last_activity: Timestamp, pane: &PaneRef) -> bool {
+fn pane_start_allows_bind(last_activity: Timestamp, pane: &PaneRef) -> bool {
     pane.pane_process_start
         .is_none_or(|start| last_activity >= start)
 }
