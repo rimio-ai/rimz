@@ -39,7 +39,7 @@ impl SidebarSnapshot {
     /// the remaining discovered providers in usage-rank order and
     /// bypassing the cap. Producer-only: the pure reducer leaves `providers`
     /// empty.
-    pub fn with_provider_aggregates(
+    pub(crate) fn with_provider_aggregates(
         mut self,
         probed_accounts: &BTreeMap<String, AgentAccount>,
         remote_control: &BTreeMap<String, RemoteControlBadge>,
