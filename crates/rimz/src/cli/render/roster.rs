@@ -21,6 +21,7 @@ pub(crate) struct RosterSignal {
 pub(crate) struct Roster {
     rows: Vec<RosterRow>,
     signals: Vec<RosterSignal>,
+    signal_width: usize,
     indent: usize,
 }
 
@@ -29,6 +30,7 @@ impl Roster {
         Self {
             rows,
             signals: Vec::new(),
+            signal_width: usize::MAX,
             indent: 0,
         }
     }
@@ -40,6 +42,11 @@ impl Roster {
 
     pub(crate) fn indent(mut self, n: usize) -> Self {
         self.indent = n;
+        self
+    }
+
+    pub(crate) fn signal_width(mut self, width: usize) -> Self {
+        self.signal_width = width;
         self
     }
 
@@ -104,8 +111,11 @@ impl Roster {
             .join(", ");
         writeln!(
             w,
-            "{indent}{}",
-            paint(palette::muted(), &format!("signals   {signals}"))
+            "{}",
+            paint(
+                palette::muted(),
+                &super::clip_to_width(&format!("{indent}signals   {signals}"), self.signal_width)
+            )
         )
     }
 }
@@ -192,6 +202,25 @@ mod tests {
         assert_eq!(
             String::from_utf8(output.into_inner()).unwrap(),
             "  signals   ci.failed (branch=main, path=/x) → @coder, pr.opened → @reviewer\n"
+        );
+    }
+
+    #[test]
+    fn roster_clips_long_signals_to_the_callers_width() {
+        let mut output = anstream::StripStream::new(Vec::new());
+        Roster::new(Vec::new())
+            .signals(vec![RosterSignal {
+                signal: "ci.failed".into(),
+                matches: BTreeMap::from([("path".into(), "/repo/long-worktree-path".into())]),
+                role: "coder".into(),
+            }])
+            .indent(2)
+            .signal_width(30)
+            .render(&mut output)
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(output.into_inner()).unwrap(),
+            "  signals   ci.failed (path=/…\n"
         );
     }
 }

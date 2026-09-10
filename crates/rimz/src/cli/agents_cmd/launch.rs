@@ -757,6 +757,7 @@ fn write_launch_receipt(w: &mut impl Write, receipt: &LaunchReceipt<'_>) -> Resu
         .collect();
     render::Roster::new(rows)
         .signals(signals)
+        .signal_width(receipt.terminal_width)
         .indent(2)
         .render(w)?;
     if team.is_some() {
