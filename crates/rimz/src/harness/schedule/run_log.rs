@@ -196,6 +196,18 @@ pub enum LoopRunResult {
 }
 
 impl LoopRunResult {
+    pub const fn spawn_exit_code(self) -> Option<i32> {
+        match self {
+            Self::Completed => Some(RunStatus::Completed.exit_code()),
+            Self::Failed => Some(RunStatus::Failed.exit_code()),
+            Self::VerifyFailed => Some(RunStatus::VerifyFailed.exit_code()),
+            Self::TimedOut => Some(RunStatus::TimedOut.exit_code()),
+            Self::BudgetExceeded => Some(RunStatus::BudgetExceeded.exit_code()),
+            Self::Canceled => Some(RunStatus::Canceled.exit_code()),
+            _ => None,
+        }
+    }
+
     pub const fn label(self) -> &'static str {
         match self {
             Self::Completed => "completed",

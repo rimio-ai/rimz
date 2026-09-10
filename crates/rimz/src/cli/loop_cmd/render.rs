@@ -1216,20 +1216,8 @@ fn record_exit(record: &LoopRunRecord) -> Option<String> {
     record
         .run_id
         .as_ref()
-        .and_then(|_| spawn_exit_code(record.result))
+        .and_then(|_| record.result.spawn_exit_code())
         .map(|code| code.to_string())
-}
-
-fn spawn_exit_code(result: LoopRunResult) -> Option<i32> {
-    match result {
-        LoopRunResult::Completed => Some(0),
-        LoopRunResult::Failed => Some(1),
-        LoopRunResult::VerifyFailed => Some(123),
-        LoopRunResult::TimedOut => Some(124),
-        LoopRunResult::BudgetExceeded => Some(125),
-        LoopRunResult::Canceled => Some(130),
-        _ => None,
-    }
 }
 
 fn record_note(record: &LoopRunRecord) -> Option<String> {
