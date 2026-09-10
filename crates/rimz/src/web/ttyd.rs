@@ -504,12 +504,7 @@ fn reap_legacy_instances() {
 }
 
 fn is_ttyd_process(process: &crate::proc::ProcInfo) -> bool {
-    process
-        .cmdline
-        .split_whitespace()
-        .next()
-        .map(crate::proc::command::basename)
-        == Some("ttyd")
+    crate::proc::command::argv0_label(&process.cmdline) == "ttyd"
 }
 
 fn terminate_legacy_instance(instance: &LegacyTtydInstance) {
@@ -823,12 +818,7 @@ fn ttyd_process_status(
 }
 
 fn is_gate_process(process: &crate::proc::ProcInfo) -> bool {
-    process
-        .cmdline
-        .split_whitespace()
-        .next()
-        .map(crate::proc::command::basename)
-        == Some("rimz")
+    crate::proc::command::argv0_label(&process.cmdline) == "rimz"
         && process
             .cmdline
             .split_whitespace()
