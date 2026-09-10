@@ -25,12 +25,7 @@ pub struct CohortSpendCache {
 }
 
 pub fn read_cohort_spend_cache(path: &Path) -> CohortSpendCache {
-    let Ok(bytes) = std::fs::read(path) else {
-        return CohortSpendCache::default();
-    };
-    let Ok(cache) = serde_json::from_slice::<CohortSpendCache>(&bytes) else {
-        return CohortSpendCache::default();
-    };
+    let cache: CohortSpendCache = crate::disk::atomic::read_json_cache(path);
     if cache.version == COHORT_SPEND_CACHE_VERSION {
         cache
     } else {

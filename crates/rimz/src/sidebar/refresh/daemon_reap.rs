@@ -29,7 +29,7 @@ pub(in crate::sidebar) fn codex_daemon_reap_path(runtime: &RuntimePaths) -> Path
     runtime.root.join("codex-daemon-reap.json")
 }
 
-pub(in crate::sidebar) fn write_codex_daemon_reap(
+fn write_codex_daemon_reap(
     runtime: &RuntimePaths,
     cache: &CodexDaemonReap,
 ) -> crate::disk::atomic::Result<()> {
@@ -37,8 +37,7 @@ pub(in crate::sidebar) fn write_codex_daemon_reap(
 }
 
 pub fn read_codex_daemon_reap(runtime: &RuntimePaths) -> Option<CodexDaemonReap> {
-    let bytes = std::fs::read(codex_daemon_reap_path(runtime)).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    crate::disk::atomic::read_json_cache(&codex_daemon_reap_path(runtime))
 }
 
 fn daemon_reap_due(cache: &Option<CodexDaemonReap>, now_ms: u64) -> bool {
@@ -61,12 +60,12 @@ pub(super) fn refresh_codex_daemon_reap_cache(
     runtime: &RuntimePaths,
     now_ms: u64,
     codex_rc_enabled: bool,
-) -> CodexDaemonReap {
+) {
     let current = read_codex_daemon_reap(runtime);
     if !should_probe_codex_daemon_reap(agents, codex_rc_enabled)
         || !daemon_reap_due(&current, now_ms)
     {
-        return current.unwrap_or_default();
+        return;
     }
     let evidence = crate::agents::session::daemon_session_evidence("codex");
     let inputs = CodexDaemonReap {
@@ -80,7 +79,6 @@ pub(super) fn refresh_codex_daemon_reap_cache(
             "codex daemon reap cache write failed"
         );
     }
-    inputs
 }
 
 #[cfg(test)]

@@ -301,8 +301,8 @@ fn cached_daemon_reap_drops_paneless_codex_ghost_before_worktree_pins() {
     let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
     let owner_pid = std::process::id();
-    crate::sidebar::refresh::daemon_reap::write_codex_daemon_reap(
-        &runtime,
+    atomic::write_temp_then_rename_cache(
+        &crate::sidebar::refresh::daemon_reap::codex_daemon_reap_path(&runtime),
         &crate::sidebar::refresh::CodexDaemonReap {
             produced_at_ms: 1,
             daemon_pids: BTreeSet::from([owner_pid]),
@@ -346,8 +346,8 @@ fn cached_daemon_reap_forwards_published_live_panes() {
     let pane_id = PaneId::from_parts(MuxName::Tmux, "%1");
     let pane = crate::pane::PaneRef::from_id(pane_id.clone());
     let codex = daemon_codex("live-pane", dir.path(), Some(pane.clone()), 77);
-    crate::sidebar::refresh::daemon_reap::write_codex_daemon_reap(
-        &runtime,
+    atomic::write_temp_then_rename_cache(
+        &crate::sidebar::refresh::daemon_reap::codex_daemon_reap_path(&runtime),
         &crate::sidebar::refresh::CodexDaemonReap {
             produced_at_ms: 1,
             daemon_pids: BTreeSet::from([77]),

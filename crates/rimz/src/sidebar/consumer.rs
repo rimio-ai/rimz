@@ -361,6 +361,14 @@ fn consumer_fold_inputs_stamp(
         crate::remote::link::stats_path(runtime),
         runtime.agent_projection_path(),
         runtime.root.join("metrics-sample.json"),
+        runtime.diff_stats_path(),
+        runtime.cohort_spend_path(),
+        runtime.pr_state_path(),
+        runtime.shared_accounts_path(),
+        runtime.shared_rate_limits_path(),
+        runtime.shared_credits_path(),
+        runtime.shared_provider_spending_path(),
+        super::refresh::daemon_reap::codex_daemon_reap_path(runtime),
     ];
     let dirs = [
         state.messages_dir.as_path(),
@@ -374,11 +382,6 @@ fn consumer_fold_inputs_stamp(
         .iter()
         .map(|path| StampedPath::of(path.as_path()))
         .collect::<Vec<_>>();
-    runtime_stamps.extend(
-        super::refresh::inputs::published_lane_inputs(runtime)
-            .iter()
-            .map(|path| StampedPath::of(path)),
-    );
     runtime_stamps.extend(filtered_runtime_inputs(runtime));
 
     ConsumerFoldInputsStamp {
