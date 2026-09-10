@@ -85,7 +85,6 @@ fn default_machine_teams() -> TeamsConfig {
             layout: Some("claude,codex".to_owned()),
             scratch_files: Vec::new(),
             stages: Vec::new(),
-            signals: Vec::new(),
         },
     )]))
 }
@@ -183,14 +182,11 @@ pub struct Team {
     pub scratch_files: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stages: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub signals: Vec<TeamSignalBinding>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TeamSignalBinding {
     pub signal: String,
-    pub role: String,
     #[serde(default, rename = "match")]
     pub matches: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -203,6 +199,8 @@ pub struct RoleBinding {
     /// A named profile or registered agent kind. A same-named machine profile
     /// overrides the kind's implicit base.
     pub profile: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signals: Vec<TeamSignalBinding>,
     #[serde(default)]
     pub mode: Option<PermissionMode>,
     #[serde(default)]
@@ -275,6 +273,14 @@ pub(crate) fn retired_agents_key(doc: &toml::Table) -> Option<String> {
         .and_then(|agents| agents.get("teams"))
         .and_then(toml::Value::as_table)?;
     for (team_name, team) in teams {
+        if team
+            .as_table()
+            .is_some_and(|team| team.contains_key("signals"))
+        {
+            return Some(format!(
+                "team `{team_name}` key `signals` moved to each receiving role; use signals = [{{ signal = \"ci.failed\" }}] in its role block and remove the binding's `role` field"
+            ));
+        }
         let roles = team
             .as_table()
             .and_then(|team| team.get("roles"))

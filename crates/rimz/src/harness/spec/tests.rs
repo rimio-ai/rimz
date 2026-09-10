@@ -85,6 +85,7 @@ fn role(role: &str, profile: &str) -> RoleBinding {
     RoleBinding {
         role: role.to_owned(),
         profile: profile.to_owned(),
+        signals: Vec::new(),
         mode: None,
         model: None,
         effort: None,
@@ -103,7 +104,6 @@ fn team(roles: Vec<RoleBinding>) -> Team {
         layout: None,
         scratch_files: Vec::new(),
         stages: Vec::new(),
-        signals: Vec::new(),
     }
 }
 
@@ -114,7 +114,6 @@ fn team_with_layout(roles: Vec<RoleBinding>, layout: &str) -> Team {
         layout: Some(layout.to_owned()),
         scratch_files: Vec::new(),
         stages: Vec::new(),
-        signals: Vec::new(),
     }
 }
 
@@ -123,28 +122,22 @@ fn no_profiles() -> ProfilesConfig {
 }
 
 #[test]
-fn team_signal_validation_checks_roles_selectors_and_matches() {
+fn team_signal_validation_checks_role_selectors_and_matches() {
     use crate::config::TeamSignalBinding;
     use crate::harness::schedule::ScheduleErr;
 
-    let mut declared = team(vec![role("coder", "codex")]);
-    declared.signals.push(TeamSignalBinding {
+    let mut declared = team(vec![role("reviewer", "claude"), role("coder", "codex")]);
+    declared.roles[1].signals.push(TeamSignalBinding {
         signal: "ci.failed".to_owned(),
-        role: "coder".to_owned(),
         matches: BTreeMap::new(),
         prompt: None,
     });
     let validate = |team: &Team| prepare_team("forge", team, &no_profiles(), None).map(|_| ());
     assert_eq!(validate(&declared), Ok(()));
-    declared.signals.push(declared.signals[0].clone());
-    declared.signals[1].role = "builder".to_owned();
-    assert_eq!(
-        validate(&declared).unwrap_err().to_string(),
-        "team `forge` signal binding 2 targets undeclared role `builder`"
-    );
-    declared.signals[1].role = "coder".to_owned();
+    let repeated = declared.roles[1].signals[0].clone();
+    declared.roles[1].signals.push(repeated);
     for signal in ["invalid signal", "ci.finished"] {
-        declared.signals[1].signal = signal.to_owned();
+        declared.roles[1].signals[1].signal = signal.to_owned();
         let error = validate(&declared).unwrap_err();
         assert!(matches!(
             error,
@@ -153,11 +146,11 @@ fn team_signal_validation_checks_roles_selectors_and_matches() {
         assert!(
             error
                 .to_string()
-                .starts_with("team `forge` signal binding 2: ")
+                .starts_with("team `forge` role `coder` signal binding 2: ")
         );
     }
-    declared.signals[1].signal = "ci.*".to_owned();
-    declared.signals[1]
+    declared.roles[1].signals[1].signal = "ci.*".to_owned();
+    declared.roles[1].signals[1]
         .matches
         .insert("conclusion".to_owned(), "failure".to_owned());
     assert!(matches!(
@@ -167,30 +160,25 @@ fn team_signal_validation_checks_roles_selectors_and_matches() {
             ..
         })
     ));
-    declared.signals[1].matches.clear();
+    declared.roles[1].signals[1].matches.clear();
     for signal in ["agent.*", "agent.idle"] {
-        declared.signals[1].signal = signal.to_owned();
+        declared.roles[1].signals[1].signal = signal.to_owned();
         for matches in [
             BTreeMap::new(),
             BTreeMap::from([("handle".to_owned(), " ".to_owned())]),
         ] {
-            declared.signals[1].matches = matches;
+            declared.roles[1].signals[1].matches = matches;
             assert!(matches!(
                 validate(&declared),
                 Err(LayoutErr::UnscopedTeamAgentSignal { index: 2, .. })
             ));
         }
         for key in ["handle", "session"] {
-            declared.signals[1].matches = BTreeMap::from([(key.to_owned(), "reviewer".to_owned())]);
+            declared.roles[1].signals[1].matches =
+                BTreeMap::from([(key.to_owned(), "reviewer".to_owned())]);
             assert_eq!(validate(&declared), Ok(()));
         }
     }
-    declared.roles.clear();
-    declared.layout = Some("codex:coder".to_owned());
-    assert!(matches!(
-        validate(&declared),
-        Err(LayoutErr::UnknownTeamSignalRole { index: 1, .. })
-    ));
 }
 
 fn no_commands() -> CommandsConfig {
@@ -1212,6 +1200,7 @@ fn named_teams_compile_roles_and_apply_overrides() {
             RoleBinding {
                 role: "coder".to_owned(),
                 profile: "coder-base".to_owned(),
+                signals: Vec::new(),
                 mode: Some(PermissionMode::Ask),
                 model: Some("role-model".to_owned()),
                 effort: Some("high".to_owned()),
@@ -1224,6 +1213,7 @@ fn named_teams_compile_roles_and_apply_overrides() {
             RoleBinding {
                 role: "planner".to_owned(),
                 profile: "planner-base".to_owned(),
+                signals: Vec::new(),
                 mode: None,
                 model: None,
                 effort: None,
@@ -1598,7 +1588,6 @@ fn team_leader_validation_accepts_one_target() {
         layout: Some(layout.to_owned()),
         scratch_files: Vec::new(),
         stages: Vec::new(),
-        signals: Vec::new(),
     };
     validate(layout_only("claude", "claude,codex")).expect("unique layout leader");
     assert!(matches!(

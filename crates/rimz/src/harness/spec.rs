@@ -271,23 +271,19 @@ pub enum LayoutErr {
     },
     #[error("team `{team}` must declare at least one role")]
     EmptyTeam { team: String },
-    #[error("team `{team}` signal binding {index} targets undeclared role `{role}`")]
-    UnknownTeamSignalRole {
-        team: String,
-        index: usize,
-        role: String,
-    },
-    #[error("team `{team}` signal binding {index}: {source}")]
+    #[error("team `{team}` role `{role}` signal binding {index}: {source}")]
     InvalidTeamSignal {
         team: String,
+        role: String,
         index: usize,
         source: crate::harness::schedule::ScheduleErr,
     },
     #[error(
-        "team `{team}` signal binding {index} (`{signal}`) requires match.handle or match.session"
+        "team `{team}` role `{role}` signal binding {index} (`{signal}`) requires match.handle or match.session"
     )]
     UnscopedTeamAgentSignal {
         team: String,
+        role: String,
         index: usize,
         signal: String,
     },
@@ -1695,15 +1691,13 @@ fn prepare_team<'a>(
 }
 
 fn validate_team_signals(name: &str, team: &Team) -> Result<()> {
-    for (index, binding) in team.signals.iter().enumerate() {
+    for (role, index, binding) in team.roles.iter().flat_map(|role| {
+        role.signals
+            .iter()
+            .enumerate()
+            .map(move |(index, binding)| (&role.role, index, binding))
+    }) {
         let index = index + 1;
-        if !team.roles.iter().any(|role| role.role == binding.role) {
-            return Err(LayoutErr::UnknownTeamSignalRole {
-                team: name.to_owned(),
-                index,
-                role: binding.role.clone(),
-            });
-        }
         let selector = crate::harness::schedule::parse_signal_selector(
             name,
             &binding.signal,
@@ -1711,6 +1705,7 @@ fn validate_team_signals(name: &str, team: &Team) -> Result<()> {
         )
         .map_err(|source| LayoutErr::InvalidTeamSignal {
             team: name.to_owned(),
+            role: role.clone(),
             index,
             source,
         })?;
@@ -1724,6 +1719,7 @@ fn validate_team_signals(name: &str, team: &Team) -> Result<()> {
         {
             return Err(LayoutErr::UnscopedTeamAgentSignal {
                 team: name.to_owned(),
+                role: role.clone(),
                 index,
                 signal: binding.signal.clone(),
             });

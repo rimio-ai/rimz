@@ -1591,6 +1591,7 @@ mod tests {
             rimz::config::Team {
                 roles: vec![
                     rimz::config::RoleBinding {
+                        signals: Vec::new(),
                         auto_compact: None,
                         role: "planner".to_owned(),
                         profile: "claude".to_owned(),
@@ -1603,6 +1604,7 @@ mod tests {
                         args: None,
                     },
                     rimz::config::RoleBinding {
+                        signals: Vec::new(),
                         auto_compact: None,
                         role: "coder".to_owned(),
                         profile: "codex".to_owned(),
@@ -1619,7 +1621,6 @@ mod tests {
                 layout: None,
                 scratch_files: vec!["blackboard.md".to_owned()],
                 stages: Vec::new(),
-                signals: Vec::new(),
             },
         );
         let mut request = request(

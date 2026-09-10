@@ -977,14 +977,7 @@ const PROFILE_FIELDS: &[&str] = &[
     "append-system-prompt-files",
     "args",
 ];
-const TEAM_FIELDS: &[&str] = &[
-    "roles",
-    "leader",
-    "layout",
-    "scratch-files",
-    "stages",
-    "signals",
-];
+const TEAM_FIELDS: &[&str] = &["roles", "leader", "layout", "scratch-files", "stages"];
 
 fn parse_edit_value(raw: &str) -> Value {
     raw.parse::<Value>()

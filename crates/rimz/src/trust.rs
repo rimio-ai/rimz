@@ -800,14 +800,14 @@ struct ExecutableTeam<'a> {
     name: &'a str,
     layout: Option<&'a str>,
     roles: Vec<ExecutableRole<'a>>,
-    #[serde(skip_serializing_if = "<[crate::config::TeamSignalBinding]>::is_empty")]
-    signals: &'a [crate::config::TeamSignalBinding],
 }
 
 #[derive(Serialize)]
 struct ExecutableRole<'a> {
     role: &'a str,
     profile: &'a str,
+    #[serde(skip_serializing_if = "<[crate::config::TeamSignalBinding]>::is_empty")]
+    signals: &'a [crate::config::TeamSignalBinding],
     mode: Option<&'static str>,
     model: Option<&'a str>,
     effort: Option<&'a str>,
@@ -908,13 +908,13 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                 .map(|(name, team)| ExecutableTeam {
                     name: name.as_str(),
                     layout: team.layout.as_deref(),
-                    signals: &team.signals,
                     roles: team
                         .roles
                         .iter()
                         .map(|role| ExecutableRole {
                             role: role.role.as_str(),
                             profile: role.profile.as_str(),
+                            signals: &role.signals,
                             mode: role.mode.map(permission_mode_name),
                             model: role.model.as_deref(),
                             effort: role.effort.as_deref(),

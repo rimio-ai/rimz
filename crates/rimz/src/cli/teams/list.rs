@@ -247,9 +247,11 @@ fn definition_report(
         .unwrap_or_else(|| unresolved_roles(team, profiles));
     for role in &mut roles {
         role.signals = team
-            .signals
+            .roles
             .iter()
-            .filter(|binding| binding.role == role.role)
+            .find(|binding| binding.role == role.role)
+            .into_iter()
+            .flat_map(|binding| &binding.signals)
             .map(|binding| DeclaredSignal {
                 signal: binding.signal.clone(),
                 matches: binding.matches.clone(),

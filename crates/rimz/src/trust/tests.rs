@@ -426,19 +426,33 @@ fn hash_covers_every_documented_surface_field() {
             "case `{text}` collided with another surface case",
         );
     }
-    let binding = "[[agents.teams.review.signals]]\nsignal = \"ci.failed\"\nrole = \"coder\"\n";
-    let second = "[[agents.teams.review.signals]]\nsignal = \"pr.merged\"\nrole = \"planner\"\n";
+    let role = "[[agents.teams.review.roles]]\nrole = \"coder\"\nprofile = \"codex\"\n";
+    let binding = "{ signal = \"ci.failed\" }";
+    let second = "{ signal = \"pr.merged\" }";
     for text in [
-        binding.to_owned(),
-        binding.replace("ci.failed", "ci.passed"),
-        binding.replace("coder", "planner"),
-        format!("{binding}match = {{ branch = \"feature\" }}\n"),
-        format!("{binding}match = {{ branch = \"main\" }}\n"),
-        format!("{binding}match = {{ path = \"feature\" }}\n"),
-        format!("{binding}prompt = \"Repair CI\"\n"),
-        format!("{binding}prompt = \"Inspect CI\"\n"),
-        format!("{binding}{second}"),
-        format!("{second}{binding}"),
+        format!("{role}signals = [{binding}]"),
+        format!(
+            "{role}signals = [{}]",
+            binding.replace("ci.failed", "ci.passed")
+        ),
+        format!("{}signals = [{binding}]", role.replace("coder", "planner")),
+        format!(
+            "{role}signals = [{{ signal = \"ci.failed\", match = {{ branch = \"feature\" }} }}]"
+        ),
+        format!("{role}signals = [{{ signal = \"ci.failed\", match = {{ branch = \"main\" }} }}]"),
+        format!("{role}signals = [{{ signal = \"ci.failed\", match = {{ path = \"feature\" }} }}]"),
+        format!("{role}signals = [{{ signal = \"ci.failed\", prompt = \"Repair CI\" }}]"),
+        format!("{role}signals = [{{ signal = \"ci.failed\", prompt = \"Inspect CI\" }}]"),
+        format!("{role}signals = [{binding}, {second}]"),
+        format!("{role}signals = [{second}, {binding}]"),
+        format!(
+            "{role}signals = [{binding}]\n{}",
+            role.replace("coder", "planner")
+        ),
+        format!(
+            "{role}{}signals = [{binding}]",
+            role.replace("coder", "planner")
+        ),
     ] {
         let config: ProjectConfig = toml::from_str(&text).expect("parse team signals");
         assert!(
@@ -450,7 +464,7 @@ fn hash_covers_every_documented_surface_field() {
 
 #[test]
 fn empty_team_signals_preserve_executable_surface_hash() {
-    let legacy = "[agents.teams.review]\nlayout = \"codex\"\n";
+    let legacy = "[agents.teams.review]\nlayout = \"coder\"\n[[agents.teams.review.roles]]\nrole = \"coder\"\nprofile = \"codex\"\n";
     let config: ProjectConfig = toml::from_str(legacy).expect("legacy team");
     let explicit: ProjectConfig =
         toml::from_str(&format!("{legacy}signals = []\n")).expect("empty signals");
@@ -458,7 +472,7 @@ fn empty_team_signals_preserve_executable_surface_hash() {
     assert_eq!(snapshot.hash, executable_surface_hash(&explicit));
     assert_eq!(
         serde_json::to_string(&ExecutableSurface::from(&config).teams).expect("team surface"),
-        r#"[{"name":"review","layout":"codex","roles":[]}]"#,
+        r#"[{"name":"review","layout":"coder","roles":[{"role":"coder","profile":"codex","mode":null,"model":null,"effort":null,"system_prompt_file":null,"append_system_prompt_file":null,"args":null}]}]"#,
     );
 }
 

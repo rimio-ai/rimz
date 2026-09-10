@@ -728,6 +728,7 @@ fn team_machine() -> MachineConfig {
         Team {
             roles: vec![
                 RoleBinding {
+                    signals: Vec::new(),
                     auto_compact: None,
                     role: "planner".to_owned(),
                     profile: "claude-plan".to_owned(),
@@ -740,6 +741,7 @@ fn team_machine() -> MachineConfig {
                     args: None,
                 },
                 RoleBinding {
+                    signals: Vec::new(),
                     auto_compact: None,
                     role: "coder".to_owned(),
                     profile: "codex-code".to_owned(),
@@ -756,7 +758,6 @@ fn team_machine() -> MachineConfig {
             layout: Some("planner,coder".to_owned()),
             scratch_files: Vec::new(),
             stages: Vec::new(),
-            signals: Vec::new(),
         },
     );
     machine

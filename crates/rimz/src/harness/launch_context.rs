@@ -187,6 +187,7 @@ mod tests {
 
     fn role(role: &str) -> RoleBinding {
         RoleBinding {
+            signals: Vec::new(),
             auto_compact: None,
             role: role.to_owned(),
             profile: "claude".to_owned(),

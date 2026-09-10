@@ -756,12 +756,16 @@ fn write_launch_receipt(w: &mut impl Write, receipt: &LaunchReceipt<'_>) -> Resu
         )?;
     }
     if let Some((_, team)) = receipt.team
-        && !team.signals.is_empty()
+        && team.roles.iter().any(|role| !role.signals.is_empty())
     {
         let signals = team
-            .signals
+            .roles
             .iter()
-            .map(|binding| format!("{} → {}", binding.signal, binding.role))
+            .flat_map(|role| {
+                role.signals
+                    .iter()
+                    .map(|binding| format!("{} → {}", binding.signal, role.role))
+            })
             .collect::<Vec<_>>()
             .join(", ");
         writeln!(w, "signals: {signals}")?;
@@ -1037,11 +1041,22 @@ mod tests {
                 team: Some((
                     "forge",
                     &rimz::config::Team {
-                        signals: vec![rimz::config::TeamSignalBinding {
-                            signal: "ci.failed".to_owned(),
+                        roles: vec![rimz::config::RoleBinding {
                             role: "coder".to_owned(),
-                            matches: Default::default(),
-                            prompt: None,
+                            profile: "codex".to_owned(),
+                            mode: None,
+                            model: None,
+                            effort: None,
+                            budget: None,
+                            auto_compact: None,
+                            system_prompt_file: None,
+                            append_system_prompt_files: Vec::new(),
+                            args: None,
+                            signals: vec![rimz::config::TeamSignalBinding {
+                                signal: "ci.failed".to_owned(),
+                                matches: Default::default(),
+                                prompt: None,
+                            }],
                         }],
                         ..Default::default()
                     },

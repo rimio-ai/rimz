@@ -67,6 +67,9 @@ fn team_signal_binding_registers_delivers_and_retires() {
     team_signal_hook(&env, &cwd, "sess-team-coder", "SessionStart");
     assert_eq!(read_loop_instances(&env), armed);
     team_signal_hook(&env, &cwd, "sess-team-coder", "UserPromptSubmit");
+    loop_ok(&env, &["events", "emit", "deploy.done"]);
+    assert!(env.store().list_pending_messages().unwrap().is_empty());
+    assert!(read_loop_run_records(&env).is_empty());
     for (path, matching) in [(&env.project_root, false), (&cwd, true)] {
         loop_ok(
             &env,
@@ -142,27 +145,17 @@ fn team_signal_slug_collisions_preserve_distinct_subscriptions() {
         env.config_root().join("rimz/agents.toml"),
         r#"
 [agents.teams.forge]
-roles = [{ role = "coder", profile = "claude" }]
-[[agents.teams.forge.signals]]
-signal = "deploy.foo-bar"
+[[agents.teams.forge.roles]]
 role = "coder"
-[[agents.teams.forge.signals]]
-signal = "deploy.foo.bar"
-role = "coder"
-[[agents.teams.forge.signals]]
-signal = "deploy.done"
-role = "coder"
-match = { target = "first" }
-[[agents.teams.forge.signals]]
-signal = "deploy.done"
-role = "coder"
-match = { target = "second" }
-[[agents.teams.forge.signals]]
-signal = "deploy.done-2"
-role = "coder"
-[[agents.teams.forge.signals]]
-signal = "deploy.done-2-2"
-role = "coder"
+profile = "claude"
+signals = [
+  { signal = "deploy.foo-bar" },
+  { signal = "deploy.foo.bar" },
+  { signal = "deploy.done", match = { target = "first" } },
+  { signal = "deploy.done", match = { target = "second" } },
+  { signal = "deploy.done-2" },
+  { signal = "deploy.done-2-2" },
+]
 "#,
     )
     .unwrap();
@@ -321,7 +314,10 @@ fn team_signal_launch_refuses_root_before_side_effects() {
         .runtime_projection(rimz::RuntimeScope::Audit)
         .unwrap();
     let (_, error) = loop_fail(&env, &["teams", "forge"]);
-    assert!(error.contains("team `forge` signal binding 1"), "{error}");
+    assert!(
+        error.contains("team `forge` role `coder` signal binding 1"),
+        "{error}"
+    );
     assert!(
         error.contains("CI on the root checkout is not watched"),
         "{error}"
@@ -345,10 +341,14 @@ fn write_team_signal_config(env: &Env) {
         path,
         r#"
 [agents.teams.forge]
-roles = [{ role = "coder", profile = "claude" }]
-[[agents.teams.forge.signals]]
-signal = "ci.failed"
+[[agents.teams.forge.roles]]
 role = "coder"
+profile = "claude"
+signals = [{ signal = "ci.failed" }]
+[[agents.teams.forge.roles]]
+role = "reviewer"
+profile = "claude"
+signals = [{ signal = "deploy.done" }]
 "#,
     )
     .unwrap();
