@@ -4,9 +4,7 @@ use std::process::Command;
 use crate::RuntimePaths;
 use crate::disk::atomic;
 use crate::ids::WorkspaceId;
-use crate::sidebar::refresh::git_stats::{
-    DiffStatsCache, WorktreeRootsCache, read_diff_stats_cache,
-};
+use crate::sidebar::refresh::git_stats::{DiffStatsCache, WorktreeRootsCache};
 use crate::workspace::RootClass;
 
 use super::roots::{list_group_roots, list_worktree_roots, project_group_roots};
@@ -129,7 +127,7 @@ fn project_group_roots_publishes_exact_marker_names() {
     runtime.ensure_dirs().unwrap();
 
     let roots = project_group_roots(&main, RootClass::Repo, &runtime, None);
-    let cache = read_diff_stats_cache(&runtime.diff_stats_path());
+    let cache: DiffStatsCache = atomic::read_json_cache(&runtime.diff_stats_path());
     let classifications = cache
         .worktrees
         .expect("roots cache")
@@ -170,7 +168,7 @@ fn project_group_roots_refreshes_a_legacy_unclassified_cache() {
     .unwrap();
 
     assert!(project_group_roots(room.path(), RootClass::Directory, &runtime, None).is_empty());
-    let refreshed = read_diff_stats_cache(&runtime.diff_stats_path())
+    let refreshed = atomic::read_json_cache::<DiffStatsCache>(&runtime.diff_stats_path())
         .worktrees
         .expect("refreshed roots");
     assert!(refreshed.roots.is_empty());

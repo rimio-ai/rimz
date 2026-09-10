@@ -16,7 +16,7 @@ use crate::forge::pr_state::{PrLink, PrStateCache, RepoProbe, TargetStamp, read_
 use crate::forge::{self, ForgeCli};
 use crate::sidebar::refresh::git_stats::{
     DiffStatsCache, focused_worktree_paths, hot_worktree_paths, is_trunk_branch,
-    needed_worktree_paths, read_diff_stats_cache,
+    needed_worktree_paths,
 };
 use crate::sidebar::timing::{PR_STATE_HOT_TTL, PR_STATE_RETRY_TTL, PR_STATE_TTL};
 use crate::store::snapshot::{SidebarSnapshot, WorktreePrCi, WorktreePrState};
@@ -49,7 +49,8 @@ pub(super) fn produce_pr_states(
     let cache = read_pr_state_cache(&path);
     let now_ms = unix_now_ms();
     let needed = needed_worktree_paths(snapshot);
-    let diff_cache = read_diff_stats_cache(&runtime.diff_stats_path());
+    let diff_cache: DiffStatsCache =
+        crate::disk::atomic::read_json_cache(&runtime.diff_stats_path());
     let hot = hot_worktree_paths(snapshot);
     let focused = focused_worktree_paths(snapshot);
     if let Some(due) = cached_due_repo_keys(&cache, &needed, &diff_cache, &hot, &focused, now_ms)

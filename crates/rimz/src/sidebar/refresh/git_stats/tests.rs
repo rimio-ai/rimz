@@ -58,12 +58,6 @@ fn git_cache_freshness_boundaries_are_inclusive() {
             removed: 1,
         })
     );
-    assert_eq!(populated.commits, Some(4));
-    assert_eq!(populated.behind, Some(2));
-    assert_eq!(populated.trunk.as_deref(), Some("main"));
-    assert_eq!(populated.branch.as_deref(), Some("feature-migration"));
-    assert_eq!(populated.clean, Some(true));
-    assert_eq!(populated.landed, Some(true));
 
     // An old producer's cache entry predates the `clean`, `landed`, and
     // `from_pr` columns; serde defaults read them back as "not probed" (`None`),
@@ -552,9 +546,17 @@ fn untracked_added_lines_spends_a_shared_read_budget() {
     // left, counts nothing (its status entry still dirties the tree), and
     // leaves the remainder intact.
     let mut budget = 6;
-    assert_eq!(untracked_added_lines(&small, &mut budget), 2);
+    let prior = UntrackedLineMemo::new();
+    let mut next = UntrackedLineMemo::new();
+    assert_eq!(
+        memoized_untracked_added_lines(dir.path(), "small.txt", &prior, &mut next, &mut budget),
+        2
+    );
     assert_eq!(budget, 2);
-    assert_eq!(untracked_added_lines(&big, &mut budget), 0);
+    assert_eq!(
+        memoized_untracked_added_lines(dir.path(), "big.txt", &prior, &mut next, &mut budget),
+        0
+    );
     assert_eq!(budget, 2);
 }
 

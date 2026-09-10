@@ -30,8 +30,7 @@ use super::refresh::cohort_spend::{CohortSpendCache, read_cohort_spend_cache};
 use super::refresh::credits::apply_credits_cache;
 use super::refresh::daemon_reap::read_codex_daemon_reap;
 use super::refresh::git_stats::{
-    DiffStatsCache, DiffStatsCacheEntry, is_trunk_branch, read_diff_stats_cache,
-    worktree_group_path_fields,
+    DiffStatsCache, DiffStatsCacheEntry, is_trunk_branch, worktree_group_path_fields,
 };
 use super::refresh::live_spend::{apply_live_day_spend, apply_live_today_spend};
 use super::refresh::rate_limits::apply_cached_rate_limits;
@@ -503,7 +502,8 @@ fn enrich_core(
     snapshot.theme = machine_config.theme.clone();
     snapshot.attention = machine_config.agents.attention;
     fold_link_stats(&mut snapshot, runtime, crate::utils::time::unix_now_ms());
-    let diff_cache = read_diff_stats_cache(&runtime.diff_stats_path());
+    let diff_cache: DiffStatsCache =
+        crate::disk::atomic::read_json_cache(&runtime.diff_stats_path());
     let cohort_spend_cache = read_cohort_spend_cache(&runtime.cohort_spend_path());
 
     // The room's enumerated group roots — a repo room's worktree checkouts, so

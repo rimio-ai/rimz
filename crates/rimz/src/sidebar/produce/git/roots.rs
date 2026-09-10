@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::disk::atomic;
-use crate::sidebar::refresh::git_stats::{WorktreeRootsCache, read_diff_stats_cache};
+use crate::sidebar::refresh::git_stats::{DiffStatsCache, WorktreeRootsCache};
 use crate::utils::time::unix_now_ms;
 use crate::workspace::RootClass;
 
@@ -25,7 +25,7 @@ pub(in crate::sidebar::produce) fn project_group_roots(
     min_refreshed_at_ms: Option<u64>,
 ) -> Vec<PathBuf> {
     let cache_path = runtime.diff_stats_path();
-    let mut cache = read_diff_stats_cache(&cache_path);
+    let mut cache: DiffStatsCache = atomic::read_json_cache(&cache_path);
     let now_ms = unix_now_ms();
     // The freshness floor mirrors the pane cache's: a session boundary sends
     // its wakeup with `--min-pane-cache-ms`, and an enumeration older than

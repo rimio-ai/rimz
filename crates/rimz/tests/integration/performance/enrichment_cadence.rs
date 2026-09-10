@@ -14,6 +14,7 @@
 #![allow(clippy::print_stderr)] // self-skip notices, like the sibling fixture
 
 use rimz::sidebar::consumer::RollupCursor;
+use rimz::sidebar::refresh::git_stats::DiffStatsCache;
 use rimz::utils::time::unix_now_ms;
 
 use super::sidebar_diff_stats::Fixture;
@@ -152,7 +153,9 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
     let provider_path = runtime.shared_provider_spending_path();
     let accounts_path = runtime.shared_accounts_path();
     let diff_stats_path = runtime.diff_stats_path();
-    let diff_stats = rimz::sidebar::refresh::git_stats::read_diff_stats_cache(&diff_stats_path);
+    let diff_stats =
+        serde_json::from_slice::<DiffStatsCache>(&std::fs::read(&diff_stats_path).unwrap())
+            .unwrap();
     assert!(
         !diff_stats.entries.is_empty(),
         "refresher publishes diff stats for the live worktree"
@@ -311,7 +314,9 @@ fn idle_room_produce_runs_no_enrichment_io() {
     // Backdate the per-worktree git stamps into the tier gap: stale under
     // DIFF_STATS_TTL (5s), fresh under DIFF_STATS_IDLE_TTL (60s).
     let diff_stats_path = runtime_root.join("diff-stats.json");
-    let mut diff_stats = rimz::sidebar::refresh::git_stats::read_diff_stats_cache(&diff_stats_path);
+    let mut diff_stats =
+        serde_json::from_slice::<DiffStatsCache>(&std::fs::read(&diff_stats_path).unwrap())
+            .unwrap();
     assert!(
         !diff_stats.entries.is_empty(),
         "the cold produce cached the worktree's git facts:\n{}",
