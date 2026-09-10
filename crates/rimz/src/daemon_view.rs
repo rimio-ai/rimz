@@ -113,7 +113,7 @@ fn content_supervisor_pane(slot: usize, rimz_bin: &Path, worktree_root: &Path) -
 }
 
 /// Substring marking the always-present loop panel command.
-pub(crate) const LOOP_PANEL_MARKER: &str = "loop watch";
+const LOOP_PANEL_MARKER: &str = "loop watch";
 
 /// Return the oldest loop panel in the managed view.
 pub fn find_loop_panel(panes: &[PaneRef]) -> Option<&PaneRef> {
@@ -218,14 +218,12 @@ pub fn repair_daemon_view(
     let reconciliation = managed_pane_reconciliation(view, &listing.panes);
     let missing_count = reconciliation.spawn.len();
 
-    if let RepairStep::Close(pane_ids) = next_repair_step(&listing.panes, view) {
-        if !close_surplus_panes(backend, session_name, &pane_ids) {
-            return RepairOutcome::Retry;
-        }
-        listing
-            .panes
-            .retain(|pane| !pane_ids.contains(&pane.pane_id));
+    if !close_surplus_panes(backend, session_name, &reconciliation.close) {
+        return RepairOutcome::Retry;
     }
+    listing
+        .panes
+        .retain(|pane| !reconciliation.close.contains(&pane.pane_id));
 
     for _ in 0..missing_count {
         let reconciliation = managed_pane_reconciliation(view, &listing.panes);
@@ -782,63 +780,6 @@ impl DaemonRepairTracker {
         }
         self.repair_pending = repair(view) == RepairOutcome::Retry;
     }
-}
-
-/// Best-effort elder duty that reconstructs the daemon-view spec from durable
-/// workspace metadata and current machine configuration, then repairs it.
-pub fn ensure_daemon_view(
-    backend: &dyn MuxBackend,
-    workspace_id: &WorkspaceId,
-    session_name: &str,
-) {
-    let paths = match StatePaths::for_workspace(workspace_id.clone()) {
-        Ok(paths) => paths,
-        Err(err) => {
-            tracing::debug!(
-                workspace = %workspace_id,
-                error = &err as &dyn std::error::Error,
-                "daemon view repair skipped; state paths unavailable",
-            );
-            return;
-        }
-    };
-    let record = match record::read(&paths.workspace_record) {
-        Ok(record) => record,
-        Err(err) => {
-            tracing::debug!(
-                workspace = %workspace_id,
-                error = &err as &dyn std::error::Error,
-                "daemon view repair skipped; workspace record unavailable",
-            );
-            return;
-        }
-    };
-    let machine = crate::config::MachineConfig::load_lenient();
-    ensure_daemon_view_with_config(
-        backend,
-        workspace_id,
-        session_name,
-        &record,
-        machine.as_ref(),
-    );
-}
-
-pub(crate) fn ensure_daemon_view_with_config(
-    backend: &dyn MuxBackend,
-    workspace_id: &WorkspaceId,
-    session_name: &str,
-    record: &record::WorkspaceRecord,
-    machine: &crate::config::MachineConfig,
-) {
-    let readiness = crate::remote_control::ReadinessSnapshot::probe(&machine.remote_control);
-    ensure_daemon_view_with_readiness(
-        backend,
-        workspace_id,
-        session_name,
-        record,
-        machine,
-        &readiness,
-    );
 }
 
 pub(crate) fn ensure_daemon_view_with_readiness(

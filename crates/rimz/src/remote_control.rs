@@ -64,14 +64,6 @@ impl ReadinessSnapshot {
         }
     }
 
-    pub fn for_kind(&self, kind: &str) -> &RuntimeControlReadiness {
-        match kind {
-            "claude" => &self.claude,
-            "codex" => &self.codex,
-            _ => &RuntimeControlReadiness::Disabled,
-        }
-    }
-
     pub fn claude_host_argv(&self) -> Option<&[String]> {
         match self.for_host(RemoteControlHost::Claude) {
             RuntimeControlReadiness::Ready {
