@@ -13,11 +13,11 @@ use crate::common::{
     CommandTimeoutExt, Env, exec_args, path_with_front, write_env_dump_shim, write_fake_login_shell,
 };
 
+#[expect(clippy::print_stderr, reason = "optional bubblewrap test dependency")]
 fn available() -> bool {
     match rimz::sandbox::preflight(Isolation::Sandbox) {
         Ok(()) => true,
         Err(err) => {
-            #[expect(clippy::print_stderr, reason = "optional bubblewrap test dependency")]
             eprintln!("skipping bubblewrap execution: {err}");
             false
         }
