@@ -215,13 +215,9 @@ fn longest_cached_window_expired(
 /// refreshed or exhausted budget.
 fn unknown_idle_window(cached: RateLimitWindow) -> RateLimitWindow {
     RateLimitWindow {
-        scope: cached.scope,
         used_percentage: None,
         resets_at: None,
-        duration_mins: cached.duration_mins,
-        observed_at: cached.observed_at,
-        source: cached.source,
-        lifted: cached.lifted,
+        ..cached
     }
 }
 
@@ -241,10 +237,6 @@ pub(in crate::sidebar) fn apply_cached_rate_limits(
 /// Fuse live account windows into the shared cache and project producer panels.
 /// The cache is rebuilt from current panels, so a logged-out kind drops out.
 pub(super) fn refresh_rate_limits(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths) {
-    if snapshot.providers.is_empty() {
-        reset_logged_out_rate_limits_cache(runtime);
-        return;
-    }
     let path = runtime.shared_rate_limits_path();
     let reset_kinds = {
         let Some(_guard) =
@@ -256,8 +248,18 @@ pub(super) fn refresh_rate_limits(snapshot: &mut SidebarSnapshot, runtime: &Runt
             return;
         };
         let cached = read_rate_limits_cache(&path);
-        let trace = rate_limits_trace_path(runtime);
-        let (next, reset_kinds) = project_rate_limits(snapshot, &cached, true, trace.as_deref());
+        let (next, reset_kinds) = if snapshot.providers.is_empty() {
+            (
+                (!cached.entries.is_empty()).then(|| RateLimitsCache {
+                    refreshed_at_ms: unix_now_ms(),
+                    ..Default::default()
+                }),
+                Vec::new(),
+            )
+        } else {
+            let trace = rate_limits_trace_path(runtime);
+            project_rate_limits(snapshot, &cached, true, trace.as_deref())
+        };
         if let Some(next) = next {
             write_rate_limits_cache(&path, &next);
         }
@@ -266,32 +268,6 @@ pub(super) fn refresh_rate_limits(snapshot: &mut SidebarSnapshot, runtime: &Runt
     for kind in reset_kinds {
         super::credits::invalidate_oauth_read(runtime, &kind);
     }
-}
-
-/// Clear the published cache once every provider has logged out, so a later
-/// re-login paints from live readings rather than stale budgets. A no-op when
-/// the cache is already empty or the RMW lock is held — a contending producer's
-/// frame reaps it instead. Producer-only.
-fn reset_logged_out_rate_limits_cache(runtime: &RuntimePaths) {
-    let path = runtime.shared_rate_limits_path();
-    let Some(_guard) =
-        crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_rate_limits_lock())
-            .ok()
-            .flatten()
-    else {
-        return;
-    };
-    let cached = read_rate_limits_cache(&path);
-    if cached.entries.is_empty() {
-        return;
-    }
-    write_rate_limits_cache(
-        &path,
-        &RateLimitsCache {
-            refreshed_at_ms: unix_now_ms(),
-            ..Default::default()
-        },
-    );
 }
 
 fn acquire_rate_limits_cache_lock(
