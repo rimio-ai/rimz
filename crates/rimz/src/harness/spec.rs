@@ -130,7 +130,7 @@ impl Cell {
         Self::Command { argv: Vec::new() }
     }
 
-    pub(crate) fn pane_name(&self) -> String {
+    pub(super) fn pane_name(&self) -> String {
         match self {
             Self::Agent(cell) => cell
                 .launch
