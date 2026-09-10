@@ -9,7 +9,8 @@ use super::super::{Ctx, GlobalFlags, render, report_unknown_config_keys};
 use rimz::agents::attribution::LaneLifetimes;
 use rimz::agents::{AgentState, AgentStatus, TurnPhase};
 use rimz::config::{
-    CommandsConfig, MachineConfig, ProfilesConfig, TaskEntry, Team, TeamsConfig, ThemeConfig,
+    CommandsConfig, Isolation, MachineConfig, ProfilesConfig, TaskEntry, Team, TeamsConfig,
+    ThemeConfig,
 };
 use rimz::harness::schedule::catalog::{LoadedTask, TaskCatalog, TaskSource};
 use rimz::harness::spec::{AgentCell, LayoutSpec};
@@ -61,6 +62,8 @@ pub(super) struct LiveInstance {
     pub members: Vec<LiveMember>,
     pub worktree: Option<PathBuf>,
     pub branch: Option<String>,
+    pub isolation: Isolation,
+    pub tmp_dir: PathBuf,
     pub stages: Vec<String>,
     pub stage: Option<StageReport>,
     pub pr: Option<PrReport>,
@@ -156,6 +159,8 @@ pub(super) fn load_catalog(
             lifetimes: &lifetimes,
             prices: &prices,
             worktree,
+            isolation: machine.agents.isolation,
+            tmp_dir: &ctx.store.paths().tmp_dir,
         },
         |name| team_source(&ctx.workspace.project_root, name),
     ))
@@ -218,6 +223,8 @@ struct LiveCatalog<'a> {
     lifetimes: &'a LaneLifetimes,
     prices: &'a rimz::agents::PriceBook,
     worktree: Option<&'a str>,
+    isolation: Isolation,
+    tmp_dir: &'a Path,
 }
 
 fn definition_report(
@@ -538,6 +545,11 @@ fn live_instances(
                 members,
                 worktree,
                 branch,
+                isolation: catalog.isolation,
+                tmp_dir: match catalog.isolation {
+                    Isolation::Sandbox => catalog.tmp_dir.to_path_buf(),
+                    Isolation::Host => PathBuf::from("/tmp"),
+                },
                 stages: team.map(|team| team.stages.clone()).unwrap_or_default(),
                 stage,
                 pr,

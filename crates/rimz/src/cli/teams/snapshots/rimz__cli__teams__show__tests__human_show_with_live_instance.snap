@@ -3,23 +3,18 @@ source: crates/rimz/src/cli/teams/show.rs
 expression: "rendered(&report(vec![live_instance()]), None)"
 ---
 forge
-  source:     /tmp/.agents/teams/forge/team.toml
-  layout:     planner,coder+reviewer
-  leader:     planner
-  validation: ready
+  source: /tmp/.agents/teams/forge/team.toml
+  layout: planner,coder+reviewer
 
-  ROLE     PROFILE  KIND    MODEL  EFFORT  MODE
-  planner  claude   claude  fable  high    auto
+  @planner   claude  fable  <- leader
+  signals   ci.failed → @planner
   (prompt stack: rimz teams show forge --json)
 
-Declared signals
-  ROLE     SIGNAL     MATCH  PROMPT
-  planner  ci.failed  -      Fix CI
-
-#feat-x · Plan (delta) (@planner)
-  worktree: /repo/worktrees/feat-x · branch feat-x
-  stages:   Explore → [Plan] → Implement
-  pr:       none
+#feat-x · running · Plan (delta) (@planner)
+  worktree:  /repo/worktrees/feat-x
+  isolation: host · tmp /tmp
+  stages:    Explore → [Plan] → Implement
+  pr:        none
 
   MEMBER    STATUS   ACTIVITY         CTX   COST  AGE
   @planner  running  reading show.rs  42%  $0.25   2m
@@ -27,6 +22,3 @@ Declared signals
 Live signals
   LANE     MEMBER    NAME                                 SIGNAL     MATCH
   #feat-x  @planner  team-forge-feat-x-planner-ci-failed  ci.failed  path=/repo/feat-x
-
-Reach: rimz message @planner#feat-x '<text>'
-Focus: rimz teams focus forge#feat-x

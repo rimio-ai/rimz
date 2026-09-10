@@ -3,16 +3,60 @@ use std::io::Write;
 use anyhow::{Context, Result, bail};
 
 use super::super::{GlobalFlags, render};
-use super::list::{LiveInstance, LiveMember, RoleReport, TeamReport, ci_style, stage_label};
+use super::list::{LiveInstance, LiveMember, TeamReport, ci_style, stage_label};
+use rimz::config::Isolation;
 use rimz::store::snapshot::{WorktreePrCi, WorktreePrState};
 
-pub(super) fn run(name: &str, lane: Option<&str>, json: bool, globals: &GlobalFlags) -> Result<()> {
+pub(super) fn run(
+    name: Option<&str>,
+    lane: Option<&str>,
+    json: bool,
+    globals: &GlobalFlags,
+) -> Result<()> {
     let machine = rimz::config::MachineConfig::load().context("loading machine config")?;
     let reports = super::list::load_catalog(globals, lane, &machine)?;
+    let selected = select_reports(&reports, name)?;
+    if json {
+        return if name.is_some() {
+            render::json_pretty(&selected[0])
+        } else {
+            render::json_pretty(&selected)
+        };
+    }
+    let mut out = render::out();
+    if selected.is_empty() {
+        writeln!(
+            out,
+            "{}",
+            render::paint(
+                render::palette::muted(),
+                &format!("no live team in #{}", lane.unwrap_or_default())
+            )
+        )?;
+    }
+    let now = jiff::Timestamp::now();
+    for (index, report) in selected.iter().enumerate() {
+        if index > 0 {
+            writeln!(out)?;
+        }
+        write_report(&mut out, report, lane, now)?;
+    }
+    Ok(())
+}
+
+fn select_reports<'a>(
+    reports: &'a [TeamReport],
+    name: Option<&str>,
+) -> Result<Vec<&'a TeamReport>> {
+    let Some(name) = name else {
+        return Ok(reports
+            .iter()
+            .filter(|report| !report.instances.is_empty())
+            .collect());
+    };
     let Some(report) = reports
         .iter()
         .find(|report| report.name == name && report.defined)
-        .cloned()
     else {
         let valid = reports
             .iter()
@@ -29,10 +73,7 @@ pub(super) fn run(name: &str, lane: Option<&str>, json: bool, globals: &GlobalFl
             valid.join(", ")
         );
     };
-    if json {
-        return render::json_pretty(&report);
-    }
-    write_report(&mut render::out(), &report, lane, jiff::Timestamp::now())
+    Ok(vec![report])
 }
 
 fn write_report(
@@ -62,34 +103,42 @@ fn write_report(
         "layout",
         render::cell(report.layout.as_deref().unwrap_or("-")).dash(),
     );
-    definition.push(
-        "leader",
-        render::cell(report.leader.as_deref().unwrap_or("-")).dash(),
-    );
-    definition.push(
-        "validation",
-        render::cell(
-            report
-                .error
-                .as_deref()
-                .map_or_else(|| "ready".to_owned(), |error| format!("broken: {error}")),
-        )
-        .fg(if report.valid {
-            render::palette::good()
-        } else {
-            render::palette::alarm()
-        }),
-    );
+    if let Some(error) = &report.error {
+        definition.push(
+            "error",
+            render::cell(render::one_line(error)).fg(render::palette::alarm()),
+        );
+    }
     definition.render(w)?;
     writeln!(w)?;
 
-    let mut roles = render::Table::new(["ROLE", "PROFILE", "KIND", "MODEL", "EFFORT", "MODE"])
-        .indent(2)
-        .max_width(render::terminal_columns(120));
-    for role in &report.roles {
-        roles.row(role_cells(role));
-    }
-    roles.render(w)?;
+    render::Roster::new(
+        report
+            .roles
+            .iter()
+            .map(|role| render::RosterRow {
+                handle: role.role.clone(),
+                kind: role.kind.clone().unwrap_or_else(|| "-".to_owned()),
+                model: role.model.clone(),
+                leader: report.leader.as_deref() == Some(role.role.as_str()),
+            })
+            .collect(),
+    )
+    .signals(
+        report
+            .roles
+            .iter()
+            .flat_map(|role| {
+                role.signals.iter().map(|signal| render::RosterSignal {
+                    signal: signal.signal.clone(),
+                    matches: signal.matches.clone(),
+                    role: role.role.clone(),
+                })
+            })
+            .collect(),
+    )
+    .indent(2)
+    .render(w)?;
     if report.roles.iter().any(|role| {
         role.system_prompt_file.is_some() || !role.append_system_prompt_files.is_empty()
     }) {
@@ -101,36 +150,6 @@ fn write_report(
                 &format!("(prompt stack: rimz teams show {} --json)", report.name)
             )
         )?;
-    }
-
-    if report.roles.iter().any(|role| !role.signals.is_empty()) {
-        writeln!(w)?;
-        writeln!(
-            w,
-            "{}",
-            render::paint(render::palette::header(), "Declared signals")
-        )?;
-        let mut signals = render::Table::new(["ROLE", "SIGNAL", "MATCH", "PROMPT"])
-            .indent(2)
-            .max_width(render::terminal_columns(120));
-        for role in &report.roles {
-            for signal in &role.signals {
-                signals.row([
-                    render::cell(&role.role).fg(render::palette::accent()),
-                    render::cell(&signal.signal),
-                    render::cell(signal_matches(&signal.matches)).dash(),
-                    render::cell(
-                        signal
-                            .prompt
-                            .as_deref()
-                            .map(render::one_line)
-                            .unwrap_or_else(|| "-".to_owned()),
-                    )
-                    .dash(),
-                ]);
-            }
-        }
-        signals.render(w)?;
     }
 
     if report.instances.is_empty() && lane.is_some() {
@@ -179,22 +198,6 @@ fn write_report(
         signals.render(w)?;
     }
 
-    if report.instances.is_empty() {
-        writeln!(w)?;
-        writeln!(w, "Launch: rimz teams {} -w <worktree>", report.name)?;
-        writeln!(w, "Resume: rimz teams resume {}", report.name)?;
-        return Ok(());
-    }
-    if let Some((handle, channel)) = live_target(report) {
-        writeln!(w)?;
-        writeln!(
-            w,
-            "Reach: rimz message @{}#{} '<text>'",
-            handle.trim_start_matches('@'),
-            channel
-        )?;
-        writeln!(w, "Focus: rimz teams focus {}#{}", report.name, channel)?;
-    }
     Ok(())
 }
 
@@ -210,7 +213,7 @@ fn write_instance(w: &mut impl Write, instance: &LiveInstance, now: jiff::Timest
         "{}",
         render::paint(
             render::palette::header(),
-            &format!("#{}{stage}", instance.channel)
+            &format!("#{} · {}{stage}", instance.channel, instance.state)
         )
     )?;
     let mut facts = render::KeyVals::new().indent(2);
@@ -219,10 +222,22 @@ fn write_instance(w: &mut impl Write, instance: &LiveInstance, now: jiff::Timest
         .as_ref()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "-".to_owned());
-    if let Some(branch) = &instance.branch {
+    if let Some(branch) = &instance.branch
+        && instance.worktree.as_ref().and_then(|path| path.file_name())
+            != Some(std::ffi::OsStr::new(branch))
+    {
         checkout.push_str(&format!(" · branch {branch}"));
     }
     facts.push("worktree", render::cell(checkout).dash());
+    let tmp = instance.tmp_dir.display().to_string();
+    let tmp = match instance.isolation {
+        Isolation::Sandbox => format!("{} (as /tmp)", render::home_relative(&tmp)),
+        Isolation::Host => tmp,
+    };
+    facts.push(
+        "isolation",
+        render::cell(format!("{} · tmp {tmp}", instance.isolation)),
+    );
     if !instance.stages.is_empty() {
         let current = instance
             .stage
@@ -280,16 +295,35 @@ fn write_instance(w: &mut impl Write, instance: &LiveInstance, now: jiff::Timest
         }),
     );
     if !instance.memory.is_empty() {
+        let names = instance
+            .memory
+            .iter()
+            .map(|file| {
+                instance
+                    .worktree
+                    .as_ref()
+                    .and_then(|worktree| file.path.strip_prefix(worktree).ok())
+                    .unwrap_or(&file.path)
+                    .display()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        let name_width = names.iter().map(String::len).max().unwrap_or(0);
+        let lines_width = instance
+            .memory
+            .iter()
+            .map(|file| file.lines.to_string().len())
+            .max()
+            .unwrap_or(0);
         facts.push_lines(
             "memory",
-            instance.memory.iter().map(|file| {
+            instance.memory.iter().zip(&names).map(|(file, name)| {
                 let age = file
                     .modified_at
                     .map(|time| render::rel_age(time, now))
                     .unwrap_or_else(|| "-".to_owned());
                 vec![render::cell(format!(
-                    "{}  {} lines · {age}",
-                    file.path.display(),
+                    "{name:<name_width$}  {:>lines_width$} lines · {age}",
                     file.lines
                 ))]
             }),
@@ -317,35 +351,6 @@ fn signal_matches(matches: &std::collections::BTreeMap<String, String>) -> Strin
         .map(|(key, value)| render::one_line(&format!("{key}={value}")))
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-fn live_target(report: &TeamReport) -> Option<(&str, &str)> {
-    if report.instances.len() != 1 {
-        return None;
-    }
-    let instance = report.instances.first()?;
-    let member = report
-        .leader
-        .as_deref()
-        .and_then(|leader| {
-            instance
-                .members
-                .iter()
-                .find(|member| member.handle.trim_start_matches('@') == leader)
-        })
-        .or_else(|| instance.members.first())?;
-    Some((&member.handle, &instance.channel))
-}
-
-fn role_cells(role: &RoleReport) -> [render::Cell; 6] {
-    [
-        render::cell(&role.role).fg(render::palette::accent()),
-        render::cell(&role.profile),
-        render::cell(role.kind.as_deref().unwrap_or("-")).dash(),
-        render::cell(role.model.as_deref().unwrap_or("-")).dash(),
-        render::cell(role.effort.as_deref().unwrap_or("-")).dash(),
-        render::cell(role.mode.as_deref().unwrap_or("-")).dash(),
-    ]
 }
 
 fn member_cells(member: &LiveMember, now: jiff::Timestamp) -> [render::Cell; 6] {
@@ -414,6 +419,8 @@ mod tests {
             status_counts: BTreeMap::from([("running".to_owned(), 1)]),
             worktree: Some("/repo/worktrees/feat-x".into()),
             branch: Some("feat-x".to_owned()),
+            isolation: Isolation::Host,
+            tmp_dir: "/tmp".into(),
             stages: vec!["Explore".into(), "Plan".into(), "Implement".into()],
             stage: Some(super::super::list::StageReport {
                 name: "Plan (delta)".into(),
@@ -470,7 +477,10 @@ mod tests {
         assert!(output.contains("Explore → [Plan] → Implement"));
         assert!(output.contains("Plan (delta) (@planner)"));
         assert!(output.contains("ci passing"));
-        assert!(output.contains("/repo/worktrees/feat-x/blackboard.md"));
+        assert!(output.contains("blackboard.md"));
+        assert_eq!(output.matches("/repo/worktrees/feat-x").count(), 1);
+        assert!(output.contains("#feat-x · running"));
+        assert!(output.contains("isolation: host · tmp /tmp"));
         assert!(output.contains("41 lines · 2m ago"));
         assert!(
             output
@@ -491,6 +501,8 @@ mod tests {
             }])
         );
         let member = &json["instances"][0]["members"][0];
+        assert_eq!(json["instances"][0]["isolation"], "host");
+        assert_eq!(json["instances"][0]["tmp_dir"], "/tmp");
         assert_eq!(member["role"], "planner");
         assert_eq!(
             member["signals"],
@@ -518,16 +530,56 @@ mod tests {
     }
 
     #[test]
-    fn human_show_omits_ambiguous_reach_hint() {
+    fn human_show_omits_trailing_hints() {
         let mut second = live_instance();
         second.channel = "feat-y".to_owned();
-        let report = report(vec![live_instance(), second]);
-
-        for lane in [None, Some("feat-x")] {
-            let output = rendered(&report, lane);
-            assert!(!output.contains("Reach:"));
-            assert!(!output.contains("Focus:"));
-            assert!(!output.ends_with("\n\n"));
+        for instances in [vec![], vec![live_instance()], vec![live_instance(), second]] {
+            for lane in [None, Some("feat-x")] {
+                let output = rendered(&report(instances.clone()), lane);
+                for hint in ["Reach:", "Focus:", "Launch:", "Resume:"] {
+                    assert!(!output.contains(hint));
+                }
+                assert!(!output.ends_with("\n\n"));
+            }
         }
+    }
+
+    #[test]
+    fn human_show_elides_only_the_matching_branch() {
+        let mut instance = live_instance();
+        assert!(!rendered(&report(vec![instance.clone()]), None).contains("branch feat-x"));
+        instance.worktree = Some("/repo/worktrees/another".into());
+        assert!(rendered(&report(vec![instance.clone()]), None).contains("branch feat-x"));
+        instance.worktree = None;
+        assert!(rendered(&report(vec![instance]), None).contains("branch feat-x"));
+    }
+
+    #[test]
+    fn human_show_describes_sandbox_tmp_mount() {
+        let mut instance = live_instance();
+        instance.isolation = Isolation::Sandbox;
+        instance.tmp_dir = "/state/room/tmp".into();
+        let output = rendered(&report(vec![instance]), None);
+        assert!(output.contains("isolation: sandbox · tmp /state/room/tmp (as /tmp)"));
+    }
+
+    #[test]
+    fn lane_selection_includes_every_live_team_even_without_a_definition() {
+        let mut orphan = report(vec![live_instance()]);
+        orphan.name = "orphan".into();
+        orphan.defined = false;
+        let reports = vec![report(vec![live_instance()]), report(vec![]), orphan];
+        let selected = select_reports(&reports, None).unwrap();
+        assert_eq!(
+            selected
+                .iter()
+                .map(|report| report.name.as_str())
+                .collect::<Vec<_>>(),
+            ["forge", "orphan"]
+        );
+        assert_eq!(select_reports(&reports, Some("forge")).unwrap().len(), 1);
+        assert!(select_reports(&reports, Some("orphan")).is_err());
+        assert!(select_reports(&reports, Some("missing")).is_err());
+        assert!(select_reports(&[report(vec![])], None).unwrap().is_empty());
     }
 }

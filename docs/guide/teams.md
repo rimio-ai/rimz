@@ -72,6 +72,7 @@ When several copies of a team are working in parallel, checking each pane loses 
 ```sh
 rimz teams                              # every definition and live instance
 rimz teams show forge#feat-query        # stage, PR/CI, memory files, and member activity
+rimz teams show '#feat-query'           # every team live in this lane
 rimz teams forge -w feat-query          # launch or reconcile one cohort
 rimz teams resume forge                 # reopen its newest closed cohort
 rimz teams focus forge                  # jump to the role that needs attention
@@ -79,12 +80,12 @@ rimz teams restart forge                # restart every role in declared order
 rimz teams stop forge                   # close the whole live cohort
 ```
 
-Add `--json` to `rimz teams` or `show` for the structured report.
+Add `--json` to `rimz teams` or `show` for the structured report. Named-team inspection returns one record; lane-only inspection returns an array of team records.
 The bare team name and the longer `launch` form use the same reconciliation engine as `rimz agents <team>`, while `resume`, `focus`, `restart`, and `stop` keep the cohort lifecycle together.
 
-Fresh launches that open a new pane or tab print the worktree lane, absolute path, `board blackboard.md`, and each member's handle and resolved model, marking the effective leader with `<- leader`. Configured signal bindings remain below the member list. If you supplied a task, the receipt names its recipient and echoes a shortened version of that prompt. This tells you how the team was launched, not whether its providers are ready: startup is asynchronous, and members may not yet appear in `teams show`.
+Fresh launches that open a new pane or tab print the worktree lane, absolute path, `board blackboard.md`, and each member's handle and resolved model, marking the effective leader with `<- leader`. When signal bindings are configured, a `signals` line closes the member list. If you supplied a task, the receipt names its recipient and echoes a shortened version of that prompt. This tells you how the team was launched, not whether its providers are ready: startup is asynchronous, and members may not yet appear in `teams show`.
 
-Run `rimz teams show forge#feat-query` to see each cohort's member status, activity, context fill, cost, and time since last activity. The report also lists existing memory files by absolute path with line counts and modification ages, so you can open the board or notes directly rather than read every pane. Stage comes from the team's `Stage:` line in the worktree's `blackboard.md`; it is an advisory progress note, not a state inferred from idle or running agents. PR/CI reflects the room's cached observations, not a fresh forge query; `none` means no PR information is available in the report, not a verified absence of a PR.
+Run `rimz teams show forge#feat-query` to see each cohort's state, member status, activity, context fill, cost, and time since last activity. The report shows the absolute worktree path once and lists existing memory files relative to the worktree with line counts and modification ages, so you can open the board or notes directly rather than read every pane. The isolation line identifies the room's current setting and temporary directory, not each member's launch history. Stage comes from the team's `Stage:` line in the worktree's `blackboard.md`; it is an advisory progress note, not a state inferred from idle or running agents. PR/CI reflects the room's cached observations, not a fresh forge query; `none` means no PR information is available in the report, not a verified absence of a PR.
 
 Use `rimz message @planner#feat-query '<text>'` to message the leader, or arm a wake on the cohort's next idle transition instead of polling. For an agent waiting on this cohort:
 

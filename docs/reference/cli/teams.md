@@ -16,7 +16,7 @@ rimz teams list
 rimz teams ls --json
 ```
 
-The bare command and `list`/`ls` merge the effective team definitions with live team instances. The columns are `TEAM LANE STAGE PR STATUS`, with one row per live cohort; `PR` includes the projected PR number and CI indicator when available. A definition with no live cohort gets one row with `-` for lane, stage, and PR, and `ready` or a definition error for status. Definition errors remain visible on live rows; a cohort whose definition was removed keeps its live status with `not defined` appended. Resolved roles, models, and effort stay in `show`.
+The bare command and `list`/`ls` merge the effective team definitions with live team instances. The columns are `TEAM LANE STAGE PR STATUS`, with one row per live cohort; `PR` includes the projected PR number and CI indicator when available. A definition with no live cohort gets one row with `-` for lane, stage, and PR, and `ready` or a definition error for status. Definition errors remain visible on live rows; a cohort whose definition was removed keeps its live status with `not defined` appended. Resolved roles and models stay in `show`; effort is available in JSON.
 
 The effective catalogue merges the machine `agents.toml`, fragments under `~/.agents/teams/`, and a trusted repository overlay.
 An unreadable or invalid effective config fails at entry with the source error.
@@ -31,29 +31,35 @@ An instance's `state` follows member-status priority: `blocked` (any waiting or 
 rimz teams show forge
 rimz teams show forge#feat-rate-limits
 rimz teams show forge -w feat-rate-limits
+rimz teams show '#feat-rate-limits'
+rimz teams show -w feat-rate-limits
 rimz teams inspect forge
 rimz teams show forge --json
 ```
 
-`show` and its `inspect` alias name the best-effort definition source, layout, leader, and validation result, then list each resolved role's profile or kind, model, effort, and mode.
+`show` and its `inspect` alias name the best-effort definition `source` and `layout`, with an `error` line only when the definition is broken. The roster matches the launch receipt: each row shows a role handle, provider kind, and raw model ID, with `<- leader` marking the leader. When configured, a muted `signals` line closes the roster, showing bindings such as `ci.failed → @coder`, including match filters in parentheses.
 When a role has system-prompt files, the human report points to `--json`, whose `system_prompt_file` and `append_system_prompt_files` fields expose the complete resolved stack.
 
-Each live cohort gets its own block: lane and advisory board stage with optional owner; absolute worktree path and branch; declared stages; cached PR/CI facts and URL; and matching memory files with absolute paths, line counts, and modification ages. The member table is `MEMBER STATUS ACTIVITY CTX COST AGE`; `AGE` measures time since last activity, not the last heartbeat. Undeclared stages and empty memory scans omit their lines. If members disagree on the worktree or branch, that value is unavailable rather than chosen from an arbitrary member.
+Each live cohort gets its own block headed by lane, cohort state, and advisory board stage with optional owner. The absolute worktree path appears once, with a branch suffix only when the branch differs from the checkout directory's name. The block also shows isolation, declared stages, cached PR/CI facts and URL, and matching memory files with paths relative to the worktree, line counts, and modification ages. The member table is `MEMBER STATUS ACTIVITY CTX COST AGE`; `AGE` measures time since last activity, not the last heartbeat. Undeclared stages and empty memory scans omit their lines. If members disagree on the worktree or branch, that value is unavailable rather than chosen from an arbitrary member.
+
+The `isolation` line reports the room's current machine-wide `agents.isolation` setting, not a durable per-agent launch record. Host isolation shows `host · tmp /tmp`. Sandbox isolation shows the room's state tmp directory, home-relative where possible, with `(as /tmp)` indicating where it is mounted inside the sandbox.
 
 The current stage comes from the first `Stage:` line in `<worktree>/blackboard.md`, for example `Stage: Plan (@planner)`. A terminal ` (@owner)` suffix supplies the owner; other parenthesized text stays part of the stage name. This is advisory text maintained by the team, never inferred from member status and never proof of completion. The stages line brackets the declared name equal to the board stage's first whitespace-delimited word, case-sensitively; an unknown stage brackets nothing. A missing or unreadable board omits the header's stage suffix, even when a pipeline is declared.
 
 PR/CI comes from the sidebar-refreshed cache; `teams` and `show` do not contact the forge. Only available facts are shown, and `pr none` means nothing is projected, not that RimZ verified there is no PR. Before a room snapshot is published, live cohorts can still be inspected without projected PR or activity enrichment.
 
-Use `team#worktree` or `-w NAME` to narrow the live section by exact lane or member worktree; an ended or not-yet-live lane reports that no instance is live and still exits successfully.
-`Declared signals` lists ROLE, SIGNAL, MATCH, and PROMPT from config even before launch. `Live signals` lists LANE, MEMBER, NAME, SIGNAL, and MATCH from materialized workspace rows whose team instance and pinned kind/session match that member. JSON exposes `roles[].signals` and `instances[].members[].role`/`signals`; an invalid definition stays visible with its validation error.
+Use `team#worktree` or a team name with `-w NAME` to narrow the live section by exact lane or member worktree; an ended or not-yet-live lane reports `no live instance in #lane` and still exits successfully. Use either the fused form or `-w`, not both. Without a team name, `show '#lane'` or `show -w lane` prints a full report for every team live in that lane. No matches prints `no live team in #lane` and exits successfully.
+The roster's `signals` line describes configured bindings even before launch. `Live signals` lists LANE, MEMBER, NAME, SIGNAL, and MATCH from materialized workspace rows whose team instance and pinned kind/session match that member. JSON exposes `roles[].signals` and `instances[].members[].role`/`signals`; an invalid definition stays visible with its error.
 
-The report ends with copy-ready launch and resume forms when no instance is live, or lane-qualified reach and focus forms when exactly one live cohort is shown.
+The report has no trailing launch, resume, reach, or focus command hints.
 
-`rimz teams --json` emits an array of team records; `rimz teams show <team> --json` emits one team record. Both retain the definition, resolved `roles`, validation, and `instances` array. Each instance retains `channel`, `state`, `status_counts`, and `members` and adds:
+`rimz teams --json` emits an array of team records; `rimz teams show <team> --json` emits one team record. Lane-only inspection (`show '#lane' --json` or `show -w lane --json`) emits an array, empty when no teams are live there. All forms retain the definition, resolved `roles`, validation, and `instances` array. `roles[]` keeps `profile`, `effort`, and `mode`, and `roles[].signals[]` keeps `prompt` and `match`, even though the human roster omits those launch details except match filters. Each instance retains `channel`, `state`, `status_counts`, and `members` and adds:
 
 | Field | Meaning |
 | --- | --- |
 | `worktree`, `branch` | Absolute checkout path and branch, or `null` when unavailable or conflicting. |
+| `isolation` | Current machine setting: `host` or `sandbox`, not a per-agent launch record. |
+| `tmp_dir` | `/tmp` for host isolation; the absolute room state tmp directory mounted at `/tmp` for sandbox isolation. |
 | `stages` | Ordered declared stage names; `[]` when undeclared or the definition is gone. |
 | `stage` | `{ "name": "Plan", "owner": "planner" }`, with the owner stored without `@`; `owner` can be `null`, and absent board stage is `null`. |
 | `pr` | `number`, `state`, `ci`, and `url`, each nullable; the whole value is `null` when no facts are projected. |
@@ -89,7 +95,7 @@ rimz loop add team-idle --wake @me --signal team.idle --match instance=forge#fea
 
 Startup remains asynchronous: the receipt is not a readiness barrier, and members may not yet appear in `teams show`. Inspect the cohort for live status. The `loop add` command above arms a one-shot subscription on a future transition to `team.idle`; it does not block until readiness or completion, and idle does not mean the task is done. Signals do not replay: if the cohort was already idle before the subscription was armed, that transition will not wake you. Inspect current state as well as arming the subscription; [signal delivery](./loop.md#signals) applies. Launch has no JSON receipt; `--json` is for list and inspection.
 
-For a configured binding the receipt also prints `signals: ci.failed → coder`; this describes intent, not an already-armed row. Root members arm their bindings when their real sessions register, including resume, restart, and role re-add; children do not. End, loss, or stop retires the session's subscriptions, and missed signals are never replayed.
+For configured bindings, a `signals` line closes the receipt's member list, for example `signals   ci.failed → @coder`; this describes intent, not an already-armed row. Root members arm their bindings when their real sessions register, including resume, restart, and role re-add; children do not. End, loss, or stop retires the session's subscriptions, and missed signals are never replayed.
 
 A fresh launch on the root checkout refuses CI/PR bindings with no explicit `match.path` or `match.branch`, before creating panes or worktrees. Use `-w <worktree>`, launch from a linked worktree, or set an explicit match. The full ordered binding list enters project trust.
 

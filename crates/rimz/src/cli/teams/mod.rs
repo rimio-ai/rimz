@@ -33,14 +33,15 @@ pub struct TeamsArgs {
 
 #[derive(Debug, Subcommand)]
 enum TeamsSubcmd {
-    /// Show one team's definition and live instances.
+    /// Show team definitions and live instances.
     #[command(alias = "inspect")]
     Show {
+        /// Team, team#lane, or #lane for every team live in a lane.
         #[arg(
             value_name = "NAME",
             add = clap_complete::ArgValueCandidates::new(crate::cli::complete::team_names)
         )]
-        name: String,
+        name: Option<String>,
         /// Scope live instances to one worktree or lane.
         #[arg(
             long,
@@ -151,8 +152,8 @@ pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
             worktree,
             json,
         }) => {
-            let (name, worktree) = team_lane(name, worktree)?;
-            show::run(&name, worktree.as_deref(), json, globals)
+            let (name, worktree) = show_target(name, worktree)?;
+            show::run(name.as_deref(), worktree.as_deref(), json, globals)
         }
         Some(TeamsSubcmd::List { json }) => list::run(json, globals),
         Some(TeamsSubcmd::Launch(args)) => {
@@ -229,6 +230,21 @@ fn team_lane(name: String, worktree: Option<String>) -> Result<(String, Option<S
         bail!("worktree given twice; use either `team#worktree` or `-w/--worktree`");
     }
     Ok((team.to_owned(), Some(lane.to_owned())))
+}
+
+fn show_target(
+    name: Option<String>,
+    worktree: Option<String>,
+) -> Result<(Option<String>, Option<String>)> {
+    let Some(name) = name else {
+        if worktree.is_none() {
+            bail!("expected a team name or #lane");
+        }
+        return Ok((None, worktree));
+    };
+    let lane_only = name.starts_with('#');
+    let (team, lane) = team_lane(name, worktree)?;
+    Ok(((!lane_only).then_some(team), lane))
 }
 
 fn reject_launch_flags_without_name(
@@ -367,8 +383,8 @@ mod tests {
             panic!("show verb");
         };
         assert_eq!(
-            team_lane(name, worktree).unwrap(),
-            ("forge".to_owned(), Some("feat-x".to_owned()))
+            show_target(name, worktree).unwrap(),
+            (Some("forge".to_owned()), Some("feat-x".to_owned()))
         );
         let Some(TeamsSubcmd::Stop(args)) = stop.command else {
             panic!("stop verb");
@@ -400,5 +416,24 @@ mod tests {
 
         let duplicate = team_lane("forge#feat-x".to_owned(), Some("other".to_owned())).unwrap_err();
         assert!(duplicate.to_string().contains("given twice"));
+    }
+
+    #[test]
+    fn show_accepts_lane_only_targets() {
+        for argv in [
+            vec!["rimz", "show", "#feat-x"],
+            vec!["rimz", "show", "-w", "feat-x"],
+        ] {
+            let Some(TeamsSubcmd::Show { name, worktree, .. }) = parse_teams(&argv).command else {
+                panic!("show verb");
+            };
+            assert_eq!(
+                show_target(name, worktree).unwrap(),
+                (None, Some("feat-x".to_owned()))
+            );
+        }
+        assert!(show_target(None, None).is_err());
+        assert!(show_target(Some("#".into()), None).is_err());
+        assert!(show_target(Some("#feat-x".into()), Some("other".into())).is_err());
     }
 }

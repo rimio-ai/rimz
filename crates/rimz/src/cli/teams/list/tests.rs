@@ -161,6 +161,8 @@ fn catalog_projects_cohort_observability_by_worktree() {
             &ProfilesConfig::default(),
             &CommandsConfig::default(),
             LiveCatalog {
+                isolation: Isolation::Host,
+                tmp_dir: Path::new("/tmp"),
                 tasks: &BTreeMap::new(),
                 snapshot,
                 audit_agents: &[],
@@ -259,6 +261,8 @@ fn catalog_merges_definition_and_live_instance() {
         &ProfilesConfig::default(),
         &CommandsConfig::default(),
         LiveCatalog {
+            isolation: Isolation::Host,
+            tmp_dir: Path::new("/tmp"),
             tasks: &BTreeMap::new(),
             snapshot: &snapshot,
             audit_agents: &[],
@@ -303,6 +307,8 @@ fn catalog_merges_definition_and_live_instance() {
         &ProfilesConfig::default(),
         &CommandsConfig::default(),
         LiveCatalog {
+            isolation: Isolation::Host,
+            tmp_dir: Path::new("/tmp"),
             tasks: &BTreeMap::new(),
             snapshot: &snapshot,
             audit_agents: &[],
@@ -350,6 +356,8 @@ fn live_member_cost_comes_from_its_audit_slot() {
         &ProfilesConfig::default(),
         &CommandsConfig::default(),
         LiveCatalog {
+            isolation: Isolation::Host,
+            tmp_dir: Path::new("/tmp"),
             tasks: &BTreeMap::new(),
             snapshot: &snapshot(vec![agent.clone()]),
             audit_agents: &[agent],
@@ -425,6 +433,8 @@ fn live_member_cost_counts_only_the_current_lane_lifetime() {
             &ProfilesConfig::default(),
             &CommandsConfig::default(),
             LiveCatalog {
+                isolation: Isolation::Host,
+                tmp_dir: Path::new("/tmp"),
                 tasks: &BTreeMap::new(),
                 snapshot: &snapshot(vec![current.clone()]),
                 audit_agents: &audit_agents,
@@ -492,6 +502,8 @@ fn invalid_team_stays_visible_with_its_error() {
         &ProfilesConfig::default(),
         &CommandsConfig::default(),
         LiveCatalog {
+            isolation: Isolation::Host,
+            tmp_dir: Path::new("/tmp"),
             tasks: &BTreeMap::new(),
             snapshot: &snapshot(Vec::new()),
             audit_agents: &[],
@@ -562,6 +574,8 @@ fn human_catalog_and_empty_state_teach_the_command() {
         &ProfilesConfig::default(),
         &CommandsConfig::default(),
         LiveCatalog {
+            isolation: Isolation::Host,
+            tmp_dir: Path::new("/tmp"),
             tasks: &BTreeMap::new(),
             snapshot: &snapshot(Vec::new()),
             audit_agents: &[],
@@ -622,6 +636,8 @@ fn catalog_filter_matches_an_exact_lane_or_member_worktree() {
             &ProfilesConfig::default(),
             &CommandsConfig::default(),
             LiveCatalog {
+                isolation: Isolation::Host,
+                tmp_dir: Path::new("/tmp"),
                 tasks: &BTreeMap::new(),
                 snapshot: &snapshot(vec![agent.clone()]),
                 audit_agents: &[],
