@@ -26,7 +26,7 @@ Every field that can cause a process to run enters the hash. The projection is [
 - `[[agents]]` — `name`, `launch_command`, `env`.
 - `[profiles.<name>]` — `agent`, `mode`, `model`, `effort`, `auto-compact`, `system-prompt-file`, `args`.
 - `[subagents.profiles.<name>]` — the same command-running profile fields, including `auto-compact`, in the child-launch namespace.
-- `[agents.teams.<name>]` — `layout`, plus each role's `role`, `profile`, `mode`, `model`, `effort`, `auto-compact`, `system-prompt-file`, `args`.
+- `[agents.teams.<name>]` — `layout`, plus each role's `role`, `profile`, `mode`, `model`, `effort`, `auto-compact`, `system-prompt-file`, `args`, `signals`.
 - `[tasks.<name>]` — `agent`, `prompt`, `prompt-file`, `check`, `verify`, `max-attempts`, `on`, `worktree`, `mode`, `effort`, `system-prompt-file`, `timeout`, `at`, `every`, `cron`.
 - `[[hooks]]` — `event`, `command`.
 - `[env]` — every key and value.
