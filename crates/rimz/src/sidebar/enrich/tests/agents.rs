@@ -55,8 +55,8 @@ fn cached_enrich_uses_published_codex_daemon_reap_inputs() {
         vec![closed, open],
         Timestamp::now(),
     );
-    write_codex_daemon_reap(
-        &runtime_paths,
+    atomic::write_temp_then_rename_cache(
+        &codex_daemon_reap_path(&runtime_paths),
         &CodexDaemonReap {
             produced_at_ms: 1_000,
             daemon_pids: BTreeSet::from([77]),
@@ -91,8 +91,8 @@ fn cached_enrich_uses_published_codex_daemon_reap_inputs() {
 #[test]
 fn project_lane_enrich_reads_stale_codex_daemon_reap_without_rewriting() {
     let (_dir, runtime_paths, _) = runtime();
-    write_codex_daemon_reap(
-        &runtime_paths,
+    atomic::write_temp_then_rename_cache(
+        &codex_daemon_reap_path(&runtime_paths),
         &CodexDaemonReap {
             produced_at_ms: 1,
             daemon_pids: BTreeSet::new(),

@@ -24,7 +24,6 @@ pub mod credits;
 pub mod daemon_reap;
 mod git_refs;
 pub mod git_stats;
-pub(crate) mod inputs;
 pub mod live_spend;
 pub mod pr;
 pub mod rate_limits;
