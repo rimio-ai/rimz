@@ -232,7 +232,7 @@ impl SidebarSnapshot {
     pub fn card_admitted_live_panes(panes: Vec<PaneRef>, exclude: Option<&PaneId>) -> Vec<PaneRef> {
         panes
             .into_iter()
-            .filter(|pane| pane_admits_card(pane, exclude).admits())
+            .filter(|pane| pane_admits_card(pane, exclude))
             .collect()
     }
 

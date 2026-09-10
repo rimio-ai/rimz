@@ -374,33 +374,17 @@ pub(super) fn is_daemon_owned(agent: &AgentState, daemon_pids: &BTreeSet<u32>) -
     agent_owner_pid(agent).is_some_and(|pid| daemon_pids.contains(&pid))
 }
 
-/// The card-admission verdict for one live pane: admitted, or the named reason
-/// it renders nothing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum CardAdmission {
-    Admitted,
-    ExcludedPaneId,
-    SidebarChrome,
-    RemoteControlOrAppServerHost,
-}
-
-impl CardAdmission {
-    pub(super) fn admits(self) -> bool {
-        self == Self::Admitted
-    }
-}
-
-pub(super) fn pane_admits_card(pane: &PaneRef, exclude: Option<&PaneId>) -> CardAdmission {
+pub(super) fn pane_admits_card(pane: &PaneRef, exclude: Option<&PaneId>) -> bool {
     if exclude.is_some_and(|excluded| pane.pane_id == *excluded) {
-        return CardAdmission::ExcludedPaneId;
+        return false;
     }
     if pane.is_rimz_sidebar() {
-        return CardAdmission::SidebarChrome;
+        return false;
     }
     if crate::pane::pane_is_host(pane) {
-        return CardAdmission::RemoteControlOrAppServerHost;
+        return false;
     }
-    CardAdmission::Admitted
+    true
 }
 
 /// Facts a pane exposes to binding policies. Raw cwd stays separate from the
@@ -615,36 +599,26 @@ mod tests {
             ..pane_cmd("terminal_2", "tab_0", "zsh", None)
         };
         for (label, pane, exclude, expected) in [
-            (
-                "working pane",
-                working.clone(),
-                None,
-                CardAdmission::Admitted,
-            ),
+            ("working pane", working.clone(), None, true),
             (
                 "excluded pane id",
                 working.clone(),
                 Some(working.pane_id.clone()),
-                CardAdmission::ExcludedPaneId,
+                false,
             ),
             (
                 "sidebar chrome",
                 pane_cmd("terminal_3", "tab_0", "rimz-sidebar", None),
                 None,
-                CardAdmission::SidebarChrome,
+                false,
             ),
             (
                 "remote-control host",
                 pane_cmd("terminal_4", "tab_0", "rimz codex app-server serve", None),
                 None,
-                CardAdmission::RemoteControlOrAppServerHost,
+                false,
             ),
-            (
-                "identityless pane",
-                unreadable,
-                None,
-                CardAdmission::Admitted,
-            ),
+            ("identityless pane", unreadable, None, true),
         ] {
             assert_eq!(
                 pane_admits_card(&pane, exclude.as_ref()),
