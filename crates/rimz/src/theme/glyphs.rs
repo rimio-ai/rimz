@@ -27,6 +27,7 @@ macro_rules! glyph {
 /// One row per [`GlyphRole`], in exact discriminant order. `None` keeps the
 /// Unicode glyph in the Nerd Font set: drawn gauges, spines, caps, hairlines,
 /// spinner/clock heads, and the compacting wave stay on the terminal grid.
+/// Verify new Nerd Font codepoints against the font's cmap with fontTools before adding them.
 const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(StatusWaiting, "?", Some("\u{f128}")),
     glyph!(StatusAttention, "!", Some("\u{f12a}")),
@@ -86,7 +87,9 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(WorktreeDotted, "┄", None),
     glyph!(ChannelHash, "#", Some("\u{f292}")),
     glyph!(CardSubagents, "⧉", Some("\u{ed50}")),
-    glyph!(CardWaits, "⧖", Some("\u{f0904}")),
+    glyph!(CardWaits, "⧖", Some("\u{f00a0}")),
+    glyph!(CardWaitTimer, "◷", Some("\u{f051f}")),
+    glyph!(CardWaitSignal, "⌁", Some("\u{f1720}")),
     glyph!(CardParkedBg, "⋯", None),
     glyph!(ProcessCpu, "C", Some("\u{ef8f}")),
     glyph!(ProcessMem, "M", Some("\u{efc5}")),
@@ -319,7 +322,14 @@ mod tests {
             nerd_font_glyph(GlyphRole::StatusSleeping),
             Some("\u{f0904}")
         );
-        assert_eq!(nerd_font_glyph(GlyphRole::CardWaits), Some("\u{f0904}"));
+        assert_eq!(nerd_font_glyph(GlyphRole::CardWaits), Some("\u{f00a0}"));
+        assert_eq!(unicode_glyph(GlyphRole::CardWaitTimer), "◷");
+        assert_eq!(nerd_font_glyph(GlyphRole::CardWaitTimer), Some("\u{f051f}"));
+        assert_eq!(unicode_glyph(GlyphRole::CardWaitSignal), "⌁");
+        assert_eq!(
+            nerd_font_glyph(GlyphRole::CardWaitSignal),
+            Some("\u{f1720}")
+        );
         assert_eq!(
             agent_status_glyph_role(AgentStatus::Sleeping),
             GlyphRole::StatusSleeping
@@ -518,7 +528,23 @@ mod tests {
         }
 
         let files = crate::config::ConfigEditor::machine().files().ordered();
-        let parsed: ThemeFile = toml::from_str(files[1].template()).expect("theme template parses");
+        let mut in_glyph_section = false;
+        let documented = files[1]
+            .template()
+            .lines()
+            .map(|line| {
+                if line.starts_with('[') {
+                    in_glyph_section = line.starts_with("[theme.glyphs.");
+                }
+                if in_glyph_section {
+                    line.strip_prefix("## ").unwrap_or(line)
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parsed: ThemeFile = toml::from_str(&documented).expect("theme template parses");
         let mut unicode_theme = parsed.theme.clone();
         unicode_theme.glyphs.set = Some("unicode".to_owned());
         let from_template = GlyphSet::resolve(&unicode_theme);

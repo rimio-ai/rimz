@@ -26,13 +26,14 @@ A complete frame: a selected agent in a worktree, with the per-provider dashboar
 ▌  store refactor                                        ← line 2: session description
 ▌  ▣ ━━━━━━━━━━━━━━━━─────────────────────────── 38.2%    ← context window progress: how full the context window is
 ▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k · 97%             ◔ 8m    ← token stats: filled toks in context window · session cache hit
-▌  ⧉ subagents (2) · ⧖ waits (2)                 $0.42    ← lifetime child count and cost · pending one-shot wakes
+▌  ⧉ subagents (2) · ⧖ waits (3)                 $0.42    ← lifetime child count and cost · pending one-shot wakes
 ▌    ✓ Explore — locate the render seam                   ← done child: collapses to one line
 ▌    ⠁ Explore — audit the trust hash                     ← active child: thinking head
 ▌      ◇ 3k · Opus 4.8                           ◔  3m    ← running child: tokens · model · elapsed
-▌    ⧖ in 12m                                    ◔ 18m    ← timer: time until wake · elapsed since armed
-▌    ⧖ cargo                                     ◔  4m    ← command: program · elapsed since armed
+▌    ◷ in 12m                                    ◔ 18m    ← timer: time until wake · elapsed since armed
+▌    ⢿ cargo                                     ◔  4m    ← command: program · elapsed since armed
 ▌      cargo test                                         ← shell command, muted
+▌    ⌁ on pr.merged                              ◔  5m    ← signal: selector · elapsed since armed
 
  ─────────────────────────────────────────────────────
   Claude v2.1.169 · Claude Max                    ⇅ rc    ← provider · version · plan · remote-control health (green up / red down)
@@ -129,6 +130,7 @@ How the wash, the crest, and the lead-row motion are produced — `shimmer` vs. 
 | `⧉ N`           | the subagents an agent has spawned — lifetime count on the card's delegation line, shared with waits; the current user-authored turn's entries beneath it when expanded; the marker violet, the label soft |
 | `⋯ bg`          | an agent has background work pending — a faint secondary marker after the description that rides the settled `✓` as “done, background chore still running” |
 | `⧖ N`           | armed one-shot wakes for the agent: timers, watched commands, and one-shot signals; shares the delegation line with subagents, with wait entries beneath when expanded; the marker violet, the label soft |
+| `◷` / `⢿` / `⌁` | a wait entry's lead names what it waits on: a timer, a watched command (the process row's working head), or a signal |
 | `⑂ name` / `⮌ name` | a group header with a git story — branch for pristine/diverged worktrees, merge for landed removable worktrees |
 | `name` (bold)   | a directory room's own pod — name-only, no git story |
 | `▎`             | the selection lane — the worktree you're in, a dim selection-tone bracket |
@@ -257,7 +259,7 @@ The expanded card lists the **subagents** from the parent's current user-authore
 ▌      ◇ 22k · Haiku 4.5
 ```
 
-The **waits** follow the subagent entries: timers by due time, then commands, then signals. Each leads with `⧖`. A timer takes one line, reading `in 12m` or `due`; a signal also takes one line, reading `on <selector>` with ` · <left> left` when it has a deadline. A command takes two lines: the program on line 1, then the shell command with the program's path trimmed on a deeper-indented, muted line 2. The elapsed-since-armed clock pins right on line 1 in the same glyph and duration vocabulary as subagents, but stays muted rather than heating with age: a wake is pending by design. It is absent when the arm time is unknown.
+The **waits** follow the subagent entries: timers by due time, then commands, then signals. Timer entries lead with `◷`, watched commands with the process row's dim working head `⢿`, and signals with `⌁`; timer and signal leads stay violet. The section title keeps `⧖` (a sleeping bell in Nerd Font), distinct from the agent's sleeping status. A timer takes one line, reading `in 12m` or `due`; a signal also takes one line, reading `on <selector>` with ` · <left> left` when it has a deadline. A command takes two lines: the program on line 1, then the shell command with the program's path trimmed on a deeper-indented, muted line 2. The elapsed-since-armed clock pins right on line 1 in the same glyph and duration vocabulary as subagents, but stays muted rather than heating with age: a wake is pending by design. It is absent when the arm time is unknown.
 
 Claude's description, cumulative tokens, and precise start time ride in from `subagentStatusLine`; the Claude-only feed is configured at install and fed at runtime. The same feed incrementally prices every request in that child's dedicated transcript; when every model resolves, the exact cumulative figure pins right on line 1. Any unpriced request hides the figure rather than showing a partial sum. That provider-native figure is display-only because Claude's parent session spend already includes it. A child launched through `rimz subagents` instead shows its launch profile as its type, prices its own provider session, and adds that cost to the parent's line-1 figure across every turn. A Codex-native child reads nickname, task path, role, model/effort, and current context tokens — not a cumulative total — from the child rollout around each hook; its elapsed fallback starts at durable child registration. Copilot reads the model from the parent's start record and reconciles the exact total from the completion record at the next parent checkpoint. Siblings on different models read apart at a glance and a reasoning child uses the same thinking animation its parent would. A child with no enrichment shows just its `glyph type` line. Provider-native subagents have no pane; a launched child owns a pane while it runs or is kept. Neither gets a duplicate top-level row while its parent is visible; both nest here only.
 
@@ -284,7 +286,7 @@ A pane no agent has stamped reads like a slim agent card, one soft step quieter:
     cargo build --release
 ```
 
-The label is the program the pane runs, read past a `sudo` wrapper and through a `node`/`npx` launcher (`sudo npm install -g @openai/codex` is an `npm` install, not a codex agent; `node …/codex` is codex). No status, no meter, never counted in the cockpit — it is presence, not a cue. It is still a jump target, and the moment an agent's hook stamps that pane it becomes that agent's card.
+The label is the program the pane runs, read past environment and shell wrappers such as `env VAR=value` and `sh -c`, other command prefixes such as `sudo` and `timeout`, and through a `node`/`npx` launcher (`sudo npm install -g @openai/codex` is an `npm` install, not a codex agent; `node …/codex` is codex). Shell scripts select the first non-setup command: `sh -c 'cd /repo && cargo build'` identifies `cargo`, while `sh -c 'echo ready; cargo build'` identifies `echo`. No status, no meter, never counted in the cockpit — it is presence, not a cue. It is still a jump target, and the moment an agent's hook stamps that pane it becomes that agent's card.
 
 ### Worktree groups and the selection lane
 

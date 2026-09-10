@@ -206,6 +206,8 @@
 [theme.glyphs.unicode.card]
 ## subagents = "⧉"
 ## waits = "⧖"
+## wait_timer = "◷"
+## wait_signal = "⌁"
 ## parked_bg = "⋯"
 
 [theme.glyphs.unicode.process]
@@ -310,8 +312,10 @@
 ## dotted = "┄"
 
 [theme.glyphs.nerd_font.card]
-## subagents = ""
+## subagents = ""
 ## waits = "󰂠"
+## wait_timer = "󰔟"
+## wait_signal = "󱜠"
 ## parked_bg = "⋯"
 
 [theme.glyphs.nerd_font.process]

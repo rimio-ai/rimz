@@ -1,6 +1,9 @@
 use super::*;
 use crate::agents::{PendingWake, PendingWakeTrigger};
-use crate::sidebar_pane::render::labels::{activity_age_style, elapsed_glyph};
+use crate::config::AnimationRole;
+use crate::sidebar_pane::render::labels::{
+    activity_age_style, elapsed_glyph, role_glyph, working_style,
+};
 use crate::sidebar_pane::render::theme::Component;
 
 #[test]
@@ -83,7 +86,7 @@ fn pending_wakes_line_counts_armed_wakes() {
     assert!(
         !collapsed_text
             .iter()
-            .any(|line| line.contains("⧖ in 12m") || line.contains("make check"))
+            .any(|line| line.contains("◷ in 12m") || line.contains("make check"))
     );
     assert_snapshot(
         "pending_wakes_line",
@@ -110,8 +113,11 @@ fn pending_wakes_line_counts_armed_wakes() {
     assert!(expanded[stats].ends_with("$0.42▐"));
     assert!(expanded[stats + 1].contains("inspect the renderer"));
     assert!(expanded[stats + 2].contains("12k"));
-    assert!(expanded[stats + 3].contains("⧖ in 12m"));
-    assert!(expanded[stats + 4].contains("⧖ make"));
+    assert!(expanded[stats + 3].contains("◷ in 12m"));
+    assert!(expanded[stats + 4].contains(&format!(
+        "{} make",
+        role_glyph(&theme, AnimationRole::Working, 0)
+    )));
     assert!(expanded[stats + 5].contains("make check"));
 
     for width in [24, 30, 36, 45, 46] {
@@ -142,6 +148,53 @@ fn pending_wakes_line_counts_armed_wakes() {
                 .collect::<String>(),
         );
     }
+
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .pending_wakes
+        .push(PendingWake {
+            name: "signal".to_owned(),
+            trigger: PendingWakeTrigger::Signal {
+                selector: "pr.merged".to_owned(),
+                deadline: None,
+            },
+            armed_at: Some(fixed_now()),
+        });
+    let with_signal = group_lines(&snapshot, &theme, 0);
+    let with_signal_text = line_texts(&with_signal);
+    assert!(with_signal_text[stats].contains("⧖ waits (3)"));
+    for (offset, glyph, style) in [
+        (
+            3,
+            theme.glyph(GlyphRole::CardWaitTimer).to_owned(),
+            theme.styled(Component::WakeHeader, Modifier::empty()),
+        ),
+        (
+            4,
+            role_glyph(&theme, AnimationRole::Working, 0),
+            working_style(&theme, 0).add_modifier(Modifier::DIM),
+        ),
+        (
+            6,
+            theme.glyph(GlyphRole::CardWaitSignal).to_owned(),
+            theme.styled(Component::WakeHeader, Modifier::empty()),
+        ),
+    ] {
+        let lead = with_signal[stats + offset]
+            .spans
+            .iter()
+            .find(|span| span.content == glyph)
+            .unwrap();
+        assert_eq!(lead.style.fg, style.fg);
+        assert_eq!(lead.style.add_modifier, style.add_modifier);
+    }
+    assert!(with_signal_text[stats + 6].contains("on pr.merged"));
+    assert!(
+        with_signal_text[stats + 3..=stats + 6]
+            .iter()
+            .all(|line| !line.contains(theme.glyph(GlyphRole::CardWaits)))
+    );
 
     snapshot.worktree_groups[0].rows[0]
         .as_agent_mut()
@@ -198,14 +251,19 @@ fn wait_entries_show_trigger_program_and_command() {
     let rows = line_texts(&lines);
     let start = rows
         .iter()
-        .position(|line| line.contains("⧖ in 12m"))
+        .position(|line| line.contains("◷ in 12m"))
         .unwrap();
     for (offset, label, seconds, elapsed) in [
-        (0, "⧖ in 12m", 1080, "18m"),
-        (1, "⧖ on pr.merged · 2h left", 300, "5m"),
-        (2, "⧖ cargo", 240, "4m"),
+        (0, "◷ in 12m".to_owned(), 1080, "18m"),
+        (1, "⌁ on pr.merged · 2h left".to_owned(), 300, "5m"),
+        (
+            2,
+            format!("{} cargo", role_glyph(&theme, AnimationRole::Working, 0)),
+            240,
+            "4m",
+        ),
     ] {
-        assert!(rows[start + offset].contains(label));
+        assert!(rows[start + offset].contains(&label));
         assert!(
             rows[start + offset]
                 .ends_with(&format!("{} {elapsed:>3}▐", elapsed_glyph(&theme, seconds)))
@@ -236,7 +294,7 @@ fn wait_entries_show_trigger_program_and_command() {
 
     let narrow = group_lines_at_width(&snapshot, &theme, 0, 24);
     let narrow_text = line_texts(&narrow);
-    assert!(narrow_text[start + 1].contains("⧖ on pr.merg"));
+    assert!(narrow_text[start + 1].contains("⌁ on pr.merg"));
     assert!(narrow_text[start + 1].ends_with("5m▐"));
     assert!(narrow_text[start + 3].contains("cargo xtask gate"));
     assert!(!narrow_text[start + 3].contains("foo_test"));
@@ -248,7 +306,7 @@ fn wait_entries_show_trigger_program_and_command() {
 
     snapshot.now += Duration::from_secs(720);
     let advanced = line_texts(&group_lines(&snapshot, &theme, 0));
-    assert!(advanced[start].contains("⧖ due"));
+    assert!(advanced[start].contains("◷ due"));
     assert!(advanced[start].ends_with("30m▐"));
     assert!(advanced[start + 1].contains("on pr.merged · 108m left"));
     assert!(advanced[start + 1].ends_with("17m▐"));
@@ -256,6 +314,24 @@ fn wait_entries_show_trigger_program_and_command() {
     snapshot.now += Duration::from_secs(6480);
     let expired = line_texts(&group_lines(&snapshot, &theme, 0));
     assert!(expired[start + 1].contains("on pr.merged · 0m left"));
+    for (command, detail) in [
+        ("env A=b /usr/bin/cargo build", "env A=b cargo build"),
+        ("sh -c '/usr/bin/cargo build'", "sh -c 'cargo build'"),
+    ] {
+        snapshot.worktree_groups[0].rows[0]
+            .as_agent_mut()
+            .unwrap()
+            .pending_wakes[2]
+            .trigger = PendingWakeTrigger::Command {
+            command: command.to_owned(),
+        };
+        let wrapped = line_texts(&group_lines(&snapshot, &theme, 0));
+        assert!(wrapped[start + 2].contains(&format!(
+            "{} cargo",
+            role_glyph(&theme, AnimationRole::Working, 0)
+        )));
+        assert!(wrapped[start + 3].contains(detail));
+    }
 }
 
 #[test]
@@ -285,7 +361,7 @@ fn wait_entry_without_armed_at_has_no_clock() {
     assert_eq!(rows[stats].trim_matches(['▌', '▐', ' ']), "⧖ waits (1)");
     assert_eq!(
         rows[stats + 1].trim_matches(['▌', '▐', ' ']),
-        "⧖ on pr.merged"
+        "⌁ on pr.merged"
     );
     let narrow = line_texts(&group_lines_at_width(
         &snapshot,

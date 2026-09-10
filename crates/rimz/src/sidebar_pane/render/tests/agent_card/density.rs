@@ -282,7 +282,7 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
         .unwrap();
     let wait_entry = rendered
         .lines()
-        .position(|line| line.contains("⧖ in 12m"))
+        .position(|line| line.contains("◷ in 12m"))
         .unwrap();
     assert!(wait_entry > child_entry);
     assert!(subagent_line.contains("· ⧖ waits (1)"));

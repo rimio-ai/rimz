@@ -1,4 +1,4 @@
-//! Pending-wait entries in projection order: timers by due, commands, then signals.
+//! Pending-wait entries lead by trigger kind, in projection order: timers by due, commands, then signals.
 
 use crate::agents::{PendingWake, PendingWakeTrigger};
 use crate::proc::command::{command_program_basename, program_label};
@@ -14,12 +14,23 @@ pub(super) fn wait_entry_lines(ctx: &RowCtx<'_>, wakes: &[PendingWake]) -> Vec<L
             PendingWakeTrigger::Command { command } => program_label(command),
             _ => wake.trigger.summary(ctx.now),
         };
-        let left = vec![
-            Span::raw("    "),
-            Span::styled(
-                theme.glyph(GlyphRole::CardWaits).to_owned(),
+        let (lead, lead_style) = match &wake.trigger {
+            PendingWakeTrigger::Command { .. } => (
+                role_glyph(theme, AnimationRole::Working, ctx.animation_phase),
+                working_style(theme, ctx.animation_phase).add_modifier(Modifier::DIM),
+            ),
+            PendingWakeTrigger::Timer { .. } => (
+                theme.glyph(GlyphRole::CardWaitTimer).to_owned(),
                 theme.styled(Component::WakeHeader, Modifier::empty()),
             ),
+            PendingWakeTrigger::Signal { .. } => (
+                theme.glyph(GlyphRole::CardWaitSignal).to_owned(),
+                theme.styled(Component::WakeHeader, Modifier::empty()),
+            ),
+        };
+        let left = vec![
+            Span::raw("    "),
+            Span::styled(lead, lead_style),
             Span::raw(" "),
             Span::styled(summary, theme.body()),
         ];
