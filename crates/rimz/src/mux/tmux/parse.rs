@@ -169,7 +169,7 @@ mod tests {
     #[test]
     fn parse_pane_line_handles_full_short_and_invalid_rows() {
         // session, window_id, pane_id, command, cwd, pid, window_name,
-        // pane_title, pane_floating_flag, pane_start_command.
+        // pinned launch name or pane_title, pane_floating_flag, pane_start_command.
         let row =
             "rimz-qe,@1,%3,rimz,/home/u/qe,4242,qe,rimz loop watch --hold,0,rimz loop watch --hold";
         let pane = parse_pane_line(row).expect("full row parses");
@@ -211,6 +211,23 @@ mod tests {
             assert!(
                 parse_pane_line(malformed).is_none(),
                 "needs session+window+pane: {malformed:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn parse_pane_line_preserves_launch_names_terminal_titles_and_chrome() {
+        for title in ["opus-fast", "user@host: ~/repo", "rimz-sidebar"] {
+            let row = format!("rimz-qe,@1,%3,rimz,/home/u/qe,4242,qe,{title},0");
+            let pane = parse_pane_line(&row).expect("pane row");
+            assert_eq!(pane.title.as_deref(), Some(title));
+            assert_eq!(
+                pane.command.as_deref(),
+                Some(if title == "rimz-sidebar" {
+                    "rimz-sidebar"
+                } else {
+                    "rimz"
+                })
             );
         }
     }

@@ -134,8 +134,13 @@ pub(super) fn execute(
 ) -> Result<()> {
     if request.placement == Placement::SamePane
         && let Some(anchor) = own_pane_id(request.mux)
-        && let Err(err) =
-            backend.set_tab_title(&request.sidebar.session_name, &anchor, &request.title)
+        && let Some(pane_name) = single_pane(&request.panes)?.name.clone()
+        && let Err(err) = backend.rename_tab(
+            &request.sidebar.session_name,
+            &anchor,
+            &request.title,
+            rimz::mux::tab_name::TabNameIntent::Claim { pane_name },
+        )
     {
         tracing::warn!(
             error = &err as &dyn std::error::Error,

@@ -17,6 +17,7 @@ mod pane_writer;
 mod reconcile;
 pub mod recovery;
 mod selection;
+pub mod tab_name;
 pub mod tmux;
 pub(crate) mod width;
 pub(crate) mod width_target;
@@ -1008,23 +1009,18 @@ pub trait MuxBackend: Send + Sync {
     /// layout. Contributor gallery tabs can opt out through
     /// [`TabOptions::dock_sidebar`].
     fn open_tab(&self, opts: &TabOptions) -> Result<()>;
-    /// Set a launch title for an existing tab, replacing automatic naming and
-    /// any pending restoration of it after a status suffix clears.
-    fn set_tab_title(&self, session: &str, anchor: &PaneId, name: &str) -> Result<()> {
-        self.rename_tab(session, anchor, name)
-    }
     /// Rename the tab/window containing `anchor`. The pane anchor keeps the
     /// cross-backend seam stable: tmux can address its window through a pane
     /// directly, while Zellij resolves the pane's stable tab id before using
-    /// its by-id rename action. On an automatically named tmux window, this
-    /// also arms `@rimz_restore_automatic_rename` for [`Self::clear_tab_status`].
-    fn rename_tab(&self, session: &str, anchor: &PaneId, name: &str) -> Result<()>;
-    /// Restore the tab's resting name after its status suffix clears. Backends
-    /// with automatic naming re-enable it only when RimZ's status rename
-    /// disabled it; the default is the ordinary rename used by Zellij.
-    fn clear_tab_status(&self, session: &str, anchor: &PaneId, name: &str) -> Result<()> {
-        self.rename_tab(session, anchor, name)
-    }
+    /// its by-id rename action. The intent distinguishes a launch claim,
+    /// temporary status, resting name, and release to inherited naming.
+    fn rename_tab(
+        &self,
+        session: &str,
+        anchor: &PaneId,
+        name: &str,
+        intent: tab_name::TabNameIntent,
+    ) -> Result<()>;
     /// Close one pane by normalized id. Used by supervised one-shot launches
     /// after their terminal result is recorded; callers treat failure as
     /// best-effort cleanup.

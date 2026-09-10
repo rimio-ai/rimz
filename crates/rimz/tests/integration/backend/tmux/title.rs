@@ -1,4 +1,5 @@
 use super::support::*;
+use rimz::mux::tab_name::TabNameIntent;
 
 #[test]
 fn window_names_keep_literal_hashes() {
@@ -11,7 +12,7 @@ fn window_names_keep_literal_hashes() {
 
     server
         .backend
-        .rename_tab(session, &anchor, "#health ready")
+        .rename_tab(session, &anchor, "#health ready", TabNameIntent::Rest)
         .expect("rename window");
     assert_eq!(server.window_names(session), ["#health ready"]);
 
@@ -43,6 +44,66 @@ fn window_names_keep_literal_hashes() {
         server.display(&format!("{session}:#host#health"), "#{window_name}"),
         "#host#health",
         "literal hash names must remain valid tmux targets",
+    );
+}
+
+#[test]
+fn in_place_claim_pins_the_pane_name_not_the_scoped_tab_title() {
+    require_tmux!();
+    let session = "rimz-claim-title";
+    let server = TmuxServer::new();
+    ensure_rimz_session(&server, session, Some((120, 40)));
+    let anchor = PaneId::from_parts(MuxName::Tmux, server.display(session, "#{pane_id}"));
+    server
+        .backend
+        .rename_tab(session, &anchor, "shell ?", TabNameIntent::Status)
+        .expect("status before claim");
+    server
+        .backend
+        .rename_tab(
+            session,
+            &anchor,
+            "#feat",
+            TabNameIntent::Claim {
+                pane_name: "opus.fast".to_owned(),
+            },
+        )
+        .expect("claim in-place pane");
+    assert_eq!(server.display(anchor.raw(), "#{window_name}"), "#feat");
+    assert_eq!(server.display(anchor.raw(), "#{@rimz_title}"), "opus-fast");
+    server.output(&["select-pane", "-t", anchor.raw(), "-T", "terminal,title"]);
+    let roster = list_session_panes(&server, session);
+    assert_eq!(
+        roster
+            .iter()
+            .find(|pane| pane.pane_id == anchor)
+            .expect("claimed pane")
+            .title
+            .as_deref(),
+        Some("opus-fast"),
+    );
+    assert_eq!(
+        server.display(anchor.raw(), "#{@rimz_restore_automatic_rename}"),
+        ""
+    );
+    let format = server.show_option(&["-t", session], "set-titles-string");
+    assert_eq!(
+        server.display(anchor.raw(), &format),
+        format!("{session} | opus-fast")
+    );
+    server
+        .backend
+        .rename_tab(session, &anchor, "sh", TabNameIntent::Release)
+        .expect("release pin");
+    let roster = list_session_panes(&server, session);
+    assert_eq!(
+        roster
+            .iter()
+            .find(|pane| pane.pane_id == anchor)
+            .expect("released pane")
+            .title
+            .as_deref(),
+        Some("terminal_title"),
     );
 }
 

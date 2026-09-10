@@ -1,6 +1,7 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use super::support::*;
+use rimz::mux::tab_name::TabNameIntent;
 
 fn terminal_feature_count(stdout: &str, feature: &str) -> usize {
     stdout
@@ -27,7 +28,7 @@ fn tab_status_clear_restores_automatic_rename() {
         // The command-builder unit test covers Unicode preservation. Keep the
         // live seam assertion locale-neutral: tmux replaces non-ASCII with `_`
         // when the server starts under CI's `LC_ALL=C`.
-        .rename_tab(session, &anchor, "work ?")
+        .rename_tab(session, &anchor, "work ?", TabNameIntent::Status)
         .expect("rename pane's window");
 
     assert_eq!(server.display(session, "#{window_name}"), "work ?");
@@ -45,7 +46,7 @@ fn tab_status_clear_restores_automatic_rename() {
 
     server
         .backend
-        .clear_tab_status(session, &anchor, "work")
+        .rename_tab(session, &anchor, "work", TabNameIntent::Rest)
         .expect("clear pane's window status");
 
     assert_eq!(server.display(session, "#{window_name}"), "work");
@@ -85,11 +86,11 @@ fn tab_status_clear_preserves_an_intentionally_stable_name() {
 
     server
         .backend
-        .rename_tab(session, &anchor, "stable ?")
+        .rename_tab(session, &anchor, "stable ?", TabNameIntent::Status)
         .expect("rename stable window");
     server
         .backend
-        .clear_tab_status(session, &anchor, "stable")
+        .rename_tab(session, &anchor, "stable", TabNameIntent::Rest)
         .expect("clear stable window status");
 
     assert_eq!(server.display(session, "#{window_name}"), "stable");
@@ -104,6 +105,69 @@ fn tab_status_clear_preserves_an_intentionally_stable_name() {
         ]),
         "",
     );
+}
+
+#[test]
+fn tab_release_restores_automatic_rename_and_clears_every_pane_pin() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let session = "rimz-release-tab";
+    server.ensure_with_shell(session);
+    server.output(&["new-window", "-t", session, "-n", "opus", "sh"]);
+    let anchor = PaneId::from_parts(MuxName::Tmux, server.display(session, "#{pane_id}"));
+    server.output(&["split-window", "-d", "-t", anchor.raw(), "sh"]);
+    let panes = list_session_panes(&server, session)
+        .into_iter()
+        .filter(|pane| server.display(pane.pane_id.raw(), "#{window_name}") == "opus")
+        .collect::<Vec<_>>();
+    assert_eq!(panes.len(), 2);
+    for pane in &panes {
+        server.output(&[
+            "set-option",
+            "-p",
+            "-t",
+            pane.pane_id.raw(),
+            "@rimz_title",
+            "opus",
+        ]);
+    }
+    assert_eq!(server.display(anchor.raw(), "#{automatic-rename}"), "0");
+    assert_eq!(
+        server.display(anchor.raw(), "#{@rimz_restore_automatic_rename}"),
+        ""
+    );
+
+    server
+        .backend
+        .rename_tab(session, &anchor, "sh", TabNameIntent::Release)
+        .expect("release launch name without a status marker");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while server.display(anchor.raw(), "#{window_name}") != "sh" {
+        assert!(
+            Instant::now() < deadline,
+            "released window did not become sh"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+    assert_eq!(server.display(anchor.raw(), "#{automatic-rename}"), "1");
+    for option in ["automatic-rename", "@rimz_restore_automatic_rename"] {
+        assert_eq!(
+            server.stdout(&["show-options", "-wq", "-t", anchor.raw(), option]),
+            ""
+        );
+    }
+    for pane in panes {
+        assert_eq!(
+            server.stdout(&[
+                "show-options",
+                "-pq",
+                "-t",
+                pane.pane_id.raw(),
+                "@rimz_title"
+            ]),
+            ""
+        );
+    }
 }
 
 #[test]

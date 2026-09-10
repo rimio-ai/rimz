@@ -2390,8 +2390,7 @@ pub fn closed_cohort_specs(
 }
 
 /// A short, view-safe label for a resumed agent: `kind:<channel>`, falling back
-/// to the worktree directory name, then `kind:agent`. Used in skip reports and
-/// legacy per-agent tab title fallbacks.
+/// to the worktree directory name, then `kind:agent`. Used in skip reports.
 pub fn build_label(kind: &str, channel: Option<&str>, worktree: &Path) -> String {
     format!("{kind}:{}", channel_short(channel, worktree))
 }
@@ -2412,8 +2411,7 @@ pub fn channel_short(channel: Option<&str>, worktree: &Path) -> String {
 
 /// A channel tab label from the worktree directory name, matching live
 /// worktree-launch tabs. A main-repo non-worktree agent falls back to
-/// `#<repo-name>` rather than the live `kind:repo` title because resume groups by
-/// cwd.
+/// `#<repo-name>` because resume groups by cwd.
 pub fn channel_label(channel: Option<&str>, worktree: &Path) -> String {
     format!("#{}", channel_short(channel, worktree))
 }

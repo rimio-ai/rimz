@@ -428,7 +428,7 @@ fn tab_name_memo_deduplicates_within_one_pane_observation() {
         anchor: anchor.clone(),
         observed_name: "#feat".to_owned(),
         desired_name: "#feat ?".to_owned(),
-        has_status: true,
+        intent: crate::mux::tab_name::TabNameIntent::Status,
     };
     let mut memo = TabNameMemo::default();
 
@@ -457,6 +457,33 @@ fn tab_name_memo_deduplicates_within_one_pane_observation() {
         vec![changed],
         "a fresh pane observation permits a retry",
     );
+}
+
+#[test]
+fn released_tab_deduplicates_and_settles_on_the_next_observation() {
+    let mut pane = pane("terminal_7", "tab_1", false);
+    pane.title = Some("opus".to_owned());
+    pane.view_name = Some("opus".to_owned());
+    let mut frame = crate::sidebar::frame::assemble_frame(vec![pane], 12, "rimz-test");
+    let snapshot = SidebarSnapshot::build_with_agents(
+        crate::ids::WorkspaceId::parse("ws_0123456789abcdef01234567").expect("workspace"),
+        Vec::new(),
+        jiff::Timestamp::from_second(1_700_000_000).expect("time"),
+    );
+    let mut memo = TabNameMemo::default();
+    let renames =
+        crate::sidebar::produce::tab_status::desired_tab_renames(&snapshot, &frame, "zsh");
+    assert_eq!(
+        renames[0].intent,
+        crate::mux::tab_name::TabNameIntent::Release
+    );
+    assert_eq!(memo.pending(&frame, renames.clone()).len(), 1);
+    assert!(memo.pending(&frame, renames).is_empty());
+    frame.observed_at_ms += 1;
+    frame.tabs[0].name = Some("zsh".to_owned());
+    let renames =
+        crate::sidebar::produce::tab_status::desired_tab_renames(&snapshot, &frame, "zsh");
+    assert!(memo.pending(&frame, renames).is_empty());
 }
 
 fn notification_agent(id: &str, pane_id: Option<PaneId>) -> NotificationAgent {

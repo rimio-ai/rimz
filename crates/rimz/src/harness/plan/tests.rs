@@ -1575,18 +1575,21 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
         dir.path(),
     )
     .expect("runtime");
-    let layout = LayoutSpec {
+    let mut layout = LayoutSpec {
         columns: vec![Column {
             rows: vec![
                 Cell::agent(AgentKind::new_unchecked("claude")),
                 Cell::Command {
-                    argv: vec!["watch".to_owned()],
+                    argv: vec!["/usr/bin/watch".to_owned()],
                 },
                 Cell::agent(AgentKind::new_unchecked("codex")),
             ],
             stacked: false,
         }],
     };
+    for (cell, profile) in layout.agent_cells_mut().zip(["opus", "coder"]) {
+        cell.launch.profile = Some(profile.to_owned());
+    }
     let mut resumed = crate::testkit::agent_state("claude", "sess-resume", Timestamp::now());
     resumed.name = Some("steady-beacon".to_owned());
     resumed.channel = None;
@@ -1621,12 +1624,13 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
 
     let panes = &panes.columns[0].panes;
     assert_request_field(&panes[0].argv, RequestField::Resume, "sess-resume");
-    assert_eq!(panes[0].name.as_deref(), Some("claude"));
+    assert_eq!(panes[0].name.as_deref(), Some("opus"));
     assert_request_field(&panes[0].argv, RequestField::Channel, "fallback");
-    assert_eq!(panes[1].argv, vec!["watch"]);
+    assert_eq!(panes[1].argv, vec!["/usr/bin/watch"]);
+    assert_eq!(panes[1].name.as_deref(), Some("watch"));
     assert_request_field(&panes[2].argv, RequestField::Name, "bright-river");
     assert_request_field(&panes[2].argv, RequestField::Prompt, "fresh prompt");
-    assert_eq!(panes[2].name.as_deref(), Some("codex"));
+    assert_eq!(panes[2].name.as_deref(), Some("coder"));
 
     let err = compile_layout_panes(
         &layout,

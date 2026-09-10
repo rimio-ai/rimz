@@ -1712,61 +1712,31 @@ fn default_tab_title_uses_launch_identity_and_layout_order() {
     )
     .expect("command layout");
     let profile = parse_layout_spec(
-        "planner",
-        &profiles([("planner", profile("claude"))]),
+        "opus",
+        &profiles([("opus", profile("claude"))]),
         &no_commands(),
     )
     .expect("profile");
     let capped = parse_layout_spec("claude,codex,pi,claude", &no_profiles(), &no_commands())
         .expect("four-cell layout");
+    let empty = LayoutSpec {
+        columns: Vec::new(),
+    };
+    let shell_name = crate::proc::shell_pane_name();
+    let mixed_title = format!("{shell_name}+codex");
 
-    for (spec, cwd, worktree, team, expected) in [
-        (
-            &layout,
-            Path::new("/code/wt/tab-name"),
-            Some("tab-name"),
-            Some("forge"),
-            "#tab-name",
-        ),
-        (
-            &layout,
-            Path::new("/code/query-engine"),
-            None,
-            Some("forge"),
-            "team:forge",
-        ),
-        (
-            &layout,
-            Path::new("/code/query-engine"),
-            None,
-            None,
-            "term+codex:query-engine",
-        ),
-        (&single, Path::new("/code/main"), None, None, "claude:main"),
-        (&terminal, Path::new("/code/main"), None, None, "term:main"),
-        (
-            &command,
-            Path::new("/code/main"),
-            None,
-            None,
-            "nvim+claude:main",
-        ),
-        (
-            &profile,
-            Path::new("/code/main"),
-            None,
-            None,
-            "planner:main",
-        ),
-        (
-            &capped,
-            Path::new("/code/main"),
-            None,
-            None,
-            "claude+codex+pi+…:main",
-        ),
+    for (spec, worktree, team, expected) in [
+        (&layout, Some("tab-name"), Some("forge"), "#tab-name"),
+        (&layout, None, Some("forge"), "team:forge"),
+        (&layout, None, None, mixed_title.as_str()),
+        (&single, None, None, "claude"),
+        (&terminal, None, None, shell_name.as_str()),
+        (&command, None, None, "nvim+claude"),
+        (&profile, None, None, "opus"),
+        (&capped, None, None, "claude+codex+pi+…"),
+        (&empty, None, None, "term"),
     ] {
-        assert_eq!(default_tab_title(spec, cwd, worktree, team), expected);
+        assert_eq!(default_tab_title(spec, worktree, team), expected);
     }
 }
 

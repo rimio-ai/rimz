@@ -166,8 +166,8 @@ pub struct PaneRef {
     /// views such as the remote-control host. Never a correctness signal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view_name: Option<String>,
-    /// Pane title/name as reported by the multiplexer. Advisory classification
-    /// metadata for sidebar chrome and managed background panes; agent binding
+    /// The launch name RimZ pinned on the pane, otherwise the multiplexer's
+    /// pane title. Advisory naming and classification metadata; agent binding
     /// never reads it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,

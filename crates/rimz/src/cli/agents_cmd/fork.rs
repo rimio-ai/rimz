@@ -170,10 +170,9 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             stacked: false,
         }],
     };
-    let title = channel.as_deref().map_or_else(
-        || rimz::harness::resume::build_label(seed.kind.as_str(), None, &seed.cwd),
-        |channel| format!("#{channel}"),
-    );
+    let title = channel
+        .as_deref()
+        .map_or_else(|| seed.kind.to_string(), |channel| format!("#{channel}"));
     let sidebar = room.sidebar_options(&seed.cwd, Vec::new(), None);
     let in_place = placement == Placement::SamePane;
     if in_place {

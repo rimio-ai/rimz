@@ -168,18 +168,7 @@ impl TmuxBackend {
     /// Attach a RimZ-owned display identity to one pane. Pane user options are
     /// not writable through terminal escape sequences, unlike `pane_title`.
     pub(super) fn set_pane_rimz_title(&self, pane_id: &str, name: &str) {
-        if let Err(err) = self
-            .cmd()
-            .args([
-                "set-option".to_owned(),
-                "-p".to_owned(),
-                "-t".to_owned(),
-                pane_id.to_owned(),
-                RIMZ_TITLE_OPTION.to_owned(),
-                name.to_owned(),
-            ])
-            .run()
-        {
+        if let Err(err) = self.set_pane_rimz_title_command(pane_id, name).run() {
             tracing::warn!(
                 pane = pane_id,
                 title = name,
@@ -188,6 +177,50 @@ impl TmuxBackend {
                 "could not set the pane's RimZ title; using its process fallback",
             );
         }
+    }
+
+    fn set_pane_rimz_title_command(&self, pane_id: &str, name: &str) -> CommandSpec {
+        self.cmd().args([
+            "set-option".to_owned(),
+            "-p".to_owned(),
+            "-t".to_owned(),
+            pane_id.to_owned(),
+            RIMZ_TITLE_OPTION.to_owned(),
+            sanitize_window_name(name),
+        ])
+    }
+
+    pub(super) fn claim_window_command(
+        &self,
+        anchor: &PaneId,
+        name: &str,
+        pane_name: &str,
+    ) -> Result<CommandSpec> {
+        let rename = Self::rename_window_args(anchor, name)?;
+        Ok(self
+            .set_pane_rimz_title_command(anchor.raw(), pane_name)
+            .arg(";")
+            .args(rename)
+            .args([
+                ";",
+                "set-option",
+                "-wu",
+                "-t",
+                anchor.raw(),
+                RIMZ_RESTORE_AUTOMATIC_RENAME_OPTION,
+            ]))
+    }
+
+    pub(super) fn window_pane_ids_command(&self, anchor: &PaneId) -> Result<CommandSpec> {
+        ensure_pane_backend(anchor, MuxName::Tmux)?;
+        Ok(self
+            .cmd()
+            .args(["list-panes", "-t", anchor.raw(), "-F", "#{pane_id}"]))
+    }
+
+    pub(super) fn clear_pane_rimz_title_command(&self, pane_id: &str) -> CommandSpec {
+        self.cmd()
+            .args(["set-option", "-pu", "-t", pane_id, RIMZ_TITLE_OPTION])
     }
 
     fn rename_window_args(anchor: &PaneId, name: &str) -> Result<Vec<String>> {

@@ -2,6 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use rimz::ids::{MuxName, PaneId, WorkspaceId};
+use rimz::mux::tab_name::TabNameIntent;
 use rimz::mux::{LayoutPanes, MuxBackend, PaneCmd, SidebarPaneOptions, TabOptions, ZellijBackend};
 use tempfile::TempDir;
 
@@ -295,7 +296,7 @@ fn rename_tab_uses_the_anchor_panes_stable_tab_id() {
 
     let room = LiveZellijSession::new("rename-tab");
     room.create_background();
-    let _client = AttachedClient::attach(&room, 100, 30);
+    let mut client = AttachedClient::attach(&room, 100, 30);
     open_new_tab(room.path(), room.name());
     open_new_tab(room.path(), room.name());
     let before = expect_list_panes(room.path(), room.name());
@@ -340,9 +341,23 @@ fn rename_tab_uses_the_anchor_panes_stable_tab_id() {
         "fixture must distinguish stable id from shifted position",
     );
     let anchor = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", target.id));
+    let other = shifted
+        .panes
+        .iter()
+        .find(|pane| !pane.is_plugin && pane.tab_id == ids[0])
+        .expect("other tab work pane");
+    let other_anchor = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", other.id));
+    client.go_to_tab_until(1, &other_anchor, "unrelated pane before claim");
 
     room.backend()
-        .set_tab_title(room.name(), &anchor, "opus:project")
+        .rename_tab(
+            room.name(),
+            &anchor,
+            "#feat",
+            TabNameIntent::Claim {
+                pane_name: "opus".to_owned(),
+            },
+        )
         .expect("name existing launch tab");
     poll_until(
         Duration::from_secs(10),
@@ -352,13 +367,26 @@ fn rename_tab_uses_the_anchor_panes_stable_tab_id() {
                 .panes
                 .iter()
                 .filter(|pane| pane.tab_id == target_id)
-                .all(|pane| pane.tab_name.as_deref() == Some("opus:project"))
+                .all(|pane| pane.tab_name.as_deref() == Some("#feat"))
+                && snapshot.panes.iter().any(|pane| {
+                    pane.id == target.id && !pane.is_plugin && pane.title.as_deref() == Some("opus")
+                })
         },
         "launch title replaces default tab name",
     );
+    let claimed = expect_list_panes(room.path(), room.name());
+    assert_eq!(
+        claimed
+            .panes
+            .iter()
+            .find(|pane| !pane.is_plugin && pane.id == other.id)
+            .expect("other pane after claim")
+            .title,
+        other.title
+    );
 
     room.backend()
-        .rename_tab(room.name(), &anchor, "work ✓")
+        .rename_tab(room.name(), &anchor, "work ✓", TabNameIntent::Status)
         .expect("rename shifted tab by its pane anchor");
 
     let renamed = poll_until(
@@ -381,6 +409,38 @@ fn rename_tab_uses_the_anchor_panes_stable_tab_id() {
             .all(|pane| pane.tab_name.as_deref() != Some("work ✓")),
         "rename should not affect another tab: {renamed:?}",
     );
+    let shell = rimz::proc::shell_pane_name();
+    room.backend()
+        .rename_tab(room.name(), &anchor, &shell, TabNameIntent::Release)
+        .expect("release anchored tab");
+    let released = poll_until(
+        Duration::from_secs(10),
+        || list_panes(room.path(), room.name()),
+        |snapshot| {
+            snapshot.panes.iter().any(|pane| {
+                pane.id == target.id
+                    && !pane.is_plugin
+                    && pane.tab_name.as_deref() == Some(shell.as_str())
+            })
+        },
+        "released stable-id tab",
+    );
+    for pane in &renamed.panes {
+        let after = released
+            .panes
+            .iter()
+            .find(|after| after.id == pane.id && after.is_plugin == pane.is_plugin)
+            .expect("pane survives release");
+        assert_eq!(after.title, pane.title, "release must retain pane names");
+        if pane.tab_id == target_id {
+            assert_eq!(after.tab_name.as_deref(), Some(shell.as_str()));
+        } else {
+            assert_eq!(
+                after.tab_name, pane.tab_name,
+                "release must not rename another tab"
+            );
+        }
+    }
 }
 
 #[test]

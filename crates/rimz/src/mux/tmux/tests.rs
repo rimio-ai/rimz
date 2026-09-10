@@ -55,6 +55,54 @@ fn rename_tab_targets_the_anchor_pane_and_encodes_the_name() {
 }
 
 #[test]
+fn tab_claim_pins_the_sanitized_pane_name_not_the_tab_name() {
+    let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
+    let pane = crate::PaneId::from_parts(crate::MuxName::Tmux, "%7");
+    let claim = backend
+        .claim_window_command(&pane, "#feat:one.2", "opus.fast")
+        .expect("tmux pane");
+    assert_eq!(
+        verb_args(&claim),
+        [
+            "set-option",
+            "-p",
+            "-t",
+            "%7",
+            "@rimz_title",
+            "opus-fast",
+            ";",
+            "rename-window",
+            "-t",
+            "%7",
+            "##feat-one-2",
+            ";",
+            "set-option",
+            "-wu",
+            "-t",
+            "%7",
+            "@rimz_restore_automatic_rename",
+        ]
+    );
+}
+
+#[test]
+fn tab_release_lists_the_anchor_window_and_clears_each_pane_pin() {
+    let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
+    let pane = crate::PaneId::from_parts(crate::MuxName::Tmux, "%7");
+    let list = backend.window_pane_ids_command(&pane).expect("tmux pane");
+    assert_eq!(
+        verb_args(&list),
+        ["list-panes", "-t", "%7", "-F", "#{pane_id}"]
+    );
+    for pane_id in ["%7", "%8"] {
+        assert_eq!(
+            verb_args(&backend.clear_pane_rimz_title_command(pane_id)),
+            ["set-option", "-pu", "-t", pane_id, "@rimz_title"]
+        );
+    }
+}
+
+#[test]
 fn tab_status_commands_probe_and_remember_automatic_rename() {
     let backend = TmuxBackend::with_socket("/run/user/1000/rimz/tmux/server");
     let pane = crate::PaneId::from_parts(crate::MuxName::Tmux, "%7");
@@ -425,6 +473,9 @@ fn list_panes_scopes_session_without_server_wide_flag() {
         ["list-panes", "-s", "-t", "rimz-room", "-F"]
     );
     assert!(!session_args.iter().any(|arg| arg == "-a"));
+    assert!(session_args[5].contains(
+        ",#{s/,/_/g:#{?#{@rimz_title},#{@rimz_title},#{pane_title}}},#{pane_floating_flag},"
+    ));
 
     let server_spec = backend.list_panes_command(None);
     assert_eq!(&verb_args(&server_spec)[..3], ["list-panes", "-a", "-F"]);

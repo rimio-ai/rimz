@@ -540,7 +540,11 @@ impl FetchWorker {
         snapshot: &SidebarSnapshot,
         frame: &crate::sidebar::frame::PaneFrame,
     ) {
-        let renames = crate::sidebar::produce::tab_status::desired_tab_renames(snapshot, frame);
+        let renames = crate::sidebar::produce::tab_status::desired_tab_renames(
+            snapshot,
+            frame,
+            &crate::proc::shell_pane_name(),
+        );
         let pending = self.tab_name_memo.pending(frame, renames);
         if pending.is_empty() {
             return;
@@ -550,11 +554,12 @@ impl FetchWorker {
         std::thread::spawn(move || {
             let backend = crate::mux::backend_for(mux);
             for rename in pending {
-                let result = if rename.has_status {
-                    backend.rename_tab(&session, &rename.anchor, &rename.desired_name)
-                } else {
-                    backend.clear_tab_status(&session, &rename.anchor, &rename.desired_name)
-                };
+                let result = backend.rename_tab(
+                    &session,
+                    &rename.anchor,
+                    &rename.desired_name,
+                    rename.intent,
+                );
                 if let Err(err) = result {
                     tracing::debug!(
                         session = %session,

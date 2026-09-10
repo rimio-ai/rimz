@@ -85,6 +85,8 @@ pub struct TabFrame {
 pub struct PaneState {
     pub pane_id: PaneId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_seen_at_ms: Option<u64>,
     /// Non-advancing TTL anchor for a hosted-agent stamp restored from the
     /// prior frame after a transient process scan miss.
@@ -199,7 +201,7 @@ impl PaneFrame {
             view_id: Some(tab.view_id.to_string()),
             view_kind: Some(tab.kind),
             view_name: tab.name.clone(),
-            title: None,
+            title: pane.title.clone(),
             is_floating: pane.is_floating,
             command: pane.current.command.clone(),
             foreground_cmdline: pane.current.foreground_cmdline.clone(),
@@ -407,6 +409,7 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
         });
         tab.panes.push(PaneState {
             pane_id: pane.pane_id,
+            title: pane.title,
             first_seen_at_ms: pane.first_seen_at_ms,
             hosted_carry_since_ms: None,
             is_floating: pane.is_floating,

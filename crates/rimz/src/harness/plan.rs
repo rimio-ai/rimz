@@ -941,29 +941,24 @@ pub fn compile_layout_panes(
                 .rows
                 .iter()
                 .map(|cell| {
-                    let pane = match cell {
-                        Cell::Command { argv } if argv.is_empty() => PaneCmd {
-                            argv: vec![crate::proc::user_shell_program()],
-                            name: Some(crate::proc::shell_pane_name()),
-                        },
-                        Cell::Command { argv } => PaneCmd {
-                            argv: argv.clone(),
-                            name: None,
-                        },
+                    let argv = match cell {
+                        Cell::Command { argv } if argv.is_empty() => {
+                            vec![crate::proc::user_shell_program()]
+                        }
+                        Cell::Command { argv } => argv.clone(),
                         Cell::Agent(cell) => {
                             let seed = params.resume_seeds.map(|seeds| &seeds[agent_index]);
-                            let pane = match seed {
-                                Some(CohortSeed::Resume(agent)) => PaneCmd {
+                            let argv = match seed {
+                                Some(CohortSeed::Resume(agent)) => {
                                     // The layout already resolved this cell from its profile or
                                     // role binding, so the posture to replay is right here.
-                                    argv: resume_command(
+                                    resume_command(
                                         &rimz_bin,
                                         params.runtime,
                                         &ResumeLaunchIdentity::from(agent.as_ref()),
                                         params.fallback_channel,
                                         &ResumeLaunchPosture::from(cell),
-                                    ),
-                                    name: Some(cell.kind.to_string()),
+                                    )
                                 },
                                 Some(CohortSeed::Fresh) | None => {
                                     let Some(launch) = launches.next() else {
@@ -971,14 +966,17 @@ pub fn compile_layout_panes(
                                             "launch plan missing identity for agent cell {agent_index}"
                                         );
                                     };
-                                    fresh_agent_pane(cell, launch, &rimz_bin, params)?
+                                    fresh_agent_argv(cell, launch, &rimz_bin, params)?
                                 }
                             };
                             agent_index = agent_index.saturating_add(1);
-                            pane
+                            argv
                         }
                     };
-                    Ok(pane)
+                    Ok(PaneCmd {
+                        argv,
+                        name: Some(cell.pane_name()),
+                    })
                 })
                 .collect::<Result<Vec<_>>>()?;
             Ok(LayoutColumn {
@@ -993,42 +991,39 @@ pub fn compile_layout_panes(
     Ok(LayoutPanes { columns })
 }
 
-fn fresh_agent_pane(
+fn fresh_agent_argv(
     cell: &AgentCell,
     launch: &AgentLaunchIdentity,
     rimz_bin: &Path,
     params: LayoutPaneParams<'_>,
-) -> Result<PaneCmd> {
+) -> Result<Vec<String>> {
     validate_agent_name(&launch.name)?;
-    Ok(PaneCmd {
-        argv: crate::harness::launch::exec_argv(
-            rimz_bin,
-            params.runtime,
-            &crate::harness::launch::ExecRequest {
-                kind: cell.kind.clone(),
-                action: crate::harness::launch::ExecAction::Launch {
-                    prompt: launch.prompt.clone(),
-                    extra_args: cell.args.clone(),
-                },
-                system_prompt_file: cell.system_prompt_file.clone(),
-                append_system_prompt_files: cell.append_system_prompt_files.clone(),
-                skills: cell.skills.clone(),
-                provider_account: crate::harness::launch::ProviderAccountState::Unbound,
-                run_id: None,
-                worktree_path: params.cleanup_worktree.then(|| params.cwd.to_path_buf()),
-                close_pane_on_exit: !params.cleanup_worktree && !params.in_place,
-                exit_on_run_completion: false,
-                subagent: false,
-                identity: crate::harness::launch::ExecIdentity {
-                    name: Some(launch.name.clone()),
-                    name_explicit: launch.name_explicit,
-                    launch_id: Some(launch.agent_id.to_string()),
-                    params: launch.launch.clone(),
-                },
+    Ok(crate::harness::launch::exec_argv(
+        rimz_bin,
+        params.runtime,
+        &crate::harness::launch::ExecRequest {
+            kind: cell.kind.clone(),
+            action: crate::harness::launch::ExecAction::Launch {
+                prompt: launch.prompt.clone(),
+                extra_args: cell.args.clone(),
             },
-        )?,
-        name: Some(cell.kind.to_string()),
-    })
+            system_prompt_file: cell.system_prompt_file.clone(),
+            append_system_prompt_files: cell.append_system_prompt_files.clone(),
+            skills: cell.skills.clone(),
+            provider_account: crate::harness::launch::ProviderAccountState::Unbound,
+            run_id: None,
+            worktree_path: params.cleanup_worktree.then(|| params.cwd.to_path_buf()),
+            close_pane_on_exit: !params.cleanup_worktree && !params.in_place,
+            exit_on_run_completion: false,
+            subagent: false,
+            identity: crate::harness::launch::ExecIdentity {
+                name: Some(launch.name.clone()),
+                name_explicit: launch.name_explicit,
+                launch_id: Some(launch.agent_id.to_string()),
+                params: launch.launch.clone(),
+            },
+        },
+    )?)
 }
 
 pub fn validate_agent_name(name: &str) -> Result<()> {
