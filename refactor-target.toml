@@ -159,7 +159,7 @@ upward-dependencies = ["sidebar::refresh"]
 # Read-only pending deliveries are shared by wake listings, hooks and enrichment.
 # Submitted-prompt header grammar now belongs to store.
 # Loop hosts and check ownership cross the scheduler/CLI/room seams.
-surface-budget = 543
+surface-budget = 539
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -1207,3 +1207,18 @@ reason = "Launch-lane precedence belongs with layout policy; team is absent for 
 kind = "item"
 key = "cli::address::message_target"
 reason = "Uses the canonical live renderer when a peer exists, but preserves a readable durable address after the agent leaves the snapshot (pass 14)."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::runner::RunLockInfo"
+reason = "Read by inference through lock rendering in the binary and returned by signal::watcher_info; narrowing breaks the public interface (pass 14)."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::signal::SignalSelector"
+reason = "Carried by public DeliveryTrigger, Trigger and TaskTimingState; integration vocabulary pins reach this type from the separate test crate (pass 14)."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::run_log::new"
+reason = "Integration fixtures construct LoopRunRecord history rows from the separate test crate (pass 14)."
