@@ -135,7 +135,7 @@ upward-dependencies = [
     "sidebar::frame",
     "sidebar::timing",
 ]
-surface-budget = 14
+surface-budget = 11
 
 [[module]]
 path = "crates/rimz/src/diag"
@@ -204,7 +204,7 @@ path = "crates/rimz/src/mux"
 # Sandbox reach uses mux-owned endpoint resolution rather than duplicating it.
 # Launch titles have their own operation, separate from temporary status renames.
 # The cross-backend live-session snapshot moves here from room (pass 15c).
-surface-budget = 263
+surface-budget = 264
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
@@ -241,7 +241,7 @@ surface-budget = 177
 
 [[module]]
 path = "crates/rimz/src/remote_control.rs"
-surface-budget = 14
+surface-budget = 12
 
 [[module]]
 path = "crates/rimz/src/sandbox"
@@ -259,7 +259,7 @@ upward-dependencies = [
     "sidebar",
     "sidebar::body_filter",
 ]
-surface-budget = 51
+surface-budget = 48
 
 [[module]]
 path = "crates/rimz/src/sidebar"
@@ -1298,3 +1298,48 @@ reason = "Shared with sidebar/refresh, not a snapshot-private formatting helper 
 kind = "item"
 key = "store::snapshot::view::providers::sort_windows"
 reason = "Shared with sidebar/refresh, not a snapshot-private ordering helper (pass 15a)."
+
+[[verdict]]
+kind = "item"
+key = "room::sidebar_options"
+reason = "Ordinary tabs never override refresh; birth carries --refresh-ms through the same constructor. Removing the parameter costs two production SLOC (pass 15c)."
+
+[[verdict]]
+kind = "item"
+key = "room::pane_identity_env"
+reason = "inherit_channel has four conditional callers in agent launch and supervised runs (pass 15c)."
+
+[[verdict]]
+kind = "item"
+key = "room::from_resolved"
+reason = "RoomSizing is live in both values; the gallery consumes Birth without calling birth (pass 15c)."
+
+[[verdict]]
+kind = "item"
+key = "room::from_record"
+reason = "Normalizes durable identity and resolves the recorded binary; not a pass-through (pass 15c)."
+
+[[verdict]]
+kind = "item"
+key = "room::require_live_mux"
+reason = "Selects the backend and translates selection failure into room guidance (pass 15c)."
+
+[[verdict]]
+kind = "item"
+key = "room::session::room_inventory"
+reason = "Owns the batch probe; the borrowed-probe seam lets web reuse one observation (pass 15c)."
+
+[[verdict]]
+kind = "item"
+key = "room::session::pick_mux_for_session"
+reason = "Selection, record lookup and the rival guard stay separate: the CLI prints notices between them and orders them differently per entry (pass 15c)."
+
+[[verdict]]
+kind = "item"
+key = "daemon_view::repair_daemon_view"
+reason = "Stays public with RepairOutcome for the live tmux test; room and the runtime toggle discard the outcome by design (pass 15c)."
+
+[[verdict]]
+kind = "item"
+key = "daemon_view::daemon_view_spec"
+reason = "Effective-view assemblies differ by binary and readiness source; a shared prepare-and-probe helper costs fourteen production SLOC (pass 15c)."
