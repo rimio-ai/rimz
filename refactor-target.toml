@@ -71,7 +71,8 @@ upward-dependencies = ["address"]
 # The parent-link predicate is shared by store, harness and CLI consumers.
 # Attribution adds lifetime values, boundary queries and unreadable-path warnings.
 # Pending-wake vocabulary and rest projection are shared by harness and renderers.
-surface-budget = 965
+# Trigger summaries share wording between sleeping descriptions and expanded waits.
+surface-budget = 966
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/codex"
