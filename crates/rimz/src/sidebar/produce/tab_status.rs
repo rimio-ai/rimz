@@ -1,11 +1,12 @@
 //! Pure tab-status projection from the producer's fused agent rows and pane
 //! frame. Mux mutation stays with the elected producer; this module only
-//! decides which observed names need a new suffix.
+//! decides which observed names need a new suffix or release to the shell.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::agents::AgentStatus;
 use crate::ids::PaneId;
+use crate::mux::tab_name::{TabNameIntent, is_named_after_panes};
 use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::timing::TAB_SUCCESS_STATUS_TTL;
 use crate::store::snapshot::SidebarSnapshot;
@@ -16,7 +17,7 @@ pub(crate) struct TabRename {
     pub(crate) anchor: PaneId,
     pub(crate) observed_name: String,
     pub(crate) desired_name: String,
-    pub(crate) has_status: bool,
+    pub(crate) intent: TabNameIntent,
 }
 
 /// Declaration order is the product precedence ladder consumed by `max`.
@@ -52,7 +53,16 @@ impl TabStatus {
     }
 }
 
-pub(crate) fn desired_tab_renames(snapshot: &SidebarSnapshot, frame: &PaneFrame) -> Vec<TabRename> {
+pub(crate) fn desired_tab_renames(
+    snapshot: &SidebarSnapshot,
+    frame: &PaneFrame,
+    shell_name: &str,
+) -> Vec<TabRename> {
+    let live_agent_panes = snapshot
+        .rows()
+        .filter(|row| row.as_agent().is_some())
+        .filter_map(|row| row.pane.as_ref().map(|pane| &pane.pane_id))
+        .collect::<HashSet<_>>();
     let status_by_pane = snapshot
         .rows()
         .filter_map(|row| {
@@ -77,23 +87,48 @@ pub(crate) fn desired_tab_renames(snapshot: &SidebarSnapshot, frame: &PaneFrame)
         .iter()
         .filter_map(|tab| {
             let observed_name = tab.name.as_ref()?;
-            let anchor = tab.panes.first()?.pane_id.clone();
-            let status = tab
+            if observed_name == crate::pane::VIEW_NAME {
+                return None;
+            }
+            let work_panes = tab
                 .panes
+                .iter()
+                .filter(|pane| {
+                    !pane.current.command.as_deref().is_some_and(|command| {
+                        crate::pane::command_is_sidebar_chrome(command)
+                            || crate::pane::command_is_host(command)
+                    }) && !pane
+                        .current
+                        .spawn_command
+                        .as_deref()
+                        .is_some_and(crate::pane::command_is_host)
+                })
+                .collect::<Vec<_>>();
+            let anchor = work_panes.first()?.pane_id.clone();
+            let status = work_panes
                 .iter()
                 .filter_map(|pane| status_by_pane.get(&pane.pane_id).copied())
                 .max();
-            let has_status = status.is_some();
             let base = theme::strip_status_glyph_suffix(observed_name, &snapshot.theme);
-            let desired_name = status.map_or_else(
-                || base.to_owned(),
-                |status| format!("{base} {}", status.glyph()),
-            );
+            let has_agent = work_panes.iter().any(|pane| {
+                live_agent_panes.contains(&pane.pane_id) || pane.current.hosted_agent_kind.is_some()
+            });
+            let names = work_panes
+                .iter()
+                .filter_map(|pane| pane.title.as_deref())
+                .collect::<Vec<_>>();
+            let (desired_name, intent) = if let Some(status) = status {
+                (format!("{base} {}", status.glyph()), TabNameIntent::Status)
+            } else if !has_agent && base != shell_name && is_named_after_panes(base, &names) {
+                (shell_name.to_owned(), TabNameIntent::Release)
+            } else {
+                (base.to_owned(), TabNameIntent::Rest)
+            };
             (desired_name != *observed_name).then(|| TabRename {
                 anchor,
                 observed_name: observed_name.clone(),
                 desired_name,
-                has_status,
+                intent,
             })
         })
         .collect()
@@ -129,6 +164,7 @@ mod tests {
                     .iter()
                     .map(|id| PaneState {
                         pane_id: PaneId::from_parts(MuxName::Tmux, id),
+                        title: None,
                         first_seen_at_ms: None,
                         hosted_carry_since_ms: None,
                         is_floating: false,
@@ -186,11 +222,11 @@ mod tests {
             now,
         );
 
-        let renames = desired_tab_renames(&snapshot, &frame("#feat", &["%1", "%2", "%3"]));
+        let renames = desired_tab_renames(&snapshot, &frame("#feat", &["%1", "%2", "%3"]), "zsh");
 
         assert_eq!(renames[0].desired_name, "#feat !");
         assert_eq!(renames[0].anchor.raw(), "%1");
-        assert!(renames[0].has_status);
+        assert_eq!(renames[0].intent, TabNameIntent::Status);
     }
 
     #[test]
@@ -199,19 +235,19 @@ mod tests {
         let old = now - SignedDuration::from_mins(6);
         let snapshot = snapshot(vec![(AgentStatus::Success, "%1", old)], now);
 
-        let renames = desired_tab_renames(&snapshot, &frame("my tab ✓", &["%1"]));
+        let renames = desired_tab_renames(&snapshot, &frame("my tab ✓", &["%1"]), "zsh");
 
         assert_eq!(renames[0].observed_name, "my tab ✓");
         assert_eq!(renames[0].desired_name, "my tab");
-        assert!(!renames[0].has_status);
+        assert_eq!(renames[0].intent, TabNameIntent::Rest);
     }
 
     #[test]
     fn status_change_replaces_both_catalog_variants() {
         let now = Timestamp::from_second(1_700_000_000).expect("time");
         let snapshot = snapshot(vec![(AgentStatus::Waiting, "%1", now)], now);
-        let unicode = desired_tab_renames(&snapshot, &frame("manual ⏸\u{fe0e}", &["%1"]));
-        let nerd = desired_tab_renames(&snapshot, &frame("manual \u{f04c}", &["%1"]));
+        let unicode = desired_tab_renames(&snapshot, &frame("manual ⏸\u{fe0e}", &["%1"]), "zsh");
+        let nerd = desired_tab_renames(&snapshot, &frame("manual \u{f04c}", &["%1"]), "zsh");
 
         assert_eq!(unicode[0].desired_name, "manual ?");
         assert_eq!(nerd[0].desired_name, "manual ?");
@@ -245,7 +281,7 @@ mod tests {
             )
             .expect("glyph config");
 
-            let renames = desired_tab_renames(&snapshot, &frame("#feat", &["%1"]));
+            let renames = desired_tab_renames(&snapshot, &frame("#feat", &["%1"]), "zsh");
 
             assert_eq!(renames[0].desired_name, expected);
         }
@@ -256,6 +292,95 @@ mod tests {
         let now = Timestamp::from_second(1_700_000_000).expect("time");
         let snapshot = snapshot(vec![(AgentStatus::Running, "%1", now)], now);
 
-        assert!(desired_tab_renames(&snapshot, &frame("#feat ⢿", &["%1"])).is_empty());
+        assert!(desired_tab_renames(&snapshot, &frame("#feat ⢿", &["%1"]), "zsh").is_empty());
+    }
+
+    fn named_frame(name: &str, names: &[&str]) -> PaneFrame {
+        let ids = (1..=names.len())
+            .map(|id| format!("%{id}"))
+            .collect::<Vec<_>>();
+        let mut frame = frame(name, &ids.iter().map(String::as_str).collect::<Vec<_>>());
+        for (pane, name) in frame.tabs[0].panes.iter_mut().zip(names) {
+            pane.title = Some((*name).to_owned());
+        }
+        frame
+    }
+
+    #[test]
+    fn pane_named_tab_releases_only_after_the_last_agent_leaves() {
+        let now = Timestamp::from_second(1_700_000_000).expect("time");
+        let frame = named_frame("opus+codex", &["codex", "opus"]);
+        for remaining in [vec!["%1", "%2"], vec!["%2"]] {
+            for status in [
+                AgentStatus::Idle,
+                AgentStatus::Sleeping,
+                AgentStatus::Success,
+            ] {
+                let snapshot = snapshot(
+                    remaining
+                        .iter()
+                        .map(|id| (status, *id, now - SignedDuration::from_mins(6)))
+                        .collect(),
+                    now,
+                );
+                assert!(desired_tab_renames(&snapshot, &frame, "zsh").is_empty());
+            }
+        }
+        let snapshot = snapshot(Vec::new(), now);
+        let renames = desired_tab_renames(&snapshot, &frame, "zsh");
+        assert_eq!(renames[0].desired_name, "zsh");
+        assert_eq!(renames[0].intent, TabNameIntent::Release);
+        let mut released = frame;
+        released.tabs[0].name = Some("zsh".to_owned());
+        assert!(desired_tab_renames(&snapshot, &released, "zsh").is_empty());
+    }
+
+    #[test]
+    fn hosted_agent_without_a_row_blocks_release_even_when_floating() {
+        let now = Timestamp::from_second(1_700_000_000).expect("time");
+        let snapshot = snapshot(Vec::new(), now);
+        let mut frame = named_frame("opus", &["opus"]);
+        frame.tabs[0].panes[0].current.hosted_agent_kind =
+            Some(crate::ids::AgentKind::new_unchecked("claude"));
+        frame.tabs[0].panes[0].is_floating = true;
+        assert!(desired_tab_renames(&snapshot, &frame, "zsh").is_empty());
+    }
+
+    #[test]
+    fn scoped_manual_and_unpinned_names_are_kept_but_stale_status_clears() {
+        let now = Timestamp::from_second(1_700_000_000).expect("time");
+        let snapshot = snapshot(Vec::new(), now);
+        for name in ["#feat", "team:forge", "my tab", "zsh"] {
+            assert!(
+                desired_tab_renames(&snapshot, &named_frame(name, &["opus"]), "zsh").is_empty()
+            );
+        }
+        assert!(desired_tab_renames(&snapshot, &frame("opus", &["%1"]), "zsh").is_empty());
+        let renames = desired_tab_renames(&snapshot, &named_frame("#feat ?", &["opus"]), "zsh");
+        assert_eq!(renames[0].desired_name, "#feat");
+        assert_eq!(renames[0].intent, TabNameIntent::Rest);
+        let renames = desired_tab_renames(
+            &snapshot,
+            &named_frame("opus+codex+pi+…", &["pi", "opus", "codex", "nvim"]),
+            "zsh",
+        );
+        assert_eq!(renames[0].intent, TabNameIntent::Release);
+    }
+
+    #[test]
+    fn chrome_and_daemon_panes_neither_claim_nor_hold_a_name() {
+        let now = Timestamp::from_second(1_700_000_000).expect("time");
+        let snapshot = snapshot(Vec::new(), now);
+        for command in ["rimz-sidebar", "claude remote-control", "codex app-server"] {
+            let mut frame = named_frame("opus", &["opus", "opus"]);
+            frame.tabs[0].panes[0].current.command = Some(command.to_owned());
+            frame.tabs[0].panes[0].current.hosted_agent_kind =
+                Some(crate::ids::AgentKind::new_unchecked("claude"));
+            let renames = desired_tab_renames(&snapshot, &frame, "zsh");
+            assert_eq!(renames[0].intent, TabNameIntent::Release);
+            assert_eq!(renames[0].anchor.raw(), "%2");
+            frame.tabs[0].panes[1].title = None;
+            assert!(desired_tab_renames(&snapshot, &frame, "zsh").is_empty());
+        }
     }
 }

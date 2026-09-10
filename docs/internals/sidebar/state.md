@@ -59,6 +59,7 @@ Producing and publishing, all producer-only:
 | Module | What it owns |
 | --- | --- |
 | [`produce/`](../../../crates/rimz/src/sidebar/produce/mod.rs) | The producer read. `panes.rs` assembles and publishes the pane frame behind a single flight, `metrics.rs` samples per-pane `/proc`, `git.rs` enumerates worktree roots. |
+| [`produce/tab_status.rs`](../../../crates/rimz/src/sidebar/produce/tab_status.rs) | Pure tab-name projection: status glyphs, stale-suffix cleanup, and release of pane-named tabs when no agent remains. |
 | [`refresh/`](../../../crates/rimz/src/sidebar/refresh/mod.rs) | The heavy lanes, each self-gated on its own TTL: `git_stats.rs`, `pr.rs`, `accounts.rs`, `usage.rs`, `credits.rs`, `rate_limits.rs`, `sessions.rs`, `live_spend.rs`, `cohort_spend.rs`, `daemon_reap.rs`. `runner.rs` shares bounded worker mechanics; `consumer.rs` lists its own fold-cache inputs, while cache reads use `disk::atomic`. `git_refs.rs` reads ref files in process to skip a `git` fork, and `trace.rs` is the opt-in account-refresh timing trace. |
 | [`workspace_projection.rs`](../../../crates/rimz/src/sidebar/workspace_projection.rs) | The renderer-independent fold publication and the consumer's adoption check. |
 | [`agent_projection.rs`](../../../crates/rimz/src/sidebar/agent_projection.rs) | Published adapter wiring and provider-local session discovery. |
@@ -116,7 +117,7 @@ Four threads inside the renderer gate on that election.
 
 | Thread | Owns while elected | On demotion |
 | --- | --- | --- |
-| Fetch worker | The pane frame, worktree group roots, the agent projection, the workspace projection, and best-effort mux tab-status names, on the data tick. | Folds published caches only and never renames tabs. |
+| Fetch worker | The pane frame, worktree group roots, the agent projection, the workspace projection, and best-effort mux tab-status names and release of pane-named tabs, on the data tick. | Folds published caches only and never renames tabs. |
 | Cache refresher | Git diff stats, PR state, accounts, usage, credits, finished-cohort effort, auto-continue, budget enforcement, due loop tasks and scheduled messages, and daemon-view repair. | Sleeps on the election poll. |
 | tmux control-mode watch | The tmux presence stream for this session (tmux rooms only). | Drops the control client. |
 | Transcript watch | Filesystem watches on every live session whose adapter declares `transcript_tail_context`. | Drops the watches. |
@@ -136,7 +137,7 @@ One cycle runs four steps.
 1. **Observe the role.** One tracker lookup decides producer or consumer for this cycle, and a role change emits a diagnostic.
 2. **Try to skip.** An ordinary consumer request stamps the files its fold would read and compares them against the memo from last time. An unchanged stamp posts an `Unchanged` outcome that clears single-flight state without replacing the snapshot or dirtying the frame.
 3. **Fast fold.** The producer folds the rollup, pane frame, and sidecars, then publishes the result as `workspace-projection.json`. A consumer instead tries to adopt that publication, and falls back to the same full in-process fold when it cannot.
-4. **Produce, if due.** Only the producer, and only when the published pane frame is past its TTL and no attempt has started inside this data tick, pays the reconciling produce: resolve panes, refresh group roots, publish, and fold again with the fresh frame. It then folds projected live-agent status per tab and renames only names whose suffix differs; clearing a suffix asks the backend to restore automatic naming when RimZ's own status rename disabled it. Failed mux writes are logged and retried at most once per pane observation; they never fail the snapshot.
+4. **Produce, if due.** Only the producer, and only when the published pane frame is past its TTL and no attempt has started inside this data tick, pays the reconciling produce: resolve panes, refresh group roots, publish, and fold again with the fresh frame. It then projects each tab's name from live-agent status and the pane frame, emitting a rename only when the desired name differs. A status glyph takes precedence; without one, a pane-named tab with neither a live agent row nor a hosted agent returns to the shell's name via `Release`. Idle, sleeping, and expired-success agents still block release, including those in floating work panes. Otherwise `Rest` clears any stale suffix, even on scoped or user-named tabs. The worker forwards the intent to the backend; tmux's marker and pin cleanup live at that seam ([multiplexers → pane and view IDs](../multiplexers.md#pane-and-view-ids)). Failed mux writes are logged and retried at most once per pane observation; they never fail the snapshot.
 
 A produce runs behind a panic guard. An unwind costs one degraded outcome, the loop holds its last good frame, and the next cycle refolds cold from a fresh cursor rather than trusting a base a panic may have torn.
 

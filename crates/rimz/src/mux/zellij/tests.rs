@@ -314,20 +314,45 @@ exit 0
 #[cfg(unix)]
 #[test]
 fn rename_tab_resolves_the_anchor_to_a_stable_id() {
-    let (temp, shim) =
-        support::pane_roster_shim(r#"[{"id":7,"is_plugin":false,"tab_id":42,"tab_position":3}]"#);
-    let backend = ZellijBackend::with_program_for_test(&shim);
-    let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
+    use crate::mux::tab_name::TabNameIntent;
 
-    backend
-        .rename_tab("rimz-test", &pane, "#feat ✓")
-        .expect("rename by stable tab id");
+    for intent in [
+        TabNameIntent::Claim {
+            pane_name: "-opus".to_owned(),
+        },
+        TabNameIntent::Status,
+        TabNameIntent::Rest,
+        TabNameIntent::Release,
+    ] {
+        let claim = matches!(intent, TabNameIntent::Claim { .. });
+        let (temp, shim) = support::pane_roster_shim(
+            r#"[{"id":7,"is_plugin":false,"tab_id":42,"tab_position":3,"is_focused":false},{"id":8,"is_plugin":false,"tab_id":43,"tab_position":1,"is_focused":true}]"#,
+        );
+        let backend = ZellijBackend::with_program_for_test(&shim);
+        let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
 
-    let log = shim_log(&temp);
-    assert!(
-        log.contains("--session rimz-test action rename-tab-by-id 42 #feat ✓"),
-        "{log}"
-    );
+        backend
+            .rename_tab("rimz-test", &pane, "#feat ✓", intent)
+            .expect("rename by stable tab id");
+
+        let log = shim_log(&temp);
+        assert!(
+            log.contains("--session rimz-test action rename-tab-by-id 42 #feat ✓"),
+            "{log}"
+        );
+        assert_eq!(
+            command_count(&log, "action rename-pane"),
+            usize::from(claim)
+        );
+        if claim {
+            assert!(
+                log.contains(
+                    "--session rimz-test action rename-pane --pane-id terminal_7 -- -opus"
+                ),
+                "{log}"
+            );
+        }
+    }
 }
 
 #[cfg(unix)]

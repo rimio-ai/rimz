@@ -2,6 +2,7 @@
 
 use super::support::*;
 use rimz::agents::{AgentStatus, LaunchParams};
+use rimz::mux::tab_name::TabNameIntent;
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 use rimz::store::writer::AgentLifecycleIntent;
 
@@ -58,7 +59,12 @@ fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
         );
         server
             .backend
-            .rename_tab(&workspace.session_name, &anchor, "shell ?")
+            .rename_tab(
+                &workspace.session_name,
+                &anchor,
+                "shell ?",
+                TabNameIntent::Status,
+            )
             .expect("pending status rename");
         let launch = shlex::try_join([
             "/usr/bin/env",
@@ -91,22 +97,176 @@ fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
             thread::sleep(Duration::from_millis(50));
         }
 
-        let title = "opus-project";
+        let title = "opus";
         assert_eq!(server.display(anchor.raw(), "#{window_name}"), title);
+        assert_eq!(server.display(anchor.raw(), "#{@rimz_title}"), "opus");
         assert_eq!(server.display(anchor.raw(), "#{automatic-rename}"), "0");
         if isolation == "sandbox" {
             server.wait_for_pane_command(&workspace.session_name, "bwrap");
         }
         server
             .backend
-            .rename_tab(&workspace.session_name, &anchor, &format!("{title} ?"))
+            .rename_tab(
+                &workspace.session_name,
+                &anchor,
+                &format!("{title} ?"),
+                TabNameIntent::Status,
+            )
             .expect("agent status");
         server
             .backend
-            .clear_tab_status(&workspace.session_name, &anchor, title)
+            .rename_tab(&workspace.session_name, &anchor, title, TabNameIntent::Rest)
             .expect("idle agent");
         assert_eq!(server.display(anchor.raw(), "#{window_name}"), title);
         assert_eq!(server.display(anchor.raw(), "#{automatic-rename}"), "0");
+    }
+}
+
+#[test]
+fn producer_releases_profile_tab_after_agent_exit() {
+    require_tmux!();
+    assert_producer_releases_profile_tab(1);
+}
+
+#[test]
+fn producer_keeps_profile_tab_until_both_agents_exit() {
+    require_tmux!();
+    assert_producer_releases_profile_tab(2);
+}
+
+fn assert_producer_releases_profile_tab(count: usize) {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let config_dir = env.config_root().join("rimz");
+    std::fs::create_dir_all(&config_dir).expect("config directory");
+    std::fs::write(
+        config_dir.join("agents.toml"),
+        "[agents]\nisolation = \"host\"\n[agents.profiles.opus]\nagent = \"claude\"\n",
+    )
+    .expect("profile config");
+    let agent_bin = write_sleeping_agent_shim(&env, "claude");
+    let ready = env.home_root.join("tab-name-ready");
+    std::fs::create_dir(&ready).expect("readiness directory");
+    std::fs::write(
+        agent_bin.join("claude"),
+        "#!/bin/bash\nset -e\n\
+         printf '{\"hook_event_name\":\"SessionStart\",\"session_id\":\"tab-name-%s\"}\\n' \"$$\" | \
+         RIMZ_AGENT_PID=$$ \"$RIMZ_TEST_RIMZ_BIN\" hooks feed --source claude >/dev/null\n\
+         printf '%s' \"$$\" > \"$RIMZ_TEST_AGENT_READY/$TMUX_PANE\"\n\
+         exec -a claude sleep 300\n",
+    )
+    .expect("write registered sleeping agent");
+    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let server = TmuxServer::in_runtime_root(&env.runtime_root);
+    env.rimz()
+        .env("PATH", path_with_front(&agent_bin))
+        .env("RIMZ_TEST_AGENT_READY", &ready)
+        .env("RIMZ_TEST_RIMZ_BIN", env.rimz_bin())
+        .args(["--mux", "tmux", "start", "--no-attach"])
+        .assert_success_within_timeout("start real sidebar producer");
+    let _client = AttachedTmuxClient::attach(&server.socket, &workspace.session_name, 160, 40);
+    let layout = if count == 1 { "opus" } else { "opus,opus" };
+    env.rimz()
+        .env("PATH", path_with_front(&agent_bin))
+        .env("RIMZ_TEST_AGENT_READY", &ready)
+        .env("RIMZ_TEST_RIMZ_BIN", env.rimz_bin())
+        .args(["--mux", "tmux", "agents", layout, "--new-tab"])
+        .assert_success_within_timeout("launch profile tab");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let agents = loop {
+        let agents = std::fs::read_dir(&ready)
+            .expect("read ready agents")
+            .map(|entry| {
+                let entry = entry.expect("ready agent");
+                let pane = PaneId::from_parts(MuxName::Tmux, entry.file_name().to_string_lossy());
+                let pid = std::fs::read_to_string(entry.path()).expect("agent pid");
+                (pane, pid)
+            })
+            .collect::<Vec<_>>();
+        if agents.len() == count && agents.iter().all(|(_, pid)| !pid.is_empty()) {
+            break agents;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "profile agents did not start: {agents:?}"
+        );
+        thread::sleep(Duration::from_millis(25));
+    };
+    let title = if count == 1 { "opus" } else { "opus+opus" };
+    for (pane, _) in &agents {
+        assert_eq!(server.display(pane.raw(), "#{window_name}"), title);
+        assert_eq!(server.display(pane.raw(), "#{@rimz_title}"), "opus");
+    }
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let frame = rimz::sidebar::cache::read_snapshot_cache(
+            &env.runtime_paths().pane_frame_path(),
+            &workspace.session_name,
+        );
+        if frame.as_ref().is_some_and(|frame| {
+            frame.tabs.iter().any(|tab| {
+                tab.name.as_deref() == Some(title)
+                    && agents.iter().all(|(pane, _)| {
+                        tab.panes.iter().any(|state| {
+                            state.pane_id == *pane && state.title.as_deref() == Some("opus")
+                        })
+                    })
+            })
+        }) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "producer did not observe the profile launch: {frame:?}"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+    for (index, (pane, pid)) in agents.iter().enumerate() {
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid.parse().expect("numeric agent pid")),
+            nix::sys::signal::Signal::SIGTERM,
+        )
+        .expect("end fixture agent without closing its pane");
+        wait_for_agent_end_observation(&env, &format!("tab-name-{pid}"));
+        let expected = if index + 1 == count { "sh" } else { title };
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let frame = rimz::sidebar::cache::read_snapshot_cache(
+                &env.runtime_paths().pane_frame_path(),
+                &workspace.session_name,
+            );
+            let observed = frame.as_ref().is_some_and(|frame| {
+                frame.tabs.iter().any(|tab| {
+                    tab.name.as_deref() == Some(expected)
+                        && tab.panes.iter().any(|state| {
+                            state.pane_id == *pane
+                                && state.current.command.as_deref() == Some("sh")
+                                && state.current.hosted_agent_kind.is_none()
+                        })
+                })
+            });
+            if observed && server.display(pane.raw(), "#{window_name}") == expected {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "producer did not observe exit {index} with title {expected:?}: {frame:?}"
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
+        if index + 1 < count {
+            let (remaining, remaining_pid) = &agents[index + 1];
+            assert!(rimz::proc::process_is_live(
+                remaining_pid.parse().expect("remaining pid"),
+                None
+            ));
+            assert_eq!(server.display(remaining.raw(), "#{@rimz_title}"), "opus");
+            assert_eq!(server.display(remaining.raw(), "#{automatic-rename}"), "0");
+        }
+    }
+    for (pane, _) in &agents {
+        assert_eq!(server.display(pane.raw(), "#{@rimz_title}"), "");
+        assert_eq!(server.display(pane.raw(), "#{automatic-rename}"), "1");
     }
 }
 

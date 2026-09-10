@@ -22,6 +22,7 @@ use super::{HEALTH_PROBE_RETRY_DELAY, RECONCILE_LIST_TIMEOUT, ZellijBackend};
 use crate::disk::paths::RuntimePaths;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
 use crate::mux::companion_layout::{GridPane, balance, plan_append};
+use crate::mux::tab_name::TabNameIntent;
 use crate::mux::{
     BackgroundViewLaunch, BackgroundViewOptions, CachedPaneRoster, ClientFocusOptions, ClientView,
     CommandSpec, CompanionPaneAppend, DaemonView, MuxBackend, MuxErr, PaneCapture, PaneListOptions,
@@ -1639,7 +1640,13 @@ impl MuxBackend for ZellijBackend {
         Ok(())
     }
 
-    fn rename_tab(&self, session: &str, anchor: &PaneId, name: &str) -> Result<()> {
+    fn rename_tab(
+        &self,
+        session: &str,
+        anchor: &PaneId,
+        name: &str,
+        intent: TabNameIntent,
+    ) -> Result<()> {
         let tab_id =
             self.tab_id_for_pane_within(session, anchor, super::super::TAB_RENAME_TIMEOUT)?;
         self.zellij_action(session)
@@ -1648,8 +1655,22 @@ impl MuxBackend for ZellijBackend {
                 tab_id.to_string(),
                 name.to_owned(),
             ])
-            .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
-            .map(|_| ())
+            .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)?;
+        if let TabNameIntent::Claim { pane_name } = intent
+            && let Err(err) = self
+                .zellij_action(session)
+                .args(["rename-pane", "--pane-id", anchor.raw(), "--", &pane_name])
+                .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
+        {
+            tracing::warn!(
+                session,
+                pane = %anchor,
+                tags.operation = "zellij.rename_pane",
+                error = &err as &dyn std::error::Error,
+                "could not pin the pane's launch name",
+            );
+        }
+        Ok(())
     }
 
     fn close_pane(&self, session: &str, pane: &PaneId) -> Result<()> {

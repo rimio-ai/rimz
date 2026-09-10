@@ -47,6 +47,24 @@ fn floating_flag_survives_frame_round_trip() {
 }
 
 #[test]
+fn launch_title_survives_frame_serialization_without_history_repair() {
+    let mut pane = pane("terminal_1", "tab_0", Some("zsh"), true);
+    pane.title = Some("opus".to_owned());
+    let frame = assemble_frame(vec![pane], 7, "rimz-test");
+    let mut json = serde_json::to_value(&frame).expect("serialize frame");
+    let decoded: PaneFrame = serde_json::from_value(json.clone()).expect("decode frame");
+    assert_eq!(decoded.to_pane_refs()[0].title.as_deref(), Some("opus"));
+
+    json["tabs"][0]["panes"][0]
+        .as_object_mut()
+        .expect("pane object")
+        .remove("title");
+    let mut legacy: PaneFrame = serde_json::from_value(json).expect("legacy frame");
+    legacy.rotate_against_prior(&frame);
+    assert_eq!(legacy.to_pane_refs()[0].title, None);
+}
+
+#[test]
 fn kiro_resume_id_is_stamped_from_direct_mux_command() {
     let session = "sess_11111111-1111-4111-8111-111111111111";
     for command in [

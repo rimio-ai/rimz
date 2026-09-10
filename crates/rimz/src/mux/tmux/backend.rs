@@ -15,6 +15,7 @@ use super::window::{TmuxPaneGeometry, companion_tmux_layout};
 use crate::ids::{MuxName, PaneId};
 use crate::mux::LayoutPanes;
 use crate::mux::companion_layout::{balance, plan_append};
+use crate::mux::tab_name::TabNameIntent;
 use crate::mux::width::sidebar_width_off_spec;
 use crate::mux::{
     BackgroundViewLaunch, BackgroundViewOptions, ClientFocusOptions, ClientView, CommandSpec,
@@ -929,44 +930,51 @@ impl MuxBackend for TmuxBackend {
         Ok(())
     }
 
-    fn set_tab_title(&self, _session: &str, anchor: &PaneId, name: &str) -> Result<()> {
-        self.rename_window_command(anchor, name)?
-            .args([
-                ";",
-                "set-option",
-                "-wu",
-                "-t",
-                anchor.raw(),
-                super::options::RIMZ_RESTORE_AUTOMATIC_RENAME_OPTION,
-            ])
-            .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
-            .map(|_| ())
-    }
-
-    fn rename_tab(&self, _session: &str, anchor: &PaneId, name: &str) -> Result<()> {
-        let automatic = self
-            .automatic_rename_probe_command(anchor)?
-            .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
-            .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "1");
-        let command = if automatic {
-            self.rename_window_with_restore_marker_command(anchor, name)?
-        } else {
-            self.rename_window_command(anchor, name)?
-        };
-        command
-            .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
-            .map(|_| ())
-    }
-
-    fn clear_tab_status(&self, _session: &str, anchor: &PaneId, name: &str) -> Result<()> {
-        let restore = self
-            .restore_automatic_rename_probe_command(anchor)?
-            .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
-            .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "on");
-        let command = if restore {
-            self.clear_window_status_and_restore_command(anchor, name)?
-        } else {
-            self.rename_window_command(anchor, name)?
+    fn rename_tab(
+        &self,
+        _session: &str,
+        anchor: &PaneId,
+        name: &str,
+        intent: TabNameIntent,
+    ) -> Result<()> {
+        let command = match intent {
+            TabNameIntent::Claim { pane_name } => {
+                self.claim_window_command(anchor, name, &pane_name)?
+            }
+            TabNameIntent::Status => {
+                let automatic = self
+                    .automatic_rename_probe_command(anchor)?
+                    .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
+                    .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "1");
+                if automatic {
+                    self.rename_window_with_restore_marker_command(anchor, name)?
+                } else {
+                    self.rename_window_command(anchor, name)?
+                }
+            }
+            TabNameIntent::Rest => {
+                let restore = self
+                    .restore_automatic_rename_probe_command(anchor)?
+                    .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
+                    .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "on");
+                if restore {
+                    self.clear_window_status_and_restore_command(anchor, name)?
+                } else {
+                    self.rename_window_command(anchor, name)?
+                }
+            }
+            TabNameIntent::Release => {
+                self.clear_window_status_and_restore_command(anchor, name)?
+                    .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)?;
+                let output = self
+                    .window_pane_ids_command(anchor)?
+                    .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)?;
+                for pane_id in String::from_utf8_lossy(&output.stdout).lines() {
+                    self.clear_pane_rimz_title_command(pane_id)
+                        .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)?;
+                }
+                return Ok(());
+            }
         };
         command
             .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
@@ -1084,7 +1092,7 @@ impl TmuxBackend {
     }
 
     pub(super) fn list_panes_command(&self, session_name: Option<&str>) -> CommandSpec {
-        let format = "#{s/,/_/g:session_name},#{window_id},#{pane_id},#{s/,/_/g:pane_current_command},#{s/,/_/g:pane_current_path},#{pane_pid},#{s/,/_/g:window_name},#{s/,/_/g:pane_title},#{pane_floating_flag},#{s/,/_/g:pane_start_command}";
+        let format = "#{s/,/_/g:session_name},#{window_id},#{pane_id},#{s/,/_/g:pane_current_command},#{s/,/_/g:pane_current_path},#{pane_pid},#{s/,/_/g:window_name},#{s/,/_/g:#{?#{@rimz_title},#{@rimz_title},#{pane_title}}},#{pane_floating_flag},#{s/,/_/g:pane_start_command}";
         match session_name {
             Some(session) => self
                 .cmd()

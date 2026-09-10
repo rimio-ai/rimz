@@ -147,7 +147,12 @@ pub(in crate::cli) fn restart_resolved(
             params: restart_params,
         },
     };
-    let pane_name = invocation.kind.to_string();
+    let pane_name = invocation
+        .identity
+        .params
+        .profile
+        .clone()
+        .unwrap_or_else(|| invocation.kind.to_string());
     let argv = rimz::harness::launch::exec_argv(
         &rimz::proc::rimz_exe(),
         store.runtime_paths(),

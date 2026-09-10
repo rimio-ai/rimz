@@ -327,7 +327,6 @@ pub(super) fn launch_layout(
         || {
             rimz::harness::spec::default_tab_title(
                 &layout,
-                &cwd,
                 worktree_name.as_deref(),
                 team_name.as_deref(),
             )
@@ -505,7 +504,7 @@ fn launch_resume_layout(
     )?;
 
     let title = channel.as_deref().map_or_else(
-        || rimz::harness::spec::default_tab_title(&layout, &cwd, None, team_name.as_deref()),
+        || rimz::harness::spec::default_tab_title(&layout, None, team_name.as_deref()),
         |channel| format!("#{channel}"),
     );
     let sidebar = room.sidebar_options(&cwd, Vec::new(), None);

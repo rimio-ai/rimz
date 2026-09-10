@@ -740,6 +740,7 @@ mod tests {
                 name: Some("work".to_owned()),
                 panes: vec![PaneState {
                     pane_id: pane_id("terminal_9"),
+                    title: None,
                     first_seen_at_ms: Some(1),
                     hosted_carry_since_ms: None,
                     is_floating: false,

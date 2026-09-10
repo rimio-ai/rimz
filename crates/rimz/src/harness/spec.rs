@@ -129,6 +129,25 @@ impl Cell {
     pub fn shell() -> Self {
         Self::Command { argv: Vec::new() }
     }
+
+    pub(crate) fn pane_name(&self) -> String {
+        match self {
+            Self::Agent(cell) => cell
+                .launch
+                .profile
+                .clone()
+                .unwrap_or_else(|| cell.kind.to_string()),
+            Self::Command { argv } => {
+                argv.first()
+                    .map_or_else(crate::proc::shell_pane_name, |program| {
+                        Path::new(program).file_name().map_or_else(
+                            || program.clone(),
+                            |name| name.to_string_lossy().into_owned(),
+                        )
+                    })
+            }
+        }
+    }
 }
 
 /// A profile chain flattened to the concrete adapter kind that can be executed.
@@ -1071,11 +1090,9 @@ pub fn resolve_room_channel(
 
 /// The default tab title for a launch. Worktree launches use the `#channel`
 /// spelling shared with agent addresses; a named-team launch uses
-/// `team:<name>`; otherwise the title lists up to three cells in layout order
-/// over the cwd basename.
+/// `team:<name>`; otherwise the title lists up to three pane names in layout order.
 pub fn default_tab_title(
     spec: &LayoutSpec,
-    cwd: &Path,
     worktree_name: Option<&str>,
     team: Option<&str>,
 ) -> String {
@@ -1085,34 +1102,17 @@ pub fn default_tab_title(
     if let Some(team) = team.filter(|team| !team.is_empty()) {
         return format!("team:{team}");
     }
-    let tokens = spec
+    let names = spec
         .columns
         .iter()
         .flat_map(|column| &column.rows)
-        .map(|cell| match cell {
-            Cell::Agent(cell) => {
-                Cow::Borrowed(cell.launch.profile.as_deref().unwrap_or(cell.kind.as_str()))
-            }
-            Cell::Command { argv } => argv.first().map_or(Cow::Borrowed("term"), |program| {
-                Path::new(program).file_name().map_or_else(
-                    || Cow::Borrowed(program.as_str()),
-                    |name| name.to_string_lossy(),
-                )
-            }),
-        })
+        .map(Cell::pane_name)
         .collect::<Vec<_>>();
-    let mut title = tokens
-        .iter()
-        .take(3)
-        .map(Cow::as_ref)
-        .collect::<Vec<_>>()
-        .join("+");
+    let mut title = crate::mux::tab_name::label_from_pane_names(names.iter().map(String::as_str));
     if title.is_empty() {
         title.push_str("term");
-    } else if tokens.len() > 3 {
-        title.push_str("+…");
     }
-    crate::harness::resume::build_label(&title, None, cwd)
+    title
 }
 
 pub fn is_known_spec_token(

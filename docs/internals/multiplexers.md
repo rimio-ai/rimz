@@ -37,6 +37,7 @@ Shared seam, `crates/rimz/src/mux/`:
 | [`mount_proof.rs`](../../crates/rimz/src/mux/mount_proof.rs) | Current-build heartbeat proof for panes mounted during repair. |
 | [`width.rs`](../../crates/rimz/src/mux/width.rs) | Sidebar sizing: share resolution, native steps, and target spellings. |
 | [`companion_layout.rs`](../../crates/rimz/src/mux/companion_layout.rs) | Pure bounded column planning and equal-area targets for [subagent companion tabs](./harness/subagents.md#what-a-launch-desugars-to). |
+| [`tab_name.rs`](../../crates/rimz/src/mux/tab_name.rs) | Pure pane-derived tab labels, name ownership, and `TabNameIntent`. |
 | [`width_target.rs`](../../crates/rimz/src/mux/width_target.rs) | The room-runtime width record every renderer resolves against: its file, its pin flag, and the change broadcast. |
 | [`focus_anchor.rs`](../../crates/rimz/src/mux/focus_anchor.rs) | The durable two-phase intent behind every RimZ-initiated focus action: nonce, anchor file, pre-action fence, and the five observation verdicts. |
 | [`recovery.rs`](../../crates/rimz/src/mux/recovery.rs) | The guarded process sweep behind room teardown: heuristic kills scoped by uid, session name, ancestry, and process domain. |
@@ -98,7 +99,7 @@ Selection is stable across worktrees: every worktree of one repository resolves 
 | Session lifecycle | `ensure_session`, `attach_command`, `detach`, `kill_session`, `list_sessions`, `session_liveness`, `version` | `attach_command` hands a `CommandSpec` to the CLI attach runner rather than running it. |
 | Pane inventory | `list_panes`, `cached_pane_roster`, `client_view` | See [reading the room](#reading-the-room). |
 | Pane I/O | `capture_pane`, `send_keys`, `send_key`, `paste_text` | `paste_text` wraps one bracketed paste and converts logical newlines to CR; tmux loads markers and body together into a unique stdin-fed buffer and pastes it raw, including in copy mode, while Zellij writes bounded 8 KiB byte chunks. On failure, tmux best-effort deletes the buffer and Zellij stops body writes and best-effort writes the closing marker; both return the original error. The submit Enter follows separately as a keystroke. |
-| Structure | `split_pane`, `append_companion_pane`, `open_tab`, `set_tab_title`, `rename_tab`, `open_sidebar`, `open_background_view`, `close_pane`, `close_view_floating_panes` | Callers pass backend-neutral argv and layout geometry. Companion append checks native occupancy before birth and balances best-effort afterward; its `Full` result guarantees no payload ran. Tab rename and optional post-birth placement address a view through a pane anchor. |
+| Structure | `split_pane`, `append_companion_pane`, `open_tab`, `rename_tab`, `open_sidebar`, `open_background_view`, `close_pane`, `close_view_floating_panes` | Callers pass backend-neutral argv and layout geometry. Companion append checks native occupancy before birth and balances best-effort afterward; its `Full` result guarantees no payload ran. Tab rename and optional post-birth placement address a view through a pane anchor. |
 | Focus and geometry | `focus_pane`, `toggle_fullscreen`, `sidebar_width_step`, `nudge_sidebar_width`, `record_sidebar_width_default`, `register_room_key` | |
 | Health | `probe_session_health`, `ensure_clean_session`, `reconcile_sidebars`, `purge_resurrection_cache`, `resurrection_cache_paths`, `session_accepts_agent_close` | Several default to a no-op because they answer a Zellij-only question. |
 | Presence | `ensure_presence_plugin` | Zellij-only; tmux inherits the no-op default because its control-mode watch already pushes. |
@@ -134,7 +135,16 @@ Raw IDs stay inside the backend adapter, where the native command expects them (
 
 **A view id is never the view's on-screen label.** Zellij's default tab names are themselves number-shaped (`Tab #16`), so matching a positional `tab_15` against a tab named "Tab #15" joins two unrelated id spaces and lands on the wrong tab in any session that has closed one. The label is sticky, minted at tab creation; `PaneRef.view_name` carries it for display only. Resolve "which view holds this pane?" through the pane id.
 
-Tab renames follow that rule too. `rename_tab` takes a normalized pane anchor, never a display name or positional `ViewId`: tmux accepts the pane directly as a `rename-window` target, while Zellij resolves the pane through an authoritative listing and passes the resulting stable id to `rename-tab-by-id`. The sidebar producer uses this best-effort primitive to maintain one status-glyph suffix. On an automatically named tmux window, the first status rename records `@rimz_restore_automatic_rename`; clearing the suffix restores the bare name, re-enables `automatic-rename`, and removes the marker. An in-place launch uses `set_tab_title` to pin its resolved label and clear any existing restoration marker, so later status cleanup leaves automatic naming disabled. Manually named, `new-window -n`, and launch-titled windows stay stable and do not acquire the marker on subsequent status renames. The suffix is chrome only, rebuilt from projected agent state; it never becomes identity or durable truth. Name-based birth and resume checks strip known built-in and configured status suffixes before comparing their idempotency keys.
+Tab renames follow that rule too. `rename_tab` takes a normalized pane anchor, never a display name or positional `ViewId`: tmux accepts the pane directly as a `rename-window` target, while Zellij resolves the pane through an authoritative listing and passes the resulting stable id to `rename-tab-by-id`. Its `TabNameIntent` carries the naming transition:
+
+| Intent | Effect |
+| --- | --- |
+| `Claim { pane_name }` | An in-place launch names the tab and pins the pane's own launch name, not the tab title. tmux clears any restoration marker; Zellij renames the anchor pane by id. |
+| `Status` | Add the projected status glyph. On an automatically named tmux window, arm `@rimz_restore_automatic_rename` before renaming; otherwise just rename. |
+| `Rest` | Clear a stale glyph. If the tmux marker is armed, rename, restore inherited `automatic-rename`, and remove the marker; otherwise just rename. |
+| `Release` | Rename to the shell's name. tmux unconditionally restores inherited `automatic-rename`, removes the marker, and clears `@rimz_title` on every pane in the window. Zellij keeps the pane names and only renames the tab. |
+
+The marker remembers only automatic naming interrupted by `Status`, for `Rest` to undo; it is not an ownership record, and `Release` does not depend on it. The elected sidebar producer projects status and release from the tab's contents, rather than relying on an agent-exit hook. The suffix is chrome only, rebuilt from projected agent state; it never becomes identity or durable truth. Name-based birth and resume checks strip known built-in and configured status suffixes before comparing their idempotency keys.
 
 ### The identity pin
 
@@ -148,9 +158,11 @@ Zellij carries the map on the spawning client's environment; the per-session ser
 
 Rebirth re-pins on both backends, and resume tabs are ordinary layout panes, so a re-seeded agent inherits the same contract.
 
+Pane launch-name pins are separate from this room identity. tmux stores them in `@rimz_title`, sanitized like window names (`:` and `.` become `-`), and removes them from every pane in a released window. Zellij uses the pane name and retains it on release.
+
 ### Pane metadata
 
-`list_panes` reports each pane's foreground command, optional spawn command, optional title, cwd, view, and id.
+`list_panes` reports each pane's foreground command, optional spawn command, optional title, cwd, view, and id. The title is the pinned launch name when present, otherwise the multiplexer's pane title; the published pane frame preserves it for tab-name reconciliation.
 
 The sidebar uses foreground for display, spawn for identity only while the pane root still runs the spawn program (or foreground is temporarily unreported), and cwd for worktree grouping ([sidebar.md → presence model](./sidebar/sidebar.md#presence-model)). A foreground shell therefore demotes historical agent birth argv. Foreground, title, and cwd are cross-backend. Spawn stays optional because Zellij omits it for panes created through `action new-pane`, while tmux exposes the static `pane_start_command`. **The parity floor for presence is command plus cwd**, which both backends meet.
 
@@ -176,6 +188,10 @@ tmux enables session-scoped `set-titles`. For caller-identified panes the backen
 ## Reading the room
 
 Each backend has one authoritative roster and, optionally, one push channel that makes reads fresher.
+
+Ordinary launch titles are pane-name tokens joined by `+`: `<profile-or-kind>` for agents, the executable basename for commands, and the shell basename for empty command cells. The label keeps the first three tokens and adds `+…` for overflow, without a directory suffix (`opus`, `nvim+claude`). A tab named after its panes returns to the shell's name when no agent remains: tmux also resumes inherited automatic naming, while Zellij keeps the explicit shell name because it has no automatic tab naming.
+
+Ownership is derived, not stored: strip the status suffix, ignore `…`, and require every remaining `+` token to match a work pane's launch name, regardless of order. Sidebar chrome and daemon-host panes do not count. A live agent row or a hosted agent in any work pane, including a floating pane, blocks release even when idle, sleeping, or past the success-glyph timeout. Channel/worktree names (`#feat`), team names (`team:forge`), and user names that do not match the panes are kept; a user name identical to a pane-derived label follows the same release rule. Stale glyphs still clear on tabs that are not pane-named.
 
 | | Zellij | tmux |
 | --- | --- | --- |
