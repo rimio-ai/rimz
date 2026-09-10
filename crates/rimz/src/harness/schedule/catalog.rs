@@ -260,13 +260,10 @@ impl TaskCatalog {
             instances::remove(&instance_root, name, None)?;
         }
         let source = TaskSource::from_entry(entry);
+        let key = TaskKey::for_task(name, source, &entry.resolved_root());
         Ok(TaskMutation {
             changed: true,
-            cleared_overlays: clear_overlays(&TaskKey::for_task(
-                name,
-                source,
-                &entry.resolved_root(),
-            ))?,
+            cleared_overlays: clear_overlays(&key)?,
         })
     }
 
