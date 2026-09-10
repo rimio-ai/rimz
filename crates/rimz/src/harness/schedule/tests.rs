@@ -57,6 +57,28 @@ fn schedule_of(entry: &TaskEntry) -> Schedule {
 }
 
 #[test]
+fn weekday_masks_preserve_aliases_sorting_and_wrapped_ranges() {
+    use Weekday::{Sat, Sun, Thu, Tue};
+
+    assert_eq!(weekday_range(Fri, Mon), vec![Fri, Sat, Sun, Mon]);
+    for (raw, expected) in [
+        ("fri-mon", vec![Mon, Fri, Sat, Sun]),
+        ("wed,mon,mon", vec![Mon, Wed]),
+        ("tues,thurs,weds", vec![Tue, Wed, Thu]),
+        ("weekends", vec![Sat, Sun]),
+    ] {
+        assert_eq!(parse_days(raw), Some(expected), "{raw}");
+    }
+    for raw in ["mon-", "mon,,fri"] {
+        assert_eq!(parse_days(raw), None, "{raw}");
+    }
+    assert_eq!(
+        schedule_of(&entry(Some("09:30"), Some("fri-mon"), None)).describe(),
+        "every Mon,Fri,Sat,Sun at 09:30"
+    );
+}
+
+#[test]
 fn surplus_gate_values_parse_and_reject_unsafe_inputs() {
     assert_eq!(parse_surplus("1.5x"), Ok(1.5));
     assert_eq!(parse_surplus(" 2X "), Ok(2.0));
