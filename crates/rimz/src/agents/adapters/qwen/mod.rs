@@ -117,7 +117,6 @@ static QWEN_DESCRIPTOR: AgentSpec = AgentSpec {
             instruction: super::CompactInstruction::Unsupported,
         }),
         presets: super::PresetMatchers {
-            auto_compact: None,
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             system_prompt_file: Some(super::StaticPresetMatcher::EnvPathVar("QWEN_SYSTEM_MD")),
             ..super::PresetMatchers::EMPTY
