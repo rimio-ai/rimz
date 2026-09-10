@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::TaskTarget;
+use crate::disk::summary::FileSummary;
 use crate::harness::schedule::signal::{WatchOutcome, WatchVerdict};
 use crate::store::event::SignalSource;
 
@@ -39,25 +40,30 @@ fn assert_watch(verdict: WatchVerdict, label: &str) {
         watch: Some("cargo test".to_owned()),
         ..task()
     };
-    for output_path in [None, Some("/state/wakes/wake-test.log".into())] {
+    for output_path in [None, Some("/tmp/rimz-wakes/wake-test.output".into())] {
         for output in ["", "  last line\nnext line  \n"] {
             let signal = Signal {
                 watch: Some(WatchOutcome {
                     verdict: verdict.clone(),
                     output: output.to_owned(),
                     output_path: output_path.clone(),
+                    summary: if output.is_empty() {
+                        FileSummary::default()
+                    } else {
+                        FileSummary {
+                            bytes: 24,
+                            lines: 2,
+                        }
+                    },
                 }),
                 ..signal("wake.test", serde_json::json!({}))
             };
-            let path = if output_path.is_some() && !output.is_empty() {
-                " · output: /state/wakes/wake-test.log"
-            } else {
+            let path = if output_path.is_none() {
                 ""
-            };
-            let tail = if output.is_empty() {
-                "(no output)"
+            } else if output.is_empty() {
+                " · output (0 B, 0 lines): /tmp/rimz-wakes/wake-test.output"
             } else {
-                output
+                " · output (24 B, 2 lines): /tmp/rimz-wakes/wake-test.output"
             };
             assert_eq!(
                 compose_wake(
@@ -69,7 +75,7 @@ fn assert_watch(verdict: WatchVerdict, label: &str) {
                     now(),
                 ),
                 format!(
-                    "waited on `cargo test`\n{label}{path} [wake-test]\n{tail}\n\n  Inspect {{{{branch}}}}.\nKeep this line.  \n"
+                    "waited on `cargo test`\n{label}{path} [wake-test]\n\n  Inspect {{{{branch}}}}.\nKeep this line.  \n"
                 )
             );
         }
@@ -77,7 +83,7 @@ fn assert_watch(verdict: WatchVerdict, label: &str) {
 }
 
 #[test]
-fn watch_exit_success_keeps_output_path_tail_and_note() {
+fn watch_exit_success_keeps_output_summary_path_and_note() {
     assert_watch(
         WatchVerdict::Exited {
             code: Some(0),
@@ -88,7 +94,7 @@ fn watch_exit_success_keeps_output_path_tail_and_note() {
 }
 
 #[test]
-fn watch_exit_failure_keeps_output_path_tail_and_note() {
+fn watch_exit_failure_keeps_output_summary_path_and_note() {
     assert_watch(
         WatchVerdict::Exited {
             code: Some(1),
@@ -99,7 +105,7 @@ fn watch_exit_failure_keeps_output_path_tail_and_note() {
 }
 
 #[test]
-fn watch_killed_by_signal_keeps_output_path_tail_and_note() {
+fn watch_killed_by_signal_keeps_output_summary_path_and_note() {
     assert_watch(
         WatchVerdict::Exited {
             code: None,
@@ -110,7 +116,7 @@ fn watch_killed_by_signal_keeps_output_path_tail_and_note() {
 }
 
 #[test]
-fn watch_checkin_keeps_tail_path_and_next_actions() {
+fn watch_checkin_keeps_summary_path_and_next_actions() {
     for timeout in [None, Some("1s"), Some("12m")] {
         let task = TaskEntry {
             watch: Some("cargo test".to_owned()),
@@ -124,20 +130,23 @@ fn watch_checkin_keeps_tail_path_and_next_actions() {
                         elapsed_ms: 1_800_000,
                     },
                     output: output.to_owned(),
-                    output_path: Some("/state/wakes/wake-test.log".into()),
+                    output_path: Some("/tmp/rimz-wakes/wake-test.output".into()),
+                    summary: if output.is_empty() {
+                        FileSummary::default()
+                    } else {
+                        FileSummary {
+                            bytes: 10,
+                            lines: 1,
+                        }
+                    },
                 }),
                 ..signal("wake.test", serde_json::json!({}))
             };
-            let tail = if output.is_empty() {
-                "(no output)"
-            } else {
-                output
-            };
             let delay = timeout.unwrap_or("30m");
             let path = if output.is_empty() {
-                ""
+                " · output (0 B, 0 lines): /tmp/rimz-wakes/wake-test.output"
             } else {
-                " · output: /state/wakes/wake-test.log"
+                " · output (10 B, 1 line): /tmp/rimz-wakes/wake-test.output"
             };
             assert_eq!(
                 compose_wake(
@@ -149,7 +158,7 @@ fn watch_checkin_keeps_tail_path_and_next_actions() {
                     now()
                 ),
                 format!(
-                    "waited on `cargo test`\nstill running after 30m{path} [wake-test]\n{tail}\n\nStop it: rimz wake cancel wake-test\nAnother check-in: rimz wake --in {delay}"
+                    "waited on `cargo test`\nstill running after 30m{path} [wake-test]\n\nStop it: rimz wake cancel wake-test\nAnother check-in: rimz wake --in {delay}"
                 )
             );
         }
@@ -157,7 +166,7 @@ fn watch_checkin_keeps_tail_path_and_next_actions() {
 }
 
 #[test]
-fn watch_timeout_keeps_output_path_tail_and_note() {
+fn watch_timeout_keeps_output_summary_path_and_note() {
     assert_watch(
         WatchVerdict::TimedOut {
             elapsed_ms: 3_540_000,
@@ -167,7 +176,7 @@ fn watch_timeout_keeps_output_path_tail_and_note() {
 }
 
 #[test]
-fn watch_lost_keeps_output_path_tail_and_note() {
+fn watch_lost_keeps_output_summary_path_and_note() {
     assert_watch(
         WatchVerdict::Lost {
             detail: "lock disappeared".to_owned(),

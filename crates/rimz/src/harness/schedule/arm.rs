@@ -156,8 +156,8 @@ pub fn arm_delivery(
     }
     if entry.watch.is_some() {
         let spawn = || -> std::io::Result<()> {
-            std::fs::create_dir_all(&paths.wakes_dir)?;
-            let path = super::signal::wake_log_path(&paths, &name);
+            paths.ensure_tmp_dir().map_err(std::io::Error::other)?;
+            let path = super::signal::wake_output_path(&paths, &name);
             let output = OpenOptions::new()
                 .create(true)
                 .write(true)

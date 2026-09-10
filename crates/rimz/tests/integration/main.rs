@@ -36,6 +36,7 @@ mod loop_schedule;
 mod message;
 mod mux_command;
 mod oauth_usage;
+mod output_files;
 mod performance;
 mod presence_wake;
 mod pricing_refresh;

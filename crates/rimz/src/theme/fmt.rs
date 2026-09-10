@@ -4,6 +4,27 @@ use jiff::Timestamp;
 
 use crate::agents::RateLimitWindow;
 
+/// Format bytes for human reports with 1024-based units.
+pub fn fmt_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if value.fract() == 0.0 {
+        format!("{value:.0} {}", UNITS[unit])
+    } else if value < 10.0 {
+        format!("{value:.1} {}", UNITS[unit])
+    } else {
+        format!("{value:.0} {}", UNITS[unit])
+    }
+}
+
 pub fn command_preview(command: &str) -> std::borrow::Cow<'_, str> {
     let count = command.chars().count();
     if count <= 120 {
@@ -91,6 +112,15 @@ pub fn compact_count(value: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fmt_bytes_uses_binary_units_and_short_decimals() {
+        assert_eq!(fmt_bytes(1023), "1023 B");
+        assert_eq!(fmt_bytes(1024), "1 KB");
+        assert_eq!(fmt_bytes(13_018), "13 KB");
+        assert_eq!(fmt_bytes(1_503_238_553), "1.4 GB");
+        assert_eq!(fmt_bytes(18 * 1024 * 1024), "18 MB");
+    }
 
     #[test]
     fn command_preview_bounds_unicode_without_changing_short_commands() {

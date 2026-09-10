@@ -174,7 +174,7 @@ fn wake_rejects_watch_checkins_at_or_above_24_hours() {
 }
 
 #[test]
-fn wake_pid_checks_in_then_delivers_after_process_disappears_without_empty_path() {
+fn wake_pid_checks_in_then_delivers_after_process_disappears_with_empty_summary() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
@@ -190,8 +190,8 @@ fn wake_pid_checks_in_then_delivers_after_process_disappears_without_empty_path(
     assert_eq!(receipt["trigger"], receipt["pending"][0]["trigger"]);
     let checkin = wait_for_wake_messages(&env, 1);
     assert!(checkin[0].text.contains("still running after"));
-    assert!(checkin[0].text.contains("(no output)"));
-    assert!(!checkin[0].text.contains("output:"));
+    assert!(checkin[0].text.contains("output (0 B, 0 lines):"));
+    assert!(!checkin[0].text.contains("(no output)"));
     assert!(process.try_wait().unwrap().is_none());
     assert_eq!(wake_instances(&env).0.len(), 1);
     process.kill().unwrap();
@@ -202,8 +202,8 @@ fn wake_pid_checks_in_then_delivers_after_process_disappears_without_empty_path(
         .find(|message| message.text.contains("exit 0 after"))
         .expect("process disappearance delivered");
     assert!(completed.text.contains(&pid));
-    assert!(completed.text.contains("(no output)"));
-    assert!(!completed.text.contains("output:"));
+    assert!(completed.text.contains("output (0 B, 0 lines):"));
+    assert!(!completed.text.contains("(no output)"));
     wait_for_no_wake_instances(&env);
 
     wake_ok(&env, &["wake", "--pid", &pid]);
@@ -367,7 +367,7 @@ fn watched_wake_runs_in_the_arming_worktree() {
 }
 
 #[test]
-fn watched_failure_preserves_full_output_and_delivers_its_tail() {
+fn watched_failure_preserves_full_output_and_delivers_its_summary() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
@@ -390,6 +390,13 @@ fn watched_failure_preserves_full_output_and_delivers_its_tail() {
     let records = wait_for_wake_records(&env, 1);
     let check = records[0].check.as_ref().unwrap();
     let path = check.output_path.as_ref().expect("watch output path");
+    assert_eq!(
+        path,
+        &env.store()
+            .paths()
+            .wakes_dir
+            .join(format!("{}.output", records[0].task))
+    );
     let full = std::fs::read_to_string(path).expect("full watch output");
     assert_eq!(
         full,
@@ -409,10 +416,15 @@ fn watched_failure_preserves_full_output_and_delivers_its_tail() {
     assert!(!message.contains("exit 3 after 0s"), "{message}");
     assert!(!message.contains("armed by you"), "{message}");
     assert!(
-        message.contains(&format!("output: {}", path.display())),
+        message.contains(&format!(
+            "output ({}, 5001 lines): {}",
+            rimz::theme::fmt::fmt_bytes(full.len() as u64),
+            path.display()
+        )),
         "{message}"
     );
-    assert!(message.contains("5000\n  watched"), "{message}");
+    assert!(!message.contains("5000\n"), "{message}");
+    assert!(!message.contains(&check.output), "{message}");
     let logs = wake_ok(&env, &["loop", "logs", &records[0].task]);
     assert!(
         logs.contains(&records[0].watch.as_ref().unwrap().label()),
@@ -471,10 +483,11 @@ fn watched_wake_survives_the_arming_process_group_exiting() {
 }
 
 #[test]
-fn missing_watcher_row_reports_its_error_to_the_wake_log() {
+fn missing_watcher_row_reports_its_error_to_the_wake_output() {
     let env = Env::new();
     let store = env.store();
-    let path = store.paths().wakes_dir.join("wake-missing.log");
+    store.paths().ensure_tmp_dir().unwrap();
+    let path = store.paths().wakes_dir.join("wake-missing.output");
     let output = std::fs::File::create(&path).unwrap();
     let status = env
         .rimz()
@@ -491,7 +504,7 @@ fn missing_watcher_row_reports_its_error_to_the_wake_log() {
 }
 
 #[test]
-fn lost_watcher_delivers_elapsed_and_the_existing_log_tail() {
+fn lost_watcher_delivers_elapsed_and_the_existing_output_summary() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     register_calling_agent(&env);
@@ -509,7 +522,7 @@ fn lost_watcher_delivers_elapsed_and_the_existing_log_tail() {
     let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
     let name = receipt["name"].as_str().unwrap();
     let store = env.store();
-    let path = store.paths().wakes_dir.join(format!("{name}.log"));
+    let path = store.paths().wakes_dir.join(format!("{name}.output"));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let watcher = loop {
         if std::fs::read_to_string(&path).is_ok_and(|output| output == "started") {
@@ -569,7 +582,13 @@ fn lost_watcher_delivers_elapsed_and_the_existing_log_tail() {
     );
     let message = wait_for_wake_messages(&env, 1).pop().unwrap();
     assert!(message.text.contains(&verdict.label()), "{}", message.text);
-    assert!(message.text.contains("started"), "{}", message.text);
+    assert!(
+        message.text.contains("output (7 B, 1 line):"),
+        "{}",
+        message.text
+    );
+    assert_eq!(records[0].check.as_ref().unwrap().output, "started");
+    assert!(!message.text.lines().any(|line| line == "started"));
     let logs = wake_ok(&env, &["loop", "logs", name]);
     assert!(logs.contains(&verdict.label()), "{logs}");
     assert!(logs.contains(&path.display().to_string()), "{logs}");
@@ -674,7 +693,12 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
             "--on {on}: {}",
             notice.text
         );
-        assert!(notice.text.contains("checkin-marker"), "{}", notice.text);
+        assert!(
+            notice.text.contains("output (14 B, 1 line):"),
+            "{}",
+            notice.text
+        );
+        assert!(!notice.text.lines().any(|line| line == "checkin-marker"));
         assert!(
             notice.text.contains(&format!("rimz wake cancel {name}")),
             "{}",
@@ -760,9 +784,15 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
                 final_message.text
             );
             assert!(
-                final_message.text.contains("final-marker"),
+                final_message.text.contains("output (26 B, 1 line):"),
                 "{}",
                 final_message.text
+            );
+            assert!(
+                !final_message
+                    .text
+                    .lines()
+                    .any(|line| line == "checkin-markerfinal-marker")
             );
             assert_eq!(
                 records[1].message_id.as_ref(),

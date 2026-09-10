@@ -28,17 +28,13 @@ pub(super) fn compose_wake(
     } else {
         body.push_str(&format!(" [{name}]"));
     }
-    if let Evidence::Signal(signal) = &evidence {
+    if let Evidence::Signal(signal) = &evidence
+        && signal.watch.is_none()
+    {
         body.push('\n');
-        match &signal.watch {
-            Some(watch) if watch.output.is_empty() => body.push_str("(no output)"),
-            Some(watch) => body.push_str(&watch.output),
-            None => {
-                let mut payload = signal.payload.clone();
-                payload.insert("signal".to_owned(), Value::String(signal.name.to_string()));
-                body.push_str(&Value::Object(payload).to_string());
-            }
-        }
+        let mut payload = signal.payload.clone();
+        payload.insert("signal".to_owned(), Value::String(signal.name.to_string()));
+        body.push_str(&Value::Object(payload).to_string());
     }
     if let Evidence::Signal(signal) = &evidence
         && signal
@@ -102,13 +98,15 @@ fn verdict_line(
         Evidence::Scheduled => "fired".to_owned(),
     };
     if let Evidence::Signal(signal) = evidence
-        && let Some(path) = signal
-            .watch
-            .as_ref()
-            .filter(|watch| !watch.output.is_empty())
-            .and_then(|watch| watch.output_path.as_ref())
+        && let Some(watch) = &signal.watch
+        && let Some(path) = &watch.output_path
     {
-        verdict.push_str(&format!(" · output: {}", path.display()));
+        verdict.push_str(&format!(
+            " · output ({}, {}): {}",
+            crate::theme::fmt::fmt_bytes(watch.summary.bytes),
+            watch.summary.lines_label(),
+            path.display()
+        ));
     }
     verdict.push_str(&format!(" [{name}]"));
     Some(verdict)

@@ -152,7 +152,7 @@ fn gc_prunes_dead_root_workspace() {
 }
 
 #[test]
-fn gc_prunes_wake_logs_despite_another_projects_invalid_config() {
+fn gc_prunes_wake_outputs_despite_another_projects_invalid_config() {
     let env = Env::new();
     let other = env.home_root.join("other-project");
     env.record(&other);
@@ -163,8 +163,8 @@ fn gc_prunes_wake_logs_despite_another_projects_invalid_config() {
     )
     .unwrap();
     let paths = env.state_path_for(&other);
-    std::fs::create_dir_all(&paths.wakes_dir).unwrap();
-    let log = paths.wakes_dir.join("wake-retired.log");
+    paths.ensure_tmp_dir().unwrap();
+    let log = paths.wakes_dir.join("wake-retired.output");
     std::fs::write(&log, "old command output").unwrap();
     std::fs::File::open(&log)
         .unwrap()
@@ -174,6 +174,7 @@ fn gc_prunes_wake_logs_despite_another_projects_invalid_config() {
     let damaged = env.home_root.join("damaged-project");
     env.record(&damaged);
     let damaged_paths = env.state_path_for(&damaged);
+    damaged_paths.ensure_tmp_dir().unwrap();
     std::fs::remove_dir(&damaged_paths.wakes_dir).unwrap();
     std::fs::write(&damaged_paths.wakes_dir, "not a directory").unwrap();
 

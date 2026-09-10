@@ -397,6 +397,7 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
             },
             output: String::new(),
             output_path: Some(dir.path().join("watch.log")),
+            summary: crate::disk::summary::FileSummary::default(),
         }),
     };
     for on in [CheckOn::Success, CheckOn::Fail, CheckOn::Any] {

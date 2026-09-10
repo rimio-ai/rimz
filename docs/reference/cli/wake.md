@@ -28,18 +28,17 @@ Below 46 columns the card's waits count shortens to `⧖ N`, sharing its line wi
 
 **A command after `--`** runs through `sh -c` at the root of the checkout it was armed from (including linked worktrees) with stdin closed, in a detached watcher that outlives the arming turn. `--on fail|success|any` filters its final outcome, defaulting to `any`: `fail` covers a non-zero exit or a lost watcher, and `success` a zero exit. A filtered outcome records `skipped` and retires the row without a final message.
 
-**`--timeout <DURATION>` is a check-in, not a kill deadline.** It defaults to `30m`, independent of `loop.default-timeout`, and must be positive and shorter than 24 hours. If the command or PID wait is still running then, RimZ sends one notice with the current output tail, leaves the watcher and row running, and later delivers the exit verdict. The check-in is never filtered by `--on` and does not repeat automatically. `--timeout` requires `--pid` or a command.
+**`--timeout <DURATION>` is a check-in, not a kill deadline.** It defaults to `30m`, independent of `loop.default-timeout`, and must be positive and shorter than 24 hours. If the command or PID wait is still running then, RimZ sends one notice with the current output file's size and line count, leaves the watcher and row running, and later delivers the exit verdict. The check-in is never filtered by `--on` and does not repeat automatically. `--timeout` requires `--pid` or a command.
 
 ## The delivered message
 
 Self wakes are durable messages from `@rimz` with `Type: WAKE`, dispatched as steer: they interrupt a working agent rather than waiting for its next `done` boundary. Scheduled and signal [loop deliveries](./loop.md#signals) instead park at that boundary. Delivered wakes are hidden from the rendered transcript and retained by [`rimz transcript --json`](./transcript.md).
 
-The body names the wait, its elapsed outcome and task name, then the last 4 KiB of combined output or `(no output)`. The output path is included only when there is output. A timer reads `waited 30m [<name>]`. A command check-in has this shape:
+The body names the wait, its elapsed outcome and task name, and the combined output file's path, byte size, and line count. It never inlines command output; even an empty file is listed as `0 B, 0 lines`. A timer reads `waited 30m [<name>]`. A command check-in has this shape:
 
 ```text
 waited on `cargo build`
-still running after 30m · output: …/wakes/wake-solid-pixel.log [wake-solid-pixel]
-<output tail>
+still running after 30m · output (12 KB, 340 lines): /tmp/rimz-wakes/wake-solid-pixel.output [wake-solid-pixel]
 
 Stop it: rimz wake cancel wake-solid-pixel
 Another check-in: rimz wake --in 30m
@@ -49,7 +48,7 @@ The follow-up timer is a separate alarm; it does not restart or stop the watched
 
 ### The output file
 
-Combined stdout and stderr go to `~/.local/state/rimz/workspaces/<workspace-id>/wakes/<name>.log` as they arrive. The watcher uses that file for its own stderr too, so an early startup failure leaves evidence there. The file outlives the room; `rimz gc` removes it only once its row is gone, no watcher is running, and its last write is over 14 days old.
+Combined stdout and stderr go to `~/.local/state/rimz/workspaces/<workspace-id>/tmp/rimz-wakes/<name>.output` as they arrive. Under sandbox isolation the message shows `/tmp/rimz-wakes/<name>.output`; in host mode it shows the host path. The watcher uses that file for its own stderr too, so an early startup failure leaves evidence there. Room teardown removes the file; in a long-lived room, `rimz gc` removes it once its row is gone, no watcher is running, and its last write is over 14 days old. The durable run record retains the last 4 KiB for `rimz loop logs` after the file is gone.
 
 ## List and cancel
 
