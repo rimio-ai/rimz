@@ -27,10 +27,7 @@ pub(super) fn wait_entry_lines(ctx: &RowCtx<'_>, wakes: &[PendingWake]) -> Vec<L
             .armed_at
             .map(|at| {
                 let secs = age_secs(at, ctx.now);
-                vec![Span::styled(
-                    format!("{} {:>3}", elapsed_glyph(theme, secs), elapsed_label(secs)),
-                    theme.muted(),
-                )]
+                vec![Span::styled(elapsed_cluster(theme, secs), theme.muted())]
             })
             .unwrap_or_default();
         lines.push(pin_right(left, elapsed, width));
