@@ -1021,21 +1021,22 @@ fn normalize_budget(budget: &mut Option<String>, profile: &str) -> Result<()> {
 }
 
 fn normalize_auto_compact(value: &mut Option<String>, profile: &str) -> Result<()> {
+    use crate::store::message::AutoCompact;
+
     let Some(raw) = value.as_deref() else {
         return Ok(());
     };
-    let tokens = crate::store::message::parse_token_count(raw).map_err(|reason| {
-        LayoutErr::InvalidProfile {
-            profile: profile.to_owned(),
-            reason: format!("auto-compact: {reason}"),
+    let tokens = match AutoCompact::parse(raw) {
+        Ok(AutoCompact::Tokens(tokens)) if tokens > 0 => tokens,
+        _ => {
+            return Err(LayoutErr::InvalidProfile {
+                profile: profile.to_owned(),
+                reason: format!(
+                    "auto-compact must be a positive token count (for example `200k`), got `{raw}`"
+                ),
+            });
         }
-    })?;
-    if tokens == 0 {
-        return Err(LayoutErr::InvalidProfile {
-            profile: profile.to_owned(),
-            reason: "auto-compact must be a positive token count".to_owned(),
-        });
-    }
+    };
     *value = Some(tokens.to_string());
     Ok(())
 }
