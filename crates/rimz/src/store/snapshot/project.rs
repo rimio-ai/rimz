@@ -281,6 +281,11 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
 }
 
 impl ReducerState {
+    fn insert(&mut self, key: AgentKey, state: AgentState) {
+        self.launch_identity.replace(&key, &state);
+        self.map.insert(key, state);
+    }
+
     fn reduce_agent_attach(
         &mut self,
         event: &EventEnvelope,
@@ -421,8 +426,7 @@ impl ReducerState {
         }
         inherit_compaction_registration(&self.map, &mut state);
         inherit_launch_identity(&self.map, &self.launch_identity, &mut state);
-        self.launch_identity.replace(&key, &state);
-        self.map.insert(key, state);
+        self.insert(key, state);
     }
 
     fn adopt_provisional(
@@ -519,8 +523,7 @@ impl ReducerState {
             .identity
             .assign_launch(kind, &payload.agent_id, payload, prior);
         let state = assemble_launch_state(kind, event, payload, prior, card_identity);
-        self.launch_identity.replace(&key, &state);
-        self.map.insert(key, state);
+        self.insert(key, state);
     }
 }
 
