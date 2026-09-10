@@ -51,7 +51,7 @@ pub struct DiffStatsCache {
 /// Long-lived producer state for content-derived Git facts that do not belong
 /// in the renderer-consumed cache.
 #[derive(Debug, Default)]
-pub struct GitRefreshState {
+pub(super) struct GitRefreshState {
     untracked: HashMap<String, UntrackedLineMemo>,
 }
 
@@ -162,13 +162,13 @@ pub struct DiffStatsCacheEntry {
 impl DiffStatsCacheEntry {
     /// Local-fact freshness under the caller's tier. Saturating, so a clock
     /// that ran backwards reads fresh rather than re-forking every tick.
-    pub fn local_fresh_for(&self, now_ms: u64, ttl: Duration) -> bool {
+    fn local_fresh_for(&self, now_ms: u64, ttl: Duration) -> bool {
         now_ms.saturating_sub(self.refreshed_at_ms) <= ttl.as_millis() as u64
     }
 
     /// Commit-fact freshness under the caller's tier. Old entries with no
     /// split stamp are commit-stale and get re-probed once.
-    pub fn commit_fresh_for(&self, now_ms: u64, ttl: Duration) -> bool {
+    fn commit_fresh_for(&self, now_ms: u64, ttl: Duration) -> bool {
         self.commit_refreshed_at_ms
             .is_some_and(|stamp| now_ms.saturating_sub(stamp) <= ttl.as_millis() as u64)
     }
@@ -186,10 +186,6 @@ impl DiffStatsCacheEntry {
 pub(in crate::sidebar) fn is_trunk_branch(branch: &str, trunk: Option<&str>) -> bool {
     branch == "main"
         || trunk.map(|trunk| trunk.strip_prefix("origin/").unwrap_or(trunk)) == Some(branch)
-}
-
-pub fn read_diff_stats_cache(path: &Path) -> DiffStatsCache {
-    crate::disk::atomic::read_json_cache(path)
 }
 
 /// Refresh the producer's per-worktree git facts. The git forks are the
@@ -244,7 +240,7 @@ pub(in crate::sidebar) fn worktree_group_path_fields<'a>(
 /// The live worktree paths this snapshot needs git facts for: a git-backed
 /// group whose recovered path is a live directory, de-duplicated so two
 /// branch-split groups for one dir share a single git read.
-pub(in crate::sidebar) fn needed_worktree_paths(snapshot: &SidebarSnapshot) -> Vec<String> {
+pub(super) fn needed_worktree_paths(snapshot: &SidebarSnapshot) -> Vec<String> {
     let mut needed: Vec<String> = Vec::new();
     for group in &snapshot.worktree_groups {
         let Some(path) = git_backed_worktree_path(group) else {
@@ -283,7 +279,7 @@ fn is_worktree_channel(path: &str, label: &str) -> bool {
 }
 
 /// The worktree paths whose git facts refresh on the fast [`DIFF_STATS_TTL`].
-pub(in crate::sidebar) fn hot_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
+pub(super) fn hot_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
     let window = SignedDuration::try_from(crate::sidebar::timing::GIT_ACTIVITY_WINDOW)
         .unwrap_or(SignedDuration::MAX);
     let mut hot = BTreeSet::new();
@@ -305,7 +301,7 @@ pub(in crate::sidebar) fn hot_worktree_paths(snapshot: &SidebarSnapshot) -> BTre
 
 /// The worktree paths whose edit-sensitive git facts refresh on the focused
 /// tier.
-pub(in crate::sidebar) fn focused_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
+pub(super) fn focused_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
     let viewed: HashSet<&PaneId> = snapshot.viewed_panes.iter().collect();
     let mut focused = BTreeSet::new();
     for group in &snapshot.worktree_groups {
@@ -369,7 +365,7 @@ fn refresh_diff_stats(
             .collect()
     };
 
-    let cache = read_diff_stats_cache(cache_path);
+    let cache: DiffStatsCache = atomic::read_json_cache(cache_path);
     // Fast path: nothing stale — no lock, no git, as the all-fresh tick already
     // behaved before the single-flight.
     if stale(&cache).is_empty() {
@@ -378,7 +374,7 @@ fn refresh_diff_stats(
 
     let lock_path = runtime.root.join("diff-stats.lock");
     let fresh = || {
-        let cache = read_diff_stats_cache(cache_path);
+        let cache: DiffStatsCache = atomic::read_json_cache(cache_path);
         stale(&cache).is_empty().then_some(cache)
     };
     match single_flight::coalesce(
@@ -393,7 +389,7 @@ fn refresh_diff_stats(
         // lock), refresh only what is still stale against that read — git forks
         // run in parallel across worktrees — and write once.
         Coalesced::Produce(_guard) => {
-            let mut cache = read_diff_stats_cache(cache_path);
+            let mut cache: DiffStatsCache = atomic::read_json_cache(cache_path);
             let refreshed =
                 refresh_entries(&stale(&cache), &cache, configured_trunk, &state.untracked);
             let changed = !refreshed.is_empty();
@@ -498,9 +494,6 @@ fn refresh_entries(
     configured_trunk: Option<&str>,
     prior_memos: &HashMap<String, UntrackedLineMemo>,
 ) -> Vec<(String, DiffStatsCacheEntry, Option<UntrackedLineMemo>)> {
-    if paths.is_empty() {
-        return Vec::new();
-    }
     super::runner::bounded_map(
         crate::lane::current(),
         MAX_PARALLEL_GIT,
@@ -952,26 +945,6 @@ fn parse_status_entries(
 /// budget only bounds the churn line count, so one refresh never reads more
 /// than this however many untracked files the tree holds.
 const UNTRACKED_READ_BUDGET: u64 = 8 * 1024 * 1024;
-
-/// The added lines one untracked file contributes to the `+` churn — what
-/// numstat would report if the file were tracked — spending the probe's shared
-/// read `budget`. Unreadable, over-budget, and non-file paths contribute
-/// nothing; the status entry already marks the tree dirty, so an uncounted
-/// file costs accuracy, never the markers.
-#[cfg(test)]
-fn untracked_added_lines(path: &Path, budget: &mut u64) -> u32 {
-    let Ok(meta) = std::fs::metadata(path) else {
-        return 0;
-    };
-    if !meta.is_file() || meta.len() > *budget {
-        return 0;
-    }
-    let Ok(bytes) = std::fs::read(path) else {
-        return 0;
-    };
-    *budget = budget.saturating_sub(bytes.len() as u64);
-    count_added_lines(&bytes)
-}
 
 /// Line count of a blob the way numstat counts an added file: newlines plus a
 /// trailing partial line. A NUL in the first 8000 bytes reads as binary (git's
