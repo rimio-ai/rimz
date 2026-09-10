@@ -303,7 +303,7 @@ fn cached_daemon_reap_drops_paneless_codex_ghost_before_worktree_pins() {
     let owner_pid = std::process::id();
     atomic::write_temp_then_rename_cache(
         &crate::sidebar::refresh::daemon_reap::codex_daemon_reap_path(&runtime),
-        &crate::sidebar::refresh::CodexDaemonReap {
+        &crate::sidebar::refresh::daemon_reap::CodexDaemonReap {
             produced_at_ms: 1,
             daemon_pids: BTreeSet::from([owner_pid]),
             loaded: Some(BTreeSet::new()),
@@ -348,7 +348,7 @@ fn cached_daemon_reap_forwards_published_live_panes() {
     let codex = daemon_codex("live-pane", dir.path(), Some(pane.clone()), 77);
     atomic::write_temp_then_rename_cache(
         &crate::sidebar::refresh::daemon_reap::codex_daemon_reap_path(&runtime),
-        &crate::sidebar::refresh::CodexDaemonReap {
+        &crate::sidebar::refresh::daemon_reap::CodexDaemonReap {
             produced_at_ms: 1,
             daemon_pids: BTreeSet::from([77]),
             loaded: Some(BTreeSet::new()),
