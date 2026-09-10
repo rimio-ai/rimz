@@ -22,7 +22,7 @@ use crate::sidebar_pane::render::labels::{
     context_breakdown_spans, context_compaction_spans, context_gauge_spans,
     context_tool_repeat_spans, context_total_spans, elapsed_glyph, emphasize, role_glyph,
     severity_heat_amount, severity_heat_color, subagent_head_style, token_breakdown_spans,
-    token_total_glyph, unread_run_spans, window_style,
+    token_total_glyph, unread_run_spans, window_style, working_style,
 };
 use crate::sidebar_pane::render::layout::ellipsize;
 use crate::sidebar_pane::render::theme::{Component, Theme};

@@ -116,6 +116,8 @@ glyph_roles! {
     "card" {
         CardSubagents => "subagents",
         CardWaits => "waits",
+        CardWaitTimer => "wait_timer",
+        CardWaitSignal => "wait_signal",
         CardParkedBg => "parked_bg",
     }
     "process" {
