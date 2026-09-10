@@ -78,7 +78,7 @@ struct UntrackedLineMemoEntry {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WorktreeRootsCache {
+pub(in crate::sidebar) struct WorktreeRootsCache {
     pub refreshed_at_ms: u64,
     pub roots: Vec<PathBuf>,
     /// Exact checkout-root to RimZ marker-name classifications. `None` marks a

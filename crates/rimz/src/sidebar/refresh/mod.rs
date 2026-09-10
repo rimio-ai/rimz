@@ -19,14 +19,14 @@ use crate::store::snapshot::SidebarSnapshot;
 use crate::{RuntimePaths, Store};
 
 pub mod accounts;
-pub mod cohort_spend;
-pub mod credits;
-pub mod daemon_reap;
+pub(super) mod cohort_spend;
+pub(super) mod credits;
+pub(super) mod daemon_reap;
 mod git_refs;
 pub mod git_stats;
-pub mod live_spend;
-pub mod pr;
-pub mod rate_limits;
+pub(super) mod live_spend;
+mod pr;
+pub(super) mod rate_limits;
 mod runner;
 pub mod sessions;
 mod trace;
@@ -34,8 +34,9 @@ pub mod usage;
 
 pub use accounts::{AccountsCache, ProviderRecord, ProviderStatus, query_provider_accounts};
 pub use credits::merge_provider_realtime_usage;
-pub use daemon_reap::{CodexDaemonReap, read_codex_daemon_reap};
-pub use live_spend::{apply_live_day_spend, apply_live_today_spend};
+pub(super) use daemon_reap::{CodexDaemonReap, read_codex_daemon_reap};
+pub use live_spend::apply_live_day_spend;
+pub(super) use live_spend::apply_live_today_spend;
 pub(crate) use rate_limits::merge_account_rate_limits;
 pub use sessions::{
     ForcedSessionRefresh, force_refresh_session_context,
@@ -70,7 +71,7 @@ pub struct RefreshedLanes {
 
 /// Process-local memo state owned by one long-lived cache producer.
 #[derive(Debug, Default)]
-pub struct ProducerRefreshState {
+pub(crate) struct ProducerRefreshState {
     git: git_stats::GitRefreshState,
     cohort_rollup: crate::store::snapshot::RollupCursor,
     cohort_effort: crate::agents::spending::EffortParseMemo,
@@ -183,7 +184,7 @@ fn codex_origin_overrides(snapshot: &SidebarSnapshot) -> HashMap<PathBuf, PathBu
         .collect()
 }
 
-pub fn refresh_heavy_lanes(
+pub(super) fn refresh_heavy_lanes(
     base: &SidebarSnapshot,
     daemon_probe_agents: &[AgentState],
     state_paths: &crate::StatePaths,
