@@ -13,7 +13,7 @@ use jiff::{Timestamp, Zoned};
 use serde::{Deserialize, Serialize};
 
 use crate::disk::paths::state_home;
-use crate::harness::schedule::arming::{self, TaskKey};
+use crate::harness::schedule::arming;
 use crate::harness::schedule::catalog::LoadedTask;
 use crate::harness::schedule::signal::WatchVerdict;
 use crate::harness::schedule::strikes;
@@ -52,7 +52,7 @@ pub(super) fn record_transition(task: &LoadedTask, record: &LoopRunRecord) -> Ru
     scoped_record.root = Some(task.entry().resolved_root());
     append_to(&state_home(), &scoped_record);
     let name = &record.task;
-    let key = TaskKey::for_task(name, task.source(), &task.entry().resolved_root());
+    let key = task.key(name);
     let signal = strikes::classify(record);
     let count = match strikes::note(&key, signal) {
         Ok(count) => count,

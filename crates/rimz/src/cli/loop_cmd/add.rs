@@ -518,16 +518,10 @@ pub(super) fn enable(args: ScopeArgs, globals: &GlobalFlags) -> Result<()> {
     let mut out = ui::out();
     for (name, task) in tasks {
         let key = task.key(&name);
-        let record = entries.get(&key);
-        let already_enabled = ArmState::resolve(record, task.source(), now) == ArmState::Live
-            && record.is_none_or(|record| record.enabled && record.strikes.is_none());
-        if already_enabled {
-            strikes::clear(&key)?;
+        let Some(enabled) = task.enable(&name, entries.get(&key), now)? else {
             writeln!(out, "loop `{name}`: already enabled")?;
             continue;
-        }
-        let enabled = arming::enable(&key)?;
-        strikes::clear(&key)?;
+        };
         write!(out, "loop `{name}`: enabled")?;
         if let Some(next) = task_next_fire_text(&name, &task, Some(&enabled), &now_zoned) {
             write!(out, " · next {next}")?;

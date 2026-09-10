@@ -14,7 +14,7 @@ use jiff::{Timestamp, Zoned};
 
 use super::{
     Trigger,
-    arming::{self, ArmState, Arming, TaskKey},
+    arming::{self, ArmState, Arming},
     catalog::{LoadedTask, TaskCatalog},
 };
 use crate::RuntimePaths;
@@ -200,7 +200,7 @@ fn plan(
                 continue;
             }
         };
-        let key = TaskKey::for_task(name, task.source(), &task.entry().resolved_root());
+        let key = task.key(name);
         let arming = arming_entries.get(&key);
         let arm_state = ArmState::resolve(arming, task.source(), now.timestamp());
         match state.get(name).copied() {
@@ -604,12 +604,7 @@ mod tests {
                 &self.state.map(one).unwrap_or_default(),
                 &self
                     .arming
-                    .map(|arming| {
-                        BTreeMap::from([(
-                            TaskKey::for_task(NAME, task.source(), &task.entry().resolved_root()),
-                            arming,
-                        )])
-                    })
+                    .map(|arming| BTreeMap::from([(task.key(NAME), arming)]))
                     .unwrap_or_default(),
                 now,
             );
