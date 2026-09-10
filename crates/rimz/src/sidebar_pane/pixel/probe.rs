@@ -284,7 +284,12 @@ fn rendering_clients_allowed(clients: &[RenderingClient], probe: &impl Probe) ->
         .filter(|pid| {
             processes.iter().any(|process| {
                 process.pid == *pid
-                    && crate::proc::command::program_label(&process.cmdline) == "ttyd"
+                    && process
+                        .cmdline
+                        .split_whitespace()
+                        .next()
+                        .map(crate::proc::command::basename)
+                        == Some("ttyd")
             })
         })
         .collect::<Vec<_>>();
