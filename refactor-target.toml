@@ -285,7 +285,7 @@ upward-dependencies = [
 # Fresh boundary dispatch shares the queue's in-flight claim predicate.
 # Header grammar moved from harness; lifecycle projection also shares prompt-origin classification.
 # Exec cleanup probes waiter liveness without owning socket paths.
-surface-budget = 343
+surface-budget = 342
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -1252,3 +1252,48 @@ reason = "Carried by public DeliveryTrigger, Trigger and TaskTimingState; integr
 kind = "item"
 key = "harness::schedule::run_log::new"
 reason = "Integration fixtures construct LoopRunRecord history rows from the separate test crate (pass 14)."
+
+[[verdict]]
+kind = "pass-through"
+key = "store::snapshot::fold::new"
+reason = "RollupCursor::new has frozen callers in sidebar, sidebar_pane and cli; removing the constructor would cross this pass boundary (pass 15a)."
+
+[[verdict]]
+kind = "pass-through"
+key = "store::snapshot::view::layout::partial_cmp"
+reason = "StartKey implements Ord; PartialOrd must delegate to the same ordering (pass 15a)."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::fold::lifecycle_follow_seed"
+reason = "Hides RollupCache.extent from the lifecycle follower rather than forwarding its representation to the caller (pass 15a)."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::assemble::read_fresh_latest"
+reason = "Integration tests prove publication freshness through this exact entry point; narrowing would move the proof to a different read path (pass 15a)."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::assemble::build_with_cursor"
+reason = "Integration and fold_incremental performance tests measure this exact resumable read entry point (pass 15a)."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::panes::SidebarOwnView"
+reason = "Snapshot wire schema consumed by frozen sidebar and binary callers (pass 15a)."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::SnapshotErr"
+reason = "Typed snapshot error boundary has frozen callers; writer publication distinguishes EventLog corruption through it (pass 15a)."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::providers::format_plan_label"
+reason = "Shared with sidebar/refresh, not a snapshot-private formatting helper (pass 15a)."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::providers::sort_windows"
+reason = "Shared with sidebar/refresh, not a snapshot-private ordering helper (pass 15a)."
