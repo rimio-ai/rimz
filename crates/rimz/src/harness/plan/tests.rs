@@ -443,6 +443,12 @@ fn profile_prompt_validation_requires_declared_files() {
 
 #[test]
 fn pane_compilation_checks_support_across_layout_before_prompt_files() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let runtime = RuntimePaths::under(
+        crate::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
+    )
+    .expect("runtime");
     let missing = PathBuf::from("missing-prompt.md");
     let mut missing_file = preset_cell("codex", &[], None, None);
     let Cell::Agent(cell) = &mut missing_file else {
@@ -464,6 +470,7 @@ fn pane_compilation_checks_support_across_layout_before_prompt_files() {
     let err = compile_layout_panes(
         &layout,
         LayoutPaneParams {
+            runtime: &runtime,
             cwd: Path::new("/repo"),
             cleanup_worktree: false,
             in_place: false,
@@ -1487,6 +1494,12 @@ fn launch_identity_requests_stamp_team_and_inline_cohort_order() {
 
 #[test]
 fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let runtime = RuntimePaths::under(
+        crate::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
+    )
+    .expect("runtime");
     let layout = LayoutSpec {
         columns: vec![
             Column {
@@ -1516,6 +1529,7 @@ fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
     let panes = compile_layout_panes(
         &layout,
         LayoutPaneParams {
+            runtime: &runtime,
             cwd: Path::new("/tmp/project"),
             cleanup_worktree: false,
             in_place: false,
@@ -1548,6 +1562,12 @@ fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
 
 #[test]
 fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let runtime = RuntimePaths::under(
+        crate::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
+    )
+    .expect("runtime");
     let layout = LayoutSpec {
         columns: vec![Column {
             rows: vec![
@@ -1581,6 +1601,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
     let panes = compile_layout_panes(
         &layout,
         LayoutPaneParams {
+            runtime: &runtime,
             cwd: Path::new("/repo"),
             cleanup_worktree: false,
             in_place: false,
@@ -1603,6 +1624,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
     let err = compile_layout_panes(
         &layout,
         LayoutPaneParams {
+            runtime: &runtime,
             cwd: Path::new("/repo"),
             cleanup_worktree: false,
             in_place: false,
@@ -1620,6 +1642,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
     let err = compile_layout_panes(
         &layout,
         LayoutPaneParams {
+            runtime: &runtime,
             cwd: Path::new("/repo"),
             cleanup_worktree: false,
             in_place: false,
@@ -1635,6 +1658,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
     let err = compile_layout_panes(
         &layout,
         LayoutPaneParams {
+            runtime: &runtime,
             cwd: Path::new("/repo"),
             cleanup_worktree: false,
             in_place: false,
@@ -1652,6 +1676,12 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
 
 #[test]
 fn pane_command_stamps_cli_identity_and_close_policy() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let runtime = RuntimePaths::under(
+        crate::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
+    )
+    .expect("runtime");
     let cell = Cell::Agent(AgentCell {
         kind: AgentKind::new_unchecked("claude"),
         auto_compact: None,
@@ -1684,6 +1714,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
     let panes = compile_layout_panes(
         &layout,
         LayoutPaneParams {
+            runtime: &runtime,
             cwd: Path::new("/tmp/project"),
             cleanup_worktree: false,
             in_place: false,
@@ -1718,6 +1749,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
         let panes = compile_layout_panes(
             &layout,
             LayoutPaneParams {
+                runtime: &runtime,
                 cwd: Path::new("/tmp/project"),
                 cleanup_worktree,
                 in_place,
@@ -1741,6 +1773,12 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
 /// member returns with the model, effort, and argv its role binding declares.
 #[test]
 fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let runtime = RuntimePaths::under(
+        crate::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
+    )
+    .expect("runtime");
     let cell = Cell::Agent(AgentCell {
         kind: AgentKind::new_unchecked("claude"),
         auto_compact: None,
@@ -1771,6 +1809,7 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
     let panes = compile_layout_panes(
         &layout,
         LayoutPaneParams {
+            runtime: &runtime,
             cwd: Path::new("/tmp/project"),
             cleanup_worktree: false,
             in_place: false,

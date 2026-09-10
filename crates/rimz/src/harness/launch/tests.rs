@@ -126,7 +126,9 @@ fn team_request(kind: &str) -> ExecRequest {
 }
 
 fn round_trip(input: &ExecRequest) -> (Vec<String>, ExecRequest) {
-    let argv = exec_argv(Path::new("/bin/rimz"), input).expect("encode exec request");
+    let dir = tempfile::tempdir().expect("runtime root");
+    let runtime = runtime(dir.path());
+    let argv = exec_argv(Path::new("/bin/rimz"), &runtime, input).expect("encode exec request");
     let payload = argv
         .windows(2)
         .find_map(|pair| (pair[0] == "--request").then_some(pair[1].as_str()))
@@ -134,6 +136,35 @@ fn round_trip(input: &ExecRequest) -> (Vec<String>, ExecRequest) {
     let decoded = decode_exec_request(input.kind.as_str(), input.worktree_path.as_deref(), payload)
         .expect("decode exec request");
     (argv, decoded)
+}
+
+fn runtime(root: &Path) -> RuntimePaths {
+    RuntimePaths::under(crate::ids::WorkspaceId::from_project_root(root), root)
+        .expect("runtime paths")
+}
+
+#[test]
+fn provider_prompt_size_is_checked_at_the_argv_boundary() {
+    let adapter = crate::agents::find_definition("codex").expect("codex");
+    for size in [TEXT_PROMPT_LIMIT, TEXT_PROMPT_LIMIT + 1] {
+        let result = compile_provider_argv(
+            adapter,
+            "codex",
+            &ExecAction::Launch {
+                prompt: Some("x".repeat(size)),
+                extra_args: Vec::new(),
+            },
+            Path::new("/repo"),
+        );
+        if size == TEXT_PROMPT_LIMIT {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(
+                result,
+                Err(AgentProcessCompileErr::PromptTooLarge { size: actual, limit: TEXT_PROMPT_LIMIT, .. }) if actual == size
+            ));
+        }
+    }
 }
 
 #[test]
@@ -961,6 +992,9 @@ fn exec_wire_round_trips_resume_and_fork() {
         };
         let (argv, decoded) = round_trip(&invocation);
         assert_eq!(argv[..4], ["/bin/rimz", "agents", "exec", "claude"]);
+        let wire: serde_json::Value =
+            serde_json::from_str(argv.last().expect("payload")).expect("wire");
+        assert!(wire.get("prompt_file").is_none());
         assert_eq!(decoded, invocation);
     }
 }
@@ -1079,9 +1113,13 @@ fn exec_wire_rejects_launch_id_without_a_name() {
     invocation.identity.launch_id = Some("launch_orphan".to_owned());
 
     assert_eq!(
-        exec_argv(Path::new("/bin/rimz"), &invocation)
-            .expect_err("orphan launch id")
-            .to_string(),
+        exec_argv(
+            Path::new("/bin/rimz"),
+            &runtime(Path::new("/tmp/unused")),
+            &invocation
+        )
+        .expect_err("orphan launch id")
+        .to_string(),
         "--launch-id requires --agent-name"
     );
 }
@@ -1104,9 +1142,13 @@ fn exec_wire_rejects_malformed_and_mismatched_envelopes() {
     );
     missing_run.exit_on_run_completion = true;
     assert_eq!(
-        exec_argv(Path::new("/bin/rimz"), &missing_run)
-            .expect_err("run id required")
-            .to_string(),
+        exec_argv(
+            Path::new("/bin/rimz"),
+            &runtime(Path::new("/tmp/unused")),
+            &missing_run
+        )
+        .expect_err("run id required")
+        .to_string(),
         "--exit-on-run-completion requires --run-id"
     );
 
@@ -1117,7 +1159,12 @@ fn exec_wire_rejects_malformed_and_mismatched_envelopes() {
             extra_args: Vec::new(),
         },
     );
-    let argv = exec_argv(Path::new("/bin/rimz"), &input).expect("argv");
+    let argv = exec_argv(
+        Path::new("/bin/rimz"),
+        &runtime(Path::new("/tmp/unused")),
+        &input,
+    )
+    .expect("argv");
     let payload = argv.last().expect("payload");
     assert!(matches!(
         decode_exec_request("claude", None, payload),
@@ -1137,6 +1184,12 @@ fn exec_wire_rejects_malformed_and_mismatched_envelopes() {
         decode_exec_request("codex", None, &value.to_string()).expect("legacy request payload");
     assert!(!decoded.subagent);
 
+    value["action"]["prompt"] = serde_json::json!("legacy inline\nprompt");
+    let decoded = decode_exec_request("codex", None, &value.to_string()).expect("inline prompt");
+    assert!(
+        matches!(decoded.action, ExecAction::Launch { prompt: Some(ref prompt), .. } if prompt == "legacy inline\nprompt")
+    );
+
     value["provider_account"] = serde_json::json!({ "state": "finalized" });
     let err = decode_exec_request("codex", None, &value.to_string())
         .expect_err("finalized binding required");
@@ -1150,6 +1203,7 @@ fn exec_wire_rejects_malformed_and_mismatched_envelopes() {
 #[test]
 fn provider_account_stage_validates_and_reenters_once() {
     let project = tempfile::tempdir().expect("project");
+    let runtime = runtime(project.path());
     let binding = provider_binding("owner");
     for (kind, action) in [
         (
@@ -1184,6 +1238,7 @@ fn provider_account_stage_validates_and_reenters_once() {
             &input,
             project.path(),
             Path::new("/bin/rimz"),
+            &runtime,
             &BTreeMap::new(),
             &LaunchReminders::default(),
         )
@@ -1197,7 +1252,7 @@ fn provider_account_stage_validates_and_reenters_once() {
     let mut pending = request(
         "qwen",
         ExecAction::Launch {
-            prompt: None,
+            prompt: Some("reentry prompt".to_owned()),
             extra_args: Vec::new(),
         },
     );
@@ -1210,6 +1265,7 @@ fn provider_account_stage_validates_and_reenters_once() {
         &pending,
         project.path(),
         Path::new("/bin/rimz"),
+        &runtime,
         &BTreeMap::new(),
         &LaunchReminders::default(),
     )
@@ -1222,6 +1278,11 @@ fn provider_account_stage_validates_and_reenters_once() {
         .find_map(|pair| (pair[0] == "--request").then_some(pair[1].as_str()))
         .expect("reentry payload");
     let finalized = decode_exec_request("qwen", None, payload).expect("finalized request");
+    assert_eq!(finalized.action, pending.action);
+    let initial = exec_argv(Path::new("/bin/rimz"), &runtime, &pending).expect("initial argv");
+    let initial: ExecWire = serde_json::from_str(initial.last().expect("payload")).expect("wire");
+    let reentry: ExecWire = serde_json::from_str(payload).expect("wire");
+    assert_eq!(initial.prompt_file, reentry.prompt_file);
     assert!(matches!(
         finalized.provider_account,
         ProviderAccountState::Finalized { .. }
@@ -1233,6 +1294,7 @@ fn provider_account_stage_validates_and_reenters_once() {
         &finalized,
         project.path(),
         Path::new("/bin/rimz"),
+        &runtime,
         &BTreeMap::new(),
         &LaunchReminders::default(),
     )
@@ -1260,6 +1322,7 @@ fn provider_account_stage_validates_and_reenters_once() {
         &unbound,
         project.path(),
         Path::new("/bin/rimz"),
+        &runtime,
         &BTreeMap::new(),
         &LaunchReminders::default(),
     )
@@ -1292,6 +1355,7 @@ fn provider_account_stage_validates_and_reenters_once() {
         &finalized_request,
         Some(&crate::agents::ManagedLaunchState::Bound(binding)),
         Path::new("/bin/rimz"),
+        &runtime,
     )
     .expect("matching finalized binding") else {
         panic!("finalized launch is ready");

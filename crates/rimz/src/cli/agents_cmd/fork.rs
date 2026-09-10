@@ -129,6 +129,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let launch = launch_batch.single_identity()?;
     let argv = rimz::harness::launch::exec_argv(
         &rimz::proc::rimz_exe(),
+        store.runtime_paths(),
         &rimz::harness::launch::ExecRequest {
             kind: seed.kind.clone(),
             action: rimz::harness::launch::ExecAction::Fork {

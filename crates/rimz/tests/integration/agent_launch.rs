@@ -503,7 +503,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
         identity: ExecIdentity::default(),
     };
     env.rimz()
-        .args(exec_args(&resume))
+        .args(exec_args(&env, &resume))
         .arg("--root")
         .arg(&env.project_root)
         .env("SHELL", "/definitely/not/a/shell")
@@ -561,7 +561,7 @@ fn resume_exec_attaches_only_the_resumed_session_to_its_pane() {
             identity: ExecIdentity::default(),
         };
         env.rimz()
-            .args(exec_args(&request))
+            .args(exec_args(&env, &request))
             .arg("--root")
             .arg(&env.project_root)
             .env("SHELL", "/definitely/not/a/shell")
@@ -592,7 +592,7 @@ fn shell_rc_env_reaches_the_spawned_agent() {
     let dump = env.home_root.join("codex-shell.env");
 
     env.rimz()
-        .args(exec_args(&fresh_exec("codex", None)))
+        .args(exec_args(&env, &fresh_exec("codex", None)))
         .env("SHELL", &shell)
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
@@ -624,7 +624,7 @@ fn bashrc_path_reaches_the_spawned_agent() {
     let dump = env.home_root.join("codex-bashrc.env");
 
     env.rimz()
-        .args(exec_args(&fresh_exec("codex", None)))
+        .args(exec_args(&env, &fresh_exec("codex", None)))
         .env("SHELL", &shell)
         .env("PATH", "/usr/bin:/bin")
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
@@ -652,7 +652,7 @@ fn adapter_preserves_agent_view_shell_env() {
     let dump = env.home_root.join("claude-shell.env");
 
     env.rimz()
-        .args(exec_args(&fresh_exec("claude", None)))
+        .args(exec_args(&env, &fresh_exec("claude", None)))
         .env("SHELL", &shell)
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
@@ -681,7 +681,7 @@ fn trusted_agent_env_overrides_shell_rc_env() {
     let dump = env.home_root.join("codex-trusted-shell.env");
 
     env.rimz()
-        .args(exec_args(&fresh_exec("codex", None)))
+        .args(exec_args(&env, &fresh_exec("codex", None)))
         .env("SHELL", &shell)
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
@@ -704,7 +704,7 @@ fn missing_shell_path_falls_back_to_direct_exec() {
     let dump = env.home_root.join("codex-direct.env");
 
     env.rimz()
-        .args(exec_args(&fresh_exec("codex", None)))
+        .args(exec_args(&env, &fresh_exec("codex", None)))
         .env("SHELL", "/definitely/not/a/shell")
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
@@ -897,10 +897,18 @@ fn prompt_with_shell_metacharacters_stays_one_argument_after_terminator() {
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
     let shim_dir = write_env_dump_shim(&env, "codex");
     let dump = env.home_root.join("codex-prompt.env");
-    let prompt = r#"say "hello there" with spaces"#;
+    let mut prompt = r#"say "hello there"; $HOME `whoami` \\ with spaces "#.repeat(1024);
+    prompt.truncate(40 * 1024);
+    assert_eq!(prompt.len(), 40 * 1024);
+    let argv = rimz::harness::launch::exec_argv(
+        &env.rimz_bin(),
+        &env.runtime_paths(),
+        &fresh_exec("codex", Some(&prompt)),
+    )
+    .expect("encode large prompt");
 
     env.rimz()
-        .args(exec_args(&fresh_exec("codex", Some(prompt))))
+        .args(argv.into_iter().skip(1))
         .env("SHELL", &shell)
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
@@ -921,6 +929,179 @@ fn prompt_with_shell_metacharacters_stays_one_argument_after_terminator() {
             .any(|line| line == format!("ARGV_4={prompt}")),
         "prompt argv element was changed by the shell wrapper:\n{dumped}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn launch_prompt_artifact_round_trips_and_missing_file_fails() {
+    use rimz::harness::launch::{ExecWireErr, decode_exec_request, exec_argv};
+
+    let env = Env::new();
+    let runtime = env.runtime_paths();
+    for prompt in [String::new(), "line with \"quotes\"\n雪\r\n".repeat(2048)] {
+        let request = fresh_exec("codex", Some(&prompt));
+        let argv = exec_argv(&env.rimz_bin(), &runtime, &request).expect("exec argv");
+        let payload = argv.last().expect("payload");
+        assert!(
+            payload.len() < 4096,
+            "prompt must not travel through mux argv"
+        );
+        let wire: serde_json::Value = serde_json::from_str(payload).expect("wire JSON");
+        assert!(wire["action"]["prompt"].is_null());
+        let path = std::path::Path::new(wire["prompt_file"].as_str().expect("prompt path"));
+        assert_eq!(path.parent(), Some(runtime.prompt_dir().as_path()));
+        assert!(
+            path.file_name()
+                .expect("name")
+                .to_string_lossy()
+                .starts_with("task.")
+        );
+        assert_eq!(
+            std::fs::read_to_string(path).expect("prompt contents"),
+            prompt
+        );
+        assert_eq!(
+            decode_exec_request("codex", None, payload).expect("decode"),
+            request
+        );
+
+        std::fs::remove_file(path).expect("remove artifact");
+        assert!(matches!(
+            decode_exec_request("codex", None, payload),
+            Err(ExecWireErr::PromptRead { .. })
+        ));
+        assert!(matches!(
+            decode_exec_request("claude", None, payload),
+            Err(ExecWireErr::KindMismatch { .. })
+        ));
+        assert!(matches!(
+            decode_exec_request("codex", Some(&env.project_root), payload),
+            Err(ExecWireErr::WorktreeMismatch)
+        ));
+
+        let mut invalid = wire;
+        invalid["action"] =
+            serde_json::json!({"action": "resume", "session_id": "session", "extra_args": []});
+        assert!(matches!(
+            decode_exec_request("codex", None, &invalid.to_string()),
+            Err(ExecWireErr::Parse(_))
+        ));
+    }
+    std::fs::remove_dir(runtime.prompt_dir()).expect("empty artifact directory");
+    std::fs::write(runtime.prompt_dir(), "not a directory").expect("block artifact writes");
+    assert!(matches!(
+        exec_argv(
+            &env.rimz_bin(),
+            &runtime,
+            &fresh_exec("codex", Some("prompt"))
+        ),
+        Err(ExecWireErr::PromptWrite(_))
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn oversized_prompt_refuses_before_launch_and_run_records() {
+    for supervised in [false, true] {
+        let env = Env::new();
+        let prompt = "x".repeat(120 * 1024 + 1);
+        let mut command = env.rimz();
+        command.args(["agents", "codex", &prompt]);
+        if supervised {
+            command.args(["-p", "--bg"]);
+        }
+        command
+            .assert()
+            .failure()
+            .stderr(contains("122881 bytes"))
+            .stderr(contains("122880-byte argv safety limit"));
+
+        let paths = env.state_path_for(&env.project_root);
+        assert!(
+            !paths.runs_dir.exists()
+                || std::fs::read_dir(&paths.runs_dir)
+                    .expect("read runs")
+                    .next()
+                    .is_none(),
+            "oversized prompt must not create a run record (supervised={supervised})",
+        );
+        assert!(
+            env.store().read_events().expect("read events").is_empty(),
+            "oversized prompt must not append launch events (supervised={supervised})",
+        );
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn exec_prompt_failures_fail_provisional_launch_and_release_run_waiter() {
+    use rimz::harness::run::RunCancellation;
+    use rimz::harness::run_wake::{ExpectedRunFrame, RunWaiter};
+    use rimz::store::run::{RunRecord, RunStatus};
+
+    for missing_artifact in [true, false] {
+        let env = Env::new();
+        let store = env.store();
+        let launch_id = "launch_prompt_failure";
+        seed_provisional_agent_launch(&env, launch_id, "pruner");
+        let prompt = if missing_artifact {
+            "prompt".to_owned()
+        } else {
+            "x".repeat(120 * 1024 + 1)
+        };
+        let record = RunRecord::new(
+            env.workspace_id.clone(),
+            AgentKind::new_unchecked("codex"),
+            rimz::agents::PermissionMode::Auto,
+            prompt.clone(),
+            env.project_root.clone(),
+        );
+        rimz::harness::run::create(store.paths(), &record).expect("pending run");
+        let waiter = RunWaiter::bind(
+            store.runtime_paths(),
+            ExpectedRunFrame {
+                workspace_id: env.workspace_id.clone(),
+                run_id: record.run_id.clone(),
+            },
+            RunCancellation::new(),
+        )
+        .expect("run waiter");
+        let mut request = fresh_exec("codex", Some(&prompt));
+        request.run_id = Some(record.run_id.clone());
+        request.identity.name = Some("pruner".to_owned());
+        request.identity.launch_id = Some(launch_id.to_owned());
+        let argv = exec_args(&env, &request);
+        if missing_artifact {
+            let wire: serde_json::Value =
+                serde_json::from_str(argv.last().expect("payload")).expect("wire");
+            std::fs::remove_file(wire["prompt_file"].as_str().expect("artifact path"))
+                .expect("remove prompt artifact");
+        }
+        let output = env
+            .rimz()
+            .args(argv)
+            .bounded_output()
+            .expect("wrapper exits");
+        assert!(!output.status.success());
+        let expected = if missing_artifact {
+            "reading launch prompt"
+        } else {
+            "122880-byte argv safety limit"
+        };
+        assert!(String::from_utf8_lossy(&output.stderr).contains(expected));
+        let terminal = waiter
+            .wait_terminal(&store, Some(std::time::Duration::from_secs(1)), None)
+            .await
+            .expect("parent unblocks");
+        assert_eq!(
+            terminal.status,
+            RunStatus::Failed,
+            "failure must not leave the parent waiting until timeout"
+        );
+        assert!(store.read_events().expect("launch events").iter().any(|event| matches!(
+            event.kind(), EventKind::AgentLaunch(ref payload) if payload.state == AgentLaunchState::Failed && payload.agent_id == launch_id
+        )));
+    }
 }
 
 #[cfg(unix)]
@@ -947,7 +1128,7 @@ fn close_pane_exec_reports_startup_failure_before_dropping_to_shell() {
     };
     let output = env
         .rimz()
-        .args(exec_args(&request))
+        .args(exec_args(&env, &request))
         .env("SHELL", &shell)
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_IDLE_SHELL_MARKER", &idle_shell_marker)

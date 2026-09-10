@@ -1794,7 +1794,7 @@ fn agents_exec_missing_worktree_path_fails_launch_without_spawning() {
     request.identity.name = Some("missing-agent".to_owned());
     request.identity.launch_id = Some("launch_missing".to_owned());
     env.rimz()
-        .args(exec_args(&request))
+        .args(exec_args(&env, &request))
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_READY", &ready)
         .assert()
@@ -2736,7 +2736,7 @@ fn spawn_agent_exec_once(env: &Env, worktree: &Path, label: &str) -> Child {
     let shim_dir = write_codex_spawn_marker_shim(env);
     let ready = env.home_root.join(format!("{label}.ready"));
     let mut cmd = env.rimz();
-    cmd.args(exec_args(&worktree_exec_request(worktree)))
+    cmd.args(exec_args(env, &worktree_exec_request(worktree)))
         .current_dir(worktree)
         .env("SHELL", "/definitely/not/a/shell")
         .env("PATH", path_with_front(&shim_dir))
@@ -2758,7 +2758,7 @@ fn spawn_agent_exec_command(
     let shim_dir = write_codex_shim(env);
     let ready = env.home_root.join(format!("{label}.ready"));
     let pid_file = env.home_root.join(format!("{label}.pid"));
-    cmd.args(exec_args(&worktree_exec_request(worktree_arg)))
+    cmd.args(exec_args(env, &worktree_exec_request(worktree_arg)))
         .current_dir(cwd)
         .env("SHELL", "/definitely/not/a/shell")
         .env("PATH", path_with_front(&shim_dir))

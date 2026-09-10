@@ -346,6 +346,7 @@ fn resume_command_replays_launch_identity() {
     };
     let argv = crate::harness::plan::resume_command(
         Path::new(RIMZ_BIN),
+        &RUNTIME,
         &crate::harness::plan::ResumeLaunchIdentity::from(&agent),
         agent.channel.as_deref(),
         &crate::harness::plan::ResumeLaunchPosture::default(),

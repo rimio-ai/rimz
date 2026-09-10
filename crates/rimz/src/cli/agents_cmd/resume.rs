@@ -55,6 +55,7 @@ pub(super) fn resume_lane(
             project_root: &workspace.project_root,
             max: machine_config.resume.max,
             rimz_bin: &rimz::proc::rimz_exe(),
+            runtime: store.runtime_paths(),
         },
         Path::is_dir,
         resume_session_present,

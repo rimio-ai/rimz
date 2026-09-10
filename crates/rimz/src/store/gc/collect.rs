@@ -530,7 +530,7 @@ mod tests {
         let stale_idle_compact = rt.root.join("idle-compact").join("deadbeef.json");
         fs::create_dir_all(stale_idle_compact.parent().unwrap()).unwrap();
         fs::write(&stale_idle_compact, b"{}").unwrap();
-        let stale_prompt = rt.system_prompt_dir().join("sys.deadbeef.md");
+        let stale_prompt = rt.prompt_dir().join("sys.deadbeef.md");
         fs::create_dir_all(stale_prompt.parent().unwrap()).unwrap();
         fs::write(&stale_prompt, b"prompt").unwrap();
         let old = SystemTime::now() - Duration::from_secs(7200);
@@ -581,7 +581,7 @@ mod tests {
             "the emptied idle-compact dir is removed"
         );
         assert!(
-            !rt.system_prompt_dir().exists(),
+            !rt.prompt_dir().exists(),
             "the emptied prompt dir is removed"
         );
         assert!(

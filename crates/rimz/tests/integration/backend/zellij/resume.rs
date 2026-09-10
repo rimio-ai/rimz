@@ -323,7 +323,8 @@ fn zellij_agent_exec_command(
         subagent: false,
         identity: rimz::harness::launch::ExecIdentity::default(),
     };
-    let exec = rimz::harness::launch::exec_argv(&env.rimz_bin(), &request).expect("exec argv");
+    let exec = rimz::harness::launch::exec_argv(&env.rimz_bin(), &env.runtime_paths(), &request)
+        .expect("exec argv");
     let mut argv = vec![
         "/usr/bin/env".to_owned(),
         format!("XDG_STATE_HOME={}", env.state_root().display()),
@@ -454,6 +455,7 @@ fn plan_from_env(env: &Env) -> rimz::harness::resume::ResumePlan {
         rimz::harness::resume::ResumeContext {
             project_root: Some(&env.project_root),
             rimz_bin: &env.rimz_bin(),
+            runtime: &env.runtime_paths(),
             profiles: &rimz::config::ProfilesConfig::default(),
             max: rimz::config::ResumeConfig::default().max,
         },

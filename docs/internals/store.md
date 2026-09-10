@@ -101,6 +101,8 @@ read-marks/{sidebar.<id>,manual}.json read receipts that clear unread rows
 agent_context/, subagent_context/     latest-wins per-session enrichment sidecars
 agent-activity/                       per-agent activity hints
 active-time/                          per-root-session active-time accumulators
+prompt/task.<digest>.md               launch prompt handoff artifacts (cache)
+prompt/sys.<digest>.md                composed system-prompt artifacts (cache)
 agent-telemetry/copilot-otel.jsonl    room-scoped metadata-only Copilot export
 ```
 

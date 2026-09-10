@@ -687,6 +687,8 @@ fn tmux_supervised_print_launches_hook_firing_agent_binary() {
     trust_codex_agent_path(&env, &agent_path);
     let socket = managed_socket(&env.runtime_root);
     let _server = TmuxServerGuard::new(socket.clone());
+    let prompt = "summarize the diff; preserve \"quoted\" details\n".repeat(1024);
+    let prompt = &prompt[..40 * 1024];
 
     // `rimz agents -p` births the tmux session and run tab cold, launches the
     // trusted agent binary, and waits for it. The stub fires its hooks against
@@ -704,7 +706,7 @@ fn tmux_supervised_print_launches_hook_firing_agent_binary() {
             "tmux",
             "agents",
             "codex",
-            "summarize the diff",
+            prompt,
             "--name",
             "journey-runner",
             "-p",
@@ -858,7 +860,7 @@ fn tmux_resumed_parent_session_switch_keeps_subagent_nested() {
     };
     request.identity.launch_id = Some(launch_id.to_string());
     request.close_pane_on_exit = true;
-    let argv = rimz::harness::launch::exec_argv(&env.rimz_bin(), &request)
+    let argv = rimz::harness::launch::exec_argv(&env.rimz_bin(), &env.runtime_paths(), &request)
         .expect("compile spawn-mode resume");
     let command = argv
         .iter()

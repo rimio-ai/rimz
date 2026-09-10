@@ -75,6 +75,8 @@ git diff --staged | rimz agents codex -p --stdin 'review this diff; reply SHIP o
 
 `--stdin` reads to EOF. When both a prompt and stdin are present, RimZ wraps the stdin bytes in `<stdin>…</stdin>` so the agent reads them as attached material. For a fully programmatic feed, `--input-format stream-json` reads user messages from stdin until EOF instead of taking a positional prompt; it already declares stdin as its source, so omit `--stdin`.
 
+For a long brief, use `rimz agents codex -p --stdin < brief.md`, or `rimz subagents codex --prompt-file brief.md` from an agent. The complete launch prompt, including attached stdin and any subagent instructions RimZ adds, must fit within 120 KiB (122,880 bytes). Larger prompts fail before the agent pane opens; keep the brief short and ask the agent to read the larger file instead.
+
 ## Shape the output
 
 `--output-format` chooses what `-p` prints, so the same run serves a human, a `jq` filter, or a live UI.

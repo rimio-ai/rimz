@@ -140,7 +140,11 @@ pub(in crate::cli) fn restart_resolved(
         },
     };
     let pane_name = invocation.kind.to_string();
-    let argv = rimz::harness::launch::exec_argv(&rimz::proc::rimz_exe(), &invocation)?;
+    let argv = rimz::harness::launch::exec_argv(
+        &rimz::proc::rimz_exe(),
+        store.runtime_paths(),
+        &invocation,
+    )?;
     let mut env = rimz::room::pane_identity_env(workspace, agent.channel.as_deref(), false);
     env.insert(
         rimz::workspace::ENV_WORKTREE_PATH.to_owned(),
