@@ -402,11 +402,15 @@ fn append_sub_agent_effort(
     left.push(Span::styled(effort.to_owned(), theme.muted()));
 }
 
+fn elapsed_cluster(theme: &Theme, secs: i64) -> String {
+    format!("{} {:>3}", elapsed_glyph(theme, secs), elapsed_label(secs))
+}
+
 fn sub_agent_elapsed(theme: &Theme, elapsed: Option<i64>) -> Vec<Span<'static>> {
     elapsed
         .map(|secs| {
             vec![Span::styled(
-                format!("{} {:>3}", elapsed_glyph(theme, secs), elapsed_label(secs)),
+                elapsed_cluster(theme, secs),
                 activity_age_style(theme, secs),
             )]
         })
