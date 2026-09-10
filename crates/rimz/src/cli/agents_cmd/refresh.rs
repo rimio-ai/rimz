@@ -52,19 +52,7 @@ pub(super) fn run_refresh(args: RefreshArgs, globals: &GlobalFlags) -> Result<()
     for agent in targets {
         let label = rimz::address::agent_handle(agent, &peers, true);
         let kind = agent.kind.as_str();
-        let model_hint = agent.model.as_deref().or_else(|| {
-            agent
-                .context
-                .as_ref()
-                .and_then(|context| context.model_id.as_deref())
-        });
-        match force_refresh_session_context(
-            &snapshot,
-            runtime,
-            kind,
-            agent.agent_id.as_str(),
-            model_hint,
-        ) {
+        match force_refresh_session_context(&snapshot, runtime, agent) {
             Ok(refresh) if refresh.transcript_refreshed => {
                 writeln!(out, "refreshed {label}")?;
             }

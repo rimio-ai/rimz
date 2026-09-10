@@ -1540,7 +1540,7 @@ fn cursor_transcript_recovery_does_not_settle_a_new_active_turn() {
                 .set_modified(std::time::SystemTime::now() + Duration::from_secs(60)),
         )
         .unwrap();
-    rimz::sidebar::refresh::refresh_session_transcript_context(
+    rimz::sidebar::refresh::refresh_session_transcript_context_from_watch(
         &env.runtime_paths(),
         "cursor",
         "conv-cursor-recovery",
@@ -1577,7 +1577,7 @@ fn cursor_transcript_recovery_does_not_settle_a_new_active_turn() {
     )
     .unwrap();
     drop(file);
-    rimz::sidebar::refresh::refresh_session_transcript_context(
+    rimz::sidebar::refresh::refresh_session_transcript_context_from_watch(
         &env.runtime_paths(),
         "cursor",
         "conv-cursor-recovery",

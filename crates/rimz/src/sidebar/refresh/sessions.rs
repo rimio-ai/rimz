@@ -12,8 +12,8 @@ use sha2::{Digest, Sha256};
 
 use crate::RuntimePaths;
 use crate::agents::{
-    AgentTurnError, LifecycleRefreshCtx, LocalContextRefresh, LocalContextRefreshCtx, RefreshSpawn,
-    RefreshTrigger,
+    AgentState, AgentTurnError, LifecycleRefreshCtx, LocalContextRefresh, LocalContextRefreshCtx,
+    RefreshSpawn, RefreshTrigger,
 };
 use crate::ids::PaneId;
 use crate::sidebar::timing::SESSION_REFRESH_INTERVAL;
@@ -55,25 +55,6 @@ pub(super) fn refresh_live_sessions(snapshot: &SidebarSnapshot, runtime: &Runtim
     reap_stale_session_probe_markers(runtime);
 }
 
-/// Refresh one session's local transcript/rollout context into its sidecar and
-/// wake every renderer. Adapter no-op and stat-gated no-change reads are free,
-/// so producer ticks and transcript watchers can call this freely.
-pub fn refresh_session_transcript_context(
-    runtime: &RuntimePaths,
-    kind: &str,
-    session_id: &str,
-    model_hint: Option<&str>,
-) {
-    refresh_session_transcript_context_with_snapshot(
-        None,
-        runtime,
-        kind,
-        session_id,
-        model_hint,
-        RefreshTrigger::Tick,
-    );
-}
-
 /// Refresh one watched transcript without running adapter full-history work.
 pub fn refresh_session_transcript_context_from_watch(
     runtime: &RuntimePaths,
@@ -104,10 +85,11 @@ pub struct ForcedSessionRefresh {
 pub fn force_refresh_session_context(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
-    kind: &str,
-    session_id: &str,
-    model_hint: Option<&str>,
+    agent: &AgentState,
 ) -> SessionRefreshResult<ForcedSessionRefresh> {
+    let kind = agent.kind.as_str();
+    let session_id = agent.agent_id.as_str();
+    let model_hint = session_model_hint(agent);
     let transcript_refreshed = refresh_session_transcript_context_core(
         Some(snapshot),
         runtime,
@@ -129,25 +111,17 @@ pub fn force_refresh_session_context(
     })
 }
 
-#[cfg(not(test))]
 fn spawn_forced_session_context_refresh(
     runtime: &RuntimePaths,
     kind: &str,
     session_id: &str,
     spawn: RefreshSpawn,
 ) {
+    // Unit tests exercise the inline merge without forking a detached helper.
+    if cfg!(test) {
+        return;
+    }
     spawn_session_context_refresh(runtime, kind, session_id, spawn);
-}
-
-#[cfg(test)]
-// Unit tests exercise the forced inline merge without forking the test binary
-// as a detached `rimz` helper.
-fn spawn_forced_session_context_refresh(
-    _runtime: &RuntimePaths,
-    _kind: &str,
-    _session_id: &str,
-    _spawn: RefreshSpawn,
-) {
 }
 
 fn refresh_session_transcript_context_with_snapshot(
@@ -352,12 +326,18 @@ fn live_session_refreshes(snapshot: &SidebarSnapshot) -> Vec<LiveSessionRefresh>
         .map(|agent| LiveSessionRefresh {
             kind: agent.kind.as_str().to_owned(),
             session_id: agent.agent_id.to_string(),
-            model_hint: agent
-                .model
-                .clone()
-                .or_else(|| agent.context.as_ref().and_then(|ctx| ctx.model_id.clone())),
+            model_hint: session_model_hint(agent).map(str::to_owned),
         })
         .collect()
+}
+
+fn session_model_hint(agent: &AgentState) -> Option<&str> {
+    agent.model.as_deref().or_else(|| {
+        agent
+            .context
+            .as_ref()
+            .and_then(|context| context.model_id.as_deref())
+    })
 }
 
 /// Throttle one session's detached context refresh via a marker file under the
@@ -732,7 +712,14 @@ mod tests {
         let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
         runtime.ensure_dirs().unwrap();
 
-        refresh_session_transcript_context(&runtime, "claude", "sess-1", Some("opus"));
+        refresh_session_transcript_context_with_snapshot(
+            None,
+            &runtime,
+            "claude",
+            "sess-1",
+            Some("opus"),
+            RefreshTrigger::Tick,
+        );
 
         assert!(crate::store::agent_context::read_all(&runtime).is_empty());
     }
@@ -761,7 +748,14 @@ mod tests {
         record.transcript_path = Some(path.to_string_lossy().into_owned());
         crate::store::agent_context::write_record(&runtime, &record).unwrap();
 
-        refresh_session_transcript_context(&runtime, "codex", "sess-1", Some("gpt-5"));
+        refresh_session_transcript_context_with_snapshot(
+            None,
+            &runtime,
+            "codex",
+            "sess-1",
+            Some("gpt-5"),
+            RefreshTrigger::Tick,
+        );
         let first = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
         // The sidecar carries the derivation inputs (window + current usage), not a
         // baked percentage; the gauge derives 50% (50 of 100) downstream.
@@ -781,7 +775,14 @@ mod tests {
         let observed_at = first.context.observed_at;
         let stat = first.transcript_stat;
 
-        refresh_session_transcript_context(&runtime, "codex", "sess-1", Some("gpt-5"));
+        refresh_session_transcript_context_with_snapshot(
+            None,
+            &runtime,
+            "codex",
+            "sess-1",
+            Some("gpt-5"),
+            RefreshTrigger::Tick,
+        );
         let second = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
         assert_eq!(second.context.observed_at, observed_at);
         assert_eq!(second.transcript_stat, stat);
@@ -796,7 +797,14 @@ mod tests {
               \"model_context_window\":100}}}\n",
             )
             .unwrap();
-        refresh_session_transcript_context(&runtime, "codex", "sess-1", Some("gpt-5"));
+        refresh_session_transcript_context_with_snapshot(
+            None,
+            &runtime,
+            "codex",
+            "sess-1",
+            Some("gpt-5"),
+            RefreshTrigger::Tick,
+        );
         let third = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
         assert_eq!(
             third
@@ -834,19 +842,33 @@ mod tests {
         record.transcript_path = Some(path.to_string_lossy().into_owned());
         crate::store::agent_context::write_record(&runtime, &record).unwrap();
 
-        refresh_session_transcript_context(&runtime, "codex", "sess-1", Some("gpt-5"));
+        refresh_session_transcript_context_with_snapshot(
+            None,
+            &runtime,
+            "codex",
+            "sess-1",
+            Some("gpt-5"),
+            RefreshTrigger::Tick,
+        );
         let first = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
         let observed_at = first.context.observed_at;
         let stat = first.transcript_stat;
-        refresh_session_transcript_context(&runtime, "codex", "sess-1", Some("gpt-5"));
+        refresh_session_transcript_context_with_snapshot(
+            None,
+            &runtime,
+            "codex",
+            "sess-1",
+            Some("gpt-5"),
+            RefreshTrigger::Tick,
+        );
         let second = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
         assert_eq!(second.context.observed_at, observed_at);
         assert_eq!(second.transcript_stat, stat);
 
         let snapshot = snapshot_with_panels(workspace, Vec::new());
-        let refresh =
-            force_refresh_session_context(&snapshot, &runtime, "codex", "sess-1", Some("gpt-5"))
-                .unwrap();
+        let mut agent = crate::testkit::agent_state("codex", "sess-1", Timestamp::now());
+        agent.model = Some("gpt-5".to_owned());
+        let refresh = force_refresh_session_context(&snapshot, &runtime, &agent).unwrap();
 
         assert!(refresh.transcript_refreshed);
         assert!(refresh.helper_spawned);
@@ -886,7 +908,14 @@ mod tests {
         );
         record.transcript_path = Some(path.to_string_lossy().into_owned());
         crate::store::agent_context::write_record(&runtime, &record).unwrap();
-        refresh_session_transcript_context(&runtime, "codex", "sess-1", Some("gpt-5"));
+        refresh_session_transcript_context_with_snapshot(
+            None,
+            &runtime,
+            "codex",
+            "sess-1",
+            Some("gpt-5"),
+            RefreshTrigger::Tick,
+        );
         let stat_gated =
             crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
         assert_eq!(
@@ -900,9 +929,9 @@ mod tests {
 
         write_spent_codex_window(&runtime);
         let snapshot = snapshot_with_panels(workspace, Vec::new());
-        let refresh =
-            force_refresh_session_context(&snapshot, &runtime, "codex", "sess-1", Some("gpt-5"))
-                .unwrap();
+        let mut agent = crate::testkit::agent_state("codex", "sess-1", Timestamp::now());
+        agent.model = Some("gpt-5".to_owned());
+        let refresh = force_refresh_session_context(&snapshot, &runtime, &agent).unwrap();
 
         assert!(refresh.transcript_refreshed);
         let forced = crate::store::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
