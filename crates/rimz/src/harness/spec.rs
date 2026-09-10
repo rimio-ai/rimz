@@ -276,7 +276,7 @@ pub enum LayoutErr {
         team: String,
         role: String,
         index: usize,
-        source: crate::harness::schedule::ScheduleErr,
+        source: Box<crate::harness::schedule::ScheduleErr>,
     },
     #[error(
         "team `{team}` role `{role}` signal binding {index} (`{signal}`) requires match.handle or match.session"
@@ -1707,7 +1707,7 @@ fn validate_team_signals(name: &str, team: &Team) -> Result<()> {
             team: name.to_owned(),
             role: role.clone(),
             index,
-            source,
+            source: Box::new(source),
         })?;
         if selector.family() == "agent"
             && !["handle", "session"].iter().any(|key| {

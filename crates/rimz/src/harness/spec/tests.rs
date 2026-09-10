@@ -156,9 +156,9 @@ fn team_signal_validation_checks_role_selectors_and_matches() {
     assert!(matches!(
         validate(&declared),
         Err(LayoutErr::InvalidTeamSignal {
-            source: ScheduleErr::ObsoleteCiSignal { .. },
+            source,
             ..
-        })
+        }) if matches!(*source, ScheduleErr::ObsoleteCiSignal { .. })
     ));
     declared.roles[1].signals[1].matches.clear();
     for signal in ["agent.*", "agent.idle"] {
