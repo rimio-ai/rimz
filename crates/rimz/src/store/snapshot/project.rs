@@ -221,6 +221,12 @@ pub(super) fn agent_event_key(event: &FoldEvent<'_>) -> Option<(AgentKind, Agent
     ))
 }
 
+struct ReducerState {
+    map: BTreeMap<AgentKey, AgentState>,
+    identity: CardIdentityAllocator,
+    launch_identity: LaunchIdentityIndex,
+}
+
 pub(super) fn reduce_agent_states_seeded_with_identity(
     seed: BTreeMap<(AgentKind, AgentSessionId), AgentState>,
     identity_state: AgentIdentityState,
@@ -229,43 +235,32 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
     BTreeMap<(AgentKind, AgentSessionId), AgentState>,
     AgentIdentityState,
 ) {
-    let mut map = seed;
-    let mut identity = CardIdentityAllocator::from_map_and_state(&map, identity_state);
-    let mut launch_identity = LaunchIdentityIndex::from_map(&map);
+    let mut state = ReducerState {
+        identity: CardIdentityAllocator::from_map_and_state(&seed, identity_state),
+        launch_identity: LaunchIdentityIndex::from_map(&seed),
+        map: seed,
+    };
     for event in events {
         let envelope = event.envelope;
         match &event.kind {
             EventKind::SessionRebirth => {
-                unstamp_for_rebirth(map.values_mut());
-                identity.reset_ordinals();
-                launch_identity = LaunchIdentityIndex::from_map(&map);
+                unstamp_for_rebirth(state.map.values_mut());
+                state.identity.reset_ordinals();
+                state.launch_identity = LaunchIdentityIndex::from_map(&state.map);
             }
             EventKind::AgentLaunch(payload) => {
                 let kind = AgentKind::new_unchecked(envelope.source.clone());
-                reduce_agent_launch(
-                    &mut map,
-                    &mut identity,
-                    &mut launch_identity,
-                    envelope,
-                    &kind,
-                    payload,
-                );
+                state.reduce_agent_launch(envelope, &kind, payload);
             }
             EventKind::AgentAttach(payload) => {
                 let kind = AgentKind::new_unchecked(envelope.source.clone());
-                reduce_agent_attach(&mut map, &mut launch_identity, envelope, &kind, payload);
+                state.reduce_agent_attach(envelope, &kind, payload);
             }
             EventKind::AgentLifecycle(payload) => {
-                reduce_lifecycle_event(
-                    &mut map,
-                    &mut identity,
-                    &mut launch_identity,
-                    envelope,
-                    payload,
-                );
+                state.reduce_lifecycle_event(envelope, payload);
             }
             EventKind::Message { payload, .. } => {
-                stamp_compact_command(&mut map, payload, envelope.timestamp);
+                stamp_compact_command(&mut state.map, payload, envelope.timestamp);
             }
             EventKind::SessionDeath(_) => {}
             EventKind::Signal(_) => {}
@@ -282,164 +277,251 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
             EventKind::Other { .. } => {}
         }
     }
-    (map, identity.state())
+    (state.map, state.identity.state())
 }
 
-fn reduce_agent_attach(
-    map: &mut BTreeMap<AgentKey, AgentState>,
-    launch_identity: &mut LaunchIdentityIndex,
-    event: &EventEnvelope,
-    kind: &AgentKind,
-    payload: &AgentAttachPayload,
-) {
-    let key = (kind.clone(), payload.agent_id.clone());
-    if !map.contains_key(&key) && payload.launch_id.is_none() {
-        debug!(
-            target: "rimz::agent::binding",
-            kind = %kind,
-            agent_id = %payload.agent_id,
-            pane_id = %payload.pane_id,
-            "legacy agent.attached event for unknown session ignored",
-        );
-        return;
-    }
-    // A discovered provider session may have no prior RimZ event. The resume
-    // wrapper knows enough durable identity to seed it before the provider
-    // process starts, so the process can launch children immediately.
-    let state = map.entry(key.clone()).or_insert_with(|| {
-        AgentState::seed(
-            kind.clone(),
-            payload.agent_id.clone(),
-            AgentStatus::Idle,
-            event.timestamp,
-        )
-    });
-    if let Some(launch_id) = &payload.launch_id {
-        state.launch_id = Some(launch_id.clone());
-    }
-    state.pane = Some(PaneRef {
-        pane_pid: payload.pane_pid,
-        ..PaneRef::from_id(payload.pane_id.clone())
-    });
-    state.runtime_owner = Some(payload.runtime_owner.clone());
-    launch_identity.replace(&key, state);
-}
-
-fn reduce_lifecycle_event(
-    map: &mut BTreeMap<AgentKey, AgentState>,
-    identity: &mut CardIdentityAllocator,
-    launch_identity: &mut LaunchIdentityIndex,
-    event: &EventEnvelope,
-    payload: &AgentLifecyclePayload,
-) {
-    let kind = AgentKind::new_unchecked(event.source.clone());
-    // The agent-agnostic lifecycle intent this event carries. The status
-    // and the phase/compacting heads are all derived from it through the
-    // one shared `lifecycle::step` table — never taken verbatim — so an
-    // illegal jump can't slip through unvalidated. Replay is silent here;
-    // the ingestion path logs anomalies once per fresh event.
-    let observation = &payload.observation;
-    let signal = observation.signal.clone();
-    // Identity is required: a session-less event is quarantined (folded
-    // to nothing), mirroring the malformed-subagent-identity rule —
-    // never silently merged into a shared per-kind bucket where two
-    // distinct instances would collapse into one row. The ingestion path
-    // warns once with the event in hand; here a `debug!` keeps every
-    // cold rebuild's re-fold quiet.
-    let Some(agent_id) = observation.agent_id.clone() else {
-        debug!(
-            target: "rimz::agent::lifecycle",
-            event_id = %event.event_id,
-            workspace = %event.workspace_id,
-            kind = %kind,
-            "session-less agent.lifecycle event quarantined",
-        );
-        return;
-    };
-    let key = (kind.clone(), agent_id.clone());
-    let event_is_child = observation.parent_agent_id.is_some();
-    let provisional_prior = if event_is_child {
-        // Exact child IDs are authoritative. A child may share its type label
-        // and pane with siblings or its parent, so neither is an adoption or
-        // provisional-release key.
-        None
-    } else if map.contains_key(&key) {
-        release_stamped_provisional_for_existing(
-            map,
-            identity,
-            launch_identity,
-            &kind,
-            &key,
-            observation,
-        );
-        None
-    } else {
-        adopt_provisional(map, identity, launch_identity, &kind, &key, observation)
-    };
-    let event_name = payload.event_name.as_deref();
-    let event_parent_agent_id =
-        non_empty_string(observation.parent_agent_id.as_deref()).map(AgentSessionId::from);
-    let event_task = non_empty_string(observation.task.as_deref());
-    let prior = map.get(&key).or(provisional_prior.as_ref());
-    if let Some(reason) = quarantine_reason(
-        &signal,
-        prior,
-        observation.compacted_from.is_some(),
-        event_parent_agent_id.as_ref(),
-        event_task.as_deref(),
+impl ReducerState {
+    fn reduce_agent_attach(
+        &mut self,
+        event: &EventEnvelope,
+        kind: &AgentKind,
+        payload: &AgentAttachPayload,
     ) {
-        debug!(
-            target: "rimz::agent::lifecycle",
-            event_id = %event.event_id,
-            workspace = %event.workspace_id,
-            kind = %kind,
-            agent_id = %agent_id,
-            reason,
-            "agent.lifecycle event quarantined",
-        );
-        return;
-    }
-    let establishes_identity = signal.establishes_identity();
-    if prior.is_none() && !establishes_identity {
-        debug!(
-            target: "rimz::agent::binding",
-            kind = %kind,
-            agent_id = %agent_id,
-            signal = ?signal,
-            event_name = event_name.unwrap_or(""),
-            "non-start lifecycle event created an unseen session in the reducer",
-        );
-    }
-    let card_identity = identity.assign(&kind, &agent_id, observation, prior);
-    let mut state = assemble_agent_state(AgentStateInput {
-        kind: &kind,
-        agent_id: &agent_id,
-        event,
-        event_name,
-        observation,
-        signal,
-        prior,
-        event_parent_agent_id,
-        event_task,
-        establishes_identity,
-        card_identity,
-    });
-    if prior.is_none()
-        && matches!(
-            observation.signal,
-            lifecycle::LifecycleSignal::CompactionEnded { .. }
-        )
-    {
-        state.compacted_awaiting_prompt = state.compacted_awaiting_prompt.or_else(|| {
-            let predecessor = observation.compacted_from.as_ref()?;
-            map.get(&(kind.clone(), predecessor.clone()))?
-                .compacted_awaiting_prompt
+        let key = (kind.clone(), payload.agent_id.clone());
+        if !self.map.contains_key(&key) && payload.launch_id.is_none() {
+            debug!(
+                target: "rimz::agent::binding",
+                kind = %kind,
+                agent_id = %payload.agent_id,
+                pane_id = %payload.pane_id,
+                "legacy agent.attached event for unknown session ignored",
+            );
+            return;
+        }
+        // A discovered provider session may have no prior RimZ event. The resume
+        // wrapper knows enough durable identity to seed it before the provider
+        // process starts, so the process can launch children immediately.
+        let state = self.map.entry(key.clone()).or_insert_with(|| {
+            AgentState::seed(
+                kind.clone(),
+                payload.agent_id.clone(),
+                AgentStatus::Idle,
+                event.timestamp,
+            )
         });
+        if let Some(launch_id) = &payload.launch_id {
+            state.launch_id = Some(launch_id.clone());
+        }
+        state.pane = Some(PaneRef {
+            pane_pid: payload.pane_pid,
+            ..PaneRef::from_id(payload.pane_id.clone())
+        });
+        state.runtime_owner = Some(payload.runtime_owner.clone());
+        self.launch_identity.replace(&key, state);
     }
-    inherit_compaction_registration(map, &mut state);
-    inherit_launch_identity(map, launch_identity, &mut state);
-    launch_identity.replace(&key, &state);
-    map.insert(key, state);
+
+    fn reduce_lifecycle_event(&mut self, event: &EventEnvelope, payload: &AgentLifecyclePayload) {
+        let kind = AgentKind::new_unchecked(event.source.clone());
+        // The agent-agnostic lifecycle intent this event carries. The status
+        // and the phase/compacting heads are all derived from it through the
+        // one shared `lifecycle::step` table — never taken verbatim — so an
+        // illegal jump can't slip through unvalidated. Replay is silent here;
+        // the ingestion path logs anomalies once per fresh event.
+        let observation = &payload.observation;
+        let signal = observation.signal.clone();
+        // Identity is required: a session-less event is quarantined (folded
+        // to nothing), mirroring the malformed-subagent-identity rule —
+        // never silently merged into a shared per-kind bucket where two
+        // distinct instances would collapse into one row. The ingestion path
+        // warns once with the event in hand; here a `debug!` keeps every
+        // cold rebuild's re-fold quiet.
+        let Some(agent_id) = observation.agent_id.clone() else {
+            debug!(
+                target: "rimz::agent::lifecycle",
+                event_id = %event.event_id,
+                workspace = %event.workspace_id,
+                kind = %kind,
+                "session-less agent.lifecycle event quarantined",
+            );
+            return;
+        };
+        let key = (kind.clone(), agent_id.clone());
+        let event_is_child = observation.parent_agent_id.is_some();
+        let provisional_prior = if event_is_child {
+            // Exact child IDs are authoritative. A child may share its type label
+            // and pane with siblings or its parent, so neither is an adoption or
+            // provisional-release key.
+            None
+        } else if self.map.contains_key(&key) {
+            self.release_stamped_provisional_for_existing(&kind, &key, observation);
+            None
+        } else {
+            self.adopt_provisional(&kind, &key, observation)
+        };
+        let event_name = payload.event_name.as_deref();
+        let event_parent_agent_id =
+            non_empty_string(observation.parent_agent_id.as_deref()).map(AgentSessionId::from);
+        let event_task = non_empty_string(observation.task.as_deref());
+        let prior = self.map.get(&key).or(provisional_prior.as_ref());
+        if let Some(reason) = quarantine_reason(
+            &signal,
+            prior,
+            observation.compacted_from.is_some(),
+            event_parent_agent_id.as_ref(),
+            event_task.as_deref(),
+        ) {
+            debug!(
+                target: "rimz::agent::lifecycle",
+                event_id = %event.event_id,
+                workspace = %event.workspace_id,
+                kind = %kind,
+                agent_id = %agent_id,
+                reason,
+                "agent.lifecycle event quarantined",
+            );
+            return;
+        }
+        let establishes_identity = signal.establishes_identity();
+        if prior.is_none() && !establishes_identity {
+            debug!(
+                target: "rimz::agent::binding",
+                kind = %kind,
+                agent_id = %agent_id,
+                signal = ?signal,
+                event_name = event_name.unwrap_or(""),
+                "non-start lifecycle event created an unseen session in the reducer",
+            );
+        }
+        let card_identity = self.identity.assign(&kind, &agent_id, observation, prior);
+        let mut state = assemble_agent_state(AgentStateInput {
+            kind: &kind,
+            agent_id: &agent_id,
+            event,
+            event_name,
+            observation,
+            signal,
+            prior,
+            event_parent_agent_id,
+            event_task,
+            establishes_identity,
+            card_identity,
+        });
+        if prior.is_none()
+            && matches!(
+                observation.signal,
+                lifecycle::LifecycleSignal::CompactionEnded { .. }
+            )
+        {
+            state.compacted_awaiting_prompt = state.compacted_awaiting_prompt.or_else(|| {
+                let predecessor = observation.compacted_from.as_ref()?;
+                self.map
+                    .get(&(kind.clone(), predecessor.clone()))?
+                    .compacted_awaiting_prompt
+            });
+        }
+        inherit_compaction_registration(&self.map, &mut state);
+        inherit_launch_identity(&self.map, &self.launch_identity, &mut state);
+        self.launch_identity.replace(&key, &state);
+        self.map.insert(key, state);
+    }
+
+    fn adopt_provisional(
+        &mut self,
+        kind: &AgentKind,
+        key: &(AgentKind, AgentSessionId),
+        observation: &AgentLifecycleObservation,
+    ) -> Option<AgentState> {
+        if let Some(provisional_key) = observation.agent_name.as_deref().and_then(|name| {
+            self.identity
+                .adoptable_owner_for_name(&self.map, kind, name, key)
+        }) && let Some(prior) = self.retire_provisional(&provisional_key)
+        {
+            return Some(prior);
+        }
+        let provisional_key = observation.pane_id.as_ref().and_then(|pane_id| {
+            self.identity
+                .adoptable_owner_for_pane(&self.map, kind, pane_id, key)
+        })?;
+        self.retire_provisional(&provisional_key)
+    }
+
+    fn release_stamped_provisional_for_existing(
+        &mut self,
+        kind: &AgentKind,
+        key: &(AgentKind, AgentSessionId),
+        observation: &AgentLifecycleObservation,
+    ) {
+        if self
+            .map
+            .get(key)
+            .is_some_and(AgentState::is_provider_subagent)
+        {
+            return;
+        }
+        if self.map.get(key).is_none_or(|state| state.pane.is_some()) {
+            return;
+        }
+        let Some(provisional_key) = observation.pane_id.as_ref().and_then(|pane_id| {
+            self.identity
+                .adoptable_owner_for_pane(&self.map, kind, pane_id, key)
+        }) else {
+            return;
+        };
+        let _ = self.retire_provisional(&provisional_key);
+    }
+
+    fn retire_provisional(&mut self, key: &AgentKey) -> Option<AgentState> {
+        let prior = self.map.remove(key);
+        self.launch_identity.remove(key);
+        self.identity.release_key(key);
+        self.identity.consume_launch_key(key);
+        prior
+    }
+
+    fn reduce_agent_launch(
+        &mut self,
+        event: &EventEnvelope,
+        kind: &AgentKind,
+        payload: &AgentLaunchPayload,
+    ) {
+        if !valid_agent_name(&payload.agent_name) {
+            debug!(
+                target: "rimz::agent::launch",
+                event_id = %event.event_id,
+                workspace = %event.workspace_id,
+                kind = %kind,
+                agent_name = %payload.agent_name,
+                "agent.launched event with invalid name ignored",
+            );
+            return;
+        }
+        let key = (kind.clone(), payload.agent_id.clone());
+        if self.identity.launch_consumed(&payload.agent_id) {
+            return;
+        }
+        if payload.agent_id.is_provisional()
+            && let Some(owner) = self.identity.owner_for_name(&payload.agent_name)
+            && owner.0 == *kind
+            && owner != key
+            && self.map.contains_key(&owner)
+        {
+            self.identity.consume_launch_key(&key);
+            return;
+        }
+        if matches!(payload.state, AgentLaunchState::Failed)
+            && !self.map.contains_key(&key)
+            && self.identity.owner_for_name(&payload.agent_name).is_none()
+        {
+            return;
+        }
+        let prior = self.map.get(&key);
+        let card_identity = self
+            .identity
+            .assign_launch(kind, &payload.agent_id, payload, prior);
+        let state = assemble_launch_state(kind, event, payload, prior, card_identity);
+        self.launch_identity.replace(&key, &state);
+        self.map.insert(key, state);
+    }
 }
 
 fn quarantine_reason(
@@ -469,111 +551,6 @@ fn quarantine_reason(
         }
         _ => None,
     }
-}
-
-fn adopt_provisional(
-    map: &mut BTreeMap<AgentKey, AgentState>,
-    identity: &mut CardIdentityAllocator,
-    launch_identity: &mut LaunchIdentityIndex,
-    kind: &AgentKind,
-    key: &(AgentKind, AgentSessionId),
-    observation: &AgentLifecycleObservation,
-) -> Option<AgentState> {
-    if let Some(provisional_key) = observation
-        .agent_name
-        .as_deref()
-        .and_then(|name| identity.adoptable_owner_for_name(map, kind, name, key))
-        && let Some(prior) = retire_provisional(map, identity, launch_identity, &provisional_key)
-    {
-        return Some(prior);
-    }
-    let provisional_key = observation
-        .pane_id
-        .as_ref()
-        .and_then(|pane_id| identity.adoptable_owner_for_pane(map, kind, pane_id, key))?;
-    retire_provisional(map, identity, launch_identity, &provisional_key)
-}
-
-fn release_stamped_provisional_for_existing(
-    map: &mut BTreeMap<AgentKey, AgentState>,
-    identity: &mut CardIdentityAllocator,
-    launch_identity: &mut LaunchIdentityIndex,
-    kind: &AgentKind,
-    key: &(AgentKind, AgentSessionId),
-    observation: &AgentLifecycleObservation,
-) {
-    if map.get(key).is_some_and(AgentState::is_provider_subagent) {
-        return;
-    }
-    if map.get(key).is_none_or(|state| state.pane.is_some()) {
-        return;
-    }
-    let Some(provisional_key) = observation
-        .pane_id
-        .as_ref()
-        .and_then(|pane_id| identity.adoptable_owner_for_pane(map, kind, pane_id, key))
-    else {
-        return;
-    };
-    let _ = retire_provisional(map, identity, launch_identity, &provisional_key);
-}
-
-fn retire_provisional(
-    map: &mut BTreeMap<AgentKey, AgentState>,
-    identity: &mut CardIdentityAllocator,
-    launch_identity: &mut LaunchIdentityIndex,
-    key: &AgentKey,
-) -> Option<AgentState> {
-    let prior = map.remove(key);
-    launch_identity.remove(key);
-    identity.release_key(key);
-    identity.consume_launch_key(key);
-    prior
-}
-
-fn reduce_agent_launch(
-    map: &mut BTreeMap<AgentKey, AgentState>,
-    identity: &mut CardIdentityAllocator,
-    launch_identity: &mut LaunchIdentityIndex,
-    event: &EventEnvelope,
-    kind: &AgentKind,
-    payload: &AgentLaunchPayload,
-) {
-    if !valid_agent_name(&payload.agent_name) {
-        debug!(
-            target: "rimz::agent::launch",
-            event_id = %event.event_id,
-            workspace = %event.workspace_id,
-            kind = %kind,
-            agent_name = %payload.agent_name,
-            "agent.launched event with invalid name ignored",
-        );
-        return;
-    }
-    let key = (kind.clone(), payload.agent_id.clone());
-    if identity.launch_consumed(&payload.agent_id) {
-        return;
-    }
-    if payload.agent_id.is_provisional()
-        && let Some(owner) = identity.owner_for_name(&payload.agent_name)
-        && owner.0 == *kind
-        && owner != key
-        && map.contains_key(&owner)
-    {
-        identity.consume_launch_key(&key);
-        return;
-    }
-    if matches!(payload.state, AgentLaunchState::Failed)
-        && !map.contains_key(&key)
-        && identity.owner_for_name(&payload.agent_name).is_none()
-    {
-        return;
-    }
-    let prior = map.get(&key);
-    let card_identity = identity.assign_launch(kind, &payload.agent_id, payload, prior);
-    let state = assemble_launch_state(kind, event, payload, prior, card_identity);
-    launch_identity.replace(&key, &state);
-    map.insert(key, state);
 }
 
 pub(super) fn compact_command_agent_key<'a>(
