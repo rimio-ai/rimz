@@ -149,7 +149,8 @@ allowed-dependencies = [
 ]
 # Pane writers share one user-scoped lock path across workspace boundaries.
 # Room lifecycle owns private tmp and rewritten-skill directory creation and removal.
-surface-budget = 129
+# Wake and subagent reports share streaming output-file measurements.
+surface-budget = 133
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -246,7 +247,8 @@ path = "crates/rimz/src/sandbox"
 allowed-dependencies = ["agents", "config", "disk", "ids", "mux", "utils"]
 # Launch passes adapter-declared skill inputs separately from provider-home binds.
 # Static profile preflight shares typed provider identity across CLI entry points.
-surface-budget = 13
+# Host-side output writers share the current agent-visible room tmp view.
+surface-budget = 16
 
 [[module]]
 path = "crates/rimz/src/room"
@@ -287,7 +289,8 @@ surface-budget = 343
 [[module]]
 path = "crates/rimz/src/theme"
 upward-dependencies = ["agents"]
-surface-budget = 32
+# Wake prompts and CLI reports share the byte-size formatter.
+surface-budget = 33
 
 [[module]]
 path = "crates/rimz/src/transcript.rs"
