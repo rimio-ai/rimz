@@ -50,6 +50,10 @@ fn warm_discovery_reuses_unchanged_directories_and_finds_changed_frontier() {
     let second = root.join("project/session/deeper/second.jsonl");
     std::fs::create_dir_all(second.parent().unwrap()).unwrap();
     std::fs::write(&second, "{}\n").unwrap();
+    File::open(first.parent().unwrap())
+        .unwrap()
+        .set_modified(SystemTime::now() + Duration::from_secs(1))
+        .unwrap();
     assert_eq!(
         index.discover_sources_for_test(vec![source.clone()], now),
         [second.clone(), first.clone()]
