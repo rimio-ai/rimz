@@ -522,23 +522,44 @@ impl MuxBackend for TmuxBackend {
     fn paste_text(&self, pane: &PaneId, text: &str) -> Result<()> {
         ensure_pane_backend(pane, MuxName::Tmux)?;
         let payload = paste_payload(text);
-        // Open marker, literal text, close marker — each `-l` so tmux never
-        // re-reads the bytes as key names, all in one client invocation.
-        let literal = |body: &str| {
-            vec![
-                "send-keys".to_owned(),
-                "-t".to_owned(),
-                pane.raw().to_owned(),
-                "-l".to_owned(),
-                "--".to_owned(),
-                body.to_owned(),
-            ]
-        };
-        self.batch(&[
-            literal(BRACKET_PASTE_OPEN),
-            literal(&payload),
-            literal(BRACKET_PASTE_CLOSE),
-        ])
+        static NEXT_BUFFER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let buffer = format!(
+            "rimz-paste-{}-{}",
+            std::process::id(),
+            NEXT_BUFFER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        );
+        // Explicit markers bracket even when the application has not enabled
+        // paste mode (unlike `-p`); `-r` preserves our CR-normalized bytes.
+        let mut paste = vec![
+            "paste-buffer".to_owned(),
+            "-d".to_owned(),
+            "-r".to_owned(),
+            "-b".to_owned(),
+            buffer.clone(),
+            "-t".to_owned(),
+            pane.raw().to_owned(),
+        ];
+        // tmux 3.7 added control-byte sanitization; older releases paste raw.
+        if super::parse_version(&self.version()?).is_some_and(|version| version >= (3, 7, 0)) {
+            paste.push("-S".to_owned());
+        }
+        let result = self
+            .batch_spec(&[
+                vec![
+                    "load-buffer".to_owned(),
+                    "-b".to_owned(),
+                    buffer.clone(),
+                    "-".to_owned(),
+                ],
+                paste,
+            ])
+            .stdin_bytes(format!("{BRACKET_PASTE_OPEN}{payload}{BRACKET_PASTE_CLOSE}").into_bytes())
+            .run()
+            .map(|_| ());
+        if result.is_err() {
+            let _ = self.cmd().args(["delete-buffer", "-b", &buffer]).run();
+        }
+        result
     }
 
     fn open_sidebar(&self, opts: &SidebarPaneOptions, _daemon: Option<&DaemonView>) -> Result<()> {

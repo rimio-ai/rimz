@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
-use std::io::Read as _;
+use std::io::{Read as _, Write as _};
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -25,7 +25,7 @@ pub(crate) const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const LIST_SESSIONS_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// A built-up command we can run or hand back to an interactive caller.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct CommandSpec {
     pub program: String,
     pub args: Vec<String>,
@@ -33,6 +33,20 @@ pub struct CommandSpec {
     /// Keys cleared from the inherited environment before `env` is applied.
     pub env_remove: BTreeSet<String>,
     pub cwd: Option<PathBuf>,
+    stdin: Option<Vec<u8>>,
+}
+
+impl std::fmt::Debug for CommandSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CommandSpec")
+            .field("program", &self.program)
+            .field("args", &self.args)
+            .field("env", &self.env)
+            .field("env_remove", &self.env_remove)
+            .field("cwd", &self.cwd)
+            .field("stdin_len", &self.stdin.as_ref().map(Vec::len))
+            .finish()
+    }
 }
 
 impl CommandSpec {
@@ -43,6 +57,7 @@ impl CommandSpec {
             env: BTreeMap::new(),
             env_remove: BTreeSet::new(),
             cwd: None,
+            stdin: None,
         }
     }
 
@@ -75,6 +90,12 @@ impl CommandSpec {
 
     pub fn cwd(mut self, dir: impl Into<PathBuf>) -> Self {
         self.cwd = Some(dir.into());
+        self
+    }
+
+    /// Feed payload bytes to a bounded control command, then close stdin.
+    pub fn stdin_bytes(mut self, bytes: impl Into<Vec<u8>>) -> Self {
+        self.stdin = Some(bytes.into());
         self
     }
 
@@ -168,23 +189,44 @@ impl CommandSpec {
     }
 
     fn run_bounded_inner(&self, timeout: Duration) -> Result<Output> {
+        let started = Instant::now();
         crate::proc::testkit::count_spawn();
         let mut child = self
             .to_command()
-            .stdin(Stdio::null())
+            .stdin(if self.stdin.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|err| self.spawn_error(err))?;
         let drain = |pipe: Option<Box<dyn io::Read + Send>>| {
+            let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let mut buf = Vec::new();
                 if let Some(mut pipe) = pipe {
                     let _ = pipe.read_to_end(&mut buf);
                 }
-                buf
-            })
+                let _ = tx.send(buf);
+            });
+            rx
         };
+        let input = self
+            .stdin
+            .as_ref()
+            .zip(child.stdin.take())
+            .map(|(bytes, mut pipe)| {
+                let bytes = bytes.clone();
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let result = pipe.write_all(&bytes);
+                    drop(pipe);
+                    let _ = tx.send(result);
+                });
+                rx
+            });
         let stdout = drain(
             child
                 .stdout
@@ -205,39 +247,44 @@ impl CommandSpec {
         let waiter = std::thread::spawn(move || {
             let _ = tx.send(child.wait());
         });
-        match rx.recv_timeout(timeout) {
-            Ok(status) => {
-                let status = status?;
-                let _ = waiter.join();
-                let stdout = stdout.join().unwrap_or_default();
-                let stderr = stderr.join().unwrap_or_default();
-                Ok(Output {
-                    status,
-                    stdout,
-                    stderr,
-                })
-            }
-            // Timeout — or the unreachable disconnected case (the waiter always
-            // sends); both mean no exit status arrived, so kill and report.
+        let remaining = || timeout.saturating_sub(started.elapsed());
+        let timeout_error = || MuxErr::Timeout {
+            program: self.program.clone(),
+            args: self.args.join(" "),
+            seconds: timeout.as_secs(),
+        };
+        let status = match rx.recv_timeout(remaining()) {
+            Ok(status) => status?,
             Err(_) => {
                 kill_by_pid(pid);
-                // SIGKILL is not refusable, so the joins reap the child and
-                // finish the drains before the error returns. Off unix nothing
-                // was killed: skip the joins — the handles detach, and the
-                // waiter reaps the child whenever it eventually exits.
+                // Reap the killed child, but do not join pipe workers: a
+                // descendant may still hold their other ends open.
                 #[cfg(unix)]
-                {
-                    let _ = waiter.join();
-                    let _ = stdout.join();
-                    let _ = stderr.join();
-                }
-                Err(MuxErr::Timeout {
-                    program: self.program.clone(),
-                    args: self.args.join(" "),
-                    seconds: timeout.as_secs(),
-                })
+                let _ = waiter.join();
+                return Err(timeout_error());
+            }
+        };
+        let stdout = stdout
+            .recv_timeout(remaining())
+            .map_err(|_| timeout_error())?;
+        let stderr = stderr
+            .recv_timeout(remaining())
+            .map_err(|_| timeout_error())?;
+        if let Some(input) = input {
+            let result = input
+                .recv_timeout(remaining())
+                .map_err(|_| timeout_error())?;
+            // Preserve the command's stderr on failure; successful commands
+            // must not silently accept an incomplete input payload.
+            if status.success() {
+                result?;
             }
         }
+        Ok(Output {
+            status,
+            stdout,
+            stderr,
+        })
     }
 
     fn spawn_error(&self, err: io::Error) -> MuxErr {

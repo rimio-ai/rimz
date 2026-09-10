@@ -70,6 +70,97 @@ fn send_keys_separates_dash_leading_text_from_zellij_options() {
 }
 
 #[cfg(unix)]
+#[test]
+fn paste_text_chunks_large_byte_streams_without_changing_bytes() {
+    use crate::pane::keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN};
+
+    for text in [
+        String::new(),
+        "x".repeat(100),
+        "é\r\n\0\x1b[200~".repeat(2048),
+    ] {
+        let (temp, shim) = support::logging_shim();
+        let backend = ZellijBackend::with_program_for_test(&shim);
+        let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
+        backend.paste_text(&pane, &text).expect("paste text");
+        let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
+        let expected =
+            format!("{BRACKET_PASTE_OPEN}{normalized}{BRACKET_PASTE_CLOSE}").into_bytes();
+        let log = shim_log(&temp);
+        assert_eq!(
+            log.lines().count(),
+            expected.len().div_ceil(ZELLIJ_WRITE_CHUNK)
+        );
+        let mut actual = Vec::new();
+        for line in log.lines() {
+            let bytes = line
+                .strip_prefix("action write --pane-id terminal_7 ")
+                .expect("targeted byte write")
+                .split_whitespace()
+                .map(|byte| byte.parse::<u8>().expect("decimal byte"))
+                .collect::<Vec<_>>();
+            assert!(bytes.len() <= ZELLIJ_WRITE_CHUNK);
+            actual.extend(bytes);
+        }
+        assert_eq!(actual, expected);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn paste_text_closes_after_second_failed_zellij_chunk() {
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/zellij.log"
+if [ -e "$dir/first-chunk" ]; then
+    if [ -e "$dir/failed-chunk" ]; then
+        printf 'close failed\n' >&2
+        exit 2
+    fi
+    touch "$dir/failed-chunk"
+    printf 'chunk failed\n' >&2
+    exit 1
+fi
+touch "$dir/first-chunk"
+"#,
+    );
+    let backend = ZellijBackend::with_program_for_test(&shim);
+    let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
+    let err = backend
+        .paste_text(&pane, &"x".repeat(20 * 1024))
+        .expect_err("second chunk fails");
+    assert!(err.to_string().contains("chunk failed"));
+    let log = shim_log(&temp);
+    let writes = log
+        .lines()
+        .map(|line| {
+            line.strip_prefix("action write --pane-id terminal_7 ")
+                .expect("targeted byte write")
+                .split_whitespace()
+                .map(|byte| byte.parse::<u8>().expect("decimal byte"))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        writes.len(),
+        3,
+        "no body chunks after the failed second chunk"
+    );
+    let expected = format!(
+        "{}{}",
+        crate::pane::keys::BRACKET_PASTE_OPEN,
+        "x".repeat(20 * 1024)
+    );
+    assert_eq!(writes[0], expected.as_bytes()[..ZELLIJ_WRITE_CHUNK]);
+    assert_eq!(
+        writes[1],
+        expected.as_bytes()[ZELLIJ_WRITE_CHUNK..2 * ZELLIJ_WRITE_CHUNK]
+    );
+    assert_eq!(writes[2], crate::pane::keys::BRACKET_PASTE_CLOSE.as_bytes());
+}
+
+#[cfg(unix)]
 struct TestRoom {
     runtime_root: tempfile::TempDir,
     project_root: tempfile::TempDir,
