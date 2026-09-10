@@ -152,9 +152,11 @@ fn prepare_view(
         }
     }
     shadows.retain(|target, _| {
-        !entries.values().any(|entry| {
-            matches!(entry.kind, DirEntryKind::Bind) && root.join(&entry.name) == *target
-        })
+        entries.values().any(|entry| {
+            matches!(entry.kind, DirEntryKind::Symlink { .. }) && entry.source == *target
+        }) && !entries
+            .values()
+            .any(|entry| root.join(&entry.name) == *target)
     });
     Ok(SkillView {
         dir: Some(DirView {
@@ -200,10 +202,12 @@ fn list_dir(
             .into_string()
             .map_err(|_| SandboxErr::InvalidPath(path.clone()))?;
         let kind = if preserve_symlinks && path.is_symlink() {
-            let target =
-                std::fs::read_link(&path).map_err(|source| SandboxErr::Io { path, source })?;
+            let target = std::fs::read_link(&path).map_err(|source| SandboxErr::Io {
+                path: path.clone(),
+                source,
+            })?;
             if target.to_str().is_none() {
-                return Err(SandboxErr::InvalidPath(target));
+                return Err(SandboxErr::InvalidPath(path));
             }
             DirEntryKind::Symlink { target }
         } else {

@@ -457,6 +457,13 @@ fn sandbox_empty_skill_list_makes_every_skill_manual() {
         },
     )
     .unwrap();
+    assert_eq!(
+        argv.windows(3)
+            .filter(|args| args[0] == "--ro-bind")
+            .count(),
+        2,
+        "library copies bind only at the discovery path, not over the host library"
+    );
     for (source, name) in [(&root, "native"), (&library, "library-only")] {
         let copy = skill_bind_source(&argv, &root.join(name));
         assert!(copy.starts_with(&env.store().paths().skills_dir));
