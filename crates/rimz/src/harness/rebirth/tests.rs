@@ -692,6 +692,7 @@ fn team_machine() -> MachineConfig {
     machine.agents.profiles.0.insert(
         "claude-plan".to_owned(),
         Profile {
+            auto_compact: None,
             agent: "claude".to_owned(),
             description: None,
             subagents: None,
@@ -708,6 +709,7 @@ fn team_machine() -> MachineConfig {
     machine.agents.profiles.0.insert(
         "codex-code".to_owned(),
         Profile {
+            auto_compact: None,
             agent: "codex".to_owned(),
             description: None,
             subagents: None,
@@ -726,6 +728,7 @@ fn team_machine() -> MachineConfig {
         Team {
             roles: vec![
                 RoleBinding {
+                    auto_compact: None,
                     role: "planner".to_owned(),
                     profile: "claude-plan".to_owned(),
                     mode: None,
@@ -737,6 +740,7 @@ fn team_machine() -> MachineConfig {
                     args: None,
                 },
                 RoleBinding {
+                    auto_compact: None,
                     role: "coder".to_owned(),
                     profile: "codex-code".to_owned(),
                     mode: None,

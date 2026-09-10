@@ -334,6 +334,7 @@ fn available_profiles_include_profiles_and_commands_but_not_kinds_or_teams() {
     config.agents.profiles.0.insert(
         "agent-only".to_owned(),
         rimz::config::Profile {
+            auto_compact: None,
             agent: "claude".to_owned(),
             description: None,
             subagents: None,
@@ -350,6 +351,7 @@ fn available_profiles_include_profiles_and_commands_but_not_kinds_or_teams() {
     config.subagents.profiles.0.insert(
         "planner".to_owned(),
         rimz::config::Profile {
+            auto_compact: None,
             agent: "claude".to_owned(),
             description: Some("Plans supervised work".to_owned()),
             subagents: None,
@@ -366,6 +368,7 @@ fn available_profiles_include_profiles_and_commands_but_not_kinds_or_teams() {
     config.subagents.profiles.0.insert(
         "claude".to_owned(),
         rimz::config::Profile {
+            auto_compact: None,
             agent: "claude".to_owned(),
             description: None,
             subagents: None,

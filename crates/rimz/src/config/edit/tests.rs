@@ -240,12 +240,14 @@ fn validates_config_key_read_and_write_surfaces() {
         "agents.profiles.codex-slim.mode",
         "agents.profiles.codex-slim.model",
         "agents.profiles.codex-slim.effort",
+        "agents.profiles.codex-slim.auto-compact",
         "agents.profiles.codex-slim.args",
         "agents.profiles.codex-slim.system-prompt-file",
         "subagents.profiles.codex-review.agent",
         "subagents.profiles.codex-review.description",
         "subagents.profiles.codex-review.model-reminder",
         "subagents.profiles.codex-review.model",
+        "subagents.profiles.codex-review.auto-compact",
         "loop.tasks.watch.agent",
         "loop.default-timeout",
         "loop.tasks.watch.prompt",
@@ -347,8 +349,10 @@ fn validates_config_key_read_and_write_surfaces() {
         ("accounts.budget", true),
         ("accounts.budget.claude", true),
         ("agents.profiles.demo.agent", true),
+        ("agents.profiles.demo.auto-compact", true),
         ("agents.profiles.demo.bogus", false),
         ("subagents.profiles.demo.effort", true),
+        ("subagents.profiles.demo.auto-compact", true),
         ("subagents.profiles.demo.bogus", false),
         ("agents.teams.demo.layout", true),
         ("agents.teams.demo.bogus", false),
@@ -378,6 +382,7 @@ fn dynamic_profile_and_team_field_lists_match_serialized_schema() {
         model: Some("model".to_owned()),
         effort: Some("high".to_owned()),
         budget: Some("$1".to_owned()),
+        auto_compact: Some("200k".to_owned()),
         system_prompt_file: Some(PathBuf::from("system.md")),
         append_system_prompt_files: vec![PathBuf::from("append.md")],
         args: Some("--flag".to_owned()),
@@ -390,6 +395,7 @@ fn dynamic_profile_and_team_field_lists_match_serialized_schema() {
             model: None,
             effort: None,
             budget: None,
+            auto_compact: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             args: None,
@@ -495,6 +501,32 @@ fn set_profile_model_reminder_preserves_boolean_values_in_both_namespaces() {
             editor.get(Some(&key)).expect("unchanged model reminder"),
             toml::Value::Boolean(true)
         );
+    }
+}
+
+#[test]
+fn set_profile_auto_compact_round_trips_in_both_namespaces() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        dir.path().join("agents-home"),
+    ));
+    for namespace in ["agents", "subagents"] {
+        editor
+            .set(&format!("{namespace}.profiles.planner.agent"), "claude")
+            .expect("create profile");
+        let key = format!("{namespace}.profiles.planner.auto-compact");
+        assert!(matches!(
+            editor.get(Some(&key)),
+            Err(ConfigEditErr::UnsetKey { .. })
+        ));
+        for value in ["200k", "200000", "1m"] {
+            editor.set(&key, value).expect("set auto-compact");
+            assert_eq!(
+                editor.get(Some(&key)).expect("get auto-compact"),
+                toml::Value::String(value.to_owned())
+            );
+        }
     }
 }
 

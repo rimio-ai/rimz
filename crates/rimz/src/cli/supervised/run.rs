@@ -88,6 +88,7 @@ pub(super) fn prepare_supervised_launch_layout(
     let preset = rimz::agents::LaunchPreset {
         model: rimz::harness::plan::normalized_preset_value(request.model.as_deref()),
         effort: rimz::harness::plan::normalized_preset_value(request.effort.as_deref()),
+        auto_compact: None,
         system_prompt_file: request.system_prompt_file.clone(),
         append_system_prompt_files: request.append_system_prompt_files.clone(),
     };

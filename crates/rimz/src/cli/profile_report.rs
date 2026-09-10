@@ -363,6 +363,7 @@ mod tests {
 
     fn profile(agent: &str) -> rimz::config::Profile {
         rimz::config::Profile {
+            auto_compact: None,
             agent: agent.to_owned(),
             description: None,
             subagents: None,

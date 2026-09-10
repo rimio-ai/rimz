@@ -1579,6 +1579,7 @@ mod tests {
             rimz::config::Team {
                 roles: vec![
                     rimz::config::RoleBinding {
+                        auto_compact: None,
                         role: "planner".to_owned(),
                         profile: "claude".to_owned(),
                         mode: None,
@@ -1590,6 +1591,7 @@ mod tests {
                         args: None,
                     },
                     rimz::config::RoleBinding {
+                        auto_compact: None,
                         role: "coder".to_owned(),
                         profile: "codex".to_owned(),
                         mode: None,

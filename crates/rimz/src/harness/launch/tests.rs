@@ -87,6 +87,7 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
 
 fn team() -> crate::config::Team {
     let role = |role: &str, profile: &str| crate::config::RoleBinding {
+        auto_compact: None,
         role: role.to_owned(),
         profile: profile.to_owned(),
         mode: None,

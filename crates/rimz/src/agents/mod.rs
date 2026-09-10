@@ -163,6 +163,8 @@ pub type Result<T> = std::result::Result<T, AgentErr>;
 pub struct LaunchPreset {
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// Native auto-compaction window as a canonical decimal token count.
+    pub auto_compact: Option<String>,
     /// Absolute path to a file whose contents replace the agent's base system
     /// prompt. Resolved and existence-checked by the launcher before render.
     pub system_prompt_file: Option<PathBuf>,
@@ -175,6 +177,7 @@ impl LaunchPreset {
     pub fn is_empty(&self) -> bool {
         self.model.as_deref().is_none_or(str::is_empty)
             && self.effort.as_deref().is_none_or(str::is_empty)
+            && self.auto_compact.as_deref().is_none_or(str::is_empty)
             && self.system_prompt_file.is_none()
             && self.append_system_prompt_files.is_empty()
     }
@@ -184,6 +187,7 @@ impl LaunchPreset {
 pub enum PresetField {
     Model,
     Effort,
+    AutoCompact,
     SystemPromptFile,
 }
 
@@ -192,6 +196,7 @@ impl PresetField {
         match self {
             Self::Model => "model",
             Self::Effort => "effort",
+            Self::AutoCompact => "auto-compact",
             Self::SystemPromptFile => "system-prompt-file",
         }
     }
@@ -201,6 +206,7 @@ impl PresetField {
         match self {
             Self::Model => preset.model = Some(value),
             Self::Effort => preset.effort = Some(value),
+            Self::AutoCompact => preset.auto_compact = Some(value),
             Self::SystemPromptFile => preset.system_prompt_file = Some(value.into()),
         }
         preset

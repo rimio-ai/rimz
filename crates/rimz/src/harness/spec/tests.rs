@@ -56,6 +56,7 @@ fn profile(agent: &str) -> Profile {
         model: None,
         effort: None,
         budget: None,
+        auto_compact: None,
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
         args: None,
@@ -88,6 +89,7 @@ fn role(role: &str, profile: &str) -> RoleBinding {
         model: None,
         effort: None,
         budget: None,
+        auto_compact: None,
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
         args: None,
@@ -511,6 +513,7 @@ fn profile_inheritance_and_builtin_overrides_resolve() {
             Profile {
                 agent: "codex".to_owned(),
                 model: Some("base-model".to_owned()),
+                auto_compact: Some("1m".to_owned()),
                 effort: Some("medium".to_owned()),
                 args: Some("--base".to_owned()),
                 ..profile("codex")
@@ -522,6 +525,7 @@ fn profile_inheritance_and_builtin_overrides_resolve() {
                 agent: "base".to_owned(),
                 effort: Some("high".to_owned()),
                 args: Some("--child".to_owned()),
+                auto_compact: Some("200k".to_owned()),
                 ..profile("base")
             },
         ),
@@ -553,11 +557,13 @@ fn profile_inheritance_and_builtin_overrides_resolve() {
     assert_eq!(child.launch.model.as_deref(), Some("base-model"));
     assert_eq!(child.launch.effort.as_deref(), Some("high"));
     assert_eq!(child.args.as_deref(), Some("--child"));
+    assert_eq!(child.auto_compact.as_deref(), Some("200000"));
 
     let inherited = resolve_profile("inherits-args", &profiles).expect("inherited");
     assert_eq!(inherited.launch.model.as_deref(), Some("child-model"));
     assert_eq!(inherited.launch.effort.as_deref(), Some("medium"));
     assert_eq!(inherited.args.as_deref(), Some("--base"));
+    assert_eq!(inherited.auto_compact.as_deref(), Some("1000000"));
 
     for name in ["claude", "claude-child"] {
         let resolved = resolve_profile(name, &profiles).expect("override");
@@ -575,6 +581,7 @@ fn profile_cells_render_preset_args_and_carry_prompt_sources() {
                 agent: "codex".to_owned(),
                 mode: Some(PermissionMode::Auto),
                 model: Some("gpt-5-codex".to_owned()),
+                auto_compact: Some("200k".to_owned()),
                 effort: Some("high".to_owned()),
                 args: Some("--profile reviewer".to_owned()),
                 ..profile("codex")
@@ -585,6 +592,7 @@ fn profile_cells_render_preset_args_and_carry_prompt_sources() {
             Profile {
                 agent: "claude".to_owned(),
                 system_prompt_file: Some("/prompts/base.md".into()),
+                auto_compact: Some("200000".to_owned()),
                 append_system_prompt_files: vec!["/prompts/base-fragment.md".into()],
                 ..profile("claude")
             },
@@ -607,6 +615,8 @@ fn profile_cells_render_preset_args_and_carry_prompt_sources() {
         "gpt-5-codex".to_owned(),
         "-c".to_owned(),
         "model_reasoning_effort=high".to_owned(),
+        "-c".to_owned(),
+        "model_auto_compact_token_limit=200000".to_owned(),
     ];
     expected.extend(
         crate::agents::find_definition("codex")
@@ -635,7 +645,7 @@ fn profile_cells_render_preset_args_and_carry_prompt_sources() {
             PathBuf::from("/prompts/child-fragment.md")
         ]
     );
-    assert!(prompt.args.is_empty());
+    assert_eq!(prompt.args, ["--autocompact", "200000"]);
 }
 
 #[test]
@@ -651,6 +661,7 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
             model: Some("claude-model".to_owned()),
             effort: Some("high".to_owned()),
             budget: Some("$4".to_owned()),
+            auto_compact: Some("200k".to_owned()),
             system_prompt_file: Some("/prompts/system.md".into()),
             append_system_prompt_files: vec!["/prompts/fragment.md".into()],
             args: Some("--strict-mcp-config".to_owned()),
@@ -671,6 +682,12 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
     assert_eq!(cell.launch.model, None);
     assert_eq!(cell.launch.effort.as_deref(), Some("high"));
     assert_eq!(cell.launch.budget.as_deref(), Some("$4.00"));
+    assert_eq!(cell.auto_compact.as_deref(), Some("200000"));
+    assert!(
+        cell.args
+            .windows(2)
+            .any(|args| args == ["-c", "model_auto_compact_token_limit=200000"])
+    );
     assert_eq!(cell.launch.mode, Some(PermissionMode::Auto));
     assert_eq!(
         cell.system_prompt_file.as_deref(),
@@ -681,6 +698,40 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
         [PathBuf::from("/prompts/fragment.md")]
     );
     assert!(!cell.args.iter().any(|arg| arg == "--strict-mcp-config"));
+}
+
+#[test]
+fn auto_compact_rejects_invalid_counts_and_unsupported_adapters() {
+    for (kind, value) in [
+        ("claude", "70%"),
+        ("codex", "0"),
+        ("codex", "lots"),
+        ("codex", "18446744073709551615k"),
+        ("pi", "200k"),
+    ] {
+        let profiles = profiles([(
+            "compact",
+            Profile {
+                auto_compact: Some(value.to_owned()),
+                ..profile(kind)
+            },
+        )]);
+        assert!(
+            matches!(resolve_profile("compact", &profiles),
+            Err(LayoutErr::InvalidProfile { profile, reason })
+                if profile == "compact" && reason.contains("auto-compact")),
+            "{kind}: {value}"
+        );
+    }
+
+    for value in ["70%", "0", "lots"] {
+        let mut binding = role("coder", "codex");
+        binding.auto_compact = Some(value.to_owned());
+        let teams = TeamsConfig(BTreeMap::from([("forge".to_owned(), team(vec![binding]))]));
+        assert!(matches!(resolve_spec_with_agent_override(
+            Some("forge"), &no_profiles(), &no_profiles(), &no_commands(), &teams, None,
+        ), Err(LayoutErr::InvalidProfile { reason, .. }) if reason.contains("auto-compact")));
+    }
 }
 
 #[test]
@@ -797,6 +848,7 @@ fn team_roles_and_virtual_cells_rebase_through_the_same_path() {
             Profile {
                 agent: "claude".to_owned(),
                 model: Some("profile-model".to_owned()),
+                auto_compact: Some("200k".to_owned()),
                 ..profile("claude")
             },
         ),
@@ -813,6 +865,7 @@ fn team_roles_and_virtual_cells_rebase_through_the_same_path() {
     ]);
     let mut planner = role("planner", "planner");
     planner.args = Some("--role-arg".to_owned());
+    planner.auto_compact = Some("300K".to_owned());
     let mut reviewer = role("reviewer", "planner");
     reviewer.args = Some("--reviewer-arg".to_owned());
     let teams = TeamsConfig(BTreeMap::from([(
@@ -831,6 +884,16 @@ fn team_roles_and_virtual_cells_rebase_through_the_same_path() {
     let cell = agent_at(&team_spec, 0, 0);
     assert_eq!(cell.kind, "codex");
     assert_eq!(cell.launch.role.as_deref(), Some("planner"));
+    assert_eq!(cell.auto_compact.as_deref(), Some("300000"));
+    assert!(
+        cell.args
+            .windows(2)
+            .any(|args| args == ["-c", "model_auto_compact_token_limit=300000"])
+    );
+    assert_eq!(
+        agent_at(&team_spec, 1, 0).auto_compact.as_deref(),
+        Some("200000")
+    );
     assert!(!cell.args.iter().any(|arg| arg == "--role-arg"));
 
     let role_spec = resolve_spec_with_agent_override(
@@ -1112,6 +1175,7 @@ fn named_teams_compile_roles_and_apply_overrides() {
                 effort: Some("high".to_owned()),
                 budget: None,
                 system_prompt_file: Some("/prompts/coder.md".into()),
+                auto_compact: None,
                 append_system_prompt_files: Vec::new(),
                 args: Some("--role".to_owned()),
             },
@@ -1123,6 +1187,7 @@ fn named_teams_compile_roles_and_apply_overrides() {
                 effort: None,
                 budget: None,
                 system_prompt_file: Some("/prompts/role.md".into()),
+                auto_compact: None,
                 append_system_prompt_files: vec!["/prompts/role-fragment.md".into()],
                 args: None,
             },

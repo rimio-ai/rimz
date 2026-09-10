@@ -239,6 +239,7 @@ fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
     Cell::Agent(AgentCell {
         kind: agent.kind.clone(),
         args: posture.args.clone(),
+        auto_compact: None,
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
         launch: rimz::agents::LaunchParams {

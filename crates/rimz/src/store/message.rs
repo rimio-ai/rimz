@@ -161,20 +161,7 @@ impl AutoCompact {
             }
             Ok(Self::Percent(pct))
         } else {
-            let (mantissa, scale) = match raw.as_bytes().last() {
-                Some(b'k' | b'K') => (&raw[..raw.len() - 1], 1_000),
-                Some(b'm' | b'M') => (&raw[..raw.len() - 1], 1_000_000),
-                _ => (raw, 1),
-            };
-            let count: u64 = mantissa.trim().parse().map_err(|_| {
-                format!(
-                    "invalid auto-compact threshold `{raw}`; use `70%`, a token count, or a `k`/`m` count like `180k`"
-                )
-            })?;
-            let tokens = count
-                .checked_mul(scale)
-                .ok_or_else(|| format!("auto-compact threshold `{raw}` is too large"))?;
-            Ok(Self::Tokens(tokens))
+            parse_token_count(raw).map(Self::Tokens)
         }
     }
 
@@ -190,6 +177,21 @@ impl AutoCompact {
                 .is_some_and(|used| used >= tokens),
         }
     }
+}
+
+pub(crate) fn parse_token_count(raw: &str) -> Result<u64, String> {
+    let raw = raw.trim();
+    let (mantissa, scale) = match raw.as_bytes().last() {
+        Some(b'k' | b'K') => (&raw[..raw.len() - 1], 1_000),
+        Some(b'm' | b'M') => (&raw[..raw.len() - 1], 1_000_000),
+        _ => (raw, 1),
+    };
+    let count: u64 = mantissa.trim().parse().map_err(|_| {
+        format!("invalid token count `{raw}`; use a token count or a `k`/`m` count like `180k`")
+    })?;
+    count
+        .checked_mul(scale)
+        .ok_or_else(|| format!("token count `{raw}` is too large"))
 }
 
 impl std::fmt::Display for AutoCompact {

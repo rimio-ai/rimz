@@ -136,6 +136,13 @@ pub struct Profile {
     pub effort: Option<String>,
     #[serde(default)]
     pub budget: Option<String>,
+    /// The agent's native auto-compaction window as a token count; rendered per adapter, with unsupported adapters refusing the launch.
+    #[serde(
+        default,
+        rename = "auto-compact",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub auto_compact: Option<String>,
     /// A file whose contents replace the agent's base system prompt, giving the
     /// profile its own voice. Resolved relative to the config file and
     /// existence-checked when the profile launches.
@@ -204,6 +211,13 @@ pub struct RoleBinding {
     pub effort: Option<String>,
     #[serde(default)]
     pub budget: Option<String>,
+    /// The agent's native auto-compaction window as a token count; rendered per adapter, with unsupported adapters refusing the launch.
+    #[serde(
+        default,
+        rename = "auto-compact",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub auto_compact: Option<String>,
     /// A replacement system prompt. Relative paths use the declaring file's
     /// directory, so a role in `~/.agents/teams/<name>/team.toml` can name a
     /// prompt shipped beside that fragment.

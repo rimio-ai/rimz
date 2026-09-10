@@ -132,6 +132,7 @@ static KIMI_DESCRIPTOR: AgentSpec = AgentSpec {
             instruction: super::CompactInstruction::Unsupported,
         }),
         presets: super::PresetMatchers {
+            auto_compact: None,
             model: Some(super::StaticPresetMatcher::Flag(&["--model", "-m"])),
             ..super::PresetMatchers::EMPTY
         },

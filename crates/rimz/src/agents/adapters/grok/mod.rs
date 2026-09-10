@@ -104,6 +104,7 @@ static GROK_DESCRIPTOR: AgentSpec = AgentSpec {
             instruction: super::CompactInstruction::Unsupported,
         }),
         presets: super::PresetMatchers {
+            auto_compact: None,
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             effort: Some(super::StaticPresetMatcher::Flag(&["--reasoning-effort"])),
             ..super::PresetMatchers::EMPTY

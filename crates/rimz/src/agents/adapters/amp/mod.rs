@@ -89,6 +89,7 @@ static AMP_DESCRIPTOR: AgentSpec = AgentSpec {
         max_turn_flag: None,
         compact_command: None,
         presets: super::PresetMatchers {
+            auto_compact: None,
             model: Some(super::StaticPresetMatcher::Flag(&["--mode"])),
             effort: Some(super::StaticPresetMatcher::Flag(&["--effort"])),
             system_prompt_file: None,

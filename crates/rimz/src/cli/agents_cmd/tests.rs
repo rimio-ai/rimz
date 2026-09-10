@@ -28,6 +28,7 @@ fn planner_profiles() -> ProfilesConfig {
     profiles.0.insert(
         "planner".to_owned(),
         Profile {
+            auto_compact: None,
             agent: "claude".to_owned(),
             description: None,
             subagents: None,
@@ -73,6 +74,7 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
     machine.agents.profiles.0.insert(
         "planner".to_owned(),
         Profile {
+            auto_compact: None,
             agent: "claude".to_owned(),
             description: Some("Plans the main lane".to_owned()),
             subagents: None,
@@ -89,6 +91,7 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
     machine.subagents.profiles.0.insert(
         "child-only".to_owned(),
         Profile {
+            auto_compact: None,
             agent: "codex".to_owned(),
             description: Some("Child profile".to_owned()),
             subagents: None,
@@ -1122,6 +1125,7 @@ mod launch_options {
         machine.agents.profiles.0.insert(
             "warn".to_owned(),
             rimz::config::Profile {
+                auto_compact: None,
                 agent: "codex".to_owned(),
                 description: None,
                 subagents: None,
