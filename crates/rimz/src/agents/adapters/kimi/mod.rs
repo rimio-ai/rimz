@@ -510,6 +510,10 @@ impl crate::agents::capabilities::InstallationCapability for KimiAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for KimiAdapter {
+    fn config_home_env_keys(&self) -> &'static [&'static str] {
+        &["KIMI_CODE_HOME"]
+    }
+
     fn config_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
         wire::kimi_home_from(
             env.get("KIMI_CODE_HOME").map(std::ffi::OsStr::new),

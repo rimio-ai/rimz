@@ -253,6 +253,10 @@ impl crate::agents::capabilities::CoreCapability for KiroAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for KiroAdapter {
+    fn config_home_env_keys(&self) -> &'static [&'static str] {
+        &["KIRO_HOME"]
+    }
+
     fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         install::resolve_home(
             env.get("KIRO_HOME").map(std::ffi::OsStr::new),

@@ -470,6 +470,10 @@ impl crate::agents::capabilities::InstallationCapability for CursorAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for CursorAdapter {
+    fn config_home_env_keys(&self) -> &'static [&'static str] {
+        &["CURSOR_CONFIG_DIR"]
+    }
+
     fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         if let Some(home) = env.get("CURSOR_CONFIG_DIR").filter(|home| !home.is_empty()) {
             return Some(PathBuf::from(home));

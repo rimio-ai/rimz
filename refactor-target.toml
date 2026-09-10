@@ -74,7 +74,7 @@ upward-dependencies = ["address"]
 # Pending-wake vocabulary and rest projection are shared by harness and renderers.
 # Trigger summaries share wording between sleeping descriptions and expanded waits.
 # Native config-home resolution is shared with sandbox launch planning.
-surface-budget = 967
+surface-budget = 968
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/codex"
@@ -165,7 +165,8 @@ upward-dependencies = ["sidebar::refresh"]
 # Submitted-prompt header grammar now belongs to store.
 # Loop hosts and check ownership cross the scheduler/CLI/room seams.
 # The validated exec envelope establishes cleanup context before artifact I/O.
-surface-budget = 543
+# Sandbox env pins rebuild shell argv while preserving post-rc account stages.
+surface-budget = 544
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -241,7 +242,7 @@ surface-budget = 14
 [[module]]
 path = "crates/rimz/src/sandbox"
 allowed-dependencies = ["agents", "config", "disk", "mux", "utils"]
-surface-budget = 9
+surface-budget = 11
 
 [[module]]
 path = "crates/rimz/src/room"
@@ -537,11 +538,13 @@ allowed-dependencies = [
     "harness::prompt_compose",
     "ids",
     "proc",
+    "sandbox",
     "trust",
     "workspace",
 ]
 # Validated envelope access establishes failure cleanup before prompt-file I/O.
-surface-budget = 44
+# Mount-input pins are reapplied through the compiled shell wrapper.
+surface-budget = 45
 
 [[module]]
 path = "crates/rimz/src/harness/run.rs"

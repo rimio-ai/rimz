@@ -236,6 +236,11 @@ pub trait LaunchCapability: CoreCapability {
         None
     }
 
+    /// Provider-specific environment overrides consulted by `config_home`; HOME and XDG roots are owned and pinned by the sandbox.
+    fn config_home_env_keys(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Whether a command already matched by this adapter's launch descriptors
     /// is an interactive agent process. Providers with service subcommands
     /// override this while ordinary CLIs accept the descriptor match.

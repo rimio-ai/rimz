@@ -327,6 +327,10 @@ impl crate::agents::capabilities::CoreCapability for GrokAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for GrokAdapter {
+    fn config_home_env_keys(&self) -> &'static [&'static str] {
+        &["GROK_HOME"]
+    }
+
     fn config_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
         paths::home_from(
             env.get("GROK_HOME").map(std::ffi::OsStr::new),

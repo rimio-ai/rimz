@@ -340,6 +340,10 @@ impl crate::agents::capabilities::CoreCapability for PiAdapter {
 
 // TODO(launch-reminders): compose additive text into materialized --system-prompt text or the extension.
 impl crate::agents::capabilities::LaunchCapability for PiAdapter {
+    fn config_home_env_keys(&self) -> &'static [&'static str] {
+        &["PI_CODING_AGENT_DIR"]
+    }
+
     fn config_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
         spend::pi_config_dir_from(
             env.get("PI_CODING_AGENT_DIR").map(String::as_str),

@@ -51,7 +51,9 @@ fn sandbox_prepare_resolves_symlinked_skill_sources() {
     std::fs::create_dir_all(root.join("hidden")).unwrap();
     std::os::unix::fs::symlink(&source, root.join("visible")).unwrap();
     std::os::unix::fs::symlink("missing", root.join("broken")).unwrap();
-    let vars = environment(&env);
+    let mut vars = environment(&env);
+    let claude_home = env.home_root.join(".claude").display().to_string();
+    vars.insert("CLAUDE_CONFIG_DIR".to_owned(), claude_home.clone());
     let specs = ["hidden:off".parse().unwrap()];
     let state = env.store();
     let mut inputs = SandboxInputs {
@@ -61,10 +63,25 @@ fn sandbox_prepare_resolves_symlinked_skill_sources() {
         worktree: None,
         scratch_dir: &state.paths().scratch_dir,
         provider_home: None,
+        provider_home_env_keys: &["CODEX_HOME"],
         skills: &specs,
     };
     let plan = rimz::sandbox::prepare(&inputs).unwrap();
-    let argv = rimz::sandbox::bwrap_argv(&plan, inputs.cwd, &["true".into()]);
+    assert_eq!(plan.pins["CODEX_HOME"], rimz::sandbox::EnvPin::Unset);
+    assert_eq!(
+        plan.pins["CLAUDE_CONFIG_DIR"],
+        rimz::sandbox::EnvPin::Set(claude_home)
+    );
+    assert_eq!(
+        plan.pins["HOME"],
+        rimz::sandbox::EnvPin::Set(env.home_root.display().to_string())
+    );
+    assert_eq!(
+        plan.pins["TMPDIR"],
+        rimz::sandbox::EnvPin::Set("/tmp".to_owned())
+    );
+    assert!(!plan.pins.contains_key("PATH"));
+    let argv = rimz::sandbox::bwrap_argv(&plan.plan, inputs.cwd, &["true".into()]);
     assert!(argv.windows(3).any(|args| args
         == [
             "--ro-bind",
@@ -95,10 +112,11 @@ fn sandbox_prepare_rebinds_tmp_rooted_runtime() {
         worktree: None,
         scratch_dir: &state.paths().scratch_dir,
         provider_home: None,
+        provider_home_env_keys: &[],
         skills: &[],
     };
     let plan = rimz::sandbox::prepare(&inputs).unwrap();
-    let argv = rimz::sandbox::bwrap_argv(&plan, inputs.cwd, &[]);
+    let argv = rimz::sandbox::bwrap_argv(&plan.plan, inputs.cwd, &[]);
     assert!(argv.windows(3).any(|args| args
         == [
             "--bind",
@@ -141,6 +159,9 @@ set -eu
 ls "$HOME/.claude/skills" > /tmp/claude-skills
 ls "$HOME/.agents/skills" > /tmp/agent-skills
 printf '%s\n' "$TMPDIR" > /tmp/tmpdir
+printf '%s\n' "$HOME" > /tmp/provider-home
+test "${CLAUDE_CONFIG_DIR+x}" != x
+test "${CODEX_HOME+x}" != x
 test -d "$XDG_RUNTIME_DIR/rimz/$RIMZ_TEST_WORKSPACE_ID"
 test -c /dev/null
 test "$(cat "$HOME/.codex/config.toml")" = sandbox-test
@@ -151,6 +172,8 @@ printf '%s\n' shared > /tmp/team-file
     )
     .unwrap();
     let shell = write_fake_login_shell(&env, "sandbox-shell", &[("TMPDIR", "wrong-shell-tmp")]);
+    let shell_body = std::fs::read_to_string(&shell).unwrap();
+    std::fs::write(&shell, shell_body.replacen("#!/bin/sh\n", "#!/bin/sh\nexport CLAUDE_CONFIG_DIR=$HOME/elsewhere\nexport CODEX_HOME=$HOME/elsewhere\nexport XDG_RUNTIME_DIR=/tmp/wrong-runtime\nexport HOME=/tmp/evil\n", 1)).unwrap();
     let host_tmp = tempfile::NamedTempFile::new_in("/tmp").unwrap();
     let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("codex"), Vec::new());
     request.skills = vec!["c:off".parse().unwrap()];
@@ -186,6 +209,12 @@ printf '%s\n' shared > /tmp/team-file
     );
     assert!(env.home_root.join(".agents/skills/c").is_dir());
     assert!(env.home_root.join(".claude/skills/b").is_symlink());
+    assert_eq!(
+        std::fs::read_to_string(scratch.join("provider-home"))
+            .unwrap()
+            .trim(),
+        env.home_root.to_str().unwrap()
+    );
 
     std::fs::write(shim_dir.join("codex"), "#!/bin/sh\nset -eu\ntest \"$(cat /tmp/team-file)\" = shared\nprintf child > /tmp/child-file\n").unwrap();
     request.subagent = true;
@@ -239,11 +268,12 @@ fn sandbox_skill_root_symlink_keeps_its_filtered_view() {
         worktree: None,
         scratch_dir: &state.paths().scratch_dir,
         provider_home: None,
+        provider_home_env_keys: &[],
         skills: &["hidden:off".parse().unwrap()],
     })
     .unwrap();
     let argv = rimz::sandbox::bwrap_argv(
-        &plan,
+        &plan.plan,
         &env.project_root,
         &[
             "/bin/sh".into(),

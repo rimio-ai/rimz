@@ -69,7 +69,7 @@ Project config uses one `agents` shape at a time: `[[agents]]` for env entries, 
 3. trusted project `[[agents]]` env
 4. adapter launch built-ins ([`AgentDefinition::launch_env`](../../../crates/rimz/src/agents/mod.rs))
 5. `RIMZ_RUN_ID`, `RIMZ_AGENT_PROFILE`, `RIMZ_AGENT_ROLE`, `RIMZ_AGENT_MODEL`, `RIMZ_AGENT_EFFORT`, and the render-toolkit mode
-6. sandbox launches stamp `TMPDIR=/tmp` through extra launch env before compilation, so the wrapper reapplies it after shell startup
+6. sandbox launches pin the root and native override variables consulted by mount planning: present values are reapplied, absent keys are removed after shell startup, and `TMPDIR` is always `/tmp`
 
 Adapter built-ins apply after the project env so a trusted config tunes an agent's launch while the integration's own launch contract stays pinned. A malformed launch env key refuses before any tab, worktree, or run-record side effect: [`invalid_env_key`](../../../crates/rimz/src/harness/launch.rs) requires every key to be non-empty, free of `=`, and not start with `-`.
 
