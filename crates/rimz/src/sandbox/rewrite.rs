@@ -256,6 +256,7 @@ fn flow_closes_on_line(node: &str) -> bool {
         let byte = bytes[index];
         match byte {
             b' ' | b'\t' => {}
+            b'?' if node_start && bytes.get(index + 1).is_some_and(u8::is_ascii_whitespace) => {}
             b'#' if node_start || index > 0 && bytes[index - 1].is_ascii_whitespace() => {
                 return false;
             }
@@ -604,6 +605,8 @@ mod tests {
             "[!!str a]",
             "{a: *x}",
             "{\"a\":*x}",
+            "{? &a key: value}",
+            "[? *a : value]",
             "[\"unterminated]",
             "[a,\n  b]",
             "[a, # ]\n  b]",
