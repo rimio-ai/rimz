@@ -13,6 +13,10 @@ fn write_sleeping_agent_shim(env: &Env, agent: &str) -> PathBuf {
     std::fs::write(
         &path,
         "#!/bin/bash\n\
+         case \"${1:-}\" in\n\
+           --version) printf '%s 0.0.0\\n' \"${0##*/}\"; exit 0;;\n\
+           auth|login) exit 1;;\n\
+         esac\n\
          printf ready > \"$RIMZ_TEST_AGENT_READY\"\n\
          exec -a \"${0##*/}\" sleep 300\n",
     )
@@ -196,12 +200,31 @@ fn assert_producer_releases_profile_tab(count: usize) {
     std::fs::write(
         agent_bin.join("claude"),
         "#!/bin/bash\nset -e\n\
+         case \"${1:-}\" in\n\
+           --version) printf 'claude 0.0.0\\n'; exit 0;;\n\
+           auth) exit 1;;\n\
+         esac\n\
          printf '{\"hook_event_name\":\"SessionStart\",\"session_id\":\"tab-name-%s\"}\\n' \"$$\" | \
          RIMZ_AGENT_PID=$$ \"$RIMZ_TEST_RIMZ_BIN\" hooks feed --source claude >/dev/null\n\
          printf '%s' \"$$\" > \"$RIMZ_TEST_AGENT_READY/$TMUX_PANE\"\n\
          exec -a claude sleep 300\n",
     )
     .expect("write registered sleeping agent");
+    for args in [vec!["--version"], vec!["auth", "status"]] {
+        env.rimz_at(&agent_bin.join("claude"))
+            .env("RIMZ_TEST_AGENT_READY", &ready)
+            .env("RIMZ_TEST_RIMZ_BIN", env.rimz_bin())
+            .env("TMUX_PANE", "%0")
+            .args(args)
+            .bounded_output()
+            .expect("informational probe finishes without launching an agent");
+        assert_eq!(
+            std::fs::read_dir(&ready)
+                .expect("readiness directory")
+                .count(),
+            0
+        );
+    }
     let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
     let server = TmuxServer::in_runtime_root(&env.runtime_root);
     env.rimz()
