@@ -100,12 +100,12 @@ pub struct SandboxDiagnostic {
     pub error: Option<String>,
 }
 
-pub fn preflight(isolation: Isolation) -> Result<(), SandboxErr> {
+pub fn preflight(isolation: Isolation) -> Result<Option<PathBuf>, SandboxErr> {
     if isolation == Isolation::Host {
-        return Ok(());
+        return Ok(None);
     }
     #[cfg(target_os = "linux")]
-    return linux::probe().map(|_| ());
+    return linux::probe().map(Some);
     #[cfg(not(target_os = "linux"))]
     Err(SandboxErr::UnsupportedOs)
 }
@@ -226,20 +226,21 @@ fn validate_path(path: &Path) -> Result<(), SandboxErr> {
     Ok(())
 }
 
-pub fn bwrap_argv(plan: &MountPlan, cwd: &Path, inner: &[String]) -> Vec<String> {
-    let mut argv: Vec<String> = [
-        "bwrap",
-        "--bind",
-        "/",
-        "/",
-        "--dev-bind",
-        "/dev",
-        "/dev",
-        "--die-with-parent",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect();
+pub fn bwrap_argv(bwrap: &Path, plan: &MountPlan, cwd: &Path, inner: &[String]) -> Vec<String> {
+    let mut argv = vec![bwrap.display().to_string()];
+    argv.extend(
+        [
+            "--bind",
+            "/",
+            "/",
+            "--dev-bind",
+            "/dev",
+            "/dev",
+            "--die-with-parent",
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    );
     for mount in &plan.mounts {
         match mount {
             Mount::Bind { source, target } | Mount::RoBind { source, target } => {
@@ -313,9 +314,9 @@ mod tests {
                 },
             ],
         };
-        insta::assert_debug_snapshot!(bwrap_argv(&plan, Path::new("/project"), &["agent".into(), "two words".into()]), @r###"
+        insta::assert_debug_snapshot!(bwrap_argv(Path::new("/usr/bin/bwrap"), &plan, Path::new("/project"), &["agent".into(), "two words".into()]), @r###"
         [
-            "bwrap",
+            "/usr/bin/bwrap",
             "--bind",
             "/",
             "/",

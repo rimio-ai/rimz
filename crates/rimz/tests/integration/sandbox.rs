@@ -1,6 +1,7 @@
 //! Agent mount-view coverage at the real exec boundary.
 
 use std::collections::BTreeMap;
+use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 
 use predicates::str::contains;
@@ -16,7 +17,7 @@ use crate::common::{
 #[expect(clippy::print_stderr, reason = "optional bubblewrap test dependency")]
 fn available() -> bool {
     match rimz::sandbox::preflight(Isolation::Sandbox) {
-        Ok(()) => true,
+        Ok(_) => true,
         Err(err) => {
             eprintln!("skipping bubblewrap execution: {err}");
             false
@@ -81,7 +82,12 @@ fn sandbox_prepare_resolves_symlinked_skill_sources() {
         rimz::sandbox::EnvPin::Set("/tmp".to_owned())
     );
     assert!(!plan.pins.contains_key("PATH"));
-    let argv = rimz::sandbox::bwrap_argv(&plan.plan, inputs.cwd, &["true".into()]);
+    let argv = rimz::sandbox::bwrap_argv(
+        Path::new("/usr/bin/bwrap"),
+        &plan.plan,
+        inputs.cwd,
+        &["true".into()],
+    );
     assert!(argv.windows(3).any(|args| args
         == [
             "--ro-bind",
@@ -116,7 +122,7 @@ fn sandbox_prepare_rebinds_tmp_rooted_runtime() {
         skills: &[],
     };
     let plan = rimz::sandbox::prepare(&inputs).unwrap();
-    let argv = rimz::sandbox::bwrap_argv(&plan.plan, inputs.cwd, &[]);
+    let argv = rimz::sandbox::bwrap_argv(Path::new("/usr/bin/bwrap"), &plan.plan, inputs.cwd, &[]);
     assert!(argv.windows(3).any(|args| args
         == [
             "--bind",
@@ -160,6 +166,7 @@ ls "$HOME/.claude/skills" > /tmp/claude-skills
 ls "$HOME/.agents/skills" > /tmp/agent-skills
 printf '%s\n' "$TMPDIR" > /tmp/tmpdir
 printf '%s\n' "$HOME" > /tmp/provider-home
+printf '%s' "$RIMZ_TEST_NON_UTF8" > /tmp/non-utf8
 test "${CLAUDE_CONFIG_DIR+x}" != x
 test "${CODEX_HOME+x}" != x
 test -d "$XDG_RUNTIME_DIR/rimz/$RIMZ_TEST_WORKSPACE_ID"
@@ -184,6 +191,10 @@ printf '%s\n' shared > /tmp/team-file
         .env("SHELL", shell)
         .env("RIMZ_TEST_HOST_TMP_FILE", host_tmp.path())
         .env("RIMZ_TEST_WORKSPACE_ID", env.workspace_id.as_str())
+        .env(
+            "RIMZ_TEST_NON_UTF8",
+            std::ffi::OsString::from_vec(vec![0xff, 0xfe]),
+        )
         .env_remove("CLAUDE_CONFIG_DIR")
         .env_remove("CODEX_HOME")
         .bounded_output()
@@ -195,6 +206,10 @@ printf '%s\n' shared > /tmp/team-file
     );
     let store = env.store();
     let scratch = &store.paths().scratch_dir;
+    assert_eq!(
+        std::fs::read(scratch.join("non-utf8")).unwrap(),
+        [0xff, 0xfe]
+    );
     assert_eq!(
         std::fs::read_to_string(scratch.join("claude-skills")).unwrap(),
         "a\nb\n"
@@ -227,6 +242,40 @@ printf '%s\n' shared > /tmp/team-file
     assert_eq!(
         std::fs::read_to_string(scratch.join("child-file")).unwrap(),
         "child"
+    );
+}
+
+#[test]
+fn sandboxed_exec_uses_probed_bwrap_with_trusted_path() {
+    if !available() {
+        return;
+    }
+    let env = Env::new();
+    enable(&env);
+    let shim_dir = write_env_dump_shim(&env, "codex");
+    std::fs::write(
+        shim_dir.join("codex"),
+        "#!/bin/sh\nprintf '%s' \"$PATH\" > /tmp/provider-path\n",
+    )
+    .unwrap();
+    env.write_config(
+        &env.project_root,
+        &format!(
+            "[[agents]]\nname = \"codex\"\nenv = {{ PATH = {:?} }}\n",
+            shim_dir.to_str().unwrap()
+        ),
+    );
+    env.rimz()
+        .args(["trust", "grant"])
+        .assert_success_within_timeout("grant trusted provider PATH");
+    let request = ExecRequest::bare_launch(AgentKind::new_unchecked("codex"), Vec::new());
+    env.rimz()
+        .args(exec_args(&env, &request))
+        .env("SHELL", "/definitely/not/a/shell")
+        .assert_success_within_timeout("sandbox with provider-only PATH");
+    assert_eq!(
+        std::fs::read_to_string(env.store().paths().scratch_dir.join("provider-path")).unwrap(),
+        shim_dir.to_str().unwrap()
     );
 }
 
@@ -273,6 +322,9 @@ fn sandbox_skill_root_symlink_keeps_its_filtered_view() {
     })
     .unwrap();
     let argv = rimz::sandbox::bwrap_argv(
+        &rimz::sandbox::preflight(Isolation::Sandbox)
+            .unwrap()
+            .unwrap(),
         &plan.plan,
         &env.project_root,
         &[

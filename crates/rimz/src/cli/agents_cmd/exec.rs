@@ -88,7 +88,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         } else {
             rimz::sandbox::preflight(isolation)
         };
-    sandbox_preflight.inspect_err(|_| {
+    let bwrap = sandbox_preflight.inspect_err(|_| {
         mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
         fail_run_on_exec_precondition(run_context.as_ref());
     })?;
@@ -130,10 +130,14 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             return Ok(());
         }
     };
-    if isolation == rimz::config::Isolation::Sandbox {
+    if let Some(bwrap) = bwrap {
         let prepare = || -> Result<_> {
             let state = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())?;
-            let mut env: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+            let mut env: std::collections::BTreeMap<String, String> = std::env::vars_os()
+                .filter_map(|(key, value)| {
+                    Some((key.into_string().ok()?, value.into_string().ok()?))
+                })
+                .collect();
             env.extend(process.env.clone());
             let adapter = rimz::agents::registry::find_definition(request.kind.as_str());
             let provider_home = adapter
@@ -160,7 +164,8 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             fail_run_on_exec_precondition(run_context.as_ref());
         })?;
         process.pin_env(prepared.pins);
-        process.argv = rimz::sandbox::bwrap_argv(&prepared.plan, &provider_cwd, &process.argv);
+        process.argv =
+            rimz::sandbox::bwrap_argv(&bwrap, &prepared.plan, &provider_cwd, &process.argv);
     }
     if let Some(context) = run_context.as_ref() {
         record_own_run_pane(context);
