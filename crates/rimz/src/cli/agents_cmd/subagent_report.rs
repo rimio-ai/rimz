@@ -278,11 +278,6 @@ pub(super) fn backstop_digest(request: super::SubagentDigestRequest) -> anyhow::
 }
 
 fn compose_digest(rows: &[(&AgentState, &RunRecord, Option<&ResponseFile>)]) -> String {
-    let names = rows
-        .iter()
-        .map(|(child, run, _)| format!("@{}", child_name(child, run)))
-        .collect::<Vec<_>>()
-        .join(" ");
     let heading = if rows.len() == 1 {
         "Your subagent settled:".to_owned()
     } else {
@@ -293,9 +288,7 @@ fn compose_digest(rows: &[(&AgentState, &RunRecord, Option<&ResponseFile>)]) -> 
         .map(|(child, run, response)| compose_digest_row(child, run, *response))
         .collect::<Vec<_>>()
         .join("\n");
-    format!(
-        "{heading}\n{rows}\n\nPrint them inline and mark them joined with `rimz subagents wait {names}`."
-    )
+    format!("{heading}\n{rows}")
 }
 
 fn compose_digest_row(
@@ -464,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn digest_names_its_single_result_command() {
+    fn digest_lists_a_single_result_without_a_trailing_command() {
         let mut result = run(RunStatus::Completed);
         result.last_message = Some("Done.\n\nTwo paragraphs.\n".to_owned());
         let child = child("naming", Some("map spec/profile surfaces"));
@@ -479,8 +472,7 @@ mod tests {
         assert_eq!(
             compose_digest(&[(&child, &result, Some(&response))]),
             "Your subagent settled:\n\
-             - @naming: completed in 4m12s, task: \"map spec/profile surfaces\", response: /tmp/rimz-subagents/naming.output (3 lines)\n\n\
-             Print them inline and mark them joined with `rimz subagents wait @naming`."
+             - @naming: completed in 4m12s, task: \"map spec/profile surfaces\", response: /tmp/rimz-subagents/naming.output (3 lines)"
         );
     }
 
@@ -519,8 +511,7 @@ mod tests {
             "All 3 subagents settled:\n\
              - @naming: completed in 4m12s, task: \"map spec/profile surfaces\", response: /tmp/rimz-subagents/naming.output (2 lines)\n\
              - @runtime: completed in 4m12s, task: \"map it\", no response\n\
-             - @slow-reviewer: timed out after 4m12s; provider did not stop, task: \"review correctness\", response: /tmp/rimz-subagents/slow-reviewer.output (1 line)\n\n\
-             Print them inline and mark them joined with `rimz subagents wait @naming @runtime @slow-reviewer`."
+             - @slow-reviewer: timed out after 4m12s; provider did not stop, task: \"review correctness\", response: /tmp/rimz-subagents/slow-reviewer.output (1 line)"
         );
     }
 

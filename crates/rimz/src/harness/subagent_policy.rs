@@ -74,7 +74,7 @@ pub fn reminder(catalog: &SubagentCatalog) -> String {
                 .collect::<Vec<_>>()
                 .join("\n");
             format!(
-                "Subagents are available to you; launch them with Skill(rimz-subagents). Use them to run independent work in parallel, fan out searches or audits, or keep a large exploration out of your own context: delegate it and keep the conclusion, not the file dumps.\n\nWhen every subagent you launched has settled, one `SUBAGENT_REPORT` message from `@rimz` lists each child's outcome, task, and the file holding its response; read the files you need, or run the `rimz subagents wait @…` command it names to print them inline. Calling `rimz subagents wait <name>…` earlier blocks until those children settle (`--any` returns the first).\n\nAvailable subagent profiles you may launch:\n{list}"
+                "Subagents are available to you; launch them with Skill(rimz-subagents). Use them to run independent work in parallel, fan out searches or audits, or keep a large exploration out of your own context: delegate it and keep the conclusion, not the file dumps.\n\nWhen every subagent you launched has settled, one `SUBAGENT_REPORT` message from `@rimz` lists each child's outcome, task, and the file holding its response; read the files you need, or print those answers inline with `rimz subagents wait @…`. Calling `rimz subagents wait <name>…` earlier blocks until those children settle (`--any` returns the first).\n\nAvailable subagent profiles you may launch:\n{list}"
             )
         }
     }
@@ -292,7 +292,7 @@ mod tests {
         assert_eq!(
             text,
             "Subagents are available to you; launch them with Skill(rimz-subagents). Use them to run independent work in parallel, fan out searches or audits, or keep a large exploration out of your own context: delegate it and keep the conclusion, not the file dumps.\n\n\
-             When every subagent you launched has settled, one `SUBAGENT_REPORT` message from `@rimz` lists each child's outcome, task, and the file holding its response; read the files you need, or run the `rimz subagents wait @…` command it names to print them inline. Calling `rimz subagents wait <name>…` earlier blocks until those children settle (`--any` returns the first).\n\n\
+             When every subagent you launched has settled, one `SUBAGENT_REPORT` message from `@rimz` lists each child's outcome, task, and the file holding its response; read the files you need, or print those answers inline with `rimz subagents wait @…`. Calling `rimz subagents wait <name>…` earlier blocks until those children settle (`--any` returns the first).\n\n\
              Available subagent profiles you may launch:\n\
              - `explorer` (claude · sonnet · low): Finds files and traces code paths\n\
              - `lint`"

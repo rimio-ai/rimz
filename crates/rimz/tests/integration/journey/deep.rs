@@ -1560,7 +1560,7 @@ fn tmux_settled_subagent_reports_to_parent() {
             .text
             .contains(&format!("@{second_name}: canceled"))
     );
-    assert!(fleet_digest.text.contains("rimz subagents wait"));
+    assert!(!fleet_digest.text.contains("rimz subagents wait"));
     let response_path = env
         .store()
         .paths()
