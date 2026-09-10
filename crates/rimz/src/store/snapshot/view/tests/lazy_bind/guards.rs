@@ -125,7 +125,9 @@ fn stale_codex_ghosts_predating_pane_start_render_idle_live_pane() {
             "fresh Codex rows must not guess a model or inherit stale session stats: {label}",
         );
         assert_eq!(
-            rows[0].context_window(),
+            rows[0]
+                .as_agent()
+                .and_then(|agent| agent.usage.context_window),
             Some(272_000),
             "fresh Codex rows use the provider fallback window, not stale session stats: {label}",
         );

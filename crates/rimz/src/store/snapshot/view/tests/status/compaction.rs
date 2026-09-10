@@ -119,15 +119,21 @@ fn compacting_marker_lights_the_head_then_expires() {
 
     let snapshot = room_with_agent_panes(vec![fresh, inside, stale]);
     assert!(
-        row(&snapshot, "compacting-now").compacting(),
+        row(&snapshot, "compacting-now")
+            .as_agent()
+            .is_some_and(|agent| agent.compacting),
         "a fresh marker pulses"
     );
     assert!(
-        row(&snapshot, "compacting-inside").compacting(),
+        row(&snapshot, "compacting-inside")
+            .as_agent()
+            .is_some_and(|agent| agent.compacting),
         "a marker one second inside the window still pulses"
     );
     assert!(
-        !row(&snapshot, "compacted-long-ago").compacting(),
+        !row(&snapshot, "compacted-long-ago")
+            .as_agent()
+            .is_some_and(|agent| agent.compacting),
         "a marker past the window has expired"
     );
 }

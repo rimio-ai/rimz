@@ -34,7 +34,13 @@ fn wired_unprompted_codex_panes_render_idle_agent_rows() {
         assert_eq!(rows[0].id, "tmux:term1", "{label}");
         assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "term1");
         assert_eq!(rows[0].model(), expected_model, "{label}");
-        assert_eq!(rows[0].context_window(), Some(272_000), "{label}");
+        assert_eq!(
+            rows[0]
+                .as_agent()
+                .and_then(|agent| agent.usage.context_window),
+            Some(272_000),
+            "{label}"
+        );
         assert_eq!(
             rows[0].as_agent().unwrap().usage.context_pct,
             None,

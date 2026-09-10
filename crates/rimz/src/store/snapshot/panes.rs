@@ -1,7 +1,6 @@
 //! Pane binding: which store agent owns which live pane, the own-view
 //! projection, and the daemon-view predicates.
 
-use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use jiff::Timestamp;
@@ -95,7 +94,7 @@ impl<'a> PaneBindingIndex<'a> {
                     .as_ref()
                     .is_some_and(|stamped| stamped_agent_matches_live_pane(agent, stamped, pane))
             })
-            .min_by(|left, right| compare_same_pane_owners(left, right))
+            .min_by(|left, right| left.compare_same_pane_owner(right))
     }
 
     pub(super) fn stamped_agent_for_session(
@@ -161,7 +160,7 @@ impl<'a> PaneBindingIndex<'a> {
                     .as_ref()
                     .is_some_and(|stamped| stamped_agent_matches_live_pane(agent, stamped, pane))
             })
-            .min_by(|left, right| compare_same_pane_owners(left, right))
+            .min_by(|left, right| left.compare_same_pane_owner(right))
     }
 
     fn stamped_agent_for_ambient_pane(&self, pane: &PaneRef) -> Option<&'a AgentState> {
@@ -180,11 +179,11 @@ impl<'a> PaneBindingIndex<'a> {
         candidates
             .clone()
             .filter(|agent| agent.parent_agent_id.is_none())
-            .min_by(|left, right| compare_same_pane_owners(left, right))
+            .min_by(|left, right| left.compare_same_pane_owner(right))
             .or_else(|| {
                 candidates
                     .filter(|agent| agent.is_launched_child())
-                    .min_by(|left, right| compare_same_pane_owners(left, right))
+                    .min_by(|left, right| left.compare_same_pane_owner(right))
             })
     }
 
@@ -203,7 +202,7 @@ impl<'a> PaneBindingIndex<'a> {
                     && agent.agent_id != *agent_id
                     && pane_start_allows_bind(agent.last_activity, evidence.pane)
             })
-            .min_by(|left, right| compare_same_pane_owners(left, right))
+            .min_by(|left, right| left.compare_same_pane_owner(right))
     }
 }
 
@@ -437,10 +436,6 @@ pub fn stamped_agent_for_pane<'a>(
     agents: &'a [AgentState],
 ) -> Option<&'a AgentState> {
     PaneBindingIndex::new(agents).stamped_agent_for_ambient_pane(pane)
-}
-
-fn compare_same_pane_owners(left: &AgentState, right: &AgentState) -> Ordering {
-    left.compare_same_pane_owner(right)
 }
 
 fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: &PaneRef) -> bool {
