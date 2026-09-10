@@ -200,6 +200,10 @@ fn sandbox_unusable_unlisted_skill_is_omitted_with_warning() {
     let metadata = "---\nname: bad\ndescription: &d x\nsummary: *d\n---\nbody\n";
     let bad = root.join("bad/SKILL.md");
     std::fs::write(&bad, metadata).unwrap();
+    std::os::unix::fs::symlink("bad", root.join("alias")).unwrap();
+    let library = env.config_root().join("rimz/skills");
+    std::fs::create_dir_all(&library).unwrap();
+    std::os::unix::fs::symlink(root.join("bad"), library.join("library-alias")).unwrap();
     std::fs::write(root.join("listed/SKILL.md"), metadata).unwrap();
     let vars = environment(&env);
     let state = env.store();
@@ -214,16 +218,21 @@ fn sandbox_unusable_unlisted_skill_is_omitted_with_warning() {
         },
     )
     .unwrap();
-    assert_eq!(prepared.skipped.len(), 1);
-    let skipped = &prepared.skipped[0];
-    assert_eq!(skipped.name, "bad");
-    assert_eq!(skipped.path, bad);
-    assert!(matches!(&skipped.reason, SkipReason::Metadata(_)));
-    assert!(
-        skipped
-            .to_string()
-            .contains("starting without skill \"bad\"")
-    );
+    assert_eq!(prepared.skipped.len(), 3);
+    for (skipped, name) in prepared
+        .skipped
+        .iter()
+        .zip(["alias", "bad", "library-alias"])
+    {
+        assert_eq!(skipped.name, name);
+        assert_eq!(skipped.path, bad);
+        assert!(matches!(&skipped.reason, SkipReason::Metadata(_)));
+        assert!(
+            skipped
+                .to_string()
+                .contains(&format!("starting without skill {name:?}"))
+        );
+    }
     let argv = rimz::sandbox::bwrap_argv(
         Path::new("/usr/bin/bwrap"),
         &prepared.plan,
@@ -245,6 +254,9 @@ fn sandbox_unusable_unlisted_skill_is_omitted_with_warning() {
         "---\ndisable-model-invocation: true\n---\nbody\n"
     );
     assert!(!argv.iter().any(|arg| Path::new(arg) == root.join("bad")));
+    for name in ["alias", "library-alias"] {
+        assert!(!argv.iter().any(|arg| Path::new(arg) == root.join(name)));
+    }
     assert_eq!(std::fs::read(&bad).unwrap(), metadata.as_bytes());
     assert!(
         std::fs::read_dir(&state.paths().skills_dir)
@@ -654,7 +666,7 @@ fn sandbox_unsupported_provider_refuses_skill_list() {
 }
 
 #[test]
-fn sandbox_prepare_resolves_symlinked_skill_sources() {
+fn sandbox_prepare_preserves_symlinked_skill_sources() {
     let env = Env::new();
     let root = env.home_root.join(".agents/skills");
     let source = env.home_root.join("library/visible");
@@ -706,7 +718,7 @@ fn sandbox_prepare_resolves_symlinked_skill_sources() {
     );
     assert!(argv.windows(3).any(|args| args
         == [
-            "--ro-bind",
+            "--symlink",
             source.to_str().unwrap(),
             root.join("visible").to_str().unwrap()
         ]));
@@ -728,6 +740,196 @@ fn sandbox_prepare_resolves_symlinked_skill_sources() {
     let err = rimz::sandbox::prepare(&inputs).err().unwrap();
     assert!(matches!(err, SandboxErr::UnknownSkill { .. }));
     assert!(err.to_string().contains(root.to_str().unwrap()));
+}
+
+#[test]
+fn sandbox_symlinked_manual_skills_resolve_shared_modules() {
+    let env = Env::new();
+    let root = env.home_root.join(".claude/skills");
+    let source = env.home_root.join(".agents/skills/manual");
+    let shared = source.parent().unwrap().join("_shared");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(source.join("scripts")).unwrap();
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(source.join("SKILL.md"), "manual body\n").unwrap();
+    std::fs::write(shared.join("probe.py"), "value = 'shared module'\n").unwrap();
+    std::fs::write(
+        source.join("scripts/run.py"),
+        "from pathlib import Path\nimport sys\nroot = Path(__file__).resolve().parents[2]\nsys.path.insert(0, str(root / '_shared'))\nfrom probe import value\nassert 'disable-model-invocation: true' in (root / 'manual/SKILL.md').read_text()\nprint(value)\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("../../.agents/skills/manual", root.join("relative")).unwrap();
+    std::os::unix::fs::symlink(&source, root.join("absolute")).unwrap();
+    std::fs::write(root.join("AGENTS.md"), "root instructions\n").unwrap();
+    std::os::unix::fs::symlink("AGENTS.md", root.join("CLAUDE.md")).unwrap();
+    let execute = available() && which::which("python3").is_ok();
+    for workaround in [false, true] {
+        if workaround {
+            std::os::unix::fs::symlink("../../.agents/skills/_shared", root.join("_shared"))
+                .unwrap();
+        }
+        let argv = skill_argv(
+            &env,
+            &environment(&env),
+            SkillInputs {
+                kind: "claude",
+                home: Some(root.clone()),
+                manual: ManualSkill::Frontmatter,
+                callable: Some(&[]),
+            },
+        )
+        .unwrap();
+        for (name, target) in [
+            ("relative", Path::new("../../.agents/skills/manual")),
+            ("absolute", source.as_path()),
+            ("CLAUDE.md", Path::new("AGENTS.md")),
+        ] {
+            assert!(argv.windows(3).any(|args| args[0] == "--symlink"
+                && Path::new(&args[1]) == target
+                && Path::new(&args[2]) == root.join(name)));
+        }
+        let copy = skill_bind_source(&argv, &source);
+        assert!(copy.starts_with(&env.store().paths().skills_dir));
+        assert_eq!(
+            argv.windows(3)
+                .filter(|args| args[0] == "--ro-bind" && Path::new(&args[2]) == source)
+                .count(),
+            1
+        );
+        assert!(!argv.windows(3).any(|args| args[0] == "--ro-bind"
+            && (Path::new(&args[2]) == shared || Path::new(&args[2]) == root.join("_shared"))));
+        assert_eq!(
+            std::fs::read_dir(&env.store().paths().skills_dir)
+                .unwrap()
+                .count(),
+            1
+        );
+        assert_eq!(
+            std::fs::read_to_string(source.join("SKILL.md")).unwrap(),
+            "manual body\n"
+        );
+        if !execute {
+            continue;
+        }
+        enable(&env);
+        let shim_dir = write_env_dump_shim(&env, "claude");
+        std::fs::write(
+            shim_dir.join("claude"),
+            "#!/bin/sh\nset -eu\ntest -L \"$HOME/.claude/skills/relative\"\ntest -L \"$HOME/.claude/skills/absolute\"\ntest -L \"$HOME/.claude/skills/CLAUDE.md\"\ntest \"$(cat \"$HOME/.claude/skills/CLAUDE.md\")\" = 'root instructions'\npython3 \"$HOME/.claude/skills/relative/scripts/run.py\" > /tmp/shared-probe\n",
+        )
+        .unwrap();
+        let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+        request.skills = Some(vec![]);
+        env.rimz()
+            .args(exec_args(&env, &request))
+            .env("PATH", path_with_front(&shim_dir))
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .assert_success_within_timeout("symlinked skill shared module import");
+        assert_eq!(
+            std::fs::read_to_string(env.store().paths().tmp_dir.join("shared-probe")).unwrap(),
+            "shared module\n"
+        );
+    }
+}
+
+#[test]
+fn sandbox_skill_aliases_require_matching_invocation_policies() {
+    let env = Env::new();
+    let root = env.home_root.join(".agents/skills");
+    let source = root.join("native");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("SKILL.md"), "native body\n").unwrap();
+    std::os::unix::fs::symlink("native", root.join("alias")).unwrap();
+    for names in [
+        vec!["alias"],
+        vec!["native"],
+        vec![],
+        vec!["alias", "native"],
+    ] {
+        let callable: Vec<_> = names.iter().map(|name| name.parse().unwrap()).collect();
+        let result = skill_argv(
+            &env,
+            &environment(&env),
+            SkillInputs {
+                kind: "codex",
+                home: Some(root.clone()),
+                manual: ManualSkill::OpenAiPolicy,
+                callable: Some(&callable),
+            },
+        );
+        if names.len() == 1 {
+            let err = result.unwrap_err();
+            assert!(
+                matches!(&err, SandboxErr::ConflictingSkillAliases { listed, unlisted, path }
+                if listed == names[0] && unlisted != listed && path == &source)
+            );
+            assert!(
+                err.to_string()
+                    .ends_with("list both names or neither in the profile skills list")
+            );
+            assert!(!env.store().paths().skills_dir.exists());
+            continue;
+        }
+        let argv = result.unwrap();
+        if names.is_empty() {
+            assert!(skill_bind_source(&argv, &source).starts_with(&env.store().paths().skills_dir));
+            assert_eq!(
+                argv.windows(3)
+                    .filter(|args| args[0] == "--ro-bind")
+                    .count(),
+                1
+            );
+        } else {
+            assert!(!argv.iter().any(|arg| arg == "--tmpfs"));
+        }
+    }
+}
+
+#[test]
+fn sandbox_non_skill_entries_are_never_materialized() {
+    let env = Env::new();
+    let root = env.home_root.join(".agents/skills");
+    std::fs::create_dir_all(root.join("_shared")).unwrap();
+    std::fs::write(root.join("_shared/module.py"), "shared\n").unwrap();
+    std::fs::write(root.join("AGENTS.md"), "instructions\n").unwrap();
+    std::os::unix::fs::symlink("AGENTS.md", root.join("CLAUDE.md")).unwrap();
+    for overlay in [false, true] {
+        if overlay {
+            let library = env.config_root().join("rimz/skills/library-only");
+            std::fs::create_dir_all(&library).unwrap();
+            std::fs::write(library.join("SKILL.md"), "library\n").unwrap();
+        }
+        let callable = if overlay {
+            vec!["library-only".parse().unwrap()]
+        } else {
+            vec![]
+        };
+        let argv = skill_argv(
+            &env,
+            &environment(&env),
+            SkillInputs {
+                kind: "codex",
+                home: Some(root.clone()),
+                manual: ManualSkill::OpenAiPolicy,
+                callable: Some(&callable),
+            },
+        )
+        .unwrap();
+        assert!(!env.store().paths().skills_dir.exists());
+        assert!(!root.join("_shared/agents").exists());
+        if overlay {
+            assert_eq!(
+                skill_bind_source(&argv, &root.join("_shared")),
+                root.join("_shared")
+            );
+            assert_eq!(
+                skill_bind_source(&argv, &root.join("AGENTS.md")),
+                root.join("AGENTS.md")
+            );
+        } else {
+            assert!(!argv.iter().any(|arg| arg == "--tmpfs"));
+        }
+    }
 }
 
 #[test]
@@ -781,6 +983,16 @@ fn sandboxed_exec_shows_profile_skill_view_and_room_tmp() {
         ".codex",
     ] {
         std::fs::create_dir_all(env.home_root.join(dir)).unwrap();
+    }
+    for name in ["b", "c", "d"] {
+        std::fs::write(
+            env.home_root
+                .join(".agents/skills")
+                .join(name)
+                .join("SKILL.md"),
+            "skill body\n",
+        )
+        .unwrap();
     }
     std::fs::write(env.home_root.join(".codex/config.toml"), "sandbox-test").unwrap();
     let bad = env.home_root.join(".agents/skills/d/agents/openai.yaml");

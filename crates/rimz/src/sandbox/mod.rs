@@ -73,6 +73,14 @@ pub enum SandboxErr {
         "unknown skill {name:?}; searched {roots:?}; install the skill or remove it from the profile"
     )]
     UnknownSkill { name: String, roots: Vec<PathBuf> },
+    #[error(
+        "skills {listed:?} and {unlisted:?} resolve to {path} but have conflicting invocation policies; list both names or neither in the profile skills list"
+    )]
+    ConflictingSkillAliases {
+        listed: String,
+        unlisted: String,
+        path: PathBuf,
+    },
     #[error("provider {kind} declares no skill root; remove the profile skills list")]
     SkillsNeedRoot { kind: String },
     #[error("provider {kind} cannot mark skills user-only; remove the profile skills list")]
@@ -155,11 +163,18 @@ pub struct ProviderHome {
 struct DirView {
     root: PathBuf,
     entries: Vec<DirEntry>,
+    shadows: BTreeMap<PathBuf, PathBuf>,
 }
 
 struct DirEntry {
     name: String,
     source: PathBuf,
+    kind: DirEntryKind,
+}
+
+enum DirEntryKind {
+    Bind,
+    Symlink { target: PathBuf },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -167,6 +182,7 @@ enum Mount {
     Bind { source: PathBuf, target: PathBuf },
     RoBind { source: PathBuf, target: PathBuf },
     Tmpfs { target: PathBuf },
+    Symlink { target: PathBuf, path: PathBuf },
 }
 
 pub struct MountPlan {
@@ -296,10 +312,17 @@ pub fn prepare(inputs: &SandboxInputs<'_>) -> Result<Prepared, SandboxErr> {
             target: view.root.clone(),
         });
         for entry in view.entries {
-            mounts.push(Mount::RoBind {
-                source: entry.source,
-                target: view.root.join(entry.name),
+            let path = view.root.join(entry.name);
+            mounts.push(match entry.kind {
+                DirEntryKind::Bind => Mount::RoBind {
+                    source: entry.source,
+                    target: path,
+                },
+                DirEntryKind::Symlink { target } => Mount::Symlink { target, path },
             });
+        }
+        for (target, source) in view.shadows {
+            mounts.push(Mount::RoBind { source, target });
         }
     }
     crate::disk::paths::ensure_private_runtime_dir(inputs.tmp_dir)?;
@@ -349,6 +372,11 @@ pub fn bwrap_argv(bwrap: &Path, plan: &MountPlan, cwd: &Path, inner: &[String]) 
             Mount::Tmpfs { target } => {
                 argv.push("--tmpfs".to_owned());
                 argv.push(target.display().to_string());
+            }
+            Mount::Symlink { target, path } => {
+                argv.push("--symlink".to_owned());
+                argv.push(target.display().to_string());
+                argv.push(path.display().to_string());
             }
         }
     }
@@ -452,6 +480,10 @@ mod tests {
                     source: "/skills/one".into(),
                     target: "/home/user/.agents/skills/one".into(),
                 },
+                Mount::Symlink {
+                    target: "../../.agents/skills/one".into(),
+                    path: "/home/user/.claude/skills/one".into(),
+                },
             ],
         };
         insta::assert_debug_snapshot!(bwrap_argv(Path::new("/usr/bin/bwrap"), &plan, Path::new("/project"), &["agent".into(), "two words".into()]), @r###"
@@ -478,6 +510,9 @@ mod tests {
             "--ro-bind",
             "/skills/one",
             "/home/user/.agents/skills/one",
+            "--symlink",
+            "../../.agents/skills/one",
+            "/home/user/.claude/skills/one",
             "--chdir",
             "/project",
             "--",
