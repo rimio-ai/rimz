@@ -64,6 +64,11 @@ pub(crate) fn basename(token: &str) -> &str {
         .unwrap_or(token)
 }
 
+/// Raw executable identity for flattened process argv, without wrapper or script projection.
+pub(crate) fn argv0_label(command: &str) -> &str {
+    basename(command.split_whitespace().next().unwrap_or_default())
+}
+
 #[derive(Clone)]
 struct Word<'a> {
     text: &'a str,
@@ -394,6 +399,17 @@ fn first_script_command<'a>(
                 "cd" | "export" | "set" | "source" | "."
             )
         {
+            if !parsed.program.quoted
+                && (matches!(
+                    parsed.program.text,
+                    "if" | "while" | "until" | "for" | "case" | "select" | "function"
+                ) || parsed
+                    .program
+                    .text
+                    .starts_with(['(', '{', '>', '<', '!', '|']))
+            {
+                return None;
+            }
             return Some(parsed);
         }
         start += tokens[start..]
@@ -442,9 +458,10 @@ pub(crate) struct EffectiveProgram<'a> {
 
 pub(crate) fn effective_program_info(command: &str) -> EffectiveProgram<'_> {
     let Some(parsed) = effective_program_and_args(command) else {
+        let program = command.split_whitespace().next().unwrap_or(command);
         return EffectiveProgram {
-            program: command,
-            root_program: command,
+            program,
+            root_program: program,
         };
     };
     let program = parsed.program.text;
@@ -491,6 +508,19 @@ pub(crate) fn agent_script_path_names_kind(script: &str, kind: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_program_identity_does_not_project_wrappers_or_scripts() {
+        for (command, raw) in [
+            ("/usr/bin/ttyd -p 8200", "ttyd"),
+            ("sh -c ttyd -p 8200", "sh"),
+            ("env X=1 ttyd -p 8200", "env"),
+            ("node /usr/bin/codex", "node"),
+            ("", ""),
+        ] {
+            assert_eq!(argv0_label(command), raw);
+        }
+    }
 
     #[test]
     fn parser_unwraps_prefix_wrappers() {
@@ -561,6 +591,13 @@ mod tests {
             ("bash -l", "bash"),
             ("sh -c ''", "sh"),
             ("sh -c 'cd x; export A=1; A=2'", "sh"),
+            ("sh -c '(cd /repo && cargo build)'", "sh"),
+            ("sh -c '{ cargo build; }'", "sh"),
+            ("sh -c 'exec > /tmp/log; cargo build'", "sh"),
+            ("sh -c '! cargo build'", "sh"),
+            ("sh -c 'while true; do sleep 1; done'", "sh"),
+            ("sh -c 'if [ -f x ]; then cargo build; fi'", "sh"),
+            ("sh -c '\"while\" arg'", "while"),
         ] {
             assert_eq!(program_label(command), label, "{command}");
         }
@@ -658,6 +695,8 @@ mod tests {
             ("sh -c", "sh"),
             ("sh -c 'cargo build", "sh"),
             ("", ""),
+            ("A=1; cargo build", "A=1;"),
+            ("; cargo build", ";"),
         ] {
             assert_eq!(program_label(command), label, "{command}");
         }
