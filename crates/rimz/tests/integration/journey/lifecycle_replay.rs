@@ -373,12 +373,9 @@ fn subagent_child_row_appears_and_clears() {
 
         let child_id = format!("{}-child", agent.source());
         room.agent_hook(agent.source(), &subagent_start(agent.session(), &child_id));
-        let screen = room.wait_for(
-            |s| s.contains("subagents (1)") && s.contains("review"),
-            SETTLE,
-        );
+        let screen = room.wait_for(|s| s.contains("⧉ 1") && s.contains("review"), SETTLE);
         assert!(
-            screen.contains("subagents (1)") && screen.contains("review"),
+            screen.contains("⧉ 1") && screen.contains("review"),
             "subagent start renders the child under the selected parent:\n{screen}"
         );
 
@@ -391,15 +388,11 @@ fn subagent_child_row_appears_and_clears() {
 
         room.agent_hook(agent.source(), &agent.prompt("next parent turn"));
         let screen = room.wait_for(
-            |s| {
-                s.contains("next parent turn")
-                    && s.contains("subagents (1)")
-                    && !s.contains("✓ review")
-            },
+            |s| s.contains("next parent turn") && s.contains("⧉ 1") && !s.contains("✓ review"),
             SETTLE,
         );
         assert!(
-            screen.contains("subagents (1)") && !screen.contains("✓ review"),
+            screen.contains("⧉ 1") && !screen.contains("✓ review"),
             "next parent turn retains lifetime stats and retires the finished child row:\n{screen}"
         );
     }
