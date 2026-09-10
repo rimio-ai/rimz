@@ -47,6 +47,7 @@ mod resume;
 mod scheme;
 mod sentry;
 mod sidebar;
+mod skills;
 mod theme;
 mod web;
 mod worktree;
@@ -54,7 +55,7 @@ mod worktree;
 pub use accounts::{AccountBudgetConfigError, AccountsConfig, UsageLimitUsd};
 pub(crate) use agents::retired_agents_key;
 pub use agents::{
-    AgentsConfig, CommandsConfig, LaunchPlacement, Profile, ProfilesConfig, RoleBinding,
+    AgentsConfig, CommandsConfig, Isolation, LaunchPlacement, Profile, ProfilesConfig, RoleBinding,
     SubagentProfilesConfig, SubagentsConfig, Team, TeamSignalBinding, TeamsConfig,
 };
 use animation::validate_glyph_cells;
@@ -102,6 +103,8 @@ pub(crate) use scheme::{DEFAULT_SCHEME, ParsedScheme, explicit_scheme, parse_col
 pub use scheme::{SchemeSwatch, resolve_inline_palette, scheme_swatches};
 pub use sentry::SentryConfig;
 pub use sidebar::{SidebarConfig, SidebarKeys};
+pub(crate) use skills::deserialize_skill_list;
+pub use skills::{SkillMode, SkillName, SkillSpec, SkillSpecErr, validate_skill_list};
 pub use theme::{
     InlineAnsiColors, InlineCursorColors, InlinePalette, InlinePrimaryColors,
     InlineSelectionColors, ThemeConfig, ThemeProviderStyle, ThemeStyle,

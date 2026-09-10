@@ -79,6 +79,15 @@ pub(crate) fn print_reset_report(report: &rimz::room::RoomResetReport) -> Result
             "es"
         },
     )?;
+    writeln!(
+        stderr,
+        "Scratch: {}.",
+        if teardown.scratch_removed {
+            "cleared"
+        } else {
+            "removal failed"
+        }
+    )?;
     match &records.rotation {
         rimz::store::event_log::RotationOutcome::Rotated {
             archive_path,

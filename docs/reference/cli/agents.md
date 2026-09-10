@@ -306,6 +306,8 @@ The activity description — the same field the sidebar card shows — renders u
 
 `show --json` places the same projected agent entry under `agent`, with `stale`, rich `ask`, `run`, `messages`, and raw `capture` data as show-only siblings when applicable. A stopped audit agent keeps the full stable entry shape, with published-row fields such as context severity and active time set to `null`. Supervised `-p` runs shape their output with `--output-format` instead.
 
+When room scratch exists, `show` reports its host path and notes that sandboxed panes mount it at `/tmp`; JSON exposes `scratch_dir`. Scratch is shared across the room's sandboxed agents, survives agent restart, and is removed by room teardown ([mount-view lifecycle](../../internals/sandbox.md#room-scratch)).
+
 #### `logs`
 
 `logs <ref>` is the agent-centric transcript view: `-n/--tail N` keeps the last N chat lines, `-f/--follow` prints new lines as they land, `--all` includes prior-session history, and `--json` emits JSON for one-shot reads or NDJSON in follow mode. It uses the same transcript scope and rendering as [`rimz transcript @ref`](./transcript.md).

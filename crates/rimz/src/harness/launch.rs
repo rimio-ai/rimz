@@ -442,6 +442,12 @@ pub struct ExecRequest {
     pub system_prompt_file: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub append_system_prompt_files: Vec<PathBuf>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::config::deserialize_skill_list"
+    )]
+    pub skills: Vec<crate::config::SkillSpec>,
     #[serde(default)]
     pub provider_account: ProviderAccountState,
     pub run_id: Option<RunId>,
@@ -468,6 +474,7 @@ impl ExecRequest {
             },
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
+            skills: Vec::new(),
             provider_account: ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,
@@ -516,6 +523,8 @@ impl ExecEnvelope {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExecWireErr {
+    #[error(transparent)]
+    Skills(#[from] crate::config::SkillSpecErr),
     #[error("serializing hidden agent exec request: {0}")]
     Serialize(#[source] serde_json::Error),
     #[error("parsing hidden agent exec request: {0}")]
@@ -977,6 +986,7 @@ pub fn decode_exec_envelope(
 }
 
 fn validate_exec_request(request: &ExecRequest) -> Result<(), ExecWireErr> {
+    crate::config::validate_skill_list(&request.skills)?;
     if request.identity.launch_id.is_some()
         && request.identity.name.is_none()
         && !matches!(request.action, ExecAction::Resume { .. })

@@ -18,6 +18,23 @@ pub struct ProcessDomain {
 }
 
 impl ProcessDomain {
+    /// Filesystem roots needed to keep the launch environment's mux endpoints reachable.
+    pub(crate) fn required_paths(env: &std::collections::BTreeMap<String, String>) -> Vec<PathBuf> {
+        let domain = Self::from_env(
+            |key| env.get(key).filter(|value| !value.is_empty()).cloned(),
+            crate::proc::own_uid().unwrap_or_default(),
+        );
+        let mut paths = vec![
+            domain.state_home,
+            domain.runtime_home,
+            domain.zellij_socket_base,
+        ];
+        if let Some(parent) = domain.tmux_socket.parent() {
+            paths.push(parent.to_path_buf());
+        }
+        paths
+    }
+
     /// Resolve the invoker's process domain from its current environment.
     pub fn current() -> Self {
         Self::from_env(

@@ -33,6 +33,7 @@ fn agent_cell_with_role(role: Option<&str>) -> Cell {
         args: Vec::new(),
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        skills: Vec::new(),
         launch: LaunchParams {
             profile: role.map(|role| format!("{role}-profile")),
             role: role.map(ToOwned::to_owned),
@@ -109,6 +110,7 @@ fn preset_cell(kind: &str, args: &[&str], model: Option<&str>, effort: Option<&s
         args: args.iter().map(|value| (*value).to_owned()).collect(),
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        skills: Vec::new(),
         launch: LaunchParams {
             profile: Some(format!("{kind}-coder")),
             model: model.map(str::to_owned),
@@ -155,6 +157,7 @@ fn configured_profile(
         auto_compact: None,
         system_prompt_file,
         append_system_prompt_files: Vec::new(),
+        skills: None,
         args: args.map(str::to_owned),
     }
 }
@@ -860,6 +863,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
             args,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
+            skills: Vec::new(),
             launch: LaunchParams {
                 profile: Some("codex-coder".to_owned()),
                 mode,
@@ -949,6 +953,7 @@ fn codex_launch_leaves_native_default_unset_and_preserves_explicit_model() {
         args: vec!["--model".to_owned(), "gpt-6-astra".to_owned()],
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        skills: Vec::new(),
         launch: LaunchParams {
             model: Some("gpt-6-astra".to_owned()),
             ..Default::default()
@@ -1315,6 +1320,7 @@ fn launch_request_names_and_metadata() {
         args: Vec::new(),
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        skills: Vec::new(),
         launch: LaunchParams {
             profile: Some("codex-coder".to_owned()),
             mode: Some(PermissionMode::Yolo),
@@ -1689,6 +1695,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
         args: Vec::new(),
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        skills: vec!["merge:off".parse().unwrap()],
         launch: LaunchParams::default(),
     });
     let launch = AgentLaunchIdentity {
@@ -1726,6 +1733,10 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
     )
     .unwrap();
     let pane = &panes.columns[0].panes[0];
+    assert_eq!(
+        exec_request(&pane.argv).skills,
+        vec!["merge:off".parse().unwrap()]
+    );
 
     for (field, value) in [
         (RequestField::Name, "swift-otter"),
@@ -1786,6 +1797,7 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
         args: vec!["--profile-declared".to_owned()],
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        skills: vec!["merge:off".parse().unwrap()],
         launch: LaunchParams {
             profile: Some("new-profile".to_owned()),
             role: Some("new-role".to_owned()),
@@ -1821,6 +1833,10 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
     )
     .unwrap();
     let pane = &panes.columns[0].panes[0];
+    assert_eq!(
+        exec_request(&pane.argv).skills,
+        vec!["merge:off".parse().unwrap()]
+    );
 
     for (field, value) in [
         (RequestField::Resume, "sess-1"),

@@ -54,6 +54,7 @@ pub type Result<T> = std::result::Result<T, PathErr>;
 pub struct StatePaths {
     pub workspace_id: WorkspaceId,
     pub root: PathBuf,
+    pub scratch_dir: PathBuf,
     pub events_log: PathBuf,
     pub events_archive_dir: PathBuf,
     pub agents_carryover: PathBuf,
@@ -97,6 +98,7 @@ impl StatePaths {
         let locks_dir = root.join("locks");
         Ok(Self {
             workspace_id,
+            scratch_dir: root.join("tmp"),
             events_log: root.join("events.log.jsonl"),
             events_archive_dir: root.join("events.log.archive"),
             agents_carryover: root.join("agents.carryover.json"),
@@ -128,6 +130,21 @@ impl StatePaths {
         mkdir_p(&self.wakes_dir)?;
         mkdir_p(&self.locks_dir)?;
         Ok(())
+    }
+
+    pub fn ensure_scratch_dir(&self) -> Result<()> {
+        ensure_private_runtime_dir(&self.scratch_dir)
+    }
+
+    pub fn remove_scratch_dir(&self) -> Result<()> {
+        match fs::remove_dir_all(&self.scratch_dir) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(PathErr::Io {
+                path: self.scratch_dir.clone(),
+                source,
+            }),
+        }
     }
 }
 

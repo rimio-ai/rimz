@@ -44,6 +44,14 @@ Composed prompt contents normally travel by private artifact path. Pi is the exc
 
 Per-machine loop schedules are separate: a `check = "<shell>"` line in your own `~/.config/rimz/loop.toml` is your command, not a repo's. A clone can supply only project `[tasks]`, and those need both a trust grant for the config and a machine-local `rimz loop enable <name>` before they run unattended. Until trust, a same-named machine task remains the runnable definition; after trust, the project definition is visible but defaults disabled here.
 
+### Sandbox isolation
+
+Stock agent CLIs share the host's `/tmp` and discover every installed user skill. On Linux, `rimz config set agents.isolation sandbox` uses bubblewrap to give each agent pane the room's shared `/tmp` and optional [profile skill views](./configuration.md#profiles). It probes before enabling; start refuses when bubblewrap is missing or unusable.
+
+This is a mount view, not containment. The host filesystem remains writable, credentials remain visible, and processes, networking, and IPC remain shared. Visible skills are bound read-only at their discovery paths, but their host sources are not changed and may remain reachable elsewhere. Provider permission settings still apply independently. Bubblewrap disables privilege escalation, so `sudo` and setuid programs cannot elevate inside these panes; use a host shell for that work.
+
+Scratch lands under `~/.local/state/rimz/workspaces/<workspace_id>/tmp/` (or your `XDG_STATE_HOME`) and is shared by the room's sandboxed agents and subagents. `rimz agents show @handle` gives its host path. Agent restart preserves it; `rimz reset --no-start --yes` tears down the room and removes it after sweeping processes. Uninstall and dead-workspace GC also reclaim it. Required host paths beneath `/tmp` stay reachable, so empty mount-point directories may appear in scratch. To stop using the view, run `rimz config set agents.isolation host` and restart affected agents; clear any non-empty profile `skills` lists first. No command edits or deletes your host skills.
+
 ### Notification handlers
 
 Notification handlers run a command of your choosing when a row needs attention (`[[notifications.handler]]`, or the legacy `[notifications].command`). They live only in your per-machine `~/.config/rimz/config.toml`, so a clone can never supply one. They run under your user id, spawned by the sidebar process, and often carry local push credentials. A handler that acts back on the room should treat pane text and transcripts as untrusted data: match a bounded prompt shape, and stay silent on anything else. Wiring is in [the notifications internals](../internals/sidebar/notifications.md).

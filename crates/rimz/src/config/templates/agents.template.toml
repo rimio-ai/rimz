@@ -6,6 +6,7 @@
 # only when this machine needs an override.
 
 [agents]
+# isolation = "host"                  # "sandbox": Linux bubblewrap mount view, per-room /tmp, and skill views
 # Drop-in fragments under ~/.agents/{profiles,teams} merge into matching
 # [agents] and [subagents] tables; entries in this file override them.
 # placement = "auto"                    # launch placement: "auto" (single agent → current pane; team/worktree → new tab), "pane" (split a new pane), or "tab" (always new tab)
@@ -46,6 +47,7 @@
 ## system-prompt-file = "~/.config/rimz/prompts/slim.md"
 ## append-system-prompt-files = ["~/.config/rimz/prompts/rust.md"]
 ## args = "--max-turns 4"
+## skills = ["merge:off", "rebase:off"]
 
 [subagents.profiles]
 # Profiles available only through `rimz subagents`. They use the same fields as
@@ -55,6 +57,7 @@
 ## agent = "codex"
 ## description = "Focused reviewer for supervised child tasks"
 ## effort = "high"
+## skills = ["merge:off", "rebase:off"]
 
 [agents.commands]
 # Commands are shell-split raw command panes. They are not addressable agents.

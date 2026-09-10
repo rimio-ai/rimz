@@ -63,6 +63,28 @@ fn reset_archives_records_and_clears_room_state() {
         .expect("append lifecycle");
 
     let paths = env.state_path_for(&env.project_root);
+    assert!(!paths.scratch_dir.exists(), "host store creates no scratch");
+    paths.ensure_scratch_dir().expect("scratch dir");
+    fs::write(paths.scratch_dir.join("agent-work"), b"scratch").expect("write scratch");
+    paths
+        .ensure_scratch_dir()
+        .expect("scratch ensure is idempotent");
+    assert_eq!(
+        fs::read(paths.scratch_dir.join("agent-work")).expect("read scratch"),
+        b"scratch"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&paths.scratch_dir)
+                .expect("scratch metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+    }
     let diag = rimz::diag::DiagSink::under(
         paths.root.clone(),
         env.workspace_id.clone(),
@@ -92,6 +114,7 @@ fn reset_archives_records_and_clears_room_state() {
     assert!(!diag_log.exists(), "diag log cleared");
     assert!(!diag_frames.exists(), "diag frame captures cleared");
     assert!(!runtime_root.exists(), "workspace runtime dir cleared");
+    assert!(!paths.scratch_dir.exists(), "room scratch cleared");
 
     let archives = archive_paths(&paths.events_archive_dir);
     assert_eq!(archives.len(), 1, "one reset archive written");

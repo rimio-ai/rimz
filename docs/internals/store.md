@@ -114,6 +114,8 @@ The runtime root is mode `0700` and `ensure_private_runtime_dir` refuses to proc
 
 Freshness here gates behaviour, so these files are scoped to one mux session incarnation. When a birth proves the previous session absent, RimZ purges sidebar heartbeats before creating the replacement, so a fresh-but-dead liveness claim cannot steer launch or reconcile decisions in a reborn room.
 
+Room scratch is a sibling concern to the runtime tier: `StatePaths.scratch_dir` lives at `<workspace store>/tmp/`, a persistent location mounted at `/tmp` in sandboxed agent panes. It is ensured privately at mode `0700` only for sandbox launches, never by ordinary `ensure_dirs`. Scratch is not a durable record and has no store write barrier. It survives agent restart; room teardown removes it after sweeping processes, and dead-workspace GC removes it with the state root. Runtime sockets stay in their short runtime paths. Mount-point directories can appear in scratch when host dependencies under `/tmp` are rebound ([sandbox.md](./sandbox.md)).
+
 ### Account-global caches
 
 Under `~/.local/state/rimz/shared/` for the data (`accounts.json`, `rate_limits.json`, `credits.json`, `provider-spending.json`, `spending.json`, `pricing-cache.json`) and `$XDG_RUNTIME_DIR/rimz/shared/` for the election locks and the spending service socket. Data persists so the provider dashboard opens warm after a reboot; locks are runtime because they mean nothing once the process holding them is gone. What each file carries is [state.md → Published lanes](./sidebar/state.md#published-lanes) and [providers.md](./agents/providers.md).

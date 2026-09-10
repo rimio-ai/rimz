@@ -76,23 +76,25 @@ Claude Code is the richest of these: its children also carry a running token cou
 
 One row per agent, ordered by support tier — Claude and Codex, then the alpha and experimental sets.
 
-| Agent | State | Live | History | Account | Ask | Subagents |
-| --- | :--: | :--: | :--: | :--: | :--: | :--: |
-| Claude Code | ● | ● | ● | ● | ● | ● |
-| Codex | ● | ● | ● | ● | ● | ● |
-| Pi | ● | ● | ● | ● | ● | ● |
-| OpenCode | ● | ● | ● | ● | ● | ● |
-| Antigravity | ● | ◐ | ◐ | ● | ◐ | ◐ |
-| Copilot | ● | ◐ | ◐ | ◐ | ● | ◐ |
-| Droid | ● | ◐ | ◐ | ✗ | ◐ | ✗ |
-| Cursor | ● | ◐ | ◐ | ◐ | ◐ | ◐ |
-| Amp | ● | ◐ | ◐ | ◐ | ● | ✗ |
-| Kiro | ◐ | ◐ | ◐ | ✗ | ◐ | ✗ |
-| Qwen | ● | ◐ | ◐ | ◐ | ● | ● |
-| Kimi | ● | ◐ | ◐ | ● | ● | ◐ |
-| Grok | ● | ◐ | ● | ◐ | ● | ● |
+| Agent | State | Live | History | Account | Ask | Subagents | Config home (override) |
+| --- | :--: | :--: | :--: | :--: | :--: | :--: | --- |
+| Claude Code | ● | ● | ● | ● | ● | ● | `~/.claude` (first `CLAUDE_CONFIG_DIR` entry) |
+| Codex | ● | ● | ● | ● | ● | ● | `~/.codex` (`CODEX_HOME`) |
+| Pi | ● | ● | ● | ● | ● | ● | `~/.pi/agent` (`PI_CODING_AGENT_DIR`) |
+| OpenCode | ● | ● | ● | ● | ● | ● | `~/.config/opencode` (`XDG_CONFIG_HOME` + `/opencode`) |
+| Antigravity | ● | ◐ | ◐ | ● | ◐ | ◐ | `~/.gemini/antigravity-cli` |
+| Copilot | ● | ◐ | ◐ | ◐ | ● | ◐ | `~/.copilot` (`COPILOT_HOME`) |
+| Droid | ● | ◐ | ◐ | ✗ | ◐ | ✗ | `~/.factory` |
+| Cursor | ● | ◐ | ◐ | ◐ | ◐ | ◐ | `~/.cursor` (`CURSOR_CONFIG_DIR`; otherwise `XDG_CONFIG_HOME/cursor` on Linux/BSD) |
+| Amp | ● | ◐ | ◐ | ◐ | ● | ✗ | `~/.config/amp` (`XDG_CONFIG_HOME` + `/amp`) |
+| Kiro | ◐ | ◐ | ◐ | ✗ | ◐ | ✗ | `~/.kiro` (`KIRO_HOME`) |
+| Qwen | ● | ◐ | ◐ | ◐ | ● | ● | `~/.qwen` (`QWEN_HOME`) |
+| Kimi | ● | ◐ | ◐ | ● | ● | ◐ | `~/.kimi-code` (`KIMI_CODE_HOME`) |
+| Grok | ● | ◐ | ● | ◐ | ● | ● | `~/.grok` (`GROK_HOME`) |
 
 <sub>● full · ◐ partial · ✗ unsupported. Run `rimz coverage` for the same grid with the exact limit spelled out on every ◐ and ✗ cell.</sub>
+
+Linux `agents.isolation = "sandbox"` explicitly binds each built-in's config home from the effective launch environment; it does not hide the rest of the host or move credentials. Plugin adapters need not declare a config home. Profile skill views cover Claude's user skill root and `$HOME/.agents/skills`, not project-chain skills or Codex's deprecated `$CODEX_HOME/skills`. See [sandbox internals](../internals/sandbox.md) for mount order and scope.
 
 Claude Code is the reference integration and reads full across all six; each other agent exposes less of itself to a local observer. Breadth here is independent of support tier — an experimental agent can carry a wide surface, and a daily driver can leave a cell partial by choice. A ✗ is a declared absence the sidebar and `rimz doctor` read from the same place, so a missing surface renders as a stated gap rather than a silent bug.
 

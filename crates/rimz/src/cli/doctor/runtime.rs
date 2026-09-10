@@ -225,6 +225,17 @@ fn room_state_view(state: &rimz::room::session::BackendRoomState) -> model::Room
     }
 }
 
+pub(super) fn collect_sandbox() -> model::Sandbox {
+    let mode = crate::cli::machine_config().agents.isolation;
+    let diagnostic = rimz::sandbox::diagnose();
+    model::Sandbox {
+        mode,
+        path: diagnostic.path,
+        version: diagnostic.version,
+        error: diagnostic.error,
+    }
+}
+
 fn collect_ttyd() -> model::Probe<model::TtydWeb> {
     match rimz::web::ttyd_diagnostic() {
         Ok(diagnostic) => model::Probe::Ready(model::TtydWeb {

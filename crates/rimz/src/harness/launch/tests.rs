@@ -75,6 +75,7 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
         action,
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        skills: Vec::new(),
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -921,6 +922,7 @@ fn exec_wire_round_trips_maximal_launch_identity() {
         },
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        skills: vec!["merge:auto".parse().unwrap(), "rebase:off".parse().unwrap()],
         provider_account: ProviderAccountState::Unbound,
         run_id: Some(
             "run_0123456789abcdef0123456789abcdef"
@@ -997,6 +999,37 @@ fn exec_wire_round_trips_resume_and_fork() {
         assert!(wire.get("prompt_file").is_none());
         assert_eq!(decoded, invocation);
     }
+}
+
+#[test]
+fn exec_wire_defaults_missing_skills_and_rejects_duplicates() {
+    let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+    let mut payload = serde_json::to_value(&request).unwrap();
+    assert!(payload.get("skills").is_none());
+    assert!(
+        decode_exec_request("claude", None, &payload.to_string())
+            .unwrap()
+            .skills
+            .is_empty()
+    );
+    payload["skills"] = serde_json::json!(["merge", "merge:off"]);
+    assert!(
+        decode_exec_request("claude", None, &payload.to_string())
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate skill name `merge`")
+    );
+    request.skills = vec!["merge".parse().unwrap(), "merge:off".parse().unwrap()];
+    assert!(matches!(
+        exec_argv(
+            Path::new("/bin/rimz"),
+            &runtime(Path::new("/tmp/unused")),
+            &request
+        ),
+        Err(ExecWireErr::Skills(
+            crate::config::SkillSpecErr::DuplicateName(_)
+        ))
+    ));
 }
 
 #[test]

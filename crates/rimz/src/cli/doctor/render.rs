@@ -137,6 +137,39 @@ fn detail(w: &mut impl Write, style: anstyle::Style, text: &str) -> io::Result<(
     writeln!(w, "      {}", paint(style, text))
 }
 
+fn render_sandbox(
+    w: &mut impl Write,
+    sandbox: &super::model::Sandbox,
+    tally: &mut Tally,
+) -> io::Result<()> {
+    section(w, tally, "SANDBOX")?;
+    let health = match (sandbox.mode, sandbox.error.is_some()) {
+        (rimz::config::Isolation::Host, _) => Health::Info,
+        (rimz::config::Isolation::Sandbox, true) => Health::Alarm,
+        (rimz::config::Isolation::Sandbox, false) => Health::Ok,
+    };
+    let mut kv = KeyVals::new().indent(2);
+    kv.push("mode", cell(sandbox.mode.to_string()));
+    kv.push(
+        "bwrap",
+        cell(
+            sandbox
+                .path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "not found".to_owned()),
+        ),
+    );
+    if let Some(version) = &sandbox.version {
+        kv.push("version", cell(version));
+    }
+    kv.push(
+        "probe",
+        verdict(tally, health, sandbox.error.as_deref().unwrap_or("passed")),
+    );
+    kv.render(w)
+}
+
 pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Result<()> {
     let mut tally = Tally::default();
     render_identity(w, report.version, &report.host)?;
@@ -144,6 +177,7 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     render_mux(w, &report.mux, &mut tally)?;
     render_terminal(w, &report.terminal, &mut tally)?;
     render_machine_config(w, &report.machine_config, &mut tally)?;
+    render_sandbox(w, &report.sandbox, &mut tally)?;
     render_hooks(w, report, &mut tally)?;
     render_plugins(w, report, &mut tally)?;
     render_loop(w, &report.loop_tasks, &mut tally)?;

@@ -89,6 +89,10 @@ The `MACHINE CONFIG` section names any `config.toml`, `theme.toml`, `agents.toml
 
 ## The room won't start
 
+### Sandbox isolation is unavailable
+
+Check the `SANDBOX` section in `rimz doctor`: it reports the configured mode, bubblewrap path/version, probe result, and fix. Sandbox mode requires Linux and the `bubblewrap` package (`bwrap` on `PATH`). A failed probe can mean disabled unprivileged user namespaces (`kernel.unprivileged_userns_clone` or `user.max_user_namespaces`) or AppArmor/LSM policy. Follow the probe's error for your host, or use `rimz config set agents.isolation host` and clear non-empty profile `skills` lists. Host mode does not require bubblewrap. The switch affects new launches, not existing panes; [security](./security.md#sandbox-isolation) explains its limits and cleanup.
+
 ### RimZ says the workspace path does not exist
 
 `rimz start -- /path/to/project` only creates a room for a directory that already exists. Correct a typo in the path or create the directory first, then run the command again. Remote path targets follow the same rule before attach; run `rimz remote list` to inspect a saved alias and correct its target.

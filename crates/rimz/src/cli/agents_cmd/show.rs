@@ -11,6 +11,8 @@ use crate::cli::render;
 #[derive(serde::Serialize)]
 struct ShowReport {
     #[serde(skip_serializing_if = "Option::is_none")]
+    scratch_dir: Option<std::path::PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     agent: Option<AgentReportEntry>,
     #[serde(skip)]
     agent_state: Option<AgentState>,
@@ -119,6 +121,11 @@ fn collect_show_report(
     });
     Ok((
         ShowReport {
+            scratch_dir: store
+                .paths()
+                .scratch_dir
+                .exists()
+                .then(|| store.paths().scratch_dir.clone()),
             agent: report_agent,
             agent_state: agent,
             stale,
@@ -153,6 +160,14 @@ fn render_show_report(
     render_activity_section(&mut out, agent, report.ask.as_ref(), report.stale, now)?;
     render_context_section(&mut out, agent, now)?;
     render_placement_section(&mut out, agent)?;
+    if let Some(scratch_dir) = &report.scratch_dir {
+        writeln!(
+            out,
+            "  scratch: {} (mounted at /tmp in sandboxed panes)",
+            scratch_dir.display()
+        )?;
+        writeln!(out)?;
+    }
     let fallback_run = if report.run.is_none() {
         newest_run_for_agent(store, state).ok().flatten()
     } else {
@@ -804,6 +819,7 @@ mod tests {
         let state = rimz::testkit::agent_state("codex", "show", jiff::Timestamp::UNIX_EPOCH);
         let peers = [&state];
         let report = ShowReport {
+            scratch_dir: None,
             agent: Some(build_entry(
                 &state,
                 None,

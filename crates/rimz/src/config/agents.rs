@@ -17,6 +17,7 @@ pub struct AgentsConfig {
     /// Declared before the table fields so the section serializes as valid
     /// TOML (a scalar after a sub-table would bind to the wrong table).
     pub placement: LaunchPlacement,
+    pub isolation: Isolation,
     /// Maximum successive agent-to-agent launches from a human-started root.
     #[serde(default = "default_max_chain_length", rename = "max-chain-length")]
     pub max_chain_length: u8,
@@ -36,6 +37,7 @@ impl Default for AgentsConfig {
     fn default() -> Self {
         Self {
             placement: LaunchPlacement::default(),
+            isolation: Isolation::default(),
             max_chain_length: default_max_chain_length(),
             worktree: WorktreeConfig::default(),
             attention: AttentionConfig::default(),
@@ -109,11 +111,34 @@ pub enum LaunchPlacement {
 #[serde(transparent)]
 pub struct ProfilesConfig(pub BTreeMap<String, Profile>);
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Isolation {
+    #[default]
+    Host,
+    Sandbox,
+}
+
+impl std::fmt::Display for Isolation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Host => "host",
+            Self::Sandbox => "sandbox",
+        })
+    }
+}
+
 /// A named agent profile. `agent` is a base reference: either a built-in agent
 /// kind or another profile that resolves to one.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Profile {
     pub agent: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::skills::deserialize_optional_skill_list"
+    )]
+    pub skills: Option<Vec<super::SkillSpec>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Specs this profile's agents may launch through `rimz subagents`.

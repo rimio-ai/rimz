@@ -130,6 +130,9 @@ impl RoomContext {
             }
         }
 
+        if self.machine_config.agents.isolation == crate::config::Isolation::Sandbox {
+            StatePaths::for_workspace(self.workspace.workspace_id.clone())?.ensure_scratch_dir()?;
+        }
         self.backend.ensure_session(&self.session_options(&cwd))?;
         if supervised && pre_existed {
             self.detected_size = None;
@@ -291,14 +294,15 @@ impl RoomContext {
 
     /// Tear down mux runtime and reset durable room records.
     pub fn reset(&self, hard: bool) -> Result<RoomResetReport> {
+        let paths = StatePaths::for_workspace(self.workspace.workspace_id.clone())
+            .context("preparing store paths for reset")?;
         let teardown = crate::room::teardown::teardown_room(
             self.backend.as_ref(),
             &self.workspace.workspace_id,
             &self.workspace.session_name,
             &self.runtime,
+            &paths,
         );
-        let paths = StatePaths::for_workspace(self.workspace.workspace_id.clone())
-            .context("preparing store paths for reset")?;
         let store = Store::open(paths, self.runtime.clone()).context("opening store for reset")?;
         store
             .record_workspace(&self.workspace)

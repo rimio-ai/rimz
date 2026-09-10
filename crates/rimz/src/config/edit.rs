@@ -965,6 +965,7 @@ const CONTEXT_METER_BANDS: &[&str] = &["green", "yellow", "amber", "red"];
 const ANIMATION_FIELDS: &[&str] = &["frames", "color", "effect", "speed"];
 const PROFILE_FIELDS: &[&str] = &[
     "agent",
+    "skills",
     "description",
     "subagents",
     "model-reminder",

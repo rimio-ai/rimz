@@ -98,6 +98,7 @@ pub struct AgentCell {
     pub system_prompt_file: Option<PathBuf>,
     /// Ordered prompt fragments composed into the replacement system prompt.
     pub append_system_prompt_files: Vec<PathBuf>,
+    pub skills: Vec<crate::config::SkillSpec>,
     /// Canonical shared launch identity selected by profiles, roles, and CLI overlays.
     pub launch: crate::agents::LaunchParams,
 }
@@ -120,6 +121,7 @@ impl Cell {
             auto_compact: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
+            skills: Vec::new(),
             launch: crate::agents::LaunchParams::default(),
         })
     }
@@ -137,6 +139,7 @@ pub struct ResolvedProfile {
     pub auto_compact: Option<String>,
     pub system_prompt_file: Option<PathBuf>,
     pub append_system_prompt_files: Vec<PathBuf>,
+    pub skills: Option<Vec<crate::config::SkillSpec>>,
     pub args: Option<String>,
 }
 
@@ -148,11 +151,15 @@ impl ResolvedProfile {
             auto_compact: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
+            skills: None,
             args: None,
         }
     }
 
     fn fill_missing(&mut self, layer: &Profile) {
+        if self.skills.is_none() {
+            self.skills.clone_from(&layer.skills);
+        }
         self.launch.mode = self.launch.mode.or(layer.mode);
         if self.launch.model.is_none() {
             self.launch.model.clone_from(&layer.model);
@@ -1351,6 +1358,7 @@ fn agent_cell_from(
         auto_compact: resolved.auto_compact.clone(),
         system_prompt_file: resolved.system_prompt_file.clone(),
         append_system_prompt_files: resolved.append_system_prompt_files.clone(),
+        skills: resolved.skills.clone().unwrap_or_default(),
         launch: crate::agents::LaunchParams {
             profile,
             mode,
@@ -1735,6 +1743,9 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     let same_kind = original.kind == base.kind;
 
     original.kind.clone_from(&base.kind);
+    if original.skills.is_none() {
+        original.skills.clone_from(&base.skills);
+    }
     // Keep the portable-field merge aligned with ResolvedProfile::fill_missing.
     original.launch.mode = original.launch.mode.or(base.launch.mode);
     if original.launch.effort.is_none() {

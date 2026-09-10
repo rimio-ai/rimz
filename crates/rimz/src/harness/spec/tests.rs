@@ -59,8 +59,54 @@ fn profile(agent: &str) -> Profile {
         auto_compact: None,
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
+        skills: None,
         args: None,
     }
+}
+
+#[test]
+fn profile_skills_inherit_replace_and_clear() {
+    let parent = Profile {
+        skills: Some(vec!["merge:off".parse().unwrap()]),
+        ..profile("claude")
+    };
+    for child_skills in [
+        None,
+        Some(Vec::new()),
+        Some(vec!["rebase:off".parse().unwrap()]),
+    ] {
+        let expected = child_skills.clone().or_else(|| parent.skills.clone());
+        let profiles = ProfilesConfig(BTreeMap::from([
+            ("parent".to_owned(), parent.clone()),
+            (
+                "child".to_owned(),
+                Profile {
+                    skills: child_skills,
+                    ..profile("parent")
+                },
+            ),
+        ]));
+        let resolved = resolve_profile("child", &profiles).unwrap();
+        assert_eq!(resolved.skills, expected);
+        assert_eq!(
+            agent_cell("child", &profiles, &CommandsConfig::default()).skills,
+            expected.unwrap_or_default()
+        );
+    }
+}
+
+#[test]
+fn rebased_profile_skills_preserve_explicit_empty() {
+    let mut base = ResolvedProfile::bare("codex");
+    base.skills = Some(vec!["merge:off".parse().unwrap()]);
+    let original = ResolvedProfile::bare("claude");
+    assert_eq!(
+        rebase_onto(original.clone(), Some(&base)).skills,
+        base.skills
+    );
+    let mut cleared = original;
+    cleared.skills = Some(Vec::new());
+    assert_eq!(rebase_onto(cleared, Some(&base)).skills, Some(Vec::new()));
 }
 
 fn profiles(entries: impl IntoIterator<Item = (&'static str, Profile)>) -> ProfilesConfig {
@@ -652,6 +698,7 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
             auto_compact: Some("200k".to_owned()),
             system_prompt_file: Some("/prompts/system.md".into()),
             append_system_prompt_files: vec!["/prompts/fragment.md".into()],
+            skills: None,
             args: Some("--strict-mcp-config".to_owned()),
         },
     )]);

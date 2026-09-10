@@ -77,6 +77,7 @@ fn exec_resume(kind: &str, id: &str) -> Vec<String> {
             },
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
+            skills: Vec::new(),
             provider_account: crate::harness::launch::ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,

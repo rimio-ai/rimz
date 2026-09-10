@@ -408,6 +408,7 @@ fn prepare_supervised(
 ) -> Result<Option<PreparedRun>> {
     let workspace = supervised::resolve_run_workspace(globals)?;
     let machine_config = crate::cli::machine_config();
+    rimz::sandbox::preflight(machine_config.agents.isolation)?;
     let mode = request.permission_mode;
     let store = crate::cli::open_store(&workspace)?;
     // Inside a team's lane, a bare role names that team's role, exactly as it
@@ -470,6 +471,11 @@ fn prepare_supervised(
         bail!("--print requires a single-cell agent layout");
     }
     let agent_cell = agent_cells[0];
+    if machine_config.agents.isolation == rimz::config::Isolation::Host
+        && !agent_cell.skills.is_empty()
+    {
+        return Err(rimz::sandbox::SandboxErr::SkillsNeedSandbox.into());
+    }
     let adapter = rimz::agents::find_definition(&agent_cell.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent_cell.kind))?;
     let prompt = supervised_prompt(request, adapter);
@@ -501,6 +507,7 @@ fn prepare_supervised(
         extra_args: agent_cell.args.clone(),
     };
     launch_invocation.system_prompt_file = agent_cell.system_prompt_file.clone();
+    launch_invocation.skills.clone_from(&agent_cell.skills);
     launch_invocation
         .append_system_prompt_files
         .clone_from(&agent_cell.append_system_prompt_files);
@@ -632,6 +639,7 @@ fn execute_attempt(
         permission_args: &agent_cell.args,
         system_prompt_file: agent_cell.system_prompt_file.as_deref(),
         append_system_prompt_files: &agent_cell.append_system_prompt_files,
+        skills: &agent_cell.skills,
         self_cleanup_on_completion: request.self_cleanup_on_completion && !request.keep,
         subagent: request.subagent,
         provider_account_binding: prepared.managed_launch.binding(),

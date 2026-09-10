@@ -34,6 +34,7 @@ pub(super) struct DoctorReport {
     pub(super) mux: Probe<Mux>,
     pub(super) terminal: Terminal,
     pub(super) machine_config: MachineConfigHealth,
+    pub(super) sandbox: Sandbox,
     pub(super) hooks: Vec<HookRow>,
     pub(super) plugins: Vec<PluginRow>,
     pub(super) loop_tasks: LoopTasks,
@@ -53,6 +54,14 @@ pub(super) struct DoctorReport {
     pub(super) diagnostics: Option<Diagnostics>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) last_incident: Option<LastIncident>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct Sandbox {
+    pub(super) mode: rimz::config::Isolation,
+    pub(super) path: Option<std::path::PathBuf>,
+    pub(super) version: Option<String>,
+    pub(super) error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

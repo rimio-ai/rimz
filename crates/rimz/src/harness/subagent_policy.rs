@@ -159,6 +159,7 @@ mod tests {
                 budget: None,
                 system_prompt_file: None,
                 append_system_prompt_files: Vec::new(),
+                skills: None,
                 args: None,
             },
         )]));
@@ -207,6 +208,7 @@ mod tests {
                 budget: None,
                 system_prompt_file: None,
                 append_system_prompt_files: Vec::new(),
+                skills: None,
                 args: None,
             },
         )]));

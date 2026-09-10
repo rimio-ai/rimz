@@ -46,6 +46,8 @@ mod reset;
 mod resume;
 mod run;
 #[cfg(target_os = "linux")]
+mod sandbox;
+#[cfg(target_os = "linux")]
 mod sandbox_containment;
 mod sessions;
 mod sidebar_snapshot;
