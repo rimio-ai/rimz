@@ -97,7 +97,7 @@ Check the `SANDBOX` section in `rimz doctor`: it reports the configured mode, bu
 
 The agent is starting, but RimZ left an unlisted skill out of this launch because it could not prepare its user-only copy for the profile's `skills` list in sandbox mode. The warning names the skill, the source path, and why RimZ could not read or rewrite it. Nothing in the installed skill changed; unaffected skills remain available with their invocation restrictions intact.
 
-To restore the skill on the next launch, fix the source problem named in the warning. For metadata RimZ cannot rewrite, use block mappings and block sequences without anchors, aliases, tags, or flow collections; keep quoted values on one line and use block scalars for multiline descriptions. Alternatively, add the skill's bare name to the [profile's `skills` list](./configuration.md#profiles) to bind it exactly as installed, without rewriting its metadata. Listing it also makes it model-callable if its author's invocation restrictions allow that.
+To restore the skill on the next launch, fix the source problem named in the warning. For metadata RimZ cannot rewrite, use block mappings and block sequences without anchors, aliases, or tags; inline lists and mappings are also supported as values if they open and close on one line. Keep quoted values on one line and use block scalars for multiline descriptions. Alternatively, add the skill's bare name to the [profile's `skills` list](./configuration.md#profiles) to bind it exactly as installed, without rewriting its metadata. Listing it also makes it model-callable if its author's invocation restrictions allow that.
 
 ### RimZ says the workspace path does not exist
 

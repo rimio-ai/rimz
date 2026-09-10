@@ -247,6 +247,51 @@ fn quoted_end(text: &str) -> Option<usize> {
     None
 }
 
+fn flow_closes_on_line(node: &str) -> bool {
+    let bytes = node.as_bytes();
+    let mut brackets = Vec::new();
+    let mut node_start = true;
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        match byte {
+            b' ' | b'\t' => {}
+            b'#' if node_start || index > 0 && bytes[index - 1].is_ascii_whitespace() => {
+                return false;
+            }
+            b'&' | b'*' | b'!' if node_start => return false,
+            b'\'' | b'"' if node_start => {
+                let Some(end) = quoted_end(&node[index..]) else {
+                    return false;
+                };
+                index += end;
+                node_start = false;
+                continue;
+            }
+            b'[' | b'{' => {
+                brackets.push(if byte == b'[' { b']' } else { b'}' });
+                node_start = true;
+            }
+            b']' | b'}' => {
+                if brackets.pop() != Some(byte) {
+                    return false;
+                }
+                if brackets.is_empty() {
+                    let rest = &node[index + 1..];
+                    return rest.is_empty()
+                        || rest.starts_with([' ', '\t'])
+                            && (rest.trim().is_empty() || rest.trim_start().starts_with('#'));
+                }
+                node_start = false;
+            }
+            b',' | b':' => node_start = true,
+            _ => node_start = false,
+        }
+        index += 1;
+    }
+    false
+}
+
 fn validate_lines(text: &str) -> Result<(), &'static str> {
     let mut block_depth = None;
     for line in text.lines().filter(|line| meaningful(line)) {
@@ -270,7 +315,12 @@ fn validate_lines(text: &str) -> Result<(), &'static str> {
             return Err("explicit \"?\" keys are not supported");
         }
         if node.starts_with(['{', '[']) {
-            return Err("flow collections are not supported");
+            if !flow_closes_on_line(node) {
+                return Err(
+                    "a \"[...]\" or \"{...}\" value must close on the same line without anchors, aliases, or tags",
+                );
+            }
+            continue;
         }
         if node.starts_with(['&', '*', '!']) {
             return Err("YAML anchors, aliases, and tags are not supported");
@@ -280,8 +330,10 @@ fn validate_lines(text: &str) -> Result<(), &'static str> {
         } else {
             node_depth = scalar_depth;
         }
-        if node.starts_with(['{', '[']) {
-            return Err("flow collections are not supported");
+        if node.starts_with(['{', '[']) && !flow_closes_on_line(node) {
+            return Err(
+                "a \"[...]\" or \"{...}\" value must close on the same line without anchors, aliases, or tags",
+            );
         }
         if node.starts_with(['&', '*', '!']) {
             return Err("YAML anchors, aliases, and tags are not supported");
@@ -516,6 +568,63 @@ mod tests {
             "\"pol\\u0069cy\": {allow_implicit_invocation: true}",
         ] {
             assert!(openai_policy_user_only(Some(text)).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn markers_accept_single_line_flow_collections() {
+        let fields = "requires:\n  bins: [\"sentry\"]\n  auth: true\ntools: {read: true, run: [a, \"b]\", 'c']} # note\ntags: [it's, ok!]\nitems:\n  - [a, b]\n  - {label: \"quoted\", url: https://example.test}\ninterface: {\"display_name\":\"Demo\"}\n";
+        assert_eq!(
+            frontmatter_user_only(&format!(
+                "---\n{fields}disable-model-invocation: [x]\n---\nBody"
+            ))
+            .unwrap(),
+            format!("---\n{fields}disable-model-invocation: true\n---\nBody")
+        );
+        assert_eq!(
+            openai_policy_user_only(Some(fields)).unwrap(),
+            format!("{fields}policy:\n  allow_implicit_invocation: false\n")
+        );
+        assert_eq!(
+            openai_policy_user_only(Some(&format!(
+                "{fields}policy:\n  allow_implicit_invocation: [x]\n"
+            )))
+            .unwrap(),
+            format!("{fields}policy:\n  allow_implicit_invocation: false\n")
+        );
+    }
+
+    #[test]
+    fn markers_refuse_flow_collections_that_span_lines_or_carry_anchors() {
+        for value in [
+            "[\n  \"sentry\"\n]",
+            "[\"sentry\"] trailing",
+            "[&a x]",
+            "[*a]",
+            "[!!str a]",
+            "{a: *x}",
+            "{\"a\":*x}",
+            "[\"unterminated]",
+            "[a,\n  b]",
+            "[a, # ]\n  b]",
+            "[a}",
+            "[{a: b]]",
+        ] {
+            let fields = format!("bins: {value}\n");
+            assert!(
+                frontmatter_user_only(&format!(
+                    "---\n{fields}disable-model-invocation: false\n---\nBody"
+                ))
+                .is_err(),
+                "{value}"
+            );
+            assert!(
+                openai_policy_user_only(Some(&format!(
+                    "{fields}policy:\n  allow_implicit_invocation: true\n"
+                )))
+                .is_err(),
+                "{value}"
+            );
         }
     }
 
