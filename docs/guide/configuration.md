@@ -356,6 +356,7 @@ agent = "claude"                                       # a built-in kind, or ano
 description = "Lightweight main-agent profile"
 effort = "low"
 budget = "5"
+auto-compact = "200k"
 system-prompt-file = "~/.config/rimz/prompts/slim.md"
 
 [agents.profiles.planner]
@@ -396,7 +397,7 @@ mode = "plan"
 
 #### Profiles
 
-A profile is a named agent preset. `[agents.profiles]` entries belong to `rimz agents` and become addressable type handles; `[subagents.profiles]` entries belong only to `rimz subagents`. `agent` is the base, a built-in kind (`claude`, `codex`, …) or another profile in the same namespace, and the remaining **override fields** layer on top: `mode` (`auto` | `ask` | `plan` | `yolo`), `model`, `effort`, `budget`, `system-prompt-file`, `append-system-prompt-files`, and raw `args`. Optional `description` is listing metadata shown by `rimz agents profiles` or `rimz subagents profiles`; it is not inherited, and neither is `model-reminder`, the switch for the launch line described below. `budget = "5"` caps the session and `budget = "20/day"` resets at the configured local day boundary. Team roles expose the launch fields; loop tasks expose the subset relevant to scheduled work.
+A profile is a named agent preset. `[agents.profiles]` entries belong to `rimz agents` and become addressable type handles; `[subagents.profiles]` entries belong only to `rimz subagents`. `agent` is the base, a built-in kind (`claude`, `codex`, …) or another profile in the same namespace, and the remaining **override fields** layer on top: `mode` (`auto` | `ask` | `plan` | `yolo`), `model`, `effort`, `budget`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, and raw `args`. Optional `description` is listing metadata shown by `rimz agents profiles` or `rimz subagents profiles`; it is not inherited, and neither is `model-reminder`, the switch for the launch line described below. `budget = "5"` caps the session and `budget = "20/day"` resets at the configured local day boundary. Team roles expose the launch fields; loop tasks expose the subset relevant to scheduled work.
 
 An `[agents.profiles]` entry may restrict delegation by listing the only profiles its agents may launch through `rimz subagents`:
 
@@ -422,15 +423,19 @@ model-reminder = false
 
 Drop-ins under `~/.agents/profiles/<name>/agent.toml` may declare either or both profile namespaces. Their relative prompt paths root at the drop-in directory, and same-named entries in the machine `agents.toml` take precedence.
 
+To give a planner more room for a design or compact a tool-heavy coder sooner, set `auto-compact` on its profile or team role. It sets the agent's own auto-compaction window as a positive token count: `"200k"`, `"200000"`, or `"1m"`, never a percentage. Claude Code 2.1.221+ receives `--autocompact <tokens>` and accepts 100k–1M, capped at the model's context window; Codex receives `-c model_auto_compact_token_limit=<tokens>` and clamps the threshold to 90% of the model window. Other agents refuse the field at launch ([support table](../reference/agent-support.md#auto-compaction-window)). This is separate from [`harness.smart_compact`](#smart-compaction), which sends `/compact` from RimZ before a message or loop wake. Remove the field from the profile chain and role to leave the native window to the agent on subsequent launches; RimZ does not rewrite the agent's saved settings.
+
+Put the threshold on the profile if it must survive a single-agent `restart` or room rebirth: those paths re-read the profile, not team-role overrides. Restoring the team's layout also reapplies its role overrides.
+
 Inheritance flattens at launch to one concrete adapter kind, and **the nearest set value wins for every launch override except prompt fragments**: a child that sets `args` replaces the base `args`, while `append-system-prompt-files` concatenates parent-first through the profile chain and a team role appends last. Fragments require a resolved `system-prompt-file` base. RimZ reads the pieces, separates them with blank lines, materializes one content-addressed replacement, and passes that complete value through the adapter's existing replacement channel. A `~` expands to home and a relative path roots at the declaring config file. Every source file must exist at launch; a missing one fails with the path to fix.
 
-Model, effort, and adapter-declared system-prompt path flags repeated in raw `args` are reconciled at launch: the typed field or launch flag wins and RimZ warns when its value differs, while a model set only in `args` becomes the launch model and suppresses the adapter default. Qwen's typed replacement is an environment variable rather than an argv flag, so a raw provider `--system-prompt` remains an explicit provider-specific override.
+Model, effort, auto-compaction, and adapter-declared system-prompt path flags repeated in raw `args` are reconciled at launch: the typed field or launch flag wins and RimZ warns when its value differs, while a model set only in `args` becomes the launch model and suppresses the adapter default. Qwen's typed replacement is an environment variable rather than an argv flag, so a raw provider `--system-prompt` remains an explicit provider-specific override.
 
 Command-line `--model`, `--effort`, `--budget`, and `--system-prompt-file` override the profile value. Repeated `--append-system-prompt-file` values replace the complete inherited fragment list for that launch. The singular configuration key is rejected; configuration uses the plural array.
 
 A profile may be named like a kind: `[agents.profiles.claude]` overrides the base for bare `claude`, for profiles that set `agent = "claude"`, and for virtual cells like `claude-auto`.
 
-At launch, `--agent <PROFILE|KIND>` replaces the base chain while keeping the selected cell's identity and portable settings: mode, effort, budget, and prompt files. On a provider change, the replacement is intentional: the original model and raw `args` are dropped silently because their vocabulary belongs to the old provider, and the replacement profile supplies those fields instead. A same-provider re-base keeps them. This makes a profile named for a kind, such as `[agents.profiles.codex]`, the natural place for the Codex model and raw flags used by `--agent codex`.
+At launch, `--agent <PROFILE|KIND>` replaces the base chain while keeping the selected cell's identity and portable settings: mode, effort, budget, `auto-compact`, and prompt files. On a provider change, the replacement is intentional: the original model and raw `args` are dropped silently because their vocabulary belongs to the old provider, and the replacement profile supplies those fields instead. A same-provider re-base keeps them. This makes a profile named for a kind, such as `[agents.profiles.codex]`, the natural place for the Codex model and raw flags used by `--agent codex`.
 
 #### Commands
 
