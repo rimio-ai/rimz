@@ -55,13 +55,7 @@ pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
     }
 
     if let Some(realtime) = refresh.realtime_usage {
-        let oauth_enabled = !agents::credits::oauth_usage_offline();
-        wrote |= rimz::sidebar::refresh::complete_realtime_account_usage(
-            &runtime,
-            kind,
-            oauth_enabled,
-            Some(realtime),
-        );
+        wrote |= rimz::sidebar::refresh::complete_realtime_account_usage(&runtime, kind, realtime);
     }
 
     if let Some(observed) = refresh.observed {

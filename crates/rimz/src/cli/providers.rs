@@ -19,8 +19,7 @@ use rimz::agents::{ExtraCredits, ProviderAccountScope, RateLimitWindow, ResetCre
 use rimz::config::MachineConfig;
 use rimz::sidebar::enrich::provider_panels_from_caches;
 use rimz::sidebar::refresh::{
-    AccountsCache, ProviderRecord, ProviderStatus, query_provider_accounts,
-    refresh_account_usage_if_due, refresh_account_usage_now,
+    AccountsCache, ProviderRecord, ProviderStatus, query_provider_accounts, refresh_provider_usage,
 };
 use rimz::store::snapshot::{DailyBudgetView, SidebarProviderPanel};
 
@@ -62,11 +61,7 @@ pub fn run(args: ProvidersArgs, _globals: &GlobalFlags) -> Result<()> {
         {
             continue;
         }
-        if args.refresh {
-            refresh_account_usage_now(&runtime, kind);
-        } else {
-            refresh_account_usage_if_due(&runtime, kind);
-        }
+        refresh_provider_usage(&runtime, kind, args.refresh);
     }
     drop(spinner);
 

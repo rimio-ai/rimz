@@ -125,8 +125,7 @@ pub fn refresh_claimed_account_usage(runtime: &RuntimePaths, kind: &str, claim_i
     let mut cache_publication_ms = 0;
     if let Some(usage) = realtime {
         let publication_started = Instant::now();
-        wrote |=
-            publish_account_usage_snapshot(runtime, kind, ProviderAccountScope::KindWide, usage);
+        wrote |= publish_account_usage_snapshot(runtime, kind, usage);
         cache_publication_ms += duration_ms(publication_started.elapsed());
     }
     if !renew_provider_account_usage_claim(runtime, kind, claim_id) {
@@ -189,96 +188,59 @@ fn trace_usage_helper(
     });
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct AccountUsageCompletionDecision {
-    publish_realtime: bool,
-    run_direct: bool,
-}
-
-fn account_usage_completion_decision(
-    oauth_enabled: bool,
-    realtime: Option<&AccountUsageSnapshot>,
-) -> AccountUsageCompletionDecision {
-    if !oauth_enabled {
-        return AccountUsageCompletionDecision::default();
-    }
-    let Some(realtime) = realtime else {
-        return AccountUsageCompletionDecision {
-            run_direct: true,
-            ..Default::default()
-        };
-    };
-    AccountUsageCompletionDecision {
-        publish_realtime: realtime.plan.is_some()
-            || realtime.extra_credits.is_some()
-            || realtime.reset_credits.is_some(),
-        run_direct: realtime.plan.is_none()
-            || realtime.extra_credits.is_none()
-            || realtime.rate_limits.is_none(),
-    }
-}
-
-/// Complete one synchronous provider refresh from optional realtime data and a
+/// Complete one synchronous provider refresh from realtime data and a
 /// due direct probe. Codex uses this after its app-server read so publication,
 /// fallback, and window precedence stay owned by the sidebar cache layer.
 pub fn complete_realtime_account_usage(
     runtime: &RuntimePaths,
     kind: &str,
-    oauth_enabled: bool,
-    realtime: Option<AccountUsageSnapshot>,
+    realtime: AccountUsageSnapshot,
 ) -> bool {
-    complete_realtime_account_usage_with(
-        runtime,
-        kind,
-        oauth_enabled,
-        realtime,
-        merge_account_usage_if_due,
-    )
+    complete_realtime_account_usage_with(runtime, kind, realtime, merge_account_usage_if_due)
 }
 
-/// Force one bounded direct account-usage read before a reset-shaped ping.
+/// Refresh one provider's account usage for `rimz providers`, forcing a read
+/// when requested or otherwise following its durable cadence.
 /// Cache publication remains nonce-guarded by the normal claim path.
-pub fn refresh_account_usage_now(runtime: &RuntimePaths, kind: &str) -> bool {
+pub fn refresh_provider_usage(runtime: &RuntimePaths, kind: &str, force: bool) -> bool {
     if crate::agents::credits::oauth_usage_offline() {
         return false;
     }
-    refresh_account_usage_now_with(runtime, kind, merge_account_usage_if_due)
+    refresh_provider_usage_with(runtime, kind, force, merge_account_usage_if_due)
 }
 
-/// Refresh one provider's account usage when its durable cadence says it is
-/// due. The claim path single-flights concurrent callers.
-pub fn refresh_account_usage_if_due(runtime: &RuntimePaths, kind: &str) -> bool {
-    if crate::agents::credits::oauth_usage_offline() {
-        return false;
-    }
-    merge_account_usage_if_due(runtime, kind)
-}
-
-fn refresh_account_usage_now_with(
+fn refresh_provider_usage_with(
     runtime: &RuntimePaths,
     kind: &str,
+    force: bool,
     refresh: impl FnOnce(&RuntimePaths, &str) -> bool,
 ) -> bool {
-    super::credits::invalidate_oauth_read(runtime, kind);
+    if force {
+        super::credits::invalidate_oauth_read(runtime, kind);
+    }
     refresh(runtime, kind)
 }
 
 fn complete_realtime_account_usage_with(
     runtime: &RuntimePaths,
     kind: &str,
-    oauth_enabled: bool,
-    realtime: Option<AccountUsageSnapshot>,
+    realtime: AccountUsageSnapshot,
     complete_direct: impl FnOnce(&RuntimePaths, &str) -> bool,
 ) -> bool {
-    let decision = account_usage_completion_decision(oauth_enabled, realtime.as_ref());
-    let mut wrote = false;
-    if decision.publish_realtime
-        && let Some(realtime) = realtime
-    {
-        wrote |=
-            publish_account_usage_snapshot(runtime, kind, ProviderAccountScope::KindWide, realtime);
+    if crate::agents::credits::oauth_usage_offline() {
+        return false;
     }
-    if decision.run_direct {
+    let publish = realtime.plan.is_some()
+        || realtime.extra_credits.is_some()
+        || realtime.reset_credits.is_some();
+    let run_direct = realtime.plan.is_none()
+        || realtime.extra_credits.is_none()
+        || realtime.rate_limits.is_none();
+    let mut wrote = false;
+    if publish {
+        wrote |= publish_account_usage_snapshot(runtime, kind, realtime);
+    }
+    if run_direct {
         wrote |= complete_direct(runtime, kind);
     }
     wrote
@@ -328,7 +290,6 @@ fn complete_direct_account_usage(
 fn publish_account_usage_snapshot(
     runtime: &RuntimePaths,
     kind: &str,
-    scope: ProviderAccountScope,
     mut snapshot: AccountUsageSnapshot,
 ) -> bool {
     let windows = snapshot.rate_limits.take();
@@ -336,17 +297,10 @@ fn publish_account_usage_snapshot(
         || snapshot.extra_credits.is_some()
         || snapshot.reset_credits.is_some();
     if has_credits {
-        merge_provider_realtime_usage(runtime, kind, scope.clone(), snapshot);
+        merge_provider_realtime_usage(runtime, kind, ProviderAccountScope::KindWide, snapshot);
     }
-    let has_windows = publish_account_usage_windows(
-        runtime,
-        kind,
-        AccountUsageIdentity {
-            scope,
-            ..AccountUsageIdentity::default()
-        },
-        windows,
-    );
+    let has_windows =
+        publish_account_usage_windows(runtime, kind, AccountUsageIdentity::default(), windows);
     has_credits || has_windows
 }
 
