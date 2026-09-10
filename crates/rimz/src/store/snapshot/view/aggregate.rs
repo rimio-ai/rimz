@@ -7,11 +7,10 @@ use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::snapshot::row::SidebarRow;
 
 use super::layout::{
-    GroupEntry, GroupResolver, GroupRoots, compare_groups, group_branch_label, sort_rows,
-    status_counts,
+    GroupEntry, GroupResolver, compare_groups, group_branch_label, sort_rows, status_counts,
 };
 use super::score;
-use super::{SidebarWorktreeGroup, SidebarWorktreeKind, cohort_team};
+use super::{SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind, cohort_team};
 
 mod forks;
 mod status;
@@ -120,112 +119,109 @@ impl AttentionWindows {
     }
 }
 
-pub(super) struct AgentProjection<'a> {
-    pub agents: &'a [AgentState],
-    pub provider_capacities: &'a BTreeMap<AgentKind, ProviderCapacity>,
-    pub exhausted_resumes: &'a BTreeSet<(AgentKind, AgentSessionId)>,
-}
+impl SidebarSnapshot {
+    pub(super) fn build_worktree_groups(
+        &self,
+        mut rows: Vec<SidebarRow>,
+        provider_capacities: &BTreeMap<AgentKind, ProviderCapacity>,
+        exhausted_resumes: &BTreeSet<(AgentKind, AgentSessionId)>,
+    ) -> Vec<SidebarWorktreeGroup> {
+        let now = self.now;
+        let windows = AttentionWindows::from_config(&self.attention);
+        let agent_index = AgentProjectionIndex::new(&self.agents, &rows);
+        // Nest each subagent under its parent root row before grouping. This is the
+        // one chokepoint every live (`rows_from_panes`) card flows through, so
+        // nesting behaves identically for process, agent, and attention rows.
+        subagents::attach_sub_agents_indexed(&mut rows, &agent_index, now);
+        // A delegating parent's work is its children's, so their activity advances
+        // the parent row's displayed clock before the stall check reads it.
+        subagents::fold_child_activity_onto_parents(&mut rows);
+        // Same-pane conversations keep separate durable projections, so fold the
+        // hidden roots' clocks onto whichever one currently owns the pane.
+        forks::fold_same_pane_clocks_onto_bound_row(&mut rows, &self.agents);
+        // Project the displayed status now that each row knows its subagents and
+        // the full agent set is in hand.
+        status::project_display_status(
+            &mut rows,
+            &agent_index,
+            provider_capacities,
+            exhausted_resumes,
+            now,
+            windows.stalled_after_secs,
+            windows.tool_repeat_attention_after,
+        );
+        stamp_attention(&mut rows, now, windows);
 
-pub(super) fn build_worktree_groups_from_rows(
-    mut rows: Vec<SidebarRow>,
-    agent_projection: AgentProjection<'_>,
-    roots: GroupRoots<'_>,
-    now: Timestamp,
-    windows: AttentionWindows,
-) -> Vec<SidebarWorktreeGroup> {
-    let agent_index = AgentProjectionIndex::new(agent_projection.agents, &rows);
-    // Nest each subagent under its parent root row before grouping. This is the
-    // one chokepoint every live (`rows_from_panes`) card flows through, so
-    // nesting behaves identically for process, agent, and attention rows.
-    subagents::attach_sub_agents_indexed(&mut rows, &agent_index, now);
-    // A delegating parent's work is its children's, so their activity advances
-    // the parent row's displayed clock before the stall check reads it.
-    subagents::fold_child_activity_onto_parents(&mut rows);
-    // Same-pane conversations keep separate durable projections, so fold the
-    // hidden roots' clocks onto whichever one currently owns the pane.
-    forks::fold_same_pane_clocks_onto_bound_row(&mut rows, agent_projection.agents);
-    // Project the displayed status now that each row knows its subagents and
-    // the full agent set is in hand.
-    status::project_display_status(
-        &mut rows,
-        &agent_index,
-        agent_projection.provider_capacities,
-        agent_projection.exhausted_resumes,
-        now,
-        windows.stalled_after_secs,
-        windows.tool_repeat_attention_after,
-    );
-    stamp_attention(&mut rows, now, windows);
+        let resolver = GroupResolver::new(
+            self,
+            rows.iter().map(|row| GroupEntry {
+                channel: row.channel.as_deref(),
+                path: row.worktree_path.as_deref(),
+                branch: row.worktree_branch.as_deref(),
+            }),
+        );
 
-    let resolver = GroupResolver::new(
-        roots,
-        rows.iter().map(|row| GroupEntry {
-            channel: row.channel.as_deref(),
-            path: row.worktree_path.as_deref(),
-            branch: row.worktree_branch.as_deref(),
-        }),
-    );
+        let mut by_group: BTreeMap<String, (String, SidebarWorktreeKind, Vec<SidebarRow>)> =
+            BTreeMap::new();
+        for row in rows {
+            let identity = resolver.resolve(GroupEntry {
+                channel: row.channel.as_deref(),
+                path: row.worktree_path.as_deref(),
+                branch: row.worktree_branch.as_deref(),
+            });
+            by_group
+                .entry(identity.key)
+                .and_modify(|(_, _, rows)| rows.push(row.clone()))
+                .or_insert_with(|| (identity.label, identity.kind, vec![row]));
+        }
 
-    let mut by_group: BTreeMap<String, (String, SidebarWorktreeKind, Vec<SidebarRow>)> =
-        BTreeMap::new();
-    for row in rows {
-        let identity = resolver.resolve(GroupEntry {
-            channel: row.channel.as_deref(),
-            path: row.worktree_path.as_deref(),
-            branch: row.worktree_branch.as_deref(),
-        });
-        by_group
-            .entry(identity.key)
-            .and_modify(|(_, _, rows)| rows.push(row.clone()))
-            .or_insert_with(|| (identity.label, identity.kind, vec![row]));
+        let mut groups = by_group
+            .into_iter()
+            .map(|(key, (label, kind, mut rows))| {
+                sort_rows(&mut rows);
+                // Prefer a branch label over the path-basename seed for worktree
+                // pods. Root pods keep the room name; external keeps its catch-all
+                // label even if a stray branch rode the row.
+                let label = if kind == SidebarWorktreeKind::Worktree {
+                    group_branch_label(&rows).unwrap_or(label)
+                } else {
+                    label
+                };
+                let status_counts = status_counts(&rows);
+                let team = cohort_team(
+                    rows.iter()
+                        .map(|row| row.as_agent().and_then(|agent| agent.team.as_deref())),
+                )
+                .map(ToOwned::to_owned);
+                SidebarWorktreeGroup {
+                    key,
+                    label,
+                    label_qualifier: None,
+                    kind,
+                    team,
+                    cohort_effort: None,
+                    status_counts,
+                    rows,
+                    diff_added: None,
+                    diff_removed: None,
+                    commits_ahead: None,
+                    commits_behind: None,
+                    trunk: None,
+                    worktree_backed: false,
+                    finished: false,
+                    clean: None,
+                    landed: None,
+                    trunk_sync: None,
+                    pr_state: None,
+                    pr_ci: None,
+                    pr_number: None,
+                    pr_url: None,
+                }
+            })
+            .collect::<Vec<_>>();
+        groups.sort_by(compare_groups);
+        groups
     }
-
-    let mut groups = by_group
-        .into_iter()
-        .map(|(key, (label, kind, mut rows))| {
-            sort_rows(&mut rows);
-            // Prefer a branch label over the path-basename seed for worktree
-            // pods. Root pods keep the room name; external keeps its catch-all
-            // label even if a stray branch rode the row.
-            let label = if kind == SidebarWorktreeKind::Worktree {
-                group_branch_label(&rows).unwrap_or(label)
-            } else {
-                label
-            };
-            let status_counts = status_counts(&rows);
-            let team = cohort_team(
-                rows.iter()
-                    .map(|row| row.as_agent().and_then(|agent| agent.team.as_deref())),
-            )
-            .map(ToOwned::to_owned);
-            SidebarWorktreeGroup {
-                key,
-                label,
-                label_qualifier: None,
-                kind,
-                team,
-                cohort_effort: None,
-                status_counts,
-                rows,
-                diff_added: None,
-                diff_removed: None,
-                commits_ahead: None,
-                commits_behind: None,
-                trunk: None,
-                worktree_backed: false,
-                finished: false,
-                clean: None,
-                landed: None,
-                trunk_sync: None,
-                pr_state: None,
-                pr_ci: None,
-                pr_number: None,
-                pr_url: None,
-            }
-        })
-        .collect::<Vec<_>>();
-    groups.sort_by(compare_groups);
-    groups
 }
 
 /// Stamp attention ranking facts: no-activity age drives the inactive sink, the

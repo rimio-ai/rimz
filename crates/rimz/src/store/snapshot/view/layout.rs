@@ -22,14 +22,6 @@ pub(super) fn group_branch_label(rows: &[SidebarRow]) -> Option<String> {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct GroupRoots<'a> {
-    pub project_root: Option<&'a Path>,
-    pub worktree_roots: &'a [PathBuf],
-    pub worktree_home: Option<&'a Path>,
-    pub root_class: RootClass,
-}
-
-#[derive(Clone, Copy)]
 pub(super) struct GroupEntry<'a> {
     pub channel: Option<&'a str>,
     pub path: Option<&'a str>,
@@ -52,10 +44,11 @@ pub(super) struct GroupResolver<'a> {
 
 impl<'a> GroupResolver<'a> {
     pub(super) fn new<'entry>(
-        roots: GroupRoots<'a>,
+        snapshot: &'a SidebarSnapshot,
         entries: impl IntoIterator<Item = GroupEntry<'entry>>,
     ) -> Self {
-        let mut worktree_roots: BTreeSet<PathBuf> = roots.worktree_roots.iter().cloned().collect();
+        let mut worktree_roots: BTreeSet<PathBuf> =
+            snapshot.worktree_roots.iter().cloned().collect();
         let mut branches_per_path: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
         for entry in entries {
             let (Some(path), Some(branch)) = (
@@ -73,10 +66,10 @@ impl<'a> GroupResolver<'a> {
             .map(|(path, _)| path.to_owned())
             .collect();
         Self {
-            project_root: roots.project_root,
+            project_root: snapshot.project_root.as_deref(),
             worktree_roots: worktree_roots.into_iter().collect(),
-            worktree_home: roots.worktree_home,
-            root_class: roots.root_class,
+            worktree_home: snapshot.worktree_home.as_deref(),
+            root_class: snapshot.root_class,
             multi_branch_paths,
         }
     }
@@ -801,15 +794,9 @@ pub fn group_live_agents_by_worktree<'a>(
     agents: &[&'a AgentState],
     snapshot: &SidebarSnapshot,
 ) -> Vec<AgentWorktreeGroup<'a>> {
-    let project_root = snapshot.project_root.as_deref();
     let windows = AttentionWindows::from_config(&snapshot.attention);
     let resolver = GroupResolver::new(
-        GroupRoots {
-            project_root,
-            worktree_roots: &snapshot.worktree_roots,
-            worktree_home: snapshot.worktree_home.as_deref(),
-            root_class: snapshot.root_class,
-        },
+        snapshot,
         agents.iter().map(|agent| GroupEntry {
             channel: agent.channel.as_deref(),
             path: agent.worktree_path.as_deref(),
