@@ -1272,19 +1272,28 @@ impl MuxBackend for ZellijBackend {
                 reason: err.to_string(),
             })?
             .action_target();
-        // Open marker + text + close marker as one decimal byte list, mirroring
-        // the existing `send_key` byte-write mechanism. Raw bytes pass through
-        // untouched, so a marker-looking byte inside `text` is never re-parsed.
+        // Chunk the complete byte stream so small pastes remain one command.
         let bytes = BRACKET_PASTE_OPEN
             .bytes()
             .chain(payload.bytes())
             .chain(BRACKET_PASTE_CLOSE.bytes())
-            .map(|byte| byte.to_string());
-        self.cmd()
-            .args(["action", "write", "--pane-id", &target])
-            .args(bytes)
-            .run()
-            .map(|_| ())
+            .collect::<Vec<_>>();
+        for chunk in bytes.chunks(super::ZELLIJ_WRITE_CHUNK) {
+            if let Err(err) = self
+                .cmd()
+                .args(["action", "write", "--pane-id", &target])
+                .args(chunk.iter().map(u8::to_string))
+                .run()
+            {
+                let _ = self
+                    .cmd()
+                    .args(["action", "write", "--pane-id", &target])
+                    .args(BRACKET_PASTE_CLOSE.bytes().map(|byte| byte.to_string()))
+                    .run();
+                return Err(err);
+            }
+        }
+        Ok(())
     }
 
     fn open_sidebar(&self, opts: &SidebarPaneOptions, daemon: Option<&DaemonView>) -> Result<()> {

@@ -330,6 +330,10 @@ impl TmuxBackend {
         if commands.is_empty() {
             return Ok(());
         }
+        self.batch_spec(commands).run().map(|_| ())
+    }
+
+    pub(super) fn batch_spec(&self, commands: &[Vec<String>]) -> CommandSpec {
         let mut spec = self.cmd();
         for (index, command) in commands.iter().enumerate() {
             if index > 0 {
@@ -337,7 +341,7 @@ impl TmuxBackend {
             }
             spec = spec.args(command.iter().cloned());
         }
-        spec.run().map(|_| ())
+        spec
     }
 
     /// The session's first window index (`base-index`, default 0).

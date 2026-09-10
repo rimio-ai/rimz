@@ -22,6 +22,7 @@ macro_rules! require_zellij {
 
 mod containment;
 mod daemon;
+mod large_paste;
 mod launch;
 mod pane_io;
 mod presence;
