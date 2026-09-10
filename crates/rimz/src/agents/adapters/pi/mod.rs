@@ -350,6 +350,10 @@ impl crate::agents::capabilities::LaunchCapability for PiAdapter {
             env.get("HOME").map(Path::new),
         )
     }
+
+    fn manual_skill(&self) -> ManualSkill {
+        ManualSkill::Frontmatter
+    }
 }
 
 impl crate::agents::capabilities::HookCapability for PiAdapter {

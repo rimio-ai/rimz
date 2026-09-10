@@ -521,6 +521,10 @@ impl crate::agents::capabilities::LaunchCapability for KimiAdapter {
         )
     }
 
+    fn manual_skill(&self) -> ManualSkill {
+        ManualSkill::Frontmatter
+    }
+
     fn configured_identity(&self) -> (Option<String>, Option<String>) {
         (spend::configured_model(), None)
     }

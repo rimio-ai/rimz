@@ -7,6 +7,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::capabilities::ManualSkill;
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind, LifecycleState, TurnPhase, step};
 use super::registry::BUILTINS;
 use super::{
@@ -49,6 +50,64 @@ fn builtin_config_homes_resolve_only_the_explicit_launch_env() {
             );
         }
         assert_eq!(adapter.config_home(&Default::default()), None, "{kind}");
+    }
+}
+
+#[test]
+fn builtin_skills_homes_follow_config_homes() {
+    let table = [
+        ("claude", ".claude/skills", ManualSkill::Frontmatter),
+        ("codex", ".agents/skills", ManualSkill::OpenAiPolicy),
+        ("amp", ".agents/skills", ManualSkill::Unsupported),
+        ("copilot", ".agents/skills", ManualSkill::Frontmatter),
+        ("kimi", ".agents/skills", ManualSkill::Frontmatter),
+        ("pi", ".agents/skills", ManualSkill::Frontmatter),
+        ("opencode", ".agents/skills", ManualSkill::Unsupported),
+        ("antigravity", ".agents/skills", ManualSkill::Unsupported),
+        ("cursor", ".agents/skills", ManualSkill::Frontmatter),
+        ("droid", ".agents/skills", ManualSkill::Frontmatter),
+        ("kiro", ".kiro/skills", ManualSkill::Unsupported),
+        ("qwen", ".qwen/skills", ManualSkill::Frontmatter),
+        ("grok", ".agents/skills", ManualSkill::Unsupported),
+    ];
+    assert_eq!(table.len(), BUILTINS.len());
+    for adapter in BUILTINS {
+        let kind = adapter.spec().kind;
+        let (_, suffix, manual) = table.iter().find(|(name, _, _)| *name == kind).unwrap();
+        assert_eq!(adapter.manual_skill(), *manual, "{kind}");
+        for home in ["/fixture/home", "/another/home"] {
+            let env = std::collections::BTreeMap::from([("HOME".into(), home.into())]);
+            assert_eq!(
+                adapter.skills_home(&env),
+                Some(Path::new(home).join(suffix)),
+                "{kind}"
+            );
+        }
+        assert_eq!(adapter.skills_home(&Default::default()), None, "{kind}");
+        assert_eq!(
+            adapter.skills_home(&std::collections::BTreeMap::from([(
+                "HOME".into(),
+                String::new()
+            )])),
+            None,
+            "{kind}"
+        );
+    }
+    for (kind, key, value) in [
+        ("claude", "CLAUDE_CONFIG_DIR", " /selected , /archive "),
+        ("qwen", "QWEN_HOME", "/selected"),
+        ("kiro", "KIRO_HOME", "/selected"),
+    ] {
+        let adapter = BUILTINS
+            .iter()
+            .find(|adapter| adapter.spec().kind == kind)
+            .unwrap();
+        let env = std::collections::BTreeMap::from([(key.into(), value.into())]);
+        assert_eq!(
+            adapter.skills_home(&env),
+            Some(PathBuf::from("/selected/skills")),
+            "{kind}"
+        );
     }
 }
 

@@ -467,6 +467,14 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         )
     }
 
+    fn skills_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
+        Some(self.config_home(env)?.join("skills"))
+    }
+
+    fn manual_skill(&self) -> ManualSkill {
+        ManualSkill::Frontmatter
+    }
+
     fn append_system_text_channel(&self) -> Option<SystemTextChannel> {
         Some(SystemTextChannel::TextFlag {
             flags: vec!["--append-system-prompt".to_owned()],
