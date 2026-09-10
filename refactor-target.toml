@@ -41,6 +41,7 @@ layers = [
     "daemon_view",
     "room",
     "remote_control",
+    "sandbox",
 ],
     [
     "sidebar",
@@ -72,7 +73,8 @@ upward-dependencies = ["address"]
 # Attribution adds lifetime values, boundary queries and unreadable-path warnings.
 # Pending-wake vocabulary and rest projection are shared by harness and renderers.
 # Trigger summaries share wording between sleeping descriptions and expanded waits.
-surface-budget = 966
+# Native config-home resolution is shared with sandbox launch planning.
+surface-budget = 967
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/codex"
@@ -117,7 +119,8 @@ upward-dependencies = [
     "harness::spec",
     "store::message",
 ]
-surface-budget = 167
+# Isolation and parsed skill policy cross config, harness and sandbox seams.
+surface-budget = 174
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"
@@ -144,7 +147,8 @@ allowed-dependencies = [
     "sock",
 ]
 # Pane writers share one user-scoped lock path across workspace boundaries.
-surface-budget = 126
+# Room lifecycle owns private scratch creation and removal.
+surface-budget = 128
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -173,7 +177,7 @@ surface-budget = 9
 
 [[module]]
 path = "crates/rimz/src/lib.rs"
-surface-budget = 69
+surface-budget = 70
 
 [[module]]
 path = "crates/rimz/src/main.rs"
@@ -194,7 +198,8 @@ surface-budget = 67
 path = "crates/rimz/src/mux"
 # Companion append adds one deep operation, its outcome, and the shared tab cap.
 # Geometry planning and native balancing remain private to mux.
-surface-budget = 260
+# Sandbox reach uses mux-owned endpoint resolution rather than duplicating it.
+surface-budget = 261
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
@@ -232,6 +237,11 @@ surface-budget = 177
 [[module]]
 path = "crates/rimz/src/remote_control.rs"
 surface-budget = 14
+
+[[module]]
+path = "crates/rimz/src/sandbox"
+allowed-dependencies = ["agents", "config", "disk", "mux", "utils"]
+surface-budget = 9
 
 [[module]]
 path = "crates/rimz/src/room"
