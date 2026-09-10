@@ -1004,6 +1004,44 @@ fn launch_prompt_artifact_round_trips_and_missing_file_fails() {
 
 #[cfg(unix)]
 #[test]
+fn unsupported_profile_skills_refuse_before_launch_and_run_records() {
+    for supervised in [false, true] {
+        let env = Env::new();
+        let config_dir = env.config_root().join("rimz");
+        std::fs::create_dir_all(&config_dir).expect("mkdir config");
+        std::fs::write(
+            config_dir.join("agents.toml"),
+            "[agents]\nisolation = \"sandbox\"\n\
+             [agents.profiles.worker]\nagent = \"amp\"\nskills = []\n",
+        )
+        .expect("write unsupported skills profile");
+        let mut command = env.rimz();
+        command.args(["agents", "worker", "hello"]);
+        if supervised {
+            command.args(["-p", "--bg"]);
+        }
+        command.assert().failure().stderr(contains(
+            "provider amp cannot mark skills user-only; remove the profile skills list",
+        ));
+
+        let paths = env.state_path_for(&env.project_root);
+        assert!(
+            !paths.runs_dir.exists()
+                || std::fs::read_dir(&paths.runs_dir)
+                    .expect("read runs")
+                    .next()
+                    .is_none(),
+            "unsupported skills must not create a run record (supervised={supervised})",
+        );
+        assert!(
+            env.store().read_events().expect("read events").is_empty(),
+            "unsupported skills must not append launch events (supervised={supervised})",
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn oversized_prompt_refuses_before_launch_and_run_records() {
     for supervised in [false, true] {
         let env = Env::new();

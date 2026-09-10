@@ -138,10 +138,6 @@ impl StatePaths {
         ensure_private_runtime_dir(&self.tmp_dir)
     }
 
-    pub fn ensure_skills_dir(&self) -> Result<()> {
-        ensure_private_runtime_dir(&self.skills_dir)
-    }
-
     pub fn remove_tmp_dir(&self) -> Result<()> {
         match fs::remove_dir_all(&self.tmp_dir) {
             Ok(()) => Ok(()),

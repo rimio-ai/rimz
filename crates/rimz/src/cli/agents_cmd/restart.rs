@@ -46,11 +46,15 @@ pub(in crate::cli) fn restart_resolved(
         .unwrap_or_else(|| workspace.worktree_root.clone());
     let machine_config = crate::cli::machine_config();
     let posture = restart_posture(agent, workspace, &machine_config)?;
+    let adapter = rimz::agents::find_definition(agent.kind.as_str())
+        .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
+    rimz::sandbox::preflight_skills(
+        machine_config.agents.isolation,
+        &agent.kind,
+        posture.skills.is_some(),
+        adapter.manual_skill(),
+    )?;
     rimz::sandbox::preflight(machine_config.agents.isolation)?;
-    if machine_config.agents.isolation == rimz::config::Isolation::Host && posture.skills.is_some()
-    {
-        return Err(rimz::sandbox::SandboxErr::SkillsNeedSandbox.into());
-    }
     let cell = restart_cell(agent, &posture);
     let extra_args = posture.args.clone();
 
@@ -63,8 +67,6 @@ pub(in crate::cli) fn restart_resolved(
         &cwd,
     )?;
 
-    let adapter = rimz::agents::find_definition(agent.kind.as_str())
-        .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
     let resume_support = !agent.agent_id.is_provisional()
         && agent.worktree_path.is_some()
         && rimz::harness::launch::compile_provider_argv(

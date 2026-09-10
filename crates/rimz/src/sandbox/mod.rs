@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::agents::ManualSkill;
 use crate::config::{Isolation, SkillName};
+use crate::ids::AgentKind;
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -118,6 +119,26 @@ pub struct SandboxDiagnostic {
     pub error: Option<String>,
 }
 
+pub fn preflight_skills(
+    isolation: Isolation,
+    kind: &AgentKind,
+    configured: bool,
+    manual: ManualSkill,
+) -> Result<(), SandboxErr> {
+    if !configured {
+        return Ok(());
+    }
+    if isolation == Isolation::Host {
+        return Err(SandboxErr::SkillsNeedSandbox);
+    }
+    if manual == ManualSkill::Unsupported {
+        return Err(SandboxErr::ManualSkillsUnsupported {
+            kind: kind.to_string(),
+        });
+    }
+    Ok(())
+}
+
 pub fn preflight(isolation: Isolation) -> Result<Option<PathBuf>, SandboxErr> {
     if isolation == Isolation::Host {
         return Ok(None);
@@ -213,12 +234,10 @@ pub fn prepare(inputs: &SandboxInputs<'_>) -> Result<Prepared, SandboxErr> {
         bound.push(path);
     }
     if let Some(view) = views {
-        validate_path(&view.root)?;
         mounts.push(Mount::Tmpfs {
             target: view.root.clone(),
         });
         for entry in view.entries {
-            validate_path(&entry.source)?;
             mounts.push(Mount::RoBind {
                 source: entry.source,
                 target: view.root.join(entry.name),

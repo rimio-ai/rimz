@@ -12,6 +12,20 @@ pub(super) fn prepare(
     skills_dir: &Path,
     inputs: &SkillInputs<'_>,
 ) -> Result<Option<DirView>, SandboxErr> {
+    match prepare_view(env, skills_dir, inputs) {
+        Err(error) if inputs.callable.is_none() => {
+            tracing::debug!(%error, "keeping native skill discovery because the optional view is unavailable");
+            Ok(None)
+        }
+        result => result,
+    }
+}
+
+fn prepare_view(
+    env: &BTreeMap<String, String>,
+    skills_dir: &Path,
+    inputs: &SkillInputs<'_>,
+) -> Result<Option<DirView>, SandboxErr> {
     let Some(home) = &inputs.home else {
         return if inputs.callable.is_some() {
             Err(SandboxErr::SkillsNeedRoot {
@@ -83,6 +97,10 @@ pub(super) fn prepare(
             });
         }
     };
+    super::validate_path(&root)?;
+    for source in entries.values() {
+        super::validate_path(source)?;
+    }
     Ok(Some(DirView {
         root,
         entries: entries

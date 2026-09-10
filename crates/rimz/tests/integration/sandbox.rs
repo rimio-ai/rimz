@@ -110,6 +110,120 @@ fn sandbox_unconfigured_skills_without_library_add_no_mounts() {
 }
 
 #[test]
+fn sandbox_unconfigured_unreadable_skills_keep_native_launch_behavior() {
+    let execute = available();
+    for invalid_name in [false, true] {
+        let env = Env::new();
+        let root = env.home_root.join(".agents/skills");
+        std::fs::create_dir_all(root.parent().unwrap()).unwrap();
+        if invalid_name {
+            std::fs::create_dir(&root).unwrap();
+            std::fs::write(
+                root.join(std::ffi::OsString::from_vec(vec![0xff])),
+                "native",
+            )
+            .unwrap();
+        } else {
+            std::os::unix::fs::symlink("skills", &root).unwrap();
+        }
+        let vars = environment(&env);
+        for callable in [None, Some(&[][..])] {
+            let result = skill_argv(
+                &env,
+                &vars,
+                SkillInputs {
+                    kind: "codex",
+                    home: Some(root.clone()),
+                    manual: ManualSkill::OpenAiPolicy,
+                    callable,
+                },
+            );
+            if callable.is_some() {
+                assert!(result.is_err());
+            } else {
+                assert!(
+                    !result
+                        .unwrap()
+                        .iter()
+                        .any(|arg| arg == "--tmpfs" || arg == "--ro-bind")
+                );
+            }
+        }
+        if !execute {
+            continue;
+        }
+        enable(&env);
+        let shim_dir = write_env_dump_shim(&env, "codex");
+        std::fs::write(
+            shim_dir.join("codex"),
+            "#!/bin/sh\nprintf ran > /tmp/skill-probe\n",
+        )
+        .unwrap();
+        let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("codex"), Vec::new());
+        let probe = env.store().paths().tmp_dir.join("skill-probe");
+        env.rimz()
+            .args(exec_args(&env, &request))
+            .env("PATH", path_with_front(&shim_dir))
+            .assert_success_within_timeout("unconfigured native skill discovery");
+        assert_eq!(std::fs::read_to_string(&probe).unwrap(), "ran");
+        std::fs::remove_file(&probe).unwrap();
+        request.skills = Some(Vec::new());
+        let output = env
+            .rimz()
+            .args(exec_args(&env, &request))
+            .env("PATH", path_with_front(&shim_dir))
+            .bounded_output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(
+            !probe.exists(),
+            "configured discovery errors must refuse before provider exec"
+        );
+    }
+}
+
+#[test]
+fn sandboxed_exec_merges_library_without_native_skill_root() {
+    if !available() {
+        return;
+    }
+    let env = Env::new();
+    enable(&env);
+    let root = env.home_root.join(".agents/skills");
+    let library = env.config_root().join("rimz/skills/library-only");
+    std::fs::create_dir_all(&library).unwrap();
+    std::fs::write(library.join("SKILL.md"), "library body").unwrap();
+    assert!(!root.exists());
+    let shim_dir = write_env_dump_shim(&env, "codex");
+    std::fs::write(
+        shim_dir.join("codex"),
+        r#"#!/bin/sh
+set -eu
+test "$(cat "$HOME/.agents/skills/library-only/SKILL.md")" = 'library body'
+if touch "$HOME/.agents/skills/library-only/changed" 2>/dev/null; then exit 1; fi
+printf consumed > /tmp/library-probe
+"#,
+    )
+    .unwrap();
+    let request = ExecRequest::bare_launch(AgentKind::new_unchecked("codex"), Vec::new());
+    env.rimz()
+        .args(exec_args(&env, &request))
+        .env("PATH", path_with_front(&shim_dir))
+        .assert_success_within_timeout("library-only skill discovery");
+    assert_eq!(
+        std::fs::read_to_string(env.store().paths().tmp_dir.join("library-probe")).unwrap(),
+        "consumed"
+    );
+    assert!(root.is_dir());
+    assert_eq!(std::fs::read_dir(root).unwrap().count(), 0);
+    assert_eq!(
+        std::fs::read_to_string(library.join("SKILL.md")).unwrap(),
+        "library body"
+    );
+    assert!(!library.join("changed").exists());
+}
+
+#[test]
 fn sandbox_merges_rimz_library_and_provider_root_wins() {
     let env = Env::new();
     let root = env.home_root.join(".claude/skills");

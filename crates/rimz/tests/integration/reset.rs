@@ -68,7 +68,7 @@ fn reset_archives_records_and_clears_room_state() {
         !paths.skills_dir.exists(),
         "host store creates no skill copies"
     );
-    paths.ensure_skills_dir().expect("skills dir");
+    fs::create_dir(&paths.skills_dir).expect("skills dir");
     let skill_copy = paths.skills_dir.join("skill-digest");
     fs::create_dir(&skill_copy).expect("skill copy dir");
     fs::write(skill_copy.join("SKILL.md"), b"user-only skill").expect("write skill copy");

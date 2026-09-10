@@ -149,7 +149,7 @@ allowed-dependencies = [
 ]
 # Pane writers share one user-scoped lock path across workspace boundaries.
 # Room lifecycle owns private tmp and rewritten-skill directory creation and removal.
-surface-budget = 130
+surface-budget = 129
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -242,9 +242,10 @@ surface-budget = 14
 
 [[module]]
 path = "crates/rimz/src/sandbox"
-allowed-dependencies = ["agents", "config", "disk", "mux", "utils"]
+allowed-dependencies = ["agents", "config", "disk", "ids", "mux", "utils"]
 # Launch passes adapter-declared skill inputs separately from provider-home binds.
-surface-budget = 12
+# Static profile preflight shares typed provider identity across CLI entry points.
+surface-budget = 13
 
 [[module]]
 path = "crates/rimz/src/room"

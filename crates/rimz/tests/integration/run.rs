@@ -1870,6 +1870,7 @@ fn run_status_honors_pinned_room_inside_nested_repo() {
     );
     let run_id = record.run_id.clone();
     rimz::harness::run::create(store.paths(), &record).expect("create run");
+    store.paths().ensure_tmp_dir().expect("create room tmp");
 
     let out = env
         .rimz()
@@ -1888,6 +1889,8 @@ fn run_status_honors_pinned_room_inside_nested_repo() {
     let parsed: serde_json::Value = serde_json::from_slice(&out.stdout).expect("status json");
     assert_eq!(parsed["run"]["run_id"], run_id.as_str());
     assert_eq!(parsed["run"]["workspace_id"], env.workspace_id.as_str());
+    assert_eq!(parsed["tmp_dir"], store.paths().tmp_dir.to_str().unwrap());
+    assert!(parsed.get("scratch_dir").is_none());
 }
 
 #[test]
