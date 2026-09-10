@@ -18,6 +18,7 @@ fn role_binding(role: &str) -> RoleBinding {
         model: None,
         effort: None,
         budget: None,
+        auto_compact: None,
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
         args: None,
@@ -27,6 +28,7 @@ fn role_binding(role: &str) -> RoleBinding {
 fn agent_cell_with_role(role: Option<&str>) -> Cell {
     Cell::Agent(AgentCell {
         kind: AgentKind::new_unchecked("claude"),
+        auto_compact: None,
         args: Vec::new(),
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
@@ -102,6 +104,7 @@ fn exec_request(argv: &[String]) -> crate::harness::launch::ExecRequest {
 fn preset_cell(kind: &str, args: &[&str], model: Option<&str>, effort: Option<&str>) -> Cell {
     Cell::Agent(AgentCell {
         kind: AgentKind::new_unchecked(kind),
+        auto_compact: None,
         args: args.iter().map(|value| (*value).to_owned()).collect(),
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
@@ -148,6 +151,7 @@ fn configured_profile(
         model: model.map(str::to_owned),
         effort: effort.map(str::to_owned),
         budget: None,
+        auto_compact: None,
         system_prompt_file,
         append_system_prompt_files: Vec::new(),
         args: args.map(str::to_owned),
@@ -330,6 +334,7 @@ fn subagent_doorway_keeps_team_roles_on_agent_profiles() {
                 model: None,
                 effort: None,
                 budget: None,
+                auto_compact: None,
                 system_prompt_file: None,
                 append_system_prompt_files: Vec::new(),
                 args: None,
@@ -843,6 +848,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
     let cell = |args, mode| {
         Cell::Agent(AgentCell {
             kind: AgentKind::new_unchecked("codex"),
+            auto_compact: None,
             args,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
@@ -931,6 +937,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
 fn codex_launch_leaves_native_default_unset_and_preserves_explicit_model() {
     let explicit = Cell::Agent(AgentCell {
         kind: AgentKind::new_unchecked("codex"),
+        auto_compact: None,
         args: vec!["--model".to_owned(), "gpt-6-astra".to_owned()],
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
@@ -1145,6 +1152,52 @@ fn config_key_effort_reconciles_without_touching_unrelated_or_undeclared_flags()
 }
 
 #[test]
+fn auto_compact_reconciles_declared_fields_without_touching_other_args() {
+    for (kind, raw, expected) in [
+        (
+            "claude",
+            "--autocompact=100000 --debug",
+            vec!["--debug", "--autocompact", "200000"],
+        ),
+        (
+            "codex",
+            "--config=model_auto_compact_token_limit=100000 -c web_search=cached",
+            vec![
+                "-c",
+                "web_search=cached",
+                "-c",
+                "model_auto_compact_token_limit=200000",
+            ],
+        ),
+    ] {
+        let machine: crate::config::MachineConfig = toml::from_str(&format!(
+            "[agents.profiles.compact]\nagent = {kind:?}\nauto-compact = '200k'\nargs = {raw:?}\n"
+        ))
+        .expect("profile config");
+        let cell = crate::harness::spec::profile_cell("compact", &machine.agents.profiles)
+            .expect("profile cell");
+        let mut layout = LayoutSpec::single(Cell::Agent(cell));
+        let warnings = finalize(&mut layout, &Default::default(), &[]).expect("finalize");
+        assert!(
+            matches!(warnings.as_slice(), [LaunchFinalizeWarning::DeclaredFieldWins { field: "auto-compact", value, .. }] if value == "200000")
+        );
+        assert!(
+            matches!(&layout.columns[0].rows[0], Cell::Agent(AgentCell { args, .. }) if args == &expected)
+        );
+
+        let mut undeclared = LayoutSpec::single(preset_cell(kind, &expected, None, None));
+        assert!(
+            finalize(&mut undeclared, &Default::default(), &[])
+                .expect("undeclared args")
+                .is_empty()
+        );
+        assert!(
+            matches!(&undeclared.columns[0].rows[0], Cell::Agent(AgentCell { args, .. }) if args == &expected)
+        );
+    }
+}
+
+#[test]
 fn supervised_turn_limit_renders_supported_adapter_and_fails_fast() {
     let preset = crate::agents::LaunchPreset::default();
     let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("claude")));
@@ -1250,6 +1303,7 @@ fn finalization_handles_mixed_cells_without_leaking_state() {
 fn launch_request_names_and_metadata() {
     let layout = LayoutSpec::single(Cell::Agent(AgentCell {
         kind: AgentKind::new_unchecked("codex"),
+        auto_compact: None,
         args: Vec::new(),
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
@@ -1600,6 +1654,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
 fn pane_command_stamps_cli_identity_and_close_policy() {
     let cell = Cell::Agent(AgentCell {
         kind: AgentKind::new_unchecked("claude"),
+        auto_compact: None,
         args: Vec::new(),
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
@@ -1688,6 +1743,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
 fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
     let cell = Cell::Agent(AgentCell {
         kind: AgentKind::new_unchecked("claude"),
+        auto_compact: None,
         args: vec!["--profile-declared".to_owned()],
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),

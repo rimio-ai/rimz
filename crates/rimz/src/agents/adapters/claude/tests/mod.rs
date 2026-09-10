@@ -26,6 +26,25 @@ fn hook_ingress_ignores_remote_control_and_preserves_ordinary_owner() {
 
 #[test]
 fn claude_commands_and_permission_args_match_run_posture() {
+    let preset = crate::agents::LaunchPreset {
+        auto_compact: Some("200000".to_owned()),
+        ..Default::default()
+    };
+    assert!(!preset.is_empty());
+    assert_eq!(
+        ClaudeAdapter.spec().render_preset(&preset).unwrap(),
+        vec!["--autocompact", "200000"]
+    );
+    assert_eq!(
+        ClaudeAdapter
+            .spec()
+            .launch
+            .preset_arg_matcher(crate::agents::PresetField::AutoCompact),
+        Some(crate::agents::PresetArgMatcher::Flag(vec![
+            "--autocompact".to_owned()
+        ]))
+    );
+
     let argv = ClaudeAdapter
         .resume_command("sess-123", Path::new("/code/query-engine"))
         .expect("claude resumes");

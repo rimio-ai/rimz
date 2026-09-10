@@ -21,7 +21,11 @@ use crate::transcript::{AskOption, AskQuestion};
 
 #[test]
 fn rendered_preset_flags_have_matching_argv_declarations() {
-    let fields = [(PresetField::Model, "model"), (PresetField::Effort, "high")];
+    let fields = [
+        (PresetField::Model, "model"),
+        (PresetField::Effort, "high"),
+        (PresetField::AutoCompact, "200000"),
+    ];
     for adapter in BUILTINS {
         let definition = adapter.spec();
         for (field, value) in fields {
@@ -150,6 +154,7 @@ system-prompt-file-flag = "--system-prompt-file"
         for (field, value) in [
             (PresetField::Model, "model-x"),
             (PresetField::Effort, "high"),
+            (PresetField::AutoCompact, "200000"),
         ] {
             cases.push(format!(
                 "{}.{field:?}={:?}",
@@ -159,7 +164,11 @@ system-prompt-file-flag = "--system-prompt-file"
                     .render_preset(&field.launch_preset(value.to_owned()))
             ));
         }
-        for field in [PresetField::Model, PresetField::Effort] {
+        for field in [
+            PresetField::Model,
+            PresetField::Effort,
+            PresetField::AutoCompact,
+        ] {
             cases.push(format!(
                 "{}.empty-{field:?}={:?}",
                 adapter.spec().kind,
@@ -168,7 +177,7 @@ system-prompt-file-flag = "--system-prompt-file"
                     .render_preset(&field.launch_preset(String::new()))
             ));
         }
-        // Every field at once pins flag order and which field an adapter
+        // Model and effort together pin flag order and which field an adapter
         // rejects first — the composition the per-field cases cannot show.
         cases.push(format!(
             "{}.all={:?}",
@@ -183,73 +192,101 @@ system-prompt-file-flag = "--system-prompt-file"
     insta::assert_snapshot!(cases.join("\n"), @r#"
     claude.Model=Ok(["--model", "model-x"])
     claude.Effort=Ok(["--effort", "high"])
+    claude.AutoCompact=Ok(["--autocompact", "200000"])
     claude.empty-Model=Ok([])
     claude.empty-Effort=Ok([])
+    claude.empty-AutoCompact=Ok([])
     claude.all=Ok(["--model", "model-x", "--effort", "high"])
     codex.Model=Ok(["--model", "model-x"])
     codex.Effort=Ok(["-c", "model_reasoning_effort=high"])
+    codex.AutoCompact=Ok(["-c", "model_auto_compact_token_limit=200000"])
     codex.empty-Model=Ok([])
     codex.empty-Effort=Ok([])
+    codex.empty-AutoCompact=Ok([])
     codex.all=Ok(["--model", "model-x", "-c", "model_reasoning_effort=high"])
     amp.Model=Ok(["--mode", "model-x"])
     amp.Effort=Ok(["--effort", "high"])
+    amp.AutoCompact=Err(UnsupportedField { agent: "amp", field: "auto-compact" })
     amp.empty-Model=Ok([])
     amp.empty-Effort=Ok([])
+    amp.empty-AutoCompact=Ok([])
     amp.all=Ok(["--mode", "model-x", "--effort", "high"])
     copilot.Model=Ok(["--model", "model-x"])
     copilot.Effort=Ok(["--effort", "high"])
+    copilot.AutoCompact=Err(UnsupportedField { agent: "copilot", field: "auto-compact" })
     copilot.empty-Model=Ok([])
     copilot.empty-Effort=Ok([])
+    copilot.empty-AutoCompact=Ok([])
     copilot.all=Ok(["--model", "model-x", "--effort", "high"])
     kimi.Model=Ok(["--model", "model-x"])
     kimi.Effort=Err(UnsupportedField { agent: "kimi", field: "effort" })
+    kimi.AutoCompact=Err(UnsupportedField { agent: "kimi", field: "auto-compact" })
     kimi.empty-Model=Ok([])
     kimi.empty-Effort=Ok([])
+    kimi.empty-AutoCompact=Ok([])
     kimi.all=Err(UnsupportedField { agent: "kimi", field: "effort" })
     pi.Model=Ok(["--model", "model-x"])
     pi.Effort=Ok(["--thinking", "high"])
+    pi.AutoCompact=Err(UnsupportedField { agent: "pi", field: "auto-compact" })
     pi.empty-Model=Ok([])
     pi.empty-Effort=Ok([])
+    pi.empty-AutoCompact=Ok([])
     pi.all=Ok(["--model", "model-x", "--thinking", "high"])
     opencode.Model=Ok(["--model", "model-x"])
     opencode.Effort=Err(UnsupportedField { agent: "opencode", field: "effort" })
+    opencode.AutoCompact=Err(UnsupportedField { agent: "opencode", field: "auto-compact" })
     opencode.empty-Model=Ok([])
     opencode.empty-Effort=Ok([])
+    opencode.empty-AutoCompact=Ok([])
     opencode.all=Err(UnsupportedField { agent: "opencode", field: "effort" })
     antigravity.Model=Ok(["--model", "model-x"])
     antigravity.Effort=Err(UnsupportedField { agent: "antigravity", field: "effort" })
+    antigravity.AutoCompact=Err(UnsupportedField { agent: "antigravity", field: "auto-compact" })
     antigravity.empty-Model=Ok([])
     antigravity.empty-Effort=Ok([])
+    antigravity.empty-AutoCompact=Ok([])
     antigravity.all=Err(UnsupportedField { agent: "antigravity", field: "effort" })
     cursor.Model=Ok(["--model", "model-x"])
     cursor.Effort=Err(UnsupportedField { agent: "cursor", field: "effort" })
+    cursor.AutoCompact=Err(UnsupportedField { agent: "cursor", field: "auto-compact" })
     cursor.empty-Model=Ok([])
     cursor.empty-Effort=Ok([])
+    cursor.empty-AutoCompact=Ok([])
     cursor.all=Err(UnsupportedField { agent: "cursor", field: "effort" })
     droid.Model=Err(UnsupportedField { agent: "droid", field: "model" })
     droid.Effort=Err(UnsupportedField { agent: "droid", field: "effort" })
+    droid.AutoCompact=Err(UnsupportedField { agent: "droid", field: "auto-compact" })
     droid.empty-Model=Ok([])
     droid.empty-Effort=Ok([])
+    droid.empty-AutoCompact=Ok([])
     droid.all=Err(UnsupportedField { agent: "droid", field: "model" })
     kiro.Model=Ok(["--model", "model-x"])
     kiro.Effort=Ok(["--effort", "high"])
+    kiro.AutoCompact=Err(UnsupportedField { agent: "kiro", field: "auto-compact" })
     kiro.empty-Model=Ok([])
     kiro.empty-Effort=Ok([])
+    kiro.empty-AutoCompact=Ok([])
     kiro.all=Ok(["--model", "model-x", "--effort", "high"])
     qwen.Model=Ok(["--model", "model-x"])
     qwen.Effort=Err(UnsupportedField { agent: "qwen", field: "effort" })
+    qwen.AutoCompact=Err(UnsupportedField { agent: "qwen", field: "auto-compact" })
     qwen.empty-Model=Ok([])
     qwen.empty-Effort=Ok([])
+    qwen.empty-AutoCompact=Ok([])
     qwen.all=Err(UnsupportedField { agent: "qwen", field: "effort" })
     grok.Model=Ok(["--model", "model-x"])
     grok.Effort=Ok(["--reasoning-effort", "high"])
+    grok.AutoCompact=Err(UnsupportedField { agent: "grok", field: "auto-compact" })
     grok.empty-Model=Ok([])
     grok.empty-Effort=Ok([])
+    grok.empty-AutoCompact=Ok([])
     grok.all=Ok(["--model", "model-x", "--reasoning-effort", "high"])
     fixturebot.Model=Ok(["--model", "model-x"])
     fixturebot.Effort=Ok(["--effort", "high"])
+    fixturebot.AutoCompact=Err(UnsupportedField { agent: "fixturebot", field: "auto-compact" })
     fixturebot.empty-Model=Ok([])
     fixturebot.empty-Effort=Ok([])
+    fixturebot.empty-AutoCompact=Ok([])
     fixturebot.all=Ok(["--model", "model-x", "--effort", "high"])
     "#);
 }

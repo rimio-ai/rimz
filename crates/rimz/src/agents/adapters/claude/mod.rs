@@ -148,6 +148,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
             instruction: super::CompactInstruction::Trailing,
         }),
         presets: super::PresetMatchers {
+            auto_compact: Some(super::StaticPresetMatcher::Flag(&["--autocompact"])),
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             effort: Some(super::StaticPresetMatcher::Flag(&["--effort"])),
             system_prompt_file: Some(super::StaticPresetMatcher::Flag(&["--system-prompt-file"])),

@@ -559,6 +559,7 @@ fn reconcile_preset_args(
     let declared = [
         (PresetField::Model, cell.launch.model.clone()),
         (PresetField::Effort, cell.launch.effort.clone()),
+        (PresetField::AutoCompact, cell.auto_compact.clone()),
     ];
 
     for (field, value) in declared {

@@ -135,6 +135,7 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
             instruction: super::CompactInstruction::Unsupported,
         }),
         presets: super::PresetMatchers {
+            auto_compact: None,
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             effort: Some(super::StaticPresetMatcher::Flag(&["--thinking"])),
             system_prompt_file: Some(super::StaticPresetMatcher::TextFlag(&["--system-prompt"])),

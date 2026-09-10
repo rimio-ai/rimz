@@ -385,6 +385,7 @@ fn build_descriptor(manifest: &'static PluginManifest, plugin_dir: &'static Path
                     }
                 }),
                 presets: PresetMatchers {
+                    auto_compact: None,
                     model: flag(&launch.model_flag),
                     effort: flag(&launch.effort_flag),
                     system_prompt_file: flag(&launch.system_prompt_file_flag),

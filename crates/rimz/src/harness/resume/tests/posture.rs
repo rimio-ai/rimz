@@ -10,6 +10,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
     let cell = AgentCell {
         kind: AgentKind::new_unchecked("codex"),
         args: vec!["--model".to_owned(), "o3".to_owned()],
+        auto_compact: None,
         system_prompt_file: Some(PathBuf::from("system.md")),
         append_system_prompt_files: vec![PathBuf::from("append.md")],
         launch: LaunchParams {
@@ -22,6 +23,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
     };
     let AgentCell {
         kind: _,
+        auto_compact: _,
         args,
         system_prompt_file,
         append_system_prompt_files,
@@ -55,6 +57,7 @@ fn resume_replays_the_profile_declared_posture() {
             model: Some("opus".to_owned()),
             effort: Some("high".to_owned()),
             system_prompt_file: Some(prompt.path().to_path_buf()),
+            auto_compact: Some("200k".to_owned()),
             ..profile("claude")
         },
     );
@@ -80,6 +83,10 @@ fn resume_replays_the_profile_declared_posture() {
             session_id: "a1".to_owned(),
             extra_args: expected,
         }
+    );
+    assert!(
+        matches!(&request.action, crate::harness::launch::ExecAction::Resume { extra_args, .. }
+        if extra_args.windows(2).any(|args| args == ["--autocompact", "200000"]))
     );
     assert_eq!(request.identity.params.model.as_deref(), Some("opus"));
     assert_eq!(request.identity.params.effort.as_deref(), Some("high"));

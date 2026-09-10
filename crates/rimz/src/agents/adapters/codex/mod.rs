@@ -231,6 +231,10 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
             instruction: super::CompactInstruction::Unsupported,
         }),
         presets: super::PresetMatchers {
+            auto_compact: Some(super::StaticPresetMatcher::ConfigKey {
+                flags: &["-c", "--config"],
+                key: "model_auto_compact_token_limit",
+            }),
             model: Some(super::StaticPresetMatcher::Flag(&["--model", "-m"])),
             effort: Some(super::StaticPresetMatcher::ConfigKey {
                 flags: &["-c", "--config"],

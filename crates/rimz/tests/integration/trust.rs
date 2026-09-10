@@ -218,6 +218,23 @@ fn config_without_retired_prompt_field_keeps_legacy_surface_hash() {
 }
 
 #[test]
+fn config_without_auto_compact_keeps_subagent_and_role_surface_hashes() {
+    for (text, expected) in [
+        (
+            "[subagents.profiles.x]\nagent = \"claude\"\n",
+            "sha256:2ee42e422e184752349f9fef76da2863f3ff33a07a6cb4cdeac53686556ac7fb",
+        ),
+        (
+            "[[agents.teams.review.roles]]\nrole = \"lead\"\nprofile = \"claude\"\n",
+            "sha256:72fa1fe5e5cc42bd321b442846148d0b1f16cf080e1e7a28b3d27fe16ac2b38c",
+        ),
+    ] {
+        let config: rimz::trust::ProjectConfig = toml::from_str(text).expect("config");
+        assert_eq!(rimz::trust::executable_surface_hash(&config), expected);
+    }
+}
+
+#[test]
 fn trust_hash_covers_subagent_profile_namespace_and_launch_fields() {
     let cases = [
         "[subagents.profiles.x]\nagent = \"claude\"\n",
@@ -225,6 +242,7 @@ fn trust_hash_covers_subagent_profile_namespace_and_launch_fields() {
         "[subagents.profiles.x]\nagent = \"claude\"\nmode = \"ask\"\n",
         "[subagents.profiles.x]\nagent = \"claude\"\nmodel = \"opus\"\n",
         "[subagents.profiles.x]\nagent = \"claude\"\neffort = \"low\"\n",
+        "[subagents.profiles.x]\nagent = \"claude\"\nauto-compact = \"200k\"\n",
         "[subagents.profiles.x]\nagent = \"claude\"\nsystem-prompt-file = \"prompts/x.md\"\n",
         "[subagents.profiles.x]\nagent = \"claude\"\nappend-system-prompt-files = [\"prompts/a.md\"]\n",
         "[subagents.profiles.x]\nagent = \"claude\"\nargs = \"--profile x\"\n",
@@ -239,6 +257,25 @@ fn trust_hash_covers_subagent_profile_namespace_and_launch_fields() {
         .collect::<std::collections::HashSet<_>>();
 
     assert_eq!(hashes.len(), cases.len());
+}
+
+#[test]
+fn trust_hash_covers_auto_compact_on_profiles_and_team_roles() {
+    for base in [
+        "[profiles.x]\nagent = \"claude\"\n",
+        "[subagents.profiles.x]\nagent = \"claude\"\n",
+        "[[agents.teams.review.roles]]\nrole = \"lead\"\nprofile = \"claude\"\n",
+    ] {
+        let hashes = ["", "auto-compact = \"200k\"\n", "auto-compact = \"300k\"\n"]
+            .into_iter()
+            .map(|field| {
+                let config: rimz::trust::ProjectConfig =
+                    toml::from_str(&format!("{base}{field}")).expect("config");
+                rimz::trust::executable_surface_hash(&config)
+            })
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(hashes.len(), 3, "{base}");
+    }
 }
 
 #[test]

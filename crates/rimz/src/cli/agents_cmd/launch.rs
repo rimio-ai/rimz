@@ -923,6 +923,7 @@ pub(super) fn launch_override_preset(args: &AgentsArgs) -> Result<rimz::agents::
     Ok(rimz::agents::LaunchPreset {
         model: rimz::harness::plan::normalized_preset_value(args.launch.model.as_deref()),
         effort: rimz::harness::plan::normalized_preset_value(args.launch.effort.as_deref()),
+        auto_compact: None,
         system_prompt_file,
         append_system_prompt_files,
     })

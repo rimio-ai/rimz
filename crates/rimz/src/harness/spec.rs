@@ -94,6 +94,7 @@ pub struct Column {
 pub struct AgentCell {
     pub kind: AgentKind,
     pub args: Vec<String>,
+    pub auto_compact: Option<String>,
     pub system_prompt_file: Option<PathBuf>,
     /// Ordered prompt fragments composed into the replacement system prompt.
     pub append_system_prompt_files: Vec<PathBuf>,
@@ -116,6 +117,7 @@ impl Cell {
         Self::Agent(AgentCell {
             kind,
             args: Vec::new(),
+            auto_compact: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             launch: crate::agents::LaunchParams::default(),
@@ -132,6 +134,7 @@ impl Cell {
 pub struct ResolvedProfile {
     pub kind: AgentKind,
     pub launch: crate::agents::LaunchParams,
+    pub auto_compact: Option<String>,
     pub system_prompt_file: Option<PathBuf>,
     pub append_system_prompt_files: Vec<PathBuf>,
     pub args: Option<String>,
@@ -142,6 +145,7 @@ impl ResolvedProfile {
         Self {
             kind: AgentKind::new_unchecked(kind),
             launch: crate::agents::LaunchParams::default(),
+            auto_compact: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             args: None,
@@ -158,6 +162,9 @@ impl ResolvedProfile {
         }
         if self.launch.budget.is_none() {
             self.launch.budget.clone_from(&layer.budget);
+        }
+        if self.auto_compact.is_none() {
+            self.auto_compact.clone_from(&layer.auto_compact);
         }
         if self.system_prompt_file.is_none() {
             self.system_prompt_file
@@ -181,6 +188,7 @@ impl ResolvedProfile {
             (&mut self.launch.model, &binding.model),
             (&mut self.launch.effort, &binding.effort),
             (&mut self.launch.budget, &binding.budget),
+            (&mut self.auto_compact, &binding.auto_compact),
         ] {
             if source.is_some() {
                 target.clone_from(source);
@@ -984,6 +992,7 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
     for layer in layers {
         resolved.fill_missing(layer);
     }
+    normalize_auto_compact(&mut resolved.auto_compact, name)?;
     let adapter = crate::agents::find_definition(resolved.kind.as_str())
         .expect("resolved profile terminal kind is known");
     adapter
@@ -1008,6 +1017,26 @@ fn normalize_budget(budget: &mut Option<String>, profile: &str) -> Result<()> {
             reason: err.to_string(),
         })?;
     *budget = Some(spec.to_string());
+    Ok(())
+}
+
+fn normalize_auto_compact(value: &mut Option<String>, profile: &str) -> Result<()> {
+    let Some(raw) = value.as_deref() else {
+        return Ok(());
+    };
+    let tokens = crate::store::message::parse_token_count(raw).map_err(|reason| {
+        LayoutErr::InvalidProfile {
+            profile: profile.to_owned(),
+            reason: format!("auto-compact: {reason}"),
+        }
+    })?;
+    if tokens == 0 {
+        return Err(LayoutErr::InvalidProfile {
+            profile: profile.to_owned(),
+            reason: "auto-compact must be a positive token count".to_owned(),
+        });
+    }
+    *value = Some(tokens.to_string());
     Ok(())
 }
 
@@ -1322,6 +1351,7 @@ fn agent_cell_from(
     AgentCell {
         kind: resolved.kind.clone(),
         args,
+        auto_compact: resolved.auto_compact.clone(),
         system_prompt_file: resolved.system_prompt_file.clone(),
         append_system_prompt_files: resolved.append_system_prompt_files.clone(),
         launch: crate::agents::LaunchParams {
@@ -1364,6 +1394,7 @@ fn profile_preset(resolved: &ResolvedProfile) -> crate::agents::LaunchPreset {
     crate::agents::LaunchPreset {
         model: resolved.launch.model.clone(),
         effort: resolved.launch.effort.clone(),
+        auto_compact: resolved.auto_compact.clone(),
         ..Default::default()
     }
 }
@@ -1638,6 +1669,7 @@ fn prepare_team<'a>(
         }
         let mut resolved = resolve_profile(&binding.profile, profiles)?;
         resolved.apply_role(binding);
+        normalize_auto_compact(&mut resolved.auto_compact, &binding.profile)?;
         let resolved = rebase_onto(resolved, base_override);
         let args = render_profile_args(&binding.profile, &resolved)?;
         roles.push(PreparedRole {
@@ -1713,6 +1745,9 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     }
     if original.launch.budget.is_none() {
         original.launch.budget.clone_from(&base.launch.budget);
+    }
+    if original.auto_compact.is_none() {
+        original.auto_compact.clone_from(&base.auto_compact);
     }
     if original.system_prompt_file.is_none() {
         original

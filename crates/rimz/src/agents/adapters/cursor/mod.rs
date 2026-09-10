@@ -109,6 +109,7 @@ static CURSOR_DESCRIPTOR: AgentSpec = AgentSpec {
             instruction: super::CompactInstruction::Unsupported,
         }),
         presets: super::PresetMatchers {
+            auto_compact: None,
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
             ..super::PresetMatchers::EMPTY
         },

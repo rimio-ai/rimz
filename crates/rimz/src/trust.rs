@@ -710,6 +710,8 @@ pub struct ProjectProfile {
     pub mode: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
+    #[serde(rename = "auto-compact")]
+    pub auto_compact: Option<String>,
     #[serde(rename = "system-prompt-file")]
     pub system_prompt_file: Option<String>,
     #[serde(rename = "append-system-prompt-files")]
@@ -783,6 +785,8 @@ struct ExecutableProfile<'a> {
     mode: Option<&'a str>,
     model: Option<&'a str>,
     effort: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auto_compact: Option<&'a str>,
     system_prompt_file: Option<&'a str>,
     // Keep the legacy singular projection key so configs without fragments
     // retain their pinned executable-surface hash.
@@ -807,6 +811,8 @@ struct ExecutableRole<'a> {
     mode: Option<&'static str>,
     model: Option<&'a str>,
     effort: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auto_compact: Option<&'a str>,
     system_prompt_file: Option<String>,
     // Keep the legacy singular projection key so configs without fragments
     // retain their pinned executable-surface hash.
@@ -874,6 +880,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                     mode: p.mode.as_deref(),
                     model: p.model.as_deref(),
                     effort: p.effort.as_deref(),
+                    auto_compact: p.auto_compact.as_deref(),
                     system_prompt_file: p.system_prompt_file.as_deref(),
                     append_system_prompt_files: p.append_system_prompt_files.as_deref(),
                     args: p.args.as_deref(),
@@ -889,6 +896,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                     mode: p.mode.as_deref(),
                     model: p.model.as_deref(),
                     effort: p.effort.as_deref(),
+                    auto_compact: p.auto_compact.as_deref(),
                     system_prompt_file: p.system_prompt_file.as_deref(),
                     append_system_prompt_files: p.append_system_prompt_files.as_deref(),
                     args: p.args.as_deref(),
@@ -910,6 +918,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                             mode: role.mode.map(permission_mode_name),
                             model: role.model.as_deref(),
                             effort: role.effort.as_deref(),
+                            auto_compact: role.auto_compact.as_deref(),
                             system_prompt_file: role
                                 .system_prompt_file
                                 .as_ref()

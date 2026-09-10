@@ -997,6 +997,7 @@ fn agents_toml_entries_override_agents_home_fragments() {
             model: Some("opus".to_owned()),
             effort: None,
             budget: None,
+            auto_compact: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             args: None,
@@ -1132,6 +1133,7 @@ fn absent_agents_home_is_noop_and_malformed_fragment_leaves_config_unchanged() {
             model: None,
             effort: None,
             budget: None,
+            auto_compact: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             args: None,
@@ -1369,6 +1371,7 @@ fn agent_profiles_commands_and_teams_parse() {
              mode = \"yolo\"\n\
              model = \"gpt-5-codex\"\n\
              effort = \"high\"\n\
+             auto-compact = \"200k\"\n\
              args = \"--model gpt-5-codex -c model_reasoning_effort=high\"\n\
              [agents.profiles.planner]\n\
              agent = \"claude\"\n\
@@ -1378,9 +1381,13 @@ fn agent_profiles_commands_and_teams_parse() {
              [[agents.teams.stacked.roles]]\n\
              role = \"planner\"\n\
              profile = \"planner\"\n\
+             auto-compact = \"200k\"\n\
              [[agents.teams.stacked.roles]]\n\
              role = \"coder\"\n\
-             profile = \"codex-yolo\"\n",
+             profile = \"codex-yolo\"\n\
+             [subagents.profiles.reviewer]\n\
+             agent = \"codex\"\n\
+             auto-compact = \"200k\"\n",
     ))
     .expect("load");
     let commands = &config.agents.commands.0;
@@ -1398,6 +1405,7 @@ fn agent_profiles_commands_and_teams_parse() {
             model: Some("gpt-5-codex".to_owned()),
             effort: Some("high".to_owned()),
             budget: None,
+            auto_compact: Some("200k".to_owned()),
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
             args: Some("--model gpt-5-codex -c model_reasoning_effort=high".to_owned())
@@ -1414,6 +1422,7 @@ fn agent_profiles_commands_and_teams_parse() {
             model: None,
             effort: None,
             budget: None,
+            auto_compact: None,
             system_prompt_file: Some("/prompts/planner.md".into()),
             append_system_prompt_files: Vec::new(),
             args: None,
@@ -1424,8 +1433,16 @@ fn agent_profiles_commands_and_teams_parse() {
     let roles = &team.roles;
     assert_eq!(roles[0].role, "planner");
     assert_eq!(roles[0].profile, "planner");
+    assert_eq!(roles[0].auto_compact.as_deref(), Some("200k"));
     assert_eq!(roles[1].role, "coder");
     assert_eq!(roles[1].profile, "codex-yolo");
+    assert_eq!(roles[1].auto_compact, None);
+    assert_eq!(
+        config.subagents.profiles.0["reviewer"]
+            .auto_compact
+            .as_deref(),
+        Some("200k")
+    );
 }
 
 #[test]

@@ -42,6 +42,26 @@ fn hook_ingress_ignores_internal_servers_and_normalizes_daemon_owners() {
 
 #[test]
 fn codex_commands_and_permission_args_match_run_posture() {
+    let preset = crate::agents::LaunchPreset {
+        auto_compact: Some("200000".to_owned()),
+        ..Default::default()
+    };
+    assert!(!preset.is_empty());
+    assert_eq!(
+        CodexAdapter.spec().render_preset(&preset).unwrap(),
+        vec!["-c", "model_auto_compact_token_limit=200000"]
+    );
+    assert_eq!(
+        CodexAdapter
+            .spec()
+            .launch
+            .preset_arg_matcher(crate::agents::PresetField::AutoCompact),
+        Some(crate::agents::PresetArgMatcher::ConfigKey {
+            flags: vec!["-c".to_owned(), "--config".to_owned()],
+            key: "model_auto_compact_token_limit".to_owned(),
+        })
+    );
+
     let argv = CodexAdapter
         .resume_command("sess-abc", Path::new("/code/query-engine"))
         .expect("codex resumes");

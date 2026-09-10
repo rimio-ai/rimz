@@ -13,6 +13,7 @@ fn snapshot(agents: Vec<AgentState>) -> SidebarSnapshot {
 fn team() -> Team {
     Team {
         roles: vec![RoleBinding {
+            auto_compact: None,
             role: "planner".to_owned(),
             profile: "claude".to_owned(),
             mode: None,

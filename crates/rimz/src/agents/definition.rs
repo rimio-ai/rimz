@@ -120,6 +120,7 @@ impl LaunchSpec {
         let matcher = match field {
             PresetField::Model => self.presets.model,
             PresetField::Effort => self.presets.effort,
+            PresetField::AutoCompact => self.presets.auto_compact,
             PresetField::SystemPromptFile => self.presets.system_prompt_file,
         }?;
         Some(match matcher {
@@ -142,7 +143,7 @@ impl LaunchSpec {
         agent_kind: &'static str,
         preset: &LaunchPreset,
     ) -> Result<Vec<String>, PresetErr> {
-        let values: [(PresetField, &'static str, Option<String>); 2] = [
+        let values: [(PresetField, &'static str, Option<String>); 3] = [
             (
                 PresetField::Model,
                 "model",
@@ -152,6 +153,14 @@ impl LaunchSpec {
                 PresetField::Effort,
                 "effort",
                 preset.effort.clone().filter(|value| !value.is_empty()),
+            ),
+            (
+                PresetField::AutoCompact,
+                "auto-compact",
+                preset
+                    .auto_compact
+                    .clone()
+                    .filter(|value| !value.is_empty()),
             ),
         ];
         let mut argv = Vec::new();
@@ -286,6 +295,7 @@ impl LaunchPermissionArgs {
 pub struct PresetMatchers {
     pub model: Option<StaticPresetMatcher>,
     pub effort: Option<StaticPresetMatcher>,
+    pub auto_compact: Option<StaticPresetMatcher>,
     pub system_prompt_file: Option<StaticPresetMatcher>,
 }
 
@@ -293,6 +303,7 @@ impl PresetMatchers {
     pub const EMPTY: Self = Self {
         model: None,
         effort: None,
+        auto_compact: None,
         system_prompt_file: None,
     };
 }

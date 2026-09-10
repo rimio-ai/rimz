@@ -972,6 +972,7 @@ const PROFILE_FIELDS: &[&str] = &[
     "model",
     "effort",
     "budget",
+    "auto-compact",
     "system-prompt-file",
     "append-system-prompt-files",
     "args",
@@ -991,7 +992,8 @@ fn parse_edit_value(raw: &str) -> Value {
 }
 
 fn parse_set_value(path: &[String], raw: &str) -> Value {
-    if is_harness_smart_compact_edit(path)
+    if matches!(path, [root, profiles, _, field] if matches!(root.as_str(), "agents" | "subagents") && profiles == "profiles" && field == "auto-compact")
+        || is_harness_smart_compact_edit(path)
         || is_harness_compact_instruction_edit(path)
         || is_harness_idle_compact_edit(path)
         || is_harness_idle_compact_after_edit(path)
