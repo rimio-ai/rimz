@@ -64,11 +64,6 @@ pub(crate) fn basename(token: &str) -> &str {
         .unwrap_or(token)
 }
 
-/// The raw process basename for matching a mux comm to flattened process argv, without wrapper or script projection.
-pub(crate) fn argv0_label(command: &str) -> &str {
-    basename(command.split_whitespace().next().unwrap_or_default())
-}
-
 #[derive(Clone)]
 struct Word<'a> {
     text: &'a str,
