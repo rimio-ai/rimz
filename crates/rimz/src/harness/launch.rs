@@ -141,7 +141,7 @@ pub enum AgentProcessCompileErr {
 
 pub type AgentProcessResult<T> = std::result::Result<T, AgentProcessCompileErr>;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CompiledAgentProcess {
     /// Provider command before shell startup wrapping.
     provider_argv: Vec<String>,
@@ -153,13 +153,83 @@ pub struct CompiledAgentProcess {
     pub env: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Launch env carries trusted `[[agents]]` env, which is where a project keeps
+/// provider credentials, and the login-shell wrapper repeats every entry as a
+/// `KEY=VALUE` token inside `argv`. Both renders print keys only, so no debug
+/// format of a compiled process puts a secret into a log, a panic, or an error.
+const REDACTED_ENV_VALUE: &str = "<redacted>";
+
+struct RedactedEnv<'a>(&'a BTreeMap<String, String>);
+
+impl std::fmt::Debug for RedactedEnv<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_map()
+            .entries(self.0.keys().map(|key| (key, REDACTED_ENV_VALUE)))
+            .finish()
+    }
+}
+
+struct RedactedArgv<'a> {
+    argv: &'a [String],
+    env: &'a BTreeMap<String, String>,
+}
+
+impl std::fmt::Debug for RedactedArgv<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries(self.argv.iter().map(|arg| match arg.split_once('=') {
+                Some((key, _)) if self.env.contains_key(key) => {
+                    format!("{key}={REDACTED_ENV_VALUE}")
+                }
+                _ => arg.clone(),
+            }))
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for CompiledAgentProcess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompiledAgentProcess")
+            .field("provider_argv", &self.provider_argv)
+            .field("provider_program", &self.provider_program)
+            .field(
+                "argv",
+                &RedactedArgv {
+                    argv: &self.argv,
+                    env: &self.env,
+                },
+            )
+            .field("env", &RedactedEnv(&self.env))
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub enum AgentProcessStage {
     Ready(CompiledAgentProcess),
     LoginShellReentry {
         process: CompiledAgentProcess,
         argv: Vec<String>,
     },
+}
+
+impl std::fmt::Debug for AgentProcessStage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ready(process) => f.debug_tuple("Ready").field(process).finish(),
+            Self::LoginShellReentry { process, argv } => f
+                .debug_struct("LoginShellReentry")
+                .field("process", process)
+                .field(
+                    "argv",
+                    &RedactedArgv {
+                        argv,
+                        env: &process.env,
+                    },
+                )
+                .finish(),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

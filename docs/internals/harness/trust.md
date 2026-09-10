@@ -70,6 +70,8 @@ Project config uses one `agents` shape at a time: `[[agents]]` for env entries, 
 
 Adapter built-ins apply after the project env so a trusted config tunes an agent's launch while the integration's own launch contract stays pinned. A malformed launch env key refuses before any tab, worktree, or run-record side effect: [`invalid_env_key`](../../../crates/rimz/src/harness/launch.rs) requires every key to be non-empty, free of `=`, and not start with `-`.
 
+A project puts credentials in that env, so `CompiledAgentProcess` and `AgentProcessStage` carry hand-written `Debug` impls rather than derived ones: the env map prints its keys against `<redacted>`, and every `KEY=VALUE` token the login-shell wrapper added to `argv` prints as `KEY=<redacted>`. Debug-formatting a compiled process — in a log line, a panic message, or an error context — therefore never puts a launch env value in cleartext.
+
 ## Storage
 
 The committed **project config** is `<project_root>/.rimz/config.toml`. The **trust record** is per-machine, at `$XDG_CONFIG_HOME/rimz/projects/<workspace_id>/trust.toml`, written with atomic temp-plus-rename through [`disk::atomic::write_bytes_atomically`](../../../crates/rimz/src/disk/atomic.rs). Its schema:

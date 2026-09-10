@@ -1438,6 +1438,39 @@ fn posix_wrapper_shape_reapplies_env_after_rc() {
 }
 
 #[test]
+fn compiled_process_debug_prints_launch_env_keys_without_values() {
+    let launch_env = env(&[("ANTHROPIC_API_KEY", "sk-secret"), ("RIMZ_RTK", "auto")]);
+    let provider_argv = argv(&["claude", "--print"]);
+    let wrapped = login_shell_argv_with(
+        Some(Path::new("/bin/sh")),
+        true,
+        &launch_env,
+        &provider_argv,
+    );
+    let process = CompiledAgentProcess {
+        provider_argv,
+        provider_program: "claude".to_owned(),
+        argv: wrapped.clone(),
+        env: launch_env,
+    };
+
+    let rendered = format!("{process:?}");
+    assert!(!rendered.contains("sk-secret"), "{rendered}");
+    assert!(rendered.contains("ANTHROPIC_API_KEY"), "{rendered}");
+    assert!(rendered.contains("--print"), "{rendered}");
+
+    let rendered = format!(
+        "{:?}",
+        AgentProcessStage::LoginShellReentry {
+            process,
+            argv: wrapped,
+        }
+    );
+    assert!(!rendered.contains("sk-secret"), "{rendered}");
+    assert!(rendered.contains("ANTHROPIC_API_KEY"), "{rendered}");
+}
+
+#[test]
 fn fish_wrapper_uses_argv_without_a_posix_arg0() {
     let wrapped = login_shell_argv_with(
         Some(Path::new("/usr/bin/fish")),
