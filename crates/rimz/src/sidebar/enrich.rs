@@ -25,7 +25,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::frame::{PaneFrame, PaneMetrics};
-use super::refresh::accounts::{cached_accounts_for_snapshot, read_accounts_cache};
+use super::refresh::accounts::cached_accounts_for_snapshot;
 use super::refresh::cohort_spend::{CohortSpendCache, read_cohort_spend_cache};
 use super::refresh::credits::apply_credits_cache;
 use super::refresh::daemon_reap::read_codex_daemon_reap;
@@ -858,10 +858,7 @@ fn fold_machine_config(
     let (accounts, spending) = if let Some(lanes) = lanes {
         (lanes.accounts.clone(), lanes.spending.clone())
     } else {
-        let accounts = cached_accounts_for_snapshot(
-            read_accounts_cache(&runtime.shared_accounts_path()),
-            &snapshot,
-        );
+        let accounts = cached_accounts_for_snapshot(runtime, &snapshot);
         // Consumers read producer publications only. A missing workspace
         // sidecar stays absent until the elected producer supplies it.
         let spending = super::refresh::consumer_spending_caches(runtime, &snapshot);

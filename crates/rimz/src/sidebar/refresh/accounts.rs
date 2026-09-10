@@ -199,9 +199,10 @@ fn query_provider_accounts_with(
 }
 
 pub(in crate::sidebar) fn cached_accounts_for_snapshot(
-    cache: AccountsCache,
+    runtime: &RuntimePaths,
     snapshot: &SidebarSnapshot,
 ) -> BTreeMap<String, AgentAccount> {
+    let cache = read_accounts_cache(&runtime.shared_accounts_path());
     accounts_with_context_versions(&cache, &context_versions(snapshot))
 }
 
@@ -241,10 +242,7 @@ fn due_provider_kinds(
             }
             age_ms > ACCOUNTS_RETRY_TTL.as_millis() as u64
                 && active_version_kinds.contains(kind)
-                && context_versions
-                    .get(kind)
-                    .filter(|version| !version.is_empty())
-                    .is_none()
+                && !context_versions.contains_key(kind)
                 && account_version(record.account.as_ref()).is_none()
         })
         .collect()
@@ -252,15 +250,7 @@ fn due_provider_kinds(
 
 fn provider_kinds(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
     let mut kinds: BTreeSet<String> = crate::agents::known_kinds().map(str::to_owned).collect();
-    kinds.extend(
-        snapshot
-            .agents
-            .iter()
-            .filter(|agent| !agent.is_provider_subagent())
-            .filter_map(|agent| {
-                crate::agents::find_definition(agent.kind.as_str()).map(|_| agent.kind.to_string())
-            }),
-    );
+    kinds.extend(active_version_probe_kinds(snapshot));
     kinds
 }
 
@@ -353,14 +343,13 @@ fn execute_account_probes(
     let started = Instant::now();
     let jobs: Vec<_> = due_kinds.iter().cloned().collect();
     let worker_count = MAX_PARALLEL_ACCOUNT_PROBES.min(jobs.len());
-    let mut results: Vec<_> =
+    let results: Vec<_> =
         super::runner::bounded_map(crate::lane::current(), worker_count, &jobs, |kind| {
             probe(kind, active_version_kinds.contains(kind))
         })
         .into_iter()
         .flatten()
         .collect();
-    results.sort_by(|left, right| left.kind.cmp(&right.kind));
     ProbeBatch {
         results,
         worker_count,
@@ -533,7 +522,7 @@ fn active_version_probe_kinds(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
 
 /// Read the producer's published account cache, or an empty cache on a cold,
 /// corrupt, or old-schema file. Read-only and fork-free.
-pub(in crate::sidebar) fn read_accounts_cache(path: &Path) -> AccountsCache {
+fn read_accounts_cache(path: &Path) -> AccountsCache {
     crate::disk::atomic::read_json_cache(path)
 }
 
