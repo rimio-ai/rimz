@@ -1,4 +1,4 @@
-//! One system reminder carrying team context, model identity, and subagent policy.
+//! One system reminder carrying team context, model identity, sandbox view, and subagent policy.
 
 use std::path::Path;
 
@@ -11,6 +11,7 @@ use crate::config::Team;
 pub struct LaunchReminders {
     /// The launched profile's `model-reminder`; on when unset or when the launch has no profile.
     pub model: bool,
+    pub sandbox: bool,
     pub subagent_catalog: Option<SubagentCatalog>,
     pub team: Option<Team>,
 }
@@ -19,18 +20,28 @@ impl Default for LaunchReminders {
     fn default() -> Self {
         Self {
             model: true,
+            sandbox: false,
             subagent_catalog: None,
             team: None,
         }
     }
 }
 
+const SANDBOX_REMINDER_BODY: &str = concat!(
+    "This pane runs under a bubblewrap sandbox. `/tmp` belongs to this RimZ room: ",
+    "teammates and subagents in the room share it, it is separate from the host's `/tmp`, ",
+    "and it is removed when the room closes. The room's host state path remains accessible. ",
+    "Use it freely for temporary files, and use `/tmp/scratchpad` as your scratchpad ",
+    "directory. RimZ writes its own outputs there too: `rimz wake` command output under ",
+    "`/tmp/rimz-wakes/` and settled subagent responses under `/tmp/rimz-subagents/`."
+);
+
 const SUBAGENT_REMINDER_BODY: &str = concat!(
     "You are a subagent: a supervised child launched by another agent to ",
     "complete the task you were given. The task is scoped to this one run, so do the work ",
     "yourself rather than launching with Skill(rimz-agents, rimz-subagents, rimz-teams); ",
-    "nothing above your caller supervises a run you start. Report the result: your final ",
-    "message is delivered to your caller as a message when you exit."
+    "nothing above your caller supervises a run you start. Report the result: your caller ",
+    "receives a completion report pointing to your final response after the fleet settles."
 );
 
 pub(super) fn wrap(body: &str) -> String {
@@ -63,6 +74,9 @@ pub(super) fn render(
         && let Some(model) = model_reminder(&request.identity.params, paragraphs.is_empty())
     {
         paragraphs.push(model);
+    }
+    if reminders.sandbox {
+        paragraphs.push(SANDBOX_REMINDER_BODY.to_owned());
     }
     if request.subagent {
         paragraphs.push(SUBAGENT_REMINDER_BODY.to_owned());
@@ -102,6 +116,58 @@ fn model_reminder(params: &LaunchParams, with_handle: bool) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sandbox_reminder_is_opt_in_and_follows_model_before_policy() {
+        let cwd = Path::new("/worktree");
+        let mut request =
+            ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
+        assert!(render(&request, &LaunchReminders::default(), cwd).is_none());
+        request.identity.params = LaunchParams {
+            team: Some("forge".to_owned()),
+            role: Some("coder".to_owned()),
+            model: Some("gpt-6-astra".to_owned()),
+            ..LaunchParams::default()
+        };
+        let mut reminders = LaunchReminders {
+            team: Some(Team {
+                roles: Vec::new(),
+                leader: None,
+                layout: None,
+                scratch_files: Vec::new(),
+                stages: Vec::new(),
+            }),
+            subagent_catalog: Some(SubagentCatalog::Disabled),
+            ..LaunchReminders::default()
+        };
+        for subagent in [false, true] {
+            request.subagent = subagent;
+            for sandbox in [false, true] {
+                reminders.sandbox = sandbox;
+                let text = render(&request, &reminders, cwd).expect("reminder");
+                assert_eq!(text.contains(SANDBOX_REMINDER_BODY), sandbox);
+                assert_eq!(text.contains("in team `forge`"), !subagent);
+                assert_eq!(text.matches("<system_reminder>").count(), 1);
+                assert_eq!(text.matches("</system_reminder>").count(), 1);
+                let model = text.find("GPT 6 Astra").expect("model line");
+                let policy = text
+                    .find(if subagent {
+                        SUBAGENT_REMINDER_BODY
+                    } else {
+                        "Subagents are disabled"
+                    })
+                    .expect("policy paragraph");
+                assert!(model < policy);
+                if !subagent {
+                    assert!(text.find("in team `forge`").unwrap() < model);
+                }
+                if sandbox {
+                    let sandbox = text.find(SANDBOX_REMINDER_BODY).unwrap();
+                    assert!(model < sandbox && sandbox < policy);
+                }
+            }
+        }
+    }
 
     #[test]
     fn model_reminder_names_handle_model_and_effort() {

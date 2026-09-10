@@ -39,6 +39,8 @@ fn tmux_sandbox_team_consumes_message_and_subagent_shared_tmp() {
     body.push_str(
         r#"set -eu
 test "$TMPDIR" = /tmp
+test -d /tmp/scratchpad
+case "$*" in *'This pane runs under a bubblewrap sandbox.'*) ;; *) exit 1 ;; esac
 test ! -e "$RIMZ_TEST_HOST_TMP_FILE"
 grep -q 'disable-model-invocation: true' "$HOME/.claude/skills/hidden/SKILL.md"
 test "$(cat "$HOME/.claude/skills/visible/SKILL.md")" = visible
@@ -61,6 +63,25 @@ case "$RIMZ_AGENT_ROLE" in
         "$rimz" --mux tmux message @other "sandbox-handoff:$child_text" > /tmp/message-send 2>&1
         while [ ! -s /tmp/other-consumed ]; do sleep 0.1; done
         test "$(cat /tmp/other-consumed)" = "$child_text"
+        "$rimz" --mux tmux wake -- sh -c "printf 'wake-file\n'" > /tmp/wake-launch 2>&1
+        while IFS= read -r line; do
+            case "$line" in
+                *'response: /tmp/rimz-subagents/'*)
+                    response_path=${line#*response: }
+                    response_path=${response_path%% (*}
+                    test "$(cat "$response_path")" = 'tmp written'
+                    case "$line" in *'(1 line)'*) ;; *) exit 1 ;; esac
+                    printf '%s\n' "$response_path" > /tmp/response-consumed
+                    ;;
+                *'output (10 B, 1 line): /tmp/rimz-wakes/'*)
+                    wake_path=${line#*: /tmp/rimz-wakes/}
+                    wake_path=/tmp/rimz-wakes/${wake_path%% *}
+                    test "$(cat "$wake_path")" = wake-file
+                    printf '%s\n' "$wake_path" > /tmp/wake-consumed
+                    ;;
+            esac
+            if [ -s /tmp/response-consumed ] && [ -s /tmp/wake-consumed ]; then break; fi
+        done
         printf '%s\n' "parent-read:$child_text" > /tmp/journey-complete
         ;;
     other)
@@ -141,10 +162,13 @@ profile = "worker"
         }
         assert!(
             Instant::now() < deadline,
-            "sandbox consumers did not finish: completion={completed:?}, child launch={:?}, message send={:?}, teammate read={:?}",
+            "sandbox consumers did not finish: completion={completed:?}, child launch={:?}, message send={:?}, teammate read={:?}, wake launch={:?}, response read={:?}, wake read={:?}",
             std::fs::read_to_string(tmp.join("child-launch")),
             std::fs::read_to_string(tmp.join("message-send")),
             std::fs::read_to_string(tmp.join("other-consumed")),
+            std::fs::read_to_string(tmp.join("wake-launch")),
+            std::fs::read_to_string(tmp.join("response-consumed")),
+            std::fs::read_to_string(tmp.join("wake-consumed")),
         );
         std::thread::sleep(Duration::from_millis(50));
     }

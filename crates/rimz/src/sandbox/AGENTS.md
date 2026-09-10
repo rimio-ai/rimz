@@ -5,8 +5,9 @@ Local contract for `crates/rimz/src/sandbox/` — opt-in agent filesystem views.
 ## Boundaries
 
 - Sandbox owns bubblewrap admission, ordered mount plans, profile skill views, and the environment pins those plans require. It provides a view, not containment.
+- `TmpView` owns host-to-agent output path mapping: room tmp paths become `/tmp/…` under sandbox isolation and stay host paths otherwise. The host state path remains accessible; room tmp is separate from host `/tmp`, not hidden from the host.
 - Provider home resolution and native override keys belong to the agent capability seam; multiplexer endpoint resolution belongs to the mux domain. Do not duplicate either resolver here.
 - Skill roots and the user-only marker come from the adapter (`skills_home`, `manual_skill`); rewritten copies live under `StatePaths.skills_dir`, owned by room lifecycle like `tmp/`.
 - Launch compilation applies environment pins after shell startup; CLI execution retains the probed wrapper path and routes preparation errors through launch/run failure cleanup.
-- Room lifecycle owns tmp creation at birth and removal after process teardown; launch preparation only ensures the directory exists.
+- `StatePaths::ensure_tmp_dir` builds the shared room tmp layout (`scratchpad/`, `rimz-wakes/`, `rimz-subagents/`). Room lifecycle ensures it at sandbox birth and removes it after process teardown; sandbox launch preparation ensures it again, and output writers create it on demand in either isolation mode.
 - Unit tests cover pure parsing and argv lowering. Filesystem and real bubblewrap tests live in `tests/integration/sandbox.rs`; room messaging and supervised handoff belong to the journey tier.
