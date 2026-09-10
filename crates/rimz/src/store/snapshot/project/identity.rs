@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::agents::petname::valid_agent_name;
 use crate::agents::{AgentLifecycleObservation, AgentState};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::store::event::AgentLaunchPayload;
@@ -62,7 +63,7 @@ pub(crate) fn backfill_agent_identities(
 }
 
 fn has_card_identity(agent: &AgentState) -> bool {
-    agent.name.as_deref().is_some_and(usable_name) && agent.kind_ordinal.is_some()
+    agent.name.as_deref().is_some_and(valid_agent_name) && agent.kind_ordinal.is_some()
 }
 
 #[derive(Clone, Debug)]
@@ -97,7 +98,7 @@ impl CardIdentityAllocator {
         });
         for ((kind, agent_id), state) in map {
             if !state.is_provider_subagent()
-                && let Some(name) = state.name.as_deref().filter(|name| usable_name(name))
+                && let Some(name) = state.name.as_deref().filter(|name| valid_agent_name(name))
             {
                 allocator
                     .names
@@ -284,11 +285,11 @@ impl CardIdentityAllocator {
         let candidate = observation
             .agent_name
             .as_deref()
-            .filter(|name| usable_name(name))
+            .filter(|name| valid_agent_name(name))
             .or_else(|| {
                 prior
                     .and_then(|state| state.name.as_deref())
-                    .filter(|name| usable_name(name))
+                    .filter(|name| valid_agent_name(name))
             });
         self.assign_name_candidate(key, candidate, prior, &key.1)
     }
@@ -299,12 +300,12 @@ impl CardIdentityAllocator {
         prior: Option<&AgentState>,
         fallback_id: &AgentSessionId,
     ) -> String {
-        if let Some(name) = candidate.filter(|name| usable_name(name)) {
+        if let Some(name) = candidate.filter(|name| valid_agent_name(name)) {
             return name.to_owned();
         }
         if let Some(name) = prior
             .and_then(|state| state.name.as_deref())
-            .filter(|name| usable_name(name))
+            .filter(|name| valid_agent_name(name))
         {
             return name.to_owned();
         }
@@ -326,7 +327,7 @@ impl CardIdentityAllocator {
         }
         if let Some(name) = prior
             .and_then(|state| state.name.as_deref())
-            .filter(|name| usable_name(name))
+            .filter(|name| valid_agent_name(name))
             && self.name_available_for(name, key)
         {
             self.names.insert(name.to_owned(), key.clone());
@@ -414,8 +415,4 @@ impl CardIdentityAllocator {
         }
         ordinal >= self.next_ordinal.get(kind).copied().unwrap_or(1)
     }
-}
-
-pub(super) fn usable_name(name: &str) -> bool {
-    crate::agents::petname::valid_agent_name(name)
 }

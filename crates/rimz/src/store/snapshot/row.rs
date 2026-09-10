@@ -155,17 +155,9 @@ impl SidebarRow {
         self.as_agent().and_then(|agent| agent.usage.total_tokens)
     }
 
-    pub fn context_window(&self) -> Option<u64> {
-        self.as_agent().and_then(|agent| agent.usage.context_window)
-    }
-
     pub fn turn_error_label(&self) -> Option<&str> {
         self.as_agent()
             .and_then(|agent| agent.turn_error_label.as_deref())
-    }
-
-    pub fn compacting(&self) -> bool {
-        self.as_agent().is_some_and(|agent| agent.compacting)
     }
 
     pub fn sub_agents(&self) -> &[SidebarSubAgent] {

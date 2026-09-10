@@ -111,7 +111,7 @@ impl<'a> GroupResolver<'a> {
 
     fn is_owned_worktree(&self, cwd: &Path) -> bool {
         self.worktree_home
-            .is_some_and(|home| is_within(home, cwd) && cwd != home)
+            .is_some_and(|home| cwd.starts_with(home) && cwd != home)
             && self.project_root != Some(cwd)
     }
 
@@ -120,7 +120,7 @@ impl<'a> GroupResolver<'a> {
             .iter()
             .map(PathBuf::as_path)
             .chain(self.project_root)
-            .filter(|root| is_within(root, cwd))
+            .filter(|root| cwd.starts_with(root))
             .max_by_key(|root| root.components().count())
     }
 
@@ -224,23 +224,6 @@ fn path_basename(root: &Path) -> String {
         .filter(|name| !name.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| root.to_string_lossy().into_owned())
-}
-
-/// True when `path` is `root` itself or nested under it, compared by path
-/// components so `/home/userX` is not treated as under `/home/user`. This
-/// is a lexical test on the raw cwd the mux reported — no filesystem
-/// canonicalization — keeping the reducer pure. Used against both the project
-/// root and each enumerated worktree root to decide a cwd's pod.
-pub(super) fn is_within(root: &Path, path: &Path) -> bool {
-    let mut root_components = root.components();
-    let mut path_components = path.components();
-    loop {
-        match (root_components.next(), path_components.next()) {
-            (Some(r), Some(p)) if r == p => continue,
-            (Some(_), _) => return false,
-            (None, _) => return true,
-        }
-    }
 }
 
 pub(super) fn status_counts(rows: &[SidebarRow]) -> Vec<SidebarStatusCount> {

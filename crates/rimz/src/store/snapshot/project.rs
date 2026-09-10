@@ -8,6 +8,7 @@ use jiff::Timestamp;
 use tracing::debug;
 
 use crate::agents::lifecycle::{self, Transition};
+use crate::agents::petname::valid_agent_name;
 use crate::agents::state::{append_recent_prompt, usable_description};
 use crate::agents::{AgentLifecycleObservation, LaunchParams};
 use crate::agents::{AgentState, AgentStatus};
@@ -23,7 +24,7 @@ mod identity;
 
 pub(crate) use identity::AgentIdentityState;
 pub(super) use identity::backfill_agent_identities;
-use identity::{CardIdentity, CardIdentityAllocator, usable_name};
+use identity::{CardIdentity, CardIdentityAllocator};
 
 type AgentKey = (AgentKind, AgentSessionId);
 type LaunchInstanceKey = (AgentKind, crate::ids::PaneId, u32);
@@ -538,7 +539,7 @@ fn reduce_agent_launch(
     kind: &AgentKind,
     payload: &AgentLaunchPayload,
 ) {
-    if !usable_name(&payload.agent_name) {
+    if !valid_agent_name(&payload.agent_name) {
         debug!(
             target: "rimz::agent::launch",
             event_id = %event.event_id,
@@ -567,12 +568,6 @@ fn reduce_agent_launch(
         && identity.owner_for_name(&payload.agent_name).is_none()
     {
         return;
-    }
-    if let Some(owner) = identity.owner_for_name(&payload.agent_name)
-        && owner != key
-        && !map.contains_key(&owner)
-    {
-        identity.release_key(&owner);
     }
     let prior = map.get(&key);
     let card_identity = identity.assign_launch(kind, &payload.agent_id, payload, prior);
@@ -1219,17 +1214,13 @@ fn pane_projection(
         .or_else(|| observation.pane_id.clone().map(PaneRef::from_id));
     match (observation_pane, prior.and_then(|p| p.pane.clone())) {
         (Some(observed), Some(prior))
-            if observed.pane_id == prior.pane_id && !pane_stamp_is_enriched(&observed) =>
+            if observed.pane_id == prior.pane_id && observed.pane_pid.is_none() =>
         {
             Some(prior)
         }
         (Some(observed), _) => Some(observed),
         (None, prior) => prior,
     }
-}
-
-fn pane_stamp_is_enriched(pane: &PaneRef) -> bool {
-    pane.pane_pid.is_some()
 }
 
 fn non_empty_string(value: Option<&str>) -> Option<String> {
