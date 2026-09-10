@@ -16,8 +16,8 @@ pub(super) fn wait_entry_lines(ctx: &RowCtx<'_>, wakes: &[PendingWake]) -> Vec<L
         };
         let (lead, lead_style) = match &wake.trigger {
             PendingWakeTrigger::Command { .. } => (
-                role_glyph(theme, AnimationRole::Working, ctx.animation_phase),
-                working_style(theme, ctx.animation_phase).add_modifier(Modifier::DIM),
+                status_glyph(theme, AgentStatus::Running),
+                working_style(theme, 0).add_modifier(Modifier::DIM),
             ),
             PendingWakeTrigger::Timer { .. } => (
                 theme.glyph(GlyphRole::CardWaitTimer).to_owned(),
