@@ -96,12 +96,15 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             .clone()
             .unwrap_or_else(|| workspace.worktree_root.clone()),
     };
-    let reminders = exec_launch_reminders(
-        &request,
-        &machine_config,
-        &workspace.project_root,
-        &rimz::disk::paths::config_home(),
-    );
+    let reminders = LaunchReminders {
+        sandbox: bwrap.is_some(),
+        ..exec_launch_reminders(
+            &request,
+            &machine_config,
+            &workspace.project_root,
+            &rimz::disk::paths::config_home(),
+        )
+    };
     let stage = rimz::harness::launch::compile_agent_process_stage_with_extra_env(
         &workspace.project_root,
         machine_config.harness.rtk,
@@ -137,6 +140,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     if let Some(bwrap) = bwrap {
         let prepare = || -> Result<_> {
             let state = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())?;
+            state.ensure_tmp_dir()?;
             let mut env: std::collections::BTreeMap<String, String> = std::env::vars_os()
                 .filter_map(|(key, value)| {
                     Some((key.into_string().ok()?, value.into_string().ok()?))
@@ -347,6 +351,7 @@ fn exec_launch_reminders(
         model,
         subagent_catalog,
         team,
+        ..LaunchReminders::default()
     }
 }
 

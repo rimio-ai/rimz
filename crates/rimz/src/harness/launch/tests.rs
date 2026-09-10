@@ -586,6 +586,49 @@ fn process_compiler_joins_catalog_and_team_context_in_one_occurrence() {
 }
 
 #[test]
+fn process_compiler_joins_sandbox_reminder_for_native_peers_and_children() {
+    let project = tempfile::tempdir().expect("project");
+    for kind in ["claude", "qwen", "droid", "codex"] {
+        for subagent in [false, true] {
+            let mut invocation = team_request(kind);
+            invocation.subagent = subagent;
+            invocation.identity.params.model = Some("gpt-6-astra".to_owned());
+            let reminders = LaunchReminders {
+                sandbox: true,
+                team: Some(team()),
+                subagent_catalog: Some(crate::harness::subagent_policy::SubagentCatalog::Disabled),
+                ..LaunchReminders::default()
+            };
+            let process = compile_agent_process_with_extra_env(
+                project.path(),
+                crate::config::RtkMode::Auto,
+                &invocation,
+                project.path(),
+                &BTreeMap::new(),
+                &reminders,
+            )
+            .expect("process");
+            let channel = crate::agents::find_definition(kind)
+                .and_then(|adapter| adapter.append_system_text_channel())
+                .expect("system text channel");
+            let occurrences =
+                crate::agents::PresetArgMatcher::from(&channel).occurrences(&process.provider_argv);
+            assert_eq!(occurrences.len(), 1);
+            let text = parse_toml_string_or_raw(&occurrences[0].value);
+            assert_eq!(text.matches("<system_reminder>").count(), 1);
+            assert_eq!(text.matches("</system_reminder>").count(), 1);
+            assert!(text.contains("This pane runs under a bubblewrap sandbox."));
+            assert!(text.contains("`/tmp/scratchpad`"));
+            assert_eq!(text.contains("You are a subagent:"), subagent);
+            assert_eq!(
+                Some(text),
+                crate::harness::launch_reminders::render(&invocation, &reminders, project.path())
+            );
+        }
+    }
+}
+
+#[test]
 fn process_compiler_appends_model_line_for_native_adapters() {
     let project = tempfile::tempdir().expect("project");
     for kind in ["claude", "codex"] {
@@ -603,6 +646,7 @@ fn process_compiler_appends_model_line_for_native_adapters() {
                     &BTreeMap::new(),
                     &LaunchReminders {
                         model,
+                        sandbox: false,
                         team: Some(team()),
                         subagent_catalog: Some(
                             crate::harness::subagent_policy::SubagentCatalog::Disabled,
@@ -687,6 +731,7 @@ fn process_compiler_omits_team_context_for_unsupported_adapter() {
         &BTreeMap::new(),
         &LaunchReminders {
             team: Some(team.clone()),
+            sandbox: true,
             ..LaunchReminders::default()
         },
     )
@@ -696,6 +741,12 @@ fn process_compiler_omits_team_context_for_unsupported_adapter() {
             .provider_argv
             .iter()
             .all(|arg| !arg.contains(&reminder))
+    );
+    assert!(
+        process
+            .provider_argv
+            .iter()
+            .all(|arg| !arg.contains("bubblewrap sandbox"))
     );
 }
 

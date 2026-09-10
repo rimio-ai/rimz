@@ -29,13 +29,23 @@ The plan pins its environment inputs across shell startup: existing root and pro
 
 ## Room tmp
 
-`${XDG_STATE_HOME:-~/.local/state}/rimz/workspaces/<workspace_id>/tmp/` is ensured at mode `0700` before sandbox room birth and again during launch preparation. Host mode does not create it. The launch environment pins reapply `TMPDIR=/tmp` after shell startup files.
+`${XDG_STATE_HOME:-~/.local/state}/rimz/workspaces/<workspace_id>/tmp/` is ensured at mode `0700` before sandbox room birth and again during launch preparation. `StatePaths::ensure_tmp_dir` builds one layout: `scratchpad/` for agent scratch files, `rimz-wakes/` for watched-command output, and `rimz-subagents/` for settled child responses. Host mode creates this layout on demand for RimZ's own output files. The sandbox launch environment pins reapply `TMPDIR=/tmp` after shell startup files.
+
+`sandbox::TmpView` owns the host-to-agent path mapping for output records and messages: paths under room tmp become `/tmp/<relative path>` under sandbox isolation and remain host paths otherwise. `TmpView::current` reads current machine policy for emitters without a launch config. Room tmp is separate from host `/tmp`, not hidden from host processes: the host state path remains accessible inside and outside the sandbox.
 
 All sandboxed agents and subagents in the room see the same temporary files. Room tmp survives agent restart and lives at a persistent location, but is not a durable store record and carries no fsync guarantee. Room teardown, including reset and uninstall, removes it after the process sweep; dead-workspace GC removes it with the state root. `rimz agents show` exposes the host path when it exists. Reset with rebirth may immediately create a new empty tmp directory. Team `scratch-files` config is separate and unchanged.
 
 Rewritten skill copies live beside `tmp/`, under `StatePaths.skills_dir` at `<workspace store>/skills/<sha256>/`. The digest covers the rewrite kind, relative paths, and file bytes. Copies are immutable and deduplicated across concurrent launches; changed sources produce new copies. The private `skills/` directory is created only when needed. Copies remain for the room's lifetime so running mounts retain their files, and teardown, reset, uninstall, and dead-workspace GC reclaim them with the room.
 
 Storage reports include tmp and skill copies in the State root's on-disk footprint; the State category describes their location, not a durability guarantee.
+
+## Launch reminder
+
+The exec wrapper sets `LaunchReminders.sandbox` from its successful bubblewrap preflight and ensures the tmp layout before preparing the mounts, including on restart of an older room. The reminder renderer inserts this paragraph after the model line and before the catalog or child policy, inside the same `<system_reminder>` tag:
+
+> This pane runs under a bubblewrap sandbox. `/tmp` belongs to this RimZ room: teammates and subagents in the room share it, it is separate from the host's `/tmp`, and it is removed when the room closes. The room's host state path remains accessible. Use it freely for temporary files, and use `/tmp/scratchpad` as your scratchpad directory. RimZ writes its own outputs there too: `rimz wake` command output under `/tmp/rimz-wakes/` and settled subagent responses under `/tmp/rimz-subagents/`.
+
+It reaches Claude, Qwen, Droid, and Codex through their existing native append-system-text channels on every launch kind, including subagents. Host-mode launches omit it. Other providers gain no fallback; their child user-prompt fallback remains the no-delegation body only.
 
 ## Profile skill views
 
