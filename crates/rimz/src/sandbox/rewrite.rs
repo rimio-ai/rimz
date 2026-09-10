@@ -131,8 +131,8 @@ fn digest(entries: &[Entry], kind: ManualSkill) -> String {
     let mut hash = Sha256::new();
     hash.update(match kind {
         ManualSkill::Unsupported => b"unsupported-v1".as_slice(),
-        ManualSkill::Frontmatter => b"frontmatter-v1".as_slice(),
-        ManualSkill::OpenAiPolicy => b"openai-policy-v1".as_slice(),
+        ManualSkill::Frontmatter => b"frontmatter-v2".as_slice(),
+        ManualSkill::OpenAiPolicy => b"openai-policy-v2".as_slice(),
     });
     for entry in entries {
         let path = entry.path.as_os_str().as_encoded_bytes();
@@ -182,11 +182,88 @@ fn rewrite(root: &Path, source: &Path, kind: ManualSkill) -> Result<(), SandboxE
 }
 
 fn mapping_key(line: &str) -> Option<(&str, &str)> {
-    let (key, value) = line.split_once(':')?;
-    if key.contains('\\') {
+    let line = line.trim();
+    let (key, value) = if line.starts_with(['\'', '"']) {
+        let end = quoted_end(line)?;
+        let key = &line[1..end - 1];
+        let value = line[end..].trim_start().strip_prefix(':')?;
+        (key, value)
+    } else {
+        let (key, value) = line.split_once(':')?;
+        (key.trim(), value)
+    };
+    if key.contains('\\') || (!value.is_empty() && !value.starts_with(char::is_whitespace)) {
         return None;
     }
-    Some((key.trim().trim_matches(['\'', '"']), value.trim()))
+    Some((key, value.trim()))
+}
+
+fn quoted_end(text: &str) -> Option<usize> {
+    let quote = text.as_bytes()[0];
+    let mut bytes = text.bytes().enumerate().skip(1).peekable();
+    while let Some((index, byte)) = bytes.next() {
+        if quote == b'"' && byte == b'\\' {
+            bytes.next();
+            continue;
+        }
+        if byte != quote {
+            continue;
+        }
+        if quote == b'\'' && bytes.peek().is_some_and(|(_, next)| *next == quote) {
+            bytes.next();
+            continue;
+        }
+        return Some(index + 1);
+    }
+    None
+}
+
+fn validate_lines(text: &str) -> Result<(), &'static str> {
+    let mut block_depth = None;
+    for line in text.lines().filter(|line| meaningful(line)) {
+        let depth = indentation(line).len();
+        if block_depth.is_some_and(|block| depth > block) {
+            continue;
+        }
+        block_depth = None;
+        let mut node = line.trim();
+        let mut node_depth = depth;
+        while let Some(item) = node
+            .strip_prefix('-')
+            .filter(|item| item.starts_with(char::is_whitespace))
+        {
+            node_depth += node.len() - item.trim_start().len();
+            node = item.trim_start();
+        }
+        if node.starts_with(['&', '*', '!', '{', '[', '?']) {
+            return Err(
+                "skill metadata must use untagged block mappings without anchors or aliases",
+            );
+        }
+        if let Some((_, value)) = mapping_key(node) {
+            node = value;
+        } else {
+            node_depth = depth;
+        }
+        if node.starts_with(['&', '*', '!', '{', '[']) {
+            return Err(
+                "skill metadata must use untagged block mappings without anchors or aliases",
+            );
+        }
+        if node.starts_with(['\'', '"']) {
+            let Some(end) = quoted_end(node) else {
+                return Err("skill metadata quoted scalars must fit on one line");
+            };
+            let rest = node[end..].trim_start();
+            if !rest.is_empty() && !rest.starts_with('#') {
+                return Err("skill metadata quoted scalars must fit on one line");
+            }
+        }
+        if node.starts_with(['|', '>']) {
+            block_depth = Some(node_depth);
+        }
+    }
+    Ok(())
 }
 
 fn meaningful(line: &str) -> bool {
@@ -220,6 +297,7 @@ fn frontmatter_user_only(text: &str) -> Result<String, &'static str> {
 }
 
 fn set_block_key(text: &str, key: &str, value: &str, indent: &str) -> Result<String, &'static str> {
+    validate_lines(text)?;
     if indent.contains('\t') {
         return Err("skill metadata indentation must use spaces");
     }
@@ -255,6 +333,7 @@ fn set_block_key(text: &str, key: &str, value: &str, indent: &str) -> Result<Str
 
 fn openai_policy_user_only(text: Option<&str>) -> Result<String, &'static str> {
     let text = text.unwrap_or("");
+    validate_lines(text)?;
     let lines: Vec<_> = text.split_inclusive('\n').collect();
     let root_indent = lines
         .iter()
@@ -402,6 +481,94 @@ mod tests {
         ] {
             assert!(openai_policy_user_only(Some(text)).is_err(), "{text}");
         }
+    }
+
+    #[test]
+    fn markers_refuse_multiline_quoted_scalars_with_fake_keys() {
+        for quote in ['\'', '"'] {
+            let text = format!(
+                "interface:\n  short_description: {quote}foo\npolicy:\n  allow_implicit_invocation: true\nend: bar{quote}\n"
+            );
+            assert!(openai_policy_user_only(Some(&text)).is_err());
+            let text = format!(
+                "---\ndescription: {quote}foo\ndisable-model-invocation: false\nend: bar{quote}\n---\nBody"
+            );
+            assert!(frontmatter_user_only(&text).is_err());
+            let text = format!(
+                "interface:\n  descriptions:\n    - {quote}foo\npolicy:\n  allow_implicit_invocation: true\nend: bar{quote}\n"
+            );
+            assert!(openai_policy_user_only(Some(&text)).is_err());
+            let text = text.replace("- ", "-\t");
+            assert!(openai_policy_user_only(Some(&text)).is_err());
+            let text = format!(
+                "entries:\n  - description: |\n      block text\n    quoted: {quote}foo\npolicy:\n  allow_implicit_invocation: true\nend: bar{quote}\n"
+            );
+            assert!(openai_policy_user_only(Some(&text)).is_err());
+        }
+    }
+
+    #[test]
+    fn markers_preserve_quoted_keys_with_colons_and_spaces() {
+        for quote in ['\'', '"'] {
+            let fields = format!(
+                "{quote}disable-model-invocation:extra{quote}: keep\n{quote}disable-model-invocation {quote}: keep\n"
+            );
+            assert_eq!(
+                frontmatter_user_only(&format!("---\n{fields}---\nBody")).unwrap(),
+                format!("---\n{fields}disable-model-invocation: true\n---\nBody")
+            );
+            let fields = format!(
+                "{quote}policy:extra{quote}: keep\npolicy:\n  {quote}allow_implicit_invocation:extra{quote}: keep\n"
+            );
+            assert_eq!(
+                openai_policy_user_only(Some(&fields)).unwrap(),
+                format!("{fields}  allow_implicit_invocation: false\n")
+            );
+        }
+    }
+
+    #[test]
+    fn markers_refuse_anchors_before_removing_alias_targets() {
+        for block in [
+            "disable-model-invocation: &flag false\ncustom: *flag\n",
+            "disable-model-invocation:\n  nested: &flag false\ncustom: *flag\n",
+        ] {
+            assert!(frontmatter_user_only(&format!("---\n{block}---\n")).is_err());
+        }
+        for text in [
+            "policy:\n  allow_implicit_invocation: &flag true\ncustom: *flag\n",
+            "policy:\n  allow_implicit_invocation:\n    nested: &flag true\ncustom: *flag\n",
+            "policy:\n  allow_implicit_invocation: !!bool &flag true\ncustom: *flag\n",
+            "policy:\n  allow_implicit_invocation: {nested: &flag true}\ncustom: *flag\n",
+        ] {
+            assert!(openai_policy_user_only(Some(text)).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn markers_preserve_descriptions_without_interpreting_scalar_content() {
+        for description in [
+            "It's a user's tool\n",
+            "'It''s a user''s tool' # keep\n",
+            "\"It's a \\\"quoted\\\" tool\"\n",
+            "|-\n  It's an unclosed \"quote\n  policy:\n    allow_implicit_invocation: true\n  &flag *alias\n",
+            ">+\n  'unclosed quote\n  disable-model-invocation: false\n",
+        ] {
+            let fields = format!("name: demo\ndescription: {description}");
+            assert_eq!(
+                frontmatter_user_only(&format!("---\n{fields}---\nBody")).unwrap(),
+                format!("---\n{fields}disable-model-invocation: true\n---\nBody")
+            );
+            assert_eq!(
+                openai_policy_user_only(Some(&fields)).unwrap(),
+                format!("{fields}policy:\n  allow_implicit_invocation: false\n")
+            );
+        }
+        let text = "policy:\n  description: |\n    allow_implicit_invocation: true\n    \"unclosed quote\n  allow_implicit_invocation: true\n";
+        assert_eq!(
+            openai_policy_user_only(Some(text)).unwrap(),
+            "policy:\n  description: |\n    allow_implicit_invocation: true\n    \"unclosed quote\n  allow_implicit_invocation: false\n"
+        );
     }
 
     #[test]
