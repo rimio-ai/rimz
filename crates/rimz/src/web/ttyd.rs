@@ -504,7 +504,12 @@ fn reap_legacy_instances() {
 }
 
 fn is_ttyd_process(process: &crate::proc::ProcInfo) -> bool {
-    crate::proc::command::program_label(&process.cmdline) == "ttyd"
+    process
+        .cmdline
+        .split_whitespace()
+        .next()
+        .map(crate::proc::command::basename)
+        == Some("ttyd")
 }
 
 fn terminate_legacy_instance(instance: &LegacyTtydInstance) {
@@ -818,7 +823,12 @@ fn ttyd_process_status(
 }
 
 fn is_gate_process(process: &crate::proc::ProcInfo) -> bool {
-    crate::proc::command::program_label(&process.cmdline) == "rimz"
+    process
+        .cmdline
+        .split_whitespace()
+        .next()
+        .map(crate::proc::command::basename)
+        == Some("rimz")
         && process
             .cmdline
             .split_whitespace()
@@ -1887,9 +1897,16 @@ mod tests {
         assert!(is_ttyd_process(&process("/usr/bin/ttyd -p 8200 sh")));
         assert!(!is_ttyd_process(&process("/usr/bin/ttyd-trace -p 8200")));
         assert!(!is_ttyd_process(&process("sh -c ttyd -p 8200")));
+        assert!(!is_ttyd_process(&process("env A=b ttyd -p 8200")));
         assert!(is_gate_process(&process(
             "/opt/rimz/bin/rimz web gate --listen 0.0.0.0:8200"
         )));
         assert!(!is_gate_process(&process("/opt/rimz/bin/rimz web start")));
+        assert!(!is_gate_process(&process(
+            "sh -c rimz web gate --listen 0.0.0.0:8200"
+        )));
+        assert!(!is_gate_process(&process(
+            "env A=b rimz web gate --listen 0.0.0.0:8200"
+        )));
     }
 }

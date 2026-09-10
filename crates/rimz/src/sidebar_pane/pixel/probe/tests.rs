@@ -630,6 +630,24 @@ fn ttyd_descendant_client_requires_live_matching_protocol_daemon() {
             daemon_records: vec![(10, crate::web::TTYD_PIXEL_PROTOCOL)],
             ..FakeProbe::ok()
         },
+        FakeProbe {
+            termnames: Some(vec!["xterm-256color".to_owned()]),
+            processes: vec![
+                process(10, 1, "sh -c ttyd -p 8200"),
+                process(100, 10, "tmux attach -t rimz-test"),
+            ],
+            daemon_records: vec![(10, crate::web::TTYD_PIXEL_PROTOCOL)],
+            ..FakeProbe::ok()
+        },
+        FakeProbe {
+            termnames: Some(vec!["xterm-256color".to_owned()]),
+            processes: vec![
+                process(10, 1, "env A=b ttyd -p 8200"),
+                process(100, 10, "tmux attach -t rimz-test"),
+            ],
+            daemon_records: vec![(10, crate::web::TTYD_PIXEL_PROTOCOL)],
+            ..FakeProbe::ok()
+        },
     ] {
         assert!(
             !detect_with(
