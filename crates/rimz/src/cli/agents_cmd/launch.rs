@@ -733,53 +733,32 @@ fn write_launch_receipt(w: &mut impl Write, receipt: &LaunchReceipt<'_>) -> Resu
     }
     writeln!(w)?;
 
-    let handle_width = identities
+    let rows = identities
         .iter()
-        .map(|identity| launch_identity_handle(identity).len() + 1)
-        .max()
-        .unwrap_or(0);
-    let kind_width = identities
-        .iter()
-        .map(|identity| identity.kind.as_str().len())
-        .max()
-        .unwrap_or(0);
-    let model_width = identities
-        .iter()
-        .map(|identity| identity.launch.model.as_deref().unwrap_or("-").len())
-        .max()
-        .unwrap_or(0);
-    for (index, identity) in identities.iter().enumerate() {
-        let handle = format!("@{:<handle_width$}", launch_identity_handle(identity));
-        let kind = format!("{:<kind_width$}", identity.kind.as_str());
-        let model = identity.launch.model.as_deref().unwrap_or("-");
-        let model = if team.is_some() && receipt.leader_index == Some(index) {
-            format!("{model:<model_width$}  <- leader")
-        } else {
-            model.to_owned()
-        };
-        writeln!(
-            w,
-            "  {}  {}  {}",
-            render::paint(render::palette::identity(identity.kind.as_str()), &handle),
-            render::paint(render::palette::identity(identity.kind.as_str()), &kind),
-            render::paint(render::palette::muted(), &model)
-        )?;
-    }
-    if let Some((_, team)) = receipt.team
-        && team.roles.iter().any(|role| !role.signals.is_empty())
-    {
-        let signals = team
-            .roles
-            .iter()
-            .flat_map(|role| {
-                role.signals
-                    .iter()
-                    .map(|binding| format!("{} → {}", binding.signal, role.role))
+        .enumerate()
+        .map(|(index, identity)| render::RosterRow {
+            handle: launch_identity_handle(identity).to_owned(),
+            kind: identity.kind.as_str().to_owned(),
+            model: identity.launch.model.clone(),
+            leader: team.is_some() && receipt.leader_index == Some(index),
+        })
+        .collect();
+    let signals = receipt
+        .team
+        .into_iter()
+        .flat_map(|(_, team)| &team.roles)
+        .flat_map(|role| {
+            role.signals.iter().map(|binding| render::RosterSignal {
+                signal: binding.signal.clone(),
+                matches: binding.matches.clone(),
+                role: role.role.clone(),
             })
-            .collect::<Vec<_>>()
-            .join(", ");
-        writeln!(w, "signals: {signals}")?;
-    }
+        })
+        .collect();
+    render::Roster::new(rows)
+        .signals(signals)
+        .indent(2)
+        .render(w)?;
     if team.is_some() {
         return Ok(());
     }
@@ -1044,7 +1023,7 @@ mod tests {
 
         insta::assert_snapshot!(String::from_utf8(output.into_inner()).unwrap());
 
-        let mut output = Vec::new();
+        let mut output = anstream::StripStream::new(Vec::new());
         write_launch_receipt(
             &mut output,
             &LaunchReceipt {
@@ -1080,9 +1059,9 @@ mod tests {
         )
         .unwrap();
         assert!(
-            String::from_utf8(output)
+            String::from_utf8(output.into_inner())
                 .unwrap()
-                .contains("signals: ci.failed → coder\n")
+                .contains("  signals   ci.failed → @coder\n")
         );
     }
 

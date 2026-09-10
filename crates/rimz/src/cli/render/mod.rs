@@ -11,7 +11,10 @@
 pub(crate) mod palette;
 pub(crate) mod prose;
 pub(crate) mod room;
+mod roster;
 pub(crate) mod status;
+
+pub(crate) use roster::{Roster, RosterRow, RosterSignal};
 
 use std::io::Write;
 
