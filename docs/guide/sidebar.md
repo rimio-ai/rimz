@@ -82,28 +82,27 @@ The sidebar follows its attached view at the explicit `[theme.display].width_per
   <br/><sub>A finished card with the subagents it fanned out this turn; the idle agent below collapses to a single line.</sub>
 </p>
 
-Each agent is a small stacked card, four lines at rest, plus a subagent stats line after it has spawned a child and a waits line while one-shot wakes are pending:
+Each agent is a small stacked card, four lines at rest, plus one shared line counting subagents and pending one-shot wakes; either count appears alone when only one applies:
 
 ```
 ⢿ claude · Opus 4.8 · xhigh · 1m                $1.27    ← state · identity · cost
   store refactor                                         ← what it is working on
   ▣ ━━━━━━━━━━━━━━━━─────────────────────────── 38.2%    ← context meter: how full the window is
   ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                   ◔ 8m    ← tokens in the window · last activity
-  ⧉ subagents (2)                               $0.42    ← lifetime child count · lifetime child cost
-  ⧖ waits (2)                                            ← pending one-shot wakes
+  ⧉ subagents (2) · ⧖ waits (2)                 $0.42    ← lifetime child count and cost · pending one-shot wakes
 ```
 
 - **The identity line.** The state glyph leads, animated while the agent works. Then the agent's handle (its team role, profile, or kind, so a team reads `planner` / `coder` / `reviewer`), the model, one reasoning-configuration token (effort or `thinking`), and the size of its context window. The session's dollar cost pins right and counts up live once the session has spent anything, including sessions it launched through `rimz subagents`.
 - **What it is working on.** The session's name or task, falling back to its first prompt so the card stays stable between turns. Codex names sessions automatically, so its generated short title replaces the raw first prompt as soon as it is available. When a turn dies on a provider error, this line quotes the error (`API Error: Overloaded`) so the card says why without a jump.
 - **The context meter.** How full the agent's context window is, as a bar and a percentage. The fill also shows where the window went: cache reads, cache writes, and fresh input paint as distinct runs, and the bar's tone shifts from calm toward red as the window fills.
 - **The token line.** The absolute companion: tokens currently in the window, the same composition as markers, a `↻ N` count of completed context compactions, an amber `⟲ N` while a running agent is between the identical-call warning and attention thresholds, and, once the agent has been quiet for five minutes, its last-activity age pinned right, heating toward red as an hour approaches. At the attention threshold the marker yields to `!` and the description carries `loop: <tool> ×<count>`; the next differing call clears the run and returns the card to its running state.
-- **The subagent stats line.** Once the session has spawned a child, its lifetime count and known lifetime cost stay on the card throughout the retained session history. The figure covers provider-native and RimZ-launched children, but is a breakdown rather than a second charge to add to the identity line: native cost is already there, and launched-child cost is the portion the identity line adds.
+- **The subagents and waits line.** Once the session has spawned a child, its lifetime count and known lifetime cost stay on the card throughout the retained session history, sharing the line with any pending waits. The figure covers provider-native and RimZ-launched children, but is a breakdown rather than a second charge to add to the identity line: native cost is already there, and launched-child cost is the portion the identity line adds.
 
 The stats line stays after older entries retire. Selecting a card reveals more detail: the **subagent entries** for the agent's current task appear underneath, each with its own live state, what the parent asked it to do, and, while it runs, tokens, model, and elapsed time. A child launched with `rimz subagents` also shows its launch profile, cumulative displayed session tokens (excluding cache reads), and own session cost. When that agent belongs to a named team, every visible teammate's card expands with it, while only the selected card carries the highlight. A finished subagent keeps its `✓` or `!` verdict on the list until you send the parent a new prompt or reset its context with `/clear` or manual `/compact`; messages from other agents and RimZ's automatic deliveries keep it listed. Provider-native subagents are headless; a launched child has its own pane and transcript while it runs, then normally closes that pane while keeping the verdict here. `--keep` holds the pane instead. Both kinds stay nested under their parent rather than becoming duplicate top-level cards.
 
-How much of the card shows at rest is yours to tune with `card_density` ([theme.md → Display](./theme.md#display)): `compact` trims resting cards, including the subagent stats and waits lines, `expanded` shows subagents everywhere.
+How much of the card shows at rest is yours to tune with `card_density` ([theme.md → Display](./theme.md#display)): `compact` trims resting cards, including the shared subagents and waits line, `expanded` shows subagent and wait entries everywhere.
 
-The **waits line** counts armed one-shot wakes: timers, watched commands, and one-shot signals. It follows the subagent stats, before any expanded child entries, and disappears when none remain. It stays visible on standard cards while the agent works as well as while it sleeps.
+The **waits count** covers armed one-shot wakes: timers, watched commands, and one-shot signals. It shares the subagents line and disappears when none remain. It stays visible on standard cards while the agent works as well as while it sleeps. Selecting the card lists each wait beneath the subagent entries, so you can see what it is waiting for without opening another pane.
 
 ## Process rows
 

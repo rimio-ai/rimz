@@ -26,11 +26,13 @@ A complete frame: a selected agent in a worktree, with the per-provider dashboar
 ▌  store refactor                                        ← line 2: session description
 ▌  ▣ ━━━━━━━━━━━━━━━━─────────────────────────── 38.2%    ← context window progress: how full the context window is
 ▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k · 97%             ◔ 8m    ← token stats: filled toks in context window · session cache hit
-▌  ⧉ subagents (2)                               $0.42    ← lifetime child count and cost
-▌  ⧖ waits (2)                                           ← pending one-shot wakes
+▌  ⧉ subagents (2) · ⧖ waits (2)                 $0.42    ← lifetime child count and cost · pending one-shot wakes
 ▌    ✓ Explore — locate the render seam                   ← done child: collapses to one line
 ▌    ⠁ Explore — audit the trust hash                     ← active child: thinking head
 ▌      ◇ 3k · Opus 4.8                           ◔  3m    ← running child: tokens · model · elapsed
+▌    ⧖ in 12m                                   ◔ 18m    ← timer: time until wake · elapsed since armed
+▌    ⧖ cargo                                    ◔  4m    ← command: program · elapsed since armed
+▌      cargo test                                        ← shell command, muted
 
  ─────────────────────────────────────────────────────
   Claude v2.1.169 · Claude Max                    ⇅ rc    ← provider · version · plan · remote-control health (green up / red down)
@@ -124,9 +126,9 @@ How the wash, the crest, and the lead-row motion are produced — `shimmer` vs. 
 | `¤ N`           | the live agents in the room right now — the glyph in the agents' working clay |
 | `⑃ N`           | open pull requests on agent lanes awaiting you — green when every known CI verdict passes, amber while one runs, red when one fails, and the cool PR-open tone while CI is unknown; click it to filter the body to those lanes |
 | `◎ N`           | sessions (threads) that have run in the configured headline window (cockpit/provider) / in the store window — teal in both |
-| `⧉ N`           | the subagents an agent has spawned — lifetime count on the card's stats line, the current user-authored turn's entries beneath it when expanded; the marker violet, the label soft |
+| `⧉ N`           | the subagents an agent has spawned — lifetime count on the card's delegation line, shared with waits; the current user-authored turn's entries beneath it when expanded; the marker violet, the label soft |
 | `⋯ bg`          | an agent has background work pending — a faint secondary marker after the description that rides the settled `✓` as “done, background chore still running” |
-| `⧖ N`           | armed one-shot wakes for the agent: timers, watched commands, and one-shot signals; the marker violet, the label soft |
+| `⧖ N`           | armed one-shot wakes for the agent: timers, watched commands, and one-shot signals; shares the delegation line with subagents, with wait entries beneath when expanded; the marker violet, the label soft |
 | `⑂ name` / `⮌ name` | a group header with a git story — branch for pristine/diverged worktrees, merge for landed removable worktrees |
 | `name` (bold)   | a directory room's own pod — name-only, no git story |
 | `▎`             | the selection lane — the worktree you're in, a dim selection-tone bracket |
@@ -188,9 +190,9 @@ While a [make-up bucket](#zone-1--the-cockpit), the unread lens, or the open-PR 
 
 ### The card
 
-An agent is a small stacked card. The standard resting card is four lines, plus the `⧉ subagents (N)` stats line once the session has spawned a child and `⧖ waits (N)` while one-shot wakes are armed. An idle agent with no prompt or session history stays fresh: it is identity-only without a descriptor and identity + description when launched with one. Selecting any fresh card adds the empty meter, with an animated compose affordance filling the description slot when no authored description exists; a selected described fresh card is identity + description + empty meter. Submitting any prompt engages the card for good: it holds identity, description, meter, and stats lines while data fills in place, using `▢ 0%` and `▤ 0` before the first measurement. Selecting an engaged card appends the current user-authored turn's subagent entries after the waits line and lights the spine, so its standard lines never reflow. If it belongs to a named team, every visible teammate expands at the same time, but the spine and selection band stay on the selected card alone.
+An agent is a small stacked card. The standard resting card is four lines, plus the `⧉ subagents (N) · ⧖ waits (N)` delegation line once the session has spawned a child or armed a one-shot wake; either half appears alone when only one applies. An idle agent with no prompt or session history stays fresh: it is identity-only without a descriptor and identity + description when launched with one. Selecting any fresh card adds the empty meter, with an animated compose affordance filling the description slot when no authored description exists; a selected described fresh card is identity + description + empty meter. Submitting any prompt engages the card for good: it holds identity, description, meter, and stats lines while data fills in place, using `▢ 0%` and `▤ 0` before the first measurement. Selecting an engaged card appends the current user-authored turn's subagent entries, then one entry per pending wait, under the delegation line and lights the spine, so its standard lines never reflow. If it belongs to a named team, every visible teammate expands at the same time, but the spine and selection band stay on the selected card alone.
 
-`[theme.display] card_density` tunes that body without changing routing: `auto` uses the standard card, `expanded` shows subagent entries on every parent card, and `compact` trims resting cards by status — including the standing subagent stats line — while selection opens the selected card and any visible named teammates to their lifecycle stages' full shapes. Compact resting cards read idle as identity only, running/waiting as identity + description + meter (including the `▢ 0%` placeholder), and paused/done/sleeping/failed as identity + description.
+`[theme.display] card_density` tunes that body without changing routing: `auto` uses the standard card, `expanded` shows subagent and wait entries on every engaged card, and `compact` trims resting cards by status — including the standing delegation line — while selection opens the selected card and any visible named teammates to their lifecycle stages' full shapes. Compact resting cards read idle as identity only, running/waiting as identity + description + meter (including the `▢ 0%` placeholder), and paused/done/sleeping/failed as identity + description.
 
 idle:
 
@@ -219,7 +221,7 @@ While sleeping, line 2 names the first pending wake instead of the usual session
 
 The `▣`/`▢` and `▤` glyphs share one lead column, so the card reads as an aligned grid.
 
-**Selection.** In `auto` and `expanded`, the resting card is the four lines above plus its standing subagent stats and waits lines, when present. Selecting any row lights the bold `▌` spine and *appends* the current user-authored turn's subagent entries beneath — it never reshapes a line already on screen, so the card never reflows. Selecting a named-team member expands every visible teammate's card in the same way, without giving those teammates the selected spine or band:
+**Selection.** In `auto`, the resting card is the four lines above plus its standing delegation line, when present. Selecting any row lights the bold `▌` spine and *appends* the current user-authored turn's subagent entries, then one entry per pending wait, under the delegation line — it never reshapes a line already on screen, so the card never reflows. In `expanded`, those entries already appear on every engaged card. Selecting a named-team member expands every visible teammate's card in the same way, without giving those teammates the selected spine or band:
 
 resting:
 
@@ -241,7 +243,7 @@ selected — only appends, never reshapes
 ▌    ⢿ Explore
 ```
 
-Once an agent has spawned a child, the `⧉ subagents (N)` stats line remains on its standard card. `N` is the lifetime count of provider-native and RimZ-launched children as far back as store GC retains them; the known lifetime cost of both origins pins right. That cost is a breakdown, not an amount to add to the parent's line 1: provider-native cost is already inside the parent's own session figure, while launched-child cost is the portion line 1 adds. The waits line follows the stats line, before any expanded child entries, and disappears when no one-shot wakes remain. The stats line persists when finished entries retire at the parent's next user-authored prompt or context reset; messages from other agents and RimZ's automatic deliveries keep them listed.
+Once an agent has spawned a child, the `⧉ subagents (N)` half of the delegation line remains on its standard card. `N` is the lifetime count of provider-native and RimZ-launched children as far back as store GC retains them; the known lifetime cost of both origins pins right. That cost is a breakdown, not an amount to add to the parent's line 1: provider-native cost is already inside the parent's own session figure, while launched-child cost is the portion line 1 adds. The `⧖ waits (N)` half shares that line and disappears when no one-shot wakes remain. Expansion appends the current user-authored turn's subagent entries, then one entry per pending wait, under the delegation line. The subagents half persists when finished entries retire at the parent's next user-authored prompt or context reset; messages from other agents and RimZ's automatic deliveries keep them listed.
 
 The expanded card lists the **subagents** from the parent's current user-authored turn, one entry per child in spawn order (creation time ascending, stable across refreshes). Nested Codex descendants remain in this flat root-owned list and keep their root-relative task path as detail. Each entry leads with the same live head an agent row wears — the `⠁` thinking animation while the child reasons, the `⢿` working fill while it acts, the static verdict once it lands — followed by the child's nickname/type and task. A deeper-indented second line carries available reported tokens `◇` and model/effort metadata. For a launched child, `◇` is its cumulative displayed session total — input, cache writes, and output, with cache reads excluded. While the child runs, its live elapsed work pins right — the clock-fill glyph (filling with the child's worked span) over a fixed three-cell `m`/`h` label (`<1m` under a minute, never seconds), toned by the age ramp. That line is a per-card grid — the figure right-aligned, the model padded to the widest sibling, a missing field blank-filling its slot — so the metadata stacks into columns across children. A **finished** child keeps exact token/model/effort metadata but drops the elapsed clock; a metadata-free completion still collapses to its single type line:
 
@@ -252,6 +254,8 @@ The expanded card lists the **subagents** from the parent's current user-authore
 ▌    ✓ review — audit the trust hash
 ▌      ◇ 22k · Haiku 4.5
 ```
+
+The **waits** follow the subagent entries: timers by due time, then commands, then signals. Each leads with `⧖`. A timer takes one line, reading `in 12m` or `due`; a signal also takes one line, reading `on <selector>` with ` · <left> left` when it has a deadline. A command takes two lines: the program on line 1, then the shell command with the program's path trimmed on a deeper-indented, muted line 2. The elapsed-since-armed clock pins right on line 1 in the same clock vocabulary as subagents; it is absent when the arm time is unknown.
 
 Claude's description, cumulative tokens, and precise start time ride in from `subagentStatusLine`; the Claude-only feed is configured at install and fed at runtime. The same feed incrementally prices every request in that child's dedicated transcript; when every model resolves, the exact cumulative figure pins right on line 1. Any unpriced request hides the figure rather than showing a partial sum. That provider-native figure is display-only because Claude's parent session spend already includes it. A child launched through `rimz subagents` instead shows its launch profile as its type, prices its own provider session, and adds that cost to the parent's line-1 figure across every turn. A Codex-native child reads nickname, task path, role, model/effort, and current context tokens — not a cumulative total — from the child rollout around each hook; its elapsed fallback starts at durable child registration. Copilot reads the model from the parent's start record and reconciles the exact total from the completion record at the next parent checkpoint. Siblings on different models read apart at a glance and a reasoning child uses the same thinking animation its parent would. A child with no enrichment shows just its `glyph type` line. Provider-native subagents have no pane; a launched child owns a pane while it runs or is kept. Neither gets a duplicate top-level row while its parent is visible; both nest here only.
 
