@@ -6,7 +6,7 @@
 
 `rimz config set agents.isolation sandbox` probes bubblewrap before writing. Start and launch preflights refuse non-Linux systems, missing `bwrap`, or a failed mount probe, with a fix rather than a host-mode fallback. `rimz doctor` reports the mode, binary/version, probe verdict, and fix; in host mode the diagnostic is informational.
 
-The exec wrapper reads current machine policy and wraps only the ready provider process. Qwen's login-shell reentry runs first on the host; its finalized exec builds the one view. Each pane gets one RimZ sandbox, not nested wrappers. Subagents launch through the multiplexer and build their own view with their own profile, sharing room scratch. Restart and rebirth pick up the current isolation setting.
+The exec wrapper reads current machine policy and wraps only the ready provider process, using the absolute bubblewrap path that its preflight probed. A trusted provider `PATH` override does not change the wrapper binary. Qwen's login-shell reentry runs first on the host; its finalized exec builds the one view. Each pane gets one RimZ sandbox, not nested wrappers. Subagents launch through the multiplexer and build their own view with their own profile, sharing room scratch. Restart and rebirth pick up the current isolation setting.
 
 Bubblewrap forks instead of becoming the provider. The wrapper always passes `--die-with-parent` so terminating the supervised bubblewrap process also terminates its child. Bubblewrap sets `NoNewPrivs`: `sudo` and setuid privilege escalation do not work inside these panes. Use a host shell for privileged work.
 
@@ -23,6 +23,8 @@ There is no `--unshare-*`, replacement `/proc`, or cleared environment. `/dev` n
 
 Host-reach candidates include `HOME`, the five XDG roots, RimZ runtime, project root, worktree, cwd, provider home, and mux endpoint directories resolved by the mux domain. Paths remain identical inside and outside: process ownership comparisons and short Unix socket paths depend on this. A required root equal to `/tmp` cannot coexist with the scratch replacement and is refused. Bubblewrap may create missing mount-point directories beneath the scratch bind; empty host-visible directories in room scratch are therefore expected, not leaked host data. Skill roots may themselves be symlinks: overlays target the resolved directories, while entry sources are resolved before any overlay hides them.
 
+The tmux endpoint is the inherited `$TMUX` server, or the managed RimZ server when `$TMUX` is absent. An unrelated ambient server under `/tmp/tmux-<uid>` is not separately rebound; commands targeting that default socket directory see room scratch rather than the host directory.
+
 The plan pins its environment inputs across shell startup: existing root and provider-override values are reapplied, while consulted keys that were absent are removed with `env -u`. Adapters declare their native override keys beside their home resolver; the skill view also consults Claude's override. This prevents shell startup files from moving provider discovery away from the mounted view. Export root overrides before launching RimZ, or put them in trusted launch environment config; changing them only inside the pane's startup files does not change its planned mounts. `TMPDIR` is always pinned to `/tmp`. Finalized provider-account launches retain their raw argv and apply the same environment policy without another shell.
 
 ## Room scratch
@@ -30,6 +32,8 @@ The plan pins its environment inputs across shell startup: existing root and pro
 `${XDG_STATE_HOME:-~/.local/state}/rimz/workspaces/<workspace_id>/tmp/` is ensured at mode `0700` before sandbox room birth and again during launch preparation. Host mode does not create it. The launch environment pins reapply `TMPDIR=/tmp` after shell startup files.
 
 All sandboxed agents and subagents in the room see the same scratch files. Scratch survives agent restart and lives at a persistent location, but is not a durable store record and carries no fsync guarantee. Room teardown, including reset and uninstall, removes it after the process sweep; dead-workspace GC removes it with the state root. `rimz agents show` exposes the host path when it exists. Reset with rebirth may immediately create a new empty scratch directory.
+
+Storage reports include scratch in the State root's on-disk footprint; the State category describes its location, not a durability guarantee.
 
 ## Profile skill views
 
