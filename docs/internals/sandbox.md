@@ -39,7 +39,9 @@ Storage reports include tmp and skill copies in the State root's on-disk footpri
 
 ## Profile skill views
 
-Each launch overlays at most one user skill root, declared by its adapter through `skills_home`:
+Host isolation ignores profile `skills` lists, including `[]` and lists for providers without skill-view support, without a warning. Native skill discovery and invocation remain unchanged. Config parsing still rejects duplicate and invalid names in every isolation mode.
+
+Each sandbox launch overlays at most one user skill root, declared by its adapter through `skills_home`:
 
 | Provider | Skill root |
 | --- | --- |
@@ -57,7 +59,7 @@ Listing a skill never lifts a native user-only marker: listed skills bind their 
 
 Without a configured list, an unavailable skill view (for example an unreadable root or an undecodable entry name) leaves native discovery unchanged and only logs a debug diagnostic. A configured list instead refuses those errors before provider execution.
 
-Every configured list, including `[]`, requires sandbox isolation. Launch refuses when the provider declares no root, cannot mark skills user-only, or a listed name is absent from both the provider root and the library; the error names the fix. Duplicate names are rejected during config parsing. Antigravity, Amp, OpenCode, Kiro, Grok, and plugins refuse a configured list regardless of installed skills.
+In sandbox isolation, every configured list, including `[]`, requires a provider skill root and a user-only marker. Launch refuses when the provider declares no root, cannot mark skills user-only, or a listed name is absent from both the provider root and the library; the error names the fix. Antigravity, Amp, OpenCode, Kiro, Grok, and plugins refuse a configured list in sandbox mode regardless of installed skills.
 
 Adapters declare the user-only rewrite through `manual_skill`. Claude, Cursor, Copilot, Droid, Kimi, Qwen, and Pi write `disable-model-invocation: true` in `SKILL.md` frontmatter. Codex writes `policy.allow_implicit_invocation: false` in `agents/openai.yaml`, creating that file when absent. These are line-structured edits in full directory copies, not edits to host sources; the frontmatter rewrite leaves the document body untouched. Metadata must use block mappings and block sequences without anchors, aliases, tags, or flow collections. Quoted values must fit on one line; use block scalars for multiline descriptions. Unsupported forms refuse with the source path and the fix rather than leave implicit invocation enabled.
 

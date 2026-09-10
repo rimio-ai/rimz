@@ -4,7 +4,6 @@ use std::collections::BTreeMap;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
-use predicates::str::contains;
 use rimz::agents::ManualSkill;
 use rimz::config::Isolation;
 use rimz::harness::launch::ExecRequest;
@@ -759,20 +758,24 @@ fn sandboxed_exec_uses_probed_bwrap_with_trusted_path() {
 }
 
 #[test]
-fn sandbox_skills_under_host_refuse_before_provider_exec() {
-    use assert_cmd::assert::OutputAssertExt;
+fn sandbox_skills_under_host_are_ignored_at_provider_exec() {
     let env = Env::new();
-    let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("codex"), Vec::new());
-    for skills in [vec!["merge".parse().unwrap()], vec![]] {
-        request.skills = Some(skills);
-        env.rimz()
-            .args(exec_args(&env, &request))
-            .assert()
-            .failure()
-            .stderr(contains(
-                "a profile skills list needs agents.isolation = \"sandbox\"",
-            ));
-        assert!(!env.store().paths().tmp_dir.exists());
+    let probe = env.home_root.join("provider-env");
+    for kind in ["codex", "amp"] {
+        let shim_dir = write_env_dump_shim(&env, kind);
+        let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked(kind), Vec::new());
+        for skills in [vec!["missing-skill".parse().unwrap()], vec![]] {
+            request.skills = Some(skills);
+            env.rimz()
+                .args(exec_args(&env, &request))
+                .env("PATH", path_with_front(&shim_dir))
+                .env("RIMZ_TEST_AGENT_ENV_DUMP", &probe)
+                .assert_success_within_timeout("host launch ignores profile skills");
+            assert!(probe.exists());
+            std::fs::remove_file(&probe).unwrap();
+            assert!(!env.store().paths().tmp_dir.exists());
+            assert!(!env.store().paths().skills_dir.exists());
+        }
     }
 }
 
