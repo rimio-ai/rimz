@@ -725,9 +725,14 @@ fn build_targets_marks_main_and_the_resolved_trunk() {
 
 #[test]
 fn tea_detail_args_carry_cached_pr_numbers() {
-    assert_eq!(
-        tea_pr_detail_args(42, "org/repo"),
-        ["api", "repos/org/repo/pulls/42"]
+    let _ = probe_tea_detail_with(
+        &tea_target("/repo", "feature"),
+        "org/repo",
+        42,
+        |_, _, args| {
+            assert_eq!(args, ["api", "repos/org/repo/pulls/42"]);
+            None
+        },
     );
 }
 
