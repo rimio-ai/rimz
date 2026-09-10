@@ -74,7 +74,8 @@ upward-dependencies = ["address"]
 # Pending-wake vocabulary and rest projection are shared by harness and renderers.
 # Trigger summaries share wording between sleeping descriptions and expanded waits.
 # Native config-home resolution is shared with sandbox launch planning.
-surface-budget = 968
+# Native skill roots and user-only markers belong to the same capability seam.
+surface-budget = 972
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/codex"
@@ -147,8 +148,8 @@ allowed-dependencies = [
     "sock",
 ]
 # Pane writers share one user-scoped lock path across workspace boundaries.
-# Room lifecycle owns private scratch creation and removal.
-surface-budget = 128
+# Room lifecycle owns private tmp and rewritten-skill directory creation and removal.
+surface-budget = 130
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -242,7 +243,8 @@ surface-budget = 14
 [[module]]
 path = "crates/rimz/src/sandbox"
 allowed-dependencies = ["agents", "config", "disk", "mux", "utils"]
-surface-budget = 11
+# Launch passes adapter-declared skill inputs separately from provider-home binds.
+surface-budget = 12
 
 [[module]]
 path = "crates/rimz/src/room"
