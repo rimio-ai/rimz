@@ -1,8 +1,7 @@
 use super::*;
 use crate::agents::{PendingWake, PendingWakeTrigger};
-use crate::config::AnimationRole;
 use crate::sidebar_pane::render::labels::{
-    activity_age_style, elapsed_glyph, role_glyph, working_style,
+    activity_age_style, elapsed_glyph, status_glyph, working_style,
 };
 use crate::sidebar_pane::render::theme::Component;
 
@@ -116,7 +115,7 @@ fn pending_wakes_line_counts_armed_wakes() {
     assert!(expanded[stats + 3].contains("◷ in 12m"));
     assert!(expanded[stats + 4].contains(&format!(
         "{} make",
-        role_glyph(&theme, AnimationRole::Working, 0)
+        status_glyph(&theme, AgentStatus::Running)
     )));
     assert!(expanded[stats + 5].contains("make check"));
 
@@ -172,7 +171,7 @@ fn pending_wakes_line_counts_armed_wakes() {
         ),
         (
             4,
-            role_glyph(&theme, AnimationRole::Working, 0),
+            status_glyph(&theme, AgentStatus::Running),
             working_style(&theme, 0).add_modifier(Modifier::DIM),
         ),
         (
@@ -258,7 +257,7 @@ fn wait_entries_show_trigger_program_and_command() {
         (1, "⌁ on pr.merged · 2h left".to_owned(), 300, "5m"),
         (
             2,
-            format!("{} cargo", role_glyph(&theme, AnimationRole::Working, 0)),
+            format!("{} cargo", status_glyph(&theme, AgentStatus::Running)),
             240,
             "4m",
         ),
@@ -291,6 +290,18 @@ fn wait_entries_show_trigger_program_and_command() {
         .unwrap();
     assert_eq!(detail.style.fg, theme.muted().fg);
     assert_snapshot("wait_entries", snapshot_to_screen(&snapshot, 54, 23));
+    let cost_rolls = CostRolls::default();
+    for phase in [0, 7] {
+        let ctx = test_row_ctx(&snapshot, &theme, 54, 0, phase, &cost_rolls);
+        let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
+        let lead = block.lines[start + 2]
+            .spans
+            .iter()
+            .find(|span| span.content == status_glyph(&theme, AgentStatus::Running))
+            .unwrap();
+        assert_eq!(lead.style.fg, working_style(&theme, 0).fg);
+        assert!(lead.style.add_modifier.contains(Modifier::DIM));
+    }
 
     let narrow = group_lines_at_width(&snapshot, &theme, 0, 24);
     let narrow_text = line_texts(&narrow);
@@ -328,7 +339,7 @@ fn wait_entries_show_trigger_program_and_command() {
         let wrapped = line_texts(&group_lines(&snapshot, &theme, 0));
         assert!(wrapped[start + 2].contains(&format!(
             "{} cargo",
-            role_glyph(&theme, AnimationRole::Working, 0)
+            status_glyph(&theme, AgentStatus::Running)
         )));
         assert!(wrapped[start + 3].contains(detail));
     }

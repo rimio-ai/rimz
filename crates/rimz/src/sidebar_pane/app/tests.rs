@@ -132,6 +132,34 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
 }
 
 #[test]
+fn sleeping_command_wait_keeps_the_animation_gate_idle() {
+    let ws = workspace();
+    let mut snapshot = agent_snapshot(&ws);
+    let agent = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    agent.status = crate::agents::AgentStatus::Sleeping;
+    agent.pending_wakes.push(crate::agents::PendingWake {
+        name: "command".to_owned(),
+        trigger: crate::agents::PendingWakeTrigger::Command {
+            command: "cargo test".to_owned(),
+        },
+        armed_at: None,
+    });
+    let mut ui = UiState {
+        selected_index: 0,
+        ..Default::default()
+    };
+    ui.theme(&snapshot.theme);
+    assert_eq!(
+        render::animation_cadence(
+            &snapshot,
+            &ui.cached_theme(&snapshot.theme).unwrap().animations
+        ),
+        render::AnimationCadence::None
+    );
+    assert!(!is_animating(&snapshot, &ui, 0, false));
+}
+
+#[test]
 fn selected_blank_idle_agent_keeps_breath_grid_awake() {
     let ws = workspace();
     let mut snapshot = agent_snapshot(&ws);
