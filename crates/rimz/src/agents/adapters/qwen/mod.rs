@@ -11,7 +11,7 @@ mod statusline;
 
 pub(crate) use crate::agents::capabilities::*;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 use serde_json::Value;
@@ -451,6 +451,13 @@ impl crate::agents::capabilities::CoreCapability for QwenAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for QwenAdapter {
+    fn config_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
+        install::qwen_home_from(
+            env.get("QWEN_HOME").map(std::ffi::OsStr::new),
+            env.get("HOME").map(std::ffi::OsStr::new),
+        )
+    }
+
     fn append_system_text_channel(&self) -> Option<SystemTextChannel> {
         Some(SystemTextChannel::TextFlag {
             flags: vec!["--append-system-prompt".to_owned()],

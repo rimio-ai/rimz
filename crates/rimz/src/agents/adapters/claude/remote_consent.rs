@@ -41,16 +41,18 @@ pub(crate) fn global_config_path() -> Option<PathBuf> {
 }
 
 fn config_base() -> Option<PathBuf> {
-    if let Ok(configured) = std::env::var("CLAUDE_CONFIG_DIR")
-        && let Some(first) = configured
-            .split(',')
-            .map(str::trim)
-            .find(|part| !part.is_empty())
-    {
-        return Some(PathBuf::from(first));
-    }
-    std::env::var_os("HOME")
-        .filter(|value| !value.is_empty())
+    configured_dir(std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref()).or_else(|| {
+        std::env::var_os("HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    })
+}
+
+pub(super) fn configured_dir(configured: Option<&str>) -> Option<PathBuf> {
+    configured?
+        .split(',')
+        .map(str::trim)
+        .find(|part| !part.is_empty())
         .map(PathBuf::from)
 }
 

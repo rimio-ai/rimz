@@ -6,7 +6,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
-use crate::agents::transcript_fs::{home_dir, read_transcript_lines};
+use crate::agents::transcript_fs::read_transcript_lines;
 
 #[derive(Clone, Debug)]
 pub struct WireRecord {
@@ -274,10 +274,24 @@ struct SessionIndexEntry {
 }
 
 pub fn kimi_home() -> PathBuf {
-    std::env::var_os("KIMI_CODE_HOME")
+    kimi_home_from(
+        std::env::var_os("KIMI_CODE_HOME").as_deref(),
+        std::env::var("HOME")
+            .ok()
+            .as_deref()
+            .map(std::ffi::OsStr::new),
+    )
+    .unwrap_or_else(|| PathBuf::from("/.kimi-code"))
+}
+
+pub(super) fn kimi_home_from(
+    configured: Option<&std::ffi::OsStr>,
+    home: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    configured
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| home_dir().join(".kimi-code"))
+        .or_else(|| home.map(|home| PathBuf::from(home).join(".kimi-code")))
 }
 
 pub fn session_dir(session_id: &str, cwd: Option<&Path>) -> Option<PathBuf> {

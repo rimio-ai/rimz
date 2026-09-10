@@ -27,12 +27,25 @@ pub(super) fn qwen_settings_path() -> Result<PathBuf> {
             Path::new(".qwen/settings.json"),
         );
     }
-    if let Some(home) = std::env::var_os("QWEN_HOME").filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(home).join("settings.json"));
+    if let Some(home) = qwen_home_from(std::env::var_os("QWEN_HOME").as_deref(), None) {
+        return Ok(home.join("settings.json"));
     }
     agent_config_path(
         "qwen",
         "RIMZ_QWEN_SETTINGS",
         Path::new(".qwen/settings.json"),
     )
+}
+
+pub(super) fn qwen_home_from(
+    configured: Option<&std::ffi::OsStr>,
+    home: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    configured
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            home.filter(|value| !value.is_empty())
+                .map(|home| PathBuf::from(home).join(".qwen"))
+        })
 }

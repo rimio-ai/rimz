@@ -229,6 +229,13 @@ pub trait InstallationCapability: CoreCapability {
 
 #[doc(hidden)]
 pub trait LaunchCapability: CoreCapability {
+    /// The directory the provider reads its user-level config and credentials from, as the launch env will resolve it. Never reads the ambient env.
+    ///
+    /// Providers with separate config and credential stores declare their config root; this is not an inventory of every provider-owned path.
+    fn config_home(&self, _env: &BTreeMap<String, String>) -> Option<PathBuf> {
+        None
+    }
+
     /// Whether a command already matched by this adapter's launch descriptors
     /// is an interactive agent process. Providers with service subcommands
     /// override this while ordinary CLIs accept the descriptor match.

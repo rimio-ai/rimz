@@ -42,6 +42,7 @@ mod transcript;
 
 pub(crate) use crate::agents::capabilities::*;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -92,11 +93,20 @@ use crate::transcript::{AskOption, AskQuestion};
 
 /// Codex's shared config, credentials, and control-socket home.
 fn codex_home() -> Option<PathBuf> {
-    if let Some(raw) = std::env::var_os("CODEX_HOME").filter(|v| !v.is_empty()) {
+    codex_home_from(
+        std::env::var_os("CODEX_HOME").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+    )
+}
+
+fn codex_home_from(
+    configured: Option<&std::ffi::OsStr>,
+    home: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    if let Some(raw) = configured.filter(|v| !v.is_empty()) {
         return Some(PathBuf::from(raw));
     }
-    std::env::var_os("HOME")
-        .filter(|v| !v.is_empty())
+    home.filter(|v| !v.is_empty())
         .map(|home| PathBuf::from(home).join(".codex"))
 }
 
@@ -678,6 +688,13 @@ impl crate::agents::capabilities::InstallationCapability for CodexAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
+    fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
+        codex_home_from(
+            env.get("CODEX_HOME").map(std::ffi::OsStr::new),
+            env.get("HOME").map(std::ffi::OsStr::new),
+        )
+    }
+
     fn is_interactive_process(&self, command: &str) -> bool {
         process::is_interactive_process(command)
     }

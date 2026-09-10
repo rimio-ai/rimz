@@ -1121,6 +1121,13 @@ globs = ["history/**/*.jsonl"]
     fn renders_launch_resume_and_presets() {
         let adapter = adapter();
         assert_eq!(
+            adapter.config_home(&std::collections::BTreeMap::from([(
+                "HOME".into(),
+                "/fixture/home".into()
+            )])),
+            None
+        );
+        assert_eq!(
             adapter.launch_command(&["--extra".into()], Some("hello")),
             Some(vec![
                 "testbot".into(),

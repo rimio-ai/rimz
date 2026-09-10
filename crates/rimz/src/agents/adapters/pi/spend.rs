@@ -39,8 +39,7 @@ use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse, origin_path,
 
 use crate::agents::transcript_fs::{
     deserialize_optional_f64_lossy, deserialize_optional_object_lossy,
-    deserialize_optional_string_lossy, deserialize_optional_u64_lossy, home_dir,
-    read_transcript_lines,
+    deserialize_optional_string_lossy, deserialize_optional_u64_lossy, read_transcript_lines,
 };
 
 // ── Typed structs ─────────────────────────────────────────────────────────────
@@ -177,9 +176,17 @@ pub(super) fn pi_session_roots() -> Vec<PathBuf> {
 }
 
 pub(crate) fn pi_config_dir() -> PathBuf {
-    std::env::var("PI_CODING_AGENT_DIR")
+    pi_config_dir_from(
+        std::env::var("PI_CODING_AGENT_DIR").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref().map(Path::new),
+    )
+    .unwrap_or_else(|| PathBuf::from("/.pi/agent"))
+}
+
+pub(super) fn pi_config_dir_from(configured: Option<&str>, home: Option<&Path>) -> Option<PathBuf> {
+    configured
         .map(PathBuf::from)
-        .unwrap_or_else(|_| home_dir().join(".pi/agent"))
+        .or_else(|| home.map(|home| home.join(".pi/agent")))
 }
 
 // ── Parser ────────────────────────────────────────────────────────────────────

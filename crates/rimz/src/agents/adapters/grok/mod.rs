@@ -326,7 +326,14 @@ impl crate::agents::capabilities::CoreCapability for GrokAdapter {
     }
 }
 
-impl crate::agents::capabilities::LaunchCapability for GrokAdapter {}
+impl crate::agents::capabilities::LaunchCapability for GrokAdapter {
+    fn config_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
+        paths::home_from(
+            env.get("GROK_HOME").map(std::ffi::OsStr::new),
+            env.get("HOME").map(std::ffi::OsStr::new),
+        )
+    }
+}
 
 impl crate::agents::capabilities::HookCapability for GrokAdapter {
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {

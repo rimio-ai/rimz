@@ -476,6 +476,10 @@ impl crate::agents::capabilities::InstallationCapability for AntigravityAdapter 
 }
 
 impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
+    fn config_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
+        session::resolve_home(None, env.get("HOME").map(std::ffi::OsStr::new))
+    }
+
     fn probe_version(&self) -> Option<String> {
         None
     }
