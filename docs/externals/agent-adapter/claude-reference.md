@@ -18,6 +18,7 @@ Re-fetch these pages to refresh this mirror. `docs.claude.com/en/docs/claude-cod
 | Agent view and background-session supervisor | <https://code.claude.com/docs/en/agent-view> |
 | Settings (`statusLine` / `hooks` config keys, `disableAgentView`) | <https://code.claude.com/docs/en/settings> |
 | CLI flags (system-prompt append) | <https://code.claude.com/docs/en/cli-reference> |
+| Native auto-compaction CLI, settings, environment, and model bounds (verified 2026-09-10 with Claude Code 2.1.267) | <https://code.claude.com/docs/en/cli-usage>, <https://code.claude.com/docs/en/settings-reference>, <https://code.claude.com/docs/en/env-vars>, <https://code.claude.com/docs/en/model-config> |
 | Sessions (resume and fork CLI flags) | <https://code.claude.com/docs/en/sessions> |
 | Remote Control (`remote-control`, `--remote-control`, `/remote-control`, version floor, settings) | <https://code.claude.com/docs/en/remote-control> |
 | Release history (version floors and protocol additions) | <https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md> |
@@ -31,6 +32,12 @@ Re-fetch these pages to refresh this mirror. `docs.claude.com/en/docs/claude-cod
 ## System-prompt append
 
 `--append-system-prompt <text>` appends launch-scoped text to Claude's default system prompt. RimZ uses the flag for the supervised-subagent no-delegation reminder; it remains separate from the user-facing typed replacement surface built on `--system-prompt-file`.
+
+## Auto-compaction window
+
+[`--autocompact <auto|tokens>`](https://code.claude.com/docs/en/cli-usage), available in Claude Code 2.1.221+, selects the native auto-compaction window for one session without changing saved settings. `auto` selects the model-tuned default; an absolute count accepts plain tokens or suffixes such as `500k` and `1M`. The valid window is 100K–1M tokens, capped at the model's real context window ([model configuration](https://code.claude.com/docs/en/model-config)). This is a window setting, not a guarantee that compaction fires at exactly that occupied-token count.
+
+The [`autoCompactWindow` settings key](https://code.claude.com/docs/en/settings-reference) provides the saved setting. [`CLAUDE_CODE_AUTO_COMPACT_WINDOW`](https://code.claude.com/docs/en/env-vars) overrides the window, including changes through the interactive `/autocompact` command. `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, documented on the same environment-variable page, is a percentage of the effective window and can only lower the compaction threshold. RimZ uses the session-scoped CLI flag for its token-only profile field, not either environment variable.
 
 ## Hooks
 

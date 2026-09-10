@@ -36,6 +36,8 @@ Native event → internal mapping. The table says *which native events are wired
 
 **Compaction command.** Claude accepts `/compact <instructions>`, so RimZ appends the configured summary brief to smart and idle compaction commands. The brief is typed as a second write after `/compact ` so Claude's paste classifier never swallows the slash.
 
+**Native auto-compaction window.** Profile `auto-compact` renders as `--autocompact <tokens>` for Claude Code 2.1.221+: a session-only 100k–1M token window capped at the model's real context window ([upstream semantics](../../externals/agent-adapter/claude-reference.md#auto-compaction-window)).
+
 **Answer delivery.** `AskUserQuestion` supports structured single picks, multi-select, and free text through the native TUI. Permission asks expose only `allow`, which sends digit 1 for the stable first menu action. Plan approvals expose only caution-marked `approve`, which sends Shift-Tab and engages accept-edits mode. Each kind's Escape rejection path emits neither `PostToolUse` nor `Stop` in Claude Code 2.1.205. When Escape is followed by free text, the next `UserPromptSubmit` closes the durable question with that prompt as its answer; deny, keep-planning, refinement text, persistent grants, and manual-review approval without a new prompt stay in the pane.
 
 **Neutral output.** Claude's neutral path is empty stdout. Permission, plan, and question prompts remain in Claude's own UI, and the sidebar's `?` row routes you there.

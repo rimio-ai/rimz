@@ -22,6 +22,7 @@ Re-fetch these pages â€” and, for the app-server, re-run the schema generators â
 | Advanced config (`notify` payload) | <https://learn.chatgpt.com/docs/config-file/config-advanced> |
 | CLI reference (`resume`, `fork`, `login status`) | <https://learn.chatgpt.com/docs/developer-commands?surface=cli> |
 | CLI `-c` override parser | <https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/utils/cli/src/config_override.rs> |
+| Native auto-compaction config type, model ceiling, and override parser (verified 2026-09-10 with Codex CLI 0.154.0) | <https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/config/src/config_toml.rs>, <https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/protocol/src/openai_models.rs>, <https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/utils/cli/src/config_override.rs> |
 | App-server API (protocol, methods, notifications) | <https://learn.chatgpt.com/docs/app-server> |
 | App-server README + schema generation | <https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md> |
 | App-server daemon lifecycle + PID backend | <https://github.com/openai/codex/blob/main/codex-rs/app-server-daemon/README.md>, <https://github.com/openai/codex/blob/main/codex-rs/app-server-daemon/src/lib.rs>, <https://github.com/openai/codex/blob/main/codex-rs/app-server-daemon/src/backend/pid.rs>, <https://github.com/openai/codex/blob/main/codex-rs/app-server-daemon/src/update_loop.rs> |
@@ -49,6 +50,10 @@ Codex treats a run of plain characters arriving at most 8 ms apart as a suspecte
 ## CLI config overrides
 
 Each `-c key=value` or `--config key=value` occurrence overrides the corresponding loaded configuration key for that launch. Codex parses the value as TOML and falls back to a raw string when TOML parsing fails, so callers that need exact string round trips should emit a TOML-quoted value. `developer_instructions` produces developer-role instruction text separate from the user message; it does not have the replacement-file semantics of `model_instructions_file`. A CLI value overrides the same key from `~/.codex/config.toml`.
+
+`model_auto_compact_token_limit` is a top-level [`ConfigToml` field of type `Option<i64>`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/config/src/config_toml.rs): an absolute occupied-token threshold, not a percentage. The [model calculation](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/protocol/src/openai_models.rs) defaults to 90% of the model context window and clamps larger configured limits to that ceiling. Zero or negative values compact immediately rather than failing validation; RimZ's profile field rejects them.
+
+The launch override is `-c model_auto_compact_token_limit=200000` (or `--config`), not a dedicated threshold flag or environment variable. The [override parser](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/utils/cli/src/config_override.rs) requires a TOML integer for this typed key, so `200k` cannot be passed through unchanged. The key may be saved at the top level of Codex's `config.toml`, but is not valid under Codex's `[profiles.X]`; RimZ profiles instead render it as a launch-scoped `-c` override.
 
 ## Project directory trust
 

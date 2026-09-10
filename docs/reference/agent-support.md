@@ -121,6 +121,29 @@ Unsupported typed prompt fields fail at launch rather than degrading to a provid
 
 Pi is the non-hermetic exception: it still appends native `APPEND_SYSTEM.md`, context files, skills, and cwd material after RimZ's replacement text. Its full prompt is argv-visible and capped at 120 KiB.
 
+## Auto-compaction window
+
+Profile and team-role `auto-compact` sets the agent's native window as a positive token count (`"200k"`, `"200000"`, `"1m"`), not a percentage. It is separate from [RimZ smart compaction](../guide/configuration.md#smart-compaction).
+
+| Agent | Typed auto-compaction window | Provider rendering |
+| --- | :--: | --- |
+| Claude Code | ✓ | `--autocompact <tokens>` |
+| Codex | ✓ | `-c model_auto_compact_token_limit=<tokens>` |
+| Qwen Code | ✗ | no verified threshold flag |
+| Droid | ✗ | no verified threshold flag |
+| Pi | ✗ | no verified threshold flag |
+| OpenCode | ✗ | no verified threshold flag |
+| Antigravity | ✗ | no verified threshold flag |
+| Copilot | ✗ | no verified threshold flag |
+| Cursor | ✗ | no verified threshold flag |
+| Amp | ✗ | no verified threshold flag |
+| Kiro CLI | ✗ | no verified threshold flag |
+| Kimi | ✗ | no verified threshold flag |
+| Grok Build | ✗ | no verified threshold flag |
+| Process plugin | ✗ | not declarable yet |
+
+Claude Code requires 2.1.221+ and accepts 100k–1M, capped at the model's context window. Codex clamps the threshold to 90% of the model window. RimZ validates a positive token count; the provider applies its bounds. Unsupported typed fields fail at launch rather than degrading to a provider default. Raw `args` remain the explicit provider-specific escape hatch.
+
 ## The wiring matrix
 
 Under the six capabilities sits the mechanism: eighteen integration concerns naming what each adapter reads from its agent. This is the grid to consult when a capability reads partial and you want the specific reason, or when you are [building an adapter](../contributing/agent-adapters.md).
