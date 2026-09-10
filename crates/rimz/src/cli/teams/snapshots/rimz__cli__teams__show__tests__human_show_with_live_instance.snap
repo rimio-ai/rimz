@@ -10,7 +10,7 @@ forge
   signals   ci.failed → @planner
   (prompt stack: rimz teams show forge --json)
 
-#feat-x · running · Plan (delta) (@planner)
+#feat-x · working · Plan (delta) (@planner)
   worktree:  /repo/worktrees/feat-x
   isolation: host · tmp /tmp
   stages:    Explore → [Plan] → Implement

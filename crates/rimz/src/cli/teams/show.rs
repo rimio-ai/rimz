@@ -1,6 +1,7 @@
 use std::io::Write;
 
 use anyhow::{Context, Result, bail};
+use unicode_width::UnicodeWidthStr;
 
 use super::super::{GlobalFlags, render};
 use super::list::{LiveInstance, LiveMember, TeamReport, ci_style, stage_label};
@@ -110,7 +111,9 @@ fn write_report(
         );
     }
     definition.render(w)?;
-    writeln!(w)?;
+    if !report.roles.is_empty() {
+        writeln!(w)?;
+    }
 
     render::Roster::new(
         report
@@ -124,6 +127,7 @@ fn write_report(
             })
             .collect(),
     )
+    .signal_width(render::terminal_columns(120))
     .signals(
         report
             .roles
@@ -308,7 +312,7 @@ fn write_instance(w: &mut impl Write, instance: &LiveInstance, now: jiff::Timest
                     .to_string()
             })
             .collect::<Vec<_>>();
-        let name_width = names.iter().map(String::len).max().unwrap_or(0);
+        let name_width = names.iter().map(|name| name.width()).max().unwrap_or(0);
         let lines_width = instance
             .memory
             .iter()
@@ -323,8 +327,10 @@ fn write_instance(w: &mut impl Write, instance: &LiveInstance, now: jiff::Timest
                     .map(|time| render::rel_age(time, now))
                     .unwrap_or_else(|| "-".to_owned());
                 vec![render::cell(format!(
-                    "{name:<name_width$}  {:>lines_width$} lines · {age}",
-                    file.lines
+                    "{name}{:pad$}  {:>lines_width$} lines · {age}",
+                    "",
+                    file.lines,
+                    pad = name_width - name.width(),
                 ))]
             }),
         );
@@ -415,7 +421,7 @@ mod tests {
     fn live_instance() -> LiveInstance {
         LiveInstance {
             channel: "feat-x".to_owned(),
-            state: "running".to_owned(),
+            state: "working".to_owned(),
             status_counts: BTreeMap::from([("running".to_owned(), 1)]),
             worktree: Some("/repo/worktrees/feat-x".into()),
             branch: Some("feat-x".to_owned()),
@@ -479,7 +485,7 @@ mod tests {
         assert!(output.contains("ci passing"));
         assert!(output.contains("blackboard.md"));
         assert_eq!(output.matches("/repo/worktrees/feat-x").count(), 1);
-        assert!(output.contains("#feat-x · running"));
+        assert!(output.contains("#feat-x · working"));
         assert!(output.contains("isolation: host · tmp /tmp"));
         assert!(output.contains("41 lines · 2m ago"));
         assert!(
@@ -524,6 +530,17 @@ mod tests {
     }
 
     #[test]
+    fn human_show_empty_roster_has_no_extra_separator() {
+        for instances in [Vec::new(), vec![live_instance()]] {
+            let mut report = report(instances);
+            report.roles.clear();
+            let output = rendered(&report, None);
+            assert!(!output.contains("\n\n\n"));
+            assert!(!output.ends_with("\n\n"));
+        }
+    }
+
+    #[test]
     fn human_show_answers_when_a_selected_lane_is_not_live() {
         let output = rendered(&report(Vec::new()), Some("ended-lane"));
         assert!(output.contains("no live instance in #ended-lane"));
@@ -561,6 +578,29 @@ mod tests {
         instance.tmp_dir = "/state/room/tmp".into();
         let output = rendered(&report(vec![instance]), None);
         assert!(output.contains("isolation: sandbox · tmp /state/room/tmp (as /tmp)"));
+    }
+
+    #[test]
+    fn human_show_aligns_memory_columns_by_display_width() {
+        let mut instance = live_instance();
+        instance.memory = ["blackboard.md", "笔记.md", "é.md"]
+            .into_iter()
+            .map(|name| super::super::list::MemoryReport {
+                path: instance.worktree.as_ref().unwrap().join(name),
+                lines: 41,
+                modified_at: None,
+            })
+            .collect();
+        let output = rendered(&report(vec![instance]), None);
+        let columns = output
+            .lines()
+            .filter_map(|line| {
+                line.split_once("41 lines")
+                    .map(|(prefix, _)| prefix.width())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(columns.len(), 3);
+        assert!(columns.iter().all(|column| *column == columns[0]));
     }
 
     #[test]
