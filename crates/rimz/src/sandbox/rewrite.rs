@@ -228,10 +228,12 @@ fn validate_lines(text: &str) -> Result<(), &'static str> {
         block_depth = None;
         let mut node = line.trim();
         let mut node_depth = depth;
+        let mut scalar_depth = depth;
         while let Some(item) = node
             .strip_prefix('-')
             .filter(|item| item.starts_with(char::is_whitespace))
         {
+            scalar_depth = node_depth;
             node_depth += node.len() - item.trim_start().len();
             node = item.trim_start();
         }
@@ -243,7 +245,7 @@ fn validate_lines(text: &str) -> Result<(), &'static str> {
         if let Some((_, value)) = mapping_key(node) {
             node = value;
         } else {
-            node_depth = depth;
+            node_depth = scalar_depth;
         }
         if node.starts_with(['&', '*', '!', '{', '[']) {
             return Err(
@@ -502,6 +504,10 @@ mod tests {
             assert!(openai_policy_user_only(Some(&text)).is_err());
             let text = format!(
                 "entries:\n  - description: |\n      block text\n    quoted: {quote}foo\npolicy:\n  allow_implicit_invocation: true\nend: bar{quote}\n"
+            );
+            assert!(openai_policy_user_only(Some(&text)).is_err());
+            let text = format!(
+                "entries:\n  - - |\n        block text\n    - {quote}foo\npolicy:\n  allow_implicit_invocation: true\nend: bar{quote}\n"
             );
             assert!(openai_policy_user_only(Some(&text)).is_err());
         }
