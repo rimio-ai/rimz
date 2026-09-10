@@ -1,21 +1,28 @@
 //! Merge the provider skill root and RimZ library into a read-only launch view.
+//! Unlisted skills that cannot be prepared are omitted and reported.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::agents::ManualSkill;
 
-use super::{DirEntry, DirView, SandboxErr, SkillInputs, rewrite};
+use super::{DirEntry, DirView, SandboxErr, SkillInputs, SkippedSkill, rewrite};
+
+#[derive(Default)]
+pub(super) struct SkillView {
+    pub dir: Option<DirView>,
+    pub skipped: Vec<SkippedSkill>,
+}
 
 pub(super) fn prepare(
     env: &BTreeMap<String, String>,
     skills_dir: &Path,
     inputs: &SkillInputs<'_>,
-) -> Result<Option<DirView>, SandboxErr> {
+) -> Result<SkillView, SandboxErr> {
     match prepare_view(env, skills_dir, inputs) {
         Err(error) if inputs.callable.is_none() => {
             tracing::debug!(%error, "keeping native skill discovery because the optional view is unavailable");
-            Ok(None)
+            Ok(SkillView::default())
         }
         result => result,
     }
@@ -25,14 +32,14 @@ fn prepare_view(
     env: &BTreeMap<String, String>,
     skills_dir: &Path,
     inputs: &SkillInputs<'_>,
-) -> Result<Option<DirView>, SandboxErr> {
+) -> Result<SkillView, SandboxErr> {
     let Some(home) = &inputs.home else {
         return if inputs.callable.is_some() {
             Err(SandboxErr::SkillsNeedRoot {
                 kind: inputs.kind.to_owned(),
             })
         } else {
-            Ok(None)
+            Ok(SkillView::default())
         };
     };
     super::validate_path(home)?;
@@ -44,6 +51,7 @@ fn prepare_view(
     let mut entries = list_dir(home)?;
     let mut roots = vec![home.clone()];
     let mut changed = false;
+    let mut skipped = Vec::new();
     let config = env
         .get("XDG_CONFIG_HOME")
         .filter(|value| !value.is_empty())
@@ -78,12 +86,26 @@ fn prepare_view(
             if callable.iter().any(|skill| skill.as_str() == name) || !source.is_dir() {
                 continue;
             }
-            *source = rewrite::materialize(skills_dir, source, inputs.manual)?;
+            match rewrite::materialize(skills_dir, source, inputs.manual) {
+                Ok(copy) => *source = copy,
+                Err(rewrite::MaterializeErr::Unusable { path, reason }) => {
+                    tracing::debug!(skill = %name, path = %path.display(), "omitting skill the view cannot prepare");
+                    skipped.push(SkippedSkill {
+                        name: name.clone(),
+                        path,
+                        reason,
+                    });
+                }
+                Err(rewrite::MaterializeErr::Sandbox(error)) => return Err(error),
+            }
             changed = true;
         }
     }
     if !changed {
-        return Ok(None);
+        return Ok(SkillView::default());
+    }
+    for skill in &skipped {
+        entries.remove(&skill.name);
     }
     let root = match home.canonicalize() {
         Ok(root) => root,
@@ -101,13 +123,16 @@ fn prepare_view(
     for source in entries.values() {
         super::validate_path(source)?;
     }
-    Ok(Some(DirView {
-        root,
-        entries: entries
-            .into_iter()
-            .map(|(name, source)| DirEntry { name, source })
-            .collect(),
-    }))
+    Ok(SkillView {
+        dir: Some(DirView {
+            root,
+            entries: entries
+                .into_iter()
+                .map(|(name, source)| DirEntry { name, source })
+                .collect(),
+        }),
+        skipped,
+    })
 }
 
 fn list_dir(root: &Path) -> Result<BTreeMap<String, PathBuf>, SandboxErr> {

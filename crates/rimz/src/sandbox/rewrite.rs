@@ -9,7 +9,18 @@ use sha2::{Digest, Sha256};
 
 use crate::agents::ManualSkill;
 
-use super::SandboxErr;
+use super::{SandboxErr, SkipReason};
+
+pub(super) enum MaterializeErr {
+    Unusable { path: PathBuf, reason: SkipReason },
+    Sandbox(SandboxErr),
+}
+
+impl From<SandboxErr> for MaterializeErr {
+    fn from(error: SandboxErr) -> Self {
+        Self::Sandbox(error)
+    }
+}
 
 struct Entry {
     path: PathBuf,
@@ -21,18 +32,17 @@ pub(super) fn materialize(
     skills_dir: &Path,
     source: &Path,
     kind: ManualSkill,
-) -> Result<PathBuf, SandboxErr> {
+) -> Result<PathBuf, MaterializeErr> {
     super::validate_path(skills_dir)?;
     let mut entries = Vec::new();
-    collect(source, Path::new(""), &mut Vec::new(), &mut entries)
-        .map_err(|error| io_error(source, error))?;
+    collect(source, Path::new(""), &mut Vec::new(), &mut entries)?;
     let target = skills_dir.join(digest(&entries, kind));
-    crate::disk::paths::ensure_private_runtime_dir(skills_dir)?;
+    crate::disk::paths::ensure_private_runtime_dir(skills_dir).map_err(SandboxErr::from)?;
     if target.is_dir() {
         return Ok(target);
     }
     let temp = skills_dir.join(format!(".{}", uuid::Uuid::now_v7()));
-    crate::disk::paths::ensure_private_runtime_dir(&temp)?;
+    crate::disk::paths::ensure_private_runtime_dir(&temp).map_err(SandboxErr::from)?;
     let result = (|| {
         for entry in &entries {
             let path = temp.join(&entry.path);
@@ -61,7 +71,7 @@ pub(super) fn materialize(
             {
                 Ok(target.clone())
             }
-            Err(error) => Err(io_error(&target, error)),
+            Err(error) => Err(io_error(&target, error).into()),
         }
     })();
     if temp.exists() {
@@ -77,21 +87,35 @@ fn io_error(path: &Path, source: io::Error) -> SandboxErr {
     }
 }
 
+fn unreadable(path: &Path, error: io::Error) -> MaterializeErr {
+    MaterializeErr::Unusable {
+        path: path.to_path_buf(),
+        reason: SkipReason::Unreadable(error),
+    }
+}
+
 fn collect(
     source: &Path,
     relative: &Path,
     ancestors: &mut Vec<PathBuf>,
     entries: &mut Vec<Entry>,
-) -> io::Result<()> {
-    let canonical = source.canonicalize()?;
+) -> Result<(), MaterializeErr> {
+    let canonical = source
+        .canonicalize()
+        .map_err(|error| unreadable(source, error))?;
     if ancestors.contains(&canonical) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "skill contains a directory symlink cycle",
+        return Err(unreadable(
+            source,
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "skill contains a directory symlink cycle",
+            ),
         ));
     }
     ancestors.push(canonical);
-    let mut children = fs::read_dir(source)?.collect::<Result<Vec<_>, _>>()?;
+    let mut children = fs::read_dir(source)
+        .and_then(|children| children.collect::<Result<Vec<_>, _>>())
+        .map_err(|error| unreadable(source, error))?;
     children.sort_by_key(fs::DirEntry::file_name);
     for child in children {
         let path = child.path();
@@ -101,20 +125,23 @@ fn collect(
                 tracing::debug!(path = %path.display(), "skipping broken skill symlink");
                 continue;
             }
-            Err(error) => return Err(error),
+            Err(error) => return Err(unreadable(&path, error)),
         };
         let relative = relative.join(child.file_name());
         if !metadata.is_file() && !metadata.is_dir() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "skill contains a non-file entry",
+            return Err(unreadable(
+                &path,
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "skill contains a non-file entry",
+                ),
             ));
         }
         entries.push(Entry {
             path: relative.clone(),
             permissions: metadata.permissions(),
             bytes: if metadata.is_file() {
-                Some(fs::read(&path)?)
+                Some(fs::read(&path).map_err(|error| unreadable(&path, error))?)
             } else {
                 None
             },
@@ -148,7 +175,7 @@ fn digest(entries: &[Entry], kind: ManualSkill) -> String {
     hex::encode(hash.finalize())
 }
 
-fn rewrite(root: &Path, source: &Path, kind: ManualSkill) -> Result<(), SandboxErr> {
+fn rewrite(root: &Path, source: &Path, kind: ManualSkill) -> Result<(), MaterializeErr> {
     let metadata = match kind {
         ManualSkill::Frontmatter => "SKILL.md",
         ManualSkill::OpenAiPolicy => "agents/openai.yaml",
@@ -158,7 +185,7 @@ fn rewrite(root: &Path, source: &Path, kind: ManualSkill) -> Result<(), SandboxE
     let text = match fs::read_to_string(&path) {
         Ok(text) => Some(text),
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(io_error(&path, error)),
+        Err(error) => return Err(io_error(&path, error).into()),
     };
     let edited = match kind {
         ManualSkill::Frontmatter => {
@@ -170,15 +197,15 @@ fn rewrite(root: &Path, source: &Path, kind: ManualSkill) -> Result<(), SandboxE
         ManualSkill::OpenAiPolicy => openai_policy_user_only(text.as_deref()),
         ManualSkill::Unsupported => return Ok(()),
     }
-    .map_err(|reason| SandboxErr::SkillMetadata {
+    .map_err(|reason| MaterializeErr::Unusable {
         path: source.join(metadata),
-        reason,
+        reason: SkipReason::Metadata(reason),
     })?;
     if kind == ManualSkill::OpenAiPolicy {
         let agents = root.join("agents");
         fs::create_dir_all(&agents).map_err(|error| io_error(&agents, error))?;
     }
-    fs::write(&path, edited).map_err(|error| io_error(&path, error))
+    fs::write(&path, edited).map_err(|error| io_error(&path, error).into())
 }
 
 fn mapping_key(line: &str) -> Option<(&str, &str)> {
@@ -239,28 +266,33 @@ fn validate_lines(text: &str) -> Result<(), &'static str> {
             node_depth += node.len() - item.trim_start().len();
             node = item.trim_start();
         }
-        if node.starts_with(['&', '*', '!', '{', '[', '?']) {
-            return Err(
-                "skill metadata must use untagged block mappings without anchors or aliases",
-            );
+        if node.starts_with('?') {
+            return Err("explicit \"?\" keys are not supported");
+        }
+        if node.starts_with(['{', '[']) {
+            return Err("flow collections are not supported");
+        }
+        if node.starts_with(['&', '*', '!']) {
+            return Err("YAML anchors, aliases, and tags are not supported");
         }
         if let Some((_, value)) = mapping_key(node) {
             node = value;
         } else {
             node_depth = scalar_depth;
         }
-        if node.starts_with(['&', '*', '!', '{', '[']) {
-            return Err(
-                "skill metadata must use untagged block mappings without anchors or aliases",
-            );
+        if node.starts_with(['{', '[']) {
+            return Err("flow collections are not supported");
+        }
+        if node.starts_with(['&', '*', '!']) {
+            return Err("YAML anchors, aliases, and tags are not supported");
         }
         if node.starts_with(['\'', '"']) {
             let Some(end) = quoted_end(node) else {
-                return Err("skill metadata quoted scalars must fit on one line");
+                return Err("a quoted value must close on the same line");
             };
             let rest = node[end..].trim_start();
             if !rest.is_empty() && !rest.starts_with('#') {
-                return Err("skill metadata quoted scalars must fit on one line");
+                return Err("a quoted value must close on the same line");
             }
         }
         if node.starts_with(['|', '>']) {
@@ -297,13 +329,13 @@ fn frontmatter_user_only(text: &str) -> Result<String, &'static str> {
         }
         offset += line.len();
     }
-    Err("SKILL.md frontmatter has no closing delimiter")
+    Err("the frontmatter has no closing \"---\"")
 }
 
 fn set_block_key(text: &str, key: &str, value: &str, indent: &str) -> Result<String, &'static str> {
     validate_lines(text)?;
     if indent.contains('\t') {
-        return Err("skill metadata indentation must use spaces");
+        return Err("indentation must use spaces");
     }
     let mut output = String::new();
     let mut skipping = false;
@@ -315,14 +347,14 @@ fn set_block_key(text: &str, key: &str, value: &str, indent: &str) -> Result<Str
         let depth = indentation(line).len();
         if depth == indent.len() {
             let Some((name, _)) = mapping_key(line) else {
-                return Err("skill metadata must use a block mapping");
+                return Err("the top level must be a block mapping");
             };
             if line.trim_start().starts_with(['{', '[', '-', '?']) {
-                return Err("skill metadata must use a block mapping");
+                return Err("the top level must be a block mapping");
             }
             skipping = name == key;
         } else if depth < indent.len() {
-            return Err("inconsistent skill metadata indentation");
+            return Err("inconsistent indentation");
         }
         if !skipping {
             output.push_str(line);
@@ -350,13 +382,13 @@ fn openai_policy_user_only(text: Option<&str>) -> Result<String, &'static str> {
             continue;
         }
         if indentation(line) != root_indent || root_indent.contains('\t') {
-            return Err("inconsistent skill metadata indentation");
+            return Err("inconsistent indentation");
         }
         let Some((key, value)) = mapping_key(line) else {
-            return Err("openai.yaml must use a single block mapping");
+            return Err("openai.yaml must be a single block mapping");
         };
         if line.trim_start().starts_with(['{', '[', '-', '?']) {
-            return Err("openai.yaml must use a single block mapping");
+            return Err("openai.yaml must be a single block mapping");
         }
         if policy.is_some() && end == lines.len() {
             end = index;
@@ -365,7 +397,7 @@ fn openai_policy_user_only(text: Option<&str>) -> Result<String, &'static str> {
             continue;
         }
         if policy.is_some() || (!value.is_empty() && !value.starts_with('#')) {
-            return Err("rewrite policy as a single block mapping");
+            return Err("\"policy\" must be a block mapping");
         }
         policy = Some(index);
     }
@@ -386,7 +418,7 @@ fn openai_policy_user_only(text: Option<&str>) -> Result<String, &'static str> {
         .find(|line| meaningful(line))
         .map_or(default_indent.as_str(), |line| indentation(line));
     if indent.len() <= root_indent.len() || indent.contains('\t') {
-        return Err("policy must contain indented mapping keys");
+        return Err("\"policy\" must contain indented keys");
     }
     let edited = set_block_key(
         &block.concat(),

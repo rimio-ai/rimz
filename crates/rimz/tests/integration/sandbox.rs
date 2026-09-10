@@ -8,7 +8,7 @@ use rimz::agents::ManualSkill;
 use rimz::config::Isolation;
 use rimz::harness::launch::ExecRequest;
 use rimz::ids::AgentKind;
-use rimz::sandbox::{SandboxErr, SandboxInputs, SkillInputs};
+use rimz::sandbox::{SandboxErr, SandboxInputs, SkillInputs, SkipReason};
 
 use crate::common::{
     CommandTimeoutExt, Env, exec_args, path_with_front, write_env_dump_shim, write_fake_login_shell,
@@ -179,6 +179,163 @@ fn sandbox_unconfigured_unreadable_skills_keep_native_launch_behavior() {
             "configured discovery errors must refuse before provider exec"
         );
     }
+}
+
+#[test]
+fn sandbox_unusable_unlisted_skill_is_omitted_with_warning() {
+    let env = Env::new();
+    let root = env.home_root.join(".claude/skills");
+    for name in ["listed", "plain", "bad"] {
+        std::fs::create_dir_all(root.join(name)).unwrap();
+        std::fs::write(root.join(name).join("SKILL.md"), "body\n").unwrap();
+    }
+    let metadata = "---\nname: bad\ndescription: &d x\nsummary: *d\n---\nbody\n";
+    let bad = root.join("bad/SKILL.md");
+    std::fs::write(&bad, metadata).unwrap();
+    let vars = environment(&env);
+    let state = env.store();
+    let prepared = rimz::sandbox::prepare(&SandboxInputs {
+        env: &vars,
+        cwd: &env.project_root,
+        project_root: &env.project_root,
+        worktree: None,
+        tmp_dir: &state.paths().tmp_dir,
+        skills_dir: &state.paths().skills_dir,
+        provider_home: None,
+        provider_home_env_keys: &[],
+        skills: SkillInputs {
+            kind: "claude",
+            home: Some(root.clone()),
+            manual: ManualSkill::Frontmatter,
+            callable: Some(&["listed".parse().unwrap()]),
+        },
+    })
+    .unwrap();
+    assert_eq!(prepared.skipped.len(), 1);
+    let skipped = &prepared.skipped[0];
+    assert_eq!(skipped.name, "bad");
+    assert_eq!(skipped.path, bad);
+    assert!(matches!(&skipped.reason, SkipReason::Metadata(_)));
+    assert!(
+        skipped
+            .to_string()
+            .contains("starting without skill \"bad\"")
+    );
+    let argv = rimz::sandbox::bwrap_argv(
+        Path::new("/usr/bin/bwrap"),
+        &prepared.plan,
+        &env.project_root,
+        &[],
+    );
+    assert!(
+        argv.windows(2)
+            .any(|args| args[0] == "--tmpfs" && Path::new(&args[1]) == root)
+    );
+    assert_eq!(
+        skill_bind_source(&argv, &root.join("listed")),
+        root.join("listed").canonicalize().unwrap()
+    );
+    let copy = skill_bind_source(&argv, &root.join("plain"));
+    assert!(copy.starts_with(&state.paths().skills_dir));
+    assert_eq!(
+        std::fs::read_to_string(copy.join("SKILL.md")).unwrap(),
+        "---\ndisable-model-invocation: true\n---\nbody\n"
+    );
+    assert!(!argv.iter().any(|arg| Path::new(arg) == root.join("bad")));
+    assert_eq!(std::fs::read(&bad).unwrap(), metadata.as_bytes());
+    assert!(
+        std::fs::read_dir(&state.paths().skills_dir)
+            .unwrap()
+            .all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .as_encoded_bytes()
+                .starts_with(b"."))
+    );
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "permission test requires enforced read permissions"
+)]
+fn sandbox_unreadable_unlisted_skill_is_omitted_with_warning() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let env = Env::new();
+    let root = env.home_root.join(".claude/skills");
+    std::fs::create_dir_all(root.join("bad/scripts")).unwrap();
+    std::fs::write(root.join("bad/SKILL.md"), "body\n").unwrap();
+    let unreadable = root.join("bad/scripts/run.sh");
+    std::fs::write(&unreadable, "echo original\n").unwrap();
+    std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read(&unreadable).is_ok() {
+        eprintln!("skipping unreadable skill test: mode 000 files remain readable");
+        return;
+    }
+    let vars = environment(&env);
+    let state = env.store();
+    let prepared = rimz::sandbox::prepare(&SandboxInputs {
+        env: &vars,
+        cwd: &env.project_root,
+        project_root: &env.project_root,
+        worktree: None,
+        tmp_dir: &state.paths().tmp_dir,
+        skills_dir: &state.paths().skills_dir,
+        provider_home: None,
+        provider_home_env_keys: &[],
+        skills: SkillInputs {
+            kind: "claude",
+            home: Some(root.clone()),
+            manual: ManualSkill::Frontmatter,
+            callable: Some(&[]),
+        },
+    })
+    .unwrap();
+    assert_eq!(prepared.skipped.len(), 1);
+    let skipped = &prepared.skipped[0];
+    assert_eq!(skipped.name, "bad");
+    assert_eq!(skipped.path, unreadable);
+    assert!(matches!(&skipped.reason, SkipReason::Unreadable(_)));
+    assert!(
+        skipped
+            .to_string()
+            .contains("starting without skill \"bad\"")
+    );
+    let argv = rimz::sandbox::bwrap_argv(
+        Path::new("/usr/bin/bwrap"),
+        &prepared.plan,
+        &env.project_root,
+        &[],
+    );
+    assert!(
+        argv.windows(2)
+            .any(|args| args[0] == "--tmpfs" && Path::new(&args[1]) == root)
+    );
+    assert!(!argv.iter().any(|arg| Path::new(arg) == root.join("bad")));
+}
+
+#[test]
+fn sandbox_skills_state_failure_still_refuses() {
+    let env = Env::new();
+    let root = env.home_root.join(".claude/skills");
+    std::fs::create_dir_all(root.join("plain")).unwrap();
+    std::fs::write(root.join("plain/SKILL.md"), "body\n").unwrap();
+    let state = env.store();
+    std::fs::write(&state.paths().skills_dir, "not a directory").unwrap();
+    assert!(
+        skill_argv(
+            &env,
+            &environment(&env),
+            SkillInputs {
+                kind: "claude",
+                home: Some(root),
+                manual: ManualSkill::Frontmatter,
+                callable: Some(&[]),
+            },
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -624,11 +781,15 @@ fn sandboxed_exec_shows_profile_skill_view_and_room_tmp() {
         ".claude/skills/a",
         ".agents/skills/b",
         ".agents/skills/c",
+        ".agents/skills/d/agents",
         ".codex",
     ] {
         std::fs::create_dir_all(env.home_root.join(dir)).unwrap();
     }
     std::fs::write(env.home_root.join(".codex/config.toml"), "sandbox-test").unwrap();
+    let bad = env.home_root.join(".agents/skills/d/agents/openai.yaml");
+    let metadata = "policy: *alias\n";
+    std::fs::write(&bad, metadata).unwrap();
     std::os::unix::fs::symlink(
         env.home_root.join(".agents/skills/b"),
         env.home_root.join(".claude/skills/b"),
@@ -687,6 +848,8 @@ printf '%s\n' shared > /tmp/team-file
         "sandbox skill view: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("rimz: starting without skill \"d\""));
+    assert_eq!(std::fs::read(&bad).unwrap(), metadata.as_bytes());
     let store = env.store();
     let tmp = &store.paths().tmp_dir;
     assert_eq!(std::fs::read(tmp.join("non-utf8")).unwrap(), [0xff, 0xfe]);
