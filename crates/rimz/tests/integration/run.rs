@@ -2743,6 +2743,104 @@ fn wait_single_run_json_prints_full_record() {
 }
 
 #[test]
+fn subagent_report_publishes_response_files_in_host_and_sandbox_views() {
+    for isolation in ["host", "sandbox"] {
+        for message in [Some("first\n\nlast"), Some("answer\n"), Some(""), None] {
+            let env = Env::new();
+            env.record(&env.project_root);
+            let store = env.store();
+            let (mut record, _, parent_id) = create_finished_subagent(&env, &store);
+            record.last_message = message.map(str::to_owned);
+            rimz::harness::run::create(store.paths(), &record).expect("seed response");
+            let config = env.config_root().join("rimz");
+            std::fs::create_dir_all(&config).unwrap();
+            std::fs::write(
+                config.join("agents.toml"),
+                format!("[agents]\nisolation = \"{isolation}\"\n"),
+            )
+            .unwrap();
+            let request = json!({"workspace_id": env.workspace_id, "parent_agent_id": parent_id});
+            if isolation == "host" && message == Some("first\n\nlast") {
+                store.paths().ensure_tmp_dir().unwrap();
+                std::fs::remove_dir(&store.paths().subagents_dir).unwrap();
+                std::fs::write(&store.paths().subagents_dir, "blocked output directory").unwrap();
+                let output = env
+                    .rimz()
+                    .args([
+                        "agents",
+                        "subagent-digest",
+                        "--request",
+                        &request.to_string(),
+                    ])
+                    .output()
+                    .unwrap();
+                assert!(!output.status.success());
+                assert!(store.list_messages().unwrap().is_empty());
+                assert!(
+                    rimz::harness::run::load(store.paths(), &record.run_id)
+                        .unwrap()
+                        .report_message_id
+                        .is_none()
+                );
+                std::fs::remove_file(&store.paths().subagents_dir).unwrap();
+            }
+            let output = env
+                .rimz()
+                .args([
+                    "agents",
+                    "subagent-digest",
+                    "--request",
+                    &request.to_string(),
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let messages = store.list_messages().expect("queued report");
+            assert_eq!(messages.len(), 1);
+            let report = &messages[0].text;
+            assert!(report.contains("task: \"inspect the wait path\""));
+            let host_path = store.paths().subagents_dir.join("quiet-fox.output");
+            if let Some(message) = message.filter(|message| !message.is_empty()) {
+                let expected = if message.ends_with('\n') {
+                    message.to_owned()
+                } else {
+                    format!("{message}\n")
+                };
+                assert_eq!(std::fs::read_to_string(&host_path).unwrap(), expected);
+                let visible = if isolation == "sandbox" {
+                    std::path::Path::new("/tmp/rimz-subagents/quiet-fox.output")
+                } else {
+                    &host_path
+                };
+                let lines = if message == "first\n\nlast" {
+                    "3 lines"
+                } else {
+                    "1 line"
+                };
+                assert!(
+                    report.contains(&format!("response: {} ({lines})", visible.display())),
+                    "{report}"
+                );
+                assert!(!report.contains(message));
+            } else {
+                assert!(!host_path.exists());
+                assert!(report.contains("no response"));
+            }
+            let reloaded = rimz::harness::run::load(store.paths(), &record.run_id).unwrap();
+            assert_eq!(
+                reloaded.report_message_id.as_ref(),
+                Some(&messages[0].message_id)
+            );
+            assert_eq!(reloaded.joined_at, None);
+        }
+    }
+}
+
+#[test]
 fn completed_subagent_wait_prints_the_durable_result_after_the_child_ends() {
     let env = Env::new();
     let store = env.store();

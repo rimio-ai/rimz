@@ -5,12 +5,17 @@
 //! and lets the wrapper fast path race safely with the producer backstop.
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 use anyhow::Context;
 use rimz::agents::AgentState;
+use rimz::disk::atomic::{AtomicErr, write_bytes_atomically};
+use rimz::disk::paths::{PathErr, StatePaths};
+use rimz::disk::summary::FileSummary;
 use rimz::harness::run;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, RunId};
 use rimz::message::deliver::{DeliveryPolicy, deliver_one};
+use rimz::sandbox::TmpView;
 use rimz::store::message::{DeliveryGate, HarnessNotice, MessageRecord, MessageSender};
 use rimz::store::run::{RunRecord, RunStatus, RunStoreErr};
 use rimz::workspace::ResolvedWorkspace;
@@ -39,6 +44,56 @@ pub(super) enum ReportErr {
     Run(#[from] RunStoreErr),
     #[error(transparent)]
     Deliver(#[from] rimz::message::deliver::DeliverErr),
+    #[error(transparent)]
+    Paths(#[from] PathErr),
+    #[error(transparent)]
+    Atomic(#[from] AtomicErr),
+    #[error("measuring subagent response file {path}: {source}")]
+    Response {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+struct ResponseFile {
+    path: PathBuf,
+    summary: FileSummary,
+}
+
+fn write_response_files(
+    paths: &StatePaths,
+    view: &TmpView,
+    rows: &[(&AgentState, &RunRecord)],
+) -> Result<Vec<Option<ResponseFile>>, ReportErr> {
+    paths.ensure_tmp_dir()?;
+    rows.iter()
+        .map(|(child, run)| {
+            let Some(message) = run
+                .last_message
+                .as_deref()
+                .filter(|message| !message.is_empty())
+            else {
+                return Ok(None);
+            };
+            let path = paths
+                .subagents_dir
+                .join(format!("{}.output", child_name(child, run)));
+            let mut bytes = message.as_bytes().to_vec();
+            if !bytes.ends_with(b"\n") {
+                bytes.push(b'\n');
+            }
+            write_bytes_atomically(&path, &bytes)?;
+            let summary = FileSummary::measure(&path).map_err(|source| ReportErr::Response {
+                path: path.clone(),
+                source,
+            })?;
+            Ok(Some(ResponseFile {
+                path: view.agent_path(&path),
+                summary,
+            }))
+        })
+        .collect()
 }
 
 pub(super) fn report_fleet(
@@ -102,6 +157,14 @@ fn report_fleet_with_kind(
         return Ok(ReportOutcome::NothingToReport);
     }
 
+    let view = TmpView::current(store.paths());
+    let responses = write_response_files(store.paths(), &view, &rows)?;
+    let digest_rows = rows
+        .iter()
+        .zip(&responses)
+        .map(|((child, run), response)| (*child, *run, response.as_ref()))
+        .collect::<Vec<_>>();
+
     let sender = MessageSender::Harness {
         notice: HarnessNotice::SubagentReport,
     };
@@ -109,7 +172,7 @@ fn report_fleet_with_kind(
     let mut message = MessageRecord::new(
         workspace.workspace_id.clone(),
         parent,
-        compose_digest(&rows),
+        compose_digest(&digest_rows),
         true,
         DeliveryGate::Done,
     )
@@ -214,29 +277,32 @@ pub(super) fn backstop_digest(request: super::SubagentDigestRequest) -> anyhow::
     Ok(())
 }
 
-fn compose_digest(rows: &[(&AgentState, &RunRecord)]) -> String {
+fn compose_digest(rows: &[(&AgentState, &RunRecord, Option<&ResponseFile>)]) -> String {
     let names = rows
         .iter()
-        .map(|(child, run)| format!("@{}", child_name(child, run)))
+        .map(|(child, run, _)| format!("@{}", child_name(child, run)))
         .collect::<Vec<_>>()
         .join(" ");
     let heading = if rows.len() == 1 {
-        format!("Your subagent settled, read with `rimz subagents wait {names}`.")
+        "Your subagent settled:".to_owned()
     } else {
-        format!(
-            "All {} settled, read with `rimz subagents wait {names}`.",
-            rows.len()
-        )
+        format!("All {} subagents settled:", rows.len())
     };
     let rows = rows
         .iter()
-        .map(|(child, run)| compose_digest_row(child, run))
+        .map(|(child, run, response)| compose_digest_row(child, run, *response))
         .collect::<Vec<_>>()
         .join("\n");
-    format!("{heading}\n\n{rows}")
+    format!(
+        "{heading}\n{rows}\n\nPrint them inline and mark them joined with `rimz subagents wait {names}`."
+    )
 }
 
-fn compose_digest_row(child: &AgentState, run: &RunRecord) -> String {
+fn compose_digest_row(
+    child: &AgentState,
+    run: &RunRecord,
+    response: Option<&ResponseFile>,
+) -> String {
     let finished_at = run.completed_at.unwrap_or(run.updated_at);
     let elapsed =
         format_compact_duration(finished_at.duration_since(run.started_at).as_secs().max(0) as u64);
@@ -246,10 +312,9 @@ fn compose_digest_row(child: &AgentState, run: &RunRecord) -> String {
         "in"
     };
     let mut row = format!(
-        "@{} — {} {preposition} {elapsed}, {}",
+        "- @{}: {} {preposition} {elapsed}",
         child_name(child, run),
         status_label(run.status),
-        result_size(run),
     );
     if run.status != RunStatus::Completed
         && let Some(reason) = failure_reason(run)
@@ -257,13 +322,28 @@ fn compose_digest_row(child: &AgentState, run: &RunRecord) -> String {
         row.push_str("; ");
         row.push_str(reason);
     }
-    if let Some(description) = child
+    if let Some(task) = child
         .description
         .as_deref()
         .filter(|value| !value.is_empty())
+        .map(std::borrow::Cow::Borrowed)
+        .or_else(|| {
+            run.prompt
+                .lines()
+                .next()
+                .filter(|line| !line.is_empty())
+                .map(rimz::theme::fmt::command_preview)
+        })
     {
-        row.push_str(" — ");
-        row.push_str(description);
+        row.push_str(&format!(", task: \"{task}\""));
+    }
+    match response {
+        Some(response) => row.push_str(&format!(
+            ", response: {} ({})",
+            response.path.display(),
+            response.summary.lines_label(),
+        )),
+        None => row.push_str(", no response"),
     }
     row
 }
@@ -298,21 +378,6 @@ fn child_name<'a>(child: &'a AgentState, run: &'a RunRecord) -> &'a str {
         .as_deref()
         .or(run.agent_name.as_deref())
         .unwrap_or_else(|| child.agent_id.as_str())
-}
-
-fn result_size(run: &RunRecord) -> String {
-    match run
-        .last_message
-        .as_deref()
-        .into_iter()
-        .flat_map(str::lines)
-        .filter(|line| !line.trim().is_empty())
-        .count()
-    {
-        0 => "no result".to_owned(),
-        1 => "1 line".to_owned(),
-        lines => format!("{lines} lines"),
-    }
 }
 
 fn failure_reason(run: &RunRecord) -> Option<&str> {
@@ -403,11 +468,19 @@ mod tests {
         let mut result = run(RunStatus::Completed);
         result.last_message = Some("Done.\n\nTwo paragraphs.\n".to_owned());
         let child = child("naming", Some("map spec/profile surfaces"));
+        let response = ResponseFile {
+            path: PathBuf::from("/tmp/rimz-subagents/naming.output"),
+            summary: FileSummary {
+                bytes: 23,
+                lines: 3,
+            },
+        };
 
         assert_eq!(
-            compose_digest(&[(&child, &result)]),
-            "Your subagent settled, read with `rimz subagents wait @naming`.\n\n\
-             @naming — completed in 4m12s, 2 lines — map spec/profile surfaces"
+            compose_digest(&[(&child, &result, Some(&response))]),
+            "Your subagent settled:\n\
+             - @naming: completed in 4m12s, task: \"map spec/profile surfaces\", response: /tmp/rimz-subagents/naming.output (3 lines)\n\n\
+             Print them inline and mark them joined with `rimz subagents wait @naming`."
         );
     }
 
@@ -422,17 +495,50 @@ mod tests {
         let naming = child("naming", Some("map spec/profile surfaces"));
         let runtime = child("runtime", None);
         let reviewer = child("slow-reviewer", Some("review correctness"));
+        let response = ResponseFile {
+            path: PathBuf::from("/tmp/rimz-subagents/naming.output"),
+            summary: FileSummary {
+                bytes: 19,
+                lines: 2,
+            },
+        };
+        let partial = ResponseFile {
+            path: PathBuf::from("/tmp/rimz-subagents/slow-reviewer.output"),
+            summary: FileSummary {
+                bytes: 15,
+                lines: 1,
+            },
+        };
 
         assert_eq!(
             compose_digest(&[
-                (&naming, &completed),
-                (&runtime, &blank),
-                (&reviewer, &timed_out),
+                (&naming, &completed, Some(&response)),
+                (&runtime, &blank, None),
+                (&reviewer, &timed_out, Some(&partial)),
             ]),
-            "All 3 settled, read with `rimz subagents wait @naming @runtime @slow-reviewer`.\n\n\
-             @naming — completed in 4m12s, 2 lines — map spec/profile surfaces\n\
-             @runtime — completed in 4m12s, no result\n\
-             @slow-reviewer — timed out after 4m12s, 1 line; provider did not stop — review correctness"
+            "All 3 subagents settled:\n\
+             - @naming: completed in 4m12s, task: \"map spec/profile surfaces\", response: /tmp/rimz-subagents/naming.output (2 lines)\n\
+             - @runtime: completed in 4m12s, task: \"map it\", no response\n\
+             - @slow-reviewer: timed out after 4m12s; provider did not stop, task: \"review correctness\", response: /tmp/rimz-subagents/slow-reviewer.output (1 line)\n\n\
+             Print them inline and mark them joined with `rimz subagents wait @naming @runtime @slow-reviewer`."
+        );
+    }
+
+    #[test]
+    fn digest_task_falls_back_to_prompt_preview_or_is_omitted() {
+        let child = child("naming", None);
+        let mut result = run(RunStatus::Completed);
+        result.prompt = format!("{}\nnot part of the task", "x".repeat(150));
+        let row = compose_digest_row(&child, &result, None);
+        assert!(row.contains(&format!(
+            ", task: \"{}\", no response",
+            rimz::theme::fmt::command_preview(&"x".repeat(150))
+        )));
+        assert!(!row.contains("not part of the task"));
+        result.prompt.clear();
+        assert_eq!(
+            compose_digest_row(&child, &result, None),
+            "- @naming: completed in 4m12s, no response"
         );
     }
 
