@@ -22,7 +22,7 @@ fn sleeping_card_describes_its_wake_using_the_snapshot_clock() {
     let screen = snapshot_to_screen(&snapshot, 44, 20);
     assert!(screen.contains(Theme::fixed(false).glyph(GlyphRole::StatusSleeping)));
     assert!(screen.contains("wake in 12m"));
-    assert!(screen.contains("⧖ waits (1)"));
+    assert!(screen.contains("⧖ 1"));
     assert!(!screen.contains("finished work"));
     assert_snapshot("sleeping_card", screen);
 
@@ -54,7 +54,7 @@ fn sleeping_card_describes_its_wake_using_the_snapshot_clock() {
         let screen = snapshot_to_screen(&snapshot, 44, 20);
         assert!(screen.contains("finished work"), "{status:?}: {screen}");
         assert!(!screen.contains("wake due"), "{status:?}: {screen}");
-        assert!(screen.contains("⧖ waits (1)"), "{status:?}: {screen}");
+        assert!(screen.contains("⧖ 1"), "{status:?}: {screen}");
     }
 }
 

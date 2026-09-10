@@ -30,9 +30,9 @@ A complete frame: a selected agent in a worktree, with the per-provider dashboar
 ▌    ✓ Explore — locate the render seam                   ← done child: collapses to one line
 ▌    ⠁ Explore — audit the trust hash                     ← active child: thinking head
 ▌      ◇ 3k · Opus 4.8                           ◔  3m    ← running child: tokens · model · elapsed
-▌    ⧖ in 12m                                   ◔ 18m    ← timer: time until wake · elapsed since armed
-▌    ⧖ cargo                                    ◔  4m    ← command: program · elapsed since armed
-▌      cargo test                                        ← shell command, muted
+▌    ⧖ in 12m                                    ◔ 18m    ← timer: time until wake · elapsed since armed
+▌    ⧖ cargo                                     ◔  4m    ← command: program · elapsed since armed
+▌      cargo test                                         ← shell command, muted
 
  ─────────────────────────────────────────────────────
   Claude v2.1.169 · Claude Max                    ⇅ rc    ← provider · version · plan · remote-control health (green up / red down)
@@ -190,6 +190,8 @@ While a [make-up bucket](#zone-1--the-cockpit), the unread lens, or the open-PR 
 
 ### The card
 
+At narrow and medium widths (L0/L1, fewer than 44 content columns or 46 pane columns), the delegation line uses the legend shorthand `⧉ N · ⧖ M`, keeping both counts and the cost visible. Either half keeps this shorthand when shown alone. At L2 the full `subagents (N)` and `waits (M)` labels return. Selection never changes which form the current width uses.
+
 An agent is a small stacked card. The standard resting card is four lines, plus the `⧉ subagents (N) · ⧖ waits (N)` delegation line once the session has spawned a child or armed a one-shot wake; either half appears alone when only one applies. An idle agent with no prompt or session history stays fresh: it is identity-only without a descriptor and identity + description when launched with one. Selecting any fresh card adds the empty meter, with an animated compose affordance filling the description slot when no authored description exists; a selected described fresh card is identity + description + empty meter. Submitting any prompt engages the card for good: it holds identity, description, meter, and stats lines while data fills in place, using `▢ 0%` and `▤ 0` before the first measurement. Selecting an engaged card appends the current user-authored turn's subagent entries, then one entry per pending wait, under the delegation line and lights the spine, so its standard lines never reflow. If it belongs to a named team, every visible teammate expands at the same time, but the spine and selection band stay on the selected card alone.
 
 `[theme.display] card_density` tunes that body without changing routing: `auto` uses the standard card, `expanded` shows subagent and wait entries on every engaged card, and `compact` trims resting cards by status — including the standing delegation line — while selection opens the selected card and any visible named teammates to their lifecycle stages' full shapes. Compact resting cards read idle as identity only, running/waiting as identity + description + meter (including the `▢ 0%` placeholder), and paused/done/sleeping/failed as identity + description.
@@ -255,7 +257,7 @@ The expanded card lists the **subagents** from the parent's current user-authore
 ▌      ◇ 22k · Haiku 4.5
 ```
 
-The **waits** follow the subagent entries: timers by due time, then commands, then signals. Each leads with `⧖`. A timer takes one line, reading `in 12m` or `due`; a signal also takes one line, reading `on <selector>` with ` · <left> left` when it has a deadline. A command takes two lines: the program on line 1, then the shell command with the program's path trimmed on a deeper-indented, muted line 2. The elapsed-since-armed clock pins right on line 1 in the same clock vocabulary as subagents; it is absent when the arm time is unknown.
+The **waits** follow the subagent entries: timers by due time, then commands, then signals. Each leads with `⧖`. A timer takes one line, reading `in 12m` or `due`; a signal also takes one line, reading `on <selector>` with ` · <left> left` when it has a deadline. A command takes two lines: the program on line 1, then the shell command with the program's path trimmed on a deeper-indented, muted line 2. The elapsed-since-armed clock pins right on line 1 in the same glyph and duration vocabulary as subagents, but stays muted rather than heating with age: a wake is pending by design. It is absent when the arm time is unknown.
 
 Claude's description, cumulative tokens, and precise start time ride in from `subagentStatusLine`; the Claude-only feed is configured at install and fed at runtime. The same feed incrementally prices every request in that child's dedicated transcript; when every model resolves, the exact cumulative figure pins right on line 1. Any unpriced request hides the figure rather than showing a partial sum. That provider-native figure is display-only because Claude's parent session spend already includes it. A child launched through `rimz subagents` instead shows its launch profile as its type, prices its own provider session, and adds that cost to the parent's line-1 figure across every turn. A Codex-native child reads nickname, task path, role, model/effort, and current context tokens — not a cumulative total — from the child rollout around each hook; its elapsed fallback starts at durable child registration. Copilot reads the model from the parent's start record and reconciles the exact total from the completion record at the next parent checkpoint. Siblings on different models read apart at a glance and a reasoning child uses the same thinking animation its parent would. A child with no enrichment shows just its `glyph type` line. Provider-native subagents have no pane; a launched child owns a pane while it runs or is kept. Neither gets a duplicate top-level row while its parent is visible; both nest here only.
 
@@ -524,6 +526,7 @@ The renderer's golden tests in [`crates/rimz/src/sidebar_pane/render/`](../../cr
 | agents + dimmed process tail | `agents_process_tail` |
 | subagent list + elapsed column | `subagent_two_line_entry` |
 | persistent subagent stats line | `subagent_stats_line` |
+| card wait entries | `wait_entries` |
 | worktree grouping + external | `worktree_attention_map` |
 | equal-to-trunk header (`≡`) | `worktree_equal_to_trunk` |
 | clear worktree header (`✓`) | `worktree_clear_safe_to_remove` |

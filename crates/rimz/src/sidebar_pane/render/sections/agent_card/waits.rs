@@ -23,8 +23,17 @@ pub(super) fn wait_entry_lines(ctx: &RowCtx<'_>, wakes: &[PendingWake]) -> Vec<L
             Span::raw(" "),
             Span::styled(summary, theme.body()),
         ];
-        let elapsed = wake.armed_at.map(|at| age_secs(at, ctx.now));
-        lines.push(pin_right(left, elapsed_spans(theme, elapsed), width));
+        let elapsed = wake
+            .armed_at
+            .map(|at| {
+                let secs = age_secs(at, ctx.now);
+                vec![Span::styled(
+                    format!("{} {:>3}", elapsed_glyph(theme, secs), elapsed_label(secs)),
+                    theme.muted(),
+                )]
+            })
+            .unwrap_or_default();
+        lines.push(pin_right(left, elapsed, width));
 
         if let PendingWakeTrigger::Command { command } = &wake.trigger {
             let detail = vec![
