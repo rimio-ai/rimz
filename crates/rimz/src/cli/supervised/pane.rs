@@ -458,42 +458,8 @@ pub(super) fn split_into_loop_zone(
     env: BTreeMap<String, String>,
     pane: &PaneCmd,
 ) -> Result<bool> {
-    let listing = match list_loop_zone_panes(backend, workspace) {
-        Some(listing) => listing,
-        None => return Ok(false),
-    };
-    let panel = match rimz::daemon_view::find_loop_panel(&listing.panes) {
-        Some(panel) => panel.clone(),
-        None => {
-            let machine = rimz::config::MachineConfig::load_lenient();
-            let rimz_bin = rimz::proc::rimz_exe();
-            // One gate decides whether a host launches. A cheaper local check
-            // would spawn a host that stalls on its first-run prompt or a
-            // version it cannot serve from, in the one path no operator watches.
-            rimz::remote_control::prepare_hosts(&machine.remote_control);
-            let readiness = rimz::remote_control::ReadinessSnapshot::probe(&machine.remote_control);
-            let claude_host_argv = readiness.claude_host_argv().map(<[String]>::to_vec);
-            let view =
-                rimz::daemon_view::daemon_view_spec(rimz::daemon_view::DaemonViewSpecParams {
-                    claude_host_argv: claude_host_argv.as_deref(),
-                    daemon: &machine.daemon,
-                    rimz_bin: &rimz_bin,
-                    workspace_id: &workspace.workspace_id,
-                    session_name: &workspace.session_name,
-                    project_root: &workspace.project_root,
-                    worktree_root: &workspace.worktree_root,
-                    codex_present: which::which("codex").is_ok(),
-                });
-            match rimz::daemon_view::ensure_loop_panel(
-                backend,
-                &workspace.session_name,
-                &workspace.workspace_id,
-                &view,
-            ) {
-                Some(panel) => panel,
-                None => return Ok(false),
-            }
-        }
+    let Some(panel) = rimz::daemon_view::ensure_loop_panel(backend, workspace) else {
+        return Ok(false);
     };
     match backend.split_pane(SplitPaneOptions {
         target: SplitTarget::SessionPane {
@@ -517,29 +483,6 @@ pub(super) fn split_into_loop_zone(
                 "loop zone split failed; falling back to a run tab",
             );
             Ok(false)
-        }
-    }
-}
-
-fn list_loop_zone_panes(
-    backend: &dyn rimz::mux::MuxBackend,
-    workspace: &rimz::ResolvedWorkspace,
-) -> Option<rimz::mux::PaneListing> {
-    match backend.list_panes(PaneListOptions {
-        session_name: Some(workspace.session_name.clone()),
-        workspace_id: Some(workspace.workspace_id.clone()),
-        command_timeout: Some(Duration::from_millis(500)),
-        consistency: PaneReadConsistency::PreferAuthoritative,
-        ..Default::default()
-    }) {
-        Ok(listing) => Some(listing),
-        Err(err) => {
-            tracing::debug!(
-                session = %workspace.session_name,
-                error = &err as &dyn std::error::Error,
-                "loop zone lookup failed; falling back to a run tab",
-            );
-            None
         }
     }
 }

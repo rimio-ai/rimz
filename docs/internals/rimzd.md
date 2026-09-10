@@ -94,9 +94,9 @@ The third caller is the loop zone, which repairs the panel alone.
 
 ## The loop zone
 
-`split_into_loop_zone` finds the oldest live loop panel and splits the run pane against it with `SplitPlacement::Stacked`, so run output lands in the runtime column.
+`split_into_loop_zone` asks `daemon_view::ensure_loop_panel` for the workspace's oldest live loop panel and splits the run pane against it with `SplitPlacement::Stacked`, so run output lands in the runtime column.
 
-Fire time is the one moment repair runs outside the elder's tick. When the panel is gone but the view survives, `ensure_loop_panel` recreates just that pane through the same placement and settle path a full repair uses, then the run stacks under it. Which fires land here, and where a run goes when the view is gone, are in [loops.md](./harness/loops.md#where-a-scheduled-run-lands).
+Fire time is the one moment repair runs outside the elder's tick. `ensure_loop_panel` takes the workspace and looks up the panel cheaply. When the panel is gone, it builds the effective spec itself, preparing hosts before probing readiness in the same order as the elder. If the view survives, it recreates just that pane through the same authoritative placement and settle path a full repair uses, then the run stacks under it. Which fires land here, and where a run goes when the view is gone, are in [loops.md](./harness/loops.md#where-a-scheduled-run-lands).
 
 ## Where the code lives
 

@@ -28,6 +28,7 @@ use crate::pane::{APP_SERVER_MARKER, PaneRef, VIEW_NAME, command_is_claude_host}
 use crate::workspace::record;
 
 const REPAIR_LIST_TIMEOUT: Duration = Duration::from_secs(3);
+const LOOP_PANEL_LOOKUP_TIMEOUT: Duration = Duration::from_millis(500);
 const SETTLE_ATTEMPTS: usize = 5;
 const SETTLE_POLL: Duration = Duration::from_millis(100);
 
@@ -266,20 +267,54 @@ pub fn repair_daemon_view(
     }
 }
 
-/// Ensure the loop panel through the same placement and settle path used by a
-/// full daemon-view repair, then return the oldest settled match.
+/// Find the oldest loop panel cheaply, build its effective spec when missing, and restore it through the full repair's placement and settle path.
 pub fn ensure_loop_panel(
     backend: &dyn MuxBackend,
-    session_name: &str,
-    workspace_id: &WorkspaceId,
-    view: &DaemonView,
+    workspace: &crate::workspace::ResolvedWorkspace,
 ) -> Option<PaneRef> {
+    let session_name = &workspace.session_name;
+    let workspace_id = &workspace.workspace_id;
+    let listing = match backend.list_panes(PaneListOptions {
+        session_name: Some(session_name.clone()),
+        workspace_id: Some(workspace_id.clone()),
+        command_timeout: Some(LOOP_PANEL_LOOKUP_TIMEOUT),
+        consistency: PaneReadConsistency::PreferAuthoritative,
+        ..Default::default()
+    }) {
+        Ok(listing) => listing,
+        Err(err) => {
+            tracing::debug!(
+                session = %session_name,
+                error = &err as &dyn std::error::Error,
+                "loop zone lookup failed; falling back to a run tab",
+            );
+            return None;
+        }
+    };
+    if let Some(panel) = find_loop_panel(&listing.panes) {
+        return Some(panel.clone());
+    }
+    let machine = crate::config::MachineConfig::load_lenient();
+    let rimz_bin = crate::proc::rimz_exe();
+    // One gate decides whether a host launches. A cheaper local check would spawn a host that stalls on its first-run prompt or a version it cannot serve from, in the one path no operator watches.
+    crate::remote_control::prepare_hosts(&machine.remote_control);
+    let readiness = crate::remote_control::ReadinessSnapshot::probe(&machine.remote_control);
+    let view = daemon_view_spec(DaemonViewSpecParams {
+        claude_host_argv: readiness.claude_host_argv(),
+        daemon: &machine.daemon,
+        rimz_bin: &rimz_bin,
+        workspace_id,
+        session_name,
+        project_root: &workspace.project_root,
+        worktree_root: &workspace.worktree_root,
+        codex_present: which::which("codex").is_ok(),
+    });
     let listing = list_daemon_panes(backend, session_name, workspace_id)?;
     if let Some(panel) = find_loop_panel(&listing.panes) {
         return Some(panel.clone());
     }
     let marker = ManagedPaneMarker::LoopPanel;
-    let (anchor_pane_id, direction) = spawn_anchor(&listing.panes, view, &marker)?;
+    let (anchor_pane_id, direction) = spawn_anchor(&listing.panes, &view, &marker)?;
     if !split_managed_pane(
         backend,
         session_name,
