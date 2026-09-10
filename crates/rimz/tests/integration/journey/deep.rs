@@ -1549,18 +1549,40 @@ fn tmux_settled_subagent_reports_to_parent() {
         assert!(Instant::now() < deadline, "fleet digest was not queued");
         std::thread::sleep(Duration::from_millis(25));
     };
-    assert!(fleet_digest.text.contains("All 2 settled"));
+    assert!(fleet_digest.text.contains("All 2 subagents settled"));
     assert!(
         fleet_digest
             .text
-            .contains(&format!("@{first_name} — completed"))
+            .contains(&format!("@{first_name}: completed"))
     );
     assert!(
         fleet_digest
             .text
-            .contains(&format!("@{second_name} — canceled"))
+            .contains(&format!("@{second_name}: canceled"))
     );
     assert!(fleet_digest.text.contains("rimz subagents wait"));
+    let response_path = env
+        .store()
+        .paths()
+        .subagents_dir
+        .join(format!("{first_name}.output"));
+    let response = std::fs::read_to_string(&response_path).expect("published child response");
+    assert_eq!(
+        response.trim_end_matches('\n'),
+        first_run
+            .last_message
+            .as_deref()
+            .unwrap()
+            .trim_end_matches('\n')
+    );
+    let summary =
+        rimz::disk::summary::FileSummary::measure(&response_path).expect("response summary");
+    assert!(fleet_digest.text.contains(&format!(
+        "response: {} ({})",
+        response_path.display(),
+        summary.lines_label()
+    )));
+    assert!(fleet_digest.text.contains("task: \"finish now\""));
     for run in [&first_run, &second_run] {
         assert_eq!(
             rimz::harness::run::load(env.store().paths(), &run.run_id)
@@ -1720,7 +1742,7 @@ fn tmux_settled_subagent_reports_to_parent() {
         unattended_run.joined_at, None,
         "a printed result after the parent's turn must remain unjoined: {unattended_run:?}"
     );
-    let unattended_digest_line = format!("@{unattended_name} — completed");
+    let unattended_digest_line = format!("@{unattended_name}: completed");
     let unattended_frame = capture_joined_until(
         &socket,
         &parent_pane_raw,
@@ -1797,7 +1819,7 @@ fn tmux_settled_subagent_reports_to_parent() {
                             notice: rimz::store::message::HarnessNotice::SubagentReport
                         }
                     )
-                    && message.text.contains(&format!("@{timed_name} — completed"))
+                    && message.text.contains(&format!("@{timed_name}: completed"))
             })
         {
             break report;
@@ -1812,11 +1834,11 @@ fn tmux_settled_subagent_reports_to_parent() {
     assert!(
         timed_report
             .text
-            .contains(&format!("@{timed_name} — completed"))
+            .contains(&format!("@{timed_name}: completed"))
     );
 
-    let first_digest_line = format!("@{first_name} — completed");
-    let second_digest_line = format!("@{second_name} — canceled");
+    let first_digest_line = format!("@{first_name}: completed");
+    let second_digest_line = format!("@{second_name}: canceled");
     let parent_frame = capture_joined_until(
         &socket,
         &parent_pane_raw,
