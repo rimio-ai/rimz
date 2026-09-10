@@ -14,9 +14,8 @@ use crate::config::MachineConfig;
 use crate::disk::atomic;
 use crate::ids::MuxName;
 use crate::mux::CommandSpec;
-use crate::room::session::{
-    LiveRoom, LiveSessions, room_inventory_with, workspace_record_for_session,
-};
+use crate::mux::LiveSessions;
+use crate::room::session::{LiveRoom, room_inventory_with, workspace_record_for_session};
 
 mod gate;
 mod ttyd;

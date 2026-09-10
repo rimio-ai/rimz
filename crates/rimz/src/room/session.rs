@@ -1,13 +1,11 @@
-//! Live room inventory, session-record lookup, cross-mux live sets, mux choice,
-//! and renamed-session retirement.
+//! Live room inventory, session-record lookup, mux choice, and renamed-session retirement.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use super::{LiveRoomErr, LiveRoomResult};
 use crate::ids::MuxName;
-use crate::mux::MuxBackend;
+use crate::mux::{LiveSessions, MuxBackend};
 use crate::workspace::{KnownWorkspace, record};
 use crate::{RuntimePaths, StatePaths, WorkspaceId, workspace::record::WorkspaceRecord};
 use anyhow::{Context, Result, bail};
@@ -89,13 +87,6 @@ pub struct MuxPickErr {
     pub source: crate::mux::MuxErr,
 }
 
-/// Both backends' live session names, probed once for batch operations.
-/// Missing backends and transient list failures contribute an empty set.
-pub(crate) struct LiveSessions {
-    zellij: HashSet<String>,
-    tmux: HashSet<String>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BackendRoomState {
     Live,
@@ -160,34 +151,6 @@ pub fn probe_room_ownership(selected: MuxName, session_name: &str) -> RoomOwners
         selected,
         zellij: probe(MuxName::Zellij),
         tmux: probe(MuxName::Tmux),
-    }
-}
-
-impl LiveSessions {
-    pub(crate) fn probe() -> Self {
-        let names = |mux| -> HashSet<String> {
-            crate::mux::backend_for(mux)
-                .list_sessions()
-                .unwrap_or_default()
-                .into_iter()
-                .collect()
-        };
-        Self {
-            zellij: names(MuxName::Zellij),
-            tmux: names(MuxName::Tmux),
-        }
-    }
-
-    /// Resolve a live session with Zellij-first precedence. An absent session
-    /// maps to `None`, preserving best-effort empty-set fallback.
-    pub(crate) fn mux_of(&self, session: &str) -> Option<MuxName> {
-        if self.zellij.contains(session) {
-            Some(MuxName::Zellij)
-        } else if self.tmux.contains(session) {
-            Some(MuxName::Tmux)
-        } else {
-            None
-        }
     }
 }
 
@@ -523,19 +486,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["rimz-stopped-new", "rimz-stopped-old"]
         );
-    }
-
-    #[test]
-    fn live_sessions_resolve_with_zellij_first_precedence() {
-        let live = LiveSessions {
-            zellij: HashSet::from(["shared".to_owned(), "zellij".to_owned()]),
-            tmux: HashSet::from(["shared".to_owned(), "tmux".to_owned()]),
-        };
-
-        assert_eq!(live.mux_of("shared"), Some(MuxName::Zellij));
-        assert_eq!(live.mux_of("zellij"), Some(MuxName::Zellij));
-        assert_eq!(live.mux_of("tmux"), Some(MuxName::Tmux));
-        assert_eq!(live.mux_of("missing"), None);
     }
 
     fn ownership(

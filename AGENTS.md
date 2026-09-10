@@ -107,7 +107,7 @@ This indexes what lives where; runtime shape and the single-binary rationale liv
 - `harness/` — layout IR, teams, launch argv, supervised run transitions and their wake socket, loop scheduling over clock/signal/watch triggers, signal selectors and in-process firing, resume planning, and rebirth recovery inspection/materialization.
 - `message/` — message delivery: park-vs-live dispatch, live-pane send, reply waits, scheduled wakeups.
 - `store/` — durable state engine: `Store` handle, canonical snapshot schema, writer mutation vocabulary/choreography, framed event log, message record and queue codec, lifecycle follower, the supervised-run record with its codec and terminal wake sender, GC.
-- `mux/` — Zellij/tmux seam: `MuxBackend`, subprocess engine, reconcile planner, recovery, focus-intent anchor, room width target, Zellij pane-topology and presence-desired caches, per-pane write lock.
+- `mux/` — Zellij/tmux seam: `MuxBackend`, cross-backend live-session snapshot, subprocess engine, reconcile planner, recovery, focus-intent anchor, room width target, Zellij pane-topology and presence-desired caches, per-pane write lock.
 - `sidebar/` — data plane: Zellij presence ingestion, producer election, pulled-truth/event fusion, realtime overlay store, projection fold, heavy-lane refresh.
 - `sidebar_pane/` — native renderer process: serve loop, pets, and the ratatui theme/component edge.
 - `remote/` — SSH grammar, reconnect policy, link health, `remote.toml`.

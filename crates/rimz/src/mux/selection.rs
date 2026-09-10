@@ -4,9 +4,48 @@
 //! 2. active mux environment (`ZELLIJ` / `TMUX`)
 //! 3. `[mux] default` config — errors if it names an uninstalled backend
 //! 4. installed binary (tmux preferred when both are present)
+//!
+//! The live-session snapshot answers which backend holds a session at batch scale.
+
+use std::collections::HashSet;
 
 use super::{MuxErr, Result};
 use crate::ids::MuxName;
+
+/// Both backends' live session names, probed once for batch operations.
+/// Missing backends and transient list failures contribute an empty set.
+pub(crate) struct LiveSessions {
+    zellij: HashSet<String>,
+    tmux: HashSet<String>,
+}
+
+impl LiveSessions {
+    pub(crate) fn probe() -> Self {
+        let names = |mux| -> HashSet<String> {
+            crate::mux::backend_for(mux)
+                .list_sessions()
+                .unwrap_or_default()
+                .into_iter()
+                .collect()
+        };
+        Self {
+            zellij: names(MuxName::Zellij),
+            tmux: names(MuxName::Tmux),
+        }
+    }
+
+    /// Resolve a live session with Zellij-first precedence. An absent session
+    /// maps to `None`, preserving best-effort empty-set fallback.
+    pub(crate) fn mux_of(&self, session: &str) -> Option<MuxName> {
+        if self.zellij.contains(session) {
+            Some(MuxName::Zellij)
+        } else if self.tmux.contains(session) {
+            Some(MuxName::Tmux)
+        } else {
+            None
+        }
+    }
+}
 
 pub(crate) fn select_backend(
     explicit: Option<MuxName>,
@@ -64,6 +103,19 @@ pub fn auto_detect_backend(explicit: Option<MuxName>) -> Result<MuxName> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_sessions_resolve_with_zellij_first_precedence() {
+        let live = LiveSessions {
+            zellij: HashSet::from(["shared".to_owned(), "zellij".to_owned()]),
+            tmux: HashSet::from(["shared".to_owned(), "tmux".to_owned()]),
+        };
+
+        assert_eq!(live.mux_of("shared"), Some(MuxName::Zellij));
+        assert_eq!(live.mux_of("zellij"), Some(MuxName::Zellij));
+        assert_eq!(live.mux_of("tmux"), Some(MuxName::Tmux));
+        assert_eq!(live.mux_of("missing"), None);
+    }
 
     fn select(
         explicit: Option<MuxName>,
