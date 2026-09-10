@@ -343,6 +343,13 @@ impl crate::agents::capabilities::CoreCapability for OpencodeAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for OpencodeAdapter {
+    fn config_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
+        opencode_config_home(
+            env.get("XDG_CONFIG_HOME").map(std::ffi::OsStr::new),
+            env.get("HOME").map(std::ffi::OsStr::new),
+        )
+    }
+
     // TODO(launch-reminders): carry additive system text through the OpenCode plugin.
     fn lockdown_subagent_env(&self, env: &mut std::collections::BTreeMap<String, String>) {
         const PERMISSION_ENV: &str = "OPENCODE_PERMISSION";
@@ -656,20 +663,30 @@ fn opencode_plugin_path() -> Result<PathBuf> {
     if let Some(raw) = std::env::var_os("RIMZ_OPENCODE_PLUGIN").filter(|v| !v.is_empty()) {
         return Ok(PathBuf::from(raw));
     }
-    let config_home = std::env::var_os("XDG_CONFIG_HOME")
+    let config_home = opencode_config_home(
+        std::env::var_os("XDG_CONFIG_HOME").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+    )
+    .ok_or_else(|| AgentErr::Install {
+        agent: "opencode",
+        reason: "$HOME is not set; cannot resolve ~/.config/opencode/plugin/rimz.ts".to_owned(),
+    })?;
+    Ok(config_home.join("plugin/rimz.ts"))
+}
+
+fn opencode_config_home(
+    configured: Option<&std::ffi::OsStr>,
+    home: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    configured
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .or_else(|| {
-            std::env::var_os("HOME")
-                .filter(|v| !v.is_empty())
+            home.filter(|v| !v.is_empty())
                 .map(PathBuf::from)
                 .map(|home| home.join(".config"))
         })
-        .ok_or_else(|| AgentErr::Install {
-            agent: "opencode",
-            reason: "$HOME is not set; cannot resolve ~/.config/opencode/plugin/rimz.ts".to_owned(),
-        })?;
-    Ok(config_home.join("opencode/plugin/rimz.ts"))
+        .map(|home| home.join("opencode"))
 }
 
 // Capabilities this agent has no behavior for; every method keeps its

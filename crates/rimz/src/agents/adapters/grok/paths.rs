@@ -5,10 +5,24 @@ use std::path::{Component, Path, PathBuf};
 use crate::agents::{AgentErr, Result};
 
 pub(super) fn home() -> PathBuf {
-    std::env::var_os("GROK_HOME")
+    home_from(
+        std::env::var_os("GROK_HOME").as_deref(),
+        std::env::var("HOME")
+            .ok()
+            .as_deref()
+            .map(std::ffi::OsStr::new),
+    )
+    .unwrap_or_else(|| PathBuf::from("/.grok"))
+}
+
+pub(super) fn home_from(
+    configured: Option<&std::ffi::OsStr>,
+    home: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    configured
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| crate::agents::transcript_fs::home_dir().join(".grok"))
+        .or_else(|| home.map(|home| PathBuf::from(home).join(".grok")))
 }
 
 pub(super) fn sessions_root() -> PathBuf {

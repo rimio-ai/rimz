@@ -20,6 +20,145 @@ use crate::agents::AskKind;
 use crate::transcript::{AskOption, AskQuestion};
 
 #[test]
+fn builtin_config_homes_resolve_only_the_explicit_launch_env() {
+    let defaults = [
+        ("claude", ".claude"),
+        ("codex", ".codex"),
+        ("amp", ".config/amp"),
+        ("copilot", ".copilot"),
+        ("kimi", ".kimi-code"),
+        ("pi", ".pi/agent"),
+        ("opencode", ".config/opencode"),
+        ("antigravity", ".gemini/antigravity-cli"),
+        ("cursor", ".cursor"),
+        ("droid", ".factory"),
+        ("kiro", ".kiro"),
+        ("qwen", ".qwen"),
+        ("grok", ".grok"),
+    ];
+    assert_eq!(defaults.len(), BUILTINS.len());
+    for adapter in BUILTINS {
+        let kind = adapter.spec().kind;
+        let suffix = defaults.iter().find(|(name, _)| *name == kind).unwrap().1;
+        for home in ["/fixture/home", "/another/home"] {
+            let env = std::collections::BTreeMap::from([("HOME".into(), home.into())]);
+            assert_eq!(
+                adapter.config_home(&env),
+                Some(Path::new(home).join(suffix)),
+                "{kind}"
+            );
+        }
+        assert_eq!(adapter.config_home(&Default::default()), None, "{kind}");
+    }
+}
+
+#[test]
+fn builtin_config_homes_honor_provider_overrides() {
+    let overrides = [
+        (
+            "claude",
+            "CLAUDE_CONFIG_DIR",
+            " /selected , /archive ",
+            "/selected",
+        ),
+        ("codex", "CODEX_HOME", "/selected", "/selected"),
+        ("amp", "XDG_CONFIG_HOME", "/selected", "/selected/amp"),
+        ("copilot", "COPILOT_HOME", "/selected", "/selected"),
+        ("kimi", "KIMI_CODE_HOME", "/selected", "/selected"),
+        ("pi", "PI_CODING_AGENT_DIR", "/selected", "/selected"),
+        (
+            "opencode",
+            "XDG_CONFIG_HOME",
+            "/selected",
+            "/selected/opencode",
+        ),
+        ("cursor", "CURSOR_CONFIG_DIR", "/selected", "/selected"),
+        ("kiro", "KIRO_HOME", "/selected", "/selected"),
+        ("qwen", "QWEN_HOME", "/selected", "/selected"),
+        ("grok", "GROK_HOME", "/selected", "/selected"),
+    ];
+    for (kind, key, value, expected) in overrides {
+        let adapter = BUILTINS
+            .iter()
+            .find(|adapter| adapter.spec().kind == kind)
+            .unwrap();
+        let mut env = std::collections::BTreeMap::from([(key.into(), value.into())]);
+        assert_eq!(
+            adapter.config_home(&env),
+            Some(PathBuf::from(expected)),
+            "{kind}"
+        );
+        env.insert("HOME".into(), "/fixture/home".into());
+        assert_eq!(
+            adapter.config_home(&env),
+            Some(PathBuf::from(expected)),
+            "{kind}"
+        );
+        env.insert(key.into(), String::new());
+        let empty_override = adapter.config_home(&env);
+        env.remove(key);
+        assert_eq!(
+            empty_override,
+            if kind == "pi" {
+                Some(PathBuf::new())
+            } else {
+                adapter.config_home(&env)
+            },
+            "{kind}"
+        );
+    }
+}
+
+#[test]
+fn builtin_config_homes_do_not_follow_runtime_or_rimz_overrides() {
+    for (kind, key) in [
+        ("qwen", "QWEN_RUNTIME_DIR"),
+        ("amp", "AMP_DATA_DIR"),
+        ("antigravity", "RIMZ_ANTIGRAVITY_HOME"),
+        ("droid", "RIMZ_DROID_SETTINGS"),
+        ("claude", "RIMZ_CLAUDE_SETTINGS"),
+        ("opencode", "RIMZ_OPENCODE_PLUGIN"),
+    ] {
+        let adapter = BUILTINS
+            .iter()
+            .find(|adapter| adapter.spec().kind == kind)
+            .unwrap();
+        let mut env = std::collections::BTreeMap::from([("HOME".into(), "/fixture/home".into())]);
+        let expected = adapter.config_home(&env);
+        env.insert(key.into(), "/not-provider-config".into());
+        assert_eq!(adapter.config_home(&env), expected, "{kind}");
+    }
+}
+
+#[test]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
+fn cursor_config_home_prefers_native_override_to_xdg() {
+    let adapter = BUILTINS
+        .iter()
+        .find(|adapter| adapter.spec().kind == "cursor")
+        .unwrap();
+    let mut env = std::collections::BTreeMap::from([
+        ("HOME".into(), "/fixture/home".into()),
+        ("XDG_CONFIG_HOME".into(), "/xdg".into()),
+    ]);
+    assert_eq!(
+        adapter.config_home(&env),
+        Some(PathBuf::from("/xdg/cursor"))
+    );
+    env.insert("CURSOR_CONFIG_DIR".into(), "/cursor-config".into());
+    assert_eq!(
+        adapter.config_home(&env),
+        Some(PathBuf::from("/cursor-config"))
+    );
+}
+
+#[test]
 fn rendered_preset_flags_have_matching_argv_declarations() {
     let fields = [
         (PresetField::Model, "model"),

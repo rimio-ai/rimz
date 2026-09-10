@@ -15,6 +15,7 @@ mod transcript;
 
 pub(crate) use crate::agents::capabilities::*;
 
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
@@ -469,6 +470,23 @@ impl crate::agents::capabilities::InstallationCapability for CursorAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for CursorAdapter {
+    fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
+        if let Some(home) = env.get("CURSOR_CONFIG_DIR").filter(|home| !home.is_empty()) {
+            return Some(PathBuf::from(home));
+        }
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "freebsd",
+            target_os = "openbsd",
+            target_os = "netbsd",
+            target_os = "dragonfly"
+        ))]
+        if let Some(home) = env.get("XDG_CONFIG_HOME").filter(|home| !home.is_empty()) {
+            return Some(PathBuf::from(home).join("cursor"));
+        }
+        session::cursor_home(env.get("HOME").map(std::ffi::OsStr::new))
+    }
+
     fn parse_version(&self, stdout: &str, stderr: &str) -> Option<String> {
         parse_cursor_version(stdout).or_else(|| parse_cursor_version(stderr))
     }

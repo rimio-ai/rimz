@@ -273,6 +273,12 @@ impl crate::agents::capabilities::CoreCapability for DroidAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for DroidAdapter {
+    fn config_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
+        env.get("HOME")
+            .filter(|home| !home.is_empty())
+            .map(|home| PathBuf::from(home).join(".factory"))
+    }
+
     fn append_system_text_channel(&self) -> Option<SystemTextChannel> {
         Some(SystemTextChannel::TextFlag {
             flags: vec!["--append-system-prompt".to_owned()],

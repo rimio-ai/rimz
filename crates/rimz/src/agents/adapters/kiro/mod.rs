@@ -18,6 +18,7 @@ mod tests;
 
 pub(crate) use crate::agents::capabilities::*;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::definition::{
@@ -251,7 +252,14 @@ impl crate::agents::capabilities::CoreCapability for KiroAdapter {
     }
 }
 
-impl crate::agents::capabilities::LaunchCapability for KiroAdapter {}
+impl crate::agents::capabilities::LaunchCapability for KiroAdapter {
+    fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
+        install::resolve_home(
+            env.get("KIRO_HOME").map(std::ffi::OsStr::new),
+            env.get("HOME").map(std::ffi::OsStr::new),
+        )
+    }
+}
 
 impl crate::agents::capabilities::InstallationCapability for KiroAdapter {
     fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {

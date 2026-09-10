@@ -510,6 +510,13 @@ impl crate::agents::capabilities::InstallationCapability for KimiAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for KimiAdapter {
+    fn config_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
+        wire::kimi_home_from(
+            env.get("KIMI_CODE_HOME").map(std::ffi::OsStr::new),
+            env.get("HOME").map(std::ffi::OsStr::new),
+        )
+    }
+
     fn configured_identity(&self) -> (Option<String>, Option<String>) {
         (spend::configured_model(), None)
     }

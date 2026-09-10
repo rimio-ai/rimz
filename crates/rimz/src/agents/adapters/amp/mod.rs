@@ -350,6 +350,13 @@ impl crate::agents::capabilities::InstallationCapability for AmpAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for AmpAdapter {
+    fn config_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
+        amp_config_home(
+            env.get("XDG_CONFIG_HOME").map(std::ffi::OsStr::new),
+            env.get("HOME").map(std::ffi::OsStr::new),
+        )
+    }
+
     fn parse_version(&self, stdout: &str, stderr: &str) -> Option<String> {
         parse_amp_version(stdout).or_else(|| parse_amp_version(stderr))
     }
@@ -478,20 +485,30 @@ fn amp_plugin_path() -> Result<PathBuf> {
     if let Some(raw) = std::env::var_os("RIMZ_AMP_PLUGIN").filter(|value| !value.is_empty()) {
         return Ok(PathBuf::from(raw));
     }
-    let config_home = std::env::var_os("XDG_CONFIG_HOME")
+    let config_home = amp_config_home(
+        std::env::var_os("XDG_CONFIG_HOME").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+    )
+    .ok_or_else(|| AgentErr::Install {
+        agent: "amp",
+        reason: "$HOME is not set; cannot resolve ~/.config/amp/plugins/rimz.ts".to_owned(),
+    })?;
+    Ok(config_home.join("plugins/rimz.ts"))
+}
+
+fn amp_config_home(
+    configured: Option<&std::ffi::OsStr>,
+    home: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    configured
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .or_else(|| {
-            std::env::var_os("HOME")
-                .filter(|value| !value.is_empty())
+            home.filter(|value| !value.is_empty())
                 .map(PathBuf::from)
                 .map(|home| home.join(".config"))
         })
-        .ok_or_else(|| AgentErr::Install {
-            agent: "amp",
-            reason: "$HOME is not set; cannot resolve ~/.config/amp/plugins/rimz.ts".to_owned(),
-        })?;
-    Ok(config_home.join("amp/plugins/rimz.ts"))
+        .map(|home| home.join("amp"))
 }
 
 fn stamp_transcript_path(
