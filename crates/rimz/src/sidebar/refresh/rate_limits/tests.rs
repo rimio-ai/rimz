@@ -258,29 +258,35 @@ fn reset_epoch_invalidates_oauth_usage_throttle() {
             BTreeMap::new(),
         ),
     );
-    crate::sidebar::refresh::credits::merge_provider_credits_entry(
-        &runtime,
-        "codex",
-        crate::sidebar::refresh::credits::ProviderCreditsEntry {
-            scope: Default::default(),
-            observed_at_ms: 1,
-            oauth_read_at_ms: 1234,
-            auth_settled: false,
-            credentials_stamp: None,
-            account_key: None,
-            plan: None,
-            ok: true,
-            extra_credits: Some(crate::agents::ExtraCredits::known(None, Some(4.0), None)),
-            reset_credits: None,
-            direct_query_claim: Some(crate::sidebar::refresh::credits::DirectQueryClaim {
-                nonce: uuid::Uuid::nil(),
-                claimed_at_ms: 1,
-                requested_scope: Default::default(),
-                credentials_stamp: None,
-                preflight_account_key: None,
-            }),
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &runtime.shared_credits_path(),
+        &crate::sidebar::refresh::credits::CreditsCache {
+            refreshed_at_ms: unix_now_ms(),
+            entries: BTreeMap::from([(
+                "codex".to_owned(),
+                crate::sidebar::refresh::credits::ProviderCreditsEntry {
+                    scope: Default::default(),
+                    observed_at_ms: 1,
+                    oauth_read_at_ms: 1234,
+                    auth_settled: false,
+                    credentials_stamp: None,
+                    account_key: None,
+                    plan: None,
+                    ok: true,
+                    extra_credits: Some(crate::agents::ExtraCredits::known(None, Some(4.0), None)),
+                    reset_credits: None,
+                    direct_query_claim: Some(crate::sidebar::refresh::credits::DirectQueryClaim {
+                        nonce: uuid::Uuid::nil(),
+                        claimed_at_ms: 1,
+                        requested_scope: Default::default(),
+                        credentials_stamp: None,
+                        preflight_account_key: None,
+                    }),
+                },
+            )]),
         },
-    );
+    )
+    .unwrap();
     let mut frame = snapshot_with_panels(
         workspace,
         vec![provider_panel("codex", vec![rl_window(1, Some(new_reset))])],
@@ -296,23 +302,29 @@ fn reset_epoch_invalidates_oauth_usage_throttle() {
 /// A settled OAuth read inside its one-hour ceiling — the state that holds the
 /// account probe off until the unknown display forces it.
 fn seed_settled_credits(runtime: &RuntimePaths, kind: &str, oauth_read_at_ms: u64) {
-    crate::sidebar::refresh::credits::merge_provider_credits_entry(
-        runtime,
-        kind,
-        crate::sidebar::refresh::credits::ProviderCreditsEntry {
-            scope: Default::default(),
-            observed_at_ms: oauth_read_at_ms,
-            oauth_read_at_ms,
-            auth_settled: true,
-            credentials_stamp: None,
-            account_key: None,
-            plan: None,
-            ok: true,
-            extra_credits: None,
-            reset_credits: None,
-            direct_query_claim: None,
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &runtime.shared_credits_path(),
+        &crate::sidebar::refresh::credits::CreditsCache {
+            refreshed_at_ms: unix_now_ms(),
+            entries: BTreeMap::from([(
+                kind.to_owned(),
+                crate::sidebar::refresh::credits::ProviderCreditsEntry {
+                    scope: Default::default(),
+                    observed_at_ms: oauth_read_at_ms,
+                    oauth_read_at_ms,
+                    auth_settled: true,
+                    credentials_stamp: None,
+                    account_key: None,
+                    plan: None,
+                    ok: true,
+                    extra_credits: None,
+                    reset_credits: None,
+                    direct_query_claim: None,
+                },
+            )]),
         },
-    );
+    )
+    .unwrap();
 }
 
 fn oauth_read_at_ms(runtime: &RuntimePaths, kind: &str) -> u64 {

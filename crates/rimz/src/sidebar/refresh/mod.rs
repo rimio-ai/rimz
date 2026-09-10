@@ -43,8 +43,7 @@ pub use sessions::{
     refresh_session_transcript_context_from_watch,
 };
 pub use usage::{
-    complete_realtime_account_usage, refresh_account_usage_if_due, refresh_account_usage_now,
-    refresh_claimed_account_usage,
+    complete_realtime_account_usage, refresh_claimed_account_usage, refresh_provider_usage,
 };
 
 use self::accounts::produce_accounts;

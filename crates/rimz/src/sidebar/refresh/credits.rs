@@ -236,19 +236,39 @@ pub fn merge_provider_realtime_usage(
     snapshot: AccountUsageSnapshot,
 ) {
     let (plan, extra_credits, reset_credits) = account_usage_credit_fields(Some(&snapshot));
-    merge_provider_credits_entry(
-        runtime,
-        kind,
-        ProviderCreditsEntry {
-            scope,
-            observed_at_ms: unix_now_ms(),
-            plan: plan.clone(),
-            ok: plan.is_some() || extra_credits.is_some() || reset_credits.is_some(),
-            extra_credits,
-            reset_credits,
-            ..Default::default()
-        },
-    );
+    let mut entry = ProviderCreditsEntry {
+        scope,
+        observed_at_ms: unix_now_ms(),
+        ok: plan.is_some() || extra_credits.is_some() || reset_credits.is_some(),
+        plan,
+        extra_credits,
+        reset_credits,
+        ..Default::default()
+    };
+    let path = runtime.shared_credits_path();
+    let Some(_guard) =
+        crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
+            .ok()
+            .flatten()
+    else {
+        return;
+    };
+    let mut cache = read_credits_cache(&path);
+    if let Some(prior) = cache
+        .entries
+        .get(kind)
+        .filter(|prior| prior.scope == entry.scope)
+    {
+        entry.oauth_read_at_ms = prior.oauth_read_at_ms;
+        entry.auth_settled = prior.auth_settled;
+        entry.credentials_stamp = prior.credentials_stamp;
+        entry.account_key = prior.account_key.clone();
+        entry.direct_query_claim = prior.direct_query_claim.clone();
+        fill_missing_display_fields(&mut entry, prior);
+    }
+    cache.refreshed_at_ms = unix_now_ms();
+    cache.entries.insert(kind.to_owned(), entry);
+    write_credits_cache(&path, &cache);
 }
 
 /// Claim one due direct account-usage read under the shared credits lock.
@@ -442,55 +462,6 @@ fn account_usage_credit_fields(
     let extra_credits = snapshot.and_then(|usage| usage.extra_credits.clone());
     let reset_credits = snapshot.and_then(|usage| usage.reset_credits.clone());
     (plan, extra_credits, reset_credits)
-}
-
-pub(super) fn merge_provider_credits_entry(
-    runtime: &RuntimePaths,
-    kind: &str,
-    entry: ProviderCreditsEntry,
-) {
-    let path = runtime.shared_credits_path();
-    let Some(_guard) =
-        crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
-            .ok()
-            .flatten()
-    else {
-        return;
-    };
-    let mut cache = read_credits_cache(&path);
-    let mut entry = entry;
-    entry.plan = entry
-        .plan
-        .as_deref()
-        .and_then(crate::agents::non_empty_trimmed);
-    let prior = cache
-        .entries
-        .get(kind)
-        .filter(|prior| prior.scope == entry.scope);
-    if let Some(prior) = prior {
-        if entry.oauth_read_at_ms == 0 {
-            entry.oauth_read_at_ms = prior.oauth_read_at_ms;
-            entry.auth_settled = prior.auth_settled;
-            entry.credentials_stamp = prior.credentials_stamp;
-            entry.account_key = prior.account_key.clone();
-            entry.direct_query_claim = prior.direct_query_claim.clone();
-            fill_missing_display_fields(&mut entry, prior);
-        } else {
-            entry.extra_credits = entry
-                .extra_credits
-                .take()
-                .or_else(|| prior.extra_credits.clone());
-            // A reading without reset-credit data preserves the last successful
-            // app-server or OAuth reset-credit read.
-            entry.reset_credits = entry
-                .reset_credits
-                .take()
-                .or_else(|| prior.reset_credits.clone());
-        }
-    }
-    cache.refreshed_at_ms = unix_now_ms();
-    cache.entries.insert(kind.to_owned(), entry);
-    write_credits_cache(&path, &cache);
 }
 
 pub(super) fn invalidate_oauth_read(runtime: &RuntimePaths, kind: &str) {

@@ -20,75 +20,6 @@ fn complete_realtime() -> AccountUsageSnapshot {
     }
 }
 
-#[test]
-fn account_usage_completion_decision_matrix() {
-    let complete = complete_realtime();
-    assert_eq!(
-        account_usage_completion_decision(false, Some(&complete)),
-        AccountUsageCompletionDecision::default()
-    );
-    assert_eq!(
-        account_usage_completion_decision(true, None),
-        AccountUsageCompletionDecision {
-            publish_realtime: false,
-            run_direct: true,
-        }
-    );
-    assert_eq!(
-        account_usage_completion_decision(true, Some(&complete)),
-        AccountUsageCompletionDecision {
-            publish_realtime: true,
-            run_direct: false,
-        }
-    );
-
-    let mut missing_plan = complete.clone();
-    missing_plan.plan = None;
-    assert_eq!(
-        account_usage_completion_decision(true, Some(&missing_plan)),
-        AccountUsageCompletionDecision {
-            publish_realtime: true,
-            run_direct: true,
-        }
-    );
-
-    let mut missing_extra = complete.clone();
-    missing_extra.extra_credits = None;
-    assert_eq!(
-        account_usage_completion_decision(true, Some(&missing_extra)),
-        AccountUsageCompletionDecision {
-            publish_realtime: true,
-            run_direct: true,
-        }
-    );
-
-    let mut missing_windows = complete.clone();
-    missing_windows.rate_limits = None;
-    assert_eq!(
-        account_usage_completion_decision(true, Some(&missing_windows)),
-        AccountUsageCompletionDecision {
-            publish_realtime: true,
-            run_direct: true,
-        }
-    );
-
-    let reset_only = AccountUsageSnapshot {
-        reset_credits: Some(crate::agents::ResetCredits {
-            count: 1,
-            soonest_expiry: None,
-            expiries: Vec::new(),
-        }),
-        ..Default::default()
-    };
-    assert_eq!(
-        account_usage_completion_decision(true, Some(&reset_only)),
-        AccountUsageCompletionDecision {
-            publish_realtime: true,
-            run_direct: true,
-        }
-    );
-}
-
 fn account_usage_runtime() -> (tempfile::TempDir, RuntimePaths) {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
@@ -116,9 +47,10 @@ fn forced_account_usage_refresh_invalidates_throttle_before_direct_claim() {
     );
     let mut called = false;
 
-    assert!(refresh_account_usage_now_with(
+    assert!(refresh_provider_usage_with(
         &runtime,
         "claude",
+        true,
         |runtime, kind| {
             called = true;
             assert_eq!(kind, "claude");
@@ -150,10 +82,9 @@ fn account_usage_completion_publishes_complete_realtime_without_fallback() {
     let mut realtime = complete_realtime();
     realtime.rate_limits = Some(usage_windows(12));
 
-    let wrote =
-        complete_realtime_account_usage_with(&runtime, "codex", true, Some(realtime), |_, _| {
-            unreachable!("complete realtime usage needs no direct fallback")
-        });
+    let wrote = complete_realtime_account_usage_with(&runtime, "codex", realtime, |_, _| {
+        unreachable!("complete realtime usage needs no direct fallback")
+    });
 
     assert!(wrote);
     let credits = super::super::credits::read_credits_cache(&runtime.shared_credits_path());
@@ -175,23 +106,17 @@ fn account_usage_completion_combines_realtime_credits_with_direct_windows() {
         ..Default::default()
     };
 
-    let wrote = complete_realtime_account_usage_with(
-        &runtime,
-        "codex",
-        true,
-        Some(realtime),
-        |runtime, kind| {
+    let wrote =
+        complete_realtime_account_usage_with(&runtime, "codex", realtime, |runtime, kind| {
             publish_account_usage_snapshot(
                 runtime,
                 kind,
-                ProviderAccountScope::KindWide,
                 AccountUsageSnapshot {
                     rate_limits: Some(usage_windows(34)),
                     ..Default::default()
                 },
             )
-        },
-    );
+        });
 
     assert!(wrote);
     let credits = super::super::credits::read_credits_cache(&runtime.shared_credits_path());
@@ -207,18 +132,31 @@ fn account_usage_completion_combines_realtime_credits_with_direct_windows() {
 
 #[test]
 fn account_usage_completion_offline_skips_publication_and_probe() {
+    if !crate::agents::credits::oauth_usage_offline() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "sidebar::refresh::usage::tests::account_usage_completion_offline_skips_publication_and_probe",
+                "--nocapture",
+            ])
+            .env("RIMZ_OAUTH_USAGE_OFFLINE", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
     let (_dir, runtime) = account_usage_runtime();
     let called = std::cell::Cell::new(false);
-    let wrote = complete_realtime_account_usage_with(
-        &runtime,
-        "codex",
-        false,
-        Some(complete_realtime()),
-        |_, _| {
+    let wrote =
+        complete_realtime_account_usage_with(&runtime, "codex", complete_realtime(), |_, _| {
             called.set(true);
             true
-        },
-    );
+        });
 
     assert!(!wrote);
     assert!(!called.get());
