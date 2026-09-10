@@ -1,7 +1,7 @@
 use super::*;
 use jiff::civil::date;
 
-use Weekday::{Fri, Mon, Wed};
+use jiff::civil::Weekday::{Friday, Monday, Wednesday};
 
 pub(super) fn zdt(year: i16, month: i8, day: i8, hour: i8, minute: i8, second: i8) -> Zoned {
     date(year, month, day)
@@ -58,14 +58,17 @@ fn schedule_of(entry: &TaskEntry) -> Schedule {
 
 #[test]
 fn weekday_masks_preserve_aliases_sorting_and_wrapped_ranges() {
-    use Weekday::{Sat, Sun, Thu, Tue};
+    use jiff::civil::Weekday::{Saturday, Sunday, Thursday, Tuesday};
 
-    assert_eq!(weekday_range(Fri, Mon), vec![Fri, Sat, Sun, Mon]);
+    assert_eq!(
+        weekday_range(Friday, Monday),
+        vec![Friday, Saturday, Sunday, Monday]
+    );
     for (raw, expected) in [
-        ("fri-mon", vec![Mon, Fri, Sat, Sun]),
-        ("wed,mon,mon", vec![Mon, Wed]),
-        ("tues,thurs,weds", vec![Tue, Wed, Thu]),
-        ("weekends", vec![Sat, Sun]),
+        ("fri-mon", vec![Monday, Friday, Saturday, Sunday]),
+        ("wed,mon,mon", vec![Monday, Wednesday]),
+        ("tues,thurs,weds", vec![Tuesday, Wednesday, Thursday]),
+        ("weekends", vec![Saturday, Sunday]),
     ] {
         assert_eq!(parse_days(raw), Some(expected), "{raw}");
     }
@@ -250,7 +253,7 @@ fn parse_schedule_accepts_every_timing_form() {
         Schedule::Calendar(CalendarSpec {
             minute: 5,
             hour: 6,
-            weekdays: vec![Mon, Wed, Fri],
+            weekdays: vec![Monday, Wednesday, Friday],
         })
     );
     assert_eq!(

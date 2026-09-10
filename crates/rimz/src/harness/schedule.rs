@@ -17,6 +17,7 @@ use anyhow::Context;
 
 use crate::config::{TaskEntry, TaskTarget};
 use crate::utils::time::{ClockTime, DurationUnit, parse_duration_units};
+use jiff::civil::Weekday;
 use jiff::{SignedDuration, Timestamp, Zoned};
 
 pub mod arm;
@@ -216,59 +217,38 @@ fn ephemeral_lifetime(entry: &TaskEntry) -> bool {
         || entry.watch.is_some()
 }
 
-/// A weekday in Mon..Sun order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum Weekday {
-    Mon,
-    Tue,
-    Wed,
-    Thu,
-    Fri,
-    Sat,
-    Sun,
+const WEEK: [Weekday; 7] = [
+    Weekday::Monday,
+    Weekday::Tuesday,
+    Weekday::Wednesday,
+    Weekday::Thursday,
+    Weekday::Friday,
+    Weekday::Saturday,
+    Weekday::Sunday,
+];
+
+fn short_day_name(day: Weekday) -> &'static str {
+    match day {
+        Weekday::Monday => "Mon",
+        Weekday::Tuesday => "Tue",
+        Weekday::Wednesday => "Wed",
+        Weekday::Thursday => "Thu",
+        Weekday::Friday => "Fri",
+        Weekday::Saturday => "Sat",
+        Weekday::Sunday => "Sun",
+    }
 }
 
-impl Weekday {
-    const ORDER: [Weekday; 7] = [
-        Weekday::Mon,
-        Weekday::Tue,
-        Weekday::Wed,
-        Weekday::Thu,
-        Weekday::Fri,
-        Weekday::Sat,
-        Weekday::Sun,
-    ];
-
-    fn index(self) -> usize {
-        Self::ORDER
-            .iter()
-            .position(|d| *d == self)
-            .expect("weekday in order")
-    }
-
-    fn short_name(self) -> &'static str {
-        match self {
-            Weekday::Mon => "Mon",
-            Weekday::Tue => "Tue",
-            Weekday::Wed => "Wed",
-            Weekday::Thu => "Thu",
-            Weekday::Fri => "Fri",
-            Weekday::Sat => "Sat",
-            Weekday::Sun => "Sun",
-        }
-    }
-
-    fn parse(token: &str) -> Option<Weekday> {
-        match token.trim().to_ascii_lowercase().as_str() {
-            "mon" | "monday" => Some(Weekday::Mon),
-            "tue" | "tues" | "tuesday" => Some(Weekday::Tue),
-            "wed" | "weds" | "wednesday" => Some(Weekday::Wed),
-            "thu" | "thur" | "thurs" | "thursday" => Some(Weekday::Thu),
-            "fri" | "friday" => Some(Weekday::Fri),
-            "sat" | "saturday" => Some(Weekday::Sat),
-            "sun" | "sunday" => Some(Weekday::Sun),
-            _ => None,
-        }
+fn parse_weekday(token: &str) -> Option<Weekday> {
+    match token.trim().to_ascii_lowercase().as_str() {
+        "mon" | "monday" => Some(Weekday::Monday),
+        "tue" | "tues" | "tuesday" => Some(Weekday::Tuesday),
+        "wed" | "weds" | "wednesday" => Some(Weekday::Wednesday),
+        "thu" | "thur" | "thurs" | "thursday" => Some(Weekday::Thursday),
+        "fri" | "friday" => Some(Weekday::Friday),
+        "sat" | "saturday" => Some(Weekday::Saturday),
+        "sun" | "sunday" => Some(Weekday::Sunday),
+        _ => None,
     }
 }
 
@@ -312,7 +292,7 @@ impl Schedule {
                 } else {
                     spec.weekdays
                         .iter()
-                        .map(|d| d.short_name())
+                        .map(|day| short_day_name(*day))
                         .collect::<Vec<_>>()
                         .join(",")
                 };
@@ -801,8 +781,8 @@ fn parse_days(days: &str) -> Option<Vec<Weekday>> {
     }
     match days.to_ascii_lowercase().as_str() {
         "day" | "daily" => return Some(Vec::new()),
-        "weekday" | "weekdays" => return Some(weekday_range(Weekday::Mon, Weekday::Fri)),
-        "weekend" | "weekends" => return Some(vec![Weekday::Sat, Weekday::Sun]),
+        "weekday" | "weekdays" => return Some(weekday_range(Weekday::Monday, Weekday::Friday)),
+        "weekend" | "weekends" => return Some(vec![Weekday::Saturday, Weekday::Sunday]),
         _ => {}
     }
     let mut set: Vec<Weekday> = Vec::new();
@@ -812,11 +792,11 @@ fn parse_days(days: &str) -> Option<Vec<Weekday>> {
             return None;
         }
         let expanded = if let Some((lo, hi)) = token.split_once('-') {
-            let lo = Weekday::parse(lo)?;
-            let hi = Weekday::parse(hi)?;
+            let lo = parse_weekday(lo)?;
+            let hi = parse_weekday(hi)?;
             weekday_range(lo, hi)
         } else {
-            vec![Weekday::parse(token)?]
+            vec![parse_weekday(token)?]
         };
         for day in expanded {
             if !set.contains(&day) {
@@ -824,7 +804,7 @@ fn parse_days(days: &str) -> Option<Vec<Weekday>> {
             }
         }
     }
-    set.sort();
+    set.sort_by_key(|day| day.to_monday_zero_offset());
     Some(set)
 }
 
@@ -852,15 +832,14 @@ fn parse_interval_minutes(raw: &str) -> Result<u32, ()> {
 
 /// Inclusive Mon..Sun range; a wrap-around (e.g. `fri-mon`) walks forward to Sun.
 fn weekday_range(lo: Weekday, hi: Weekday) -> Vec<Weekday> {
-    let (lo, hi) = (lo.index(), hi.index());
+    let (lo, hi) = (
+        lo.to_monday_zero_offset() as usize,
+        hi.to_monday_zero_offset() as usize,
+    );
     if lo <= hi {
-        Weekday::ORDER[lo..=hi].to_vec()
+        WEEK[lo..=hi].to_vec()
     } else {
-        Weekday::ORDER[lo..]
-            .iter()
-            .chain(&Weekday::ORDER[..=hi])
-            .copied()
-            .collect()
+        WEEK[lo..].iter().chain(&WEEK[..=hi]).copied().collect()
     }
 }
 
@@ -887,7 +866,7 @@ fn format_minutes(minutes: u32) -> String {
 }
 
 fn calendar_due(spec: &CalendarSpec, last_fire: Timestamp, now: &Zoned) -> bool {
-    if !spec.weekdays.is_empty() && !spec.weekdays.contains(&weekday_from_jiff(now.weekday())) {
+    if !spec.weekdays.is_empty() && !spec.weekdays.contains(&now.weekday()) {
         return false;
     }
     if (now.hour(), now.minute()) < (spec.hour as i8, spec.minute as i8) {
@@ -913,8 +892,7 @@ fn calendar_next_after(
             .date()
             .checked_add(Duration::from_secs(days * 86_400))
             .ok()?;
-        if !spec.weekdays.is_empty() && !spec.weekdays.contains(&weekday_from_jiff(date.weekday()))
-        {
+        if !spec.weekdays.is_empty() && !spec.weekdays.contains(&date.weekday()) {
             continue;
         }
         let Ok(occurrence) = date
@@ -929,18 +907,6 @@ fn calendar_next_after(
         }
     }
     None
-}
-
-fn weekday_from_jiff(day: jiff::civil::Weekday) -> Weekday {
-    match day {
-        jiff::civil::Weekday::Monday => Weekday::Mon,
-        jiff::civil::Weekday::Tuesday => Weekday::Tue,
-        jiff::civil::Weekday::Wednesday => Weekday::Wed,
-        jiff::civil::Weekday::Thursday => Weekday::Thu,
-        jiff::civil::Weekday::Friday => Weekday::Fri,
-        jiff::civil::Weekday::Saturday => Weekday::Sat,
-        jiff::civil::Weekday::Sunday => Weekday::Sun,
-    }
 }
 
 fn minute_bucket(timestamp: Timestamp) -> i64 {
