@@ -12,6 +12,7 @@ use crate::ids::{AgentKind, AgentSessionId};
 
 fn role_binding(role: &str) -> RoleBinding {
     RoleBinding {
+        signals: Vec::new(),
         role: role.to_owned(),
         profile: format!("{role}-profile"),
         mode: None,
@@ -328,6 +329,7 @@ fn subagent_doorway_keeps_team_roles_on_agent_profiles() {
         "forge".to_owned(),
         Team {
             roles: vec![RoleBinding {
+                signals: Vec::new(),
                 role: "reviewer".to_owned(),
                 profile: "claude-agent".to_owned(),
                 mode: None,
@@ -343,7 +345,6 @@ fn subagent_doorway_keeps_team_roles_on_agent_profiles() {
             layout: None,
             scratch_files: Vec::new(),
             stages: Vec::new(),
-            signals: Vec::new(),
         },
     );
     let launch = effective_launch(&machine, dir.path());

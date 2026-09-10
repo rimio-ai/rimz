@@ -151,12 +151,15 @@ Start from the forge directory or from scratch: rename the roles, add or drop so
 
 ### Send events to the responsible role
 
-A PR script knows who pushed, not who owns the repair. Put that routing in the team instead, so a failed check reaches the coder without the reviewer relaying it:
+A PR script knows who pushed, not who owns the repair. Declare signals on the role that receives them, so a failed check reaches the coder without the reviewer relaying it:
 
 ```toml
-[[agents.teams.forge.signals]]
-signal = "ci.failed"
+[[agents.teams.forge.roles]]
 role = "coder"
+profile = "codex"
+signals = [
+  { signal = "ci.failed" },
+]
 ```
 
 Launch with `rimz teams forge -w feat-x`, or from an existing linked worktree. RimZ refuses a fresh root-checkout launch of this binding because its forge poll watches worktree branches; an explicit branch or worktree-path match is the alternative. When the coder registers, RimZ writes a standing subscription pinned to that session and scoped to its worktree. Failed CI sends the coder a `Type: SIGNAL` message with the branch, PR when known, and event payload. A busy coder takes it at the next turn boundary; this is not a self-alarm interrupt.

@@ -69,6 +69,7 @@ fn diagnosis_reaches_through_a_project_trust_parse_error() {
 
 fn role(role: &str, profile: &str) -> RoleBinding {
     RoleBinding {
+        signals: Vec::new(),
         role: role.to_owned(),
         profile: profile.to_owned(),
         mode: None,
@@ -699,7 +700,6 @@ fn trusted_repo_team_overlays_machine_team_and_resolves_prompt_paths() {
             layout: None,
             scratch_files: Vec::new(),
             stages: Vec::new(),
-            signals: Vec::new(),
         },
     )]));
 
@@ -798,7 +798,6 @@ fn untrusted_repo_profile_inside_machine_team_layout_is_blocked() {
             layout: Some("coder,planner".to_owned()),
             scratch_files: Vec::new(),
             stages: Vec::new(),
-            signals: Vec::new(),
         },
     )]));
 

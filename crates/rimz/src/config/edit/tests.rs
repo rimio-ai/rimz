@@ -391,6 +391,11 @@ fn dynamic_profile_and_team_field_lists_match_serialized_schema() {
         roles: vec![RoleBinding {
             role: "lead".to_owned(),
             profile: "claude".to_owned(),
+            signals: vec![crate::config::TeamSignalBinding {
+                signal: "ci.failed".to_owned(),
+                matches: Default::default(),
+                prompt: None,
+            }],
             mode: None,
             model: None,
             effort: None,
@@ -404,12 +409,6 @@ fn dynamic_profile_and_team_field_lists_match_serialized_schema() {
         layout: Some("lead".to_owned()),
         scratch_files: vec!["notes/".to_owned()],
         stages: vec!["Explore".to_owned(), "Plan".to_owned()],
-        signals: vec![crate::config::TeamSignalBinding {
-            signal: "ci.failed".to_owned(),
-            role: "lead".to_owned(),
-            matches: Default::default(),
-            prompt: None,
-        }],
     };
 
     let profile_keys: std::collections::BTreeSet<_> = toml::Value::try_from(profile)

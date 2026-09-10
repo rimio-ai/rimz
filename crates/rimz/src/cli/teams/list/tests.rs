@@ -23,12 +23,12 @@ fn team() -> Team {
             system_prompt_file: Some("planner.md".into()),
             append_system_prompt_files: vec!["consensus.md".into()],
             args: None,
+            signals: Vec::new(),
         }],
         leader: Some("planner".to_owned()),
         layout: None,
         scratch_files: Vec::new(),
         stages: Vec::new(),
-        signals: Vec::new(),
     }
 }
 
@@ -238,12 +238,16 @@ fn catalog_projects_cohort_observability_by_worktree() {
 #[test]
 fn catalog_merges_definition_and_live_instance() {
     let mut definition = team();
-    definition.signals.push(rimz::config::TeamSignalBinding {
-        signal: "ci.failed".to_owned(),
-        role: "planner".to_owned(),
-        matches: BTreeMap::from([("branch".to_owned(), "feat-x".to_owned())]),
-        prompt: None,
-    });
+    let mut reviewer = definition.roles[0].clone();
+    reviewer.role = "reviewer".to_owned();
+    definition.roles.push(reviewer);
+    definition.roles[0]
+        .signals
+        .push(rimz::config::TeamSignalBinding {
+            signal: "ci.failed".to_owned(),
+            matches: BTreeMap::from([("branch".to_owned(), "feat-x".to_owned())]),
+            prompt: None,
+        });
     let teams = TeamsConfig(BTreeMap::from([("forge".to_owned(), definition)]));
     let mut agent = AgentState::stub("claude", "sess-planner", AgentStatus::Running);
     agent.team = Some("forge".to_owned());
@@ -278,6 +282,8 @@ fn catalog_merges_definition_and_live_instance() {
             "signal": "ci.failed", "match": {"branch": "feat-x"}, "prompt": null
         }])
     );
+    assert_eq!(json[0]["roles"][1]["role"], "reviewer");
+    assert_eq!(json[0]["roles"][1]["signals"], serde_json::json!([]));
     assert_eq!(json[0]["instances"][0]["members"][0]["role"], "planner");
     assert_eq!(
         json[0]["instances"][0]["members"][0]["signals"],
@@ -474,12 +480,13 @@ fn live_member_cost_counts_only_the_current_lane_lifetime() {
 fn invalid_team_stays_visible_with_its_error() {
     let mut broken = team();
     broken.roles[0].profile = "missing".to_owned();
-    broken.signals.push(rimz::config::TeamSignalBinding {
-        signal: "ci.failed".to_owned(),
-        role: "planner".to_owned(),
-        matches: BTreeMap::new(),
-        prompt: Some("Fix CI".to_owned()),
-    });
+    broken.roles[0]
+        .signals
+        .push(rimz::config::TeamSignalBinding {
+            signal: "ci.failed".to_owned(),
+            matches: BTreeMap::new(),
+            prompt: Some("Fix CI".to_owned()),
+        });
     let reports = build_catalog(
         &TeamsConfig(BTreeMap::from([("broken".to_owned(), broken)])),
         &ProfilesConfig::default(),
@@ -506,29 +513,6 @@ fn invalid_team_stays_visible_with_its_error() {
             .error
             .as_deref()
             .is_some_and(|error| error.contains("unknown profile"))
-    );
-
-    let mut invalid_signal = team();
-    invalid_signal
-        .signals
-        .push(rimz::config::TeamSignalBinding {
-            signal: "ci.failed".to_owned(),
-            role: "builder".to_owned(),
-            matches: BTreeMap::new(),
-            prompt: None,
-        });
-    let report = definition_report(
-        "forge",
-        &invalid_signal,
-        &ProfilesConfig::default(),
-        &CommandsConfig::default(),
-        None,
-        Vec::new(),
-    );
-    assert!(!report.valid);
-    assert_eq!(
-        report.error.as_deref(),
-        Some("team `forge` signal binding 1 targets undeclared role `builder`")
     );
 }
 

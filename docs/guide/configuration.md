@@ -505,19 +505,20 @@ base = "fresh"
 
 ### Team signal bindings
 
-A team can route events to the role responsible for acting on them, instead of making the agent that pushed relay a failed build:
+A role's `signals` array declares the events it receives; see [teams](./teams.md#send-events-to-the-responsible-role) for the workflow:
 
 ```toml
-[[agents.teams.forge.signals]]
-signal = "ci.failed"
+[[agents.teams.forge.roles]]
 role = "coder"
-# match = { branch = "feat-x" }
-# prompt = "Read the failed job and repair it."
+profile = "codex"
+signals = [
+  { signal = "ci.failed", match = { branch = "feat-x" }, prompt = "Read the failed job and repair it." },
+]
 ```
 
-Each binding requires a `signal` selector and a declared `role`; optional `match` is an all-of map of string values against top-level payload fields, and optional `prompt` is appended verbatim after the event evidence. Selectors use an exact name or a family such as `ci.*`. An `agent.*` binding requires `match.handle` or `match.session` naming another agent. Invalid bindings fail team preparation and stay visible in `rimz teams show`.
+Each binding is an inline table requiring a `signal` selector; its containing role is the receiver. Optional `match` is an all-of map of string values against top-level payload fields, and optional `prompt` is appended verbatim after the event evidence. Selectors use an exact name or a family such as `ci.*`. An `agent.*` binding requires `match.handle` or `match.session` naming another agent. Invalid bindings fail team preparation and stay visible in `rimz teams show`.
 
-CI/PR bindings default to the member's worktree; team signals default to its cohort. Fresh root-checkout launches with implicit CI/PR scope are refused before side effects: launch with `-w <worktree>`, work from a linked worktree, or supply an explicit branch/path match. Registration materializes session-pinned workspace rows; end, loss, and stop remove them. `rimz teams show` separates declarations from live rows. The complete ordered list, including selectors, roles, matches, and prompts, is trust-hashed; changing a project binding requires a fresh `rimz trust grant`. See [teams](./teams.md#define-your-own-team) for the workflow.
+CI/PR bindings default to the member's worktree; team signals default to its cohort. Fresh root-checkout launches with implicit CI/PR scope are refused before side effects: launch with `-w <worktree>`, work from a linked worktree, or supply an explicit branch/path match. Registration materializes session-pinned workspace rows; end, loss, and stop remove them. `rimz teams show` separates declarations from live rows. Each role's complete ordered binding list, including selectors, matches, and prompts, is trust-hashed; changing a project binding requires a fresh `rimz trust grant`.
 
 ## loop.toml: scheduled turns
 

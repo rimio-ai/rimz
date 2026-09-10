@@ -17,9 +17,10 @@ pub enum TeamBindingErr {
     InvalidMember,
     #[error(transparent)]
     Instance(#[from] crate::ids::InvalidTeamInstanceId),
-    #[error("team `{team}` signal binding {index}: {source}")]
+    #[error("team `{team}` role `{role}` signal binding {index}: {source}")]
     Binding {
         team: String,
+        role: String,
         index: usize,
         #[source]
         source: TeamBindingFailure,
@@ -49,7 +50,12 @@ pub fn validate_launch(
     if worktree.is_some() || workspace.worktree_root != workspace.project_root {
         return Ok(());
     }
-    for (index, binding) in team.signals.iter().enumerate() {
+    for (role, index, binding) in team.roles.iter().flat_map(|role| {
+        role.signals
+            .iter()
+            .enumerate()
+            .map(move |(index, binding)| (&role.role, index, binding))
+    }) {
         let result = (|| -> Result<(), TeamBindingFailure> {
             let selector =
                 super::parse_signal_selector(name, &binding.signal, Some(&binding.matches))?;
@@ -63,6 +69,7 @@ pub fn validate_launch(
         })();
         result.map_err(|source| TeamBindingErr::Binding {
             team: name.to_owned(),
+            role: role.clone(),
             index: index + 1,
             source,
         })?;
@@ -86,6 +93,9 @@ pub fn arm_member(
     let Some(role) = member.role.as_deref() else {
         return Ok(0);
     };
+    let Some(declared_role) = team.roles.iter().find(|binding| binding.role == role) else {
+        return Ok(0);
+    };
     let channel = member.channel().unwrap_or_else(|| "external".to_owned());
     let instance: TeamInstanceId = format!("{name}#{channel}").parse()?;
     let peers: Vec<_> = agents.iter().collect();
@@ -96,12 +106,7 @@ pub fn arm_member(
     };
     let mut names = BTreeSet::new();
     let mut specs = Vec::new();
-    for (index, binding) in team
-        .signals
-        .iter()
-        .enumerate()
-        .filter(|(_, b)| b.role == role)
-    {
+    for (index, binding) in declared_role.signals.iter().enumerate() {
         let result = (|| -> Result<DeliverySpec, TeamBindingFailure> {
             let mut ordinal = 1;
             let task_name = loop {
@@ -142,6 +147,7 @@ pub fn arm_member(
             index + 1,
             result.map_err(|source| TeamBindingErr::Binding {
                 team: name.to_owned(),
+                role: role.to_owned(),
                 index: index + 1,
                 source,
             })?,
@@ -151,6 +157,7 @@ pub fn arm_member(
     for (index, spec) in specs {
         arm::arm_delivery(workspace, spec).map_err(|source| TeamBindingErr::Binding {
             team: name.to_owned(),
+            role: role.to_owned(),
             index,
             source: source.into(),
         })?;
@@ -180,8 +187,6 @@ fn member_task_name(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use super::*;
 
     #[test]
@@ -204,25 +209,25 @@ mod tests {
     fn team_signal_launch_scope_requires_explicit_root_checkout_matches() {
         let root = tempfile::tempdir().unwrap();
         let mut workspace = crate::WorkspaceResolver::resolve(root.path(), None).unwrap();
-        let mut team = Team {
-            signals: vec![crate::config::TeamSignalBinding {
-                signal: "ci.failed".to_owned(),
-                role: "coder".to_owned(),
-                matches: BTreeMap::new(),
-                prompt: None,
-            }],
-            ..Default::default()
-        };
+        let mut team: Team = toml::from_str(
+            r#"
+            [[roles]]
+            role = "coder"
+            profile = "codex"
+            signals = [{ signal = "ci.failed" }]
+            "#,
+        )
+        .unwrap();
         assert!(validate_launch("forge", &team, &workspace, None).is_err());
         assert!(validate_launch("forge", &team, &workspace, Some("feature")).is_ok());
         for key in ["branch", "path"] {
-            team.signals[0]
+            team.roles[0].signals[0]
                 .matches
                 .insert(key.to_owned(), "feature".to_owned());
             assert!(validate_launch("forge", &team, &workspace, None).is_ok());
-            team.signals[0].matches.clear();
+            team.roles[0].signals[0].matches.clear();
         }
-        team.signals[0].signal = "pr.merged".to_owned();
+        team.roles[0].signals[0].signal = "pr.merged".to_owned();
         assert!(validate_launch("forge", &team, &workspace, None).is_err());
         workspace.worktree_root = root.path().join("feature");
         assert!(validate_launch("forge", &team, &workspace, None).is_ok());

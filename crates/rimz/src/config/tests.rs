@@ -1452,35 +1452,66 @@ fn team_signal_bindings_parse_default_and_round_trip() {
         [[teams.forge.roles]]
         role = "coder"
         profile = "codex"
-        [[teams.forge.signals]]
-        signal = "ci.failed"
-        role = "coder"
-        [[teams.forge.signals]]
-        signal = "agent.idle"
-        role = "coder"
-        match = { handle = "reviewer" }
-        prompt = "Review the result"
+        signals = [
+            { signal = "ci.failed" },
+            { signal = "agent.idle", match = { handle = "reviewer" }, prompt = "Review the result" },
+        ]
+        [[teams.forge.roles]]
+        role = "reviewer"
+        profile = "claude"
         "#,
     )
     .expect("parse bindings");
     let team = &config.teams.0["forge"];
-    assert_eq!(team.signals.len(), 2);
-    assert_eq!(team.signals[0].signal, "ci.failed");
-    assert_eq!(team.signals[0].role, "coder");
-    assert!(team.signals[0].matches.is_empty());
-    assert!(team.signals[0].prompt.is_none());
-    assert_eq!(team.signals[1].matches["handle"], "reviewer");
-    assert_eq!(team.signals[1].prompt.as_deref(), Some("Review the result"));
+    let signals = &team.roles[0].signals;
+    assert_eq!(signals.len(), 2);
+    assert_eq!(signals[0].signal, "ci.failed");
+    assert!(signals[0].matches.is_empty());
+    assert!(signals[0].prompt.is_none());
+    assert_eq!(signals[1].matches["handle"], "reviewer");
+    assert_eq!(signals[1].prompt.as_deref(), Some("Review the result"));
+    assert!(team.roles[1].signals.is_empty());
     let encoded = toml::to_string(team).expect("serialize bindings");
     assert_eq!(toml::from_str::<Team>(&encoded).expect("round trip"), *team);
     for raw in ["", "signals = []"] {
-        let empty: Team = toml::from_str(raw).expect("default bindings");
+        let empty: RoleBinding =
+            toml::from_str(&format!("role = \"coder\"\nprofile = \"codex\"\n{raw}"))
+                .expect("default bindings");
         assert!(empty.signals.is_empty());
         assert!(
             !toml::to_string(&empty)
                 .expect("serialize empty")
                 .contains("signals")
         );
+    }
+    for signals in [
+        r#"["ci.failed"]"#,
+        r#"[{ prompt = "missing signal" }]"#,
+        r#"[{ signal = "ci.failed", match = { branch = 1 } }]"#,
+    ] {
+        assert!(
+            toml::from_str::<RoleBinding>(&format!(
+                "role = \"coder\"\nprofile = \"codex\"\nsignals = {signals}"
+            ))
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn team_level_signals_are_rejected_with_role_migration_guidance() {
+    let dir = tempdir().expect("tempdir");
+    let path = write_named(
+        &dir,
+        "agents.toml",
+        "[[agents.teams.forge.signals]]\nsignal = \"ci.failed\"\nrole = \"coder\"\n",
+    );
+    match load_no_fragments(&path) {
+        Err(ConfigErr::RemovedKey { detail, .. }) => {
+            assert!(detail.contains("team `forge`"), "{detail}");
+            assert!(detail.contains("each receiving role"), "{detail}");
+        }
+        other => panic!("expected RemovedKey for team-level signals, got {other:?}"),
     }
 }
 
