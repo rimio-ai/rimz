@@ -746,17 +746,6 @@ mod tests {
         assert_eq!(outcome.output, "watcher failed before launching command");
         assert_eq!(outcome.summary.bytes, 39);
         assert_eq!(outcome.summary.lines, 1);
-        let sandboxed = super::super::signal::WatchOutcome::measured(
-            outcome.verdict,
-            outcome.output,
-            &path,
-            &crate::sandbox::TmpView::new(crate::config::Isolation::Sandbox, &paths),
-        );
-        assert_eq!(
-            sandboxed.output_path,
-            Some(PathBuf::from(format!("/tmp/rimz-wakes/{NAME}.output")))
-        );
-        assert_eq!(sandboxed.summary, outcome.summary);
         std::fs::remove_file(path).unwrap();
     }
 

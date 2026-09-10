@@ -22,7 +22,7 @@ pub struct TmpView {
 }
 
 impl TmpView {
-    pub fn new(isolation: Isolation, paths: &StatePaths) -> Self {
+    fn new(isolation: Isolation, paths: &StatePaths) -> Self {
         Self {
             tmp_dir: paths.tmp_dir.clone(),
             sandboxed: isolation == Isolation::Sandbox,
