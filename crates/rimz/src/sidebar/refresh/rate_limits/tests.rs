@@ -1243,6 +1243,130 @@ fn auth(used: u8, resets_at: Timestamp, observed_at: Timestamp) -> RateLimitWind
 }
 
 #[test]
+fn parked_refill_requests_refresh_once_then_authoritative_read_corrects_display() {
+    let now = fuse_now();
+    let reset = now + SignedDuration::from_secs(7 * 24 * 3_600);
+    let window = RateLimitWindow {
+        duration_mins: Some(10_080),
+        ..auth(58, reset, now - SignedDuration::from_secs(60))
+    };
+    let mut cache = kind_wide_cache(
+        1,
+        BTreeMap::from([(
+            "claude".to_owned(),
+            AgentRateLimits {
+                windows: vec![window.clone()],
+            },
+        )]),
+        BTreeMap::new(),
+    );
+    let workspace = WorkspaceId::from_project_root(Path::new("/refill"));
+    let mut live = RateLimitWindow {
+        used_percentage: Some(2),
+        observed_at: Some(now),
+        source: WindowSource::BestEffort,
+        ..window
+    };
+
+    for (producer, expected_refresh) in
+        [(false, false), (true, true), (true, false), (false, false)]
+    {
+        let mut frame = snapshot_with_panels(
+            workspace.clone(),
+            vec![provider_panel("claude", vec![live.clone()])],
+        );
+        frame.now = now;
+        let (next, refresh) = project_rate_limits(&mut frame, &cache, producer, None);
+        assert_eq!(frame.providers[0].windows[0].used_percentage, Some(58));
+        assert_eq!(
+            refresh,
+            if expected_refresh {
+                vec!["claude"]
+            } else {
+                vec![]
+            }
+        );
+        if producer {
+            cache = next.unwrap();
+            assert_eq!(cache.entries["claude"].pending.len(), 1);
+        } else {
+            assert!(next.is_none());
+        }
+    }
+
+    live.source = WindowSource::Authoritative;
+    let mut frame = snapshot_with_panels(
+        workspace.clone(),
+        vec![provider_panel("claude", vec![live])],
+    );
+    frame.now = now;
+    let (next, refresh) = project_rate_limits(&mut frame, &cache, true, None);
+    let corrected = next.unwrap();
+    assert_eq!(frame.providers[0].windows[0].used_percentage, Some(2));
+    assert!(corrected.entries["claude"].pending.is_empty());
+    assert!(refresh.is_empty());
+
+    let mut consumer = snapshot_with_panels(workspace, vec![provider_panel("claude", vec![])]);
+    consumer.now = now;
+    let (next, refresh) = project_rate_limits(&mut consumer, &corrected, false, None);
+    assert_eq!(consumer.providers[0].windows[0].used_percentage, Some(2));
+    assert!(next.is_none());
+    assert!(refresh.is_empty());
+}
+
+#[test]
+fn parked_refill_refresh_transition_is_per_window() {
+    let now = fuse_now();
+    let reset = now + SignedDuration::from_secs(3_600);
+    let mut cache = kind_wide_cache(
+        1,
+        BTreeMap::from([(
+            "claude".to_owned(),
+            AgentRateLimits {
+                windows: vec![
+                    auth(58, reset, now - SignedDuration::from_secs(60)),
+                    RateLimitWindow {
+                        duration_mins: Some(10_080),
+                        ..auth(58, reset, now - SignedDuration::from_secs(60))
+                    },
+                ],
+            },
+        )]),
+        BTreeMap::from([(
+            "claude".to_owned(),
+            vec![PendingRefill {
+                scope_id: None,
+                duration_mins: Some(10_080),
+                used_percentage: 2,
+                first_seen_at: now,
+            }],
+        )]),
+    );
+    let workspace = WorkspaceId::from_project_root(Path::new("/refill"));
+    for (windows, should_refresh) in [
+        (vec![be(2, reset, now)], true),
+        (vec![], false),
+        (vec![be(3, reset, now)], false),
+    ] {
+        let mut frame =
+            snapshot_with_panels(workspace.clone(), vec![provider_panel("claude", windows)]);
+        frame.now = now;
+        let (next, refresh) = project_rate_limits(&mut frame, &cache, true, None);
+        assert_eq!(
+            refresh,
+            if should_refresh {
+                vec!["claude"]
+            } else {
+                vec![]
+            }
+        );
+        cache = next.unwrap();
+        assert_eq!(cache.entries["claude"].pending.len(), 2);
+        assert_eq!(cache.entries["claude"].pending[0].duration_mins, Some(300));
+    }
+}
+
+#[test]
 fn fuse_window_selects_truth_by_source_freshness_and_epoch() {
     let now = fuse_now();
     let reset = now + SignedDuration::from_secs(3_600);

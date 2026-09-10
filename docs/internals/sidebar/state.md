@@ -237,6 +237,8 @@ that frame rather than mixing two logins into one bar. Only an authoritative
 account read binds an entry's key, and it fuses onto a prior entry only when
 scope and key both match ([providers.md](../agents/providers.md#persistence-across-idle-sessions)).
 
+When the producer newly parks a best-effort refill for a window key, it invalidates the provider's OAuth read cadence so the same refresh pass can schedule an authoritative check, even when the reset instant has not advanced. A pending marker already present for that key does not force another read; success and failure completion restore ordinary throttling. Consumers neither request this escalation nor create or confirm pending refills. Reset-advance and unknown-display escalation remain independent triggers.
+
 ### Sidecars
 
 Per-session sidecars (`agent_context/`, `subagent_context/`, `agent-activity/`, `active-time/`) are the one exception to producer ownership: CLI hook and statusline runs write the context and activity records, the hook updates active-time accumulators under per-record locks, and the elder's transcript watcher refreshes transcript-tail context between hooks ([push channels](#push-channels)). Every renderer reads them fresh behind stat-gated parse caches.

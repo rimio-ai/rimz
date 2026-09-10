@@ -432,6 +432,11 @@ fn project_rate_limits(
                 truth.insert(key, window);
             }
             if let Some(refill) = refill {
+                // Verify a newly suspected refill without forcing another read
+                // on every frame while the same window remains parked.
+                if producer && !index.pending.contains_key(&refill.key()) {
+                    refresh_kinds.insert(panel.kind.clone());
+                }
                 pending.push(refill);
             }
         }
