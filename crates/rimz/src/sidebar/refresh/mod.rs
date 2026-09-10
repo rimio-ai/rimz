@@ -34,9 +34,8 @@ pub mod usage;
 
 pub use accounts::{AccountsCache, ProviderRecord, ProviderStatus, query_provider_accounts};
 pub use credits::merge_provider_realtime_usage;
-pub(super) use daemon_reap::{CodexDaemonReap, read_codex_daemon_reap};
+pub(super) use daemon_reap::read_codex_daemon_reap;
 pub use live_spend::apply_live_day_spend;
-pub(super) use live_spend::apply_live_today_spend;
 pub(crate) use rate_limits::merge_account_rate_limits;
 pub use sessions::{
     ForcedSessionRefresh, force_refresh_session_context,
