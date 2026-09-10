@@ -8,6 +8,13 @@ use crate::pane::PaneRef;
 use jiff::Timestamp;
 
 const RIMZ_BIN: &str = "/bin/rimz";
+static RUNTIME: std::sync::LazyLock<RuntimePaths> = std::sync::LazyLock::new(|| {
+    RuntimePaths::under(
+        crate::WorkspaceId::from_project_root(Path::new("/repo")),
+        Path::new("/runtime"),
+    )
+    .expect("runtime fixture")
+});
 
 fn pane_id(raw: &str) -> PaneId {
     PaneId::from_parts(MuxName::Zellij, raw)
@@ -61,6 +68,7 @@ fn inline_agent(
 fn exec_resume(kind: &str, id: &str) -> Vec<String> {
     crate::harness::launch::exec_argv(
         Path::new(RIMZ_BIN),
+        &RUNTIME,
         &crate::harness::launch::ExecRequest {
             kind: AgentKind::new_unchecked(kind),
             action: crate::harness::launch::ExecAction::Resume {
@@ -176,6 +184,7 @@ fn ctx<'a>(
     ResumeContext {
         project_root,
         rimz_bin: Path::new(RIMZ_BIN),
+        runtime: &RUNTIME,
         profiles,
         max,
     }
@@ -450,6 +459,7 @@ impl<'a> LaneCase<'a> {
                 project_root: Path::new("/repo"),
                 max: self.max,
                 rimz_bin: Path::new(RIMZ_BIN),
+                runtime: &RUNTIME,
             },
             self.path_exists,
             self.session_backed,

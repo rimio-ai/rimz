@@ -50,8 +50,8 @@ pub fn daemon_test_guard() -> rimz::disk::lock::WorkspaceLock {
         .unwrap_or_else(|err| panic!("acquire web daemon test lock {}: {err}", path.display()))
 }
 
-pub fn exec_args(request: &rimz::harness::launch::ExecRequest) -> Vec<String> {
-    rimz::harness::launch::exec_argv(std::path::Path::new("rimz"), request)
+pub fn exec_args(env: &Env, request: &rimz::harness::launch::ExecRequest) -> Vec<String> {
+    rimz::harness::launch::exec_argv(std::path::Path::new("rimz"), &env.runtime_paths(), request)
         .expect("encode hidden exec request")
         .into_iter()
         .skip(1)

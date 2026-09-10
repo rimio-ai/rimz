@@ -7,34 +7,47 @@ use std::sync::mpsc;
 pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving the agent launch workspace")?;
-    let mut request = rimz::harness::launch::decode_exec_request(
+    let envelope = rimz::harness::launch::decode_exec_envelope(
         &args.kind,
         args.worktree_path.as_deref(),
         &args.request,
     )
     .context("decoding hidden agent exec request")?;
     let invocation = ExecInvocationContext::new(&workspace);
-    let run_context = run_exec_context(&request, &invocation)?;
-    let launch_identity = exec_launch_identity(&request)?;
+    let run_context = run_exec_context(envelope.request(), &invocation)?;
+    let launch_identity = exec_launch_identity(envelope.request())?;
+    let mut request = match envelope.materialize() {
+        Ok(request) => request,
+        Err(err) => {
+            mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
+            fail_run_on_exec_precondition(run_context.as_ref());
+            return Err(err).context("materializing launch prompt");
+        }
+    };
     let attach_target = exec_attach_target(&request);
     let prompt_sources = rimz::harness::prompt_compose::SystemPromptSources {
         system_prompt_file: request.system_prompt_file.clone(),
         append_system_prompt_files: request.append_system_prompt_files.clone(),
     };
+    let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
+        .and_then(|runtime| {
+            runtime.ensure_dirs()?;
+            Ok(runtime)
+        })
+        .context("preparing prompt runtime")
+        .inspect_err(|_| {
+            mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
+            fail_run_on_exec_precondition(run_context.as_ref());
+        })?;
     let materialized_prompt = if prompt_sources.is_empty() {
         rimz::harness::prompt_compose::MaterializedSystemPrompt::default()
     } else {
-        let materialized = (|| -> Result<_> {
-            let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
-                .context("preparing prompt runtime")?;
-            runtime.ensure_dirs().context("preparing prompt runtime")?;
-            rimz::harness::prompt_compose::materialize_system_prompt(
-                &request.kind,
-                &prompt_sources,
-                &runtime,
-            )
-            .context("materializing system prompt")
-        })();
+        let materialized = rimz::harness::prompt_compose::materialize_system_prompt(
+            &request.kind,
+            &prompt_sources,
+            &runtime,
+        )
+        .context("materializing system prompt");
         match materialized {
             Ok(materialized) => materialized,
             Err(err) => {
@@ -80,16 +93,15 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         &request,
         &provider_cwd,
         &rimz::proc::rimz_exe(),
+        &runtime,
         &materialized_prompt.env,
         &reminders,
     );
     let stage = match stage {
         Ok(stage) => stage,
         Err(err) => {
-            if err.is_finalized_provider_mismatch() {
-                mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
-                fail_run_on_exec_precondition(run_context.as_ref());
-            }
+            mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
+            fail_run_on_exec_precondition(run_context.as_ref());
             return Err(err.into());
         }
     };
@@ -1785,6 +1797,11 @@ mod tests {
             &request,
             project.path(),
             Path::new("/bin/rimz"),
+            &rimz::RuntimePaths::under(
+                rimz::WorkspaceId::from_project_root(project.path()),
+                project.path(),
+            )
+            .expect("runtime"),
             &materialized.env,
             &LaunchReminders::default(),
         )

@@ -9,7 +9,7 @@ use crate::agents::{PresetArgMatcher, PresetField};
 use crate::disk::paths::RuntimePaths;
 use crate::ids::AgentKind;
 
-const TEXT_PROMPT_LIMIT: usize = 120 * 1024;
+pub(super) const TEXT_PROMPT_LIMIT: usize = 120 * 1024;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SystemPromptSources {
@@ -97,7 +97,7 @@ pub fn materialize_system_prompt(
     }
 
     let composed = read_composed(sources, agent)?;
-    let artifact = write_artifact(runtime, &composed)?;
+    let artifact = write_prompt_artifact(runtime, "sys", &composed)?;
     render(matcher, &artifact, agent)
 }
 
@@ -195,11 +195,15 @@ fn compose(pieces: &[String]) -> String {
         .join("\n")
 }
 
-fn write_artifact(runtime: &RuntimePaths, contents: &str) -> Result<PathBuf, PromptComposeErr> {
+pub(super) fn write_prompt_artifact(
+    runtime: &RuntimePaths,
+    prefix: &str,
+    contents: &str,
+) -> Result<PathBuf, crate::disk::atomic::AtomicErr> {
     let digest = hex::encode(Sha256::digest(contents.as_bytes()));
     let path = runtime
-        .system_prompt_dir()
-        .join(format!("sys.{}.md", &digest[..32]));
+        .prompt_dir()
+        .join(format!("{prefix}.{}.md", &digest[..32]));
     crate::disk::atomic::write_cache_bytes_atomically(&path, contents.as_bytes())?;
     Ok(path)
 }

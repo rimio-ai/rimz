@@ -84,6 +84,8 @@ The scaffold contains the manifest, setup guide, canonical forwarding shim, and 
 
 A `<SPEC>` is a shape, and the optional `PROMPT` goes to exactly one leader: a named team's configured `leader` role, its first declared role by default, or otherwise the first agent cell. A repeated first cell must have an inline role to make the target unambiguous; use `rimz message @all` after launch for a broadcast.
 
+The final launch prompt is capped at 120 KiB (122880 bytes) because the provider receives it as one argv element. This applies to interactive and supervised (`-p`) launches, including prompt content read with `--stdin` and any reminder text that must be appended to the prompt. Oversized prompts fail before launch or run records are created, with the limit named in the error. Move supporting detail into a file the agent is instructed to read when the assignment exceeds that limit.
+
 ```sh
 rimz agents peer                                    # built-in claude,codex side by side
 rimz agents launch peer                             # explicit launch verb, same payload

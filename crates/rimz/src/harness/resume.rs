@@ -22,6 +22,7 @@ use crate::agents::PermissionMode;
 use crate::agents::find_definition;
 use crate::agents::{AgentState, LocalSessionObservation};
 use crate::config::{CommandsConfig, ProfilesConfig, TeamsConfig};
+use crate::disk::paths::RuntimePaths;
 use crate::harness::plan::{
     CohortCell, CohortResumePlan, CohortSeed, LayoutPaneParams, cohort_cells, compile_layout_panes,
     launch_identity_requests,
@@ -84,6 +85,7 @@ pub struct LaneResumeRequest<'a> {
     pub project_root: &'a Path,
     pub max: usize,
     pub rimz_bin: &'a Path,
+    pub runtime: &'a RuntimePaths,
 }
 
 impl<'a> LaneResumeRequest<'a> {
@@ -93,6 +95,7 @@ impl<'a> LaneResumeRequest<'a> {
         ResumeContext {
             project_root: Some(self.project_root),
             rimz_bin: self.rimz_bin,
+            runtime: self.runtime,
             profiles,
             max: self.max,
         }
@@ -1434,6 +1437,7 @@ pub fn materialize_team_restore_tab(
     let layout = compile_layout_panes(
         &planned.layout,
         LayoutPaneParams {
+            runtime: store.runtime_paths(),
             cwd: &planned.cwd,
             cleanup_worktree: false,
             in_place: false,
@@ -1616,6 +1620,7 @@ fn newest_cmp(
 pub struct ResumeContext<'a> {
     pub project_root: Option<&'a Path>,
     pub rimz_bin: &'a Path,
+    pub runtime: &'a RuntimePaths,
     pub profiles: &'a ProfilesConfig,
     pub max: usize,
 }
@@ -1734,6 +1739,7 @@ fn plan_resume_candidates_detailed(
         );
         let command = crate::harness::plan::resume_command(
             ctx.rimz_bin,
+            ctx.runtime,
             &resume_launch_identity(&candidate),
             channel.as_deref(),
             &resume_launch_posture(&posture),

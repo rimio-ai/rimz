@@ -11,7 +11,9 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::agents::capabilities::SystemTextChannel;
+use crate::disk::paths::RuntimePaths;
 use crate::harness::launch_reminders::LaunchReminders;
+use crate::harness::prompt_compose::{TEXT_PROMPT_LIMIT, write_prompt_artifact};
 use crate::ids::{AgentKind, RunId};
 
 const ENV_BIN: &str = "/usr/bin/env";
@@ -111,6 +113,14 @@ pub enum AgentProcessCompileErr {
     NoFork { kind: String },
     #[error("agent `{kind}` produced an empty launch command")]
     EmptyCommand { kind: String },
+    #[error(
+        "`{kind}` prompt is {size} bytes, exceeding RimZ's {limit}-byte argv safety limit; shorten it or move detail into a file the agent reads"
+    )]
+    PromptTooLarge {
+        kind: String,
+        size: usize,
+        limit: usize,
+    },
     #[error(transparent)]
     Trust(#[from] crate::trust::TrustErr),
     #[error(
@@ -399,12 +409,55 @@ impl ExecRequest {
     }
 }
 
+#[derive(Serialize, Deserialize)]
+struct ExecWire {
+    #[serde(flatten)]
+    request: ExecRequest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prompt_file: Option<PathBuf>,
+}
+
+/// A validated exec envelope whose launch prompt may still live in an artifact.
+pub struct ExecEnvelope(ExecWire);
+
+impl ExecEnvelope {
+    /// Inspect identity and run context for failure cleanup only. A launch prompt
+    /// is not yet materialized; this borrowed request must not be compiled.
+    pub fn request(&self) -> &ExecRequest {
+        &self.0.request
+    }
+
+    /// Restore the prompt before the request can enter provider compilation.
+    pub fn materialize(self) -> Result<ExecRequest, ExecWireErr> {
+        let ExecWire {
+            mut request,
+            prompt_file,
+        } = self.0;
+        if let (Some(path), ExecAction::Launch { prompt, .. }) = (prompt_file, &mut request.action)
+        {
+            *prompt = Some(
+                std::fs::read_to_string(&path)
+                    .map_err(|source| ExecWireErr::PromptRead { path, source })?,
+            );
+        }
+        Ok(request)
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ExecWireErr {
     #[error("serializing hidden agent exec request: {0}")]
     Serialize(#[source] serde_json::Error),
     #[error("parsing hidden agent exec request: {0}")]
     Parse(#[source] serde_json::Error),
+    #[error("writing launch prompt artifact: {0}")]
+    PromptWrite(#[source] crate::disk::atomic::AtomicErr),
+    #[error("reading launch prompt `{}`: {source}", path.display())]
+    PromptRead {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error("hidden agent exec kind `{payload}` does not match visible kind `{visible}`")]
     KindMismatch { visible: String, payload: String },
     #[error("hidden agent exec worktree does not match visible --worktree-path")]
@@ -426,6 +479,18 @@ pub fn compile_provider_argv(
     action: &ExecAction,
     cwd: &Path,
 ) -> AgentProcessResult<Vec<String>> {
+    if let ExecAction::Launch {
+        prompt: Some(prompt),
+        ..
+    } = action
+        && prompt.len() > TEXT_PROMPT_LIMIT
+    {
+        return Err(AgentProcessCompileErr::PromptTooLarge {
+            kind: kind.to_owned(),
+            size: prompt.len(),
+            limit: TEXT_PROMPT_LIMIT,
+        });
+    }
     let argv = match action {
         ExecAction::Launch { prompt, extra_args } => adapter
             .launch_command(extra_args, prompt.as_deref())
@@ -614,12 +679,17 @@ pub fn compile_managed_agent_process(
 /// Pending stages re-enter through the login shell once; finalized stages
 /// execute raw provider argv after the adapter verifies the effective binding.
 /// `reminders` controls model identity, team context, and subagent policy text.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "explicit process compilation and reentry inputs without a duplicate launch context"
+)]
 pub fn compile_agent_process_stage_with_extra_env(
     project_root: &Path,
     rtk: crate::config::RtkMode,
     request: &ExecRequest,
     cwd: &Path,
     rimz_bin: &Path,
+    runtime: &RuntimePaths,
     extra_env: &BTreeMap<String, String>,
     reminders: &LaunchReminders,
 ) -> Result<AgentProcessStage, AgentProcessStageErr> {
@@ -655,7 +725,7 @@ pub fn compile_agent_process_stage_with_extra_env(
     } else {
         None
     };
-    finalize_agent_process_stage(process, request, managed_launch.as_ref(), rimz_bin)
+    finalize_agent_process_stage(process, request, managed_launch.as_ref(), rimz_bin, runtime)
 }
 
 fn finalize_agent_process_stage(
@@ -663,6 +733,7 @@ fn finalize_agent_process_stage(
     request: &ExecRequest,
     managed_launch: Option<&crate::agents::ManagedLaunchState>,
     rimz_bin: &Path,
+    runtime: &RuntimePaths,
 ) -> Result<AgentProcessStage, AgentProcessStageErr> {
     match &request.provider_account {
         ProviderAccountState::Unbound => Ok(AgentProcessStage::Ready(process)),
@@ -671,7 +742,7 @@ fn finalize_agent_process_stage(
             finalized.provider_account = ProviderAccountState::Finalized {
                 binding: binding.clone(),
             };
-            let argv = exec_argv(rimz_bin, &finalized)?;
+            let argv = exec_argv(rimz_bin, runtime, &finalized)?;
             let argv = login_shell_argv(&process.env, &argv);
             if argv.is_empty() {
                 return Err(AgentProcessStageErr::EmptyReentry);
@@ -762,11 +833,23 @@ pub fn preflight_agent_kind(
     )
 }
 
-pub fn exec_argv(rimz_bin: &Path, request: &ExecRequest) -> Result<Vec<String>, ExecWireErr> {
+/// Encode the launch prompt by artifact path, keeping its body out of mux argv.
+pub fn exec_argv(
+    rimz_bin: &Path,
+    runtime: &RuntimePaths,
+    request: &ExecRequest,
+) -> Result<Vec<String>, ExecWireErr> {
     let mut encoded = request.clone();
     encoded.identity.params.kind_ordinal = None;
     validate_exec_request(&encoded)?;
-    let payload = serde_json::to_string(&encoded).map_err(ExecWireErr::Serialize)?;
+    let prompt_file = match &mut encoded.action {
+        ExecAction::Launch { prompt, .. } => prompt
+            .take()
+            .map(|text| write_prompt_artifact(runtime, "task", &text))
+            .transpose()
+            .map_err(ExecWireErr::PromptWrite)?,
+        _ => None,
+    };
     let mut argv = vec![
         rimz_bin.to_string_lossy().into_owned(),
         "agents".to_owned(),
@@ -779,16 +862,32 @@ pub fn exec_argv(rimz_bin: &Path, request: &ExecRequest) -> Result<Vec<String>, 
             path.to_string_lossy().into_owned(),
         ]);
     }
+    let payload = serde_json::to_string(&ExecWire {
+        request: encoded,
+        prompt_file,
+    })
+    .map_err(ExecWireErr::Serialize)?;
     argv.extend(["--request".to_owned(), payload]);
     Ok(argv)
 }
 
+/// Check the visible envelope, then restore the launch prompt from its artifact.
 pub fn decode_exec_request(
     visible_kind: &str,
     visible_worktree_path: Option<&Path>,
     payload: &str,
 ) -> Result<ExecRequest, ExecWireErr> {
-    let request: ExecRequest = serde_json::from_str(payload).map_err(ExecWireErr::Parse)?;
+    decode_exec_envelope(visible_kind, visible_worktree_path, payload)?.materialize()
+}
+
+/// Validate the complete visible envelope and request before any artifact I/O.
+pub fn decode_exec_envelope(
+    visible_kind: &str,
+    visible_worktree_path: Option<&Path>,
+    payload: &str,
+) -> Result<ExecEnvelope, ExecWireErr> {
+    let wire: ExecWire = serde_json::from_str(payload).map_err(ExecWireErr::Parse)?;
+    let request = &wire.request;
     if request.kind != visible_kind {
         return Err(ExecWireErr::KindMismatch {
             visible: visible_kind.to_owned(),
@@ -798,8 +897,13 @@ pub fn decode_exec_request(
     if request.worktree_path.as_deref() != visible_worktree_path {
         return Err(ExecWireErr::WorktreeMismatch);
     }
-    validate_exec_request(&request)?;
-    Ok(request)
+    validate_exec_request(request)?;
+    if wire.prompt_file.is_some() && !matches!(request.action, ExecAction::Launch { .. }) {
+        return Err(ExecWireErr::Parse(serde::de::Error::custom(
+            "prompt_file requires a launch action",
+        )));
+    }
+    Ok(ExecEnvelope(wire))
 }
 
 fn validate_exec_request(request: &ExecRequest) -> Result<(), ExecWireErr> {

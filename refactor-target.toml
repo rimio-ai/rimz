@@ -159,7 +159,8 @@ upward-dependencies = ["sidebar::refresh"]
 # Read-only pending deliveries are shared by wake listings, hooks and enrichment.
 # Submitted-prompt header grammar now belongs to store.
 # Loop hosts and check ownership cross the scheduler/CLI/room seams.
-surface-budget = 539
+# The validated exec envelope establishes cleanup context before artifact I/O.
+surface-budget = 543
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -479,6 +480,7 @@ path = "crates/rimz/src/harness/plan.rs"
 allowed-dependencies = [
     "agents",
     "config",
+    "disk::paths",
     "harness::ancestry",
     "harness::budget",
     "harness::launch",
@@ -498,6 +500,7 @@ allowed-dependencies = [
     "(crate)",
     "agents",
     "config",
+    "disk::paths",
     "harness::ancestry",
     "harness::plan",
     "harness::spec",
@@ -517,13 +520,17 @@ allowed-dependencies = [
     "agents",
     "agents::capabilities",
     "config",
+    "disk::atomic",
+    "disk::paths",
     "harness::launch_reminders",
+    "harness::prompt_compose",
     "ids",
     "proc",
     "trust",
     "workspace",
 ]
-surface-budget = 40
+# Validated envelope access establishes failure cleanup before prompt-file I/O.
+surface-budget = 44
 
 [[module]]
 path = "crates/rimz/src/harness/run.rs"
@@ -571,7 +578,8 @@ allowed-dependencies = [
     "ids",
     "proc",
 ]
-surface-budget = 9
+# Launch and system prompts share the artifact writer and argv-size limit.
+surface-budget = 11
 
 [[module]]
 path = "crates/rimz/src/harness/schedule/runner.rs"

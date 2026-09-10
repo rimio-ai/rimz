@@ -558,6 +558,15 @@ fn execute_attempt(
         .agent_cells()
         .next()
         .expect("prepared supervised layout has one agent cell");
+    rimz::harness::launch::compile_provider_argv(
+        prepared.adapter,
+        prepared.kind.as_str(),
+        &rimz::harness::launch::ExecAction::Launch {
+            prompt: Some(prompt.to_owned()),
+            extra_args: agent_cell.args.clone(),
+        },
+        &prepared.launch.cwd,
+    )?;
     let permission_mode = agent_cell.launch.mode.unwrap_or(prepared.mode);
     let mut record = RunRecord::new(
         prepared.workspace.workspace_id.clone(),
@@ -609,6 +618,7 @@ fn execute_attempt(
     let launch_identity = launch_batch.single_identity()?;
     record.agent_name = Some(launch_identity.name.clone());
     let pane = supervised::run_pane_cmd(supervised::RunPaneCmdArgs {
+        runtime: prepared.store.runtime_paths(),
         adapter: prepared.adapter,
         run_id: &run_id,
         agent_name: Some(&launch_identity.name),
@@ -624,6 +634,9 @@ fn execute_attempt(
         self_cleanup_on_completion: request.self_cleanup_on_completion && !request.keep,
         subagent: request.subagent,
         provider_account_binding: prepared.managed_launch.binding(),
+    })
+    .inspect_err(|_| {
+        let _ = prepared.store.fail_agent_launch_batch(&launch_batch);
     })?;
     let waiter = if request.background {
         None

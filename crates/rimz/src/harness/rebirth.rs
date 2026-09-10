@@ -280,10 +280,10 @@ fn inspect_at(
         plan_recovery(
             audit.as_ref().map(|(_, projection)| projection),
             &paths,
+            &runtime,
             &roster,
             &machine.resume,
-            &teams_and_profiles.0,
-            &teams_and_profiles.1,
+            &teams_and_profiles,
             &machine.agents.commands,
         )
     } else {
@@ -330,12 +330,13 @@ fn effective_teams_and_profiles(
 fn plan_recovery(
     projection: Option<&crate::RuntimeProjection>,
     paths: &StatePaths,
+    runtime: &RuntimePaths,
     roster: &BTreeSet<(AgentKind, AgentSessionId)>,
     resume_cfg: &crate::config::ResumeConfig,
-    teams: &TeamsConfig,
-    profiles: &ProfilesConfig,
+    teams_and_profiles: &(TeamsConfig, ProfilesConfig),
     commands: &crate::config::CommandsConfig,
 ) -> RecoveryPlan {
+    let (teams, profiles) = teams_and_profiles;
     let Some(projection) = projection else {
         return RecoveryPlan::default();
     };
@@ -362,6 +363,7 @@ fn plan_recovery(
         crate::harness::resume::ResumeContext {
             project_root: project_root.as_deref(),
             rimz_bin: &crate::proc::rimz_exe(),
+            runtime,
             profiles,
             max: resume_cfg.max.saturating_sub(team_panes),
         },

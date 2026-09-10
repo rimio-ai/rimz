@@ -119,8 +119,11 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
 }
 
 fn parse_exec_request(input: &ExecRequest) -> ExecRequest {
-    let argv =
-        rimz::harness::launch::exec_argv(Path::new("/bin/rimz"), input).expect("render exec argv");
+    let dir = tempfile::tempdir().expect("temp dir");
+    let runtime = rimz::RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+        .expect("runtime");
+    let argv = rimz::harness::launch::exec_argv(Path::new("/bin/rimz"), &runtime, input)
+        .expect("render exec argv");
     let parsed = crate::cli::Cli::try_parse_from(argv).expect("parse rendered exec argv");
     let Some(crate::cli::Subcmd::Agents(args)) = parsed.subcommand else {
         panic!("expected agents subcommand");

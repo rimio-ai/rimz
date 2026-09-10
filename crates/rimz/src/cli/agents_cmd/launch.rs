@@ -138,11 +138,19 @@ pub(super) fn launch_layout(
         )
         .ok()
     });
-    for kind in layout.agent_kinds() {
-        rimz::harness::launch::preflight_agent_kind(
+    for (index, cell) in layout.agent_cells().enumerate() {
+        let mut request =
+            rimz::harness::launch::ExecRequest::bare_launch(cell.kind.clone(), Vec::new());
+        request.action = rimz::harness::launch::ExecAction::Launch {
+            prompt: prompt
+                .filter(|_| Some(index) == prompt_agent_index)
+                .map(str::to_owned),
+            extra_args: cell.args.clone(),
+        };
+        rimz::harness::launch::preflight_agent_process(
             &workspace.project_root,
             machine_config.harness.rtk,
-            kind,
+            &request,
             &workspace.worktree_root,
         )?;
     }
@@ -320,6 +328,7 @@ pub(super) fn launch_layout(
     let panes = compile_layout_panes(
         &layout,
         LayoutPaneParams {
+            runtime: store.runtime_paths(),
             cwd: &cwd,
             cleanup_worktree,
             in_place,
@@ -327,7 +336,10 @@ pub(super) fn launch_layout(
             launch_identities: launch_batch.identities(),
             fallback_channel: None,
         },
-    )?;
+    )
+    .inspect_err(|_| {
+        let _ = store.fail_agent_launch_batch(&launch_batch);
+    })?;
     super::placement::execute(
         backend,
         store,
@@ -490,6 +502,7 @@ fn launch_resume_layout(
     let panes = compile_layout_panes(
         &layout,
         LayoutPaneParams {
+            runtime: store.runtime_paths(),
             cwd: &cwd,
             cleanup_worktree: false,
             in_place,

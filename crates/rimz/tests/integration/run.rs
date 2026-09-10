@@ -534,8 +534,11 @@ fn assert_subagent_launch_uses_parent_checkout(fanout: bool, repo_subdir: bool) 
     let foreign = env.home_root.join("foreign-briefs");
     std::fs::create_dir_all(&checkout).expect("mkdir parent checkout");
     std::fs::create_dir(&foreign).expect("mkdir foreign cwd");
-    let prompt = "Read this brief from the foreign cwd, but work in the parent checkout.";
-    std::fs::write(foreign.join("brief.md"), prompt).expect("write relative prompt file");
+    let mut prompt =
+        "Read this brief from the foreign cwd, but work in the parent checkout.\n".repeat(1500);
+    prompt.truncate(93 * 1024 - 1);
+    prompt.push('.');
+    std::fs::write(foreign.join("brief.md"), &prompt).expect("write relative prompt file");
     std::fs::write(checkout.join("brief.md"), "wrong checkout brief")
         .expect("write decoy prompt file");
     std::fs::write(
@@ -663,6 +666,24 @@ fn assert_subagent_launch_uses_parent_checkout(fanout: bool, repo_subdir: bool) 
         let args = pane.split('\t').collect::<Vec<_>>();
         let cwd = args.windows(2).find(|args| args[0] == "--cwd");
         assert_eq!(cwd.map(|args| args[1]), checkout.to_str(), "{pane}");
+        let payload = args
+            .windows(2)
+            .find(|args| args[0] == "--request")
+            .expect("exec request")[1];
+        assert!(
+            payload.len() < 4096,
+            "large brief must stay out of mux argv"
+        );
+        let visible_worktree = args
+            .windows(2)
+            .find(|args| args[0] == "--worktree-path")
+            .map(|args| std::path::Path::new(args[1]));
+        let decoded =
+            rimz::harness::launch::decode_exec_request("codex", visible_worktree, payload)
+                .expect("child prompt artifact");
+        assert!(
+            matches!(decoded.action, rimz::harness::launch::ExecAction::Launch { prompt: Some(ref actual), .. } if actual == &prompt)
+        );
     }
 }
 
@@ -1132,7 +1153,7 @@ fn failed_supervised_run_retries_with_failure_context() {
         .home_root
         .join("project-worktrees")
         .join("retry-worktree");
-    let mut child = spawn_retrying_print(&env, "retry-success", true);
+    let mut child = spawn_retrying_print(&env, "retry-success", true, "fix it");
 
     let mut records = wait_for_run_count(&store, &mut child, 1);
     assert!(worktree.is_dir(), "attempt 1 created the shared worktree");
@@ -1205,10 +1226,48 @@ fn failed_supervised_run_retries_with_failure_context() {
 
 #[cfg(unix)]
 #[test]
+fn oversized_retry_prompt_refuses_before_creating_another_run() {
+    let env = Env::new();
+    let store = env.store();
+    let mut child = spawn_retrying_print(&env, "retry-oversized", false, &"x".repeat(120 * 1024));
+    let mut failed = wait_for_run_count(&store, &mut child, 1)
+        .pop()
+        .expect("first run");
+    failed.status = RunStatus::Failed;
+    failed.failure_tail = Some("compiler failure".to_owned());
+    finish_run(&store, &mut failed);
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while child.try_wait().expect("poll coordinator").is_none() {
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            panic!("oversized retry did not refuse before waiting for another run");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let output = child.wait_with_output().expect("retry refusal");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("122880-byte argv safety limit"));
+    assert_eq!(
+        rimz::harness::run::list(store.paths()).expect("runs").len(),
+        1
+    );
+    assert_eq!(
+        store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .expect("launches")
+            .agents
+            .len(),
+        1
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn timed_out_supervised_run_does_not_retry() {
     let env = Env::new();
     let store = env.store();
-    let mut child = spawn_retrying_print(&env, "retry-timeout", false);
+    let mut child = spawn_retrying_print(&env, "retry-timeout", false, "fix it");
 
     let mut records = wait_for_run_count(&store, &mut child, 1);
     let mut timed_out = records.pop().expect("first run");
@@ -1367,7 +1426,12 @@ fn verify_reprompt_interrupt_stays_canceled() {
 }
 
 #[cfg(unix)]
-fn spawn_retrying_print(env: &Env, trace_name: &str, use_worktree: bool) -> std::process::Child {
+fn spawn_retrying_print(
+    env: &Env,
+    trace_name: &str,
+    use_worktree: bool,
+    prompt: &str,
+) -> std::process::Child {
     env.install_agent_hooks("codex");
     trust_codex_hooks(env);
     trust_codex_project(env, &env.project_root);
@@ -1408,7 +1472,7 @@ fn spawn_retrying_print(env: &Env, trace_name: &str, use_worktree: bool) -> std:
             "zellij",
             "agents",
             "codex",
-            "fix it",
+            prompt,
             "-p",
             "--retries",
             "1",

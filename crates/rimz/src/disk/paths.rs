@@ -294,8 +294,8 @@ impl RuntimePaths {
         Ok(paths)
     }
 
-    /// Content-addressed replacement prompts generated for provider launches.
-    pub fn system_prompt_dir(&self) -> PathBuf {
+    /// Content-addressed launch and system prompt artifacts.
+    pub fn prompt_dir(&self) -> PathBuf {
         self.root.join("prompt")
     }
 

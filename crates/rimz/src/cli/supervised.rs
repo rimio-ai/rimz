@@ -164,6 +164,7 @@ pub(crate) fn cancel_supervised_run(store: &rimz::Store, run: &RunRecord) -> Res
 }
 
 pub(super) struct RunPaneCmdArgs<'a> {
+    pub(super) runtime: &'a rimz::RuntimePaths,
     pub(super) adapter: &'a AgentDefinition,
     pub(super) run_id: &'a rimz::RunId,
     pub(super) agent_name: Option<&'a str>,
@@ -188,6 +189,7 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
     let name = args.adapter.spec().kind_id();
     let argv = rimz::harness::launch::exec_argv(
         &rimz_bin,
+        args.runtime,
         &rimz::harness::launch::ExecRequest {
             kind: name.clone(),
             action: rimz::harness::launch::ExecAction::Launch {

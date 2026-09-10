@@ -569,6 +569,9 @@ fn stream_event_shapes_are_ndjson_ready() {
 
 #[test]
 fn subagent_run_closes_its_pane_after_terminal_completion() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+        .expect("runtime");
     assert_eq!(run_exit_policy(true), (true, true));
     assert_eq!(run_exit_policy(false), (false, false));
 
@@ -576,6 +579,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
     let launch = rimz::agents::LaunchParams::default();
     let launch_id = rimz::ids::AgentSessionId::from("child-id");
     let pane = run_pane_cmd(RunPaneCmdArgs {
+        runtime: &runtime,
         adapter: rimz::agents::definition_by_kind("codex").unwrap(),
         run_id: &run_id,
         agent_name: Some("child"),

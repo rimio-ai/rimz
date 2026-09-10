@@ -70,6 +70,7 @@ fn plan_from_rollup(h: &Harness) -> rimz::harness::resume::ResumePlan {
         rimz::harness::resume::ResumeContext {
             project_root: None,
             rimz_bin: Path::new("/bin/rimz"),
+            runtime: h.store.runtime_paths(),
             profiles: &rimz::config::ProfilesConfig::default(),
             max: rimz::config::ResumeConfig::default().max,
         },
@@ -78,9 +79,10 @@ fn plan_from_rollup(h: &Harness) -> rimz::harness::resume::ResumePlan {
     )
 }
 
-fn resume_argv(kind: &str, id: &str, name: &str) -> Vec<String> {
+fn resume_argv(h: &Harness, kind: &str, id: &str, name: &str) -> Vec<String> {
     rimz::harness::launch::exec_argv(
         Path::new("/bin/rimz"),
+        h.store.runtime_paths(),
         &ExecRequest {
             kind: AgentKind::new_unchecked(kind),
             action: ExecAction::Resume {
@@ -158,7 +160,7 @@ fn resumes_an_agent_stamped_in_the_real_rollup() {
     );
     assert_eq!(
         single_column(&plan.tabs[0]),
-        vec![resume_argv("claude", "sess-claude", "warm-drift")]
+        vec![resume_argv(&h, "claude", "sess-claude", "warm-drift")]
     );
     assert_eq!(plan.tabs[0].label, "#feature");
 }
@@ -271,7 +273,7 @@ fn a_rebirth_boundary_clears_a_prior_stamp_but_keeps_the_session_resumable() {
     let plan = plan_from_rollup(&h);
     assert_eq!(
         single_column(&plan.tabs[0]),
-        vec![resume_argv("claude", "sess-old", "old-ember")]
+        vec![resume_argv(&h, "claude", "sess-old", "old-ember")]
     );
 }
 
@@ -320,6 +322,7 @@ fn soft_reset_preserves_dead_paneless_resume_identity() {
         rimz::harness::resume::ResumeContext {
             project_root: None,
             rimz_bin: Path::new("/bin/rimz"),
+            runtime: h.store.runtime_paths(),
             profiles: &rimz::config::ProfilesConfig::default(),
             max: rimz::config::ResumeConfig::default().max,
         },
@@ -376,7 +379,7 @@ fn a_stamp_after_the_rebirth_boundary_survives_and_is_resumed() {
     assert_eq!(plan.tabs.len(), 1, "the post-boundary re-stamp is resumed");
     assert_eq!(
         single_column(&plan.tabs[0]),
-        vec![resume_argv("codex", "sess-codex", "calm-harbor")]
+        vec![resume_argv(&h, "codex", "sess-codex", "calm-harbor")]
     );
 }
 
@@ -428,6 +431,7 @@ fn missing_worktree_candidate_is_stamped_ended_not_reported() {
         rimz::harness::resume::ResumeContext {
             project_root: None,
             rimz_bin: Path::new("/bin/rimz"),
+            runtime: h.store.runtime_paths(),
             profiles: &rimz::config::ProfilesConfig::default(),
             max: rimz::config::ResumeConfig::default().max,
         },

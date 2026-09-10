@@ -8,6 +8,7 @@ use anyhow::{Result, bail};
 
 use crate::agents::PermissionMode;
 use crate::config::RoleBinding;
+use crate::disk::paths::RuntimePaths;
 use crate::harness::ancestry::LaunchAncestry;
 use crate::harness::budget::BudgetSpec;
 use crate::harness::spec::{AgentCell, Cell, LayoutSpec};
@@ -827,6 +828,7 @@ fn index_to_launch_ordinal(index: usize) -> u32 {
 /// Compile one provider-native resume launch from planner-owned data.
 pub fn resume_command(
     rimz_bin: &Path,
+    runtime: &RuntimePaths,
     identity: &ResumeLaunchIdentity,
     fallback_channel: Option<&str>,
     posture: &ResumeLaunchPosture,
@@ -854,6 +856,7 @@ pub fn resume_command(
     };
     let result = crate::harness::launch::exec_argv(
         rimz_bin,
+        runtime,
         &crate::harness::launch::ExecRequest {
             kind: identity.kind.clone(),
             action: crate::harness::launch::ExecAction::Resume {
@@ -887,6 +890,7 @@ pub fn resume_command(
 
 #[derive(Clone, Copy)]
 pub struct LayoutPaneParams<'a> {
+    pub runtime: &'a RuntimePaths,
     pub cwd: &'a Path,
     pub cleanup_worktree: bool,
     pub in_place: bool,
@@ -950,6 +954,7 @@ pub fn compile_layout_panes(
                                     // role binding, so the posture to replay is right here.
                                     argv: resume_command(
                                         &rimz_bin,
+                                        params.runtime,
                                         &ResumeLaunchIdentity::from(agent.as_ref()),
                                         params.fallback_channel,
                                         &ResumeLaunchPosture::from(cell),
@@ -994,6 +999,7 @@ fn fresh_agent_pane(
     Ok(PaneCmd {
         argv: crate::harness::launch::exec_argv(
             rimz_bin,
+            params.runtime,
             &crate::harness::launch::ExecRequest {
                 kind: cell.kind.clone(),
                 action: crate::harness::launch::ExecAction::Launch {
