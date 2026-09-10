@@ -1383,7 +1383,7 @@ fn provider_account_stage_validates_and_reenters_once() {
     )
     .expect("finalized process");
     let raw = process.provider_argv.clone();
-    let AgentProcessStage::Ready(finalized) = finalize_agent_process_stage(
+    let AgentProcessStage::Ready(mut finalized) = finalize_agent_process_stage(
         process,
         &finalized_request,
         Some(&crate::agents::ManagedLaunchState::Bound(binding)),
@@ -1395,6 +1395,22 @@ fn provider_account_stage_validates_and_reenters_once() {
     };
     assert_eq!(finalized.argv, raw);
     assert!(finalized.provider_argv.is_empty());
+    finalized.pin_env(BTreeMap::from([
+        (
+            "TMPDIR".to_owned(),
+            crate::sandbox::EnvPin::Set("/tmp".to_owned()),
+        ),
+        (
+            "CLAUDE_CONFIG_DIR".to_owned(),
+            crate::sandbox::EnvPin::Unset,
+        ),
+    ]));
+    assert_eq!(
+        finalized.argv, raw,
+        "post-rc stages do not re-enter a shell"
+    );
+    assert_eq!(finalized.env["TMPDIR"], "/tmp");
+    assert!(finalized.unset.contains("CLAUDE_CONFIG_DIR"));
 }
 
 #[test]
@@ -1427,6 +1443,7 @@ fn bash_wrapper_uses_interactive_rc_shape() {
         Some(Path::new("/bin/bash")),
         true,
         &env(&[("AAA", "one")]),
+        &BTreeSet::new(),
         &argv(&["codex"]),
     );
 
@@ -1450,6 +1467,7 @@ fn posix_wrapper_shape_reapplies_env_after_rc() {
         Some(Path::new("/bin/sh")),
         true,
         &env(&[("AAA", "one"), ("BBB", "two")]),
+        &BTreeSet::from(["CLAUDE_CONFIG_DIR".to_owned()]),
         &argv(&["codex", "prompt with spaces"]),
     );
 
@@ -1462,6 +1480,8 @@ fn posix_wrapper_shape_reapplies_env_after_rc() {
             "-c",
             POSIX_LOGIN_SHELL_SCRIPT,
             POSIX_ARG0,
+            "-u",
+            "CLAUDE_CONFIG_DIR",
             "AAA=one",
             "BBB=two",
             "codex",
@@ -1478,6 +1498,7 @@ fn compiled_process_debug_prints_launch_env_keys_without_values() {
         Some(Path::new("/bin/sh")),
         true,
         &launch_env,
+        &BTreeSet::new(),
         &provider_argv,
     );
     let process = CompiledAgentProcess {
@@ -1485,6 +1506,7 @@ fn compiled_process_debug_prints_launch_env_keys_without_values() {
         provider_program: "claude".to_owned(),
         argv: wrapped.clone(),
         env: launch_env,
+        unset: BTreeSet::new(),
     };
 
     let rendered = format!("{process:?}");
@@ -1509,6 +1531,7 @@ fn fish_wrapper_uses_argv_without_a_posix_arg0() {
         Some(Path::new("/usr/bin/fish")),
         true,
         &env(&[("AAA", "one")]),
+        &BTreeSet::from(["CODEX_HOME".to_owned()]),
         &argv(&["claude"]),
     );
 
@@ -1520,6 +1543,8 @@ fn fish_wrapper_uses_argv_without_a_posix_arg0() {
             "-i",
             "-c",
             FISH_LOGIN_SHELL_SCRIPT,
+            "-u",
+            "CODEX_HOME",
             "AAA=one",
             "claude",
         ]
@@ -1532,15 +1557,27 @@ fn unsupported_or_unavailable_wrapper_falls_back_to_agent_argv() {
     let launch_env = env(&[("AAA", "one")]);
 
     assert_eq!(
-        login_shell_argv_with(None, true, &launch_env, &command),
+        login_shell_argv_with(None, true, &launch_env, &BTreeSet::new(), &command),
         command
     );
     assert_eq!(
-        login_shell_argv_with(Some(Path::new("/bin/sh")), false, &launch_env, &command),
+        login_shell_argv_with(
+            Some(Path::new("/bin/sh")),
+            false,
+            &launch_env,
+            &BTreeSet::new(),
+            &command
+        ),
         command
     );
     assert_eq!(
-        login_shell_argv_with(Some(Path::new("/bin/tcsh")), true, &launch_env, &command),
+        login_shell_argv_with(
+            Some(Path::new("/bin/tcsh")),
+            true,
+            &launch_env,
+            &BTreeSet::new(),
+            &command
+        ),
         command
     );
     assert_eq!(
@@ -1548,6 +1585,7 @@ fn unsupported_or_unavailable_wrapper_falls_back_to_agent_argv() {
             Some(Path::new("/bin/sh")),
             true,
             &env(&[("BAD=KEY", "one")]),
+            &BTreeSet::new(),
             &command,
         ),
         command
@@ -1557,6 +1595,7 @@ fn unsupported_or_unavailable_wrapper_falls_back_to_agent_argv() {
             Some(Path::new("/bin/sh")),
             true,
             &env(&[("-BAD", "one")]),
+            &BTreeSet::new(),
             &command,
         ),
         command

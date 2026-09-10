@@ -568,6 +568,10 @@ impl crate::agents::capabilities::InstallationCapability for CopilotAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for CopilotAdapter {
+    fn config_home_env_keys(&self) -> &'static [&'static str] {
+        &["COPILOT_HOME"]
+    }
+
     fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         paths::copilot_home_from(
             env.get("COPILOT_HOME").map(std::ffi::OsStr::new),

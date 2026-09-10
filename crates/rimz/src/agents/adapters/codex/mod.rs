@@ -688,6 +688,10 @@ impl crate::agents::capabilities::InstallationCapability for CodexAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
+    fn config_home_env_keys(&self) -> &'static [&'static str] {
+        &["CODEX_HOME"]
+    }
+
     fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         codex_home_from(
             env.get("CODEX_HOME").map(std::ffi::OsStr::new),

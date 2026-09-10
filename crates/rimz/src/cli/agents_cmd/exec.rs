@@ -92,10 +92,6 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
         fail_run_on_exec_precondition(run_context.as_ref());
     })?;
-    let mut extra_env = materialized_prompt.env.clone();
-    if isolation == rimz::config::Isolation::Sandbox {
-        extra_env.insert("TMPDIR".to_owned(), "/tmp".to_owned());
-    }
     let reminders = exec_launch_reminders(
         &request,
         &machine_config,
@@ -109,7 +105,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         &provider_cwd,
         &rimz::proc::rimz_exe(),
         &runtime,
-        &extra_env,
+        &materialized_prompt.env,
         &reminders,
     );
     let stage = match stage {
@@ -126,7 +122,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             let (program, rest) = argv.split_first().ok_or_else(|| {
                 anyhow::anyhow!("finalized Qwen launch produced an empty command")
             })?;
-            if let Err(err) = exec_agent_command(program, rest, &process.env) {
+            if let Err(err) = exec_agent_command(program, rest, &process.env, &process.unset) {
                 mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
                 fail_run_on_exec_precondition(run_context.as_ref());
                 return Err(err);
@@ -139,7 +135,8 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             let state = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())?;
             let mut env: std::collections::BTreeMap<String, String> = std::env::vars().collect();
             env.extend(process.env.clone());
-            let provider_home = rimz::agents::registry::find_definition(request.kind.as_str())
+            let adapter = rimz::agents::registry::find_definition(request.kind.as_str());
+            let provider_home = adapter
                 .and_then(|definition| definition.config_home(&env))
                 .map(|path| rimz::sandbox::ProviderHome {
                     source: path.clone(),
@@ -152,15 +149,18 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
                 worktree: request.worktree_path.as_deref(),
                 scratch_dir: &state.scratch_dir,
                 provider_home,
+                provider_home_env_keys: adapter
+                    .map_or(&[], |adapter| adapter.config_home_env_keys()),
                 skills: &request.skills,
             })
             .map_err(Into::into)
         };
-        let plan = prepare().inspect_err(|_| {
+        let prepared = prepare().inspect_err(|_| {
             mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
             fail_run_on_exec_precondition(run_context.as_ref());
         })?;
-        process.argv = rimz::sandbox::bwrap_argv(&plan, &provider_cwd, &process.argv);
+        process.pin_env(prepared.pins);
+        process.argv = rimz::sandbox::bwrap_argv(&prepared.plan, &provider_cwd, &process.argv);
     }
     if let Some(context) = run_context.as_ref() {
         record_own_run_pane(context);
@@ -187,7 +187,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         anyhow::anyhow!("agent `{}` produced an empty launch command", request.kind)
     })?;
     if should_exec_agent_directly(&request) {
-        match exec_agent_command(program, rest, &process.env) {
+        match exec_agent_command(program, rest, &process.env, &process.unset) {
             Ok(()) => return Ok(()),
             Err(err) => {
                 mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
@@ -201,6 +201,9 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let mut command = Command::new(program);
     command.args(rest);
     command.envs(&process.env);
+    for key in &process.unset {
+        command.env_remove(key);
+    }
     if let Some(path) = entered_worktree.as_deref() {
         command.current_dir(path);
     }
@@ -629,12 +632,16 @@ fn exec_agent_command(
     program: &str,
     rest: &[String],
     env: &std::collections::BTreeMap<String, String>,
+    unset: &std::collections::BTreeSet<String>,
 ) -> Result<()> {
     use std::os::unix::process::CommandExt;
 
     let mut command = Command::new(program);
     command.args(rest);
     command.envs(env);
+    for key in unset {
+        command.env_remove(key);
+    }
     let err = command.exec();
     Err(err).with_context(|| format!("running {program}"))
 }
@@ -644,6 +651,7 @@ fn exec_agent_command(
     _program: &str,
     _rest: &[String],
     _env: &std::collections::BTreeMap<String, String>,
+    _unset: &std::collections::BTreeSet<String>,
 ) -> Result<()> {
     anyhow::bail!("direct agent exec is disabled on non-Unix platforms")
 }

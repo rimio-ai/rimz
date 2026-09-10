@@ -451,6 +451,10 @@ impl crate::agents::capabilities::CoreCapability for QwenAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for QwenAdapter {
+    fn config_home_env_keys(&self) -> &'static [&'static str] {
+        &["QWEN_HOME"]
+    }
+
     fn config_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
         install::qwen_home_from(
             env.get("QWEN_HOME").map(std::ffi::OsStr::new),

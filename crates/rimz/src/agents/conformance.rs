@@ -77,6 +77,19 @@ fn builtin_config_homes_honor_provider_overrides() {
         ("qwen", "QWEN_HOME", "/selected", "/selected"),
         ("grok", "GROK_HOME", "/selected", "/selected"),
     ];
+    for adapter in BUILTINS {
+        let kind = adapter.spec().kind;
+        let expected: Vec<_> = overrides
+            .iter()
+            .filter(|(name, key, _, _)| *name == kind && *key != "HOME" && !key.starts_with("XDG_"))
+            .map(|(_, key, _, _)| *key)
+            .collect();
+        assert_eq!(
+            adapter.config_home_env_keys(),
+            expected.as_slice(),
+            "{kind}"
+        );
+    }
     for (kind, key, value, expected) in overrides {
         let adapter = BUILTINS
             .iter()
@@ -117,6 +130,9 @@ fn builtin_config_homes_do_not_follow_runtime_or_rimz_overrides() {
         ("antigravity", "RIMZ_ANTIGRAVITY_HOME"),
         ("droid", "RIMZ_DROID_SETTINGS"),
         ("claude", "RIMZ_CLAUDE_SETTINGS"),
+        ("copilot", "RIMZ_COPILOT_SETTINGS"),
+        ("pi", "RIMZ_PI_EXTENSION"),
+        ("qwen", "RIMZ_QWEN_SETTINGS"),
         ("opencode", "RIMZ_OPENCODE_PLUGIN"),
     ] {
         let adapter = BUILTINS
@@ -124,6 +140,10 @@ fn builtin_config_homes_do_not_follow_runtime_or_rimz_overrides() {
             .find(|adapter| adapter.spec().kind == kind)
             .unwrap();
         let mut env = std::collections::BTreeMap::from([("HOME".into(), "/fixture/home".into())]);
+        assert!(
+            !adapter.config_home_env_keys().contains(&key),
+            "{kind}: {key}"
+        );
         let expected = adapter.config_home(&env);
         env.insert(key.into(), "/not-provider-config".into());
         assert_eq!(adapter.config_home(&env), expected, "{kind}");

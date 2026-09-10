@@ -52,7 +52,19 @@ pub struct SandboxInputs<'a> {
     pub worktree: Option<&'a Path>,
     pub scratch_dir: &'a Path,
     pub provider_home: Option<ProviderHome>,
+    pub provider_home_env_keys: &'a [&'a str],
     pub skills: &'a [SkillSpec],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EnvPin {
+    Set(String),
+    Unset,
+}
+
+pub struct Prepared {
+    pub plan: MountPlan,
+    pub pins: BTreeMap<String, EnvPin>,
 }
 
 pub struct ProviderHome {
@@ -109,11 +121,12 @@ pub fn diagnose() -> SandboxDiagnostic {
     }
 }
 
-pub fn prepare(inputs: &SandboxInputs<'_>) -> Result<MountPlan, SandboxErr> {
+pub fn prepare(inputs: &SandboxInputs<'_>) -> Result<Prepared, SandboxErr> {
     let views = skills::prepare(inputs.env, inputs.skills)?;
     let mut mounts = Vec::new();
     let mut required = crate::mux::domain::ProcessDomain::required_paths(inputs.env);
-    for key in [
+    let mut pins = BTreeMap::new();
+    let root_keys = [
         "HOME",
         "XDG_CONFIG_HOME",
         "XDG_DATA_HOME",
@@ -121,7 +134,27 @@ pub fn prepare(inputs: &SandboxInputs<'_>) -> Result<MountPlan, SandboxErr> {
         "XDG_STATE_HOME",
         "XDG_RUNTIME_DIR",
         "RIMZ_AGENTS_HOME",
-    ] {
+    ];
+    let mut keys: BTreeSet<&str> = root_keys.into_iter().collect();
+    keys.extend(["TMUX", "ZELLIJ_SOCKET_DIR"]);
+    keys.extend(inputs.provider_home_env_keys.iter().copied());
+    if !inputs.skills.is_empty()
+        && let Some(claude) = crate::agents::registry::find_definition("claude")
+    {
+        keys.extend(claude.config_home_env_keys().iter().copied());
+    }
+    for key in keys {
+        pins.insert(
+            key.to_owned(),
+            inputs
+                .env
+                .get(key)
+                .cloned()
+                .map_or(EnvPin::Unset, EnvPin::Set),
+        );
+    }
+    pins.insert("TMPDIR".to_owned(), EnvPin::Set("/tmp".to_owned()));
+    for key in root_keys {
         if let Some(value) = inputs.env.get(key).filter(|value| !value.is_empty()) {
             required.push(PathBuf::from(value));
         }
@@ -180,7 +213,10 @@ pub fn prepare(inputs: &SandboxInputs<'_>) -> Result<MountPlan, SandboxErr> {
         }
     }
     crate::disk::paths::ensure_private_runtime_dir(inputs.scratch_dir)?;
-    Ok(MountPlan { mounts })
+    Ok(Prepared {
+        plan: MountPlan { mounts },
+        pins,
+    })
 }
 
 fn validate_path(path: &Path) -> Result<(), SandboxErr> {

@@ -1,6 +1,6 @@
 //! Provider-process compilation, exec-wrapper argv, and login-shell launch policy.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::OpenOptions;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -151,6 +151,30 @@ pub struct CompiledAgentProcess {
     pub argv: Vec<String>,
     /// Final child environment, also re-applied after shell startup.
     pub env: BTreeMap<String, String>,
+    /// Environment keys removed before execution and again after shell startup.
+    pub unset: BTreeSet<String>,
+}
+
+impl CompiledAgentProcess {
+    /// Keep mount-planning inputs identical in the final provider environment.
+    pub fn pin_env(&mut self, pins: BTreeMap<String, crate::sandbox::EnvPin>) {
+        for (key, pin) in pins {
+            match pin {
+                crate::sandbox::EnvPin::Set(value) => {
+                    self.unset.remove(&key);
+                    self.env.insert(key, value);
+                }
+                crate::sandbox::EnvPin::Unset => {
+                    self.env.remove(&key);
+                    self.unset.insert(key);
+                }
+            }
+        }
+        // Finalized account stages have already moved provider_argv into argv.
+        if !self.provider_argv.is_empty() {
+            self.argv = login_shell_argv(&self.env, &self.unset, &self.provider_argv);
+        }
+    }
 }
 
 /// Launch env carries trusted `[[agents]]` env, which is where a project keeps
@@ -200,6 +224,7 @@ impl std::fmt::Debug for CompiledAgentProcess {
                 },
             )
             .field("env", &RedactedEnv(&self.env))
+            .field("unset", &self.unset)
             .finish()
     }
 }
@@ -666,12 +691,14 @@ fn compile_agent_process_with_extra_env(
         request,
         extra_env,
     )?;
-    let argv = login_shell_argv(&env, &provider_argv);
+    let unset = BTreeSet::new();
+    let argv = login_shell_argv(&env, &unset, &provider_argv);
     Ok(CompiledAgentProcess {
         provider_argv,
         provider_program,
         argv,
         env,
+        unset,
     })
 }
 
@@ -822,7 +849,7 @@ fn finalize_agent_process_stage(
                 binding: binding.clone(),
             };
             let argv = exec_argv(rimz_bin, runtime, &finalized)?;
-            let argv = login_shell_argv(&process.env, &argv);
+            let argv = login_shell_argv(&process.env, &process.unset, &argv);
             if argv.is_empty() {
                 return Err(AgentProcessStageErr::EmptyReentry);
             }
@@ -1063,11 +1090,16 @@ fn effective_launch_env(overrides: &BTreeMap<String, String>) -> BTreeMap<String
 /// The inputs today are trusted project config, adapter pins, and run ids; a
 /// future secret-bearing launch source needs a two-stage re-exec channel that
 /// does not place assignments in argv.
-pub fn login_shell_argv(env: &BTreeMap<String, String>, agent_argv: &[String]) -> Vec<String> {
+pub fn login_shell_argv(
+    env: &BTreeMap<String, String>,
+    unset: &BTreeSet<String>,
+    agent_argv: &[String],
+) -> Vec<String> {
     login_shell_argv_with(
         crate::proc::user_shell().as_deref(),
         Path::new(ENV_BIN).is_file(),
         env,
+        unset,
         agent_argv,
     )
 }
@@ -1076,6 +1108,7 @@ fn login_shell_argv_with(
     shell: Option<&Path>,
     env_bin_available: bool,
     env: &BTreeMap<String, String>,
+    unset: &BTreeSet<String>,
     agent_argv: &[String],
 ) -> Vec<String> {
     let Some(shell) = shell else {
@@ -1089,7 +1122,12 @@ fn login_shell_argv_with(
         );
         return agent_argv.to_vec();
     }
-    if let Some(key) = invalid_env_key(env) {
+    if let Some(key) = invalid_env_key(env).or_else(|| {
+        unset
+            .iter()
+            .find(|key| !valid_env_key(key))
+            .map(String::as_str)
+    }) {
         tracing::debug!(
             key,
             "agent launch shell wrapper disabled: launch env key cannot be represented as an env(1) assignment",
@@ -1098,9 +1136,9 @@ fn login_shell_argv_with(
     }
 
     match ShellFamily::from_shell(shell) {
-        ShellFamily::Bash => bash_interactive_shell_argv(shell, env, agent_argv),
-        ShellFamily::Posix => posix_login_shell_argv(shell, env, agent_argv),
-        ShellFamily::Fish => fish_login_shell_argv(shell, env, agent_argv),
+        ShellFamily::Bash => bash_interactive_shell_argv(shell, env, unset, agent_argv),
+        ShellFamily::Posix => posix_login_shell_argv(shell, env, unset, agent_argv),
+        ShellFamily::Fish => fish_login_shell_argv(shell, env, unset, agent_argv),
         ShellFamily::Csh => {
             tracing::debug!(
                 shell = %shell.display(),
@@ -1114,6 +1152,7 @@ fn login_shell_argv_with(
 fn bash_interactive_shell_argv(
     shell: &Path,
     env: &BTreeMap<String, String>,
+    unset: &BTreeSet<String>,
     agent_argv: &[String],
 ) -> Vec<String> {
     let mut argv = vec![
@@ -1123,7 +1162,7 @@ fn bash_interactive_shell_argv(
         POSIX_LOGIN_SHELL_SCRIPT.to_owned(),
         POSIX_ARG0.to_owned(),
     ];
-    argv.extend(env_assignments(env));
+    argv.extend(env_arguments(env, unset));
     argv.extend(agent_argv.iter().cloned());
     argv
 }
@@ -1131,6 +1170,7 @@ fn bash_interactive_shell_argv(
 fn posix_login_shell_argv(
     shell: &Path,
     env: &BTreeMap<String, String>,
+    unset: &BTreeSet<String>,
     agent_argv: &[String],
 ) -> Vec<String> {
     let mut argv = vec![
@@ -1141,7 +1181,7 @@ fn posix_login_shell_argv(
         POSIX_LOGIN_SHELL_SCRIPT.to_owned(),
         POSIX_ARG0.to_owned(),
     ];
-    argv.extend(env_assignments(env));
+    argv.extend(env_arguments(env, unset));
     argv.extend(agent_argv.iter().cloned());
     argv
 }
@@ -1149,6 +1189,7 @@ fn posix_login_shell_argv(
 fn fish_login_shell_argv(
     shell: &Path,
     env: &BTreeMap<String, String>,
+    unset: &BTreeSet<String>,
     agent_argv: &[String],
 ) -> Vec<String> {
     let mut argv = vec![
@@ -1158,13 +1199,19 @@ fn fish_login_shell_argv(
         "-c".to_owned(),
         FISH_LOGIN_SHELL_SCRIPT.to_owned(),
     ];
-    argv.extend(env_assignments(env));
+    argv.extend(env_arguments(env, unset));
     argv.extend(agent_argv.iter().cloned());
     argv
 }
 
-fn env_assignments(env: &BTreeMap<String, String>) -> impl Iterator<Item = String> + '_ {
-    env.iter().map(|(key, value)| format!("{key}={value}"))
+fn env_arguments<'a>(
+    env: &'a BTreeMap<String, String>,
+    unset: &'a BTreeSet<String>,
+) -> impl Iterator<Item = String> + 'a {
+    unset
+        .iter()
+        .flat_map(|key| ["-u".to_owned(), key.clone()])
+        .chain(env.iter().map(|(key, value)| format!("{key}={value}")))
 }
 
 fn valid_env_key(key: &str) -> bool {
@@ -1215,7 +1262,13 @@ fn final_launch_path_with(
     if !env_bin_available {
         return Ok(direct_launch_path(env));
     }
-    let argv = login_shell_argv_with(shell, env_bin_available, env, &env_probe_argv());
+    let argv = login_shell_argv_with(
+        shell,
+        env_bin_available,
+        env,
+        &BTreeSet::new(),
+        &env_probe_argv(),
+    );
     let (program, rest) = argv
         .split_first()
         .ok_or(ProgramLookupErr::EmptyProbeCommand)?;
