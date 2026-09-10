@@ -21,6 +21,9 @@ pub(crate) fn label_from_pane_names<'a>(names: impl IntoIterator<Item = &'a str>
 }
 
 pub(crate) fn is_named_after_panes(base: &str, names: &[&str]) -> bool {
+    if base.starts_with('#') || base.starts_with("team:") {
+        return false;
+    }
     let mut tokens = base.split('+').filter(|token| *token != "…").peekable();
     tokens.peek().is_some() && tokens.all(|token| !token.is_empty() && names.contains(&token))
 }
@@ -41,5 +44,7 @@ mod tests {
             assert!(!is_named_after_panes(label, &names), "{label}");
         }
         assert!(!is_named_after_panes("opus", &[]));
+        assert!(!is_named_after_panes("#feat", &["#feat"]));
+        assert!(!is_named_after_panes("team:forge", &["team:forge"]));
     }
 }

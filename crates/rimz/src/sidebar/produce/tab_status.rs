@@ -104,7 +104,12 @@ pub(crate) fn desired_tab_renames(
                         .is_some_and(crate::pane::command_is_host)
                 })
                 .collect::<Vec<_>>();
-            let anchor = work_panes.first()?.pane_id.clone();
+            let anchor = work_panes
+                .first()
+                .copied()
+                .or_else(|| tab.panes.first())?
+                .pane_id
+                .clone();
             let status = work_panes
                 .iter()
                 .filter_map(|pane| status_by_pane.get(&pane.pane_id).copied())
@@ -355,6 +360,9 @@ mod tests {
                 desired_tab_renames(&snapshot, &named_frame(name, &["opus"]), "zsh").is_empty()
             );
         }
+        for name in ["#feat", "team:forge"] {
+            assert!(desired_tab_renames(&snapshot, &named_frame(name, &[name]), "zsh").is_empty());
+        }
         assert!(desired_tab_renames(&snapshot, &frame("opus", &["%1"]), "zsh").is_empty());
         let renames = desired_tab_renames(&snapshot, &named_frame("#feat ?", &["opus"]), "zsh");
         assert_eq!(renames[0].desired_name, "#feat");
@@ -381,6 +389,19 @@ mod tests {
             assert_eq!(renames[0].anchor.raw(), "%2");
             frame.tabs[0].panes[1].title = None;
             assert!(desired_tab_renames(&snapshot, &frame, "zsh").is_empty());
+        }
+    }
+
+    #[test]
+    fn tab_with_only_chrome_or_daemon_panes_still_clears_stale_status() {
+        let now = Timestamp::from_second(1_700_000_000).expect("time");
+        let snapshot = snapshot(Vec::new(), now);
+        for command in ["rimz-sidebar", "claude remote-control", "codex app-server"] {
+            let mut frame = named_frame("opus !", &["opus"]);
+            frame.tabs[0].panes[0].current.command = Some(command.to_owned());
+            let renames = desired_tab_renames(&snapshot, &frame, "zsh");
+            assert_eq!(renames[0].desired_name, "opus");
+            assert_eq!(renames[0].intent, TabNameIntent::Rest);
         }
     }
 }
