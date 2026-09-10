@@ -2201,10 +2201,17 @@ fn loop_enable_disable_pause_workflow() {
         serde_json::to_vec(&expired).expect("serialize expired pause"),
     )
     .expect("write expired pause");
+    std::fs::write(
+        loop_strikes_path(&env),
+        serde_json::to_vec(&BTreeMap::from([(key.clone(), 2_u32)]))
+            .expect("serialize loop strikes"),
+    )
+    .expect("write loop strikes");
     assert!(loop_ok(&env, &["loop", "enable", "probe"]).contains("already enabled"));
     let enabled = read_loop_arming(&env)[&key];
     assert_eq!(enabled.at, Some(prior_enable));
     assert_eq!(enabled.pause_until, Some(expired_pause_end));
+    assert!(!read_loop_strikes(&env).contains_key(&key));
 
     loop_ok(
         &env,

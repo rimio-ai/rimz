@@ -604,8 +604,36 @@ fn show_headline_keeps_blocked_before_pause() {
 }
 
 #[test]
+fn record_exit_maps_terminal_spawn_results_only_with_run_id() {
+    for (result, expected) in [
+        (LoopRunResult::Completed, Some("0")),
+        (LoopRunResult::Failed, Some("1")),
+        (LoopRunResult::VerifyFailed, Some("123")),
+        (LoopRunResult::TimedOut, Some("124")),
+        (LoopRunResult::BudgetExceeded, Some("125")),
+        (LoopRunResult::Canceled, Some("130")),
+        (LoopRunResult::BudgetSkipped, None),
+        (LoopRunResult::SurplusSkipped, None),
+        (LoopRunResult::Delivered, None),
+        (LoopRunResult::TargetGone, None),
+        (LoopRunResult::CheckSkipped, None),
+        (LoopRunResult::SignalSkipped, None),
+        (LoopRunResult::Expired, None),
+        (LoopRunResult::Errored, None),
+        (LoopRunResult::Overlapped, None),
+    ] {
+        let mut run = record(10, result);
+        assert_eq!(record_exit(&run), None, "{result:?} without run_id");
+
+        run.run_id = Some("run_0123456789abcdef01234567".to_owned());
+        assert_eq!(record_exit(&run).as_deref(), expected, "{result:?}");
+    }
+}
+
+#[test]
 fn run_status_merges_failed_check_exit() {
     let mut failed = record(10, LoopRunResult::Failed);
+    failed.run_id = Some("run_0123456789abcdef01234567".to_owned());
     failed.check = Some(CheckRecord {
         output_path: None,
         code: Some(127),
@@ -617,6 +645,7 @@ fn run_status_merges_failed_check_exit() {
 
     assert_eq!(status.glyph, "✗");
     assert_eq!(status.label, "failed (exit 127)");
+    assert_eq!(record_exit(&failed).as_deref(), Some("127"));
 }
 
 #[test]
@@ -836,6 +865,7 @@ fn watch_history_uses_verdict_words_and_output_path() {
                 output: "last line".to_owned(),
                 output_path: Some("/tmp/wake.log".into()),
             });
+            assert_eq!(record_exit(&detail).as_deref(), Some(expected));
             let mut out = Vec::new();
             render_record_detail(
                 &mut out,
