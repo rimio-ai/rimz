@@ -42,8 +42,6 @@ pub enum SandboxErr {
         "unknown skill {name:?}; searched {roots:?}; install the skill or remove it from the profile"
     )]
     UnknownSkill { name: String, roots: Vec<PathBuf> },
-    #[error("a profile skills list needs agents.isolation = \"sandbox\"")]
-    SkillsNeedSandbox,
     #[error("provider {kind} declares no skill root; remove the profile skills list")]
     SkillsNeedRoot { kind: String },
     #[error("provider {kind} cannot mark skills user-only; remove the profile skills list")]
@@ -125,11 +123,8 @@ pub fn preflight_skills(
     configured: bool,
     manual: ManualSkill,
 ) -> Result<(), SandboxErr> {
-    if !configured {
+    if isolation == Isolation::Host || !configured {
         return Ok(());
-    }
-    if isolation == Isolation::Host {
-        return Err(SandboxErr::SkillsNeedSandbox);
     }
     if manual == ManualSkill::Unsupported {
         return Err(SandboxErr::ManualSkillsUnsupported {
