@@ -132,21 +132,27 @@ pub enum PendingWakeTrigger {
 
 impl PendingWake {
     pub fn label(&self, now: Timestamp) -> String {
+        format!("wake {}", self.trigger.summary(now))
+    }
+}
+
+impl PendingWakeTrigger {
+    pub(crate) fn summary(&self, now: Timestamp) -> String {
         use crate::theme::fmt::{command_preview, duration_label};
 
-        match &self.trigger {
-            PendingWakeTrigger::Timer { due } if *due <= now => "wake due".to_owned(),
-            PendingWakeTrigger::Timer { due } => {
+        match self {
+            Self::Timer { due } if *due <= now => "due".to_owned(),
+            Self::Timer { due } => {
                 let minutes = (due.duration_since(now).as_secs() as u64)
                     .div_ceil(60)
                     .max(1);
-                format!("wake in {}", duration_label(minutes))
+                format!("in {}", duration_label(minutes))
             }
-            PendingWakeTrigger::Command { command } => {
-                format!("wake after: {}", command_preview(command))
+            Self::Command { command } => {
+                format!("after: {}", command_preview(command))
             }
-            PendingWakeTrigger::Signal { selector, deadline } => {
-                let mut label = format!("wake on {selector}");
+            Self::Signal { selector, deadline } => {
+                let mut label = format!("on {selector}");
                 if let Some(deadline) = deadline {
                     let seconds = deadline.duration_since(now).as_secs().max(0) as u64;
                     let left = if *deadline <= now {

@@ -42,12 +42,11 @@ pub(super) enum CardSlot {
     AwaitingDots,
     Gauge,
     Tokens,
-    /// Standing lifetime child count and cost; data keeps it empty until this
-    /// session has spawned a child.
-    SubagentStats,
-    Subagents,
-    /// Standing pending-wake count; data keeps it empty until a wake is armed.
-    Waits,
+    /// Standing lifetime child count and cost plus armed one-shot wakes; empty
+    /// until either exists.
+    Delegation,
+    /// Current-turn child entries followed by pending-wait entries.
+    DelegationEntries,
 }
 
 const IDENTITY: &[CardSlot] = &[CardSlot::Identity];
@@ -61,17 +60,15 @@ const ENGAGED: &[CardSlot] = &[
     CardSlot::Description,
     CardSlot::Gauge,
     CardSlot::Tokens,
-    CardSlot::SubagentStats,
-    CardSlot::Waits,
+    CardSlot::Delegation,
 ];
-const ENGAGED_WITH_SUBAGENTS: &[CardSlot] = &[
+const ENGAGED_EXPANDED: &[CardSlot] = &[
     CardSlot::Identity,
     CardSlot::Description,
     CardSlot::Gauge,
     CardSlot::Tokens,
-    CardSlot::SubagentStats,
-    CardSlot::Waits,
-    CardSlot::Subagents,
+    CardSlot::Delegation,
+    CardSlot::DelegationEntries,
 ];
 
 /// The ordered line skeleton for one agent-card state.
@@ -97,9 +94,7 @@ pub(super) fn template(
         CardStage::Fresh { labeled: true } if !expanded => IDENTITY_DESCRIPTION,
         CardStage::Fresh { labeled: false } => IDENTITY_AWAITING_GAUGE,
         CardStage::Fresh { labeled: true } => IDENTITY_DESCRIPTION_GAUGE,
-        CardStage::Engaged if expanded || density == CardDensityMode::Expanded => {
-            ENGAGED_WITH_SUBAGENTS
-        }
+        CardStage::Engaged if expanded || density == CardDensityMode::Expanded => ENGAGED_EXPANDED,
         CardStage::Engaged => ENGAGED,
     }
 }
@@ -150,7 +145,7 @@ mod tests {
             (CardStage::Fresh { labeled: false }, true, _) => IDENTITY_AWAITING_GAUGE,
             (CardStage::Fresh { labeled: true }, true, _) => IDENTITY_DESCRIPTION_GAUGE,
             (CardStage::Engaged, _, CardDensityMode::Expanded) | (CardStage::Engaged, true, _) => {
-                ENGAGED_WITH_SUBAGENTS
+                ENGAGED_EXPANDED
             }
             (CardStage::Engaged, false, _) => ENGAGED,
         }
@@ -158,7 +153,7 @@ mod tests {
 
     #[test]
     fn table_pins_every_state_status_density_and_expansion_combination() {
-        assert!(ENGAGED_WITH_SUBAGENTS.starts_with(ENGAGED));
+        assert!(ENGAGED_EXPANDED.starts_with(ENGAGED));
         for stage in STAGES {
             for status in STATUSES {
                 for density in DENSITIES {
@@ -185,9 +180,8 @@ mod tests {
                     for expanded in [false, true] {
                         let template = template(stage, status, density, expanded);
                         assert!(!template.contains(&CardSlot::Tokens));
-                        assert!(!template.contains(&CardSlot::SubagentStats));
-                        assert!(!template.contains(&CardSlot::Subagents));
-                        assert!(!template.contains(&CardSlot::Waits));
+                        assert!(!template.contains(&CardSlot::Delegation));
+                        assert!(!template.contains(&CardSlot::DelegationEntries));
                     }
                 }
             }

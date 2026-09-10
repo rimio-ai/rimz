@@ -1,5 +1,5 @@
 //! The per-agent card: identity line, description, the context meter and its
-//! token line, and the expanded subagent list. A state-to-template table fixes
+//! token line, and expanded subagent and wait entries. A state-to-template table fixes
 //! the ordered line slots from lifecycle facts; late or absent data only fills
 //! that skeleton. The card anatomy is drawn in docs/interface/sidebar.md; the
 //! density and selection invariants live in docs/internals/sidebar/sidebar.md.
@@ -31,6 +31,7 @@ mod description;
 mod gauge;
 mod identity;
 mod template;
+mod waits;
 
 use self::{description::*, gauge::*};
 use identity::{display_context_window, identity_line};
@@ -130,13 +131,13 @@ pub(super) fn row_lines(
                     inner.push(gauge_line(ctx, row, meter_pixels.as_deref_mut()));
                 }
                 CardSlot::Tokens => inner.push(context_tokens_line(ctx, row)),
-                CardSlot::SubagentStats => {
-                    inner.extend(sub_agent_stats_line(ctx, agent));
+                CardSlot::Delegation => {
+                    inner.extend(delegation_line(ctx, agent));
                 }
-                CardSlot::Subagents => {
+                CardSlot::DelegationEntries => {
                     inner.extend(sub_agent_entry_lines(ctx, &agent.sub_agents));
+                    inner.extend(waits::wait_entry_lines(ctx, &agent.pending_wakes));
                 }
-                CardSlot::Waits => inner.extend(pending_wakes_line(ctx, agent)),
             }
         }
     }
@@ -146,28 +147,45 @@ pub(super) fn row_lines(
         .collect()
 }
 
-/// An engaged card's standing subagent stats line carries the lifetime child
-/// count and known cost. The expanded card appends current-turn child entries
-/// separately.
-fn sub_agent_stats_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>> {
-    if agent.sub_agent_count == 0 {
+/// The standing delegation line carries lifetime children, their known cost,
+/// and pending waits. Expansion only appends their entries.
+fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>> {
+    if agent.sub_agent_count == 0 && agent.pending_wakes.is_empty() {
         return None;
     }
     let theme = ctx.theme;
     let width = content_width(ctx.width);
+    let mut left = vec![Span::raw("  ")];
     // The `⧉` marker wears the violet of the delegation/meta family (the
     // compacting head, the `⇅ rc` flag); the label text reads at the soft
     // middle weight like the children below it.
-    let left = vec![
-        Span::styled(
-            format!("  {}", theme.glyph(GlyphRole::CardSubagents)),
-            theme.styled(Component::SubagentHeader, Modifier::empty()),
-        ),
-        Span::styled(
-            format!(" subagents ({})", agent.sub_agent_count),
-            theme.body(),
-        ),
-    ];
+    if agent.sub_agent_count > 0 {
+        left.extend([
+            Span::styled(
+                theme.glyph(GlyphRole::CardSubagents).to_owned(),
+                theme.styled(Component::SubagentHeader, Modifier::empty()),
+            ),
+            Span::styled(
+                format!(" subagents ({})", agent.sub_agent_count),
+                theme.body(),
+            ),
+        ]);
+    }
+    if !agent.pending_wakes.is_empty() {
+        if agent.sub_agent_count > 0 {
+            left.push(Span::styled(" · ", theme.muted()));
+        }
+        left.extend([
+            Span::styled(
+                theme.glyph(GlyphRole::CardWaits).to_owned(),
+                theme.styled(Component::WakeHeader, Modifier::empty()),
+            ),
+            Span::styled(
+                format!(" waits ({})", agent.pending_wakes.len()),
+                theme.body(),
+            ),
+        ]);
+    }
     let right = agent
         .sub_agent_cost_usd
         .filter(|usd| *usd >= 0.005)
@@ -179,24 +197,6 @@ fn sub_agent_stats_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'sta
         })
         .unwrap_or_default();
     Some(pin_right(left, right, width))
-}
-
-fn pending_wakes_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>> {
-    if agent.pending_wakes.is_empty() {
-        return None;
-    }
-    let theme = ctx.theme;
-    let left = vec![
-        Span::styled(
-            format!("  {}", theme.glyph(GlyphRole::CardWaits)),
-            theme.styled(Component::WakeHeader, Modifier::empty()),
-        ),
-        Span::styled(
-            format!(" waits ({})", agent.pending_wakes.len()),
-            theme.body(),
-        ),
-    ];
-    Some(pin_right(left, Vec::new(), content_width(ctx.width)))
 }
 
 /// Up to two indented lines for each child visible in this turn. Line 1 leads
@@ -318,7 +318,7 @@ fn sub_agent_metadata_line(
         model_col,
         prev_rendered,
     );
-    Some(pin_right(left, sub_agent_elapsed(theme, elapsed), width))
+    Some(pin_right(left, elapsed_spans(theme, elapsed), width))
 }
 
 fn append_sub_agent_tokens(
@@ -397,7 +397,7 @@ fn append_sub_agent_effort(
     left.push(Span::styled(effort.to_owned(), theme.muted()));
 }
 
-fn sub_agent_elapsed(theme: &Theme, elapsed: Option<i64>) -> Vec<Span<'static>> {
+fn elapsed_spans(theme: &Theme, elapsed: Option<i64>) -> Vec<Span<'static>> {
     elapsed
         .map(|secs| {
             vec![Span::styled(
