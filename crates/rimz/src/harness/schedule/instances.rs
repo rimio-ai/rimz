@@ -48,18 +48,6 @@ fn lock_path(state_root: &Path) -> PathBuf {
     state_root.join("loop-instances.lock")
 }
 
-pub(super) fn insert(state_root: &Path, name: &str, entry: &TaskEntry) -> Result<()> {
-    insert_into(state_root, name, entry)
-}
-
-pub(super) fn remove(state_root: &Path, name: &str, expected: Option<&TaskEntry>) -> Result<bool> {
-    remove_from(state_root, name, expected)
-}
-
-pub(super) fn rename(state_root: &Path, old: &str, new: &str) -> Result<bool> {
-    rename_from(state_root, old, new)
-}
-
 pub(super) fn load_from(state_root: &Path) -> Tasks {
     load_strict_from(state_root).unwrap_or_default()
 }
@@ -137,14 +125,14 @@ pub(super) fn migrate_legacy(state_home: &Path) -> Result<()> {
     Ok(())
 }
 
-fn insert_into(state_root: &Path, name: &str, entry: &TaskEntry) -> Result<()> {
+pub(super) fn insert(state_root: &Path, name: &str, entry: &TaskEntry) -> Result<()> {
     mutate(state_root, |tasks| {
         tasks.insert(name.to_owned(), entry.clone());
         Ok(((), true))
     })
 }
 
-fn remove_from(state_root: &Path, name: &str, expected: Option<&TaskEntry>) -> Result<bool> {
+pub(super) fn remove(state_root: &Path, name: &str, expected: Option<&TaskEntry>) -> Result<bool> {
     mutate(state_root, |tasks| {
         if expected.is_some_and(|entry| tasks.get(name) != Some(entry)) {
             return Ok((false, false));
@@ -154,7 +142,7 @@ fn remove_from(state_root: &Path, name: &str, expected: Option<&TaskEntry>) -> R
     })
 }
 
-fn rename_from(state_root: &Path, old: &str, new: &str) -> Result<bool> {
+pub(super) fn rename(state_root: &Path, old: &str, new: &str) -> Result<bool> {
     mutate(state_root, |tasks| {
         let Some(entry) = tasks.remove(old) else {
             return Ok((false, false));
@@ -293,7 +281,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let entry = task();
 
-        insert_into(dir.path(), "wake", &entry).expect("insert");
+        insert(dir.path(), "wake", &entry).expect("insert");
         let encoded = std::fs::read_to_string(path(dir.path())).expect("serialized instances");
         let value: serde_json::Value = serde_json::from_str(&encoded).expect("instances json");
         assert_eq!(value["wake"]["agent"], "claude");
@@ -308,9 +296,9 @@ mod tests {
             Some(Some("wake"))
         );
 
-        assert!(remove_from(dir.path(), "wake", None).expect("remove"));
+        assert!(remove(dir.path(), "wake", None).expect("remove"));
         assert!(load_from(dir.path()).0.is_empty());
-        assert!(!remove_from(dir.path(), "wake", None).expect("remove absent"));
+        assert!(!remove(dir.path(), "wake", None).expect("remove absent"));
     }
 
     #[test]
@@ -318,16 +306,16 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let entry = task();
 
-        insert_into(dir.path(), "wake", &entry).expect("insert");
+        insert(dir.path(), "wake", &entry).expect("insert");
 
-        assert!(rename_from(dir.path(), "wake", "nudge").expect("rename"));
+        assert!(rename(dir.path(), "wake", "nudge").expect("rename"));
         let tasks = load_from(dir.path());
         assert!(!tasks.0.contains_key("wake"));
         assert_eq!(
             tasks.0.get("nudge").map(|entry| entry.prompt.as_deref()),
             Some(Some("wake"))
         );
-        assert!(!rename_from(dir.path(), "wake", "later").expect("rename absent"));
+        assert!(!rename(dir.path(), "wake", "later").expect("rename absent"));
     }
 
     #[test]
@@ -340,7 +328,7 @@ mod tests {
             let barrier = barrier.clone();
             std::thread::spawn(move || {
                 barrier.wait();
-                insert_into(&root, name, &task()).expect("insert instance");
+                insert(&root, name, &task()).expect("insert instance");
             })
         });
         barrier.wait();
