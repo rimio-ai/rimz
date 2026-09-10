@@ -104,6 +104,84 @@ fn tab_status_clear_preserves_an_intentionally_stable_name() {
         ]),
         "",
     );
+
+    server.output(&["rename-window", "-t", anchor.raw(), "my-work-##h|notes"]);
+    let title = server
+        .backend
+        .set_tab_title(session, &anchor, "astra")
+        .expect("temporary title");
+    assert_eq!(server.display(session, "#{window_name}"), "astra");
+    drop(title);
+    assert_eq!(
+        server.display(session, "#{window_name}"),
+        "my-work-#h|notes"
+    );
+    assert_eq!(server.display(session, "#{automatic-rename}"), "0");
+
+    server.output(&["set-option", "-gw", "automatic-rename", "off"]);
+    server.output(&[
+        "set-option",
+        "-w",
+        "-t",
+        anchor.raw(),
+        "automatic-rename",
+        "on",
+    ]);
+    let title = server
+        .backend
+        .set_tab_title(session, &anchor, "astra")
+        .expect("locally automatic title");
+    drop(title);
+    assert_eq!(
+        server.stdout(&[
+            "show-options",
+            "-wqv",
+            "-t",
+            anchor.raw(),
+            "automatic-rename"
+        ]),
+        "on"
+    );
+}
+
+#[test]
+fn launch_title_restores_the_window_after_its_anchor_pane_closes() {
+    require_tmux!();
+    for automatic in ["off", "on"] {
+        let server = TmuxServer::new();
+        let session = "rimz-closed-title-anchor";
+        server.ensure_with_shell(session);
+        let anchor = list_session_panes(&server, session)[0].pane_id.clone();
+        let window = server.display(anchor.raw(), "#{window_id}");
+        server.output(&["split-window", "-d", "-t", anchor.raw(), "sh"]);
+        server.output(&["rename-window", "-t", &window, "work"]);
+        server.output(&[
+            "set-option",
+            "-w",
+            "-t",
+            &window,
+            "automatic-rename",
+            automatic,
+        ]);
+
+        let title = server
+            .backend
+            .set_tab_title(session, &anchor, "astra")
+            .expect("temporary title");
+        server
+            .backend
+            .close_pane(session, &anchor)
+            .expect("close launch pane");
+        drop(title);
+
+        assert_eq!(
+            server.display(&window, "#{automatic-rename}"),
+            if automatic == "on" { "1" } else { "0" }
+        );
+        if automatic == "off" {
+            assert_eq!(server.display(&window, "#{window_name}"), "work");
+        }
+    }
 }
 
 #[test]

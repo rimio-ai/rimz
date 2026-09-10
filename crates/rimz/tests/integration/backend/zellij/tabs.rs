@@ -341,8 +341,10 @@ fn rename_tab_uses_the_anchor_panes_stable_tab_id() {
     );
     let anchor = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", target.id));
 
-    room.backend()
-        .set_tab_title(room.name(), &anchor, "opus:project")
+    let original = target.tab_name.clone();
+    let title_guard = room
+        .backend()
+        .set_tab_title(room.name(), &anchor, "opus")
         .expect("name existing launch tab");
     poll_until(
         Duration::from_secs(10),
@@ -352,9 +354,22 @@ fn rename_tab_uses_the_anchor_panes_stable_tab_id() {
                 .panes
                 .iter()
                 .filter(|pane| pane.tab_id == target_id)
-                .all(|pane| pane.tab_name.as_deref() == Some("opus:project"))
+                .all(|pane| pane.tab_name.as_deref() == Some("opus"))
         },
         "launch title replaces default tab name",
+    );
+    drop(title_guard);
+    poll_until(
+        Duration::from_secs(10),
+        || list_panes(room.path(), room.name()),
+        |snapshot| {
+            snapshot
+                .panes
+                .iter()
+                .filter(|pane| pane.tab_id == target_id)
+                .all(|pane| pane.tab_name == original)
+        },
+        "launch exit restores original tab name",
     );
 
     room.backend()

@@ -203,7 +203,8 @@ path = "crates/rimz/src/mux"
 # Geometry planning and native balancing remain private to mux.
 # Sandbox reach uses mux-owned endpoint resolution rather than duplicating it.
 # Launch titles have their own operation, separate from temporary status renames.
-surface-budget = 262
+# Their scoped restoration adds one opaque guard returned to the CLI owner.
+surface-budget = 263
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"

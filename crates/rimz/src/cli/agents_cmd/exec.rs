@@ -290,6 +290,14 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     )
 }
 
+pub(super) fn supervise_in_place_command(command: &mut Command) -> Result<ExitStatus> {
+    reset_cleanup_signal_flag();
+    install_cleanup_signal_handlers().context("installing cleanup signal handlers")?;
+    install_interrupt_signal_handler().context("installing interrupt signal handler")?;
+    let child = command.spawn().context("starting in-place command")?;
+    supervise_child(child, None, None).map(|outcome| outcome.status)
+}
+
 fn exec_launch_reminders(
     request: &rimz::harness::launch::ExecRequest,
     machine_config: &rimz::config::MachineConfig,

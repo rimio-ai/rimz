@@ -1639,6 +1639,45 @@ impl MuxBackend for ZellijBackend {
         Ok(())
     }
 
+    fn set_tab_title(
+        &self,
+        session: &str,
+        anchor: &PaneId,
+        name: &str,
+    ) -> Result<crate::mux::TabTitleGuard> {
+        let tab_id =
+            self.tab_id_for_pane_within(session, anchor, super::super::TAB_RENAME_TIMEOUT)?;
+        let original = self
+            .raw_listed_panes(session, super::super::TAB_RENAME_TIMEOUT)?
+            .into_iter()
+            .find(|pane| pane.tab_id.or(pane.tab_position) == Some(tab_id))
+            .and_then(|pane| pane.tab_name)
+            .ok_or_else(|| MuxErr::Output {
+                program: "zellij".to_owned(),
+                reason: format!("tab `{tab_id}` has no name in session `{session}`"),
+            })?;
+        let original = crate::theme::strip_status_glyph_suffix(
+            &original,
+            &crate::config::MachineConfig::load_lenient().theme,
+        )
+        .to_owned();
+        let guard = crate::mux::TabTitleGuard {
+            restore: self.zellij_action(session).args([
+                "rename-tab-by-id".to_owned(),
+                tab_id.to_string(),
+                original,
+            ]),
+        };
+        self.zellij_action(session)
+            .args([
+                "rename-tab-by-id".to_owned(),
+                tab_id.to_string(),
+                name.to_owned(),
+            ])
+            .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)?;
+        Ok(guard)
+    }
+
     fn rename_tab(&self, session: &str, anchor: &PaneId, name: &str) -> Result<()> {
         let tab_id =
             self.tab_id_for_pane_within(session, anchor, super::super::TAB_RENAME_TIMEOUT)?;

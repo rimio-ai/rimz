@@ -2641,7 +2641,9 @@ fn capture_until_with_join(
             .arg(socket)
             .args(["capture-pane", "-p"]);
         if join_wrapped {
-            command.arg("-J");
+            // Digest headers may have scrolled off the viewport by the time
+            // their durable delivery state is observed.
+            command.args(["-J", "-S", "-"]);
         }
         let out = command
             .args(["-t", session])

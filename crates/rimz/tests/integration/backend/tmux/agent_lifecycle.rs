@@ -21,9 +21,14 @@ fn write_sleeping_agent_shim(env: &Env, agent: &str) -> PathBuf {
 }
 
 #[test]
-fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
+fn in_place_profile_launch_names_the_tab_and_restores_it_on_exit() {
     require_tmux!();
-    for isolation in ["host", "sandbox"] {
+    for (isolation, automatic) in [
+        ("host", true),
+        ("host", false),
+        ("sandbox", true),
+        ("sandbox", false),
+    ] {
         if isolation == "sandbox"
             && let Err(err) = rimz::sandbox::preflight(rimz::config::Isolation::Sandbox)
         {
@@ -43,6 +48,13 @@ fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
         )
         .expect("profile config");
         let agent_bin = write_sleeping_agent_shim(&env, "claude");
+        if !automatic {
+            std::fs::write(
+                agent_bin.join("claude"),
+                "#!/bin/bash\nprintf ready > \"$RIMZ_TEST_AGENT_READY\"\nread -r answer\nexit 0\n",
+            )
+            .expect("agent that exits normally on Enter");
+        }
         let ready = env.home_root.join("agent-ready");
         let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
         let server = TmuxServer::in_runtime_root(&env.runtime_root);
@@ -56,9 +68,41 @@ fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
             MuxName::Tmux,
             server.display(&workspace.session_name, "#{pane_id}"),
         );
+        // Room creation returns before the initial command execs the shell and
+        // tmux's automatic title catches up. Capture the shell, not that transient title.
+        let shell_ready = env.home_root.join("initial-shell-ready");
+        let shell_command = format!(
+            "printf ready > {}",
+            shlex::try_quote(shell_ready.to_str().expect("shell marker")).expect("quote marker")
+        );
         server
             .backend
-            .rename_tab(&workspace.session_name, &anchor, "shell ?")
+            .send_keys(&anchor, &shell_command)
+            .expect("type shell readiness marker");
+        server
+            .backend
+            .send_key(&anchor, NamedKey::Enter)
+            .expect("write shell readiness marker");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let command = server.display(anchor.raw(), "#{pane_current_command}");
+            let title = server.display(anchor.raw(), "#{window_name}");
+            if shell_ready.exists() && title == command {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "initial shell title did not settle: {title} (command={command})"
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
+        if !automatic {
+            server.output(&["rename-window", "-t", anchor.raw(), "my-work"]);
+        }
+        let original = server.display(anchor.raw(), "#{window_name}");
+        server
+            .backend
+            .rename_tab(&workspace.session_name, &anchor, &format!("{original} ?"))
             .expect("pending status rename");
         let launch = shlex::try_join([
             "/usr/bin/env",
@@ -91,12 +135,66 @@ fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
             thread::sleep(Duration::from_millis(50));
         }
 
-        let title = "opus-project";
+        if automatic {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let freshness = rimz::utils::time::unix_now_ms().to_string();
+                let published = env
+                    .rimz()
+                    .args([
+                        "sidebar",
+                        "snapshot",
+                        "--mux",
+                        "tmux",
+                        "--session-name",
+                        &workspace.session_name,
+                        "--min-pane-cache-ms",
+                        &freshness,
+                        "--json",
+                    ])
+                    .bounded_output()
+                    .expect("publish fresh panes for roster binding");
+                assert!(
+                    published.status.success(),
+                    "snapshot failed: {}",
+                    String::from_utf8_lossy(&published.stderr)
+                );
+                let output = env
+                    .rimz()
+                    .args(["--mux", "tmux", "agents", "--json"])
+                    .output()
+                    .expect("agent roster");
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let roster: serde_json::Value =
+                    serde_json::from_slice(&output.stdout).expect("roster JSON");
+                if roster["agents"]
+                    .as_array()
+                    .expect("agent cards")
+                    .iter()
+                    .any(|agent| {
+                        agent["profile"] == "opus"
+                            && agent["placement"]["pane"] == anchor.to_string()
+                    })
+                {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "{isolation} in-place agent missing from roster: {roster}; snapshot: {}; stderr: {}",
+                    String::from_utf8_lossy(&published.stdout),
+                    String::from_utf8_lossy(&published.stderr)
+                );
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+
+        let title = "opus";
         assert_eq!(server.display(anchor.raw(), "#{window_name}"), title);
         assert_eq!(server.display(anchor.raw(), "#{automatic-rename}"), "0");
-        if isolation == "sandbox" {
-            server.wait_for_pane_command(&workspace.session_name, "bwrap");
-        }
         server
             .backend
             .rename_tab(&workspace.session_name, &anchor, &format!("{title} ?"))
@@ -107,6 +205,55 @@ fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
             .expect("idle agent");
         assert_eq!(server.display(anchor.raw(), "#{window_name}"), title);
         assert_eq!(server.display(anchor.raw(), "#{automatic-rename}"), "0");
+        server
+            .backend
+            .send_key(
+                &anchor,
+                if automatic {
+                    NamedKey::CtrlC
+                } else {
+                    NamedKey::Enter
+                },
+            )
+            .expect("exit agent");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let restored = server.display(anchor.raw(), "#{window_name}");
+            let rename = server.display(anchor.raw(), "#{automatic-rename}");
+            if restored == original && rename == if automatic { "1" } else { "0" } {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{isolation}: expected {original}, got {restored} (automatic={rename})"
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
+        let shell_ready = env.home_root.join("shell-restored");
+        let shell_command = format!(
+            "printf '%s' \"$?\" > {}",
+            shlex::try_quote(shell_ready.to_str().expect("shell marker")).expect("quote marker")
+        );
+        server
+            .backend
+            .send_keys(&anchor, &shell_command)
+            .expect("type shell command");
+        server
+            .backend
+            .send_key(&anchor, NamedKey::Enter)
+            .expect("run shell command");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !shell_ready.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "original shell did not execute input"
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(
+            std::fs::read_to_string(shell_ready).expect("shell exit status"),
+            if automatic { "130" } else { "0" }
+        );
     }
 }
 

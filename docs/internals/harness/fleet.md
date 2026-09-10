@@ -172,7 +172,7 @@ The wrapper also collects what RimZ tells the agent about itself, as a `LaunchRe
 
 The wrapper then runs the agent in the pane, inheriting the pane's TTY. It launches through the user's shell-startup path when that shell and `/usr/bin/env` are available and falls back to direct exec otherwise, and it exports `RIMZ_RTK` from `[harness] rtk` so `cargo xtask` can route recognized cargo subcommands through `rtk`.
 
-Whether the wrapper stays resident behind the agent is one predicate, `should_exec_agent_directly`. A plain in-place launch has no run to complete, no pane to close, and no worktree to reclaim, so the wrapper direct-execs the agent and disappears. Anything with post-exit work left (a supervised run, a close-on-exit pane, a worktree launch) keeps the wrapper alive as the parent, which makes it the attach point for [supervised runs](./scripting.md) and for [Reclaiming a pane](#reclaiming-a-pane).
+Whether the provider wrapper stays resident behind the agent is one predicate, `should_exec_agent_directly`. A plain in-place launch has no run to complete, no pane to close, and no worktree to reclaim, so that wrapper direct-execs the agent. The outer placement command remains as a signal-aware parent solely to restore the tab title after exit. Anything with other post-exit work left (a supervised run, a close-on-exit pane, a worktree launch) keeps the provider wrapper alive as the parent, which makes it the attach point for [supervised runs](./scripting.md) and for [Reclaiming a pane](#reclaiming-a-pane).
 
 Room birth also carries one generic adapter-enrichment environment map through the mux seam, so a stock agent typed directly into an ordinary work shell inherits the room baseline. RimZ-managed launches still apply their adapter `launch_env` last. Existing processes and shells cannot be upgraded retroactively; rebirth is the parity boundary on both backends.
 
@@ -188,15 +188,15 @@ The CLI placement resolver takes explicit flags first, then falls back to the pe
 | --- | --- |
 | `--new-tab`, or no ambient pane to split | a new tab |
 | `--new-pane` | a split of the current tab; an explicit flag that cannot be honored fails fast |
-| policy `auto` (the default), single non-worktree cell, inside a room | the current pane: the CLI execs the wrapper argv in place, and the pane returns to its shell on exit |
+| policy `auto` (the default), single non-worktree cell, inside a room | the current pane: the CLI supervises the wrapper argv, restores the tab title on exit, and returns to the original shell |
 | policy `pane`, single non-worktree cell, inside a room | a split of the current tab |
 | policy `tab` | always a new tab |
 | any policy, with a named channel, a multi-cell layout, or a worktree | a new tab |
 | `--bg`, or create-on-miss | never in-place: the caller's pane stays available, so an in-place choice downgrades to a split |
 
-An in-place launch resolves liveness from the pane rather than from an end trace, because no wrapper stays resident to write one.
+An in-place launch resolves liveness from the pane rather than from an end trace; the placement parent only owns display cleanup.
 
-Tab titles follow the address vocabulary: a named-channel or worktree launch names its tab `#<NAME>`, a named team launch names it `team:<name>` and stamps its in-place lane as `<dir>/<team>`, and any other non-worktree launch names it `<profile-or-kind>:<dir>`. An in-place launch applies that same title to its existing tab before exec, replacing automatic process naming; tmux status suffix cleanup does not restore automatic naming over a launch title. Naming is best-effort display enrichment, not a launch precondition. Mux tab names stay display-only. They are mutable and live outside the store, so they never form an address.
+Tab titles follow the address vocabulary: a named-channel or worktree launch names its tab `#<NAME>`, a named team launch names it `team:<name>` and stamps its in-place lane as `<dir>/<team>`, and any other new-tab non-worktree launch names it `<profile-or-kind>:<dir>`. An in-place agent launch uses just `<profile-or-kind>` unless it has a channel label. A scoped mux title guard captures the original name and naming policy before pinning the launch title; status suffix cleanup leaves the launch title pinned, and command exit restores the original name and policy. Naming is best-effort display enrichment, not a launch precondition. Mux tab names stay display-only. They are mutable and live outside the store, so they never form an address.
 
 ### Cohort relaunch reconciliation
 

@@ -132,16 +132,17 @@ pub(super) fn execute(
     batch: &AgentLaunchBatch,
     request: PlacementRequest,
 ) -> Result<()> {
-    if request.placement == Placement::SamePane
-        && let Some(anchor) = own_pane_id(request.mux)
-        && let Err(err) =
-            backend.set_tab_title(&request.sidebar.session_name, &anchor, &request.title)
-    {
-        tracing::warn!(
-            error = &err as &dyn std::error::Error,
-            "could not name the agent's tab",
-        );
-    }
+    let title_guard = (request.placement == Placement::SamePane)
+        .then(|| own_pane_id(request.mux))
+        .flatten()
+        .and_then(|anchor| {
+            backend
+                .set_tab_title(&request.sidebar.session_name, &anchor, &request.title)
+                .inspect_err(|err| {
+                    tracing::warn!(error = %err, "could not name the agent's tab");
+                })
+                .ok()
+        });
     let errors = request.errors;
     let context = match request.placement {
         Placement::NewTab => errors.new_tab,
@@ -152,7 +153,9 @@ pub(super) fn execute(
         PreparedPlacement::NewTab(options) => backend.open_tab(&options).map_err(Into::into),
         PreparedPlacement::NewPane(options) => backend.split_pane(options).map_err(Into::into),
         PreparedPlacement::SamePane { argv, env, cwd } => {
-            Err(exec_wrapper_in_place(&argv, env, &cwd))
+            let code = run_wrapper_in_place(&argv, env, &cwd)?;
+            drop(title_guard);
+            std::process::exit(code);
         }
     });
     if let Err(err) = result {
@@ -229,28 +232,28 @@ fn single_pane(panes: &LayoutPanes) -> Result<&PaneCmd> {
 }
 
 #[cfg(unix)]
-fn exec_wrapper_in_place(
-    argv: &[String],
-    env: BTreeMap<String, String>,
-    cwd: &Path,
-) -> anyhow::Error {
-    use std::os::unix::process::CommandExt;
+fn run_wrapper_in_place(argv: &[String], env: BTreeMap<String, String>, cwd: &Path) -> Result<i32> {
+    use std::os::unix::process::ExitStatusExt;
 
     let Some((program, rest)) = argv.split_first() else {
-        return anyhow::anyhow!("in-place launch produced no command");
+        bail!("in-place launch produced no command");
     };
     let mut command = Command::new(program);
     command.args(rest).envs(&env).current_dir(cwd);
-    command.exec().into()
+    let status = super::exec::supervise_in_place_command(&mut command)?;
+    Ok(status
+        .code()
+        .or_else(|| status.signal().map(|signal| 128 + signal))
+        .unwrap_or(1))
 }
 
 #[cfg(not(unix))]
-fn exec_wrapper_in_place(
+fn run_wrapper_in_place(
     _argv: &[String],
     _env: BTreeMap<String, String>,
     _cwd: &Path,
-) -> anyhow::Error {
-    anyhow::anyhow!("in-place launch is only supported on Unix")
+) -> Result<i32> {
+    bail!("in-place launch is only supported on Unix")
 }
 
 #[cfg(test)]

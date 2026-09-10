@@ -147,6 +147,20 @@ pub enum MuxErr {
 
 pub type Result<T> = std::result::Result<T, MuxErr>;
 
+/// Restores a temporarily named tab when its foreground command finishes.
+#[must_use = "keep the guard alive until the foreground command exits"]
+pub struct TabTitleGuard {
+    restore: CommandSpec,
+}
+
+impl Drop for TabTitleGuard {
+    fn drop(&mut self) {
+        if let Err(err) = self.restore.run_with_timeout(TAB_RENAME_TIMEOUT) {
+            tracing::warn!(error = %err, "could not restore the tab's original name");
+        }
+    }
+}
+
 fn args_summary(args: &str) -> String {
     let mut tokens = args.split_whitespace();
     let total = tokens.clone().count();
@@ -1007,11 +1021,9 @@ pub trait MuxBackend: Send + Sync {
     /// layout. Contributor gallery tabs can opt out through
     /// [`TabOptions::dock_sidebar`].
     fn open_tab(&self, opts: &TabOptions) -> Result<()>;
-    /// Set a launch title for an existing tab, replacing automatic naming and
-    /// any pending restoration of it after a status suffix clears.
-    fn set_tab_title(&self, session: &str, anchor: &PaneId, name: &str) -> Result<()> {
-        self.rename_tab(session, anchor, name)
-    }
+    /// Temporarily pin a launch title, restoring the original name and naming
+    /// policy when the returned guard is dropped.
+    fn set_tab_title(&self, session: &str, anchor: &PaneId, name: &str) -> Result<TabTitleGuard>;
     /// Rename the tab/window containing `anchor`. The pane anchor keeps the
     /// cross-backend seam stable: tmux can address its window through a pane
     /// directly, while Zellij resolves the pane's stable tab id before using

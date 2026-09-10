@@ -929,7 +929,67 @@ impl MuxBackend for TmuxBackend {
         Ok(())
     }
 
-    fn set_tab_title(&self, _session: &str, anchor: &PaneId, name: &str) -> Result<()> {
+    fn set_tab_title(
+        &self,
+        _session: &str,
+        anchor: &PaneId,
+        name: &str,
+    ) -> Result<crate::mux::TabTitleGuard> {
+        ensure_pane_backend(anchor, MuxName::Tmux)?;
+        let original = self
+            .cmd()
+            .args([
+                "display-message",
+                "-p",
+                "-t",
+                anchor.raw(),
+                "#{window_id}|#{window_name}",
+            ])
+            .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)?;
+        let original = String::from_utf8_lossy(&original.stdout);
+        let (window_id, original) = original.split_once('|').ok_or_else(|| MuxErr::Output {
+            program: "tmux".to_owned(),
+            reason: "window title probe omitted its window id".to_owned(),
+        })?;
+        let automatic = self
+            .cmd()
+            .args([
+                "show-options",
+                "-wqv",
+                "-t",
+                anchor.raw(),
+                "automatic-rename",
+            ])
+            .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)?;
+        let automatic = String::from_utf8_lossy(&automatic.stdout);
+        let marker = self
+            .restore_automatic_rename_probe_command(anchor)?
+            .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)?;
+        let pending_restore = String::from_utf8_lossy(&marker.stdout).trim() == "on";
+        let original = crate::theme::strip_status_glyph_suffix(
+            original.trim_end_matches('\n'),
+            &crate::config::MachineConfig::load_lenient().theme,
+        )
+        .replace('#', "##");
+        let restore = self
+            .cmd()
+            .args(["rename-window", "-t", window_id, &original])
+            .args([
+                ";",
+                "set-option",
+                "-wu",
+                "-t",
+                window_id,
+                super::options::RIMZ_RESTORE_AUTOMATIC_RENAME_OPTION,
+                ";",
+                "set-option",
+            ]);
+        let restore = if pending_restore || automatic.trim().is_empty() {
+            restore.args(["-wu", "-t", window_id, "automatic-rename"])
+        } else {
+            restore.args(["-w", "-t", window_id, "automatic-rename", automatic.trim()])
+        };
+        let guard = crate::mux::TabTitleGuard { restore };
         self.rename_window_command(anchor, name)?
             .args([
                 ";",
@@ -939,8 +999,8 @@ impl MuxBackend for TmuxBackend {
                 anchor.raw(),
                 super::options::RIMZ_RESTORE_AUTOMATIC_RENAME_OPTION,
             ])
-            .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)
-            .map(|_| ())
+            .run_with_timeout(super::super::TAB_RENAME_TIMEOUT)?;
+        Ok(guard)
     }
 
     fn rename_tab(&self, _session: &str, anchor: &PaneId, name: &str) -> Result<()> {

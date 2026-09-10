@@ -171,7 +171,17 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         }],
     };
     let title = channel.as_deref().map_or_else(
-        || rimz::harness::resume::build_label(seed.kind.as_str(), None, &seed.cwd),
+        || {
+            if placement == Placement::SamePane {
+                return seed
+                    .launch
+                    .profile
+                    .as_deref()
+                    .unwrap_or(seed.kind.as_str())
+                    .to_owned();
+            }
+            rimz::harness::resume::build_label(seed.kind.as_str(), None, &seed.cwd)
+        },
         |channel| format!("#{channel}"),
     );
     let sidebar = room.sidebar_options(&seed.cwd, Vec::new(), None);

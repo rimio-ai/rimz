@@ -325,6 +325,14 @@ pub(super) fn launch_layout(
     let cwd = launch.cwd;
     let title = room_channel.as_deref().map_or_else(
         || {
+            if in_place && let Some(cell) = layout.agent_cells().next() {
+                return cell
+                    .launch
+                    .profile
+                    .as_deref()
+                    .unwrap_or(cell.kind.as_str())
+                    .to_owned();
+            }
             rimz::harness::spec::default_tab_title(
                 &layout,
                 &cwd,
@@ -505,7 +513,17 @@ fn launch_resume_layout(
     )?;
 
     let title = channel.as_deref().map_or_else(
-        || rimz::harness::spec::default_tab_title(&layout, &cwd, None, team_name.as_deref()),
+        || {
+            if in_place && let Some(cell) = layout.agent_cells().next() {
+                return cell
+                    .launch
+                    .profile
+                    .as_deref()
+                    .unwrap_or(cell.kind.as_str())
+                    .to_owned();
+            }
+            rimz::harness::spec::default_tab_title(&layout, &cwd, None, team_name.as_deref())
+        },
         |channel| format!("#{channel}"),
     );
     let sidebar = room.sidebar_options(&cwd, Vec::new(), None);
