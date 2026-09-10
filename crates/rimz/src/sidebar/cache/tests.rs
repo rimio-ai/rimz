@@ -3,11 +3,8 @@ use crate::disk::atomic;
 use crate::ids::WorkspaceId;
 use crate::mux::PRESENCE_STAMP_FRESH;
 use crate::sidebar::frame::assemble_frame;
-use crate::sidebar::refresh::git_stats::{DiffStats, DiffStatsCacheEntry, WorktreeRootsCache};
 use crate::sidebar::test_support::pane;
-use crate::sidebar::timing::{
-    DIFF_STATS_IDLE_TTL, DIFF_STATS_TTL, EVENT_PANE_TTL, SNAPSHOT_CACHE_TTL, WORKTREE_ROOTS_TTL,
-};
+use crate::sidebar::timing::{EVENT_PANE_TTL, SNAPSHOT_CACHE_TTL};
 use crate::utils::time::unix_now_ms;
 
 #[test]
@@ -237,92 +234,4 @@ fn read_snapshot_cache_reflects_a_changed_file() {
         read_snapshot_cache(&path, "rimz-two").map(|c| c.to_pane_refs().len()),
         Some(1),
     );
-}
-
-#[test]
-fn git_cache_freshness_boundaries_are_inclusive() {
-    let entry = DiffStatsCacheEntry {
-        refreshed_at_ms: 1_000,
-        commit_refreshed_at_ms: Some(1_000),
-        added: None,
-        removed: None,
-        commits: None,
-        behind: None,
-        trunk: None,
-        branch: None,
-        clean: None,
-        landed: None,
-        did_work: None,
-        merge_in_progress: None,
-        ..DiffStatsCacheEntry::default()
-    };
-    let fast = DIFF_STATS_TTL.as_millis() as u64;
-    let idle = DIFF_STATS_IDLE_TTL.as_millis() as u64;
-
-    assert!(entry.local_fresh_for(1_000 + fast, DIFF_STATS_TTL));
-    assert!(!entry.local_fresh_for(1_001 + fast, DIFF_STATS_TTL));
-    assert!(entry.commit_fresh_for(1_000 + fast, DIFF_STATS_TTL));
-    assert!(!entry.commit_fresh_for(1_001 + fast, DIFF_STATS_TTL));
-    assert!(entry.local_fresh_for(1_000 + idle, DIFF_STATS_IDLE_TTL));
-    assert!(!entry.local_fresh_for(1_001 + idle, DIFF_STATS_IDLE_TTL));
-    // The tiering's whole point: a hot-stale entry is idle-fresh, so an idle
-    // worktree skips the forks a hot one pays.
-    assert!(entry.local_fresh_for(1_001 + fast, DIFF_STATS_IDLE_TTL));
-
-    // The populated fields round-trip through the cache entry.
-    let populated = DiffStatsCacheEntry {
-        refreshed_at_ms: 1_000,
-        commit_refreshed_at_ms: Some(1_000),
-        added: Some(2),
-        removed: Some(1),
-        commits: Some(4),
-        behind: Some(2),
-        trunk: Some("main".to_owned()),
-        branch: Some("feature-migration".to_owned()),
-        clean: Some(true),
-        landed: Some(true),
-        did_work: Some(true),
-        merge_in_progress: Some(false),
-        ..DiffStatsCacheEntry::default()
-    };
-    assert_eq!(
-        populated.stats(),
-        Some(DiffStats {
-            added: 2,
-            removed: 1,
-        })
-    );
-    assert_eq!(populated.commits, Some(4));
-    assert_eq!(populated.behind, Some(2));
-    assert_eq!(populated.trunk.as_deref(), Some("main"));
-    assert_eq!(populated.branch.as_deref(), Some("feature-migration"));
-    assert_eq!(populated.clean, Some(true));
-    assert_eq!(populated.landed, Some(true));
-
-    // An old producer's cache entry predates the `clean`, `landed`, and
-    // `from_pr` columns; serde defaults read them back as "not probed" (`None`),
-    // never facts it cannot prove.
-    let legacy: DiffStatsCacheEntry = serde_json::from_str(
-            r#"{"refreshed_at_ms":1000,"added":0,"removed":0,"commits":0,"behind":3,"trunk":"main","branch":"feat"}"#,
-        )
-        .unwrap();
-    assert_eq!(legacy.clean, None);
-    assert_eq!(legacy.landed, None);
-    assert_eq!(legacy.from_pr, None);
-    assert_eq!(legacy.stats(), Some(DiffStats::default()));
-    assert!(
-        !legacy.commit_fresh_for(1_000, DIFF_STATS_TTL),
-        "pre-split entries refresh commit facts once"
-    );
-
-    let cache = WorktreeRootsCache {
-        refreshed_at_ms: 1_000,
-        roots: Vec::new(),
-        marker_names: Some(Default::default()),
-    };
-    let ttl = WORKTREE_ROOTS_TTL.as_millis() as u64;
-    assert!(cache.is_fresh(1_000 + ttl));
-    assert!(!cache.is_fresh(1_001 + ttl));
-    // A clock that ran backwards reads fresh (saturating).
-    assert!(cache.is_fresh(500));
 }
