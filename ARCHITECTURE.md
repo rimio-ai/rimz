@@ -71,7 +71,8 @@ State is five tiers of plain files, scoped by what each one outlives. [`disk/pat
 workspace store         ~/.local/state/rimz/workspaces/<workspace_id>/
   one room's durable truth: the framed event log and the records beside it,
   plus the producer caches that survive a reboot
-  tmp/ is room-owned sandbox scratch, not a durable record; teardown removes it
+  tmp/ and skills/ hold room-owned temporary files and rewritten skill copies,
+  not durable records; teardown removes both
 
 per-workspace runtime   $XDG_RUNTIME_DIR/rimz/<workspace_id>/  (or /tmp/rimz-<uid>/…)
   one room's disposable tier: wakeup sockets, heartbeats, read receipts,

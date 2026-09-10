@@ -2,6 +2,8 @@
 
 `rimz config` reads and edits the per-machine config set under `~/.config/rimz/` — `config.toml`, `theme.toml`, `agents.toml`, `loop.toml` — plain commented TOML you own. There is no config daemon and no bespoke format: `set` is a convenience that routes one dotted key to its owning file, validates the value, and writes it durably while preserving your comments, so you never have to remember which file holds a key. Reverse any change by re-running `set` or editing the file by hand. The field model, dotted-key catalog, and merge order are the [configuration guide](../../guide/configuration.md); `list-themes` and `list-pets` are the read-only pickers for the two config values with many choices.
 
+The same config directory holds `skills/`, the shared RimZ skill library merged into provider skill roots during sandbox launches. It contains skill directories, not TOML fields edited by `config set`; see [profile skills](../../guide/configuration.md#profiles).
+
 ## Read and edit config
 
 ```sh

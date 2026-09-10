@@ -47,7 +47,7 @@
 ## system-prompt-file = "~/.config/rimz/prompts/slim.md"
 ## append-system-prompt-files = ["~/.config/rimz/prompts/rust.md"]
 ## args = "--max-turns 4"
-## skills = ["merge:off", "rebase:off"]
+## skills = ["merge", "rebase"]      # model-callable; unlisted skills are user-only (sandbox)
 
 [subagents.profiles]
 # Profiles available only through `rimz subagents`. They use the same fields as
@@ -57,7 +57,7 @@
 ## agent = "codex"
 ## description = "Focused reviewer for supervised child tasks"
 ## effort = "high"
-## skills = ["merge:off", "rebase:off"]
+## skills = ["merge", "rebase"]
 
 [agents.commands]
 # Commands are shell-split raw command panes. They are not addressable agents.

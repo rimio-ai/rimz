@@ -17,7 +17,7 @@ impl SkillName {
 }
 
 impl FromStr for SkillName {
-    type Err = SkillSpecErr;
+    type Err = SkillListErr;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         if value.is_empty()
@@ -25,14 +25,14 @@ impl FromStr for SkillName {
             || value.contains(['/', '\\', ':'])
             || value.chars().any(char::is_whitespace)
         {
-            return Err(SkillSpecErr::InvalidName(value.to_owned()));
+            return Err(SkillListErr::InvalidName(value.to_owned()));
         }
         Ok(Self(value.to_owned()))
     }
 }
 
 impl TryFrom<String> for SkillName {
-    type Error = SkillSpecErr;
+    type Error = SkillListErr;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         value.parse()
@@ -51,122 +51,33 @@ impl fmt::Display for SkillName {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SkillMode {
-    #[default]
-    Auto,
-    Off,
-}
-
-impl FromStr for SkillMode {
-    type Err = SkillSpecErr;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "auto" => Ok(Self::Auto),
-            "off" => Ok(Self::Off),
-            "manual" => Err(SkillSpecErr::ManualUnsupported),
-            _ => Err(SkillSpecErr::UnknownMode(value.to_owned())),
-        }
-    }
-}
-
-impl fmt::Display for SkillMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Auto => "auto",
-            Self::Off => "off",
-        })
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct SkillSpec {
-    pub name: SkillName,
-    pub mode: SkillMode,
-}
-
-impl FromStr for SkillSpec {
-    type Err = SkillSpecErr;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let (name, mode) = match value.split_once(':') {
-            Some((_, mode)) if mode.contains(':') => {
-                return Err(SkillSpecErr::InvalidSpec(value.to_owned()));
-            }
-            Some((name, mode)) => (name, mode.parse()?),
-            None => (value, SkillMode::Auto),
-        };
-        Ok(Self {
-            name: name.parse()?,
-            mode,
-        })
-    }
-}
-
-impl TryFrom<String> for SkillSpec {
-    type Error = SkillSpecErr;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        value.parse()
-    }
-}
-
-impl From<SkillSpec> for String {
-    fn from(value: SkillSpec) -> Self {
-        value.to_string()
-    }
-}
-
-impl fmt::Display for SkillSpec {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.name, self.mode)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum SkillSpecErr {
-    #[error("invalid skill name `{0}`: use a nonempty name without paths, colons, or whitespace")]
-    InvalidName(String),
-    #[error("invalid skill spec `{0}`: expected name[:mode] with at most one colon")]
-    InvalidSpec(String),
+pub enum SkillListErr {
     #[error(
-        "skill mode `manual` is not yet supported; rewritten skill copies are planned as a follow-up; use auto or off"
+        "invalid skill name `{0}`: list bare names (the `:mode` suffix is gone; listed skills are model-callable, unlisted ones user-only)"
     )]
-    ManualUnsupported,
-    #[error("unknown skill mode `{0}`: expected auto or off")]
-    UnknownMode(String),
+    InvalidName(String),
     #[error("duplicate skill name `{0}`")]
     DuplicateName(SkillName),
 }
 
-pub fn validate_skill_list(skills: &[SkillSpec]) -> Result<(), SkillSpecErr> {
+pub fn validate_skill_list(skills: &[SkillName]) -> Result<(), SkillListErr> {
     let mut names = BTreeSet::new();
     for skill in skills {
-        if !names.insert(&skill.name) {
-            return Err(SkillSpecErr::DuplicateName(skill.name.clone()));
+        if !names.insert(skill) {
+            return Err(SkillListErr::DuplicateName(skill.clone()));
         }
     }
     Ok(())
 }
 
-pub(crate) fn deserialize_skill_list<'de, D>(deserializer: D) -> Result<Vec<SkillSpec>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let skills = Vec::<SkillSpec>::deserialize(deserializer)?;
-    validate_skill_list(&skills).map_err(serde::de::Error::custom)?;
-    Ok(skills)
-}
-
-pub(super) fn deserialize_optional_skill_list<'de, D>(
+pub(crate) fn deserialize_optional_skill_list<'de, D>(
     deserializer: D,
-) -> Result<Option<Vec<SkillSpec>>, D::Error>
+) -> Result<Option<Vec<SkillName>>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let skills = Option::<Vec<SkillSpec>>::deserialize(deserializer)?;
+    let skills = Option::<Vec<SkillName>>::deserialize(deserializer)?;
     if let Some(skills) = &skills {
         validate_skill_list(skills).map_err(serde::de::Error::custom)?;
     }
@@ -178,18 +89,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn skill_specs_parse_and_round_trip() {
-        for (input, mode) in [
-            ("merge", SkillMode::Auto),
-            ("merge:auto", SkillMode::Auto),
-            ("merge:off", SkillMode::Off),
-        ] {
-            let spec: SkillSpec = input.parse().unwrap();
-            assert_eq!(spec.name.as_str(), "merge");
-            assert_eq!(spec.mode, mode);
+    fn skill_names_parse_and_round_trip() {
+        for input in ["merge", "review-pr", "rimz.skills"] {
+            let name: SkillName = input.parse().unwrap();
+            assert_eq!(name.as_str(), input);
+            assert_eq!(serde_json::to_value(&name).unwrap(), input);
             assert_eq!(
-                serde_json::from_str::<SkillSpec>(&serde_json::to_string(&spec).unwrap()).unwrap(),
-                spec
+                serde_json::from_str::<SkillName>(&serde_json::to_string(&name).unwrap()).unwrap(),
+                name
             );
         }
         for input in [
@@ -203,20 +110,21 @@ mod tests {
             "a:",
             "a:auto:off",
             "a:unknown",
+            "merge:auto",
+            "merge:off",
+            "merge:manual",
         ] {
-            assert!(input.parse::<SkillSpec>().is_err(), "{input:?}");
+            let error = input.parse::<SkillName>().unwrap_err();
+            assert_eq!(error, SkillListErr::InvalidName(input.to_owned()));
+            assert!(error.to_string().contains("the `:mode` suffix is gone"));
         }
-        assert_eq!(
-            "merge:manual".parse::<SkillSpec>(),
-            Err(SkillSpecErr::ManualUnsupported)
-        );
     }
 
     #[test]
     fn profile_skill_lists_reject_duplicates_and_preserve_empty() {
         assert!(
             toml::from_str::<crate::config::Profile>(
-                "agent = 'claude'\nskills = ['merge', 'merge:off']"
+                "agent = 'claude'\nskills = ['merge', 'merge']"
             )
             .unwrap_err()
             .to_string()

@@ -64,7 +64,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let effective = rimz::config::effective::load(&config, &workspace.project_root)?;
     let posture = fork_posture(&seed, &effective.profiles)?;
     rimz::sandbox::preflight(config.agents.isolation)?;
-    if config.agents.isolation == rimz::config::Isolation::Host && !posture.skills.is_empty() {
+    if config.agents.isolation == rimz::config::Isolation::Host && posture.skills.is_some() {
         return Err(rimz::sandbox::SandboxErr::SkillsNeedSandbox.into());
     }
     if let Some(reason) = &posture.degraded {

@@ -106,7 +106,7 @@ pub struct ResumeLaunchPosture {
     pub args: Vec<String>,
     pub system_prompt_file: Option<PathBuf>,
     pub append_system_prompt_files: Vec<PathBuf>,
-    pub skills: Vec<crate::config::SkillSpec>,
+    pub skills: Option<Vec<crate::config::SkillName>>,
     pub mode: Option<PermissionMode>,
     pub model: Option<String>,
     pub effort: Option<String>,

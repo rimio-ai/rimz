@@ -103,7 +103,7 @@ This indexes what lives where; runtime shape and the single-binary rationale liv
 - `cli/` — command parsing, one `run(...)` per subcommand, shared `cli/render/` output, and the subagent fleet digest.
 - `agents/` — the provider-neutral `AgentDefinition` catalog, caller-aligned capability contracts and services, `state.rs` rollup, agent handle minting and validation (`petname`), private `adapters/` implementations for every built-in and process plugin, and shared spend/pricing/account machinery including upstream pricing projection.
 - `room/` — private managed-room context, birth/reset/teardown lifecycle, sidebar/presence options, and health gating.
-- `sandbox/` — Linux bubblewrap agent mount views, provider-home binds, per-room scratch, profile skill views, and capability preflight.
+- `sandbox/` — Linux bubblewrap agent mount views, provider-home binds, per-room tmp, rewritten skill copies, profile skill views, and capability preflight.
 - `harness/` — layout IR, teams, launch argv, supervised run transitions and their wake socket, loop scheduling over clock/signal/watch triggers, signal selectors and in-process firing, resume planning, and rebirth recovery inspection/materialization.
 - `message/` — message delivery: park-vs-live dispatch, live-pane send, reply waits, scheduled wakeups.
 - `store/` — durable state engine: `Store` handle, canonical snapshot schema, writer mutation vocabulary/choreography, framed event log, message record and queue codec, lifecycle follower, the supervised-run record with its codec and terminal wake sender, GC.

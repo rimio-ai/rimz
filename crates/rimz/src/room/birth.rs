@@ -131,7 +131,7 @@ impl RoomContext {
         }
 
         if self.machine_config.agents.isolation == crate::config::Isolation::Sandbox {
-            StatePaths::for_workspace(self.workspace.workspace_id.clone())?.ensure_scratch_dir()?;
+            StatePaths::for_workspace(self.workspace.workspace_id.clone())?.ensure_tmp_dir()?;
         }
         self.backend.ensure_session(&self.session_options(&cwd))?;
         if supervised && pre_existed {

@@ -81,8 +81,8 @@ pub(crate) fn print_reset_report(report: &rimz::room::RoomResetReport) -> Result
     )?;
     writeln!(
         stderr,
-        "Scratch: {}.",
-        if teardown.scratch_removed {
+        "Tmp: {}.",
+        if teardown.tmp_removed {
             "cleared"
         } else {
             "removal failed"

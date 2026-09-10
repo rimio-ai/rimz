@@ -385,7 +385,7 @@ fn dynamic_profile_and_team_field_lists_match_serialized_schema() {
         auto_compact: Some("200k".to_owned()),
         system_prompt_file: Some(PathBuf::from("system.md")),
         append_system_prompt_files: vec![PathBuf::from("append.md")],
-        skills: Some(vec!["merge:off".parse().unwrap()]),
+        skills: Some(vec!["merge".parse().unwrap()]),
         args: Some("--flag".to_owned()),
     };
     let team = Team {

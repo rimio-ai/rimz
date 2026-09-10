@@ -66,14 +66,23 @@ fn profile(agent: &str) -> Profile {
 
 #[test]
 fn profile_skills_inherit_replace_and_clear() {
+    assert_eq!(
+        agent_cell(
+            "claude",
+            &ProfilesConfig::default(),
+            &CommandsConfig::default()
+        )
+        .skills,
+        None
+    );
     let parent = Profile {
-        skills: Some(vec!["merge:off".parse().unwrap()]),
+        skills: Some(vec!["merge".parse().unwrap()]),
         ..profile("claude")
     };
     for child_skills in [
         None,
         Some(Vec::new()),
-        Some(vec!["rebase:off".parse().unwrap()]),
+        Some(vec!["rebase".parse().unwrap()]),
     ] {
         let expected = child_skills.clone().or_else(|| parent.skills.clone());
         let profiles = ProfilesConfig(BTreeMap::from([
@@ -90,7 +99,7 @@ fn profile_skills_inherit_replace_and_clear() {
         assert_eq!(resolved.skills, expected);
         assert_eq!(
             agent_cell("child", &profiles, &CommandsConfig::default()).skills,
-            expected.unwrap_or_default()
+            expected
         );
     }
 }
@@ -98,7 +107,7 @@ fn profile_skills_inherit_replace_and_clear() {
 #[test]
 fn rebased_profile_skills_preserve_explicit_empty() {
     let mut base = ResolvedProfile::bare("codex");
-    base.skills = Some(vec!["merge:off".parse().unwrap()]);
+    base.skills = Some(vec!["merge".parse().unwrap()]);
     let original = ResolvedProfile::bare("claude");
     assert_eq!(
         rebase_onto(original.clone(), Some(&base)).skills,

@@ -11,7 +11,7 @@ use crate::cli::render;
 #[derive(serde::Serialize)]
 struct ShowReport {
     #[serde(skip_serializing_if = "Option::is_none")]
-    scratch_dir: Option<std::path::PathBuf>,
+    tmp_dir: Option<std::path::PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     agent: Option<AgentReportEntry>,
     #[serde(skip)]
@@ -121,11 +121,11 @@ fn collect_show_report(
     });
     Ok((
         ShowReport {
-            scratch_dir: store
+            tmp_dir: store
                 .paths()
-                .scratch_dir
+                .tmp_dir
                 .exists()
-                .then(|| store.paths().scratch_dir.clone()),
+                .then(|| store.paths().tmp_dir.clone()),
             agent: report_agent,
             agent_state: agent,
             stale,
@@ -160,11 +160,11 @@ fn render_show_report(
     render_activity_section(&mut out, agent, report.ask.as_ref(), report.stale, now)?;
     render_context_section(&mut out, agent, now)?;
     render_placement_section(&mut out, agent)?;
-    if let Some(scratch_dir) = &report.scratch_dir {
+    if let Some(tmp_dir) = &report.tmp_dir {
         writeln!(
             out,
-            "  scratch: {} (mounted at /tmp in sandboxed panes)",
-            scratch_dir.display()
+            "  tmp: {} (mounted at /tmp in sandboxed panes)",
+            tmp_dir.display()
         )?;
         writeln!(out)?;
     }
@@ -819,7 +819,7 @@ mod tests {
         let state = rimz::testkit::agent_state("codex", "show", jiff::Timestamp::UNIX_EPOCH);
         let peers = [&state];
         let report = ShowReport {
-            scratch_dir: None,
+            tmp_dir: None,
             agent: Some(build_entry(
                 &state,
                 None,

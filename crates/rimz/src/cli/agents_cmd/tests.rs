@@ -311,7 +311,7 @@ fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecRequest {
         action,
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
-        skills: Vec::new(),
+        skills: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -679,7 +679,7 @@ mod parse {
             },
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
-            skills: Vec::new(),
+            skills: None,
             provider_account: ProviderAccountState::Unbound,
             run_id: Some(
                 "run_0123456789abcdef0123456789abcdef"
@@ -1929,7 +1929,7 @@ fn bare_exec_args() -> ExecRequest {
         },
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
-        skills: Vec::new(),
+        skills: None,
         provider_account: ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,

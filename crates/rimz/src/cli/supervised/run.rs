@@ -472,7 +472,7 @@ fn prepare_supervised(
     }
     let agent_cell = agent_cells[0];
     if machine_config.agents.isolation == rimz::config::Isolation::Host
-        && !agent_cell.skills.is_empty()
+        && agent_cell.skills.is_some()
     {
         return Err(rimz::sandbox::SandboxErr::SkillsNeedSandbox.into());
     }
@@ -639,7 +639,7 @@ fn execute_attempt(
         permission_args: &agent_cell.args,
         system_prompt_file: agent_cell.system_prompt_file.as_deref(),
         append_system_prompt_files: &agent_cell.append_system_prompt_files,
-        skills: &agent_cell.skills,
+        skills: agent_cell.skills.as_deref(),
         self_cleanup_on_completion: request.self_cleanup_on_completion && !request.keep,
         subagent: request.subagent,
         provider_account_binding: prepared.managed_launch.binding(),

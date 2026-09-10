@@ -98,7 +98,7 @@ pub struct AgentCell {
     pub system_prompt_file: Option<PathBuf>,
     /// Ordered prompt fragments composed into the replacement system prompt.
     pub append_system_prompt_files: Vec<PathBuf>,
-    pub skills: Vec<crate::config::SkillSpec>,
+    pub skills: Option<Vec<crate::config::SkillName>>,
     /// Canonical shared launch identity selected by profiles, roles, and CLI overlays.
     pub launch: crate::agents::LaunchParams,
 }
@@ -121,7 +121,7 @@ impl Cell {
             auto_compact: None,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
-            skills: Vec::new(),
+            skills: None,
             launch: crate::agents::LaunchParams::default(),
         })
     }
@@ -139,7 +139,7 @@ pub struct ResolvedProfile {
     pub auto_compact: Option<String>,
     pub system_prompt_file: Option<PathBuf>,
     pub append_system_prompt_files: Vec<PathBuf>,
-    pub skills: Option<Vec<crate::config::SkillSpec>>,
+    pub skills: Option<Vec<crate::config::SkillName>>,
     pub args: Option<String>,
 }
 
@@ -1358,7 +1358,7 @@ fn agent_cell_from(
         auto_compact: resolved.auto_compact.clone(),
         system_prompt_file: resolved.system_prompt_file.clone(),
         append_system_prompt_files: resolved.append_system_prompt_files.clone(),
-        skills: resolved.skills.clone().unwrap_or_default(),
+        skills: resolved.skills.clone(),
         launch: crate::agents::LaunchParams {
             profile,
             mode,

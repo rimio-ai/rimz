@@ -345,13 +345,13 @@ This file configures what `rimz agents <spec>` and `rimz subagents <profile>` ca
 
 ### Agent isolation
 
-Your stock agent CLI uses the host's temporary directory and skill directories. To give a room shared scratch and choose which user-level skills a profile discovers, enable the Linux bubblewrap mount view:
+Your stock agent CLI uses the host's temporary directory and skill directories. To give a room shared temporary files and choose which user-level skills a profile can invoke automatically, enable the Linux bubblewrap mount view:
 
 ```sh
 rimz config set agents.isolation sandbox
 ```
 
-This writes `isolation = "sandbox"` under `[agents]` in `agents.toml` after probing bubblewrap. The default is `host`; restore it with `rimz config set agents.isolation host`. New launches, including restarted agents, use the current setting; existing panes do not change. This is machine-wide policy, not a profile override. See [security](./security.md#sandbox-isolation) for what stays accessible and how scratch is removed.
+This writes `isolation = "sandbox"` under `[agents]` in `agents.toml` after probing bubblewrap. The default is `host`; restore it with `rimz config set agents.isolation host` after removing profile `skills` lists. New launches, including restarted agents, use the current setting; existing panes do not change. This is machine-wide policy, not a profile override. See [security](./security.md#sandbox-isolation) for what stays accessible and how room temporary files are removed.
 
 ### Agent profiles, commands, and teams
 
@@ -407,9 +407,11 @@ mode = "plan"
 
 #### Profiles
 
-To hide a user-level skill from a profile's normal discovery, set `skills = ["merge:off"]` on that profile. Entries use `name[:mode]`: `auto` keeps a skill visible, `off` hides it, and omitted modes and unlisted skills mean `auto`. A child list replaces its parent's list rather than appending; omitting the field inherits, while `skills = []` clears the inherited view. A non-empty list requires `agents.isolation = "sandbox"`. Every named skill must exist in one of the searched roots at launch, even when marked `off`; duplicate names and the not-yet-supported `manual` mode are errors.
+To reserve some skills for your explicit requests, set `skills = ["merge", "review"]` on a profile. Entries are bare names: listed skills are model-callable, and all unlisted skills remain visible but are user-invoked only. `skills = []` makes every skill user-invoked only; it does not disable the view. A child list replaces its parent's list rather than appending, and omitting the field inherits. A child cannot return to unconfigured behaviour after a parent sets a list. With no list anywhere in the profile chain, native invocation behaviour stays unchanged.
 
-Views cover the first `CLAUDE_CONFIG_DIR` directory's `skills/` (default `~/.claude/skills`) and `~/.agents/skills`, leaving project skills and host files untouched. No effective entries means no skill overlay. This changes discovery, not the agent's ability to reach host files by other paths ([security](./security.md#sandbox-isolation)).
+Put shared skills in `${XDG_CONFIG_HOME:-~/.config}/rimz/skills/`; sandbox launches merge them into the provider's user skill directory, with the provider's copy winning a name collision. Claude, Qwen, and Kiro use their config home's `skills/`; other built-ins use `~/.agents/skills`. Plugins declare no skill root. Project skills and host files stay untouched: user-only markers are written into room-owned copies. When there is no library entry to merge or skill to rewrite, no overlay is created. This changes discovery, not the agent's ability to reach host files by other paths ([security](./security.md#sandbox-isolation)).
+
+Every configured list, including `[]`, requires `agents.isolation = "sandbox"`, a provider with a skill root and a user-only marker, and installed skills matching every listed name. Duplicate names are errors. Antigravity, Amp, OpenCode, Kiro, Grok, and plugins refuse a list; remove the field to use native invocation behaviour. The old mode suffixes are no longer accepted. Changing a trusted project's skill list requires trusting the updated config again. Provider roots and markers are detailed in [sandbox internals](../internals/sandbox.md#profile-skill-views).
 
 A profile is a named agent preset. `[agents.profiles]` entries belong to `rimz agents` and become addressable type handles; `[subagents.profiles]` entries belong only to `rimz subagents`. `agent` is the base, a built-in kind (`claude`, `codex`, …) or another profile in the same namespace, and the remaining **override fields** layer on top: `mode` (`auto` | `ask` | `plan` | `yolo`), `model`, `effort`, `budget`, `auto-compact`, `system-prompt-file`, `append-system-prompt-files`, and raw `args`. Optional `description` is listing metadata shown by `rimz agents profiles` or `rimz subagents profiles`; it is not inherited, and neither is `model-reminder`, the switch for the launch line described below. `budget = "5"` caps the session and `budget = "20/day"` resets at the configured local day boundary. Team roles expose the launch fields; loop tasks expose the subset relevant to scheduled work.
 
