@@ -248,7 +248,8 @@ allowed-dependencies = ["agents", "config", "disk", "ids", "mux", "utils"]
 # Launch passes adapter-declared skill inputs separately from provider-home binds.
 # Static profile preflight shares typed provider identity across CLI entry points.
 # Host-side output writers share the current agent-visible room tmp view.
-surface-budget = 16
+# Exec presents typed skill omissions returned by sandbox preparation.
+surface-budget = 18
 
 [[module]]
 path = "crates/rimz/src/room"
