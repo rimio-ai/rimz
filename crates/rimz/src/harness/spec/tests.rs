@@ -724,13 +724,55 @@ fn auto_compact_rejects_invalid_counts_and_unsupported_adapters() {
         );
     }
 
-    for value in ["70%", "0", "lots"] {
+    for value in ["70%", "0", "200", "99999", "1000001", "lots"] {
         let mut binding = role("coder", "codex");
         binding.auto_compact = Some(value.to_owned());
         let teams = TeamsConfig(BTreeMap::from([("forge".to_owned(), team(vec![binding]))]));
         assert!(matches!(resolve_spec_with_agent_override(
             Some("forge"), &no_profiles(), &no_profiles(), &no_commands(), &teams, None,
         ), Err(LayoutErr::InvalidProfile { reason, .. }) if reason.contains("auto-compact")));
+    }
+}
+
+#[test]
+fn auto_compact_validates_portable_token_range() {
+    for kind in ["claude", "codex"] {
+        for value in ["200", "1000", "50k", "99999", "1000001", "2M"] {
+            let profiles = profiles([(
+                "compact",
+                Profile {
+                    auto_compact: Some(value.to_owned()),
+                    ..profile(kind)
+                },
+            )]);
+            assert!(
+                matches!(resolve_profile("compact", &profiles),
+                Err(LayoutErr::InvalidProfile { reason, .. })
+                    if reason.contains("100k and 1M tokens") && reason.contains("`200k`")),
+                "{kind}: {value}"
+            );
+        }
+        for (value, expected) in [
+            ("100k", "100000"),
+            ("100000", "100000"),
+            ("1M", "1000000"),
+            ("1000000", "1000000"),
+        ] {
+            let profiles = profiles([(
+                "compact",
+                Profile {
+                    auto_compact: Some(value.to_owned()),
+                    ..profile(kind)
+                },
+            )]);
+            assert_eq!(
+                resolve_profile("compact", &profiles)
+                    .expect("boundary accepted")
+                    .auto_compact
+                    .as_deref(),
+                Some(expected)
+            );
+        }
     }
 }
 
