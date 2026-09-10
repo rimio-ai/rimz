@@ -320,6 +320,7 @@ Each field renders into the base CLI's own flag, so a profile can pin anything t
 | `model` | the model to run | `--model opus` |
 | `effort` | reasoning effort, on the provider's own ladder | `--effort high` |
 | `budget` | dollar cap for the session, or per local day with `/day` | kept and enforced by RimZ ([budgets](./budget.md)) |
+| `auto-compact` | the agent's own auto-compaction window, in tokens ([supported agents and limits](./configuration.md#profiles)) | `--autocompact 200000` |
 | `system-prompt-file` | first prompt piece; replaces the provider's system prompt | `--system-prompt-file …` |
 | `append-system-prompt-files` | ordered pieces composed after the base | repeat `--append-system-prompt-file …` |
 | `mode` | the permission posture (`auto` \| `ask` \| `plan` \| `yolo`) | see [permission modes](#set-a-permission-mode) |
@@ -332,7 +333,7 @@ Raw `args` remain the provider-specific escape hatch — including Droid's nativ
 
 When does a bare kind stop being enough? The moment you type the same shaping flags a second time. One planner prompt you keep reusing, a reviewer that must never commit, a cheap low-effort triage agent — each is a profile.
 
-Override any field for one launch with the matching flag, which wins over the profile:
+Override a field for one launch with its matching launch flag, which wins over the profile; `auto-compact` is profile-only:
 
 ```sh
 rimz agents claude --model opus --effort xhigh --budget 5 --system-prompt-file ./review.md
@@ -347,7 +348,7 @@ To try a profile on a different provider without changing it, add `--agent`:
 rimz agents claude-planner --agent codex --model gpt-5.3-codex
 ```
 
-The launched handle is still `@claude-planner`. Mode, effort, budget, and prompt files carry from the original profile. Because model names and raw `args` belong to a provider, a provider change silently replaces their old values with those from the selected base; a profile such as `[agents.profiles.codex]` can hold those Codex defaults. `--agent` accepts any profile name as that base as well as a registered kind, and command-line overrides still win. This override is fresh-launch only and is not written back to the profile; a later interactive restart refuses the provider mismatch and points to an explicit fresh `--agent` launch.
+The launched handle is still `@claude-planner`. Mode, effort, budget, `auto-compact`, and prompt files carry from the original profile. Because model names and raw `args` belong to a provider, a provider change silently replaces their old values with those from the selected base; a profile such as `[agents.profiles.codex]` can hold those Codex defaults. `--agent` accepts any profile name as that base as well as a registered kind, and command-line overrides still win. This override is fresh-launch only and is not written back to the profile; a later interactive restart refuses the provider mismatch and points to an explicit fresh `--agent` launch.
 
 On budgets specifically: `--budget 5` parks the agent when its session cost reaches $5, `--budget 20/day` caps each local calendar day instead, and `rimz agents budget @coder` inspects or changes the cap while the agent runs. The same dollar-cap model scales up to loop tasks, the room, and a provider login: the [budgets guide](./budget.md) owns it.
 

@@ -123,7 +123,7 @@ Pi is the non-hermetic exception: it still appends native `APPEND_SYSTEM.md`, co
 
 ## Auto-compaction window
 
-Profile and team-role `auto-compact` sets the agent's native window as a positive token count (`"200k"`, `"200000"`, `"1m"`), not a percentage. It is separate from [RimZ smart compaction](../guide/configuration.md#smart-compaction).
+Profile and team-role `auto-compact` sets the agent's native window as a token count from 100k through 1M inclusive (`"200k"`, `"200000"`, `"1m"`), not a percentage. It is separate from [RimZ smart compaction](../guide/configuration.md#smart-compaction).
 
 | Agent | Typed auto-compaction window | Provider rendering |
 | --- | :--: | --- |
@@ -142,7 +142,7 @@ Profile and team-role `auto-compact` sets the agent's native window as a positiv
 | Grok Build | ✗ | no verified threshold flag |
 | Process plugin | ✗ | not declarable yet |
 
-Claude Code requires 2.1.221+ and accepts 100k–1M, capped at the model's context window. Codex clamps the threshold to 90% of the model window. RimZ validates a positive token count; the provider applies its bounds. Unsupported typed fields fail at launch rather than degrading to a provider default. Raw `args` remain the explicit provider-specific escape hatch.
+Claude Code requires 2.1.221+ and caps the window at the model's context window. Codex clamps the threshold to 90% of the model window. RimZ enforces the same 100k–1M token range for both providers before launch, so a plain value such as `"200"` is rejected rather than interpreted differently by each CLI. Unsupported typed fields fail at launch rather than degrading to a provider default. Raw `args` remain the explicit provider-specific escape hatch.
 
 ## The wiring matrix
 

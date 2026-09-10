@@ -1027,12 +1027,12 @@ fn normalize_auto_compact(value: &mut Option<String>, profile: &str) -> Result<(
         return Ok(());
     };
     let tokens = match AutoCompact::parse(raw) {
-        Ok(AutoCompact::Tokens(tokens)) if tokens > 0 => tokens,
+        Ok(AutoCompact::Tokens(tokens)) if (100_000..=1_000_000).contains(&tokens) => tokens,
         _ => {
             return Err(LayoutErr::InvalidProfile {
                 profile: profile.to_owned(),
                 reason: format!(
-                    "auto-compact must be a positive token count (for example `200k`), got `{raw}`"
+                    "auto-compact must be between 100k and 1M tokens; use a token count like `200k`, got `{raw}`"
                 ),
             });
         }
