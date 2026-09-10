@@ -39,7 +39,7 @@ rimz agents forge -w feat-x   # a whole team, isolated in its own worktree
 
 The wrapper stays thin. `rimz agents claude` does exactly two things on your machine: it renders the profile into the stock CLI's own flags (the `claude --permission-mode auto …` line above, nothing you couldn't type yourself), and it runs that command in your Zellij or tmux — in the pane you are standing in for a single agent, in a fresh tab for a layout or worktree — under a small RimZ launcher that stamps the handle and hands over to the CLI. The agent process is the official CLI; its session files land where the CLI always puts them, so `claude --resume` and the provider's own apps keep working. Closing the pane or `rimz agents stop @claude` ends it the same way Ctrl+C would.
 
-An agent launched in your current pane also names that tab using the same profile or channel label as a new-tab launch. The label stays readable while the agent runs, including when sandboxing is enabled, rather than following the wrapper process name.
+An agent launched in your current pane also names that tab using the same profile or channel label as a new-tab launch. The label stays readable while the agent runs, including when sandboxing is enabled, rather than following the wrapper process name. It remains when the agent exits and you return to the shell; tmux does not resume automatic process-based naming for that tab.
 
 Beyond the preset, the launcher carries three habits that build on it, each with its own guide:
 
