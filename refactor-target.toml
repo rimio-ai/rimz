@@ -263,7 +263,7 @@ surface-budget = 48
 
 [[module]]
 path = "crates/rimz/src/sidebar"
-surface-budget = 361
+surface-budget = 334
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
@@ -1343,3 +1343,53 @@ reason = "Stays public with RepairOutcome for the live tmux test; room and the r
 kind = "item"
 key = "daemon_view::daemon_view_spec"
 reason = "Effective-view assemblies differ by binary and readiness source; a shared prepare-and-probe helper costs fourteen production SLOC (pass 15c)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::refresh_heavy_lanes"
+reason = "Both caller-varying inputs and the thirteen ordered effects stay: HostEligible versus OneShot and unreaped daemon-probe agents on the one-shot path (ea47d6e1c); a policy extraction only moves code (pass 15b)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::rate_limits::project_rate_limits"
+reason = "Fusion rules pin fixes 6da4f68af, 9a12899e0, 032eebd1b, ecf0350ee, bbfa6b230, 5cf7dd95a, 28dedb821, fe996ea64, 7757ab974, 93d21170f, 08f5c37f0 and c39851bf5; phase extraction adds interfaces without removing policy (pass 15b)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::live_spend::apply_live_day_spend"
+reason = "Day and headline projections stamp different fields under different burst rules (846f90795, ef1529104); merging them stamps unread headline data for budget callers (pass 15b)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::accounts::produce_accounts"
+reason = "Contention timeout serves stale account data (cfbfe3b50); git and PR lanes have different fallback/publication rules, while disk::single_flight already owns lock coordination (pass 15b)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::git_stats::refresh_diff_stats_for"
+reason = "Local fallback uses the initial cache and fixed observation time; a shared cache-lane helper costs more than its three call sites save and would blur distinct fallback rules (pass 15b)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::pr::produce_pr_states"
+reason = "Post-coordination reread and owned-write-before-emission remain PR policy; local fallback never publishes and disk::single_flight already owns coordination (pass 15b)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::runner::bounded_map"
+reason = "Three lane callers need bounded parallel work with input-order results and explicit lane propagation (b68bcf82c); the module already hides the shared mechanics (pass 15b)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::pr::probe_repo_group"
+reason = "GitHub reprobes settled links and fails a whole group on batch failure; Tea retains terminal links and publishes partial success. These are distinct policies, not duplicate implementations (pass 15b)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::trace::record"
+reason = "Opt-in account-refresh diagnostic timing (cfbfe3b50) stays outside cache truth; the deferred closure avoids constructing unused records (pass 15b)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::refresh::git_refs::resolve"
+reason = "In-process loose/packed ref resolution avoids hot-lane git forks (5ff74b470); its single interface already hides the filesystem rules (pass 15b)."
