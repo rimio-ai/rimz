@@ -319,7 +319,7 @@ impl Schedule {
     /// First occurrence after `last_fire`, evaluated from `now` in the
     /// configured local zone. A returned timestamp may be at or before `now`,
     /// which means the elder should fire on its next tick.
-    pub fn next_after(&self, last_fire: Timestamp, now: &Zoned) -> Option<Timestamp> {
+    fn next_after(&self, last_fire: Timestamp, now: &Zoned) -> Option<Timestamp> {
         match self {
             Schedule::Interval(spec) => last_fire
                 .checked_add(SignedDuration::from_secs(i64::from(spec.minutes) * 60))

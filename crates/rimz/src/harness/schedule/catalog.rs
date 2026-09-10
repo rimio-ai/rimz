@@ -4,10 +4,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use jiff::Timestamp;
 
 use super::{
     ParsedTrigger, ScheduleErr, TaskAction, TaskActionErr, TaskShape,
-    arming::{self, TaskKey},
+    arming::{self, ArmState, Arming, TaskKey},
     config_edit, instances, strikes,
 };
 use crate::Store;
@@ -91,6 +92,24 @@ impl LoadedTask {
 
     pub fn key(&self, name: &str) -> String {
         TaskKey::for_task(name, self.source(), &self.entry().resolved_root())
+    }
+
+    pub fn enable(
+        &self,
+        name: &str,
+        observed: Option<&Arming>,
+        now: Timestamp,
+    ) -> Result<Option<Arming>> {
+        let key = self.key(name);
+        let already = ArmState::resolve(observed, self.source(), now) == ArmState::Live
+            && observed.is_none_or(|record| record.enabled && record.strikes.is_none());
+        if already {
+            strikes::clear(&key)?;
+            return Ok(None);
+        }
+        let enabled = arming::enable(&key)?;
+        strikes::clear(&key)?;
+        Ok(Some(enabled))
     }
 
     pub const fn source(&self) -> TaskSource {
@@ -241,7 +260,14 @@ impl TaskCatalog {
             instances::remove(&instance_root, name, None)?;
         }
         let source = TaskSource::from_entry(entry);
-        clear_overlays(&TaskKey::for_task(name, source, &entry.resolved_root()))
+        Ok(TaskMutation {
+            changed: true,
+            cleared_overlays: clear_overlays(&TaskKey::for_task(
+                name,
+                source,
+                &entry.resolved_root(),
+            ))?,
+        })
     }
 
     pub fn replace_project(
@@ -263,11 +289,10 @@ impl TaskCatalog {
         };
         let changed = remove_definition(name, task)?;
         let key = task.key(name);
-        let cleared_arming = arming::remove(&key)?;
-        let cleared_strikes = strikes::clear(&key)?;
+        let cleared_overlays = clear_overlays(&key)?;
         Ok(TaskMutation {
             changed,
-            cleared_overlays: cleared_arming || cleared_strikes,
+            cleared_overlays,
         })
     }
 
@@ -417,13 +442,10 @@ fn merge_base(instances: Tasks, machine: Tasks) -> BTreeMap<String, LoadedTask> 
     tasks
 }
 
-fn clear_overlays(key: &str) -> Result<TaskMutation> {
+fn clear_overlays(key: &str) -> Result<bool> {
     let cleared_arming = arming::remove(key)?;
     let cleared_strikes = strikes::clear(key)?;
-    Ok(TaskMutation {
-        changed: true,
-        cleared_overlays: cleared_arming || cleared_strikes,
-    })
+    Ok(cleared_arming || cleared_strikes)
 }
 
 fn enable_project_overlays(

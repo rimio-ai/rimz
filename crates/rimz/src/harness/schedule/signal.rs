@@ -172,7 +172,7 @@ impl WatchOutcome {
     }
 }
 
-pub fn wake_log_path(paths: &StatePaths, name: &str) -> PathBuf {
+pub(super) fn wake_log_path(paths: &StatePaths, name: &str) -> PathBuf {
     paths.wakes_dir.join(format!("{name}.log"))
 }
 
@@ -452,7 +452,7 @@ fn fire_signal_with_wait(
         if resolution == SignalResolution::Ignore {
             continue;
         }
-        let key = arming::TaskKey::for_task(&name, task.source(), &task.entry().resolved_root());
+        let key = task.key(&name);
         if arming::ArmState::resolve(
             arming_entries.get(&key),
             task.source(),

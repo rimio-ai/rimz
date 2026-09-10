@@ -59,6 +59,17 @@ pub struct Arming {
     pub strikes: Option<u32>,
 }
 
+impl Arming {
+    fn default_for(source: TaskSource) -> Self {
+        Self {
+            enabled: !matches!(source, TaskSource::Project { .. }),
+            at: None,
+            pause_until: None,
+            strikes: None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ArmState {
     Live,
@@ -75,10 +86,10 @@ pub enum DisabledReason {
 }
 
 /// Scoped overlay key construction for task definitions.
-pub struct TaskKey;
+pub(super) struct TaskKey;
 
 impl TaskKey {
-    pub fn for_task(name: &str, source: TaskSource, root: &Path) -> String {
+    pub(super) fn for_task(name: &str, source: TaskSource, root: &Path) -> String {
         format!("{}{name}", Self::scope(source, root))
     }
 
@@ -105,10 +116,10 @@ impl TaskKey {
 impl ArmState {
     pub fn resolve(record: Option<&Arming>, source: TaskSource, now: Timestamp) -> Self {
         let Some(record) = record else {
-            return if matches!(source, TaskSource::Project { .. }) {
-                Self::Disabled(DisabledReason::NotEnabledHere)
-            } else {
+            return if Arming::default_for(source).enabled {
                 Self::Live
+            } else {
+                Self::Disabled(DisabledReason::NotEnabledHere)
             };
         };
         if !record.enabled {
@@ -129,7 +140,7 @@ pub fn load() -> BTreeMap<String, Arming> {
     load_from(&state_home())
 }
 
-pub fn enable(key: &str) -> Result<Arming> {
+pub(super) fn enable(key: &str) -> Result<Arming> {
     enable_in(&state_home(), key, Timestamp::now())
 }
 
@@ -220,12 +231,9 @@ fn disable_in(state_root: &Path, key: &str, strikes: Option<u32>, now: Timestamp
 fn pause_in(state_root: &Path, key: &str, source: TaskSource, until: Timestamp) -> Result<()> {
     STORE
         .mutate(state_root, |entries: &mut BTreeMap<String, Arming>| {
-            let entry = entries.entry(key.to_owned()).or_insert(Arming {
-                enabled: !matches!(source, TaskSource::Project { .. }),
-                at: None,
-                pause_until: None,
-                strikes: None,
-            });
+            let entry = entries
+                .entry(key.to_owned())
+                .or_insert_with(|| Arming::default_for(source));
             let changed = entry.pause_until != Some(until);
             entry.pause_until = Some(until);
             ((), changed)
@@ -242,12 +250,7 @@ fn disable_if_live_in(
 ) -> Result<bool> {
     STORE
         .mutate(state_root, |entries: &mut BTreeMap<String, Arming>| {
-            if entries.get(key).is_some_and(|current| {
-                !current.enabled || current.pause_until.is_some_and(|until| until > now)
-            }) {
-                return (false, false);
-            }
-            if entries.get(key).is_none() && matches!(source, TaskSource::Project { .. }) {
+            if ArmState::resolve(entries.get(key), source, now) != ArmState::Live {
                 return (false, false);
             }
             let entry = Arming {

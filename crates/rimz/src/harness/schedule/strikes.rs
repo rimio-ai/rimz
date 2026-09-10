@@ -91,7 +91,7 @@ pub(super) fn note(key: &str, signal: Signal) -> Result<u32> {
     note_in(&state_home(), key, signal)
 }
 
-pub fn clear(key: &str) -> Result<bool> {
+pub(super) fn clear(key: &str) -> Result<bool> {
     clear_from(&state_home(), key)
 }
 
