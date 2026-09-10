@@ -201,7 +201,8 @@ path = "crates/rimz/src/mux"
 # Companion append adds one deep operation, its outcome, and the shared tab cap.
 # Geometry planning and native balancing remain private to mux.
 # Sandbox reach uses mux-owned endpoint resolution rather than duplicating it.
-surface-budget = 261
+# Launch titles have their own operation, separate from temporary status renames.
+surface-budget = 262
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
