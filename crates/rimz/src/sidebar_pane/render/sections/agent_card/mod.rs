@@ -155,6 +155,17 @@ fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>>
     }
     let theme = ctx.theme;
     let width = content_width(ctx.width);
+    let (subagents_label, waits_label) = if ctx.tier == Tier::L2 {
+        (
+            format!(" subagents ({})", agent.sub_agent_count),
+            format!(" waits ({})", agent.pending_wakes.len()),
+        )
+    } else {
+        (
+            format!(" {}", agent.sub_agent_count),
+            format!(" {}", agent.pending_wakes.len()),
+        )
+    };
     let mut left = vec![Span::raw("  ")];
     // The `⧉` marker wears the violet of the delegation/meta family (the
     // compacting head, the `⇅ rc` flag); the label text reads at the soft
@@ -165,10 +176,7 @@ fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>>
                 theme.glyph(GlyphRole::CardSubagents).to_owned(),
                 theme.styled(Component::SubagentHeader, Modifier::empty()),
             ),
-            Span::styled(
-                format!(" subagents ({})", agent.sub_agent_count),
-                theme.body(),
-            ),
+            Span::styled(subagents_label, theme.body()),
         ]);
     }
     if !agent.pending_wakes.is_empty() {
@@ -180,10 +188,7 @@ fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>>
                 theme.glyph(GlyphRole::CardWaits).to_owned(),
                 theme.styled(Component::WakeHeader, Modifier::empty()),
             ),
-            Span::styled(
-                format!(" waits ({})", agent.pending_wakes.len()),
-                theme.body(),
-            ),
+            Span::styled(waits_label, theme.body()),
         ]);
     }
     let right = agent
@@ -318,7 +323,7 @@ fn sub_agent_metadata_line(
         model_col,
         prev_rendered,
     );
-    Some(pin_right(left, elapsed_spans(theme, elapsed), width))
+    Some(pin_right(left, sub_agent_elapsed(theme, elapsed), width))
 }
 
 fn append_sub_agent_tokens(
@@ -397,7 +402,7 @@ fn append_sub_agent_effort(
     left.push(Span::styled(effort.to_owned(), theme.muted()));
 }
 
-fn elapsed_spans(theme: &Theme, elapsed: Option<i64>) -> Vec<Span<'static>> {
+fn sub_agent_elapsed(theme: &Theme, elapsed: Option<i64>) -> Vec<Span<'static>> {
     elapsed
         .map(|secs| {
             vec![Span::styled(

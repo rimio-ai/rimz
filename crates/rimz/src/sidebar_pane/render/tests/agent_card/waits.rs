@@ -1,6 +1,6 @@
 use super::*;
 use crate::agents::{PendingWake, PendingWakeTrigger};
-use crate::sidebar_pane::render::labels::elapsed_glyph;
+use crate::sidebar_pane::render::labels::{activity_age_style, elapsed_glyph};
 use crate::sidebar_pane::render::theme::Component;
 
 #[test]
@@ -114,11 +114,34 @@ fn pending_wakes_line_counts_armed_wakes() {
     assert!(expanded[stats + 4].contains("⧖ make"));
     assert!(expanded[stats + 5].contains("make check"));
 
-    let narrow = group_lines_at_width(&snapshot, &theme, 0, 24);
-    let narrow_text = line_texts(&narrow);
-    assert!(narrow_text[stats].contains("subagents"));
-    assert!(narrow_text[stats].ends_with("$0.42▐"));
-    assert_eq!(narrow[stats].width(), 24);
+    for width in [24, 30, 36, 45, 46] {
+        let narrow = group_lines_at_width(&snapshot, &theme, 0, width);
+        let narrow_text = line_texts(&narrow);
+        let counts = narrow_text[stats]
+            .strip_suffix("$0.42▐")
+            .unwrap()
+            .trim_end();
+        let expected = if width < 46 {
+            "▌  ⧉ 1 · ⧖ 2"
+        } else {
+            "▌  ⧉ subagents (1) · ⧖ waits (2)"
+        };
+        assert_eq!(counts, expected, "pane width {width}");
+        assert_eq!(narrow[stats].width(), width);
+        let collapsed = line_texts(&group_lines_at_width(&snapshot, &theme, usize::MAX, width));
+        assert_eq!(
+            narrow_text[stats]
+                .chars()
+                .skip(1)
+                .take(width - 2)
+                .collect::<String>(),
+            collapsed[stats]
+                .chars()
+                .skip(1)
+                .take(width - 2)
+                .collect::<String>(),
+        );
+    }
 
     snapshot.worktree_groups[0].rows[0]
         .as_agent_mut()
@@ -128,6 +151,11 @@ fn pending_wakes_line_counts_armed_wakes() {
     let cleared = line_texts(&group_lines(&snapshot, &theme, 0));
     assert!(cleared[stats].contains("⧉ subagents (1)"));
     assert!(!cleared.iter().any(|line| line.contains("⧖")));
+    let narrow = line_texts(&group_lines_at_width(&snapshot, &theme, 0, 36));
+    assert_eq!(
+        narrow[stats].strip_suffix("$0.42▐").unwrap().trim_end(),
+        "▌  ⧉ 1"
+    );
 }
 
 #[test]
@@ -183,6 +211,17 @@ fn wait_entries_show_trigger_program_and_command() {
                 .ends_with(&format!("{} {elapsed:>3}▐", elapsed_glyph(&theme, seconds)))
         );
         assert_eq!(lines[start + offset].width(), 54);
+        let clock = format!("{} {elapsed:>3}", elapsed_glyph(&theme, seconds));
+        assert_eq!(
+            lines[start + offset]
+                .spans
+                .iter()
+                .find(|span| span.content == clock)
+                .unwrap()
+                .style
+                .fg,
+            theme.muted().fg
+        );
     }
     assert!(rows[start + 3].contains("      cargo xtask gate --name foo_test"));
     assert!(!rows[start + 3].contains("/usr/bin"));
@@ -248,4 +287,56 @@ fn wait_entry_without_armed_at_has_no_clock() {
         rows[stats + 1].trim_matches(['▌', '▐', ' ']),
         "⧖ on pr.merged"
     );
+    let narrow = line_texts(&group_lines_at_width(
+        &snapshot,
+        &Theme::fixed(false),
+        0,
+        36,
+    ));
+    assert_eq!(narrow[stats].trim_matches(['▌', '▐', ' ']), "⧖ 1");
+}
+
+#[test]
+fn long_wait_clocks_stay_muted_while_subagent_clocks_heat() {
+    let mut parent = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("working"),
+    );
+    let started = fixed_now() - Duration::from_secs(7200);
+    parent.pending_wakes.push(PendingWake {
+        name: "timer".to_owned(),
+        trigger: PendingWakeTrigger::Timer {
+            due: fixed_now() + Duration::from_secs(7200),
+        },
+        armed_at: Some(started),
+    });
+    let mut child = agent(
+        "child-1",
+        "claude",
+        AgentStatus::Running,
+        None,
+        None,
+        Some("Explore"),
+    );
+    child.parent_agent_id = Some("claude-1".into());
+    child.subagent_started_at = Some(started);
+    let snapshot = snapshot_with(vec![parent, child]);
+    let theme = Theme::fixed(false);
+    let lines = group_lines(&snapshot, &theme, 0);
+    let clock = format!("{}  2h", elapsed_glyph(&theme, 7200));
+    let tones: Vec<_> = lines
+        .iter()
+        .flat_map(|line| &line.spans)
+        .filter(|span| span.content == clock)
+        .map(|span| span.style.fg)
+        .collect();
+    assert_eq!(
+        tones,
+        vec![activity_age_style(&theme, 7200).fg, theme.muted().fg]
+    );
+    assert_ne!(tones[0], tones[1]);
 }
