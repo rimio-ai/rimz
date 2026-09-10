@@ -370,8 +370,8 @@ fn teardown_rooms(
             &runtime,
             &state,
         );
-        if !report.scratch_removed {
-            failures.push(format!("remove scratch for {}", room.session_name));
+        if !report.tmp_removed {
+            failures.push(format!("remove tmp for {}", room.session_name));
         }
         if report.session_killed {
             writeln!(

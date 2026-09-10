@@ -63,22 +63,28 @@ fn reset_archives_records_and_clears_room_state() {
         .expect("append lifecycle");
 
     let paths = env.state_path_for(&env.project_root);
-    assert!(!paths.scratch_dir.exists(), "host store creates no scratch");
-    paths.ensure_scratch_dir().expect("scratch dir");
-    fs::write(paths.scratch_dir.join("agent-work"), b"scratch").expect("write scratch");
-    paths
-        .ensure_scratch_dir()
-        .expect("scratch ensure is idempotent");
+    assert!(!paths.tmp_dir.exists(), "host store creates no tmp");
+    assert!(
+        !paths.skills_dir.exists(),
+        "host store creates no skill copies"
+    );
+    paths.ensure_skills_dir().expect("skills dir");
+    let skill_copy = paths.skills_dir.join("skill-digest");
+    fs::create_dir(&skill_copy).expect("skill copy dir");
+    fs::write(skill_copy.join("SKILL.md"), b"user-only skill").expect("write skill copy");
+    paths.ensure_tmp_dir().expect("tmp dir");
+    fs::write(paths.tmp_dir.join("agent-work"), b"tmp").expect("write tmp");
+    paths.ensure_tmp_dir().expect("tmp ensure is idempotent");
     assert_eq!(
-        fs::read(paths.scratch_dir.join("agent-work")).expect("read scratch"),
-        b"scratch"
+        fs::read(paths.tmp_dir.join("agent-work")).expect("read tmp"),
+        b"tmp"
     );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(
-            fs::metadata(&paths.scratch_dir)
-                .expect("scratch metadata")
+            fs::metadata(&paths.tmp_dir)
+                .expect("tmp metadata")
                 .permissions()
                 .mode()
                 & 0o777,
@@ -114,7 +120,8 @@ fn reset_archives_records_and_clears_room_state() {
     assert!(!diag_log.exists(), "diag log cleared");
     assert!(!diag_frames.exists(), "diag frame captures cleared");
     assert!(!runtime_root.exists(), "workspace runtime dir cleared");
-    assert!(!paths.scratch_dir.exists(), "room scratch cleared");
+    assert!(!paths.tmp_dir.exists(), "room tmp cleared");
+    assert!(!paths.skills_dir.exists(), "room skill copies cleared");
 
     let archives = archive_paths(&paths.events_archive_dir);
     assert_eq!(archives.len(), 1, "one reset archive written");

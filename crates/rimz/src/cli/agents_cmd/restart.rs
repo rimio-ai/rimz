@@ -47,8 +47,7 @@ pub(in crate::cli) fn restart_resolved(
     let machine_config = crate::cli::machine_config();
     let posture = restart_posture(agent, workspace, &machine_config)?;
     rimz::sandbox::preflight(machine_config.agents.isolation)?;
-    if machine_config.agents.isolation == rimz::config::Isolation::Host
-        && !posture.skills.is_empty()
+    if machine_config.agents.isolation == rimz::config::Isolation::Host && posture.skills.is_some()
     {
         return Err(rimz::sandbox::SandboxErr::SkillsNeedSandbox.into());
     }

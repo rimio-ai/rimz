@@ -7,13 +7,13 @@ use crate::harness::spec::AgentCell;
 
 #[test]
 fn cell_posture_projection_covers_every_agent_cell_field() {
-    let cell = AgentCell {
+    let mut cell = AgentCell {
         kind: AgentKind::new_unchecked("codex"),
         args: vec!["--model".to_owned(), "o3".to_owned()],
         auto_compact: None,
         system_prompt_file: Some(PathBuf::from("system.md")),
         append_system_prompt_files: vec![PathBuf::from("append.md")],
-        skills: vec!["merge:off".parse().unwrap()],
+        skills: Some(vec!["merge".parse().unwrap()]),
         launch: LaunchParams {
             mode: Some(PermissionMode::Yolo),
             model: Some("o3".to_owned()),
@@ -46,6 +46,10 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
             degraded: None,
         }
     );
+    for skills in [None, Some(Vec::new())] {
+        cell.skills.clone_from(&skills);
+        assert_eq!(ResumePosture::from_cell(&cell).skills, skills);
+    }
 }
 
 #[test]

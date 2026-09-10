@@ -1,4 +1,4 @@
-//! A real team consumes peer messages and subagent scratch across mount views.
+//! A real team consumes peer messages and subagent tmp across mount views.
 
 #![cfg(target_os = "linux")]
 
@@ -24,7 +24,7 @@ fn tmux_sandbox_team_consumes_message_and_subagent_shared_tmp() {
     }
     env.install_agent_hooks("claude");
     for name in ["visible", "hidden"] {
-        let dir = env.home_root.join(".agents/skills").join(name);
+        let dir = env.home_root.join(".claude/skills").join(name);
         std::fs::create_dir_all(&dir).expect("skill directory");
         std::fs::write(dir.join("SKILL.md"), name).expect("skill content");
     }
@@ -40,13 +40,13 @@ fn tmux_sandbox_team_consumes_message_and_subagent_shared_tmp() {
         r#"set -eu
 test "$TMPDIR" = /tmp
 test ! -e "$RIMZ_TEST_HOST_TMP_FILE"
-test ! -e "$HOME/.agents/skills/hidden"
-test -r "$HOME/.agents/skills/visible/SKILL.md"
+grep -q 'disable-model-invocation: true' "$HOME/.claude/skills/hidden/SKILL.md"
+test "$(cat "$HOME/.claude/skills/visible/SKILL.md")" = visible
 case "$*" in
     *sandbox-child-task*)
         test "$(cat /tmp/parent-file)" = parent-to-child
         printf '%s\n' child-to-room > /tmp/child-file
-        feed '{"hook_event_name":"Stop","session_id":"'"$session"'","last_assistant_message":"scratch written"}'
+        feed '{"hook_event_name":"Stop","session_id":"'"$session"'","last_assistant_message":"tmp written"}'
         exit 0
         ;;
 esac
@@ -106,10 +106,10 @@ while IFS= read -r line; do :; done
 isolation = "sandbox"
 [agents.profiles.worker]
 agent = "claude"
-skills = ["hidden:off"]
+skills = ["visible"]
 [subagents.profiles.worker-child]
 agent = "claude"
-skills = ["hidden:off"]
+skills = ["visible"]
 [agents.teams.duo]
 layout = "parent+other"
 [[agents.teams.duo.roles]]
@@ -132,36 +132,36 @@ profile = "worker"
         .assert_success_within_timeout("launch sandbox team");
 
     let store = env.store();
-    let scratch = &store.paths().scratch_dir;
+    let tmp = &store.paths().tmp_dir;
     let deadline = Instant::now() + Duration::from_secs(90);
     loop {
-        let completed = std::fs::read_to_string(scratch.join("journey-complete"));
+        let completed = std::fs::read_to_string(tmp.join("journey-complete"));
         if matches!(completed.as_deref(), Ok("parent-read:child-to-room\n")) {
             break;
         }
         assert!(
             Instant::now() < deadline,
             "sandbox consumers did not finish: completion={completed:?}, child launch={:?}, message send={:?}, teammate read={:?}",
-            std::fs::read_to_string(scratch.join("child-launch")),
-            std::fs::read_to_string(scratch.join("message-send")),
-            std::fs::read_to_string(scratch.join("other-consumed")),
+            std::fs::read_to_string(tmp.join("child-launch")),
+            std::fs::read_to_string(tmp.join("message-send")),
+            std::fs::read_to_string(tmp.join("other-consumed")),
         );
         std::thread::sleep(Duration::from_millis(50));
     }
     assert_eq!(
-        std::fs::read_to_string(scratch.join("other-consumed")).expect("teammate consumed message"),
+        std::fs::read_to_string(tmp.join("other-consumed")).expect("teammate consumed message"),
         "child-to-room\n",
     );
     assert!(host_tmp.path().exists(), "host tmp remains untouched");
     let generation =
-        std::fs::read_to_string(scratch.join("other-generation")).expect("first generation");
+        std::fs::read_to_string(tmp.join("other-generation")).expect("first generation");
     env.rimz()
         .env("PATH", path_with_front(&agent_bin))
         .args(["--mux", "tmux", "agents", "restart", "@other"])
         .assert_success_within_timeout("restart sandboxed teammate");
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        let next = std::fs::read_to_string(scratch.join("other-generation"));
+        let next = std::fs::read_to_string(tmp.join("other-generation"));
         if next
             .as_ref()
             .is_ok_and(|next| !next.is_empty() && next != &generation)
@@ -175,11 +175,15 @@ profile = "worker"
         std::thread::sleep(Duration::from_millis(50));
     }
     assert_eq!(
-        std::fs::read_to_string(scratch.join("child-file")).expect("scratch survives restart"),
+        std::fs::read_to_string(tmp.join("child-file")).expect("tmp survives restart"),
         "child-to-room\n"
     );
     env.rimz()
         .args(["--mux", "tmux", "reset", "--no-start", "--yes"])
         .assert_success_within_timeout("reset sandbox room");
-    assert!(!scratch.exists(), "reset removes shared scratch");
+    assert!(!tmp.exists(), "reset removes shared tmp");
+    assert!(
+        !store.paths().skills_dir.exists(),
+        "reset removes skill copies"
+    );
 }

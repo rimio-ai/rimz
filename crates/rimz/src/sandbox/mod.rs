@@ -1,12 +1,14 @@
-//! Linux agent mount views: room-owned scratch and profile-selected directory overlays.
+//! Linux agent mount views: room-owned tmp and profile-selected directory overlays.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use crate::config::{Isolation, SkillSpec};
+use crate::agents::ManualSkill;
+use crate::config::{Isolation, SkillName};
 
 #[cfg(target_os = "linux")]
 mod linux;
+mod rewrite;
 mod skills;
 
 #[derive(Debug, thiserror::Error)]
@@ -32,17 +34,32 @@ pub enum SandboxErr {
     #[error("sandbox requires an absolute UTF-8 path, got {0:?}; use an absolute UTF-8 path")]
     InvalidPath(PathBuf),
     #[error(
-        "sandbox scratch would hide required path /tmp; move the working directory or configured root below /tmp, or set agents.isolation = \"host\""
+        "sandbox tmp would hide required path /tmp; move the working directory or configured root below /tmp, or set agents.isolation = \"host\""
     )]
-    ScratchCollision,
+    TmpCollision,
     #[error(
         "unknown skill {name:?}; searched {roots:?}; install the skill or remove it from the profile"
     )]
     UnknownSkill { name: String, roots: Vec<PathBuf> },
-    #[error("profile skills need agents.isolation = \"sandbox\"")]
+    #[error("a profile skills list needs agents.isolation = \"sandbox\"")]
     SkillsNeedSandbox,
+    #[error("provider {kind} declares no skill root; remove the profile skills list")]
+    SkillsNeedRoot { kind: String },
+    #[error("provider {kind} cannot mark skills user-only; remove the profile skills list")]
+    ManualSkillsUnsupported { kind: String },
+    #[error(
+        "cannot rewrite skill metadata {path}: {reason}; use block mappings for skill metadata or remove the profile skills list"
+    )]
+    SkillMetadata { path: PathBuf, reason: &'static str },
     #[error("invalid profile skills: {0}")]
-    Skills(#[from] crate::config::SkillSpecErr),
+    Skills(#[from] crate::config::SkillListErr),
+}
+
+pub struct SkillInputs<'a> {
+    pub kind: &'a str,
+    pub home: Option<PathBuf>,
+    pub manual: ManualSkill,
+    pub callable: Option<&'a [SkillName]>,
 }
 
 pub struct SandboxInputs<'a> {
@@ -50,10 +67,11 @@ pub struct SandboxInputs<'a> {
     pub cwd: &'a Path,
     pub project_root: &'a Path,
     pub worktree: Option<&'a Path>,
-    pub scratch_dir: &'a Path,
+    pub tmp_dir: &'a Path,
+    pub skills_dir: &'a Path,
     pub provider_home: Option<ProviderHome>,
     pub provider_home_env_keys: &'a [&'a str],
-    pub skills: &'a [SkillSpec],
+    pub skills: SkillInputs<'a>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -122,7 +140,7 @@ pub fn diagnose() -> SandboxDiagnostic {
 }
 
 pub fn prepare(inputs: &SandboxInputs<'_>) -> Result<Prepared, SandboxErr> {
-    let views = skills::prepare(inputs.env, inputs.skills)?;
+    let views = skills::prepare(inputs.env, inputs.skills_dir, &inputs.skills)?;
     let mut mounts = Vec::new();
     let mut required = crate::mux::domain::ProcessDomain::required_paths(inputs.env);
     let mut pins = BTreeMap::new();
@@ -138,11 +156,6 @@ pub fn prepare(inputs: &SandboxInputs<'_>) -> Result<Prepared, SandboxErr> {
     let mut keys: BTreeSet<&str> = root_keys.into_iter().collect();
     keys.extend(["TMUX", "ZELLIJ_SOCKET_DIR"]);
     keys.extend(inputs.provider_home_env_keys.iter().copied());
-    if !inputs.skills.is_empty()
-        && let Some(claude) = crate::agents::registry::find_definition("claude")
-    {
-        keys.extend(claude.config_home_env_keys().iter().copied());
-    }
     for key in keys {
         pins.insert(
             key.to_owned(),
@@ -172,9 +185,9 @@ pub fn prepare(inputs: &SandboxInputs<'_>) -> Result<Prepared, SandboxErr> {
         });
         required.push(home.source.clone());
     }
-    validate_path(inputs.scratch_dir)?;
+    validate_path(inputs.tmp_dir)?;
     mounts.push(Mount::Bind {
-        source: inputs.scratch_dir.to_path_buf(),
+        source: inputs.tmp_dir.to_path_buf(),
         target: PathBuf::from("/tmp"),
     });
     let mut reach = BTreeSet::new();
@@ -182,7 +195,7 @@ pub fn prepare(inputs: &SandboxInputs<'_>) -> Result<Prepared, SandboxErr> {
         validate_path(&path)?;
         let path = crate::utils::path::normalize_path_lexical(&path);
         if path == Path::new("/tmp") {
-            return Err(SandboxErr::ScratchCollision);
+            return Err(SandboxErr::TmpCollision);
         }
         if path.starts_with("/tmp") && path.exists() {
             reach.insert(path);
@@ -199,7 +212,7 @@ pub fn prepare(inputs: &SandboxInputs<'_>) -> Result<Prepared, SandboxErr> {
         });
         bound.push(path);
     }
-    for view in views {
+    if let Some(view) = views {
         validate_path(&view.root)?;
         mounts.push(Mount::Tmpfs {
             target: view.root.clone(),
@@ -212,7 +225,7 @@ pub fn prepare(inputs: &SandboxInputs<'_>) -> Result<Prepared, SandboxErr> {
             });
         }
     }
-    crate::disk::paths::ensure_private_runtime_dir(inputs.scratch_dir)?;
+    crate::disk::paths::ensure_private_runtime_dir(inputs.tmp_dir)?;
     Ok(Prepared {
         plan: MountPlan { mounts },
         pins,

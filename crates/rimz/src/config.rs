@@ -103,8 +103,8 @@ pub(crate) use scheme::{DEFAULT_SCHEME, ParsedScheme, explicit_scheme, parse_col
 pub use scheme::{SchemeSwatch, resolve_inline_palette, scheme_swatches};
 pub use sentry::SentryConfig;
 pub use sidebar::{SidebarConfig, SidebarKeys};
-pub(crate) use skills::deserialize_skill_list;
-pub use skills::{SkillMode, SkillName, SkillSpec, SkillSpecErr, validate_skill_list};
+pub(crate) use skills::deserialize_optional_skill_list;
+pub use skills::{SkillListErr, SkillName, validate_skill_list};
 pub use theme::{
     InlineAnsiColors, InlineCursorColors, InlinePalette, InlinePrimaryColors,
     InlineSelectionColors, ThemeConfig, ThemeProviderStyle, ThemeStyle,

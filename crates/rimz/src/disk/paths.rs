@@ -54,7 +54,8 @@ pub type Result<T> = std::result::Result<T, PathErr>;
 pub struct StatePaths {
     pub workspace_id: WorkspaceId,
     pub root: PathBuf,
-    pub scratch_dir: PathBuf,
+    pub tmp_dir: PathBuf,
+    pub skills_dir: PathBuf,
     pub events_log: PathBuf,
     pub events_archive_dir: PathBuf,
     pub agents_carryover: PathBuf,
@@ -98,7 +99,8 @@ impl StatePaths {
         let locks_dir = root.join("locks");
         Ok(Self {
             workspace_id,
-            scratch_dir: root.join("tmp"),
+            tmp_dir: root.join("tmp"),
+            skills_dir: root.join("skills"),
             events_log: root.join("events.log.jsonl"),
             events_archive_dir: root.join("events.log.archive"),
             agents_carryover: root.join("agents.carryover.json"),
@@ -132,16 +134,31 @@ impl StatePaths {
         Ok(())
     }
 
-    pub fn ensure_scratch_dir(&self) -> Result<()> {
-        ensure_private_runtime_dir(&self.scratch_dir)
+    pub fn ensure_tmp_dir(&self) -> Result<()> {
+        ensure_private_runtime_dir(&self.tmp_dir)
     }
 
-    pub fn remove_scratch_dir(&self) -> Result<()> {
-        match fs::remove_dir_all(&self.scratch_dir) {
+    pub fn ensure_skills_dir(&self) -> Result<()> {
+        ensure_private_runtime_dir(&self.skills_dir)
+    }
+
+    pub fn remove_tmp_dir(&self) -> Result<()> {
+        match fs::remove_dir_all(&self.tmp_dir) {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(source) => Err(PathErr::Io {
-                path: self.scratch_dir.clone(),
+                path: self.tmp_dir.clone(),
+                source,
+            }),
+        }
+    }
+
+    pub fn remove_skills_dir(&self) -> Result<()> {
+        match fs::remove_dir_all(&self.skills_dir) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(PathErr::Io {
+                path: self.skills_dir.clone(),
                 source,
             }),
         }

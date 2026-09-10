@@ -707,7 +707,7 @@ pub struct AgentConfig {
 #[serde(default)]
 pub struct ProjectProfile {
     pub agent: String,
-    pub skills: Option<Vec<crate::config::SkillSpec>>,
+    pub skills: Option<Vec<crate::config::SkillName>>,
     pub mode: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -784,7 +784,7 @@ struct ExecutableProfile<'a> {
     name: &'a str,
     agent: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    skills: Option<&'a [crate::config::SkillSpec]>,
+    skills: Option<&'a [crate::config::SkillName]>,
     mode: Option<&'a str>,
     model: Option<&'a str>,
     effort: Option<&'a str>,

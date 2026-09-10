@@ -131,9 +131,9 @@ fn gc_prunes_dead_root_workspace() {
     let gone_root = env.project_root.join("gone-project");
     env.record(&gone_root);
     let gone_paths = env.state_path_for(&gone_root);
-    gone_paths.ensure_scratch_dir().expect("scratch dir");
-    let scratch_file = gone_paths.scratch_dir.join("agent-work");
-    std::fs::write(&scratch_file, b"scratch").expect("write scratch");
+    gone_paths.ensure_tmp_dir().expect("tmp dir");
+    let tmp_file = gone_paths.tmp_dir.join("agent-work");
+    std::fs::write(&tmp_file, b"tmp").expect("write tmp");
     std::fs::remove_dir_all(&gone_root).expect("remove gone root");
 
     // `gc` is the global garbage collector: it reaps provably-dead workspaces
@@ -148,10 +148,7 @@ fn gc_prunes_dead_root_workspace() {
         !gone_paths.root.exists(),
         "gc should reap the workspace whose project root is gone"
     );
-    assert!(
-        !scratch_file.exists(),
-        "dead workspace scratch is reclaimed"
-    );
+    assert!(!tmp_file.exists(), "dead workspace tmp is reclaimed");
 }
 
 #[test]

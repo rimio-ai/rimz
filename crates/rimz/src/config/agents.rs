@@ -138,7 +138,7 @@ pub struct Profile {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "super::skills::deserialize_optional_skill_list"
     )]
-    pub skills: Option<Vec<super::SkillSpec>>,
+    pub skills: Option<Vec<super::SkillName>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Specs this profile's agents may launch through `rimz subagents`.

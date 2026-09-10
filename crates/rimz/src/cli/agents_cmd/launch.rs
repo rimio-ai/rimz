@@ -140,8 +140,7 @@ pub(super) fn launch_layout(
     });
     rimz::sandbox::preflight(machine_config.agents.isolation)?;
     for (index, cell) in layout.agent_cells().enumerate() {
-        if machine_config.agents.isolation == rimz::config::Isolation::Host
-            && !cell.skills.is_empty()
+        if machine_config.agents.isolation == rimz::config::Isolation::Host && cell.skills.is_some()
         {
             return Err(rimz::sandbox::SandboxErr::SkillsNeedSandbox.into());
         }

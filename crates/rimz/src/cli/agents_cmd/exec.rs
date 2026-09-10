@@ -83,7 +83,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let machine_config = crate::cli::machine_config();
     let isolation = machine_config.agents.isolation;
     let sandbox_preflight =
-        if isolation == rimz::config::Isolation::Host && !request.skills.is_empty() {
+        if isolation == rimz::config::Isolation::Host && request.skills.is_some() {
             Err(rimz::sandbox::SandboxErr::SkillsNeedSandbox)
         } else {
             rimz::sandbox::preflight(isolation)
@@ -151,11 +151,19 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
                 cwd: &provider_cwd,
                 project_root: &workspace.project_root,
                 worktree: request.worktree_path.as_deref(),
-                scratch_dir: &state.scratch_dir,
+                tmp_dir: &state.tmp_dir,
+                skills_dir: &state.skills_dir,
                 provider_home,
                 provider_home_env_keys: adapter
                     .map_or(&[], |adapter| adapter.config_home_env_keys()),
-                skills: &request.skills,
+                skills: rimz::sandbox::SkillInputs {
+                    kind: request.kind.as_str(),
+                    home: adapter.and_then(|adapter| adapter.skills_home(&env)),
+                    manual: adapter.map_or(rimz::agents::ManualSkill::Unsupported, |adapter| {
+                        adapter.manual_skill()
+                    }),
+                    callable: request.skills.as_deref(),
+                },
             })
             .map_err(Into::into)
         };
@@ -1535,7 +1543,7 @@ mod tests {
             action,
             system_prompt_file: None,
             append_system_prompt_files: Vec::new(),
-            skills: Vec::new(),
+            skills: None,
             provider_account: ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,
