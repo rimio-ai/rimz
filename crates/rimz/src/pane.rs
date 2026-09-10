@@ -179,7 +179,7 @@ pub struct PaneRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     /// Full `/proc` cmdline matched to [`Self::command`] when the mux reports
-    /// only a program basename. Display-only; never an identity key.
+    /// only a program basename. Drives process-row activity and detail; never an identity key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub foreground_cmdline: Option<String>,
     /// Birth argv used to launch the pane, if the backend reports it. Advisory

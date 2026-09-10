@@ -426,10 +426,7 @@ fn backfill_pane_cwds(frame: &mut PaneFrame, proc_cwd: &dyn Fn(u32) -> Option<Pa
     }
 }
 
-/// Reconcile an active foreground command against the pane's root process tree.
-/// Zellij's presence topology is a latency cache: a command absent from the
-/// tree is cleared after the shell returns to idle. For tmux, which reports only
-/// a program basename, the matching `/proc` cmdline is retained for display.
+/// Reconcile foreground commands against the pane's root process tree. Zellij's presence topology is a latency cache: an active command absent from the tree is cleared after the shell returns to idle. Comm-only muxes are probed even for idle-looking shells, retaining matched argv for process-row activity and detail, never identity.
 /// The synthetic sidebar chrome marker is classification metadata and stays
 /// exempt from this probe.
 fn reconcile_active_commands(
@@ -449,13 +446,15 @@ fn reconcile_active_commands(
         if crate::pane::command_is_sidebar_chrome(command) {
             continue;
         }
-        if !crate::store::snapshot::process_is_active(command) {
+        let match_mode = ProcessCommandMatch::for_mux(pane.pane_id.mux());
+        if match_mode == ProcessCommandMatch::ExactCmdline
+            && !crate::store::snapshot::process_is_active(command)
+        {
             continue;
         }
         let Some(root_pid) = pane.current.pid else {
             continue;
         };
-        let match_mode = ProcessCommandMatch::for_mux(pane.pane_id.mux());
         match process_tree_command_status(
             root_pid,
             command,
@@ -485,7 +484,7 @@ enum ProcessCommandMatch {
     /// same-program descendant cannot keep a stale full command alive.
     ExactCmdline,
     /// tmux reports `#{pane_current_command}`: a short program name. Match it
-    /// against the live process program label/comm, not the full argv.
+    /// against the raw process basename/comm, without wrapper projection.
     ProgramLabel,
 }
 
@@ -559,7 +558,7 @@ fn process_command_probe(
     if command.is_empty() {
         return ProcessCommandProbe::Unknown;
     }
-    let command_label = crate::proc::program_label(command);
+    let command_label = crate::proc::command::argv0_label(command);
     let mut saw_cmdline_mismatch = false;
     match proc_cmdline(pid).map(|cmdline| cmdline.trim().to_owned()) {
         Some(cmdline) if !cmdline.is_empty() => match match_mode {
@@ -568,7 +567,7 @@ fn process_command_probe(
             }
             ProcessCommandMatch::ExactCmdline => return ProcessCommandProbe::Mismatch,
             ProcessCommandMatch::ProgramLabel
-                if crate::proc::program_label(&cmdline) == command_label =>
+                if crate::proc::command::argv0_label(&cmdline) == command_label =>
             {
                 return ProcessCommandProbe::Match(Some(cmdline));
             }
