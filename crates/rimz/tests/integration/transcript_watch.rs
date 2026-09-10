@@ -1,13 +1,13 @@
 //! The transcript-watch trigger → refresh wiring: a simulated rollout-write
 //! event drives the same stat-gated refresh the producer tick uses
-//! (`rimz::sidebar::refresh::refresh_session_transcript_context`), merging fresh
+//! (`rimz::sidebar::refresh::refresh_session_transcript_context_from_watch`), merging fresh
 //! tokens into the session's context sidecar. The OS watcher itself is not
 //! driven end-to-end — platform event semantics vary — so this asserts the
 //! refresh the watcher's flush invokes, against real sidecar and rollout files.
 
 use rimz::agents::AgentContext;
 use rimz::agents::context::record::AgentContextRecord;
-use rimz::sidebar::refresh::refresh_session_transcript_context;
+use rimz::sidebar::refresh::refresh_session_transcript_context_from_watch;
 use rimz::store::agent_context;
 
 use crate::common::Harness;
@@ -57,7 +57,7 @@ fn simulated_rollout_event_merges_fresh_tokens_into_the_sidecar() {
     drop(file);
 
     // The watcher's debounce flush invokes exactly this refresh per session.
-    refresh_session_transcript_context(runtime, "codex", SESSION_ID, Some("gpt-5"));
+    refresh_session_transcript_context_from_watch(runtime, "codex", SESSION_ID, Some("gpt-5"));
 
     let merged = agent_context::read_one(runtime, "codex", SESSION_ID).expect("merged sidecar");
     let tokens = merged.context.tokens.as_ref().expect("tokens merged");
@@ -82,7 +82,7 @@ fn simulated_rollout_event_merges_fresh_tokens_into_the_sidecar() {
         runtime, "codex", SESSION_ID,
     ))
     .expect("sidecar");
-    refresh_session_transcript_context(runtime, "codex", SESSION_ID, Some("gpt-5"));
+    refresh_session_transcript_context_from_watch(runtime, "codex", SESSION_ID, Some("gpt-5"));
     let after = std::fs::read(rimz::store::agent_context::path_for(
         runtime, "codex", SESSION_ID,
     ))
@@ -114,7 +114,12 @@ fn cursor_transcript_event_recovers_terminal_state_without_content() {
     record.transcript_path = Some(path.to_string_lossy().into_owned());
     agent_context::write_record(runtime, &record).expect("seed cursor sidecar");
 
-    refresh_session_transcript_context(runtime, "cursor", SESSION_ID, Some("cursor/model"));
+    refresh_session_transcript_context_from_watch(
+        runtime,
+        "cursor",
+        SESSION_ID,
+        Some("cursor/model"),
+    );
     let first = agent_context::read_one(runtime, "cursor", SESSION_ID).expect("first refresh");
     let first_stat = first.transcript_stat.expect("first stat");
     let first_complete = first.context.settle.expect("first terminal marker").at;
@@ -139,7 +144,12 @@ fn cursor_transcript_event_recovers_terminal_state_without_content() {
                 .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(60)),
         )
         .unwrap();
-    refresh_session_transcript_context(runtime, "cursor", SESSION_ID, Some("cursor/model"));
+    refresh_session_transcript_context_from_watch(
+        runtime,
+        "cursor",
+        SESSION_ID,
+        Some("cursor/model"),
+    );
 
     let merged = agent_context::read_one(runtime, "cursor", SESSION_ID).expect("merged sidecar");
     assert!(
@@ -158,7 +168,12 @@ fn cursor_transcript_event_recovers_terminal_state_without_content() {
         runtime, "cursor", SESSION_ID,
     ))
     .unwrap();
-    refresh_session_transcript_context(runtime, "cursor", SESSION_ID, Some("cursor/model"));
+    refresh_session_transcript_context_from_watch(
+        runtime,
+        "cursor",
+        SESSION_ID,
+        Some("cursor/model"),
+    );
     let after = std::fs::read(rimz::store::agent_context::path_for(
         runtime, "cursor", SESSION_ID,
     ))
