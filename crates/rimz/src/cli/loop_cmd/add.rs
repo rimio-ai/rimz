@@ -171,7 +171,7 @@ fn add_delivery(
         },
     )?;
     let mut out = ui::out();
-    let ArmOutcome::Armed { name, entry } = outcome else {
+    let ArmOutcome::Armed { name, task } = outcome else {
         let ArmOutcome::AlreadySubscribed { name } = outcome else {
             unreachable!()
         };
@@ -179,14 +179,12 @@ fn add_delivery(
         return Ok(());
     };
     writeln!(out, "added loop task `{name}`")?;
-    let shape = schedule::TaskShape::compile(&name, &entry);
-    let parsed = shape.trigger().as_ref().map_err(Clone::clone)?;
-    let action = shape.action().map_err(Clone::clone)?;
+    let entry = task.entry();
     write_add_feedback(
         &mut out,
-        &entry,
-        parsed,
-        action,
+        entry,
+        task.trigger().as_ref().map_err(Clone::clone)?,
+        task.action().map_err(Clone::clone)?,
         entry.wake.as_ref().map(|target| target.kind.as_str()),
     )?;
     writeln!(

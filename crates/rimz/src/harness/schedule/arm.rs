@@ -10,8 +10,9 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 
+use super::catalog::{LoadedTask, TaskSource};
 use super::signal::SignalSelector;
-use super::{ParsedSchedule, Schedule, ScheduleErr, TaskShape};
+use super::{ParsedSchedule, Schedule, ScheduleErr};
 use crate::agents::AgentState;
 use crate::config::{CheckOn, TaskEntry, TaskTarget, WakeMeta};
 use crate::ids::TeamInstanceId;
@@ -96,7 +97,7 @@ pub struct DeliverySpec {
 }
 
 pub enum ArmOutcome {
-    Armed { name: String, entry: Box<TaskEntry> },
+    Armed { name: String, task: Box<LoadedTask> },
     AlreadySubscribed { name: String },
 }
 
@@ -120,7 +121,8 @@ pub fn arm_delivery(
     workspace: &ResolvedWorkspace,
     spec: DeliverySpec,
 ) -> Result<ArmOutcome, ArmFailure> {
-    let (name, entry) = build_entry(workspace, spec, Timestamp::now())?;
+    let (name, task) = build_entry(workspace, spec, Timestamp::now())?;
+    let entry = task.entry();
     let catalog = super::catalog::TaskCatalog::load(Some(&workspace.project_root))
         .map_err(|err| ArmFailure::State(err.into()))?;
     let name = match &name {
@@ -143,7 +145,7 @@ pub fn arm_delivery(
         .filter(|(_, task)| task.source() != super::catalog::TaskSource::Instance)
         .map(|(name, _)| name.clone())
         .collect();
-    let (name, duplicate) = super::instances::insert_delivery(&paths.root, name, &entry, &taken)
+    let (name, duplicate) = super::instances::insert_delivery(&paths.root, name, entry, &taken)
         .map_err(|err| ArmFailure::State(Box::new(err)))?;
     if duplicate {
         return Ok(ArmOutcome::AlreadySubscribed { name });
@@ -175,14 +177,14 @@ pub fn arm_delivery(
             Ok(())
         };
         if let Err(error) = spawn() {
-            super::instances::remove(&paths.root, &name, Some(&entry))
+            super::instances::remove(&paths.root, &name, Some(entry))
                 .map_err(|err| ArmFailure::State(Box::new(err)))?;
             return Err(ArmFailure::Watcher(error));
         }
     }
     Ok(ArmOutcome::Armed {
         name,
-        entry: Box::new(entry),
+        task: Box::new(task),
     })
 }
 
@@ -302,7 +304,7 @@ fn build_entry(
     workspace: &ResolvedWorkspace,
     spec: DeliverySpec,
     now: Timestamp,
-) -> Result<(DeliveryName, TaskEntry), ArmFailure> {
+) -> Result<(DeliveryName, LoadedTask), ArmFailure> {
     let self_wake = matches!(spec.provenance, DeliveryProvenance::SelfWake);
     if self_wake
         && (!matches!(
@@ -421,9 +423,9 @@ fn build_entry(
         DeliveryName::MintWake => "wake",
         DeliveryName::Named(name) => &name.0,
     };
-    let shape = TaskShape::compile(name, &entry);
-    shape.trigger().as_ref().map_err(Clone::clone)?;
-    Ok((spec.name, entry))
+    let task = LoadedTask::new(name, entry, TaskSource::Instance);
+    task.trigger().as_ref().map_err(Clone::clone)?;
+    Ok((spec.name, task))
 }
 
 pub fn duration_label(duration: Duration) -> String {
