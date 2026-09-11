@@ -305,6 +305,17 @@ fn root_pod_is_excluded_from_git_reads() {
     assert_eq!(needed_worktree_paths(&snapshot), vec![child_cwd]);
 }
 
+#[test]
+fn git_line_returns_the_first_non_empty_line() {
+    let fixture = GitFixture::init(&["init", "-b", "main"]);
+    assert!(fixture.initialized);
+    assert!(fixture.git(&["commit", "--allow-empty", "-m", "initial"]));
+    assert_eq!(
+        git_line(fixture.path(), &["rev-parse", "HEAD", "HEAD"]),
+        git_line(fixture.path(), &["rev-parse", "HEAD"])
+    );
+}
+
 struct GitFixture {
     dir: tempfile::TempDir,
     initialized: bool,
