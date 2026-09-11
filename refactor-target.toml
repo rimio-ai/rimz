@@ -262,7 +262,7 @@ surface-budget = 48
 
 [[module]]
 path = "crates/rimz/src/sidebar"
-surface-budget = 334
+surface-budget = 332
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
@@ -1480,3 +1480,18 @@ reason = "MessageEdit::apply is called by CLI requeue as well as the writer; nar
 kind = "item"
 key = "store::writer::AgentLaunchScope"
 reason = "Fork, launch and restart assemble fields from different sources, with restart copying the card channel; a constructor would only rename that assembly (pass 17b)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::produce::ProduceErr"
+reason = "Stays pub: it is the #[from] payload of DeliverErr::Produce and DispatchErr::Resolution, both pub (pass 17a)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::produce::ProducedWorkspaceSnapshot"
+reason = "Two outputs on purpose: the fetch worker publishes the workspace projection before project_local and needs the same frame for both (pass 17a)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::produce::resolution_snapshot"
+reason = "The mux: Option<MuxName> parameter is real: seven callers pass five distinct sources (resolved workspace, ctx, CLI flag, auto-detect, fixture); not a one-caller flag (pass 17a)."
