@@ -38,7 +38,6 @@ fn pane_tree_sample_aggregates_root_children_and_grandchildren() {
     .expect("root stat exists");
 
     assert_eq!(sample.direct_children, vec![20, 30]);
-    assert_eq!(sample.process_count, 4);
     assert_eq!(sample.cpu_ticks, 139);
     assert_eq!(sample.rss_kb, 10_000);
     assert_eq!(sample.io_bytes, Some(1_000));
@@ -79,7 +78,6 @@ fn pane_tree_sample_walk_free_recurses_through_proc_children() {
     .expect("root stat exists");
 
     assert_eq!(sample.direct_children, vec![20, 30]);
-    assert_eq!(sample.process_count, 4);
     assert_eq!(sample.cpu_ticks, 139);
     assert_eq!(sample.rss_kb, 10_000);
     assert_eq!(sample.io_bytes, Some(1_000));
@@ -107,7 +105,6 @@ fn pane_tree_rates_on_stable_root_when_children_churn() {
     prior.io_bytes = 500;
     let sample = PaneTreeSample {
         direct_children: vec![21],
-        process_count: 2,
         cpu_ticks: 1_300,
         io_bytes: Some(800),
         rss_kb: 1_024,
@@ -139,7 +136,6 @@ fn pane_tree_io_rate_waits_for_a_complete_prior_baseline() {
     prior.io_bytes_valid = false;
     let sample = PaneTreeSample {
         direct_children: vec![20],
-        process_count: 2,
         cpu_ticks: 1_100,
         io_bytes: Some(10_000),
         rss_kb: 1_024,
