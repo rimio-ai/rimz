@@ -266,7 +266,7 @@ surface-budget = 332
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
-surface-budget = 173
+surface-budget = 172
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane/app"
@@ -1510,3 +1510,13 @@ reason = "Read by the integration crate (tests/integration/message.rs, hooks.rs)
 kind = "item"
 key = "agents::HookRouting"
 reason = "Returned by HookOutput::routing while hook_types is pub(crate); the root re-export is the only public path, as OpenAskReadErr is for read_open_ask (pass 18a)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::render::layout::text_width"
+reason = "Three-line wrapper kept: it is the module's one width vocabulary across six files; inlining reintroduces the unicode-width trait at ~35 sites (pass 18b)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::render::compose::top_lines"
+reason = "Assembly holds: one call site, consumes snapshot/ui/frame and returns a complete RenderedBlock; scroll_lines likewise (pass 18b)."
