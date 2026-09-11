@@ -229,7 +229,7 @@ upward-dependencies = [
     "agents",
     "agents::registry",
 ]
-surface-budget = 102
+surface-budget = 103
 
 [[module]]
 path = "crates/rimz/src/reload.rs"

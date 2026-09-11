@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+use super::git_line;
 use crate::RuntimePaths;
 use crate::disk::single_flight::{Coalesced, ProducerGuard};
 use crate::forge::pr_state::{PrLink, PrStateCache, RepoProbe, TargetStamp, read_pr_state_cache};
@@ -1032,18 +1033,6 @@ fn probe_tea_ci(worktree: &Path, repo_slug: &str, branch: &str) -> Option<Worktr
 fn git_branch(worktree: &Path) -> Option<String> {
     let branch = git_line(worktree, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     (branch != "HEAD").then_some(branch)
-}
-
-fn git_line(worktree: &Path, args: &[&str]) -> Option<String> {
-    let output = crate::proc::git_command(worktree)
-        .args(args)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let line = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    (!line.is_empty()).then_some(line)
 }
 
 fn command_stdout(worktree: &Path, program: &str, args: &[&str]) -> Option<String> {
