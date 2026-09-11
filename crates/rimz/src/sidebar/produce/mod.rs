@@ -77,7 +77,6 @@ pub struct ProduceOptions {
     pub diag: crate::diag::DiagSink,
 }
 
-#[derive(Clone, Copy)]
 struct ProducerEnrich<'a> {
     runtime: &'a RuntimePaths,
     state: &'a StatePaths,
@@ -120,6 +119,10 @@ pub(crate) struct ProducedWorkspaceSnapshot {
     pub(crate) frame: PaneFrame,
 }
 
+/// Assemble the producer inputs and run the shared enrichment spine. This owns the root enumeration; heavy refreshes live in [`crate::sidebar::refresh`].
+///
+/// - Group roots: a repo room's worktree checkouts — cached under `WORKTREE_ROOTS_TTL`, refused below the session-boundary freshness floor (`min_pane_cache_ms`) so a new checkout's first agent re-enumerates immediately. Directory rooms get git roots from each git-backed row's resolved worktree during the row fold.
+/// - The per-machine config loads once (best-effort — a read failure falls back to defaults, so display preference is enrichment, never a precondition).
 pub(crate) fn produce_workspace_snapshot(
     cursor: &mut RollupCursor,
     state: &StatePaths,
@@ -129,17 +132,22 @@ pub(crate) fn produce_workspace_snapshot(
     let frame = produce_pane_frame(runtime, opts)?;
     let snapshot = rollup_snapshot(state, cursor)?;
     let store = Store::open_existing(state.clone(), runtime.clone());
-    let workspace = enrich_producing_workspace(
+    let config = crate::config::MachineConfig::load_lenient();
+    let roots = producer_roots(&snapshot, runtime, opts.min_pane_cache_ms);
+    let agent_projection = refresh_agent_projection(Some(&frame), runtime);
+    let workspace = enrich_workspace(
         snapshot,
         Some(&frame),
-        ProducerEnrich {
-            runtime,
-            state,
-            store: store.as_ref(),
-            exclude: opts.exclude.as_ref(),
-            min_pane_cache_ms: opts.min_pane_cache_ms,
-            diag: &opts.diag,
+        runtime,
+        store.as_ref(),
+        FoldOpts {
+            producing: true,
+            fresh_roots: roots,
+            config: Some(config),
+            lanes: None,
+            agent_projection,
         },
+        &opts.diag,
     );
     Ok(ProducedWorkspaceSnapshot { workspace, frame })
 }
@@ -438,40 +446,6 @@ fn pane_list_fixture() -> Result<Option<Vec<crate::pane::PaneRef>>> {
     Ok(Some(panes))
 }
 
-/// Assemble the producer inputs and run the shared enrichment spine. This owns
-/// the root enumeration; heavy refreshes live in [`crate::sidebar::refresh`].
-///
-/// - Group roots: a repo room's worktree checkouts — cached under
-///   `WORKTREE_ROOTS_TTL`, refused below the session-boundary freshness floor
-///   (`min_pane_cache_ms`) so a new checkout's first agent re-enumerates
-///   immediately. Directory rooms get git roots from each git-backed row's
-///   resolved worktree during the row fold.
-/// - The per-machine config loads once (best-effort — a read failure falls
-///   back to defaults, so display preference is enrichment, never a precondition).
-fn enrich_producing_workspace(
-    snapshot: SidebarSnapshot,
-    frame: Option<&PaneFrame>,
-    opts: ProducerEnrich<'_>,
-) -> WorkspaceSnapshot {
-    let config = crate::config::MachineConfig::load_lenient();
-    let roots = producer_roots(&snapshot, opts.runtime, opts.min_pane_cache_ms);
-    let agent_projection = refresh_agent_projection(frame, &opts);
-    enrich_workspace(
-        snapshot,
-        frame,
-        opts.runtime,
-        opts.store,
-        FoldOpts {
-            producing: true,
-            fresh_roots: roots,
-            config: Some(config),
-            lanes: None,
-            agent_projection,
-        },
-        opts.diag,
-    )
-}
-
 fn enrich_with_refresh(
     snapshot: SidebarSnapshot,
     frame: Option<PaneFrame>,
@@ -479,11 +453,13 @@ fn enrich_with_refresh(
 ) -> SidebarSnapshot {
     let config = crate::config::MachineConfig::load_lenient();
     let roots = producer_roots(&snapshot, opts.runtime, opts.min_pane_cache_ms);
-    let agent_projection = refresh_agent_projection(frame.as_ref(), &opts);
-    let folded = enrich_producing_with(
+    let agent_projection = refresh_agent_projection(frame.as_ref(), opts.runtime);
+    let folded = enrich(
         snapshot.clone(),
-        frame.clone(),
-        opts,
+        frame.as_ref(),
+        opts.runtime,
+        opts.store,
+        opts.exclude,
         FoldOpts {
             producing: false,
             fresh_roots: roots.clone(),
@@ -491,6 +467,7 @@ fn enrich_with_refresh(
             lanes: None,
             agent_projection: agent_projection.clone(),
         },
+        opts.diag,
     );
     // The intermediate fold applies the published daemon-reap cache. Probe from
     // the unreaped rollup so one-shot CLI refresh keeps the pre-split semantics:
@@ -505,10 +482,12 @@ fn enrich_with_refresh(
         crate::agents::spending::service::SpendingServiceStartup::OneShot,
         &mut Default::default(),
     );
-    enrich_producing_with(
+    enrich(
         snapshot,
-        frame,
-        opts,
+        frame.as_ref(),
+        opts.runtime,
+        opts.store,
+        opts.exclude,
         FoldOpts {
             producing: true,
             fresh_roots: roots,
@@ -516,13 +495,11 @@ fn enrich_with_refresh(
             lanes: Some(&refreshed),
             agent_projection,
         },
+        opts.diag,
     )
 }
 
-fn refresh_agent_projection(
-    frame: Option<&PaneFrame>,
-    opts: &ProducerEnrich<'_>,
-) -> AgentProjection {
+fn refresh_agent_projection(frame: Option<&PaneFrame>, runtime: &RuntimePaths) -> AgentProjection {
     let Some(frame) = frame else {
         return AgentProjection {
             wiring: crate::sidebar::agent_projection::probe_current(),
@@ -530,7 +507,7 @@ fn refresh_agent_projection(
         };
     };
     let panes = SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), None);
-    crate::sidebar::agent_projection::refresh_published(opts.runtime, &frame.session_name, &panes)
+    crate::sidebar::agent_projection::refresh_published(runtime, &frame.session_name, &panes)
 }
 
 fn producer_roots(
@@ -541,23 +518,6 @@ fn producer_roots(
     snapshot.project_root.clone().map(|root| {
         git::project_group_roots(&root, snapshot.root_class, runtime, min_pane_cache_ms)
     })
-}
-
-fn enrich_producing_with(
-    snapshot: SidebarSnapshot,
-    frame: Option<PaneFrame>,
-    opts: ProducerEnrich<'_>,
-    fold: FoldOpts<'_>,
-) -> SidebarSnapshot {
-    enrich(
-        snapshot,
-        frame.as_ref(),
-        opts.runtime,
-        opts.store,
-        opts.exclude,
-        fold,
-        opts.diag,
-    )
 }
 
 /// Test fixtures shared by the produce submodules' unit suites.
