@@ -644,7 +644,7 @@ fn conversation_counts(
             .or_insert_with(ConversationCounts::default);
         match entry.entry {
             TranscriptKind::Prompt => {
-                if entry.from.as_deref() != Some("rimz") {
+                if !entry.is_harness() {
                     counts.messages.from_user = counts.messages.from_user.saturating_add(1);
                 }
             }

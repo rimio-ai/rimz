@@ -349,7 +349,7 @@ pub(super) fn record_conversation(
                         entry.message_id = Some(message.message_id.clone());
                         entry.reply_to = message.in_reply_to.clone();
                         if matches!(&message.sender, rimz::store::message::MessageSender::System) {
-                            entry.from = Some("rimz".to_owned());
+                            entry.from = Some(rimz::transcript::HARNESS_FROM.to_owned());
                         }
                         matched_ids.push(message.message_id.clone());
                         delivered_cursor += offset + 1;

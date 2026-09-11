@@ -495,9 +495,18 @@ fn subagent_reports_and_wakes_are_json_only_and_do_not_consume_the_human_last_sl
         "hidden wake",
     );
     wake.at = ts("2026-06-01T00:00:02Z");
+    let mut system_prompt = log_entry(
+        "claude",
+        "receiver",
+        TranscriptKind::Prompt,
+        Some("rimz"),
+        "hidden system prompt",
+    );
+    system_prompt.at = ts("2026-06-01T00:00:03Z");
     rimz::transcript::append(&paths, &prompt).expect("append prompt");
     rimz::transcript::append(&paths, &report).expect("append report");
     rimz::transcript::append(&paths, &wake).expect("append wake");
+    rimz::transcript::append(&paths, &system_prompt).expect("append system prompt");
 
     for (flat, last) in [
         (true, None),
@@ -527,6 +536,7 @@ fn subagent_reports_and_wakes_are_json_only_and_do_not_consume_the_human_last_sl
         assert!(rendered.contains("visible prompt"));
         assert!(!rendered.contains("hidden report"));
         assert!(!rendered.contains("hidden wake"));
+        assert!(!rendered.contains("hidden system prompt"));
     }
 
     let json = chat_view_with_mode(
@@ -543,14 +553,16 @@ fn subagent_reports_and_wakes_are_json_only_and_do_not_consume_the_human_last_sl
     )
     .expect("json view");
     let lines = selected_lines(&json);
-    assert_eq!(lines.len(), 3);
+    assert_eq!(lines.len(), 4);
     assert_eq!(lines[1].from, "@rimz");
     assert_eq!(lines[1].text, "hidden report");
     assert_eq!(lines[2].from, "@rimz");
     assert_eq!(lines[2].text, "hidden wake");
+    assert_eq!(lines[3].text, "hidden system prompt");
     let serialized = serde_json::to_value(&lines).unwrap();
     assert_eq!(serialized[1]["text"], "hidden report");
     assert_eq!(serialized[2]["text"], "hidden wake");
+    assert_eq!(serialized[3]["text"], "hidden system prompt");
 }
 
 #[test]
