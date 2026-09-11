@@ -304,9 +304,12 @@ fn retry_unconfirmed_codex_turn_death(
 }
 
 fn codex_turn_death_retry_due(kind: &str, error: &AgentTurnError, now: Timestamp) -> bool {
+    // A marker stamped ahead of this clock is not recent; it becomes due once the clock passes it.
+    let age = now.duration_since(error.at);
     kind == "codex"
         && crate::agents::session::turn_death_needs_pane_confirmation("codex", error)
-        && now.duration_since(error.at).as_secs() <= CODEX_TURN_DEATH_RETRY_WINDOW.as_secs() as i64
+        && !age.is_negative()
+        && age.as_secs() <= CODEX_TURN_DEATH_RETRY_WINDOW.as_secs() as i64
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
