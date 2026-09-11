@@ -132,7 +132,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
 }
 
 #[test]
-fn sleeping_command_wait_keeps_the_animation_gate_idle() {
+fn sleeping_command_wait_keeps_the_animation_gate_running() {
     let ws = workspace();
     let mut snapshot = agent_snapshot(&ws);
     let agent = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
@@ -154,9 +154,27 @@ fn sleeping_command_wait_keeps_the_animation_gate_idle() {
             &snapshot,
             &ui.cached_theme(&snapshot.theme).unwrap().animations
         ),
-        render::AnimationCadence::None
+        render::AnimationCadence::Fast
     );
-    assert!(!is_animating(&snapshot, &ui, 0, false));
+    assert!(is_animating(&snapshot, &ui, 0, false));
+    assert_eq!(
+        frame_interval(&snapshot, &ui, false),
+        crate::sidebar::timing::animation_frame(snapshot.theme.display.resolved_refresh_ms())
+    );
+    for trigger in [
+        crate::agents::PendingWakeTrigger::Timer { due: snapshot.now },
+        crate::agents::PendingWakeTrigger::Signal {
+            selector: "pr.merged".to_owned(),
+            deadline: None,
+        },
+    ] {
+        snapshot.worktree_groups[0].rows[0]
+            .as_agent_mut()
+            .unwrap()
+            .pending_wakes[0]
+            .trigger = trigger;
+        assert!(!is_animating(&snapshot, &ui, 0, false));
+    }
 }
 
 #[test]
