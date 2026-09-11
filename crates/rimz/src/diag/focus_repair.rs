@@ -71,12 +71,8 @@ pub(crate) fn spawn_append(runtime: &RuntimePaths, record: &FocusRepairRecord) {
     }
 }
 
-fn parse(raw: &str) -> Result<FocusRepairRecord, FocusRepairParseError> {
-    Ok(serde_json::from_str(raw)?)
-}
-
 pub fn append_raw(raw: &str) -> Result<(), FocusRepairParseError> {
-    append_to(&state_home(), &parse(raw)?);
+    append_to(&state_home(), &serde_json::from_str(raw)?);
     Ok(())
 }
 
@@ -121,7 +117,10 @@ mod tests {
     fn record_round_trips_and_appends() {
         let record = record();
         let raw = serde_json::to_string(&record).expect("serialize");
-        assert_eq!(parse(&raw).expect("parse"), record);
+        assert_eq!(
+            serde_json::from_str::<FocusRepairRecord>(&raw).expect("parse"),
+            record
+        );
 
         let dir = tempfile::tempdir().expect("tempdir");
         append_to(dir.path(), &record);
