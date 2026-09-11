@@ -24,6 +24,8 @@ struct ShowReport {
     ask: Option<crate::cli::transcript::AskView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     messages: Vec<ShowMessage>,
+    #[serde(skip)]
+    system_messages_hidden: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     capture: Option<rimz::mux::PaneCapture>,
     #[serde(skip)]
@@ -92,9 +94,9 @@ fn collect_show_report(
         .as_ref()
         .and_then(|agent| session_cost(runtime, agent))
         .and_then(|cost| cost.total_cost_usd);
-    let messages = match agent.as_ref() {
+    let (messages, system_messages_hidden) = match agent.as_ref() {
         Some(agent) => show_messages(store, agent)?,
-        None => Vec::new(),
+        None => (Vec::new(), 0),
     };
     let recent_transcript = match agent.as_ref() {
         Some(agent) => recent_agent_transcript(workspace, agent).ok(),
@@ -132,6 +134,7 @@ fn collect_show_report(
             run,
             ask,
             messages,
+            system_messages_hidden,
             capture: pane_capture,
             recent_transcript,
         },
@@ -176,8 +179,13 @@ fn render_show_report(
     if let Some(run) = report.run.as_ref().or(fallback_run.as_ref()) {
         render_run_section(&mut out, run, now)?;
     }
-    if !report.messages.is_empty() {
-        render_messages_section(&mut out, &report.messages)?;
+    if !report.messages.is_empty() || report.system_messages_hidden > 0 {
+        render_messages_section(
+            &mut out,
+            &report.messages,
+            report.system_messages_hidden,
+            &state.agent_id,
+        )?;
     }
     if let Some(view) = report.recent_transcript.as_ref() {
         section(&mut out, "Recent transcript")?;
@@ -573,7 +581,12 @@ fn render_run_section(
     writeln!(w)
 }
 
-fn render_messages_section(w: &mut impl Write, messages: &[ShowMessage]) -> std::io::Result<()> {
+fn render_messages_section(
+    w: &mut impl Write,
+    messages: &[ShowMessage],
+    system_messages_hidden: usize,
+    agent_id: &rimz::ids::AgentSessionId,
+) -> std::io::Result<()> {
     section(w, "Messages")?;
     let mut table = render::Table::new(["ID", "STATUS", "FROM", "AGE", "TEXT"]);
     for message in messages {
@@ -586,6 +599,18 @@ fn render_messages_section(w: &mut impl Write, messages: &[ShowMessage]) -> std:
         ]);
     }
     table.render(w)?;
+    if system_messages_hidden > 0 {
+        writeln!(
+            w,
+            "{}",
+            render::paint(
+                render::palette::faint(),
+                &format!(
+                    "{system_messages_hidden} system messages hidden — rimz message list --system @{agent_id}"
+                ),
+            )
+        )?;
+    }
     writeln!(w)
 }
 
@@ -687,12 +712,20 @@ fn session_cost(
     rimz::agents::spending::session_cost_usd(adapter, agent.agent_id.as_str(), transcript, &prices)
 }
 
-fn show_messages(store: &rimz::Store, agent: &AgentState) -> Result<Vec<ShowMessage>> {
+fn show_messages(store: &rimz::Store, agent: &AgentState) -> Result<(Vec<ShowMessage>, usize)> {
     let now = jiff::Timestamp::now();
+    let mut system_messages_hidden = 0;
     let mut rows: Vec<ShowMessage> = store
         .list_messages()?
         .into_iter()
         .filter(|message| message.same_agent_card(agent))
+        .filter(|message| {
+            if message.sender.is_conversation() {
+                return true;
+            }
+            system_messages_hidden += 1;
+            false
+        })
         .map(|message| ShowMessage {
             id: message.message_id.to_string(),
             status: message.status,
@@ -716,10 +749,15 @@ fn show_messages(store: &rimz::Store, agent: &AgentState) -> Result<Vec<ShowMess
         {
             continue;
         }
+        let sender = payload.sender.unwrap_or_default();
+        if !sender.is_conversation() {
+            system_messages_hidden += 1;
+            continue;
+        }
         delivered.push(ShowMessage {
             id: payload.message_id.to_string(),
             status: payload.status,
-            from: payload.sender.unwrap_or_default().render(),
+            from: sender.render(),
             age: render::rel_age(payload.enqueued_at.unwrap_or(event.timestamp), now),
             text: "-".to_owned(),
         });
@@ -729,7 +767,7 @@ fn show_messages(store: &rimz::Store, agent: &AgentState) -> Result<Vec<ShowMess
     }
     delivered.reverse();
     rows.extend(delivered);
-    Ok(rows)
+    Ok((rows, system_messages_hidden))
 }
 
 fn recent_agent_transcript(
@@ -840,6 +878,7 @@ mod tests {
             run: None,
             ask: None,
             messages: Vec::new(),
+            system_messages_hidden: 0,
             capture: None,
             recent_transcript: None,
         };
