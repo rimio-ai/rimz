@@ -49,7 +49,7 @@ impl Harness {
     }
 
     /// Publish every fork-bearing produce input fresh, so an in-process
-    /// [`rimz::sidebar::produce::produce_snapshot`] call pays no mux, no
+    /// `rimz::sidebar::produce::produce_workspace_snapshot` call pays no mux, no
     /// subprocess, and no transcript walk: the pane frame (the single-flight
     /// cache's fast path serves it), the provider-spending stamp, and a
     /// retry-fresh unavailable accounts stamp. Re-call right before each

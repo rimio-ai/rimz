@@ -1,12 +1,6 @@
 //! The sidebar produce pipeline — what the elected producer runs per data tick.
 //!
-//! [`produce_snapshot`] resolves the base (the event-fresh store rollup folded
-//! through the caller's [`RollupCursor`], plus the live pane frame shared
-//! through the single-flight pane cache) and folds the producer enrichments:
-//! group roots, context/activity sidecars, the pane overlay, and projection of
-//! the cache refresher's published spending/account/git facts. The CLI
-//! inspection path uses [`produce_snapshot_with_refresh`] to refresh heavy
-//! lanes between two folds over one produced pane frame.
+//! `produce_workspace_snapshot` resolves the base (the event-fresh store rollup folded through the caller's [`RollupCursor`], plus the live pane frame shared through the single-flight pane cache) and folds the producer enrichments: group roots, context/activity sidecars, the pane overlay, and projection of the cache refresher's published spending/account/git facts. The fetch worker publishes that workspace projection before applying `project_local`. The CLI inspection path uses [`produce_snapshot_with_refresh`] to refresh heavy lanes between two folds over one produced pane frame.
 //!
 //! The module is read-only on store truth: the rollup arrives through the
 //! cursor fold, and every write is cache-class
@@ -23,15 +17,15 @@ mod metrics;
 mod panes;
 pub(crate) mod tab_status;
 
+pub use panes::repaired_pane_frame_for_binding;
+
 use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
 
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use crate::sidebar::agent_projection::{AgentProjection, WiredAgentProjection};
 use crate::sidebar::consumer::{RollupCursor, read_published_snapshot, rollup_snapshot};
-use crate::sidebar::enrich::{
-    FoldOpts, WorkspaceSnapshot, enrich, enrich_workspace, project_local,
-};
+use crate::sidebar::enrich::{FoldOpts, WorkspaceSnapshot, enrich, enrich_workspace};
 use crate::sidebar::frame::{PaneFrame, assemble_frame};
 use crate::sidebar::refresh::refresh_heavy_lanes;
 use crate::store::snapshot::{PaneAgent, RowCard, SidebarSnapshot, SnapshotErr};
@@ -62,7 +56,7 @@ pub enum ProduceErr {
     Store(#[from] crate::store::StoreErr),
 }
 
-pub type Result<T> = std::result::Result<T, ProduceErr>;
+pub(crate) type Result<T> = std::result::Result<T, ProduceErr>;
 
 /// What one produce targets: the session whose panes are read, the caller's
 /// own-pane exclusion, and the pane-freshness floor a lifecycle/resize signal
@@ -94,12 +88,8 @@ pub(crate) fn publish_test_pane_frame(
     crate::disk::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), frame)
 }
 
-/// Produce the full sidebar snapshot: rollup base + live pane frame + producer
-/// enrichments. Inline `Refresh` publishes every shared cache consumers read;
-/// live `Project` publishes pane/root truth and projects the cache refresher's
-/// heavy lanes. `Err` on pane-discovery failure (or an unreadable store) —
-/// the caller owns the fallback: the serve loop degrades to its held frame, and
-/// CLI inspection can fall back to a frameless refreshed rollup.
+/// Bench/performance façade over `produce_workspace_snapshot` followed by `project_local`, matching the fetch worker's produce and local projection without its publication step.
+#[cfg(feature = "testkit")]
 pub fn produce_snapshot(
     cursor: &mut RollupCursor,
     state: &StatePaths,
@@ -107,7 +97,7 @@ pub fn produce_snapshot(
     opts: &ProduceOptions,
 ) -> Result<SidebarSnapshot> {
     let produced = produce_workspace_snapshot(cursor, state, runtime, opts)?;
-    Ok(project_local(
+    Ok(crate::sidebar::enrich::project_local(
         produced.workspace,
         Some(&produced.frame),
         opts.exclude.as_ref(),
@@ -152,7 +142,7 @@ pub(crate) fn produce_workspace_snapshot(
     Ok(ProducedWorkspaceSnapshot { workspace, frame })
 }
 
-pub fn live_roster_from_snapshot(
+pub(crate) fn live_roster_from_snapshot(
     snapshot: &SidebarSnapshot,
 ) -> BTreeSet<(AgentKind, AgentSessionId)> {
     let rendered_agent_panes = snapshot
@@ -362,15 +352,6 @@ pub fn refresh_producer_caches(
 /// mux, so deterministic tests neither poison nor read the shared pane cache.
 pub fn pane_fixture_active() -> bool {
     std::env::var_os("RIMZ_TEST_PANE_LIST").is_some_and(|value| !value.is_empty())
-}
-
-pub fn repaired_pane_frame_for_binding(
-    runtime: &RuntimePaths,
-    mux: MuxName,
-    session: &str,
-    command_timeout: std::time::Duration,
-) -> Result<PaneFrame> {
-    panes::repaired_pane_frame_for_binding(runtime, mux, session, command_timeout)
 }
 
 fn produce_pane_frame(runtime: &RuntimePaths, opts: &ProduceOptions) -> Result<PaneFrame> {

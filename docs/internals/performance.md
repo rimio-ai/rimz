@@ -233,7 +233,7 @@ Each renderer knows its own pane and the latest same-tab focus view, so the loop
 
 ### One producer per workspace
 
-The producer runs the produce **in process** on its fetch worker ([`produce_snapshot`](../../crates/rimz/src/sidebar/produce/mod.rs)) rather than forking `rimz sidebar snapshot` per tick. A monotonic attempt stamp owned by that worker requires both a stale durable topology frame and no attempt within the data tick, so unrelated wakeups observing the same stale frame cannot multiply production; forced refreshes bypass and advance the stamp.
+The producer runs the produce **in process** on its fetch worker ([`produce_workspace_snapshot`](../../crates/rimz/src/sidebar/produce/mod.rs)) rather than forking `rimz sidebar snapshot` per tick. A monotonic attempt stamp owned by that worker requires both a stale durable topology frame and no attempt within the data tick, so unrelated wakeups observing the same stale frame cannot multiply production; forced refreshes bypass and advance the stamp.
 
 The enrichment spine splits into renderer-independent [`enrich_workspace`](../../crates/rimz/src/sidebar/enrich.rs) and renderer-local `project_local`. The producer publishes the workspace result as `workspace-projection.json`; each consumer applies only its own pane exclusion, own-view, and presence. Section stamps plus the exact rollup extent and config generation make adoption a live-truth verdict, and legacy, corrupt, or stale files fall back to the full fold.
 
