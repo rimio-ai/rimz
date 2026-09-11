@@ -119,28 +119,10 @@ impl Store {
                 .collect();
 
             let waiting_cleared = transition.is_some_and(|transition| transition.waiting_cleared);
-            if envelopes.is_empty() {
-                return Ok(AgentLifecycleReceipt {
-                    prior_status,
-                    transition,
-                    waiting_cleared,
-                    primary_event_id,
-                    events,
-                    rotation_due: false,
-                });
-            }
-            let Ok(metadata) = std::fs::metadata(&txn.paths.events_log) else {
-                return Ok(AgentLifecycleReceipt {
-                    prior_status,
-                    transition,
-                    waiting_cleared,
-                    primary_event_id,
-                    events,
-                    rotation_due: false,
-                });
-            };
             let stamp = txn.paths.locks_dir.join(AUTO_ROTATE_STAMP);
-            let rotation_due = metadata.len() >= rotation_threshold
+            let rotation_due = !envelopes.is_empty()
+                && std::fs::metadata(&txn.paths.events_log)
+                    .is_ok_and(|metadata| metadata.len() >= rotation_threshold)
                 && debounce::stamp_due(&stamp, AUTO_ROTATE_DEBOUNCE);
             if rotation_due {
                 debounce::touch_stamp(&stamp);
