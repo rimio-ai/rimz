@@ -33,7 +33,7 @@ Ordered. A seam pass at the head is proposed before any module pass. Status is `
 | 9 | `message` → `harness::target` agent-address grammar, renderer, pane binding and launch lineage | pass-13 admission: 17 production sites; canonical addressing now lives in L4 `address` | landed pass-14 |
 | 10 | `diag` re-layer to L3 below `store` (`LinkTier` moves down with it), closing the `store ↔ diag::record` cycle from the diag side | pass-15a: store → diag 4 sites, store → diag::record 3; a store-side close measured +65 SLOC | landed pass-16 |
 
-The queue closed after pass 8; pass 13 reopened it for seam 9, which landed in pass 14. Pass 15a reopens the queue for seam 10 as a finding contradicting pass 8, not an approved re-layer.
+The queue closed after pass 8; pass 13 reopened it for seam 9, which landed in pass 14. Pass 15a reopens the queue for seam 10 as a finding contradicting pass 8, not an approved re-layer. Pass 16 landed seam 10 on the user's reopen.
 
 ## Pass targets
 
@@ -99,7 +99,7 @@ One row per module reviewed, at the granularity `survey` ranks. `holds` names th
 | module | status | sha | reopen at | note |
 | --- | --- | --- | --- | --- |
 | `address` | holds; landed pass-14 | `0a9330ef1` | 30 | grammar and renderer stay with pane binding, launch-instance grouping and lineage at L4; one channel reconciler and one iterator launch selector; no binding-kind flag or root error re-export; eight message-only items narrowed. |
-| `store` | landed pass-1; pass-7; pass-8; pass-15a | — | — | seam reviewed; module interior remains a candidate. Pass 7: it owns the run record (`store::run`), the signal vocabulary (`store::event`), and the submitted-prompt alignment (`store::message`); it imports no `harness` item. Pass 8: owns `LinkTier` at `store::snapshot`; only diag upward admissions remain. Pass 15a: snapshot interior rethought; diag edges kept, re-layer queued as seam #10. Pass 16: seam reviewed, diag below; no upward admission remains. |
+| `store` | landed pass-1; pass-7; pass-8; pass-15a; pass-16 | — | — | seam reviewed; module interior remains a candidate. Pass 7: it owns the run record (`store::run`), the signal vocabulary (`store::event`), and the submitted-prompt alignment (`store::message`); it imports no `harness` item. Pass 8: owns `LinkTier` at `store::snapshot`; only diag upward admissions remain. Pass 15a: snapshot interior rethought; diag edges kept, re-layer queued as seam #10. Pass 16: seam reviewed, diag below; no upward admission remains. |
 | `store/snapshot` | holds; landed pass-15a | `922b15292` | 30 | snapshot-owned live projection and grouping; one private reducer owner; no std/sibling pass-throughs; six items narrowed to reach; wire, fold, binding and assemblers hold. |
 | `agents` | landed pass-1; pass-5; pass-7 | — | — | seam reviewed; module interior remains a candidate. Pass 5: it owns the persisted record's budget vocabulary, `AgentState::channel()`, and `TerminalDisposition`. Pass 7: it gains `agents::petname`, the handle grammar the store mints and validates against |
 | `agents/adapters` | landed pass-2 | — | — | sibling seam reviewed; provider interiors remain separate module candidates |
@@ -113,7 +113,7 @@ One row per module reviewed, at the granularity `survey` ranks. `holds` names th
 | `sidebar` | landed pass-4 | — | — | seam reviewed; it keeps producer election, fusion, refresh lanes, and its own cadences; refresh interior landed pass-15b, other interiors remain candidates |
 | `sidebar/refresh` | holds; landed pass-15b | `fbbe60d34` | 30 | one provider refresh entry, realtime merge and rate-limit transaction; PR computation shares ownership handling and emits name/payload pairs; consumer owns lane inputs; lane internals narrowed. |
 | `wakeup` | landed pass-5 | — | — | new module in pass 4: the wire lifted out of `sidebar` (heartbeat record, event vocabulary, datagram send). Pass 5 re-layers it to L2, a leaf below `store` |
-| `ids` | landed pass-5 | — | — | seam reviewed: it owns shared identifiers, gaining `MuxClientId` and `FocusNonce`; interior remains a candidate. Pass 16: gains `LinkTier`. |
+| `ids` | landed pass-5; pass-16 | — | — | seam reviewed: it owns shared identifiers, gaining `MuxClientId` and `FocusNonce`; interior remains a candidate. Pass 16: gains `LinkTier`. |
 | `proc` | landed pass-5 | — | — | seam reviewed: it owns process and environment facts including shell selection; interior remains a candidate |
 | `harness` | landed pass-5; pass-7; pass-8; pass-14 | — | — | seam reviewed: policy over the agent record (budget parsing, ledgers, `RunStatus`, `agent_handle`), with record vocabulary in `agents`; interior remains a candidate, and `harness/schedule` keeps its own row. Pass 7: policy over store records (run transitions and their workspace lock, the run waiter, signal selectors and firing); the run record and `RunStatus` live in `store::run`, `petname` in `agents`. Pass 8: reaches forge for PR state; two account-cache writer sites stay until the agents::account lift. Pass 14: address grammar, rendering, pane binding and launch lineage live in top-level `address`; launch-channel precedence stays in `harness::spec`. Pass-14b: schedule interior reopened with one arming rule, compiled delivery receipts and no instance forwarding hops |
 | `agents/adapters/codex` | holds; landed pass-9 | `7af6d9f74` | 30 | app-server, broker, rollout, install, account and spend interiors reviewed; private transport/schema duplication removed; discovery, rollout presence semantics, pane-confirmation seam and conformance fixture hold |
@@ -125,10 +125,10 @@ One row per module reviewed, at the granularity `survey` ranks. `holds` names th
 | `cli/remote` | candidate | — | — | pin, thin, cx 34.0, pace 1.32; pins are the prerequisite |
 | `sidebar_pane/render/sections` | candidate | — | — | thin (t/c 0.06) with 3.7k code; pins are the prerequisite |
 | `sidebar_pane/app` | holds; landed pass-11 | `f0d27f230` | 30 | loop transitions/context, event dispatch, folds, maintenance, focus repair, fetch/state and input interiors reviewed; width control and the three distinct elder-gated workers hold |
-| `remote` | landed pass-8 | — | — | keeps classifier and thresholds, imports the tier downward; module interior remains a candidate. Pass 16: tier imported downward from ids. |
+| `remote` | landed pass-8; pass-16 | — | — | keeps classifier and thresholds, imports the tier downward; module interior remains a candidate. Pass 16: tier imported downward from ids. |
 | `disk` | landed pass-8 | — | — | gains `disk::usage`, the unchanged byte walk and storage-root measurement |
 | `worktree` | landed pass-8 | — | — | reaches `disk::usage` downward; interior remains a candidate |
-| `diag` | holds; landed pass-16 | `6fccc2b04` | 30 | imports the tier from `store::snapshot` and owns `PluginCommandFailure`; its sidebar upward admission is closed; store ↔ diag::record cycle retained for the store-side close. Pass 16 supersedes the old tier home and cycle disposition: evidence vocabulary and append mechanics at L3 below store; one admission point; shared rotated read; wire, per-surface logs, test-facing constructors and readers hold. |
+| `diag` | holds; landed pass-16 | `6fccc2b04` | 30 | Pass 8: imports the tier from `store::snapshot` and owns `PluginCommandFailure`; its sidebar upward admission is closed; store ↔ diag::record cycle retained for the store-side close. Pass 16 supersedes the old tier home and cycle disposition: evidence vocabulary and append mechanics at L3 below store; one admission point; shared rotated read; wire, per-surface logs, test-facing constructors and readers hold. |
 | `forge` | landed pass-8 | — | — | owns the PR-state record and reader in `forge::pr_state` |
 | `osc` | landed pass-8 | — | — | re-layered to L5 as policy over config and mux capabilities |
 | `build_id` | landed pass-8 | — | — | no crate imports; proc alone owns executable-path resolution |
