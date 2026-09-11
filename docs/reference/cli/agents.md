@@ -304,13 +304,15 @@ The activity description — the same field the sidebar card shows — renders u
 
 `show` and its `inspect` alias print a describe-style report with Agent, Activity, Context, Placement, Run, Messages, and Recent transcript sections. The Context section's cost, token split, and active time cover the durable agent seat's lifetime across resumed sessions and pane-backed children it launched. Attribution uses the same all-in cost and token fold across every subagent the member spawned; addressing a child directly reports that child's own session. Live context fill, window, tool activity, and the no-transcript fallback remain session-scoped. An open identical-tool run appears once it reaches the configured warning threshold (`Bash ×23, 4m`). `--capture` appends a Capture section that frames the bound pane's visible area with its pane id in the top border (an error when the agent has no bound pane), and `--ansi` keeps colors inside that frame.
 
-`show --json` places the same projected agent entry under `agent`, with `stale`, rich `ask`, `run`, `messages`, and raw `capture` data as show-only siblings when applicable. A stopped audit agent keeps the full stable entry shape, with published-row fields such as context severity and active time set to `null`. Supervised `-p` runs shape their output with `--output-format` instead.
+The Messages section shows conversation records only: your sends and attributed agent sends. When system messages are hidden, a faint hint gives the nonzero count and points to `rimz message list --system @<agent>`; no hint appears when the count is zero.
+
+`show --json` places the same projected agent entry under `agent`, with `stale`, rich `ask`, `run`, `messages`, and raw `capture` data as show-only siblings when applicable. `messages` is the same conversation-only filtered list, without a hidden count. A stopped audit agent keeps the full stable entry shape, with published-row fields such as context severity and active time set to `null`. Supervised `-p` runs shape their output with `--output-format` instead.
 
 When room tmp exists, `show` reports its host path and notes that sandboxed panes mount it at `/tmp`; JSON exposes `tmp_dir` (renamed from `scratch_dir`, a wire-format change). Room tmp is shared across the room's sandboxed agents, survives agent restart, and is removed by room teardown ([mount-view lifecycle](../../internals/sandbox.md#room-tmp)).
 
 #### `logs`
 
-`logs <ref>` is the agent-centric transcript view: `-n/--tail N` keeps the last N chat lines, `-f/--follow` prints new lines as they land, `--all` includes prior-session history, and `--json` emits JSON for one-shot reads or NDJSON in follow mode. It uses the same transcript scope and rendering as [`rimz transcript @ref`](./transcript.md).
+`logs <ref>` is the agent-centric transcript view: `-n/--tail N` keeps the last N chat lines, `-f/--follow` prints new lines as they land, `--all` includes prior-session history, and `--json` emits JSON for one-shot reads or NDJSON in follow mode. It uses the same transcript scope and rendering as [`rimz transcript @ref`](./transcript.md): human output hides subagent digests, wakes, and `rimz`-authored prompts; JSON retains them.
 
 #### `history`
 

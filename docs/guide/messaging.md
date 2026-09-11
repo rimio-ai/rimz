@@ -161,6 +161,7 @@ Bare `rimz message` opens the current lane's inbox. Every message is a durable r
 ```sh
 rimz message list                       # the current lane's inbox, newest first
 rimz message list --all                 # every channel, grouped by #channel
+rimz message list --system              # include wakes, signals, subagent digests, and nudges
 rimz message show msg_01k…              # full text, event timeline, and the first delivery blocker
 rimz message edit msg_01k… --text "…"   # revise a still-queued message before it lands
 rimz message steer msg_01k…             # push a queued record through now, skipping its schedule and gate
@@ -169,11 +170,13 @@ rimz message cancel msg_01k…            # cancel a queued message — the reco
 rimz message clear @codex               # cancel every open message for one agent; targetless clears the channel
 ```
 
+The inbox shows your sends and attributed agent sends by default, even with `--all` or `--json`; when automation is hidden, human output shows a nonzero hidden count, and `--system` includes it so you can inspect what woke or nudged an agent.
+
 Statuses read straight across: `queued` and `claimed` are still live, `sent` means the bytes reached the pane, `delivered` means the prompt's turn started, `canceled` means the user stopped delivery, and `archived` means the receiver or its channel ended. An unconfirmed command times out without being resent, because repeating a command such as `/compact` can discard context. Use `message show` to diagnose a record that has not delivered. A durable file is the source of truth, so a missed notification or a crash between claim and send loses nothing.
 
 ## Agents message each other
 
-`rimz message` is the same command whether you type it or an agent runs it, so a running agent hands work to a teammate exactly as you do. Every attributed delivery starts with a `Type` / `From` / `Content` header: agent sends use `AGENT_MESSAGE` and their handle, the status digest sent once the current fleet of an agent's launched subagents settles uses `SUBAGENT_REPORT` and `@rimz`, while your sends use `USER_MESSAGE` and `@user`. Agent deliveries land as first-class conversation lines, but `rimz transcript` hides subagent digests from its human view; `rimz transcript --json` retains them. User headers are removed when the prompt is recorded. `--no-from` delivers verbatim without a header when a script wants the raw text.
+`rimz message` is the same command whether you type it or an agent runs it, so a running agent hands work to a teammate exactly as you do. Every attributed delivery starts with a `Type` / `From` / `Content` header: agent sends use `AGENT_MESSAGE` and their handle, the status digest sent once the current fleet of an agent's launched subagents settles uses `SUBAGENT_REPORT` and `@rimz`, while your sends use `USER_MESSAGE` and `@user`. Agent deliveries land as first-class conversation lines, but `rimz transcript` hides `@rimz` digests, wakes, and `rimz`-authored prompts from its human view; `rimz transcript --json` retains them. User headers are removed when the prompt is recorded. `--no-from` delivers verbatim without a header when a script wants the raw text.
 
 Read the root-agent conversation back across a channel, with each exchange grouped under the message that opened it, using `rimz transcript`. Name a launched child to read its separate conversation: `rimz transcript @<petname>` ([transcript CLI](../reference/cli/transcript.md)).
 
