@@ -351,7 +351,7 @@ pub(crate) fn expanded_row_awaiting_first_prompt(snapshot: &SidebarSnapshot, ui:
     })
 }
 
-pub(crate) fn expanded_command_wait_needs_motion(
+pub(in crate::sidebar_pane) fn expanded_command_wait_needs_motion(
     snapshot: &SidebarSnapshot,
     ui: &UiState,
     animations: &ResolvedAnimations,
