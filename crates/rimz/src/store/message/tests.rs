@@ -7,6 +7,37 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, MessageId, MuxName, PaneId, WorkspaceId};
 
 #[test]
+fn conversation_senders_exclude_system_traffic() {
+    assert!(MessageSender::Human.is_conversation());
+    assert!(
+        MessageSender::Agent {
+            kind: AgentKind::new_unchecked("codex"),
+            name: None,
+            profile: None,
+            role: None,
+            channel: None,
+        }
+        .is_conversation()
+    );
+    for notice in [
+        HarnessNotice::Wake,
+        HarnessNotice::Signal,
+        HarnessNotice::SubagentReport,
+        HarnessNotice::Other("future".to_owned()),
+    ] {
+        assert!(!MessageSender::Harness { notice }.is_conversation());
+    }
+    assert!(
+        !MessageSender::Subagent {
+            kind: AgentKind::new_unchecked("codex"),
+            name: "child".to_owned(),
+        }
+        .is_conversation()
+    );
+    assert!(!MessageSender::System.is_conversation());
+}
+
+#[test]
 fn delivery_gates_follow_agent_lifecycle() {
     let cases = [
         (AgentStatus::Running, false, false, false),
