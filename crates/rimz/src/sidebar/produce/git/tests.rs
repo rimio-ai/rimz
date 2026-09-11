@@ -7,7 +7,7 @@ use crate::ids::WorkspaceId;
 use crate::sidebar::refresh::git_stats::{DiffStatsCache, WorktreeRootsCache};
 use crate::workspace::RootClass;
 
-use super::roots::{list_group_roots, list_worktree_roots, project_group_roots};
+use super::{list_group_roots, list_worktree_roots, project_group_roots};
 
 fn git(cwd: &Path, args: &[&str]) -> bool {
     Command::new("git")
