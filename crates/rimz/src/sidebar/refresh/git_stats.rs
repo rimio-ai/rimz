@@ -1001,8 +1001,11 @@ fn git_line(worktree: &Path, args: &[&str]) -> Option<String> {
     if !output.status.success() {
         return None;
     }
-    let line = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    if line.is_empty() { None } else { Some(line) }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_owned)
 }
 
 fn git_output(worktree: &Path, args: &[&str]) -> Option<std::process::Output> {
