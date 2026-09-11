@@ -73,7 +73,7 @@ pub(in crate::sidebar::produce) fn project_group_roots(
 /// worktree checkouts. Directory and non-git marker rooms enumerate no children;
 /// git-backed agents contribute their own resolved worktree roots during the
 /// row fold.
-pub(super) fn list_group_roots(project_root: &Path, root_class: RootClass) -> Vec<PathBuf> {
+fn list_group_roots(project_root: &Path, root_class: RootClass) -> Vec<PathBuf> {
     match root_class {
         RootClass::Repo => list_worktree_roots(project_root),
         RootClass::Directory => Vec::new(),
@@ -91,7 +91,7 @@ pub(super) fn list_group_roots(project_root: &Path, root_class: RootClass) -> Ve
 /// root of every worktree — main and linked alike — from its `worktree <path>`
 /// lines. Linked worktrees report absolute paths, so a checkout outside the
 /// project root is captured here exactly as the reducer needs it.
-pub(super) fn list_worktree_roots(project_root: &Path) -> Vec<PathBuf> {
+fn list_worktree_roots(project_root: &Path) -> Vec<PathBuf> {
     let output = crate::proc::git_command(project_root)
         .args(["worktree", "list", "--porcelain"])
         .output()
