@@ -47,23 +47,6 @@ impl RuntimeControlIssue {
             message: issue.to_string(),
         }
     }
-
-    #[doc(hidden)]
-    pub fn from_parts(kind: &'static str, code: &'static str, message: impl Into<String>) -> Self {
-        Self {
-            kind,
-            code,
-            message: message.into(),
-        }
-    }
-
-    pub const fn kind(&self) -> &'static str {
-        self.kind
-    }
-
-    pub const fn code(&self) -> &'static str {
-        self.code
-    }
 }
 
 impl std::fmt::Display for RuntimeControlIssue {

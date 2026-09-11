@@ -64,14 +64,6 @@ pub enum HookReply {
 }
 
 impl CanonicalHookEvent {
-    pub fn native_name(&self) -> &str {
-        &self.native_name
-    }
-
-    pub const fn meaning(&self) -> CanonicalHookMeaning {
-        self.meaning
-    }
-
     pub fn records_progress(&self) -> bool {
         self.facts
             .iter()
@@ -128,10 +120,6 @@ impl HookOutput {
             CanonicalHookMeaning::Ask(kind) => Some(kind),
             CanonicalHookMeaning::Lifecycle | CanonicalHookMeaning::Unknown => None,
         }
-    }
-
-    pub const fn event(&self) -> &CanonicalHookEvent {
-        &self.event
     }
 
     pub const fn routing(&self) -> &HookRouting {

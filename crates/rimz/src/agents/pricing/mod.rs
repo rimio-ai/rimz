@@ -268,17 +268,6 @@ pub struct PriceBook {
 }
 
 impl PriceBook {
-    /// The no-network book from the embedded upstream snapshot.
-    pub fn embedded() -> Self {
-        let entries = embedded::load();
-        Self {
-            entries,
-            fuzzy_entries: None,
-            identity: Arc::default(),
-            fuzzy_cache: Arc::default(),
-        }
-    }
-
     /// Build a book from an arbitrary LiteLLM-shaped document (tests, tooling).
     pub fn from_litellm_json(json: &str) -> Self {
         let entries = embedded::parse(json);
