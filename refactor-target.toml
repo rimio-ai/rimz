@@ -203,7 +203,7 @@ path = "crates/rimz/src/mux"
 # Sandbox reach uses mux-owned endpoint resolution rather than duplicating it.
 # Tab naming shares pane-label policy and one intent-driven operation across launch and projection.
 # The cross-backend live-session snapshot moves here from room (pass 15c).
-surface-budget = 266
+surface-budget = 253
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
@@ -420,7 +420,7 @@ allowed-dependencies = [
     "ids",
     "mux",
 ]
-surface-budget = 19
+surface-budget = 16
 
 [[module]]
 path = "crates/rimz/src/mux/recovery.rs"
@@ -1520,3 +1520,43 @@ reason = "Three-line wrapper kept: it is the module's one width vocabulary acros
 kind = "item"
 key = "sidebar_pane::render::compose::top_lines"
 reason = "Assembly holds: one call site, consumes snapshot/ui/frame and returns a complete RenderedBlock; scroll_lines likewise (pass 18b)."
+
+[[verdict]]
+kind = "item"
+key = "mux::command::arg"
+reason = "Integration tests build CommandSpec argv through it (tests/integration/backend/command.rs, mux_command.rs); the integration crate sees only pub (pass 18c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::focus_anchor::load"
+reason = "Integration tests read the persisted focus intent through load and FocusAnchor fields (tests/integration/backend/zellij/tabs.rs); FocusAnchor and FocusIntentState stay pub with it (pass 18c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::focus_anchor::FocusPresentation"
+reason = "Parameter of pub sidebar::fuse::fuse, which benches/hotpath.rs calls; FocusDispatchRetries (inferred Default at the app dispatch site) and FocusActionError (returned by pub execute_action to the CLI binary) stay pub for the same reason (pass 18c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::width::WidthPercent"
+reason = "Field of pub SidebarWidth; integration tmux support calls width.percent.resolve (pass 18c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::tmux::LegacySessionConflict"
+reason = "Return of legacy_session_conflict; cli/doctor/runtime.rs reads session, socket and recovery_command from the bin target, as it reads TmuxCapabilities from capabilities (pass 18c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::tmux::tmux_cmd"
+reason = "Stays pub(crate): testkit/sandbox.rs builds the sandbox tmux command through it (pass 18c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::SplitPaneOptions"
+reason = "Policy fields (target, env, placement, focus) stay caller-set by struct update over from_command; a full-argument constructor costs more lines than the literals it replaces (pass 18c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::TabOptions"
+reason = "No one-pane constructor: only cli/supervised/pane.rs builds a single-pane tab; placement.rs takes an arbitrary LayoutPanes (pass 18c)."
