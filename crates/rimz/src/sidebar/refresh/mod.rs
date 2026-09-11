@@ -6,7 +6,7 @@
 //! freshest view in the same process.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::agents::spending::{
@@ -59,6 +59,28 @@ use super::enrich::{
 use crate::utils::time::unix_now_ms;
 
 const ORPHAN_SWEEP_SCAN_TTL: Duration = Duration::from_secs(60);
+
+// A hung git must not stall the refresh worker; this matches the forge command bound in pr.rs.
+const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Raw stdout for multi-line and NUL-delimited git commands; spawn failure or timeout returns `None`, while callers judge the exit status.
+fn git_output(worktree: &Path, args: &[&str]) -> Option<crate::proc::BoundedOutput> {
+    let output = crate::proc::run_bounded_git_output(worktree, args, GIT_COMMAND_TIMEOUT).ok()?;
+    (!output.timed_out).then_some(output)
+}
+
+/// Run `git -C <worktree> <args>` and return its stdout's first non-empty line, or `None` on a missing git binary, a non-zero exit, timeout, or empty output.
+fn git_line(worktree: &Path, args: &[&str]) -> Option<String> {
+    let output = git_output(worktree, args)?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_owned)
+}
 
 #[derive(Clone, Debug)]
 pub struct RefreshedLanes {

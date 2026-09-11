@@ -53,9 +53,24 @@ fn git_binary() -> &'static Path {
 /// probes skip PATH lookup. Counts the spawn for the subprocess perf guards.
 pub(crate) fn git_command(worktree: &Path) -> Command {
     testkit::count_spawn();
+    git_command_uncounted(worktree)
+}
+
+fn git_command_uncounted(worktree: &Path) -> Command {
     let mut cmd = Command::new(git_binary());
     cmd.arg("-C").arg(worktree);
     cmd
+}
+
+/// Run git within a deadline, counting the spawn attempt only at the bounded runner.
+pub(crate) fn run_bounded_git_output(
+    worktree: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> std::io::Result<BoundedOutput> {
+    let mut command = git_command_uncounted(worktree);
+    command.args(args);
+    run_bounded_output(&mut command, timeout)
 }
 
 fn bin_name(stem: &str) -> String {

@@ -13,6 +13,7 @@ use std::time::{Duration, SystemTime};
 use jiff::SignedDuration;
 use serde::{Deserialize, Serialize};
 
+use super::{git_line, git_output};
 use crate::PaneId;
 use crate::agents::AgentStatus;
 use crate::disk::atomic;
@@ -992,24 +993,6 @@ fn trunk_ref(worktree: &Path, configured: Option<&str>) -> Option<String> {
         worktree,
         &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
     )
-}
-
-/// Run `git -C <worktree> <args>` and return its stdout's first non-empty line,
-/// or `None` on a missing git binary, a non-zero exit, or empty output.
-fn git_line(worktree: &Path, args: &[&str]) -> Option<String> {
-    let output = git_output(worktree, args)?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(str::to_owned)
-}
-
-fn git_output(worktree: &Path, args: &[&str]) -> Option<std::process::Output> {
-    crate::proc::git_command(worktree).args(args).output().ok()
 }
 
 fn parse_numstat(output: &str) -> DiffStats {
