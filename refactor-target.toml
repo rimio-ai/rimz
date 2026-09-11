@@ -23,7 +23,7 @@ layers = [
     "trust",
     "theme",
 ],
-    ["agents"],
+    ["agents", "diag"],
     ["store"],
     [
     "address",
@@ -31,7 +31,6 @@ layers = [
     "mux",
     "remote",
     "observability",
-    "diag",
     "osc",
 ],
     [
@@ -279,10 +278,6 @@ surface-budget = 17
 
 [[module]]
 path = "crates/rimz/src/store"
-upward-dependencies = [
-    "diag",
-    "diag::record",
-]
 # Fresh boundary dispatch shares the queue's in-flight claim predicate.
 # Header grammar moved from harness; lifecycle projection also shares prompt-origin classification.
 # Exec cleanup probes waiter liveness without owning socket paths.
