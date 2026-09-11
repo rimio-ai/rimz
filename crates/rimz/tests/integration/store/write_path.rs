@@ -500,6 +500,37 @@ fn soft_reset_keeps_closed_identity_and_hard_reset_forgets_it() {
 }
 
 #[test]
+fn reset_retracts_the_published_view_and_rebuilds_by_mode() {
+    let h = crate::common::Harness::new();
+    let paths = h.store.paths();
+    let stamp = paths.locks_dir.join("publish.stamp");
+
+    let outcome = h.store.reset_records(false).expect("empty soft reset");
+    assert!(!outcome.rotation.is_rotated());
+    assert!(!outcome.hard);
+    assert!(!stamp.exists());
+    assert!(paths.latest_snapshot.exists());
+
+    h.store
+        .append_event(&lifecycle(&h, "SessionStart", "before-reset"))
+        .expect("append");
+    let outcome = h.store.reset_records(false).expect("soft reset");
+    assert!(outcome.rotation.is_rotated());
+    assert!(!stamp.exists());
+    let latest = snapshot::read_fresh_latest(paths).expect("fresh snapshot");
+    let extent = latest.reflects_log.expect("stamped");
+    assert_eq!(extent.generation, 1);
+    assert_eq!(extent.offset, 0);
+
+    let outcome = h.store.reset_records(true).expect("hard reset");
+    assert!(outcome.hard);
+    assert!(!paths.latest_snapshot.exists());
+    assert!(!paths.rollup_cache.exists());
+    assert!(!paths.events_log.exists());
+    assert!(!stamp.exists());
+}
+
+#[test]
 fn rotation_retracts_the_published_snapshot_and_republishes_fresh() {
     // The published stamp describes the renamed-away log, so rotation
     // retracts `latest.json` before reseeding (a crash mid-rotation leaves
