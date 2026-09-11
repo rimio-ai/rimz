@@ -222,10 +222,7 @@ pub(super) fn enrich_pane_metrics(
         return false;
     }
 
-    // Zellij topology reports no per-pane pid (tmux fills `#{pane_pid}`
-    // natively), so first restore each due pidless pane's root pid from the
-    // prior tick's binding — starttime-guarded, one stat read per pane instead
-    // of the table walk below.
+    // Published backend pids are authoritative. Restore each due pidless pane's root pid from the prior tick's starttime-guarded binding before falling back to the process-table walk.
     let needs_walk = restore_cached_bindings(frame, &prior, &due, &|pid| {
         crate::proc::stat_metrics(pid).map(|stat| stat.start_ticks)
     });
@@ -635,7 +632,7 @@ fn cached_root_pid(
     (read_start_ticks(pid) == Some(recorded)).then_some(pid)
 }
 
-pub(in crate::sidebar::produce) fn backfill_zellij_pane_pids_from_proc(
+pub(super) fn backfill_zellij_pane_pids_from_proc(
     frame: &mut PaneFrame,
     session_name: &str,
 ) -> HashMap<u32, Vec<u32>> {
@@ -676,7 +673,7 @@ pub(in crate::sidebar::produce) fn backfill_zellij_pane_pids_from_proc(
 /// foreground cmdline is almost always unique, so real work still reads.
 /// Sidebar chrome panes are skipped outright: every sidebar shares one
 /// cmdline, and they are excluded from rows anyway.
-pub(super) fn backfill_zellij_pane_pids(
+fn backfill_zellij_pane_pids(
     frame: &mut PaneFrame,
     procs: &[crate::proc::ProcInfo],
     children: &HashMap<u32, Vec<u32>>,
