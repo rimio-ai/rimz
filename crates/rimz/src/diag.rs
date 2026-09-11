@@ -308,33 +308,18 @@ pub fn frames_dir_under(state_root: &Path) -> PathBuf {
     state_root.join(DIAG_FRAMES_DIR)
 }
 
-pub fn recent_records(
-    workspace_id: WorkspaceId,
-    limit: usize,
-) -> Option<(PathBuf, Vec<DiagEnvelope>)> {
+pub fn recent_records(workspace_id: WorkspaceId) -> Option<(PathBuf, Vec<DiagEnvelope>)> {
     let path = crate::StatePaths::for_workspace(workspace_id)
         .ok()?
         .root
         .join(DIAG_LOG_NAME);
     let mut records = Vec::new();
-    for candidate in [crate::disk::rotating::rotated_path(&path), path.clone()] {
-        let Ok(text) = std::fs::read_to_string(&candidate) else {
-            continue;
-        };
-        for line in text.lines().filter(|line| !line.trim().is_empty()) {
-            match serde_json::from_str::<DiagEnvelope>(line) {
-                Ok(record) if record.is_current_version() => records.push(record),
-                Ok(_) => {}
-                Err(err) => {
-                    tracing::debug!(path = %candidate.display(), error = %err, "diagnostic record decode failed");
-                }
-            }
+    crate::disk::rotating::visit_records(&path, |record: DiagEnvelope| {
+        if record.is_current_version() {
+            records.push(record);
         }
-    }
+    });
     records.sort_by_key(|record| record.at_ms);
-    if records.len() > limit {
-        records.drain(..records.len() - limit);
-    }
     Some((path, records))
 }
 
@@ -530,7 +515,7 @@ mod tests {
     }
 
     #[test]
-    fn recent_records_merges_generations_filters_versions_and_caps_results() {
+    fn recent_records_merges_generations_filters_versions_and_sorts() {
         let workspace_id = WorkspaceId::from_project_root(Path::new("/diag-recent-records"));
         let state = crate::StatePaths::for_workspace(workspace_id.clone()).unwrap();
         let _ = std::fs::remove_dir_all(&state.root);
@@ -566,14 +551,14 @@ mod tests {
         )
         .unwrap();
 
-        let (returned_path, records) = recent_records(workspace_id, 3).unwrap();
+        let (returned_path, records) = recent_records(workspace_id).unwrap();
         assert_eq!(returned_path, live_path);
         assert_eq!(
             records
                 .iter()
                 .map(|record| record.at_ms)
                 .collect::<Vec<_>>(),
-            vec![30, 40, 50]
+            vec![10, 20, 30, 40, 50]
         );
         std::fs::remove_dir_all(state.root).unwrap();
     }
