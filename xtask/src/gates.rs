@@ -927,7 +927,8 @@ fn run_streaming_tests(
         cargo_args,
         env,
         &["NO_COLOR"],
-        RtkPolicy::Configured,
+        // rtk would compress the very stream `--no-capture` exists to show; the listing and discovery runs bypass it for the same reason.
+        RtkPolicy::Bypass,
     )?;
     if nextest_matched_no_tests(status.code(), "") {
         report_zero_test_match(requested);
