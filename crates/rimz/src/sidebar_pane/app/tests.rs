@@ -154,13 +154,34 @@ fn sleeping_command_wait_keeps_the_animation_gate_running() {
             &snapshot,
             &ui.cached_theme(&snapshot.theme).unwrap().animations
         ),
-        render::AnimationCadence::Fast
+        render::AnimationCadence::None
     );
     assert!(is_animating(&snapshot, &ui, 0, false));
     assert_eq!(
         frame_interval(&snapshot, &ui, false),
         crate::sidebar::timing::animation_frame(snapshot.theme.display.resolved_refresh_ms())
     );
+    ui.selected_index = usize::MAX;
+    assert!(!is_animating(&snapshot, &ui, 0, false));
+    snapshot.theme.display.card_density = crate::config::CardDensityMode::Expanded;
+    ui.theme(&snapshot.theme);
+    assert!(is_animating(&snapshot, &ui, 0, false));
+    ui.make_up_filter = Some(render::BodyFilter::Status(
+        crate::agents::AgentStatus::Running,
+    ));
+    assert!(!is_animating(&snapshot, &ui, 0, false));
+    ui.make_up_filter = None;
+    snapshot.theme.display.card_density = crate::config::CardDensityMode::Compact;
+    ui.theme(&snapshot.theme);
+    assert!(!is_animating(&snapshot, &ui, 0, false));
+    ui.selected_index = 0;
+    assert!(is_animating(&snapshot, &ui, 0, false));
+    snapshot.theme.animations.working =
+        Some(toml::from_str("frames = \"-\"\neffect = \"static\"\n").expect("animation spec"));
+    ui.theme(&snapshot.theme);
+    assert!(!is_animating(&snapshot, &ui, 0, false));
+    snapshot.theme.animations.working = None;
+    ui.theme(&snapshot.theme);
     for trigger in [
         crate::agents::PendingWakeTrigger::Timer { due: snapshot.now },
         crate::agents::PendingWakeTrigger::Signal {

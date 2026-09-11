@@ -5,8 +5,8 @@
 //! density and selection invariants live in docs/internals/sidebar/sidebar.md.
 
 use crate::agents::{AgentContext, AgentCurrentUsage, CacheHealth, TurnPhase};
-use crate::agents::{AgentStatus, ContextSeverity};
-use crate::config::{AnimationRole, ContextMeterConfig, GlyphRole};
+use crate::agents::{AgentStatus, ContextSeverity, PendingWakeTrigger};
+use crate::config::{AnimationRole, CardDensityMode, ContextMeterConfig, GlyphRole};
 use crate::store::snapshot::{AgentCard, SidebarRow, SidebarSubAgent, SidebarWorktreeGroup};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -72,6 +72,22 @@ pub(in crate::sidebar_pane) fn agent_card_cost_usd(
 
 pub(in crate::sidebar_pane::render) fn awaiting_first_prompt_affordance(row: &SidebarRow) -> bool {
     matches!(CardStage::of(row), CardStage::Fresh { labeled: false })
+}
+
+pub(in crate::sidebar_pane::render) fn has_command_wait_entries(
+    row: &SidebarRow,
+    density: CardDensityMode,
+    expanded: bool,
+) -> bool {
+    let Some(agent) = row.as_agent() else {
+        return false;
+    };
+    template(CardStage::of(row), agent.status, density, expanded)
+        .contains(&CardSlot::DelegationEntries)
+        && agent
+            .pending_wakes
+            .iter()
+            .any(|wake| matches!(wake.trigger, PendingWakeTrigger::Command { .. }))
 }
 
 pub(super) fn row_lines(
