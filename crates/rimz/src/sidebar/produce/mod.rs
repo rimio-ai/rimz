@@ -341,23 +341,6 @@ pub fn refresh_producer_caches(
     runtime: &RuntimePaths,
     session: &str,
     exclude: Option<&PaneId>,
-) -> Result<()> {
-    refresh_producer_caches_with_state(
-        cursor,
-        state,
-        runtime,
-        session,
-        exclude,
-        &mut Default::default(),
-    )
-}
-
-pub(crate) fn refresh_producer_caches_with_state(
-    cursor: &mut RollupCursor,
-    state: &StatePaths,
-    runtime: &RuntimePaths,
-    session: &str,
-    exclude: Option<&PaneId>,
     refresh_state: &mut crate::sidebar::refresh::ProducerRefreshState,
 ) -> Result<()> {
     let base = read_published_snapshot(cursor, state, runtime, session, exclude)?;

@@ -62,7 +62,7 @@ fn refresh_loop(
         };
         let tick = meter.begin();
         let result = refresh_guarded(&mut cursor, |cursor| {
-            crate::sidebar::produce::refresh_producer_caches_with_state(
+            crate::sidebar::produce::refresh_producer_caches(
                 cursor,
                 &state,
                 &runtime,

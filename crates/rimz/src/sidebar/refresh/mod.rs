@@ -92,7 +92,7 @@ pub struct RefreshedLanes {
 
 /// Process-local memo state owned by one long-lived cache producer.
 #[derive(Debug, Default)]
-pub(crate) struct ProducerRefreshState {
+pub struct ProducerRefreshState {
     git: git_stats::GitRefreshState,
     cohort_rollup: crate::store::snapshot::RollupCursor,
     cohort_effort: crate::agents::spending::EffortParseMemo,

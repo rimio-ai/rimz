@@ -147,8 +147,16 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
     );
 
     let mut cursor = RollupCursor::new();
-    rimz::sidebar::produce::refresh_producer_caches(&mut cursor, &state, &runtime, &session, None)
-        .expect("refresh producer caches");
+    let mut refresh_state = rimz::sidebar::refresh::ProducerRefreshState::default();
+    rimz::sidebar::produce::refresh_producer_caches(
+        &mut cursor,
+        &state,
+        &runtime,
+        &session,
+        None,
+        &mut refresh_state,
+    )
+    .expect("refresh producer caches");
 
     let provider_path = runtime.shared_provider_spending_path();
     let accounts_path = runtime.shared_accounts_path();
@@ -177,8 +185,15 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
     let provider_bytes = std::fs::read(&provider_path).expect("provider cache");
     let accounts_bytes = std::fs::read(&accounts_path).expect("accounts cache");
     let diff_stats_bytes = std::fs::read(&diff_stats_path).expect("diff stats cache");
-    rimz::sidebar::produce::refresh_producer_caches(&mut cursor, &state, &runtime, &session, None)
-        .expect("second refresh");
+    rimz::sidebar::produce::refresh_producer_caches(
+        &mut cursor,
+        &state,
+        &runtime,
+        &session,
+        None,
+        &mut refresh_state,
+    )
+    .expect("second refresh");
     assert_eq!(
         std::fs::read(&provider_path).expect("provider cache"),
         provider_bytes,
