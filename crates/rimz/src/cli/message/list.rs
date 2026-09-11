@@ -139,24 +139,15 @@ impl MessageListRow {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn list_messages(
-    json: bool,
-    all: bool,
-    status: Option<MessageStatus>,
-    channel: Option<String>,
-    limit: Option<usize>,
-    target: Option<String>,
-    globals: &GlobalFlags,
-) -> Result<()> {
+pub(super) fn list_messages(args: ListArgs, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let store = &ctx.store;
     let snapshot = ctx.cached_snapshot()?;
     let mut messages = projected_messages(store)?;
     let ambient_channel = ctx.channel().map(ToOwned::to_owned);
-    let lane_scope = if all {
+    let lane_scope = if args.all {
         LaneScope::All
-    } else if let Some(channel) = channel {
+    } else if let Some(channel) = args.channel {
         LaneScope::Named(channel)
     } else if let Some(channel) = ambient_channel {
         LaneScope::Named(channel)
@@ -170,12 +161,12 @@ pub(super) fn list_messages(
             messages.retain(|message| message.channel.as_deref() == Some(channel.as_str()));
         }
     }
-    if let Some(status) = status {
+    if let Some(status) = args.status {
         messages.retain(|message| message.status == status);
     } else if !lane_scope.includes_archived() {
         messages.retain(|message| message.status != MessageStatus::Archived);
     }
-    if let Some(raw) = target {
+    if let Some(raw) = args.target {
         rimz::address::require_mention(&raw)?;
         let agent =
             crate::cli::resolve_agent_one(store, &snapshot, &raw, None, lane_scope.named())?;
@@ -188,12 +179,17 @@ pub(super) fn list_messages(
             .matches(agent.card_ref())
         });
     }
+    let system_hidden = if args.system {
+        0
+    } else {
+        retain_conversation(&mut messages)
+    };
     messages.sort_by(|a, b| {
         b.enqueued_at
             .cmp(&a.enqueued_at)
             .then_with(|| b.message_id.as_str().cmp(a.message_id.as_str()))
     });
-    let limit = limit.unwrap_or(DEFAULT_MESSAGE_LIST_LIMIT);
+    let limit = args.limit.unwrap_or(DEFAULT_MESSAGE_LIST_LIMIT);
     let hidden = if limit == 0 {
         0
     } else {
@@ -202,14 +198,28 @@ pub(super) fn list_messages(
     if limit != 0 {
         messages.truncate(limit);
     }
-    if json {
+    if args.json {
         render::json_pretty(&messages)?;
     } else {
         let agents = rimz::address::addressable_agents(&snapshot);
         let mut out = render::out();
-        render_message_digest(&mut out, messages, &agents, &lane_scope, hidden, status)?;
+        render_message_digest(
+            &mut out,
+            messages,
+            &agents,
+            &lane_scope,
+            hidden,
+            system_hidden,
+            args.status,
+        )?;
     }
     Ok(())
+}
+
+fn retain_conversation(messages: &mut Vec<MessageListRow>) -> usize {
+    let total = messages.len();
+    messages.retain(|message| message.sender.is_conversation());
+    total - messages.len()
 }
 
 pub(super) fn projected_messages(store: &rimz::Store) -> Result<Vec<MessageListRow>> {
@@ -240,8 +250,10 @@ pub(super) fn render_message_digest(
     agents: &[&AgentState],
     lane_scope: &LaneScope,
     hidden: usize,
+    system_hidden: usize,
     status: Option<MessageStatus>,
 ) -> Result<()> {
+    let now = Timestamp::now();
     if messages.is_empty() {
         writeln!(
             out,
@@ -251,11 +263,7 @@ pub(super) fn render_message_digest(
                 &empty_message_digest(lane_scope, status)
             )
         )?;
-        return Ok(());
-    }
-
-    let now = Timestamp::now();
-    if matches!(lane_scope, LaneScope::All) {
+    } else if matches!(lane_scope, LaneScope::All) {
         for (index, (channel, rows)) in message_digest_groups(messages).into_iter().enumerate() {
             if index > 0 {
                 writeln!(out)?;
@@ -274,6 +282,12 @@ pub(super) fn render_message_digest(
         writeln!(
             out,
             "... {hidden} older messages hidden (--limit 0 for all)"
+        )?;
+    }
+    if system_hidden > 0 {
+        writeln!(
+            out,
+            "... {system_hidden} system messages hidden (--system shows them)"
         )?;
     }
     Ok(())
@@ -717,6 +731,42 @@ mod tests {
     }
 
     #[test]
+    fn retain_conversation_keeps_human_and_agent_rows() {
+        let mut rows: Vec<_> = [
+            MessageSender::Human,
+            agent_sender("planner", None),
+            MessageSender::System,
+            MessageSender::Harness {
+                notice: rimz::store::message::HarnessNotice::Wake,
+            },
+            MessageSender::Subagent {
+                kind: AgentKind::new_unchecked("codex"),
+                name: "child".to_owned(),
+            },
+        ]
+        .into_iter()
+        .map(|sender| message_row_with_sender("sess-coder", None, "task", sender))
+        .collect();
+        assert_eq!(retain_conversation(&mut rows), 3);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].sender, MessageSender::Human);
+        assert_eq!(rows[1].sender, agent_sender("planner", None));
+    }
+
+    #[test]
+    fn message_digest_reports_hidden_system_rows() {
+        for rows in [Vec::new(), vec![message_row("sess-coder", None, "task")]] {
+            let mut out = Vec::new();
+            render_message_digest(&mut out, rows, &[], &LaneScope::Main, 0, 2, None).unwrap();
+            let output = String::from_utf8(out).unwrap();
+            assert!(output.ends_with("... 2 system messages hidden (--system shows them)\n"));
+        }
+        assert!(
+            !render_digest(Vec::new(), LaneScope::Main, None).contains("system messages hidden")
+        );
+    }
+
+    #[test]
     fn message_digest_empty_state_describes_scope_and_status() {
         let all = render_digest(Vec::new(), LaneScope::All, None);
         assert!(all.contains("no messages"));
@@ -778,7 +828,7 @@ mod tests {
         status: Option<MessageStatus>,
     ) -> String {
         let mut out = Vec::new();
-        render_message_digest(&mut out, messages, &[], &lane_scope, 0, status).unwrap();
+        render_message_digest(&mut out, messages, &[], &lane_scope, 0, 0, status).unwrap();
         String::from_utf8(out).unwrap()
     }
 
