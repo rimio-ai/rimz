@@ -194,7 +194,7 @@ Those stamps are what keep the write path O(1) over log history. A busy fleet ap
 
 Wakeups fire *before* the publish, deliberately. Consumers fold the log tail from their own cursor, so checkpoint cadence tunes cold-start latency and never gates freshness.
 
-Mutations that replace or cut the active log use a separate log-boundary primitive. It holds the workspace and publish locks in that order, retracts stale snapshot caches, then rebuilds them after an identity rewrite, rotation, or repair. Reset remains its own room forget/rebirth choreography because hard reset deliberately skips rebuild; carryover pruning rebuilds without invalidating the log's extent.
+Mutations that replace, cut, or forget the active log run one log-boundary primitive: it holds the workspace and publish locks in that order, retracts the published view, then applies the cache policy the mutation reports — reseed the rollup (identity rewrite, rotation, a soft reset that archived the log), drop it (repair), keep it (a soft reset of an empty log), or forget it (hard reset, which never rebuilds) — and rebuilds otherwise. Carryover pruning rebuilds without invalidating the log's extent.
 
 ### Write classes
 
