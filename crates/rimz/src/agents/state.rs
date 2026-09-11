@@ -1072,7 +1072,7 @@ impl AgentState {
     /// One-line activity label for CLI and sidebar rows: a rich session name
     /// that does not merely prefix the prompt, rich session preview, launch
     /// description, live task, first prompt, then latest prompt.
-    pub fn activity_description(&self) -> Option<&str> {
+    pub(crate) fn activity_description(&self) -> Option<&str> {
         select_activity_description(
             self.context.as_ref(),
             self.description.as_deref(),
@@ -1082,7 +1082,7 @@ impl AgentState {
         )
     }
 
-    /// [`Self::activity_description`] collapsed to a single presentable line —
+    /// `Self::activity_description` collapsed to a single presentable line —
     /// the form every row-oriented surface (CLI tables, key/value reports) renders.
     pub fn activity_line(&self) -> Option<String> {
         self.activity_description()
