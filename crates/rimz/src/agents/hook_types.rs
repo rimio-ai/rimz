@@ -115,7 +115,8 @@ impl HookOutput {
         }
     }
 
-    pub const fn ask_kind(&self) -> Option<AskKind> {
+    #[cfg(test)]
+    pub(super) const fn ask_kind(&self) -> Option<AskKind> {
         match self.event.meaning {
             CanonicalHookMeaning::Ask(kind) => Some(kind),
             CanonicalHookMeaning::Lifecycle | CanonicalHookMeaning::Unknown => None,
@@ -222,7 +223,8 @@ impl HookOutput {
         &self.reply
     }
 
-    pub fn json_reply(&self) -> Option<&Value> {
+    #[cfg(test)]
+    pub(super) fn json_reply(&self) -> Option<&Value> {
         match &self.reply {
             HookReply::Silent => None,
             HookReply::Json(value) => Some(value),
@@ -309,6 +311,7 @@ impl HookOutput {
         );
     }
 
+    #[cfg(any(test, feature = "testkit"))]
     pub fn update_lifecycle(&mut self, update: impl FnOnce(&mut AgentLifecycleObservation)) {
         if let Some(observation) = self.event.facts.iter_mut().find_map(|fact| match fact {
             CanonicalHookFact::Lifecycle(observation) => Some(&mut **observation),

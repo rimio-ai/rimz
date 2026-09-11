@@ -75,6 +75,7 @@ impl ProviderAccountBinding {
     }
 
     #[doc(hidden)]
+    #[cfg(any(test, feature = "testkit"))]
     pub fn decode(value: &str) -> Option<Self> {
         serde_json::from_str(value)
             .ok()

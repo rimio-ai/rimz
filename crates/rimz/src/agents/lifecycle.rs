@@ -221,7 +221,8 @@ impl LifecycleSignal {
     }
 
     /// Data-less kind for matrix rows and definition conformance.
-    pub const fn kind(&self) -> LifecycleSignalKind {
+    #[cfg(test)]
+    pub(super) const fn kind(&self) -> LifecycleSignalKind {
         match self {
             Self::Registered => LifecycleSignalKind::Registered,
             Self::TurnStarted => LifecycleSignalKind::TurnStarted,

@@ -290,6 +290,7 @@ impl<T> FieldPatch<T> {
         matches!(self, Self::Keep)
     }
 
+    #[cfg(any(test, feature = "testkit"))]
     pub fn as_set(&self) -> Option<&T> {
         match self {
             Self::Set(value) => Some(value),
@@ -297,6 +298,7 @@ impl<T> FieldPatch<T> {
         }
     }
 
+    #[cfg(any(test, feature = "testkit"))]
     pub fn into_set(self) -> Option<T> {
         match self {
             Self::Set(value) => Some(value),
@@ -372,7 +374,8 @@ impl LocalContextPatch {
 }
 
 impl LocalTokenPatch {
-    pub fn as_value(&self) -> Option<&AgentTokenUsage> {
+    #[cfg(test)]
+    pub(super) fn as_value(&self) -> Option<&AgentTokenUsage> {
         match self {
             Self::PreserveEstablished(value) | Self::ReplaceCurrentPreservingSession(value) => {
                 value.as_ref()
@@ -381,7 +384,8 @@ impl LocalTokenPatch {
         }
     }
 
-    pub fn into_value(self) -> Option<AgentTokenUsage> {
+    #[cfg(test)]
+    pub(super) fn into_value(self) -> Option<AgentTokenUsage> {
         match self {
             Self::PreserveEstablished(value) | Self::ReplaceCurrentPreservingSession(value) => {
                 value
