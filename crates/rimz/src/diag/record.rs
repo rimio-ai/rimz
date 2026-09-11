@@ -642,7 +642,7 @@ impl DiagEvent {
         }
     }
 
-    pub fn kind_name(&self) -> &'static str {
+    pub(super) fn kind_name(&self) -> &'static str {
         match self {
             Self::FrameRejected { .. } => "frame_rejected",
             Self::ResolutionFallback { .. } => "resolution_fallback",
@@ -1660,7 +1660,7 @@ impl AnomalyKind {
     /// [`DiagEvent::identity_key`], which the sink rate limit and Doctor's
     /// incident fold both key on; detectors with whole-frame scope have no
     /// subject.
-    pub(crate) fn subject(&self) -> Option<Cow<'_, str>> {
+    fn subject(&self) -> Option<Cow<'_, str>> {
         match self {
             Self::RowPresenceFlap { row_id, .. }
             | Self::ShortLivedRow { row_id, .. }

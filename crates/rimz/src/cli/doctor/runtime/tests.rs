@@ -728,8 +728,7 @@ fn diagnostic_classification_covers_retained_and_reason_sensitive_events() {
         assert_eq!(
             classify_diagnostic(&event, event.severity()),
             (expected_state, expected_impact),
-            "{}",
-            event.kind_name()
+            "{event:?}"
         );
     }
 }
