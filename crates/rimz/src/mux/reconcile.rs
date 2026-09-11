@@ -35,22 +35,22 @@ pub struct SidebarLiveness {
 
 /// One view's sidebar panes in mux order and whether the view contains work or
 /// managed daemon hosts. A view with neither is an orphan sidebar-only view.
-pub(crate) struct ViewSidebars {
-    pub view: String,
-    pub sidebar_panes: Vec<PaneId>,
-    pub has_working: bool,
-    pub has_daemon_host: bool,
+pub(super) struct ViewSidebars {
+    pub(super) view: String,
+    pub(super) sidebar_panes: Vec<PaneId>,
+    has_working: bool,
+    has_daemon_host: bool,
 }
 
 /// Backend-neutral structural pane used to group native listings for repair.
-pub(crate) struct ReconcilePane {
-    pub view: String,
-    pub pane_id: PaneId,
-    pub role: ReconcilePaneRole,
+pub(super) struct ReconcilePane {
+    pub(super) view: String,
+    pub(super) pane_id: PaneId,
+    pub(super) role: ReconcilePaneRole,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ReconcilePaneRole {
+pub(super) enum ReconcilePaneRole {
     Sidebar,
     Working,
     DaemonHost,
@@ -70,7 +70,7 @@ impl ReconcilePaneRole {
 
 /// Group participating panes by stable first-seen view order while preserving
 /// native sidebar order within each view.
-pub(crate) fn group_reconcile_panes(
+pub(super) fn group_reconcile_panes(
     panes: impl IntoIterator<Item = ReconcilePane>,
 ) -> Vec<ViewSidebars> {
     let mut views = Vec::new();
@@ -97,7 +97,7 @@ pub(crate) fn group_reconcile_panes(
 /// One serialized repair transaction. Replacement keeps existing panes alive
 /// until a new pane mounts in the intended view and publishes a heartbeat.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ViewVerdict {
+enum ViewVerdict {
     CloseDuplicates { view: String, close: Vec<PaneId> },
     Add { view: String },
     Replace { view: String, close: Vec<PaneId> },
@@ -105,7 +105,7 @@ pub(crate) enum ViewVerdict {
 
 /// Result of a backend's native add and verification effect.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ReconcileAddOutcome {
+pub(super) enum ReconcileAddOutcome {
     Verified,
     VerifiedMisdocked,
     Deferred,
@@ -113,13 +113,13 @@ pub(crate) enum ReconcileAddOutcome {
 
 /// First failed transaction, retained for backend-specific warning policy.
 #[derive(Debug)]
-pub(crate) struct ReconcileFailure {
-    pub(crate) view: String,
-    pub(crate) error: crate::mux::MuxErr,
+pub(super) struct ReconcileFailure {
+    pub(super) view: String,
+    pub(super) error: crate::mux::MuxErr,
 }
 
 impl ViewVerdict {
-    pub(crate) fn view(&self) -> &str {
+    fn view(&self) -> &str {
         match self {
             Self::CloseDuplicates { view, .. }
             | Self::Add { view }
@@ -127,7 +127,7 @@ impl ViewVerdict {
         }
     }
 
-    pub(crate) fn closes(&self) -> &[PaneId] {
+    fn closes(&self) -> &[PaneId] {
         match self {
             Self::CloseDuplicates { close, .. } | Self::Replace { close, .. } => close,
             Self::Add { .. } => &[],
@@ -136,12 +136,12 @@ impl ViewVerdict {
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) struct ReconcilePlan {
-    pub verdicts: Vec<ViewVerdict>,
+pub(super) struct ReconcilePlan {
+    verdicts: Vec<ViewVerdict>,
 }
 
 impl ReconcilePlan {
-    pub(crate) fn close_panes(&self) -> Vec<PaneId> {
+    pub(super) fn close_panes(&self) -> Vec<PaneId> {
         self.verdicts
             .iter()
             .flat_map(ViewVerdict::closes)
@@ -149,7 +149,7 @@ impl ReconcilePlan {
             .collect()
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    pub(super) fn is_empty(&self) -> bool {
         self.verdicts.is_empty()
     }
 
@@ -157,13 +157,13 @@ impl ReconcilePlan {
         self.verdicts.len().saturating_sub(index)
     }
 
-    pub(crate) fn has_adds(&self) -> bool {
+    pub(super) fn has_adds(&self) -> bool {
         self.verdicts
             .iter()
             .any(|verdict| !matches!(verdict, ViewVerdict::CloseDuplicates { .. }))
     }
 
-    pub(crate) fn add_views(&self) -> HashSet<String> {
+    pub(super) fn add_views(&self) -> HashSet<String> {
         self.verdicts
             .iter()
             .filter_map(|verdict| match verdict {
@@ -177,7 +177,7 @@ impl ReconcilePlan {
 /// Execute view transactions in planner order. `defer_adds` pre-counts every
 /// add transaction before execution so a later close failure preserves the
 /// detached-Zellij accounting contract while leaving those views untouched.
-pub(crate) fn execute_reconcile_plan<Add, Close>(
+pub(super) fn execute_reconcile_plan<Add, Close>(
     plan: ReconcilePlan,
     report: &mut SidebarRecovery,
     defer_adds: bool,
@@ -301,7 +301,7 @@ fn reconcile_failure(
 /// An unlocated fresh heartbeat conservatively protects one physical pane per
 /// occupied view. A wholly unclaimed occupied view uses add-before-close;
 /// orphan sidebar-only views are close-only.
-pub(crate) fn plan_reconcile(views: &[ViewSidebars], live: &SidebarLiveness) -> ReconcilePlan {
+pub(super) fn plan_reconcile(views: &[ViewSidebars], live: &SidebarLiveness) -> ReconcilePlan {
     let mut plan = ReconcilePlan::default();
     for view in views {
         let occupied = view.has_working || view.has_daemon_host;

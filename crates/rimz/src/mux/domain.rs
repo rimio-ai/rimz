@@ -45,7 +45,7 @@ impl ProcessDomain {
 
     /// Resolve `pid`'s inherited process domain. An unreadable environment is
     /// unknown and returns `None`, allowing signal callers to spare it.
-    pub fn of_process(pid: u32) -> Option<Self> {
+    fn of_process(pid: u32) -> Option<Self> {
         let environment = crate::proc::environ(pid)?;
         Some(Self::from_env(
             |key| {
@@ -59,7 +59,7 @@ impl ProcessDomain {
     }
 
     /// Whether two processes share RimZ's persistent and runtime state world.
-    pub fn same_world(&self, other: &Self) -> bool {
+    fn same_world(&self, other: &Self) -> bool {
         self.state_home == other.state_home && self.runtime_home == other.runtime_home
     }
 
@@ -70,7 +70,7 @@ impl ProcessDomain {
     }
 
     /// Whether two processes share the state world and selected mux endpoint.
-    pub fn same_mux_endpoint(&self, other: &Self, mux: MuxName) -> bool {
+    fn same_mux_endpoint(&self, other: &Self, mux: MuxName) -> bool {
         self.same_world(other)
             && match mux {
                 MuxName::Zellij => self.zellij_socket_base == other.zellij_socket_base,

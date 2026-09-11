@@ -158,7 +158,7 @@ pub fn managed_cmd() -> CommandSpec {
 }
 
 /// Extract the server socket from tmux's `socket,pid,index` environment value.
-pub(crate) fn socket_path_from_tmux_var(value: &str) -> Option<PathBuf> {
+pub(super) fn socket_path_from_tmux_var(value: &str) -> Option<PathBuf> {
     let socket = value.split(',').next()?.trim();
     (!socket.is_empty()).then(|| PathBuf::from(socket))
 }
@@ -249,7 +249,7 @@ impl TmuxBackend {
     /// command — [`CommandSpec::env`] adds to the inherited environment, so a
     /// `rimz` invoked from inside some other tmux would otherwise leak that
     /// endpoint into commands meant for the managed one.
-    pub(super) fn cmd(&self) -> CommandSpec {
+    fn cmd(&self) -> CommandSpec {
         self.socket_dir.get_or_init(|| {
             if let Some(parent) = self.socket.parent() {
                 // Best-effort: tmux creates the socket but not its directory.
@@ -326,7 +326,7 @@ impl TmuxBackend {
     }
 
     /// Run several tmux commands in one client invocation.
-    pub(super) fn batch(&self, commands: &[Vec<String>]) -> Result<()> {
+    fn batch(&self, commands: &[Vec<String>]) -> Result<()> {
         if commands.is_empty() {
             return Ok(());
         }
