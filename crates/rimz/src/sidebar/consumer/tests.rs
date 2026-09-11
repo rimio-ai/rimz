@@ -304,7 +304,7 @@ fn cached_daemon_reap_drops_paneless_codex_ghost_before_worktree_pins() {
     atomic::write_temp_then_rename_cache(
         &crate::sidebar::refresh::daemon_reap::codex_daemon_reap_path(&runtime),
         &crate::sidebar::refresh::daemon_reap::CodexDaemonReap {
-            produced_at_ms: 1,
+            produced_at_ms: crate::utils::time::unix_now_ms(),
             daemon_pids: BTreeSet::from([owner_pid]),
             loaded: Some(BTreeSet::new()),
         },
@@ -338,6 +338,33 @@ fn cached_daemon_reap_drops_paneless_codex_ghost_before_worktree_pins() {
 }
 
 #[test]
+fn cached_daemon_reap_keeps_ghost_when_publication_is_stale() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let owner_pid = std::process::id();
+    atomic::write_temp_then_rename_cache(
+        &crate::sidebar::refresh::daemon_reap::codex_daemon_reap_path(&runtime),
+        &crate::sidebar::refresh::daemon_reap::CodexDaemonReap {
+            produced_at_ms: crate::utils::time::unix_now_ms()
+                - crate::sidebar::timing::CODEX_DAEMON_REAP_TTL.as_millis() as u64
+                - 1,
+            daemon_pids: BTreeSet::from([owner_pid]),
+            loaded: Some(BTreeSet::new()),
+        },
+    )
+    .unwrap();
+    let ghost = daemon_codex("ghost", dir.path(), None, owner_pid);
+    let snapshot = SidebarSnapshot::build_with_agents(workspace, vec![ghost], Timestamp::now());
+
+    let snapshot = reap_cached_daemon_sessions(snapshot, &runtime, "rimz-test");
+
+    assert_eq!(snapshot.agents.len(), 1);
+    assert_eq!(snapshot.agents[0].agent_id.as_str(), "ghost");
+}
+
+#[test]
 fn cached_daemon_reap_forwards_published_live_panes() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
@@ -349,7 +376,7 @@ fn cached_daemon_reap_forwards_published_live_panes() {
     atomic::write_temp_then_rename_cache(
         &crate::sidebar::refresh::daemon_reap::codex_daemon_reap_path(&runtime),
         &crate::sidebar::refresh::daemon_reap::CodexDaemonReap {
-            produced_at_ms: 1,
+            produced_at_ms: crate::utils::time::unix_now_ms(),
             daemon_pids: BTreeSet::from([77]),
             loaded: Some(BTreeSet::new()),
         },

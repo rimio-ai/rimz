@@ -1,9 +1,6 @@
 //! Codex daemon-mode session reap cache.
 //!
-//! The refresh lane probes daemon PIDs and Codex's loaded-thread list on a TTL
-//! when daemon-hooked sessions need reaping or the remote-control badge needs a
-//! health signal. The fold applies the published inputs without proc scans or
-//! app-server reads.
+//! The refresh lane probes daemon PIDs and Codex's loaded-thread list when daemon-hooked sessions need reaping or the remote-control badge needs a health signal. The TTL gates both producer re-probes and every reader's acceptance. The fold applies the published inputs without proc scans or app-server reads.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -36,15 +33,16 @@ fn write_codex_daemon_reap(
     crate::disk::atomic::write_temp_then_rename_cache(&codex_daemon_reap_path(runtime), cache)
 }
 
+/// Read the publication within the reap TTL of `now_ms`; absent, unreadable, or stale records return `None`, so readers keep every session and the producer re-probes. Saturating age treats a clock-ahead stamp as fresh, like `snapshot_cache_is_fresh`.
 pub(in crate::sidebar) fn read_codex_daemon_reap(
     runtime: &RuntimePaths,
+    now_ms: u64,
 ) -> Option<CodexDaemonReap> {
-    crate::disk::atomic::read_json_cache(&codex_daemon_reap_path(runtime))
-}
-
-fn daemon_reap_due(cache: &Option<CodexDaemonReap>, now_ms: u64) -> bool {
-    cache.as_ref().is_none_or(|cache| {
-        now_ms.saturating_sub(cache.produced_at_ms) > CODEX_DAEMON_REAP_TTL.as_millis() as u64
+    crate::disk::atomic::read_json_cache::<Option<CodexDaemonReap>>(&codex_daemon_reap_path(
+        runtime,
+    ))
+    .filter(|cache| {
+        now_ms.saturating_sub(cache.produced_at_ms) <= CODEX_DAEMON_REAP_TTL.as_millis() as u64
     })
 }
 
@@ -63,9 +61,8 @@ pub(super) fn refresh_codex_daemon_reap_cache(
     now_ms: u64,
     codex_rc_enabled: bool,
 ) {
-    let current = read_codex_daemon_reap(runtime);
     if !should_probe_codex_daemon_reap(agents, codex_rc_enabled)
-        || !daemon_reap_due(&current, now_ms)
+        || read_codex_daemon_reap(runtime, now_ms).is_some()
     {
         return;
     }
@@ -96,27 +93,26 @@ mod tests {
     use crate::{RuntimeOwner, RuntimeOwnerKind};
 
     #[test]
-    fn daemon_reap_due_tracks_cache_ttl() {
+    fn read_codex_daemon_reap_expires_past_ttl() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
         let ttl_ms = CODEX_DAEMON_REAP_TTL.as_millis() as u64;
-        let now_ms = ttl_ms * 2 + 10;
+        let produced_at_ms = ttl_ms * 2 + 10;
 
-        assert!(daemon_reap_due(&None, now_ms));
-        assert!(!daemon_reap_due(
-            &Some(CodexDaemonReap {
-                produced_at_ms: now_ms.saturating_sub(ttl_ms),
-                daemon_pids: BTreeSet::new(),
-                loaded: None,
-            }),
-            now_ms
-        ));
-        assert!(daemon_reap_due(
-            &Some(CodexDaemonReap {
-                produced_at_ms: now_ms.saturating_sub(ttl_ms).saturating_sub(1),
-                daemon_pids: BTreeSet::new(),
-                loaded: None,
-            }),
-            now_ms
-        ));
+        assert!(read_codex_daemon_reap(&runtime, produced_at_ms).is_none());
+        write_codex_daemon_reap(
+            &runtime,
+            &CodexDaemonReap {
+                produced_at_ms,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(read_codex_daemon_reap(&runtime, produced_at_ms + ttl_ms).is_some());
+        assert!(read_codex_daemon_reap(&runtime, produced_at_ms + ttl_ms + 1).is_none());
+        assert!(read_codex_daemon_reap(&runtime, produced_at_ms - 1).is_some());
     }
 
     #[test]
@@ -191,7 +187,7 @@ mod tests {
         );
 
         assert_ne!(
-            read_codex_daemon_reap(&runtime)
+            read_codex_daemon_reap(&runtime, crate::utils::time::unix_now_ms())
                 .expect("codex reap cache")
                 .produced_at_ms,
             1,

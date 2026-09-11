@@ -600,9 +600,8 @@ fn enrich_core(
     // proc or contact the app-server. The probe runs for any root daemon-hooked
     // session or while the Codex rc toggle needs its health signal, so
     // pane-stamped daemon ghosts and a session-less rc host both refresh it.
-    // Best-effort and fail-safe: no daemon process, absent cache, or an
-    // untrusted loaded list keeps every session.
-    let daemon_inputs = read_codex_daemon_reap(runtime);
+    // Best-effort and fail-safe: no daemon process, an absent or stale cache, or an untrusted loaded list keeps every session.
+    let daemon_inputs = read_codex_daemon_reap(runtime, crate::utils::time::unix_now_ms());
     // A managed pane keeps the joined argv as its title for its whole life, so
     // pane presence alone cannot see a host whose child stopped serving. The
     // provider's own record of the serving process settles it; a host with no
