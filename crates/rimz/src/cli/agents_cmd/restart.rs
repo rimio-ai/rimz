@@ -176,7 +176,9 @@ pub(in crate::cli) fn restart_resolved(
     )
     .context("focusing the agent pane for restart")
     {
-        mark_fresh_failed(store, workspace, fresh_identity, &cwd);
+        if let Some(batch) = &fresh_batch {
+            let _ = store.fail_agent_launch_batch(batch);
+        }
         return Err(err);
     }
     if let Err(err) = backend
@@ -192,7 +194,9 @@ pub(in crate::cli) fn restart_resolved(
         })
         .context("opening the replacement agent pane")
     {
-        mark_fresh_failed(store, workspace, fresh_identity, &cwd);
+        if let Some(batch) = &fresh_batch {
+            let _ = store.fail_agent_launch_batch(batch);
+        }
         return Err(err);
     }
     backend
@@ -330,18 +334,6 @@ fn append_fresh_launch(
     )?;
     batch.single_identity()?;
     Ok(batch)
-}
-
-fn mark_fresh_failed(
-    store: &rimz::Store,
-    workspace: &rimz::ResolvedWorkspace,
-    identity: Option<&LaunchIdentity>,
-    cwd: &Path,
-) {
-    let Some(identity) = identity else {
-        return;
-    };
-    let _ = store.fail_agent_launch(identity, &workspace.session_name, cwd);
 }
 
 #[cfg(test)]
