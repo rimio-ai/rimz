@@ -1,7 +1,8 @@
 use super::*;
 use crate::agents::{PendingWake, PendingWakeTrigger};
+use crate::config::AnimationRole;
 use crate::sidebar_pane::render::labels::{
-    activity_age_style, elapsed_glyph, status_glyph, working_style,
+    activity_age_style, elapsed_glyph, role_glyph, working_style,
 };
 use crate::sidebar_pane::render::theme::Component;
 
@@ -115,7 +116,7 @@ fn pending_wakes_line_counts_armed_wakes() {
     assert!(expanded[stats + 3].contains("◷ in 12m"));
     assert!(expanded[stats + 4].contains(&format!(
         "{} make",
-        status_glyph(&theme, AgentStatus::Running)
+        role_glyph(&theme, AnimationRole::Working, 0)
     )));
     assert!(expanded[stats + 5].contains("make check"));
 
@@ -171,7 +172,7 @@ fn pending_wakes_line_counts_armed_wakes() {
         ),
         (
             4,
-            status_glyph(&theme, AgentStatus::Running),
+            role_glyph(&theme, AnimationRole::Working, 0),
             working_style(&theme, 0).add_modifier(Modifier::DIM),
         ),
         (
@@ -257,7 +258,7 @@ fn wait_entries_show_trigger_program_and_command() {
         (1, "⌁ on pr.merged · 2h left".to_owned(), 300, "5m"),
         (
             2,
-            format!("{} cargo", status_glyph(&theme, AgentStatus::Running)),
+            format!("{} cargo", role_glyph(&theme, AnimationRole::Working, 0)),
             240,
             "4m",
         ),
@@ -291,17 +292,25 @@ fn wait_entries_show_trigger_program_and_command() {
     assert_eq!(detail.style.fg, theme.muted().fg);
     assert_snapshot("wait_entries", snapshot_to_screen(&snapshot, 54, 23));
     let cost_rolls = CostRolls::default();
+    let mut leads = Vec::new();
     for phase in [0, 7] {
         let ctx = test_row_ctx(&snapshot, &theme, 54, 0, phase, &cost_rolls);
         let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
         let lead = block.lines[start + 2]
             .spans
             .iter()
-            .find(|span| span.content == status_glyph(&theme, AgentStatus::Running))
+            .find(|span| span.content == role_glyph(&theme, AnimationRole::Working, phase))
             .unwrap();
-        assert_eq!(lead.style.fg, working_style(&theme, 0).fg);
+        leads.push(lead.content.clone());
+        assert_eq!(lead.style.fg, working_style(&theme, phase).fg);
         assert!(lead.style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(block.lines[start], lines[start]);
+        assert_eq!(block.lines[start + 1], lines[start + 1]);
     }
+    assert_ne!(
+        leads[0], leads[1],
+        "command waits advance on the frame clock"
+    );
 
     let narrow = group_lines_at_width(&snapshot, &theme, 0, 24);
     let narrow_text = line_texts(&narrow);
@@ -339,7 +348,7 @@ fn wait_entries_show_trigger_program_and_command() {
         let wrapped = line_texts(&group_lines(&snapshot, &theme, 0));
         assert!(wrapped[start + 2].contains(&format!(
             "{} cargo",
-            status_glyph(&theme, AgentStatus::Running)
+            role_glyph(&theme, AnimationRole::Working, 0)
         )));
         assert!(wrapped[start + 3].contains(detail));
     }

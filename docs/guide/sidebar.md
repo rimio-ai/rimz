@@ -102,7 +102,7 @@ The stats line stays after older entries retire. Selecting a card reveals more d
 
 How much of the card shows at rest is yours to tune with `card_density` ([theme.md → Display](./theme.md#display)): `compact` trims resting cards, including the shared subagents and waits line, `expanded` shows subagent and wait entries everywhere. Narrow sidebars shorten the shared count line to `⧉ N · ⧖ M` so both counts and the cost fit.
 
-The **waits count** covers armed one-shot wakes: timers, watched commands, and one-shot signals. It shares the subagents line and disappears when none remain. It stays visible on standard cards while the agent works as well as while it sleeps. Selecting the card lists each wait beneath the subagent entries, so you can see what it is waiting for without opening another pane.
+The **waits count** covers armed one-shot wakes: timers, watched commands, and one-shot signals. It shares the subagents line and disappears when none remain. It stays visible on standard cards while the agent works as well as while it sleeps. Selecting the card lists each wait beneath the subagent entries, so you can see what it is waiting for without opening another pane. Watched commands show the same animated spinner as running work, even while the agent sleeps; timer and signal icons stay still.
 
 ## Process rows
 

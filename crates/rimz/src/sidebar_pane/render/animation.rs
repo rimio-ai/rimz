@@ -1,4 +1,4 @@
-use crate::agents::{ATTENTION_AGE_CEILING_SECS, AgentStatus};
+use crate::agents::{ATTENTION_AGE_CEILING_SECS, AgentStatus, PendingWakeTrigger};
 use crate::config::{
     AnimationColor, AnimationEffect, AnimationRole, AnimationSpec, AnimationSpeed, GlyphRole,
     ThemeAnimationsConfig, UnreadEffect,
@@ -48,7 +48,7 @@ pub(crate) enum AnimationCadence {
 
 /// Whether any visible row is in an animated state — a running agent (working
 /// or pre-edit thinking), an active process spinning on real work (a build, a
-/// test, a `sudo` install), a row whose resolved status
+/// test, a `sudo` install), a pending command wait, a row whose resolved status
 /// head moves, or the single lead unread `?`/`!` row whose configured effect
 /// flows. The serve loop uses this to choose the fast frame grid, the breath
 /// grid, or the slow data tick. A fully settled sidebar — quiet read idle/done
@@ -71,8 +71,14 @@ pub(crate) fn animation_cadence(
         .iter()
         .flat_map(|group| &group.rows)
     {
-        if row.is_agent() {
-            if row.status() == Some(AgentStatus::Running) {
+        if let Some(agent) = row.as_agent() {
+            if agent.status == AgentStatus::Running
+                || (animations.role(AnimationRole::Working).has_motion()
+                    && agent
+                        .pending_wakes
+                        .iter()
+                        .any(|wake| matches!(wake.trigger, PendingWakeTrigger::Command { .. })))
+            {
                 return AnimationCadence::Fast;
             }
             // The status head asks for the breath grid only when its resolved

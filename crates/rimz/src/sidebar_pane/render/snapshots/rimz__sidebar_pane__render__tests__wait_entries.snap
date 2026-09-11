@@ -17,7 +17,7 @@ expression: screen
 ▌  ⧖ waits (3)                                       ▐
 ▌    ◷ in 12m                                   ◑ <t>▐
 ▌    ⌁ on pr.merged · 2h left                   ◔  5m▐
-▌    ⢿ cargo                                    ◔  4m▐
+▌    ⣾ cargo                                    ◔  4m▐
 ▌      cargo xtask gate --name foo_test              ▐
 
  ────────────────────────────────────────────────────
