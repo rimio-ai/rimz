@@ -76,6 +76,8 @@ A record is keyed on a **card**, the logical agent identity the rollup tracks: a
 | `last_error` | the most recent delivery or reconciliation failure |
 | `enqueued_at`, `updated_at`, `delivered_at` | timestamps |
 
+`MessageSender::is_conversation()` divides senders into conversation traffic (`Human` and `Agent`) and system traffic (`Harness`, legacy `Subagent`, and `System`). The split depends only on the sender variant, not `automated`; nudges, compaction commands, and deliberately unattributed `--no-from` text are system traffic. This is a read-side filter for conversation surfaces, not a change to durable records or delivery.
+
 Two counters, two caps, two meanings. `attempts` counts claims that failed before any byte was written and caps at `MAX_DELIVERY_ATTEMPTS` (5). For prompts, `unconfirmed_sends` counts writes that landed and were never acknowledged and caps at `RIMZ_MESSAGE_MAX_DELIVERY_ATTEMPTS` (3). A claim bumps only the first; a stale-`Sent` prompt requeue bumps only the second. Commands do not use the unconfirmed-send cap because they are never resent after reaching a pane.
 
 ## Status lifecycle
@@ -308,7 +310,7 @@ Content:
 
 The agent handle is the shortest unique selector over addressable agents: role when unique in scope, then explicit launch name, then profile when unique, else kind, else kind ordinal, else pet name. A session rebirth's co-resident audit row is not addressable, so it never pushes the live pane owner's handle down this ladder. System records and `--no-from` sends stay verbatim.
 
-The receiver's turn-start hook parses the header once. `AGENT_MESSAGE` becomes a first-class `Message` transcript entry, `SUBAGENT_REPORT` becomes a `SubagentReport` entry, and `WAKE` or `SIGNAL` becomes a `Wake` entry; these carry structured `from`. Human transcript rendering hides `SubagentReport` and `Wake`, while `rimz transcript --json` includes both. `USER_MESSAGE` becomes a `Prompt` entry with the header removed and no `from`. When the agent has an open question, the first direct human `Prompt` segment instead becomes its id-stamped `Answer`; an attributed queue record never answers it. The queue record supplies the confirmed message id and parentage stamped onto that entry, while the parsed body stays the transcript content.
+The receiver's turn-start hook parses the header once. `AGENT_MESSAGE` becomes a first-class `Message` transcript entry, `SUBAGENT_REPORT` becomes a `SubagentReport` entry, and `WAKE` or `SIGNAL` becomes a `Wake` entry; these carry structured `from`. Human transcript rendering hides `SubagentReport`, `Wake`, and `Prompt` entries with `from: "rimz"`, while `rimz transcript --json` retains them. `TranscriptEntry::is_harness()` owns this predicate, shared with conversation counts; `HARNESS_FROM` names the `rimz` sender used for confirmed headerless system prompts. `USER_MESSAGE` becomes a `Prompt` entry with the header removed and no `from`. When the agent has an open question, the first direct human `Prompt` segment instead becomes its id-stamped `Answer`; an attributed queue record never answers it. The queue record supplies the confirmed message id and parentage stamped onto that entry, while the parsed body stays the transcript content.
 
 ## Smart compaction
 
@@ -421,7 +423,7 @@ Hook and delivery paths append to fixed 7-day buckets at `transcript/<bucket-sta
 
 | Kind | Records | Reads back as |
 | --- | --- | --- |
-| `Prompt` | a human prompt when no question is open | `user: @receiver, text` |
+| `Prompt` | a human prompt when no question is open, or a confirmed system prompt with `from: "rimz"` | `user: @receiver, text` for human prompts; system prompts hidden from human rendering, retained by `--json` |
 | `Message` | an inter-agent delivery, or a launched child's run-matched launch brief, with structured `from` | `@sender: @receiver, text` |
 | `SubagentReport` | the status-only launched-child fleet digest, with `from: @rimz` | hidden from human rendering; included by `--json` |
 | `Assistant` | a root turn's final assistant message | `@receiver: text` |
@@ -503,11 +505,11 @@ The payload carries `message_id`, `address`, `kind`, `agent_id`, `agent_name`, `
 
 Flags and rendering are [cli/message.md](../../reference/cli/message.md). What they do underneath:
 
-- `message list` / `message show` merge the three sources above. The rendered handle comes from the record's enqueue-time `address` first, then the live snapshot, then `agent_name` plus channel, then `kind:agent_id`. `show` renders the ordered delivery check, so it names the *first* unmet condition rather than a list of everything.
+- `message list` / `message show` merge the three sources above. `list` keeps only conversation records unless `--system` is passed, independently of `--all`, lane, status, or target selection; JSON follows the same filter. Human output reports a hidden-system count only when nonzero, including when no visible rows remain; the count is scoped before the row limit, and JSON omits it. `show` still reads every sender class. The rendered handle comes from the record's enqueue-time `address` first, then the live snapshot, then `agent_name` plus channel, then `kind:agent_id`. `show` renders the ordered delivery check, so it names the *first* unmet condition rather than a list of everything.
 - `message edit` is the single compare-and-swap path for a queued record. It accepts only `Queued`, refuses `Claimed` as in-flight, reports terminal records from history, applies the delivery deltas, clears `retry_after` so the next sweep sees the change, and appends `message.edited` naming the changed fields. Receiver identity, channel, card, sender, and pane affinity stay outside edit: retargeting is cancel plus send.
 - `message steer` pushes a queued record through now, bypassing schedule, FIFO, and gate.
 - `message requeue` copies a terminal history record into a fresh `Queued` record with a new id, preserving text, receiver, channel, sender, body, delivery settings, and `in_reply_to`, while clearing condition stamps. Event-only terminal rows cannot requeue, because their text was never in the event log.
-- `message cancel` settles named live records; `message clear <target>` settles every open record for one card, and targetless `message clear` settles the scoped lane.
+- `message cancel` settles named live records; `message clear <target>` settles every open record for one card, and targetless `message clear` settles the scoped lane. Both include system records hidden from the inbox; `clear` prints the ids it canceled.
 
 Two hidden helpers are the pipeline's arms, spawned detached with nulled stdio: `message deliver --message-id <id>` and `message sweep`.
 
