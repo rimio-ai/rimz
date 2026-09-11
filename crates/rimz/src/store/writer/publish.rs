@@ -99,25 +99,9 @@ pub(super) fn retract_publish_stamp(paths: &StatePaths) {
 }
 
 impl Store {
-    /// The off-lock tail every high-cadence mutator runs: the debounced group
-    /// fdatasync, then the checkpoint publish when [`publish_due`] says the
-    /// stamp aged out, the unpublished tail crossed the byte budget, or the
-    /// log was swapped.
-    pub(super) fn publish_snapshot_best_effort(&self) {
-        self.publish_tail(false);
-    }
-
-    /// [`Self::publish_snapshot_best_effort`] without the cadence gate, for
-    /// mutators that run rarely and whose callers read the checkpoint right
-    /// after.
-    pub(super) fn publish_snapshot_forced(&self) {
-        self.publish_tail(true);
-    }
-
-    /// The one off-lock tail body behind both publish entry points: the
-    /// debounced group fdatasync always runs; `force` decides whether the
-    /// checkpoint skips the cadence gate.
-    fn publish_tail(&self, force: bool) {
+    /// The off-lock tail: debounced group fdatasync, then the checkpoint when due.
+    /// `force` skips the cadence gate, never the sync.
+    pub(super) fn publish_tail(&self, force: bool) {
         sync_log_debounced(&self.inner.paths);
         if force || publish_due(&self.inner.paths) {
             self.publish_snapshot_now();

@@ -127,26 +127,26 @@ pub struct ResetRecordsOutcome {
     pub hard: bool,
 }
 
-pub(super) struct Txn<'a> {
-    pub(super) paths: &'a StatePaths,
+struct Txn<'a> {
+    paths: &'a StatePaths,
     events: Vec<EventEnvelope>,
     force_publish: bool,
 }
 
 impl Txn<'_> {
-    pub(super) fn append(&mut self, event: &EventEnvelope) -> Result<()> {
+    fn append(&mut self, event: &EventEnvelope) -> Result<()> {
         event_log::append(&self.paths.events_log, event)?;
         self.events.push(event.clone());
         Ok(())
     }
 
-    pub(super) fn append_batch(&mut self, events: &[EventEnvelope]) -> Result<()> {
+    fn append_batch(&mut self, events: &[EventEnvelope]) -> Result<()> {
         event_log::append_batch(&self.paths.events_log, events)?;
         self.events.extend_from_slice(events);
         Ok(())
     }
 
-    pub(super) fn force_publish(&mut self) {
+    fn force_publish(&mut self) {
         self.force_publish = true;
     }
 }
@@ -221,16 +221,8 @@ impl Store {
         for event in &txn.events {
             self.wake_sidebars_for_event_best_effort(event);
         }
-        let ran_publish_tail = if txn.force_publish {
-            self.publish_snapshot_forced();
-            true
-        } else if !txn.events.is_empty() {
-            self.publish_snapshot_best_effort();
-            true
-        } else {
-            false
-        };
-        if ran_publish_tail {
+        if txn.force_publish || !txn.events.is_empty() {
+            self.publish_tail(txn.force_publish);
             self.reap_dead_sessions_if_due();
         }
         Ok(out)
@@ -332,10 +324,7 @@ impl Store {
     /// Append a freestanding event.
     #[must_use = "durability barrier; check the result"]
     pub fn append_event(&self, event: &EventEnvelope) -> Result<()> {
-        self.commit(|txn| {
-            txn.append(event)?;
-            Ok(())
-        })
+        self.commit(|txn| txn.append(event))
     }
 
     /// Allocate final agent card identities from the durable agent fold and
