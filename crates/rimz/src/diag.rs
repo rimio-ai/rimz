@@ -47,6 +47,12 @@ struct Inner {
     limiter: Mutex<Limiter>,
 }
 
+#[derive(Clone, Copy)]
+enum Admission {
+    Identity,
+    KindOnly,
+}
+
 #[derive(Clone, Debug)]
 struct Limiter {
     window: Duration,
@@ -196,29 +202,34 @@ impl DiagSink {
     }
 
     pub(crate) fn emit_at_ms(&self, event: DiagEvent, at_ms: u64) {
-        let Some(inner) = self.inner.as_ref() else {
-            return;
-        };
-        let Some(suppressed_since_last) = inner.suppression(&event, at_ms) else {
-            return;
-        };
-        inner.append(event, at_ms, suppressed_since_last);
+        self.emit_admitted(event, at_ms, Admission::Identity);
     }
 
     pub fn emit_unlimited(&self, event: DiagEvent) {
+        self.emit_admitted(
+            event,
+            crate::utils::time::unix_now_ms(),
+            Admission::KindOnly,
+        );
+    }
+
+    fn emit_admitted(&self, event: DiagEvent, at_ms: u64, admission: Admission) {
         let Some(inner) = self.inner.as_ref() else {
             return;
         };
-        let at_ms = crate::utils::time::unix_now_ms();
         let kind = event.kind_name();
         let Ok(mut limiter) = inner.limiter.lock() else {
             inner.append(event, at_ms, 0);
             return;
         };
-        let Some(suppressed_since_last) = limiter.allow_kind_only(kind, at_ms) else {
-            return;
+        let admitted = match admission {
+            Admission::Identity => limiter.allow(&event.identity_key(), kind, at_ms),
+            Admission::KindOnly => limiter.allow_kind_only(kind, at_ms),
         };
         drop(limiter);
+        let Some(suppressed_since_last) = admitted else {
+            return;
+        };
         inner.append(event, at_ms, suppressed_since_last);
     }
 
@@ -292,15 +303,6 @@ impl Inner {
         );
         envelope.suppressed_since_last = suppressed_since_last;
         crate::disk::rotating::append(&self.log_path(), DIAG_LOG_MAX_BYTES, &envelope);
-    }
-
-    fn suppression(&self, event: &DiagEvent, at_ms: u64) -> Option<u32> {
-        let key = event.identity_key();
-        let kind = event.kind_name();
-        let Ok(mut limiter) = self.limiter.lock() else {
-            return Some(0);
-        };
-        limiter.allow(&key, kind, at_ms)
     }
 }
 
