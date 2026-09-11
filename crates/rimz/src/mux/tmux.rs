@@ -230,10 +230,6 @@ impl Default for TmuxBackend {
 }
 
 impl TmuxBackend {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn with_socket(socket: impl Into<PathBuf>) -> Self {
         Self {
             socket: socket.into(),

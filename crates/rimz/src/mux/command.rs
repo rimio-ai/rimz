@@ -125,7 +125,7 @@ impl CommandSpec {
 
     /// Run the command with raw exit status and captured output. Use this only
     /// where the caller deliberately accepts an unbounded process. Anything
-    /// that can wedge on a server should use [`Self::output_raw_with_timeout`].
+    /// that can wedge on a server should use `Self::output_raw_with_timeout`.
     pub fn output_raw(&self) -> Result<Output> {
         self.to_command()
             .output()
@@ -133,9 +133,18 @@ impl CommandSpec {
     }
 
     /// Run the command with raw exit status and captured output, bounded by
-    /// `timeout`. Callers inspect nonzero status themselves.
-    pub fn output_raw_with_timeout(&self, timeout: Duration) -> Result<Output> {
-        self.run_bounded(timeout)
+    /// `timeout`. Callers inspect nonzero status themselves. The child's
+    /// stdout/stderr are drained on threads so a full pipe never deadlocks the
+    /// wait, and the wait itself is event-driven: a waiter thread blocks in
+    /// `wait()` and posts the exit status over a channel, so the common (fast)
+    /// path wakes the instant the child exits — no poll step, no added latency.
+    /// On the deadline the child is SIGKILLed by pid, the waiter's `wait()`
+    /// reaps it, and a [`MuxErr::Timeout`] is returned.
+    pub(crate) fn output_raw_with_timeout(&self, timeout: Duration) -> Result<Output> {
+        let started = Instant::now();
+        let result = self.run_bounded_inner(timeout);
+        crate::lane::add_mux_wait_ms(duration_ms(started.elapsed()));
+        result
     }
 
     /// Run the command to completion and capture its output, bounded by
@@ -156,7 +165,7 @@ impl CommandSpec {
     /// a dead server) is killed in a few seconds rather than stalling the launch
     /// for the full `COMMAND_TIMEOUT`.
     pub fn run_with_timeout(&self, timeout: Duration) -> Result<Output> {
-        let output = self.run_bounded(timeout)?;
+        let output = self.output_raw_with_timeout(timeout)?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             tracing::debug!(
@@ -172,20 +181,6 @@ impl CommandSpec {
             });
         }
         Ok(output)
-    }
-
-    /// Spawn the child and wait at most `timeout` for it. Its stdout/stderr are
-    /// drained on threads so a full pipe never deadlocks the wait, and the wait
-    /// itself is event-driven: a waiter thread blocks in `wait()` and posts the
-    /// exit status over a channel, so the common (fast) path wakes the instant
-    /// the child exits — no poll step, no added latency. On the deadline the
-    /// child is SIGKILLed by pid, the waiter's `wait()` reaps it, and a
-    /// [`MuxErr::Timeout`] is returned.
-    fn run_bounded(&self, timeout: Duration) -> Result<Output> {
-        let started = Instant::now();
-        let result = self.run_bounded_inner(timeout);
-        crate::lane::add_mux_wait_ms(duration_ms(started.elapsed()));
-        result
     }
 
     fn run_bounded_inner(&self, timeout: Duration) -> Result<Output> {

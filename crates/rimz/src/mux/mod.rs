@@ -1050,7 +1050,7 @@ pub trait MuxBackend: Send + Sync {
 pub fn backend_for(mux: MuxName) -> Box<dyn MuxBackend> {
     match mux {
         MuxName::Zellij => Box::new(ZellijBackend::default()),
-        MuxName::Tmux => Box::new(TmuxBackend::new()),
+        MuxName::Tmux => Box::new(TmuxBackend::default()),
     }
 }
 
