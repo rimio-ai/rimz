@@ -13,10 +13,11 @@ use super::chrome::{
     FooterParts, alert_lines, footer_lines, footer_parts, gate_notice_lines, hairline_rule,
     repo_header_lines, truth_notice_lines,
 };
+use super::layout::pad_line_to;
 use super::sections::{
     CockpitBadges, DashboardContext, RowCtx, Tier, WorktreeRenderContext, cockpit_spend_line,
     cockpit_summary_line, content_width, dashboard_block, fleet_header_lines, fleet_size,
-    fleet_store_lines, fleet_total_lines, open_pr_total, open_pr_worst_ci, trim_spans_to_width,
+    fleet_store_lines, fleet_total_lines, open_pr_total, open_pr_worst_ci,
     worktree_group_lines_projected,
 };
 use super::theme::Theme;
@@ -365,8 +366,7 @@ pub(super) fn build_bottom_chrome(
     if plan.truth_notice
         && let Some(notice) = snapshot.truth_degraded.as_ref()
     {
-        append_inert_lines(
-            &mut bottom,
+        bottom.extend_inert(
             truth_notice_lines(theme, notice, snapshot.now)
                 .into_iter()
                 .map(pad_chrome),
@@ -375,10 +375,7 @@ pub(super) fn build_bottom_chrome(
     if plan.gate_notice
         && let Some(notice) = ui.gate_notice.as_ref()
     {
-        append_inert_lines(
-            &mut bottom,
-            gate_notice_lines(theme, notice).into_iter().map(pad_chrome),
-        );
+        bottom.extend_inert(gate_notice_lines(theme, notice).into_iter().map(pad_chrome));
     }
     if plan.footer {
         let footer = footer_lines(snapshot, theme, inner);
@@ -390,14 +387,13 @@ pub(super) fn build_bottom_chrome(
             if !bottom.lines.is_empty() {
                 bottom.push_inert(Line::from(""));
             }
-            append_inert_lines(&mut bottom, footer.into_iter().map(pad_chrome));
+            bottom.extend_inert(footer.into_iter().map(pad_chrome));
         }
     }
     if plan.alert
         && let Some(alert) = alert
     {
-        append_inert_lines(
-            &mut bottom,
+        bottom.extend_inert(
             alert_lines(theme, alert, snapshot.now)
                 .into_iter()
                 .map(pad_chrome),
@@ -460,13 +456,9 @@ fn bottom_corner_chrome(
         if !dashboard_present {
             block.push_inert(pad_chrome(hairline_rule(theme, inner)));
         }
-        append_inert_lines(&mut block, lines.into_iter().map(pad_chrome));
+        block.extend_inert(lines.into_iter().map(pad_chrome));
     }
     block
-}
-
-fn append_inert_lines(block: &mut RenderedBlock, lines: impl IntoIterator<Item = Line<'static>>) {
-    block.extend_inert(lines);
 }
 
 /// One draw's lines, typed interactions, and resolved zone positions.
@@ -628,11 +620,7 @@ pub(super) fn with_scrollbar(
 ) -> Line<'static> {
     let (thumb_start, thumb_len) = scroll_thumb(offset, scroll_len, viewport);
     let rail_column = cells.saturating_sub(1);
-    line.spans = trim_spans_to_width(line.spans, rail_column);
-    let pad = rail_column.saturating_sub(line.width());
-    if pad > 0 {
-        line.spans.push(Span::raw(" ".repeat(pad)));
-    }
+    line = pad_line_to(line, rail_column);
     let in_thumb = (thumb_start..thumb_start + thumb_len).contains(&row);
     line.spans.push(if in_thumb {
         Span::styled(labels::scroll_thumb_glyph(theme), theme.muted())
