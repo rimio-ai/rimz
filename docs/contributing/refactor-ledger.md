@@ -31,7 +31,7 @@ Ordered. A seam pass at the head is proposed before any module pass. Status is `
 | 7 | `store` → `harness` upward dependencies (signal vocabulary, petname, prompt alignment, run schema, run wake sender): close the direction | pass-6 admission intent `store → harness::schedule::signal` close: later seam; survey at `97a947974`: 17 sites into harness (run 6, signal 5, petname 4, run_wake 1, target 1), cycle harness ↔ store 47/17 cross-layer | landed pass-7 |
 | 8 | `store` → `remote::link` and `store` → `disk_usage` remaining non-diag upward dependencies and the four small upward edges: `harness` → `sidebar::refresh::pr`, `osc` → `config`/`mux`, `diag` → `sidebar::presence`, `build_id` → `proc` | survey at `6d13498b3`: store upward sites 6 = diag 4, disk_usage 1, remote::link 1; worktree → disk_usage 1 | landed pass-8 |
 | 9 | `message` → `harness::target` agent-address grammar, renderer, pane binding and launch lineage | pass-13 admission: 17 production sites; canonical addressing now lives in L4 `address` | landed pass-14 |
-| 10 | `diag` re-layer to L3 below `store` (`LinkTier` moves down with it), closing the `store ↔ diag::record` cycle from the diag side | pass-15a: store → diag 4 sites, store → diag::record 3; a store-side close measured +65 SLOC | queued (contradicts the pass-8 target; needs the user's reopen) |
+| 10 | `diag` re-layer to L3 below `store` (`LinkTier` moves down with it), closing the `store ↔ diag::record` cycle from the diag side | pass-15a: store → diag 4 sites, store → diag::record 3; a store-side close measured +65 SLOC | in flight diag-relayer |
 
 The queue closed after pass 8; pass 13 reopened it for seam 9, which landed in pass 14. Pass 15a reopens the queue for seam 10 as a finding contradicting pass 8, not an approved re-layer.
 
@@ -82,9 +82,15 @@ Pass 5 measures against `f43250479`. Admission rows retain their baseline counts
 
 The extension puts OSC notification policy at L5 over config and mux capabilities, plugin-command failure vocabulary beside its diagnostic sample, and executable-path resolution solely in `proc`. `forge::pr_state` owns PR-state records and their reader; the sidebar retains forge probes, publication, and account-cache fusion. The generic default-on-unreadable cache read joins cache publication in `disk::atomic`. The two harness account-cache writers stay until their lift beside `agents::account`'s reader; the store/diag cycle closes from the store side, not by lowering diagnostics.
 
+Superseded in part by the pass 16 target: `LinkTier` lives in `ids` and `diag` sits at L3 below `store`; the store/diag cycle closed from the diag side.
+
 ### Pass 9 target
 
 Codex and Claude expose only registry adapters, delegated OAuth usage, and the Codex broker entrypoint; provider interiors and test helpers stay inside their adapter. One framed child transport and initialize handshake serve Codex enrichment and the warm broker, while broker caching, credential-stamp respawn, retry policy and request budgets remain local. One app-server observation owns account projection and refresh throttling. Both providers return neutral runtime-control outcomes directly. Claude derives parking from its typed Stop payload, uses the shared current-usage schema, and shares its priced-record gate; Codex keeps spend wire types beside their parser. Wire shapes, validation, persistence, and provider-specific discovery remain unchanged.
+
+### Pass 16 target
+
+`diag` is evidence vocabulary and append mechanics over `disk`, `ids`, and process facts; it sits at L3 below `store`, which constructs diagnostics downward and never reads one back. `LinkTier` lives at L1 in `ids` beside the other shared classification enums; store records, diagnostics, remote classification and sidebar notification policy import it directly. The store has no upward admission left. Inside diagnostics, one sink admission point owns disabled, limiter and poison handling, and the shared rotating reader owns generation traversal; the wire schema and per-surface logs remain local.
 
 ## Module verdicts
 

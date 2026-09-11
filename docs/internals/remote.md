@@ -307,7 +307,7 @@ The supervisor replaces the session only when all three conditions hold: the ses
 
 The module keeps a stepped scale for alerting and a continuous one for the badge, and mixing them up is an easy bug.
 
-`LinkTier` is the stepped one; the type lives beside the snapshot's `SidebarLinkHealth` record in `store::snapshot`. The `remote::link::link_tier` classifier owns the thresholds, taking the worse of the two axes:
+`LinkTier` is the stepped one; the type lives in `ids` beside the other shared classification enums; the snapshot's `SidebarLinkHealth` record embeds it. The `remote::link::link_tier` classifier owns the thresholds, taking the worse of the two axes:
 
 | Axis | Good | Degraded | Bad |
 | --- | --- | --- | --- |
