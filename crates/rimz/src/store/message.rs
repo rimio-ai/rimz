@@ -76,6 +76,11 @@ impl HarnessNotice {
 }
 
 impl MessageSender {
+    /// Conversation traffic: human sends and attributed agent sends, not harness or system text.
+    pub fn is_conversation(&self) -> bool {
+        matches!(self, Self::Human | Self::Agent { .. })
+    }
+
     pub fn render(&self) -> String {
         match self {
             Self::Human => "you".to_owned(),
