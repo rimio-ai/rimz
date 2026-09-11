@@ -106,10 +106,10 @@ fn daemon_view_spec_orders_the_ungated_broker_then_claude() {
 
     assert!(
         spec(
-            RuntimeControlReadiness::Uninstalled(RuntimeControlIssue::from_parts(
+            RuntimeControlReadiness::Uninstalled(RuntimeControlIssue::new(
                 "claude",
                 "uninstalled",
-                "Claude is not installed",
+                &"Claude is not installed",
             )),
             false,
         )

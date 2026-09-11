@@ -31,26 +31,26 @@ fn snapshot_returns_each_host_state_and_ready_claude_argv() {
 #[test]
 fn start_gate_skips_uninstalled_hosts_and_keeps_hard_refusals() {
     let skipped = ReadinessSnapshot::from_states(
-        RuntimeControlReadiness::Uninstalled(RuntimeControlIssue::from_parts(
+        RuntimeControlReadiness::Uninstalled(RuntimeControlIssue::new(
             "claude",
             "uninstalled",
-            "Claude is not installed",
+            &"Claude is not installed",
         )),
-        RuntimeControlReadiness::Uninstalled(RuntimeControlIssue::from_parts(
+        RuntimeControlReadiness::Uninstalled(RuntimeControlIssue::new(
             "codex",
             "standalone_missing",
-            "Codex standalone is missing",
+            &"Codex standalone is missing",
         )),
     );
     assert_eq!(skipped.start_gate(), Ok(()));
 
-    let issue = RuntimeControlIssue::from_parts("claude", "blocked", "Claude is too old");
+    let issue = RuntimeControlIssue::new("claude", "blocked", &"Claude is too old");
     let blocked = ReadinessSnapshot::from_states(
         RuntimeControlReadiness::Blocked(issue.clone()),
-        RuntimeControlReadiness::Uninstalled(RuntimeControlIssue::from_parts(
+        RuntimeControlReadiness::Uninstalled(RuntimeControlIssue::new(
             "codex",
             "standalone_missing",
-            "Codex standalone is missing",
+            &"Codex standalone is missing",
         )),
     );
     assert_eq!(blocked.start_gate(), Err(issue));

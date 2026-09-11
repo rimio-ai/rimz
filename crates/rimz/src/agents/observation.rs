@@ -160,10 +160,6 @@ pub struct AgentUsageSummary {
 }
 
 impl AgentUsageSummary {
-    pub fn is_empty(&self) -> bool {
-        self == &Self::default()
-    }
-
     /// Current input-side context composition, when a provider reports the
     /// fresh-input anchor that makes the split meaningful.
     pub fn input_context_tokens(&self) -> Option<u64> {
@@ -474,7 +470,5 @@ mod tests {
                 .context_pct,
             Some(63)
         );
-        assert!(AgentUsageSummary::default().is_empty());
-        assert!(!prior.is_empty());
     }
 }
