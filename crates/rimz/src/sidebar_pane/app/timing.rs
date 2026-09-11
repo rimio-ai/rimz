@@ -15,6 +15,7 @@ pub(super) fn is_animating(
         return true;
     };
     render::animation_cadence(snapshot, &theme.animations) != render::AnimationCadence::None
+        || render::expanded_command_wait_needs_motion(snapshot, ui, &theme.animations)
         || render::expanded_row_awaiting_first_prompt(snapshot, ui)
         || ui.help_visible
         || pet_frame_interval(snapshot, ui, alert_active).is_some()
@@ -80,7 +81,9 @@ pub(super) fn frame_interval(
     } else {
         cadence
     };
-    if cadence == render::AnimationCadence::Fast {
+    if cadence == render::AnimationCadence::Fast
+        || render::expanded_command_wait_needs_motion(snapshot, ui, &theme.animations)
+    {
         return base;
     }
     // The money rolls click once per `CLICK_PHASES` phases, so a rolling room
