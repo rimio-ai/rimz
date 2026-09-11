@@ -24,14 +24,14 @@ pub struct HookOutput {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct CanonicalHookEvent {
+struct CanonicalHookEvent {
     native_name: String,
     meaning: CanonicalHookMeaning,
     facts: Vec<CanonicalHookFact>,
 }
 
 #[derive(Debug, PartialEq)]
-pub enum CanonicalHookFact {
+enum CanonicalHookFact {
     /// Boxed, like [`Context`](Self::Context): the observation dwarfs every
     /// other fact, so inlining it would size the whole enum — and every
     /// `Vec<CanonicalHookFact>` — to its width.
@@ -50,7 +50,7 @@ pub enum CanonicalHookFact {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CanonicalHookMeaning {
+enum CanonicalHookMeaning {
     Lifecycle,
     Ask(AskKind),
     Unknown,
@@ -64,13 +64,13 @@ pub enum HookReply {
 }
 
 impl CanonicalHookEvent {
-    pub fn records_progress(&self) -> bool {
+    fn records_progress(&self) -> bool {
         self.facts
             .iter()
             .any(|fact| matches!(fact, CanonicalHookFact::Progress))
     }
 
-    pub fn ends_session(&self) -> bool {
+    fn ends_session(&self) -> bool {
         self.facts
             .iter()
             .any(|fact| matches!(fact, CanonicalHookFact::SessionEnded))

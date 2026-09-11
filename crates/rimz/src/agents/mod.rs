@@ -66,27 +66,26 @@ pub use account::{
 };
 pub use capabilities::ManualSkill;
 pub use context::{
-    AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
-    AgentSessionUsage, AgentTokenUsage, AgentTurnError, CacheHealth, ContextObservation,
-    CostCoverage, FieldPatch, LocalContextPatch, LocalTokenPatch, ProviderAccountScope,
-    RateLimitWindow, RateLimitWindowScope, SessionContextInput, SessionContextRefresh,
-    SubagentContext, SubagentObservation, SubagentUsageCursor, TurnErrorClass, TurnSettle,
+    AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentRateLimits, AgentSessionUsage,
+    AgentTokenUsage, AgentTurnError, CacheHealth, CostCoverage, FieldPatch, LocalContextPatch,
+    LocalTokenPatch, ProviderAccountScope, RateLimitWindow, RateLimitWindowScope,
+    SessionContextInput, SubagentContext, SubagentUsageCursor, TurnErrorClass, TurnSettle,
     TurnSettleOutcome,
 };
+use context::{ContextObservation, SessionContextRefresh, SubagentObservation};
 pub(crate) use credits::HttpErrKind;
 pub use credits::{AccountUsageProbe, AccountUsageSnapshot, ExtraCredits, ResetCredits};
 pub use definition::{
-    AgentDefinition, AgentSpec, Brand, Capabilities, CapabilityLevel, CompactCommand,
-    CompactInstruction, ConcernCoverage, DefinitionValidationError, HookCoverage,
-    IntegrationConcern, LaunchPermissionArgs, LaunchSpec, PermissionMode, PlanLabel,
-    PresetMatchers, PromptStyle, RemoteControlCapability, SamePaneSessionPolicy, SessionCommand,
-    StaticPresetMatcher, ThreadKey, ToolClassification, UserCapability, UserCoverage,
-    program_names_kind,
+    AgentDefinition, AgentSpec, Brand, Capabilities, CapabilityLevel, CompactInstruction,
+    ConcernCoverage, HookCoverage, IntegrationConcern, PermissionMode, PlanLabel,
+    SamePaneSessionPolicy, UserCapability, program_names_kind,
+};
+use definition::{
+    CompactCommand, LaunchPermissionArgs, LaunchSpec, PresetMatchers, PromptStyle, SessionCommand,
+    StaticPresetMatcher,
 };
 pub use emblems::{Emblem, EmblemTint, emblem_for};
-pub use hook_types::{
-    CanonicalHookEvent, CanonicalHookFact, CanonicalHookMeaning, HookOutput, HookReply, HookRouting,
-};
+pub use hook_types::{HookOutput, HookReply, HookRouting};
 pub(crate) use identity::{
     RootIdentity, SubagentIdentity, resolve_root_identity, resolve_subagent_identity,
 };
@@ -97,7 +96,7 @@ pub use lifecycle::{
 };
 pub use locate::locate_binary;
 pub(crate) use locate::{agent_config_path, probe_descriptor_version, read_optional_file};
-pub use managed_source::{ManagedIntegration, ManagedSource};
+pub use managed_source::ManagedIntegration;
 pub use observation::{
     AgentLifecycleObservation, AgentUsageSummary, LaunchParams, SessionOrigin, SpawnedSubagent,
     SubagentCorrelation, SubagentCorrelationInput, SubagentSpawnInput,
@@ -119,11 +118,12 @@ pub use state::{
     DEFAULT_ARCHIVE_AFTER_SECS, DEFAULT_INACTIVE_AFTER_SECS, DEFAULT_STALL_AFTER_SECS,
     DEFAULT_TOOL_REPEAT_ATTENTION_AFTER, DEFAULT_TOOL_REPEAT_WARN_AFTER, OpenAsk, PendingWake,
     PendingWakeTrigger, is_stalled, is_tool_looping, is_turn_dead, settled_outcome,
-    single_line_description, usable_description,
+    single_line_description,
 };
-pub(crate) use state::{display_turn_error, effective_turn_error_class};
-pub use transcript::{TranscriptMessage, TranscriptPage, TranscriptPosition, TranscriptRole};
-pub use transcript_fs::read_transcript_lines;
+pub(crate) use state::{display_turn_error, effective_turn_error_class, usable_description};
+use transcript::TranscriptRole;
+pub use transcript::{TranscriptMessage, TranscriptPage, TranscriptPosition};
+use transcript_fs::read_transcript_lines;
 pub(crate) use transcript_fs::{read_transcript_tail, read_transcript_tail_with_status};
 
 pub mod plugins;
