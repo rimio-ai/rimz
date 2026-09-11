@@ -2025,6 +2025,7 @@ fn agents_show_filters_live_and_delivered_system_messages_in_human_and_json_view
             LifecycleSignal::Registered,
         );
         observation.agent_name = Some("lucid-atlas".to_owned());
+        observation.worktree_branch = Some("docs".to_owned());
         store
             .append_event(&EventEnvelope::agent_lifecycle(
                 env.workspace_id.clone(),
@@ -2073,7 +2074,8 @@ fn agents_show_filters_live_and_delivered_system_messages_in_human_and_json_view
                     true,
                     DeliveryGate::Done,
                 )
-                .with_sender(sender);
+                .with_sender(sender)
+                .with_channel(Some("docs".to_owned()));
                 if is_conversation {
                     visible_ids.push(message.message_id.to_string());
                 } else {
@@ -2110,7 +2112,16 @@ fn agents_show_filters_live_and_delivered_system_messages_in_human_and_json_view
         let human = String::from_utf8(output.stdout).expect("human show output");
         assert!(human.contains("Messages"), "{human}");
         assert!(
-            human.contains("4 system messages hidden — rimz message list --system @sess-messages"),
+            human.contains(
+                "4 system messages hidden — rimz message list --all --system @sess-messages"
+            ),
+            "{human}"
+        );
+        assert_eq!(
+            human.lines().any(|line| line
+                .split_whitespace()
+                .eq(["ID", "STATUS", "FROM", "AGE", "TEXT"])),
+            conversation,
             "{human}"
         );
         for id in &visible_ids {
@@ -2121,6 +2132,36 @@ fn agents_show_filters_live_and_delivered_system_messages_in_human_and_json_view
         }
         assert!(!human.contains("system-only text"), "{human}");
         assert!(!human.contains("harness-only text"), "{human}");
+
+        let hint = human
+            .lines()
+            .find_map(|line| {
+                line.split_once(" — rimz message list ")
+                    .map(|(_, args)| args)
+            })
+            .expect("message list hint");
+        let output = env
+            .rimz()
+            .args(["message", "list"])
+            .args(hint.split_whitespace())
+            .arg("--json")
+            .output()
+            .expect("run hint from main lane");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let rows: serde_json::Value = serde_json::from_slice(&output.stdout).expect("hint JSON");
+        for id in &hidden_ids {
+            assert!(
+                rows.as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|row| row["message_id"] == *id),
+                "hidden message {id} missing from hint: {rows}"
+            );
+        }
 
         let output = env
             .rimz()

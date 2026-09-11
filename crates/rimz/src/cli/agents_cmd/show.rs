@@ -598,7 +598,9 @@ fn render_messages_section(
             render::cell(message.text.as_str()).dash(),
         ]);
     }
-    table.render(w)?;
+    if !messages.is_empty() {
+        table.render(w)?;
+    }
     if system_messages_hidden > 0 {
         writeln!(
             w,
@@ -606,7 +608,7 @@ fn render_messages_section(
             render::paint(
                 render::palette::faint(),
                 &format!(
-                    "{system_messages_hidden} system messages hidden — rimz message list --system @{agent_id}"
+                    "{system_messages_hidden} system messages hidden — rimz message list --all --system @{agent_id}"
                 ),
             )
         )?;
