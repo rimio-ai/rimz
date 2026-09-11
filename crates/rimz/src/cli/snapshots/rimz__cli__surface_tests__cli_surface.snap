@@ -1601,6 +1601,7 @@ rimz message list
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
     --status <STATUS>  [action=set takes=1..=1]
+    --system  [action=set-true takes=0..=0]
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
 
