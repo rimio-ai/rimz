@@ -1,5 +1,5 @@
 use super::*;
-use crate::store::snapshot::LinkTier;
+use crate::ids::LinkTier;
 use ratatui::style::{Color, Modifier};
 
 fn footer_text(snapshot: &SidebarSnapshot, width: usize) -> String {

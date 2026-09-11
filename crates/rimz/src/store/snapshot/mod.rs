@@ -50,9 +50,9 @@ pub use row::{
 };
 pub use view::{AgentWorktreeGroup, group_live_agents_by_worktree};
 pub use view::{
-    DailyBudgetView, LinkTier, PresenceSample, RemoteControlBadge, RuntimeReapInputs,
-    SNAPSHOT_VERSION, SidebarCohortEffort, SidebarLinkFreshness, SidebarLinkHealth,
-    SidebarPresence, SidebarProviderPanel, SidebarSeatEffort, SidebarSnapshot, SidebarStatusCount,
+    DailyBudgetView, PresenceSample, RemoteControlBadge, RuntimeReapInputs, SNAPSHOT_VERSION,
+    SidebarCohortEffort, SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence,
+    SidebarProviderPanel, SidebarSeatEffort, SidebarSnapshot, SidebarStatusCount,
     SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice, WorktreePrCi, WorktreePrState,
     WorktreeTrunkSync, lead_unread_row,
 };

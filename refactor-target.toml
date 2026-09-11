@@ -172,7 +172,7 @@ surface-budget = 544
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
-surface-budget = 45
+surface-budget = 46
 
 [[module]]
 path = "crates/rimz/src/lane.rs"

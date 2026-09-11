@@ -4,7 +4,7 @@ use rimz::diag::record::{
     FrameStamp, HostedCarryDropReason, LocalSessionBindRejectReason, ObserveRole, PaneDropEvidence,
     PaneDropViewEvidence, TickLoop, WorkPaneBoundaryMove,
 };
-use rimz::store::snapshot::LinkTier;
+use rimz::ids::LinkTier;
 
 fn sidebar(raw: &str) -> rimz::SidebarInstanceId {
     rimz::SidebarInstanceId::parse(raw).expect("valid sidebar id")

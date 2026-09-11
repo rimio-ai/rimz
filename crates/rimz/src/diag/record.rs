@@ -8,9 +8,8 @@ use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{
-    AgentKind, AgentSessionId, MessageId, PaneId, SidebarInstanceId, ViewId, WorkspaceId,
+    AgentKind, AgentSessionId, LinkTier, MessageId, PaneId, SidebarInstanceId, ViewId, WorkspaceId,
 };
-use crate::store::snapshot::LinkTier;
 
 const DIAG_SCHEMA_VERSION: &str = "rimz.diag.v1";
 

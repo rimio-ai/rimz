@@ -4,7 +4,7 @@
 //! hook protocol is a newtype. RimZ-minted long IDs (`RunId`, `EventId`,
 //! `SidebarInstanceId`) use UUIDv7, while message IDs use a shorter
 //! time-sortable token. IDs derived from external truth (`WorkspaceId`,
-//! `PaneId`) keep their natural shape.
+//! `PaneId`) keep their natural shape. Shared classification enums (`MuxName`, `ViewKind`, `LinkTier`) travel beside them.
 
 use std::fmt;
 use std::path::Path;
@@ -76,6 +76,15 @@ pub enum MuxClientId {
 pub enum ViewKind {
     Tab,
     Window,
+}
+
+/// Link-health tier for notifications, diagnostics, and CLI health output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkTier {
+    Good,
+    Degraded,
+    Bad,
 }
 
 /// Multiplexer view identifier: Zellij tab id or tmux window id.
@@ -806,6 +815,21 @@ pub(crate) fn dashed_name(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn link_tier_orders_good_below_degraded_below_bad_and_spells_snake_case() {
+        assert!(LinkTier::Good < LinkTier::Degraded);
+        assert!(LinkTier::Degraded < LinkTier::Bad);
+        assert_eq!(LinkTier::Bad.max(LinkTier::Good), LinkTier::Bad);
+        for (tier, json) in [
+            (LinkTier::Good, "\"good\""),
+            (LinkTier::Degraded, "\"degraded\""),
+            (LinkTier::Bad, "\"bad\""),
+        ] {
+            assert_eq!(serde_json::to_string(&tier).unwrap(), json);
+            assert_eq!(serde_json::from_str::<LinkTier>(json).unwrap(), tier);
+        }
+    }
 
     #[test]
     fn mux_name_other_flips_backend() {
