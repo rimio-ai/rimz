@@ -951,8 +951,7 @@ pub(super) fn collect_diagnostics(
     cleared_at: Option<jiff::Timestamp>,
 ) -> model::Diagnostics {
     const RECENT_DIAG_INCIDENTS: usize = 12;
-    let Some((path, records)) = rimz::diag::recent_records(ws.workspace_id.clone(), usize::MAX)
-    else {
+    let Some((path, records)) = rimz::diag::recent_records(ws.workspace_id.clone()) else {
         return model::Diagnostics::Unavailable;
     };
     let cleared_at_ms = cleared_at.and_then(|at| u64::try_from(at.as_millisecond()).ok());
