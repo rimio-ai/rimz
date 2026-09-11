@@ -138,7 +138,7 @@ surface-budget = 11
 
 [[module]]
 path = "crates/rimz/src/diag"
-surface-budget = 80
+surface-budget = 76
 
 [[module]]
 path = "crates/rimz/src/disk"
@@ -282,7 +282,7 @@ path = "crates/rimz/src/store"
 # Header grammar moved from harness; lifecycle projection also shares prompt-origin classification.
 # Exec cleanup probes waiter liveness without owning socket paths.
 # Conversation surfaces share sender classification with the CLI binary.
-surface-budget = 343
+surface-budget = 342
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -1390,3 +1390,58 @@ reason = "Opt-in account-refresh diagnostic timing (cfbfe3b50) stays outside cac
 kind = "item"
 key = "sidebar::refresh::git_refs::resolve"
 reason = "In-process loose/packed ref resolution avoids hot-lane git forks (5ff74b470); its single interface already hides the filesystem rules (pass 15b)."
+
+[[verdict]]
+kind = "item"
+key = "diag::under"
+reason = "Root constructor: for_workspace routes the renderer's Some(instance_id) through it and the integration crate builds sinks under sandbox roots; a producer-only split costs +4 (pass 16)."
+
+[[verdict]]
+kind = "item"
+key = "diag::log_path"
+reason = "The sanctioned test reach to the primary log across the lib, bin and integration crates; its literal is pinned to diag.rs by the invariant (pass 16)."
+
+[[verdict]]
+kind = "item"
+key = "diag::frames_dir_under"
+reason = "Store reset and the integration reset test resolve the frame ring through it (pass 16)."
+
+[[verdict]]
+kind = "item"
+key = "diag::focus_repair::recent"
+reason = "Integration reader of the account-global focus-repair log (backend/zellij/presence.rs); deleting it re-creates the rotated read and sort in the test crate and widens disk::rotating (pass 16)."
+
+[[verdict]]
+kind = "item"
+key = "diag::record::new"
+reason = "DiagEnvelope::new is how the bin and integration doctor tests construct envelopes (pass 16)."
+
+[[verdict]]
+kind = "item"
+key = "diag::record::severity"
+reason = "Source severity stamped by DiagEnvelope::new; the doctor tests classify from it, and doctor classification is a different policy (pass 16)."
+
+[[verdict]]
+kind = "item"
+key = "diag::record::DiagEvent"
+reason = "Frozen rimz.diag.v1 wire; every variant payload type stays pub under private_interfaces; kind_name mirrors the serde tag for all 46 variants and stays the allocation-free identity source (pass 16)."
+
+[[verdict]]
+kind = "item"
+key = "diag::record::FetchFoldCauseStats"
+reason = "No producer since 8c02a0b7a retired routine fetch-fold production; the variant is decoded wire the doctor fixture still reads (pass 16)."
+
+[[verdict]]
+kind = "item"
+key = "diag::binding::append"
+reason = "Per-surface log family: name, cap and append over disk::rotating, with roots that differ (state, state/rimz, runtime); a shared RotatingLog value measures +17 (pass 16)."
+
+[[verdict]]
+kind = "item"
+key = "diag::plugin_presence::history_paths"
+reason = "Per-surface log family: name, cap and append over disk::rotating, with roots that differ (state, state/rimz, runtime); a shared RotatingLog value measures +17 (pass 16)."
+
+[[verdict]]
+kind = "item"
+key = "diag::notify::NotifyTraceEvent"
+reason = "Per-surface log family: name, cap and append over disk::rotating, with roots that differ (state, state/rimz, runtime); a shared RotatingLog value measures +17 (pass 16)."
