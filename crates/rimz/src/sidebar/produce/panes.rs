@@ -103,7 +103,7 @@ impl<'a> PaneFrameCache<'a> {
     }
 
     fn publishable_prior(&self, prior: PaneFrame) -> Option<PaneFrame> {
-        publishable_prior(prior, self.own_pane, self.diag)
+        publishable_cached_frame(prior, self.own_pane, self.diag)
     }
 
     fn validate_topology(
@@ -1003,7 +1003,7 @@ fn validate_frame_for_publish(
     cache_path: &Path,
 ) -> Result<PaneFrame> {
     let now_ms = unix_now_ms();
-    let prior = prior.and_then(|prior| publishable_prior(prior, own_pane, diag));
+    let prior = prior.and_then(|prior| publishable_cached_frame(prior, own_pane, diag));
     emit_mixed_build_writers(diag, prior.as_ref());
     match frame_publish_verdict(&frame, own_pane) {
         PublishVerdict::Publish => {
@@ -1041,14 +1041,6 @@ fn validate_frame_for_publish(
             }
         }
     }
-}
-
-fn publishable_prior(
-    frame: PaneFrame,
-    own_pane: Option<&PaneId>,
-    diag: &crate::diag::DiagSink,
-) -> Option<PaneFrame> {
-    publishable_cached_frame(frame, own_pane, diag)
 }
 
 /// A prior frame assembled by a different build means two rimz versions are

@@ -262,9 +262,6 @@ fn apply_tab_coherence(classification: &mut CarryClassification<'_>, now_ms: u64
         if classification.decisions.contains_key(&record.pane.pane_id)
             || !classification.confirmed_tabs.contains(&record.tab.view_id)
             || record.expired.is_some()
-            || record
-                .prior_meta
-                .is_some_and(|meta| expired_at(meta.carried_since_ms, now_ms))
             || matches!(record.verdict, Liveness::DeadProven | Liveness::Dead)
         {
             continue;
