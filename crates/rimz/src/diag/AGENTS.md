@@ -19,7 +19,7 @@ An internal repair keeps a durable record of what it did — [`focus_repair.rs`]
 - [`diag.rs`](../diag.rs) owns the sink, the rate limiter, and the frame-capture ring. It also owns the main diagnostics log name and the frame-capture directory name; `cargo xtask invariants` rejects those two literals anywhere else, so the primary surface stays enumerable from one file.
 - [`record.rs`](./record.rs) owns the schema and its version; the shared [`disk/rotating.rs`](../disk/rotating.rs) helper owns rotating JSONL mechanics, with schema and path left to the caller.
 - Per-surface logs stay in their own file: [`notify.rs`](./notify.rs), [`binding.rs`](./binding.rs), [`focus_repair.rs`](./focus_repair.rs), [`plugin_presence.rs`](./plugin_presence.rs). Each is documented by the subsystem that writes it.
-- [`store/`](../store/AGENTS.md) owns durable truth and never consumes a record from here. `observability.rs` is the separate opt-in off-box channel behind the `sentry` build feature; keep local-only episodes local.
+- [`store/`](../store/AGENTS.md) owns durable truth and never consumes a record from here. `diag` is evidence vocabulary and append mechanics over `disk`, `ids`, and process facts; it sits below `store`, which constructs diagnostics downward and never reads one back. `observability.rs` is the separate opt-in off-box channel behind the `sentry` build feature; keep local-only episodes local.
 - Snapshot projection stays quiet: the invariant rejects `warn!` and `error!` under `store/snapshot/`, so a per-fold diagnostic never floods the off-box channel.
 
 ## Tests
