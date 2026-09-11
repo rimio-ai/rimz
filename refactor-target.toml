@@ -74,7 +74,7 @@ upward-dependencies = ["address"]
 # Trigger summaries share wording between sleeping descriptions and expanded waits.
 # Native config-home resolution is shared with sandbox launch planning.
 # Native skill roots and user-only markers belong to the same capability seam.
-surface-budget = 972
+surface-budget = 926
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/codex"
@@ -1495,3 +1495,18 @@ reason = "Two outputs on purpose: the fetch worker publishes the workspace proje
 kind = "item"
 key = "sidebar::produce::resolution_snapshot"
 reason = "The mux: Option<MuxName> parameter is real: seven callers pass five distinct sources (resolved workspace, ctx, CLI flag, auto-detect, fixture); not a one-caller flag (pass 17a)."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::InstallationCapability"
+reason = "The six install defaults no adapter overrides stay trait defaults: the trait default is the single home for 'this agent does not do that' (agents/AGENTS.md), AgentDefinition forwards by Deref, and an inherent move is 41 lines out for 41 in (pass 18a)."
+
+[[verdict]]
+kind = "item"
+key = "agents::state::COMPACTING_WINDOW_SECS"
+reason = "Read by the integration crate (tests/integration/message.rs, hooks.rs) as the fixture's timing constant; stays pub with DEFAULT_TOOL_REPEAT_ATTENTION_AFTER (pass 18a)."
+
+[[verdict]]
+kind = "item"
+key = "agents::HookRouting"
+reason = "Returned by HookOutput::routing while hook_types is pub(crate); the root re-export is the only public path, as OpenAskReadErr is for read_open_ask (pass 18a)."
