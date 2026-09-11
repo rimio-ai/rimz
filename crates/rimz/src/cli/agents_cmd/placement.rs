@@ -206,13 +206,10 @@ fn prepare_resolved(
             let pane = single_pane(&panes)?;
             PreparedPlacement::NewPane(SplitPaneOptions {
                 target: target_pane_id.map_or(SplitTarget::Ambient, SplitTarget::Pane),
-                cwd: Some(cwd.to_string_lossy().into_owned()),
-                command: Some(pane.argv.clone()),
-                title: pane.name.clone(),
-                close_on_exit: false,
                 env: identity_env,
                 placement: SplitPlacement::Directional(direction),
                 focus: !background,
+                ..SplitPaneOptions::from_command(pane, &cwd)
             })
         }
         Placement::SamePane => PreparedPlacement::SamePane {
