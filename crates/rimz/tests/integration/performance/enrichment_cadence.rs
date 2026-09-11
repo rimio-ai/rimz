@@ -235,6 +235,17 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
         assert_eq!(project_group.clean, refresh_group.clean);
         assert_eq!(project_group.landed, refresh_group.landed);
     }
+
+    let frameless = rimz::sidebar::produce::produce_rollup_snapshot_with_refresh(
+        &mut RollupCursor::new(),
+        &state,
+        &runtime,
+        None,
+        None,
+    )
+    .expect("frameless refresh produce");
+    assert_eq!(frameless.providers, refresh.providers);
+    assert_eq!(frameless.project_root, refresh.project_root);
 }
 
 /// A directory room does not enumerate child repos. The fixture's bare room root
