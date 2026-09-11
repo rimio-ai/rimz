@@ -2011,6 +2011,145 @@ fn agents_show_retains_ended_pidless_audit_card_and_keeps_fresh_context() {
 }
 
 #[test]
+fn agents_show_filters_live_and_delivered_system_messages_in_human_and_json_views() {
+    use rimz::store::event::MessageEventMethod;
+    use rimz::store::message::{
+        DeliveryGate, HarnessNotice, MessageRecord, MessageSender, MessageStatus,
+    };
+
+    for conversation in [true, false] {
+        let env = Env::new();
+        let store = env.store();
+        let mut observation = AgentLifecycleObservation::new(
+            Some("sess-messages".into()),
+            LifecycleSignal::Registered,
+        );
+        observation.agent_name = Some("lucid-atlas".to_owned());
+        store
+            .append_event(&EventEnvelope::agent_lifecycle(
+                env.workspace_id.clone(),
+                "session",
+                "claude",
+                "SessionStart",
+                &observation,
+            ))
+            .expect("register agent");
+
+        let mut visible_ids = Vec::new();
+        let mut hidden_ids = Vec::new();
+        for delivered in [false, true] {
+            for (text, sender) in [
+                ("human conversation", MessageSender::Human),
+                (
+                    "agent conversation",
+                    MessageSender::Agent {
+                        kind: AgentKind::new_unchecked("codex"),
+                        name: Some("planner".to_owned()),
+                        profile: None,
+                        role: None,
+                        channel: None,
+                    },
+                ),
+                ("more conversation", MessageSender::Human),
+                ("system-only text", MessageSender::System),
+                (
+                    "harness-only text",
+                    MessageSender::Harness {
+                        notice: HarnessNotice::Wake,
+                    },
+                ),
+            ] {
+                let is_conversation =
+                    matches!(sender, MessageSender::Human | MessageSender::Agent { .. });
+                if is_conversation && !conversation {
+                    continue;
+                }
+                let mut message = MessageRecord::new_for_card(
+                    env.workspace_id.clone(),
+                    AgentKind::new_unchecked("claude"),
+                    "sess-messages".into(),
+                    Some("lucid-atlas".to_owned()),
+                    text.to_owned(),
+                    true,
+                    DeliveryGate::Done,
+                )
+                .with_sender(sender);
+                if is_conversation {
+                    visible_ids.push(message.message_id.to_string());
+                } else {
+                    hidden_ids.push(message.message_id.to_string());
+                }
+                if delivered {
+                    message.status = MessageStatus::Delivered;
+                    store
+                        .append_event(&EventEnvelope::message_event(
+                            &message,
+                            "session",
+                            MessageEventMethod::Delivered,
+                            None,
+                        ))
+                        .expect("append delivered message");
+                } else {
+                    store
+                        .queue_message(&message, "session")
+                        .expect("queue message");
+                }
+            }
+        }
+
+        let output = env
+            .rimz()
+            .args(["agents", "show", "lucid-atlas"])
+            .output()
+            .expect("human agents show");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let human = String::from_utf8(output.stdout).expect("human show output");
+        assert!(human.contains("Messages"), "{human}");
+        assert!(
+            human.contains("4 system messages hidden — rimz message list --system @sess-messages"),
+            "{human}"
+        );
+        for id in &visible_ids {
+            assert!(human.contains(id), "missing conversation {id}: {human}");
+        }
+        for id in &hidden_ids {
+            assert!(!human.contains(id), "system message {id} leaked: {human}");
+        }
+        assert!(!human.contains("system-only text"), "{human}");
+        assert!(!human.contains("harness-only text"), "{human}");
+
+        let output = env
+            .rimz()
+            .args(["agents", "show", "lucid-atlas", "--json"])
+            .output()
+            .expect("JSON agents show");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("show JSON");
+        assert!(report.get("system_messages_hidden").is_none(), "{report}");
+        if conversation {
+            let messages = report["messages"]
+                .as_array()
+                .expect("conversation messages");
+            let ids: Vec<_> = messages
+                .iter()
+                .map(|message| message["id"].as_str().expect("message ID"))
+                .collect();
+            assert_eq!(ids, visible_ids, "{report}");
+        } else {
+            assert!(report.get("messages").is_none(), "{report}");
+        }
+    }
+}
+
+#[test]
 fn agents_show_capture_errors_when_agent_has_no_bound_pane() {
     let env = Env::new();
     let store = env.store();
