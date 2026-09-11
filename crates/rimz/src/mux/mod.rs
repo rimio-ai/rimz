@@ -29,7 +29,7 @@ pub(crate) use command::{COMMAND_TIMEOUT, LIST_SESSIONS_TIMEOUT};
 pub use companion_layout::COMPANION_PANE_LIMIT;
 pub use focus_key::RoomKeyBinding;
 pub use pane_writer::PaneWriter;
-pub(crate) use reconcile::{
+use reconcile::{
     ReconcileAddOutcome, ReconcilePane, ReconcilePaneRole, execute_reconcile_plan,
     group_reconcile_panes, plan_reconcile,
 };

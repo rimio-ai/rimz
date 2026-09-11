@@ -270,7 +270,7 @@ pub(crate) fn zellij_resize_step_cols(view_cols: u64) -> u64 {
 }
 
 /// The widest integer spacing produced by Zellij's approximately 5% resize.
-pub(crate) fn zellij_resize_stop_step_cols(view_cols: u64) -> u64 {
+pub(super) fn zellij_resize_stop_step_cols(view_cols: u64) -> u64 {
     view_cols.div_ceil(20).max(1)
 }
 

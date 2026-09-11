@@ -229,7 +229,7 @@ pub(crate) fn attributed_pane(pid: u32, mux: MuxName) -> Option<PaneId> {
 /// mounted or could not be docked, so a failed add never leaks a paneless
 /// renderer. Same uid/ancestor/environment scoping as the orphan sweep. Returns
 /// the number of processes signalled; empty where `list_processes` is empty.
-pub(crate) fn kill_sidebar_serve_for_pane(
+pub(super) fn kill_sidebar_serve_for_pane(
     workspace_id: &str,
     session_name: &str,
     pane: &PaneId,

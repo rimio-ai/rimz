@@ -47,7 +47,7 @@ impl LiveSessions {
     }
 }
 
-pub(crate) fn select_backend(
+fn select_backend(
     explicit: Option<MuxName>,
     env_mux: Option<MuxName>,
     configured_default: Option<MuxName>,

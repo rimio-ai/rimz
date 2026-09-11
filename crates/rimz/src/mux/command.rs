@@ -83,7 +83,7 @@ impl CommandSpec {
     /// Clear an inherited variable for the child. [`Self::env`] adds to the
     /// parent environment rather than replacing it, so an inherited value must
     /// be dropped explicitly.
-    pub fn env_remove(mut self, key: impl Into<String>) -> Self {
+    pub(crate) fn env_remove(mut self, key: impl Into<String>) -> Self {
         self.env_remove.insert(key.into());
         self
     }
