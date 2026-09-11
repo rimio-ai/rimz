@@ -105,7 +105,6 @@ struct ProcessStateSample {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PaneTreeSample {
     direct_children: Vec<u32>,
-    process_count: u32,
     cpu_ticks: u64,
     io_bytes: Option<u64>,
     rss_kb: u64,
@@ -354,7 +353,6 @@ fn sample_pane_tree(
     let root_children = direct_children(root_pid, children, needs_walk, proc_children);
     let mut sample = PaneTreeSample {
         direct_children: root_children.clone(),
-        process_count: 0,
         cpu_ticks: 0,
         io_bytes: Some(0),
         rss_kb: 0,
@@ -397,7 +395,6 @@ fn add_process_to_sample(
     io_bytes: &dyn Fn(u32) -> Option<u64>,
     sample: &mut PaneTreeSample,
 ) {
-    sample.process_count = sample.process_count.saturating_add(1);
     sample.cpu_ticks = sample
         .cpu_ticks
         .saturating_add(stat.cpu_ticks)
