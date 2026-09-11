@@ -233,19 +233,7 @@ impl Store {
     /// when identity-visible record fields change.
     #[must_use = "durability barrier; check the result"]
     pub fn record_workspace(&self, workspace: &ResolvedWorkspace) -> Result<()> {
-        self.commit(|txn| {
-            let prior = record::read(&txn.paths.workspace_record).ok();
-            let record = workspace_record_preserving_rimz_target(prior.as_ref(), workspace, None);
-            if prior.as_ref().is_none_or(|prior| {
-                prior.project_root != record.project_root
-                    || prior.session_name != record.session_name
-                    || prior.root_class != record.root_class
-            }) {
-                txn.force_publish();
-            }
-            record::write(txn.paths, &record)?;
-            Ok(())
-        })
+        self.commit(|txn| write_workspace_record(txn, workspace, None))
     }
 
     /// Persist the room-owning RimZ binary for session-local helpers. Generic
@@ -258,22 +246,8 @@ impl Store {
         rimz_build: String,
     ) -> Result<()> {
         self.commit(|txn| {
-            let prior = record::read(&txn.paths.workspace_record).ok();
-            let room_bin_target = rimz_bin.clone();
-            let record = workspace_record_preserving_rimz_target(
-                prior.as_ref(),
-                workspace,
-                Some((rimz_bin, rimz_build)),
-            );
-            if prior.as_ref().is_none_or(|prior| {
-                prior.project_root != record.project_root
-                    || prior.session_name != record.session_name
-                    || prior.root_class != record.root_class
-            }) {
-                txn.force_publish();
-            }
-            record::write(txn.paths, &record)?;
-            crate::disk::atomic::link_executable_atomically(&room_bin_target, &txn.paths.room_bin)
+            write_workspace_record(txn, workspace, Some((rimz_bin.clone(), rimz_build)))?;
+            crate::disk::atomic::link_executable_atomically(&rimz_bin, &txn.paths.room_bin)
                 .map_err(record::WorkspaceRecordErr::from)?;
             Ok(())
         })
@@ -614,6 +588,24 @@ impl Store {
             Ok((outcome, rollup))
         })
     }
+}
+
+fn write_workspace_record(
+    txn: &mut Txn<'_>,
+    workspace: &ResolvedWorkspace,
+    rimz_target: Option<(PathBuf, String)>,
+) -> Result<()> {
+    let prior = record::read(&txn.paths.workspace_record).ok();
+    let record = workspace_record_preserving_rimz_target(prior.as_ref(), workspace, rimz_target);
+    if prior.as_ref().is_none_or(|prior| {
+        prior.project_root != record.project_root
+            || prior.session_name != record.session_name
+            || prior.root_class != record.root_class
+    }) {
+        txn.force_publish();
+    }
+    record::write(txn.paths, &record)?;
+    Ok(())
 }
 
 fn workspace_record_preserving_rimz_target(
