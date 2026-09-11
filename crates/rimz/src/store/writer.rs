@@ -152,11 +152,17 @@ impl Txn<'_> {
 }
 
 enum RollupInvalidation {
+    /// Log renamed away: reseed a new generation and rebuild.
     Reseed,
+    /// Log cut in place: drop the rollup and rebuild.
     Drop,
+    /// Nothing moved: keep the rollup and rebuild.
+    Keep,
+    /// History forgotten: drop the rollup and publish nothing.
+    Forget,
 }
 
-fn remove_snapshot_file_if_exists(path: &Path) -> Result<()> {
+fn remove_file_if_exists(path: &Path) -> Result<()> {
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -167,16 +173,6 @@ fn remove_snapshot_file_if_exists(path: &Path) -> Result<()> {
     }
 }
 
-fn invalidate_snapshot_caches(paths: &StatePaths, rollup: RollupInvalidation) -> Result<()> {
-    remove_snapshot_file_if_exists(&paths.latest_snapshot)?;
-    publish::retract_publish_stamp(paths);
-    match rollup {
-        RollupInvalidation::Reseed => snapshot::reseed_rollup_cache_for_rotation(paths)?,
-        RollupInvalidation::Drop => remove_snapshot_file_if_exists(&paths.rollup_cache)?,
-    }
-    Ok(())
-}
-
 impl Store {
     /// Run a mutation that may replace or cut the active event log.
     ///
@@ -184,17 +180,28 @@ impl Store {
     /// workspace → publish lock order. When the log changed, retract the
     /// published view before touching the rollup cache so a crash leaves
     /// readers folding for themselves, never trusting an offset that can alias
-    /// into the fresh log after it regrows.
-    fn commit_boundary<T, F>(&self, rollup: RollupInvalidation, mutation: F) -> Result<T>
+    /// into the fresh log after it regrows. The mutation selects the policy; Forget retracts and drops without rebuilding.
+    fn commit_boundary<T, F>(&self, mutation: F) -> Result<T>
     where
-        F: FnOnce(&StatePaths) -> Result<(T, bool)>,
+        F: FnOnce(&StatePaths) -> Result<(T, Option<RollupInvalidation>)>,
     {
-        let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
-        let _publish_guard = lock::WorkspaceLock::acquire(&self.inner.paths.publish_lock)?;
-        let (value, changed) = mutation(&self.inner.paths)?;
-        if changed {
-            invalidate_snapshot_caches(&self.inner.paths, rollup)?;
-            snapshot::rebuild(&self.inner.paths)?;
+        let paths = &self.inner.paths;
+        let _guard = lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
+        let _publish_guard = lock::WorkspaceLock::acquire(&paths.publish_lock)?;
+        let (value, rollup) = mutation(paths)?;
+        if let Some(rollup) = rollup {
+            remove_file_if_exists(&paths.latest_snapshot)?;
+            publish::retract_publish_stamp(paths);
+            match rollup {
+                RollupInvalidation::Reseed => snapshot::reseed_rollup_cache_for_rotation(paths)?,
+                RollupInvalidation::Drop | RollupInvalidation::Forget => {
+                    remove_file_if_exists(&paths.rollup_cache)?;
+                }
+                RollupInvalidation::Keep => {}
+            }
+            if !matches!(rollup, RollupInvalidation::Forget) {
+                snapshot::rebuild(paths)?;
+            }
         }
         Ok(value)
     }
@@ -291,28 +298,29 @@ impl Store {
         &self,
         workspace: &ResolvedWorkspace,
     ) -> Result<WorkspaceRewriteOutcome> {
-        let (messages_rewritten, events_rewritten) =
-            self.commit_boundary(RollupInvalidation::Reseed, |paths| {
-                let mut messages = message::read_queue(&paths.messages_dir)?;
-                let messages_rewritten = messages.len();
-                for message in &mut messages {
-                    message.workspace_id = workspace.workspace_id.clone();
-                }
-                message::write_queue(&paths.messages_dir, &messages)?;
+        let (messages_rewritten, events_rewritten) = self.commit_boundary(|paths| {
+            let mut messages = message::read_queue(&paths.messages_dir)?;
+            let messages_rewritten = messages.len();
+            for message in &mut messages {
+                message.workspace_id = workspace.workspace_id.clone();
+            }
+            message::write_queue(&paths.messages_dir, &messages)?;
 
-                let mut events = event_log::read_all(&paths.events_log)?;
-                let events_rewritten = events.len();
-                for event in &mut events {
-                    event.workspace_id = workspace.workspace_id.clone();
-                }
-                event_log::replace_all(&paths.events_log, &events)?;
+            let mut events = event_log::read_all(&paths.events_log)?;
+            let events_rewritten = events.len();
+            for event in &mut events {
+                event.workspace_id = workspace.workspace_id.clone();
+            }
+            event_log::replace_all(&paths.events_log, &events)?;
 
-                let prior = record::read(&paths.workspace_record).ok();
-                let record =
-                    workspace_record_preserving_rimz_target(prior.as_ref(), workspace, None);
-                record::write(paths, &record)?;
-                Ok(((messages_rewritten, events_rewritten), true))
-            })?;
+            let prior = record::read(&paths.workspace_record).ok();
+            let record = workspace_record_preserving_rimz_target(prior.as_ref(), workspace, None);
+            record::write(paths, &record)?;
+            Ok((
+                (messages_rewritten, events_rewritten),
+                Some(RollupInvalidation::Reseed),
+            ))
+        })?;
 
         Ok(WorkspaceRewriteOutcome {
             workspace_id: workspace.workspace_id.clone(),
@@ -561,14 +569,13 @@ impl Store {
     where
         F: FnOnce(&Path, &Path, u64) -> event_log::Result<event_log::RotationOutcome>,
     {
-        let (rotation, carryover_agents) =
-            self.commit_boundary(RollupInvalidation::Reseed, |paths| {
-                let carryover_agents = snapshot::stage_carryover_for_rotation(paths, min_bytes)?;
+        let (rotation, carryover_agents) = self.commit_boundary(|paths| {
+            let carryover_agents = snapshot::stage_carryover_for_rotation(paths, min_bytes)?;
 
-                let rotation = rotate(&paths.events_log, &paths.events_archive_dir, min_bytes)?;
-                let changed = rotation.is_rotated();
-                Ok(((rotation, carryover_agents), changed))
-            })?;
+            let rotation = rotate(&paths.events_log, &paths.events_archive_dir, min_bytes)?;
+            let rollup = rotation.is_rotated().then_some(RollupInvalidation::Reseed);
+            Ok(((rotation, carryover_agents), rollup))
+        })?;
         let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
         let pruned = if let Some(older_than) = archive_older_than {
             event_log::prune_archive(&self.inner.paths.events_archive_dir, older_than)?
@@ -612,10 +619,10 @@ impl Store {
     /// frame CRC, and retries cold.
     #[must_use = "durability barrier; check the result"]
     pub fn repair_event_log(&self) -> Result<event_log::RepairOutcome> {
-        self.commit_boundary(RollupInvalidation::Drop, |paths| {
+        self.commit_boundary(|paths| {
             let outcome = event_log::repair(&paths.events_log)?;
-            let changed = outcome.truncated();
-            Ok((outcome, changed))
+            let rollup = outcome.truncated().then_some(RollupInvalidation::Drop);
+            Ok((outcome, rollup))
         })
     }
 }
