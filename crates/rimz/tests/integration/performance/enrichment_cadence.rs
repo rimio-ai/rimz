@@ -83,7 +83,7 @@ fn worktree_roots_reenumerate_on_session_boundary_only() {
 /// The fixture seam's isolation contract: a produce driven by
 /// `RIMZ_TEST_PANE_LIST` short-circuits before the shared pane cache, so a
 /// deterministic test can neither poison nor read it. The short-circuit lives
-/// at the library entry (`rimz::sidebar::produce::produce_snapshot` resolves
+/// at the library entry (`rimz::sidebar::produce::produce_workspace_snapshot` resolves
 /// the fixture itself), so the CLI delegate and the in-process fetch worker
 /// honor it identically.
 #[test]

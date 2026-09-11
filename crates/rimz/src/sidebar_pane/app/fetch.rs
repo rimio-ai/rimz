@@ -317,7 +317,7 @@ impl FetchWorker {
     /// failures; the produce below recovers the pane frame.
     ///
     /// **Produce lane (the elder's reconciliation):**
-    /// [`crate::sidebar::produce::produce_snapshot`] runs in process on this same
+    /// [`crate::sidebar::produce::produce_workspace_snapshot`] runs in process on this same
     /// worker — same thread, same warm cursor as the fast lane, so the rollup
     /// fold stays O(new log bytes) and promotion to producer is warm by
     /// construction. It refreshes pane truth and roots, then publishes the shared
