@@ -135,10 +135,6 @@ impl MessageEdit {
         }
         fields
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.changed_fields().is_empty()
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -300,14 +296,12 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
         session_name: &str,
         reason: &str,
         mut select: impl FnMut(&MessageRecord) -> bool,
-        mut update: impl FnMut(&mut MessageRecord),
     ) -> Vec<MessageRecord> {
         debug_assert!(status.is_terminal());
         self.apply_all(session_name, Timestamp::now(), |message| {
             if !select(message) {
                 return MessageUpdate::Keep;
             }
-            update(message);
             MessageUpdate::Finalize {
                 status,
                 reason: Some(reason.to_owned()),
@@ -692,33 +686,6 @@ impl Store {
     }
 
     #[must_use = "durability barrier; check the result"]
-    pub fn settle_message(
-        &self,
-        message_id: &MessageId,
-        status: MessageStatus,
-        session_name: &str,
-        reason: Option<&str>,
-    ) -> Result<Option<MessageRecord>> {
-        debug_assert!(status.is_terminal());
-        self.commit_queue(|queue| {
-            let message = match queue.get(message_id) {
-                Some(message)
-                    if matches!(
-                        message.status,
-                        MessageStatus::Queued | MessageStatus::Claimed | MessageStatus::Sent
-                    ) =>
-                {
-                    message
-                }
-                Some(_) | None => return Ok(None),
-            };
-            let now = Timestamp::now();
-            let settled = queue.terminalize(message, status, session_name, reason, now);
-            Ok(Some(settled))
-        })
-    }
-
-    #[must_use = "durability barrier; check the result"]
     pub fn confirm_delivered_for_card(
         &self,
         kind: &AgentKind,
@@ -731,16 +698,11 @@ impl Store {
         self.commit_queue(|queue| {
             let now = Timestamp::now();
             let oldest_sent_batch = |body| {
-                let Some(oldest) = queue
-                    .live()
-                    .iter()
-                    .filter(|message| {
-                        message.status == MessageStatus::Sent
-                            && message.body == body
-                            && message.same_card(card)
-                    })
-                    .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
-                else {
+                let Some(oldest) = queue.live().iter().find(|message| {
+                    message.status == MessageStatus::Sent
+                        && message.body == body
+                        && message.same_card(card)
+                }) else {
                     return BTreeSet::new();
                 };
                 queue
@@ -761,7 +723,7 @@ impl Store {
                 DeliveryAck::TurnStarted {
                     prompt: Some(prompt),
                 } if !prompt.trim().is_empty() => {
-                    let mut confirmable = queue
+                    let confirmable = queue
                         .live()
                         .iter()
                         .filter(|message| {
@@ -771,7 +733,6 @@ impl Store {
                                     || message.awaiting_late_ack())
                         })
                         .collect::<Vec<_>>();
-                    confirmable.sort_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()));
                     let mut selected = (BTreeSet::new(), None);
                     for first in &confirmable {
                         let batch = confirmable
@@ -955,7 +916,6 @@ impl Store {
                     existing.pane_id = message.pane_id.clone();
                     existing
                 }
-                Some(existing) if existing.status == MessageStatus::Sent => return Ok(None),
                 Some(_) => return Ok(None),
                 None => message.clone(),
             };
@@ -1094,7 +1054,6 @@ impl Store {
                 session_name,
                 "clear",
                 |message| message.status.is_open() && message.same_card(card),
-                |_| {},
             );
             Ok(cleared)
         })
@@ -1112,7 +1071,6 @@ impl Store {
                 session_name,
                 "clear",
                 |message| message.status.is_open() && message.channel.as_deref() == Some(channel),
-                |_| {},
             );
             Ok(cleared)
         })
@@ -1174,13 +1132,10 @@ impl Store {
     ) -> Result<usize> {
         let card = AgentCardRef::new(kind, agent_id, agent_name);
         let archived = self.commit_queue(|queue| {
-            let archived = queue.finalize_matching(
-                MessageStatus::Archived,
-                session_name,
-                reason,
-                |message| message.status.is_open() && message.same_card(card),
-                |message| message.last_error = Some(reason.to_owned()),
-            );
+            let archived =
+                queue.finalize_matching(MessageStatus::Archived, session_name, reason, |message| {
+                    message.status.is_open() && message.same_card(card)
+                });
             Ok(archived)
         })?;
         Ok(archived.len())
@@ -1225,13 +1180,10 @@ impl Store {
         session_name: &str,
     ) -> Result<usize> {
         let archived = self.commit_queue(|queue| {
-            let archived = queue.finalize_matching(
-                MessageStatus::Archived,
-                session_name,
-                reason,
-                |message| message.status.is_open() && message.channel.as_deref() == Some(channel),
-                |message| message.last_error = Some(reason.to_owned()),
-            );
+            let archived =
+                queue.finalize_matching(MessageStatus::Archived, session_name, reason, |message| {
+                    message.status.is_open() && message.channel.as_deref() == Some(channel)
+                });
             Ok(archived)
         })?;
         Ok(archived.len())

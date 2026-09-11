@@ -217,15 +217,7 @@ fn message_list_hides_system_traffic_unless_asked() {
 fn terminal_history_list_and_show_preserve_content_and_channel_fallback() {
     let env = Env::new();
     register_running_agent(&env, "sess-history", "docs", &[]);
-    let message_id = queue_direct_channel_message(&env, "docs", "kept body");
-    env.store()
-        .settle_message(
-            &MessageId::parse(&message_id).expect("message id"),
-            MessageStatus::Delivered,
-            "rimz-test",
-            None,
-        )
-        .expect("settle delivered");
+    let message_id = deliver_direct_channel_message(&env, "docs", "kept body");
 
     let listed = run_success(
         env.rimz().args(["message", "list", "--all", "--json"]),
@@ -5823,6 +5815,39 @@ fn queue_direct_channel_message(env: &Env, channel: &str, text: &str) -> String 
         .queue_message(&message, "rimz-test")
         .expect("queue message");
     message_id
+}
+
+fn deliver_direct_channel_message(env: &Env, channel: &str, text: &str) -> String {
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.parent_agent_id.is_none())
+        .expect("agent");
+    let message = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        text.to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_channel(Some(channel.to_owned()));
+    env.store()
+        .queue_message(&message, "rimz-test")
+        .expect("queue message");
+    env.store()
+        .record_sent_batch(std::slice::from_ref(&message), "rimz-test")
+        .expect("record sent");
+    env.store()
+        .confirm_delivered_for_card(
+            &agent.kind,
+            &agent.agent_id,
+            agent.name.as_deref(),
+            rimz::store::writer::DeliveryAck::TurnStarted { prompt: None },
+            "rimz-test",
+        )
+        .expect("confirm delivered");
+    message.message_id.to_string()
 }
 
 fn wake_stamp_path(env: &Env) -> PathBuf {

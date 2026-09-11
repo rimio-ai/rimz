@@ -155,13 +155,7 @@ fn edit_message_refuses_claimed_terminal_and_missing_records() {
     );
 
     let terminal = q.queue(2);
-    q.settle_message(
-        &terminal.message_id,
-        MessageStatus::Delivered,
-        "session",
-        None,
-    )
-    .unwrap();
+    q.settle(&terminal.message_id, MessageStatus::Delivered, None);
 
     assert_eq!(
         q.edit_message(&terminal.message_id, edit(), "session")
@@ -345,13 +339,7 @@ fn single_terminal_transitions_share_exact_history_and_event_contract() {
         let before = Timestamp::now();
 
         let terminal = q
-            .settle_message(
-                &queued.message_id,
-                status,
-                "session",
-                Some("terminal reason"),
-            )
-            .unwrap()
+            .settle(&queued.message_id, status, Some("terminal reason"))
             .expect("accepted terminal transition");
 
         assert!(q.live().is_empty());

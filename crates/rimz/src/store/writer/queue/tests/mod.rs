@@ -83,6 +83,22 @@ impl Queue {
             .expect("sent")
     }
 
+    /// Terminalize one live record the way the production paths do, without a production entry point per status.
+    fn settle(
+        &self,
+        id: &MessageId,
+        status: MessageStatus,
+        reason: Option<&str>,
+    ) -> Option<MessageRecord> {
+        self.store
+            .commit_queue(|queue| {
+                Ok(queue.get(id).map(|message| {
+                    queue.terminalize(message, status, "session", reason, Timestamp::now())
+                }))
+            })
+            .unwrap()
+    }
+
     fn live(&self) -> Vec<MessageRecord> {
         self.store.list_messages().unwrap()
     }

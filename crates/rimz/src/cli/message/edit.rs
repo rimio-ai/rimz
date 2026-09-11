@@ -54,10 +54,10 @@ pub(super) fn edit_message(
     let ctx = Ctx::open(globals)?;
     let (workspace, store) = (&ctx.workspace, &ctx.store);
     let edit = edit_from_flags(flags)?;
-    if edit.is_empty() {
+    let fields = edit.changed_fields();
+    if fields.is_empty() {
         bail!("nothing to edit; pass --text, --file, --on, --schedule, or another edit flag");
     }
-    let fields = edit.changed_fields();
     match store.edit_message(&message_id, edit, &workspace.session_name)? {
         EditOutcome::Edited(_) => {
             deliver::register_message_wake(workspace, store)?;
