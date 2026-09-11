@@ -172,6 +172,12 @@ fn codex_turn_death_retry_is_bounded_to_generic_recent_codex_markers() {
     };
     assert!(!codex_turn_death_retry_due("codex", &classified, now));
 
+    let future = crate::agents::AgentTurnError {
+        at: now.checked_add(jiff::SignedDuration::from_secs(1)).unwrap(),
+        ..marker.clone()
+    };
+    assert!(!codex_turn_death_retry_due("codex", &future, now));
+
     let expired = crate::agents::AgentTurnError {
         at: now
             .checked_sub(jiff::SignedDuration::from_secs(
