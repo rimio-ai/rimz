@@ -67,7 +67,7 @@ impl ProviderAccountScope {
         matches!(self, Self::KindWide)
     }
 
-    pub(crate) fn sub_provider_parts(&self) -> Option<(&str, &str)> {
+    pub(super) fn sub_provider_parts(&self) -> Option<(&str, &str)> {
         match self {
             Self::SubProvider { provider, variant } => Some((provider, variant)),
             Self::KindWide => None,
@@ -556,7 +556,7 @@ fn preserve_cached_context_window(
 }
 
 /// Round and clamp a reported percentage to the `0..=100` gauge range.
-pub(crate) fn clamp_pct(value: Option<f64>) -> Option<u8> {
+pub(super) fn clamp_pct(value: Option<f64>) -> Option<u8> {
     value
         .filter(|value| value.is_finite())
         .map(|value| value.round().clamp(0.0, 100.0) as u8)
@@ -1037,7 +1037,7 @@ pub enum WindowSource {
 impl WindowSource {
     /// Whether this is the default ([`WindowSource::BestEffort`]) — lets serde
     /// omit the common case and a cold cache deserialize to the safe reading.
-    pub fn is_best_effort(&self) -> bool {
+    pub(super) fn is_best_effort(&self) -> bool {
         matches!(self, WindowSource::BestEffort)
     }
 
