@@ -34,7 +34,7 @@ pub(crate) struct NotifyTraceEnvelope {
 }
 
 impl NotifyTraceEnvelope {
-    pub(crate) fn new(
+    pub(super) fn new(
         workspace_id: WorkspaceId,
         session_name: String,
         instance_id: Option<SidebarInstanceId>,
@@ -135,7 +135,7 @@ pub struct TraceAgent {
 const NOTIFY_LOG_NAME: &str = "notify.log.jsonl";
 const NOTIFY_LOG_MAX_BYTES: u64 = 1_048_576;
 
-pub(crate) fn append(state_root: &Path, record: &NotifyTraceEnvelope) {
+pub(super) fn append(state_root: &Path, record: &NotifyTraceEnvelope) {
     crate::disk::rotating::append(
         &state_root.join(NOTIFY_LOG_NAME),
         NOTIFY_LOG_MAX_BYTES,
