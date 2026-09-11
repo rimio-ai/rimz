@@ -1,6 +1,6 @@
 //! Codex daemon-mode session reap cache.
 //!
-//! The refresh lane probes daemon PIDs and Codex's loaded-thread list when daemon-hooked sessions need reaping or the remote-control badge needs a health signal. The TTL gates both producer re-probes and every reader's acceptance. The fold applies the published inputs without proc scans or app-server reads.
+//! The refresh lane probes daemon PIDs and Codex's loaded-thread list when daemon-hooked sessions need reaping or the remote-control badge needs a health signal. Readers accept publications beyond the producer's re-probe TTL so replacement probes overlap the previous evidence. The fold applies the published inputs without proc scans or app-server reads.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::RuntimePaths;
 use crate::agents::AgentState;
 
-use super::super::timing::CODEX_DAEMON_REAP_TTL;
+use super::super::timing::{CODEX_DAEMON_REAP_STALE, CODEX_DAEMON_REAP_TTL};
 
 /// Producer-published inputs for the Codex daemon ghost reaper. Consumers read
 /// this cache so the fast lane can apply the same reap without proc scans or
@@ -33,7 +33,7 @@ fn write_codex_daemon_reap(
     crate::disk::atomic::write_temp_then_rename_cache(&codex_daemon_reap_path(runtime), cache)
 }
 
-/// Read the publication within the reap TTL of `now_ms`; absent, unreadable, or stale records return `None`, so readers keep every session and the producer re-probes. Saturating age treats a clock-ahead stamp as fresh, like `snapshot_cache_is_fresh`.
+/// Read the publication within the reader's stale bound of `now_ms`; absent, unreadable, or stale records return `None`, so readers keep every session. Saturating age treats a clock-ahead stamp as fresh, like `snapshot_cache_is_fresh`.
 pub(in crate::sidebar) fn read_codex_daemon_reap(
     runtime: &RuntimePaths,
     now_ms: u64,
@@ -42,7 +42,13 @@ pub(in crate::sidebar) fn read_codex_daemon_reap(
         runtime,
     ))
     .filter(|cache| {
-        now_ms.saturating_sub(cache.produced_at_ms) <= CODEX_DAEMON_REAP_TTL.as_millis() as u64
+        now_ms.saturating_sub(cache.produced_at_ms) <= CODEX_DAEMON_REAP_STALE.as_millis() as u64
+    })
+}
+
+fn daemon_reap_due(cache: &Option<CodexDaemonReap>, now_ms: u64) -> bool {
+    cache.as_ref().is_none_or(|cache| {
+        now_ms.saturating_sub(cache.produced_at_ms) > CODEX_DAEMON_REAP_TTL.as_millis() as u64
     })
 }
 
@@ -61,8 +67,10 @@ pub(super) fn refresh_codex_daemon_reap_cache(
     now_ms: u64,
     codex_rc_enabled: bool,
 ) {
+    // Re-probe before the reader's stale bound so replacement probes overlap the previous publication.
+    let current = crate::disk::atomic::read_json_cache(&codex_daemon_reap_path(runtime));
     if !should_probe_codex_daemon_reap(agents, codex_rc_enabled)
-        || read_codex_daemon_reap(runtime, now_ms).is_some()
+        || !daemon_reap_due(&current, now_ms)
     {
         return;
     }
@@ -93,12 +101,13 @@ mod tests {
     use crate::{RuntimeOwner, RuntimeOwnerKind};
 
     #[test]
-    fn read_codex_daemon_reap_expires_past_ttl() {
+    fn read_codex_daemon_reap_expires_past_stale_bound() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = WorkspaceId::from_project_root(dir.path());
         let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
         runtime.ensure_dirs().unwrap();
         let ttl_ms = CODEX_DAEMON_REAP_TTL.as_millis() as u64;
+        let stale_ms = CODEX_DAEMON_REAP_STALE.as_millis() as u64;
         let produced_at_ms = ttl_ms * 2 + 10;
 
         assert!(read_codex_daemon_reap(&runtime, produced_at_ms).is_none());
@@ -110,9 +119,26 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(read_codex_daemon_reap(&runtime, produced_at_ms + ttl_ms).is_some());
-        assert!(read_codex_daemon_reap(&runtime, produced_at_ms + ttl_ms + 1).is_none());
+        let due = read_codex_daemon_reap(&runtime, produced_at_ms + ttl_ms + 1);
+        assert!(due.is_some());
+        assert!(daemon_reap_due(&due, produced_at_ms + ttl_ms + 1));
+        assert!(read_codex_daemon_reap(&runtime, produced_at_ms + stale_ms).is_some());
+        assert!(read_codex_daemon_reap(&runtime, produced_at_ms + stale_ms + 1).is_none());
         assert!(read_codex_daemon_reap(&runtime, produced_at_ms - 1).is_some());
+    }
+
+    #[test]
+    fn daemon_reap_due_tracks_cache_ttl() {
+        let ttl_ms = CODEX_DAEMON_REAP_TTL.as_millis() as u64;
+        let produced_at_ms = ttl_ms * 2;
+        let cache = Some(CodexDaemonReap {
+            produced_at_ms,
+            ..Default::default()
+        });
+        assert!(daemon_reap_due(&None, produced_at_ms));
+        assert!(!daemon_reap_due(&cache, produced_at_ms + ttl_ms));
+        assert!(daemon_reap_due(&cache, produced_at_ms + ttl_ms + 1));
+        assert!(!daemon_reap_due(&cache, produced_at_ms - 1));
     }
 
     #[test]
@@ -152,10 +178,12 @@ mod tests {
         ));
         let pre_reap =
             SidebarSnapshot::build_with_agents(workspace.clone(), vec![agent], Timestamp::now());
+        let produced_at_ms =
+            crate::utils::time::unix_now_ms() - CODEX_DAEMON_REAP_TTL.as_millis() as u64 - 1;
         write_codex_daemon_reap(
             &runtime,
             &CodexDaemonReap {
-                produced_at_ms: 1,
+                produced_at_ms,
                 daemon_pids: BTreeSet::from([77]),
                 loaded: Some(BTreeSet::new()),
             },
@@ -163,17 +191,17 @@ mod tests {
         .unwrap();
 
         let mut base = pre_reap.clone();
-        let daemon_pids = BTreeSet::from([77]);
-        let loaded = BTreeSet::new();
+        let inputs = read_codex_daemon_reap(&runtime, crate::utils::time::unix_now_ms())
+            .expect("due publication still serves readers");
         base.reap_runtime(crate::store::snapshot::RuntimeReapInputs {
-            daemon_pids: &daemon_pids,
-            loaded: Some(&loaded),
+            daemon_pids: &inputs.daemon_pids,
+            loaded: inputs.loaded.as_ref(),
             frame_panes: None,
             exclude_pane: None,
         });
         assert!(
             base.agents.is_empty(),
-            "stale cache reaps the intermediate base"
+            "due publication reaps the intermediate base"
         );
 
         let _ = super::super::refresh_heavy_lanes(
@@ -190,7 +218,7 @@ mod tests {
             read_codex_daemon_reap(&runtime, crate::utils::time::unix_now_ms())
                 .expect("codex reap cache")
                 .produced_at_ms,
-            1,
+            produced_at_ms,
             "the refresh probes from the unreaped CLI snapshot, not the reaped base"
         );
     }

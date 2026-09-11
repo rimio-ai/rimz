@@ -348,7 +348,7 @@ fn cached_daemon_reap_keeps_ghost_when_publication_is_stale() {
         &crate::sidebar::refresh::daemon_reap::codex_daemon_reap_path(&runtime),
         &crate::sidebar::refresh::daemon_reap::CodexDaemonReap {
             produced_at_ms: crate::utils::time::unix_now_ms()
-                - crate::sidebar::timing::CODEX_DAEMON_REAP_TTL.as_millis() as u64
+                - crate::sidebar::timing::CODEX_DAEMON_REAP_STALE.as_millis() as u64
                 - 1,
             daemon_pids: BTreeSet::from([owner_pid]),
             loaded: Some(BTreeSet::new()),

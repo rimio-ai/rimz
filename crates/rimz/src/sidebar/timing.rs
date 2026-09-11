@@ -236,6 +236,9 @@ pub const SESSION_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 /// one coarse cache stamp and the fetch lane only reads it.
 pub const CODEX_DAEMON_REAP_TTL: Duration = Duration::from_secs(30);
 
+/// Reader acceptance allows two missed re-probes plus slack before frozen daemon-reap evidence falls back to keeping every session.
+pub(super) const CODEX_DAEMON_REAP_STALE: Duration = Duration::from_secs(90);
+
 /// Link stats are stale after three missed two-second publishes plus slack.
 /// Stale renders as dim unknown (`⇄ remote ?`) rather than red: during a hard
 /// drop the remote-rendered sidebar cannot reach the user, and a second local
