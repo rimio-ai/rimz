@@ -1,7 +1,8 @@
 use super::*;
 use rimz::agents::spending::sum_optional_cost;
+use rimz::ids::LinkTier;
 use rimz::store::snapshot::{
-    AgentCard, LinkTier, ProcessCard, ProcessState, RemoteControlBadge, RowCard, SNAPSHOT_VERSION,
+    AgentCard, ProcessCard, ProcessState, RemoteControlBadge, RowCard, SNAPSHOT_VERSION,
     SidebarLinkFreshness, SidebarLinkHealth, SidebarProviderPanel, SidebarRow, SidebarSnapshot,
     SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrCi,
     WorktreePrState, WorktreeTrunkSync,

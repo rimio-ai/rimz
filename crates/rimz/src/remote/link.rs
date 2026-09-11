@@ -10,9 +10,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::ids::LinkTier;
 use crate::mux::CommandSpec;
 use crate::sock;
-use crate::store::snapshot::LinkTier;
 
 use super::{RemoteTarget, env_ms, remote_path_prefix};
 

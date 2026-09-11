@@ -156,7 +156,7 @@ fn diagnostics_name_producer_transitions_and_link_alerts() {
     emit_link_alert(
         &sink,
         LinkAlert {
-            tier: crate::store::snapshot::LinkTier::Degraded,
+            tier: crate::ids::LinkTier::Degraded,
             rtt_ms: Some(230),
             miss_pct: 4,
             since_ms: 10,
@@ -168,7 +168,7 @@ fn diagnostics_name_producer_transitions_and_link_alerts() {
     assert!(matches!(
         &events[2],
         crate::diag::record::DiagEvent::LinkAlert {
-            tier: crate::store::snapshot::LinkTier::Degraded,
+            tier: crate::ids::LinkTier::Degraded,
             rtt_ms: Some(230),
             miss_pct: 4,
             since_ms: 10,

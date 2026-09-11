@@ -14,9 +14,9 @@ use crate::child_process;
 use crate::config::{
     NotificationsPrefs, NotifyConditionAgent, RenderMode, TemplateVars, render_template,
 };
-use crate::ids::{AgentKind, AgentSessionId, AskId, PaneId};
+use crate::ids::{AgentKind, AgentSessionId, AskId, LinkTier, PaneId};
 use crate::sidebar::unread::OpenedUnread;
-use crate::store::snapshot::{LinkTier, SidebarLinkFreshness, SidebarLinkHealth, SidebarSnapshot};
+use crate::store::snapshot::{SidebarLinkFreshness, SidebarLinkHealth, SidebarSnapshot};
 
 pub use crate::config::NotificationKind;
 
