@@ -58,29 +58,31 @@ fn cached_enrich_uses_published_codex_daemon_reap_inputs() {
     atomic::write_temp_then_rename_cache(
         &codex_daemon_reap_path(&runtime_paths),
         &CodexDaemonReap {
-            produced_at_ms: crate::utils::time::unix_now_ms(),
+            produced_at_ms: crate::utils::time::unix_now_ms()
+                - crate::sidebar::timing::CODEX_DAEMON_REAP_TTL.as_millis() as u64
+                - 1,
             daemon_pids: BTreeSet::from([77]),
             loaded: Some(BTreeSet::from(["open".to_owned()])),
         },
     )
     .unwrap();
 
-    let fresh = fold_cached(snapshot.clone(), None, &runtime_paths);
+    let due = fold_cached(snapshot.clone(), None, &runtime_paths);
 
     assert_eq!(
-        fresh
-            .agents
+        due.agents
             .iter()
             .map(|agent| agent.agent_id.as_str())
             .collect::<Vec<_>>(),
-        vec!["open"]
+        vec!["open"],
+        "a due publication still reaps while its replacement is being probed"
     );
 
     atomic::write_temp_then_rename_cache(
         &codex_daemon_reap_path(&runtime_paths),
         &CodexDaemonReap {
             produced_at_ms: crate::utils::time::unix_now_ms()
-                - crate::sidebar::timing::CODEX_DAEMON_REAP_TTL.as_millis() as u64
+                - crate::sidebar::timing::CODEX_DAEMON_REAP_STALE.as_millis() as u64
                 - 1,
             daemon_pids: BTreeSet::from([77]),
             loaded: Some(BTreeSet::from(["open".to_owned()])),

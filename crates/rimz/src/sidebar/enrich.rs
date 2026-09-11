@@ -350,8 +350,7 @@ pub struct FoldOpts<'a> {
     pub agent_projection: crate::sidebar::agent_projection::AgentProjection,
 }
 
-/// Probed managed-server liveness for the rc badge. `None` means no probe was
-/// available this tick (no pane frame or no reap cache yet).
+/// Probed managed-server liveness for the rc badge. `None` means no probe was available this tick (no pane frame, or an absent or stale reap cache).
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct RemoteControlServerHealth {
     /// A managed host pane exists *and* the provider's record shows it still
