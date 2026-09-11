@@ -545,6 +545,19 @@ pub struct SplitPaneOptions {
     pub focus: bool,
 }
 
+impl SplitPaneOptions {
+    /// The command projection of `pane` launched in `cwd`; every other field
+    /// keeps its default and the caller states its own policy by struct update.
+    pub fn from_command(pane: &PaneCmd, cwd: &std::path::Path) -> Self {
+        Self {
+            cwd: Some(cwd.to_string_lossy().into_owned()),
+            command: Some(pane.argv.clone()),
+            title: pane.name.clone(),
+            ..Self::default()
+        }
+    }
+}
+
 /// A companion append never asks the caller to retry after opening a pane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompanionPaneAppend {

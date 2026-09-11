@@ -291,13 +291,10 @@ pub(super) fn split_into_subagent_zone(
                 session_name: session_name.clone(),
                 pane_id: pane_id.clone(),
             },
-            cwd: Some(cwd.to_string_lossy().into_owned()),
-            command: Some(pane.argv.clone()),
             title: Some(child_name.to_owned()),
-            close_on_exit: false,
             env: env.clone(),
             placement,
-            focus: false,
+            ..SplitPaneOptions::from_command(pane, cwd)
         }) {
         Ok(()) => SubagentZoneOpen::Opened,
         Err(err) => {
@@ -351,13 +348,9 @@ pub(super) fn split_into_subagent_zone(
                         session_name,
                         pane_id,
                     },
-                    cwd: Some(cwd.to_string_lossy().into_owned()),
-                    command: Some(pane.argv.clone()),
                     title: Some(child_name.to_owned()),
-                    close_on_exit: false,
                     env: env.clone(),
-                    placement: SplitPlacement::default(),
-                    focus: false,
+                    ..SplitPaneOptions::from_command(pane, cwd)
                 }) {
                     Ok(CompanionPaneAppend::Opened) => return SubagentZoneOpen::Opened,
                     Ok(CompanionPaneAppend::Full) => continue,
@@ -466,13 +459,9 @@ pub(super) fn split_into_loop_zone(
             session_name: workspace.session_name.clone(),
             pane_id: panel.pane_id.clone(),
         },
-        cwd: Some(cwd.to_string_lossy().into_owned()),
-        command: Some(pane.argv.clone()),
-        title: pane.name.clone(),
-        close_on_exit: false,
         env,
         placement: SplitPlacement::Stacked,
-        focus: false,
+        ..SplitPaneOptions::from_command(pane, cwd)
     }) {
         Ok(()) => Ok(true),
         Err(err) => {
