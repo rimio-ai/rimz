@@ -676,13 +676,13 @@ fn provider_tab_rail(
         }
         let gap = if rendered > 0 { RAIL_STUB } else { 0 };
         let active = panel.kind == active_kind;
-        let label = tab_label(&panel.product_name);
+        let label = panel.product_name.as_str();
         let cells = label.chars().count() + 4;
         if gap > 0 {
             spans.push(fill(gap));
             col += gap;
         }
-        append_provider_tab_spans(&mut spans, theme, panel, &label, active);
+        append_provider_tab_spans(&mut spans, theme, panel, label, active);
         hits.push((
             col as u16..(col + cells).min(width) as u16,
             HitTarget::ProviderTab(panel.kind.clone()),
@@ -704,8 +704,7 @@ fn selected_provider_tabs(
     width: usize,
     stub: usize,
 ) -> Vec<bool> {
-    let tab_cells =
-        |panel: &SidebarProviderPanel| tab_label(&panel.product_name).chars().count() + 4;
+    let tab_cells = |panel: &SidebarProviderPanel| panel.product_name.chars().count() + 4;
     let active_index = providers.iter().position(|panel| panel.kind == active_kind);
     let mut selected = vec![false; providers.len()];
     let mut used = stub;
@@ -764,16 +763,6 @@ fn append_provider_tab_spans(
 
 /// Width of the tab rail's leading stub and inter-tab gaps.
 const RAIL_STUB: usize = 2;
-
-/// A tab's display label: the registry kind slug with its first ASCII char
-/// capitalized (`claude` → `Claude`) — the rail names the product, so the
-/// tabbed header doesn't have to. Hits keep the raw slug. Kind slugs are
-/// registry-fixed ASCII — the rail's cell math counts on it — so a non-ASCII
-/// first char (a mid-codepoint `get_mut` range) is left uncapitalized rather
-/// than split.
-fn tab_label(product_name: &str) -> String {
-    product_name.to_owned()
-}
 
 /// The block's header line, with the health-colored `⇅ rc` flag pinned to the
 /// top-right corner when remote control is on for the provider. Untabbed it

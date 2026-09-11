@@ -6,7 +6,6 @@ use crate::config::CardDensityMode;
 use crate::store::snapshot::SidebarRow;
 
 use super::description::awaiting_first_prompt;
-use super::gauge::gauge_percent;
 
 /// The card lifecycle state. Its line set is stable; enrichment only changes
 /// the contents of those lines.
@@ -24,7 +23,7 @@ impl CardStage {
         if matches!(row.status().unwrap_or(AgentStatus::Idle), AgentStatus::Idle)
             && agent.prompt.is_none()
             && !agent.has_session_history()
-            && gauge_percent(row).unwrap_or(0) == 0
+            && row.context_gauge_percent().unwrap_or(0) == 0
         {
             Self::Fresh {
                 labeled: !awaiting_first_prompt(row),

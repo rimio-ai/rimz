@@ -105,7 +105,7 @@ pub(super) fn gauge_line(
     let theme = ctx.theme;
     let bands = ctx.bands;
     let width = content_width(ctx.width);
-    let percent = gauge_percent(row).unwrap_or(0);
+    let percent = row.context_gauge_percent().unwrap_or(0);
     let precise = precise_context_pct(row);
     let value = pct_label(precise, percent);
     let fill = precise.unwrap_or_else(|| f64::from(percent));
@@ -222,7 +222,7 @@ pub(super) fn row_severity(row: &SidebarRow, bands: &ContextMeterConfig) -> Cont
         .and_then(|agent| agent.context_severity)
         .unwrap_or_else(|| {
             ContextSeverity::classify(
-                gauge_percent(row).unwrap_or(0),
+                row.context_gauge_percent().unwrap_or(0),
                 row.context_used_tokens(),
                 bands,
             )
@@ -238,7 +238,7 @@ fn row_severity_color(
     severity_heat_color(
         theme,
         severity,
-        gauge_percent(row).unwrap_or(0),
+        row.context_gauge_percent().unwrap_or(0),
         row.context_used_tokens(),
         bands,
     )
@@ -259,12 +259,6 @@ pub(super) fn precise_context_pct(row: &SidebarRow) -> Option<f64> {
     }
     let used = row.context_used_tokens()? as f64;
     Some((used / window * 100.0).clamp(0.0, 100.0))
-}
-
-/// The context bar's value — [`SidebarRow::context_gauge_percent`], the same
-/// input the producer classified the stamped severity from.
-pub(super) fn gauge_percent(row: &SidebarRow) -> Option<u8> {
-    row.context_gauge_percent()
 }
 
 fn correlated_current_usage(row: &SidebarRow) -> Option<&AgentCurrentUsage> {
