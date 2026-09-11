@@ -154,13 +154,17 @@ fn workspace_migrate_moves_store_and_rewrites_workspace_ids() {
         .queue_message(&delivered_message, "old-session")
         .expect("message delivered message");
     old_store
-        .settle_message(
-            &delivered_message_id,
-            MessageStatus::Delivered,
+        .record_sent_batch(std::slice::from_ref(&delivered_message), "old-session")
+        .expect("record sent");
+    old_store
+        .confirm_delivered_for_card(
+            &agent.kind,
+            &agent.agent_id,
+            agent.name.as_deref(),
+            rimz::store::writer::DeliveryAck::TurnStarted { prompt: None },
             "old-session",
-            None,
         )
-        .expect("settle delivered message");
+        .expect("confirm delivered message");
 
     std::fs::remove_dir_all(&old_root).expect("simulate moved project");
 
