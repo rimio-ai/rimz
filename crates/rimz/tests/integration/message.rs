@@ -150,6 +150,70 @@ fn message_list_scopes_orders_and_limits_records() {
 }
 
 #[test]
+fn message_list_hides_system_traffic_unless_asked() {
+    let env = Env::new();
+    register_running_agent(&env, "sess-conversation", "docs", &[]);
+    let human = queue_direct_channel_message(&env, "docs", "human conversation");
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
+    let agent = &snapshot.agents[0];
+    let mut system_ids = Vec::new();
+    for sender in [
+        MessageSender::Harness {
+            notice: HarnessNotice::Wake,
+        },
+        MessageSender::System,
+    ] {
+        let message = MessageRecord::new(
+            env.workspace_id.clone(),
+            agent,
+            "system traffic".to_owned(),
+            true,
+            DeliveryGate::Done,
+        )
+        .with_channel(Some("docs".to_owned()))
+        .with_sender(sender);
+        env.store().queue_message(&message, "rimz-test").unwrap();
+        system_ids.push(message.message_id.to_string());
+    }
+    queue_direct_channel_message(&env, "ops", "other lane");
+    assert_eq!(
+        list_message_ids(
+            &env,
+            &["message", "list", "--json", "--limit", "1"],
+            Some("docs")
+        ),
+        vec![human.clone()]
+    );
+    let all = list_message_ids(
+        &env,
+        &["message", "list", "--system", "--json"],
+        Some("docs"),
+    );
+    assert_eq!(all.len(), 3);
+    assert!(all.contains(&human));
+    assert!(system_ids.iter().all(|id| all.contains(id)));
+    let conversation = list_message_ids(&env, &["message", "list", "--all", "--json"], None);
+    assert_eq!(conversation.len(), 2);
+    assert!(system_ids.iter().all(|id| !conversation.contains(id)));
+
+    let digest = run_success(
+        env.rimz()
+            .env(rimz::workspace::ENV_CHANNEL, "docs")
+            .args(["message", "list"]),
+        "conversation digest",
+    );
+    let digest = String::from_utf8_lossy(&digest.stdout);
+    assert!(digest.contains("human conversation"));
+    assert!(!digest.contains("system traffic"));
+    assert!(digest.contains("2 system messages hidden (--system shows them)"));
+    let shown = run_success(
+        env.rimz().args(["message", "show", &system_ids[0]]),
+        "system audit",
+    );
+    assert!(String::from_utf8_lossy(&shown.stdout).contains("system traffic"));
+}
+
+#[test]
 fn terminal_history_list_and_show_preserve_content_and_channel_fallback() {
     let env = Env::new();
     register_running_agent(&env, "sess-history", "docs", &[]);
@@ -4310,7 +4374,9 @@ fn agents_compact_queues_for_a_running_agent() {
     assert_eq!(
         list_message_ids(
             &env,
-            &["message", "list", "--all", "--status", "queued", "--json"],
+            &[
+                "message", "list", "--all", "--system", "--status", "queued", "--json"
+            ],
             None
         ),
         vec![command.message_id.to_string()]

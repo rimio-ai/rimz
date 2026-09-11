@@ -65,33 +65,8 @@ pub struct MessageArgs {
 
 #[derive(Debug, Subcommand)]
 enum MessageSubcmd {
-    /// List queued message records.
-    List {
-        /// Emit JSON.
-        #[arg(long)]
-        json: bool,
-        /// Include every channel and archived messages.
-        #[arg(long)]
-        all: bool,
-        /// Exact status filter.
-        #[arg(long, value_name = "STATUS", value_parser = parse_status)]
-        status: Option<MessageStatus>,
-        /// Filter by channel name.
-        #[arg(
-            long,
-            value_name = "NAME",
-            add = clap_complete::ArgValueCandidates::new(crate::cli::complete::channels)
-        )]
-        channel: Option<String>,
-        /// Max rows to show, newest first. 0 lists all.
-        #[arg(long, value_name = "N")]
-        limit: Option<usize>,
-        /// Optional target filter.
-        #[arg(add = clap_complete::ArgValueCandidates::new(
-            crate::cli::complete::message_targets
-        ))]
-        target: Option<String>,
-    },
+    /// List message records for the current lane: the conversation, newest first.
+    List(ListArgs),
     /// Show one message record with timeline and delivery diagnosis.
     #[command(alias = "status")]
     Show {
@@ -175,6 +150,37 @@ enum MessageSubcmd {
     Sweep,
 }
 
+#[derive(Debug, Default, Args)]
+struct ListArgs {
+    /// Emit JSON.
+    #[arg(long)]
+    json: bool,
+    /// Include every channel and archived messages.
+    #[arg(long)]
+    all: bool,
+    /// Include system traffic: wakes, signals, subagent digests, nudges, and --no-from text.
+    #[arg(long)]
+    system: bool,
+    /// Exact status filter.
+    #[arg(long, value_name = "STATUS", value_parser = parse_status)]
+    status: Option<MessageStatus>,
+    /// Filter by channel name.
+    #[arg(
+        long,
+        value_name = "NAME",
+        add = clap_complete::ArgValueCandidates::new(crate::cli::complete::channels)
+    )]
+    channel: Option<String>,
+    /// Max rows to show, newest first. 0 lists all.
+    #[arg(long, value_name = "N")]
+    limit: Option<usize>,
+    /// Optional target filter.
+    #[arg(add = clap_complete::ArgValueCandidates::new(
+        crate::cli::complete::message_targets
+    ))]
+    target: Option<String>,
+}
+
 #[derive(Debug, Args)]
 struct EditFlags {
     /// Replace the message text.
@@ -214,14 +220,7 @@ struct EditFlags {
 
 pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
-        Some(MessageSubcmd::List {
-            json,
-            all,
-            status,
-            channel,
-            limit,
-            target,
-        }) => list_messages(json, all, status, channel, limit, target, globals),
+        Some(MessageSubcmd::List(args)) => list_messages(args, globals),
         Some(MessageSubcmd::Show { message_id, json }) => show_message(message_id, json, globals),
         Some(MessageSubcmd::Edit { message_id, edit }) => edit_message(message_id, edit, globals),
         Some(MessageSubcmd::Steer { message_id, force }) => {
@@ -240,7 +239,7 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
         Some(MessageSubcmd::Sweep) => sweep_messages(globals),
         None => {
             let Some(target) = args.target else {
-                return list_messages(false, false, None, None, None, None, globals);
+                return list_messages(ListArgs::default(), globals);
             };
             if !target.starts_with('@') && !target.contains(':') {
                 if target.starts_with("msg_") {
