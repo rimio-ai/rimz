@@ -1,6 +1,6 @@
 //! Ratatui rendering for the sidebar snapshot model.
 //!
-//! `draw` is the entry point a Ratatui frame calls; `render_fixed` is the
+//! `draw_with_ui` is the entry point a Ratatui frame calls; `render_fixed` is the
 //! offscreen variant used by the vt100-backed snapshot tests. Section
 //! composition lives in `sections`; vocabulary labels in `labels`;
 //! pure formatting helpers in `fmt`.
@@ -74,10 +74,6 @@ fn age_heat_amount_for_test(age_secs: i64) -> f32 {
     debug_assert!(age_secs > first_quarter);
     let heat_span = crate::agents::ATTENTION_AGE_CEILING_SECS - first_quarter;
     ((age_secs - first_quarter) as f32 / heat_span as f32).min(1.0)
-}
-
-pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, alert: Option<&Alert>) {
-    draw_with_ui(frame, snapshot, alert, &mut UiState::default());
 }
 
 pub fn draw_with_ui(

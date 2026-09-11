@@ -24,7 +24,7 @@ pub(super) fn trim_spans_to_width(spans: Vec<Span<'static>>, width: usize) -> Ve
             trimmed.push(span);
             continue;
         }
-        let content = take_cells(span.content.as_ref(), remaining);
+        let content = clip(span.content.as_ref(), remaining);
         if !content.is_empty() {
             trimmed.push(Span::styled(content, span.style));
         }
@@ -86,10 +86,6 @@ pub(super) fn truncate_left(text: &str, budget: usize) -> String {
     format!("…{}", tail.into_iter().collect::<String>())
 }
 
-pub(super) fn clip(text: &str, max_cells: usize) -> String {
-    take_cells(text, max_cells)
-}
-
 pub(super) fn ellipsize(text: &str, max_cells: usize) -> String {
     if text_width(text) <= max_cells {
         return text.to_owned();
@@ -97,10 +93,10 @@ pub(super) fn ellipsize(text: &str, max_cells: usize) -> String {
     if max_cells == 0 {
         return String::new();
     }
-    format!("{}…", take_cells(text, max_cells - 1))
+    format!("{}…", clip(text, max_cells - 1))
 }
 
-fn take_cells(content: &str, width: usize) -> String {
+pub(super) fn clip(content: &str, width: usize) -> String {
     let mut taken = String::new();
     let mut used = 0;
     for ch in content.chars() {
