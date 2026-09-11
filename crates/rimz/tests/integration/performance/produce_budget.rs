@@ -1,6 +1,6 @@
 //! The in-process produce budget at fleet scale.
 //!
-//! The elder renderer runs [`rimz::sidebar::produce::produce_snapshot`] on its
+//! The elder renderer runs `rimz::sidebar::produce::produce_workspace_snapshot` on its
 //! fetch worker once per data tick (docs/internals/performance.md, the 2026-06
 //! warm-producer pass). The contract: a warm steady-state produce — every
 //! fork-bearing input pre-published fresh, the rollup folding O(new bytes)

@@ -179,7 +179,7 @@ fn diagnostics_name_producer_transitions_and_link_alerts() {
 
 /// One forced cycle over a tempdir workspace, end to end and entirely in
 /// process: the fast lane folds the published frame and posts a non-final
-/// outcome, then the produce arm runs [`produce_snapshot`] on the same warm
+/// outcome, then the produce arm runs `produce_workspace_snapshot` on the same warm
 /// cursor and posts the final reconciling outcome. Every forked enrichment is
 /// pre-published fresh — the pane frame (the single-flight cache's fast path,
 /// so no mux), the provider-spending stamp, and the accounts stamp — so the
