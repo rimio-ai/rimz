@@ -8,7 +8,6 @@ use crate::remote::link::{LinkStats, LinkStatsFile};
 use crate::sidebar::refresh::AccountsCache;
 use crate::sidebar::refresh::daemon_reap::{CodexDaemonReap, codex_daemon_reap_path};
 use crate::sidebar::refresh::git_stats::{DiffStatsCache, DiffStatsCacheEntry, WorktreeRootsCache};
-use crate::sidebar::refresh::read_codex_daemon_reap;
 use crate::sidebar::test_support::{activity_row, pane, root_agent, worktree_group};
 use crate::store::snapshot::LinkTier;
 use crate::utils::time::unix_now_ms;

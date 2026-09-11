@@ -58,22 +58,44 @@ fn cached_enrich_uses_published_codex_daemon_reap_inputs() {
     atomic::write_temp_then_rename_cache(
         &codex_daemon_reap_path(&runtime_paths),
         &CodexDaemonReap {
-            produced_at_ms: 1_000,
+            produced_at_ms: crate::utils::time::unix_now_ms(),
             daemon_pids: BTreeSet::from([77]),
             loaded: Some(BTreeSet::from(["open".to_owned()])),
         },
     )
     .unwrap();
 
-    let snapshot = fold_cached(snapshot, None, &runtime_paths);
+    let fresh = fold_cached(snapshot.clone(), None, &runtime_paths);
 
     assert_eq!(
-        snapshot
+        fresh
             .agents
             .iter()
             .map(|agent| agent.agent_id.as_str())
             .collect::<Vec<_>>(),
         vec!["open"]
+    );
+
+    atomic::write_temp_then_rename_cache(
+        &codex_daemon_reap_path(&runtime_paths),
+        &CodexDaemonReap {
+            produced_at_ms: crate::utils::time::unix_now_ms()
+                - crate::sidebar::timing::CODEX_DAEMON_REAP_TTL.as_millis() as u64
+                - 1,
+            daemon_pids: BTreeSet::from([77]),
+            loaded: Some(BTreeSet::from(["open".to_owned()])),
+        },
+    )
+    .unwrap();
+    let stale = fold_cached(snapshot, None, &runtime_paths);
+    assert_eq!(
+        stale
+            .agents
+            .iter()
+            .map(|agent| agent.agent_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["closed", "open"],
+        "stale cache reaps nothing"
     );
 
     let (_empty_dir, empty_runtime, _) = runtime();
@@ -109,7 +131,7 @@ fn project_lane_enrich_reads_stale_codex_daemon_reap_without_rewriting() {
     let _ = fold_producing(snapshot, None, &runtime_paths);
 
     assert_eq!(
-        read_codex_daemon_reap(&runtime_paths)
+        atomic::read_json_cache::<Option<CodexDaemonReap>>(&codex_daemon_reap_path(&runtime_paths))
             .expect("codex reap cache")
             .produced_at_ms,
         1

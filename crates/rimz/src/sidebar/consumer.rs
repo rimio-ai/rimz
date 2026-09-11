@@ -317,7 +317,8 @@ fn reap_cached_daemon_sessions_with(
     runtime: &RuntimePaths,
     frame_panes: Option<&[crate::pane::PaneRef]>,
 ) {
-    let cache = super::refresh::read_codex_daemon_reap(runtime).unwrap_or_default();
+    let cache = super::refresh::read_codex_daemon_reap(runtime, crate::utils::time::unix_now_ms())
+        .unwrap_or_default();
     snapshot.reap_runtime(crate::store::snapshot::RuntimeReapInputs {
         daemon_pids: &cache.daemon_pids,
         loaded: cache.loaded.as_ref(),
