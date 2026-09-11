@@ -19,6 +19,8 @@ use crate::ids::{AskId, compose_channel};
 const FILE_DAYS: u32 = 7;
 const SECONDS_PER_DAY: i64 = 86_400;
 
+pub const HARNESS_FROM: &str = "rimz";
+
 #[derive(Debug, thiserror::Error)]
 pub enum TranscriptLogErr {
     #[error(transparent)]
@@ -89,6 +91,14 @@ pub struct TranscriptEntry {
 }
 
 impl TranscriptEntry {
+    /// RimZ-authored automation: fleet digests, wakes and signals, and headerless system prompts. Human rendering and conversation counts skip these.
+    pub fn is_harness(&self) -> bool {
+        matches!(
+            self.entry,
+            TranscriptKind::SubagentReport | TranscriptKind::Wake
+        ) || (self.entry == TranscriptKind::Prompt && self.from.as_deref() == Some(HARNESS_FROM))
+    }
+
     pub fn new(
         at: Timestamp,
         kind: AgentKind,

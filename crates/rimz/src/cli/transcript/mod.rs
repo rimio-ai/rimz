@@ -108,11 +108,7 @@ impl Hidden {
     }
 
     fn includes(self, entry: &TranscriptEntry) -> bool {
-        self == Self::Show
-            || !matches!(
-                entry.entry,
-                TranscriptKind::SubagentReport | TranscriptKind::Wake
-            )
+        self == Self::Show || !entry.is_harness()
     }
 }
 
