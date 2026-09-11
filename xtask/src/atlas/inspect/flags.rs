@@ -234,24 +234,27 @@ fn finding_rank(finding: &str) -> usize {
 
 pub(super) fn render_flags(out: &mut String, section: &FlagSection, top: usize) {
     out.push_str("\n# Flags\n\n");
-    out.push_str("| function | param | type | finding | value | sites | callers |\n");
-    out.push_str("|---|---|---|---|---|---:|---|\n");
+    out.push_str("| function | param | type | finding | values |\n");
+    out.push_str("|---|---|---|---|---|\n");
     for row in section.rows.iter().take(top) {
-        let (_, sites, callers) = row
+        let values = row
             .values
             .iter()
-            .find(|(value, _, _)| value == &row.finding_value)
-            .expect("the finding value belongs to the row's values");
+            .filter(|(value, _, _)| value == &row.finding_value)
+            .chain(
+                row.values
+                    .iter()
+                    .filter(|(value, _, _)| value != &row.finding_value),
+            )
+            .map(|(value, sites, callers)| {
+                format!("`{value}` ×{sites} ({})", bounded_callers(callers))
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
         writeln!(
             out,
-            "| `{}` | `{}` | `{}` | {} | `{}` | {} | {} |",
-            row.function,
-            row.param,
-            row.ty,
-            row.finding,
-            row.finding_value,
-            sites,
-            bounded_callers(callers)
+            "| `{}` | `{}` | `{}` | {} | {} |",
+            row.function, row.param, row.ty, row.finding, values
         )
         .expect("writing to a String cannot fail");
     }
@@ -286,6 +289,37 @@ mod tests {
     use super::super::super::references::References;
     use super::super::testkit::{crate_with_files, occurrence, selector};
     use super::*;
+
+    #[test]
+    fn render_flags_lists_every_caller_value() {
+        let section = FlagSection {
+            rows: vec![FlagRow {
+                function: "spending_startup".into(),
+                path: "src/target.rs".into(),
+                line: 1,
+                param: "mode".into(),
+                ty: "Mode".into(),
+                values: vec![
+                    (
+                        "HostEligible".into(),
+                        3,
+                        vec!["a".into(), "b".into(), "c".into()],
+                    ),
+                    ("OneShot".into(), 1, vec!["produce_once".into()]),
+                ],
+                finding: "one-caller",
+                finding_value: "OneShot".into(),
+            }],
+            ..FlagSection::default()
+        };
+        let mut rendered = String::new();
+
+        render_flags(&mut rendered, &section, 1);
+
+        assert!(rendered.lines().any(|line| {
+            line.contains("`OneShot` ×1 (produce_once); `HostEligible` ×3 (a, b, c)")
+        }));
+    }
 
     #[test]
     fn finds_one_caller_constants_and_ignores_binding_only_params() {
