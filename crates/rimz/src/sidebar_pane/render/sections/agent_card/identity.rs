@@ -53,14 +53,14 @@ pub(super) fn agent_lead_cell(
     animation_phase: u64,
 ) -> Span<'static> {
     let actionable = status.is_actionable();
-    if !actionable && agent(row).is_some_and(|agent| agent.compacting) {
+    if !actionable && row.as_agent().is_some_and(|agent| agent.compacting) {
         return Span::styled(
             role_glyph(theme, AnimationRole::Compacting, animation_phase),
             compacting_head_style(theme, animation_phase),
         );
     }
     if status == AgentStatus::Running
-        && agent(row).is_some_and(|agent| {
+        && row.as_agent().is_some_and(|agent| {
             agent
                 .sub_agents
                 .iter()
@@ -180,7 +180,7 @@ pub(super) fn agent_identity_line(
 /// out-of-band runtime reading and falls back to the row's carried/default
 /// window.
 pub(super) fn display_context_window(row: &SidebarRow) -> Option<u64> {
-    agent(row)
+    row.as_agent()
         .and_then(|agent| {
             agent
                 .context

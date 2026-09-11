@@ -45,12 +45,8 @@ use super::{Gutter, RowCtx, Tier, content_width, pin_right, trim_spans_to_width,
 /// pushing the model/effort tokens off the line.
 const NAME_MAX: usize = 18;
 
-fn agent(row: &SidebarRow) -> Option<&AgentCard> {
-    row.as_agent()
-}
-
 fn card_cost_usd(row: &SidebarRow) -> Option<f64> {
-    agent(row).and_then(AgentCard::cost_usd)
+    row.as_agent().and_then(AgentCard::cost_usd)
 }
 
 pub(in crate::sidebar_pane) fn agent_card_cost_usd(
@@ -132,7 +128,7 @@ pub(super) fn row_lines(
         if let Some(line) = process_detail_line(ctx.theme, row, cw) {
             inner.push(line);
         }
-    } else if let Some(agent) = agent(row) {
+    } else if let Some(agent) = row.as_agent() {
         let stage = CardStage::of(row);
         for slot in template(stage, status, ctx.card_density, expanded) {
             match slot {

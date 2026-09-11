@@ -71,12 +71,14 @@ pub(super) fn description_line(
         }
     };
     let mut left = vec![Span::raw("  ")];
-    if let Some(label) = agent(row)
+    if let Some(label) = row
+        .as_agent()
         .and_then(|agent| agent.turn_error_label.as_deref())
         .and_then(crate::agents::single_line_description)
     {
         left.extend(body_spans(&label, true));
-    } else if let Some(wake) = agent(row)
+    } else if let Some(wake) = row
+        .as_agent()
         .filter(|agent| agent.status == AgentStatus::Sleeping)
         .and_then(|agent| agent.pending_wakes.first())
     {

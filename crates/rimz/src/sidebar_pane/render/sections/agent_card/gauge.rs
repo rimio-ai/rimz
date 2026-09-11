@@ -6,7 +6,7 @@ use crate::sidebar_pane::pixel::{
 
 /// The session's statusline enrichment, when it published any.
 pub(super) fn ctx(row: &SidebarRow) -> Option<&AgentContext> {
-    agent(row).and_then(|agent| agent.context.as_ref())
+    row.as_agent().and_then(|agent| agent.context.as_ref())
 }
 
 /// Model name preferred from the provider display label over the normalized
@@ -16,7 +16,7 @@ pub(super) fn display_model(row: &SidebarRow) -> Option<String> {
     ctx(row)
         .and_then(|context| context.model_display_name.as_deref())
         .or_else(|| ctx(row).and_then(|context| context.model_id.as_deref()))
-        .or_else(|| agent(row).and_then(|agent| agent.model.as_deref()))
+        .or_else(|| row.as_agent().and_then(|agent| agent.model.as_deref()))
         .filter(|model| !model.is_empty())
         .map(model_label)
 }
@@ -29,7 +29,7 @@ pub(super) fn display_reasoning(row: &SidebarRow) -> Option<&str> {
         .and_then(|context| context.effort.as_deref())
         .filter(|effort| !effort.is_empty())
         .or_else(|| {
-            agent(row)
+            row.as_agent()
                 .and_then(|agent| agent.effort.as_deref())
                 .filter(|effort| !effort.is_empty())
         })
@@ -218,7 +218,7 @@ fn pixel_gauge_spans(
 /// before the stamp (an older producer mid-upgrade). Either way it is
 /// [`ContextSeverity::classify`]'s verdict, never a renderer-private ramp.
 pub(super) fn row_severity(row: &SidebarRow, bands: &ContextMeterConfig) -> ContextSeverity {
-    agent(row)
+    row.as_agent()
         .and_then(|agent| agent.context_severity)
         .unwrap_or_else(|| {
             ContextSeverity::classify(
@@ -403,7 +403,7 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
     } else {
         let total = row
             .context_used_tokens()
-            .or_else(|| agent(row).and_then(|agent| agent.usage.total_tokens))
+            .or_else(|| row.as_agent().and_then(|agent| agent.usage.total_tokens))
             .unwrap_or(0);
         left.extend(context_total_spans(theme, severity, total, tokens_int));
     }
@@ -422,12 +422,12 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
     }
     left.extend(context_compaction_spans(
         theme,
-        agent(row).map_or(0, |agent| agent.compaction_count),
+        row.as_agent().map_or(0, |agent| agent.compaction_count),
     ));
     left.extend(context_tool_repeat_spans(
         theme,
         row.status().unwrap_or(AgentStatus::Idle),
-        agent(row).and_then(|agent| agent.tool_repeat.as_ref()),
+        row.as_agent().and_then(|agent| agent.tool_repeat.as_ref()),
         row_ctx.tool_repeat_warn_after,
     ));
     pin_right(left, age, width)
