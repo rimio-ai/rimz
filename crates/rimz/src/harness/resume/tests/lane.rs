@@ -438,3 +438,25 @@ fn recovery_plan_sorts_equal_freshness_by_label() {
 
     assert_eq!(recovery.labels(), ["#alpha", "#zed"]);
 }
+
+#[test]
+fn lane_refuses_a_closed_member_from_another_account() {
+    let agents = [agent("claude", "closed", "/lane", 1)];
+    let room = claude_room("work");
+
+    let error = LaneCase::new(LaneResumeSelector::Current, &agents)
+        .current_root("/lane")
+        .logins(&room)
+        .run()
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        LaneResumeError::LoginMismatch(LoginMismatch {
+            kind: AgentKind::new_unchecked("claude"),
+            session_id: "closed".into(),
+            session_login: crate::ids::LoginName::default_login(),
+            room_login: "work".parse().expect("login name"),
+        })
+    );
+}

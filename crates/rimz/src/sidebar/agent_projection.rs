@@ -68,11 +68,22 @@ impl LocalSessionInputs {
         }
     }
 
-    fn discover(&self) -> Vec<LocalSessionObservation> {
-        let login_env = crate::agents::ambient_env();
+    /// Sessions in the room's own account homes; a kind whose account cannot
+    /// be resolved discovers nothing rather than another account's sessions.
+    fn discover(&self, runtime: &RuntimePaths) -> Vec<LocalSessionObservation> {
+        let ambient = crate::agents::ambient_env();
+        let accounts = &crate::config::MachineConfig::load_lenient().accounts;
+        let Ok(state) = crate::disk::paths::StatePaths::for_workspace(runtime.workspace_id.clone())
+        else {
+            return Vec::new();
+        };
         self.discover_with(|kind, workspaces| {
+            let Ok(login) = crate::agents::room_login(&state.workspace_record, accounts, kind)
+            else {
+                return Vec::new();
+            };
             crate::agents::find_definition(kind.as_str())
-                .map(|adapter| adapter.discover_local_sessions(workspaces, &login_env))
+                .map(|adapter| adapter.discover_local_sessions(workspaces, &login.env(&ambient)))
                 .unwrap_or_default()
         })
     }
@@ -269,7 +280,7 @@ pub fn refresh_published(
 ) -> AgentProjection {
     let wiring = probe_current();
     let inputs = LocalSessionInputs::from_panes(panes);
-    let observations = inputs.discover();
+    let observations = inputs.discover(runtime);
     let published = AgentProjectionPublication {
         session_name: session_name.to_owned(),
         wiring: wiring.clone(),

@@ -8,6 +8,7 @@ use crate::pane::PaneRef;
 use jiff::Timestamp;
 
 const RIMZ_BIN: &str = "/bin/rimz";
+static NO_LOGINS: RoomLogins = RoomLogins::new();
 static RUNTIME: std::sync::LazyLock<RuntimePaths> = std::sync::LazyLock::new(|| {
     RuntimePaths::under(
         crate::WorkspaceId::from_project_root(Path::new("/repo")),
@@ -188,7 +189,16 @@ fn ctx<'a>(
         runtime: &RUNTIME,
         profiles,
         max,
+        logins: &NO_LOGINS,
     }
+}
+
+/// A room whose Claude account is `name`.
+fn claude_room(name: &str) -> RoomLogins {
+    RoomLogins::from([(
+        AgentKind::new_unchecked("claude"),
+        name.parse().expect("login name"),
+    )])
 }
 
 fn no_profiles() -> ProfilesConfig {
@@ -321,6 +331,7 @@ fn cohort_with(
 ) -> Result<CohortResumePlan, CohortResumeErr> {
     plan_cohort_resume(
         agents,
+        &NO_LOGINS,
         liveness,
         cells,
         team,
@@ -384,6 +395,7 @@ struct LaneCase<'a> {
     worktrees: &'a [LaneWorktree],
     current_root: &'a Path,
     max: usize,
+    logins: &'a RoomLogins,
     path_exists: PathPredicate<'a>,
     session_backed: AgentPredicate<'a>,
     liveness: LivenessFn<'a>,
@@ -399,12 +411,18 @@ impl<'a> LaneCase<'a> {
             worktrees: &[],
             current_root: Path::new("/repo"),
             max: 128,
+            logins: &NO_LOGINS,
             path_exists: Box::new(|_| true),
             session_backed: Box::new(|_| true),
             liveness: Box::new(dead),
             discover: Box::new(|_| Vec::new()),
             restore: Box::new(empty_lane_restore),
         }
+    }
+
+    fn logins(mut self, logins: &'a RoomLogins) -> Self {
+        self.logins = logins;
+        self
     }
 
     fn worktrees(mut self, worktrees: &'a [LaneWorktree]) -> Self {
@@ -461,6 +479,7 @@ impl<'a> LaneCase<'a> {
                 max: self.max,
                 rimz_bin: Path::new(RIMZ_BIN),
                 runtime: &RUNTIME,
+                logins: self.logins,
             },
             self.path_exists,
             self.session_backed,

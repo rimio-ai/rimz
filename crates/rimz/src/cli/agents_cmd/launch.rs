@@ -398,8 +398,10 @@ fn launch_resume_layout(
     let cells = cohort_cells(&layout);
     let spec = args.launch.spec.as_deref().unwrap_or("<spec>");
     let scope = worktree_filter.and_then(worktree_scope_label);
+    let logins = rimz::agents::room_logins(&store.paths().workspace_record)?;
     let mut plan = rimz::harness::resume::plan_cohort_resume(
         &agents,
+        &logins,
         rimz::store::runtime::agent_liveness,
         &cells,
         team_name.as_deref(),
@@ -647,6 +649,7 @@ fn cohort_resume_error(
                 labels.join(", ")
             )
         }
+        rimz::harness::resume::CohortResumeErr::LoginMismatch(mismatch) => mismatch.into(),
     }
 }
 

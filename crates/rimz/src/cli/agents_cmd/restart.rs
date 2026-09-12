@@ -66,7 +66,8 @@ pub(in crate::cli) fn restart_resolved(
         &cwd,
     )?;
 
-    let (action, fresh_reason) = relaunch_action(agent, &cwd)?;
+    let logins = rimz::agents::room_logins(&store.paths().workspace_record)?;
+    let (action, fresh_reason) = relaunch_action(agent, &logins, &cwd)?;
     let fresh_batch = if fresh_reason.is_some() {
         Some(append_fresh_launch(
             store,
@@ -156,8 +157,12 @@ pub(in crate::cli) fn restart_resolved(
 
 pub(super) fn relaunch_action(
     agent: &AgentState,
+    logins: &rimz::ids::RoomLogins,
     cwd: &Path,
 ) -> Result<(rimz::harness::launch::ExecAction, Option<&'static str>)> {
+    if let Some(mismatch) = rimz::harness::resume::login_mismatch(agent, logins) {
+        return Err(mismatch.into());
+    }
     let adapter = rimz::agents::find_definition(agent.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
     let resume_support = !agent.agent_id.is_provisional()
@@ -418,6 +423,26 @@ mod tests {
                     },
                 },
             }
+        );
+    }
+
+    #[test]
+    fn relaunch_refuses_a_session_from_another_account_before_classifying() {
+        let agent = AgentState {
+            login: Some("personal".parse().expect("login name")),
+            ..rimz::testkit::agent_state("claude", "session-1", jiff::Timestamp::now())
+        };
+        let room = rimz::ids::RoomLogins::from([(
+            rimz::ids::AgentKind::new_unchecked("claude"),
+            "work".parse().expect("login name"),
+        )]);
+
+        let err = relaunch_action(&agent, &room, Path::new("/repo")).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("session account is `personal`, room account is `work`"),
+            "{err}"
         );
     }
 }
