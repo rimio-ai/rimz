@@ -541,6 +541,27 @@ fn start_takes_project_accounts_only_under_trust() {
     assert!(stderr.contains("rimz trust grant"), "{stderr}");
     assert_eq!(room_logins(&env), None);
 
+    // `attach` births a room that is not live under the same rule.
+    let bin_dir = seed_actionable_agent(&env);
+    let attach_log = env.project_root.join("zellij-attach.log");
+    let attach = env
+        .rimz()
+        .args(["--mux", "zellij", "attach", "--print"])
+        .env("PATH", &bin_dir)
+        .env("TERM", "dumb")
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &attach_log)
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", "")
+        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+        .expect("run rimz attach");
+    let stderr = String::from_utf8_lossy(&attach.stderr);
+    assert!(!attach.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("project account selections in .rimz/config.toml are untrusted"),
+        "{stderr}"
+    );
+    assert_eq!(room_logins(&env), None);
+
     env.rimz()
         .args(["trust", "grant"])
         .bounded_output()

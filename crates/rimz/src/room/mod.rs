@@ -72,15 +72,15 @@ pub fn require_live_session(backend: &dyn MuxBackend, session_name: &str) -> Liv
 /// then the explicit request, then the trusted project's `[accounts]`, and
 /// every selected account must be usable before anything launches.
 pub fn resolve_birth_logins(
-    workspace: &ResolvedWorkspace,
+    workspace_id: &WorkspaceId,
+    project_root: &Path,
     machine_config: &MachineConfig,
     requested: &crate::ids::RoomLogins,
     was_live: bool,
 ) -> Result<crate::ids::RoomLogins> {
     let empty = crate::ids::RoomLogins::new();
     let catalog = crate::agents::LoginCatalog::from_config(&machine_config.accounts)?;
-    let state = StatePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing store paths")?;
+    let state = StatePaths::for_workspace(workspace_id.clone()).context("preparing store paths")?;
     let mut frozen = record::read_optional(&state.workspace_record)
         .context("reading the room's accounts")?
         .and_then(|record| record.logins);
@@ -91,7 +91,7 @@ pub fn resolve_birth_logins(
     }
     let project = match frozen {
         Some(_) => empty,
-        None => match crate::trust::project_logins(&workspace.project_root)? {
+        None => match crate::trust::project_logins(project_root)? {
             crate::trust::ProjectLogins::Unconfigured => empty,
             crate::trust::ProjectLogins::Apply(logins) => logins,
             crate::trust::ProjectLogins::Blocked(state) => anyhow::bail!(

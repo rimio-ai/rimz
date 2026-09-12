@@ -520,23 +520,45 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         prompt_project_trust(&workspace.project_root);
     }
 
-    let logins = match &entry {
+    // Every entry that births a room resolves and freezes its accounts; only
+    // `start` takes flags, and only `start` re-judges a room already live.
+    let birth_identity = match &entry {
         RoomEntry::Start { workspace, .. } | RoomEntry::StartDetached { workspace, .. } => {
-            Some(rimz::room::resolve_birth_logins(
-                workspace,
-                &machine_config,
-                &match &entry {
-                    RoomEntry::Start { args, .. } => {
-                        crate::cli::accounts::requested_logins(&args.account)?
-                    }
-                    _ => RoomLogins::new(),
-                },
-                was_live,
-            )?)
+            Some((&workspace.workspace_id, workspace.project_root.as_path()))
         }
-        _ => None,
+        _ if was_live => None,
+        RoomEntry::AttachCwd { workspace, .. } => {
+            Some((&workspace.workspace_id, workspace.project_root.as_path()))
+        }
+        RoomEntry::WebSession { record, .. } => {
+            Some((&record.workspace_id, record.project_root.as_path()))
+        }
+        RoomEntry::AttachSession {
+            record: Ok(Some(record)),
+            ..
+        } => Some((&record.workspace_id, record.project_root.as_path())),
+        RoomEntry::AttachSession { .. } => None,
     };
-    let background_view = if let Some(logins) = &logins {
+    let requested = match &entry {
+        RoomEntry::Start { args, .. } => crate::cli::accounts::requested_logins(&args.account)?,
+        _ => RoomLogins::new(),
+    };
+    let logins = birth_identity
+        .map(|(workspace_id, project_root)| {
+            rimz::room::resolve_birth_logins(
+                workspace_id,
+                project_root,
+                &machine_config,
+                &requested,
+                was_live,
+            )
+        })
+        .transpose()?;
+    let starting = matches!(
+        entry,
+        RoomEntry::Start { .. } | RoomEntry::StartDetached { .. }
+    );
+    let background_view = if let Some(logins) = logins.as_ref().filter(|_| starting) {
         // Fail-fast precondition for installed agents: fixable host misconfiguration
         // aborts the launch here with the fix, before session side effects, and
         // after account resolution so each host is judged in the home it will run
@@ -584,6 +606,9 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                 RoomSizing::Birth,
             )?;
             context.claim_owner()?;
+            if let Some(logins) = &logins {
+                context.freeze_logins(logins)?;
+            }
             birth_managed_room(
                 &mut context,
                 preflight_health,
@@ -598,6 +623,9 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         RoomEntry::WebSession { record, .. } => {
             let mut context =
                 RoomContext::from_record(record, machine_config.clone(), mux, RoomSizing::Birth)?;
+            if let Some(logins) = &logins {
+                context.freeze_logins(logins)?;
+            }
             birth_managed_room(
                 &mut context,
                 preflight_health,
@@ -621,6 +649,9 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                     mux,
                     RoomSizing::Birth,
                 )?;
+                if let Some(logins) = &logins {
+                    context.freeze_logins(logins)?;
+                }
                 birth_managed_room(
                     &mut context,
                     preflight_health,
@@ -736,10 +767,6 @@ fn preflight_machine_accounts(
     }
 }
 
-/// The accounts this room launches under: the frozen selection of a room
-/// already born, else `--account` over the trusted project's `[accounts]` over
-/// the provider's own home. Every named account must be ready to launch into,
-/// so a missing home or hook set refuses here with its fix.
 fn run_room_preflights(entry: &RoomEntry<'_>, mux: MuxName) -> Result<()> {
     match entry {
         RoomEntry::Start { workspace, .. } | RoomEntry::StartDetached { workspace, .. } => {
