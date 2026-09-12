@@ -2115,6 +2115,195 @@ fn tmux_supervised_print_returns_failed_when_agent_binary_exits_nonzero() {
     );
 }
 
+#[test]
+fn named_account_room_launches_into_its_home_and_refuses_cross_account_resume() {
+    if which::which("tmux").is_err() {
+        eprintln!("tmux not on PATH; skipping named account journey");
+        return;
+    }
+    let Some(_rimz) = rimz_bin() else {
+        eprintln!("rimz not built; skipping named account journey");
+        return;
+    };
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    let work_home = env.home_root.join("claude-work");
+    let added = env
+        .rimz()
+        .args(["accounts", "add", "claude", "work", "--home"])
+        .arg(&work_home)
+        .bounded_output_within(Duration::from_secs(30))
+        .expect("add work account");
+    assert!(
+        added.status.success(),
+        "accounts add failed: {}",
+        String::from_utf8_lossy(&added.stderr)
+    );
+    let stub_dir = write_hook_firing_agent(&env, "claude");
+    let shim = stub_dir.join("claude");
+    let launched_homes = env.home_root.join("launched-homes");
+    let body = std::fs::read_to_string(&shim).expect("read claude shim");
+    let body = body.replacen(
+        "session=",
+        &format!(
+            "printf '%s\\n' \"${{CLAUDE_CONFIG_DIR:-native}}\" >> {}\nsession=",
+            shell_quote(&launched_homes.display().to_string())
+        ),
+        1,
+    );
+    std::fs::write(&shim, body).expect("write claude shim");
+    let agent_path = path_with_front(&stub_dir);
+    let socket = managed_socket(&env.runtime_root);
+    let _server = TmuxServerGuard::new(socket.clone());
+    let session = workspace_session(&env);
+
+    let started = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .args([
+            "--mux",
+            "tmux",
+            "start",
+            "--no-attach",
+            "--account",
+            "claude=work",
+        ])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("start work room");
+    assert!(
+        started.status.success(),
+        "room start failed: {}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    tmux(
+        &socket,
+        &[
+            "set-environment",
+            "-t",
+            &session,
+            "RIMZ_TEST_AGENT_WAIT_STDIN",
+            "1",
+        ],
+    );
+    let launched = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .env("TMUX", tmux_env(&socket))
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env("RIMZ_TEST_AGENT_WAIT_STDIN", "1")
+        .args([
+            "--mux",
+            "tmux",
+            "agents",
+            "claude",
+            "work on the account",
+            "--name",
+            "account-worker",
+            "--bg",
+        ])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("launch work agent");
+    assert!(
+        launched.status.success(),
+        "agent launch failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&launched.stdout),
+        String::from_utf8_lossy(&launched.stderr)
+    );
+
+    let agent = wait_for_named_agent(&env, "account-worker", true, CAPTURE_BUDGET);
+    assert_eq!(
+        agent.login.as_ref().map(|login| login.as_str()),
+        Some("work"),
+        "the session is stamped with the room's account"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&launched_homes).expect("launched homes trace"),
+        format!("{}\n", work_home.display()),
+        "the agent process runs under the work account home"
+    );
+
+    let restamp = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .args([
+            "--mux",
+            "tmux",
+            "start",
+            "--no-attach",
+            "--account",
+            "claude=default",
+        ])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("start with another account");
+    let stderr = String::from_utf8_lossy(&restamp.stderr);
+    assert!(
+        !restamp.status.success(),
+        "a live room keeps its account: {stderr}"
+    );
+    assert!(stderr.contains("rimz reset --account"), "{stderr}");
+
+    let reset = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .args(["--mux", "tmux", "reset", "--yes", "--no-start"])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("reset work room");
+    assert!(
+        reset.status.success(),
+        "reset failed: {}",
+        String::from_utf8_lossy(&reset.stderr)
+    );
+    let reborn = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .args([
+            "--mux",
+            "tmux",
+            "start",
+            "--no-attach",
+            "--account",
+            "claude=default",
+        ])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("start default room");
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&reborn.stdout),
+        String::from_utf8_lossy(&reborn.stderr)
+    );
+    assert!(reborn.status.success(), "rebirth failed: {output}");
+    let mismatch = "session account is `work`, room account is `default`; use a room started with `rimz start --account claude=work`, or run `rimz reset --account claude=work` here";
+    assert!(
+        output.contains(mismatch),
+        "rebirth warns and skips: {output}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&launched_homes).expect("launched homes trace"),
+        format!("{}\n", work_home.display()),
+        "no work session is resumed under the default account"
+    );
+
+    let resumed = env
+        .rimz()
+        .env("PATH", &agent_path)
+        .env("TMUX", tmux_env(&socket))
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .args(["--mux", "tmux", "agents", "resume", "#project"])
+        .bounded_output_within(Duration::from_secs(45))
+        .expect("resume the work lane");
+    let stderr = String::from_utf8_lossy(&resumed.stderr);
+    assert!(
+        !resumed.status.success(),
+        "explicit resume refuses: {stderr}"
+    );
+    assert!(stderr.contains(mismatch), "{stderr}");
+}
+
 fn wait_for_named_agent(
     env: &Env,
     name: &str,
