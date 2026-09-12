@@ -62,7 +62,7 @@ pub struct CohortResumePlan {
 
 /// Durable identity projected by resume planning for argv compilation.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ResumeLaunchIdentity {
+pub(super) struct ResumeLaunchIdentity {
     pub kind: crate::ids::AgentKind,
     pub session_id: AgentSessionId,
     pub launch_id: Option<AgentSessionId>,
@@ -678,7 +678,7 @@ fn validate_system_prompt_text(cell: &AgentCell) -> std::result::Result<(), Laun
     Ok(())
 }
 
-pub(crate) fn validate_finalized_cell(
+pub(super) fn validate_finalized_cell(
     cell: &AgentCell,
     adapter: Option<&crate::agents::AgentDefinition>,
 ) -> std::result::Result<(), LaunchFinalizeError> {
@@ -829,7 +829,7 @@ fn index_to_launch_ordinal(index: usize) -> u32 {
 }
 
 /// Compile one provider-native resume launch from planner-owned data.
-pub fn resume_command(
+pub(super) fn resume_command(
     rimz_bin: &Path,
     runtime: &RuntimePaths,
     identity: &ResumeLaunchIdentity,
