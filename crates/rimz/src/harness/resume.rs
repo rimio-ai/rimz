@@ -1418,6 +1418,10 @@ fn materialize_team_restore_tab(
 }
 
 /// Plan restorable named-team tabs from prior full agent sessions.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the resume planners' shared inputs, borrowed from two different callers"
+)]
 fn plan_team_restore_tabs(
     agents: &[AgentState],
     logins: &RoomLogins,
@@ -1499,6 +1503,10 @@ fn plan_team_restore_tabs(
 }
 
 /// Partition agents into planned named-team tabs and flat resume candidates.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the resume planners' shared inputs, borrowed from two different callers"
+)]
 pub(super) fn split_team_and_flat(
     agents: &[AgentState],
     logins: &RoomLogins,

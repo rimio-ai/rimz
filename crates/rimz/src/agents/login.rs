@@ -387,8 +387,8 @@ pub enum BirthLoginErr {
         name: LoginName,
         home: PathBuf,
         env_key: &'static str,
-        hooks: String,
-        fix: String,
+        hooks: Box<str>,
+        fix: Box<str>,
     },
 }
 
@@ -432,8 +432,8 @@ impl ProviderLogin {
                     name,
                     home: path,
                     env_key: home.env_key,
-                    hooks,
-                    fix,
+                    hooks: hooks.into(),
+                    fix: fix.into(),
                 })
             }
         }
