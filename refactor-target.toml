@@ -157,7 +157,7 @@ allowed-dependencies = [
 # Pane writers share one user-scoped lock path across workspace boundaries.
 # Room lifecycle owns private tmp and rewritten-skill directory creation and removal.
 # Wake and subagent reports share streaming output-file measurements.
-surface-budget = 133
+surface-budget = 131
 
 [[module]]
 path = "crates/rimz/src/forge"
