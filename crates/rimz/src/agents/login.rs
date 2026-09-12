@@ -468,6 +468,64 @@ pub fn room_logins(record: &Path) -> Result<RoomLogins, RoomLoginErr> {
         .unwrap_or_default())
 }
 
+/// The logins a room reads provider state under, resolved once per refresh
+/// pass or fold over one ambient snapshot. A kind whose account cannot be
+/// resolved answers `None`, so callers skip it rather than read another
+/// account's state.
+#[derive(Clone, Debug)]
+pub struct RoomLoginSet {
+    /// `None` when the room's record could not be read.
+    selection: Option<RoomLogins>,
+    /// `None` when the machine's account config does not load.
+    catalog: Option<LoginCatalog>,
+    ambient: BTreeMap<String, String>,
+}
+
+impl RoomLoginSet {
+    pub fn new(
+        selection: Option<RoomLogins>,
+        catalog: Option<LoginCatalog>,
+        ambient: BTreeMap<String, String>,
+    ) -> Self {
+        Self {
+            selection,
+            catalog,
+            ambient,
+        }
+    }
+
+    /// The room whose `workspace.json` is `record`, under machine `accounts`.
+    pub fn resolve(record: &Path, accounts: &AccountsConfig) -> Self {
+        Self::new(
+            room_logins(record).ok(),
+            LoginCatalog::from_config(accounts).ok(),
+            ambient_env(),
+        )
+    }
+
+    /// Every kind under its provider's own home, for callers outside a room.
+    pub fn native() -> Self {
+        Self::new(Some(RoomLogins::new()), None, ambient_env())
+    }
+
+    pub fn login(&self, kind: &str) -> Option<ProviderLogin> {
+        let kind = AgentKind::new_unchecked(kind);
+        match self.selection.as_ref()?.get(&kind) {
+            Some(name) if !name.is_default() => self.catalog.as_ref()?.select(&kind, name).ok(),
+            _ => Some(ProviderLogin::default_for(kind)),
+        }
+    }
+
+    pub fn key(&self, kind: &str) -> Option<LoginKey> {
+        self.login(kind).map(|login| login.key())
+    }
+
+    /// The environment `login`'s provider state is read under.
+    pub fn env(&self, login: &ProviderLogin) -> BTreeMap<String, String> {
+        login.env(&self.ambient)
+    }
+}
+
 /// The login the room whose `workspace.json` is `record` launches `kind`
 /// under. A record without a selection, or none at all, is the provider's own
 /// home.
