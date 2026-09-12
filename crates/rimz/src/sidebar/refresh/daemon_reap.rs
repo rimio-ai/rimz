@@ -64,6 +64,7 @@ fn should_probe_codex_daemon_reap(agents: &[AgentState], codex_rc_enabled: bool)
 pub(super) fn refresh_codex_daemon_reap_cache(
     agents: &[AgentState],
     runtime: &RuntimePaths,
+    logins: &crate::agents::RoomLoginSet,
     now_ms: u64,
     codex_rc_enabled: bool,
 ) {
@@ -74,7 +75,6 @@ pub(super) fn refresh_codex_daemon_reap_cache(
     {
         return;
     }
-    let logins = crate::agents::RoomLoginSet::for_runtime(runtime);
     let Some(login) = logins.login("codex") else {
         return;
     };
