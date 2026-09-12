@@ -3,17 +3,17 @@
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
-use serde_json::{Map, Value, json};
+use serde_json::{Map, json};
 
 use crate::Store;
 use crate::agents::AgentState;
 use crate::config::{DONE_STAGE, MachineConfig, Team};
 use crate::disk::{atomic, lock::WorkspaceLock};
 use crate::ids::{EventId, MessageId, MuxName, PaneId};
-use crate::message::compact::{self, CompactErr, CompactOutcome, CompactRequest};
+use crate::message::compact::{self, CompactOutcome, CompactRequest};
 use crate::message::dispatch::{self, DispatchMode, DispatchOutcome, DispatchRequest};
 use crate::store::event::SignalSource;
-use crate::store::message::{DeliveryGate, HarnessNotice, MessageSender};
+use crate::store::message::{AutoCompact, DeliveryGate, HarnessNotice, MessageSender};
 use crate::workspace::ResolvedWorkspace;
 
 use super::assist_log::{self, Assist, AssistRecord};
@@ -24,7 +24,7 @@ pub enum Flipper<'a> {
     Member {
         role: &'a str,
         agent: &'a AgentState,
-        pane: PaneId,
+        pane: Option<PaneId>,
     },
     User,
 }
@@ -47,8 +47,8 @@ pub struct FlipRequest<'a> {
     pub worktree: &'a Path,
     pub members: &'a [AgentState],
     pub to: &'a str,
-    pub note: Option<&'a str>,
-    pub steer: bool,
+    pub note: &'a str,
+    pub flip_compact: Option<AutoCompact>,
     pub by: Flipper<'a>,
     pub mux: Option<MuxName>,
     pub now: Timestamp,
@@ -69,7 +69,6 @@ pub struct FlipReceipt {
 pub enum Delivery {
     Sent { label: String },
     Queued { label: String },
-    Steered { label: String },
     OwnerNotLive { owner: String },
     SelfOwned,
     Terminal,
@@ -79,13 +78,19 @@ pub enum Delivery {
 pub enum Compaction {
     NotConfigured,
     NotHandedOff,
+    BelowThreshold {
+        occupied: Option<u64>,
+        threshold: u64,
+    },
     Sent {
         message_id: MessageId,
-        occupied_tokens: Option<u64>,
+        occupied_tokens: u64,
+        threshold: u64,
     },
     Queued {
         message_id: MessageId,
-        occupied_tokens: Option<u64>,
+        occupied_tokens: u64,
+        threshold: u64,
     },
     Skipped {
         reason: String,
@@ -94,10 +99,6 @@ pub enum Compaction {
 
 #[derive(Debug, thiserror::Error)]
 pub enum FlipErr {
-    #[error("no board at {path}; create blackboard.md with a Stage: line first")]
-    NoBoard { path: PathBuf },
-    #[error("no Stage: line in {path}; add one before flipping")]
-    NoStageLine { path: PathBuf },
     #[error("team `{team}` has no stage owners; add owns = [\"Stage\"] to its roles")]
     NoOwners { team: String },
     #[error("unknown stage `{to}`; choose one of {declared:?} or Done")]
@@ -120,12 +121,8 @@ pub enum FlipErr {
     Store(#[from] crate::store::StoreErr),
     #[error(transparent)]
     Dispatch(#[from] dispatch::DispatchErr),
-    #[error(transparent)]
-    Compact(#[from] CompactErr),
-    #[error("role `{role}` cannot compact {kind}; disable compact-on-handoff for this role")]
-    CompactUnsupported { role: String, kind: String },
     #[error(
-        "completed {done}; {source}; re-run `rimz teams flip {to}` to repeat the signal and delivery"
+        "completed {done}; {source}; re-run `rimz teams flip {to} \"<progress note>\"` to repeat the signal and delivery"
     )]
     PartialFlip {
         done: &'static str,
@@ -151,22 +148,15 @@ pub fn flip(request: FlipRequest<'_>) -> Result<FlipReceipt, FlipErr> {
     let board = worktree.join("blackboard.md");
     let _lock = WorkspaceLock::acquire(&request.store.runtime_paths().board_lock(&worktree))?;
     let text = read_board(&board)?;
-    let from = parse_board_stage(&text)
-        .ok_or_else(|| FlipErr::NoStageLine {
-            path: board.clone(),
-        })?
-        .name;
+    let from = parse_board_stage(&text).map(|stage| stage.name);
     let ledger = ledger_line(
         request.now,
         request.by.name(),
-        &from,
+        from.as_deref(),
         request.to,
         request.note,
     );
-    let rewritten =
-        rewrite_board(&text, request.to, owner, &ledger).ok_or_else(|| FlipErr::NoStageLine {
-            path: board.clone(),
-        })?;
+    let rewritten = rewrite_board(&text, request.to, owner, &ledger);
     atomic::write_bytes_atomically(&board, rewritten.as_bytes())?;
     let opening = StageOpening {
         workspace: request.workspace,
@@ -175,23 +165,21 @@ pub fn flip(request: FlipRequest<'_>) -> Result<FlipReceipt, FlipErr> {
         channel: request.channel,
         members: request.members,
         board: &board,
-        from: &from,
+        from: from.as_deref(),
         to: request.to,
         owner,
         by: request.by.name(),
         self_owned: matches!(&request.by, Flipper::Member { role, .. } if Some(*role) == owner),
-        note: request.note,
-        steer: request.steer,
+        note: Some(request.note),
         mux: request.mux,
         now: request.now,
         rewake: false,
     };
     let (signal_event, delivery) = open_stage(&opening, "board")?;
-    let compaction = compact_flipper(&request, &from, &delivery)
-        .map_err(|err| err.after("board, signal, owner delivery", request.to))?;
+    let compaction = compact_flipper(&request, from.as_deref(), &delivery);
     Ok(FlipReceipt {
         board,
-        from: (!from.is_empty()).then_some(from),
+        from,
         to: request.to.to_owned(),
         owner: owner.map(str::to_owned),
         delivery,
@@ -218,11 +206,7 @@ pub fn rewake(
     let worktree = canonical_worktree(worktree)?;
     let board = worktree.join("blackboard.md");
     let _lock = WorkspaceLock::acquire(&store.runtime_paths().board_lock(&worktree))?;
-    let text = match read_board(&board) {
-        Ok(text) => text,
-        Err(FlipErr::NoBoard { .. }) => return Ok(None),
-        Err(err) => return Err(err),
-    };
+    let text = read_board(&board)?;
     let Some(stage) = parse_board_stage(&text) else {
         return Ok(None);
     };
@@ -242,13 +226,12 @@ pub fn rewake(
             channel: &channel,
             members,
             board: &board,
-            from: &stage.name,
+            from: Some(&stage.name),
             to: &stage.name,
             owner,
             by: "rimz",
             self_owned: false,
             note: None,
-            steer: false,
             mux,
             now,
             rewake: true,
@@ -274,18 +257,14 @@ fn canonical_worktree(worktree: &Path) -> Result<PathBuf, FlipErr> {
 }
 
 fn read_board(board: &Path) -> Result<String, FlipErr> {
-    std::fs::read_to_string(board).map_err(|source| {
-        if source.kind() == std::io::ErrorKind::NotFound {
-            FlipErr::NoBoard {
-                path: board.to_path_buf(),
-            }
-        } else {
-            FlipErr::Io {
-                path: board.to_path_buf(),
-                source,
-            }
-        }
-    })
+    match std::fs::read_to_string(board) {
+        Ok(text) => Ok(text),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(source) => Err(FlipErr::Io {
+            path: board.to_path_buf(),
+            source,
+        }),
+    }
 }
 
 fn resolve_owner<'a>(
@@ -325,13 +304,12 @@ struct StageOpening<'a> {
     channel: &'a str,
     members: &'a [AgentState],
     board: &'a Path,
-    from: &'a str,
+    from: Option<&'a str>,
     to: &'a str,
     owner: Option<&'a str>,
     by: &'a str,
     self_owned: bool,
     note: Option<&'a str>,
-    steer: bool,
     mux: Option<MuxName>,
     now: Timestamp,
     rewake: bool,
@@ -352,8 +330,8 @@ fn open_stage(
         ("board".to_owned(), json!(opening.board)),
         ("at".to_owned(), json!(opening.now.to_string())),
     ]);
-    if !opening.from.is_empty() {
-        payload.insert("from".to_owned(), json!(opening.from));
+    if let Some(from) = opening.from {
+        payload.insert("from".to_owned(), json!(from));
     }
     if let Some(owner) = opening.owner {
         payload.insert("owner".to_owned(), json!(owner));
@@ -402,33 +380,31 @@ fn open_stage(
         opening.store,
         DispatchRequest {
             target: format!("@{}", member.agent_id),
-            text: stage_open_body(opening, &signal),
+            text: stage_open_body(
+                opening.from,
+                opening.to,
+                opening.by,
+                opening.note,
+                opening.rewake,
+            ),
             target_scope: None,
             current_channel: Some(opening.channel.to_owned()),
             caller: None,
             sender: MessageSender::Harness {
-                notice: HarnessNotice::Signal,
+                notice: HarnessNotice::Stage,
             },
             automated: true,
             allow_fanout: false,
             reply: None,
             mux: opening.mux,
-            mode: if opening.steer {
-                DispatchMode::Steer {
-                    enter: true,
-                    force: false,
-                    auto_compact: None,
-                }
-            } else {
-                DispatchMode::Boundary {
-                    enter: true,
-                    gate: DeliveryGate::Done,
-                    force: false,
-                    auto_compact: None,
-                    not_before: None,
-                    after: Vec::new(),
-                    when: Vec::new(),
-                }
+            mode: DispatchMode::Boundary {
+                enter: true,
+                gate: DeliveryGate::Done,
+                force: false,
+                auto_compact: None,
+                not_before: None,
+                after: Vec::new(),
+                when: Vec::new(),
             },
         },
     )
@@ -449,7 +425,6 @@ fn open_stage(
         .next()
         .expect("single stage recipient");
     let delivery = match outcome {
-        DispatchOutcome::Sent { label, .. } if opening.steer => Delivery::Steered { label },
         DispatchOutcome::Sent { label, .. } => Delivery::Sent { label },
         DispatchOutcome::Queued { label, .. }
         | DispatchOutcome::CompactionPending { label, .. }
@@ -458,29 +433,31 @@ fn open_stage(
     Ok((event, delivery))
 }
 
-fn stage_open_body(opening: &StageOpening<'_>, signal: &Signal) -> String {
-    let instance = format!("{}#{}", opening.team_name, opening.channel);
-    let from = if opening.from.is_empty() {
-        "(none)"
-    } else {
-        opening.from
+fn stage_open_body(
+    from: Option<&str>,
+    to: &str,
+    by: &str,
+    note: Option<&str>,
+    rewake: bool,
+) -> String {
+    if rewake {
+        return format!(
+            "The team resumed at stage {to}, which is yours. Nothing flipped since the board's last Progress line: reread blackboard.md and continue from where it stops."
+        );
+    }
+    let mut body = match from {
+        Some(from) if from == to => {
+            format!("@{by} re-opened {to}. It is still yours: pick it up from blackboard.md.")
+        }
+        Some(from) => format!(
+            "@{by} flipped the stage {from} -> {to}. {to} is yours: pick it up from blackboard.md."
+        ),
+        None => {
+            format!("@{by} opened the stage {to}. {to} is yours: pick it up from blackboard.md.")
+        }
     };
-    let headline = if opening.rewake {
-        format!(
-            "stage {} is still yours: the board says where it stopped [{instance}]",
-            opening.to
-        )
-    } else {
-        format!(
-            "stage {} is yours: {} -> {} by @{} [{instance}]",
-            opening.to, from, opening.to, opening.by
-        )
-    };
-    let mut payload = signal.payload.clone();
-    payload.insert("signal".to_owned(), json!(signal.name.as_str()));
-    let mut body = format!("{headline}\n{}", Value::Object(payload));
-    if let Some(note) = opening.note {
-        body.push_str("\n\n");
+    if let Some(note) = note {
+        body.push_str("\n\nNote: ");
         body.push_str(note);
     }
     body
@@ -488,106 +465,119 @@ fn stage_open_body(opening: &StageOpening<'_>, signal: &Signal) -> String {
 
 fn compact_flipper(
     request: &FlipRequest<'_>,
-    from: &str,
+    from: Option<&str>,
     delivery: &Delivery,
-) -> Result<Compaction, FlipErr> {
+) -> Compaction {
     let Flipper::Member { role, agent, pane } = &request.by else {
-        return Ok(Compaction::NotConfigured);
+        return Compaction::NotConfigured;
     };
-    if !request
-        .team
-        .roles
-        .iter()
-        .any(|binding| binding.role == *role && binding.compact_on_handoff)
+    let Some(policy) = request.flip_compact else {
+        return Compaction::NotConfigured;
+    };
+    if from.and_then(|stage| request.team.owner_of(stage)) != Some(*role)
+        || !matches!(
+            delivery,
+            Delivery::Sent { .. }
+                | Delivery::Queued { .. }
+                | Delivery::OwnerNotLive { .. }
+                | Delivery::Terminal
+        )
     {
-        return Ok(Compaction::NotConfigured);
+        return Compaction::NotHandedOff;
     }
-    if !matches!(
-        delivery,
-        Delivery::Sent { .. } | Delivery::Queued { .. } | Delivery::Steered { .. }
-    ) {
-        return Ok(Compaction::NotHandedOff);
+    let occupied = agent.occupied_context_tokens();
+    let window = agent.resolved_context_window();
+    let threshold = match policy {
+        AutoCompact::Tokens(tokens) => tokens,
+        AutoCompact::Percent(percent) => (u128::from(window.unwrap_or_default())
+            * u128::from(percent))
+        .div_ceil(100)
+        .try_into()
+        .unwrap_or(u64::MAX),
+    };
+    if pane.is_some() && !occupied.is_some_and(|occupied| policy.reached(occupied, window)) {
+        return Compaction::BelowThreshold {
+            occupied,
+            threshold,
+        };
     }
-    let machine = MachineConfig::load_lenient();
-    let command = crate::agents::spec_by_kind(agent.kind.as_str())
-        .and_then(|spec| {
-            spec.launch
-                .compact_command(machine.harness.compact_instruction())
-        })
-        .ok_or_else(|| FlipErr::CompactUnsupported {
-            role: (*role).to_owned(),
-            kind: agent.kind.to_string(),
-        })?;
     let message_id = MessageId::new();
-    let outcome = compact::send_compact(
-        request.workspace,
-        request.store,
-        CompactRequest {
-            message_id: message_id.clone(),
-            agent,
-            pane_id: pane.clone(),
-            command,
-            sender: MessageSender::System,
-            automated: true,
-        },
-    );
-    let skipped = matches!(
-        outcome,
-        Err(CompactErr::Compacting | CompactErr::Pending { .. } | CompactErr::Repeated { .. })
-    );
-    let error = outcome.as_ref().err().map(ToString::to_string);
+    let outcome = (|| {
+        let pane = pane.as_ref().ok_or_else(|| "no bound pane".to_owned())?;
+        let machine = MachineConfig::load_lenient();
+        let command = crate::agents::spec_by_kind(agent.kind.as_str())
+            .and_then(|spec| {
+                spec.launch
+                    .compact_command(machine.harness.compact_instruction())
+            })
+            .ok_or_else(|| format!("{} does not support compaction", agent.kind))?;
+        compact::send_compact(
+            request.workspace,
+            request.store,
+            CompactRequest {
+                message_id: message_id.clone(),
+                agent,
+                pane_id: pane.clone(),
+                command,
+                sender: MessageSender::System,
+                automated: true,
+            },
+        )
+        .map_err(|err| err.to_string())
+    })();
     assist_log::append(&AssistRecord {
         at: request.now,
-        assist: Assist::HandoffCompact {
+        assist: Assist::FlipCompact {
             kind: agent.kind.clone(),
             agent_id: agent.agent_id.clone(),
-            label: Some(format!("@{role}")),
-            from: (!from.is_empty()).then(|| from.to_owned()),
+            role: (*role).to_owned(),
+            threshold,
+            from: from.map(str::to_owned),
             to: request.to.to_owned(),
-            occupied_tokens: agent.occupied_context_tokens(),
-            message_id: (!skipped).then(|| message_id.to_string()),
+            occupied_tokens: occupied,
+            message_id: outcome.is_ok().then(|| message_id.to_string()),
             delivered: matches!(outcome, Ok(CompactOutcome::Sent)),
-            error: error.clone(),
+            error: outcome.as_ref().err().cloned(),
         },
     });
-    if skipped {
-        return Ok(Compaction::Skipped {
-            reason: error.unwrap_or_default(),
-        });
-    }
-    let occupied_tokens = agent.occupied_context_tokens();
-    match outcome? {
-        CompactOutcome::Sent => Ok(Compaction::Sent {
+    match outcome {
+        Ok(CompactOutcome::Sent) => Compaction::Sent {
             message_id,
-            occupied_tokens,
-        }),
-        CompactOutcome::Queued => Ok(Compaction::Queued {
+            occupied_tokens: occupied.unwrap_or_default(),
+            threshold,
+        },
+        Ok(CompactOutcome::Queued) => Compaction::Queued {
             message_id,
-            occupied_tokens,
-        }),
+            occupied_tokens: occupied.unwrap_or_default(),
+            threshold,
+        },
+        Err(reason) => Compaction::Skipped { reason },
     }
 }
 
-fn ledger_line(now: Timestamp, by: &str, from: &str, to: &str, note: Option<&str>) -> String {
+fn ledger_line(now: Timestamp, by: &str, from: Option<&str>, to: &str, note: &str) -> String {
     let at = now.to_zoned(MachineConfig::load_lenient().time_zone());
-    let from = if from.is_empty() { "(none)" } else { from };
-    let mut line = format!("- {} @{by}: {from} -> {to}", at.strftime("%Y-%m-%d %H:%M"));
-    if let Some(note) = note {
-        line.push_str(" — ");
-        line.push_str(&note.replace(['\r', '\n'], " "));
-    }
-    line
+    let transition = match from {
+        Some(from) => format!("{from} -> {to}"),
+        None => format!("opened {to}"),
+    };
+    format!(
+        "- {} @{by}: {transition} — {}",
+        at.strftime("%Y-%m-%d %H:%M"),
+        note.replace(['\r', '\n'], " ")
+    )
 }
 
-fn rewrite_board(text: &str, to: &str, owner: Option<&str>, ledger: &str) -> Option<String> {
+fn rewrite_board(text: &str, to: &str, owner: Option<&str>, ledger: &str) -> String {
     let mut result = String::with_capacity(text.len() + ledger.len() + to.len() + 64);
+    let stage = match owner {
+        Some(owner) => format!("Stage: {to} (@{owner})"),
+        None => format!("Stage: {to}"),
+    };
     let mut replaced = false;
     for line in text.split_inclusive('\n') {
         if !replaced && line.starts_with("Stage:") {
-            result.push_str(&format!("Stage: {to}"));
-            if let Some(owner) = owner {
-                result.push_str(&format!(" (@{owner})"));
-            }
+            result.push_str(&stage);
             if line.ends_with("\r\n") {
                 result.push_str("\r\n");
             } else if line.ends_with('\n') {
@@ -599,7 +589,17 @@ fn rewrite_board(text: &str, to: &str, owner: Option<&str>, ledger: &str) -> Opt
         }
     }
     if !replaced {
-        return None;
+        let at = if text.starts_with("# ") {
+            text.find('\n').map_or(text.len(), |at| at + 1)
+        } else {
+            0
+        };
+        let prefix = if at > 0 && !text[..at].ends_with('\n') {
+            "\n"
+        } else {
+            ""
+        };
+        result.insert_str(at, &format!("{prefix}{stage}\n"));
     }
     let mut offset = 0;
     let mut insertion = None;
@@ -609,7 +609,9 @@ fn rewrite_board(text: &str, to: &str, owner: Option<&str>, ledger: &str) -> Opt
             break;
         }
         offset += line.len();
-        if content == "## Progress log" || (insertion.is_some() && !content.trim().is_empty()) {
+        if matches!(content, "## Progress" | "## Progress log")
+            || (insertion.is_some() && !content.trim().is_empty())
+        {
             insertion = Some(offset);
         }
     }
@@ -626,10 +628,10 @@ fn rewrite_board(text: &str, to: &str, owner: Option<&str>, ledger: &str) -> Opt
             if !result.ends_with('\n') {
                 result.push('\n');
             }
-            result.push_str(&format!("\n## Progress log\n{ledger}\n"));
+            result.push_str(&format!("\n## Progress\n{ledger}\n"));
         }
     }
-    Some(result)
+    result
 }
 
 #[cfg(test)]
@@ -639,12 +641,18 @@ mod tests {
     #[test]
     fn board_rewrite_preserves_freeform_sections_and_appends_inside_ledger() {
         let board = "# Blackboard\r\nStage:Plan (@planner)\r\n\r\n## Goal\r\nKeep this.\r\n\r\n## Progress log\r\n- old entry\r\n\r\n## Result\r\nUnchanged.\r\n";
-        assert_eq!(rewrite_board(board, "Implement", Some("coder"), "- next"), Some("# Blackboard\r\nStage: Implement (@coder)\r\n\r\n## Goal\r\nKeep this.\r\n\r\n## Progress log\r\n- old entry\r\n- next\n\r\n## Result\r\nUnchanged.\r\n".to_owned()));
+        assert_eq!(
+            rewrite_board(board, "Implement", Some("coder"), "- next"),
+            "# Blackboard\r\nStage: Implement (@coder)\r\n\r\n## Goal\r\nKeep this.\r\n\r\n## Progress log\r\n- old entry\r\n- next\n\r\n## Result\r\nUnchanged.\r\n"
+        );
         assert_eq!(
             rewrite_board("Stage: Plan", "Done", None, "- done"),
-            Some("Stage: Done\n\n## Progress log\n- done\n".to_owned())
+            "Stage: Done\n\n## Progress\n- done\n"
         );
-        assert_eq!(rewrite_board("# Board\n", "Done", None, "- done"), None);
+        assert_eq!(
+            rewrite_board("# Board\n", "Done", None, "- done"),
+            "# Board\nStage: Done\n\n## Progress\n- done\n"
+        );
     }
 
     #[test]
@@ -664,13 +672,10 @@ mod tests {
             ),
             (
                 "Stage: Plan\nStage: untouched\n",
-                "Stage: Done\nStage: untouched\n\n## Progress log\n- done\n",
+                "Stage: Done\nStage: untouched\n\n## Progress\n- done\n",
             ),
         ] {
-            assert_eq!(
-                rewrite_board(board, "Done", None, "- done").as_deref(),
-                Some(expected)
-            );
+            assert_eq!(rewrite_board(board, "Done", None, "- done"), expected);
         }
     }
 
@@ -679,11 +684,73 @@ mod tests {
         let line = ledger_line(
             "2026-09-12T14:02:00Z".parse().unwrap(),
             "planner",
-            "Plan",
+            Some("Plan"),
             "Implement",
-            Some("ready\n## Result\r\nStage: Done"),
+            "ready\n## Result\r\nStage: Done",
         );
         assert_eq!(line.lines().count(), 1);
         assert!(line.ends_with("@planner: Plan -> Implement — ready ## Result  Stage: Done"));
+    }
+
+    #[test]
+    fn first_flip_bootstraps_stage_and_progress_without_losing_freeform_text() {
+        for (text, expected) in [
+            ("", "Stage: Explore (@planner)\n\n## Progress\n- opened\n"),
+            (
+                "# Work",
+                "# Work\nStage: Explore (@planner)\n\n## Progress\n- opened\n",
+            ),
+            (
+                "# Work\n\n## Goal\nFind the bug.\n",
+                "# Work\nStage: Explore (@planner)\n\n## Goal\nFind the bug.\n\n## Progress\n- opened\n",
+            ),
+            (
+                "A freeform board.\n",
+                "Stage: Explore (@planner)\nA freeform board.\n\n## Progress\n- opened\n",
+            ),
+            (
+                "## Progress\n- existing\n\n## Result\n",
+                "Stage: Explore (@planner)\n## Progress\n- existing\n- opened\n\n## Result\n",
+            ),
+        ] {
+            assert_eq!(
+                rewrite_board(text, "Explore", Some("planner"), "- opened"),
+                expected
+            );
+        }
+        let ledger = ledger_line(
+            "2026-09-12T14:02:00Z".parse().unwrap(),
+            "planner",
+            None,
+            "Explore",
+            "sweep aimed",
+        );
+        assert!(ledger.ends_with("@planner: opened Explore — sweep aimed"));
+    }
+
+    #[test]
+    fn stage_notices_are_prose_for_handoff_refire_and_recovery() {
+        assert_eq!(
+            stage_open_body(
+                Some("Plan"),
+                "Implement",
+                "planner",
+                Some("plan ready"),
+                false
+            ),
+            "@planner flipped the stage Plan -> Implement. Implement is yours: pick it up from blackboard.md.\n\nNote: plan ready"
+        );
+        assert_eq!(
+            stage_open_body(None, "Explore", "planner", Some("opened"), false),
+            "@planner opened the stage Explore. Explore is yours: pick it up from blackboard.md.\n\nNote: opened"
+        );
+        assert_eq!(
+            stage_open_body(Some("Implement"), "Implement", "user", Some("retry"), false),
+            "@user re-opened Implement. It is still yours: pick it up from blackboard.md.\n\nNote: retry"
+        );
+        assert_eq!(
+            stage_open_body(Some("Implement"), "Implement", "rimz", None, true),
+            "The team resumed at stage Implement, which is yours. Nothing flipped since the board's last Progress line: reread blackboard.md and continue from where it stops."
+        );
     }
 }

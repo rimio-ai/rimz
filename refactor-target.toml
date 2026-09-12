@@ -293,7 +293,8 @@ path = "crates/rimz/src/store"
 # Header grammar moved from harness; lifecycle projection also shares prompt-origin classification.
 # Exec cleanup probes waiter liveness without owning socket paths.
 # Conversation surfaces share sender classification with the CLI binary.
-surface-budget = 342
+# Flip and smart compaction share the typed occupied-context threshold predicate.
+surface-budget = 343
 
 [[module]]
 path = "crates/rimz/src/theme"

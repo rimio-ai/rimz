@@ -132,7 +132,7 @@ fn resolves_team_for_launch_context_from_effective_config() {
                 crate::config::RoleBinding {
                     signals: Vec::new(),
                     owns: Vec::new(),
-                    compact_on_handoff: false,
+                    flip_compact: None,
                     auto_compact: None,
                     role: "planner".to_owned(),
                     profile: "claude".to_owned(),
@@ -147,7 +147,7 @@ fn resolves_team_for_launch_context_from_effective_config() {
                 crate::config::RoleBinding {
                     signals: Vec::new(),
                     owns: Vec::new(),
-                    compact_on_handoff: false,
+                    flip_compact: None,
                     auto_compact: None,
                     role: "coder".to_owned(),
                     profile: "codex".to_owned(),

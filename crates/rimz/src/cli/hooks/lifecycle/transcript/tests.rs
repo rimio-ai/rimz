@@ -238,43 +238,59 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
 }
 
 #[test]
-fn subagent_report_records_as_a_hidden_harness_report() {
-    let (_dir, store) = store();
-    let workspace = workspace();
-    let agent = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
-    let message = rimz::store::message::MessageRecord::new(
-        workspace.workspace_id.clone(),
-        &agent,
-        "child result".to_owned(),
-        true,
-        rimz::store::message::DeliveryGate::Done,
-    )
-    .with_sender(rimz::store::message::MessageSender::Subagent {
-        kind: rimz::ids::AgentKind::new_unchecked("codex"),
-        name: "lucid-atlas".to_owned(),
-    });
-    let mut started = recorded(LifecycleSignal::TurnStarted);
-    started.observation.prompt =
-        Some("Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nchild result".to_owned());
+fn harness_notices_retain_delivery_attribution_in_transcripts() {
+    use rimz::store::message::{HarnessNotice, MessageSender};
+    use rimz::transcript::TranscriptKind;
 
-    record_conversation(
-        &workspace,
-        &store,
-        rimz::agents::definition_by_kind("claude").unwrap(),
-        &started,
-        conversation_input(None, &[], std::slice::from_ref(&message)),
-    )
-    .unwrap();
+    for (sender, header, kind) in [
+        (
+            MessageSender::Subagent {
+                kind: rimz::ids::AgentKind::new_unchecked("codex"),
+                name: "lucid-atlas".to_owned(),
+            },
+            "SUBAGENT_REPORT",
+            TranscriptKind::SubagentReport,
+        ),
+        (
+            MessageSender::Harness {
+                notice: HarnessNotice::Stage,
+            },
+            "STAGE",
+            TranscriptKind::Wake,
+        ),
+    ] {
+        let (_dir, store) = store();
+        let workspace = workspace();
+        let agent = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
+        let message = rimz::store::message::MessageRecord::new(
+            workspace.workspace_id.clone(),
+            &agent,
+            "child result".to_owned(),
+            true,
+            rimz::store::message::DeliveryGate::Done,
+        )
+        .with_sender(sender);
+        let mut started = recorded(LifecycleSignal::TurnStarted);
+        started.observation.prompt = Some(format!(
+            "Type: {header}\nFrom: @rimz\nContent:\nchild result"
+        ));
 
-    let entries = rimz::transcript::read_all(store.paths()).unwrap();
-    assert_eq!(entries.len(), 1);
-    assert_eq!(
-        entries[0].entry,
-        rimz::transcript::TranscriptKind::SubagentReport
-    );
-    assert_eq!(entries[0].from.as_deref(), Some("@rimz"));
-    assert_eq!(entries[0].text, "child result");
-    assert_eq!(entries[0].message_id.as_ref(), Some(&message.message_id));
+        record_conversation(
+            &workspace,
+            &store,
+            rimz::agents::definition_by_kind("claude").unwrap(),
+            &started,
+            conversation_input(None, &[], std::slice::from_ref(&message)),
+        )
+        .unwrap();
+
+        let entries = rimz::transcript::read_all(store.paths()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].entry, kind);
+        assert_eq!(entries[0].from.as_deref(), Some("@rimz"));
+        assert_eq!(entries[0].text, "child result");
+        assert_eq!(entries[0].message_id.as_ref(), Some(&message.message_id));
+    }
 }
 
 #[test]

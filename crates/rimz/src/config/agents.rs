@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{AttentionConfig, WorktreeConfig};
 use crate::agents::PermissionMode;
+use crate::store::message::AutoCompact;
 
 /// Agent-launch preferences. Machine-team entries bind role names to profiles
 /// or registered agent kinds; inline launch specs resolve through the same
@@ -212,6 +213,19 @@ pub struct Team {
 pub const DONE_STAGE: &str = "Done";
 
 impl Team {
+    pub fn flip_compact(&self, role: &str, default: Option<AutoCompact>) -> Option<AutoCompact> {
+        match self
+            .roles
+            .iter()
+            .find(|binding| binding.role == role)
+            .and_then(|binding| binding.flip_compact)
+        {
+            Some(FlipCompact::Off) => None,
+            Some(FlipCompact::Threshold(threshold)) => Some(threshold),
+            None => default,
+        }
+    }
+
     pub fn owner_of(&self, stage: &str) -> Option<&str> {
         self.roles
             .iter()
@@ -233,6 +247,38 @@ pub struct TeamSignalBinding {
     pub matches: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FlipCompact {
+    Off,
+    Threshold(AutoCompact),
+}
+
+impl<'de> Deserialize<'de> for FlipCompact {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        if raw == "off" {
+            return Ok(Self::Off);
+        }
+        AutoCompact::parse(&raw)
+            .map(Self::Threshold)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+impl Serialize for FlipCompact {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Off => serializer.serialize_str("off"),
+            Self::Threshold(AutoCompact::Percent(pct)) => {
+                serializer.serialize_str(&format!("{pct}%"))
+            }
+            Self::Threshold(AutoCompact::Tokens(tokens)) => {
+                serializer.serialize_str(&tokens.to_string())
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -261,13 +307,13 @@ pub struct RoleBinding {
         skip_serializing_if = "Option::is_none"
     )]
     pub auto_compact: Option<String>,
-    /// Compact this role after handing a stage to another member.
+    /// Override the harness threshold for compaction after handing off a stage.
     #[serde(
         default,
-        rename = "compact-on-handoff",
-        skip_serializing_if = "std::ops::Not::not"
+        rename = "flip-compact",
+        skip_serializing_if = "Option::is_none"
     )]
-    pub compact_on_handoff: bool,
+    pub flip_compact: Option<FlipCompact>,
     /// A replacement system prompt. Relative paths use the declaring file's
     /// directory, so a role in `~/.agents/teams/<name>/team.toml` can name a
     /// prompt shipped beside that fragment.

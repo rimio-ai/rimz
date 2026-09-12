@@ -278,7 +278,8 @@ pub(super) fn record_conversation(
                                 header @ (rimz::store::message::HeaderKind::Agent
                                 | rimz::store::message::HeaderKind::Subagent
                                 | rimz::store::message::HeaderKind::Wake
-                                | rimz::store::message::HeaderKind::Signal),
+                                | rimz::store::message::HeaderKind::Signal
+                                | rimz::store::message::HeaderKind::Stage),
                                 sender,
                                 body,
                             )) => {
@@ -291,7 +292,8 @@ pub(super) fn record_conversation(
                                         rimz::transcript::TranscriptKind::SubagentReport
                                     }
                                     rimz::store::message::HeaderKind::Wake
-                                    | rimz::store::message::HeaderKind::Signal => {
+                                    | rimz::store::message::HeaderKind::Signal
+                                    | rimz::store::message::HeaderKind::Stage => {
                                         rimz::transcript::TranscriptKind::Wake
                                     }
                                     rimz::store::message::HeaderKind::User => {

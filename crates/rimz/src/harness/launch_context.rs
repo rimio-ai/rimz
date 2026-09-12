@@ -25,6 +25,13 @@ impl From<&ExecAction> for LaunchSession {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+enum BoardStart {
+    None,
+    Stage { name: String, owner: Option<String> },
+    Done,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct TeamLaunchContext {
     team: String,
     role: String,
@@ -36,6 +43,7 @@ pub(super) struct TeamLaunchContext {
     scratch_patterns: Vec<String>,
     scratch: ScratchScan,
     stage_handoffs: bool,
+    board: BoardStart,
 }
 
 pub(super) fn team_launch_context(
@@ -57,6 +65,19 @@ pub(super) fn team_launch_context(
         .or_else(|| roles.first().cloned())
         .unwrap_or_else(|| role.clone());
     let scratch = scratch::scan(cwd, &team.scratch_files);
+    let stage_handoffs = team.owned_stages().next().is_some();
+    let board = if stage_handoffs {
+        match scratch::board_stage(cwd) {
+            Some(stage) if stage.name == "Done" => BoardStart::Done,
+            Some(stage) => BoardStart::Stage {
+                name: stage.name,
+                owner: stage.owner,
+            },
+            None => BoardStart::None,
+        }
+    } else {
+        BoardStart::None
+    };
 
     Some(TeamLaunchContext {
         team: team_name.clone(),
@@ -68,7 +89,8 @@ pub(super) fn team_launch_context(
         session: action.into(),
         scratch_patterns: team.scratch_files.clone(),
         scratch,
-        stage_handoffs: team.owned_stages().next().is_some(),
+        stage_handoffs,
+        board,
     })
 }
 
@@ -105,11 +127,25 @@ pub(super) fn reminder(context: &TeamLaunchContext) -> String {
         LaunchSession::Forked => "This is a forked session.",
     };
     let scratch = scratch_reminder(context);
-    let mut text = format!(
-        "{identity}\n{session}\n{scratch}\nThis is a launch-time snapshot; the files change as the team works."
-    );
+    let mut text = format!("{identity}\n{session}\n{scratch}");
     if context.stage_handoffs {
-        text.push_str("\nHand the board to the next stage with `rimz teams flip <stage> [-m note]`; RimZ writes the Stage line and the ledger and wakes the owner.");
+        text.push('\n');
+        match &context.board {
+            BoardStart::None => text.push_str("Fresh run: no board in this worktree. The leader opens it with the first flip."),
+            BoardStart::Stage { name, owner: Some(owner) } => text.push_str(&format!(
+                "Continuation: the board is at {}, owned by @{}, who is woken with the stage; everyone else rests until pinged.",
+                escape_reminder_text(name), escape_reminder_text(owner)
+            )),
+            BoardStart::Stage { name, owner: None } => text.push_str(&format!(
+                "Continuation: the board is at {}, with no owner recorded. Read blackboard.md before acting.",
+                escape_reminder_text(name)
+            )),
+            BoardStart::Done => text.push_str("Previous run finished in this worktree; blackboard.md and the memory files are from that run. The leader decides whether this is a new request (clear them, open a fresh board) or a follow-up (keep them, flip out of Done)."),
+        }
+    }
+    text.push_str("\nThis is a launch-time snapshot; the files change as the team works.");
+    if context.stage_handoffs {
+        text.push_str("\nHand the board to the next stage with `rimz teams flip <stage> \"<progress note>\"`; RimZ writes the Stage line and the Progress line and wakes the owner.");
     }
     text
 }
@@ -195,7 +231,7 @@ mod tests {
         RoleBinding {
             signals: Vec::new(),
             owns: Vec::new(),
-            compact_on_handoff: false,
+            flip_compact: None,
             auto_compact: None,
             role: role.to_owned(),
             profile: "claude".to_owned(),
@@ -291,7 +327,7 @@ mod tests {
         let context = team_launch_context(&params(), &action, &team, Path::new("/tmp/worktree"))
             .expect("team context");
         assert_eq!(context.leader, "planner");
-        assert!(reminder(&context).contains("rimz teams flip <stage> [-m note]"));
+        assert!(reminder(&context).contains("rimz teams flip <stage> \"<progress note>\""));
     }
 
     #[test]
@@ -321,8 +357,9 @@ mod tests {
 
     #[test]
     fn renders_fresh_empty_context() {
-        let context = TeamLaunchContext {
+        let mut context = TeamLaunchContext {
             stage_handoffs: false,
+            board: BoardStart::None,
             team: "forge".to_owned(),
             role: "coder".to_owned(),
             channel: Some("feature".to_owned()),
@@ -340,12 +377,26 @@ mod tests {
         Team memory files declared by the team (git-excluded, at the worktree root): *-notes.md. At launch none of them existed: this worktree holds no run state yet.
         This is a launch-time snapshot; the files change as the team works.
         "###);
+
+        context.stage_handoffs = true;
+        insta::assert_snapshot!(reminder(&context), @r###"
+        You are @coder in team `forge`, channel #feature, launched by RimZ in worktree /tmp/project-feature. Leader: @planner. Teammates: @planner.
+        This is a fresh session.
+        Team memory files declared by the team (git-excluded, at the worktree root): *-notes.md. At launch none of them existed: this worktree holds no run state yet.
+        Fresh run: no board in this worktree. The leader opens it with the first flip.
+        This is a launch-time snapshot; the files change as the team works.
+        Hand the board to the next stage with `rimz teams flip <stage> "<progress note>"`; RimZ writes the Stage line and the Progress line and wakes the owner.
+        "###);
     }
 
     #[test]
     fn renders_resumed_context_with_files() {
-        let context = TeamLaunchContext {
+        let mut context = TeamLaunchContext {
             stage_handoffs: true,
+            board: BoardStart::Stage {
+                name: "Plan".to_owned(),
+                owner: Some("planner".to_owned()),
+            },
             team: "forge".to_owned(),
             role: "planner".to_owned(),
             channel: None,
@@ -368,8 +419,19 @@ mod tests {
         You are @planner in team `forge`, launched by RimZ in worktree /tmp/project. Leader: @planner.
         This is a resumed session: your earlier context continues.
         Team memory files declared by the team (git-excluded, at the worktree root): blackboard.md. At launch these existed: blackboard.md (42 lines). They are existing run state; read them before acting.
+        Continuation: the board is at Plan, owned by @planner, who is woken with the stage; everyone else rests until pinged.
         This is a launch-time snapshot; the files change as the team works.
-        Hand the board to the next stage with `rimz teams flip <stage> [-m note]`; RimZ writes the Stage line and the ledger and wakes the owner.
+        Hand the board to the next stage with `rimz teams flip <stage> "<progress note>"`; RimZ writes the Stage line and the Progress line and wakes the owner.
+        "###);
+
+        context.board = BoardStart::Done;
+        insta::assert_snapshot!(reminder(&context), @r###"
+        You are @planner in team `forge`, launched by RimZ in worktree /tmp/project. Leader: @planner.
+        This is a resumed session: your earlier context continues.
+        Team memory files declared by the team (git-excluded, at the worktree root): blackboard.md. At launch these existed: blackboard.md (42 lines). They are existing run state; read them before acting.
+        Previous run finished in this worktree; blackboard.md and the memory files are from that run. The leader decides whether this is a new request (clear them, open a fresh board) or a follow-up (keep them, flip out of Done).
+        This is a launch-time snapshot; the files change as the team works.
+        Hand the board to the next stage with `rimz teams flip <stage> "<progress note>"`; RimZ writes the Stage line and the Progress line and wakes the owner.
         "###);
     }
 
@@ -377,6 +439,7 @@ mod tests {
     fn escapes_filesystem_text_in_reminder() {
         let context = TeamLaunchContext {
             stage_handoffs: false,
+            board: BoardStart::None,
             team: "forge".to_owned(),
             role: "coder".to_owned(),
             channel: None,

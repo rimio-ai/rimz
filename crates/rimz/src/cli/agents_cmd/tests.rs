@@ -1096,7 +1096,7 @@ mod launch_options {
                     profile: "planner".to_owned(),
                     signals: Vec::new(),
                     owns: Vec::new(),
-                    compact_on_handoff: false,
+                    flip_compact: None,
                     mode: None,
                     model: None,
                     effort: None,

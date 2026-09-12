@@ -615,6 +615,7 @@ fn message_header_parser_round_trips_attributed_senders() {
     for (notice, kind, header_type) in [
         (HarnessNotice::Wake, HeaderKind::Wake, "WAKE"),
         (HarnessNotice::Signal, HeaderKind::Signal, "SIGNAL"),
+        (HarnessNotice::Stage, HeaderKind::Stage, "STAGE"),
     ] {
         let sender = MessageSender::Harness { notice };
         let prompt = message_header(&sender, &[], None).unwrap() + body;

@@ -72,7 +72,7 @@ enum TeamsSubcmd {
     Focus(CohortArgs),
     /// Restart every live member of a team cohort.
     Restart(CohortArgs),
-    /// Hand the cohort's board to the next stage's owner.
+    /// Hand the board to the next stage's owner.
     Flip(FlipArgs),
     /// List or install team bundles from the matching RimZ release.
     Install(install::InstallArgs),
@@ -138,27 +138,32 @@ struct CohortArgs {
 struct FlipArgs {
     #[arg(value_name = "STAGE")]
     stage: String,
-    /// Note delivered to the stage's owner and recorded in the board ledger.
-    #[arg(short = 'm', long = "note")]
-    note: Option<String>,
-    /// Interrupt the owner's current turn to deliver the stage.
-    #[arg(long)]
-    steer: bool,
-    /// Select a configured team instead of the caller's team.
+    /// The progress note recorded on the board; what is done or where the work stands.
+    #[arg(value_name = "NOTE")]
+    note: String,
+    /// Select a team when several teams share the worktree.
     #[arg(
         long,
         value_name = "NAME",
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::team_names)
     )]
     team: Option<String>,
-    /// Select one live cohort by worktree name or lane.
-    #[arg(
-        short = 'w',
-        long,
-        value_name = "NAME",
-        add = clap_complete::ArgValueCandidates::new(crate::cli::complete::worktrees)
-    )]
-    worktree: Option<String>,
+}
+
+pub(super) fn stage_strip(stages: &[String], current: Option<&str>) -> String {
+    stages
+        .iter()
+        .map(String::as_str)
+        .chain(std::iter::once(rimz::config::DONE_STAGE))
+        .map(|stage| {
+            if current == Some(stage) {
+                format!("[{stage}]")
+            } else {
+                stage.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" → ")
 }
 
 pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
@@ -366,28 +371,43 @@ mod tests {
     }
 
     #[test]
-    fn flip_parses_stage_and_delivery_options() {
-        let args = parse_teams(&[
-            "rimz",
-            "flip",
-            "Implement",
-            "-m",
-            "note",
-            "--steer",
-            "-w",
-            "lane",
-            "--team",
-            "forge",
-        ]);
+    fn flip_requires_progress_note_and_accepts_only_team_selection() {
+        let args = parse_teams(&["rimz", "flip", "Implement", "note", "--team", "forge"]);
         let Some(TeamsSubcmd::Flip(args)) = args.command else {
             panic!("flip verb");
         };
         assert_eq!(args.stage, "Implement");
-        assert_eq!(args.note.as_deref(), Some("note"));
-        assert!(args.steer);
-        assert_eq!(args.worktree.as_deref(), Some("lane"));
+        assert_eq!(args.note, "note");
         assert_eq!(args.team.as_deref(), Some("forge"));
         assert!(TeamsHarness::try_parse_from(["rimz", "flip"]).is_err());
+        for stage in ["Implement", "Done"] {
+            assert!(TeamsHarness::try_parse_from(["rimz", "flip", stage]).is_err());
+            assert!(TeamsHarness::try_parse_from(["rimz", "flip", stage, "note"]).is_ok());
+        }
+        assert!(TeamsHarness::try_parse_from(["rimz", "flip", "Plan", "note", "--steer"]).is_err());
+        for flag in ["-m", "--note", "-w", "--worktree"] {
+            assert!(
+                TeamsHarness::try_parse_from(["rimz", "flip", "Plan", "note", flag, "value"])
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn stage_strip_matches_exact_names_and_includes_terminal() {
+        let stages = vec!["Plan".into(), "Plan review".into()];
+        assert_eq!(
+            stage_strip(&stages, Some("Plan review")),
+            "Plan → [Plan review] → Done"
+        );
+        assert_eq!(
+            stage_strip(&stages, Some("Done")),
+            "Plan → Plan review → [Done]"
+        );
+        assert_eq!(
+            stage_strip(&stages, Some("Plan (delta)")),
+            "Plan → Plan review → Done"
+        );
     }
 
     #[test]

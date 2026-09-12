@@ -4,7 +4,7 @@ use super::support::*;
 use rimz::agents::LaunchParams;
 use rimz::ids::AgentSessionId;
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
-use rimz::store::message::{DeliveryGate, MessageStatus};
+use rimz::store::message::{DeliveryGate, HarnessNotice, MessageSender, MessageStatus};
 use std::process::Stdio;
 
 #[test]
@@ -124,6 +124,7 @@ done
     let command = || {
         let mut command = env.rimz();
         command
+            .env(rimz::workspace::ENV_WORKTREE_PATH, &env.project_root)
             .env(rimz::workspace::ENV_CHANNEL, "stage-test")
             .args(["--mux", "tmux"]);
         command
@@ -171,7 +172,6 @@ done
             "Review",
             "--team",
             "forge",
-            "-m",
             "Inspect the receiver.",
         ])
         .bounded_output()
@@ -193,7 +193,16 @@ done
         String::from_utf8_lossy(&flipped.stdout),
     );
     assert_eq!(pending[0].gate, DeliveryGate::Done);
-    assert!(pending[0].text.contains("stage Review is yours"));
+    assert_eq!(
+        pending[0].sender,
+        MessageSender::Harness {
+            notice: HarnessNotice::Stage,
+        }
+    );
+    assert_eq!(
+        pending[0].text,
+        "@user flipped the stage Build -> Review. Review is yours: pick it up from blackboard.md.\n\nNote: Inspect the receiver."
+    );
     let message_id = pending[0].message_id.clone();
     command()
         .args(["message", "sweep"])
@@ -209,7 +218,7 @@ done
         .assert_success_within_timeout("deliver after the receiver's Done boundary");
     let text = wait_for_text(&received, &pending[0].text, &server, &pane);
     let delivered = &text[before.len()..];
-    assert!(delivered.contains("Type: SIGNAL"), "{delivered}");
+    assert!(delivered.contains("Type: STAGE"), "{delivered}");
     assert!(delivered.contains("From: @rimz"), "{delivered}");
     assert!(store.list_messages().unwrap().iter().any(|message| {
         message.message_id == message_id && message.status == MessageStatus::Sent
@@ -224,28 +233,20 @@ done
     let messages = store.list_messages().unwrap();
     let rewake = messages
         .iter()
-        .find(|message| message.text.contains("stage Review is still yours"))
+        .find(|message| {
+            message
+                .text
+                .contains("The team resumed at stage Review, which is yours.")
+        })
         .expect("registration creates a still-yours notice");
     assert_eq!(rewake.gate, DeliveryGate::Done);
     assert_eq!(rewake.status, MessageStatus::Sent);
     let text = wait_for_text(&received, &rewake.text, &server, &pane);
     let delivered = &text[before.len()..];
-    assert!(delivered.contains("Type: SIGNAL"), "{delivered}");
+    assert!(delivered.contains("Type: STAGE"), "{delivered}");
     assert!(delivered.contains("From: @rimz"), "{delivered}");
-    let payload = serde_json::Deserializer::from_str(
-        delivered
-            .lines()
-            .find(|line| line.starts_with('{'))
-            .expect("signal payload"),
-    )
-    .into_iter::<serde_json::Value>()
-    .next()
-    .unwrap()
-    .unwrap();
-    assert_eq!(payload["signal"], "team.stage");
-    assert_eq!(payload["from"], "Review");
-    assert_eq!(payload["to"], "Review");
-    assert_eq!(payload["by"], "rimz");
+    assert!(!delivered.lines().any(|line| line.starts_with('{')));
+    assert!(delivered.contains("reread blackboard.md"), "{delivered}");
     assert!(store.list_pending_messages().unwrap().is_empty());
     assert_eq!(std::fs::read(&board).unwrap(), flipped_board);
 }

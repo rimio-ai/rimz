@@ -142,7 +142,7 @@ fn role(role: &str, profile: &str) -> RoleBinding {
         profile: profile.to_owned(),
         signals: Vec::new(),
         owns: Vec::new(),
-        compact_on_handoff: false,
+        flip_compact: None,
         mode: None,
         model: None,
         effort: None,
@@ -1321,7 +1321,7 @@ fn named_teams_compile_roles_and_apply_overrides() {
                 profile: "coder-base".to_owned(),
                 signals: Vec::new(),
                 owns: Vec::new(),
-                compact_on_handoff: false,
+                flip_compact: None,
                 mode: Some(PermissionMode::Ask),
                 model: Some("role-model".to_owned()),
                 effort: Some("high".to_owned()),
@@ -1336,7 +1336,7 @@ fn named_teams_compile_roles_and_apply_overrides() {
                 profile: "planner-base".to_owned(),
                 signals: Vec::new(),
                 owns: Vec::new(),
-                compact_on_handoff: false,
+                flip_compact: None,
                 mode: None,
                 model: None,
                 effort: None,
@@ -1591,6 +1591,13 @@ fn team_validation_rejects_empty_and_duplicate_stages() {
         })
     );
     validate(&[]).expect("undeclared stages");
+    assert_eq!(
+        validate(&["Explore", "Done"]),
+        Err(LayoutErr::ReservedStage {
+            team: "review".to_owned(),
+            name: "Done".to_owned(),
+        })
+    );
     validate(&["Explore", "Plan", "Implement (delta)"]).expect("ordered stages");
     validate(&["Plan", "plan"]).expect("stage names are case-sensitive");
 }
@@ -1598,7 +1605,7 @@ fn team_validation_rejects_empty_and_duplicate_stages() {
 #[test]
 fn team_stage_ownership_validation() {
     let mut candidate = team(vec![role("planner", "claude"), role("coder", "codex")]);
-    candidate.stages = ["Explore", "Plan", "Implement", "Review", "Reflect", "Done"]
+    candidate.stages = ["Explore", "Plan", "Implement", "Review", "Reflect"]
         .map(str::to_owned)
         .to_vec();
     candidate.roles[0].owns = ["Explore", "Plan", "Reflect"].map(str::to_owned).to_vec();
@@ -1648,29 +1655,43 @@ fn team_stage_ownership_validation() {
 }
 
 #[test]
-fn compact_on_handoff_preflight_uses_resolved_launch_kind() {
+fn flip_compact_preflight_uses_effective_policy_and_resolved_launch_kind() {
+    use crate::config::FlipCompact;
+    use crate::store::message::AutoCompact;
+
+    let preflight = |candidate: &Team, base: Option<&ResolvedProfile>, default| {
+        let prepared = prepare_team("forge", candidate, &no_profiles(), base)?;
+        validate_flip_compact("forge", &prepared, default)
+    };
     let mut candidate = team(vec![role("coder", "claude")]);
-    candidate.roles[0].compact_on_handoff = true;
-    prepare_team("forge", &candidate, &no_profiles(), None).expect("Claude supports compact");
+    candidate.roles[0].flip_compact = Some(FlipCompact::Threshold(AutoCompact::Tokens(180_000)));
+    preflight(&candidate, None, None).expect("Claude supports compact");
     assert!(matches!(
-        prepare_team("forge", &candidate, &no_profiles(), Some(&ResolvedProfile::bare("amp"))),
-        Err(LayoutErr::CompactOnHandoffUnsupported { kind, .. }) if kind.as_str() == "amp"
+        preflight(&candidate, Some(&ResolvedProfile::bare("amp")), None),
+        Err(LayoutErr::FlipCompactUnsupported { kind, .. }) if kind.as_str() == "amp"
     ));
     candidate.roles[0].profile = "amp".to_owned();
-    assert!(matches!(
-        prepare_team("forge", &candidate, &no_profiles(), None),
-        Err(LayoutErr::CompactOnHandoffUnsupported { .. })
-    ));
-    prepare_team(
-        "forge",
-        &candidate,
+    validate_config(
         &no_profiles(),
-        Some(&ResolvedProfile::bare("claude")),
+        &no_commands(),
+        &TeamsConfig(BTreeMap::from([("forge".to_owned(), candidate.clone())])),
     )
-    .expect("override supports compact");
-    candidate.roles[0].compact_on_handoff = false;
-    prepare_team("forge", &candidate, &no_profiles(), None)
+    .expect("capability checks wait for the final launch kind");
+    assert!(matches!(
+        preflight(&candidate, None, None),
+        Err(LayoutErr::FlipCompactUnsupported { .. })
+    ));
+    preflight(&candidate, Some(&ResolvedProfile::bare("claude")), None)
+        .expect("override supports compact");
+    candidate.roles[0].flip_compact = Some(FlipCompact::Off);
+    preflight(&candidate, None, Some(AutoCompact::Tokens(180_000)))
         .expect("disabled on unsupported adapter");
+    candidate.roles[0].flip_compact = None;
+    preflight(&candidate, None, None).expect("unconfigured compaction allows unsupported adapter");
+    assert!(matches!(
+        preflight(&candidate, None, Some(AutoCompact::Tokens(180_000))),
+        Err(LayoutErr::FlipCompactUnsupported { .. })
+    ));
 }
 
 #[test]

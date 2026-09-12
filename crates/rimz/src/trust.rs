@@ -805,7 +805,7 @@ struct ExecutableTeam<'a> {
     roles: Vec<ExecutableRole<'a>>,
 }
 
-// `owns` and `compact-on-handoff` deliberately stay outside the executable projection.
+// `owns` and `flip-compact` deliberately stay outside the executable projection.
 #[derive(Serialize)]
 struct ExecutableRole<'a> {
     role: &'a str,

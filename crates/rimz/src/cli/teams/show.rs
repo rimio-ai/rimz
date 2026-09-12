@@ -243,26 +243,10 @@ fn write_instance(w: &mut impl Write, instance: &LiveInstance, now: jiff::Timest
         render::cell(format!("{} · tmp {tmp}", instance.isolation)),
     );
     if !instance.stages.is_empty() {
-        let current = instance
-            .stage
-            .as_ref()
-            .and_then(|stage| stage.name.split_whitespace().next());
+        let current = instance.stage.as_ref().map(|stage| stage.name.as_str());
         facts.push(
             "stages",
-            render::cell(
-                instance
-                    .stages
-                    .iter()
-                    .map(|stage| {
-                        if current == Some(stage.as_str()) {
-                            format!("[{stage}]")
-                        } else {
-                            stage.clone()
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" → "),
-            ),
+            render::cell(super::stage_strip(&instance.stages, current)),
         );
     }
     let mut pr = Vec::new();
@@ -480,7 +464,7 @@ mod tests {
             modified_at: Some(jiff::Timestamp::UNIX_EPOCH),
         }];
         let output = rendered(&report(vec![instance.clone()]), None);
-        assert!(output.contains("Explore → [Plan] → Implement"));
+        assert!(output.contains("Explore → Plan → Implement → Done"));
         assert!(output.contains("Plan (delta) (@planner)"));
         assert!(output.contains("ci passing"));
         assert!(output.contains("blackboard.md"));
@@ -494,7 +478,9 @@ mod tests {
                 .any(|line| line.contains("@planner") && line.ends_with("2m"))
         );
         instance.stage.as_mut().unwrap().name = "Done".into();
-        assert!(rendered(&report(vec![instance]), None).contains("Explore → Plan → Implement"));
+        assert!(
+            rendered(&report(vec![instance]), None).contains("Explore → Plan → Implement → [Done]")
+        );
     }
 
     #[test]

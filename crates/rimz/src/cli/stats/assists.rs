@@ -85,12 +85,12 @@ pub(super) enum AssistEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
-    HandoffCompact {
+    FlipCompact {
         at: Timestamp,
         kind: AgentKind,
         agent_id: AgentSessionId,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        label: Option<String>,
+        role: String,
+        threshold: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
         from: Option<String>,
         to: String,
@@ -148,7 +148,7 @@ impl AssistStats {
                 }
                 AssistEvent::Compact { .. } => rollup.compacts += 1,
                 AssistEvent::IdleCompact { delivered, .. }
-                | AssistEvent::HandoffCompact { delivered, .. } => {
+                | AssistEvent::FlipCompact { delivered, .. } => {
                     rollup.compacts += usize::from(*delivered);
                 }
                 AssistEvent::Resume { recovered, .. } => {
@@ -250,21 +250,23 @@ impl AssistEvent {
                 delivered,
                 error,
             },
-            Assist::HandoffCompact {
+            Assist::FlipCompact {
                 kind,
                 agent_id,
-                label,
+                role,
+                threshold,
                 from,
                 to,
                 occupied_tokens,
                 message_id,
                 delivered,
                 error,
-            } => Self::HandoffCompact {
+            } => Self::FlipCompact {
                 at: record.at,
                 kind,
                 agent_id,
-                label,
+                role,
+                threshold,
                 from,
                 to,
                 occupied_tokens,
@@ -295,7 +297,7 @@ impl AssistEvent {
             | Self::Continue { at, .. }
             | Self::Compact { at, .. }
             | Self::IdleCompact { at, .. }
-            | Self::HandoffCompact { at, .. }
+            | Self::FlipCompact { at, .. }
             | Self::Resume { at, .. } => *at,
         }
     }
@@ -489,9 +491,9 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 compact_token_count(*occupied_tokens),
             )
         }
-        AssistEvent::HandoffCompact {
-            kind,
-            label,
+        AssistEvent::FlipCompact {
+            role,
+            threshold,
             from,
             to,
             occupied_tokens,
@@ -499,7 +501,7 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
             error,
             ..
         } => {
-            let agent = label.as_deref().unwrap_or(kind.as_str());
+            let agent = format!("@{role}");
             let outcome = if *delivered { "" } else { " held" };
             let from = from.as_deref().unwrap_or("(none)");
             let context = occupied_tokens
@@ -509,7 +511,10 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 .as_deref()
                 .map(|error| format!(" ({})", first_line(error)))
                 .unwrap_or_default();
-            format!("{time} ⌁ {agent} hand-off compaction{outcome} — {from} → {to}{context}{error}")
+            let threshold = compact_token_count(*threshold);
+            format!(
+                "{time} ⌁ {agent} flip compaction{outcome} — {from} → {to}{context}, threshold {threshold}{error}"
+            )
         }
         AssistEvent::Resume {
             cause,
@@ -576,7 +581,7 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
         } => format!(
             "{at} {benefit} · agent {agent_id} · message {message_id} · delivered {delivered}"
         ),
-        AssistEvent::HandoffCompact {
+        AssistEvent::FlipCompact {
             agent_id,
             message_id,
             delivered,
@@ -689,15 +694,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn handoff_compaction_fold_and_render_preserve_skipped_attempts() {
+    fn flip_compaction_fold_and_render_preserve_skipped_attempts() {
         let records = [true, false]
             .into_iter()
             .map(|delivered| AssistRecord {
                 at: Timestamp::from_second(if delivered { 0 } else { 60 }).expect("timestamp"),
-                assist: Assist::HandoffCompact {
+                assist: Assist::FlipCompact {
                     kind: AgentKind::new_unchecked("codex"),
                     agent_id: AgentSessionId::from("session-1"),
-                    label: delivered.then(|| "@coder".to_owned()),
+                    role: "coder".to_owned(),
+                    threshold: 180_000,
                     from: delivered.then(|| "Implement".to_owned()),
                     to: "Review".to_owned(),
                     occupied_tokens: delivered.then_some(180_000),
@@ -718,7 +724,9 @@ mod tests {
         assert_eq!(stats.events.len(), 2);
         let json = serde_json::to_value(&stats).expect("stats JSON");
         let skipped = &json["events"][0];
-        assert_eq!(skipped["assist"], "handoff_compact");
+        assert_eq!(skipped["assist"], "flip_compact");
+        assert_eq!(skipped["role"], "coder");
+        assert_eq!(skipped["threshold"], 180_000);
         assert_eq!(skipped["delivered"], false);
         for field in ["message_id", "from", "occupied_tokens", "label"] {
             assert!(skipped.get(field).is_none(), "omits absent {field}");
@@ -732,8 +740,8 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         insta::assert_snapshot!(lines, @"
-        1970-01-01 00:01 ⌁ codex hand-off compaction held — (none) → Review (already compacting) · agent session-1 · delivered false
-        1970-01-01 00:00 ⌁ @coder hand-off compaction — Implement → Review — 180k ctx · agent session-1 · message msg_1 · delivered true
+        1970-01-01 00:01 ⌁ @coder flip compaction held — (none) → Review, threshold 180k (already compacting) · agent session-1 · delivered false
+        1970-01-01 00:00 ⌁ @coder flip compaction — Implement → Review — 180k ctx, threshold 180k · agent session-1 · message msg_1 · delivered true
         ");
     }
 }
