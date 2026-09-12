@@ -1,6 +1,5 @@
 use super::*;
 use crate::cli::{open_store, worktree};
-use rimz::harness::launch_reminders::LaunchReminders;
 use std::cell::RefCell;
 use std::sync::mpsc;
 
@@ -32,7 +31,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
         fail_run_on_exec_precondition(run_context.as_ref());
     })?;
-    let mut request = match envelope.materialize() {
+    let request = match envelope.materialize() {
         Ok(request) => request,
         Err(err) => {
             mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
@@ -41,159 +40,75 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         }
     };
     let attach_target = exec_attach_target(&request);
-    let prompt_sources = rimz::harness::prompt_compose::SystemPromptSources {
-        system_prompt_file: request.system_prompt_file.clone(),
-        append_system_prompt_files: request.append_system_prompt_files.clone(),
-    };
-    let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
-        .and_then(|runtime| {
-            runtime.ensure_dirs()?;
-            Ok(runtime)
-        })
-        .context("preparing prompt runtime")
+    let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
+    let state = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())?;
+    let provider_cwd = request
+        .worktree_path
+        .as_deref()
+        .map(absolute_lexical_path)
+        .transpose()?
+        .unwrap_or(match &request.action {
+            rimz::harness::launch::ExecAction::Launch { .. } => workspace.worktree_root.clone(),
+            _ => std::env::current_dir().context("reading the agent pane cwd")?,
+        });
+    let effective = rimz::config::effective::load_with_roots(
+        &machine_config,
+        &workspace.project_root,
+        &rimz::disk::paths::config_home(),
+    );
+    if let Err(err) = &effective {
+        writeln!(crate::cli::render::err(), "rimz: {err}")?;
+    }
+    let ambient_env = std::env::vars_os()
+        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+        .collect();
+    let plan = rimz::harness::launch_plan::compile(rimz::harness::launch_plan::LaunchPlanInputs {
+        request: &request,
+        cwd: &provider_cwd,
+        project_root: &workspace.project_root,
+        rimz_bin: &rimz::proc::rimz_exe(),
+        runtime: &runtime,
+        state: &state,
+        effective: effective.as_ref().ok(),
+        commands: &machine_config.agents.commands,
+        bwrap: bwrap.as_deref(),
+        ambient_env: &ambient_env,
+    })
+    .inspect_err(|_| {
+        mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
+        fail_run_on_exec_precondition(run_context.as_ref());
+    })?;
+    for warning in &plan.warnings {
+        writeln!(crate::cli::render::err(), "rimz: {warning}")?;
+    }
+    if let Some(sandbox) = &plan.sandbox {
+        for skipped in &sandbox.skipped {
+            writeln!(crate::cli::render::err(), "rimz: {skipped}")?;
+        }
+    }
+    rimz::harness::launch_plan::apply(&plan).inspect_err(|_| {
+        mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
+        fail_run_on_exec_precondition(run_context.as_ref());
+    })?;
+    let entered_worktree = request
+        .worktree_path
+        .as_deref()
+        .map(enter_worktree)
+        .transpose()
         .inspect_err(|_| {
             mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
             fail_run_on_exec_precondition(run_context.as_ref());
         })?;
-    let materialized_prompt = if prompt_sources.is_empty() {
-        rimz::harness::prompt_compose::MaterializedSystemPrompt::default()
-    } else {
-        let materialized = rimz::harness::prompt_compose::materialize_system_prompt(
-            &request.kind,
-            &prompt_sources,
-            &runtime,
-        )
-        .context("materializing system prompt");
-        match materialized {
-            Ok(materialized) => materialized,
-            Err(err) => {
-                mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
-                fail_run_on_exec_precondition(run_context.as_ref());
-                return Err(err);
-            }
-        }
-    };
-    apply_materialized_system_prompt(&mut request, &materialized_prompt);
-    let entered_worktree = match request.worktree_path.as_deref() {
-        Some(path) => match enter_worktree(path) {
-            Ok(path) => Some(path),
-            Err(err) => {
-                mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
-                fail_run_on_exec_precondition(run_context.as_ref());
-                return Err(err);
-            }
-        },
-        None => None,
-    };
-    let provider_cwd = match &request.action {
-        rimz::harness::launch::ExecAction::Fork { .. } => {
-            std::env::current_dir().context("reading the fork pane cwd")?
-        }
-        rimz::harness::launch::ExecAction::Resume { .. } => {
-            std::env::current_dir().context("reading the resume pane cwd")?
-        }
-        rimz::harness::launch::ExecAction::Launch { .. } => entered_worktree
-            .clone()
-            .unwrap_or_else(|| workspace.worktree_root.clone()),
-    };
-    let reminders = LaunchReminders {
-        sandbox: bwrap.is_some(),
-        ..exec_launch_reminders(
-            &request,
-            &machine_config,
-            &workspace.project_root,
-            &rimz::disk::paths::config_home(),
-        )
-    };
-    let stage = rimz::harness::launch::compile_agent_process_stage_with_extra_env(
-        &workspace.project_root,
-        &request,
-        &provider_cwd,
-        &rimz::proc::rimz_exe(),
-        &runtime,
-        &materialized_prompt.env,
-        &reminders,
-    );
-    let stage = match stage {
-        Ok(stage) => stage,
-        Err(err) => {
-            mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
-            fail_run_on_exec_precondition(run_context.as_ref());
-            return Err(err.into());
-        }
-    };
-    let mut process = match stage {
-        rimz::harness::launch::AgentProcessStage::Ready(process) => process,
-        rimz::harness::launch::AgentProcessStage::LoginShellReentry {
-            process,
-            argv,
-            prompt_artifact,
-        } => {
-            if let Some(artifact) = &prompt_artifact
-                && let Err(err) = rimz::harness::launch::write_prompt_artifact(artifact)
-            {
-                mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
-                fail_run_on_exec_precondition(run_context.as_ref());
-                return Err(err.into());
-            }
-            let (program, rest) = argv.split_first().ok_or_else(|| {
-                anyhow::anyhow!("finalized Qwen launch produced an empty command")
-            })?;
-            if let Err(err) = exec_agent_command(program, rest, &process.env, &process.unset) {
-                mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
-                fail_run_on_exec_precondition(run_context.as_ref());
-                return Err(err);
-            }
-            return Ok(());
-        }
-    };
-    if let Some(bwrap) = bwrap {
-        let prepare = || -> Result<_> {
-            let state = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())?;
-            state.ensure_tmp_dir()?;
-            let mut env: std::collections::BTreeMap<String, String> = std::env::vars_os()
-                .filter_map(|(key, value)| {
-                    Some((key.into_string().ok()?, value.into_string().ok()?))
-                })
-                .collect();
-            env.extend(process.env.clone());
-            let provider_home = adapter
-                .and_then(|definition| definition.config_home(&env))
-                .map(|path| rimz::sandbox::ProviderHome {
-                    source: path.clone(),
-                    target: path,
-                });
-            rimz::sandbox::prepare(&rimz::sandbox::SandboxInputs {
-                env: &env,
-                cwd: &provider_cwd,
-                project_root: &workspace.project_root,
-                worktree: request.worktree_path.as_deref(),
-                tmp_dir: &state.tmp_dir,
-                skills_dir: &state.skills_dir,
-                provider_home,
-                provider_home_env_keys: adapter
-                    .map_or(&[], |adapter| adapter.config_home_env_keys()),
-                skills: rimz::sandbox::SkillInputs {
-                    kind: request.kind.as_str(),
-                    home: adapter.and_then(|adapter| adapter.skills_home(&env)),
-                    manual: adapter.map_or(rimz::agents::ManualSkill::Unsupported, |adapter| {
-                        adapter.manual_skill()
-                    }),
-                    callable: request.skills.as_deref(),
-                },
-            })
-            .map_err(Into::into)
-        };
-        let prepared = prepare().inspect_err(|_| {
+    let process = plan.process();
+    if let rimz::harness::launch::AgentProcessStage::LoginShellReentry { argv, .. } = &plan.stage {
+        let (program, rest) = argv
+            .split_first()
+            .ok_or_else(|| anyhow::anyhow!("finalized Qwen launch produced an empty command"))?;
+        exec_agent_command(program, rest, &process.env, &process.unset).inspect_err(|_| {
             mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
             fail_run_on_exec_precondition(run_context.as_ref());
         })?;
-        for skipped in &prepared.skipped {
-            let _ = writeln!(std::io::stderr().lock(), "rimz: {skipped}");
-        }
-        process.pin_env(prepared.pins);
-        process.argv =
-            rimz::sandbox::bwrap_argv(&bwrap, &prepared.plan, &provider_cwd, &process.argv);
+        return Ok(());
     }
     if let Some(context) = run_context.as_ref() {
         record_own_run_pane(context);
@@ -301,93 +216,6 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         entered_worktree.as_deref(),
         outcome,
     )
-}
-
-fn exec_launch_reminders(
-    request: &rimz::harness::launch::ExecRequest,
-    machine_config: &rimz::config::MachineConfig,
-    project_root: &std::path::Path,
-    config_root: &std::path::Path,
-) -> LaunchReminders {
-    let effective =
-        match rimz::config::effective::load_with_roots(machine_config, project_root, config_root) {
-            Ok(effective) => effective,
-            Err(err) => {
-                let _ = writeln!(
-                    std::io::stderr().lock(),
-                    "rimz: {err}; launching with default RimZ launch reminders"
-                );
-                return LaunchReminders::default();
-            }
-        };
-    let profiles = if request.subagent {
-        &effective.subagent_profiles
-    } else {
-        &effective.profiles
-    };
-    let model = request
-        .identity
-        .params
-        .profile
-        .as_deref()
-        .and_then(|name| profiles.0.get(name))
-        .and_then(|profile| profile.model_reminder)
-        .unwrap_or(true);
-    if request.subagent {
-        return LaunchReminders {
-            model,
-            ..LaunchReminders::default()
-        };
-    }
-    let subagent_catalog = Some(rimz::harness::subagent_policy::catalog(
-        request.identity.params.profile.as_deref(),
-        &effective.profiles,
-        &effective.subagent_profiles,
-        &machine_config.agents.commands,
-    ));
-    let team = request
-        .identity
-        .params
-        .team
-        .as_deref()
-        .and_then(|team_name| match effective.teams.0.get(team_name) {
-            Some(team) => Some(team.clone()),
-            None => {
-                let _ = writeln!(
-                    std::io::stderr().lock(),
-                    "rimz: team `{team_name}` is no longer configured; launching without the team context reminder"
-                );
-                None
-            }
-        });
-    LaunchReminders {
-        model,
-        subagent_catalog,
-        team,
-        ..LaunchReminders::default()
-    }
-}
-
-fn apply_materialized_system_prompt(
-    request: &mut rimz::harness::launch::ExecRequest,
-    materialized: &rimz::harness::prompt_compose::MaterializedSystemPrompt,
-) {
-    if !materialized.args.is_empty() {
-        // Materialization already proved that the adapter and matcher exist.
-        let matcher = rimz::agents::find_definition(request.kind.as_str())
-            .and_then(|adapter| {
-                adapter
-                    .spec()
-                    .launch
-                    .preset_arg_matcher(rimz::agents::PresetField::SystemPromptFile)
-            })
-            .expect("materialized prompt args require a validated prompt matcher");
-        matcher.remove_occurrences(request.action.extra_args_mut());
-    }
-    request
-        .action
-        .extra_args_mut()
-        .extend(materialized.args.iter().cloned());
 }
 
 struct RunExitContext<'a> {
@@ -1498,10 +1326,6 @@ fn close_own_pane(globals: &GlobalFlags, session_name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rimz::harness::launch::{
-        AgentProcessStage, ExecAction, ExecIdentity, ExecRequest, ProviderAccountState,
-    };
-    use rimz::harness::prompt_compose::MaterializedSystemPrompt;
 
     #[test]
     fn terminal_self_cleanup_defers_to_waiter_and_survives_rearm() {
@@ -1555,355 +1379,6 @@ mod tests {
         assert!(
             context.ready_for_self_cleanup(),
             "terminal run is reclaimed once waiter leaves"
-        );
-    }
-
-    fn request(kind: &str, action: ExecAction) -> ExecRequest {
-        ExecRequest {
-            kind: AgentKind::new_unchecked(kind),
-            action,
-            system_prompt_file: None,
-            append_system_prompt_files: Vec::new(),
-            skills: None,
-            provider_account: ProviderAccountState::Unbound,
-            run_id: None,
-            worktree_path: None,
-            close_pane_on_exit: false,
-            exit_on_run_completion: false,
-            subagent: false,
-            identity: ExecIdentity::default(),
-        }
-    }
-
-    fn action_with_args(action: &str, args: Vec<String>) -> ExecAction {
-        match action {
-            "launch" => ExecAction::Launch {
-                prompt: None,
-                extra_args: args,
-            },
-            "resume" => ExecAction::Resume {
-                session_id: "session".to_owned(),
-                extra_args: args,
-            },
-            "fork" => ExecAction::Fork {
-                session_id: "session".to_owned(),
-                extra_args: args,
-            },
-            _ => unreachable!("test action is known"),
-        }
-    }
-
-    #[test]
-    fn broken_effective_config_skips_launch_reminder() {
-        let project = tempfile::tempdir().expect("project");
-        let config = tempfile::tempdir().expect("config");
-        let project_config = project.path().join(".rimz");
-        std::fs::create_dir_all(&project_config).expect("create project config dir");
-        std::fs::write(
-            project_config.join("config.toml"),
-            "[profiles.child]\nagent = \"unknown-base\"\n",
-        )
-        .expect("write broken project config");
-        rimz::trust::grant_with_roots(project.path(), config.path()).expect("trust project");
-        let machine_config = rimz::config::MachineConfig::default();
-        let request = request(
-            "claude",
-            ExecAction::Launch {
-                prompt: None,
-                extra_args: Vec::new(),
-            },
-        );
-
-        let reminders =
-            exec_launch_reminders(&request, &machine_config, project.path(), config.path());
-        assert!(reminders.subagent_catalog.is_none());
-        assert!(reminders.team.is_none());
-        assert!(reminders.model);
-    }
-
-    #[test]
-    fn profile_model_reminder_flag_reaches_launch_reminders() {
-        let project = tempfile::tempdir().expect("project");
-        let config = tempfile::tempdir().expect("config");
-        let machine_config: rimz::config::MachineConfig = toml::from_str(
-            r#"
-            [agents.profiles.quiet]
-            agent = "claude"
-            model-reminder = false
-            [agents.profiles.loud]
-            agent = "quiet"
-            [subagents.profiles.quiet]
-            agent = "claude"
-            model-reminder = true
-            [subagents.profiles.child]
-            agent = "claude"
-            model-reminder = false
-        "#,
-        )
-        .expect("config");
-        for (profile, subagent, expected) in [
-            (Some("quiet"), false, false),
-            (Some("loud"), false, true),
-            (Some("quiet"), true, true),
-            (Some("child"), true, false),
-            (None, false, true),
-            (None, true, true),
-        ] {
-            let mut request = request(
-                "claude",
-                ExecAction::Launch {
-                    prompt: None,
-                    extra_args: Vec::new(),
-                },
-            );
-            request.identity.params.profile = profile.map(str::to_owned);
-            request.subagent = subagent;
-            let reminders =
-                exec_launch_reminders(&request, &machine_config, project.path(), config.path());
-            assert_eq!(
-                reminders.model, expected,
-                "{profile:?}, subagent={subagent}"
-            );
-        }
-    }
-
-    #[test]
-    fn resolves_team_for_launch_context_from_effective_config() {
-        let project = tempfile::tempdir().expect("project");
-        let config = tempfile::tempdir().expect("config");
-        let mut machine_config = rimz::config::MachineConfig::default();
-        machine_config.agents.teams.0.insert(
-            "forge".to_owned(),
-            rimz::config::Team {
-                roles: vec![
-                    rimz::config::RoleBinding {
-                        signals: Vec::new(),
-                        owns: Vec::new(),
-                        compact_on_handoff: false,
-                        auto_compact: None,
-                        role: "planner".to_owned(),
-                        profile: "claude".to_owned(),
-                        mode: None,
-                        model: None,
-                        effort: None,
-                        budget: None,
-                        system_prompt_file: None,
-                        append_system_prompt_files: Vec::new(),
-                        args: None,
-                    },
-                    rimz::config::RoleBinding {
-                        signals: Vec::new(),
-                        owns: Vec::new(),
-                        compact_on_handoff: false,
-                        auto_compact: None,
-                        role: "coder".to_owned(),
-                        profile: "codex".to_owned(),
-                        mode: None,
-                        model: None,
-                        effort: None,
-                        budget: None,
-                        system_prompt_file: None,
-                        append_system_prompt_files: Vec::new(),
-                        args: None,
-                    },
-                ],
-                leader: Some("planner".to_owned()),
-                layout: None,
-                scratch_files: vec!["blackboard.md".to_owned()],
-                stages: Vec::new(),
-            },
-        );
-        let mut request = request(
-            "codex",
-            ExecAction::Resume {
-                session_id: "session".to_owned(),
-                extra_args: Vec::new(),
-            },
-        );
-        request.identity.params = rimz::agents::LaunchParams {
-            team: Some("forge".to_owned()),
-            role: Some("coder".to_owned()),
-            channel: Some("feature".to_owned()),
-            ..rimz::agents::LaunchParams::default()
-        };
-
-        let reminders =
-            exec_launch_reminders(&request, &machine_config, project.path(), config.path());
-        let team = reminders.team.expect("team");
-        assert_eq!(team.leader.as_deref(), Some("planner"));
-        assert_eq!(
-            team.roles
-                .iter()
-                .map(|role| role.role.as_str())
-                .collect::<Vec<_>>(),
-            ["planner", "coder"]
-        );
-        assert_eq!(team.scratch_files, ["blackboard.md"]);
-    }
-
-    #[test]
-    fn omits_team_context_without_team_identity_and_catalog_for_children() {
-        let project = tempfile::tempdir().expect("project");
-        let config = tempfile::tempdir().expect("config");
-        let machine_config = rimz::config::MachineConfig::default();
-        let request = request(
-            "claude",
-            ExecAction::Launch {
-                prompt: None,
-                extra_args: Vec::new(),
-            },
-        );
-        let reminders =
-            exec_launch_reminders(&request, &machine_config, project.path(), config.path());
-        assert!(reminders.subagent_catalog.is_some());
-        assert!(reminders.team.is_none());
-        assert!(reminders.model);
-
-        let mut child = request;
-        child.subagent = true;
-        let reminders =
-            exec_launch_reminders(&child, &machine_config, project.path(), config.path());
-        assert!(reminders.subagent_catalog.is_none());
-        assert!(reminders.team.is_none());
-        assert!(reminders.model);
-    }
-
-    #[test]
-    fn materialized_prompt_replaces_raw_prompt_args_for_every_action() {
-        let materialized = MaterializedSystemPrompt {
-            args: vec![
-                "--system-prompt-file".to_owned(),
-                "/runtime/prompt/sys.composed.md".to_owned(),
-            ],
-            env: BTreeMap::new(),
-        };
-        for action in ["launch", "resume", "fork"] {
-            let mut request = request(
-                "claude",
-                action_with_args(
-                    action,
-                    vec![
-                        "--system-prompt-file".to_owned(),
-                        "/raw.md".to_owned(),
-                        "--verbose".to_owned(),
-                    ],
-                ),
-            );
-            apply_materialized_system_prompt(&mut request, &materialized);
-            assert_eq!(
-                request.action.extra_args(),
-                [
-                    "--verbose",
-                    "--system-prompt-file",
-                    "/runtime/prompt/sys.composed.md"
-                ],
-                "{action}"
-            );
-        }
-
-        let mut codex = request(
-            "codex",
-            action_with_args(
-                "resume",
-                vec![
-                    "-c".to_owned(),
-                    "model_instructions_file=/raw.md".to_owned(),
-                ],
-            ),
-        );
-        apply_materialized_system_prompt(
-            &mut codex,
-            &MaterializedSystemPrompt {
-                args: vec![
-                    "-c".to_owned(),
-                    "model_instructions_file=/runtime/prompt/sys.composed.md".to_owned(),
-                ],
-                env: BTreeMap::new(),
-            },
-        );
-        assert_eq!(
-            codex.action.extra_args(),
-            [
-                "-c",
-                "model_instructions_file=/runtime/prompt/sys.composed.md"
-            ]
-        );
-
-        let mut pi = request(
-            "pi",
-            action_with_args(
-                "fork",
-                vec!["--system-prompt".to_owned(), "raw text".to_owned()],
-            ),
-        );
-        apply_materialized_system_prompt(
-            &mut pi,
-            &MaterializedSystemPrompt {
-                args: vec![
-                    "--system-prompt".to_owned(),
-                    "base text\n\nfragment text\n".to_owned(),
-                ],
-                env: BTreeMap::new(),
-            },
-        );
-        assert_eq!(
-            pi.action.extra_args(),
-            ["--system-prompt", "base text\n\nfragment text\n"]
-        );
-    }
-
-    #[test]
-    fn prompt_environment_reaches_qwen_without_entering_argv() {
-        let project = tempfile::tempdir().expect("project");
-        let mut request = request(
-            "qwen",
-            ExecAction::Launch {
-                prompt: None,
-                extra_args: Vec::new(),
-            },
-        );
-        let materialized = MaterializedSystemPrompt {
-            args: Vec::new(),
-            env: [(
-                "QWEN_SYSTEM_MD".to_owned(),
-                "/runtime/prompt/sys.composed.md".to_owned(),
-            )]
-            .into_iter()
-            .collect(),
-        };
-        apply_materialized_system_prompt(&mut request, &materialized);
-        let provider_argv = rimz::harness::launch::compile_provider_argv(
-            rimz::agents::find_definition("qwen").expect("qwen"),
-            "qwen",
-            &request.action,
-            project.path(),
-        )
-        .expect("compile qwen provider argv");
-        assert!(
-            provider_argv
-                .iter()
-                .all(|arg| !arg.contains("sys.composed.md") && arg != "--system-prompt")
-        );
-        let stage = rimz::harness::launch::compile_agent_process_stage_with_extra_env(
-            project.path(),
-            &request,
-            project.path(),
-            Path::new("/bin/rimz"),
-            &rimz::RuntimePaths::under(
-                rimz::WorkspaceId::from_project_root(project.path()),
-                project.path(),
-            )
-            .expect("runtime"),
-            &materialized.env,
-            &LaunchReminders::default(),
-        )
-        .expect("compile qwen process");
-        let AgentProcessStage::Ready(process) = stage else {
-            panic!("unbound qwen launch is ready");
-        };
-        assert_eq!(
-            process.env.get("QWEN_SYSTEM_MD").map(String::as_str),
-            Some("/runtime/prompt/sys.composed.md")
         );
     }
 }

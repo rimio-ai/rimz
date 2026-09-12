@@ -149,6 +149,7 @@ pub struct CompiledAgentProcess {
     /// Final child environment, also re-applied after shell startup.
     pub env: BTreeMap<String, String>,
     pub secret_keys: BTreeSet<String>,
+    pub reminder: Option<String>,
     /// Environment keys removed before execution and again after shell startup.
     pub unset: BTreeSet<String>,
 }
@@ -691,10 +692,11 @@ fn compile_agent_process_with_extra_env(
     if request.subagent {
         adapter.lockdown_subagent_args(action.extra_args_mut());
     }
+    let reminder = crate::harness::launch_reminders::render(request, reminders, cwd);
     if let Some(channel) = adapter.append_system_text_channel()
-        && let Some(text) = crate::harness::launch_reminders::render(request, reminders, cwd)
+        && let Some(text) = &reminder
     {
-        merge_appended_system_text(action.extra_args_mut(), &channel, &text);
+        merge_appended_system_text(action.extra_args_mut(), &channel, text);
     }
     let provider_argv = compile_provider_argv(adapter, kind, &action, cwd)?;
     let provider_program =
@@ -715,6 +717,7 @@ fn compile_agent_process_with_extra_env(
         argv,
         env,
         secret_keys,
+        reminder,
         unset,
     })
 }
