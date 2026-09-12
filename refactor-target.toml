@@ -1618,3 +1618,238 @@ reason = "Kimi retains append/cursor attribution and a full-snapshot path; Qwen 
 kind = "item"
 key = "agents::adapters::kimi::install::MANAGED_INTEGRATION"
 reason = "Kimi's additive TOML hook merger and Qwen's existing ManagedSource over JSON/statusline machinery are distinct installs. The pass-2 report_files duplication belongs to Copilot/Cursor, not these adapters (pass 19c)."
+
+[[verdict]]
+kind = "item"
+key = "proc::process_is_live"
+reason = "Integration wake, run, sandbox and backend lifecycle tests call this process-liveness seam; pub(crate) would break the separate test crate. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "proc::comm_and_ppid"
+reason = "The deep journey integration tests inspect parent chains through this public process API. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "proc::argv"
+reason = "Zellij reap and deep journey integration tests read real process argv through this public API. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "proc::children"
+reason = "tests/integration/proc.rs pins the real process-tree reader from the separate integration crate. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "proc::shell_pane_name"
+reason = "Zellij launch, tabs and title integration tests use the shell label seam. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "proc::hosted_agent_process_for_root"
+reason = "Tmux agent-lifecycle integration tests pin hosted-process classification through this public entry and its HostedAgentProcess result. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "proc::HostedAgentProcess"
+reason = "Public result of hosted_agent_process_for_root, consumed by tmux integration tests; inferred signature reach keeps the type public. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "proc::InPaneAgentProcess"
+reason = "Public result of in_pane_agent_process_for_root, consumed by cli/hooks/binding.rs in the separate binary target; private_interfaces keeps it public. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "proc::in_pane_agent_start"
+reason = "No current caller: atlas proposes private, which would trip dead_code under -D warnings. Deletion is deferred rather than widening this source-only visibility pass into removal of an unused public entry. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "proc::testkit::spawn_count"
+reason = "Deliberate test-only measurement seam re-exported by testkit and used by integration/performance/produce_budget.rs; production-site absence does not make it private. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "proc::list_processes"
+reason = "The cfg-gated macOS re-export family is the platform implementation seam, not vestigial aliases. Linux /proc and macOS sysinfo retain distinct implementations (a7affebec, 6fb93ac61, 89a6d4679). (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "proc::run_bounded_output"
+reason = "One owner sets the process group, drains both pipes, kills the group on timeout and reaps the child; collapsing into a caller duplicates the bounded subprocess contract (695f955ab). (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "proc::run_bounded_git_output"
+reason = "Bounded git and git_command share git_command_uncounted but count at different spawn boundaries; merging the wrappers double-counts or loses spawn accounting (697574e38). (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "proc::git_command"
+reason = "The unbounded git builder counts at construction while run_bounded_git_output counts in the bounded runner; one shared uncounted builder preserves the two accounting seams. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "proc::rimz_exe"
+reason = "Deleted-inode replacement resolution is required after atomic reinstall; the remote/self-spawn fallback is not dead weight (e13d2d21b, c6564e420). (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "proc::REMOTE_LINEAGE_ENV"
+reason = "Stable remote-device lineage retires replaced predecessors; this process vocabulary is not a remote-module dependency (b57d9ebe5). (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "proc::hosted_agent_absent_under_root"
+reason = "Absence is stricter than lookup: unreadable argv, branching and depth exhaustion abstain. The paired pane-probe APIs retain these distinct decisions and the existing pane::ElevatedAgent value home. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::atomic::write_bytes_atomically"
+reason = "The writer family already funnels through replace_whole_file; durable/cache fsync class, executable/private modes and pretty/compact JSON are caller-visible policies, not redundant wrappers. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::atomic::write_temp_then_rename"
+reason = "Doctor integration tests seed durable records through this public seam; durable and cache writers must retain their separate fsync classes. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::atomic::write_executable_bytes_atomically"
+reason = "zellij_health integration fixtures publish executable owner records; pub(crate) would break that test seam. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::atomic::write_temp_then_rename_cache_compact"
+reason = "Zellij topology integration fixtures plant compact cache JSON through this public writer. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::atomic::append_record_bytes"
+reason = "Doctor integration tests append diagnostic records through this public seam; store durability remains the group-sync barrier rather than per-append fsync. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::atomic::testkit::fsync_count"
+reason = "The separate integration/performance/store_fsync.rs binary measures the single fsync funnel through this deliberate test-only public seam. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::lock::LockErr"
+reason = "Public WorkspaceLock signatures expose this error to the separate CLI binary; inferred return-type reach is not captured by named-reference narrowing. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::lock::try_acquire"
+reason = "CLI supervised tests and message integration tests pin immediate lock contention through this public method. (pass 19b)."
+
+[[verdict]]
+kind = "pass-through"
+key = "disk::lock::acquire_with_timeout"
+reason = "The private deadline forwarder hides lock acquisition once; inlining is sideways. Integration common::DaemonGuard needs a 120-second bound while sidebar presence supplies its own (df017267b). (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::lock::LOCK_TIMEOUT"
+reason = "Sidebar refresh usage tests compare their timeout budgets to this crate-visible constant; atlas private would break those test callers. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::parse_cache::FileStamp"
+reason = "Crate-visible field type of StampedPath.stamp; private_interfaces retains the type. Identity remains mtime/length plus dev/inode, unlike the separately verdicted per-walk FileIdentity. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::single_flight::coalesce"
+reason = "Three outcomes preserve peer reuse, elected publication and local-only fallback; coordinate additionally distinguishes contention from unavailable coordination for account policy. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::rotating::append"
+reason = "Best-effort rotating JSONL diagnostics deliberately skip fsync; generation traversal and append policy do not merge with durable atomic writes. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::RuntimePaths"
+reason = "Accessors name distinct socket, lock, cache and durable protocols, not generic join wrappers. Public StatePaths/RuntimePaths constructors and externally reached fields remain available to CLI, integration fixtures and benches. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::ensure_dirs"
+reason = "Both path owners are constructed and ensured by the separate binary, integration fixtures and benches/fleet.rs and hotpath.rs. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::remove_tmp_dir"
+reason = "tests/integration/output_files.rs exercises room-output cleanup through the public StatePaths method. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::workspaces_dir_under"
+reason = "Zellij reconcile integration tests discover state workspaces through this public helper. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::prompt_dir"
+reason = "Agent-launch integration tests inspect the prompt handoff directory. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::copilot_otel_path"
+reason = "Tmux and Zellij session/launch integration assertions inspect the room telemetry path. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::sidebar_heartbeat_path"
+reason = "Loop-schedule and sidebar-supervisor integration tests publish renderer heartbeats. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::sidebar_read_marks_path"
+reason = "GC integration tests seed sidebar read marks. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::unread_path"
+reason = "Sidebar-unread integration tests exercise the shared unread protocol. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::agent_projection_path"
+reason = "Hooks integration tests inspect the published agent projection. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::diff_stats_path"
+reason = "Performance enrichment integration tests seed and inspect diff-stat cache files. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::pane_write_lock"
+reason = "Message integration tests prove the user-scoped pane-lock namespace across workspaces. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::shared_accounts_path"
+reason = "Common integration fixtures and performance tests seed the account-global cache. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::shared_rate_limits_path"
+reason = "Hooks, loop-schedule and performance integration tests seed shared rate-limit caches. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::shared_credits_path"
+reason = "Hooks and OAuth-usage integration tests inspect shared credits. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::workspace_spending_path"
+reason = "Journey migration tests inspect renderer-specific spending-cache paths. (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::shared_spending_cursor_path"
+reason = "The separate CLI target stats tests read/write the shared cursor; production-only references incorrectly suggest pub(crate). (pass 19b)."
