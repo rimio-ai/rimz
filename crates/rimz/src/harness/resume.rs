@@ -426,7 +426,7 @@ pub enum CohortRelaunchState {
 
 /// One named-team tab selected for restore and awaiting launch materialization.
 #[derive(Clone, Debug)]
-pub struct PlannedTeamTab {
+pub(super) struct PlannedTeamTab {
     pub label: String,
     pub cwd: PathBuf,
     pub channel: Option<String>,
@@ -450,7 +450,7 @@ enum ResumeTabIdentity {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PlannedResumeTab {
+pub(super) struct PlannedResumeTab {
     identity: ResumeTabIdentity,
     tab: ResumeTab,
     freshest: Timestamp,
@@ -464,7 +464,7 @@ impl PlannedResumeTab {
 }
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct DetailedResumePlan {
+pub(super) struct DetailedResumePlan {
     tabs: Vec<PlannedResumeTab>,
     resumed: BTreeSet<(AgentKind, AgentSessionId)>,
     skipped: Vec<ResumeSkip>,
@@ -485,27 +485,27 @@ impl DetailedResumePlan {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum RecoveryEntry {
+pub(super) enum RecoveryEntry {
     Flat(PlannedResumeTab),
     Team(PlannedTeamTab),
 }
 
 impl RecoveryEntry {
-    pub(crate) fn label(&self) -> &str {
+    fn label(&self) -> &str {
         match self {
             Self::Flat(planned) => &planned.tab.label,
             Self::Team(planned) => &planned.label,
         }
     }
 
-    pub(crate) fn freshest(&self) -> Timestamp {
+    fn freshest(&self) -> Timestamp {
         match self {
             Self::Flat(planned) => planned.freshest,
             Self::Team(planned) => planned.freshest,
         }
     }
 
-    pub(crate) fn pane_count(&self) -> usize {
+    fn pane_count(&self) -> usize {
         match self {
             Self::Flat(planned) => planned.pane_count(),
             Self::Team(planned) => planned
@@ -517,7 +517,7 @@ impl RecoveryEntry {
         }
     }
 
-    pub(crate) fn resumed_keys(&self) -> BTreeSet<(AgentKind, AgentSessionId)> {
+    fn resumed_keys(&self) -> BTreeSet<(AgentKind, AgentSessionId)> {
         match self {
             Self::Flat(planned) => planned.resumed.clone(),
             Self::Team(planned) => planned
@@ -534,17 +534,17 @@ impl RecoveryEntry {
 }
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct RecoveryPlan {
+pub(super) struct RecoveryPlan {
     teams: TeamsConfig,
-    pub(crate) entries: Vec<RecoveryEntry>,
+    pub(super) entries: Vec<RecoveryEntry>,
     skipped: Vec<ResumeSkip>,
-    pub(crate) warnings: Vec<String>,
+    pub(super) warnings: Vec<String>,
     agents_to_end: Vec<(AgentKind, AgentSessionId)>,
     base_resumed: BTreeSet<(AgentKind, AgentSessionId)>,
 }
 
 impl RecoveryPlan {
-    pub(crate) fn new(
+    pub(super) fn new(
         teams: TeamsConfig,
         team: Vec<PlannedTeamTab>,
         flat: DetailedResumePlan,
@@ -564,7 +564,7 @@ impl RecoveryPlan {
         }
     }
 
-    pub(crate) fn sort_by_freshness(&mut self) {
+    pub(super) fn sort_by_freshness(&mut self) {
         self.entries.sort_by(|left, right| {
             newest_cmp(
                 left.freshest(),
@@ -575,11 +575,11 @@ impl RecoveryPlan {
         });
     }
 
-    pub(crate) fn pane_count(&self) -> usize {
+    pub(super) fn pane_count(&self) -> usize {
         self.entries.iter().map(RecoveryEntry::pane_count).sum()
     }
 
-    pub(crate) fn labels(&self) -> Vec<String> {
+    pub(super) fn labels(&self) -> Vec<String> {
         self.entries
             .iter()
             .map(|entry| entry.label().to_owned())
@@ -587,11 +587,11 @@ impl RecoveryPlan {
     }
 
     #[cfg(test)]
-    pub(crate) fn base_resumed(&self) -> &BTreeSet<(AgentKind, AgentSessionId)> {
+    pub(super) fn base_resumed(&self) -> &BTreeSet<(AgentKind, AgentSessionId)> {
         &self.base_resumed
     }
 
-    pub(crate) fn materialize(
+    pub(super) fn materialize(
         self,
         session_name: &str,
         materializer: RecoveryMaterializer<'_>,
@@ -633,7 +633,7 @@ impl RecoveryPlan {
     }
 }
 
-pub(crate) enum RecoveryMaterializer<'a> {
+pub(super) enum RecoveryMaterializer<'a> {
     Strict(&'a Store),
     BestEffort {
         store: Option<&'a Store>,
@@ -650,9 +650,9 @@ impl<'a> RecoveryMaterializer<'a> {
     }
 }
 
-pub(crate) struct MaterializedRecovery {
-    pub(crate) resume: ResumePlan,
-    pub(crate) resumed: BTreeSet<(AgentKind, AgentSessionId)>,
+pub(super) struct MaterializedRecovery {
+    pub(super) resume: ResumePlan,
+    pub(super) resumed: BTreeSet<(AgentKind, AgentSessionId)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -735,7 +735,7 @@ impl ResumeCandidate {
 /// Provider sessions are intervals from creation through last activity. The
 /// newest merged cluster is the last concurrent working set; older disjoint
 /// clusters are returned separately so callers can report what stayed closed.
-pub fn concurrent_session_set(
+fn concurrent_session_set(
     mut observations: Vec<LocalSessionObservation>,
 ) -> (Vec<LocalSessionObservation>, Vec<LocalSessionObservation>) {
     observations.sort_by(|left, right| {
@@ -1299,7 +1299,7 @@ fn path_label(path: &Path) -> String {
 
 /// Register team scratch exclusions, allocate fresh members, and compile one
 /// planned team restore tab.
-pub fn materialize_team_restore_tab(
+fn materialize_team_restore_tab(
     store: &Store,
     session_name: &str,
     teams: &TeamsConfig,
@@ -1386,7 +1386,7 @@ pub fn materialize_team_restore_tab(
 }
 
 /// Plan restorable named-team tabs from prior full agent sessions.
-pub fn plan_team_restore_tabs(
+fn plan_team_restore_tabs(
     agents: &[AgentState],
     teams: &TeamsConfig,
     profiles: &ProfilesConfig,
@@ -1463,7 +1463,7 @@ pub fn plan_team_restore_tabs(
 }
 
 /// Partition agents into planned named-team tabs and flat resume candidates.
-pub fn split_team_and_flat(
+pub(super) fn split_team_and_flat(
     agents: &[AgentState],
     teams: &TeamsConfig,
     profiles: &ProfilesConfig,
@@ -1493,7 +1493,7 @@ pub fn split_team_and_flat(
     (team, flat)
 }
 
-pub fn planned_team_matches_agent(planned: &PlannedTeamTab, agent: &AgentState) -> bool {
+fn planned_team_matches_agent(planned: &PlannedTeamTab, agent: &AgentState) -> bool {
     agent.team.as_deref() == Some(planned.team.as_str())
         && normalized_agent_worktree(agent).as_deref() == Some(planned.cwd.as_path())
 }
@@ -1566,7 +1566,7 @@ pub fn plan_resume(
     plan_resume_detailed(agents, ended, ctx, worktree_exists, session_backed).lower()
 }
 
-pub(crate) fn plan_resume_detailed(
+pub(super) fn plan_resume_detailed(
     agents: &[AgentState],
     ended: &BTreeSet<(AgentKind, AgentSessionId)>,
     ctx: ResumeContext<'_>,
@@ -2325,13 +2325,13 @@ pub fn closed_cohort_specs(
 
 /// A short, view-safe label for a resumed agent: `kind:<channel>`, falling back
 /// to the worktree directory name, then `kind:agent`. Used in skip reports.
-pub fn build_label(kind: &str, channel: Option<&str>, worktree: &Path) -> String {
+fn build_label(kind: &str, channel: Option<&str>, worktree: &Path) -> String {
     format!("{kind}:{}", channel_short(channel, worktree))
 }
 
 /// A short, view-safe channel name: explicit channel, then worktree directory,
 /// then `agent`.
-pub fn channel_short(channel: Option<&str>, worktree: &Path) -> String {
+fn channel_short(channel: Option<&str>, worktree: &Path) -> String {
     channel
         .filter(|channel| !channel.is_empty())
         .map(ToOwned::to_owned)
@@ -2346,7 +2346,7 @@ pub fn channel_short(channel: Option<&str>, worktree: &Path) -> String {
 /// A channel tab label from the worktree directory name, matching live
 /// worktree-launch tabs. A main-repo non-worktree agent falls back to
 /// `#<repo-name>` because resume groups by cwd.
-pub fn channel_label(channel: Option<&str>, worktree: &Path) -> String {
+fn channel_label(channel: Option<&str>, worktree: &Path) -> String {
     format!("#{}", channel_short(channel, worktree))
 }
 
