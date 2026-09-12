@@ -12,6 +12,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use sha2::{Digest, Sha256};
+
 use crate::ids::{PaneId, SidebarInstanceId, WorkspaceId};
 use crate::sock::SockBudget;
 
@@ -435,6 +437,14 @@ impl RuntimePaths {
         self.shared_root
             .join("pane-write")
             .join(format!("{}.lock", hex::encode(pane.as_str())))
+    }
+
+    /// Serializes stage transitions for a canonical worktree across rooms.
+    pub(crate) fn board_lock(&self, worktree: &Path) -> PathBuf {
+        self.shared_root.join("board-write").join(format!(
+            "{}.lock",
+            hex::encode(Sha256::digest(worktree.as_os_str().as_encoded_bytes()))
+        ))
     }
 
     /// The per-session Codex app-server broker socket. The broker
@@ -1056,6 +1066,9 @@ mod tests {
 
         assert_eq!(paths.shared_root, runtime_root.join("rimz").join("shared"));
         assert_eq!(paths.persistent_shared_root, persistent_shared_root);
+        let board_lock = paths.board_lock(Path::new("/tmp/team"));
+        assert!(board_lock.starts_with(paths.shared_root.join("board-write")));
+        assert_ne!(board_lock, paths.board_lock(Path::new("/tmp/other-team")));
         assert_eq!(
             paths.shared_provider_spending_path(),
             state_root

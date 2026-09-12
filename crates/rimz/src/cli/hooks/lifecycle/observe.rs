@@ -191,16 +191,28 @@ fn record_mapped_lifecycle_observation(
         {
             warn!(error = %err, "lifecycle: failed to retire session deliveries");
         }
-        if matches!(event.signal, LifecycleSignal::Registered)
-            && event.parent_agent_id.is_none()
-            && let Some(audit) = &audit
-            && let Some(member) = audit
-                .agents
-                .iter()
-                .find(|member| member.kind == event.kind && member.agent_id == event.agent_id)
-            && member.team.is_some()
-            && member.parent_agent_id.is_none()
-            && let Err(err) = arm_team_member(workspace, &audit.agents, member)
+        let registered_member = audit.as_ref().and_then(|audit| {
+            audit.agents.iter().find(|member| {
+                matches!(event.signal, LifecycleSignal::Registered)
+                    && event.parent_agent_id.is_none()
+                    && member.kind == event.kind
+                    && member.agent_id == event.agent_id
+                    && member.team.is_some()
+                    && member.parent_agent_id.is_none()
+            })
+        });
+        let registered_team = registered_member.and_then(|member| {
+            load_member_team(workspace, member)
+                .inspect_err(|err| {
+                    warn!(error = %err, "lifecycle: failed to load team configuration");
+                })
+                .ok()
+                .flatten()
+        });
+        if let (Some(audit), Some(member), Some(team)) =
+            (&audit, registered_member, registered_team.as_ref())
+            && let Err(err) =
+                rimz::harness::schedule::team::arm_member(workspace, &audit.agents, member, team)
         {
             warn!(error = %err, "lifecycle: failed to arm team signal bindings");
         }
@@ -255,6 +267,37 @@ fn record_mapped_lifecycle_observation(
                 );
             }
         }
+        if let (Some(audit), Some(member), Some(team)) =
+            (&audit, registered_member, registered_team.as_ref())
+            && let (Some(name), Some(worktree)) =
+                (member.team.as_deref(), member.worktree_path.as_deref())
+        {
+            let channel = member.channel().unwrap_or_else(|| "external".to_owned());
+            let members = rimz::address::team_cohorts(&audit.agents)
+                .into_iter()
+                .find(|cohort| cohort.team == name && cohort.channel == channel)
+                .map(|cohort| cohort.members.into_iter().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            match rimz::harness::team_stage::rewake(
+                workspace,
+                store,
+                name,
+                team,
+                member,
+                &members,
+                Path::new(worktree),
+                globals.mux,
+                event.at,
+            ) {
+                Ok(Some(receipt)) => {
+                    debug!(delivery = ?receipt.delivery, "lifecycle: re-woke team stage owner");
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    warn!(error = %err, "lifecycle: failed to re-wake team stage owner");
+                }
+            }
+        }
     }
     RecordedLifecycle {
         model_hint,
@@ -266,13 +309,12 @@ fn record_mapped_lifecycle_observation(
     }
 }
 
-fn arm_team_member(
+fn load_member_team(
     workspace: &ResolvedWorkspace,
-    agents: &[rimz::agents::AgentState],
     member: &rimz::agents::AgentState,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<rimz::config::Team>> {
     let Some(name) = member.team.as_deref() else {
-        return Ok(());
+        return Ok(None);
     };
     let machine = rimz::config::MachineConfig::load()?;
     let effective = rimz::config::effective::load(&machine, &workspace.project_root)?;
@@ -286,8 +328,7 @@ fn arm_team_member(
         .0
         .get(name)
         .ok_or_else(|| anyhow::anyhow!("team `{name}` is no longer configured"))?;
-    rimz::harness::schedule::team::arm_member(workspace, agents, member, team)?;
-    Ok(())
+    Ok(Some(team.clone()))
 }
 
 fn correlate_subagent_observation(
