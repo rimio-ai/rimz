@@ -64,7 +64,7 @@ Read that as: ready for personal, daily use today; for production workflows that
 - **Attention, Routed:** one glance at the cockpit line (`? 2  ! 1 …`) reads the whole fleet, the column below arrives already triaged, and one click drops you into the pane that is waiting
 - **Know Your Pace:** spending and token insight for today, week, and month, with plan and 5h/7d budget bars for providers that expose those account surfaces; one look tells you where the week is going
 - **Worktrees, for every Agent:** open agents together, side by side in an isolated worktree with dynamic layout: `claude,codex` starts Claude planning beside Codex reviewing, `vim,codex+term` puts your editor, an agent, and a shell in one tab
-- **Teams, cross-model by design:** pair a Fable planner with a Sol coder and launch them as one team, each role on the model best at its job (reasoning depth, instruction following, speed, price); a mixed team catches what a single model lets through, and delivers better results faster for less
+- **Teams, cross-model by design:** pair a Fable planner with an Astra coder and launch them as one team, each role on the model best at its job (reasoning depth, instruction following, speed, price); a mixed team catches what a single model lets through, and delivers better results faster for less
 - **Messages, agents chat as in Slack:** every agent answers to a handle (`@codex`, `@planner`); steer/queue delivery guarantees the message lands, respecting agent state and the context window, and agents talk to each other and to you inside channels
 - **Scriptable, End to End:** `rimz agents -p` is `claude -p` for every agent, with exit codes, JSON output, streaming, and the full transcript kept, so agents drop into scripts, CI, and workflows
 - **Loops, Yours to Engineer:** `rimz loop` schedules supervised runs on a clock (calendar, interval, cron, or a check-guarded watchdog that runs a command and wakes an agent on the result) or on a signal anything can emit, `rimz wake` lets an agent arm its own timer or command wait instead of sleeping, and notification handlers run your own command the moment a row needs eyes
@@ -155,12 +155,13 @@ rimz agents 'claude/codex/gemini' -w feat-d    # three agents in one stacked pan
 rimz agents codex --from-pr 42                 # worktree checked out from a pull request
 ```
 
-**Combine models as teams.** A named [team](./docs/guide/teams.md) in `agents.toml` gives each role a handle and launches the whole set in its layout, each role in its own context window, cooperating over messages. Pair model strengths across providers: one plans, another writes the code, a third reviews the diff blind. RimZ is built this way; `examples/teams/` ships the `forge` team it uses.
+**Combine models as teams.** A named [team](./docs/guide/teams.md) in `agents.toml` gives each role a handle and launches the whole set in its layout, each role in its own context window, cooperating over messages. Pair model strengths across providers: one plans, another writes the code, a third reviews the diff blind. RimZ is built this way; `examples/teams/` ships the `forge` team it uses, plus `mill` for refactors and `spot` for small fixes.
 
 ```sh
 rimz agents claude:planner,codex:coder -w feat-once   # one-off roles without agents.toml
 rimz teams install forge                              # release-matched shipped team
 rimz teams forge -w feat-complex                      # planner, coder, reviewer on one feature
+rimz teams spot -w fix-expiry                         # coder and reviewer on a small fix
 ```
 
 ### Steer the fleet
@@ -171,7 +172,7 @@ rimz teams forge -w feat-complex                      # planner, coder, reviewer
 # Park at the next turn boundary — address by kind, profile, or team role
 rimz message @claude "add coverage for the expiry edge cases"
 rimz message @planner "draft the implementation plan"
-rimz message @coder --after @planner "planner's done — read plan.md and start"
+rimz message @coder --after @planner "planner's done — read plan-notes.md and start"
 
 # Ask and print the reply from the agent's own context
 rimz message @coder --wait "did the migration land? one line"

@@ -31,14 +31,15 @@ cp examples/zellij/config.kdl ~/.config/zellij/config.kdl
 zellij setup --check
 ```
 
-## Forge agent team — `teams/forge/`
+## Agent teams — `teams/`
 
-[`teams/forge`](./teams/forge/) is one RimZ drop-in fragment for the plan → code → review loop: `@planner` runs Claude, `@coder` runs Codex, and `@reviewer` runs Claude. Its `team.toml` declares the three profiles, layout, git-excluded scratch files, and a `ci.failed` → `coder` signal binding, and the three Markdown files are the role prompts. The [teams README](./teams/README.md) walks the whole loop: roles, hand-offs, install, and customization.
+Three RimZ drop-in team fragments, one per shape of work: [`forge`](./teams/forge/) plans, builds, and reviews a change worth designing first; [`mill`](./teams/mill/) puts an architect in the lead for a refactor that has to remove surface; [`spot`](./teams/spot/) drops the design stage entirely for a small fix. Each directory is a `team.toml` declaring the roles, layout, pipeline stages, git-excluded scratch files, and a `ci.failed` → `coder` signal binding, plus one Markdown prompt per role. The [teams README](./teams/README.md) walks all three: pipelines, hand-offs, install, and customization.
 
-Install the release-matched bundle from GitHub:
+Install a release-matched bundle from GitHub:
 
 ```sh
 rimz teams install forge
+rimz teams install spot
 ```
 
 From a repository checkout, copying remains the local-edit alternative:
@@ -50,14 +51,14 @@ cp -r examples/teams/forge ~/.agents/teams/
 
 `rimz teams install forge --force` replaces files in a same-named installed directory; the plain install preserves it. Entries in `~/.config/rimz/agents.toml` override fragment entries with the same names.
 
-Launch with `rimz teams forge -w feat-x`; the lifecycle grammar lives in the [teams CLI reference](../docs/reference/cli/teams.md). Each role answers to `@planner`, `@coder`, or `@reviewer`. The binding is armed when the coder registers, scoped to its worktree, and retired with that session. Failed CI delivers a `Type: SIGNAL` message directly to the coder, not whoever pushed. Without an explicit branch/path match, launching this binding on the root checkout is refused; use `-w` or launch from a linked worktree. `rimz teams show forge#feat-x` separates declared bindings from live subscriptions.
+Launch with `rimz teams forge -w feat-x`; the lifecycle grammar lives in the [teams CLI reference](../docs/reference/cli/teams.md). Each role answers to its role handle — `@planner`, `@architect`, `@coder`, `@reviewer`. The signal binding is armed when the coder registers, scoped to its worktree, and retired with that session. Failed CI delivers a `Type: SIGNAL` message directly to the coder, not whoever pushed. Without an explicit branch/path match, launching this binding on the root checkout is refused; use `-w` or launch from a linked worktree. `rimz teams show forge#feat-x` separates declared bindings from live subscriptions.
 
-The `claude` and `codex` CLIs must be on `PATH`. The profiles in `team.toml` pin models (`fable`, `opus`) and Codex feature flags; adjust them there to taste. The coder's PR step expects a `pr` skill and falls back to plain `gh` or `tea` without it.
+The `claude` and `codex` CLIs must be on `PATH`, for all three teams. Each `team.toml` pins its models (`fable`, `opus`, the current GPT) and Codex feature flags; adjust them there to taste. The prompts also name helper skills that are not shipped here, `pr` among them, and state the outcome alongside each, so a role without one falls back to plain `git` or `gh`.
 
-Try the team before installing by pointing RimZ at this checkout:
+Try a team before installing by pointing RimZ at this checkout:
 
 ```sh
-RIMZ_AGENTS_HOME="$PWD/examples" rimz agents forge -w feat-x
+RIMZ_AGENTS_HOME="$PWD/examples" rimz teams forge -w feat-x
 ```
 
 ## Third-party agent plugin — `agent-plugin/`
