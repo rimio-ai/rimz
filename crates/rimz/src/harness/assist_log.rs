@@ -76,6 +76,22 @@ pub enum Assist {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    HandoffCompact {
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<String>,
+        to: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        occupied_tokens: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
+        delivered: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     AutoResume {
         workspace_id: crate::ids::WorkspaceId,
         session_name: String,
