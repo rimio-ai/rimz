@@ -516,7 +516,6 @@ fn prepare_supervised(
     launch_invocation.identity.params = preflight_launch;
     let (process, managed_launch) = rimz::harness::launch::compile_managed_agent_process(
         &workspace.project_root,
-        machine_config.harness.rtk,
         &launch_invocation,
         &launch.cwd,
         &request.managed_launch,

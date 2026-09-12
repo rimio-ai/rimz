@@ -158,7 +158,6 @@ pub(super) fn launch_layout(
         };
         rimz::harness::launch::preflight_agent_process(
             &workspace.project_root,
-            machine_config.harness.rtk,
             &request,
             &workspace.worktree_root,
         )?;

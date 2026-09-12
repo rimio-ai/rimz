@@ -22,7 +22,6 @@ fn launch_environment_key_literals_are_stable() {
     assert_eq!(ENV_AGENT_MODEL, "RIMZ_AGENT_MODEL");
     assert_eq!(ENV_AGENT_EFFORT, "RIMZ_AGENT_EFFORT");
     assert_eq!(ENV_AGENT_BUDGET, "RIMZ_AGENT_BUDGET");
-    assert_eq!(ENV_RTK, "RIMZ_RTK");
 }
 
 #[test]
@@ -169,7 +168,7 @@ fn provider_prompt_size_is_checked_at_the_argv_boundary() {
 }
 
 #[test]
-fn process_compiler_composes_adapter_identity_and_rtk_environment() {
+fn process_compiler_composes_adapter_and_identity_environment() {
     let project = tempfile::tempdir().expect("project");
     let params = crate::agents::LaunchParams {
         channel: Some("design".to_owned()),
@@ -189,13 +188,8 @@ fn process_compiler_composes_adapter_identity_and_rtk_environment() {
     );
     invocation.identity.params = params;
 
-    let process = compile_agent_process(
-        project.path(),
-        crate::config::RtkMode::On,
-        &invocation,
-        project.path(),
-    )
-    .expect("compiled process");
+    let process = compile_agent_process(project.path(), &invocation, project.path())
+        .expect("compiled process");
 
     assert_eq!(process.provider_program, "copilot");
     assert_eq!(
@@ -218,13 +212,6 @@ fn process_compiler_composes_adapter_identity_and_rtk_environment() {
             .get(crate::workspace::ENV_CHANNEL)
             .map(String::as_str),
         Some("design")
-    );
-    assert_eq!(
-        process
-            .env
-            .get(crate::harness::launch::ENV_RTK)
-            .map(String::as_str),
-        Some("on")
     );
 }
 
@@ -272,26 +259,16 @@ fn process_compiler_locks_down_only_subagent_launches() {
                 extra_args: profile_args.clone(),
             },
         );
-        let ordinary = compile_agent_process(
-            project.path(),
-            crate::config::RtkMode::Auto,
-            &invocation,
-            project.path(),
-        )
-        .expect("ordinary process");
+        let ordinary = compile_agent_process(project.path(), &invocation, project.path())
+            .expect("ordinary process");
         assert_eq!(
             ordinary.provider_argv[1..1 + profile_args.len()],
             profile_args
         );
 
         invocation.subagent = true;
-        let child = compile_agent_process(
-            project.path(),
-            crate::config::RtkMode::Auto,
-            &invocation,
-            project.path(),
-        )
-        .expect("subagent process");
+        let child = compile_agent_process(project.path(), &invocation, project.path())
+            .expect("subagent process");
         assert!(child.provider_argv.ends_with(&expected_suffix));
     }
 }
@@ -308,13 +285,8 @@ fn process_compiler_appends_subagent_reminder_for_native_adapters() {
             },
         );
 
-        let ordinary = compile_agent_process(
-            project.path(),
-            crate::config::RtkMode::Auto,
-            &invocation,
-            project.path(),
-        )
-        .expect("ordinary process");
+        let ordinary = compile_agent_process(project.path(), &invocation, project.path())
+            .expect("ordinary process");
         assert!(
             !ordinary
                 .provider_argv
@@ -325,13 +297,8 @@ fn process_compiler_appends_subagent_reminder_for_native_adapters() {
         );
 
         invocation.subagent = true;
-        let child = compile_agent_process(
-            project.path(),
-            crate::config::RtkMode::Auto,
-            &invocation,
-            project.path(),
-        )
-        .expect("subagent process");
+        let child = compile_agent_process(project.path(), &invocation, project.path())
+            .expect("subagent process");
         assert!(
             child
                 .provider_argv
@@ -350,13 +317,8 @@ fn process_compiler_appends_subagent_reminder_for_native_adapters() {
         },
     );
     invocation.subagent = true;
-    let child = compile_agent_process(
-        project.path(),
-        crate::config::RtkMode::Auto,
-        &invocation,
-        project.path(),
-    )
-    .expect("codex subagent process");
+    let child = compile_agent_process(project.path(), &invocation, project.path())
+        .expect("codex subagent process");
     let occurrences = crate::agents::PresetArgMatcher::ConfigKey {
         flags: vec!["-c".to_owned(), "--config".to_owned()],
         key: "developer_instructions".to_owned(),
@@ -395,7 +357,6 @@ fn process_compiler_appends_available_catalog_only_to_peer_launches() {
         );
         let peer = compile_agent_process_with_extra_env(
             project.path(),
-            crate::config::RtkMode::Auto,
             &invocation,
             project.path(),
             &BTreeMap::new(),
@@ -421,13 +382,8 @@ fn process_compiler_appends_available_catalog_only_to_peer_launches() {
             assert_eq!(parse_toml_string_or_raw(&occurrences[0].value), reminder);
         }
 
-        let without_catalog = compile_agent_process(
-            project.path(),
-            crate::config::RtkMode::Auto,
-            &invocation,
-            project.path(),
-        )
-        .expect("process without catalog");
+        let without_catalog = compile_agent_process(project.path(), &invocation, project.path())
+            .expect("process without catalog");
         assert!(
             !without_catalog
                 .provider_argv
@@ -439,7 +395,6 @@ fn process_compiler_appends_available_catalog_only_to_peer_launches() {
         child.subagent = true;
         let child = compile_agent_process_with_extra_env(
             project.path(),
-            crate::config::RtkMode::Auto,
             &child,
             project.path(),
             &BTreeMap::new(),
@@ -482,7 +437,6 @@ fn process_compiler_appends_team_context_for_native_adapters() {
         let invocation = team_request(kind);
         let process = compile_agent_process_with_extra_env(
             project.path(),
-            crate::config::RtkMode::Auto,
             &invocation,
             project.path(),
             &BTreeMap::new(),
@@ -504,7 +458,6 @@ fn process_compiler_appends_team_context_for_native_adapters() {
     let invocation = team_request("codex");
     let process = compile_agent_process_with_extra_env(
         project.path(),
-        crate::config::RtkMode::Auto,
         &invocation,
         project.path(),
         &BTreeMap::new(),
@@ -554,7 +507,6 @@ fn process_compiler_joins_catalog_and_team_context_in_one_occurrence() {
         invocation.identity.params.effort = Some("high".to_owned());
         let process = compile_agent_process_with_extra_env(
             project.path(),
-            crate::config::RtkMode::Auto,
             &invocation,
             project.path(),
             &BTreeMap::new(),
@@ -601,7 +553,6 @@ fn process_compiler_joins_sandbox_reminder_for_native_peers_and_children() {
             };
             let process = compile_agent_process_with_extra_env(
                 project.path(),
-                crate::config::RtkMode::Auto,
                 &invocation,
                 project.path(),
                 &BTreeMap::new(),
@@ -640,7 +591,6 @@ fn process_compiler_appends_model_line_for_native_adapters() {
                 invocation.identity.params.effort = Some("high".to_owned());
                 let process = compile_agent_process_with_extra_env(
                     project.path(),
-                    crate::config::RtkMode::Auto,
                     &invocation,
                     project.path(),
                     &BTreeMap::new(),
@@ -692,7 +642,6 @@ fn process_compiler_omits_disabled_model_when_nothing_else_applies() {
     invocation.identity.params.model = Some("fable".to_owned());
     let process = compile_agent_process_with_extra_env(
         project.path(),
-        crate::config::RtkMode::Auto,
         &invocation,
         project.path(),
         &BTreeMap::new(),
@@ -725,7 +674,6 @@ fn process_compiler_omits_team_context_for_unsupported_adapter() {
     let reminder = wrap(&crate::harness::launch_context::reminder(&context));
     let process = compile_agent_process_with_extra_env(
         project.path(),
-        crate::config::RtkMode::Auto,
         &invocation,
         project.path(),
         &BTreeMap::new(),
@@ -762,13 +710,8 @@ fn process_compiler_merges_subagent_reminder_into_existing_append_flag() {
     );
     invocation.subagent = true;
 
-    let child = compile_agent_process(
-        project.path(),
-        crate::config::RtkMode::Auto,
-        &invocation,
-        project.path(),
-    )
-    .expect("subagent process");
+    let child = compile_agent_process(project.path(), &invocation, project.path())
+        .expect("subagent process");
     let matcher =
         crate::agents::PresetArgMatcher::TextFlag(vec!["--append-system-prompt".to_owned()]);
     let occurrences = matcher.occurrences(&child.provider_argv);
@@ -810,13 +753,8 @@ fn process_compiler_merges_codex_reminder_by_config_key() {
         );
         invocation.subagent = true;
 
-        let child = compile_agent_process(
-            project.path(),
-            crate::config::RtkMode::Auto,
-            &invocation,
-            project.path(),
-        )
-        .expect("codex subagent process");
+        let child = compile_agent_process(project.path(), &invocation, project.path())
+            .expect("codex subagent process");
         let matcher = crate::agents::PresetArgMatcher::ConfigKey {
             flags: vec!["-c".to_owned(), "--config".to_owned()],
             key: "developer_instructions".to_owned(),
@@ -862,13 +800,8 @@ fn process_compiler_locks_down_opencode_subagent_environment() {
     );
     invocation.subagent = true;
 
-    let process = compile_agent_process(
-        project.path(),
-        crate::config::RtkMode::Auto,
-        &invocation,
-        project.path(),
-    )
-    .expect("subagent process");
+    let process = compile_agent_process(project.path(), &invocation, project.path())
+        .expect("subagent process");
 
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&process.env["OPENCODE_PERMISSION"])
@@ -878,7 +811,7 @@ fn process_compiler_locks_down_opencode_subagent_environment() {
 }
 
 #[test]
-fn launch_environment_precedence_is_project_adapter_identity_then_rtk() {
+fn launch_environment_precedence_is_project_adapter_then_identity() {
     let adapter = crate::agents::find_definition("copilot").expect("copilot");
     let params = crate::agents::LaunchParams {
         channel: Some("identity".to_owned()),
@@ -898,24 +831,16 @@ fn launch_environment_precedence_is_project_adapter_identity_then_rtk() {
             "project",
         ),
         (crate::workspace::ENV_CHANNEL, "project"),
-        (crate::harness::launch::ENV_RTK, "project"),
     ]);
 
-    let composed = compose_agent_env(
-        project,
-        adapter,
-        crate::config::RtkMode::Off,
-        &invocation,
-        &BTreeMap::new(),
-    )
-    .expect("launch env");
+    let composed =
+        compose_agent_env(project, adapter, &invocation, &BTreeMap::new()).expect("launch env");
 
     assert_eq!(
         composed["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"],
         "false"
     );
     assert_eq!(composed[crate::workspace::ENV_CHANNEL], "identity");
-    assert_eq!(composed[crate::harness::launch::ENV_RTK], "off");
 }
 
 #[test]
@@ -932,7 +857,6 @@ fn process_compiler_names_invalid_environment_key() {
     let err = compose_agent_env(
         env(&[("-BROKEN", "value")]),
         adapter,
-        crate::config::RtkMode::Auto,
         &invocation,
         &BTreeMap::new(),
     )
@@ -1325,7 +1249,6 @@ fn provider_account_stage_validates_and_reenters_once() {
         };
         let err = compile_agent_process_stage_with_extra_env(
             project.path(),
-            crate::config::RtkMode::Auto,
             &input,
             project.path(),
             Path::new("/bin/rimz"),
@@ -1352,7 +1275,6 @@ fn provider_account_stage_validates_and_reenters_once() {
     };
     let stage = compile_agent_process_stage_with_extra_env(
         project.path(),
-        crate::config::RtkMode::Auto,
         &pending,
         project.path(),
         Path::new("/bin/rimz"),
@@ -1381,7 +1303,6 @@ fn provider_account_stage_validates_and_reenters_once() {
 
     let err = compile_agent_process_stage_with_extra_env(
         project.path(),
-        crate::config::RtkMode::Auto,
         &finalized,
         project.path(),
         Path::new("/bin/rimz"),
@@ -1400,16 +1321,10 @@ fn provider_account_stage_validates_and_reenters_once() {
             extra_args: Vec::new(),
         },
     );
-    let expected = compile_agent_process(
-        project.path(),
-        crate::config::RtkMode::Auto,
-        &unbound,
-        project.path(),
-    )
-    .expect("ordinary process");
+    let expected =
+        compile_agent_process(project.path(), &unbound, project.path()).expect("ordinary process");
     let AgentProcessStage::Ready(ordinary) = compile_agent_process_stage_with_extra_env(
         project.path(),
-        crate::config::RtkMode::Auto,
         &unbound,
         project.path(),
         Path::new("/bin/rimz"),
@@ -1433,13 +1348,8 @@ fn provider_account_stage_validates_and_reenters_once() {
     finalized_request.provider_account = ProviderAccountState::Finalized {
         binding: binding.clone(),
     };
-    let process = compile_agent_process(
-        project.path(),
-        crate::config::RtkMode::Auto,
-        &finalized_request,
-        project.path(),
-    )
-    .expect("finalized process");
+    let process = compile_agent_process(project.path(), &finalized_request, project.path())
+        .expect("finalized process");
     let raw = process.provider_argv.clone();
     let AgentProcessStage::Ready(mut finalized) = finalize_agent_process_stage(
         process,
@@ -1550,7 +1460,7 @@ fn posix_wrapper_shape_reapplies_env_after_rc() {
 
 #[test]
 fn compiled_process_debug_prints_launch_env_keys_without_values() {
-    let launch_env = env(&[("ANTHROPIC_API_KEY", "sk-secret"), ("RIMZ_RTK", "auto")]);
+    let launch_env = env(&[("ANTHROPIC_API_KEY", "sk-secret")]);
     let provider_argv = argv(&["claude", "--print"]);
     let wrapped = login_shell_argv_with(
         Some(Path::new("/bin/sh")),

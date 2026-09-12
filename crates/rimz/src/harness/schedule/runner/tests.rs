@@ -16,12 +16,8 @@ fn vanished_delivery_root_still_resolves_and_finds_no_active_run() {
         handle: "@claude".to_owned(),
     };
 
-    let context = FireContext::resolve(
-        &entry,
-        TaskAction::Deliver(target),
-        &MachineConfig::default(),
-    )
-    .expect("resolve persisted delivery root");
+    let context = FireContext::resolve(&entry, TaskAction::Deliver(target))
+        .expect("resolve persisted delivery root");
 
     assert!(context.scope.is_some());
     assert!(

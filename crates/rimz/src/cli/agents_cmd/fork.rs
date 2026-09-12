@@ -83,7 +83,6 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     seed.launch.budget.clone_from(&posture.launch.budget);
     rimz::harness::launch::preflight_agent_process(
         &workspace.project_root,
-        config.harness.rtk,
         &rimz::harness::launch::ExecRequest {
             kind: seed.kind.clone(),
             action: rimz::harness::launch::ExecAction::Fork {

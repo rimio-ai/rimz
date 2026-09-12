@@ -79,12 +79,7 @@ pub(super) fn resume_lane(
         }
     };
     for kind in action.agent_kinds_needing_preflight() {
-        rimz::harness::launch::preflight_agent_kind(
-            &workspace.project_root,
-            machine_config.harness.rtk,
-            kind.as_str(),
-            cwd,
-        )?;
+        rimz::harness::launch::preflight_agent_kind(&workspace.project_root, kind.as_str(), cwd)?;
     }
 
     match action {

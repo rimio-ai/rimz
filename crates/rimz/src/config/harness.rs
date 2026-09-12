@@ -210,29 +210,6 @@ impl IdleCompactMode {
     }
 }
 
-/// rtk output compression mode for agent-run cargo commands in `cargo xtask`.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum RtkMode {
-    /// Wrap agent cargo runs through `rtk` when the binary is on PATH.
-    #[default]
-    Auto,
-    /// Always wrap; xtask warns and runs plain when `rtk` is missing.
-    On,
-    /// Never wrap.
-    Off,
-}
-
-impl RtkMode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::On => "on",
-            Self::Off => "off",
-        }
-    }
-}
-
 /// Harness behavior shared by immediate and parked message send paths.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
@@ -265,9 +242,6 @@ pub struct HarnessConfig {
         with = "idle_compact_after_serde"
     )]
     pub idle_compact_after: Option<Duration>,
-    /// rtk output compression for agent-run cargo commands in `cargo xtask`.
-    #[serde(default)]
-    pub rtk: RtkMode,
 }
 
 impl HarnessConfig {
@@ -496,34 +470,5 @@ mod tests {
                 .expect("parse idle compact duration");
             assert_eq!(config.idle_compact_after, Some(expected));
         }
-    }
-
-    #[test]
-    fn rtk_defaults_to_auto() {
-        let config: HarnessConfig = toml::from_str("").expect("parse harness config");
-
-        assert_eq!(config.rtk, RtkMode::Auto);
-    }
-
-    #[test]
-    fn rtk_deserializes_modes() {
-        let on: HarnessConfig = toml::from_str("rtk = \"on\"").expect("parse rtk on");
-        let off: HarnessConfig = toml::from_str("rtk = \"off\"").expect("parse rtk off");
-
-        assert_eq!(on.rtk, RtkMode::On);
-        assert_eq!(off.rtk, RtkMode::Off);
-    }
-
-    #[test]
-    fn rtk_round_trips() {
-        let config = HarnessConfig {
-            rtk: RtkMode::On,
-            ..Default::default()
-        };
-
-        let toml = toml::to_string(&config).expect("serialize harness config");
-        let back: HarnessConfig = toml::from_str(&toml).expect("parse harness config");
-
-        assert_eq!(back, config);
     }
 }

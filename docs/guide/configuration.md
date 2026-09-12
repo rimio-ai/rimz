@@ -194,15 +194,6 @@ idle_compact_after = "59m"
 
 `idle_compact` is `off` by default. `auto` compacts an eligible idle agent only while another agent in the same channel is running; an open worktree pull request does not qualify. `always` ignores that re-engagement requirement. `idle_compact_after` accepts `s`, `m`, `h`, or `d` and defaults to `59m`. The reflex requires at least 50,000 occupied context tokens, uses each adapter's native compact command with the same `compact_instruction`, and fires at most once in one idle stretch. The behavior model is in [loops.md](./loops.md#idle-compaction), and the durable delivery mechanics are in [messaging.md](../internals/harness/messaging.md#idle-compaction).
 
-### rtk output compression
-
-```toml
-[harness]
-rtk = "auto"
-```
-
-`rtk` controls output compression for RimZ-launched agents that run `cargo xtask`; a direct human `cargo xtask` run stays on plain cargo. `auto` wraps recognized cargo subcommands (`build`, `check`, `test`, `nextest`, `clippy`) through `rtk` when the binary is on the agent's `PATH`; `on` forces the wrapper and prints one warning before falling back to plain cargo when `rtk` is missing; `off` keeps cargo unwrapped. Install `rtk` on the machine for compression to take effect.
-
 ### Remote control
 
 ```toml

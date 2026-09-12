@@ -91,7 +91,6 @@ const LEGACY_SET_KEYS: &[&str] = &[
     "harness.idle_compact",
     "harness.idle_compact_after",
     "harness.budget",
-    "harness.rtk",
     "timezone",
     "resume.on_rebirth",
     "resume.max",
@@ -294,7 +293,6 @@ fn validates_config_key_read_and_write_surfaces() {
         "harness.idle_compact_after",
         "harness.budget",
         "harness.turn_budget",
-        "harness.rtk",
     ] {
         validate_set_key(&test_files(), &parse_key(key).unwrap())
             .unwrap_or_else(|err| panic!("{key}: {err}"));
@@ -1312,15 +1310,6 @@ fn harness_turn_budget_values_are_validated_as_plain_amount_strings() {
 }
 
 #[test]
-fn harness_rtk_values_are_parsed_as_strings() {
-    let key = parse_key("harness.rtk").expect("key");
-
-    assert_eq!(parse_set_value(&key, "auto").as_str(), Some("auto"));
-    assert_eq!(parse_set_value(&key, "on").as_str(), Some("on"));
-    assert_eq!(parse_set_value(&key, "off").as_str(), Some("off"));
-}
-
-#[test]
 fn harness_smart_compact_validation_rejects_bad_values() {
     let key = parse_key("harness.smart_compact").expect("key");
 
@@ -1357,20 +1346,6 @@ fn harness_idle_compact_validation_accepts_modes_and_duration() {
         .expect_err("invalid idle compact duration")
         .to_string();
     assert!(err.contains("use a duration such as 59m or 2h"), "{err}");
-}
-
-#[test]
-fn harness_rtk_validation_rejects_bad_values() {
-    let key = parse_key("harness.rtk").expect("key");
-
-    for mode in ["auto", "on", "off"] {
-        validate_set_value(&key, &Value::from(mode)).expect("rtk mode");
-    }
-
-    let err = validate_set_value(&key, &Value::from("always"))
-        .expect_err("invalid rtk mode")
-        .to_string();
-    assert_eq!(err, "harness.rtk must be one of auto, on, or off");
 }
 
 #[test]
