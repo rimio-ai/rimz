@@ -163,6 +163,7 @@ impl ConfigEditor {
         let text = read_config_or_template(file.path(), file.template())?;
         let mut doc = parse_document(file.path(), &text)?;
         let mut key = vec!["accounts".to_owned(), kind.to_string(), name.to_string()];
+        let declared = item_at(&doc, &key).is_some();
         match home {
             Some(home) => {
                 key.push("home".to_owned());
@@ -178,6 +179,13 @@ impl ConfigEditor {
             None => {
                 table_at_mut(&mut doc, &key)?;
             }
+        }
+        if !declared {
+            // A new table otherwise renders inside the `[accounts]` group, above
+            // the comments that head the next table, and reads as their owner.
+            let last = last_table_position(doc.as_table());
+            table_at_mut(&mut doc, &key[..2])?.set_implicit(true);
+            table_at_mut(&mut doc, &key[..3])?.set_position(Some(last + 1));
         }
         write(file.path(), doc.to_string().as_bytes())
     }
@@ -792,6 +800,20 @@ fn table_at_mut<'a>(doc: &'a mut DocumentMut, path: &[String]) -> Result<&'a mut
             })?;
     }
     Ok(table)
+}
+
+fn last_table_position(table: &Table) -> isize {
+    table
+        .iter()
+        .filter_map(|(_, item)| item.as_table())
+        .map(|child| {
+            child
+                .position()
+                .unwrap_or(0)
+                .max(last_table_position(child))
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 fn item_at<'a>(doc: &'a DocumentMut, path: &[String]) -> Option<&'a Item> {

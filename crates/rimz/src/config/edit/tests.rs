@@ -1432,7 +1432,7 @@ fn named_account_edits_preserve_comments_and_sibling_account_keys() {
     let path = dir.path().join("config.toml");
     std::fs::write(
         &path,
-        "# my machine\n[accounts.budget]\nclaude = \"100/day\" # the cap\n",
+        "# my machine\n[accounts.budget]\nclaude = \"100/day\" # the cap\n\n[accounts.usage_limit_usd]\n# ceilings\n\n[notifications]\n",
     )
     .expect("write config");
     let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
@@ -1462,6 +1462,11 @@ fn named_account_edits_preserve_comments_and_sibling_account_keys() {
         Some(Path::new("/srv/homes/work"))
     );
     assert_eq!(parsed.claude["personal"].home, None);
+    assert!(!text.contains("[accounts.claude]"), "{text}");
+    assert!(
+        text.find("[notifications]") < text.find("[accounts.claude.work]"),
+        "a declared account must not split a table from its heading comments: {text}"
+    );
 
     assert!(editor.remove_named_account(&claude, &work).expect("remove"));
     assert!(
