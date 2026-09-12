@@ -164,6 +164,7 @@ fn config_home_env_key(kind: &AgentKind) -> Option<&'static str> {
 /// Where RimZ puts an account home the user did not place itself.
 pub fn default_named_home(kind: &AgentKind, name: &LoginName) -> PathBuf {
     crate::disk::paths::data_home()
+        .join("rimz")
         .join("accounts")
         .join(kind.as_str())
         .join(name.as_str())
