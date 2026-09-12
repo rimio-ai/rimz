@@ -1,7 +1,5 @@
 //! Interactive launch orchestration and presentation.
 
-use std::borrow::Cow;
-
 use super::*;
 use crate::cli::ctx::Ctx;
 use crate::cli::{machine_config, render, report_unknown_config_keys, require_agents_fragments};
@@ -32,66 +30,45 @@ pub(super) fn launch_layout(
     require_agents_fragments(&machine_config)?;
     report_unknown_config_keys(&machine_config)?;
     let effective = rimz::config::effective::load(&machine_config, &workspace.project_root)?;
-    // Inside a team's lane, a bare role names that team's role: in `#forge`,
-    // `reviewer` means `forge.reviewer`. The lane's agents carry the team, since
-    // the channel string alone does not name it. An explicit `--channel` picks
-    // the lane to infer from, so the inference works from outside the tab too.
     let lane = args
         .launch
         .cohort
         .channel
         .as_deref()
         .or_else(|| ctx.channel());
-    let mut inferred_lane = None;
-    if let (Some(spec), Some(channel)) = (args.launch.spec.as_deref(), lane) {
-        let snapshot = ctx.cached_snapshot()?;
-        if let Some(team) = rimz::address::channel_team(&snapshot.agents, channel) {
-            let qualified = rimz::harness::spec::qualify_spec_in_channel(
-                spec,
-                channel,
-                team,
-                &effective.teams,
-                &effective.profiles,
-                &machine_config.agents.commands,
-            )?;
-            if let Cow::Owned(qualified) = qualified {
-                args.launch.spec = Some(qualified);
-                inferred_lane = Some(channel.to_owned());
-            }
-        }
-    }
-    let mut resolved = rimz::harness::plan::resolve_launch(
+    let snapshot = if args.launch.spec.is_some() && lane.is_some() {
+        Some(ctx.cached_snapshot()?)
+    } else {
+        None
+    };
+    let FinalizedLaunch {
+        resolved,
+        preset: _preset,
+        warnings,
+        inferred_lane,
+        qualified_spec,
+    } = resolve_finalized_layout(
+        snapshot.as_ref(),
+        &machine_config,
         &effective,
-        rimz::config::effective::ProfileScope::Agents,
-        &machine_config.agents.commands,
         args.launch.spec.as_deref(),
-        rimz::harness::plan::normalized_preset_value(args.launch.agent.as_deref()).as_deref(),
-    )?;
-    let preset = validate_resolved_launch_inputs(
-        &args,
-        &effective,
-        &machine_config.agents.commands,
-        &resolved.layout,
-        true,
-    )?;
-    let warnings = rimz::harness::plan::finalize_launch_layout(
-        &mut resolved.layout,
-        LaunchFinalizeOptions {
-            permission_mode: interactive_permission_mode_from_flags(
-                args.launch.ask,
-                args.launch.yolo,
-            )?,
-            preset: &preset,
-            passthrough: &args.launch.passthrough,
-            budget: args.launch.cohort.budget,
-            max_turns: args.launch.max_turns,
-        },
+        args.launch.prompt.as_deref(),
+        &args.launch.overrides,
+        args.launch.cohort.budget,
+        args.launch.max_turns,
+        lane,
+        args.launch.name.is_some(),
     )
     .inspect_err(|err| {
-        for warning in err.warnings() {
-            let _ = writeln!(std::io::stderr(), "{warning}");
+        if let Some(err) = err.downcast_ref::<rimz::harness::plan::LaunchFinalizeError>() {
+            for warning in err.warnings() {
+                let _ = writeln!(std::io::stderr(), "{warning}");
+            }
         }
     })?;
+    if let Some(spec) = qualified_spec {
+        args.launch.spec = Some(spec);
+    }
     for warning in &warnings {
         writeln!(std::io::stderr(), "{warning}")?;
     }
@@ -860,24 +837,8 @@ fn report_cohort_resume(
     Ok(())
 }
 
-pub(super) fn interactive_permission_mode_from_flags(
-    ask: bool,
-    yolo: bool,
-) -> Result<Option<PermissionMode>> {
-    if ask && yolo {
-        bail!("choose at most one of --ask and --yolo");
-    }
-    Ok(if yolo {
-        Some(PermissionMode::Yolo)
-    } else if ask {
-        Some(PermissionMode::Ask)
-    } else {
-        None
-    })
-}
-
 pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> {
-    if !args.launch.passthrough.is_empty() {
+    if !args.launch.overrides.passthrough.is_empty() {
         bail!("missing agent spec before `--`");
     }
     if args.launch.cohort.worktree.is_some() {
@@ -897,88 +858,22 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
         || args.launch.cohort.new_tab
         || args.launch.cohort.resume
         || args.launch.cohort.fresh
-        || args.launch.ask
-        || args.launch.yolo
+        || args.launch.overrides.ask
+        || args.launch.overrides.yolo
         || args.launch.print
-        || args.launch.effort.is_some()
+        || args.launch.overrides.effort.is_some()
         || args.launch.cohort.budget.is_some()
-        || args.launch.model.is_some()
-        || args.launch.agent.is_some()
+        || args.launch.overrides.model.is_some()
+        || args.launch.overrides.agent.is_some()
         || args.launch.cohort.description.is_some()
-        || args.launch.system_prompt_file.is_some()
-        || !args.launch.append_system_prompt_files.is_empty()
+        || args.launch.overrides.system_prompt_file.is_some()
+        || !args.launch.overrides.append_system_prompt_files.is_empty()
         || args.launch.max_turns.is_some()
         || args.launch.retries.is_some()
     {
         bail!("agent launch options require an agent spec");
     }
     Ok(())
-}
-
-/// Build the launch-override preset from shared launch flags. Prompt files are
-/// resolved to absolute paths and required to exist here, at the entry point,
-/// rather than downstream in the agent.
-pub(super) fn launch_override_preset(args: &AgentsArgs) -> Result<rimz::agents::LaunchPreset> {
-    let system_prompt_file = resolve_launch_prompt_file(
-        args.launch.system_prompt_file.as_deref(),
-        "--system-prompt-file",
-    )?;
-    let append_system_prompt_files =
-        resolve_launch_prompt_files(&args.launch.append_system_prompt_files)?;
-    Ok(rimz::agents::LaunchPreset {
-        model: rimz::harness::plan::normalized_preset_value(args.launch.model.as_deref()),
-        effort: rimz::harness::plan::normalized_preset_value(args.launch.effort.as_deref()),
-        auto_compact: None,
-        system_prompt_file,
-        append_system_prompt_files,
-    })
-}
-
-pub(super) fn resolve_launch_prompt_file(
-    path: Option<&Path>,
-    flag: &str,
-) -> Result<Option<PathBuf>> {
-    let Some(path) = path else {
-        return Ok(None);
-    };
-    let resolved = path
-        .canonicalize()
-        .with_context(|| format!("reading {flag} `{}`", path.display()))?;
-    if !resolved.is_file() {
-        bail!("{flag} `{}` is not a regular file", path.display());
-    }
-    Ok(Some(resolved))
-}
-
-pub(super) fn resolve_launch_prompt_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
-    paths
-        .iter()
-        .map(|path| {
-            resolve_launch_prompt_file(Some(path), "--append-system-prompt-file")
-                .map(|path| path.expect("a supplied path resolves to one path"))
-        })
-        .collect()
-}
-
-/// Apply CLI-owned launch validation in its user-visible precedence order.
-pub(super) fn validate_resolved_launch_inputs(
-    args: &AgentsArgs,
-    effective: &rimz::config::effective::LaunchAgents,
-    commands: &rimz::config::CommandsConfig,
-    layout: &LayoutSpec,
-    enforce_name_cardinality: bool,
-) -> Result<rimz::agents::LaunchPreset> {
-    rimz::harness::plan::reject_prompt_that_looks_like_spec(
-        args.launch.spec.as_deref(),
-        args.launch.prompt.as_deref(),
-        &effective.profiles,
-        commands,
-        &effective.teams,
-    )?;
-    if enforce_name_cardinality && args.launch.name.is_some() && layout.agent_kinds().count() != 1 {
-        bail!("--name requires a layout with exactly one agent cell");
-    }
-    launch_override_preset(args)
 }
 
 #[cfg(test)]
