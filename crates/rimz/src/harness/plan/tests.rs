@@ -60,7 +60,7 @@ fn role_binding(role: &str) -> RoleBinding {
     RoleBinding {
         signals: Vec::new(),
         owns: Vec::new(),
-        compact_on_handoff: false,
+        flip_compact: None,
         role: role.to_owned(),
         profile: format!("{role}-profile"),
         mode: None,
@@ -382,7 +382,7 @@ fn subagent_doorway_keeps_team_roles_on_agent_profiles() {
             roles: vec![RoleBinding {
                 signals: Vec::new(),
                 owns: Vec::new(),
-                compact_on_handoff: false,
+                flip_compact: None,
                 role: "reviewer".to_owned(),
                 profile: "claude-agent".to_owned(),
                 mode: None,

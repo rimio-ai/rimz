@@ -732,7 +732,7 @@ fn team_machine() -> MachineConfig {
                 RoleBinding {
                     signals: Vec::new(),
                     owns: Vec::new(),
-                    compact_on_handoff: false,
+                    flip_compact: None,
                     auto_compact: None,
                     role: "planner".to_owned(),
                     profile: "claude-plan".to_owned(),
@@ -747,7 +747,7 @@ fn team_machine() -> MachineConfig {
                 RoleBinding {
                     signals: Vec::new(),
                     owns: Vec::new(),
-                    compact_on_handoff: false,
+                    flip_compact: None,
                     auto_compact: None,
                     role: "coder".to_owned(),
                     profile: "codex-code".to_owned(),

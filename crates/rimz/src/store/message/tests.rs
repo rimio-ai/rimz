@@ -22,6 +22,7 @@ fn conversation_senders_exclude_system_traffic() {
     for notice in [
         HarnessNotice::Wake,
         HarnessNotice::Signal,
+        HarnessNotice::Stage,
         HarnessNotice::SubagentReport,
         HarnessNotice::Other("future".to_owned()),
     ] {
@@ -65,12 +66,15 @@ fn prompt_origin_requires_only_non_user_headers() {
     let report = "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nfinished";
     let wake = "Type: WAKE\nFrom: @rimz\nContent:\ncheck back";
     let signal = "Type: SIGNAL\nFrom: @rimz\nContent:\nCI failed";
+    let stage = "Type: STAGE\nFrom: @rimz\nContent:\nImplement is yours.";
     let human = "Type: USER_MESSAGE\nFrom: @user\nContent:\nnext task";
     for prompt in [
         agent.to_owned(),
         report.to_owned(),
         wake.to_owned(),
         signal.to_owned(),
+        stage.to_owned(),
+        format!("{signal}\n\n{stage}"),
         format!("{report}\n\n{wake}"),
         format!("\n\n{agent}\n\n"),
         "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\n".to_owned(),
@@ -82,6 +86,7 @@ fn prompt_origin_requires_only_non_user_headers() {
         "bare composer text".to_owned(),
         format!("composer text\n\n{agent}"),
         format!("{agent}\n\n{human}"),
+        format!("{stage}\n\n{human}"),
         format!("{human}\n\n{wake}"),
         format!("{agent}\n\nType: WAKE\nFrom: rimz\nContent:\ninvalid"),
         "Type: FUTURE_NOTICE\nFrom: @rimz\nContent:\nunknown".to_owned(),
@@ -194,6 +199,18 @@ fn auto_compact_parses_percent_and_token_forms() {
     for invalid in ["101%", "18446744073709551615k", "70.5%", "1.5m", "k"] {
         assert!(AutoCompact::parse(invalid).is_err(), "{invalid}");
     }
+}
+
+#[test]
+fn auto_compact_reached_uses_inclusive_token_and_percentage_thresholds() {
+    assert!(AutoCompact::Tokens(180_000).reached(180_000, None));
+    assert!(!AutoCompact::Tokens(180_000).reached(179_999, None));
+    assert!(AutoCompact::Percent(70).reached(140_000, Some(200_000)));
+    assert!(!AutoCompact::Percent(70).reached(139_999, Some(200_000)));
+    assert!(!AutoCompact::Percent(0).reached(0, None));
+    assert!(!AutoCompact::Percent(0).reached(0, Some(0)));
+    assert!(AutoCompact::Percent(0).reached(0, Some(200_000)));
+    assert!(AutoCompact::Percent(100).reached(u64::MAX, Some(u64::MAX)));
 }
 
 #[test]
@@ -1085,6 +1102,7 @@ fn align_submitted_prompt_consumes_harness_report_header() {
         (HarnessNotice::SubagentReport, "SUBAGENT_REPORT"),
         (HarnessNotice::Wake, "WAKE"),
         (HarnessNotice::Signal, "SIGNAL"),
+        (HarnessNotice::Stage, "STAGE"),
     ] {
         let record = MessageRecord::new(
             WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),

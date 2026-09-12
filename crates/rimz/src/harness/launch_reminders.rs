@@ -133,7 +133,7 @@ mod tests {
         let text = render(&request, &reminders, Path::new("/worktree")).expect("reminder");
         assert_eq!(text.matches("<system_reminder>").count(), 1);
         assert_eq!(text.matches("</system_reminder>").count(), 1);
-        assert!(text.contains("rimz teams flip <stage> [-m note]"));
+        assert!(text.contains("rimz teams flip <stage> \"<progress note>\""));
         request.subagent = true;
         let text = render(&request, &reminders, Path::new("/worktree")).expect("child reminder");
         assert!(!text.contains("rimz teams flip"));

@@ -353,7 +353,7 @@ pub enum LayoutErr {
     #[error("duplicate stage `{name}` in team `{team}`")]
     DuplicateStage { team: String, name: String },
     #[error(
-        "reserved stage `{name}` in team `{team}`; remove it from owns because Done has no owner"
+        "reserved stage `{name}` in team `{team}`; `Done` is implicit and always last; remove it from stages and owns"
     )]
     ReservedStage { team: String, name: String },
     #[error(
@@ -373,9 +373,9 @@ pub enum LayoutErr {
         stage: String,
     },
     #[error(
-        "role `{role}` in team `{team}` enables compact-on-handoff but agent kind `{kind}` has no compact command; disable compact-on-handoff or choose a supporting agent"
+        "role `{role}` in team `{team}` enables flip-compact but agent kind `{kind}` has no compact command; set flip-compact = \"off\" on role {role} or choose a supporting agent"
     )]
-    CompactOnHandoffUnsupported {
+    FlipCompactUnsupported {
         team: String,
         role: String,
         kind: AgentKind,
@@ -753,14 +753,15 @@ fn resolve_team_with_base_override(
         .0
         .get(name)
         .expect("team resolution called with a known team name");
-    Ok(compile_team(
+    let prepared = prepare_team(name, team, profiles, base_override)?;
+    validate_flip_compact(
         name,
-        prepare_team(name, team, profiles, base_override)?,
-        profiles,
-        commands,
-        base_override,
-    )?
-    .layout)
+        &prepared,
+        crate::config::MachineConfig::load_lenient()
+            .harness
+            .flip_compact,
+    )?;
+    Ok(compile_team(name, prepared, profiles, commands, base_override)?.layout)
 }
 
 /// Resolve the one agent cell that receives a trailing launch prompt.
@@ -828,13 +829,15 @@ fn resolve_team_role(
         .0
         .get(team_name)
         .expect("team role resolution called with a known team name");
-    let compiled = compile_team(
+    let prepared = prepare_team(team_name, team, profiles, base_override)?;
+    validate_flip_compact(
         team_name,
-        prepare_team(team_name, team, profiles, base_override)?,
-        profiles,
-        commands,
-        base_override,
+        &prepared,
+        crate::config::MachineConfig::load_lenient()
+            .harness
+            .flip_compact,
     )?;
+    let compiled = compile_team(team_name, prepared, profiles, commands, base_override)?;
     let Some(cell) = compiled.roles.get(role_name) else {
         return Err(LayoutErr::UnknownRoleInTeam {
             team: team_name.to_owned(),
@@ -1655,6 +1658,12 @@ fn validate_team_names(teams: &TeamsConfig) -> Result<()> {
 pub(crate) fn validate_team_stages(name: &str, team: &Team) -> Result<()> {
     let mut stages = BTreeSet::new();
     for stage in &team.stages {
+        if stage == crate::config::DONE_STAGE {
+            return Err(LayoutErr::ReservedStage {
+                team: name.to_owned(),
+                name: stage.clone(),
+            });
+        }
         if stage.is_empty() || stage.trim() != stage || stage.chars().any(char::is_control) {
             return Err(LayoutErr::InvalidStageName {
                 team: name.to_owned(),
@@ -1775,17 +1784,6 @@ fn prepare_team<'a>(
         resolved.apply_role(binding);
         normalize_auto_compact(&mut resolved.auto_compact, &binding.profile)?;
         let resolved = rebase_onto(resolved, base_override);
-        if binding.compact_on_handoff
-            && crate::agents::spec_by_kind(resolved.kind.as_str())
-                .and_then(|spec| spec.launch.compact_command(""))
-                .is_none()
-        {
-            return Err(LayoutErr::CompactOnHandoffUnsupported {
-                team: name.to_owned(),
-                role: binding.role.clone(),
-                kind: resolved.kind.clone(),
-            });
-        }
         let args = render_profile_args(&binding.profile, &resolved)?;
         roles.push(PreparedRole {
             role: binding.role.clone(),
@@ -1806,6 +1804,27 @@ fn prepare_team<'a>(
     }
     validate_team_signals(name, team)?;
     Ok(PreparedTeam { team, roles })
+}
+
+fn validate_flip_compact(
+    name: &str,
+    prepared: &PreparedTeam<'_>,
+    default: Option<crate::store::message::AutoCompact>,
+) -> Result<()> {
+    for role in &prepared.roles {
+        if prepared.team.flip_compact(&role.role, default).is_some()
+            && crate::agents::spec_by_kind(role.resolved.kind.as_str())
+                .and_then(|spec| spec.launch.compact_command(""))
+                .is_none()
+        {
+            return Err(LayoutErr::FlipCompactUnsupported {
+                team: name.to_owned(),
+                role: role.role.clone(),
+                kind: role.resolved.kind.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn validate_team_signals(name: &str, team: &Team) -> Result<()> {

@@ -25,7 +25,7 @@ fn team() -> Team {
             args: None,
             signals: Vec::new(),
             owns: Vec::new(),
-            compact_on_handoff: false,
+            flip_compact: None,
         }],
         leader: Some("planner".to_owned()),
         layout: None,

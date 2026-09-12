@@ -13,7 +13,7 @@ forge
 #feat-x · working · Plan (delta) (@planner)
   worktree:  /repo/worktrees/feat-x
   isolation: host · tmp /tmp
-  stages:    Explore → [Plan] → Implement
+  stages:    Explore → Plan → Implement → Done
   pr:        none
 
   MEMBER    STATUS   ACTIVITY         CTX   COST  AGE

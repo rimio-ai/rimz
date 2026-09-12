@@ -76,11 +76,11 @@ pub enum Assist {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
-    HandoffCompact {
+    FlipCompact {
         kind: AgentKind,
         agent_id: AgentSessionId,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        label: Option<String>,
+        role: String,
+        threshold: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         from: Option<String>,
         to: String,
@@ -218,6 +218,35 @@ mod tests {
                 delivered: true,
                 error: None,
             },
+        }
+    }
+
+    #[test]
+    fn flip_compaction_round_trips_known_and_missing_attempt_evidence() {
+        for delivered in [true, false] {
+            let record = AssistRecord {
+                at: ts(20),
+                assist: Assist::FlipCompact {
+                    kind: AgentKind::new_unchecked("codex"),
+                    agent_id: AgentSessionId::from("session-1"),
+                    role: "coder".to_owned(),
+                    threshold: 180_000,
+                    from: delivered.then(|| "Implement".to_owned()),
+                    to: "Review".to_owned(),
+                    occupied_tokens: delivered.then_some(204_000),
+                    message_id: delivered.then(|| "msg_4".to_owned()),
+                    delivered,
+                    error: (!delivered).then(|| "no bound pane".to_owned()),
+                },
+            };
+            let json = serde_json::to_value(&record).expect("serialize");
+            assert_eq!(json["assist"], "flip_compact");
+            assert_eq!(json["role"], "coder");
+            assert_eq!(json["threshold"], 180_000);
+            assert_eq!(
+                serde_json::from_value::<AssistRecord>(json).expect("deserialize"),
+                record
+            );
         }
     }
 

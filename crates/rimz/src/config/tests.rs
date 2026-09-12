@@ -1450,23 +1450,52 @@ fn agent_profiles_commands_and_teams_parse() {
 }
 
 #[test]
-fn team_owns_and_compact_on_handoff_parse_default_and_round_trip() {
+fn team_owns_and_flip_compact_parse_default_and_round_trip() {
+    use crate::store::message::AutoCompact;
+
+    let harness: HarnessConfig =
+        toml::from_str("flip-compact = \"180k\"").expect("parse harness threshold");
+    assert_eq!(harness.flip_compact, Some(AutoCompact::Tokens(180_000)));
+    let encoded = toml::to_string(&harness).expect("serialize harness threshold");
+    assert_eq!(
+        toml::from_str::<HarnessConfig>(&encoded).expect("round trip"),
+        harness
+    );
+    assert_eq!(HarnessConfig::default().flip_compact, None);
     let team: Team = toml::from_str(
         r#"
         [[roles]]
         role = "planner"
         profile = "claude"
         owns = ["Explore", "Plan", "Reflect"]
-        compact-on-handoff = true
+        flip-compact = "220k"
         [[roles]]
         role = "coder"
         profile = "codex"
+        [[roles]]
+        role = "reviewer"
+        profile = "claude"
+        flip-compact = "off"
         "#,
     )
     .expect("parse ownership");
-    assert!(team.roles[0].compact_on_handoff);
+    assert_eq!(
+        team.roles[0].flip_compact,
+        Some(agents::FlipCompact::Threshold(AutoCompact::Tokens(220_000)))
+    );
     assert!(team.roles[1].owns.is_empty());
-    assert!(!team.roles[1].compact_on_handoff);
+    assert_eq!(team.roles[1].flip_compact, None);
+    assert_eq!(team.roles[2].flip_compact, Some(agents::FlipCompact::Off));
+    assert_eq!(
+        team.flip_compact("planner", harness.flip_compact),
+        Some(AutoCompact::Tokens(220_000))
+    );
+    assert_eq!(
+        team.flip_compact("coder", harness.flip_compact),
+        harness.flip_compact
+    );
+    assert_eq!(team.flip_compact("coder", None), None);
+    assert_eq!(team.flip_compact("reviewer", harness.flip_compact), None);
     assert_eq!(team.owner_of("Plan"), Some("planner"));
     assert_eq!(team.owner_of("plan"), None);
     assert_eq!(team.owner_of(DONE_STAGE), None);
@@ -1478,7 +1507,24 @@ fn team_owns_and_compact_on_handoff_parse_default_and_round_trip() {
     assert_eq!(toml::from_str::<Team>(&encoded).expect("round trip"), team);
     let defaults = toml::to_string(&team.roles[1]).expect("serialize defaults");
     assert!(!defaults.contains("owns"));
-    assert!(!defaults.contains("compact-on-handoff"));
+    assert!(!defaults.contains("flip-compact"));
+    for raw in ["70%", "off"] {
+        let role: RoleBinding = toml::from_str(&format!(
+            "role = \"coder\"\nprofile = \"codex\"\nflip-compact = \"{raw}\""
+        ))
+        .expect("parse role override");
+        let encoded = toml::to_string(&role).expect("serialize role override");
+        assert_eq!(
+            toml::from_str::<RoleBinding>(&encoded).expect("round trip"),
+            role
+        );
+    }
+    assert!(
+        toml::from_str::<RoleBinding>(
+            "role = \"coder\"\nprofile = \"codex\"\nflip-compact = \"101%\""
+        )
+        .is_err()
+    );
 }
 
 #[test]

@@ -59,6 +59,7 @@ pub enum HarnessNotice {
     SubagentReport,
     Wake,
     Signal,
+    Stage,
     /// Preserve newer notices verbatim through older queue rewrites and history pruning.
     #[serde(untagged)]
     Other(String),
@@ -70,6 +71,7 @@ impl HarnessNotice {
             Self::SubagentReport => "SUBAGENT_REPORT".to_owned(),
             Self::Wake => "WAKE".to_owned(),
             Self::Signal => "SIGNAL".to_owned(),
+            Self::Stage => "STAGE".to_owned(),
             Self::Other(notice) => notice.to_ascii_uppercase(),
         }
     }
@@ -183,16 +185,34 @@ impl AutoCompact {
         }
     }
 
+    /// Whether the occupied tokens reach this threshold. Percentages require a nonzero window.
+    pub(crate) fn reached(self, occupied: u64, window: Option<u64>) -> bool {
+        match self {
+            Self::Percent(percent) => window.is_some_and(|window| {
+                window > 0 && u128::from(occupied) * 100 >= u128::from(window) * u128::from(percent)
+            }),
+            Self::Tokens(tokens) => occupied >= tokens,
+        }
+    }
+
     /// Whether `agent`'s current context fill has reached this threshold. An
     /// unknown fill never triggers — a missing reading is not a full window.
     pub fn triggered(self, agent: &AgentState) -> bool {
         match self {
-            Self::Percent(pct) => agent
-                .context_fill_pct()
-                .is_some_and(|fill| fill >= f64::from(pct)),
-            Self::Tokens(tokens) => agent
+            Self::Percent(pct) => {
+                if let (Some(occupied), Some(window)) = (
+                    agent.context_used_tokens(),
+                    agent.resolved_context_window().filter(|window| *window > 0),
+                ) {
+                    return self.reached(occupied, Some(window));
+                }
+                agent
+                    .context_fill_pct()
+                    .is_some_and(|fill| fill >= f64::from(pct))
+            }
+            Self::Tokens(_) => agent
                 .occupied_context_tokens()
-                .is_some_and(|used| used >= tokens),
+                .is_some_and(|used| self.reached(used, agent.resolved_context_window())),
         }
     }
 }
@@ -904,6 +924,7 @@ pub enum HeaderKind {
     Subagent,
     Wake,
     Signal,
+    Stage,
     User,
 }
 
@@ -913,6 +934,7 @@ fn classify_header_line(line: &str) -> Option<HeaderKind> {
         "Type: SUBAGENT_REPORT" => Some(HeaderKind::Subagent),
         "Type: WAKE" => Some(HeaderKind::Wake),
         "Type: SIGNAL" => Some(HeaderKind::Signal),
+        "Type: STAGE" => Some(HeaderKind::Stage),
         "Type: USER_MESSAGE" => Some(HeaderKind::User),
         _ => None,
     }
