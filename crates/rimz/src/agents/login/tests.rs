@@ -265,3 +265,46 @@ fn mismatch_reads_an_absent_stamp_as_the_default_account() {
          `rimz reset --account claude=personal` here"
     );
 }
+
+#[test]
+fn room_login_set_answers_the_room_account_and_nothing_it_cannot_resolve() {
+    let catalog = LoginCatalog::from_config_under(
+        &accounts("[claude.work]\nhome = \"/srv/work\"\n"),
+        Some(Path::new("/home/u")),
+    )
+    .expect("catalog");
+    let ambient = BTreeMap::from([("HOME".to_owned(), "/home/u".to_owned())]);
+    let set = RoomLoginSet::new(
+        Some(RoomLogins::from([(kind("claude"), name("work"))])),
+        Some(catalog.clone()),
+        ambient.clone(),
+    );
+
+    let claude = set.login("claude").expect("claude login");
+    assert_eq!(claude.key().to_string(), "claude@work");
+    assert_eq!(
+        set.env(&claude)
+            .get("CLAUDE_CONFIG_DIR")
+            .map(String::as_str),
+        Some("/srv/work")
+    );
+    assert_eq!(
+        set.key("codex").map(|key| key.to_string()),
+        Some("codex@default".to_owned())
+    );
+
+    let removed = RoomLoginSet::new(
+        Some(RoomLogins::from([(kind("claude"), name("gone"))])),
+        Some(catalog),
+        ambient.clone(),
+    );
+    assert_eq!(removed.login("claude"), None);
+    assert!(
+        removed
+            .login("codex")
+            .is_some_and(|login| login.is_default())
+    );
+
+    let unreadable = RoomLoginSet::new(None, None, ambient);
+    assert_eq!(unreadable.login("codex"), None);
+}
