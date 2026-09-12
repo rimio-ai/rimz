@@ -565,6 +565,7 @@ fn filled_run_spans(theme: &Theme, color: Color, count: usize) -> Vec<Span<'stat
     )]
 }
 
+/// A sub-cap tick: `headroom_pct` is on the parent budget's axis; `remaining_pct` is on the sub-cap's own axis.
 pub(in crate::sidebar_pane::render) struct ManaTick {
     pub headroom_pct: u8,
     pub remaining_pct: u8,
