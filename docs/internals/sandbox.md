@@ -43,9 +43,11 @@ Storage reports include tmp and skill copies in the State root's on-disk footpri
 
 ## Launch reminder
 
-The launch compiler sets `LaunchReminders.sandbox` from successful bubblewrap preflight; the apply step ensures the tmp layout before provider execution, including on restart of an older room. The reminder renderer inserts this paragraph after the model line and before the catalog or child policy, inside the same `<system_reminder>` tag:
+The launch compiler sets `LaunchReminders.sandbox` from successful bubblewrap preflight; the apply step ensures the tmp layout before provider execution, including on restart of an older room. The reminder renderer inserts this paragraph after the identity and channel paragraphs and before the catalog or child policy, inside the same `<system_reminder>` tag:
 
-> This pane runs under a bubblewrap sandbox. `/tmp` belongs to this RimZ room: teammates and subagents in the room share it, it is separate from the host's `/tmp`, and it is removed when the room closes. The room's host state path remains accessible. Use it freely for temporary files, and use `/tmp/scratchpad` as your scratchpad directory. RimZ writes its own outputs there too: `rimz wake` command output under `/tmp/rimz-wakes/` and settled subagent responses under `/tmp/rimz-subagents/`.
+> This pane runs in a bubblewrap sandbox. `/tmp` is the room's: shared with teammates and subagents, separate from the host's `/tmp`, removed when the room closes; the host state path stays reachable. Scratch files go under `/tmp/scratchpad`.
+
+The wake and subagent output directories are not named: every wake message and subagent report carries its file path.
 
 It reaches Claude, Qwen, Droid, and Codex through their existing native append-system-text channels on every launch kind, including subagents. Host-mode launches omit it. Other providers gain no fallback; their child user-prompt fallback remains the no-delegation body only.
 

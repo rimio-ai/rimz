@@ -1,6 +1,7 @@
 //! What a `rimz subagents` caller may launch.
 
 use crate::agents::AgentState;
+use crate::agents::model_display::display_model_short;
 use crate::config::{CommandsConfig, ProfilesConfig};
 use crate::harness::spec::LayoutErr;
 
@@ -73,23 +74,26 @@ pub fn reminder(catalog: &SubagentCatalog) -> String {
                 .map(reminder_profile)
                 .collect::<Vec<_>>()
                 .join("\n");
+            // The skill owns the how (batching, the settle digest, joins); this only says what.
             format!(
-                "Subagents are available to you; launch them with Skill(rimz-subagents). Use them to run independent work in parallel, fan out searches or audits, or keep a large exploration out of your own context: delegate it and keep the conclusion, not the file dumps.\n\nWhen every subagent you launched has settled, one `SUBAGENT_REPORT` message from `@rimz` lists each child's outcome, task, and the file holding its response; read the files you need, or print those answers inline with `rimz subagents wait @…`. Calling `rimz subagents wait <name>…` earlier blocks until those children settle (`--any` returns the first).\n\nAvailable subagent profiles you may launch:\n{list}"
+                "Subagents: launch them through Skill(rimz-subagents), which also says how their results come back. Profiles you may launch:\n{list}"
             )
         }
     }
 }
 
 fn reminder_profile(profile: &SubagentProfile) -> String {
-    let details = [
-        profile.agent.as_deref(),
-        profile.model.as_deref(),
-        profile.effort.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join(" · ");
+    // The model names the line it runs on; the agent kind is only worth showing without one.
+    let runs_on = profile
+        .model
+        .as_deref()
+        .map(display_model_short)
+        .or_else(|| profile.agent.clone());
+    let details = [runs_on.as_deref(), profile.effort.as_deref()]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ");
     let details = (!details.is_empty()).then(|| format!(" ({details})"));
     let description = profile
         .description
@@ -291,11 +295,22 @@ mod tests {
         let text = reminder(&available);
         assert_eq!(
             text,
-            "Subagents are available to you; launch them with Skill(rimz-subagents). Use them to run independent work in parallel, fan out searches or audits, or keep a large exploration out of your own context: delegate it and keep the conclusion, not the file dumps.\n\n\
-             When every subagent you launched has settled, one `SUBAGENT_REPORT` message from `@rimz` lists each child's outcome, task, and the file holding its response; read the files you need, or print those answers inline with `rimz subagents wait @…`. Calling `rimz subagents wait <name>…` earlier blocks until those children settle (`--any` returns the first).\n\n\
-             Available subagent profiles you may launch:\n\
-             - `explorer` (claude · sonnet · low): Finds files and traces code paths\n\
+            "Subagents: launch them through Skill(rimz-subagents), which also says how their results come back. Profiles you may launch:\n\
+             - `explorer` (Sonnet · low): Finds files and traces code paths\n\
              - `lint`"
+        );
+        let SubagentCatalog::Available(mut specs) = available else {
+            unreachable!("built as available");
+        };
+        specs[0].model = None;
+        assert_eq!(
+            reminder_profile(&specs[0]),
+            "- `explorer` (claude · low): Finds files and traces code paths"
+        );
+        specs[0].model = Some("gpt-6-astra".to_owned());
+        assert_eq!(
+            reminder_profile(&specs[0]),
+            "- `explorer` (Astra · low): Finds files and traces code paths"
         );
         assert_eq!(
             reminder(&SubagentCatalog::Disabled),

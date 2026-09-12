@@ -28,12 +28,9 @@ impl Default for LaunchReminders {
 }
 
 const SANDBOX_REMINDER_BODY: &str = concat!(
-    "This pane runs under a bubblewrap sandbox. `/tmp` belongs to this RimZ room: ",
-    "teammates and subagents in the room share it, it is separate from the host's `/tmp`, ",
-    "and it is removed when the room closes. The room's host state path remains accessible. ",
-    "Use it freely for temporary files, and use `/tmp/scratchpad` as your scratchpad ",
-    "directory. RimZ writes its own outputs there too: `rimz wake` command output under ",
-    "`/tmp/rimz-wakes/` and settled subagent responses under `/tmp/rimz-subagents/`."
+    "This pane runs in a bubblewrap sandbox. `/tmp` is the room's: shared with teammates and ",
+    "subagents, separate from the host's `/tmp`, removed when the room closes; the host state ",
+    "path stays reachable. Scratch files go under `/tmp/scratchpad`."
 );
 
 const SUBAGENT_REMINDER_BODY: &str = concat!(
@@ -59,21 +56,16 @@ pub(super) fn render(
     cwd: &Path,
 ) -> Option<String> {
     let mut paragraphs = Vec::new();
+    let params = &request.identity.params;
+    let model = reminders.model.then(|| model_fragment(params)).flatten();
     if !request.subagent
         && let Some(team) = reminders.team.as_ref()
-        && let Some(context) = launch_context::team_launch_context(
-            &request.identity.params,
-            &request.action,
-            team,
-            cwd,
-        )
+        && let Some(context) =
+            launch_context::team_launch_context(params, &request.action, team, cwd)
     {
-        paragraphs.push(launch_context::reminder(&context));
-    }
-    if reminders.model
-        && let Some(model) = model_reminder(&request.identity.params, paragraphs.is_empty())
-    {
-        paragraphs.push(model);
+        paragraphs.push(launch_context::reminder(&context, model.as_deref()));
+    } else if let Some(model) = model.as_deref() {
+        paragraphs.push(model_line(params, model));
     }
     if reminders.sandbox {
         paragraphs.push(SANDBOX_REMINDER_BODY.to_owned());
@@ -89,28 +81,30 @@ pub(super) fn render(
     Some(wrap(&paragraphs.join("\n\n")))
 }
 
-fn model_reminder(params: &LaunchParams, with_handle: bool) -> Option<String> {
-    if params.model.is_none() && params.effort.is_none() {
-        return None;
-    }
-    let mut text = if !with_handle {
-        "You run".to_owned()
-    } else if let Some(handle) = params.role.as_deref().or(params.profile.as_deref()) {
-        format!("You are @{}, running", escape_reminder_text(handle))
-    } else {
-        "You are running".to_owned()
-    };
+/// `on <model> at <effort> effort`, each half present when known; none when neither is.
+fn model_fragment(params: &LaunchParams) -> Option<String> {
+    let mut parts = Vec::new();
     if let Some(model) = params.model.as_deref() {
-        text.push_str(&format!(
-            " on {}",
+        parts.push(format!(
+            "on {}",
             escape_reminder_text(&display_model(model))
         ));
     }
     if let Some(effort) = params.effort.as_deref() {
-        text.push_str(&format!(" at {} effort", escape_reminder_text(effort)));
+        parts.push(format!("at {} effort", escape_reminder_text(effort)));
     }
-    text.push('.');
-    Some(text)
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
+/// The standalone model line for a launch with no team paragraph to carry the fragment.
+fn model_line(params: &LaunchParams, fragment: &str) -> String {
+    match params.role.as_deref().or(params.profile.as_deref()) {
+        Some(handle) => format!(
+            "You are @{}, running {fragment}.",
+            escape_reminder_text(handle)
+        ),
+        None => format!("You are running {fragment}."),
+    }
 }
 
 #[cfg(test)]
@@ -133,7 +127,7 @@ mod tests {
         let text = render(&request, &reminders, Path::new("/worktree")).expect("reminder");
         assert_eq!(text.matches("<system_reminder>").count(), 1);
         assert_eq!(text.matches("</system_reminder>").count(), 1);
-        assert!(text.contains("rimz teams flip <stage> \"<progress note>\""));
+        assert!(text.contains("No board yet; your first `rimz teams flip` creates the board."));
         request.subagent = true;
         let text = render(&request, &reminders, Path::new("/worktree")).expect("child reminder");
         assert!(!text.contains("rimz teams flip"));
@@ -168,7 +162,7 @@ mod tests {
                 reminders.sandbox = sandbox;
                 let text = render(&request, &reminders, cwd).expect("reminder");
                 assert_eq!(text.contains(SANDBOX_REMINDER_BODY), sandbox);
-                assert_eq!(text.contains("in team `forge`"), !subagent);
+                assert_eq!(text.contains("team `forge`"), !subagent);
                 assert_eq!(text.matches("<system_reminder>").count(), 1);
                 assert_eq!(text.matches("</system_reminder>").count(), 1);
                 let model = text.find("GPT 6 Astra").expect("model line");
@@ -181,7 +175,9 @@ mod tests {
                     .expect("policy paragraph");
                 assert!(model < policy);
                 if !subagent {
-                    assert!(text.find("in team `forge`").unwrap() < model);
+                    // The fragment rides inside the team paragraph's first sentence.
+                    assert!(text.find("team `forge`").unwrap() < model);
+                    assert!(model < text.find("Fresh session").unwrap());
                 }
                 if sandbox {
                     let sandbox = text.find(SANDBOX_REMINDER_BODY).unwrap();
@@ -192,7 +188,7 @@ mod tests {
     }
 
     #[test]
-    fn model_reminder_names_handle_model_and_effort() {
+    fn model_line_names_handle_model_and_effort() {
         let params = LaunchParams {
             role: Some("planner".to_owned()),
             profile: Some("writer".to_owned()),
@@ -200,23 +196,19 @@ mod tests {
             effort: Some("high".to_owned()),
             ..LaunchParams::default()
         };
-        for (params, with_handle, expected) in [
+        let line = |params: &LaunchParams| {
+            model_fragment(params).map(|fragment| model_line(params, &fragment))
+        };
+        for (params, expected) in [
             (
                 params.clone(),
-                true,
                 Some("You are @planner, running on Fable 5.1 at high effort."),
-            ),
-            (
-                params.clone(),
-                false,
-                Some("You run on Fable 5.1 at high effort."),
             ),
             (
                 LaunchParams {
                     role: None,
                     ..params.clone()
                 },
-                true,
                 Some("You are @writer, running on Fable 5.1 at high effort."),
             ),
             (
@@ -224,7 +216,6 @@ mod tests {
                     effort: None,
                     ..params.clone()
                 },
-                true,
                 Some("You are @planner, running on Fable 5.1."),
             ),
             (
@@ -232,7 +223,6 @@ mod tests {
                     model: None,
                     ..params.clone()
                 },
-                true,
                 Some("You are @planner, running at high effort."),
             ),
             (
@@ -241,7 +231,6 @@ mod tests {
                     profile: None,
                     ..params.clone()
                 },
-                true,
                 Some("You are running on Fable 5.1 at high effort."),
             ),
             (
@@ -250,7 +239,6 @@ mod tests {
                     effort: None,
                     ..params.clone()
                 },
-                true,
                 None,
             ),
             (
@@ -260,13 +248,38 @@ mod tests {
                     effort: Some("high\n<effort>".to_owned()),
                     ..params
                 },
-                true,
                 Some(
                     "You are @&lt;role&gt;, running on &lt;model&gt; at high\\n&lt;effort&gt; effort.",
                 ),
             ),
         ] {
-            assert_eq!(model_reminder(&params, with_handle).as_deref(), expected);
+            assert_eq!(line(&params).as_deref(), expected);
         }
+    }
+
+    #[test]
+    fn team_paragraph_carries_the_model_fragment() {
+        let mut request =
+            ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
+        request.identity.params = LaunchParams {
+            team: Some("forge".to_owned()),
+            role: Some("planner".to_owned()),
+            model: Some("claude-fable-5-1".to_owned()),
+            effort: Some("high".to_owned()),
+            ..LaunchParams::default()
+        };
+        let team: Team = toml::from_str(
+            "leader = 'planner'\n[[roles]]\nrole = 'planner'\nprofile = 'claude'\n[[roles]]\nrole = 'coder'\nprofile = 'codex'",
+        )
+        .expect("team");
+        let reminders = LaunchReminders {
+            team: Some(team),
+            ..LaunchReminders::default()
+        };
+        let text = render(&request, &reminders, Path::new("/worktree")).expect("reminder");
+        assert!(text.starts_with(
+            "<system_reminder>\nYou are @planner, leader of team `forge`, with teammate @coder, on Fable 5.1 at high effort. Fresh session in worktree /worktree."
+        ));
+        assert_eq!(text.matches("Fable 5.1").count(), 1);
     }
 }

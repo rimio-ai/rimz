@@ -425,7 +425,7 @@ With no `subagents` field, every subagent profile is allowed; an empty list allo
 
 At launch, RimZ tells a supported agent which subagent profiles it may use; an empty list instead tells it that delegation is off. When no subagent profiles or commands are configured, the reminder says that `Skill(rimz-subagents)` has nothing configured to launch and points at `[subagents.profiles]`.
 
-The same reminder tells the agent which model and effort the launch selected: `You are @planner, running on Opus 4.8 at high effort.` It uses the role or profile handle and omits unknown values; when neither model nor effort is known, there is no model line. To remove only that line:
+The same reminder tells the agent which model and effort the launch selected: `You are @planner, running on Opus 4.8 at high effort.` It uses the role or profile handle and omits unknown values; a team member reads the same `on … at … effort` inside its identity sentence, and when neither model nor effort is known, there is no model line. To remove only that line:
 
 ```toml
 [agents.profiles.planner]

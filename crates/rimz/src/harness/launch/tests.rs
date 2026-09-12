@@ -442,7 +442,7 @@ fn process_compiler_appends_team_context_for_native_adapters() {
         project.path(),
     )
     .expect("team context");
-    let reminder = wrap(&crate::harness::launch_context::reminder(&context));
+    let reminder = wrap(&crate::harness::launch_context::reminder(&context, None));
 
     for kind in ["claude", "qwen", "droid"] {
         let invocation = team_request(kind);
@@ -510,7 +510,8 @@ fn process_compiler_joins_catalog_and_team_context_in_one_occurrence() {
         project.path(),
     )
     .expect("team context");
-    let team_reminder = crate::harness::launch_context::reminder(&context);
+    let team_reminder =
+        crate::harness::launch_context::reminder(&context, Some("on GPT 6 Astra at high effort"));
 
     for kind in ["claude", "codex"] {
         let mut invocation = team_request(kind);
@@ -541,9 +542,7 @@ fn process_compiler_joins_catalog_and_team_context_in_one_occurrence() {
         assert_eq!(occurrences[0].value.matches("<system_reminder>").count(), 1);
         assert_eq!(
             parse_toml_string_or_raw(&occurrences[0].value),
-            wrap(&format!(
-                "{team_reminder}\n\nYou run on GPT 6 Astra at high effort.\n\n{catalog_reminder}"
-            ))
+            wrap(&format!("{team_reminder}\n\n{catalog_reminder}"))
         );
     }
 }
@@ -579,7 +578,7 @@ fn process_compiler_joins_sandbox_reminder_for_native_peers_and_children() {
             let text = parse_toml_string_or_raw(&occurrences[0].value);
             assert_eq!(text.matches("<system_reminder>").count(), 1);
             assert_eq!(text.matches("</system_reminder>").count(), 1);
-            assert!(text.contains("This pane runs under a bubblewrap sandbox."));
+            assert!(text.contains("This pane runs in a bubblewrap sandbox."));
             assert!(text.contains("`/tmp/scratchpad`"));
             assert_eq!(text.contains("You are a subagent:"), subagent);
             assert_eq!(
@@ -626,7 +625,7 @@ fn process_compiler_appends_model_line_for_native_adapters() {
                 assert_eq!(text.matches("</system_reminder>").count(), 1);
                 assert_eq!(text.contains("GPT 6 Astra at high effort."), model);
                 assert_eq!(text.contains("You are a subagent:"), subagent);
-                assert_eq!(text.contains("in team `forge`"), !subagent);
+                assert_eq!(text.contains("team `forge`"), !subagent);
                 assert_eq!(text.contains("Subagents are disabled"), !subagent);
                 if subagent && model {
                     assert!(text.contains("You are @coder, running on GPT 6 Astra"));
@@ -682,7 +681,7 @@ fn process_compiler_omits_team_context_for_unsupported_adapter() {
         project.path(),
     )
     .expect("team context");
-    let reminder = wrap(&crate::harness::launch_context::reminder(&context));
+    let reminder = wrap(&crate::harness::launch_context::reminder(&context, None));
     let process = compile_agent_process_with_extra_env(
         project.path(),
         &invocation,

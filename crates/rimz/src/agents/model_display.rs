@@ -5,6 +5,29 @@ pub fn display_model(id: &str) -> String {
     prettify_model_slug(strip_date_suffix(id.trim()))
 }
 
+/// The shortest name that still says which line a model is: the display name minus its
+/// version and, when a codename follows, its brand acronym (`gpt-6-astra` → `Astra`,
+/// `claude-opus-4-6` → `Opus`). A name with nothing else to show keeps its display form.
+pub fn display_model_short(id: &str) -> String {
+    let display = display_model(id);
+    let words: Vec<&str> = display.split(' ').collect();
+    let named: Vec<&str> = words
+        .iter()
+        .enumerate()
+        .filter(|(index, word)| {
+            let version = word.chars().all(|c| c.is_ascii_digit() || c == '.');
+            let brand = *index == 0 && matches!(**word, "GPT" | "Claude");
+            !version && !brand
+        })
+        .map(|(_, word)| *word)
+        .collect();
+    if named.is_empty() {
+        display
+    } else {
+        named.join(" ")
+    }
+}
+
 /// Structurally render Factory's legacy custom selector
 /// `custom:<display-name-slug>-<zero-based-index>`. The terminal decimal is
 /// protocol bookkeeping, not part of the model name. This is presentation
@@ -92,6 +115,19 @@ mod tests {
         assert_eq!(display_model("gpt-5-codex-20260101"), "GPT 5 Codex");
         assert_eq!(display_model("deepseek-v4-pro"), "DeepSeek V4 Pro");
         assert_eq!(display_model("mystery-model"), "Mystery Model");
+    }
+
+    #[test]
+    fn short_names_keep_the_codename_and_fall_back_to_display() {
+        assert_eq!(display_model_short("gpt-6-astra"), "Astra");
+        assert_eq!(display_model_short("gpt-5.6-terra"), "Terra");
+        assert_eq!(display_model_short("gpt-5-codex-20260101"), "Codex");
+        assert_eq!(display_model_short("claude-opus-4-6"), "Opus");
+        assert_eq!(display_model_short("claude-fable-5-1"), "Fable");
+        assert_eq!(display_model_short("sonnet"), "Sonnet");
+        assert_eq!(display_model_short("gpt-5"), "GPT 5");
+        assert_eq!(display_model_short("anthropic-claude-4-8"), "Claude 4.8");
+        assert_eq!(display_model_short("deepseek-v4-pro"), "DeepSeek V4 Pro");
     }
 
     #[test]
