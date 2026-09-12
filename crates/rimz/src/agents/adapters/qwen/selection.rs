@@ -18,17 +18,17 @@ const ALIBABA_CN_ENDPOINT: &str = "https://coding.dashscope.aliyuncs.com/v1";
 const ACCOUNT_KEY_DOMAIN: &[u8] = b"rimz:qwen-provider-account:v1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AlibabaRegion {
+pub(super) enum AlibabaRegion {
     International,
     China,
 }
 
 impl AlibabaRegion {
-    pub(crate) fn scope(self) -> ProviderAccountScope {
+    fn scope(self) -> ProviderAccountScope {
         ProviderAccountScope::sub_provider("alibaba", self.variant())
     }
 
-    pub(crate) fn variant(self) -> &'static str {
+    fn variant(self) -> &'static str {
         match self {
             Self::International => "international",
             Self::China => "china",
@@ -44,7 +44,7 @@ impl AlibabaRegion {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SelectedProvider {
+pub(super) enum SelectedProvider {
     Alibaba(AlibabaRegion),
     OpenAi,
     Anthropic,
@@ -92,9 +92,9 @@ impl CredentialSource {
 }
 
 #[derive(Clone)]
-pub(crate) struct Selection {
-    pub(crate) provider: SelectedProvider,
-    pub(crate) credential: String,
+pub(super) struct Selection {
+    pub(super) provider: SelectedProvider,
+    pub(super) credential: String,
     credential_key: String,
     credential_source: CredentialSource,
 }
@@ -110,15 +110,15 @@ impl std::fmt::Debug for Selection {
 }
 
 impl Selection {
-    pub(crate) fn scope(&self) -> ProviderAccountScope {
+    fn scope(&self) -> ProviderAccountScope {
         self.provider.scope()
     }
 
-    pub(crate) fn credentials_stamp(&self) -> Option<u64> {
+    fn credentials_stamp(&self) -> Option<u64> {
         self.credential_source.stamp()
     }
 
-    pub(crate) fn account_key(&self) -> String {
+    fn account_key(&self) -> String {
         let (provider, variant) = match self.provider {
             SelectedProvider::Alibaba(region) => ("alibaba", region.variant()),
             SelectedProvider::OpenAi => ("openai", "direct"),
@@ -139,7 +139,7 @@ impl Selection {
         hex::encode(hasher.finalize())
     }
 
-    pub(crate) fn account_usage_identity(&self) -> crate::agents::AccountUsageIdentity {
+    pub(super) fn account_usage_identity(&self) -> crate::agents::AccountUsageIdentity {
         crate::agents::AccountUsageIdentity {
             scope: self.scope(),
             account_key: Some(self.account_key()),
@@ -147,7 +147,7 @@ impl Selection {
         }
     }
 
-    pub(crate) fn account(&self) -> AgentAccount {
+    pub(super) fn account(&self) -> AgentAccount {
         AgentAccount {
             scope: self.scope(),
             plan: (!matches!(self.provider, SelectedProvider::Alibaba(_)))
@@ -162,7 +162,7 @@ impl Selection {
 }
 
 #[derive(Debug)]
-pub(crate) enum SelectionState {
+pub(super) enum SelectionState {
     Found(Selection),
     LoggedOut,
     Unavailable,
@@ -207,7 +207,7 @@ struct ModelProvider {
     env_key: Option<String>,
 }
 
-pub(crate) fn resolve() -> SelectionState {
+pub(super) fn resolve() -> SelectionState {
     let Ok(settings_path) = super::install::qwen_settings_path() else {
         return SelectionState::Unavailable;
     };
@@ -223,7 +223,7 @@ pub(crate) fn resolve() -> SelectionState {
 /// Prove the exact Alibaba account selected by one fresh managed launch.
 /// Ambiguous Qwen configuration layers and mutable provider overrides remain
 /// unresolved rather than borrowing the passive dashboard selection.
-pub(crate) fn resolve_managed_launch(
+pub(super) fn resolve_managed_launch(
     cwd: &Path,
     env: &BTreeMap<String, String>,
     model: Option<&str>,

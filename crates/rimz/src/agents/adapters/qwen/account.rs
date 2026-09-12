@@ -2,7 +2,7 @@
 
 use crate::agents::account::AccountProbe;
 
-pub(crate) fn probe() -> AccountProbe {
+pub(super) fn probe() -> AccountProbe {
     match super::selection::resolve() {
         super::selection::SelectionState::Found(selection) => {
             AccountProbe::Found(selection.account())

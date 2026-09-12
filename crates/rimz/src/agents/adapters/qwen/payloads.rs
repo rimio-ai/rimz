@@ -14,63 +14,63 @@ use crate::agents::transcript_fs::{
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct QwenCommon {
+pub(super) struct QwenCommon {
     #[serde(flatten)]
-    pub common: HookEventCommon,
-    pub model: Option<String>,
-    pub agent_id: Option<String>,
-    pub agent_type: Option<String>,
+    pub(super) common: HookEventCommon,
+    pub(super) model: Option<String>,
+    pub(super) agent_id: Option<String>,
+    pub(super) agent_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct QwenSessionStart {
+pub(super) struct QwenSessionStart {
     #[serde(flatten)]
-    pub common: QwenCommon,
-    pub source: SessionSource,
+    pub(super) common: QwenCommon,
+    pub(super) source: SessionSource,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct QwenUserPromptSubmit {
-    pub prompt: Option<String>,
+pub(super) struct QwenUserPromptSubmit {
+    pub(super) prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct QwenToolUse {
-    pub tool_name: Option<String>,
-    pub tool_input: Option<Value>,
+pub(super) struct QwenToolUse {
+    pub(super) tool_name: Option<String>,
+    pub(super) tool_input: Option<Value>,
     #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
-    pub tool_use_id: Option<String>,
+    pub(super) tool_use_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct QwenStop {
-    pub background_tasks: Vec<BackgroundTask>,
-    pub crons: Vec<QwenCron>,
-    pub context_usage: Option<f64>,
-    pub context_limit: Option<u64>,
-    pub input_tokens: Option<u64>,
+pub(super) struct QwenStop {
+    pub(super) background_tasks: Vec<BackgroundTask>,
+    pub(super) crons: Vec<QwenCron>,
+    pub(super) context_usage: Option<f64>,
+    pub(super) context_limit: Option<u64>,
+    pub(super) input_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct QwenCron {
-    pub status: Option<String>,
+pub(super) struct QwenCron {
+    pub(super) status: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct QwenStopFailure {
-    pub error: QwenStopError,
-    pub last_assistant_message: Option<String>,
+pub(super) struct QwenStopFailure {
+    pub(super) error: QwenStopError,
+    pub(super) last_assistant_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum QwenStopError {
+pub(super) enum QwenStopError {
     RateLimit,
     AuthenticationFailed,
     BillingError,
@@ -84,15 +84,15 @@ pub enum QwenStopError {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct QwenSubagent {
+pub(super) struct QwenSubagent {
     #[serde(flatten)]
-    pub common: QwenCommon,
+    pub(super) common: QwenCommon,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct QwenCompact {
-    pub trigger: CompactTrigger,
+pub(super) struct QwenCompact {
+    pub(super) trigger: CompactTrigger,
 }
 
 /// One Qwen session-JSONL record, in the Google `Content` shape Qwen persists.
@@ -100,60 +100,60 @@ pub struct QwenCompact {
 /// typed; every other key is tolerated and ignored.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct TranscriptRecord {
-    pub uuid: Option<String>,
-    pub parent_uuid: Option<String>,
-    pub session_id: Option<String>,
-    pub r#type: Option<String>,
-    pub subtype: Option<String>,
-    pub timestamp: Option<String>,
-    pub cwd: Option<String>,
-    pub model: Option<String>,
+pub(super) struct TranscriptRecord {
+    pub(super) uuid: Option<String>,
+    parent_uuid: Option<String>,
+    pub(super) session_id: Option<String>,
+    pub(super) r#type: Option<String>,
+    subtype: Option<String>,
+    pub(super) timestamp: Option<String>,
+    pub(super) cwd: Option<String>,
+    pub(super) model: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
-    pub context_window_size: Option<u64>,
+    pub(super) context_window_size: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
-    pub usage_metadata: Option<TranscriptUsage>,
-    pub message: TranscriptContent,
-    pub is_sidechain: Option<bool>,
-    pub agent_id: Option<String>,
+    pub(super) usage_metadata: Option<TranscriptUsage>,
+    pub(super) message: TranscriptContent,
+    pub(super) is_sidechain: Option<bool>,
+    pub(super) agent_id: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
-    pub system_payload: Option<TranscriptSystemPayload>,
+    system_payload: Option<TranscriptSystemPayload>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct TranscriptSystemPayload {
+struct TranscriptSystemPayload {
     #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
-    pub custom_title: Option<String>,
+    custom_title: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct TranscriptUsage {
+pub(super) struct TranscriptUsage {
     #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
-    pub prompt_token_count: Option<u64>,
+    pub(super) prompt_token_count: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
-    pub cached_content_token_count: Option<u64>,
+    pub(super) cached_content_token_count: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
-    pub candidates_token_count: Option<u64>,
+    pub(super) candidates_token_count: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
-    pub thoughts_token_count: Option<u64>,
+    pub(super) thoughts_token_count: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
-    pub total_token_count: Option<u64>,
+    pub(super) total_token_count: Option<u64>,
 }
 
 impl TranscriptUsage {
-    pub fn uncached_prompt(&self) -> u64 {
+    pub(super) fn uncached_prompt(&self) -> u64 {
         self.prompt_token_count
             .unwrap_or(0)
             .saturating_sub(self.cache_read())
     }
 
-    pub fn cache_read(&self) -> u64 {
+    pub(super) fn cache_read(&self) -> u64 {
         self.cached_content_token_count.unwrap_or(0)
     }
 
-    pub fn output(&self) -> u64 {
+    pub(super) fn output(&self) -> u64 {
         normalized_generated_output(
             self.prompt_token_count,
             self.candidates_token_count,
@@ -163,7 +163,7 @@ impl TranscriptUsage {
         .unwrap_or(0)
     }
 
-    pub fn live_total(&self) -> Option<u64> {
+    pub(super) fn live_total(&self) -> Option<u64> {
         self.total_token_count.or_else(|| {
             self.prompt_token_count
                 .map(|prompt| prompt.saturating_add(self.output()))
@@ -197,17 +197,17 @@ pub(super) fn normalized_generated_output(
 }
 
 #[derive(Debug, Default)]
-pub struct FoldedTranscript {
-    pub physical: Vec<TranscriptRecord>,
+pub(super) struct FoldedTranscript {
+    pub(super) physical: Vec<TranscriptRecord>,
     active_root: Vec<usize>,
 }
 
 impl FoldedTranscript {
-    pub fn active_root(&self) -> impl DoubleEndedIterator<Item = &TranscriptRecord> {
+    pub(super) fn active_root(&self) -> impl DoubleEndedIterator<Item = &TranscriptRecord> {
         self.active_root.iter().map(|index| &self.physical[*index])
     }
 
-    pub fn latest_active_assistant_with_usage(&self) -> Option<&TranscriptRecord> {
+    pub(super) fn latest_active_assistant_with_usage(&self) -> Option<&TranscriptRecord> {
         self.active_root().rev().find(|record| {
             record.r#type.as_deref() == Some("assistant")
                 && record.agent_id.is_none()
@@ -216,7 +216,7 @@ impl FoldedTranscript {
         })
     }
 
-    pub fn latest_active_custom_title(&self) -> Option<&str> {
+    pub(super) fn latest_active_custom_title(&self) -> Option<&str> {
         self.active_root().rev().find_map(|record| {
             if record.r#type.as_deref() != Some("system")
                 || record.subtype.as_deref() != Some("custom_title")
@@ -236,7 +236,7 @@ impl FoldedTranscript {
 
 /// Parse complete JSONL and select the latest root record's UUID ancestry.
 /// Legacy transcripts without a usable root UUID retain physical ordering.
-pub fn fold_transcript(text: &str) -> FoldedTranscript {
+pub(super) fn fold_transcript(text: &str) -> FoldedTranscript {
     let physical = text
         .lines()
         .map(str::trim)
@@ -286,21 +286,21 @@ pub fn fold_transcript(text: &str) -> FoldedTranscript {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct QwenSubagentMeta {
-    pub description: Option<String>,
-    pub agent_type: Option<String>,
-    pub subagent_name: Option<String>,
-    pub persisted_cli_flags: QwenPersistedCliFlags,
-    pub created_at: Option<String>,
+pub(super) struct QwenSubagentMeta {
+    pub(super) description: Option<String>,
+    pub(super) agent_type: Option<String>,
+    pub(super) subagent_name: Option<String>,
+    pub(super) persisted_cli_flags: QwenPersistedCliFlags,
+    pub(super) created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct QwenPersistedCliFlags {
-    pub model: Option<String>,
+pub(super) struct QwenPersistedCliFlags {
+    pub(super) model: Option<String>,
 }
 
-pub fn read_subagent_meta(
+pub(super) fn read_subagent_meta(
     transcript_path: &str,
     session_id: &str,
     agent_id: &str,
@@ -331,15 +331,15 @@ fn sanitize_filename_component(value: &str) -> String {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct TranscriptContent {
-    pub parts: Vec<TranscriptPart>,
+pub(super) struct TranscriptContent {
+    parts: Vec<TranscriptPart>,
 }
 
 impl TranscriptContent {
     /// Join the record's visible text, newest model thinking excluded. Thought
     /// parts (`thought: true`) and `functionCall`/`functionResponse` parts carry
     /// no user-visible prose, so only non-thought `text` parts contribute.
-    pub fn visible_text(&self) -> String {
+    pub(super) fn visible_text(&self) -> String {
         self.parts
             .iter()
             .filter(|part| part.thought != Some(true))
@@ -354,14 +354,14 @@ impl TranscriptContent {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct TranscriptPart {
-    pub text: Option<String>,
-    pub thought: Option<bool>,
+struct TranscriptPart {
+    text: Option<String>,
+    thought: Option<bool>,
 }
 
 macro_rules! parse_fn {
     ($name:ident, $ty:ty) => {
-        pub fn $name(payload: &Value) -> $ty {
+        pub(super) fn $name(payload: &Value) -> $ty {
             serde_json::from_value(payload.clone()).unwrap_or_default()
         }
     };

@@ -1,15 +1,15 @@
 //! Qwen Code hook, context, account, and spend adapter.
 
-pub(crate) mod account;
+mod account;
 mod alibaba_usage;
 mod ask;
 mod install;
-pub(crate) mod payloads;
+mod payloads;
 mod selection;
-pub(crate) mod spend;
+mod spend;
 mod statusline;
 
-pub(crate) use crate::agents::capabilities::*;
+use crate::agents::capabilities::*;
 
 use std::path::{Path, PathBuf};
 
@@ -291,7 +291,7 @@ const STATUS_LINE: super::managed_statusline::ManagedStatusLineSpec =
     };
 
 #[derive(Clone, Debug, Default)]
-pub struct QwenAdapter;
+pub(in crate::agents) struct QwenAdapter;
 
 fn qwen_lifecycle(
     adapter: &QwenAdapter,

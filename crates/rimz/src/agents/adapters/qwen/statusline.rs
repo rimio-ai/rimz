@@ -15,8 +15,8 @@ use crate::agents::transcript_fs::deserialize_optional_u64_lossy;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
-pub(crate) struct StatuslinePayload {
-    pub(crate) session_id: Option<String>,
+pub(super) struct StatuslinePayload {
+    pub(super) session_id: Option<String>,
     version: Option<String>,
     model: Model,
     context_window: ContextWindow,
@@ -147,7 +147,7 @@ fn model_display_name(value: Option<String>) -> Option<String> {
 }
 
 impl StatuslinePayload {
-    pub(crate) fn cost(&self, prices: &PriceBook) -> Option<AgentCost> {
+    pub(super) fn cost(&self, prices: &PriceBook) -> Option<AgentCost> {
         // This provider statusline is the sanctioned live-card cost overlay.
         let mut total_cost_usd = 0.0;
         for (model, metrics) in &self.metrics.models {
@@ -176,7 +176,7 @@ impl StatuslinePayload {
         })
     }
 
-    pub(crate) fn into_context(self, source: &str, observed_at: Timestamp) -> AgentContext {
+    pub(super) fn into_context(self, source: &str, observed_at: Timestamp) -> AgentContext {
         let tokens = (self.context_window.context_window_size.is_some()
             || self.context_window.used_percentage.is_some()
             || self.context_window.remaining_percentage.is_some()
