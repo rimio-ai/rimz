@@ -4,6 +4,8 @@
 
 Qwen Code is a standalone, eagerly registered adapter. RimZ installs native hooks in `~/.qwen/settings.json` (or `$QWEN_HOME/settings.json`), wraps a command-mode `ui.statusLine`, and reads session JSONL from the Qwen runtime tree.
 
+Only the registry reaches the concrete adapter. Effective selection, Alibaba quota, payloads, statusline projection, installation, and spend stay private to the Qwen adapter; other modules consume the provider-neutral capabilities.
+
 ## Hooks and lifecycle
 
 | Native event | RimZ signal |

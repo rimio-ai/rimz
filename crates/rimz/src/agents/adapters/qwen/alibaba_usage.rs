@@ -15,7 +15,7 @@ const API: &str = "queryCodingPlanInstanceInfoV2";
 const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum Error {
+enum Error {
     #[error("Alibaba Coding Plan API key rejected")]
     AuthRejected,
     #[error("Alibaba Coding Plan API-key quota is unavailable for this region")]
@@ -28,7 +28,7 @@ pub(crate) enum Error {
     Schema { shape: String },
 }
 
-pub(crate) fn probe(selection: Selection) -> AccountUsageProbe {
+pub(super) fn probe(selection: Selection) -> AccountUsageProbe {
     let identity = selection.account_usage_identity();
     let SelectedProvider::Alibaba(region) = selection.provider else {
         return AccountUsageProbe::Unsupported;
@@ -133,10 +133,7 @@ struct QueryRequest<'a> {
     commodity_code: &'a str,
 }
 
-pub(crate) fn parse_response(
-    body: &str,
-    _region: AlibabaRegion,
-) -> Result<AccountUsageSnapshot, Error> {
+fn parse_response(body: &str, _region: AlibabaRegion) -> Result<AccountUsageSnapshot, Error> {
     let root: Value = serde_json::from_str(body).map_err(|_| Error::Schema {
         shape: "invalid-json".to_owned(),
     })?;

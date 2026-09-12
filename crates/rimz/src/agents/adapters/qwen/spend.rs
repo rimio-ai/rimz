@@ -21,7 +21,7 @@ pub(super) fn runtime_base() -> PathBuf {
 
 /// Qwen rewinds can invalidate any earlier root assistant, so a readable file
 /// is cold-folded and atomically replaces that file's cached entry set.
-pub(crate) fn parse_qwen_spend(
+pub(super) fn parse_qwen_spend(
     path: &Path,
     _resume: Option<&SpendCursor>,
     prices: &PriceBook,
