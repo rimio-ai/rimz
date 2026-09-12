@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 
 use super::{
-    ResumePromptMode, preflight_account_budgets, resume_prompt_mode, write_project_trust_offer_to,
+    ResumePromptMode, preflight_machine_accounts, resume_prompt_mode, write_project_trust_offer_to,
 };
 
 use rimz::trust::{BirthPromptOffer, SurfaceSummary};
 
 #[test]
-fn account_budget_preflight_propagates_only_unsupported_caps() {
+fn machine_account_preflight_propagates_only_account_config_errors() {
     let path = PathBuf::from("/tmp/config.toml");
     let account_error = rimz::config::ConfigErr::AccountBudget {
         path: path.clone(),
@@ -15,13 +15,20 @@ fn account_budget_preflight_propagates_only_unsupported_caps() {
             kind: "cursor".to_owned(),
         },
     };
-    assert!(preflight_account_budgets(Err(account_error)).is_err());
+    assert!(preflight_machine_accounts(Err(account_error)).is_err());
+    let login_error = rimz::config::ConfigErr::Account {
+        path: path.clone(),
+        source: Box::new(rimz::agents::LoginConfigErr::ReservedName {
+            kind: rimz::ids::AgentKind::new_unchecked("claude"),
+        }),
+    };
+    assert!(preflight_machine_accounts(Err(login_error)).is_err());
 
     let unrelated = rimz::config::ConfigErr::Io {
         path,
         source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
     };
-    assert!(preflight_account_budgets(Err(unrelated)).is_ok());
+    assert!(preflight_machine_accounts(Err(unrelated)).is_ok());
 }
 
 #[test]

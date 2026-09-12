@@ -28,7 +28,7 @@ These repair or clean an installation without changing your configuration.
 rimz update [--version <TAG>]
 rimz reload [--repair]
 rimz sidebar repair
-rimz reset [--yes] [--no-start] [--hard] [PATH]
+rimz reset [--yes] [--no-start] [--hard] [--account <KIND=NAME>]... [PATH]
 rimz gc [--older-than <DURATION>] [--dry-run] [--json]
 rimz uninstall [--state] [--config] [--all] [--keep-binary] [--yes]
 ```
@@ -39,7 +39,7 @@ rimz uninstall [--state] [--config] [--all] [--keep-binary] [--yes]
 
 `sidebar repair` is the standalone structural recovery for missing, duplicate, mis-docked, or wedged sidebars, using add-before-close and heartbeat verification for replacements. Its Zellij presence-liveness gate applies only to this repair transaction and cannot block build publication. `reload --repair` is sugar that completes the upgrade transaction and then invokes this same repair path as an independent operation. Sidebar reload and repair behavior is in [sidebar.md](../../internals/sidebar/sidebar.md).
 
-`reset` is the escape hatch for a wedged room. It resolves `PATH` as the cwd, tears down the session, purges the resurrection cache, archives records, clears coordination state, sweeps orphaned processes, then rebuilds and reattaches by default. Durable history is archived, not deleted, so a reset room comes up empty but its records survive. `--yes` skips the prompt (required off a TTY), `--no-start` stops after teardown and prints the rerun hint, and `--hard` also removes the agent carryover (a plain reset keeps it for history but still starts empty).
+`reset` is the escape hatch for a wedged room. It resolves `PATH` as the cwd, tears down the session, purges the resurrection cache, archives records, clears coordination state, sweeps orphaned processes, then rebuilds and reattaches by default. Durable history is archived, not deleted, so a reset room comes up empty but its records survive. `--yes` skips the prompt (required off a TTY), `--no-start` stops after teardown and prints the rerun hint, and `--hard` also removes the agent carryover (a plain reset keeps it for history but still starts empty). Reset clears the room's recorded accounts; `--account <KIND=NAME>` rebuilds the room under that account, the one way to change a room's accounts.
 
 `gc` removes stale runtime state older than `--older-than` (default `24h`) — runtime liveness hints, not durable records. One run:
 

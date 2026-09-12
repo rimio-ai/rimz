@@ -11,7 +11,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use rimz::ids::{MuxName, WorkspaceId};
+use rimz::ids::{MuxName, RoomLogins, WorkspaceId};
 use rimz::room::session::{
     MissingSessionReport, ensure_single_backend_room, pick_mux_for_session, retire_renamed_session,
     session_probe_retry_timeout, session_probe_timeout, workspace_record_for_session,
@@ -411,23 +411,12 @@ enum ReadyRoom {
 
 fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom> {
     let mut machine_config = machine_config();
-    let background_view = if matches!(
+    if matches!(
         entry,
         RoomEntry::Start { .. } | RoomEntry::StartDetached { .. }
     ) {
-        preflight_account_budgets(rimz::config::MachineConfig::load())?;
-        // Fail-fast precondition for installed agents: fixable host misconfiguration
-        // aborts the launch here with the fix, before hook-install or session side
-        // effects. An enabled host whose agent is not installed is an inert toggle,
-        // skipped here so the room still starts; `rimz doctor` surfaces it.
-        rimz::remote_control::prepare_hosts(&machine_config.remote_control);
-        let readiness =
-            rimz::remote_control::ReadinessSnapshot::probe(&machine_config.remote_control);
-        readiness.start_gate()?;
-        Some(readiness)
-    } else {
-        None
-    };
+        preflight_machine_accounts(rimz::config::MachineConfig::load())?;
+    }
 
     let mux = match &entry {
         RoomEntry::Start { mux, .. } | RoomEntry::StartDetached { mux, .. } => *mux,
@@ -526,6 +515,27 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         prompt_project_trust(&workspace.project_root);
     }
 
+    let logins = match &entry {
+        RoomEntry::Start { workspace, .. } | RoomEntry::StartDetached { workspace, .. } => Some(
+            resolve_room_logins(&entry, workspace, &machine_config, was_live)?,
+        ),
+        _ => None,
+    };
+    let background_view = if logins.is_some() {
+        // Fail-fast precondition for installed agents: fixable host misconfiguration
+        // aborts the launch here with the fix, before session side effects, and
+        // after account resolution so each host is judged in the home it will run
+        // under. An enabled host whose agent is not installed is an inert toggle,
+        // skipped here so the room still starts; `rimz doctor` surfaces it.
+        rimz::remote_control::prepare_hosts(&machine_config.remote_control);
+        let readiness =
+            rimz::remote_control::ReadinessSnapshot::probe(&machine_config.remote_control);
+        readiness.start_gate()?;
+        Some(readiness)
+    } else {
+        None
+    };
+
     let ready = match &entry {
         RoomEntry::Start { workspace, .. } | RoomEntry::StartDetached { workspace, .. } => {
             let mut context = RoomContext::from_resolved(
@@ -535,6 +545,9 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                 RoomSizing::Birth,
             )?;
             context.claim_owner()?;
+            if let Some(logins) = &logins {
+                context.freeze_logins(logins)?;
+            }
             birth_managed_room(
                 &mut context,
                 preflight_health,
@@ -694,13 +707,61 @@ fn birth_managed_room(
     Ok(())
 }
 
-fn preflight_account_budgets(
+fn preflight_machine_accounts(
     config: rimz::config::Result<rimz::config::MachineConfig>,
 ) -> Result<()> {
     match config {
-        Err(error @ rimz::config::ConfigErr::AccountBudget { .. }) => Err(error.into()),
+        Err(
+            error @ (rimz::config::ConfigErr::AccountBudget { .. }
+            | rimz::config::ConfigErr::Account { .. }),
+        ) => Err(error.into()),
         Ok(_) | Err(_) => Ok(()),
     }
+}
+
+/// The accounts this room launches under: the frozen selection of a room
+/// already born, else `--account` over the trusted project's `[accounts]` over
+/// the provider's own home. Every named account must be ready to launch into,
+/// so a missing home or hook set refuses here with its fix.
+fn resolve_room_logins(
+    entry: &RoomEntry<'_>,
+    workspace: &rimz::ResolvedWorkspace,
+    machine_config: &rimz::config::MachineConfig,
+    was_live: bool,
+) -> Result<RoomLogins> {
+    let requested = match entry {
+        RoomEntry::Start { args, .. } => crate::cli::accounts::requested_logins(&args.account)?,
+        _ => RoomLogins::new(),
+    };
+    let catalog = rimz::agents::LoginCatalog::from_config(&machine_config.accounts)?;
+    let state = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing store paths")?;
+    let mut frozen = rimz::workspace::record::read_optional(&state.workspace_record)
+        .context("reading the room's accounts")?
+        .and_then(|record| record.logins);
+    if frozen.is_none() && was_live {
+        // A room already running before accounts were recorded runs under the
+        // provider's own homes; the project cannot re-point it mid-life.
+        frozen = Some(catalog.birth_selection(None, &RoomLogins::new(), &RoomLogins::new())?);
+    }
+    let project = match frozen {
+        Some(_) => RoomLogins::new(),
+        None => match rimz::trust::project_logins(&workspace.project_root)? {
+            rimz::trust::ProjectLogins::Unconfigured => RoomLogins::new(),
+            rimz::trust::ProjectLogins::Apply(logins) => logins,
+            rimz::trust::ProjectLogins::Blocked(state) => bail!(
+                "project account selections in .rimz/config.toml are {}; {}",
+                state.as_str(),
+                rimz::trust::blocked_fix(state)
+            ),
+        },
+    };
+    let logins = catalog.birth_selection(frozen.as_ref(), &requested, &project)?;
+    let ambient = rimz::agents::ambient_env();
+    for login in catalog.room(&logins)? {
+        login.preflight(&ambient)?;
+    }
+    Ok(logins)
 }
 
 fn run_room_preflights(entry: &RoomEntry<'_>, mux: MuxName) -> Result<()> {

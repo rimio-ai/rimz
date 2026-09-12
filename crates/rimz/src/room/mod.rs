@@ -224,6 +224,18 @@ impl RoomContext {
         Ok(())
     }
 
+    /// Freeze the provider accounts this room launches under, before any
+    /// agent is seeded, so every session it stamps reads the same selection.
+    pub fn freeze_logins(&self, logins: &crate::ids::RoomLogins) -> Result<()> {
+        let paths = StatePaths::for_workspace(self.workspace.workspace_id.clone())
+            .context("preparing store paths")?;
+        let store = Store::open(paths, self.runtime.clone()).context("opening store")?;
+        store
+            .record_room_logins(&self.workspace, logins)
+            .context("recording room accounts")?;
+        Ok(())
+    }
+
     pub fn workspace_id(&self) -> &WorkspaceId {
         &self.workspace.workspace_id
     }

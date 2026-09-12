@@ -11,7 +11,7 @@
 //!
 //! [`LaunchCapability::config_home`]: crate::agents::capabilities::LaunchCapability::config_home
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::config::AccountsConfig;
@@ -174,6 +174,7 @@ pub fn default_named_home(kind: &AgentKind, name: &LoginName) -> PathBuf {
 #[derive(Clone, Debug, Default)]
 pub struct LoginCatalog {
     logins: BTreeMap<LoginKey, ProviderLogin>,
+    account_kinds: BTreeSet<AgentKind>,
 }
 
 impl LoginCatalog {
@@ -189,12 +190,14 @@ impl LoginCatalog {
         home: Option<&Path>,
     ) -> Result<Self, LoginConfigErr> {
         let mut logins = BTreeMap::new();
+        let mut account_kinds = BTreeSet::new();
         for kind in crate::agents::known_kinds().map(AgentKind::new_unchecked) {
             let key = LoginKey::default_for(kind.clone());
             logins.insert(key, ProviderLogin::default_for(kind.clone()));
             let Some(declared) = accounts.named(&kind) else {
                 continue;
             };
+            account_kinds.insert(kind.clone());
             let native = native_home(&kind, home).map(|path| normalize_path_lexical(&path));
             let mut claimed: BTreeMap<PathBuf, LoginName> = BTreeMap::new();
             for (name, account) in declared {
@@ -237,7 +240,10 @@ impl LoginCatalog {
                 logins.insert(login.key(), login);
             }
         }
-        Ok(Self { logins })
+        Ok(Self {
+            logins,
+            account_kinds,
+        })
     }
 
     /// The login a kind launches under when the room names `name`.
@@ -283,6 +289,47 @@ impl LoginCatalog {
         }
     }
 
+    /// The selection a room is born with. A frozen selection stands, and a
+    /// requested account that disagrees with it is refused; otherwise the
+    /// requested accounts win over the project's, which win over `default`.
+    /// Every kind that can carry an account gets an explicit entry, so the
+    /// frozen record reads the same whichever layer chose it.
+    pub fn birth_selection(
+        &self,
+        frozen: Option<&RoomLogins>,
+        requested: &RoomLogins,
+        project: &RoomLogins,
+    ) -> Result<RoomLogins, BirthLoginErr> {
+        for (kind, name) in requested.iter().chain(project) {
+            self.select(kind, name)?;
+        }
+        if let Some(frozen) = frozen {
+            for (kind, name) in requested {
+                let current = frozen.get(kind).cloned().unwrap_or_default();
+                if &current != name {
+                    return Err(BirthLoginErr::Frozen {
+                        kind: kind.clone(),
+                        current,
+                        requested: name.clone(),
+                    });
+                }
+            }
+            return Ok(frozen.clone());
+        }
+        Ok(self
+            .account_kinds
+            .iter()
+            .map(|kind| {
+                let name = requested
+                    .get(kind)
+                    .or_else(|| project.get(kind))
+                    .cloned()
+                    .unwrap_or_default();
+                (kind.clone(), name)
+            })
+            .collect())
+    }
+
     /// Every login, defaults included, in `<kind>@<name>` order.
     pub fn all(&self) -> impl Iterator<Item = &ProviderLogin> {
         self.logins.values()
@@ -295,6 +342,100 @@ impl LoginCatalog {
             .filter(|login| login.kind() == kind)
             .map(|login| login.name().clone())
             .collect()
+    }
+}
+
+/// A room's account selection that cannot be born.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum BirthLoginErr {
+    #[error(
+        "this room uses {kind} account `{current}`, not `{requested}`; accounts are fixed until reset, so run `rimz reset --account {kind}={requested}`"
+    )]
+    Frozen {
+        kind: AgentKind,
+        current: LoginName,
+        requested: LoginName,
+    },
+    #[error(transparent)]
+    Login(#[from] LoginErr),
+    #[error(
+        "{kind} account `{name}` home `{}` is not a directory; run `rimz accounts add {kind} {name}`",
+        home.display()
+    )]
+    MissingHome {
+        kind: AgentKind,
+        name: LoginName,
+        home: PathBuf,
+    },
+    #[error(
+        "RimZ hooks are missing for {kind} account `{name}` at `{}`; run `rimz accounts add {kind} {name}`",
+        home.display()
+    )]
+    HooksMissing {
+        kind: AgentKind,
+        name: LoginName,
+        home: PathBuf,
+    },
+    #[error(
+        "RimZ hooks for {kind} account `{name}` at `{}` are untrusted ({hooks}); {fix}, started as `{env_key}={} {kind}`",
+        home.display(),
+        home.display()
+    )]
+    HooksUntrusted {
+        kind: AgentKind,
+        name: LoginName,
+        home: PathBuf,
+        env_key: &'static str,
+        hooks: String,
+        fix: String,
+    },
+}
+
+impl ProviderLogin {
+    /// Fail fast on a named account a room cannot launch into: its home must
+    /// exist and carry trusted RimZ hooks. The default account keeps the
+    /// provider's own hook flow, which `rimz start` already walks.
+    pub fn preflight(&self, ambient: &BTreeMap<String, String>) -> Result<(), BirthLoginErr> {
+        let (Some(home), Some(adapter)) = (&self.home, crate::agents::find_definition(&self.kind))
+        else {
+            return Ok(());
+        };
+        let kind = self.kind.clone();
+        let name = self.name.clone();
+        let path = home.path.clone();
+        if !path.is_dir() {
+            return Err(BirthLoginErr::MissingHome {
+                kind,
+                name,
+                home: path,
+            });
+        }
+        match crate::agents::preflight_hooks(
+            adapter,
+            &self.env(ambient),
+            crate::agents::TurnLifecycleNeed::None,
+        ) {
+            Ok(()) | Err(crate::agents::HookPreflightErr::TurnLifecycleUnsupported { .. }) => {
+                Ok(())
+            }
+            Err(crate::agents::HookPreflightErr::HooksMissing) => {
+                Err(BirthLoginErr::HooksMissing {
+                    kind,
+                    name,
+                    home: path,
+                })
+            }
+            Err(crate::agents::HookPreflightErr::HooksUntrusted { hooks, fix }) => {
+                Err(BirthLoginErr::HooksUntrusted {
+                    kind,
+                    name,
+                    home: path,
+                    env_key: home.env_key,
+                    hooks,
+                    fix,
+                })
+            }
+        }
     }
 }
 
