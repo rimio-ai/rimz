@@ -888,6 +888,21 @@ fn same_kind_and_chained_overrides_resolve_without_drops() {
         ("switch", profile("switch-base")),
         ("switch-base", profile("codex")),
     ]);
+    for (agent_override, chain, kind) in [
+        (None, vec!["planner", "claude"], "claude"),
+        (Some("claude"), vec!["planner", "claude"], "claude"),
+        (Some(" codex "), vec!["planner", "codex"], "codex"),
+        (
+            Some("switch"),
+            vec!["planner", "switch", "switch-base", "codex"],
+            "codex",
+        ),
+    ] {
+        let resolved = resolve_profile_rebased("planner", agent_override, &profiles).unwrap();
+        assert_eq!(resolved.chain, chain);
+        assert_eq!(resolved.kind, kind);
+        assert_eq!(resolved.chain.last().unwrap(), resolved.kind.as_str());
+    }
     let same = resolve_spec_with_agent_override(
         Some("planner"),
         &profiles,

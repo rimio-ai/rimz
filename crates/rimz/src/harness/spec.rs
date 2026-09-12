@@ -167,7 +167,7 @@ impl ResolvedProfile {
     fn bare(kind: &str) -> Self {
         Self {
             kind: AgentKind::new_unchecked(kind),
-            chain: Vec::new(),
+            chain: vec![kind.to_owned()],
             launch: crate::agents::LaunchParams::default(),
             auto_compact: None,
             system_prompt_file: None,
@@ -669,21 +669,7 @@ pub fn resolve_spec_with_agent_override(
     validate_profile_names(profiles)?;
     validate_command_names(commands)?;
     validate_team_names(teams)?;
-    let agent_override = agent_override
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    if let Some(value) = agent_override
-        && !profiles.0.contains_key(value)
-        && crate::agents::find_definition(value).is_none()
-    {
-        return Err(LayoutErr::UnknownAgentOverride {
-            value: value.to_owned(),
-            valid: valid_agent_overrides(profiles),
-        });
-    }
-    let base_override = agent_override
-        .map(|value| resolve_profile(value, profiles))
-        .transpose()?;
+    let base_override = resolve_agent_override(agent_override, profiles)?;
     let Some(raw) = arg.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(LayoutSpec::single(Cell::shell()));
     };
@@ -1060,6 +1046,35 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
         })?;
     normalize_budget(&mut resolved.launch.budget, name)?;
     Ok(resolved)
+}
+
+/// Resolve a profile with the same replacement base used by launch layouts.
+pub fn resolve_profile_rebased(
+    name: &str,
+    agent_override: Option<&str>,
+    profiles: &ProfilesConfig,
+) -> Result<ResolvedProfile> {
+    let base = resolve_agent_override(agent_override, profiles)?;
+    Ok(rebase_onto(resolve_profile(name, profiles)?, base.as_ref()))
+}
+
+fn resolve_agent_override(
+    agent_override: Option<&str>,
+    profiles: &ProfilesConfig,
+) -> Result<Option<ResolvedProfile>> {
+    let Some(value) = agent_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    if !profiles.0.contains_key(value) && crate::agents::find_definition(value).is_none() {
+        return Err(LayoutErr::UnknownAgentOverride {
+            value: value.to_owned(),
+            valid: valid_agent_overrides(profiles),
+        });
+    }
+    resolve_profile(value, profiles).map(Some)
 }
 
 fn normalize_budget(budget: &mut Option<String>, profile: &str) -> Result<()> {
@@ -1834,6 +1849,8 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     let same_kind = original.kind == base.kind;
 
     original.kind.clone_from(&base.kind);
+    original.chain.pop();
+    original.chain.extend_from_slice(&base.chain);
     if original.skills.is_none() {
         original.skills.clone_from(&base.skills);
     }

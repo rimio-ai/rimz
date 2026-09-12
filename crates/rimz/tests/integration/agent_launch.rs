@@ -383,6 +383,10 @@ fn explain_prints_the_plan_without_side_effects() {
              [agents.profiles.writer]\nagent = \"claude\"\nmodel = \"fable\"\neffort = \"high\"\nmode = \"ask\"\n\
              system-prompt-file = {base:?}\nappend-system-prompt-files = [{more:?}]\n\
              [agents.profiles.worker]\nagent = \"writer\"\nskills = []\n\
+             [agents.profiles.fast]\nagent = \"codex\"\n\
+             [agents.profiles.\"duo.lead\"]\nagent = \"claude\"\n\
+             [agents.teams.duo]\nlayout = \"lead\"\n\
+             [[agents.teams.duo.roles]]\nrole = \"lead\"\nprofile = \"duo.lead\"\n\
              [subagents.profiles.scout]\nagent = \"codex\"\ndescription = \"Inspect the code\"\n"
         ),
     )
@@ -543,6 +547,43 @@ fn explain_prints_the_plan_without_side_effects() {
             .any(|arg| arg == "--dangerously-skip-permissions")
     );
     assert!(argv.iter().any(|arg| arg == "--foo"));
+    let team = env
+        .rimz()
+        .args(["agents", "explain", "duo.lead"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let team = String::from_utf8(team).unwrap();
+    assert!(team.contains("duo.lead ← claude"), "{team}");
+    assert!(!team.contains("duo.lead ← duo.lead"), "{team}");
+    for (agent_override, chain) in [
+        (" codex ", serde_json::json!(["worker", "writer", "codex"])),
+        (
+            "fast",
+            serde_json::json!(["worker", "writer", "fast", "codex"]),
+        ),
+    ] {
+        let output = env
+            .rimz()
+            .args([
+                "agents",
+                "explain",
+                "worker",
+                "--agent",
+                agent_override,
+                "--json",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let report: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(report["kind"], "codex");
+        assert_eq!(report["profile"]["chain"], chain);
+    }
     assert!(
         !state.root.exists(),
         "explain created room state or launch events"
