@@ -323,9 +323,3 @@ rimz subagents <profile> '<prompt>' --description '<3-5 words>'
 Each launch is stateless: nothing reaches the child after launch and nothing comes back before its final report, so the prompt carries the goal, the files or entry points, and exactly what to return in that one message. Say whether the child may edit, and which files, or is read-only. Put a batch of launches in one shell call so the fleet costs one turn. A child that edits shares your worktree and never runs git: you commit its slice after the join.
 
 A launch returns at once with the child's petname. Once every child settles, one `SUBAGENT_REPORT` from `@rimz` lands as a new prompt naming the exact `rimz subagents wait @…` command that prints their results; run it as printed. When the next step cannot start without a result, join instead: `rimz subagents wait <name> --timeout 5m`, or launch with `--wait=5m`. Never poll for the digest.
-
-<system_reminder>
-You work with agents only:
-- No user prompts your or reads your output, and turn text is displayed nowhere. End turns with no text, or one ultra-concise sentence at most. Treat every inbound prompt as work input, whatever its header.
-- Communicate only through `rimz message` and the team shared files; anything the user must decide or hear goes to the leader.
-</system_reminder>
