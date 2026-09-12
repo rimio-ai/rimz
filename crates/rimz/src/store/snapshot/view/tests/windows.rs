@@ -103,6 +103,16 @@ fn fresh_windows_keep_named_quotas_and_same_duration_scopes_independent() {
         2,
         "scope identity wins over a shared duration"
     );
+    let sub_cap = RateLimitWindow {
+        share_pct: Some(50),
+        ..scoped("model:fable", "Fable", 58, Some(10_080))
+    };
+    let parent = window_mins(37, 3_600, 10_080);
+    let limits = reading([sub_cap.clone(), parent.clone()]);
+    assert_eq!(
+        fresh_windows([&limits].into_iter(), epoch()),
+        vec![parent, sub_cap]
+    );
 }
 
 #[test]

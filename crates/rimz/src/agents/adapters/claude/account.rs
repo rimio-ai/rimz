@@ -11,12 +11,15 @@ use std::process::{Command, Stdio};
 use serde::Deserialize;
 
 use crate::agents::account::AccountProbe;
-use crate::agents::context::{AgentAccount, RateLimitWindow, WindowSource};
+use crate::agents::context::{AgentAccount, RateLimitWindow, RateLimitWindowScope, WindowSource};
 use crate::agents::payload::non_empty_trimmed;
 
 /// Claude's named subscription budget durations.
 pub(crate) const FIVE_HOUR_MINS: u32 = 5 * 60;
 pub(crate) const SEVEN_DAY_MINS: u32 = 7 * 24 * 60;
+
+/// Anthropic caps a single model at this fixed share of the weekly allowance. The share is account knowledge, absent from the verified 2026-09 usage payload.
+pub(crate) const MODEL_WEEKLY_SHARE_PCT: u8 = 50;
 
 /// Normalize one already-parsed Claude subscription window.
 pub(crate) fn budget_window(
@@ -39,6 +42,24 @@ pub(crate) fn budget_window(
         duration_mins: Some(duration_mins),
         source,
         ..Default::default()
+    })
+}
+
+/// Normalize a model-scoped share using the same rounding and omission rules as the parent budget.
+pub(crate) fn model_sub_cap_window(
+    display_name: &str,
+    utilization: Option<f64>,
+    resets_at: Option<jiff::Timestamp>,
+    duration_mins: u32,
+    source: WindowSource,
+) -> Option<RateLimitWindow> {
+    Some(RateLimitWindow {
+        scope: Some(RateLimitWindowScope {
+            id: format!("model:{}", display_name.to_ascii_lowercase()),
+            label: display_name.to_owned(),
+        }),
+        share_pct: Some(MODEL_WEEKLY_SHARE_PCT),
+        ..budget_window(utilization, resets_at, duration_mins, source)?
     })
 }
 
@@ -164,6 +185,39 @@ mod tests {
     #[test]
     fn budget_window_owns_clamping_omission_and_source() {
         assert!(budget_window(None, None, FIVE_HOUR_MINS, WindowSource::BestEffort).is_none());
+        assert!(
+            model_sub_cap_window(
+                "Fable",
+                None,
+                None,
+                SEVEN_DAY_MINS,
+                WindowSource::Authoritative
+            )
+            .is_none()
+        );
+
+        for utilization in [
+            None,
+            Some(-1.0),
+            Some(0.0),
+            Some(58.0),
+            Some(99.5),
+            Some(100.0),
+            Some(101.0),
+        ] {
+            for source in [WindowSource::BestEffort, WindowSource::Authoritative] {
+                let reset = Some("2026-07-06T12:00:00Z".parse().unwrap());
+                let parent = budget_window(utilization, reset, SEVEN_DAY_MINS, source).unwrap();
+                let sub_cap =
+                    model_sub_cap_window("Fable", utilization, reset, SEVEN_DAY_MINS, source)
+                        .unwrap();
+                assert_eq!(sub_cap.used_percentage, parent.used_percentage);
+                assert_eq!(sub_cap.resets_at, parent.resets_at);
+                assert_eq!(sub_cap.source, parent.source);
+                assert!(sub_cap.sub_cap_of(&parent));
+                assert_eq!(sub_cap.share_pct, Some(50));
+            }
+        }
 
         let reset = "2026-07-06T12:00:00Z".parse().unwrap();
         let window = budget_window(

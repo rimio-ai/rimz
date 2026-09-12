@@ -173,9 +173,21 @@ fn usage_response_maps_windows_and_extra_usage() {
                 "resets_at": "2026-09-21T14:13:20Z"
             },
             "seven_day": {
-                "utilization": 88.4,
+                "utilization": 37.0,
                 "resets_at": "2026-09-27T09:06:40Z"
             },
+            "limits": [
+                {"kind": "session", "percent": 1, "resets_at": "2026-09-21T14:13:20Z"},
+                {"kind": "weekly_all", "percent": 37, "resets_at": "2026-09-27T09:06:40Z"},
+                {
+                    "kind": "weekly_scoped", "group": "weekly", "percent": 58,
+                    "resets_at": "2026-09-27T09:06:40Z", "severity": "normal", "is_active": true,
+                    "scope": {"model": {"id": null, "display_name": "Fable"}, "surface": null}
+                },
+                {"kind": "weekly_scoped", "percent": 58, "scope": null},
+                {"kind": "weekly_scoped", "percent": 58, "scope": {"model": {"id": null}}},
+                {"kind": "weekly_scoped", "percent": 58, "scope": {"model": {"display_name": "  "}}}
+            ],
             "extra_usage": {
                 "is_enabled": true,
                 "used_credits": 725,
@@ -185,6 +197,7 @@ fn usage_response_maps_windows_and_extra_usage() {
     )
     .unwrap();
     let windows = usage.rate_limits.expect("windows");
+    assert_eq!(windows.windows.len(), 3);
     assert_eq!(
         windows.windows[0].duration_mins,
         Some(super::super::account::FIVE_HOUR_MINS)
@@ -198,7 +211,17 @@ fn usage_response_maps_windows_and_extra_usage() {
         windows.windows[1].duration_mins,
         Some(super::super::account::SEVEN_DAY_MINS)
     );
-    assert_eq!(windows.windows[1].used_percentage, Some(88));
+    assert_eq!(windows.windows[1].used_percentage, Some(37));
+    let sub_cap = &windows.windows[2];
+    assert_eq!(
+        sub_cap.key(),
+        crate::agents::context::RateLimitWindowKey::Scope("model:fable".to_owned())
+    );
+    assert_eq!(sub_cap.scope.as_ref().unwrap().label, "Fable");
+    assert_eq!(sub_cap.used_percentage, Some(58));
+    assert_eq!(sub_cap.duration_mins, Some(10_080));
+    assert_eq!(sub_cap.share_pct, Some(50));
+    assert_eq!(sub_cap.resets_at, windows.windows[1].resets_at);
     assert!(
         windows
             .windows

@@ -959,7 +959,7 @@ impl AgentRateLimits {
     }
 }
 
-/// Provider-defined identity and compact presentation label for a named quota.
+/// Provider-defined identity and compact presentation label for a named quota or model sub-cap (`model:<name>`).
 /// The stable `id` participates in fusion and cache identity; `label` is clipped
 /// by the renderer to its fixed three-cell window-label slot.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -978,8 +978,7 @@ pub(crate) enum RateLimitWindowKey {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RateLimitWindow {
-    /// Optional provider-defined identity for quotas that are not temporal
-    /// windows. A scope id is stable across readings; its label is display-only.
+    /// Optional provider-defined identity for named quotas and model sub-caps. A scope id is stable across readings; its label is display-only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<RateLimitWindowScope>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -990,9 +989,12 @@ pub struct RateLimitWindow {
     pub resets_at: Option<Timestamp>,
     /// The temporal window's length in minutes — its identity when `scope` is
     /// absent, the source of its bar label, and the roll-forward length once it
-    /// refills while idle. Named quotas leave it absent.
+    /// refills while idle. Named quotas leave it absent; model sub-caps carry their parent's duration and fold onto its bar.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_mins: Option<u32>,
+    /// A model sub-cap's share of its parent window's allowance. Usage is reported on the sub-cap's own axis; absent shares use the parent's axis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share_pct: Option<u8>,
     /// When this reading was captured. Provenance for fusion, not display. For a
     /// [`WindowSource::BestEffort`] statusline this is *capture* time, not
     /// content time — an idle session re-emits a days-old payload with a fresh
@@ -1063,10 +1065,29 @@ impl RateLimitWindow {
         )
     }
 
-    /// Project this cached reading to `now`: before its reset the reading stands
-    /// unchanged; once the reset passes, a dated sliding window refills and its
-    /// next reset rolls forward by the window length.
+    /// Whether this scoped window partitions the unscoped parent's allowance.
+    pub(crate) fn sub_cap_of(&self, parent: &Self) -> bool {
+        self.scope.is_some()
+            && parent.scope.is_none()
+            && self.duration_mins.is_some()
+            && self.duration_mins == parent.duration_mins
+    }
+
+    /// Remaining budget on the parent window's axis; a spent sub-cap has zero headroom.
+    pub(crate) fn headroom_of_parent(&self) -> Option<u8> {
+        self.used_percentage.map(|used| {
+            (u16::from(self.share_pct.unwrap_or(100)) * u16::from(100 - used.min(100)) / 100) as u8
+        })
+    }
+
+    /// Project this cached reading to `now`: expired scoped readings become unknown until the provider reports again; dated unscoped windows refill and roll forward by their length.
     pub fn projected_at(self, now: Timestamp) -> Self {
+        if self.scope.is_some() && self.resets_at.is_some_and(|reset| reset <= now) {
+            return Self {
+                used_percentage: None,
+                ..self
+            };
+        }
         match (self.resets_at, self.duration_mins) {
             (Some(resets_at), Some(mins)) if resets_at <= now => Self {
                 scope: self.scope,
@@ -1075,6 +1096,7 @@ impl RateLimitWindow {
                     .checked_add(SignedDuration::from_secs(i64::from(mins) * 60))
                     .ok(),
                 duration_mins: Some(mins),
+                share_pct: self.share_pct,
                 observed_at: self.observed_at,
                 source: self.source,
                 lifted: self.lifted,
@@ -1505,11 +1527,14 @@ mod tests {
             window.key(),
             RateLimitWindowKey::Scope("build_minutes".to_owned())
         );
-        assert_eq!(window.clone().projected_at(now), window);
+        let projected = window.clone().projected_at(now);
+        assert_eq!(projected.used_percentage, None);
+        assert_eq!(projected.resets_at, window.resets_at);
 
         let encoded = serde_json::to_value(&window).unwrap();
         assert_eq!(encoded["scope"]["id"], "build_minutes");
         assert_eq!(encoded["scope"]["label"], "bld");
+        assert!(encoded.get("share_pct").is_none());
         assert_eq!(
             serde_json::from_value::<RateLimitWindow>(encoded).unwrap(),
             window
@@ -1524,6 +1549,75 @@ mod tests {
             None,
             "legacy duration-only windows remain wire-compatible"
         );
+        let sub_cap = RateLimitWindow {
+            duration_mins: Some(10_080),
+            share_pct: Some(50),
+            ..window
+        };
+        let encoded = serde_json::to_value(&sub_cap).unwrap();
+        assert_eq!(encoded["share_pct"], 50);
+        assert_eq!(
+            serde_json::from_value::<RateLimitWindow>(encoded).unwrap(),
+            sub_cap
+        );
+        let legacy: RateLimitWindow = serde_json::from_str(r#"{"duration_mins":300}"#).unwrap();
+        assert_eq!(legacy.share_pct, None);
+        assert_eq!(
+            sub_cap
+                .clone()
+                .projected_at(now - SignedDuration::from_secs(2)),
+            sub_cap
+        );
+        let projected = sub_cap.clone().projected_at(now);
+        assert_eq!(projected.used_percentage, None);
+        assert_eq!(projected.resets_at, sub_cap.resets_at);
+        assert_eq!(projected.share_pct, Some(50));
+        let parent = RateLimitWindow {
+            scope: None,
+            ..sub_cap
+        };
+        let projected = parent.projected_at(now);
+        assert_eq!(projected.used_percentage, Some(0));
+        assert_eq!(
+            projected.resets_at,
+            Some(now + SignedDuration::from_secs(10_080 * 60))
+        );
+    }
+
+    #[test]
+    fn sub_cap_headroom_and_parent_matching() {
+        let parent = RateLimitWindow {
+            duration_mins: Some(10_080),
+            ..Default::default()
+        };
+        let mut sub_cap = RateLimitWindow {
+            scope: Some(RateLimitWindowScope {
+                id: "model:fable".to_owned(),
+                label: "Fable".to_owned(),
+            }),
+            duration_mins: parent.duration_mins,
+            share_pct: Some(50),
+            used_percentage: Some(58),
+            ..Default::default()
+        };
+        assert!(sub_cap.sub_cap_of(&parent));
+        assert!(!parent.sub_cap_of(&sub_cap));
+        assert!(!sub_cap.sub_cap_of(&sub_cap));
+        assert_eq!(sub_cap.headroom_of_parent(), Some(21));
+        for used in [100, 101] {
+            sub_cap.used_percentage = Some(used);
+            assert_eq!(sub_cap.headroom_of_parent(), Some(0));
+        }
+        sub_cap.used_percentage = None;
+        assert_eq!(sub_cap.headroom_of_parent(), None);
+        sub_cap.used_percentage = Some(58);
+        sub_cap.share_pct = None;
+        assert_eq!(sub_cap.headroom_of_parent(), Some(42));
+        sub_cap.duration_mins = Some(300);
+        assert!(!sub_cap.sub_cap_of(&parent));
+        sub_cap.duration_mins = None;
+        assert!(!sub_cap.sub_cap_of(&parent));
+        assert!(!parent.sub_cap_of(&parent));
     }
 
     #[test]

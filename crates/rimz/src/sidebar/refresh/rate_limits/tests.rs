@@ -160,6 +160,29 @@ fn scoped_quota_windows_fuse_and_expire_independently() {
     assert_eq!(deployments.resets_at, Some(future));
 }
 #[test]
+fn expired_model_sub_cap_is_unknown_while_live_parent_refills() {
+    let (_dir, workspace, runtime) = runtime();
+    let past = Timestamp::from_second(1_000_000_000).unwrap();
+    let parent = authoritative(rl_window_mins(37, Some(past), 10_080));
+    let sub_cap = RateLimitWindow {
+        duration_mins: Some(10_080),
+        share_pct: Some(50),
+        ..scoped_window("model:fable", "Fable", 58, past)
+    };
+    write_claude_windows(&runtime, vec![parent.clone(), sub_cap]);
+    let mut consumer =
+        snapshot_with_panels(workspace, vec![provider_panel("claude", vec![parent])]);
+    apply_cached_rate_limits(&mut consumer, &runtime);
+    let windows = &consumer.providers[0].windows;
+    assert_eq!(windows.len(), 2);
+    assert_eq!(windows[0].used_percentage, Some(0));
+    assert!(windows[0].resets_at.unwrap() > consumer.now);
+    assert_eq!(windows[1].used_percentage, None);
+    assert_eq!(windows[1].resets_at, None);
+    assert_eq!(windows[1].share_pct, Some(50));
+}
+
+#[test]
 fn producer_persisted_windows_feed_idle_consumers() {
     let (_dir, workspace, runtime) = runtime();
     let future = Timestamp::from_second(4_000_000_000).unwrap();
