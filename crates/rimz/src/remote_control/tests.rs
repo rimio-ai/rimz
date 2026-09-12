@@ -13,6 +13,22 @@ fn host_login_envs_select_each_provider_account() {
 }
 
 #[test]
+fn codex_toggle_off_reaches_every_declared_codex_account() {
+    let machine = crate::config::MachineConfig {
+        accounts: toml::from_str("[codex.work]\nhome = \"/srv/codex-work\"\n").unwrap(),
+        ..Default::default()
+    };
+    let ambient = crate::agents::ambient_env();
+    let mut work = ambient.clone();
+    work.insert("CODEX_HOME".to_owned(), "/srv/codex-work".to_owned());
+    assert_eq!(
+        codex_daemon_envs(&machine, &[], true),
+        vec![ambient.clone()]
+    );
+    assert_eq!(codex_daemon_envs(&machine, &[], false), vec![ambient, work]);
+}
+
+#[test]
 fn host_login_envs_reject_unknown_accounts() {
     let logins = RoomLogins::from([(
         AgentKind::new_unchecked("claude"),
