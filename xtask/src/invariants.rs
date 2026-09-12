@@ -53,6 +53,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_snapshot_json_writes_stay_in_produce(root, &files)?;
     ensure_snapshot_projection_stays_quiet(root, &files)?;
     ensure_diag_writes_stay_in_diag(root, &files)?;
+    ensure_provider_homes_resolve_from_login_env(root, &files)?;
     ensure_sidebar_enrich_folds_before_live_panes(root)?;
     ensure_card_admission_predicate(root)?;
     ensure_config_template_sections(root)?;
@@ -1363,6 +1364,32 @@ fn ensure_diag_writes_stay_in_diag(root: &Path, files: &[PathBuf]) -> Result<()>
             |path| path == diag_module.as_path() || is_docs_or_xtask(root, path),
             "diagnostic log paths belong in crates/rimz/src/diag.rs",
         )?;
+    }
+    Ok(())
+}
+
+/// A provider home is an account: host-side code resolves it from the login
+/// env it is handed, never the process env, or a named account would read the
+/// default home. Only the ambient snapshot in `agents/login.rs` reads the whole
+/// process env; tests may set up their own.
+fn ensure_provider_homes_resolve_from_login_env(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let src = root.join("crates/rimz/src");
+    for key in ["CLAUDE_CONFIG_DIR", "CODEX_HOME"] {
+        for read in [concat!("var", "(\""), concat!("var", "_os(\"")] {
+            ensure_no_match(
+                files,
+                &format!("{read}{key}\""),
+                |path| {
+                    !path.starts_with(&src)
+                        || path.strip_prefix(&src).is_ok_and(path_has_tests_component)
+                        || path
+                            .file_name()
+                            .and_then(OsStr::to_str)
+                            .is_some_and(|name| name == "tests.rs" || name.ends_with("_tests.rs"))
+                },
+                "resolve provider homes through the login env (`agents::login`), not the process env",
+            )?;
+        }
     }
     Ok(())
 }
