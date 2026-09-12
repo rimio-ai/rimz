@@ -221,6 +221,14 @@ fn birth_selection_prefers_requested_over_project_and_keeps_a_frozen_room() {
         catalog.birth_selection(None, &RoomLogins::new(), &unknown),
         Err(BirthLoginErr::Login(LoginErr::Unknown { .. }))
     ));
+    let escape = RoomLogins::from([(kind("claude"), LoginName::default_login())]);
+    assert_eq!(
+        catalog
+            .birth_selection(None, &escape, &unknown)
+            .expect("a flag overrides an undeclared project account")
+            .get(&kind("claude")),
+        Some(&LoginName::default_login())
+    );
 }
 
 #[test]
