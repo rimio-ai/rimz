@@ -139,6 +139,26 @@ rimz agents exec [hidden]
     --worktree-path <WORKTREE_PATH>  [action=set takes=1..=1]
     --zellij  [action=set-true takes=0..=0 global]
 
+rimz agents explain
+    <passthrough>  [action=append takes=1..=inf]
+    <target>  [action=set takes=1..=1 required]
+    --agent <PROFILE|KIND>  [action=set takes=1..=1]
+    --append-system-prompt-file <PATH>  [action=append takes=1..=1]
+    --ask  [action=set-true takes=0..=0]
+    --budget <AMOUNT[/day]>  [action=set takes=1..=1]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    --effort <LEVEL>  [action=set takes=1..=1]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --model <MODEL>  [action=set takes=1..=1]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --prompt  [action=set-true takes=0..=0]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --system-prompt-file <PATH>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    --yolo  [action=set-true takes=0..=0]
+    --zellij  [action=set-true takes=0..=0 global]
+
 rimz agents focus
     <reference>  [action=set takes=1..=1 required]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
@@ -178,6 +198,8 @@ rimz agents help check
 rimz agents help compact
 
 rimz agents help exec [hidden]
+
+rimz agents help explain
 
 rimz agents help focus
 
@@ -784,6 +806,8 @@ rimz help agents check
 rimz help agents compact
 
 rimz help agents exec [hidden]
+
+rimz help agents explain
 
 rimz help agents focus
 
