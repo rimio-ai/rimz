@@ -593,12 +593,12 @@ fn profile_inheritance_and_builtin_overrides_resolve() {
         ("claude-child", profile("claude")),
     ]);
 
-    assert_eq!(
-        resolve_profile("claude", &no_profiles()),
-        Ok(ResolvedProfile::bare("claude"))
-    );
+    let bare = resolve_profile("claude", &no_profiles()).expect("built-in");
+    assert_eq!(bare.kind.as_str(), "claude");
+    assert_eq!(bare.chain, ["claude"]);
     let child = resolve_profile("child", &profiles).expect("child");
     assert_eq!(child.kind.as_str(), "codex");
+    assert_eq!(child.chain, ["child", "base", "codex"]);
     assert_eq!(child.launch.model.as_deref(), Some("base-model"));
     assert_eq!(child.launch.effort.as_deref(), Some("high"));
     assert_eq!(child.args.as_deref(), Some("--child"));
