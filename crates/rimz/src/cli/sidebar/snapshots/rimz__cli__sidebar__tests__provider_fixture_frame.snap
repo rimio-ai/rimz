@@ -15,14 +15,14 @@ expression: strip_sgr(&ansi)
 ▌  ▣ ━━━━━━━━━━━━━━━━━━━━╺━━╺──────────────────   34%▐
 ▌  ▤ 341k · ◌ 293k ◍ 34k ↘ 13k ↗ 42k                 ▐
 ▌  ⧉ subagents (2)                              $0.46▐
-▌    ✓ Explore — audit auth watcher changes     $0.34▐
-▌      ◇ 22k · Haiku · xhigh                         ▐
 ▌    ⠁ Plan — run focused nextest               $0.12▐
 ▌      ◇ 18k · Haiku · xhigh                    ◔  3m▐
+▌  +1 more                                           ▐
 ▎? codex · GPT 5.5 · xhigh · 272k               $4.36🮇
 ▎  approve pricing cache write                       🮇
 ▎  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━────────────   71%🮇
 ▎  ▤ 193k · ◌ 185k ↘ 7k ↗ 24k                        🮇
+▎⣾ cargo nextest                                     🮇
 
  ─── Claude ──── Codex ──────────────────────────────
 
