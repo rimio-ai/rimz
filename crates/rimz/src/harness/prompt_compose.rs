@@ -36,6 +36,13 @@ pub struct MaterializedSystemPrompt {
     pub env: BTreeMap<String, String>,
 }
 
+pub struct SystemPromptPlan {
+    pub sources: SystemPromptSources,
+    pub composed: Option<String>,
+    pub artifact: Option<PathBuf>,
+    pub materialized: MaterializedSystemPrompt,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum PromptComposeErr {
     #[error("unknown agent kind `{kind}`")]
@@ -76,8 +83,23 @@ pub fn materialize_system_prompt(
     sources: &SystemPromptSources,
     runtime: &RuntimePaths,
 ) -> Result<MaterializedSystemPrompt, PromptComposeErr> {
+    let plan = plan_system_prompt(kind, sources, runtime)?;
+    apply_system_prompt(&plan)?;
+    Ok(plan.materialized)
+}
+
+pub fn plan_system_prompt(
+    kind: &AgentKind,
+    sources: &SystemPromptSources,
+    runtime: &RuntimePaths,
+) -> Result<SystemPromptPlan, PromptComposeErr> {
     if sources.is_empty() {
-        return Ok(MaterializedSystemPrompt::default());
+        return Ok(SystemPromptPlan {
+            sources: sources.clone(),
+            composed: None,
+            artifact: None,
+            materialized: MaterializedSystemPrompt::default(),
+        });
     }
     let adapter = crate::agents::find_definition(kind.as_str())
         .ok_or_else(|| PromptComposeErr::UnknownAdapter { kind: kind.clone() })?;
@@ -88,17 +110,31 @@ pub fn materialize_system_prompt(
         .preset_arg_matcher(PresetField::SystemPromptFile)
         .ok_or(PromptComposeErr::Unsupported { agent })?;
 
-    if sources.append_system_prompt_files.is_empty() {
-        let path = sources
-            .system_prompt_file
-            .as_deref()
-            .expect("non-empty sources without fragments contain a base prompt");
-        return render(matcher, path, agent);
-    }
-
     let composed = read_composed(sources, agent)?;
-    let artifact = write_prompt_artifact(runtime, "sys", &composed)?;
-    render(matcher, &artifact, agent)
+    let artifact = (!sources.append_system_prompt_files.is_empty())
+        .then(|| prompt_artifact_path(runtime, "sys", &composed));
+    let path = artifact
+        .as_deref()
+        .or(sources.system_prompt_file.as_deref())
+        .expect("read_composed requires a base prompt");
+    let materialized = render(matcher, path, &composed, agent)?;
+    Ok(SystemPromptPlan {
+        sources: sources.clone(),
+        composed: Some(composed),
+        artifact,
+        materialized,
+    })
+}
+
+pub fn apply_system_prompt(plan: &SystemPromptPlan) -> Result<(), PromptComposeErr> {
+    if let Some(path) = &plan.artifact {
+        let contents = plan
+            .composed
+            .as_deref()
+            .expect("a planned artifact always has composed contents");
+        crate::disk::atomic::write_cache_bytes_atomically(path, contents.as_bytes())?;
+    }
+    Ok(())
 }
 
 pub fn validate_text_prompt_size(
@@ -123,6 +159,7 @@ pub fn validate_text_prompt_size(
 fn render(
     matcher: PresetArgMatcher,
     path: &Path,
+    contents: &str,
     agent: &'static str,
 ) -> Result<MaterializedSystemPrompt, PromptComposeErr> {
     let path_value = path.to_string_lossy().into_owned();
@@ -136,9 +173,8 @@ fn render(
             env: [(key, path_value)].into_iter().collect(),
         }),
         PresetArgMatcher::TextFlag(flags) => {
-            let contents = read_prompt(path)?;
-            ensure_text_prompt_size(agent, &contents)?;
-            Ok(with_args(render_flag(flags, contents, agent)?))
+            ensure_text_prompt_size(agent, contents)?;
+            Ok(with_args(render_flag(flags, contents.to_owned(), agent)?))
         }
     }
 }
@@ -200,12 +236,20 @@ pub(super) fn write_prompt_artifact(
     prefix: &str,
     contents: &str,
 ) -> Result<PathBuf, crate::disk::atomic::AtomicErr> {
-    let digest = hex::encode(Sha256::digest(contents.as_bytes()));
-    let path = runtime
-        .prompt_dir()
-        .join(format!("{prefix}.{}.md", &digest[..32]));
+    let path = prompt_artifact_path(runtime, prefix, contents);
     crate::disk::atomic::write_cache_bytes_atomically(&path, contents.as_bytes())?;
     Ok(path)
+}
+
+pub(super) fn prompt_artifact_path(
+    runtime: &RuntimePaths,
+    prefix: &str,
+    contents: &str,
+) -> PathBuf {
+    let digest = hex::encode(Sha256::digest(contents.as_bytes()));
+    runtime
+        .prompt_dir()
+        .join(format!("{prefix}.{}.md", &digest[..32]))
 }
 
 fn render_flag(
@@ -287,10 +331,16 @@ mod tests {
             append_system_prompt_files: vec![first],
         };
 
-        let claude =
-            materialize_system_prompt(&AgentKind::new_unchecked("claude"), &sources, &runtime)
-                .expect("claude prompt");
-        let artifact = PathBuf::from(&claude.args[1]);
+        let claude = plan_system_prompt(&AgentKind::new_unchecked("claude"), &sources, &runtime)
+            .expect("claude prompt");
+        let pi = plan_system_prompt(&AgentKind::new_unchecked("pi"), &sources, &runtime)
+            .expect("pi prompt");
+        let artifact = claude.artifact.as_ref().expect("planned artifact");
+        assert!(!runtime.prompt_dir().exists());
+        assert_eq!(claude.composed.as_deref(), Some("base\n\nfirst\n"));
+        assert_eq!(pi.materialized.args, ["--system-prompt", "base\n\nfirst\n"]);
+        assert_eq!(claude.materialized.args[1], artifact.to_string_lossy());
+        apply_system_prompt(&claude).expect("apply prompt");
         assert_eq!(
             std::fs::read_to_string(&artifact).expect("artifact"),
             "base\n\nfirst\n"
