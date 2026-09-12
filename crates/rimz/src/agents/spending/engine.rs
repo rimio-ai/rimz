@@ -16,7 +16,7 @@ use crate::agents::spending::{
 
 use crate::utils::time::unix_now_ms;
 
-use super::SPENDING_STALE_GRACE;
+use super::{SPENDING_STALE_GRACE, SpendingFile};
 
 const SPENDING_WAIT_STEP: Duration = Duration::from_millis(20);
 const SPENDING_WAIT_STEPS: u32 = 15;
@@ -295,7 +295,7 @@ fn walk_fleet_spending_files(
     context: &SpendingRequestContext<'_>,
     publish: bool,
     progress: &mut dyn FnMut(SpendProgress),
-    files: &[(&'static crate::agents::AgentDefinition, PathBuf)],
+    files: &[SpendingFile],
     now_secs: u64,
 ) -> crate::agents::spending::SpendingCaches {
     use crate::agents::pricing;
@@ -424,7 +424,7 @@ fn walk_fleet_spending_files(
 struct PublishingWalkObserver<'a> {
     runtime: &'a RuntimePaths,
     provider_path: PathBuf,
-    files: &'a [(&'static crate::agents::AgentDefinition, PathBuf)],
+    files: &'a [SpendingFile],
     user_inputs: &'a [crate::agents::spending::user_input::UserInputRecord],
     now_secs: u64,
     scope: Option<&'a crate::agents::spending::SpendScope>,
@@ -468,7 +468,7 @@ fn workspace_cache_from_shared_entries_inner(
     provider: &crate::agents::spending::ProviderSpendingCache,
     scope: &crate::agents::spending::SpendScope,
     scope_hash: Option<&str>,
-    files: &[(&'static crate::agents::AgentDefinition, PathBuf)],
+    files: &[SpendingFile],
     spec: &crate::agents::spending::HeadlineSpec,
     origin_overrides: &HashMap<PathBuf, PathBuf>,
     publish: bool,
@@ -518,7 +518,7 @@ fn workspace_cache_from_shared_entries(
     provider: &crate::agents::spending::ProviderSpendingCache,
     scope: &crate::agents::spending::SpendScope,
     scope_hash: Option<&str>,
-    files: &[(&'static crate::agents::AgentDefinition, PathBuf)],
+    files: &[SpendingFile],
     spec: &crate::agents::spending::HeadlineSpec,
 ) -> Option<crate::agents::spending::WorkspaceSpendingCache> {
     workspace_cache_from_shared_entries_inner(

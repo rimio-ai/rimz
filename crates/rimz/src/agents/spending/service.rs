@@ -40,21 +40,25 @@ struct SpendingServiceNamespace(String);
 impl SpendingServiceNamespace {
     fn for_runtime(runtime: &RuntimePaths) -> Self {
         let login_env = crate::agents::ambient_env();
-        let declarations = crate::agents::all_definitions()
-            .flat_map(|adapter| {
-                let kind = adapter.spec().kind;
+        let declarations = super::discovery::runtime_logins()
+            .into_iter()
+            .flat_map(|(login, adapter)| {
+                let key = login.key().to_string();
                 adapter
-                    .spending_sources(&login_env)
+                    .spending_sources(&login.env(&login_env))
                     .into_iter()
-                    .map(move |source| (kind, source.fingerprint()))
+                    .map(|source| source.fingerprint())
+                    // A login without history still changes the namespace.
+                    .chain(std::iter::once(Vec::new()))
+                    .map(move |source| (key.clone(), source))
             })
-            .collect();
+            .collect::<Vec<_>>();
         Self::from_declarations(&runtime.persistent_shared_root, declarations)
     }
 
     fn from_declarations(
         persistent_shared_root: &Path,
-        mut declarations: Vec<(&str, Vec<u8>)>,
+        mut declarations: Vec<(String, Vec<u8>)>,
     ) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(b"rimz.spending-service.namespace.v2\0");
@@ -64,14 +68,14 @@ impl SpendingServiceNamespace {
             &mut hasher,
             persistent_shared_root.as_os_str().as_encoded_bytes(),
         );
-        declarations.sort_by(|(left_kind, left_source), (right_kind, right_source)| {
-            left_kind
+        declarations.sort_by(|(left_login, left_source), (right_login, right_source)| {
+            left_login
                 .as_bytes()
-                .cmp(right_kind.as_bytes())
+                .cmp(right_login.as_bytes())
                 .then_with(|| left_source.cmp(right_source))
         });
-        for (kind, source) in declarations {
-            hash_namespace_part(&mut hasher, kind.as_bytes());
+        for (login, source) in declarations {
+            hash_namespace_part(&mut hasher, login.as_bytes());
             hash_namespace_part(&mut hasher, &source);
         }
         let digest = hasher.finalize();
@@ -842,49 +846,49 @@ mod tests {
         let base = SpendingServiceNamespace::from_declarations(
             Path::new("/state-a/rimz/shared"),
             vec![
-                ("copilot", copilot_a.clone()),
-                ("grok", grok_a.clone()),
-                ("plugin", plugin.clone()),
+                ("copilot@default".to_owned(), copilot_a.clone()),
+                ("grok@default".to_owned(), grok_a.clone()),
+                ("plugin@default".to_owned(), plugin.clone()),
             ],
         );
         let reordered = SpendingServiceNamespace::from_declarations(
             Path::new("/state-a/rimz/./shared"),
             vec![
-                ("plugin", plugin.clone()),
-                ("grok", grok_a.clone()),
-                ("copilot", copilot_a.clone()),
+                ("plugin@default".to_owned(), plugin.clone()),
+                ("grok@default".to_owned(), grok_a.clone()),
+                ("copilot@default".to_owned(), copilot_a.clone()),
             ],
         );
         let other_state = SpendingServiceNamespace::from_declarations(
             Path::new("/state-b/rimz/shared"),
             vec![
-                ("copilot", copilot_a.clone()),
-                ("grok", grok_a.clone()),
-                ("plugin", plugin.clone()),
+                ("copilot@default".to_owned(), copilot_a.clone()),
+                ("grok@default".to_owned(), grok_a.clone()),
+                ("plugin@default".to_owned(), plugin.clone()),
             ],
         );
         let other_copilot_root = SpendingServiceNamespace::from_declarations(
             Path::new("/state-a/rimz/shared"),
             vec![
-                ("copilot", copilot_b),
-                ("grok", grok_a.clone()),
-                ("plugin", plugin.clone()),
+                ("copilot@default".to_owned(), copilot_b),
+                ("grok@default".to_owned(), grok_a.clone()),
+                ("plugin@default".to_owned(), plugin.clone()),
             ],
         );
         let other_grok_root = SpendingServiceNamespace::from_declarations(
             Path::new("/state-a/rimz/shared"),
             vec![
-                ("copilot", copilot_a.clone()),
-                ("grok", grok_b),
-                ("plugin", plugin.clone()),
+                ("copilot@default".to_owned(), copilot_a.clone()),
+                ("grok@default".to_owned(), grok_b),
+                ("plugin@default".to_owned(), plugin.clone()),
             ],
         );
         let other_plugin = SpendingServiceNamespace::from_declarations(
             Path::new("/state-a/rimz/shared"),
             vec![
-                ("copilot", copilot_a),
-                ("grok", grok_a),
-                ("plugin", [plugin, vec![1]].concat()),
+                ("copilot@default".to_owned(), copilot_a),
+                ("grok@default".to_owned(), grok_a),
+                ("plugin@default".to_owned(), [plugin, vec![1]].concat()),
             ],
         );
 
@@ -893,6 +897,15 @@ mod tests {
         assert_ne!(base, other_copilot_root);
         assert_ne!(base, other_grok_root);
         assert_ne!(base, other_plugin);
+        let default = SpendingServiceNamespace::from_declarations(
+            Path::new("/state-a/rimz/shared"),
+            vec![("claude@default".to_owned(), vec![1])],
+        );
+        let named = SpendingServiceNamespace::from_declarations(
+            Path::new("/state-a/rimz/shared"),
+            vec![("claude@work".to_owned(), vec![1])],
+        );
+        assert_ne!(default, named);
     }
 
     #[test]
@@ -918,10 +931,15 @@ mod tests {
             ),
         )
         .unwrap();
-        let _discovery = super::super::override_discovered_spending_files_for_test(vec![(
-            crate::agents::definition_by_kind("claude").unwrap(),
-            transcript.clone(),
-        )]);
+        let _discovery = super::super::override_discovered_spending_files_for_test(vec![
+            super::super::SpendingFile {
+                adapter: crate::agents::definition_by_kind("claude").unwrap(),
+                login: crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
+                    "claude",
+                )),
+                path: transcript.clone(),
+            },
+        ]);
         let request = SpendingServiceRequest::workspace(
             &runtime,
             workspace_id,

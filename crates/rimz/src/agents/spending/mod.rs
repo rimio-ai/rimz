@@ -34,6 +34,7 @@ use std::time::{Duration, Instant};
 
 use super::pricing::PriceBook;
 use super::{AgentCost, AgentDefinition};
+use crate::ids::LoginKey;
 use aggregate::{DedupPayload, SidechainDedup};
 
 /// How long a published fleet-spending walk remains fresh.
@@ -122,6 +123,7 @@ pub struct SpendingWalkResult {
     pub spending: Spending,
     pub workspace: ScopedSpending,
     pub provider_day: BTreeMap<String, SpendWindow>,
+    pub login_day: BTreeMap<LoginKey, SpendWindow>,
     pub day_cutoff_secs: u64,
     pub days: BTreeMap<i64, DaySpend>,
     pub models: BTreeMap<String, SpendTally>,
@@ -142,8 +144,16 @@ pub struct WalkStats {
     pub parse_bytes: u64,
 }
 
+/// One discovered spend store and the account whose home it was found under.
+#[derive(Clone, Debug)]
+pub struct SpendingFile {
+    pub adapter: &'static AgentDefinition,
+    pub login: LoginKey,
+    pub path: PathBuf,
+}
+
 #[cfg(any(test, feature = "testkit"))]
-type DiscoveredSpendingFiles = Vec<(&'static AgentDefinition, PathBuf)>;
+type DiscoveredSpendingFiles = Vec<SpendingFile>;
 
 #[cfg(any(test, feature = "testkit"))]
 thread_local! {
@@ -214,7 +224,7 @@ struct SpendingMemoKey {
 }
 
 pub struct WalkRequest<'a> {
-    pub files: &'a [(&'static AgentDefinition, PathBuf)],
+    pub files: &'a [SpendingFile],
     pub prices: &'a PriceBook,
     pub now_secs: u64,
     pub origin_overrides: &'a HashMap<PathBuf, PathBuf>,
@@ -239,10 +249,7 @@ impl SpendingWalker {
 
     /// Discover the historical spend stores through this walker's warm,
     /// process-local directory frontier.
-    fn discover_spending_files(
-        &mut self,
-        now_secs: u64,
-    ) -> Vec<(&'static AgentDefinition, PathBuf)> {
+    fn discover_spending_files(&mut self, now_secs: u64) -> Vec<SpendingFile> {
         #[cfg(any(test, feature = "testkit"))]
         if let Some(files) = DISCOVER_SPENDING_FILES_OVERRIDE.with(|slot| slot.borrow().clone()) {
             if files.is_empty() {
@@ -251,8 +258,11 @@ impl SpendingWalker {
             return files;
         }
 
-        self.discovery
-            .discover(crate::agents::all_definitions(), now_secs)
+        self.discovery.discover(
+            discovery::runtime_logins().into_iter(),
+            &crate::agents::ambient_env(),
+            now_secs,
+        )
     }
 
     fn spending_discovery_is_authoritative(&self) -> bool {
@@ -268,18 +278,24 @@ impl SpendingWalker {
         adapter: &'static AgentDefinition,
         sources: Vec<SpendingSource>,
         now_secs: u64,
-    ) -> Vec<(&'static AgentDefinition, PathBuf)> {
+    ) -> Vec<SpendingFile> {
         self.discovery
             .discover_sources_for_testkit(sources, now_secs)
             .into_iter()
-            .map(|path| (adapter, path))
+            .map(|path| SpendingFile {
+                adapter,
+                login: LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
+                    adapter.spec().kind,
+                )),
+                path,
+            })
             .collect()
     }
 
     fn recorded_unknown_models(
         &mut self,
         cache_path: &Path,
-        files: &[(&'static AgentDefinition, PathBuf)],
+        files: &[SpendingFile],
         now_secs: u64,
     ) -> BTreeSet<String> {
         let mut stats = WalkStats::default();
@@ -415,11 +431,7 @@ impl SpendingWalker {
         stats.cache_parsed = stamp.is_some();
     }
 
-    fn ensure_memo(
-        &mut self,
-        files: &[(&'static AgentDefinition, PathBuf)],
-        stats: &mut WalkStats,
-    ) {
+    fn ensure_memo(&mut self, files: &[SpendingFile], stats: &mut WalkStats) {
         let key = SpendingMemoKey {
             generation: self.cache.generation,
             files_signature: spending_files_signature(files),
@@ -440,7 +452,7 @@ impl SpendingWalker {
     pub(crate) fn scoped_from_cache(
         &mut self,
         cache_path: &Path,
-        files: &[(&'static AgentDefinition, PathBuf)],
+        files: &[SpendingFile],
         user_inputs: &[user_input::UserInputRecord],
         scope: &SpendScope,
         now_secs: u64,
@@ -464,7 +476,7 @@ impl SpendingWalker {
             false,
         );
         CachedScopedSpending {
-            has_discovered_file: files.iter().any(|(_, file)| {
+            has_discovered_file: files.iter().any(|SpendingFile { path: file, .. }| {
                 self.cache
                     .files
                     .contains_key(&file.to_string_lossy().into_owned())
@@ -632,7 +644,7 @@ impl DedupPayload for IndexedSessionEntry<'_> {
 }
 
 fn aggregate_walk_publish(
-    files: &[(&'static AgentDefinition, PathBuf)],
+    files: &[SpendingFile],
     cache: &SpendingDiskCache,
     user_inputs: &[user_input::UserInputRecord],
     now_secs: u64,
@@ -671,7 +683,7 @@ pub(crate) struct CachedScopedSpending {
 /// Compute the cockpit's workspace-scoped tally plus the headline epoch cutoff
 /// that resets presentation ratchets at window boundaries.
 fn compute_scoped_spending(
-    files: &[(&'static AgentDefinition, PathBuf)],
+    files: &[SpendingFile],
     cache: &SpendingDiskCache,
     user_inputs: &[user_input::UserInputRecord],
     scope: &SpendScope,

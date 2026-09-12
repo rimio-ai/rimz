@@ -44,7 +44,7 @@ pub fn pixel_layer_config_json() -> String {
 pub fn spending_scope_from_warm_walker(
     walker: &mut crate::agents::spending::SpendingWalker,
     cache_path: &std::path::Path,
-    files: &[(&'static crate::agents::AgentDefinition, std::path::PathBuf)],
+    files: &[crate::agents::spending::SpendingFile],
     scope: &crate::agents::spending::SpendScope,
     now_secs: u64,
     spec: &crate::agents::spending::HeadlineSpec,

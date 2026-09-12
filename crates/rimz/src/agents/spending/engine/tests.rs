@@ -235,10 +235,14 @@ fn produce_local_serves_published_within_grace() {
         claude_cost_line(unix_secs_now(), 9.0, "deleted"),
     )
     .expect("transcript");
-    let _discovered = override_discovered_spending_files_for_test(vec![(
-        crate::agents::definition_by_kind("claude").unwrap(),
-        transcript.clone(),
-    )]);
+    let _discovered =
+        override_discovered_spending_files_for_test(vec![super::super::SpendingFile {
+            adapter: crate::agents::definition_by_kind("claude").unwrap(),
+            login: crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
+                "claude",
+            )),
+            path: transcript.clone(),
+        }]);
     std::fs::remove_file(&transcript).expect("delete transcript");
 
     let now_ms = unix_now_ms();
@@ -273,10 +277,14 @@ fn produce_local_walk_seeds_from_cursor_cache() {
     let transcript = dir.path().join("claude.jsonl");
     let now_secs = unix_secs_now();
     std::fs::write(&transcript, claude_cost_line(now_secs, 9.0, "live")).expect("transcript");
-    let _discovered = override_discovered_spending_files_for_test(vec![(
-        crate::agents::definition_by_kind("claude").unwrap(),
-        transcript.clone(),
-    )]);
+    let _discovered =
+        override_discovered_spending_files_for_test(vec![super::super::SpendingFile {
+            adapter: crate::agents::definition_by_kind("claude").unwrap(),
+            login: crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
+                "claude",
+            )),
+            path: transcript.clone(),
+        }]);
 
     let mut raw = read_spending_cache(&runtime.shared_spending_cursor_path());
     raw.files.insert(
@@ -327,10 +335,14 @@ fn walk_local_stays_memory_only_while_publishing_walk_writes_provider_cache() {
     let transcript = dir.path().join("claude.jsonl");
     let now_secs = unix_secs_now();
     std::fs::write(&transcript, claude_cost_line(now_secs, 2.5, "publish")).expect("transcript");
-    let _discovered = override_discovered_spending_files_for_test(vec![(
-        crate::agents::definition_by_kind("claude").unwrap(),
-        transcript,
-    )]);
+    let _discovered =
+        override_discovered_spending_files_for_test(vec![super::super::SpendingFile {
+            adapter: crate::agents::definition_by_kind("claude").unwrap(),
+            login: crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
+                "claude",
+            )),
+            path: transcript,
+        }]);
     let spec = HeadlineSpec {
         mode: SpendWindowMode::Today,
         timezone: Some("UTC".to_owned()),
@@ -369,10 +381,14 @@ fn walk_local_builds_workspace_cache_without_publishing() {
         claude_cost_line_in(now_secs, 2.5, "local", &project),
     )
     .expect("transcript");
-    let _discovered = override_discovered_spending_files_for_test(vec![(
-        crate::agents::definition_by_kind("claude").unwrap(),
-        transcript,
-    )]);
+    let _discovered =
+        override_discovered_spending_files_for_test(vec![super::super::SpendingFile {
+            adapter: crate::agents::definition_by_kind("claude").unwrap(),
+            login: crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
+                "claude",
+            )),
+            path: transcript,
+        }]);
     let scope = SpendScope::for_workspace(Some(&project), &[], None);
     let scope_hash = scope.hash();
     let previous = crate::agents::spending::WorkspaceSpendingCache {
@@ -446,10 +462,11 @@ fn publishing_walk_observer_checkpoints_workspace_live_baselines() {
         );
         cache
     };
-    let files = vec![(
-        crate::agents::definition_by_kind("claude").unwrap(),
-        transcript,
-    )];
+    let files = vec![super::super::SpendingFile {
+        adapter: crate::agents::definition_by_kind("claude").unwrap(),
+        login: crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
+        path: transcript,
+    }];
     let spec = HeadlineSpec {
         mode: SpendWindowMode::Today,
         timezone: Some("UTC".to_owned()),
@@ -540,10 +557,11 @@ fn workspace_cache_derives_from_shared_entries_while_global_lock_is_held() {
         Coalesced::Produce(guard) => guard,
         _ => panic!("test must hold the global spending lock"),
     };
-    let files = vec![(
-        crate::agents::definition_by_kind("claude").unwrap(),
-        transcript,
-    )];
+    let files = vec![super::super::SpendingFile {
+        adapter: crate::agents::definition_by_kind("claude").unwrap(),
+        login: crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
+        path: transcript,
+    }];
     let stale_hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     crate::agents::spending::write_workspace_spending_cache(
         &runtime.workspace_spending_path(stale_hash),
@@ -623,10 +641,11 @@ fn workspace_cache_from_shared_entries_publishes_live_exclusions() {
         },
     );
     write_spending_cache(&runtime.shared_spending_cursor_path(), &raw);
-    let files = vec![(
-        crate::agents::definition_by_kind("claude").unwrap(),
-        transcript,
-    )];
+    let files = vec![super::super::SpendingFile {
+        adapter: crate::agents::definition_by_kind("claude").unwrap(),
+        login: crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
+        path: transcript,
+    }];
     let spec = HeadlineSpec {
         mode: SpendWindowMode::Today,
         timezone: Some("UTC".to_owned()),
@@ -707,10 +726,11 @@ fn producer_missing_scope_applies_live_origin_before_reusing_warm_memo() {
         },
     );
     write_spending_cache(&runtime.shared_spending_cursor_path(), &raw);
-    let files = vec![(
-        crate::agents::definition_by_kind("claude").unwrap(),
-        transcript.clone(),
-    )];
+    let files = vec![super::super::SpendingFile {
+        adapter: crate::agents::definition_by_kind("claude").unwrap(),
+        login: crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
+        path: transcript.clone(),
+    }];
     let spec = HeadlineSpec {
         mode: SpendWindowMode::Today,
         timezone: Some("UTC".to_owned()),
@@ -795,10 +815,11 @@ fn workspace_cache_from_shared_entries_serves_young_previous_regression() {
         },
     );
     write_spending_cache(&runtime.shared_spending_cursor_path(), &raw);
-    let files = vec![(
-        crate::agents::definition_by_kind("claude").unwrap(),
-        transcript,
-    )];
+    let files = vec![super::super::SpendingFile {
+        adapter: crate::agents::definition_by_kind("claude").unwrap(),
+        login: crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
+        path: transcript,
+    }];
     let mut spending = Spending::default();
     spending.total.year.usd = 10.0;
     let provider = ProviderSpendingCache {
@@ -979,10 +1000,14 @@ fn producer_publishes_compacted_shared_spending_cache() {
     let before_len = std::fs::metadata(runtime.shared_spending_cursor_path())
         .expect("seed spending cache")
         .len();
-    let _discovered = override_discovered_spending_files_for_test(vec![(
-        crate::agents::definition_by_kind("claude").unwrap(),
-        transcript,
-    )]);
+    let _discovered =
+        override_discovered_spending_files_for_test(vec![super::super::SpendingFile {
+            adapter: crate::agents::definition_by_kind("claude").unwrap(),
+            login: crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
+                "claude",
+            )),
+            path: transcript,
+        }]);
     let caches = compute_fleet_spending(&runtime, None, &HeadlineSpec::default());
 
     assert_eq!(caches.provider.spending.total.year.usd, 3.0);

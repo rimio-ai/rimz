@@ -83,7 +83,7 @@ fn token_windows_and_native_sessions_populate_public_tallies() {
         )]),
         ..Default::default()
     };
-    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![(opencode_adapter(), native_file)];
+    let files: Vec<SpendingFile> = vec![spending_file(opencode_adapter(), native_file)];
     let counted = dedup_cached_entries(&files, &cache).into_counted();
     let spending = aggregate_spending(&files, &cache, &counted, NOW_SECS, &HeadlineSpec::default());
     assert_eq!(spending.total.headline.sessions, 1);
@@ -100,7 +100,7 @@ fn tool_calls_populate_each_trailing_window_and_provider_tally() {
         files: HashMap::from([cached_file(&file, vec![entry])]),
         ..Default::default()
     };
-    let files = vec![(opencode_adapter(), file)];
+    let files = vec![spending_file(opencode_adapter(), file)];
     let counted = dedup_cached_entries(&files, &cache).into_counted();
 
     let spending = aggregate_spending(&files, &cache, &counted, NOW_SECS, &HeadlineSpec::default());
@@ -120,9 +120,9 @@ fn headline_cutoffs_are_global_and_scoped() {
     let claude_file = write_jsonl(dir.path(), "claude.jsonl", &[]);
     let codex_file = write_codex(dir.path(), &[]);
     let day_start = (NOW_SECS / 86_400) * 86_400;
-    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![
-        (claude_adapter(), claude_file.clone()),
-        (codex_adapter(), codex_file.clone()),
+    let files: Vec<SpendingFile> = vec![
+        spending_file(claude_adapter(), claude_file.clone()),
+        spending_file(codex_adapter(), codex_file.clone()),
     ];
 
     let today_cache = SpendingDiskCache {
@@ -222,8 +222,17 @@ fn local_day_rollups_ignore_headline_mode_and_publish_live_baselines() {
     let after: Timestamp = "2025-06-01T04:01:00Z".parse().expect("after midnight");
     let project = PathBuf::from("/repo/project");
     let file = PathBuf::from("/tmp/rimz/day.jsonl");
-    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![(claude_adapter(), file.clone())];
-    let cache = SpendingDiskCache {
+    let named_file = PathBuf::from("/tmp/rimz/work/day.jsonl");
+    let named_login: LoginKey = "claude@work".parse().unwrap();
+    let files = vec![
+        spending_file(claude_adapter(), file.clone()),
+        SpendingFile {
+            adapter: claude_adapter(),
+            login: named_login.clone(),
+            path: named_file.clone(),
+        },
+    ];
+    let mut cache = SpendingDiskCache {
         files: HashMap::from([cached_file_with_origin(
             &file,
             &project,
@@ -234,7 +243,17 @@ fn local_day_rollups_ignore_headline_mode_and_publish_live_baselines() {
         )]),
         ..Default::default()
     };
-    let counted = dedup_cached_entries(&files, &cache).into_counted();
+    let (key, value) = cached_file_with_origin(
+        &named_file,
+        Path::new("/elsewhere"),
+        vec![
+            cached_entry(before.as_second() as u64, 8.0, "work-before"),
+            cached_entry(after.as_second() as u64, 4.0, "work-live"),
+        ],
+    );
+    cache.files.insert(key, value);
+    let locations = dedup_cached_entry_locations(&files, &cache);
+    let counted = indexed_counted_entries(&files, &cache, &locations);
     let user_inputs = user_inputs_from_counted(&counted);
     let scope = SpendScope::from_roots(Some(&project), &[]);
     let spec = HeadlineSpec {
@@ -261,7 +280,20 @@ fn local_day_rollups_ignore_headline_mode_and_publish_live_baselines() {
             .expect("cutoff")
             .as_second() as u64
     );
-    assert!((rollups.provider_day["claude"].usd - 2.0).abs() < 1e-9);
+    assert_eq!(rollups.login_day.len(), 2);
+    assert_eq!(rollups.login_day[&named_login].usd, 4.0);
+    assert_eq!(rollups.login_day[&named_login].sessions, 1);
+    assert_eq!(
+        rollups.login_day[&LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude"))]
+            .usd,
+        2.0
+    );
+    assert_eq!(
+        rollups.login_day.values().map(|day| day.usd).sum::<f64>(),
+        rollups.provider_day["claude"].usd
+    );
+    let published = ProviderSpendingCache::from_walk(&rollups, 1);
+    assert_eq!(published.day_by_login, rollups.login_day);
     assert_eq!(rollups.workspace.day.usd, 2.0);
     assert_eq!(rollups.workspace.day.tokens, 15);
     assert!((rollups.workspace.tally.headline.usd - 3.0).abs() < 1e-9);
@@ -278,7 +310,7 @@ fn local_day_rollups_ignore_headline_mode_and_publish_live_baselines() {
 fn scoped_spending_publishes_full_walked_session_baselines() {
     let project = PathBuf::from("/repo/project");
     let file = PathBuf::from("/tmp/rimz/live.jsonl");
-    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![(claude_adapter(), file.clone())];
+    let files: Vec<SpendingFile> = vec![spending_file(claude_adapter(), file.clone())];
     let cache = SpendingDiskCache {
         files: HashMap::from([cached_file_with_origin(
             &file,
@@ -312,9 +344,9 @@ fn scoped_spending_publishes_full_walked_session_baselines() {
     main_entry.thread_id = None;
     let mut sub_entry = cached_entry(NOW_SECS, 0.10, "");
     sub_entry.thread_id = None;
-    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![
-        (claude_adapter(), main.clone()),
-        (claude_adapter(), sub.clone()),
+    let files: Vec<SpendingFile> = vec![
+        spending_file(claude_adapter(), main.clone()),
+        spending_file(claude_adapter(), sub.clone()),
     ];
     let cache = SpendingDiskCache {
         files: HashMap::from([
@@ -341,8 +373,7 @@ fn scoped_spending_publishes_full_walked_session_baselines() {
     );
 
     let codex_file = PathBuf::from("/tmp/codex/rollout.jsonl");
-    let files: Vec<(&'static AgentDefinition, PathBuf)> =
-        vec![(codex_adapter(), codex_file.clone())];
+    let files: Vec<SpendingFile> = vec![spending_file(codex_adapter(), codex_file.clone())];
     let cache = SpendingDiskCache {
         files: HashMap::from([cached_file_with_origin(
             &codex_file,
@@ -379,7 +410,7 @@ fn live_baselines_sum_year_entries_only_for_recent_sessions() {
     const DAY: u64 = 86_400;
     let project = PathBuf::from("/repo/project");
     let file = PathBuf::from("/tmp/rimz/baselines.jsonl");
-    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![(claude_adapter(), file.clone())];
+    let files: Vec<SpendingFile> = vec![spending_file(claude_adapter(), file.clone())];
     let cache = SpendingDiskCache {
         files: HashMap::from([cached_file_with_origin(
             &file,
@@ -416,10 +447,10 @@ fn priced_entries_bridge_but_never_open_a_session() {
     let first_file = PathBuf::from("/tmp/rimz/first.jsonl");
     let chatter_file = PathBuf::from("/tmp/rimz/chatter.jsonl");
     let second_file = PathBuf::from("/tmp/rimz/second.jsonl");
-    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![
-        (claude_adapter(), first_file.clone()),
-        (claude_adapter(), chatter_file.clone()),
-        (claude_adapter(), second_file.clone()),
+    let files: Vec<SpendingFile> = vec![
+        spending_file(claude_adapter(), first_file.clone()),
+        spending_file(claude_adapter(), chatter_file.clone()),
+        spending_file(claude_adapter(), second_file.clone()),
     ];
     let cache = SpendingDiskCache {
         files: HashMap::from([
@@ -464,7 +495,7 @@ fn priced_entries_bridge_but_never_open_a_session() {
 fn session_burst_resets_at_an_exact_activity_gap() {
     const HOUR: u64 = 3_600;
     let file = PathBuf::from("/tmp/rimz/activity-gap.jsonl");
-    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![(claude_adapter(), file.clone())];
+    let files: Vec<SpendingFile> = vec![spending_file(claude_adapter(), file.clone())];
     let cache = SpendingDiskCache {
         files: HashMap::from([cached_file(
             &file,
@@ -498,7 +529,7 @@ fn bridged_session_cutoff_stays_stable_while_activity_is_current() {
     const HOUR: u64 = 3_600;
     let project = PathBuf::from("/repo/project");
     let file = PathBuf::from("/tmp/rimz/stable-cutoff.jsonl");
-    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![(claude_adapter(), file.clone())];
+    let files: Vec<SpendingFile> = vec![spending_file(claude_adapter(), file.clone())];
     let cache = SpendingDiskCache {
         files: HashMap::from([cached_file_with_origin(
             &file,
@@ -540,10 +571,10 @@ fn autonomous_spend_inside_user_prompt_burst_counts() {
     let first_file = PathBuf::from("/tmp/rimz/burst-first.jsonl");
     let automation_file = PathBuf::from("/tmp/rimz/burst-automation.jsonl");
     let second_file = PathBuf::from("/tmp/rimz/burst-second.jsonl");
-    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![
-        (claude_adapter(), first_file.clone()),
-        (claude_adapter(), automation_file.clone()),
-        (claude_adapter(), second_file.clone()),
+    let files: Vec<SpendingFile> = vec![
+        spending_file(claude_adapter(), first_file.clone()),
+        spending_file(claude_adapter(), automation_file.clone()),
+        spending_file(claude_adapter(), second_file.clone()),
     ];
     let cache = SpendingDiskCache {
         files: HashMap::from([
@@ -581,9 +612,9 @@ fn provider_headlines_share_the_machine_global_burst() {
     const HOUR: u64 = 3_600;
     let claude_file = PathBuf::from("/tmp/rimz/provider-claude.jsonl");
     let codex_file = PathBuf::from("/tmp/rimz/provider-codex.jsonl");
-    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![
-        (claude_adapter(), claude_file.clone()),
-        (codex_adapter(), codex_file.clone()),
+    let files: Vec<SpendingFile> = vec![
+        spending_file(claude_adapter(), claude_file.clone()),
+        spending_file(codex_adapter(), codex_file.clone()),
     ];
     let cache = SpendingDiskCache {
         files: HashMap::from([
@@ -623,9 +654,9 @@ fn workspace_session_cutoff_uses_only_scoped_user_inputs() {
     let other = PathBuf::from("/repo/other");
     let project_file = PathBuf::from("/tmp/rimz/scoped-project.jsonl");
     let other_file = PathBuf::from("/tmp/rimz/scoped-other.jsonl");
-    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![
-        (claude_adapter(), project_file.clone()),
-        (claude_adapter(), other_file.clone()),
+    let files: Vec<SpendingFile> = vec![
+        spending_file(claude_adapter(), project_file.clone()),
+        spending_file(claude_adapter(), other_file.clone()),
     ];
     let cache = SpendingDiskCache {
         files: HashMap::from([
@@ -679,7 +710,7 @@ fn workspace_scope_uses_roots_worktree_home_and_file_origin() {
     ] {
         let session = dir.path().join(format!("sessions/{name}"));
         std::fs::create_dir_all(&session).unwrap();
-        files.push((
+        files.push(spending_file(
             claude_adapter(),
             write_jsonl(
                 &session,
@@ -711,7 +742,7 @@ fn workspace_scope_uses_roots_worktree_home_and_file_origin() {
             ),
         ],
     );
-    files.push((claude_adapter(), origin_file.clone()));
+    files.push(spending_file(claude_adapter(), origin_file.clone()));
 
     let mut cache = SpendingDiskCache::default();
     let scope =
@@ -837,7 +868,7 @@ fn claude_duplicate_dedup_keeps_the_richest_main_thread_record() {
     };
     let files = paths
         .into_iter()
-        .map(|path| (claude_adapter(), path))
+        .map(|path| spending_file(claude_adapter(), path))
         .collect::<Vec<_>>();
 
     let counted = dedup_cached_entries(&files, &cache).into_counted();
@@ -861,7 +892,7 @@ fn codex_cross_file_dedup_uses_the_exact_native_event_fingerprint() {
     ];
     let tagged = files
         .into_iter()
-        .map(|path| (codex_adapter(), path))
+        .map(|path| spending_file(codex_adapter(), path))
         .collect::<Vec<_>>();
 
     let spending = compute_spending(
@@ -893,14 +924,14 @@ fn codex_resume_pricing_provider_origin_and_unknown_heal_stay_intact() {
     );
     let mut cache = SpendingDiskCache::default();
     let first = compute_spending(
-        &[(codex_adapter(), resumable.clone())],
+        &[spending_file(codex_adapter(), resumable.clone())],
         &mut cache,
         &gpt4o_book(),
         NOW_SECS,
     );
     append_line(&resumable, &codex_total_line(&today, 1600, 800));
     let second = compute_spending(
-        &[(codex_adapter(), resumable)],
+        &[spending_file(codex_adapter(), resumable)],
         &mut cache,
         &gpt4o_book(),
         NOW_SECS,
@@ -927,7 +958,7 @@ fn codex_resume_pricing_provider_origin_and_unknown_heal_stay_intact() {
             &codex_token_line(&today, 1000, 400, 500),
         ],
     );
-    let files = vec![(codex_adapter(), codex_file.clone())];
+    let files = vec![spending_file(codex_adapter(), codex_file.clone())];
     let scope = SpendScope::from_roots(Some(&project), &[]);
     let mut cache = SpendingDiskCache::default();
     let unpriced = PriceBook::from_litellm_json("{}");
@@ -970,8 +1001,8 @@ fn codex_resume_pricing_provider_origin_and_unknown_heal_stay_intact() {
 
     let spending = compute_spending(
         &[
-            (claude_adapter(), claude_file),
-            (codex_adapter(), codex_file),
+            spending_file(claude_adapter(), claude_file),
+            spending_file(codex_adapter(), codex_file),
         ],
         &mut SpendingDiskCache::default(),
         &gpt4o_book(),
@@ -1052,9 +1083,9 @@ fn daily_and_model_rollups_share_the_dedup_pass() {
         ]),
         ..Default::default()
     };
-    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![
-        (claude_adapter(), claude_file),
-        (codex_adapter(), codex_file),
+    let files: Vec<SpendingFile> = vec![
+        spending_file(claude_adapter(), claude_file),
+        spending_file(codex_adapter(), codex_file),
     ];
 
     let daily = compute_daily_spend(&files, &cache);

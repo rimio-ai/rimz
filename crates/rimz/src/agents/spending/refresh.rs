@@ -7,6 +7,7 @@ use std::sync::{
     mpsc,
 };
 
+use super::SpendingFile;
 use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::{AgentDefinition, TranscriptStat};
 
@@ -22,7 +23,7 @@ const MAX_SPENDING_PARSE_WORKERS: usize = 8;
 type FastHashMap<K, V> = HashMap<K, V, foldhash::fast::RandomState>;
 
 pub(crate) fn refresh_spending_cache(
-    files: &[(&'static AgentDefinition, PathBuf)],
+    files: &[SpendingFile],
     cache: &mut SpendingDiskCache,
     prices: &PriceBook,
     now_secs: u64,
@@ -35,7 +36,12 @@ pub(crate) fn refresh_spending_cache(
     let total_files = files.len();
     let mut finished_files = 0;
     let mut jobs = Vec::new();
-    for (adapter, file) in files {
+    for SpendingFile {
+        adapter,
+        path: file,
+        ..
+    } in files
+    {
         let key = file.to_string_lossy().into_owned();
         let entry = cache.files.get(&key);
         let Some(stat) = adapter.transcript_stat(file) else {
@@ -339,12 +345,12 @@ pub(crate) fn price_split(
 /// Unknown models recorded by files still discovered in this spending pass.
 /// Deleted or moved transcripts do not keep a never-resolving name alive.
 pub fn recorded_unknown_models(
-    files: &[(&'static AgentDefinition, PathBuf)],
+    files: &[SpendingFile],
     cache: &SpendingDiskCache,
     now_secs: u64,
 ) -> BTreeSet<String> {
     let mut unknowns = BTreeSet::new();
-    for (_, file) in files {
+    for SpendingFile { path: file, .. } in files {
         let key = file.to_string_lossy().into_owned();
         if let Some(entry) = cache.files.get(&key) {
             unknowns.extend(
