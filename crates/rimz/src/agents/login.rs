@@ -301,7 +301,10 @@ impl LoginCatalog {
         requested: &RoomLogins,
         project: &RoomLogins,
     ) -> Result<RoomLogins, BirthLoginErr> {
-        for (kind, name) in requested.iter().chain(project) {
+        let chosen_project = project
+            .iter()
+            .filter(|(kind, _)| !requested.contains_key(*kind));
+        for (kind, name) in requested.iter().chain(chosen_project) {
             self.select(kind, name)?;
         }
         if let Some(frozen) = frozen {
