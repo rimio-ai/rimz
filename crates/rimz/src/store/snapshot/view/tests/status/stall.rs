@@ -319,3 +319,38 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
 fn spent_windows() -> Vec<RateLimitWindow> {
     vec![window(100, 3_600)]
 }
+
+#[test]
+fn model_sub_caps_cannot_park_stalled_sibling_models() {
+    let sub_cap = RateLimitWindow {
+        scope: Some(crate::agents::RateLimitWindowScope {
+            id: "model:fable".to_owned(),
+            label: "Fable".to_owned(),
+        }),
+        duration_mins: Some(10_080),
+        share_pct: Some(50),
+        ..window(100, 86_400)
+    };
+    for (parent_used, expected) in [(37, AgentStatus::Failed), (100, AgentStatus::Paused)] {
+        let session = agent("claude", "root", AgentStatus::Running, 0)
+            .worktree("/repo/main")
+            .in_pane("%1")
+            .active_ago(default_stall_secs() + 60);
+        let windows = vec![
+            RateLimitWindow {
+                duration_mins: Some(10_080),
+                ..window(parent_used, 86_400)
+            },
+            sub_cap.clone(),
+        ];
+        let snapshot = room_with_agent_panes_and_capacities(
+            vec![session],
+            provider_capacity("claude", windows),
+        );
+        assert_eq!(
+            row(&snapshot, "root").status(),
+            Some(expected),
+            "parent used {parent_used}"
+        );
+    }
+}

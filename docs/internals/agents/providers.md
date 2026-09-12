@@ -100,6 +100,8 @@ What fills each part of a panel:
 
 **Where the caches live.** The account, rate-limit, and credits caches are user-scoped and persistent under `$XDG_STATE_HOME/rimz/shared/`, single-flighted across rooms by locks under `$XDG_RUNTIME_DIR/rimz/shared/`. The elected producer publishes `accounts.json`, `rate_limits.json`, and `credits.json`; consumers read them and never fork. A due account batch runs independent account-then-version chains through four scoped workers and joins them before one deterministic atomic `accounts.json` publication. A caller that cannot open the coordination lock may probe locally without publishing, and a caller that times out behind a live producer serves the current cache for that frame and lets the next tick observe the winner, so fresh rooms do not duplicate the cold subprocess wave.
 
+The rate-limit cache schema is version 5: older versions cold-drop because pre-share writers can discard a model sub-cap's `share_pct` and turn its headroom into the wrong axis. Scoped quota values remain intact for status decisions after their reset; only display projection clears expired scoped usage to unknown.
+
 ### Per-provider spend
 
 A panel's headline line is transcript-history burn for the configured `[sidebar] spend_window`: the `◎` session count, then the token breakdown `◇ ↘ ↗ ◌` (integer magnitudes, the fleet-store rows' exact vocabulary, with cache creation folded into `↘` input), with the bold dollar-green `$` pinned right. It reads from `spending`, the per-provider [`SpendTally`](../../../crates/rimz/src/agents/spending/aggregate.rs) the walk returns ([Cost history](#cost-history)): the producer attaches each kind's entry to its panel before sorting, and the renderer reads `spending.headline` (serialized as `today` in the cache for compatibility).
@@ -190,6 +192,8 @@ Transient account-usage HTTP failures (transport, body read, and 5xx responses) 
 A window is **spent** at `used_percentage == 100`: it is currently limiting while its reset still sits ahead. The spent window paints the dashboard's budget bars; it does not park every agent of that kind.
 
 A row becomes `paused` only when that agent actually stopped mid-turn on a limit or transient server error. A native turn-error certificate (`rate_limit`, `spend_limit`, or `overloaded`) parks the affected running agent, and a stalled running agent uses the fused spent, unreset kind window as the fallback pause predicate. `overloaded` covers provider overload and transient 5xx server errors, and neither has a local reset clock.
+
+Model sub-caps cannot explain an account-wide stall: a spent Fable share never parks another Claude model. The fallback excludes scoped windows carrying a parent duration; durationless named quotas retain their existing spent/reset behavior, including promotion of a limit marker to `failed` after the quota resets.
 
 A `rate_limit` or `spend_limit` pause is resumable while the fused account budget has a subscription window with a future reset, including the common spend-limit case where extra credits are disabled or exhausted but the mana bar will refill. A recovered mana bar keeps the row parked while the persisted [auto-continue](#auto-continue) record has a chance to wake the turn, rather than turning a frozen per-agent 100% reading into a spurious `!`.
 

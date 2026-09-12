@@ -651,6 +651,15 @@ fn model_sub_cap_partitions_only_its_parent_without_changing_rows() {
     let rows = metered_bar_rows(&theme, &panel);
     assert_eq!(rows.len(), 2);
     assert!(rows.iter().all(|row| !text(row).contains(['╱', '▰'])));
+
+    panel.windows.remove(1);
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(
+        rows.len(),
+        1,
+        "a missing parent cannot promote Fable to a row"
+    );
+    assert_eq!(rows[0], baseline[0]);
 }
 
 #[test]

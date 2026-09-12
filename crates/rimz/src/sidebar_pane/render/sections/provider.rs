@@ -1186,7 +1186,7 @@ fn provider_bar_rows(
     let (sub_caps, windows): (Vec<_>, Vec<_>) = panel
         .windows
         .iter()
-        .partition(|window| panel.windows.iter().any(|parent| window.sub_cap_of(parent)));
+        .partition(|window| window.scope.is_some() && window.duration_mins.is_some());
     select_provider_bars(panel, &windows)
         .into_iter()
         .map(|bar| match bar {

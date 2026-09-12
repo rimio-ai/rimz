@@ -142,6 +142,33 @@ fn limit_marker_terminal_row_parks_until_budget_resets() {
 }
 
 #[test]
+fn named_quota_limit_marker_becomes_actionable_after_its_reset() {
+    for (resets_in, expected) in [(3_600, AgentStatus::Paused), (-60, AgentStatus::Failed)] {
+        let quota = RateLimitWindow {
+            scope: Some(crate::agents::RateLimitWindowScope {
+                id: "chat".to_owned(),
+                label: "cr".to_owned(),
+            }),
+            ..unprojectable_spent_window(resets_in)
+        };
+        let session = agent("copilot", "root", AgentStatus::Running, 0)
+            .worktree("/repo/main")
+            .in_pane("%1")
+            .active_ago(60)
+            .paused_turn_error(10, "You've hit your usage limit");
+        let snapshot = room_with_agent_panes_and_capacities(
+            vec![session],
+            provider_capacity("copilot", vec![quota]),
+        );
+        assert_eq!(
+            row(&snapshot, "root").status(),
+            Some(expected),
+            "reset in {resets_in}"
+        );
+    }
+}
+
+#[test]
 fn legacy_session_limit_marker_parks_while_budget_is_spent() {
     let session = agent("claude", "session-limited", AgentStatus::Running, 0)
         .worktree("/repo/main")

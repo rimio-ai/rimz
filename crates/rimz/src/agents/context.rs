@@ -910,11 +910,7 @@ impl AgentCurrentUsage {
     }
 }
 
-/// The rate-limit windows the agent surfaces. Temporal windows carry their own
-/// length, so a renderer derives the label (`5h`, `7d`, …) and reset-to-max
-/// roll-forward without provider-shaped buckets. Named quotas carry a stable
-/// provider scope and compact label instead; their missing duration keeps them
-/// out of temporal calculations.
+/// The rate-limit windows the agent surfaces. Temporal windows carry their own length for labels and refill projection. Scoped windows retain provider identity: durationless named quotas stand alone, while model sub-caps carry their parent's duration and share without becoming account-wide temporal limits.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentRateLimits {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1080,16 +1076,10 @@ impl RateLimitWindow {
         })
     }
 
-    /// Project this cached reading to `now`: expired scoped readings become unknown until the provider reports again; dated unscoped windows refill and roll forward by their length.
+    /// Project dated unscoped windows to `now`, refilling and rolling their reset forward. Scoped readings retain provider truth so status consumers can distinguish spent and elapsed quotas; display consumers clear expired scoped usage separately.
     pub fn projected_at(self, now: Timestamp) -> Self {
-        if self.scope.is_some() && self.resets_at.is_some_and(|reset| reset <= now) {
-            return Self {
-                used_percentage: None,
-                ..self
-            };
-        }
         match (self.resets_at, self.duration_mins) {
-            (Some(resets_at), Some(mins)) if resets_at <= now => Self {
+            (Some(resets_at), Some(mins)) if self.scope.is_none() && resets_at <= now => Self {
                 scope: self.scope,
                 used_percentage: Some(0),
                 resets_at: now

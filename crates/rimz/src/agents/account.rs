@@ -351,7 +351,7 @@ fn window_spent_unreset(window: &RateLimitWindow, now: Timestamp) -> bool {
 }
 
 /// Producer-published per-provider rate-limit windows.
-const RATE_LIMITS_CACHE_VERSION: u32 = 4;
+const RATE_LIMITS_CACHE_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitsCache {
