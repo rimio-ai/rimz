@@ -189,6 +189,11 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     // effect — hook install, session birth, sidebar, or the doomed nested
     // `attach --create`.
     if should_report_already_inside(args.attach.mode(), inside_selected_mux(mux)) {
+        if !args.account.is_empty() {
+            bail!(
+                "--account applies when a room is born, and this room is already running; run `rimz reset --account <KIND=NAME>` to change its accounts"
+            );
+        }
         report_already_inside(mux, &workspace)?;
         return Ok(());
     }
