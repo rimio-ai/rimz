@@ -1454,7 +1454,7 @@ fn team_owns_and_flip_compact_parse_default_and_round_trip() {
     use crate::store::message::AutoCompact;
 
     let harness: HarnessConfig =
-        toml::from_str("flip-compact = \"180k\"").expect("parse harness threshold");
+        toml::from_str("flip_compact = \"180k\"").expect("parse harness threshold");
     assert_eq!(harness.flip_compact, Some(AutoCompact::Tokens(180_000)));
     let encoded = toml::to_string(&harness).expect("serialize harness threshold");
     assert_eq!(

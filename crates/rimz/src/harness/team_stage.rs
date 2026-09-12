@@ -10,7 +10,7 @@ use crate::agents::AgentState;
 use crate::config::{DONE_STAGE, MachineConfig, Team};
 use crate::disk::{atomic, lock::WorkspaceLock};
 use crate::ids::{EventId, MessageId, MuxName, PaneId};
-use crate::message::compact::{self, CompactOutcome, CompactRequest};
+use crate::message::compact::{self, CompactErr, CompactOutcome, CompactRequest};
 use crate::message::dispatch::{self, DispatchMode, DispatchOutcome, DispatchRequest};
 use crate::store::event::SignalSource;
 use crate::store::message::{AutoCompact, DeliveryGate, HarnessNotice, MessageSender};
@@ -78,10 +78,7 @@ pub enum Delivery {
 pub enum Compaction {
     NotConfigured,
     NotHandedOff,
-    BelowThreshold {
-        occupied: Option<u64>,
-        threshold: u64,
-    },
+    BelowThreshold,
     Sent {
         message_id: MessageId,
         occupied_tokens: u64,
@@ -95,6 +92,14 @@ pub enum Compaction {
     Skipped {
         reason: String,
     },
+}
+
+#[derive(Debug, thiserror::Error)]
+enum FlipCompactErr {
+    #[error("{0}")]
+    Unavailable(String),
+    #[error(transparent)]
+    Compact(#[from] CompactErr),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -487,30 +492,33 @@ fn compact_flipper(
     }
     let occupied = agent.occupied_context_tokens();
     let window = agent.resolved_context_window();
+    let Some(occupied_tokens) = occupied.filter(|occupied| policy.reached(*occupied, window))
+    else {
+        return Compaction::BelowThreshold;
+    };
     let threshold = match policy {
         AutoCompact::Tokens(tokens) => tokens,
-        AutoCompact::Percent(percent) => (u128::from(window.unwrap_or_default())
+        // A reached percentage threshold proves the window is known and nonzero.
+        AutoCompact::Percent(percent) => (u128::from(window.expect("reached percentage window"))
             * u128::from(percent))
         .div_ceil(100)
         .try_into()
         .unwrap_or(u64::MAX),
     };
-    if pane.is_some() && !occupied.is_some_and(|occupied| policy.reached(occupied, window)) {
-        return Compaction::BelowThreshold {
-            occupied,
-            threshold,
-        };
-    }
     let message_id = MessageId::new();
     let outcome = (|| {
-        let pane = pane.as_ref().ok_or_else(|| "no bound pane".to_owned())?;
+        let pane = pane
+            .as_ref()
+            .ok_or_else(|| FlipCompactErr::Unavailable("no bound pane".to_owned()))?;
         let machine = MachineConfig::load_lenient();
         let command = crate::agents::spec_by_kind(agent.kind.as_str())
             .and_then(|spec| {
                 spec.launch
                     .compact_command(machine.harness.compact_instruction())
             })
-            .ok_or_else(|| format!("{} does not support compaction", agent.kind))?;
+            .ok_or_else(|| {
+                FlipCompactErr::Unavailable(format!("{} does not support compaction", agent.kind))
+            })?;
         compact::send_compact(
             request.workspace,
             request.store,
@@ -523,7 +531,7 @@ fn compact_flipper(
                 automated: true,
             },
         )
-        .map_err(|err| err.to_string())
+        .map_err(FlipCompactErr::from)
     })();
     assist_log::append(&AssistRecord {
         at: request.now,
@@ -535,23 +543,35 @@ fn compact_flipper(
             from: from.map(str::to_owned),
             to: request.to.to_owned(),
             occupied_tokens: occupied,
-            message_id: outcome.is_ok().then(|| message_id.to_string()),
+            message_id: match &outcome {
+                Err(
+                    FlipCompactErr::Unavailable(_)
+                    | FlipCompactErr::Compact(
+                        CompactErr::Compacting
+                        | CompactErr::Pending { .. }
+                        | CompactErr::Repeated { .. },
+                    ),
+                ) => None,
+                _ => Some(message_id.to_string()),
+            },
             delivered: matches!(outcome, Ok(CompactOutcome::Sent)),
-            error: outcome.as_ref().err().cloned(),
+            error: outcome.as_ref().err().map(ToString::to_string),
         },
     });
     match outcome {
         Ok(CompactOutcome::Sent) => Compaction::Sent {
             message_id,
-            occupied_tokens: occupied.unwrap_or_default(),
+            occupied_tokens,
             threshold,
         },
         Ok(CompactOutcome::Queued) => Compaction::Queued {
             message_id,
-            occupied_tokens: occupied.unwrap_or_default(),
+            occupied_tokens,
             threshold,
         },
-        Err(reason) => Compaction::Skipped { reason },
+        Err(reason) => Compaction::Skipped {
+            reason: reason.to_string(),
+        },
     }
 }
 

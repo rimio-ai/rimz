@@ -136,10 +136,11 @@ struct CohortArgs {
 
 #[derive(Debug, Args)]
 struct FlipArgs {
+    /// Destination stage owned by the team, or Done to finish the work.
     #[arg(value_name = "STAGE")]
     stage: String,
-    /// The progress note recorded on the board; what is done or where the work stands.
-    #[arg(value_name = "NOTE")]
+    /// Nonblank progress note recorded on the board; what is done or where the work stands.
+    #[arg(value_name = "NOTE", value_parser = parse_progress_note)]
     note: String,
     /// Select a team when several teams share the worktree.
     #[arg(
@@ -148,6 +149,15 @@ struct FlipArgs {
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::team_names)
     )]
     team: Option<String>,
+}
+
+fn parse_progress_note(note: &str) -> Result<String, String> {
+    if note.trim().is_empty() {
+        return Err(
+            "provide a nonblank progress note: what is done or where the work stands".to_owned(),
+        );
+    }
+    Ok(note.to_owned())
 }
 
 pub(super) fn stage_strip(stages: &[String], current: Option<&str>) -> String {
@@ -384,6 +394,23 @@ mod tests {
             assert!(TeamsHarness::try_parse_from(["rimz", "flip", stage]).is_err());
             assert!(TeamsHarness::try_parse_from(["rimz", "flip", stage, "note"]).is_ok());
         }
+        for note in ["", " ", "\t\r\n", "\u{2003}"] {
+            let error = TeamsHarness::try_parse_from(["rimz", "flip", "Plan", note]).unwrap_err();
+            assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+            assert!(error.to_string().contains("nonblank progress note"));
+        }
+        let note = "  Ready.\r\nKeep the evidence.  ";
+        let args = parse_teams(&["rimz", "flip", "Plan", note]);
+        let Some(TeamsSubcmd::Flip(args)) = args.command else {
+            panic!("flip verb");
+        };
+        assert_eq!(args.note, note);
+        let help = TeamsHarness::try_parse_from(["rimz", "flip", "--help"]).unwrap_err();
+        assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
+        assert!(
+            help.to_string()
+                .contains("Destination stage owned by the team, or Done")
+        );
         assert!(TeamsHarness::try_parse_from(["rimz", "flip", "Plan", "note", "--steer"]).is_err());
         for flag in ["-m", "--note", "-w", "--worktree"] {
             assert!(

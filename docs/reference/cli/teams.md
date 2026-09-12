@@ -162,7 +162,7 @@ rimz teams flip Review "implementation committed; report in implement-notes.md" 
 rimz teams flip Done "reflection recorded in reflect-notes.md; run complete"
 ```
 
-`rimz teams flip <STAGE> <NOTE> [--team NAME]` records progress and hands the board to the configured owner. Both positional arguments are required, including the note for `Done`. The note records what is done or where the work stands, not an instruction to the receiver.
+`rimz teams flip <STAGE> <NOTE> [--team NAME]` records progress and hands the board to the configured owner. Both positional arguments are required, including the note for `Done`; empty or whitespace-only notes are refused. The note records what is done or where the work stands, not an instruction to the receiver.
 
 Selection is worktree-based:
 
@@ -205,7 +205,7 @@ Delivery always parks at the owner's next done boundary; flip has no interrupt o
 
 `Done` is implicit and always last in the pipeline display; declaring it in either `stages` or `owns` is refused. It writes `Stage: Done`, appends the required note, and emits the signal without delivering a message. Flipping out of `Done` is allowed: keep the board and flip to an owned stage for a follow-up run. Same-stage flips repeat the ledger entry, signal, and eligible delivery. To correct a mistaken flip, flip back to the intended stage; both actions stay in the ledger.
 
-The receipt names the flipper and cohort, brackets the current stage in the pipeline, and reports the note, owner delivery, and any compaction action. For example:
+The receipt names the flipper and cohort, brackets the current stage in the declared pipeline, and reports the note, owner delivery, and any compaction action. With no declared `stages`, it omits the pipeline strip. Multiline notes stay intact in the Stage notice and signal but collapse to one line on the board and receipt. For example:
 
 ```text
 Flipped Plan -> Implement by @planner  (forge#teams-flip · teams-flip)
@@ -219,7 +219,7 @@ A first flip says `Opened <stage>`. The owner row can also say `sent now`, `not 
 
 No role declares `owns`? Add ownership before using `flip`. Unknown stage? Use an exact declared name; a declared but unowned stage needs an owner. Launch and flip reject blank stage names, surrounding whitespace or control characters, duplicate owners, explicit `Done`, or owned names missing from a nonempty `stages` list. Stage-owner role names must omit parentheses and control characters. A signal or delivery failure after the board write reports completed steps and exits nonzero; repeat `rimz teams flip <stage> "<progress note>"` to retry rather than undoing the board by hand.
 
-Set `[harness] flip-compact = "180k"` to compact a flipper's own context at its next turn boundary once it reaches that threshold; unset means off. A role's `flip-compact = "220k"` overrides the default, and `flip-compact = "off"` disables it for that role. Thresholds accept token counts or percentages such as `"70%"`. Compaction requires a cohort member leaving a stage its role owns for one it does not own. `Done` counts as not owned, and a non-live destination owner does not prevent compaction. User flips, same-stage re-fires, moves between self-owned stages, and flips of another role's stage never compact. There is no first-leave exemption: every eligible flip checks current occupied context.
+Set `[harness] flip_compact = "180k"` to compact a flipper's own context at its next turn boundary once it reaches that threshold; unset means off. A role's `flip-compact = "220k"` overrides the default, and `flip-compact = "off"` disables it for that role. Thresholds accept token counts or percentages such as `"70%"`. Compaction requires a cohort member leaving a stage its role owns for one it does not own. `Done` counts as not owned, and a non-live destination owner does not prevent compaction. User flips, same-stage re-fires, moves between self-owned stages, and flips of another role's stage never compact. There is no first-leave exemption: every eligible flip checks current occupied context before pane availability. Below-threshold flips, including those with unknown occupancy, make no attempt and write no assist record.
 
 Compaction is best-effort enrichment: an unavailable pane or compact-command error appears as `skipped` without failing the flip. Attempts append a `flip compaction` assist record and appear in `rimz stats`. Launch refuses an effective threshold on adapters without a compact command; set `flip-compact = "off"` on that role or choose a supported adapter. This is separate from native `auto-compact`, smart compaction of a message target, and idle compaction.
 

@@ -52,6 +52,17 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
             "no matching live team cohort in worktree {}",
             worktree.display()
         ),
+        [first, rest @ ..] if rest.iter().all(|cohort| cohort.team == first.team) => bail!(
+            "team `{}` has multiple live cohorts in worktree {} in channels {}; stop the extra cohorts with `rimz teams stop {} -w <channel>` before flipping",
+            first.team,
+            worktree.display(),
+            candidates
+                .iter()
+                .map(|cohort| format!("#{}", cohort.channel))
+                .collect::<Vec<_>>()
+                .join(", "),
+            first.team
+        ),
         _ => bail!(
             "multiple live team cohorts in worktree {}; select a team with --team <name>: {}",
             worktree.display(),
@@ -156,12 +167,14 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
             .unwrap_or(worktree.as_os_str())
             .to_string_lossy()
     )?;
-    writeln!(
-        out,
-        "  {}",
-        super::stage_strip(&team.stages, Some(&receipt.to))
-    )?;
-    writeln!(out, "  note     {}", args.note)?;
+    if !team.stages.is_empty() {
+        writeln!(
+            out,
+            "  {}",
+            super::stage_strip(&team.stages, Some(&receipt.to))
+        )?;
+    }
+    writeln!(out, "  note     {}", args.note.replace(['\r', '\n'], " "))?;
     match receipt.delivery {
         Delivery::Sent { .. } | Delivery::Queued { .. } => {
             // The domain only delivers a stage after resolving its owner.
@@ -192,9 +205,7 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
         )?,
         Compaction::Sent { .. } => writeln!(out, "  compact  sent")?,
         Compaction::Skipped { reason } => writeln!(out, "  compact  skipped: {reason}")?,
-        Compaction::BelowThreshold { .. }
-        | Compaction::NotConfigured
-        | Compaction::NotHandedOff => {}
+        Compaction::BelowThreshold | Compaction::NotConfigured | Compaction::NotHandedOff => {}
     }
     Ok(())
 }
