@@ -11,6 +11,7 @@ use crate::agents::ManualSkill;
 
 use super::{SandboxErr, SkipReason};
 
+#[derive(Debug)]
 pub(super) enum MaterializeErr {
     Unusable { path: PathBuf, reason: SkipReason },
     Sandbox(SandboxErr),
@@ -28,23 +29,55 @@ struct Entry {
     bytes: Option<Vec<u8>>,
 }
 
-pub(super) fn materialize(
+pub struct PlannedCopy {
+    pub source: PathBuf,
+    pub target: PathBuf,
+    entries: Vec<Entry>,
+    skills_dir: PathBuf,
+}
+
+pub(super) fn plan(
     skills_dir: &Path,
     source: &Path,
     kind: ManualSkill,
-) -> Result<PathBuf, MaterializeErr> {
+) -> Result<PlannedCopy, MaterializeErr> {
     super::validate_path(skills_dir)?;
     let mut entries = Vec::new();
     collect(source, Path::new(""), &mut Vec::new(), &mut entries)?;
+    plan_entries(skills_dir, source, kind, entries)
+}
+
+fn plan_entries(
+    skills_dir: &Path,
+    source: &Path,
+    kind: ManualSkill,
+    mut entries: Vec<Entry>,
+) -> Result<PlannedCopy, MaterializeErr> {
     let target = skills_dir.join(digest(&entries, kind));
-    crate::disk::paths::ensure_private_runtime_dir(skills_dir).map_err(SandboxErr::from)?;
+    rewrite(&mut entries, source, kind)?;
+    Ok(PlannedCopy {
+        source: source.to_path_buf(),
+        target,
+        entries,
+        skills_dir: skills_dir.to_path_buf(),
+    })
+}
+
+pub(super) fn apply(copy: &PlannedCopy) -> Result<(), SandboxErr> {
+    let PlannedCopy {
+        target,
+        entries,
+        skills_dir,
+        ..
+    } = copy;
+    crate::disk::paths::ensure_private_runtime_dir(skills_dir)?;
     if target.is_dir() {
-        return Ok(target);
+        return Ok(());
     }
     let temp = skills_dir.join(format!(".{}", uuid::Uuid::now_v7()));
-    crate::disk::paths::ensure_private_runtime_dir(&temp).map_err(SandboxErr::from)?;
+    crate::disk::paths::ensure_private_runtime_dir(&temp)?;
     let result = (|| {
-        for entry in &entries {
+        for entry in entries {
             let path = temp.join(&entry.path);
             match &entry.bytes {
                 Some(bytes) => fs::write(&path, bytes),
@@ -52,7 +85,6 @@ pub(super) fn materialize(
             }
             .map_err(|error| io_error(&path, error))?;
         }
-        rewrite(&temp, source, kind)?;
         for entry in entries.iter().rev() {
             let path = temp.join(&entry.path);
             let mut permissions = entry.permissions.clone();
@@ -61,17 +93,17 @@ pub(super) fn materialize(
             }
             fs::set_permissions(&path, permissions).map_err(|error| io_error(&path, error))?;
         }
-        match fs::rename(&temp, &target) {
-            Ok(()) => Ok(target.clone()),
+        match fs::rename(&temp, target) {
+            Ok(()) => Ok(()),
             Err(error)
                 if matches!(
                     error.kind(),
                     io::ErrorKind::AlreadyExists | io::ErrorKind::DirectoryNotEmpty
                 ) && target.is_dir() =>
             {
-                Ok(target.clone())
+                Ok(())
             }
-            Err(error) => Err(io_error(&target, error).into()),
+            Err(error) => Err(io_error(target, error)),
         }
     })();
     if temp.exists() {
@@ -175,37 +207,76 @@ fn digest(entries: &[Entry], kind: ManualSkill) -> String {
     hex::encode(hash.finalize())
 }
 
-fn rewrite(root: &Path, source: &Path, kind: ManualSkill) -> Result<(), MaterializeErr> {
+fn rewrite(
+    entries: &mut Vec<Entry>,
+    source: &Path,
+    kind: ManualSkill,
+) -> Result<(), MaterializeErr> {
     let metadata = match kind {
         ManualSkill::Frontmatter => "SKILL.md",
         ManualSkill::OpenAiPolicy => "agents/openai.yaml",
         ManualSkill::Unsupported => return Ok(()),
     };
-    let path = root.join(metadata);
-    let text = match fs::read_to_string(&path) {
-        Ok(text) => Some(text),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(io_error(&path, error).into()),
-    };
+    let index = entries
+        .iter()
+        .position(|entry| entry.path == Path::new(metadata));
+    let text = index
+        .map(|index| {
+            let bytes = entries[index].bytes.as_deref().ok_or_else(|| {
+                unreadable(
+                    &source.join(metadata),
+                    io::Error::from(io::ErrorKind::IsADirectory),
+                )
+            })?;
+            std::str::from_utf8(bytes).map_err(|error| {
+                unreadable(
+                    &source.join(metadata),
+                    io::Error::new(io::ErrorKind::InvalidData, error),
+                )
+            })
+        })
+        .transpose()?;
     let edited = match kind {
         ManualSkill::Frontmatter => {
             let Some(text) = text else {
                 return Ok(());
             };
-            frontmatter_user_only(&text)
+            frontmatter_user_only(text)
         }
-        ManualSkill::OpenAiPolicy => openai_policy_user_only(text.as_deref()),
+        ManualSkill::OpenAiPolicy => openai_policy_user_only(text),
         ManualSkill::Unsupported => return Ok(()),
     }
     .map_err(|reason| MaterializeErr::Unusable {
         path: source.join(metadata),
         reason: SkipReason::Metadata(reason),
     })?;
-    if kind == ManualSkill::OpenAiPolicy {
-        let agents = root.join("agents");
-        fs::create_dir_all(&agents).map_err(|error| io_error(&agents, error))?;
+    if let Some(index) = index {
+        entries[index].bytes = Some(edited.into_bytes());
+        return Ok(());
     }
-    fs::write(&path, edited).map_err(|error| io_error(&path, error).into())
+    if let Some(agents) = entries
+        .iter()
+        .find(|entry| entry.path == Path::new("agents"))
+    {
+        if agents.bytes.is_some() {
+            return Err(unreadable(
+                &source.join("agents"),
+                io::Error::from(io::ErrorKind::NotADirectory),
+            ));
+        }
+    } else {
+        entries.push(Entry {
+            path: PathBuf::from("agents"),
+            permissions: fs::Permissions::from_mode(0o755),
+            bytes: None,
+        });
+    }
+    entries.push(Entry {
+        path: PathBuf::from(metadata),
+        permissions: fs::Permissions::from_mode(0o644),
+        bytes: Some(edited.into_bytes()),
+    });
+    Ok(())
 }
 
 fn mapping_key(line: &str) -> Option<(&str, &str)> {
@@ -491,6 +562,64 @@ fn openai_policy_user_only(text: Option<&str>) -> Result<String, &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copy_plan_keeps_source_digest_and_captures_rewritten_bytes_for_apply() {
+        let entries = vec![Entry {
+            path: PathBuf::from("SKILL.md"),
+            permissions: fs::Permissions::from_mode(0o640),
+            bytes: Some(b"---\nname: review\n---\nReview carefully.\n".to_vec()),
+        }];
+        let skills_dir = Path::new("/room/skills");
+        let source = Path::new("/provider/review");
+        let target = skills_dir.join(digest(&entries, ManualSkill::Frontmatter));
+        let copy = plan_entries(skills_dir, source, ManualSkill::Frontmatter, entries).unwrap();
+
+        assert_eq!(copy.target, target);
+        assert_eq!(copy.source, source);
+        assert_eq!(copy.skills_dir, skills_dir);
+        assert_eq!(copy.entries[0].permissions.mode(), 0o640);
+        assert_eq!(
+            copy.entries[0].bytes.as_deref(),
+            Some(
+                b"---\nname: review\ndisable-model-invocation: true\n---\nReview carefully.\n"
+                    .as_slice()
+            )
+        );
+        assert_ne!(
+            copy.target,
+            skills_dir.join(digest(&copy.entries, ManualSkill::Frontmatter))
+        );
+    }
+
+    #[test]
+    fn copy_plan_creates_missing_policy_entries_and_refuses_unusable_metadata() {
+        let skills_dir = Path::new("/room/skills");
+        let source = Path::new("/provider/review");
+        let copy = plan_entries(skills_dir, source, ManualSkill::OpenAiPolicy, Vec::new()).unwrap();
+        assert_eq!(copy.entries.len(), 2);
+        assert_eq!(copy.entries[0].path, Path::new("agents"));
+        assert!(copy.entries[0].bytes.is_none());
+        assert_eq!(copy.entries[1].path, Path::new("agents/openai.yaml"));
+        assert_eq!(
+            copy.entries[1].bytes.as_deref(),
+            Some(b"policy:\n  allow_implicit_invocation: false\n".as_slice())
+        );
+
+        let result = plan_entries(
+            skills_dir,
+            source,
+            ManualSkill::OpenAiPolicy,
+            vec![Entry {
+                path: PathBuf::from("agents/openai.yaml"),
+                permissions: fs::Permissions::from_mode(0o644),
+                bytes: Some(b"policy: &shared\n  allow_implicit_invocation: true\n".to_vec()),
+            }],
+        );
+        assert!(
+            matches!(result, Err(MaterializeErr::Unusable { path, reason: SkipReason::Metadata(_) }) if path == source.join("agents/openai.yaml"))
+        );
+    }
 
     #[test]
     fn frontmatter_marker_preserves_body_and_nested_keys() {

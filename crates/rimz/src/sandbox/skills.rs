@@ -12,14 +12,15 @@ use super::{DirEntry, DirEntryKind, DirView, SandboxErr, SkillInputs, SkippedSki
 pub(super) struct SkillView {
     pub dir: Option<DirView>,
     pub skipped: Vec<SkippedSkill>,
+    pub copies: Vec<rewrite::PlannedCopy>,
 }
 
-pub(super) fn prepare(
+pub(super) fn plan(
     env: &BTreeMap<String, String>,
     skills_dir: &Path,
     inputs: &SkillInputs<'_>,
 ) -> Result<SkillView, SandboxErr> {
-    match prepare_view(env, skills_dir, inputs) {
+    match plan_view(env, skills_dir, inputs) {
         Err(error) if inputs.callable.is_none() => {
             tracing::debug!(%error, "keeping native skill discovery because the optional view is unavailable");
             Ok(SkillView::default())
@@ -28,7 +29,7 @@ pub(super) fn prepare(
     }
 }
 
-fn prepare_view(
+fn plan_view(
     env: &BTreeMap<String, String>,
     skills_dir: &Path,
     inputs: &SkillInputs<'_>,
@@ -52,6 +53,7 @@ fn prepare_view(
     let mut roots = vec![home.clone()];
     let mut changed = false;
     let mut skipped = Vec::new();
+    let mut copies = Vec::new();
     let config = env
         .get("XDG_CONFIG_HOME")
         .filter(|value| !value.is_empty())
@@ -107,9 +109,10 @@ fn prepare_view(
             {
                 continue;
             }
-            match rewrite::materialize(skills_dir, &entry.source, inputs.manual) {
+            match rewrite::plan(skills_dir, &entry.source, inputs.manual) {
                 Ok(copy) => {
-                    shadows.insert(entry.source.clone(), copy);
+                    shadows.insert(entry.source.clone(), copy.target.clone());
+                    copies.push(copy);
                 }
                 Err(rewrite::MaterializeErr::Unusable { path, reason }) => {
                     tracing::debug!(skill = %name, path = %path.display(), "omitting skill the view cannot prepare");
@@ -165,6 +168,7 @@ fn prepare_view(
             shadows,
         }),
         skipped,
+        copies,
     })
 }
 
