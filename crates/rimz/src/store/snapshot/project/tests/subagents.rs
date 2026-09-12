@@ -64,6 +64,10 @@ fn harness_prompt_keeps_finished_children_listed() {
         assert_eq!(decoded.user_turn_started_at, parent.user_turn_started_at);
         let snapshot = room_with_agent_panes(agents);
         assert_eq!(row(&snapshot, "parent").sub_agents().len(), 1, "{header}");
+        assert!(
+            !row(&snapshot, "parent").sub_agents()[0].prior_turn,
+            "{header}"
+        );
 
         for prompt in [
             Some("Type: USER_MESSAGE\nFrom: @user\nContent:\nnext"),
@@ -88,8 +92,16 @@ fn harness_prompt_keeps_finished_children_listed() {
             assert_eq!(parent.user_turn_started_at, parent.turn_started_at);
             let snapshot = room_with_agent_panes(agents);
             assert!(
-                row(&snapshot, "parent").sub_agents().is_empty(),
+                row(&snapshot, "parent").sub_agents()[0].prior_turn,
                 "{prompt:?}"
+            );
+            assert_eq!(
+                row(&snapshot, "parent")
+                    .as_agent()
+                    .unwrap()
+                    .current_sub_agents()
+                    .count(),
+                0
             );
         }
     }
@@ -801,12 +813,9 @@ fn finished_subagent_verdict_survives_the_parked_wake() {
 }
 
 #[test]
-fn context_reset_retires_prior_turn_subagents() {
-    // A child finishes inside the parent's turn, then the parent runs a context
-    // reset. Each reset advances `turn_started_at` past the child's activity, so
-    // the finished verdict drops from the expanded card — the user-typed
-    // `/compact` and `/clear` behave like the automatic compaction, which
-    // already opens a turn.
+fn context_reset_folds_prior_turn_subagents() {
+    // Manual resets advance the user-turn boundary and fold finished children
+    // into history; automatic mid-turn compaction keeps current entries open.
     let history = |resets: Vec<EventEnvelope>| {
         let mut events = vec![
             raw_lifecycle_at(
@@ -929,21 +938,18 @@ fn context_reset_retires_prior_turn_subagents() {
                 Some(reset_at),
                 "{label}: the reset advances the subagent boundary",
             );
-            assert!(
-                rows[0].sub_agents().is_empty(),
-                "{label}: the prior turn's finished child is flushed",
-            );
         } else {
             assert_eq!(
                 parent.turn_started_at,
                 Some(turn_at),
                 "{label}: the resumed turn keeps its boundary",
             );
-            assert_eq!(
-                rows[0].sub_agents().len(),
-                1,
-                "{label}: the in-flight turn's child stays listed",
-            );
         }
+        assert_eq!(
+            rows[0].sub_agents().len(),
+            1,
+            "{label}: the finished child stays retained"
+        );
+        assert_eq!(rows[0].sub_agents()[0].prior_turn, flushes, "{label}");
     }
 }
