@@ -22,7 +22,7 @@ use super::credits::{
     complete_provider_account_usage, merge_provider_realtime_usage,
     renew_provider_account_usage_claim,
 };
-use super::rate_limits::drop_kind_rate_limits;
+use super::rate_limits::drop_login_rate_limits;
 use super::trace::{TraceEvent, duration_ms};
 use super::{merge_account_rate_limits, trace};
 
@@ -284,7 +284,10 @@ fn complete_direct_account_usage(
             kind,
             "provider account changed; dropping cached windows",
         );
-        drop_kind_rate_limits(runtime, kind);
+        let logins = crate::agents::RoomLoginSet::for_runtime(runtime);
+        if let Some(key) = logins.key(kind) {
+            drop_login_rate_limits(runtime, &key);
+        }
     }
     if let Some(snapshot) = completion.snapshot {
         publish_account_usage_windows(runtime, kind, completion.identity, snapshot.rate_limits);
@@ -320,7 +323,11 @@ fn publish_account_usage_windows(
     let Some(windows) = windows else {
         return false;
     };
-    merge_account_rate_limits(runtime, kind, identity, windows);
+    let logins = crate::agents::RoomLoginSet::for_runtime(runtime);
+    let Some(key) = logins.key(kind) else {
+        return false;
+    };
+    merge_account_rate_limits(runtime, &key, identity, windows);
     true
 }
 

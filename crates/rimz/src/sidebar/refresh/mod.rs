@@ -214,6 +214,8 @@ pub(super) fn refresh_heavy_lanes(
     spending_startup: crate::agents::spending::service::SpendingServiceStartup,
     state: &mut ProducerRefreshState,
 ) -> RefreshedLanes {
+    let logins =
+        crate::agents::RoomLoginSet::resolve(&state_paths.workspace_record, &config.accounts);
     let store = Store::open_existing(state_paths.clone(), runtime.clone());
     refresh_codex_daemon_reap_cache(
         daemon_probe_agents,
@@ -240,7 +242,7 @@ pub(super) fn refresh_heavy_lanes(
         // This scoped fold is not returned as the final snapshot.
         RemoteControlServerHealth::default(),
     );
-    refresh_rate_limits(&mut panels, runtime);
+    refresh_rate_limits(&mut panels, runtime, &logins);
     // `with_provider_aggregates` rebuilds panels with empty credit fields; the
     // scoped producer fold must reapply the shared cache before auto-redeem can
     // evaluate the already-known reset credits.
@@ -253,11 +255,18 @@ pub(super) fn refresh_heavy_lanes(
         &config.resume,
         base.resume_outcomes.as_deref().unwrap_or_default(),
     );
-    crate::harness::auto_continue::resume_parked(base, runtime, &config.resume, &resume_messages);
+    crate::harness::auto_continue::resume_parked(
+        base,
+        runtime,
+        &logins,
+        &config.resume,
+        &resume_messages,
+    );
     crate::harness::idle_compact::compact_idle_agents(base, runtime, &config.harness);
     crate::harness::auto_redeem::redeem_credits(
         &panels.providers,
         runtime,
+        &logins,
         &config.resume,
         base.now,
     );

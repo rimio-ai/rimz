@@ -174,6 +174,7 @@ struct FireScope {
     scope_runtime: RuntimePaths,
     resolved: Option<ResolvedSingleAgentLaunch>,
     managed_launch: ManagedLaunchState,
+    login_key: Option<crate::ids::LoginKey>,
     capacity: OnceCell<Option<ProviderCapacity>>,
 }
 
@@ -183,7 +184,9 @@ impl FireScope {
         scope_runtime: RuntimePaths,
         resolved: Option<ResolvedSingleAgentLaunch>,
     ) -> Self {
+        let login_key = crate::agents::RoomLoginSet::for_runtime(&scope_runtime).key(kind.as_str());
         Self {
+            login_key,
             kind,
             scope_runtime,
             resolved,
@@ -196,7 +199,7 @@ impl FireScope {
         self.capacity
             .get_or_init(|| {
                 self.managed_launch
-                    .capacity(&self.scope_runtime, self.kind.as_str())
+                    .capacity(&self.scope_runtime, self.login_key.as_ref()?)
             })
             .as_ref()
     }
@@ -394,12 +397,9 @@ impl<'a> TaskFire<'a> {
         }
         if let Some(scope) = &context.scope
             && let Some(binding) = scope.managed_launch.binding()
-            && let Some(reason) = crate::agents::provider_budget_gate(
-                &scope.scope_runtime,
-                scope.kind.as_str(),
-                binding,
-                self.now,
-            )
+            && let Some(key) = scope.login_key.as_ref()
+            && let Some(reason) =
+                crate::agents::provider_budget_gate(&scope.scope_runtime, key, binding, self.now)
         {
             return Ok(Some(self.record_gate(LoopRunResult::BudgetSkipped, reason)));
         }

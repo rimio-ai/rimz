@@ -1,5 +1,9 @@
 use super::*;
 
+fn login_key(kind: &str) -> LoginKey {
+    LoginKey::default_for(AgentKind::new_unchecked(kind))
+}
+
 fn window(
     now: Timestamp,
     used_percentage: Option<u8>,
@@ -38,7 +42,7 @@ fn sub_provider_windows_require_an_exact_binding_for_launch_controls() {
     let other = ProviderAccountBinding::new(scope.clone(), "other".to_owned()).unwrap();
     let mut cache = RateLimitsCache {
         entries: BTreeMap::from([(
-            "qwen".to_owned(),
+            login_key("qwen"),
             RateLimitCacheEntry {
                 scope,
                 account_key: Some("owner".to_owned()),
@@ -64,21 +68,25 @@ fn sub_provider_windows_require_an_exact_binding_for_launch_controls() {
     };
     let (_dir, runtime) = runtime();
     write_cache(&runtime, &cache);
-    assert!(ProviderCapacity::read(&runtime, "qwen").is_none());
-    assert!(ProviderCapacity::read_all(&runtime).is_empty());
-    let capacity = ProviderCapacity::read_bound(&runtime, "qwen", &binding).unwrap();
+    assert!(ProviderCapacity::read(&runtime, &login_key("qwen")).is_none());
+    assert!(ProviderCapacity::read_all(&runtime, &RoomLoginSet::native()).is_empty());
+    let capacity = ProviderCapacity::read_bound(&runtime, &login_key("qwen"), &binding).unwrap();
     assert!(capacity.longest_window_surplus(now).is_some());
     assert!(capacity.spent_window(now).is_some());
-    assert!(ProviderCapacity::read_bound(&runtime, "qwen", &other).is_none());
-    let reason = provider_budget_gate(&runtime, "qwen", &binding, now).unwrap();
+    assert!(ProviderCapacity::read_bound(&runtime, &login_key("qwen"), &other).is_none());
+    let reason = provider_budget_gate(&runtime, &login_key("qwen"), &binding, now).unwrap();
     assert!(reason.contains("Qwen Alibaba International 30d window exhausted"));
     assert!(!reason.contains("owner"));
 
-    cache.entries.get_mut("qwen").unwrap().scope = ProviderAccountScope::KindWide;
-    cache.entries.get_mut("qwen").unwrap().account_key = None;
+    cache.entries.get_mut(&login_key("qwen")).unwrap().scope = ProviderAccountScope::KindWide;
+    cache
+        .entries
+        .get_mut(&login_key("qwen"))
+        .unwrap()
+        .account_key = None;
     write_cache(&runtime, &cache);
-    assert!(ProviderCapacity::read(&runtime, "qwen").is_some());
-    assert!(ProviderCapacity::read_all(&runtime).contains_key("qwen"));
+    assert!(ProviderCapacity::read(&runtime, &login_key("qwen")).is_some());
+    assert!(ProviderCapacity::read_all(&runtime, &RoomLoginSet::native()).contains_key("qwen"));
 }
 
 #[test]
@@ -86,7 +94,7 @@ fn managed_launch_state_selects_only_applicable_capacity() {
     let now = Timestamp::from_second(2_000_000_000).unwrap();
     let kind_wide = |kind: &str| {
         (
-            kind.to_owned(),
+            login_key(kind),
             RateLimitCacheEntry {
                 scope: ProviderAccountScope::KindWide,
                 limits: AgentRateLimits {
@@ -105,18 +113,18 @@ fn managed_launch_state_selects_only_applicable_capacity() {
 
     assert!(
         ManagedLaunchState::Unsupported
-            .capacity(&runtime, "claude")
+            .capacity(&runtime, &login_key("claude"))
             .is_some()
     );
     assert!(
         ManagedLaunchState::Unresolved
-            .capacity(&runtime, "qwen")
+            .capacity(&runtime, &login_key("qwen"))
             .is_none()
     );
 
     let scope = ProviderAccountScope::sub_provider("alibaba", "international");
     cache.entries.insert(
-        "qwen".to_owned(),
+        login_key("qwen"),
         RateLimitCacheEntry {
             scope: scope.clone(),
             account_key: Some("cached".to_owned()),
@@ -130,7 +138,7 @@ fn managed_launch_state_selects_only_applicable_capacity() {
     let other = ProviderAccountBinding::new(scope, "other".to_owned()).unwrap();
     assert!(
         ManagedLaunchState::Bound(other)
-            .capacity(&runtime, "qwen")
+            .capacity(&runtime, &login_key("qwen"))
             .is_none()
     );
 }
@@ -205,7 +213,7 @@ fn cache_read_cold_drops_corrupt_and_unknown_versions() {
     );
     let cache = RateLimitsCache {
         version: RateLimitsCache::default().version + 1,
-        entries: BTreeMap::from([("claude".to_owned(), Default::default())]),
+        entries: BTreeMap::from([(login_key("claude"), Default::default())]),
         ..Default::default()
     };
     write_cache(&runtime, &cache);
@@ -217,8 +225,8 @@ fn cache_read_cold_drops_corrupt_and_unknown_versions() {
     write_cache(
         &runtime,
         &RateLimitsCache {
-            version: 4,
-            entries: BTreeMap::from([("qwen".to_owned(), Default::default())]),
+            version: 5,
+            entries: BTreeMap::from([(login_key("qwen"), Default::default())]),
             ..Default::default()
         },
     );
@@ -226,7 +234,7 @@ fn cache_read_cold_drops_corrupt_and_unknown_versions() {
         read_rate_limits_cache(&runtime.shared_rate_limits_path())
             .entries
             .is_empty(),
-        "v4 writers can discard model shares, so their schema must cold-drop"
+        "v5 caches are kind-keyed, so their schema must cold-drop"
     );
 }
 

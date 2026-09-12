@@ -573,7 +573,7 @@ fn producer_reserves_a_spawn_and_paces_the_next_tick() {
     runtime.ensure_dirs().unwrap();
     crate::sidebar::refresh::merge_account_rate_limits(
         &runtime,
-        CODEX_KIND,
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(CODEX_KIND)),
         Default::default(),
         AgentRateLimits {
             windows: vec![RateLimitWindow {
@@ -592,7 +592,13 @@ fn producer_reserves_a_spawn_and_paces_the_next_tick() {
         ..Default::default()
     };
 
-    redeem_credits(std::slice::from_ref(&panel), &runtime, &config, now);
+    redeem_credits(
+        std::slice::from_ref(&panel),
+        &runtime,
+        &crate::agents::RoomLoginSet::native(),
+        &config,
+        now,
+    );
     let first = read_stamp(&runtime.shared_auto_redeem_path(CODEX_KIND)).unwrap();
     assert_eq!(first.attempted_at, now);
     assert_eq!(first.reason, RedeemReason::BlockedGain);
@@ -610,6 +616,7 @@ fn producer_reserves_a_spawn_and_paces_the_next_tick() {
     redeem_credits(
         std::slice::from_ref(&panel),
         &runtime,
+        &crate::agents::RoomLoginSet::native(),
         &config,
         now + Duration::from_secs(1),
     );

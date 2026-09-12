@@ -11,7 +11,8 @@ use crate::agents::account::{
     PendingRefill, RateLimitCacheEntry, RateLimitsCache, read_rate_limits_cache,
 };
 use crate::agents::context::RateLimitWindowKey;
-use crate::agents::{AccountUsageIdentity, AgentRateLimits, RateLimitWindow};
+use crate::agents::{AccountUsageIdentity, AgentRateLimits, RateLimitWindow, RoomLoginSet};
+use crate::ids::LoginKey;
 use crate::store::snapshot::SidebarSnapshot;
 use crate::utils::time::unix_now_ms;
 
@@ -77,10 +78,10 @@ impl WindowIndex {
     }
 }
 
-/// Seed one provider kind's account-scoped windows into the cache out-of-band, so
-/// a logged-in-but-idle provider's budget bars paint from the first frame instead
+/// Seed one login's account-scoped windows into the cache out-of-band, so a
+/// logged-in-but-idle provider's budget bars paint from the first frame instead
 /// of staying blank until a live session reports. Read-modify-write over the
-/// existing cache; other kinds are preserved untouched.
+/// existing cache; other logins are preserved untouched.
 ///
 /// Detached authoritative writers wait for the producer's short critical
 /// section so an accepted OAuth observation is published before its five-minute
@@ -88,7 +89,7 @@ impl WindowIndex {
 /// helper, never on the per-tick path.
 pub(crate) fn merge_account_rate_limits(
     runtime: &RuntimePaths,
-    kind: &str,
+    key: &LoginKey,
     identity: AccountUsageIdentity,
     windows: AgentRateLimits,
 ) {
@@ -108,7 +109,7 @@ pub(crate) fn merge_account_rate_limits(
     let mut windows = windows.stamped_at(observed_at);
     let prior_entry = cache
         .entries
-        .get(kind)
+        .get(key)
         .filter(|entry| entry.scope == identity.scope && entry.account_key == identity.account_key);
     // Carry the open unknown episode rather than closing it here. This write
     // proves an authoritative attempt landed, not that it carried usable windows;
@@ -140,7 +141,7 @@ pub(crate) fn merge_account_rate_limits(
         pending.extend(refill);
     }
     cache.entries.insert(
-        kind.to_owned(),
+        key.clone(),
         RateLimitCacheEntry {
             scope: identity.scope,
             account_key: identity.account_key,
@@ -153,10 +154,10 @@ pub(crate) fn merge_account_rate_limits(
     write_rate_limits_cache(&path, &cache);
 }
 
-/// Drop one provider kind's account-scoped windows after the local OAuth account
-/// key changes. The detached writer waits for normal producer contention; a
-/// real lock acquisition failure or absent kind is a no-op.
-pub(super) fn drop_kind_rate_limits(runtime: &RuntimePaths, kind: &str) {
+/// Drop one login's account-scoped windows after the local OAuth account key
+/// changes. The detached writer waits for normal producer contention; a real
+/// lock acquisition failure or absent login is a no-op.
+pub(super) fn drop_login_rate_limits(runtime: &RuntimePaths, key: &LoginKey) {
     let path = runtime.shared_rate_limits_path();
     let Some(_guard) = acquire_rate_limits_cache_lock(
         &runtime.shared_rate_limits_lock(),
@@ -165,7 +166,7 @@ pub(super) fn drop_kind_rate_limits(runtime: &RuntimePaths, kind: &str) {
         return;
     };
     let mut cache = read_rate_limits_cache(&path);
-    if cache.entries.remove(kind).is_none() {
+    if cache.entries.remove(key).is_none() {
         return;
     }
     cache.refreshed_at_ms = unix_now_ms();
@@ -226,17 +227,23 @@ fn unknown_idle_window(cached: RateLimitWindow) -> RateLimitWindow {
 pub(in crate::sidebar) fn apply_cached_rate_limits(
     snapshot: &mut SidebarSnapshot,
     runtime: &RuntimePaths,
+    logins: &RoomLoginSet,
 ) {
     if snapshot.providers.is_empty() {
         return;
     }
     let cached = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    let _ = project_rate_limits(snapshot, &cached, false, None);
+    let _ = project_rate_limits(snapshot, &cached, logins, false, None);
 }
 
 /// Fuse live account windows into the shared cache and project producer panels.
-/// The cache is rebuilt from current panels, so a logged-out kind drops out.
-pub(super) fn refresh_rate_limits(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths) {
+/// Only this room's login entries are rebuilt from current panels, so a
+/// logged-out kind drops out and other accounts' entries survive.
+pub(super) fn refresh_rate_limits(
+    snapshot: &mut SidebarSnapshot,
+    runtime: &RuntimePaths,
+    logins: &RoomLoginSet,
+) {
     let path = runtime.shared_rate_limits_path();
     let reset_kinds = {
         let Some(_guard) =
@@ -244,22 +251,13 @@ pub(super) fn refresh_rate_limits(snapshot: &mut SidebarSnapshot, runtime: &Runt
                 .ok()
                 .flatten()
         else {
-            apply_cached_rate_limits(snapshot, runtime);
+            apply_cached_rate_limits(snapshot, runtime, logins);
             return;
         };
         let cached = read_rate_limits_cache(&path);
-        let (next, reset_kinds) = if snapshot.providers.is_empty() {
-            (
-                (!cached.entries.is_empty()).then(|| RateLimitsCache {
-                    refreshed_at_ms: unix_now_ms(),
-                    ..Default::default()
-                }),
-                Vec::new(),
-            )
-        } else {
-            let trace = rate_limits_trace_path(runtime);
-            project_rate_limits(snapshot, &cached, true, trace.as_deref())
-        };
+        let trace = rate_limits_trace_path(runtime);
+        let (next, reset_kinds) =
+            project_rate_limits(snapshot, &cached, logins, true, trace.as_deref());
         if let Some(next) = next {
             write_rate_limits_cache(&path, &next);
         }
@@ -334,6 +332,7 @@ fn complete_omitted_duration_windows(prior: &[RateLimitWindow], current: &mut Ag
 fn project_rate_limits(
     snapshot: &mut SidebarSnapshot,
     cached: &RateLimitsCache,
+    logins: &RoomLoginSet,
     producer: bool,
     trace: Option<&Path>,
 ) -> (Option<RateLimitsCache>, Vec<String>) {
@@ -342,11 +341,14 @@ fn project_rate_limits(
     let now = snapshot.now;
     let mut next = RateLimitsCache {
         refreshed_at_ms: unix_now_ms(),
-        ..Default::default()
+        ..cached.clone()
     };
+    next.entries
+        .retain(|key, _| logins.key(key.kind.as_str()).as_ref() != Some(key));
     let mut refresh_kinds = BTreeSet::new();
 
     for panel in &mut snapshot.providers {
+        let login_key = logins.key(&panel.kind);
         if !panel.metered {
             panel.windows.clear();
             continue;
@@ -354,9 +356,9 @@ fn project_rate_limits(
         // Complete authoritative omissions against matching persisted truth
         // before indexing the live reading, then fuse each stable duration or
         // named-quota identity independently.
-        let prior_entry = cached
-            .entries
-            .get(&panel.kind)
+        let prior_entry = login_key
+            .as_ref()
+            .and_then(|key| cached.entries.get(key))
             .filter(|entry| entry.scope == panel.account_scope);
         let foreign_account = matches!(
             (
@@ -410,14 +412,14 @@ fn project_rate_limits(
             if let Some(refill) = refill {
                 // Verify a newly suspected refill without forcing another read
                 // on every frame while the same window remains parked.
-                if producer && !index.pending.contains_key(&refill.key()) {
+                if producer && login_key.is_some() && !index.pending.contains_key(&refill.key()) {
                     refresh_kinds.insert(panel.kind.clone());
                 }
                 pending.push(refill);
             }
         }
         let cache_unknown = index.live.is_empty() && longest_cached_window_expired(&truth, now);
-        if producer && !cache_unknown && kind_reset_advanced {
+        if producer && login_key.is_some() && !cache_unknown && kind_reset_advanced {
             refresh_kinds.insert(panel.kind.clone());
         }
 
@@ -451,6 +453,7 @@ fn project_rate_limits(
         // restamps the read on success and failure alike, so a provider that
         // stays unreachable falls back to ordinary throttling.
         let display_unknown = producer
+            && login_key.is_some()
             && display
                 .iter()
                 .all(|window| window.used_percentage.is_none());
@@ -467,7 +470,10 @@ fn project_rate_limits(
         // Persist fused truth, including authoritative lifted rows, any in-flight
         // refill, and the open unknown episode's marker. Display-only reset
         // projections and unknown windows are recomputed each frame.
-        if producer && (!truth.is_empty() || !pending.is_empty() || unknown_since_ms.is_some()) {
+        if producer
+            && let Some(login_key) = login_key
+            && (!truth.is_empty() || !pending.is_empty() || unknown_since_ms.is_some())
+        {
             let limits = AgentRateLimits {
                 windows: truth.values().cloned().collect(),
             };
@@ -493,12 +499,14 @@ fn project_rate_limits(
                 }
             };
             entry.unknown_since_ms = unknown_since_ms;
-            next.entries.insert(panel.kind.clone(), entry);
+            next.entries.insert(login_key, entry);
         }
     }
 
     (
-        producer.then_some(next),
+        (producer
+            && (!snapshot.providers.is_empty() || next.entries.len() != cached.entries.len()))
+        .then_some(next),
         refresh_kinds.into_iter().collect(),
     )
 }

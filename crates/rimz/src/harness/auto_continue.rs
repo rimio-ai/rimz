@@ -153,7 +153,10 @@ pub(crate) fn resume_gate_recovered(
     if let Some(park) = agent.budget_park.as_ref() {
         return park.resets_at.is_some_and(|resets_at| now >= resets_at);
     }
-    let capacity = ProviderCapacity::read(runtime, agent.kind.as_str());
+    let logins = crate::agents::RoomLoginSet::for_runtime(runtime);
+    let capacity = logins
+        .key(agent.kind.as_str())
+        .and_then(|key| ProviderCapacity::read(runtime, &key));
     match resume_park(agent, capacity.as_ref(), now) {
         Some(ResumeArm::Overloaded { .. }) => true,
         Some(ResumeArm::RateLimit { .. }) => false,
@@ -180,6 +183,7 @@ pub(crate) fn resume_gate_recovered(
 pub(crate) fn resume_parked(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
+    logins: &crate::agents::RoomLoginSet,
     config: &ResumeConfig,
     resume_messages: &[ResumeMessage],
 ) {
@@ -188,7 +192,7 @@ pub(crate) fn resume_parked(
     }
     let text = config.auto_continue_text.trim();
     let now = snapshot.now;
-    let provider_capacities = ProviderCapacity::read_all(runtime);
+    let provider_capacities = ProviderCapacity::read_all(runtime, logins);
     let ctx = FireContext {
         snapshot,
         runtime,

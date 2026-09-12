@@ -503,6 +503,18 @@ impl RoomLoginSet {
         )
     }
 
+    /// The room `runtime` belongs to, under the machine's account config; a
+    /// room whose state paths do not resolve answers no login.
+    pub fn for_runtime(runtime: &crate::RuntimePaths) -> Self {
+        let Ok(paths) = crate::StatePaths::for_workspace(runtime.workspace_id.clone()) else {
+            return Self::new(None, None, ambient_env());
+        };
+        Self::resolve(
+            &paths.workspace_record,
+            &crate::config::MachineConfig::load_lenient().accounts,
+        )
+    }
+
     /// Every kind under its provider's own home, for callers outside a room.
     pub fn native() -> Self {
         Self::new(Some(RoomLogins::new()), None, ambient_env())

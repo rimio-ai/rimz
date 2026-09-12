@@ -384,13 +384,16 @@ fn cancel_attempt_reservation(runtime: &RuntimePaths, request_id: &str) {
 pub(crate) fn redeem_credits(
     panels: &[SidebarProviderPanel],
     runtime: &RuntimePaths,
+    logins: &crate::agents::RoomLoginSet,
     config: &ResumeConfig,
     now: Timestamp,
 ) {
     let Some(panel) = panels.iter().find(|panel| panel.kind == CODEX_KIND) else {
         return;
     };
-    let capacity = ProviderCapacity::read(runtime, CODEX_KIND);
+    let capacity = logins
+        .key(CODEX_KIND)
+        .and_then(|key| ProviderCapacity::read(runtime, &key));
     let rate_pct_per_day = update_rate_cache(runtime, capacity.as_ref(), now);
     let Some(credits) = panel.reset_credits.as_ref() else {
         return;
@@ -571,7 +574,10 @@ fn publish_usage(
 ) {
     let scope = identity.scope.clone();
     if let Some(windows) = snapshot.rate_limits.clone() {
-        crate::sidebar::refresh::merge_account_rate_limits(runtime, CODEX_KIND, identity, windows);
+        let logins = crate::agents::RoomLoginSet::for_runtime(runtime);
+        if let Some(key) = logins.key(CODEX_KIND) {
+            crate::sidebar::refresh::merge_account_rate_limits(runtime, &key, identity, windows);
+        }
     }
     if snapshot.plan.is_some()
         || snapshot.extra_credits.is_some()

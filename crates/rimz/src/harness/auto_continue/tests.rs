@@ -87,7 +87,7 @@ fn write_recovered_window(runtime: &RuntimePaths) {
         &RateLimitsCache {
             refreshed_at_ms: 0,
             entries: [(
-                "claude".to_owned(),
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 crate::agents::account::RateLimitCacheEntry {
                     limits: AgentRateLimits {
                         windows: vec![window(20, 9_000)],
@@ -109,7 +109,7 @@ fn exact_qwen_cache_does_not_arm_session_resume_controls() {
         &runtime,
         &RateLimitsCache {
             entries: [(
-                "qwen".to_owned(),
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("qwen")),
                 crate::agents::RateLimitCacheEntry {
                     scope: crate::agents::ProviderAccountScope::sub_provider(
                         "alibaba",
@@ -129,8 +129,16 @@ fn exact_qwen_cache_does_not_arm_session_resume_controls() {
             ..Default::default()
         },
     );
-    assert!(ProviderCapacity::read(&runtime, "qwen").is_none());
-    assert!(ProviderCapacity::read_all(&runtime).is_empty());
+    assert!(
+        ProviderCapacity::read(
+            &runtime,
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("qwen"))
+        )
+        .is_none()
+    );
+    assert!(
+        ProviderCapacity::read_all(&runtime, &crate::agents::RoomLoginSet::native()).is_empty()
+    );
 }
 
 fn park_path(runtime: &RuntimePaths) -> PathBuf {
@@ -359,6 +367,7 @@ fn only_day_budget_parks_arm_a_resume_deadline() {
     resume_parked(
         &snapshot,
         &runtime,
+        &crate::agents::RoomLoginSet::native(),
         &ResumeConfig {
             auto_continue: true,
             ..ResumeConfig::default()
@@ -380,6 +389,7 @@ fn only_day_budget_parks_arm_a_resume_deadline() {
     resume_parked(
         &snapshot,
         &runtime,
+        &crate::agents::RoomLoginSet::native(),
         &ResumeConfig {
             auto_continue: true,
             ..ResumeConfig::default()
@@ -598,13 +608,25 @@ fn stalled_stream_park_uses_default_three_minute_retry() {
         snapshot
     };
 
-    resume_parked(&snapshot_at(1_179), &runtime, &config, &[]);
+    resume_parked(
+        &snapshot_at(1_179),
+        &runtime,
+        &crate::agents::RoomLoginSet::native(),
+        &config,
+        &[],
+    );
     assert_eq!(
         read_park(&path),
         Some(overloaded_record(1_000, 100, None, 0))
     );
 
-    resume_parked(&snapshot_at(1_180), &runtime, &config, &[]);
+    resume_parked(
+        &snapshot_at(1_180),
+        &runtime,
+        &crate::agents::RoomLoginSet::native(),
+        &config,
+        &[],
+    );
     assert_eq!(
         read_park(&path),
         Some(overloaded_record(1_000, 100, Some(1_180), 1))
@@ -632,6 +654,7 @@ fn recovered_budget_fires_due_rate_limit_record_before_clearing() {
     resume_parked(
         &snapshot,
         &runtime,
+        &crate::agents::RoomLoginSet::native(),
         &ResumeConfig {
             auto_continue: true,
             auto_continue_max_retries: 3,
@@ -665,6 +688,7 @@ fn recovered_budget_rearms_a_lost_limit_park() {
     resume_parked(
         &snapshot,
         &runtime,
+        &crate::agents::RoomLoginSet::native(),
         &ResumeConfig {
             auto_continue: true,
             auto_continue_max_retries: 3,
@@ -693,6 +717,7 @@ fn recovered_budget_clears_a_stale_rate_limit_record() {
     resume_parked(
         &snapshot,
         &runtime,
+        &crate::agents::RoomLoginSet::native(),
         &ResumeConfig {
             auto_continue: true,
             ..ResumeConfig::default()
