@@ -868,12 +868,12 @@ fn compose_agent_env(
     mut env: BTreeMap<String, String>,
     adapter: &crate::agents::AgentDefinition,
     request: &ExecRequest,
-    system_prompt_env: &BTreeMap<String, String>,
+    extra_env: &BTreeMap<String, String>,
 ) -> AgentProcessResult<BTreeMap<String, String>> {
     for (key, value) in adapter.launch_env() {
         env.insert(key.to_owned(), value.to_owned());
     }
-    env.extend(system_prompt_env.clone());
+    env.extend(extra_env.clone());
     env.extend(exec_identity_env(request));
     if request.subagent {
         adapter.lockdown_subagent_env(&mut env);

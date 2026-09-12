@@ -1734,3 +1734,27 @@ fn chmod_executable(path: &Path) {
     perms.set_mode(0o755);
     std::fs::set_permissions(path, perms).expect("chmod");
 }
+
+#[test]
+fn the_room_account_home_wins_over_a_trusted_project_env() {
+    let adapter = crate::agents::find_definition("claude").expect("claude");
+    let invocation = request(
+        "claude",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    let project = env(&[("CLAUDE_CONFIG_DIR", "/project/home")]);
+    let login = crate::agents::ProviderLogin::named(
+        crate::ids::AgentKind::new_unchecked("claude"),
+        "work".parse().expect("login name"),
+        std::path::PathBuf::from("/srv/work"),
+    )
+    .expect("named login");
+
+    let composed = compose_agent_env(project, adapter, &invocation, &login.env(&BTreeMap::new()))
+        .expect("launch env");
+
+    assert_eq!(composed["CLAUDE_CONFIG_DIR"], "/srv/work");
+}

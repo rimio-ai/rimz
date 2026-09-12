@@ -4,8 +4,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::agents::capabilities::SystemTextChannel;
-use crate::config::CommandsConfig;
+use crate::agents::{LoginCatalog, ProviderLogin};
 use crate::config::effective::LaunchAgents;
+use crate::config::{AccountsConfig, CommandsConfig};
 use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::sandbox::{self, SandboxPlan};
 
@@ -24,6 +25,7 @@ pub struct LaunchPlanInputs<'a> {
     pub state: &'a StatePaths,
     pub effective: Option<&'a LaunchAgents>,
     pub commands: &'a CommandsConfig,
+    pub accounts: &'a AccountsConfig,
     pub bwrap: Option<&'a Path>,
     pub ambient_env: &'a BTreeMap<String, String>,
 }
@@ -31,6 +33,8 @@ pub struct LaunchPlanInputs<'a> {
 pub struct LaunchPlan {
     pub request: ExecRequest,
     pub cwd: PathBuf,
+    /// The provider account this launch runs under.
+    pub login: ProviderLogin,
     pub prompt: SystemPromptPlan,
     pub reminder_channel: Option<SystemTextChannel>,
     pub stage: AgentProcessStage,
@@ -62,6 +66,12 @@ pub enum LaunchPlanErr {
     Paths(#[from] crate::disk::paths::PathErr),
     #[error("unknown agent kind `{0}`")]
     UnknownAgent(crate::ids::AgentKind),
+    #[error(transparent)]
+    Login(#[from] crate::agents::LoginErr),
+    #[error(transparent)]
+    LoginConfig(#[from] Box<crate::agents::LoginConfigErr>),
+    #[error(transparent)]
+    WorkspaceRecord(#[from] Box<crate::workspace::record::WorkspaceRecordErr>),
 }
 
 impl LaunchPlan {
@@ -95,13 +105,16 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     apply_materialized_system_prompt(&mut request, &prompt.materialized);
     let (mut reminders, warnings) = reminders(&request, inputs.effective, inputs.commands);
     reminders.sandbox = inputs.bwrap.is_some();
+    let login = room_login(&inputs, &request.kind)?;
+    let mut extra_env = prompt.materialized.env.clone();
+    extra_env.extend(login.env(&BTreeMap::new()));
     let mut stage = launch::compile_agent_process_stage_with_extra_env(
         inputs.project_root,
         &request,
         inputs.cwd,
         inputs.rimz_bin,
         inputs.runtime,
-        &prompt.materialized.env,
+        &extra_env,
         &reminders,
     )?;
     let sandbox =
@@ -137,6 +150,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     Ok(LaunchPlan {
         request,
         cwd: inputs.cwd.to_path_buf(),
+        login,
         prompt,
         reminder_channel: adapter.append_system_text_channel(),
         stage,
@@ -162,6 +176,21 @@ pub fn apply(plan: &LaunchPlan) -> Result<(), LaunchPlanErr> {
         sandbox::apply(sandbox)?;
     }
     Ok(())
+}
+
+/// The account this room launches `kind` under. The room record is the truth;
+/// a record without a selection, or none at all, is the provider's own home.
+fn room_login(
+    inputs: &LaunchPlanInputs<'_>,
+    kind: &crate::ids::AgentKind,
+) -> Result<ProviderLogin, LaunchPlanErr> {
+    let record = crate::workspace::record::read_optional(&inputs.state.workspace_record)
+        .map_err(Box::new)?;
+    let Some(selection) = record.and_then(|record| record.logins) else {
+        return Ok(ProviderLogin::default_for(kind.clone()));
+    };
+    let catalog = LoginCatalog::from_config(inputs.accounts).map_err(Box::new)?;
+    Ok(catalog.room_login(&selection, kind)?)
 }
 
 fn reminders(

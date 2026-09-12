@@ -81,6 +81,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         state: &state,
         effective: effective.as_ref().ok(),
         commands: &machine_config.agents.commands,
+        accounts: &machine_config.accounts,
         bwrap: bwrap.as_deref(),
         ambient_env: &ambient_env,
     })
