@@ -12,6 +12,7 @@ mod fork;
 mod history;
 mod idle_compact;
 pub(in crate::cli) mod launch;
+mod launch_resolve;
 mod list;
 mod logs;
 mod orphan_subagent;
@@ -55,8 +56,8 @@ use rimz::harness::budget::BudgetParkRequest;
 use rimz::harness::idle_compact::IdleCompactRequest;
 use rimz::harness::orphan_sweep::OrphanSubagentRequest;
 use rimz::harness::plan::{
-    LaunchFinalizeOptions, LayoutPaneParams, ResolvedLaunch, cohort_cells, compile_layout_panes,
-    launch_identity_requests, mint_launch_id, validate_agent_name,
+    LayoutPaneParams, ResolvedLaunch, cohort_cells, compile_layout_panes, launch_identity_requests,
+    mint_launch_id, validate_agent_name,
 };
 use rimz::harness::resume::{PostureDegrade, ResumePosture};
 use rimz::harness::run::SupervisedRunOutcome;
@@ -85,6 +86,7 @@ use fork::{ForkArgs, run_fork};
 use history::history_agent;
 use idle_compact::run_idle_compact;
 use launch::*;
+use launch_resolve::*;
 use list::list_agents;
 pub(crate) use list::render_agents_table;
 use logs::logs_agent;
@@ -178,6 +180,42 @@ pub(crate) struct CohortLaunchArgs {
 }
 
 #[derive(Debug, Default, PartialEq, Args)]
+pub(crate) struct LaunchOverrideArgs {
+    /// Let the agent ask before tool use where supported.
+    #[arg(long, conflicts_with = "yolo")]
+    pub(crate) ask: bool,
+    /// Skip provider permission prompts where supported.
+    #[arg(long)]
+    pub(crate) yolo: bool,
+    /// Model for the launched agents.
+    #[arg(long, value_name = "MODEL")]
+    pub(crate) model: Option<String>,
+    /// Re-base the spec's agent cells onto this profile or provider kind.
+    #[arg(long, value_name = "PROFILE|KIND")]
+    pub(crate) agent: Option<String>,
+    /// Replace each agent's base system prompt with a file's contents.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) system_prompt_file: Option<PathBuf>,
+    /// Append these files in order after the replacement system prompt.
+    #[arg(
+        long = "append-system-prompt-file",
+        value_name = "PATH",
+        action = clap::ArgAction::Append
+    )]
+    pub(crate) append_system_prompt_files: Vec<PathBuf>,
+    /// Reasoning effort for the launched agents (provider-specific levels).
+    #[arg(long, value_name = "LEVEL")]
+    pub(crate) effort: Option<String>,
+    /// Extra argv appended to every launched agent cell.
+    #[arg(last = true)]
+    pub(crate) passthrough: Vec<String>,
+}
+
+#[derive(Debug, Default, PartialEq, Args)]
+#[command(group = clap::ArgGroup::new("launch-overrides")
+    .multiple(true)
+    .args(["ask", "yolo", "model", "agent", "system_prompt_file", "append_system_prompt_files", "effort", "passthrough"])
+    .conflicts_with("resume"))]
 pub(crate) struct AgentLaunchArgs {
     /// Inline spec, named team, or team role (`claude,codex+term`, `forge.planner`).
     #[arg(
@@ -198,32 +236,8 @@ pub(crate) struct AgentLaunchArgs {
     /// over the current pane. Single agent cell only.
     #[arg(long, conflicts_with = "new_tab")]
     pub(crate) new_pane: bool,
-    /// Let the agent ask before tool use where supported.
-    #[arg(long, conflicts_with_all = ["yolo", "resume"])]
-    pub(crate) ask: bool,
-    /// Skip provider permission prompts where supported.
-    #[arg(long, conflicts_with = "resume")]
-    pub(crate) yolo: bool,
-    /// Model for the launched agents.
-    #[arg(long, value_name = "MODEL", conflicts_with = "resume")]
-    pub(crate) model: Option<String>,
-    /// Re-base the spec's agent cells onto this profile or provider kind.
-    #[arg(long, value_name = "PROFILE|KIND", conflicts_with = "resume")]
-    pub(crate) agent: Option<String>,
-    /// Replace each agent's base system prompt with a file's contents.
-    #[arg(long, value_name = "PATH", conflicts_with = "resume")]
-    pub(crate) system_prompt_file: Option<PathBuf>,
-    /// Append these files in order after the replacement system prompt.
-    #[arg(
-        long = "append-system-prompt-file",
-        value_name = "PATH",
-        action = clap::ArgAction::Append,
-        conflicts_with = "resume"
-    )]
-    pub(crate) append_system_prompt_files: Vec<PathBuf>,
-    /// Reasoning effort for the launched agents (provider-specific levels).
-    #[arg(long, value_name = "LEVEL", conflicts_with = "resume")]
-    pub(crate) effort: Option<String>,
+    #[command(flatten)]
+    pub(crate) overrides: LaunchOverrideArgs,
     /// Run one supervised agent prompt and print its final answer.
     #[arg(short = 'p', long = "print", conflicts_with = "resume")]
     pub(crate) print: bool,
@@ -263,9 +277,6 @@ pub(crate) struct AgentLaunchArgs {
     /// Total agent turns allowed while making --verify pass.
     #[arg(long, value_name = "N", requires = "verify")]
     pub(crate) max_attempts: Option<u32>,
-    /// Extra argv appended to every launched agent cell.
-    #[arg(last = true, conflicts_with = "resume")]
-    pub(crate) passthrough: Vec<String>,
 }
 
 /// Prompt source for a supervised `--print` run.
@@ -828,15 +839,17 @@ fn into_supervised_request(
     let output_format = args.launch.output_format.unwrap_or_default();
     validate_supervised_output(&args, output_format)?;
     let prompt = resolve_print_prompt(&args, args.launch.input_format.unwrap_or_default())?;
-    let permission_mode =
-        interactive_permission_mode_from_flags(args.launch.ask, args.launch.yolo)?
-            .unwrap_or(PermissionMode::Auto);
+    let permission_mode = interactive_permission_mode_from_flags(
+        args.launch.overrides.ask,
+        args.launch.overrides.yolo,
+    )?
+    .unwrap_or(PermissionMode::Auto);
     let system_prompt_file = resolve_launch_prompt_file(
-        args.launch.system_prompt_file.as_deref(),
+        args.launch.overrides.system_prompt_file.as_deref(),
         "--system-prompt-file",
     )?;
     let append_system_prompt_files =
-        resolve_launch_prompt_files(&args.launch.append_system_prompt_files)?;
+        resolve_launch_prompt_files(&args.launch.overrides.append_system_prompt_files)?;
     let spec = args
         .launch
         .spec
@@ -857,11 +870,12 @@ fn into_supervised_request(
         args.launch.cohort.bg || args.launch.self_cleanup_on_completion;
     request.subagent = args.launch.subagent;
     request.force_new_tab = args.launch.cohort.new_tab;
-    request.agent = rimz::harness::plan::normalized_preset_value(args.launch.agent.as_deref());
-    request.model = args.launch.model;
+    request.agent =
+        rimz::harness::plan::normalized_preset_value(args.launch.overrides.agent.as_deref());
+    request.model = args.launch.overrides.model;
     request.system_prompt_file = system_prompt_file;
     request.append_system_prompt_files = append_system_prompt_files;
-    request.effort = args.launch.effort;
+    request.effort = args.launch.overrides.effort;
     request.budget = args.launch.cohort.budget;
     request.max_turns = args.launch.max_turns;
     request.timeout = args.launch.timeout;
@@ -869,7 +883,7 @@ fn into_supervised_request(
     request.retries = args.launch.retries.unwrap_or(0);
     request.verify = args.launch.verify;
     request.max_attempts = args.launch.max_attempts;
-    request.passthrough = args.launch.passthrough;
+    request.passthrough = args.launch.overrides.passthrough;
     Ok((
         request,
         supervised::SupervisedPresentation {

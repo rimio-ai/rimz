@@ -10,6 +10,7 @@ use rimz::agents::{
 use rimz::config::{MachineConfig, Profile, ProfilesConfig, ThemeConfig, ThemeGlyphsConfig};
 use rimz::forge::Forge;
 use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
+use rimz::harness::plan::LaunchFinalizeOptions;
 use rimz::harness::run_wake::ExpectedRunFrame;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, MuxName, PaneId, RunId, WorkspaceId};
 use rimz::store::run::{RunRecord, RunStatus};
@@ -401,10 +402,10 @@ mod parse {
                 args.launch.spec.as_deref(),
                 args.launch.prompt.as_deref(),
                 args.launch.cohort.worktree.as_deref(),
-                args.launch.model.as_deref(),
+                args.launch.overrides.model.as_deref(),
                 args.launch.cohort.description.as_deref(),
-                args.launch.effort.as_deref(),
-                args.launch.system_prompt_file.as_deref(),
+                args.launch.overrides.effort.as_deref(),
+                args.launch.overrides.system_prompt_file.as_deref(),
                 args.launch.max_turns,
             ),
             (
@@ -460,6 +461,33 @@ mod parse {
         };
 
         assert_eq!(bare.launch, *verb);
+    }
+
+    #[test]
+    fn launch_overrides_conflict_with_resume() {
+        for override_args in [
+            vec!["--ask"],
+            vec!["--yolo"],
+            vec!["--model", "opus"],
+            vec!["--agent", "claude"],
+            vec!["--system-prompt-file", "base.md"],
+            vec!["--append-system-prompt-file", "fragment.md"],
+            vec!["--effort", "high"],
+            vec!["--", "--foo"],
+        ] {
+            for prefix in [vec!["rimz", "claude"], vec!["rimz", "launch", "claude"]] {
+                for resume in ["--resume", "--continue"] {
+                    let mut argv = prefix.clone();
+                    argv.push(resume);
+                    argv.extend_from_slice(&override_args);
+                    assert_clap_error(&argv, clap::error::ErrorKind::ArgumentConflict);
+                }
+            }
+        }
+        assert_clap_error(
+            &["rimz", "claude", "--ask", "--yolo"],
+            clap::error::ErrorKind::ArgumentConflict,
+        );
     }
 
     #[test]
@@ -1001,9 +1029,10 @@ mod launch_options {
     #[test]
     fn agent_override_parses_and_unknown_value_lists_choices() {
         let args = parse_agents(&["rimz", "coder", "--agent", "claude"]);
-        assert_eq!(args.launch.agent.as_deref(), Some("claude"));
+        assert_eq!(args.launch.overrides.agent.as_deref(), Some("claude"));
         assert_eq!(
-            rimz::harness::plan::normalized_preset_value(args.launch.agent.as_deref()).as_deref(),
+            rimz::harness::plan::normalized_preset_value(args.launch.overrides.agent.as_deref())
+                .as_deref(),
             Some("claude")
         );
 
@@ -1039,21 +1068,94 @@ mod launch_options {
     ) -> Result<(ResolvedLaunch, LaunchPreset)> {
         let effective =
             rimz::config::effective::load_with_roots(machine, root, &root.join("config-home"))?;
-        let resolved = rimz::harness::plan::resolve_launch(
+        let finalized = resolve_finalized_layout(
+            None,
+            machine,
             &effective,
-            rimz::config::effective::ProfileScope::Agents,
-            &machine.agents.commands,
             args.launch.spec.as_deref(),
-            rimz::harness::plan::normalized_preset_value(args.launch.agent.as_deref()).as_deref(),
+            args.launch.prompt.as_deref(),
+            &args.launch.overrides,
+            args.launch.cohort.budget,
+            args.launch.max_turns,
+            None,
+            args.launch.name.is_some(),
         )?;
-        let preset = validate_resolved_launch_inputs(
-            args,
-            &effective,
-            &machine.agents.commands,
-            &resolved.layout,
-            true,
-        )?;
-        Ok((resolved, preset))
+        Ok((finalized.resolved, finalized.preset))
+    }
+
+    #[test]
+    fn finalized_layout_resolves_without_store_and_qualifies_only_the_selected_lane() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut machine = MachineConfig::default();
+        machine.agents.profiles = planner_profiles();
+        machine.agents.teams.0.insert(
+            "forge".to_owned(),
+            rimz::config::Team {
+                roles: vec![rimz::config::RoleBinding {
+                    role: "planner".to_owned(),
+                    profile: "planner".to_owned(),
+                    signals: Vec::new(),
+                    owns: Vec::new(),
+                    compact_on_handoff: false,
+                    mode: None,
+                    model: None,
+                    effort: None,
+                    budget: None,
+                    auto_compact: None,
+                    system_prompt_file: None,
+                    append_system_prompt_files: Vec::new(),
+                    args: None,
+                }],
+                ..Default::default()
+            },
+        );
+        let effective = rimz::config::effective::load_with_roots(
+            &machine,
+            dir.path(),
+            &dir.path().join("config-home"),
+        )
+        .expect("effective config");
+        let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+            WorkspaceId::from_project_root(dir.path()),
+            vec![agent_in_lane("planner", Some("topic"), None, Some("forge"))],
+            Timestamp::from_second(1_000).unwrap(),
+        );
+        let overrides = LaunchOverrideArgs {
+            yolo: true,
+            model: Some("chosen".to_owned()),
+            ..Default::default()
+        };
+        for (snapshot, lane, inferred) in [
+            (None, Some("topic"), None),
+            (Some(&snapshot), None, None),
+            (Some(&snapshot), Some("other"), None),
+            (Some(&snapshot), Some("topic"), Some("topic")),
+        ] {
+            let finalized = resolve_finalized_layout(
+                snapshot,
+                &machine,
+                &effective,
+                Some("planner"),
+                None,
+                &overrides,
+                Some("5".parse().expect("budget")),
+                None,
+                lane,
+                false,
+            )
+            .expect("finalized layout");
+            let cell = finalized.resolved.layout.agent_cells().next().unwrap();
+            assert_eq!(cell.kind.as_str(), "claude");
+            assert_eq!(cell.launch.role.as_deref(), inferred.map(|_| "planner"));
+            assert_eq!(cell.launch.mode, Some(PermissionMode::Yolo));
+            assert_eq!(cell.launch.model.as_deref(), Some("chosen"));
+            assert_eq!(cell.launch.budget.as_deref(), Some("$5.00"));
+            assert_eq!(finalized.inferred_lane.as_deref(), inferred);
+            assert_eq!(
+                finalized.qualified_spec.as_deref(),
+                inferred.map(|_| "forge.planner")
+            );
+        }
     }
 
     #[test]
@@ -1063,7 +1165,7 @@ mod launch_options {
         std::fs::write(&prompt, "be concise").expect("write prompt");
         let system_flag = format!("--system-prompt-file={}", prompt.display());
         let args = parse_agents(&["rimz", "claude", "hi", &system_flag]);
-        let preset = launch_override_preset(&args).expect("resolve prompt files");
+        let preset = launch_override_preset(&args.launch.overrides).expect("resolve prompt files");
         assert_eq!(
             preset.system_prompt_file,
             Some(prompt.canonicalize().unwrap())
@@ -1080,7 +1182,7 @@ mod launch_options {
             "--append-system-prompt-file",
             fragment_path,
         ]);
-        let preset = launch_override_preset(&args).expect("resolve fragments");
+        let preset = launch_override_preset(&args.launch.overrides).expect("resolve fragments");
         assert_eq!(
             preset.append_system_prompt_files,
             [
@@ -1091,14 +1193,15 @@ mod launch_options {
 
         let dir_path = dir.path().to_str().expect("utf8 dir path");
         let args = parse_agents(&["rimz", "claude", "hi", "--system-prompt-file", dir_path]);
-        let err = launch_override_preset(&args).expect_err("reject a directory");
+        let err = launch_override_preset(&args.launch.overrides).expect_err("reject a directory");
         assert!(err.to_string().contains("is not a regular file"), "{err:#}");
 
         let missing = dir.path().join("missing.md");
         let missing_path = missing.to_str().expect("utf8 missing path");
         let missing_flag = format!("--system-prompt-file={missing_path}");
         let args = parse_agents(&["rimz", "claude", "hi", &missing_flag]);
-        let err = launch_override_preset(&args).expect_err("reject missing prompt path");
+        let err =
+            launch_override_preset(&args.launch.overrides).expect_err("reject missing prompt path");
         assert!(
             err.to_string().contains("reading --system-prompt-file"),
             "{err:#}"
@@ -1124,6 +1227,26 @@ mod launch_options {
             assert!(message.contains("missing-agent"), "{err:#}");
             assert!(!message.contains(secondary_error), "{err:#}");
         }
+    }
+
+    #[test]
+    fn spec_like_prompt_fails_before_name_and_prompt_file_validation() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let args = parse_agents(&[
+            "rimz",
+            "claude,codex",
+            "claude",
+            "--name",
+            "one",
+            "--system-prompt-file",
+            "missing.md",
+        ]);
+        let err = resolve_and_validate(&args, &MachineConfig::default(), dir.path())
+            .expect_err("spec-like prompt wins");
+        assert!(
+            err.to_string().contains("looks like another spec cell"),
+            "{err:#}"
+        );
     }
 
     #[test]
@@ -1164,12 +1287,17 @@ mod launch_options {
         )
         .expect("resolve warning-capable layout");
 
-        let err = validate_resolved_launch_inputs(
-            &args,
+        let err = resolve_finalized_layout(
+            None,
+            &machine,
             &effective,
-            &machine.agents.commands,
-            &resolved.layout,
-            true,
+            args.launch.spec.as_deref(),
+            args.launch.prompt.as_deref(),
+            &args.launch.overrides,
+            args.launch.cohort.budget,
+            args.launch.max_turns,
+            None,
+            args.launch.name.is_some(),
         )
         .expect_err("name cardinality wins");
         assert_eq!(

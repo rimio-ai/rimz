@@ -449,16 +449,19 @@ impl SubagentLaunchArgs {
                 bg: true,
                 ..Default::default()
             },
-            model: self.model,
-            agent: self.agent,
-            effort: self.effort,
+            overrides: agents_cmd::LaunchOverrideArgs {
+                model: self.model,
+                agent: self.agent,
+                effort: self.effort,
+                passthrough: self.passthrough,
+                ..Default::default()
+            },
             print: true,
             self_cleanup_on_completion: true,
             subagent: true,
             timeout: Some(timeout),
             keep: self.keep,
             max_turns: self.max_turns,
-            passthrough: self.passthrough,
             ..Default::default()
         })
     }
