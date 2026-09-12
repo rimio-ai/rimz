@@ -68,6 +68,47 @@ pub fn require_live_session(backend: &dyn MuxBackend, session_name: &str) -> Liv
     }
 }
 
+/// Decide the provider accounts a room is born under: its frozen record wins,
+/// then the explicit request, then the trusted project's `[accounts]`, and
+/// every selected account must be usable before anything launches.
+pub fn resolve_birth_logins(
+    workspace: &ResolvedWorkspace,
+    machine_config: &MachineConfig,
+    requested: &crate::ids::RoomLogins,
+    was_live: bool,
+) -> Result<crate::ids::RoomLogins> {
+    let empty = crate::ids::RoomLogins::new();
+    let catalog = crate::agents::LoginCatalog::from_config(&machine_config.accounts)?;
+    let state = StatePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing store paths")?;
+    let mut frozen = record::read_optional(&state.workspace_record)
+        .context("reading the room's accounts")?
+        .and_then(|record| record.logins);
+    if frozen.is_none() && was_live {
+        // A room already running before accounts were recorded runs under the
+        // provider's own homes; the project cannot re-point it mid-life.
+        frozen = Some(catalog.birth_selection(None, &empty, &empty)?);
+    }
+    let project = match frozen {
+        Some(_) => empty,
+        None => match crate::trust::project_logins(&workspace.project_root)? {
+            crate::trust::ProjectLogins::Unconfigured => empty,
+            crate::trust::ProjectLogins::Apply(logins) => logins,
+            crate::trust::ProjectLogins::Blocked(state) => anyhow::bail!(
+                "project account selections in .rimz/config.toml are {}; {}",
+                state.as_str(),
+                crate::trust::blocked_fix(state)
+            ),
+        },
+    };
+    let logins = catalog.birth_selection(frozen.as_ref(), requested, &project)?;
+    let ambient = crate::agents::ambient_env();
+    for login in catalog.room(&logins)? {
+        login.preflight(&ambient)?;
+    }
+    Ok(logins)
+}
+
 /// Build the room identity pin carried by a pane opened in a managed session.
 pub fn pane_identity_env(
     workspace: &ResolvedWorkspace,

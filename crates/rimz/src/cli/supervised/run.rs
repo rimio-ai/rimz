@@ -520,7 +520,6 @@ fn prepare_supervised(
         &launch.cwd,
         &request.managed_launch,
     )?;
-    supervised::preflight_agent(adapter, &launch)?;
     supervised::preflight_program(&process)?;
     let kind = adapter.spec().kind_id();
     if let Some(channel) = request.channel.as_deref() {
@@ -813,6 +812,44 @@ pub(in crate::cli) fn run_supervised(
     let Some(prepared) = prepare_supervised(&request, &presentation, globals)? else {
         return Ok(None);
     };
+    // Judge the agent's hooks in the account home it will run under before
+    // touching the multiplexer.
+    let logins = rimz::room::resolve_birth_logins(
+        &prepared.workspace,
+        &prepared.machine_config,
+        &rimz::ids::RoomLogins::new(),
+        false,
+    )?;
+    supervised::preflight_agent(
+        prepared.adapter,
+        &prepared.launch,
+        &rimz::agents::RoomLoginSet::new(
+            Some(logins.clone()),
+            rimz::agents::LoginCatalog::from_config(&prepared.machine_config.accounts).ok(),
+            rimz::agents::ambient_env(),
+        ),
+    )?;
+    let mux = rimz::mux::auto_detect_backend(globals.mux)?;
+    let mut room = rimz::room::RoomContext::from_resolved(
+        &prepared.workspace,
+        prepared.machine_config.clone(),
+        mux,
+        rimz::room::RoomSizing::Birth,
+    )?;
+    let was_live = room.backend().list_sessions().map_or(true, |sessions| {
+        sessions.iter().any(|name| name == room.session_name())
+    });
+    let logins = if was_live {
+        rimz::room::resolve_birth_logins(
+            &prepared.workspace,
+            &prepared.machine_config,
+            &rimz::ids::RoomLogins::new(),
+            true,
+        )?
+    } else {
+        logins
+    };
+    room.freeze_logins(&logins)?;
     let login_key = rimz::agents::RoomLoginSet::resolve(
         &rimz::StatePaths::for_workspace(prepared.store.runtime_paths().workspace_id.clone())?
             .workspace_record,
@@ -830,13 +867,6 @@ pub(in crate::cli) fn run_supervised(
     {
         return Ok(Some(SupervisedRunOutcome::BudgetExceeded { reason }));
     }
-    let mux = rimz::mux::auto_detect_backend(globals.mux)?;
-    let mut room = rimz::room::RoomContext::from_resolved(
-        &prepared.workspace,
-        prepared.machine_config.clone(),
-        mux,
-        rimz::room::RoomSizing::Birth,
-    )?;
     render::room::present_birth_outcome(
         room.birth(rimz::room::RoomBirth::Supervised {
             cwd: prepared.launch.cwd.clone(),

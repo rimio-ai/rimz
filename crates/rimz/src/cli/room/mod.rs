@@ -521,9 +521,19 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     }
 
     let logins = match &entry {
-        RoomEntry::Start { workspace, .. } | RoomEntry::StartDetached { workspace, .. } => Some(
-            resolve_room_logins(&entry, workspace, &machine_config, was_live)?,
-        ),
+        RoomEntry::Start { workspace, .. } | RoomEntry::StartDetached { workspace, .. } => {
+            Some(rimz::room::resolve_birth_logins(
+                workspace,
+                &machine_config,
+                &match &entry {
+                    RoomEntry::Start { args, .. } => {
+                        crate::cli::accounts::requested_logins(&args.account)?
+                    }
+                    _ => RoomLogins::new(),
+                },
+                was_live,
+            )?)
+        }
         _ => None,
     };
     let background_view = if let Some(logins) = &logins {
@@ -730,47 +740,6 @@ fn preflight_machine_accounts(
 /// already born, else `--account` over the trusted project's `[accounts]` over
 /// the provider's own home. Every named account must be ready to launch into,
 /// so a missing home or hook set refuses here with its fix.
-fn resolve_room_logins(
-    entry: &RoomEntry<'_>,
-    workspace: &rimz::ResolvedWorkspace,
-    machine_config: &rimz::config::MachineConfig,
-    was_live: bool,
-) -> Result<RoomLogins> {
-    let requested = match entry {
-        RoomEntry::Start { args, .. } => crate::cli::accounts::requested_logins(&args.account)?,
-        _ => RoomLogins::new(),
-    };
-    let catalog = rimz::agents::LoginCatalog::from_config(&machine_config.accounts)?;
-    let state = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing store paths")?;
-    let mut frozen = rimz::workspace::record::read_optional(&state.workspace_record)
-        .context("reading the room's accounts")?
-        .and_then(|record| record.logins);
-    if frozen.is_none() && was_live {
-        // A room already running before accounts were recorded runs under the
-        // provider's own homes; the project cannot re-point it mid-life.
-        frozen = Some(catalog.birth_selection(None, &RoomLogins::new(), &RoomLogins::new())?);
-    }
-    let project = match frozen {
-        Some(_) => RoomLogins::new(),
-        None => match rimz::trust::project_logins(&workspace.project_root)? {
-            rimz::trust::ProjectLogins::Unconfigured => RoomLogins::new(),
-            rimz::trust::ProjectLogins::Apply(logins) => logins,
-            rimz::trust::ProjectLogins::Blocked(state) => bail!(
-                "project account selections in .rimz/config.toml are {}; {}",
-                state.as_str(),
-                rimz::trust::blocked_fix(state)
-            ),
-        },
-    };
-    let logins = catalog.birth_selection(frozen.as_ref(), &requested, &project)?;
-    let ambient = rimz::agents::ambient_env();
-    for login in catalog.room(&logins)? {
-        login.preflight(&ambient)?;
-    }
-    Ok(logins)
-}
-
 fn run_room_preflights(entry: &RoomEntry<'_>, mux: MuxName) -> Result<()> {
     match entry {
         RoomEntry::Start { workspace, .. } | RoomEntry::StartDetached { workspace, .. } => {

@@ -447,6 +447,31 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
     let trace_path = env.project_root.join("fresh-supervised.log");
     let presence = env.project_root.join("presence.wasm");
     std::fs::write(&presence, b"test-presence").expect("write presence fixture");
+    let project_config = env.project_root.join(".rimz/config.toml");
+    std::fs::create_dir_all(project_config.parent().expect("project config dir"))
+        .expect("mkdir .rimz");
+    std::fs::write(&project_config, "[accounts]\ncodex = \"default\"\n").expect("project config");
+    let untrusted = env
+        .rimz()
+        .args(["--mux", "zellij", "agents", "codex", "fix it", "-p", "--bg"])
+        .env("PATH", path_with_front(&agent_bin))
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_path)
+        .bounded_output()
+        .expect("refuse untrusted project accounts");
+    let stderr = String::from_utf8_lossy(&untrusted.stderr);
+    assert!(
+        stderr.contains("project account selections in .rimz/config.toml are untrusted"),
+        "{stderr}"
+    );
+    assert!(
+        !trace_path.exists(),
+        "account refusal must not invoke the mux"
+    );
+    env.rimz()
+        .args(["trust", "grant"])
+        .bounded_output()
+        .expect("trust grant");
 
     let output = env
         .rimz()
@@ -470,6 +495,15 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
         output.status.success(),
         "supervised birth failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
+    );
+    let record: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(env.store().paths().workspace_record.clone()).expect("workspace record"),
+    )
+    .expect("workspace record json");
+    assert_eq!(
+        record["logins"],
+        serde_json::json!({"claude": "default", "codex": "default"}),
+        "supervised birth freezes the room's accounts"
     );
     assert!(
         !heartbeat_path.exists(),
