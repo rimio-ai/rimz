@@ -323,9 +323,14 @@ impl<'a> ExplainReport<'a> {
             .expect("compiled agent has an adapter");
         let profile = params.profile.as_deref().map(|name| ProfileReport {
             name,
-            chain: rimz::harness::spec::resolve_profile(name, &effective.profiles)
-                .map(|profile| profile.chain)
-                .unwrap_or_default(),
+            chain: rimz::harness::spec::resolve_profile_rebased(
+                name,
+                rimz::harness::plan::normalized_preset_value(args.overrides.agent.as_deref())
+                    .as_deref(),
+                &effective.profiles,
+            )
+            .map(|profile| profile.chain)
+            .unwrap_or_default(),
             role: params.role.as_deref(),
             team: params.team.as_deref(),
         });
@@ -520,7 +525,10 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
     if let Some(profile) = &report.profile {
         let mut chain = profile.chain.clone();
         if let (Some(team), Some(role)) = (profile.team, profile.role) {
-            chain.insert(0, format!("{team}.{role}"));
+            let qualified_role = format!("{team}.{role}");
+            if chain.first() != Some(&qualified_role) {
+                chain.insert(0, qualified_role);
+            }
         }
         plan.push("profile", render::cell(chain.join(" ← ")));
     }
