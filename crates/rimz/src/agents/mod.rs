@@ -98,7 +98,8 @@ pub use lifecycle::{
 pub use locate::locate_binary;
 pub(crate) use locate::{agent_config_path, probe_descriptor_version, read_optional_file};
 pub use login::{
-    LoginCatalog, LoginConfigErr, LoginErr, LoginMismatch, ProviderLogin, default_named_home,
+    LoginCatalog, LoginConfigErr, LoginErr, LoginMismatch, ProviderLogin, RoomLoginErr,
+    ambient_env, default_named_home, room_login,
 };
 pub use managed_source::ManagedIntegration;
 pub use observation::{

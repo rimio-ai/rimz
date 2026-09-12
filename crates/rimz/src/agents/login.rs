@@ -298,6 +298,40 @@ impl LoginCatalog {
     }
 }
 
+/// The process environment every login overrides. Pairs that are not UTF-8
+/// cannot name a home the adapters resolve, so they are dropped.
+pub fn ambient_env() -> BTreeMap<String, String> {
+    std::env::vars_os()
+        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+        .collect()
+}
+
+/// Resolving the login a room launches a kind under.
+#[derive(Debug, thiserror::Error)]
+pub enum RoomLoginErr {
+    #[error(transparent)]
+    Record(#[from] Box<crate::workspace::record::WorkspaceRecordErr>),
+    #[error(transparent)]
+    Config(#[from] LoginConfigErr),
+    #[error(transparent)]
+    Login(#[from] LoginErr),
+}
+
+/// The login the room whose `workspace.json` is `record` launches `kind`
+/// under. A record without a selection, or none at all, is the provider's own
+/// home.
+pub fn room_login(
+    record: &Path,
+    accounts: &AccountsConfig,
+    kind: &AgentKind,
+) -> Result<ProviderLogin, RoomLoginErr> {
+    let record = crate::workspace::record::read_optional(record).map_err(Box::new)?;
+    let Some(selection) = record.and_then(|record| record.logins) else {
+        return Ok(ProviderLogin::default_for(kind.clone()));
+    };
+    Ok(LoginCatalog::from_config(accounts)?.room_login(&selection, kind)?)
+}
+
 fn native_home(kind: &AgentKind, home: Option<&Path>) -> Option<PathBuf> {
     let adapter = crate::agents::find_definition(kind.as_str())?;
     let env = home

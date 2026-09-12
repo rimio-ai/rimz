@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::agents::ProviderLogin;
 use crate::agents::capabilities::SystemTextChannel;
-use crate::agents::{LoginCatalog, ProviderLogin};
 use crate::config::effective::LaunchAgents;
 use crate::config::{AccountsConfig, CommandsConfig};
 use crate::disk::paths::{RuntimePaths, StatePaths};
@@ -67,11 +67,7 @@ pub enum LaunchPlanErr {
     #[error("unknown agent kind `{0}`")]
     UnknownAgent(crate::ids::AgentKind),
     #[error(transparent)]
-    Login(#[from] crate::agents::LoginErr),
-    #[error(transparent)]
-    LoginConfig(#[from] Box<crate::agents::LoginConfigErr>),
-    #[error(transparent)]
-    WorkspaceRecord(#[from] Box<crate::workspace::record::WorkspaceRecordErr>),
+    Login(#[from] crate::agents::RoomLoginErr),
 }
 
 impl LaunchPlan {
@@ -105,7 +101,11 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     apply_materialized_system_prompt(&mut request, &prompt.materialized);
     let (mut reminders, warnings) = reminders(&request, inputs.effective, inputs.commands);
     reminders.sandbox = inputs.bwrap.is_some();
-    let login = room_login(&inputs, &request.kind)?;
+    let login = crate::agents::room_login(
+        &inputs.state.workspace_record,
+        inputs.accounts,
+        &request.kind,
+    )?;
     let mut extra_env = prompt.materialized.env.clone();
     extra_env.extend(login.env(&BTreeMap::new()));
     let mut stage = launch::compile_agent_process_stage_with_extra_env(
@@ -176,21 +176,6 @@ pub fn apply(plan: &LaunchPlan) -> Result<(), LaunchPlanErr> {
         sandbox::apply(sandbox)?;
     }
     Ok(())
-}
-
-/// The account this room launches `kind` under. The room record is the truth;
-/// a record without a selection, or none at all, is the provider's own home.
-fn room_login(
-    inputs: &LaunchPlanInputs<'_>,
-    kind: &crate::ids::AgentKind,
-) -> Result<ProviderLogin, LaunchPlanErr> {
-    let record = crate::workspace::record::read_optional(&inputs.state.workspace_record)
-        .map_err(Box::new)?;
-    let Some(selection) = record.and_then(|record| record.logins) else {
-        return Ok(ProviderLogin::default_for(kind.clone()));
-    };
-    let catalog = LoginCatalog::from_config(inputs.accounts).map_err(Box::new)?;
-    Ok(catalog.room_login(&selection, kind)?)
 }
 
 fn reminders(
