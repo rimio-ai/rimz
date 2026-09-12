@@ -231,16 +231,6 @@ fn compose(pieces: &[String]) -> String {
         .join("\n")
 }
 
-pub(super) fn write_prompt_artifact(
-    runtime: &RuntimePaths,
-    prefix: &str,
-    contents: &str,
-) -> Result<PathBuf, crate::disk::atomic::AtomicErr> {
-    let path = prompt_artifact_path(runtime, prefix, contents);
-    crate::disk::atomic::write_cache_bytes_atomically(&path, contents.as_bytes())?;
-    Ok(path)
-}
-
 pub(super) fn prompt_artifact_path(
     runtime: &RuntimePaths,
     prefix: &str,

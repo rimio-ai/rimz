@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 use crate::agents::capabilities::SystemTextChannel;
 use crate::disk::paths::RuntimePaths;
 use crate::harness::launch_reminders::LaunchReminders;
-use crate::harness::prompt_compose::{TEXT_PROMPT_LIMIT, write_prompt_artifact};
+use crate::harness::prompt_compose::{TEXT_PROMPT_LIMIT, prompt_artifact_path};
+use crate::harness::spec::AgentCell;
 use crate::ids::{AgentKind, RunId};
 
 const ENV_BIN: &str = "/usr/bin/env";
@@ -140,13 +141,14 @@ pub type AgentProcessResult<T> = std::result::Result<T, AgentProcessCompileErr>;
 #[derive(Clone, PartialEq, Eq)]
 pub struct CompiledAgentProcess {
     /// Provider command before shell startup wrapping.
-    provider_argv: Vec<String>,
+    pub provider_argv: Vec<String>,
     /// Provider executable used by PATH preflight.
     pub provider_program: String,
     /// Final shell-wrapped command.
     pub argv: Vec<String>,
     /// Final child environment, also re-applied after shell startup.
     pub env: BTreeMap<String, String>,
+    pub secret_keys: BTreeSet<String>,
     /// Environment keys removed before execution and again after shell startup.
     pub unset: BTreeSet<String>,
 }
@@ -177,7 +179,16 @@ impl CompiledAgentProcess {
 /// provider credentials, and the login-shell wrapper repeats every entry as a
 /// `KEY=VALUE` token inside `argv`. Both renders print keys only, so no debug
 /// format of a compiled process puts a secret into a log, a panic, or an error.
-const REDACTED_ENV_VALUE: &str = "<redacted>";
+pub const REDACTED_ENV_VALUE: &str = "<redacted>";
+
+pub fn redact_env_tokens(argv: &[String], keys: impl Fn(&str) -> bool) -> Vec<String> {
+    argv.iter()
+        .map(|arg| match arg.split_once('=') {
+            Some((key, _)) if keys(key) => format!("{key}={REDACTED_ENV_VALUE}"),
+            _ => arg.clone(),
+        })
+        .collect()
+}
 
 struct RedactedEnv<'a>(&'a BTreeMap<String, String>);
 
@@ -197,11 +208,8 @@ struct RedactedArgv<'a> {
 impl std::fmt::Debug for RedactedArgv<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_list()
-            .entries(self.argv.iter().map(|arg| match arg.split_once('=') {
-                Some((key, _)) if self.env.contains_key(key) => {
-                    format!("{key}={REDACTED_ENV_VALUE}")
-                }
-                _ => arg.clone(),
+            .entries(redact_env_tokens(self.argv, |key| {
+                self.env.contains_key(key)
             }))
             .finish()
     }
@@ -220,6 +228,7 @@ impl std::fmt::Debug for CompiledAgentProcess {
                 },
             )
             .field("env", &RedactedEnv(&self.env))
+            .field("secret_keys", &self.secret_keys)
             .field("unset", &self.unset)
             .finish()
     }
@@ -231,6 +240,7 @@ pub enum AgentProcessStage {
     LoginShellReentry {
         process: CompiledAgentProcess,
         argv: Vec<String>,
+        prompt_artifact: Option<PromptArtifact>,
     },
 }
 
@@ -238,7 +248,7 @@ impl std::fmt::Debug for AgentProcessStage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Ready(process) => f.debug_tuple("Ready").field(process).finish(),
-            Self::LoginShellReentry { process, argv } => f
+            Self::LoginShellReentry { process, argv, .. } => f
                 .debug_struct("LoginShellReentry")
                 .field("process", process)
                 .field(
@@ -486,6 +496,23 @@ pub struct ExecRequest {
 }
 
 impl ExecRequest {
+    pub fn fresh(
+        cell: &AgentCell,
+        identity: ExecIdentity,
+        worktree_path: Option<PathBuf>,
+        close_pane_on_exit: bool,
+    ) -> Self {
+        Self {
+            system_prompt_file: cell.system_prompt_file.clone(),
+            append_system_prompt_files: cell.append_system_prompt_files.clone(),
+            skills: cell.skills.clone(),
+            identity,
+            worktree_path,
+            close_pane_on_exit,
+            ..Self::bare_launch(cell.kind.clone(), cell.args.clone())
+        }
+    }
+
     pub fn bare_launch(kind: AgentKind, extra_args: Vec<String>) -> Self {
         Self {
             kind,
@@ -677,12 +704,9 @@ fn compile_agent_process_with_extra_env(
             .ok_or_else(|| AgentProcessCompileErr::EmptyCommand {
                 kind: kind.to_owned(),
             })?;
-    let env = compose_agent_env(
-        trusted_agent_env(project_root, kind)?,
-        adapter,
-        request,
-        extra_env,
-    )?;
+    let trusted_env = trusted_agent_env(project_root, kind)?;
+    let secret_keys = trusted_env.keys().cloned().collect();
+    let env = compose_agent_env(trusted_env, adapter, request, extra_env)?;
     let unset = BTreeSet::new();
     let argv = login_shell_argv(&env, &unset, &provider_argv);
     Ok(CompiledAgentProcess {
@@ -690,6 +714,7 @@ fn compile_agent_process_with_extra_env(
         provider_program,
         argv,
         env,
+        secret_keys,
         unset,
     })
 }
@@ -828,12 +853,16 @@ fn finalize_agent_process_stage(
             finalized.provider_account = ProviderAccountState::Finalized {
                 binding: binding.clone(),
             };
-            let argv = exec_argv(rimz_bin, runtime, &finalized)?;
-            let argv = login_shell_argv(&process.env, &process.unset, &argv);
+            let plan = plan_exec_argv(rimz_bin, runtime, &finalized)?;
+            let argv = login_shell_argv(&process.env, &process.unset, &plan.argv);
             if argv.is_empty() {
                 return Err(AgentProcessStageErr::EmptyReentry);
             }
-            Ok(AgentProcessStage::LoginShellReentry { process, argv })
+            Ok(AgentProcessStage::LoginShellReentry {
+                process,
+                argv,
+                prompt_artifact: plan.prompt_artifact,
+            })
         }
         ProviderAccountState::Finalized { binding } => {
             if managed_launch.and_then(crate::agents::ManagedLaunchState::binding) != Some(binding)
@@ -913,17 +942,47 @@ pub fn exec_argv(
     runtime: &RuntimePaths,
     request: &ExecRequest,
 ) -> Result<Vec<String>, ExecWireErr> {
+    let plan = plan_exec_argv(rimz_bin, runtime, request)?;
+    if let Some(artifact) = &plan.prompt_artifact {
+        write_prompt_artifact(artifact)?;
+    }
+    Ok(plan.argv)
+}
+
+pub struct ExecArgvPlan {
+    pub argv: Vec<String>,
+    pub prompt_artifact: Option<PromptArtifact>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct PromptArtifact {
+    pub path: PathBuf,
+    pub contents: String,
+}
+
+pub fn write_prompt_artifact(artifact: &PromptArtifact) -> Result<(), ExecWireErr> {
+    crate::disk::atomic::write_cache_bytes_atomically(&artifact.path, artifact.contents.as_bytes())
+        .map_err(ExecWireErr::PromptWrite)
+}
+
+pub fn plan_exec_argv(
+    rimz_bin: &Path,
+    runtime: &RuntimePaths,
+    request: &ExecRequest,
+) -> Result<ExecArgvPlan, ExecWireErr> {
     let mut encoded = request.clone();
     encoded.identity.params.kind_ordinal = None;
     validate_exec_request(&encoded)?;
-    let prompt_file = match &mut encoded.action {
-        ExecAction::Launch { prompt, .. } => prompt
-            .take()
-            .map(|text| write_prompt_artifact(runtime, "task", &text))
-            .transpose()
-            .map_err(ExecWireErr::PromptWrite)?,
+    let prompt_artifact = match &mut encoded.action {
+        ExecAction::Launch { prompt, .. } => prompt.take().map(|contents| PromptArtifact {
+            path: prompt_artifact_path(runtime, "task", &contents),
+            contents,
+        }),
         _ => None,
     };
+    let prompt_file = prompt_artifact
+        .as_ref()
+        .map(|artifact| artifact.path.clone());
     let mut argv = vec![
         rimz_bin.to_string_lossy().into_owned(),
         "agents".to_owned(),
@@ -942,7 +1001,10 @@ pub fn exec_argv(
     })
     .map_err(ExecWireErr::Serialize)?;
     argv.extend(["--request".to_owned(), payload]);
-    Ok(argv)
+    Ok(ExecArgvPlan {
+        argv,
+        prompt_artifact,
+    })
 }
 
 /// Check the visible envelope, then restore the launch prompt from its artifact.
