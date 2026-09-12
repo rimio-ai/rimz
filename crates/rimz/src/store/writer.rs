@@ -340,7 +340,9 @@ impl Store {
     ) -> Result<AgentLaunchBatch> {
         self.commit(|txn| {
             let (_cache, base_agents, _resume_outcomes) = snapshot::catch_up_rollup(txn.paths)?;
-            let identities = allocate_agent_launch_identities(requests, &base_agents)?;
+            let logins = record::read_optional(&txn.paths.workspace_record)?.and_then(|r| r.logins);
+            let identities =
+                allocate_agent_launch_identities(requests, &base_agents, logins.as_ref())?;
             let events = identities
                 .iter()
                 .map(|identity| {
@@ -667,6 +669,7 @@ fn workspace_record_preserving_room_state(
 fn allocate_agent_launch_identities(
     requests: &[AgentLaunchRequest],
     agents: &[crate::agents::AgentState],
+    logins: Option<&crate::ids::RoomLogins>,
 ) -> Result<Vec<AgentLaunchIdentity>> {
     // Retained ended rows keep their names reserved so an address stays
     // unambiguous until rotation prunes the row at the retention boundary.
@@ -702,12 +705,17 @@ fn allocate_agent_launch_identities(
             }
         };
         taken.insert(name.clone());
+        let mut launch = request.launch.clone();
+        launch.login = logins
+            .and_then(|l| l.get(&request.kind))
+            .filter(|name| !name.is_default())
+            .cloned();
         identities.push(AgentLaunchIdentity {
             kind: request.kind.clone(),
             agent_id: request.agent_id.clone(),
             name,
             name_explicit,
-            launch: request.launch.clone(),
+            launch,
             run_id: request.run_id.clone(),
             prompt: request.prompt.clone(),
         });

@@ -51,6 +51,7 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
             parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
             launch_depth: Some(2),
             profile: Some("codex-coder".to_owned()),
+            login: None,
             mode: Some(crate::agents::PermissionMode::Yolo),
             role: Some("coder".to_owned()),
             model: Some("gpt-5.6-sol".to_owned()),
@@ -546,6 +547,60 @@ fn room_logins_freeze_at_birth_and_survive_a_generic_rerecord() {
 }
 
 #[test]
+fn launch_batch_stamps_room_logins_over_caller_values() {
+    for recorded in [false, true] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = WorkspaceResolver::resolve(dir.path(), None).expect("workspace");
+        let paths = StatePaths::under(workspace.workspace_id.clone(), dir.path()).expect("state");
+        let runtime =
+            RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).expect("runtime");
+        let store = Store::open(paths.clone(), runtime).expect("open store");
+        let work = "work".parse::<crate::ids::LoginName>().expect("login name");
+        if recorded {
+            let logins = crate::ids::RoomLogins::from([
+                (AgentKind::new_unchecked("claude"), work.clone()),
+                (AgentKind::new_unchecked("codex"), Default::default()),
+            ]);
+            store
+                .record_room_logins(&workspace, &logins)
+                .expect("freeze accounts");
+        }
+        let requests = ["claude", "codex"].map(|kind| {
+            let mut request = launch_request(kind, AgentLaunchName::Mint);
+            request.kind = AgentKind::new_unchecked(kind);
+            request.launch.login = Some("caller".parse().expect("login name"));
+            request
+        });
+        let batch = store
+            .begin_agent_launch_batch(
+                &requests,
+                AgentLaunchScope {
+                    session_name: "rimz-test".to_owned(),
+                    cwd: dir.path().to_path_buf(),
+                    branch: None,
+                    channel: None,
+                    description: None,
+                },
+            )
+            .expect("begin launch batch");
+        let (_, agents, _) = snapshot::catch_up_rollup(&paths).expect("rollup");
+        for identity in &batch.identities {
+            let expected = (recorded && identity.kind.as_str() == "claude").then_some(work.clone());
+            assert_eq!(identity.launch.login, expected);
+            let agent = agents
+                .iter()
+                .find(|agent| agent.agent_id == identity.agent_id)
+                .expect("launched row");
+            assert_eq!(agent.login, expected);
+            let restored: AgentState =
+                serde_json::from_value(serde_json::to_value(agent).expect("serialize row"))
+                    .expect("deserialize row");
+            assert_eq!(restored.login, expected);
+        }
+    }
+}
+
+#[test]
 fn a_corrupt_workspace_record_refuses_a_rerecord_rather_than_clearing_it() {
     let dir = tempfile::tempdir().expect("tempdir");
     let project = dir.path().join("project");
@@ -892,8 +947,8 @@ fn launch_identity_allocation_rejects_explicit_live_name_or_session_prefix() {
         prompt: None,
     };
 
-    assert!(allocate_agent_launch_identities(&[duplicate], &agents).is_err());
-    assert!(allocate_agent_launch_identities(&[prefix], &agents).is_err());
+    assert!(allocate_agent_launch_identities(&[duplicate], &agents, None).is_err());
+    assert!(allocate_agent_launch_identities(&[prefix], &agents, None).is_err());
 }
 
 #[test]
@@ -912,7 +967,7 @@ fn soft_launch_name_falls_back_when_it_collides() {
         prompt: None,
     };
 
-    let identities = allocate_agent_launch_identities(&[request], &agents).unwrap();
+    let identities = allocate_agent_launch_identities(&[request], &agents, None).unwrap();
 
     assert_eq!(identities.len(), 1);
     assert_ne!(identities[0].name, "lucid-atlas");
@@ -933,7 +988,7 @@ fn launch_identity_tracks_explicit_name_provenance() {
         launch_request("launch_mint", AgentLaunchName::Mint),
     ];
 
-    let identities = allocate_agent_launch_identities(&requests, &agents).unwrap();
+    let identities = allocate_agent_launch_identities(&requests, &agents, None).unwrap();
 
     assert_eq!(identities[0].name, "writer");
     assert!(identities[0].name_explicit);
