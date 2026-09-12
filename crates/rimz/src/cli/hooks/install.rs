@@ -1,8 +1,8 @@
 use std::io::Write as _;
 
 use super::hook_install::{
-    detected_installable_adapters, install_disposition, render_dry_run, write_install_result,
-    write_post_install_footer, write_uninstall_result, write_untrusted_hooks_notice,
+    detected_installable_adapters, install_hooks_into, render_dry_run, write_post_install_footer,
+    write_uninstall_result,
 };
 use super::*;
 use rimz::agents::HookUninstallReport;
@@ -16,14 +16,7 @@ pub(super) fn run_install(agent: Option<String>, dry_run: bool) -> Result<()> {
     let adapters = install_definitions(agent)?;
     let mut out = crate::cli::render::out();
     for integration in adapters {
-        let disposition = install_disposition(integration);
-        let report = integration.install_hooks(&login_env)?;
-        crate::cli::render::finish(write_install_result(&mut out, &report, disposition))?;
-        crate::cli::render::finish(write_untrusted_hooks_notice(
-            report.agent,
-            &integration.untrusted_installed_hooks(&login_env),
-            &mut out,
-        ))?;
+        install_hooks_into(integration, &login_env, &mut out)?;
     }
     crate::cli::render::finish(write_post_install_footer(&mut out))
 }

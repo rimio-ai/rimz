@@ -11,6 +11,7 @@ This page is the map: it indexes every command and collects the conventions that
 | **Open and attach a room** | `rimz`, `start`, `attach`, `sessions`, `list`, `setup`, `doctor` | [Getting started](./cli/getting-started.md) |
 | **Reach a room anywhere** | `remote`, `web` | [Remote](./cli/remote.md) · [Web](./cli/web.md) |
 | **Run and steer agents** | `agents`, `subagents`, `teams`, `asks`, `answer`, `message`, `wait`, `transcript`, `pane`, `events` | [Agents](./cli/agents.md) · [Subagents](./cli/subagents.md) · [Teams](./cli/teams.md) · [Asks](./cli/asks.md) · [Message](./cli/message.md) · [Wait](./cli/wait.md) · [Transcript](./cli/transcript.md) · [Pane](./cli/pane.md) · [Events](./cli/events.md) |
+| **Provider accounts** | `accounts` | [Accounts](./cli/accounts.md) |
 | **Cost, usage, and budgets** | `stats`, `providers`, `budget` | [Stats](./cli/stats.md) · [Providers](./cli/providers.md) · [Budgets](./cli/agents.md#inspect-and-change-a-budget) |
 | **Lanes, worktrees, and schedules** | `channel`, `worktree`, `loop` | [Channels](./cli/channel.md) · [Worktrees](./cli/worktree.md) · [Loop](./cli/loop.md) |
 | **Hooks and trust** | `hooks`, `trust` | [Hooks and trust](./cli/hooks-trust.md) |

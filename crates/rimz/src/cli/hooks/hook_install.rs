@@ -1,5 +1,6 @@
 //! Hook install consent, previews, diffs, and result presentation.
 
+use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
 
 use anyhow::Result;
@@ -20,13 +21,15 @@ pub(super) enum InstallDisposition {
     Current,
 }
 
-pub(super) fn install_disposition(agent: &rimz::agents::AgentDefinition) -> InstallDisposition {
-    let login_env = rimz::agents::ambient_env();
-    if !agent.hooks_installed(&login_env) {
+fn install_disposition(
+    agent: &rimz::agents::AgentDefinition,
+    login_env: &BTreeMap<String, String>,
+) -> InstallDisposition {
+    if !agent.hooks_installed(login_env) {
         InstallDisposition::Installed
     } else if agent
         .managed_integration()
-        .is_some_and(|integration| integration.upgrade_available(&login_env))
+        .is_some_and(|integration| integration.upgrade_available(login_env))
     {
         InstallDisposition::Refreshed
     } else {
@@ -141,14 +144,28 @@ fn install_selected(selected: &[&'static str], out: &mut dyn Write) -> Result<()
     }
 
     for name in selected {
-        let agent = rimz::agents::definition_by_kind(name)?;
-        let disposition = install_disposition(agent);
-        let report = agent.install_hooks(&login_env)?;
-        write_install_result(out, &report, disposition)?;
-        write_untrusted_hooks_notice(name, &agent.untrusted_installed_hooks(&login_env), out)?;
+        install_hooks_into(rimz::agents::definition_by_kind(name)?, &login_env, out)?;
     }
 
     Ok(write_post_install_footer(out)?)
+}
+
+/// Install one agent's hooks into the home `login_env` resolves, then report
+/// the result and any hooks the agent's own trust gate still skips.
+pub(in crate::cli) fn install_hooks_into(
+    agent: &rimz::agents::AgentDefinition,
+    login_env: &BTreeMap<String, String>,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let disposition = install_disposition(agent, login_env);
+    let report = agent.install_hooks(login_env)?;
+    write_install_result(out, &report, disposition)?;
+    write_untrusted_hooks_notice(
+        report.agent,
+        &agent.untrusted_installed_hooks(login_env),
+        out,
+    )?;
+    Ok(())
 }
 
 /// Stderr notice for hooks the agent's own trust gate still skips: the gate

@@ -56,11 +56,23 @@ impl AccountsConfig {
     }
 
     /// The declared accounts of a kind, or `None` for a kind that cannot carry
-    /// named accounts. This is the only place the supported kinds are listed.
+    /// named accounts. This and [`Self::named_mut`] are the only places the
+    /// supported kinds are listed.
     pub fn named(&self, kind: &AgentKind) -> Option<&BTreeMap<LoginName, NamedAccount>> {
         match kind.as_str() {
             "claude" => Some(&self.claude),
             "codex" => Some(&self.codex),
+            _ => None,
+        }
+    }
+
+    pub fn named_mut(
+        &mut self,
+        kind: &AgentKind,
+    ) -> Option<&mut BTreeMap<LoginName, NamedAccount>> {
+        match kind.as_str() {
+            "claude" => Some(&mut self.claude),
+            "codex" => Some(&mut self.codex),
             _ => None,
         }
     }
