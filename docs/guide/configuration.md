@@ -168,7 +168,7 @@ claude = "100/day"
 codex = "100/day"
 ```
 
-`harness.turn_budget` caps each agent turn in the room and accepts a plain dollar amount such as `"3"` or `"$2.50"`; a new prompt starts a fresh turn baseline. `harness.budget` turns on a cap for each room's whole fleet, while `[accounts.budget]` turns on a cap for one provider login across every room on the machine. An account key requires wired authoritative account-spend history; subscription quota bars and point-in-time or partial estimates do not qualify, so `config set`, strict loading, room start, and account-budget commands reject unknown and ineligible kinds such as Antigravity with the key to remove or fix. Cursor remains eligible for per-agent/session and room caps, but not an account-day cap. Supported daily caps read spend since local midnight in `timezone` and require the `/day` suffix; a bare amount is rejected with the form to use. These keys run no command and stay outside the project trust hash.
+`harness.turn_budget` caps each agent turn in the room and accepts a plain dollar amount such as `"3"` or `"$2.50"`; a new prompt starts a fresh turn baseline. `harness.budget` turns on a cap for each room's whole fleet, while `[accounts.budget]` turns on a cap for each account of that provider, shared by every room on the same account. An account key requires wired authoritative account-spend history; subscription quota bars and point-in-time or partial estimates do not qualify, so `config set`, strict loading, room start, and account-budget commands reject unknown and ineligible kinds such as Antigravity with the key to remove or fix. Cursor remains eligible for per-agent/session and room caps, but not an account-day cap. Supported daily caps read spend since local midnight in `timezone` and require the `/day` suffix; a bare amount is rejected with the form to use. These keys run no command and stay outside the project trust hash.
 
 The daily keys are the on-switch; `rimz budget` inspects and adjusts an armed daily cap at runtime without touching them, and refuses to arm a cap they never set. The command displays `harness.turn_budget` read-only; change that standing per-turn cap with `rimz config set harness.turn_budget 3` or remove the key. The full cap model — the per-turn, per-agent, and loop-task scopes, what a park does, and what resumes it — is the [budgets guide](./budget.md).
 
@@ -251,6 +251,15 @@ claude = "100/day"
 claude = 50.0
 codex = 25.0
 ```
+
+```toml
+[accounts.claude.work]
+home = "/home/you/.claude-work"
+
+[accounts.codex.personal]
+```
+
+`[accounts.<kind>.<name>]` declares a named Claude or Codex account: a separate provider home that a room launches that provider's agents into. `home` is optional; an empty table places the home under `~/.local/share/rimz/accounts/<kind>/<name>`. `default` is reserved for the provider's own home and is never declared, and two accounts cannot share one home. `rimz accounts add` writes these entries for you, and [Provider accounts](./accounts.md) walks through the whole flow. A project picks its room's accounts in `.rimz/config.toml` with `[accounts]` entries such as `claude = "work"`. That selection joins the project trust hash, and an untrusted selection refuses `rimz start` until you trust it. `rimz start --account` overrides it.
 
 `budget` sets the enforced local-day dollar cap described in [Dollar budgets](#dollar-budgets) for descriptor-gated providers with durable spend; an unsupported entry refuses room birth instead of disappearing into lenient defaults. `usage_limit_usd` is separate, display-only, and has no account-spend eligibility gate, so Cursor remains valid there: its monthly ceiling scales the provider dashboard's `ex`/`api` bar when the provider reports no real cap, while the provider still enforces real spend and agents keep running. Account enrichment is local, read-only, and best-effort; `RIMZ_OAUTH_USAGE_OFFLINE=1` disables the live fetches for one process tree without touching transcript-derived totals or credential files.
 

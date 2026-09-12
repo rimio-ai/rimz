@@ -26,11 +26,12 @@ New here? Start with the [README](../README.md) for what RimZ is and why it exis
 - [Scripting](./guide/scripting.md): supervised one-shot `-p` turns with exit codes, JSON and streaming output, and the background-run primitives that drop agents into scripts and CI.
 - [Loops](./guide/loops.md): schedule turns on a clock, guard them with watchdogs, let agents set their own alarms, and keep the fleet moving with auto-continue.
 - [Notifications](./guide/notifications.md): reach your phone or run your own command when an agent needs you, and let handlers clear routine prompts themselves.
-- [Budgets](./guide/budget.md): enforce dollar caps across five scopes — one turn, one agent, one loop task, a room's fleet, or a provider login — and resume the work a cap parked.
+- [Budgets](./guide/budget.md): enforce dollar caps across five scopes — one turn, one agent, one loop task, a room's fleet, or a provider account — and resume the work a cap parked.
 
 ## Customization
 
 - [Configuration](./guide/configuration.md): every setting and the file that owns it, across config, agent profiles and teams, loop tasks, and project trust.
+- [Provider accounts](./guide/accounts.md): run a room's Claude or Codex agents under a second provider login, with its own limits, budget, and sessions.
 - [Theming](./guide/theme.md): palettes, color depth, glyph styles, animations, and provider branding.
 - [Pets](./guide/pets.md): the dashboard companion — built-in and petdex pets, your own sprite sheets, and the pixel and cell-art render tiers.
 - [Zellij and tmux](./guide/multiplexer.md): recommended multiplexer options, parity keybindings, and a themed status bar, shipped ready to adopt under [examples/](../examples/README.md).
