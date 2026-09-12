@@ -220,6 +220,7 @@ pub(super) fn refresh_heavy_lanes(
     refresh_codex_daemon_reap_cache(
         daemon_probe_agents,
         runtime,
+        &logins,
         unix_now_ms(),
         config.remote_control.enabled_for("codex"),
     );
@@ -249,7 +250,7 @@ pub(super) fn refresh_heavy_lanes(
     // evaluate the already-known reset credits.
     credits::apply_credits_cache(&mut panels, runtime, &config.accounts, &logins);
 
-    refresh_live_sessions(base, runtime);
+    refresh_live_sessions(base, runtime, &logins);
     refresh_account_usage(&panels, runtime, &logins);
     let resume_messages = read_auto_continue_resume_messages(
         store.as_ref(),

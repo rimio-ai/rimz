@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use crate::RuntimePaths;
 use crate::agents::{
     AgentState, AgentTurnError, LifecycleRefreshCtx, LocalContextRefresh, LocalContextRefreshCtx,
-    RefreshSpawn, RefreshTrigger,
+    RefreshSpawn, RefreshTrigger, RoomLoginSet,
 };
 use crate::ids::PaneId;
 use crate::sidebar::timing::SESSION_REFRESH_INTERVAL;
@@ -30,16 +30,24 @@ type SessionRefreshResult<T> = std::result::Result<T, crate::disk::atomic::Atomi
 /// producer. Inline transcript reads run first with their adapter stat gate;
 /// detached helpers run on a coarse per-session cadence for richer realtime
 /// channels.
-pub(super) fn refresh_live_sessions(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
+pub(super) fn refresh_live_sessions(
+    snapshot: &SidebarSnapshot,
+    runtime: &RuntimePaths,
+    logins: &RoomLoginSet,
+) {
     for refresh in live_session_refreshes(snapshot) {
-        refresh_session_transcript_context_with_snapshot(
+        if let Err(err) = refresh_session_transcript_context_core(
             Some(snapshot),
             runtime,
+            logins,
             &refresh.kind,
             &refresh.session_id,
             refresh.model_hint.as_deref(),
+            false,
             RefreshTrigger::Tick,
-        );
+        ) {
+            warn_session_transcript_merge(&refresh.kind, &refresh.session_id, &err);
+        }
         let spawn = session_context_refresh_spawn(
             runtime,
             &refresh.kind,
@@ -93,6 +101,7 @@ pub fn force_refresh_session_context(
     let transcript_refreshed = refresh_session_transcript_context_core(
         Some(snapshot),
         runtime,
+        &RoomLoginSet::for_runtime(runtime),
         kind,
         session_id,
         model_hint,
@@ -133,15 +142,27 @@ fn refresh_session_transcript_context_with_snapshot(
     trigger: RefreshTrigger<'_>,
 ) {
     if let Err(err) = refresh_session_transcript_context_core(
-        snapshot, runtime, kind, session_id, model_hint, false, trigger,
+        snapshot,
+        runtime,
+        &RoomLoginSet::for_runtime(runtime),
+        kind,
+        session_id,
+        model_hint,
+        false,
+        trigger,
     ) {
         warn_session_transcript_merge(kind, session_id, &err);
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one session's refresh inputs, shared by the tick, watch, and forced paths"
+)]
 fn refresh_session_transcript_context_core(
     snapshot: Option<&SidebarSnapshot>,
     runtime: &RuntimePaths,
+    logins: &RoomLoginSet,
     kind: &str,
     session_id: &str,
     model_hint: Option<&str>,
@@ -153,11 +174,11 @@ fn refresh_session_transcript_context_core(
     };
     let prior = crate::store::agent_context::read_one(runtime, kind, session_id);
     let shared_pricing_cache_path = runtime.shared_pricing_cache_path();
-    let logins = crate::agents::RoomLoginSet::for_runtime(runtime);
-    let login_env = logins
-        .login(kind)
-        .map(|login| logins.env(&login))
-        .unwrap_or_else(crate::agents::ambient_env);
+    // A room account that no longer resolves has no home to read.
+    let Some(login) = logins.login(kind) else {
+        return Ok(false);
+    };
+    let login_env = logins.env(&login);
     let ctx = LocalContextRefreshCtx {
         login_env: &login_env,
         agent_id: session_id,
