@@ -1479,7 +1479,7 @@ fn posix_wrapper_shape_reapplies_env_after_rc() {
 
 #[test]
 fn compiled_process_debug_prints_launch_env_keys_without_values() {
-    let launch_env = env(&[("ANTHROPIC_API_KEY", "sk-secret")]);
+    let launch_env = env(&[("ANTHROPIC_API_KEY", "sk-secret"), ("VISIBLE_SETTING", "auto")]);
     let provider_argv = argv(&["claude", "--print", "--setting=visible"]);
     let wrapped = login_shell_argv_with(
         Some(Path::new("/bin/sh")),
@@ -1494,12 +1494,13 @@ fn compiled_process_debug_prints_launch_env_keys_without_values() {
         argv: wrapped.clone(),
         env: launch_env,
         secret_keys: BTreeSet::from(["ANTHROPIC_API_KEY".to_owned()]),
+        reminder: None,
         unset: BTreeSet::new(),
     };
 
     let report_argv = redact_env_tokens(&wrapped, |key| process.secret_keys.contains(key));
     assert!(report_argv.contains(&"ANTHROPIC_API_KEY=<redacted>".to_owned()));
-    assert!(report_argv.contains(&"RIMZ_RTK=auto".to_owned()));
+    assert!(report_argv.contains(&"VISIBLE_SETTING=auto".to_owned()));
     assert!(report_argv.contains(&"--setting=visible".to_owned()));
 
     let rendered = format!("{process:?}");
@@ -1507,7 +1508,7 @@ fn compiled_process_debug_prints_launch_env_keys_without_values() {
     assert!(rendered.contains("ANTHROPIC_API_KEY"), "{rendered}");
     assert!(rendered.contains("--print"), "{rendered}");
     assert!(rendered.contains("--setting=visible"), "{rendered}");
-    assert!(!rendered.contains("RIMZ_RTK=auto"), "{rendered}");
+    assert!(!rendered.contains("VISIBLE_SETTING=auto"), "{rendered}");
 
     let rendered = format!(
         "{:?}",
