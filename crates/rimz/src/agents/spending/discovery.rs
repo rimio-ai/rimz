@@ -379,10 +379,10 @@ impl SpendingDiscoveryIndex {
                 state
                     .materialized_paths(&mut self.stats)
                     .iter()
-                    .cloned()
                     // Declared homes are distinct, so a repeat is an ambient
                     // comma list naming an account's home: count it once.
-                    .filter(|path| seen_paths.insert(path.clone()))
+                    .filter(|&path| seen_paths.insert(path.clone()))
+                    .cloned()
                     .map(|path| SpendingFile {
                         adapter,
                         login: login_key.clone(),
