@@ -422,3 +422,137 @@ fn reconnect_marker_keeps_pty_start_unattended() {
         "the reconnect must not prompt for trust: {output}"
     );
 }
+
+fn room_logins(env: &Env) -> Option<serde_json::Value> {
+    let record = env
+        .state_root()
+        .join("rimz/workspaces")
+        .join(env.workspace_id.as_str())
+        .join("workspace.json");
+    let text = std::fs::read_to_string(record).ok()?;
+    let record: serde_json::Value = serde_json::from_str(&text).expect("workspace record json");
+    record.get("logins").cloned()
+}
+
+fn start_with_accounts(env: &Env, sessions: &str, accounts: &[&str]) -> std::process::Output {
+    let bin_dir = seed_actionable_agent(env);
+    let trace = env.project_root.join("zellij-accounts.log");
+    let mut command = env.rimz();
+    configure_actionable_hooks(&mut command, env, &bin_dir, &trace, sessions);
+    for account in accounts {
+        command.args(["--account", account]);
+    }
+    command
+        .bounded_output_within(ROOM_WORKFLOW_TIMEOUT)
+        .expect("run rimz start")
+}
+
+fn write_machine_config(env: &Env, text: &str) {
+    let config = env.config_root().join("rimz/config.toml");
+    std::fs::create_dir_all(config.parent().expect("config parent")).expect("config dir");
+    std::fs::write(config, text).expect("machine config");
+}
+
+#[test]
+fn start_refuses_named_accounts_it_cannot_launch_into() {
+    let env = Env::new();
+    let home = env.home_root.join("accounts/work");
+    write_machine_config(
+        &env,
+        &format!("[accounts.claude.work]\nhome = \"{}\"\n", home.display()),
+    );
+
+    let unknown = start_with_accounts(&env, "", &["claude=travel"]);
+    let stderr = String::from_utf8_lossy(&unknown.stderr);
+    assert!(!unknown.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("unknown claude account `travel`; configured: default, work; run `rimz accounts add claude travel`"),
+        "{stderr}"
+    );
+
+    let missing = start_with_accounts(&env, "", &["claude=work"]);
+    let stderr = String::from_utf8_lossy(&missing.stderr);
+    assert!(!missing.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("is not a directory; run `rimz accounts add claude work`"),
+        "{stderr}"
+    );
+
+    std::fs::create_dir_all(&home).expect("account home");
+    let unhooked = start_with_accounts(&env, "", &["claude=work"]);
+    let stderr = String::from_utf8_lossy(&unhooked.stderr);
+    assert!(!unhooked.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("RimZ hooks are missing for claude account `work`"),
+        "{stderr}"
+    );
+    assert_eq!(room_logins(&env), None, "a refused start freezes nothing");
+}
+
+#[test]
+fn start_freezes_room_accounts_until_reset() {
+    let env = Env::new();
+    write_machine_config(&env, "[accounts.claude.work]\n");
+    let born = start_with_accounts(&env, "", &["claude=default"]);
+    assert!(
+        born.status.success(),
+        "birth failed: {}",
+        String::from_utf8_lossy(&born.stderr)
+    );
+    let frozen = serde_json::json!({"claude": "default", "codex": "default"});
+    assert_eq!(room_logins(&env), Some(frozen.clone()));
+
+    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
+    let live = format!("{} [Created 1m ago]\n", workspace.session_name);
+    for sessions in ["", live.as_str()] {
+        let refused = start_with_accounts(&env, sessions, &["claude=work"]);
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(!refused.status.success(), "{stderr}");
+        assert!(
+            stderr.contains("this room uses claude account `default`, not `work`; accounts are fixed until reset, so run `rimz reset --account claude=work`"),
+            "{stderr}"
+        );
+    }
+
+    let reborn = start_with_accounts(&env, "", &[]);
+    assert!(
+        reborn.status.success(),
+        "rebirth failed: {}",
+        String::from_utf8_lossy(&reborn.stderr)
+    );
+    assert_eq!(room_logins(&env), Some(frozen));
+}
+
+#[test]
+fn start_takes_project_accounts_only_under_trust() {
+    let env = Env::new();
+    let project_config = env.project_root.join(".rimz/config.toml");
+    std::fs::create_dir_all(project_config.parent().expect("project config dir"))
+        .expect("mkdir .rimz");
+    std::fs::write(&project_config, "[accounts]\ncodex = \"default\"\n").expect("project config");
+
+    let untrusted = start_with_accounts(&env, "", &[]);
+    let stderr = String::from_utf8_lossy(&untrusted.stderr);
+    assert!(!untrusted.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("project account selections in .rimz/config.toml are untrusted"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("rimz trust grant"), "{stderr}");
+    assert_eq!(room_logins(&env), None);
+
+    env.rimz()
+        .args(["trust", "grant"])
+        .bounded_output()
+        .expect("trust grant");
+    let trusted = start_with_accounts(&env, "", &[]);
+    assert!(
+        trusted.status.success(),
+        "trusted start failed: {}",
+        String::from_utf8_lossy(&trusted.stderr)
+    );
+    assert_eq!(
+        room_logins(&env),
+        Some(serde_json::json!({"claude": "default", "codex": "default"}))
+    );
+}
