@@ -75,13 +75,16 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
     let disk_usage = rimz::disk::usage::measure();
     let (live_rooms, session_failures) = live_rooms(&workspaces);
     failures.extend(session_failures);
-    let hook_agents = match managed_hook_agents() {
-        Ok(agents) => agents,
-        Err(err) => {
-            failures.push(format!("read managed hooks: {err}"));
-            Vec::new()
-        }
-    };
+    let (hook_logins, accounts_err) = super::hooks::managed_hook_logins();
+    if let Some(err) = accounts_err {
+        failures.push(format!(
+            "read provider accounts: {err}; only the providers' own homes were unhooked"
+        ));
+    }
+    let hook_agents = hook_logins
+        .iter()
+        .map(|(key, _, _)| hook_label(key))
+        .collect::<Vec<_>>();
     let timer_status = loop_timer::status().unwrap_or(TimerStatus::NotInstalled);
     let binaries = if args.keep_binary {
         Vec::new()
@@ -115,8 +118,9 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
     teardown_rooms(&live_rooms, &mut stderr, &mut failures)?;
 
     match super::hooks::uninstall_managed_hooks() {
-        Ok(reports) if reports.is_empty() => writeln!(stderr, "Hooks: none installed")?,
-        Ok(reports) => {
+        // The accounts config error, if any, was recorded with the preview.
+        Ok((reports, _)) if reports.is_empty() => writeln!(stderr, "Hooks: none installed")?,
+        Ok((reports, _)) => {
             let agents = reports
                 .iter()
                 .map(|(key, _)| hook_label(key))
@@ -494,13 +498,6 @@ fn root_removed(kind: StorageKind, remove_state: bool, remove_config: bool) -> b
 
 fn storage_root(disk_usage: &RuntimeStorage, kind: StorageKind) -> Option<&StorageRoot> {
     disk_usage.roots.iter().find(|root| root.kind == kind)
-}
-
-fn managed_hook_agents() -> Result<Vec<String>> {
-    Ok(super::hooks::managed_hook_logins()?
-        .iter()
-        .map(|(key, _, _)| hook_label(key))
-        .collect())
 }
 
 /// A provider's own home reads as its kind; a named account as `kind@name`.
