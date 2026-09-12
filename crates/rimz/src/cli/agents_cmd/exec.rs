@@ -1667,6 +1667,8 @@ mod tests {
                 roles: vec![
                     rimz::config::RoleBinding {
                         signals: Vec::new(),
+                        owns: Vec::new(),
+                        compact_on_handoff: false,
                         auto_compact: None,
                         role: "planner".to_owned(),
                         profile: "claude".to_owned(),
@@ -1680,6 +1682,8 @@ mod tests {
                     },
                     rimz::config::RoleBinding {
                         signals: Vec::new(),
+                        owns: Vec::new(),
+                        compact_on_handoff: false,
                         auto_compact: None,
                         role: "coder".to_owned(),
                         profile: "codex".to_owned(),

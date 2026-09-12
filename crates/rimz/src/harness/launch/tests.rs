@@ -88,6 +88,8 @@ fn request(kind: &str, action: ExecAction) -> ExecRequest {
 fn team() -> crate::config::Team {
     let role = |role: &str, profile: &str| crate::config::RoleBinding {
         signals: Vec::new(),
+        owns: Vec::new(),
+        compact_on_handoff: false,
         auto_compact: None,
         role: role.to_owned(),
         profile: profile.to_owned(),

@@ -55,8 +55,8 @@ mod worktree;
 pub use accounts::{AccountBudgetConfigError, AccountsConfig, UsageLimitUsd};
 pub(crate) use agents::retired_agents_key;
 pub use agents::{
-    AgentsConfig, CommandsConfig, Isolation, LaunchPlacement, Profile, ProfilesConfig, RoleBinding,
-    SubagentProfilesConfig, SubagentsConfig, Team, TeamSignalBinding, TeamsConfig,
+    AgentsConfig, CommandsConfig, DONE_STAGE, Isolation, LaunchPlacement, Profile, ProfilesConfig,
+    RoleBinding, SubagentProfilesConfig, SubagentsConfig, Team, TeamSignalBinding, TeamsConfig,
 };
 use animation::validate_glyph_cells;
 pub use animation::{

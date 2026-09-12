@@ -81,6 +81,10 @@ layout = "claude,codex"
 ## [[agents.teams.review.roles]]
 ## role = "planner"
 ## profile = "planner"
+## # Stages assigned to this role; Done is reserved and has no owner.
+## owns = ["Explore", "Plan", "Reflect"]
+## # Compact after handing work to another member (default: false).
+## compact-on-handoff = true
 ## [[agents.teams.review.roles]]
 ## role = "coder"
 ## profile = "codex-yolo"

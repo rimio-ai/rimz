@@ -141,6 +141,8 @@ fn role(role: &str, profile: &str) -> RoleBinding {
         role: role.to_owned(),
         profile: profile.to_owned(),
         signals: Vec::new(),
+        owns: Vec::new(),
+        compact_on_handoff: false,
         mode: None,
         model: None,
         effort: None,
@@ -1257,6 +1259,8 @@ fn named_teams_compile_roles_and_apply_overrides() {
                 role: "coder".to_owned(),
                 profile: "coder-base".to_owned(),
                 signals: Vec::new(),
+                owns: Vec::new(),
+                compact_on_handoff: false,
                 mode: Some(PermissionMode::Ask),
                 model: Some("role-model".to_owned()),
                 effort: Some("high".to_owned()),
@@ -1270,6 +1274,8 @@ fn named_teams_compile_roles_and_apply_overrides() {
                 role: "planner".to_owned(),
                 profile: "planner-base".to_owned(),
                 signals: Vec::new(),
+                owns: Vec::new(),
+                compact_on_handoff: false,
                 mode: None,
                 model: None,
                 effort: None,
@@ -1499,7 +1505,15 @@ fn team_validation_rejects_empty_and_duplicate_stages() {
             &TeamsConfig(BTreeMap::from([("review".to_owned(), candidate)])),
         )
     };
-    for name in ["", " \t ", "\u{2003}"] {
+    for name in [
+        "",
+        " \t ",
+        "\u{2003}",
+        " Plan",
+        "Plan ",
+        "Plan\nReview",
+        "Plan\0",
+    ] {
         assert_eq!(
             validate(&["Explore", name]),
             Err(LayoutErr::InvalidStageName {
@@ -1518,6 +1532,84 @@ fn team_validation_rejects_empty_and_duplicate_stages() {
     validate(&[]).expect("undeclared stages");
     validate(&["Explore", "Plan", "Implement (delta)"]).expect("ordered stages");
     validate(&["Plan", "plan"]).expect("stage names are case-sensitive");
+}
+
+#[test]
+fn team_stage_ownership_validation() {
+    let mut candidate = team(vec![role("planner", "claude"), role("coder", "codex")]);
+    candidate.stages = ["Explore", "Plan", "Implement", "Review", "Reflect", "Done"]
+        .map(str::to_owned)
+        .to_vec();
+    candidate.roles[0].owns = ["Explore", "Plan", "Reflect"].map(str::to_owned).to_vec();
+    candidate.roles[1].owns = vec!["Implement".to_owned()];
+    validate_team_stages("forge", &candidate).expect("forge with an unowned Review stage");
+    let valid = candidate.clone();
+    for name in [
+        "",
+        " ",
+        " Plan",
+        "Plan ",
+        "Plan\nReview",
+        "Plan\rReview",
+        "Plan\0",
+    ] {
+        candidate.roles[0].owns = vec![name.to_owned()];
+        assert!(matches!(
+            validate_team_stages("forge", &candidate),
+            Err(LayoutErr::InvalidStageName { .. })
+        ));
+    }
+    candidate.roles[0].owns = vec!["Done".to_owned()];
+    assert!(matches!(
+        validate_team_stages("forge", &candidate),
+        Err(LayoutErr::ReservedStage { .. })
+    ));
+    candidate.roles[0].owns = vec!["Submit".to_owned()];
+    assert!(
+        matches!(validate_team_stages("forge", &candidate), Err(LayoutErr::UnknownOwnedStage { role, stage, .. }) if role == "planner" && stage == "Submit")
+    );
+    candidate.stages.clear();
+    validate_team_stages("forge", &candidate).expect("owns defines the vocabulary");
+    for role in ["planner\nStage: Done", "planner)", "(planner", "planner\0"] {
+        candidate.roles[0].role = role.to_owned();
+        assert!(matches!(
+            validate_team_stages("forge", &candidate),
+            Err(LayoutErr::InvalidRoleName { .. })
+        ));
+    }
+    for (index, previous) in [(0, "planner"), (1, "planner")] {
+        candidate = valid.clone();
+        candidate.roles[index].owns.push("Plan".to_owned());
+        assert!(
+            matches!(validate_team_stages("forge", &candidate), Err(LayoutErr::DuplicateStageOwner { roles, .. }) if roles == [previous, candidate.roles[index].role.as_str()])
+        );
+    }
+}
+
+#[test]
+fn compact_on_handoff_preflight_uses_resolved_launch_kind() {
+    let mut candidate = team(vec![role("coder", "claude")]);
+    candidate.roles[0].compact_on_handoff = true;
+    prepare_team("forge", &candidate, &no_profiles(), None).expect("Claude supports compact");
+    assert!(matches!(
+        prepare_team("forge", &candidate, &no_profiles(), Some(&ResolvedProfile::bare("amp"))),
+        Err(LayoutErr::CompactOnHandoffUnsupported { kind, .. }) if kind.as_str() == "amp"
+    ));
+    candidate.roles[0].profile = "amp".to_owned();
+    assert!(matches!(
+        prepare_team("forge", &candidate, &no_profiles(), None),
+        Err(LayoutErr::CompactOnHandoffUnsupported { .. })
+    ));
+    prepare_team(
+        "forge",
+        &candidate,
+        &no_profiles(),
+        Some(&ResolvedProfile::bare("claude")),
+    )
+    .expect("override supports compact");
+    candidate.roles[0].compact_on_handoff = false;
+    prepare_team("forge", &candidate, &no_profiles(), None)
+        .expect("disabled on unsupported adapter");
 }
 
 #[test]

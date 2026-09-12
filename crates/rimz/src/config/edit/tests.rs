@@ -389,6 +389,8 @@ fn dynamic_profile_and_team_field_lists_match_serialized_schema() {
     let team = Team {
         roles: vec![RoleBinding {
             role: "lead".to_owned(),
+            owns: Vec::new(),
+            compact_on_handoff: false,
             profile: "claude".to_owned(),
             signals: vec![crate::config::TeamSignalBinding {
                 signal: "ci.failed".to_owned(),

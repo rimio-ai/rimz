@@ -71,6 +71,8 @@ fn diagnosis_reaches_through_a_project_trust_parse_error() {
 fn role(role: &str, profile: &str) -> RoleBinding {
     RoleBinding {
         signals: Vec::new(),
+        owns: Vec::new(),
+        compact_on_handoff: false,
         role: role.to_owned(),
         profile: profile.to_owned(),
         mode: None,
