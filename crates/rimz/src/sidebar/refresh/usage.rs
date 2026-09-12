@@ -91,6 +91,7 @@ fn trace_claim(runtime: &RuntimePaths, kind: &str, outcome: &str, elapsed: Durat
 /// Run one producer-created claim. The helper validates the nonce before any
 /// provider call; late or superseded workers leave both caches untouched.
 pub fn refresh_claimed_account_usage(runtime: &RuntimePaths, kind: &str, claim_id: Uuid) -> bool {
+    let login_env = crate::agents::ambient_env();
     let started = Instant::now();
     if crate::agents::credits::oauth_usage_offline() {
         cancel_provider_account_usage_claim(runtime, kind, claim_id);
@@ -107,7 +108,7 @@ pub fn refresh_claimed_account_usage(runtime: &RuntimePaths, kind: &str, claim_i
         return false;
     };
     let realtime_started = Instant::now();
-    let realtime = adapter.probe_realtime_account_usage(runtime);
+    let realtime = adapter.probe_realtime_account_usage(runtime, &login_env);
     let realtime_ms = duration_ms(realtime_started.elapsed());
     if !account_usage_claim_matches(runtime, kind, claim_id) {
         trace_usage_helper(
@@ -141,7 +142,7 @@ pub fn refresh_claimed_account_usage(runtime: &RuntimePaths, kind: &str, claim_i
         return wrote;
     }
     let direct_started = Instant::now();
-    let direct_probe = adapter.probe_account_usage();
+    let direct_probe = adapter.probe_account_usage(&login_env);
     let direct_ms = duration_ms(direct_started.elapsed());
     let outcome = account_usage_outcome(&direct_probe);
     let publication_started = Instant::now();
@@ -249,6 +250,7 @@ fn complete_realtime_account_usage_with(
 /// Claim and execute a direct read in-process. Codex synchronous refresh paths
 /// use this instead of maintaining a separate cadence.
 fn merge_account_usage_if_due(runtime: &RuntimePaths, kind: &str) -> bool {
+    let login_env = crate::agents::ambient_env();
     let Some(adapter) = crate::agents::find_definition(kind) else {
         return false;
     };
@@ -259,7 +261,12 @@ fn merge_account_usage_if_due(runtime: &RuntimePaths, kind: &str) -> bool {
     let Some(claim_id) = claim_provider_account_usage(runtime, kind, cached_hint) else {
         return false;
     };
-    complete_direct_account_usage(runtime, kind, claim_id, adapter.probe_account_usage())
+    complete_direct_account_usage(
+        runtime,
+        kind,
+        claim_id,
+        adapter.probe_account_usage(&login_env),
+    )
 }
 
 fn complete_direct_account_usage(

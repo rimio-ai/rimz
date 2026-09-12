@@ -661,7 +661,8 @@ impl ResolvedDaemonInputs {
         let rimz_bin = crate::proc::rimz_exe();
         let claude_bin = which::which("claude").ok();
         let codex_bin = which::which("codex").ok();
-        let claude_settings = crate::remote_control::claude_settings_path();
+        let claude_settings =
+            crate::remote_control::claude_settings_path(&crate::agents::ambient_env());
         Self {
             stamp: DaemonViewInputsStamp {
                 config_generation: crate::config::MachineConfig::load_stamp_generation(),

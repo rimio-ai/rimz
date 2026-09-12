@@ -610,7 +610,7 @@ impl crate::agents::capabilities::ContextCapability for CursorAdapter {
 }
 
 impl crate::agents::capabilities::AccountCapability for CursorAdapter {
-    fn probe_account(&self) -> super::account::AccountProbe {
+    fn probe_account(&self, _login_env: &BTreeMap<String, String>) -> super::account::AccountProbe {
         account::probe(self.spec())
     }
 }

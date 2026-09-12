@@ -634,11 +634,17 @@ impl crate::agents::capabilities::ContextCapability for CopilotAdapter {
 }
 
 impl crate::agents::capabilities::AccountCapability for CopilotAdapter {
-    fn probe_account(&self) -> crate::agents::account::AccountProbe {
+    fn probe_account(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+    ) -> crate::agents::account::AccountProbe {
         account::probe()
     }
 
-    fn probe_account_usage(&self) -> crate::agents::AccountUsageProbe {
+    fn probe_account_usage(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+    ) -> crate::agents::AccountUsageProbe {
         account_usage::probe_usage()
     }
 }

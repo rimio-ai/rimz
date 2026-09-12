@@ -9,6 +9,7 @@
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::agents::account::file_mtime_ms;
@@ -19,7 +20,8 @@ use crate::agents::{AccountUsageSnapshot, HttpErrKind, ResetCredits};
 
 use super::account::{UsageCredits, UsageWindow, normalize_usage, parse_balance};
 
-use super::codex_home;
+use super::CodexAdapter;
+use crate::agents::capabilities::LaunchCapability;
 
 const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const OFFICIAL_HOST: &str = "chatgpt.com";
@@ -114,8 +116,10 @@ struct CreditsWire {
     overage_limit_reached: Option<bool>,
 }
 
-pub(super) fn probe_usage() -> crate::agents::AccountUsageProbe {
-    let Some(home) = codex_home() else {
+pub(super) fn probe_usage(
+    login_env: &BTreeMap<String, String>,
+) -> crate::agents::AccountUsageProbe {
+    let Some(home) = CodexAdapter.config_home(login_env) else {
         return crate::agents::AccountUsageProbe::NoCredentials(Default::default());
     };
     let auth_path = home.join("auth.json");
@@ -148,12 +152,16 @@ pub(super) fn probe_usage() -> crate::agents::AccountUsageProbe {
     crate::agents::credits::map_account_usage_probe(result, identity, "codex")
 }
 
-pub(super) fn credentials_stamp() -> Option<u64> {
-    file_mtime_ms(&codex_home()?.join("auth.json"))
+pub(super) fn credentials_stamp(login_env: &BTreeMap<String, String>) -> Option<u64> {
+    file_mtime_ms(&CodexAdapter.config_home(login_env)?.join("auth.json"))
 }
 
-pub(super) fn load_configured_credentials() -> Result<(CodexOauthCredentials, Option<String>)> {
-    let home = codex_home().ok_or(CodexOauthUsageErr::NoCredentials)?;
+pub(super) fn load_configured_credentials(
+    login_env: &BTreeMap<String, String>,
+) -> Result<(CodexOauthCredentials, Option<String>)> {
+    let home = CodexAdapter
+        .config_home(login_env)
+        .ok_or(CodexOauthUsageErr::NoCredentials)?;
     let base_url = configured_base_url(&home)?;
     let credentials = load_credentials_from(&home.join("auth.json"))?;
     Ok((credentials, base_url))

@@ -6,6 +6,7 @@
 //! never refreshes or writes credentials; retry/backoff and cache writes live in
 //! the CLI helper that calls this module.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 #[cfg(target_os = "macos")]
 use std::process::{Command, Stdio};
@@ -19,10 +20,11 @@ use sha2::{Digest, Sha256};
 use crate::utils::time::unix_now_ms;
 
 use crate::agents::account::file_mtime_ms;
+use crate::agents::capabilities::LaunchCapability;
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
 use crate::agents::credits::{oauth_http_get, trusted_usage_url, url_host};
 use crate::agents::payload::non_empty_trimmed;
-use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind, transcript_fs::home_dir};
+use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind};
 
 const DEFAULT_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const OFFICIAL_HOST: &str = "api.anthropic.com";
@@ -137,10 +139,13 @@ struct ExtraUsageWire {
     monthly_limit: Option<f64>,
 }
 
-pub(super) fn probe_usage(cli_version: Option<&str>) -> crate::agents::AccountUsageProbe {
-    let credentials_stamp = credentials_stamp();
+pub(super) fn probe_usage(
+    cli_version: Option<&str>,
+    login_env: &BTreeMap<String, String>,
+) -> crate::agents::AccountUsageProbe {
+    let credentials_stamp = credentials_stamp(login_env);
     let (identity, result) = match usage_url()
-        .and_then(|url| load_credentials().map(|credentials| (url, credentials)))
+        .and_then(|url| load_credentials(login_env).map(|credentials| (url, credentials)))
     {
         Ok((url, credentials)) => (
             crate::agents::AccountUsageIdentity {
@@ -168,19 +173,27 @@ pub(in crate::agents) fn fetch_usage_with_token(
     fetch_usage_with_url(&usage_url()?, access_token.trim(), cli_version)
 }
 
-fn load_credentials() -> Result<ClaudeOauthCredentials> {
-    parse_credentials(&read_credentials_bytes()?)
+fn load_credentials(login_env: &BTreeMap<String, String>) -> Result<ClaudeOauthCredentials> {
+    parse_credentials(&read_credentials_bytes(login_env)?)
 }
 
-pub(super) fn load_account_key() -> Result<String> {
-    parse_account_key(&read_credentials_bytes()?)
+pub(super) fn load_account_key(login_env: &BTreeMap<String, String>) -> Result<String> {
+    parse_account_key(&read_credentials_bytes(login_env)?)
 }
 
-fn read_credentials_bytes() -> Result<Vec<u8>> {
-    let path = credentials_path();
+fn read_credentials_bytes(login_env: &BTreeMap<String, String>) -> Result<Vec<u8>> {
+    let path = credentials_path(login_env).ok_or(ClaudeOauthUsageErr::NoCredentials)?;
     match std::fs::read(&path) {
         Ok(bytes) => Ok(bytes),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => read_keychain_credentials_bytes(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            if login_env
+                .get("CLAUDE_CONFIG_DIR")
+                .is_some_and(|value| !value.is_empty())
+            {
+                return Err(ClaudeOauthUsageErr::NoCredentials);
+            }
+            read_keychain_credentials_bytes()
+        }
         Err(err) => Err(ClaudeOauthUsageErr::Io(err)),
     }
 }
@@ -212,12 +225,14 @@ fn read_keychain_credentials_bytes() -> Result<Vec<u8>> {
     }
 }
 
-fn credentials_path() -> PathBuf {
-    home_dir().join(".claude").join(".credentials.json")
+fn credentials_path(login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    super::ClaudeAdapter
+        .config_home(login_env)
+        .map(|home| home.join(".credentials.json"))
 }
 
-pub(super) fn credentials_stamp() -> Option<u64> {
-    file_mtime_ms(&credentials_path())
+pub(super) fn credentials_stamp(login_env: &BTreeMap<String, String>) -> Option<u64> {
+    file_mtime_ms(&credentials_path(login_env)?)
 }
 
 fn parse_credentials(bytes: &[u8]) -> Result<ClaudeOauthCredentials> {

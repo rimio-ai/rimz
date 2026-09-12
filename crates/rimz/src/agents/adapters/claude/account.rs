@@ -6,6 +6,7 @@
 //!
 //! [`AgentDefinition::probe_account`]: crate::agents::AgentDefinition::probe_account
 
+use std::collections::BTreeMap;
 use std::process::{Command, Stdio};
 
 use serde::Deserialize;
@@ -63,9 +64,12 @@ pub(crate) fn model_sub_cap_window(
 /// stdout only — never inherits stdio — so it stays quiet in a TUI. A spawn
 /// failure or non-zero exit is `Unavailable` (transient), not a logged-out
 /// account, so a missing-then-installed binary recovers on the short retry TTL.
-pub(crate) fn probe() -> AccountProbe {
+pub(crate) fn probe(login_env: &BTreeMap<String, String>) -> AccountProbe {
     let mut command = Command::new("claude");
     command.args(["auth", "status"]).stdin(Stdio::null());
+    if let Some(home) = login_env.get("CLAUDE_CONFIG_DIR") {
+        command.env("CLAUDE_CONFIG_DIR", home);
+    }
     let Ok(output) = crate::proc::run_bounded_output(
         &mut command,
         crate::agents::account::INFORMATIONAL_PROBE_TIMEOUT,
@@ -77,7 +81,7 @@ pub(crate) fn probe() -> AccountProbe {
     }
     let mut probe = parse_claude_auth(&output.stdout);
     if let AccountProbe::Found(account) = &mut probe {
-        account.credentials_updated_at_ms = super::oauth_usage::credentials_stamp();
+        account.credentials_updated_at_ms = super::oauth_usage::credentials_stamp(login_env);
     }
     probe
 }

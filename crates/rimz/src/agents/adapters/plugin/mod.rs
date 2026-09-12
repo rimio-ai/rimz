@@ -10,6 +10,7 @@ mod manifest;
 mod probes;
 mod protocol;
 
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -286,14 +287,17 @@ impl crate::agents::capabilities::ContextCapability for PluginAdapter {
 }
 
 impl crate::agents::capabilities::AccountCapability for PluginAdapter {
-    fn probe_account(&self) -> AccountProbe {
+    fn probe_account(&self, _login_env: &BTreeMap<String, String>) -> AccountProbe {
         let Some(argv) = self.manifest.probes.account.as_deref() else {
             return AccountProbe::LoggedOut;
         };
         probes::account(self.spec.kind, self.plugin_dir, argv)
     }
 
-    fn probe_account_usage(&self) -> super::AccountUsageProbe {
+    fn probe_account_usage(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+    ) -> super::AccountUsageProbe {
         let Some(argv) = self.manifest.probes.account.as_deref() else {
             return super::AccountUsageProbe::Unsupported;
         };

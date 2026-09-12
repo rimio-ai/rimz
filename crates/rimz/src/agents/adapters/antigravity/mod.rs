@@ -17,6 +17,7 @@ impl crate::agents::capabilities::RuntimeControlCapability for AntigravityAdapte
 mod tests;
 
 use crate::agents::capabilities::*;
+use std::collections::BTreeMap;
 
 use std::path::{Path, PathBuf};
 
@@ -533,13 +534,16 @@ impl crate::agents::capabilities::ContextCapability for AntigravityAdapter {
 }
 
 impl crate::agents::capabilities::AccountCapability for AntigravityAdapter {
-    fn probe_account(&self) -> super::account::AccountProbe {
+    fn probe_account(&self, _login_env: &BTreeMap<String, String>) -> super::account::AccountProbe {
         local_api::probe_account()
             .map(super::account::AccountProbe::Found)
             .unwrap_or(super::account::AccountProbe::Unavailable)
     }
 
-    fn probe_account_usage(&self) -> super::AccountUsageProbe {
+    fn probe_account_usage(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+    ) -> super::AccountUsageProbe {
         local_api::probe_account_usage()
     }
 }

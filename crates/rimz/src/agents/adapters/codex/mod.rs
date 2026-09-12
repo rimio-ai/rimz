@@ -829,8 +829,12 @@ impl crate::agents::capabilities::ContextCapability for CodexAdapter {
                 ..SessionContextRefresh::default()
             });
         }
-        let observation =
-            refresh_app_server_enrichment(Some(input.session_id), input.model, input.broker_socket);
+        let observation = refresh_app_server_enrichment(
+            Some(input.session_id),
+            input.model,
+            input.broker_socket,
+            &crate::agents::ambient_env(),
+        );
         let realtime_usage = observation
             .as_ref()
             .map(AppServerObservation::account_usage);
@@ -898,7 +902,8 @@ impl crate::agents::capabilities::AccountCapability for CodexAdapter {
         &self,
     ) -> std::result::Result<super::account::ResetCreditOffer, String> {
         let (credentials, base_url) =
-            oauth_usage::load_configured_credentials().map_err(|error| error.to_string())?;
+            oauth_usage::load_configured_credentials(&crate::agents::ambient_env())
+                .map_err(|error| error.to_string())?;
         let identity = credentials.account_usage_identity();
         let usage = oauth_usage::fetch_usage_with_url(
             &oauth_usage::usage_url(base_url.as_deref()),
@@ -927,20 +932,32 @@ impl crate::agents::capabilities::AccountCapability for CodexAdapter {
         ))
     }
 
-    fn probe_account(&self) -> crate::agents::account::AccountProbe {
-        account::probe()
+    fn probe_account(
+        &self,
+        login_env: &BTreeMap<String, String>,
+    ) -> crate::agents::account::AccountProbe {
+        account::probe(login_env)
     }
 
-    fn probe_account_usage(&self) -> crate::agents::AccountUsageProbe {
-        oauth_usage::probe_usage()
+    fn probe_account_usage(
+        &self,
+        login_env: &BTreeMap<String, String>,
+    ) -> crate::agents::AccountUsageProbe {
+        oauth_usage::probe_usage(login_env)
     }
 
     fn probe_realtime_account_usage(
         &self,
         runtime: &crate::RuntimePaths,
+        login_env: &BTreeMap<String, String>,
     ) -> Option<AccountUsageSnapshot> {
-        refresh_app_server_enrichment(None, None, Some(&runtime.codex_app_server_socket_path()))
-            .map(|observation| observation.account_usage())
+        refresh_app_server_enrichment(
+            None,
+            None,
+            Some(&runtime.codex_app_server_socket_path()),
+            login_env,
+        )
+        .map(|observation| observation.account_usage())
     }
 }
 
@@ -1051,24 +1068,26 @@ impl crate::agents::capabilities::RuntimeControlCapability for CodexAdapter {
     fn runtime_control_readiness(
         &self,
         enabled: bool,
+        login_env: &BTreeMap<String, String>,
     ) -> super::runtime_control::RuntimeControlReadiness {
-        app_server::daemon::readiness(enabled)
+        app_server::daemon::readiness(enabled, login_env)
     }
 
-    fn ensure_runtime_control(&self, enabled: bool) {
-        app_server::daemon::ensure(enabled);
+    fn ensure_runtime_control(&self, enabled: bool, login_env: &BTreeMap<String, String>) {
+        app_server::daemon::ensure(enabled, login_env);
     }
 
     fn reconcile_runtime_control(
         &self,
         enabled: bool,
+        login_env: &BTreeMap<String, String>,
     ) -> std::result::Result<(), super::runtime_control::RuntimeControlError> {
-        app_server::daemon::reconcile(enabled)
+        app_server::daemon::reconcile(enabled, login_env)
             .map_err(|error| super::runtime_control::RuntimeControlError::new("codex", error))
     }
 
-    fn runtime_control_advisory(&self) -> Option<String> {
-        app_server::daemon::updater_skew().map(|skew| skew.to_string())
+    fn runtime_control_advisory(&self, login_env: &BTreeMap<String, String>) -> Option<String> {
+        app_server::daemon::updater_skew(login_env).map(|skew| skew.to_string())
     }
 }
 
@@ -1503,8 +1522,9 @@ fn refresh_app_server_enrichment(
     session_id: Option<&str>,
     model_hint: Option<&str>,
     broker_socket: Option<&Path>,
+    login_env: &BTreeMap<String, String>,
 ) -> Option<AppServerObservation> {
-    let mut client = CodexAppServer::connect(broker_socket)?;
+    let mut client = CodexAppServer::connect(broker_socket, login_env)?;
     Some(client.observe("codex", session_id, model_hint, Timestamp::now()))
 }
 

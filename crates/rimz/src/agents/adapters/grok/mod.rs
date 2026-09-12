@@ -8,6 +8,7 @@ mod spend;
 mod transcript;
 
 pub(crate) use crate::agents::capabilities::*;
+use std::collections::BTreeMap;
 
 use std::path::{Path, PathBuf};
 
@@ -490,7 +491,7 @@ impl crate::agents::capabilities::ContextCapability for GrokAdapter {
 }
 
 impl crate::agents::capabilities::AccountCapability for GrokAdapter {
-    fn probe_account(&self) -> super::account::AccountProbe {
+    fn probe_account(&self, _login_env: &BTreeMap<String, String>) -> super::account::AccountProbe {
         account::probe()
     }
 }

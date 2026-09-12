@@ -298,10 +298,11 @@ fn probe_accounts(
 }
 
 fn probe_one_account(kind: &str, active: bool) -> Option<ProviderProbeResult> {
+    let login_env = crate::agents::ambient_env();
     let started = Instant::now();
     let adapter = crate::agents::find_definition(kind)?;
     let account_started = Instant::now();
-    let outcome = adapter.probe_account();
+    let outcome = adapter.probe_account(&login_env);
     let account_ms = duration_ms(account_started.elapsed());
     let outcome_class = match &outcome {
         AccountProbe::Found(_) => ProbeOutcomeClass::Success,

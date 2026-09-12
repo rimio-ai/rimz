@@ -1,5 +1,6 @@
 //! Provider-neutral runtime-control and daemon coordination services.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -73,46 +74,58 @@ impl RuntimeControlError {
     }
 }
 
-pub fn readiness(kind: &str, enabled: bool) -> RuntimeControlReadiness {
+pub fn readiness(
+    kind: &str,
+    enabled: bool,
+    login_env: &BTreeMap<String, String>,
+) -> RuntimeControlReadiness {
     super::find_definition(kind).map_or(RuntimeControlReadiness::Disabled, |definition| {
-        definition.runtime_control_readiness(enabled)
+        definition.runtime_control_readiness(enabled, login_env)
     })
 }
 
 /// Ask an enabled host whether it is still serving `project_root`. Read-only
 /// and bounded — a sidebar tick can afford it.
-pub fn host_liveness(kind: &str, project_root: &std::path::Path) -> RuntimeControlLiveness {
+pub fn host_liveness(
+    kind: &str,
+    project_root: &std::path::Path,
+    login_env: &BTreeMap<String, String>,
+) -> RuntimeControlLiveness {
     super::find_definition(kind).map_or(RuntimeControlLiveness::Unknown, |definition| {
-        definition.runtime_control_liveness(project_root)
+        definition.runtime_control_liveness(project_root, login_env)
     })
 }
 
-pub fn ensure(kind: &str, enabled: bool) {
+pub fn ensure(kind: &str, enabled: bool, login_env: &BTreeMap<String, String>) {
     if let Some(definition) = super::find_definition(kind) {
-        definition.ensure_runtime_control(enabled);
+        definition.ensure_runtime_control(enabled, login_env);
     }
 }
 
 /// Fill a host's launch preconditions without starting it, so a readiness gate
 /// judges the state the host will actually start with.
-pub fn prepare(kind: &str, enabled: bool) {
+pub fn prepare(kind: &str, enabled: bool, login_env: &BTreeMap<String, String>) {
     if let Some(definition) = super::find_definition(kind) {
-        definition.prepare_runtime_control(enabled);
+        definition.prepare_runtime_control(enabled, login_env);
     }
 }
 
-pub fn reconcile(kind: &str, enabled: bool) -> Result<(), RuntimeControlError> {
+pub fn reconcile(
+    kind: &str,
+    enabled: bool,
+    login_env: &BTreeMap<String, String>,
+) -> Result<(), RuntimeControlError> {
     super::find_definition(kind).map_or(Ok(()), |definition| {
-        definition.reconcile_runtime_control(enabled)
+        definition.reconcile_runtime_control(enabled, login_env)
     })
 }
 
-pub fn updater_advisory(kind: &str) -> Option<String> {
-    super::find_definition(kind)?.runtime_control_advisory()
+pub fn updater_advisory(kind: &str, login_env: &BTreeMap<String, String>) -> Option<String> {
+    super::find_definition(kind)?.runtime_control_advisory(login_env)
 }
 
-pub fn wiring_input_path(kind: &str) -> Option<PathBuf> {
-    super::find_definition(kind)?.runtime_control_wiring_input_path()
+pub fn wiring_input_path(kind: &str, login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    super::find_definition(kind)?.runtime_control_wiring_input_path(login_env)
 }
 
 /// Ceiling on one realtime provider account-usage read. A stale socket costs

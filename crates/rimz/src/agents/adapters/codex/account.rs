@@ -8,6 +8,7 @@
 //!
 //! [`AgentDefinition::probe_account`]: crate::agents::AgentDefinition::probe_account
 
+use std::collections::BTreeMap;
 use std::process::{Command, Stdio};
 
 use serde::Deserialize;
@@ -117,14 +118,17 @@ pub(crate) fn parse_balance(value: &Value) -> Option<f64> {
 /// fall back to `codex login status` when credentials live in the OS keyring.
 /// A readable file remains authoritative; an unexpected file IO error is the
 /// transient `Unavailable` arm.
-pub(crate) fn probe() -> AccountProbe {
-    let Some(home) = super::codex_home() else {
+pub(crate) fn probe(login_env: &BTreeMap<String, String>) -> AccountProbe {
+    let Some(home) = super::codex_home_from(
+        login_env.get("CODEX_HOME").map(std::ffi::OsStr::new),
+        login_env.get("HOME").map(std::ffi::OsStr::new),
+    ) else {
         return AccountProbe::LoggedOut;
     };
     let path = home.join("auth.json");
     match std::fs::read(&path) {
         Ok(bytes) => with_credentials_mtime(parse_codex_auth(&bytes), &path),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => probe_login_status(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => probe_login_status(login_env),
         Err(_) => AccountProbe::Unavailable,
     }
 }
@@ -139,9 +143,12 @@ fn with_credentials_mtime(probe: AccountProbe, path: &std::path::Path) -> Accoun
     }
 }
 
-fn probe_login_status() -> AccountProbe {
+fn probe_login_status(login_env: &BTreeMap<String, String>) -> AccountProbe {
     let mut command = Command::new("codex");
     command.args(["login", "status"]).stdin(Stdio::null());
+    if let Some(home) = login_env.get("CODEX_HOME") {
+        command.env("CODEX_HOME", home);
+    }
     probe_login_status_with(&mut command)
 }
 

@@ -4,6 +4,7 @@
 //! daemon transport, request round trips, notifications, and the shared frame
 //! helpers used by the broker and read-only app-server client.
 
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -205,9 +206,11 @@ impl FramedTransport {
     pub(in crate::agents::adapters::codex) fn spawn(
         bin: &Path,
         total: Duration,
+        login_env: &BTreeMap<String, String>,
     ) -> Result<Self, AppServerErr> {
         let mut child = Command::new(bin)
             .arg("app-server")
+            .envs(login_env.iter().filter(|(key, _)| key.as_str() == "CODEX_HOME"))
             // Mark this as a RimZ-internal enrichment server so the lifecycle
             // hooks it fires on startup no-op instead of spawning another
             // `refresh-context` (which would cold-spawn another app-server …).

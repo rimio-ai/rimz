@@ -7,6 +7,7 @@
 //! operator's intent. Seeding fills an unset value only: an explicit `false`
 //! belongs to the operator and RimZ reports it instead of overwriting it.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -33,16 +34,20 @@ pub(crate) enum ConsentState {
 /// Where Claude keeps the global config: `$CLAUDE_CONFIG_DIR/.claude.json`,
 /// falling back to `$HOME/.claude.json`. Claude reads the first entry of a
 /// comma-separated `CLAUDE_CONFIG_DIR`, so this resolves the same one.
-pub(crate) fn global_config_path() -> Option<PathBuf> {
-    if let Some(raw) = std::env::var_os(OVERRIDE_ENV).filter(|value| !value.is_empty()) {
+pub(crate) fn global_config_path(login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    if let Some(raw) = login_env
+        .get(OVERRIDE_ENV)
+        .filter(|value| !value.is_empty())
+    {
         return Some(PathBuf::from(raw));
     }
-    config_base().map(|base| base.join(GLOBAL_CONFIG_FILE))
+    config_base(login_env).map(|base| base.join(GLOBAL_CONFIG_FILE))
 }
 
-fn config_base() -> Option<PathBuf> {
-    configured_dir(std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref()).or_else(|| {
-        std::env::var_os("HOME")
+fn config_base(login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    configured_dir(login_env.get("CLAUDE_CONFIG_DIR").map(String::as_str)).or_else(|| {
+        login_env
+            .get("HOME")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
     })
@@ -59,8 +64,10 @@ pub(super) fn configured_dir(configured: Option<&str>) -> Option<PathBuf> {
 /// The consent flag and the config recording it, mirroring the shape of
 /// [`super::remote_control::read_rc_settings`]. `None` when no home or
 /// `CLAUDE_CONFIG_DIR` resolves a path to read.
-pub(crate) fn read_consent() -> Option<(PathBuf, ConsentState)> {
-    let path = global_config_path()?;
+pub(crate) fn read_consent(
+    login_env: &BTreeMap<String, String>,
+) -> Option<(PathBuf, ConsentState)> {
+    let path = global_config_path(login_env)?;
     let state = consent_state(&path);
     Some((path, state))
 }
