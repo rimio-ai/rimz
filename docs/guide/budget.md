@@ -16,7 +16,7 @@ A cap is a dollar amount (`5`, `$4.50`), optionally windowed with `/day`, which 
 | Turn | every agent turn in the room | `harness.turn_budget = "3"` | turn |
 | Loop task | one task's scheduled runs | `rimz loop add … --budget 5 --budget-per-day 20` | per run, per day |
 | Room | every agent under one project root, worktrees included | `harness.budget = "50/day"` | `/day` only |
-| Account | one provider login, every room on the machine | `[accounts.budget] claude = "100/day"` | `/day` only |
+| Account | one provider account, every room on that account | `[accounts.budget] claude = "100/day"` | `/day` only |
 
 Every scope is checked independently, so the first cap crossed is the one that parks.
 
@@ -66,10 +66,10 @@ The two daily scopes switch on in config, and only in config:
 
 ```sh
 rimz config set harness.budget 50/day              # this project's whole fleet
-rimz config set accounts.budget.claude 100/day     # one login, every room on the machine
+rimz config set accounts.budget.claude 100/day     # each claude account, every room on it
 ```
 
-Both keys live in your per-machine `config.toml`, require the `/day` form, run no command, and stay outside the project trust hash. The room cap counts every agent under the project root, worktrees included. An account cap sums one provider login across every room on the machine, while each room parks only the panes it owns.
+Both keys live in your per-machine `config.toml`, require the `/day` form, run no command, and stay outside the project trust hash. The room cap counts every agent under the project root, worktrees included. An account cap applies to each [account](./accounts.md) of the provider separately and sums that account across every room running on it, while each room parks only the panes it owns.
 
 An account cap also needs the provider's complete dollar history on disk, which Claude, Codex, Pi, and OpenCode have today. For any other kind, config edits, room start, and `rimz budget --account` refuse the key outright rather than enforce against incomplete dollars.
 
@@ -80,7 +80,7 @@ rimz budget                        # room cap, source, today's spend, park state
 rimz budget 30/day                 # replace the room cap
 rimz budget +10                    # add headroom
 rimz budget off                    # disable it; `clear` is an alias
-rimz budget +25 --account claude   # the same verbs against one login
+rimz budget +25 --account claude   # the same verbs against this room's claude account
 ```
 
 Adjustments are runtime state under RimZ's own state directory, never edits to your files: `config.toml` keeps the number you committed to, and `rimz budget` refuses to arm a cap that config never switched on. To change the standing promise, change the key.

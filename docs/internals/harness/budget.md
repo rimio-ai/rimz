@@ -27,7 +27,7 @@ Four scopes live in this module and are evaluated together on every producer tic
 | Agent | one agent session | launch identity: `--budget`, a profile, or a team role | session, or `/day` | `budget.<digest>.json`, per room |
 | Turn | every agent turn in one room | machine config `harness.turn_budget` | one turn | `budget.scopes.json`, per room |
 | Room fleet | every agent under one project root | machine config `harness.budget` | `/day` only | `budget.fleet.json`, per room |
-| Provider account | one provider login, every room on the machine | machine config `[accounts.budget].<kind>` | `/day` only | `budget.account.<kind>.json`, machine-shared |
+| Provider account | one provider account, every room on that account | machine config `[accounts.budget].<kind>`, applied to each account of the kind | `/day` only | `budget.account.<kind>@<account>.json`, machine-shared |
 | Loop task | one task's scheduled runs | the task's `--budget-per-day` | `/day` only | derived from the run log, no ledger |
 
 Enforcement treats the scopes independently: the first cap crossed parks the agent. Display picks one, and agent beats turn beats fleet beats account, so a card names the tightest reason rather than the broadest.
@@ -66,7 +66,7 @@ Each scope reads a different tally, and each read is guarded against reading the
 
 **Fleet spend** is the workspace spending cache for the current local day, with the live overlay applied so costs that have not yet flushed into the walk still count.
 
-**Account spend** is the machine-shared provider spending cache, per kind, for the current local day.
+**Account spend** is the machine-shared provider spending cache's `day_by_login` entry for the agent's account (`claude@work`), for the current local day. An agent's account comes from its row: its kind plus the login it was launched under. A missing entry is unavailable spend, never the kind-wide total.
 
 Both daily reads compare the cache's own `day_cutoff_secs` against the cutoff computed from `now`. A cache stamped for a different day contributes zero rather than yesterday's total. Staleness therefore reads as *no spend recorded yet*, and the cap holds off rather than parking the fleet on a stale number.
 
@@ -76,14 +76,14 @@ Both daily reads compare the cache's own `day_cutoff_secs` against the cutoff co
 | --- | --- | --- |
 | `budget.<digest>.json` | one agent | the spec, a runtime raise or disable, the day baseline, the park stamp, the interrupt throttle, the waiver |
 | `budget.fleet.json` | this room | a runtime override, raise, or disable, and the park stamp |
-| `budget.account.<kind>.json` | one login, machine-wide | a runtime raise or disable, and the park stamp |
+| `budget.account.<kind>@<account>.json` | one account, machine-wide | a runtime raise or disable, and the park stamp |
 | `budget.scopes.json` | this room | per-agent turn baselines, parks, and interrupt throttles, plus fleet and account waivers, park thresholds, and interrupt throttles |
 
 The shared [`store/sidecar.rs`](../../../crates/rimz/src/store/sidecar.rs) digest is the first 32 hex characters of a SHA-256 over the kind and session id, which keeps a session id out of a filename. Budget ledgers use `budget.<digest>.json`, auto-continue parks use `auto-continue.<digest>.json`, and idle-compaction fire records use `idle-compact/<digest>.json`.
 
 All of these are cache-class: `write_temp_then_rename_cache`, rebuildable, and safe to delete. Losing one loses a park, not money. The two scope ledgers additionally take a lock file around read-modify-write, so a producer tick merging a fresh park cannot clobber a cap change a CLI made in the same instant. The producer merges only the `parked` field back and leaves the cap fields as it found them.
 
-Only the account ledger is machine-shared. Every room on the machine evaluates the same account spend against the same ledger, but each room interrupts only the panes it owns. Raising an account cap from one room therefore nudges the agents *that room* interrupted, while agents in other rooms stay at rest until their own producer sees the cleared park.
+Only the account ledger is machine-shared. Every room on the same account evaluates the same account spend against the same ledger, but each room interrupts only the panes it owns. Raising an account cap from one room therefore nudges the agents *that room* interrupted, while agents in other rooms stay at rest until their own producer sees the cleared park.
 
 ## The verdict
 
@@ -157,7 +157,7 @@ Two commands write these ledgers, and neither edits your config files.
 
 [`rimz agents budget`](../../../crates/rimz/src/cli/agents_cmd/budget.rs) inspects or sets one agent's cap. An absolute value lands as a raise over the launch spec, with the window written onto the spec; switching to `/day` stamps a fresh baseline at the current cost, and switching back to a session window drops it. Every mutation clears the park, the throttle, and the waiver.
 
-[`rimz budget`](../../../crates/rimz/src/cli/budget.rs) inspects or sets a daily scope, defaulting to the fleet and taking `--account <kind>` for a login. It refuses to arm what config never switched on, and refuses to raise a cleared or unset cap.
+[`rimz budget`](../../../crates/rimz/src/cli/budget.rs) inspects or sets a daily scope, defaulting to the fleet and taking `--account <kind>` for this room's account of that kind. It refuses to arm what config never switched on, and refuses to raise a cleared or unset cap.
 
 When configured, the read-only output also shows `harness.turn_budget` as a per-turn cap with source `config`. Its mutation verbs remain daily-scope only.
 
