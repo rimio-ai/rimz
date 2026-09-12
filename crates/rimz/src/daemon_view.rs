@@ -297,8 +297,29 @@ pub fn ensure_loop_panel(
     let machine = crate::config::MachineConfig::load_lenient();
     let rimz_bin = crate::proc::rimz_exe();
     // One gate decides whether a host launches. A cheaper local check would spawn a host that stalls on its first-run prompt or a version it cannot serve from, in the one path no operator watches.
-    crate::remote_control::prepare_hosts(&machine.remote_control);
-    let readiness = crate::remote_control::ReadinessSnapshot::probe(&machine.remote_control);
+    let envs = match StatePaths::for_workspace(workspace.workspace_id.clone()) {
+        Ok(state) => match crate::remote_control::HostLoginEnvs::for_room(
+            &state.workspace_record,
+            &machine.accounts,
+        ) {
+            Ok(envs) => Some(envs),
+            Err(err) => {
+                tracing::warn!(workspace = %workspace_id, error = %err, "daemon host accounts unavailable");
+                None
+            }
+        },
+        Err(err) => {
+            tracing::warn!(workspace = %workspace_id, error = %err, "daemon host state paths unavailable");
+            None
+        }
+    };
+    let readiness = match envs {
+        Some(envs) => {
+            crate::remote_control::prepare_hosts(&machine.remote_control, &envs);
+            crate::remote_control::ReadinessSnapshot::probe(&machine.remote_control, &envs)
+        }
+        None => crate::remote_control::ReadinessSnapshot::disabled(),
+    };
     let view = daemon_view_spec(DaemonViewSpecParams {
         claude_host_argv: readiness.claude_host_argv(),
         daemon: &machine.daemon,
@@ -657,12 +678,16 @@ struct ResolvedDaemonInputs {
 }
 
 impl ResolvedDaemonInputs {
-    fn read(record: &record::WorkspaceRecord) -> Self {
+    fn read(record: &record::WorkspaceRecord, record_path: &Path) -> Self {
         let rimz_bin = crate::proc::rimz_exe();
         let claude_bin = which::which("claude").ok();
         let codex_bin = which::which("codex").ok();
-        let claude_settings =
-            crate::remote_control::claude_settings_path(&crate::agents::ambient_env());
+        let machine = crate::config::MachineConfig::load_lenient();
+        let envs = crate::remote_control::HostLoginEnvs::for_room(record_path, &machine.accounts)
+            .unwrap_or_else(|_| crate::remote_control::HostLoginEnvs::ambient());
+        let claude_settings = crate::remote_control::claude_settings_path(
+            envs.for_host(crate::remote_control::RemoteControlHost::Claude),
+        );
         Self {
             stamp: DaemonViewInputsStamp {
                 config_generation: crate::config::MachineConfig::load_stamp_generation(),
@@ -756,7 +781,7 @@ impl DaemonRepairTracker {
                 return;
             }
         };
-        let resolved = ResolvedDaemonInputs::read(&record);
+        let resolved = ResolvedDaemonInputs::read(&record, &state.workspace_record);
         let frame = crate::sidebar::cache::read_snapshot_cache(
             &runtime.pane_frame_path(),
             &self.session_name,
@@ -773,9 +798,16 @@ impl DaemonRepairTracker {
                 // own preconditions before judging it. Probing first would read a
                 // precondition this pass is able to restore, and tear down a
                 // working host over a gap that outlives nothing but this tick.
-                crate::remote_control::prepare_hosts(&machine.remote_control);
-                let readiness =
-                    crate::remote_control::ReadinessSnapshot::probe(&machine.remote_control);
+                let readiness = match crate::remote_control::HostLoginEnvs::for_room(&state.workspace_record, &machine.accounts) {
+                    Ok(envs) => {
+                        crate::remote_control::prepare_hosts(&machine.remote_control, &envs);
+                        crate::remote_control::ReadinessSnapshot::probe(&machine.remote_control, &envs)
+                    }
+                    Err(err) => {
+                        tracing::warn!(workspace = %workspace_id, error = %err, "daemon host accounts unavailable");
+                        crate::remote_control::ReadinessSnapshot::disabled()
+                    }
+                };
                 Some(effective_daemon_view(
                     &workspace_id,
                     &session_name,

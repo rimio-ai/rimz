@@ -361,12 +361,25 @@ pub fn readiness(enabled: bool, login_env: &BTreeMap<String, String>) -> Runtime
         remote_consent::read_consent(login_env),
     ) {
         Ok(host_argv) => RuntimeControlReadiness::Ready {
-            host_argv: Some(host_argv),
+            host_argv: Some(host_argv_with_login(host_argv, login_env)),
         },
         Err(issue) => {
             RuntimeControlReadiness::Blocked(RuntimeControlIssue::new("claude", "blocked", &issue))
         }
     }
+}
+
+fn host_argv_with_login(
+    mut argv: Vec<String>,
+    login_env: &BTreeMap<String, String>,
+) -> Vec<String> {
+    if let Some(home) = login_env.get("CLAUDE_CONFIG_DIR") {
+        argv.splice(
+            0..0,
+            ["env".to_owned(), format!("CLAUDE_CONFIG_DIR={home}")],
+        );
+    }
+    argv
 }
 
 /// Record the one-time remote-control dialog answer so an unattended host pane
@@ -663,6 +676,28 @@ mod tests {
             vec!["claude", "remote-control", "--spawn", "worktree"]
         );
         assert!(crate::pane::command_is_host(&argv.join(" ")));
+    }
+
+    #[test]
+    fn host_argv_preserves_login_and_host_identity() {
+        let env = BTreeMap::from([("CLAUDE_CONFIG_DIR".to_owned(), "/srv/work".to_owned())]);
+        let argv = host_argv_with_login(host_argv(), &env);
+        assert_eq!(
+            argv,
+            vec![
+                "env",
+                "CLAUDE_CONFIG_DIR=/srv/work",
+                "claude",
+                "remote-control",
+                "--spawn",
+                "worktree"
+            ]
+        );
+        assert!(crate::pane::command_is_host(&argv.join(" ")));
+        assert_eq!(
+            host_argv_with_login(host_argv(), &BTreeMap::new()),
+            host_argv()
+        );
     }
 
     #[test]

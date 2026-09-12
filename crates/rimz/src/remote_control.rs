@@ -5,13 +5,14 @@
 //! coordinates effects.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::agents::runtime_control::{
     self, RuntimeControlError, RuntimeControlIssue, RuntimeControlReadiness,
 };
-use crate::config::RemoteControlConfig;
+use crate::config::{AccountsConfig, RemoteControlConfig};
 use crate::disk::paths::StatePaths;
+use crate::ids::{AgentKind, RoomLogins};
 use crate::mux::LiveSessions;
 use crate::workspace::record;
 
@@ -30,6 +31,63 @@ impl RemoteControlHost {
     }
 }
 
+/// The provider environment each remote-control host of one room runs under.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HostLoginEnvs {
+    claude: BTreeMap<String, String>,
+    codex: BTreeMap<String, String>,
+}
+
+impl HostLoginEnvs {
+    pub fn ambient() -> Self {
+        let ambient = crate::agents::ambient_env();
+        Self {
+            claude: ambient.clone(),
+            codex: ambient,
+        }
+    }
+
+    pub fn from_logins(
+        accounts: &AccountsConfig,
+        logins: &RoomLogins,
+    ) -> Result<Self, crate::agents::RoomLoginErr> {
+        let ambient = crate::agents::ambient_env();
+        let catalog = crate::agents::LoginCatalog::from_config(accounts)?;
+        Ok(Self {
+            claude: catalog
+                .room_login(logins, &AgentKind::new_unchecked("claude"))?
+                .env(&ambient),
+            codex: catalog
+                .room_login(logins, &AgentKind::new_unchecked("codex"))?
+                .env(&ambient),
+        })
+    }
+
+    pub fn for_room(
+        record: &Path,
+        accounts: &AccountsConfig,
+    ) -> Result<Self, crate::agents::RoomLoginErr> {
+        let ambient = crate::agents::ambient_env();
+        Ok(Self {
+            claude: crate::agents::room_login(
+                record,
+                accounts,
+                &AgentKind::new_unchecked("claude"),
+            )?
+            .env(&ambient),
+            codex: crate::agents::room_login(record, accounts, &AgentKind::new_unchecked("codex"))?
+                .env(&ambient),
+        })
+    }
+
+    pub fn for_host(&self, host: RemoteControlHost) -> &BTreeMap<String, String> {
+        match host {
+            RemoteControlHost::Claude => &self.claude,
+            RemoteControlHost::Codex => &self.codex,
+        }
+    }
+}
+
 /// One batch probe of both configured provider hosts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReadinessSnapshot {
@@ -38,11 +96,25 @@ pub struct ReadinessSnapshot {
 }
 
 impl ReadinessSnapshot {
-    pub fn probe(config: &RemoteControlConfig) -> Self {
-        let login_env = crate::agents::ambient_env();
+    pub fn probe(config: &RemoteControlConfig, envs: &HostLoginEnvs) -> Self {
         Self::from_readiness(
-            runtime_control::readiness("claude", config.enabled_for("claude"), &login_env),
-            runtime_control::readiness("codex", config.enabled_for("codex"), &login_env),
+            runtime_control::readiness(
+                "claude",
+                config.enabled_for("claude"),
+                envs.for_host(RemoteControlHost::Claude),
+            ),
+            runtime_control::readiness(
+                "codex",
+                config.enabled_for("codex"),
+                envs.for_host(RemoteControlHost::Codex),
+            ),
+        )
+    }
+
+    pub(crate) fn disabled() -> Self {
+        Self::from_readiness(
+            RuntimeControlReadiness::Disabled,
+            RuntimeControlReadiness::Disabled,
         )
     }
 
@@ -103,10 +175,13 @@ impl ReadinessSnapshot {
 /// launches, so [`ReadinessSnapshot::probe`] judges each host on the state it
 /// will actually start with. Best-effort and idempotent: a provider that cannot
 /// fill its precondition reports it through readiness instead of failing here.
-pub fn prepare_hosts(config: &RemoteControlConfig) {
-    let login_env = crate::agents::ambient_env();
+pub fn prepare_hosts(config: &RemoteControlConfig, envs: &HostLoginEnvs) {
     for host in [RemoteControlHost::Claude, RemoteControlHost::Codex] {
-        runtime_control::prepare(host.kind(), config.enabled_for(host.kind()), &login_env);
+        runtime_control::prepare(
+            host.kind(),
+            config.enabled_for(host.kind()),
+            envs.for_host(host),
+        );
     }
 }
 
@@ -118,11 +193,11 @@ pub fn preflight_enable(host: RemoteControlHost) -> Result<(), RuntimeControlIss
 }
 
 /// Advisory-only provider daemon findings. These never gate `rimz start`.
-pub fn advisories(config: &RemoteControlConfig) -> Vec<String> {
-    let login_env = crate::agents::ambient_env();
+pub fn advisories(config: &RemoteControlConfig, envs: &HostLoginEnvs) -> Vec<String> {
     let mut out = Vec::new();
     if config.enabled_for("codex")
-        && let Some(skew) = runtime_control::updater_advisory("codex", &login_env)
+        && let Some(skew) =
+            runtime_control::updater_advisory("codex", envs.for_host(RemoteControlHost::Codex))
     {
         out.push(skew);
     }
@@ -153,9 +228,7 @@ pub fn apply_runtime_toggle(
     };
 
     if host == RemoteControlHost::Claude {
-        prepare_hosts(&machine.remote_control);
         let live = LiveSessions::probe();
-        let readiness = ReadinessSnapshot::probe(&machine.remote_control);
         for workspace in &workspaces {
             let Some(mux) = live.mux_of(&workspace.session_name) else {
                 continue;
@@ -182,6 +255,19 @@ pub fn apply_runtime_toggle(
                     continue;
                 }
             };
+            let envs = match HostLoginEnvs::for_room(&paths.workspace_record, &machine.accounts) {
+                Ok(envs) => envs,
+                Err(err) => {
+                    tracing::debug!(
+                        workspace = %workspace.workspace_id,
+                        error = &err as &dyn std::error::Error,
+                        "remote-control toggle skipped a workspace with unavailable accounts",
+                    );
+                    continue;
+                }
+            };
+            prepare_hosts(&machine.remote_control, &envs);
+            let readiness = ReadinessSnapshot::probe(&machine.remote_control, &envs);
             let backend = crate::mux::backend_for(mux);
             crate::daemon_view::ensure_daemon_view_with_readiness(
                 backend.as_ref(),
