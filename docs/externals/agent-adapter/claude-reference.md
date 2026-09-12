@@ -310,6 +310,8 @@ Claude captures the command's stdio rather than attaching it to the terminal. Cl
 | `fast_mode_disabled_reason` | optional reason fast mode is not currently available |
 | `worktree.{name,path,branch,original_cwd,original_branch}` | active `--worktree` session details |
 
+Claude Code 2.1.269 emits no model-scoped window in the statusline payload; RimZ reads the model sub-cap through OAuth only.
+
 **Absence vs null.** `session_name`, `prompt_id`, `workspace.git_worktree`, `workspace.repo`, `effort`, `vim`, `agent`, `pr`, `worktree`, `costBasis`, and the fast-mode fields are *absent* until their data exists; `rate_limits` appears only for Claude.ai Pro/Max after the first API response, and each window may be absent independently. `context_window.current_usage` is `null` before the first API call and again after `/compact` until the next call; `used_percentage` / `remaining_percentage` may be `null` early in a session. RimZ's parser treats every field as optional and tolerates unknown keys.
 
 **`subagentStatusLine`.** A separate command (`"subagentStatusLine": { "type": "command", "command": "…" }`) renders each subagent row in the agent panel, replacing the default `name · description · token count` body with whatever the script prints. The command runs once per refresh tick with **all visible subagent rows as a single JSON object on stdin**. The input includes the [common hook fields](#common-input) plus `columns` (usable row width) and a `tasks` array, each task carrying `id`, `name`, `type`, `status`, `description`, `label`, `model`, `effort`, `startTime`, `tokenCount`, `tokenSamples`, and `cwd`. Write one JSON line to stdout per row to override: `{"id": "<task id>", "content": "<row body>"}`. The `content` string is rendered as-is, including ANSI escape codes and OSC 8 hyperlinks. Omit a task's `id` to keep its default rendering; emit an empty `content` to hide the row. The same trust and `disableAllHooks` gates that apply to `statusLine` apply here. Plugins can ship a default `subagentStatusLine` in their `settings.json`.
@@ -393,7 +395,7 @@ The helper calls `GET https://api.anthropic.com/api/oauth/usage` with `Authoriza
     "remaining_dollars": null            // present, ignored
   },
   "seven_day": {
-    "utilization": 7,                    // mapped
+    "utilization": 37,                   // mapped
     "resets_at": "2026-09-27T09:06:40Z", // mapped
     "limit_dollars": null,               // present, ignored
     "used_dollars": null,                // present, ignored
@@ -410,13 +412,43 @@ The helper calls `GET https://api.anthropic.com/api/oauth/usage` with `Authoriza
     "daily": null,             // present, ignored
     "weekly": null             // present, ignored
   },
-  "limits": [],                       // present, ignored
+  "limits": [                         // representative entries
+    {
+      "kind": "session",              // ignored: duplicates five_hour
+      "group": "session",             // ignored
+      "percent": 12.5,                // ignored for this kind
+      "resets_at": "2026-09-21T14:13:20Z", // ignored for this kind
+      "scope": null                   // ignored
+    },
+    {
+      "kind": "weekly_all",           // ignored: duplicates seven_day
+      "group": "weekly",              // ignored
+      "percent": 37,                  // ignored for this kind
+      "resets_at": "2026-09-27T09:06:40Z", // ignored for this kind
+      "scope": null                   // ignored
+    },
+    {
+      "kind": "weekly_scoped",        // selects a model-scoped weekly cap
+      "group": "weekly",              // ignored
+      "percent": 58,                  // mapped: percent of the model's own cap
+      "resets_at": "2026-09-27T09:06:40Z", // mapped
+      "scope": {
+        "model": {
+          "id": null,                 // ignored
+          "display_name": "Fable"     // mapped: identity and label
+        },
+        "surface": null               // ignored
+      }
+    }
+  ],
   "spend": {},                        // present, ignored
   "member_dashboard_available": false // present, ignored
 }
 ```
 
 `five_hour` and `seven_day` map to 300- and 10080-minute `RateLimitWindow`s. `utilization` is a 0–100 percentage and RimZ rounds/clamps it the same way as statusline `used_percentage`; `1.0` means 1%, not a fully spent window. `extra_usage.is_enabled = false` maps to `ExtraCredits::Disabled`; otherwise `used_credits` and `monthly_limit` are cents converted to USD. The semantics (`metered` inference, plan→brand label, cache cadence) are in [adapter_claude.md → Account and balance](../../internals/agents/adapter_claude.md#account-and-balance).
+
+A `limits[]` entry with `kind: "weekly_scoped"` and a non-empty, trimmed `scope.model.display_name` maps to a model-scoped 10080-minute window: `scope.id = "model:<lowercased name>"`, `scope.label` is the trimmed name, and `share_pct = 50`. Its `percent` is on the model's own 0–100 axis and rounds/clamps like `utilization`; `resets_at` parses as RFC 3339. The share is account knowledge pinned in the adapter, not a field supplied by the API: 58% used of a 50% share leaves 21% of the parent weekly allowance. `session` and `weekly_all` entries duplicate the top-level windows and are ignored, as are `group`, `severity`, `is_active`, `scope.model.id`, and `scope.surface`. Entries without a usable model name or with neither usage nor a valid reset are omitted.
 
 ## Transcript JSONL
 

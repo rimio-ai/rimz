@@ -72,6 +72,11 @@ pub(super) fn sidebar_fixture_snapshot(state: SidebarFixtureState) -> Result<Sid
         move_fixture_overflow_to_tail(&mut group.rows);
         group.status_counts = status_counts_from_rows(&group.rows);
     }
+    if matches!(state, SidebarFixtureState::Provider) {
+        snapshot.worktree_groups[0]
+            .rows
+            .sort_by_key(|row| row.name != "claude");
+    }
     Ok(snapshot)
 }
 
@@ -2154,7 +2159,7 @@ fn add_provider_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             Some("Claude Max"),
             true,
             true,
-            budget_windows(25, 40),
+            budget_windows(25, 37),
             spend_tally(6.84, 498_000, 4),
             now,
         ),
@@ -2169,6 +2174,21 @@ fn add_provider_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             now,
         ),
     ];
+    let weekly_reset = snapshot.providers[0].windows[1].resets_at;
+    snapshot.providers[0]
+        .windows
+        .push(rimz::agents::RateLimitWindow {
+            scope: Some(rimz::agents::RateLimitWindowScope {
+                id: "model:fable".to_owned(),
+                label: "Fable".to_owned(),
+            }),
+            used_percentage: Some(58),
+            resets_at: weekly_reset,
+            duration_mins: Some(10080),
+            share_pct: Some(50),
+            source: rimz::agents::context::WindowSource::Authoritative,
+            ..Default::default()
+        });
 }
 
 #[allow(clippy::too_many_arguments)]
