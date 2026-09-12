@@ -194,6 +194,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
         state: &state,
         effective: Some(&effective),
         commands: &machine.agents.commands,
+        accounts: &machine.accounts,
         bwrap: bwrap.as_deref(),
         ambient_env: &ambient_env,
     })?;
@@ -243,6 +244,7 @@ struct ExplainReport<'a> {
     kind: &'a rimz::ids::AgentKind,
     action: &'static str,
     action_note: Option<String>,
+    account: String,
     name: Option<&'a str>,
     launch_id: Option<&'a str>,
     cwd: &'a Path,
@@ -333,8 +335,13 @@ impl<'a> ExplainReport<'a> {
             team: params.team.as_deref(),
         });
         let mut env = process.env.clone();
+        let account_home = plan.login.home().map(|home| home.to_string_lossy());
         for (key, value) in &mut env {
-            if process.secret_keys.contains(key) {
+            // The account home is RimZ's own override, not the project secret
+            // it shadows, so it stays readable even when the key was declared
+            // in the trusted project env.
+            if process.secret_keys.contains(key) && account_home.as_deref() != Some(value.as_str())
+            {
                 *value = launch::REDACTED_ENV_VALUE.to_owned();
             }
         }
@@ -390,6 +397,7 @@ impl<'a> ExplainReport<'a> {
                 }
                 _ => None,
             }),
+            account: plan.login.key().to_string(),
             name: request.identity.name.as_deref(),
             launch_id: request.identity.launch_id.as_deref(),
             cwd: &plan.cwd,
@@ -512,6 +520,7 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
         render::cell(report.launch_id.unwrap_or("(minted at launch)")),
     );
     plan.push("cwd", render::cell(report.cwd.display().to_string()));
+    plan.push("account", render::cell(&report.account));
     if let Some(profile) = &report.profile {
         let mut chain = profile.chain.clone();
         if let (Some(team), Some(role)) = (profile.team, profile.role) {

@@ -333,6 +333,7 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
             state: &state,
             effective: Some(&effective),
             commands: &machine.agents.commands,
+            accounts: &machine.accounts,
             bwrap: None,
             ambient_env: &BTreeMap::new(),
         })
@@ -379,4 +380,202 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
         );
         assert!(!state.tmp_dir.exists());
     }
+}
+
+/// A room whose `workspace.json` freezes `logins`, with the machine config
+/// that declares those accounts.
+fn room_with_accounts(
+    root: &Path,
+    accounts_toml: &str,
+    logins: &[(&str, &str)],
+) -> (crate::config::MachineConfig, StatePaths) {
+    let machine = crate::config::MachineConfig {
+        accounts: toml::from_str(accounts_toml).expect("accounts config"),
+        ..crate::config::MachineConfig::default()
+    };
+    let workspace = crate::workspace::WorkspaceResolver::resolve(root, None).expect("workspace");
+    let state = StatePaths::under(workspace.workspace_id.clone(), root).expect("state paths");
+    state.ensure_dirs().expect("state dirs");
+    let mut record = crate::workspace::record::WorkspaceRecord::from_resolved(&workspace);
+    record.logins = Some(
+        logins
+            .iter()
+            .map(|(kind, name)| {
+                (
+                    AgentKind::new_unchecked(*kind),
+                    name.parse().expect("login name"),
+                )
+            })
+            .collect(),
+    );
+    crate::workspace::record::write(&state, &record).expect("write record");
+    (machine, state)
+}
+
+#[test]
+fn the_room_account_sets_the_provider_home_on_the_launched_process() {
+    let project = tempfile::tempdir().expect("project");
+    let home = project.path().join("claude-work");
+    let (machine, state) = room_with_accounts(
+        project.path(),
+        &format!("[claude.work]\nhome = {:?}", home.display().to_string()),
+        &[("claude", "work")],
+    );
+    let effective =
+        crate::config::effective::load_with_roots(&machine, project.path(), project.path())
+            .expect("effective config");
+    let runtime = RuntimePaths::under(
+        crate::WorkspaceId::from_project_root(project.path()),
+        project.path(),
+    )
+    .expect("runtime paths");
+    let request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+
+    let plan = compile(LaunchPlanInputs {
+        request: &request,
+        cwd: project.path(),
+        project_root: project.path(),
+        rimz_bin: Path::new("/bin/rimz"),
+        runtime: &runtime,
+        state: &state,
+        effective: Some(&effective),
+        commands: &machine.agents.commands,
+        accounts: &machine.accounts,
+        bwrap: None,
+        ambient_env: &BTreeMap::new(),
+    })
+    .expect("compile");
+
+    assert_eq!(plan.login.key().to_string(), "claude@work");
+    assert_eq!(
+        plan.process()
+            .env
+            .get("CLAUDE_CONFIG_DIR")
+            .map(String::as_str),
+        Some(home.to_string_lossy().as_ref())
+    );
+    assert_eq!(plan.process().env.get("CODEX_HOME"), None);
+}
+
+#[test]
+fn the_default_account_leaves_the_provider_home_to_the_provider() {
+    let project = tempfile::tempdir().expect("project");
+    let machine = crate::config::MachineConfig::default();
+    let effective =
+        crate::config::effective::load_with_roots(&machine, project.path(), project.path())
+            .expect("effective config");
+    let workspace_id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(workspace_id.clone(), project.path()).expect("runtime");
+    let state = StatePaths::under(workspace_id, project.path()).expect("state");
+
+    for kind in ["claude", "codex"] {
+        let request = ExecRequest::bare_launch(AgentKind::new_unchecked(kind), Vec::new());
+        let plan = compile(LaunchPlanInputs {
+            request: &request,
+            cwd: project.path(),
+            project_root: project.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: Some(&effective),
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            bwrap: None,
+            ambient_env: &BTreeMap::new(),
+        })
+        .expect("compile");
+
+        assert!(plan.login.is_default(), "{kind}");
+        assert_eq!(plan.process().env.get("CLAUDE_CONFIG_DIR"), None);
+        assert_eq!(plan.process().env.get("CODEX_HOME"), None);
+    }
+}
+
+#[test]
+fn a_room_account_the_config_no_longer_declares_fails_the_launch() {
+    let project = tempfile::tempdir().expect("project");
+    let (machine, state) = room_with_accounts(project.path(), "", &[("claude", "work")]);
+    let effective =
+        crate::config::effective::load_with_roots(&machine, project.path(), project.path())
+            .expect("effective config");
+    let runtime = RuntimePaths::under(
+        crate::WorkspaceId::from_project_root(project.path()),
+        project.path(),
+    )
+    .expect("runtime");
+    let request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+
+    let error = compile(LaunchPlanInputs {
+        request: &request,
+        cwd: project.path(),
+        project_root: project.path(),
+        rimz_bin: Path::new("/bin/rimz"),
+        runtime: &runtime,
+        state: &state,
+        effective: Some(&effective),
+        commands: &machine.agents.commands,
+        accounts: &machine.accounts,
+        bwrap: None,
+        ambient_env: &BTreeMap::new(),
+    });
+
+    let error = match error {
+        Err(error) => error,
+        Ok(_) => panic!("an undeclared account cannot launch"),
+    };
+    assert!(
+        error.to_string().contains("rimz accounts add claude work"),
+        "{error}"
+    );
+}
+
+#[test]
+fn the_sandbox_binds_and_pins_the_room_account_home() {
+    let project = tempfile::tempdir().expect("project");
+    let home = project.path().join("codex-personal");
+    std::fs::create_dir_all(&home).expect("account home");
+    let (machine, state) = room_with_accounts(
+        project.path(),
+        &format!("[codex.personal]\nhome = {:?}", home.display().to_string()),
+        &[("codex", "personal")],
+    );
+    let effective =
+        crate::config::effective::load_with_roots(&machine, project.path(), project.path())
+            .expect("effective config");
+    let runtime = RuntimePaths::under(
+        crate::WorkspaceId::from_project_root(project.path()),
+        project.path(),
+    )
+    .expect("runtime paths");
+    let request = ExecRequest::bare_launch(AgentKind::new_unchecked("codex"), Vec::new());
+
+    let plan = compile(LaunchPlanInputs {
+        request: &request,
+        cwd: project.path(),
+        project_root: project.path(),
+        rimz_bin: Path::new("/bin/rimz"),
+        runtime: &runtime,
+        state: &state,
+        effective: Some(&effective),
+        commands: &machine.agents.commands,
+        accounts: &machine.accounts,
+        bwrap: Some(Path::new("/usr/bin/bwrap")),
+        ambient_env: &BTreeMap::from([("HOME".to_owned(), project.path().display().to_string())]),
+    })
+    .expect("compile");
+
+    let sandbox = plan.sandbox.as_ref().expect("sandbox plan");
+    assert!(
+        sandbox.plan.mounts.iter().any(
+            |mount| matches!(mount, crate::sandbox::Mount::Bind { source, .. } if source == &home)
+        ),
+        "{:?}",
+        sandbox.plan.mounts
+    );
+    assert_eq!(
+        sandbox.pins.get("CODEX_HOME"),
+        Some(&crate::sandbox::EnvPin::Set(
+            home.to_string_lossy().into_owned()
+        ))
+    );
 }

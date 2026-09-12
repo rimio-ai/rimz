@@ -594,6 +594,7 @@ allowed-dependencies = [
     "harness::subagent_policy",
     "ids",
     "sandbox",
+    "workspace::record",
 ]
 # The exec wrapper and inspection share one read-only compiler and write boundary.
 surface-budget = 8
