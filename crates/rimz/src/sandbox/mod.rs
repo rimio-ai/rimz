@@ -13,6 +13,8 @@ mod linux;
 mod rewrite;
 mod skills;
 
+pub use rewrite::PlannedCopy;
+
 const SANDBOX_TMP: &str = "/tmp";
 
 /// Where an agent sees room tmp: `/tmp` in a sandbox, the host path otherwise.
@@ -108,29 +110,38 @@ pub struct SandboxInputs<'a> {
     pub skills: SkillInputs<'a>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum EnvPin {
     Set(String),
     Unset,
 }
 
-pub struct Prepared {
+pub struct SandboxPlan {
     pub plan: MountPlan,
     pub pins: BTreeMap<String, EnvPin>,
     pub skipped: Vec<SkippedSkill>,
+    pub copies: Vec<PlannedCopy>,
+    tmp_dir: PathBuf,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub struct SkippedSkill {
     pub name: String,
     pub path: PathBuf,
     pub reason: SkipReason,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub enum SkipReason {
-    Unreadable(std::io::Error),
+    Unreadable(#[serde(serialize_with = "serialize_io_error")] std::io::Error),
     Metadata(&'static str),
+}
+
+fn serialize_io_error<S: serde::Serializer>(
+    error: &std::io::Error,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_str(error)
 }
 
 impl std::fmt::Display for SkippedSkill {
@@ -177,8 +188,9 @@ enum DirEntryKind {
     Symlink { target: PathBuf },
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum Mount {
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum Mount {
     Bind { source: PathBuf, target: PathBuf },
     RoBind { source: PathBuf, target: PathBuf },
     Tmpfs { target: PathBuf },
@@ -186,7 +198,7 @@ enum Mount {
 }
 
 pub struct MountPlan {
-    mounts: Vec<Mount>,
+    pub mounts: Vec<Mount>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -234,8 +246,22 @@ pub fn diagnose() -> SandboxDiagnostic {
     }
 }
 
-pub fn prepare(inputs: &SandboxInputs<'_>) -> Result<Prepared, SandboxErr> {
-    let views = skills::prepare(inputs.env, inputs.skills_dir, &inputs.skills)?;
+pub fn prepare(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
+    let planned = plan(inputs)?;
+    apply(&planned)?;
+    Ok(planned)
+}
+
+pub fn apply(plan: &SandboxPlan) -> Result<(), SandboxErr> {
+    for copy in &plan.copies {
+        rewrite::apply(copy)?;
+    }
+    crate::disk::paths::ensure_private_runtime_dir(&plan.tmp_dir)?;
+    Ok(())
+}
+
+pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
+    let views = skills::plan(inputs.env, inputs.skills_dir, &inputs.skills)?;
     let mut mounts = Vec::new();
     let mut required = crate::mux::domain::ProcessDomain::required_paths(inputs.env);
     let mut pins = BTreeMap::new();
@@ -325,11 +351,12 @@ pub fn prepare(inputs: &SandboxInputs<'_>) -> Result<Prepared, SandboxErr> {
             mounts.push(Mount::RoBind { source, target });
         }
     }
-    crate::disk::paths::ensure_private_runtime_dir(inputs.tmp_dir)?;
-    Ok(Prepared {
+    Ok(SandboxPlan {
         plan: MountPlan { mounts },
         pins,
         skipped: views.skipped,
+        copies: views.copies,
+        tmp_dir: inputs.tmp_dir.to_path_buf(),
     })
 }
 

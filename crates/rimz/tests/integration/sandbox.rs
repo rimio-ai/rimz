@@ -8,7 +8,7 @@ use rimz::agents::ManualSkill;
 use rimz::config::Isolation;
 use rimz::harness::launch::ExecRequest;
 use rimz::ids::AgentKind;
-use rimz::sandbox::{Prepared, SandboxErr, SandboxInputs, SkillInputs, SkipReason};
+use rimz::sandbox::{SandboxErr, SandboxInputs, SandboxPlan, SkillInputs, SkipReason};
 
 use crate::common::{
     CommandTimeoutExt, Env, exec_args, path_with_front, write_env_dump_shim, write_fake_login_shell,
@@ -48,7 +48,7 @@ fn skill_prepare(
     env: &Env,
     vars: &BTreeMap<String, String>,
     skills: SkillInputs<'_>,
-) -> Result<Prepared, SandboxErr> {
+) -> Result<SandboxPlan, SandboxErr> {
     let state = env.store();
     rimz::sandbox::prepare(&SandboxInputs {
         env: vars,
@@ -207,17 +207,25 @@ fn sandbox_unusable_unlisted_skill_is_omitted_with_warning() {
     std::fs::write(root.join("listed/SKILL.md"), metadata).unwrap();
     let vars = environment(&env);
     let state = env.store();
-    let prepared = skill_prepare(
-        &env,
-        &vars,
-        SkillInputs {
+    let prepared = rimz::sandbox::plan(&SandboxInputs {
+        env: &vars,
+        cwd: &env.project_root,
+        project_root: &env.project_root,
+        worktree: None,
+        tmp_dir: &state.paths().tmp_dir,
+        skills_dir: &state.paths().skills_dir,
+        provider_home: None,
+        provider_home_env_keys: &[],
+        skills: SkillInputs {
             kind: "claude",
             home: Some(root.clone()),
             manual: ManualSkill::Frontmatter,
             callable: Some(&["listed".parse().unwrap()]),
         },
-    )
+    })
     .unwrap();
+    assert!(!state.paths().skills_dir.exists());
+    assert!(!state.paths().tmp_dir.exists());
     assert_eq!(prepared.skipped.len(), 3);
     for (skipped, name) in prepared
         .skipped
@@ -249,6 +257,9 @@ fn sandbox_unusable_unlisted_skill_is_omitted_with_warning() {
     );
     let copy = skill_bind_source(&argv, &root.join("plain"));
     assert!(copy.starts_with(&state.paths().skills_dir));
+    assert!(!copy.exists());
+    rimz::sandbox::apply(&prepared).unwrap();
+    assert!(state.paths().tmp_dir.is_dir());
     assert_eq!(
         std::fs::read_to_string(copy.join("SKILL.md")).unwrap(),
         "---\ndisable-model-invocation: true\n---\nbody\n"
