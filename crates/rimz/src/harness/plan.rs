@@ -998,31 +998,24 @@ fn fresh_agent_argv(
     params: LayoutPaneParams<'_>,
 ) -> Result<Vec<String>> {
     validate_agent_name(&launch.name)?;
+    let mut request = crate::harness::launch::ExecRequest::fresh(
+        cell,
+        crate::harness::launch::ExecIdentity {
+            name: Some(launch.name.clone()),
+            name_explicit: launch.name_explicit,
+            launch_id: Some(launch.agent_id.to_string()),
+            params: launch.launch.clone(),
+        },
+        params.cleanup_worktree.then(|| params.cwd.to_path_buf()),
+        !params.cleanup_worktree && !params.in_place,
+    );
+    if let crate::harness::launch::ExecAction::Launch { prompt, .. } = &mut request.action {
+        *prompt = launch.prompt.clone();
+    }
     Ok(crate::harness::launch::exec_argv(
         rimz_bin,
         params.runtime,
-        &crate::harness::launch::ExecRequest {
-            kind: cell.kind.clone(),
-            action: crate::harness::launch::ExecAction::Launch {
-                prompt: launch.prompt.clone(),
-                extra_args: cell.args.clone(),
-            },
-            system_prompt_file: cell.system_prompt_file.clone(),
-            append_system_prompt_files: cell.append_system_prompt_files.clone(),
-            skills: cell.skills.clone(),
-            provider_account: crate::harness::launch::ProviderAccountState::Unbound,
-            run_id: None,
-            worktree_path: params.cleanup_worktree.then(|| params.cwd.to_path_buf()),
-            close_pane_on_exit: !params.cleanup_worktree && !params.in_place,
-            exit_on_run_completion: false,
-            subagent: false,
-            identity: crate::harness::launch::ExecIdentity {
-                name: Some(launch.name.clone()),
-                name_explicit: launch.name_explicit,
-                launch_id: Some(launch.agent_id.to_string()),
-                params: launch.launch.clone(),
-            },
-        },
+        &request,
     )?)
 }
 

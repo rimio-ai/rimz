@@ -124,7 +124,18 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     };
     let mut process = match stage {
         rimz::harness::launch::AgentProcessStage::Ready(process) => process,
-        rimz::harness::launch::AgentProcessStage::LoginShellReentry { process, argv } => {
+        rimz::harness::launch::AgentProcessStage::LoginShellReentry {
+            process,
+            argv,
+            prompt_artifact,
+        } => {
+            if let Some(artifact) = &prompt_artifact
+                && let Err(err) = rimz::harness::launch::write_prompt_artifact(artifact)
+            {
+                mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
+                fail_run_on_exec_precondition(run_context.as_ref());
+                return Err(err.into());
+            }
             let (program, rest) = argv.split_first().ok_or_else(|| {
                 anyhow::anyhow!("finalized Qwen launch produced an empty command")
             })?;

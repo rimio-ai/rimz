@@ -130,7 +130,16 @@ fn team_request(kind: &str) -> ExecRequest {
 fn round_trip(input: &ExecRequest) -> (Vec<String>, ExecRequest) {
     let dir = tempfile::tempdir().expect("runtime root");
     let runtime = runtime(dir.path());
+    let plan = plan_exec_argv(Path::new("/bin/rimz"), &runtime, input).expect("plan exec request");
+    if let Some(artifact) = &plan.prompt_artifact {
+        assert!(!artifact.path.exists());
+        let ExecAction::Launch { prompt, .. } = &input.action else {
+            panic!("only launch requests carry prompt artifacts");
+        };
+        assert_eq!(Some(&artifact.contents), prompt.as_ref());
+    }
     let argv = exec_argv(Path::new("/bin/rimz"), &runtime, input).expect("encode exec request");
+    assert_eq!(plan.argv, argv);
     let payload = argv
         .windows(2)
         .find_map(|pair| (pair[0] == "--request").then_some(pair[1].as_str()))
@@ -1285,9 +1294,17 @@ fn provider_account_stage_validates_and_reenters_once() {
         &LaunchReminders::default(),
     )
     .expect("pending stage");
-    let AgentProcessStage::LoginShellReentry { argv, .. } = stage else {
+    let AgentProcessStage::LoginShellReentry {
+        argv,
+        prompt_artifact,
+        ..
+    } = stage
+    else {
         panic!("pending binding must re-enter");
     };
+    let artifact = prompt_artifact.expect("reentry prompt artifact");
+    assert!(!artifact.path.exists());
+    write_prompt_artifact(&artifact).expect("apply reentry prompt artifact");
     let payload = argv
         .windows(2)
         .find_map(|pair| (pair[0] == "--request").then_some(pair[1].as_str()))
@@ -1463,7 +1480,7 @@ fn posix_wrapper_shape_reapplies_env_after_rc() {
 #[test]
 fn compiled_process_debug_prints_launch_env_keys_without_values() {
     let launch_env = env(&[("ANTHROPIC_API_KEY", "sk-secret")]);
-    let provider_argv = argv(&["claude", "--print"]);
+    let provider_argv = argv(&["claude", "--print", "--setting=visible"]);
     let wrapped = login_shell_argv_with(
         Some(Path::new("/bin/sh")),
         true,
@@ -1476,19 +1493,28 @@ fn compiled_process_debug_prints_launch_env_keys_without_values() {
         provider_program: "claude".to_owned(),
         argv: wrapped.clone(),
         env: launch_env,
+        secret_keys: BTreeSet::from(["ANTHROPIC_API_KEY".to_owned()]),
         unset: BTreeSet::new(),
     };
+
+    let report_argv = redact_env_tokens(&wrapped, |key| process.secret_keys.contains(key));
+    assert!(report_argv.contains(&"ANTHROPIC_API_KEY=<redacted>".to_owned()));
+    assert!(report_argv.contains(&"RIMZ_RTK=auto".to_owned()));
+    assert!(report_argv.contains(&"--setting=visible".to_owned()));
 
     let rendered = format!("{process:?}");
     assert!(!rendered.contains("sk-secret"), "{rendered}");
     assert!(rendered.contains("ANTHROPIC_API_KEY"), "{rendered}");
     assert!(rendered.contains("--print"), "{rendered}");
+    assert!(rendered.contains("--setting=visible"), "{rendered}");
+    assert!(!rendered.contains("RIMZ_RTK=auto"), "{rendered}");
 
     let rendered = format!(
         "{:?}",
         AgentProcessStage::LoginShellReentry {
             process,
             argv: wrapped,
+            prompt_artifact: None,
         }
     );
     assert!(!rendered.contains("sk-secret"), "{rendered}");
