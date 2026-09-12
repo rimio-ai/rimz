@@ -70,15 +70,16 @@ fn install_definitions(
     Ok(adapters)
 }
 
+/// A provider home's account, its adapter, and the env its hooks live under.
+type ManagedHookLogin = (
+    rimz::ids::LoginKey,
+    &'static rimz::agents::AgentDefinition,
+    std::collections::BTreeMap<String, String>,
+);
+
 /// Every provider home that carries RimZ-managed hooks: each kind's own home
 /// and every declared account's, labelled by account.
-pub(crate) fn managed_hook_logins() -> Result<
-    Vec<(
-        rimz::ids::LoginKey,
-        &'static rimz::agents::AgentDefinition,
-        std::collections::BTreeMap<String, String>,
-    )>,
-> {
+pub(crate) fn managed_hook_logins() -> Result<Vec<ManagedHookLogin>> {
     let ambient = rimz::agents::ambient_env();
     let catalog = rimz::agents::LoginCatalog::from_config(&crate::cli::machine_config().accounts)?;
     Ok(catalog
