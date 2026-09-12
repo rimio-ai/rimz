@@ -132,7 +132,11 @@ fn add(kind: &AgentKind, name: LoginName, home: Option<PathBuf>) -> Result<()> {
     let home_override = login
         .env(&BTreeMap::new())
         .into_iter()
-        .map(|(key, value)| format!("{key}={value}"))
+        .map(|(key, value)| {
+            // The home was just created, so it holds no NUL byte.
+            let value = shlex::try_quote(&value).expect("an existing path is shell-quotable");
+            format!("{key}={value}")
+        })
         .collect::<Vec<_>>()
         .join(" ");
     render::finish(writeln!(

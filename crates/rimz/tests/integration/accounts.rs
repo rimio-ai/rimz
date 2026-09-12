@@ -33,7 +33,7 @@ fn failed(output: &Output) -> String {
 #[test]
 fn accounts_add_creates_a_hooked_home_and_remove_forgets_only_the_entry() {
     let env = Env::new();
-    let home = env.home_root.join("claude-work");
+    let home = env.home_root.join("claude work");
     let home_arg = home.display().to_string();
 
     let added = succeeded(&accounts(
@@ -43,7 +43,7 @@ fn accounts_add_creates_a_hooked_home_and_remove_forgets_only_the_entry() {
     assert!(home.join("settings.json").is_file(), "{added}");
     assert!(
         added.contains(&format!(
-            "log in once   CLAUDE_CONFIG_DIR={home_arg} claude"
+            "log in once   CLAUDE_CONFIG_DIR='{home_arg}' claude"
         )),
         "{added}"
     );
