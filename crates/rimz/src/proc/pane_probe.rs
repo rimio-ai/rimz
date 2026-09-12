@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::ids::AgentKind;
 use crate::pane::ElevatedAgent;
+use crate::proc::command::basename;
 
 /// Maximum process-tree depth walked below a pane root when looking for an
 /// elevated or pane-hosted agent. `sudo su` + login shell + node launcher +
@@ -42,7 +43,7 @@ pub(crate) fn command_starts_with_elevation_wrapper(command: &str) -> bool {
 /// pane, if one is visible through the process backend. The marker is display-only; callers
 /// must keep the pane's original command unchanged so the sidebar never binds a
 /// foreign-user agent as a local store session.
-pub fn elevated_in_pane_agent(pane_pid: u32) -> Option<ElevatedAgent> {
+pub(crate) fn elevated_in_pane_agent(pane_pid: u32) -> Option<ElevatedAgent> {
     elevated_in_pane_agent_with(
         pane_pid,
         crate::proc::own_uid()?,
@@ -95,14 +96,6 @@ fn is_elevation_wrapper(program: &str) -> bool {
     matches!(program, "sudo" | "su" | "doas")
 }
 
-fn basename(token: &str) -> &str {
-    Path::new(token)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .unwrap_or(token)
-}
-
 /// Start time of the in-pane agent CLI process backing a live pane, found by
 /// working directory. This is the exact single-process case only: a cwd with no
 /// match or multiple same-kind agent CLIs abstains so callers keep pane starts
@@ -115,7 +108,7 @@ pub fn in_pane_agent_start(kind: &str, pane_cwd: &str) -> Option<jiff::Timestamp
 /// Start times for in-pane agent CLI processes whose process cwd equals
 /// `pane_cwd`. Callers that know other panes' exact starts subtract those before
 /// deciding whether one unaccounted process remains.
-pub fn in_pane_agent_starts(kind: &str, pane_cwd: &str) -> Vec<jiff::Timestamp> {
+pub(crate) fn in_pane_agent_starts(kind: &str, pane_cwd: &str) -> Vec<jiff::Timestamp> {
     if !in_pane_agent_probe_supported(kind) {
         return Vec::new();
     }
@@ -142,7 +135,7 @@ pub fn in_pane_agent_starts(kind: &str, pane_cwd: &str) -> Vec<jiff::Timestamp> 
 /// survives, so re-tenancy stays visible. `None` for an unknown kind, a branchy
 /// process tree, or when no descendant reads as the CLI, so the caller falls
 /// back rather than guesses.
-pub fn in_pane_agent_start_for_root(kind: &str, root_pid: u32) -> Option<jiff::Timestamp> {
+pub(crate) fn in_pane_agent_start_for_root(kind: &str, root_pid: u32) -> Option<jiff::Timestamp> {
     in_pane_agent_process_for_root(kind, root_pid).map(|process| process.started_at)
 }
 
@@ -179,7 +172,7 @@ pub fn hosted_agent_process_for_root(root_pid: u32) -> Option<HostedAgentProcess
 /// This is stricter than [`in_pane_agent_process_for_root`]: unreadable
 /// cmdlines, branching trees, and depth exhaustion are indeterminate, so they
 /// return `false` and keep callers on their transient-miss path.
-pub fn hosted_agent_absent_under_root(kind: &str, root_pid: u32) -> bool {
+pub(crate) fn hosted_agent_absent_under_root(kind: &str, root_pid: u32) -> bool {
     hosted_agent_absent_under_root_with(
         kind,
         root_pid,
