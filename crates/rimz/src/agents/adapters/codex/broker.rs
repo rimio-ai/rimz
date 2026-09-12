@@ -27,6 +27,7 @@
 //!   stale file is unlinked first, and a [`SocketGuard`] removes it on a graceful
 //!   exit. A leftover socket is harmless — the next broker unlinks it on bind.
 
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
@@ -83,6 +84,7 @@ fn render_banner(info: &BrokerInfo<'_>) -> String {
 /// client handshakes need no round-trip. The auth stamp tracks the credential
 /// file the child read at spawn so an account switch respawns it before serving.
 struct ChildIo {
+    login_env: BTreeMap<String, String>,
     transport: FramedTransport,
     init_result: Value,
     auth_stamp: Option<u64>,
@@ -92,7 +94,7 @@ impl ChildIo {
     /// Kill the dead child and replace this with a freshly handshaked one.
     fn respawn(&mut self) -> Result<(), AppServerErr> {
         self.transport.stop_child();
-        *self = spawn_and_handshake()?;
+        *self = spawn_and_handshake(&self.login_env)?;
         Ok(())
     }
 }
@@ -101,13 +103,13 @@ impl ChildIo {
 /// and cache the result. The child's stdin/stdout are the JSON-RPC channel;
 /// stderr is nulled (the fresh-stdio invariant — the pane shows this broker's own
 /// `tracing`, not the child's diagnostics).
-fn spawn_and_handshake() -> Result<ChildIo, AppServerErr> {
-    let login_env = crate::agents::ambient_env();
-    let mut transport = FramedTransport::spawn(&codex_bin(), HANDSHAKE_DEADLINE, &login_env)?;
-    let auth_stamp = oauth_usage::credentials_stamp(&login_env);
+fn spawn_and_handshake(login_env: &BTreeMap<String, String>) -> Result<ChildIo, AppServerErr> {
+    let mut transport = FramedTransport::spawn(&codex_bin(), HANDSHAKE_DEADLINE, login_env)?;
+    let auth_stamp = oauth_usage::credentials_stamp(login_env);
     transport.set_deadline(HANDSHAKE_DEADLINE);
     let init_result = initialize(&mut transport, None)?;
     Ok(ChildIo {
+        login_env: login_env.clone(),
         transport,
         init_result,
         auth_stamp,
@@ -132,7 +134,7 @@ fn serve_request(
         return Ok(lock(shared).init_result.clone());
     }
     let mut io = lock(shared);
-    let auth_stamp = oauth_usage::credentials_stamp(&crate::agents::ambient_env());
+    let auth_stamp = oauth_usage::credentials_stamp(&io.login_env);
     if io.auth_stamp != auth_stamp {
         tracing::info!("codex auth changed; respawning app-server child");
         io.respawn()?;
@@ -203,9 +205,12 @@ fn handle_client(stream: UnixStream, shared: Arc<Mutex<ChildIo>>) {
 /// Run the broker: bring up the warm child, bind the per-session socket, and
 /// serve clients until the pane closes. Returns `Ok(())` and exits cleanly when
 /// `codex` is unavailable so the pane closes and enrichment cold-spawns instead.
-pub(in crate::agents) fn serve(info: BrokerInfo<'_>) -> std::io::Result<()> {
+pub(in crate::agents) fn serve(
+    info: BrokerInfo<'_>,
+    login_env: &BTreeMap<String, String>,
+) -> std::io::Result<()> {
     let socket_path = info.socket_path;
-    let child = match spawn_and_handshake() {
+    let child = match spawn_and_handshake(login_env) {
         Ok(io) => io,
         Err(err) => {
             tracing::warn!(

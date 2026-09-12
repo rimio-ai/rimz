@@ -69,9 +69,10 @@ impl LocalSessionInputs {
     }
 
     fn discover(&self) -> Vec<LocalSessionObservation> {
+        let login_env = crate::agents::ambient_env();
         self.discover_with(|kind, workspaces| {
             crate::agents::find_definition(kind.as_str())
-                .map(|adapter| adapter.discover_local_sessions(workspaces))
+                .map(|adapter| adapter.discover_local_sessions(workspaces, &login_env))
                 .unwrap_or_default()
         })
     }

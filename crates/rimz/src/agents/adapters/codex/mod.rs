@@ -92,13 +92,6 @@ use super::{
 use crate::transcript::{AskOption, AskQuestion};
 
 /// Codex's shared config, credentials, and control-socket home.
-fn codex_home() -> Option<PathBuf> {
-    codex_home_from(
-        std::env::var_os("CODEX_HOME").as_deref(),
-        std::env::var_os("HOME").as_deref(),
-    )
-}
-
 fn codex_home_from(
     configured: Option<&std::ffi::OsStr>,
     home: Option<&std::ffi::OsStr>,
@@ -733,9 +726,14 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
 }
 
 impl crate::agents::capabilities::SessionCapability for CodexAdapter {
-    fn daemon_session_evidence(&self) -> super::session::DaemonSessionEvidence {
+    fn daemon_session_evidence(
+        &self,
+        login_env: &BTreeMap<String, String>,
+    ) -> super::session::DaemonSessionEvidence {
         let pids = codex_daemon_pids();
-        let loaded_session_ids = (!pids.is_empty()).then(loaded_daemon_threads).flatten();
+        let loaded_session_ids = (!pids.is_empty())
+            .then(|| loaded_daemon_threads(login_env))
+            .flatten();
         super::session::DaemonSessionEvidence {
             pids,
             loaded_session_ids,
@@ -759,8 +757,12 @@ impl crate::agents::capabilities::SessionCapability for CodexAdapter {
         infer_turn_death_from_spent_window(error, capacity, now);
     }
 
-    fn discover_local_sessions(&self, workspaces: &[&Path]) -> Vec<super::LocalSessionObservation> {
-        local_sessions::discover(workspaces)
+    fn discover_local_sessions(
+        &self,
+        workspaces: &[&Path],
+        login_env: &BTreeMap<String, String>,
+    ) -> Vec<super::LocalSessionObservation> {
+        local_sessions::discover(workspaces, login_env)
     }
 
     /// `codex resume <id>` resolves the UUID to its rollout file and restores
@@ -833,7 +835,7 @@ impl crate::agents::capabilities::ContextCapability for CodexAdapter {
             Some(input.session_id),
             input.model,
             input.broker_socket,
-            &crate::agents::ambient_env(),
+            input.login_env,
         );
         let realtime_usage = observation
             .as_ref()
@@ -866,7 +868,7 @@ impl crate::agents::capabilities::ContextCapability for CodexAdapter {
         {
             return None;
         }
-        refresh_local_context_under(ctx, codex_home().as_deref())
+        refresh_local_context_under(ctx, self.config_home(ctx.login_env).as_deref())
     }
 }
 
@@ -1535,8 +1537,10 @@ fn refresh_app_server_enrichment(
 /// would mass-reap — and reads `thread/loaded/list`. `None` when there is no daemon
 /// to ask or its list cannot be trusted, which the caller reads as "unknown, keep
 /// all". Spawned out-of-band by the sidebar producer; read-only, best-effort.
-fn loaded_daemon_threads() -> Option<std::collections::BTreeSet<String>> {
-    let mut client = CodexAppServer::connect_daemon()?;
+fn loaded_daemon_threads(
+    login_env: &BTreeMap<String, String>,
+) -> Option<std::collections::BTreeSet<String>> {
+    let mut client = CodexAppServer::connect_daemon(login_env)?;
     let ids = client.loaded_threads().ok()?;
     Some(ids.into_iter().collect())
 }

@@ -140,9 +140,13 @@ pub const MAX_REALTIME_ACCOUNT_USAGE_DURATION: std::time::Duration =
 pub fn serve_broker(
     session_name: Option<&str>,
     socket_path: &std::path::Path,
+    login_env: &BTreeMap<String, String>,
 ) -> std::io::Result<()> {
-    super::adapters::codex::broker::serve(super::adapters::codex::broker::BrokerInfo {
-        session: session_name,
-        socket_path,
-    })
+    super::adapters::codex::broker::serve(
+        super::adapters::codex::broker::BrokerInfo {
+            session: session_name,
+            socket_path,
+        },
+        login_env,
+    )
 }

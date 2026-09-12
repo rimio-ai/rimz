@@ -70,7 +70,18 @@ pub fn run(args: CodexArgs, _globals: &GlobalFlags) -> Result<()> {
 /// Run the per-session Codex app-server broker, bound to this workspace's socket.
 fn serve_app_server(workspace_id: &str, session_name: Option<&str>) -> Result<()> {
     let workspace_id: WorkspaceId = workspace_id.parse().context("parsing workspace id")?;
+    let state = rimz::StatePaths::for_workspace(workspace_id.clone())
+        .context("resolving broker workspace state")?;
+    let machine_config = crate::cli::machine_config();
+    let login_env = rimz::agents::room_login(
+        &state.workspace_record,
+        &machine_config.accounts,
+        &rimz::ids::AgentKind::new_unchecked("codex"),
+    )
+    .context("resolving Codex broker room login")?
+    .env(&rimz::agents::ambient_env());
     let runtime = runtime_paths_for(workspace_id)?;
     let socket = runtime.codex_app_server_socket_path();
-    runtime_control::serve_broker(session_name, &socket).context("running codex app-server broker")
+    runtime_control::serve_broker(session_name, &socket, &login_env)
+        .context("running codex app-server broker")
 }

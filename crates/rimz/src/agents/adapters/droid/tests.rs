@@ -375,6 +375,7 @@ fn local_refresh_prices_exact_cache_rows_and_fills_gauge_from_last_call() {
     .unwrap();
     let transcript_text = transcript_path.to_string_lossy().into_owned();
     let ctx = LocalContextRefreshCtx {
+        login_env: &std::collections::BTreeMap::new(),
         agent_id: "priced",
         model_hint: None,
         prior_session_name: None,

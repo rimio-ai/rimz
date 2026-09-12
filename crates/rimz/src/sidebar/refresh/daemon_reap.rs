@@ -74,7 +74,8 @@ pub(super) fn refresh_codex_daemon_reap_cache(
     {
         return;
     }
-    let evidence = crate::agents::session::daemon_session_evidence("codex");
+    let login_env = crate::agents::ambient_env();
+    let evidence = crate::agents::session::daemon_session_evidence("codex", &login_env);
     let inputs = CodexDaemonReap {
         produced_at_ms: now_ms,
         daemon_pids: evidence.pids,

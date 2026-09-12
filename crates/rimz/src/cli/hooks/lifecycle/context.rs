@@ -232,7 +232,9 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
     let prior_spend_fold = (selected_transcript_path == prior_transcript_path)
         .then(|| prior.as_ref().and_then(|record| record.spend_fold.as_ref()))
         .flatten();
+    let login_env = rimz::agents::ambient_env();
     let refresh_ctx = rimz::agents::LocalContextRefreshCtx {
+        login_env: &login_env,
         agent_id: context_agent_id,
         model_hint: local_model_hint,
         prior_session_name: prior

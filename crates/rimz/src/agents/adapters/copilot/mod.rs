@@ -627,8 +627,14 @@ impl crate::agents::capabilities::ContextCapability for CopilotAdapter {
         trigger: RefreshTrigger<'_>,
         ctx: &LocalContextRefreshCtx<'_>,
     ) -> Option<LocalContextRefresh> {
-        let statusline_installed =
-            paths::settings_path().is_ok_and(|path| install::statusline_installed(&path));
+        let statusline_installed = paths::settings_path_from(
+            ctx.login_env
+                .get("RIMZ_COPILOT_SETTINGS")
+                .map(std::ffi::OsStr::new),
+            ctx.login_env.get("COPILOT_HOME").map(std::ffi::OsStr::new),
+            ctx.login_env.get("HOME").map(std::ffi::OsStr::new),
+        )
+        .is_ok_and(|path| install::statusline_installed(&path));
         local_context_refresh_with_statusline(statusline_installed, trigger, ctx)
     }
 }

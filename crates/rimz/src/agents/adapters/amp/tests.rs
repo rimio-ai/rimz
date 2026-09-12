@@ -369,6 +369,7 @@ fn local_refresh_publishes_latest_tokens_estimated_cost_and_stat_gate() {
     let pricing = dir.path().join("pricing-cache.json");
     PriceBook::write_fixture_cache(&pricing);
     let ctx = LocalContextRefreshCtx {
+        login_env: &std::collections::BTreeMap::new(),
         agent_id: "T-live",
         model_hint: None,
         prior_session_name: None,
@@ -410,6 +411,7 @@ fn local_refresh_publishes_latest_tokens_estimated_cost_and_stat_gate() {
     );
     let stat = refresh.transcript_stat.unwrap();
     let gated = LocalContextRefreshCtx {
+        login_env: &std::collections::BTreeMap::new(),
         prior_transcript_stat: Some(&stat),
         prior_spend_fold: None,
         ..ctx

@@ -349,7 +349,10 @@ pub trait LaunchCapability: CoreCapability {
 
 #[doc(hidden)]
 pub trait SessionCapability: CoreCapability {
-    fn daemon_session_evidence(&self) -> session::DaemonSessionEvidence {
+    fn daemon_session_evidence(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+    ) -> session::DaemonSessionEvidence {
         session::DaemonSessionEvidence::default()
     }
 
@@ -381,7 +384,11 @@ pub trait SessionCapability: CoreCapability {
     /// only to currently live panes and never append it to the RimZ event log.
     /// Adapters whose store is shared across workspaces enumerate it once for
     /// the whole batch.
-    fn discover_local_sessions(&self, _workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
+    fn discover_local_sessions(
+        &self,
+        _workspaces: &[&Path],
+        _login_env: &BTreeMap<String, String>,
+    ) -> Vec<LocalSessionObservation> {
         Vec::new()
     }
 
@@ -396,6 +403,7 @@ pub trait SessionCapability: CoreCapability {
         &self,
         _session_id: &crate::ids::AgentSessionId,
         _cwd: &Path,
+        _login_env: &BTreeMap<String, String>,
     ) -> Option<bool> {
         None
     }

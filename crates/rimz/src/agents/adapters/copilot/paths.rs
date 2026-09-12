@@ -40,21 +40,30 @@ pub(super) fn validated_transcript_path(path: &Path, session_id: &str) -> Option
     validated_transcript_path_from(path, session_id)
 }
 
-pub(super) fn otel_source(prior_path: Option<&Path>) -> Option<PathBuf> {
-    let exporter_path = std::env::var_os("COPILOT_OTEL_FILE_EXPORTER_PATH");
+pub(super) fn otel_source(
+    prior_path: Option<&Path>,
+    login_env: &BTreeMap<String, String>,
+) -> Option<PathBuf> {
+    let exporter_path = login_env
+        .get("COPILOT_OTEL_FILE_EXPORTER_PATH")
+        .map(OsStr::new);
     if prior_path.is_none_or(|path| !path.is_file())
-        && non_empty_path(exporter_path.as_deref()).is_none()
+        && non_empty_path(exporter_path).is_none()
         && otlp_only_config(
-            std::env::var_os("OTEL_EXPORTER_OTLP_ENDPOINT").as_deref(),
-            std::env::var_os("COPILOT_OTEL_EXPORTER_TYPE").as_deref(),
+            login_env.get("OTEL_EXPORTER_OTLP_ENDPOINT").map(OsStr::new),
+            login_env.get("COPILOT_OTEL_EXPORTER_TYPE").map(OsStr::new),
         )
     {
         return None;
     }
     otel_source_from(
         prior_path,
-        exporter_path.as_deref(),
-        copilot_home().as_deref(),
+        exporter_path,
+        copilot_home_from(
+            login_env.get("COPILOT_HOME").map(OsStr::new),
+            login_env.get("HOME").map(OsStr::new),
+        )
+        .as_deref(),
     )
 }
 

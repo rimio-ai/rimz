@@ -14,9 +14,12 @@ pub struct DaemonSessionEvidence {
     pub loaded_session_ids: Option<BTreeSet<String>>,
 }
 
-pub fn daemon_session_evidence(kind: &str) -> DaemonSessionEvidence {
+pub fn daemon_session_evidence(
+    kind: &str,
+    login_env: &std::collections::BTreeMap<String, String>,
+) -> DaemonSessionEvidence {
     super::find_definition(kind).map_or_else(DaemonSessionEvidence::default, |definition| {
-        definition.daemon_session_evidence()
+        definition.daemon_session_evidence(login_env)
     })
 }
 

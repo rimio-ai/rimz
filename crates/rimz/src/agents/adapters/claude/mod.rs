@@ -676,16 +676,21 @@ impl crate::agents::capabilities::InstallationCapability for ClaudeAdapter {
 }
 
 impl crate::agents::capabilities::SessionCapability for ClaudeAdapter {
-    fn discover_local_sessions(&self, workspaces: &[&Path]) -> Vec<super::LocalSessionObservation> {
-        local_sessions::discover(workspaces)
+    fn discover_local_sessions(
+        &self,
+        workspaces: &[&Path],
+        login_env: &BTreeMap<String, String>,
+    ) -> Vec<super::LocalSessionObservation> {
+        local_sessions::discover(workspaces, login_env)
     }
 
     fn local_conversation_present(
         &self,
         session_id: &crate::ids::AgentSessionId,
         cwd: &Path,
+        login_env: &BTreeMap<String, String>,
     ) -> Option<bool> {
-        local_sessions::conversation_present(session_id, cwd)
+        local_sessions::conversation_present(session_id, cwd, login_env)
     }
 }
 
@@ -878,9 +883,9 @@ impl crate::agents::capabilities::RuntimeControlCapability for ClaudeAdapter {
     fn runtime_control_liveness(
         &self,
         project_root: &Path,
-        _login_env: &BTreeMap<String, String>,
+        login_env: &BTreeMap<String, String>,
     ) -> super::runtime_control::RuntimeControlLiveness {
-        remote_liveness::probe(project_root)
+        remote_liveness::probe(project_root, login_env)
     }
 
     fn runtime_control_wiring_input_path(

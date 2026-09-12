@@ -220,20 +220,30 @@ where
 /// 3. `~/.claude`
 ///
 /// Returns directories that actually have a `projects/` child.
-pub fn claude_config_dirs() -> Vec<PathBuf> {
+pub(super) fn claude_config_dirs_from(
+    login_env: &std::collections::BTreeMap<String, String>,
+) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
-    if let Ok(env_val) = std::env::var("CLAUDE_CONFIG_DIR") {
-        dirs.extend(env_val.split(',').filter_map(env_config_dir));
+    if let Some(env_val) = login_env.get("CLAUDE_CONFIG_DIR") {
+        dirs.extend(
+            env_val
+                .split(',')
+                .filter_map(|raw| env_config_dir(raw, login_env)),
+        );
         if !dirs.is_empty() {
             return dirs;
         }
     }
 
-    let home = home_dir();
-    let xdg = std::env::var("XDG_CONFIG_HOME")
+    let home = login_env
+        .get("HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| home.join(".config"));
+        .unwrap_or_else(|| PathBuf::from("/"));
+    let xdg = login_env
+        .get("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"));
     for candidate in [xdg.join("claude"), home.join(".claude")] {
         if candidate.join("projects").is_dir() {
             dirs.push(candidate);
@@ -270,12 +280,22 @@ pub(super) fn claude_config_roots() -> Vec<PathBuf> {
     vec![xdg.join("claude"), home.join(".claude")]
 }
 
-fn env_config_dir(raw: &str) -> Option<PathBuf> {
+fn env_config_dir(
+    raw: &str,
+    login_env: &std::collections::BTreeMap<String, String>,
+) -> Option<PathBuf> {
     let raw = raw.trim();
     if raw.is_empty() {
         return None;
     }
-    let path = expand_tilde(raw);
+    let home = login_env.get("HOME").map(String::as_str).unwrap_or("/");
+    let path = if raw == "~" {
+        PathBuf::from(home)
+    } else if let Some(rest) = raw.strip_prefix("~/") {
+        PathBuf::from(home).join(rest)
+    } else {
+        PathBuf::from(raw)
+    };
     let path = if path.file_name().is_some_and(|name| name == "projects") && path.is_dir() {
         path.parent().map(Path::to_path_buf).unwrap_or(path)
     } else {

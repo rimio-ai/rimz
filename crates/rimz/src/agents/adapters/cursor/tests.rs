@@ -1453,6 +1453,7 @@ fn transcript_recovery_requires_the_terminal_row_to_be_last() {
     let path_string = path.to_string_lossy().into_owned();
     let pricing = dir.path().join("pricing-cache.json");
     let refresh = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
+        login_env: &std::collections::BTreeMap::new(),
         agent_id: "conv-1",
         model_hint: None,
         prior_session_name: None,
@@ -1467,6 +1468,7 @@ fn transcript_recovery_requires_the_terminal_row_to_be_last() {
 
     std::fs::write(&path, format!("{terminal}\n{terminal}\n")).unwrap();
     let healed = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
+        login_env: &std::collections::BTreeMap::new(),
         agent_id: "conv-1",
         model_hint: None,
         prior_session_name: None,
@@ -1491,6 +1493,7 @@ fn transcript_refresh_registers_live_file_and_recovers_interruption() {
     let path_string = path.to_string_lossy().into_owned();
     let pricing = dir.path().join("pricing-cache.json");
     let first = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
+        login_env: &std::collections::BTreeMap::new(),
         agent_id: "conv-1",
         model_hint: Some("cursor/model"),
         prior_session_name: None,
@@ -1511,6 +1514,7 @@ fn transcript_refresh_registers_live_file_and_recovers_interruption() {
 
     assert!(
         transcript::refresh(&crate::agents::LocalContextRefreshCtx {
+            login_env: &std::collections::BTreeMap::new(),
             agent_id: "conv-1",
             model_hint: None,
             prior_session_name: None,
@@ -1529,6 +1533,7 @@ fn transcript_refresh_registers_live_file_and_recovers_interruption() {
     )
     .unwrap();
     let interrupted = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
+        login_env: &std::collections::BTreeMap::new(),
         agent_id: "conv-1",
         model_hint: None,
         prior_session_name: None,
@@ -1568,6 +1573,7 @@ fn transcript_refresh_recovers_a_same_path_whole_file_rewrite() {
     let path_string = path.to_string_lossy().into_owned();
     let pricing = dir.path().join("pricing-cache.json");
     let first = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
+        login_env: &std::collections::BTreeMap::new(),
         agent_id: "conv-1",
         model_hint: None,
         prior_session_name: None,
@@ -1606,6 +1612,7 @@ fn transcript_refresh_recovers_a_same_path_whole_file_rewrite() {
         .unwrap();
 
     let rewritten = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
+        login_env: &std::collections::BTreeMap::new(),
         agent_id: "conv-1",
         model_hint: None,
         prior_session_name: None,

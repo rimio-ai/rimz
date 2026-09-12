@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::managed_pricing;
-use super::spend::{claude_config_dirs, parse_claude_spend};
+use super::spend::{claude_config_dirs_from, parse_claude_spend};
 use crate::agents::pricing;
 use crate::agents::{
     AgentTokenUsage, FieldPatch, LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx,
@@ -14,7 +14,9 @@ use crate::agents::{
 pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRefresh> {
     let path = existing_path(ctx.current_transcript_path)
         .or_else(|| existing_path(ctx.prior_transcript_path))
-        .or_else(|| find_session_transcript(ctx.agent_id))?;
+        .or_else(|| {
+            find_session_transcript_under(&claude_config_dirs_from(ctx.login_env), ctx.agent_id)
+        })?;
     let stat = TranscriptStat::from_path(&path)?;
     let reuses_prior_path = ctx.prior_transcript_path.map(Path::new) == Some(path.as_path());
     let prior_fold = reuses_prior_path.then_some(ctx.prior_spend_fold).flatten();
@@ -55,10 +57,6 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
 fn existing_path(path: Option<&str>) -> Option<PathBuf> {
     let path = PathBuf::from(path?);
     path.is_file().then_some(path)
-}
-
-fn find_session_transcript(session_id: &str) -> Option<PathBuf> {
-    find_session_transcript_under(&claude_config_dirs(), session_id)
 }
 
 pub(super) fn find_session_transcript_under(

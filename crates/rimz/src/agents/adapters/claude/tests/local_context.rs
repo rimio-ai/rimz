@@ -150,6 +150,7 @@ fn refresh<'a>(
     ClaudeAdapter.local_context_refresh(
         RefreshTrigger::Tick,
         &LocalContextRefreshCtx {
+            login_env: &std::collections::BTreeMap::new(),
             agent_id: "session-1",
             model_hint: None,
             prior_session_name: None,

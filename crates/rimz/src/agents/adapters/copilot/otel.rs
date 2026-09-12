@@ -48,7 +48,7 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
         .prior_transcript_path
         .map(Path::new)
         .filter(|path| paths::validated_transcript_path(path, ctx.agent_id).is_none());
-    let path = paths::otel_source(prior_otel_path)?;
+    let path = paths::otel_source(prior_otel_path, ctx.login_env)?;
     let stat = ctx.changed_transcript(TranscriptStat::from_path(&path)?)?;
     let usage = latest_chat_usage(&read_transcript_tail(&path)?, ctx.agent_id);
     let model_id = usage
@@ -282,6 +282,7 @@ mod tests {
         std::fs::write(&path, FIXTURE).unwrap();
         let pricing = dir.path().join("pricing.json");
         let first = refresh(&LocalContextRefreshCtx {
+            login_env: &std::collections::BTreeMap::new(),
             agent_id: "session-fixture",
             model_hint: None,
             prior_session_name: None,
@@ -299,6 +300,7 @@ mod tests {
         let stat = first.transcript_stat.unwrap();
         assert!(
             refresh(&LocalContextRefreshCtx {
+                login_env: &std::collections::BTreeMap::new(),
                 agent_id: "session-fixture",
                 model_hint: None,
                 prior_session_name: None,
@@ -318,6 +320,7 @@ mod tests {
             .write_all(b"{\"type\":\"span\",\"name\":\"chat next\",\"timeUnixNano\":\"1783955606000000000\",\"attributes\":{\"gen_ai.operation.name\":\"chat\",\"gen_ai.conversation.id\":\"session-fixture\",\"gen_ai.response.model\":\"next-model\",\"gen_ai.usage.output_tokens\":1}}\n")
             .unwrap();
         let next = refresh(&LocalContextRefreshCtx {
+            login_env: &std::collections::BTreeMap::new(),
             agent_id: "session-fixture",
             model_hint: None,
             prior_session_name: None,
@@ -342,6 +345,7 @@ mod tests {
         std::fs::write(&path, "").unwrap();
         let pricing = dir.path().join("pricing.json");
         let anchored = refresh(&LocalContextRefreshCtx {
+            login_env: &std::collections::BTreeMap::new(),
             agent_id: "session-a",
             model_hint: None,
             prior_session_name: None,
@@ -365,6 +369,7 @@ mod tests {
         file.write_all(INTERLEAVED_FIXTURE.as_bytes()).unwrap();
 
         let refreshed = refresh(&LocalContextRefreshCtx {
+            login_env: &std::collections::BTreeMap::new(),
             agent_id: "session-a",
             model_hint: None,
             prior_session_name: None,
