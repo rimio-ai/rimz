@@ -22,7 +22,7 @@ use crate::agents::PermissionMode;
 use crate::config::{CheckOn, ConfigFileDiagnosis, Team};
 use crate::disk::atomic::{self, write_bytes_atomically};
 use crate::disk::paths::config_home;
-use crate::ids::WorkspaceId;
+use crate::ids::{RoomLogins, WorkspaceId};
 
 const CONFIG_REL: &str = ".rimz/config.toml";
 const PROJECTS_SUBDIR: [&str; 2] = ["rimz", "projects"];
@@ -152,6 +152,7 @@ pub struct SurfaceSummary {
     pub subagent_profiles: Vec<String>,
     pub teams: Vec<String>,
     pub env_agents: Vec<String>,
+    pub accounts: Vec<String>,
     pub hooks: usize,
 }
 
@@ -169,6 +170,11 @@ impl SurfaceSummary {
                 .map(|agent| agent.name.clone())
                 .collect::<BTreeSet<_>>()
                 .into_iter()
+                .collect(),
+            accounts: config
+                .accounts
+                .iter()
+                .map(|(kind, name)| format!("{kind}={name}"))
                 .collect(),
             hooks: config.hooks.len(),
         }
@@ -486,6 +492,38 @@ pub fn agent_env_with_roots(
     }
 }
 
+/// The project's `[accounts]` room selection, resolved under the trust gate.
+/// [`ProjectLogins::Apply`] is the default a fresh room births with;
+/// [`ProjectLogins::Blocked`] names the trust state so birth refuses with the
+/// fix rather than silently falling back to the provider's own account.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProjectLogins {
+    /// The project names no account for any kind.
+    Unconfigured,
+    /// The workspace is trusted; birth selects these accounts by default.
+    Apply(RoomLogins),
+    /// Accounts are selected but the trust gate is closed.
+    Blocked(TrustState),
+}
+
+pub fn project_logins(project_root: &Path) -> Result<ProjectLogins> {
+    project_logins_with_roots(project_root, &config_home())
+}
+
+pub fn project_logins_with_roots(project_root: &Path, config_root: &Path) -> Result<ProjectLogins> {
+    let Some(config) = read_project_config(&project_root.join(CONFIG_REL))? else {
+        return Ok(ProjectLogins::Unconfigured);
+    };
+    if config.accounts.is_empty() {
+        return Ok(ProjectLogins::Unconfigured);
+    }
+    match status_with_roots(project_root, config_root)?.state {
+        TrustState::Trusted => Ok(ProjectLogins::Apply(config.accounts)),
+        TrustState::NoConfig => Ok(ProjectLogins::Unconfigured),
+        state => Ok(ProjectLogins::Blocked(state)),
+    }
+}
+
 fn trust_record_path(config_root: &Path, workspace_id: &WorkspaceId) -> PathBuf {
     project_record_path(config_root, workspace_id, TRUST_FILE)
 }
@@ -652,6 +690,9 @@ pub struct ProjectConfig {
     pub tasks: BTreeMap<String, ProjectTask>,
     pub hooks: Vec<HookConfig>,
     pub env: BTreeMap<String, String>,
+    /// `[accounts] <kind> = "<name>"`: which provider account a fresh room
+    /// launches into. Hashed because it redirects every agent's credentials.
+    pub accounts: RoomLogins,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -770,6 +811,8 @@ struct ExecutableSurface<'a> {
     tasks: Vec<ExecutableTask<'a>>,
     hooks: Vec<ExecutableHook<'a>>,
     env: &'a BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    accounts: &'a RoomLogins,
 }
 
 #[derive(Serialize)]
@@ -982,6 +1025,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                 })
                 .collect(),
             env: &config.env,
+            accounts: &config.accounts,
         }
     }
 }

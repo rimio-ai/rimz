@@ -47,6 +47,7 @@ fn trust_birth_prompt_offer_renders_only_present_summary_lines() {
             subagent_profiles: Vec::new(),
             teams: Vec::new(),
             env_agents: vec!["claude".to_owned()],
+            accounts: vec!["claude=work".to_owned()],
             hooks: 2,
         },
     };
@@ -62,6 +63,7 @@ fn trust_birth_prompt_offer_renders_only_present_summary_lines() {
             "until you trust it on this machine:\n",
             "  loop tasks: sync\n",
             "  env for: claude\n",
+            "  accounts: claude=work\n",
             "  hooks: 2\n",
         )
     );

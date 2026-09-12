@@ -37,6 +37,7 @@ The hashed surface is every field that can cause a process to run:
 - `[tasks.<name>]`: the loop `agent`, `prompt`, `check` and `verify` commands, and the run and schedule options
 - `[[hooks]]`: `event`, `command`
 - `[env]`: every key and value
+- `[accounts]`: which provider account a fresh room launches into
 
 Room layout stays out of a repo's reach: a project config carrying a `[layout]` table (including tmux status `#(...)` and popup commands) is refused, with the fix to move it to your per-machine config. Any field RimZ can execute must enter this hash, and a unit test fails if one slips out. The mechanics, the grant record, and the diff are in [the trust internals](../internals/harness/trust.md); the command is in [the trust reference](../reference/cli/hooks-trust.md#project-trust).
 
