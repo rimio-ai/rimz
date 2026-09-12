@@ -462,3 +462,50 @@ fn resume_session_present_requires_a_redeemable_conversation() {
         assert_eq!(resume_session_present(&agent), expected, "{label}");
     }
 }
+
+#[test]
+fn skips_a_session_from_another_account_and_resumes_the_rest() {
+    let personal = AgentState {
+        login: Some("personal".parse().expect("login name")),
+        ..agent("claude", "a1", "/code/qe", 5)
+    };
+    let work = AgentState {
+        login: Some("work".parse().expect("login name")),
+        ..agent("claude", "a2", "/code/qe-feature", 10)
+    };
+    let room = claude_room("work");
+
+    let plan = plan_resume(
+        &[personal, work],
+        &BTreeSet::new(),
+        ResumeContext {
+            logins: &room,
+            ..ctx(
+                crate::config::ResumeConfig::default().max,
+                None,
+                &no_profiles(),
+            )
+        },
+        |_| true,
+        |_| true,
+    );
+
+    assert_eq!(
+        plan.skipped,
+        [ResumeSkip {
+            label: "claude:qe".to_owned(),
+            reason: ResumeSkipReason::LoginMismatch,
+        }]
+    );
+    assert_eq!(plan.warnings.len(), 1);
+    assert!(
+        plan.warnings[0].contains("rimz reset --account claude=personal"),
+        "{}",
+        plan.warnings[0]
+    );
+    assert_eq!(plan.tabs.len(), 1);
+    assert_eq!(
+        single_column(&plan.tabs[0]),
+        vec![exec_resume("claude", "a2")]
+    );
+}

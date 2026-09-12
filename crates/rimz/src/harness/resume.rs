@@ -20,7 +20,7 @@ use jiff::Timestamp;
 use crate::Store;
 use crate::agents::PermissionMode;
 use crate::agents::find_definition;
-use crate::agents::{AgentState, LocalSessionObservation};
+use crate::agents::{AgentState, LocalSessionObservation, LoginMismatch};
 use crate::config::{CommandsConfig, ProfilesConfig, TeamsConfig};
 use crate::disk::paths::RuntimePaths;
 use crate::harness::plan::{
@@ -28,7 +28,7 @@ use crate::harness::plan::{
     ResumeLaunchPosture, cohort_cells, compile_layout_panes, launch_identity_requests,
 };
 use crate::harness::spec::LayoutSpec;
-use crate::ids::{AgentKind, AgentSessionId, PaneId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, RoomLogins};
 use crate::mux::ResumeTab;
 use crate::store::runtime::AgentLiveness;
 use crate::store::writer::AgentLaunchScope;
@@ -86,6 +86,9 @@ pub struct LaneResumeRequest<'a> {
     pub max: usize,
     pub rimz_bin: &'a Path,
     pub runtime: &'a RuntimePaths,
+    /// The room's frozen account selection; a closed member born under another
+    /// account refuses the resume.
+    pub logins: &'a RoomLogins,
 }
 
 impl<'a> LaneResumeRequest<'a> {
@@ -98,6 +101,7 @@ impl<'a> LaneResumeRequest<'a> {
             runtime: self.runtime,
             profiles,
             max: self.max,
+            logins: self.logins,
         }
     }
 }
@@ -133,6 +137,8 @@ pub enum LaneResumeError {
     LiveNoPane,
     #[error("{message}")]
     RestoreConfig { message: String },
+    #[error(transparent)]
+    LoginMismatch(#[from] LoginMismatch),
 }
 
 /// All-closed lane plan awaiting durable identity allocation.
@@ -230,6 +236,9 @@ pub enum ResumeSkipReason {
     /// The profile now requires system-prompt replacement that the provider
     /// cannot express.
     PromptUnsupported,
+    /// The session was born under another account than the room launches
+    /// under, and its conversation lives in that account's home.
+    LoginMismatch,
 }
 
 impl ResumeSkipReason {
@@ -239,6 +248,7 @@ impl ResumeSkipReason {
             Self::NoConversation => "no saved conversation",
             Self::OverCap => "over the resume cap",
             Self::PromptUnsupported => "no prompt replacement",
+            Self::LoginMismatch => "different account",
         }
     }
 }
@@ -441,6 +451,7 @@ pub(super) struct PlannedTeamTab {
 pub enum CohortResumeErr {
     NothingToResume { spec: String },
     MembersStillLive { labels: Vec<String> },
+    LoginMismatch(LoginMismatch),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -671,14 +682,23 @@ struct ResumeCandidate {
     pane_id: Option<PaneId>,
     last_activity: Timestamp,
     conversation_present: bool,
+    /// Set when the session was born under another account than the room's.
+    login_mismatch: Option<LoginMismatch>,
 }
 
 impl ResumeCandidate {
-    fn from_agent(agent: &AgentState, conversation_present: impl FnOnce() -> bool) -> Option<Self> {
+    fn from_agent(
+        agent: &AgentState,
+        logins: &RoomLogins,
+        conversation_present: impl FnOnce() -> bool,
+    ) -> Option<Self> {
         if !full_session(agent) {
             return None;
         }
-        Some(Self::from_agent_identity(agent, conversation_present()))
+        Some(Self {
+            login_mismatch: login_mismatch(agent, logins),
+            ..Self::from_agent_identity(agent, conversation_present())
+        })
     }
 
     fn from_agent_identity(agent: &AgentState, conversation_present: bool) -> Self {
@@ -689,6 +709,7 @@ impl ResumeCandidate {
             pane_id: agent.pane.as_ref().map(|pane| pane.pane_id.clone()),
             last_activity: agent.last_activity,
             conversation_present,
+            login_mismatch: None,
         }
     }
 
@@ -718,6 +739,9 @@ impl ResumeCandidate {
             pane_id: None,
             last_activity: observation.last_activity,
             conversation_present: true,
+            // Discovery reads the room's own provider home, so every observed
+            // session belongs to the room's account.
+            login_mismatch: None,
         })
     }
 
@@ -829,6 +853,13 @@ pub fn plan_lane_resume(
         .iter()
         .cloned()
         .partition(|agent| matches!(liveness(agent), AgentLiveness::Live { .. }));
+    if let Some(mismatch) = closed
+        .iter()
+        .filter(|agent| !agent.agent_id.is_provisional())
+        .find_map(|agent| login_mismatch(agent, request.logins))
+    {
+        return Err(mismatch.into());
+    }
 
     // Only the branches that plan a relaunch read the effective config; a lane
     // that just needs focus stays independent of it.
@@ -1175,6 +1206,7 @@ fn plan_closed_lane(
 ) -> Result<LaneResumeAction, LaneResumeError> {
     let (team, flat_agents) = split_team_and_flat(
         &closed,
+        request.logins,
         &restore.teams,
         &restore.profiles,
         &restore.commands,
@@ -1388,6 +1420,7 @@ fn materialize_team_restore_tab(
 /// Plan restorable named-team tabs from prior full agent sessions.
 fn plan_team_restore_tabs(
     agents: &[AgentState],
+    logins: &RoomLogins,
     teams: &TeamsConfig,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
@@ -1423,8 +1456,11 @@ fn plan_team_restore_tabs(
         };
         let cells = cohort_cells(&layout);
         let group_agents = group.iter().copied().cloned().collect::<Vec<_>>();
+        // A cohort with a member born under another account plans no tab; its
+        // members fall through to the flat planner, which skips them visibly.
         let Ok(mut cohort) = plan_cohort_resume(
             &group_agents,
+            logins,
             |_| AgentLiveness::Dead,
             &cells,
             Some(&team),
@@ -1465,6 +1501,7 @@ fn plan_team_restore_tabs(
 /// Partition agents into planned named-team tabs and flat resume candidates.
 pub(super) fn split_team_and_flat(
     agents: &[AgentState],
+    logins: &RoomLogins,
     teams: &TeamsConfig,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
@@ -1474,6 +1511,7 @@ pub(super) fn split_team_and_flat(
 ) -> (Vec<PlannedTeamTab>, Vec<AgentState>) {
     let team = plan_team_restore_tabs(
         agents,
+        logins,
         teams,
         profiles,
         commands,
@@ -1554,6 +1592,9 @@ pub struct ResumeContext<'a> {
     pub runtime: &'a RuntimePaths,
     pub profiles: &'a ProfilesConfig,
     pub max: usize,
+    /// The room's frozen account selection; sessions born under another
+    /// account are skipped.
+    pub logins: &'a RoomLogins,
 }
 
 pub fn plan_resume(
@@ -1576,7 +1617,9 @@ pub(super) fn plan_resume_detailed(
     let candidates = agents
         .iter()
         .filter(|agent| !ended.contains(&(agent.kind.clone(), agent.agent_id.clone())))
-        .filter_map(|agent| ResumeCandidate::from_agent(agent, || session_backed(agent)))
+        .filter_map(|agent| {
+            ResumeCandidate::from_agent(agent, ctx.logins, || session_backed(agent))
+        })
         .collect();
     plan_resume_candidates_detailed(candidates, ctx, worktree_exists)
 }
@@ -1598,7 +1641,7 @@ fn plan_resume_candidates_detailed(
     let mut seen: HashSet<ResumeCandidateKey> = HashSet::new();
     let mut plan = DetailedResumePlan::default();
     let mut tabs: Vec<PlannedResumeTab> = Vec::new();
-    for candidate in candidates {
+    for mut candidate in candidates {
         // An older relaunch that re-used a pane is superseded by the newest
         // stamp. Rebirth-retired stamps fall back to provider session identity.
         if !seen.insert(candidate.key()) {
@@ -1611,6 +1654,14 @@ fn plan_resume_candidates_detailed(
                 candidate.identity.kind.clone(),
                 candidate.identity.session_id.clone(),
             ));
+            continue;
+        }
+        if let Some(mismatch) = candidate.login_mismatch.take() {
+            plan.warnings.push(mismatch.to_string());
+            plan.skipped.push(ResumeSkip {
+                label,
+                reason: ResumeSkipReason::LoginMismatch,
+            });
             continue;
         }
         if !supports_candidate_resume(&candidate) {
@@ -1747,6 +1798,7 @@ fn candidate_room_channel(
 /// and worktree existence so the matching rules stay pure and testable.
 pub fn plan_cohort_resume(
     agents: &[AgentState],
+    logins: &RoomLogins,
     liveness: impl Fn(&AgentState) -> AgentLiveness,
     cells: &[CohortCell],
     team: Option<&str>,
@@ -1771,6 +1823,13 @@ pub fn plan_cohort_resume(
         .collect::<Vec<_>>();
     if !live.is_empty() {
         return Err(CohortResumeErr::MembersStillLive { labels: live });
+    }
+    if let Some(mismatch) = matches
+        .iter()
+        .flatten()
+        .find_map(|agent| login_mismatch(agent, logins))
+    {
+        return Err(CohortResumeErr::LoginMismatch(mismatch));
     }
 
     let newest = matches
@@ -2159,6 +2218,16 @@ fn supports_candidate_resume(candidate: &ResumeCandidate) -> bool {
     })
 }
 
+/// The account mismatch that refuses resuming `agent` in a room under `logins`.
+pub fn login_mismatch(agent: &AgentState, logins: &RoomLogins) -> Option<LoginMismatch> {
+    LoginMismatch::between(
+        &agent.kind,
+        &agent.agent_id,
+        agent.login.as_ref(),
+        logins.get(&agent.kind),
+    )
+}
+
 /// A resumed agent must have a conversation the provider can still reopen.
 ///
 /// Claude and Codex stamp a `transcript_path` on their first `SessionStart`
@@ -2183,7 +2252,7 @@ pub fn resume_session_present(agent: &AgentState) -> bool {
     {
         return std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 0);
     }
-    let login_env = crate::agents::ambient_env();
+    let login_env = session_login_env(agent);
     agent_worktree(agent)
         .and_then(|cwd| {
             find_definition(&agent.kind).and_then(|adapter| {
@@ -2191,6 +2260,23 @@ pub fn resume_session_present(agent: &AgentState) -> bool {
             })
         })
         .unwrap_or(true)
+}
+
+/// The provider environment a session's conversation lives under: its stamped
+/// account's home, or the ambient default home.
+fn session_login_env(agent: &AgentState) -> BTreeMap<String, String> {
+    let ambient = crate::agents::ambient_env();
+    let Some(name) = agent.login.as_ref() else {
+        return ambient;
+    };
+    let accounts = &crate::config::MachineConfig::load_lenient().accounts;
+    match crate::agents::LoginCatalog::from_config(accounts)
+        .ok()
+        .and_then(|catalog| catalog.select(&agent.kind, name).ok())
+    {
+        Some(login) => login.env(&ambient),
+        None => ambient,
+    }
 }
 
 fn agent_worktree(agent: &AgentState) -> Option<PathBuf> {

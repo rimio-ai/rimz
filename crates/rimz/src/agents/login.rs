@@ -459,6 +459,15 @@ pub enum RoomLoginErr {
     Login(#[from] LoginErr),
 }
 
+/// The account selection of the room whose `workspace.json` is `record`; a
+/// record without one, or none at all, selects `default` for every kind.
+pub fn room_logins(record: &Path) -> Result<RoomLogins, RoomLoginErr> {
+    Ok(crate::workspace::record::read_optional(record)
+        .map_err(Box::new)?
+        .and_then(|record| record.logins)
+        .unwrap_or_default())
+}
+
 /// The login the room whose `workspace.json` is `record` launches `kind`
 /// under. A record without a selection, or none at all, is the provider's own
 /// home.

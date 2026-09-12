@@ -739,6 +739,7 @@ fn team_restore_tabs_seed_every_declared_role() {
     ] {
         let tabs = plan_team_restore_tabs(
             &agents,
+            &NO_LOGINS,
             &teams,
             &profiles,
             &commands,
@@ -771,6 +772,7 @@ fn split_team_and_flat_keeps_unmatched_agents_for_flat_resume() {
 
     let (tabs, flat_agents) = split_team_and_flat(
         &[planner, flat],
+        &NO_LOGINS,
         &teams,
         &profiles,
         &commands,
@@ -782,4 +784,29 @@ fn split_team_and_flat_keeps_unmatched_agents_for_flat_resume() {
     assert_eq!(tabs.len(), 1);
     assert_eq!(flat_agents.len(), 1);
     assert_eq!(flat_agents[0].agent_id.as_str(), "flat");
+}
+
+#[test]
+fn cohort_resume_refuses_a_member_from_another_account() {
+    let planner = AgentState {
+        login: Some("personal".parse().expect("login name")),
+        ..team_agent("claude", "planner", "planner", "/code/forge", 1)
+    };
+    let room = claude_room("work");
+
+    let err = plan_cohort_resume(
+        &[planner],
+        &room,
+        dead,
+        &[cohort_cell("claude", Some("planner"))],
+        Some("forge"),
+        |_| true,
+        |_| true,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(&err, CohortResumeErr::LoginMismatch(mismatch) if mismatch.session_login.as_str() == "personal"),
+        "{err:?}"
+    );
 }

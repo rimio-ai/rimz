@@ -41,6 +41,8 @@ pub(super) fn resume_lane(
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading audit agent rollup")?;
     let worktrees = local_worktrees(&workspace)?;
+    let logins = rimz::agents::room_logins(&store.paths().workspace_record)?;
+    let catalog = rimz::agents::LoginCatalog::from_config(&machine_config.accounts)?;
     let selector = lane_selector(
         scope,
         from_pr.map(|target| target.number),
@@ -56,11 +58,12 @@ pub(super) fn resume_lane(
             max: machine_config.resume.max,
             rimz_bin: &rimz::proc::rimz_exe(),
             runtime: store.runtime_paths(),
+            logins: &logins,
         },
         Path::is_dir,
         resume_session_present,
         rimz::store::runtime::agent_liveness,
-        discover_lane_sessions,
+        |path| discover_lane_sessions(path, &catalog, &logins),
         || {
             LaneRestoreConfig::load(&machine_config, &workspace.project_root).map_err(|error| {
                 LaneResumeError::RestoreConfig {
@@ -193,11 +196,23 @@ fn local_worktrees(workspace: &rimz::ResolvedWorkspace) -> Result<Vec<LaneWorktr
         .collect()
 }
 
-fn discover_lane_sessions(path: &Path) -> Vec<LocalSessionObservation> {
-    let login_env = rimz::agents::ambient_env();
+/// Sessions under `path` in the room's own account homes, so every discovered
+/// session is one the room may resume.
+fn discover_lane_sessions(
+    path: &Path,
+    catalog: &rimz::agents::LoginCatalog,
+    logins: &rimz::ids::RoomLogins,
+) -> Vec<LocalSessionObservation> {
+    let ambient = rimz::agents::ambient_env();
     rimz::agents::all_definitions()
         .filter(|adapter| adapter.spec().capabilities.local_session_discovery)
-        .flat_map(|adapter| adapter.discover_local_sessions(&[path], &login_env))
+        .flat_map(|adapter| {
+            let kind = rimz::ids::AgentKind::new_unchecked(adapter.spec().kind);
+            match catalog.room_login(logins, &kind) {
+                Ok(login) => adapter.discover_local_sessions(&[path], &login.env(&ambient)),
+                Err(_) => Vec::new(),
+            }
+        })
         .filter(|observation| {
             std::fs::metadata(&observation.transcript_path)
                 .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)

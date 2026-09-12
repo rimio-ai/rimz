@@ -87,7 +87,8 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             .as_deref()
             .map(PathBuf::from)
             .unwrap_or_else(|| workspace.worktree_root.clone());
-        let (action, note) = restart::relaunch_action(&agent, &cwd)?;
+        let logins = rimz::agents::room_logins(&state.workspace_record)?;
+        let (action, note) = restart::relaunch_action(&agent, &logins, &cwd)?;
         (
             restart::relaunch_request(&agent, &posture, action, None),
             cwd,
