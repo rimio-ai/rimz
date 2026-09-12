@@ -35,7 +35,7 @@ pub enum AtomicErr {
     Json(#[from] serde_json::Error),
 }
 
-pub type Result<T> = std::result::Result<T, AtomicErr>;
+pub(crate) type Result<T> = std::result::Result<T, AtomicErr>;
 
 /// Write raw bytes to `path` via a same-directory temp file followed by an
 /// atomic rename. fsync is applied to the temp file before the rename.
@@ -54,7 +54,7 @@ pub fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
 /// Write pre-serialized cache bytes through temp+rename without fsync. This is
 /// the raw-byte twin of [`write_temp_then_rename_cache`] for callers that must
 /// reuse one serialization for content comparison and publication.
-pub fn write_cache_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_cache_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     replace_whole_file(path, Fsync::Skip, None, |writer, tmp| {
         writer.write_all(bytes).map_err(|source| AtomicErr::Io {
             path: tmp.to_path_buf(),
@@ -145,7 +145,7 @@ pub fn write_temp_then_rename<T: Serialize>(path: &Path, value: &T) -> Result<()
 /// Like [`write_temp_then_rename`], but the temp file is created and renamed
 /// with mode 0600. Used for plaintext secret caches.
 #[must_use = "durability barrier; check the result"]
-pub fn write_private_temp_then_rename<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+pub(crate) fn write_private_temp_then_rename<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     write_temp_then_rename_with(path, value, Fsync::Durable, JsonStyle::Pretty, Some(0o600))
 }
 
@@ -380,7 +380,7 @@ fn sync_parent_dir(path: &Path) -> Result<()> {
 /// Remove temp siblings old enough that they cannot be an active write by this
 /// process family. Callers use this on large rebuilt caches, where process death
 /// can otherwise leave expensive orphan temp files behind.
-pub fn sweep_stale_temp_siblings(path: &Path, min_age: Duration) -> usize {
+pub(crate) fn sweep_stale_temp_siblings(path: &Path, min_age: Duration) -> usize {
     let Some(parent) = path.parent() else {
         return 0;
     };
