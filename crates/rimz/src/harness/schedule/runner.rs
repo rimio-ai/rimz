@@ -1002,7 +1002,11 @@ fn preflight_resolved_task(resolved: &ResolvedSingleAgentLaunch) -> Result<()> {
 fn preflight_kind(kind: &str) -> Result<()> {
     let adapter =
         find_definition(kind).ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
-    match preflight_hooks(adapter, TurnLifecycleNeed::NotUnsupported) {
+    match preflight_hooks(
+        adapter,
+        &crate::agents::ambient_env(),
+        TurnLifecycleNeed::NotUnsupported,
+    ) {
         Ok(()) => Ok(()),
         Err(HookPreflightErr::TurnLifecycleUnsupported { reason }) => anyhow::bail!(
             "{kind} cannot run as a scheduled turn: a verified executable turn-lifecycle signal is required; {reason}"

@@ -208,7 +208,8 @@ struct ModelProvider {
 }
 
 pub(super) fn resolve() -> SelectionState {
-    let Ok(settings_path) = super::install::qwen_settings_path() else {
+    let Ok(settings_path) = super::install::qwen_settings_path(&crate::agents::ambient_env())
+    else {
         return SelectionState::Unavailable;
     };
     let dotenv_path = settings_path
@@ -308,7 +309,7 @@ fn settings_path(env: &BTreeMap<String, String>) -> Option<PathBuf> {
     env.get("HOME")
         .and_then(|path| non_empty(Some(path)))
         .map(|home| PathBuf::from(home).join(".qwen/settings.json"))
-        .or_else(|| super::install::qwen_settings_path().ok())
+        .or_else(|| super::install::qwen_settings_path(&crate::agents::ambient_env()).ok())
 }
 
 fn unsupported_config_layer(cwd: &Path, env: &BTreeMap<String, String>) -> bool {

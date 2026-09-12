@@ -155,7 +155,7 @@ fn project_trust_accepts_canonical_and_symlink_keys() {
 fn codex_config_path_honors_codex_home_and_override() {
     const PROBE: &str = "RIMZ_TEST_CODEX_CONFIG_PATH";
     if let Some(expected) = std::env::var_os(PROBE) {
-        let path = super::super::install::codex_config_path().unwrap();
+        let path = super::super::install::codex_config_path(&crate::agents::ambient_env()).unwrap();
         assert_eq!(path, std::path::PathBuf::from(expected));
         let adapter = crate::agents::definition_by_kind("codex").unwrap();
         let cwd = path.parent().unwrap();

@@ -12,6 +12,7 @@ mod transcript;
 
 pub(crate) use crate::agents::capabilities::*;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -481,7 +482,7 @@ fn parse_amp_version(output: &str) -> Option<String> {
         .then(|| format!("{base}-g{hash}"))
 }
 
-fn amp_plugin_path() -> Result<PathBuf> {
+fn amp_plugin_path(_login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
     if let Some(raw) = std::env::var_os("RIMZ_AMP_PLUGIN").filter(|value| !value.is_empty()) {
         return Ok(PathBuf::from(raw));
     }

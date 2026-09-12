@@ -110,7 +110,7 @@ pub(crate) fn read_rc_settings() -> (PathBuf, ClaudeRcSettings) {
 }
 
 pub(crate) fn settings_path() -> PathBuf {
-    match claude_settings_path() {
+    match claude_settings_path(&crate::agents::ambient_env()) {
         Ok(path) => path,
         Err(err) => {
             tracing::warn!(error = %err, "Claude settings path unavailable for remote-control read");

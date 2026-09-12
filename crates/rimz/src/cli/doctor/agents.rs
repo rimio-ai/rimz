@@ -66,6 +66,7 @@ pub(super) fn collect_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) ->
 /// distinguishes installed, present-but-unwired, absent, and
 /// known-but-not-installable adapters.
 pub(super) fn collect_hooks() -> Vec<HookRow> {
+    let login_env = rimz::agents::ambient_env();
     rimz::agents::all_definitions()
         .map(|agent| {
             let definition = agent.spec();
@@ -78,8 +79,8 @@ pub(super) fn collect_hooks() -> Vec<HookRow> {
                         .unwrap_or("hook install is not supported for this adapter")
                         .to_owned(),
                 }
-            } else if agent.hooks_installed() {
-                let untrusted = agent.untrusted_installed_hooks();
+            } else if agent.hooks_installed(&login_env) {
+                let untrusted = agent.untrusted_installed_hooks(&login_env);
                 if untrusted.is_empty() {
                     HookStatus::Installed
                 } else {

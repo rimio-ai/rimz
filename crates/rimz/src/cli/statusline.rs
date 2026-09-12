@@ -64,6 +64,7 @@ pub fn run(args: StatuslineArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn run_feed(source: String, subagent: bool, globals: &GlobalFlags) -> Result<()> {
+    let login_env = rimz::agents::ambient_env();
     // Read all of stdin once — the rich statusline JSON. Keep the bytes for a
     // verbatim pass-through; a parse failure must never blank the statusline.
     let mut buf = Vec::new();
@@ -78,9 +79,9 @@ fn run_feed(source: String, subagent: bool, globals: &GlobalFlags) -> Result<()>
         .ok()
         .map(|agent| {
             let wrapped = if subagent {
-                agent.wrapped_subagent_status_line_command()
+                agent.wrapped_subagent_status_line_command(&login_env)
             } else {
-                agent.wrapped_status_line_command()
+                agent.wrapped_status_line_command(&login_env)
             };
             (wrapped, agent.status_line_invocation())
         })

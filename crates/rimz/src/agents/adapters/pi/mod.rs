@@ -37,6 +37,7 @@ pub(crate) mod transcript;
 
 pub(crate) use crate::agents::capabilities::*;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
@@ -636,7 +637,7 @@ fn pi_current_usage(parsed: &payloads::PiHookPayload) -> Option<AgentCurrentUsag
     (!usage.is_zero()).then_some(usage)
 }
 
-fn pi_extension_path() -> Result<PathBuf> {
+fn pi_extension_path(_login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
     // Honour an explicit override (`RIMZ_PI_EXTENSION`) so tests and tooling
     // can point the installer at a tempdir without touching real config. Pi
     // auto-discovers `*.ts`/`*.js` under this directory; install is

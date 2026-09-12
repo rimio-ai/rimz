@@ -1,5 +1,6 @@
 //! Copilot home, transcript, hook, and optional telemetry path resolution.
 
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
@@ -15,7 +16,7 @@ pub(super) fn copilot_home() -> Option<PathBuf> {
     )
 }
 
-pub(super) fn hooks_path() -> Result<PathBuf> {
+pub(super) fn hooks_path(_login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
     hooks_path_from(
         std::env::var_os("RIMZ_COPILOT_HOOKS").as_deref(),
         std::env::var_os("COPILOT_HOME").as_deref(),

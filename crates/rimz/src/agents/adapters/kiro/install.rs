@@ -1,5 +1,6 @@
 //! Cleanup for legacy whole-file Kiro v3 hook installs.
 
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
@@ -17,29 +18,29 @@ pub(super) static MANAGED_INTEGRATION: KiroManagedIntegration = KiroManagedInteg
 pub(super) struct KiroManagedIntegration;
 
 impl ManagedIntegration for KiroManagedIntegration {
-    fn install(&self) -> Result<HookInstallReport> {
+    fn install(&self, _login_env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
         Err(AgentErr::Install {
             agent: AGENT,
             reason: super::HOOK_INSTALL_UNAVAILABLE.to_owned(),
         })
     }
 
-    fn preview(&self) -> Result<HookInstallPreview> {
+    fn preview(&self, _login_env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
         Err(AgentErr::Install {
             agent: AGENT,
             reason: super::HOOK_INSTALL_UNAVAILABLE.to_owned(),
         })
     }
 
-    fn uninstall(&self) -> Result<HookUninstallReport> {
+    fn uninstall(&self, _login_env: &BTreeMap<String, String>) -> Result<HookUninstallReport> {
         uninstall_from(&hooks_path()?)
     }
 
-    fn installed(&self) -> bool {
+    fn installed(&self, _login_env: &BTreeMap<String, String>) -> bool {
         false
     }
 
-    fn managed_artifacts_present(&self) -> bool {
+    fn managed_artifacts_present(&self, _login_env: &BTreeMap<String, String>) -> bool {
         hooks_path().is_ok_and(|path| managed_at(&path))
     }
 }

@@ -95,7 +95,11 @@ pub(super) fn preflight_agent(
 ) -> Result<()> {
     let definition = adapter.spec();
     let kind = definition.kind;
-    match preflight_hooks(adapter, TurnLifecycleNeed::Wired) {
+    match preflight_hooks(
+        adapter,
+        &rimz::agents::ambient_env(),
+        TurnLifecycleNeed::Wired,
+    ) {
         Ok(()) => {}
         Err(HookPreflightErr::TurnLifecycleUnsupported { reason }) => bail!(
             "`rimz agents -p` cannot supervise {kind}: a verified executable turn-lifecycle signal is required; {}",

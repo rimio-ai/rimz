@@ -674,7 +674,7 @@ impl crate::agents::capabilities::HookCapability for CodexAdapter {
 
 impl crate::agents::capabilities::InstallationCapability for CodexAdapter {
     fn launch_dir_trust_gap(&self, cwd: &Path, repo_root: Option<&Path>) -> Option<String> {
-        match install::codex_config_path() {
+        match install::codex_config_path(&crate::agents::ambient_env()) {
             Ok(config) => project_trust::trust_gap_at(&config, cwd, repo_root),
             Err(err) => Some(format!(
                 "set CODEX_HOME to the Codex config directory: {err}"

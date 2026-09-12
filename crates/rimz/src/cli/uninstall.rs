@@ -472,8 +472,9 @@ fn storage_root(disk_usage: &RuntimeStorage, kind: StorageKind) -> Option<&Stora
 }
 
 fn managed_hook_agents() -> Vec<&'static str> {
+    let login_env = rimz::agents::ambient_env();
     rimz::agents::all_definitions()
-        .filter(|adapter| adapter.managed_hook_artifacts_present())
+        .filter(|adapter| adapter.managed_hook_artifacts_present(&login_env))
         .map(|adapter| adapter.spec().kind)
         .collect()
 }

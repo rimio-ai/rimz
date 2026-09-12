@@ -1,5 +1,6 @@
 //! Non-destructive Kimi `[[hooks]]` config merge.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::agents::{
@@ -19,27 +20,31 @@ pub(super) static MANAGED_INTEGRATION: KimiManagedIntegration = KimiManagedInteg
 pub(super) struct KimiManagedIntegration;
 
 impl ManagedIntegration for KimiManagedIntegration {
-    fn install(&self) -> Result<HookInstallReport> {
+    fn install(&self, _login_env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
         install(&config_path()?)
     }
 
-    fn preview(&self) -> Result<HookInstallPreview> {
+    fn preview(&self, _login_env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
         preview(&config_path()?)
     }
 
-    fn uninstall(&self) -> Result<HookUninstallReport> {
+    fn uninstall(&self, _login_env: &BTreeMap<String, String>) -> Result<HookUninstallReport> {
         uninstall(&config_path()?)
     }
 
-    fn installed(&self) -> bool {
+    fn installed(&self, _login_env: &BTreeMap<String, String>) -> bool {
         config_path().is_ok_and(|path| installed(&path))
     }
 
-    fn managed_artifacts_present(&self) -> bool {
+    fn managed_artifacts_present(&self, _login_env: &BTreeMap<String, String>) -> bool {
         config_path().is_ok_and(|path| managed(&path))
     }
 
-    fn wiring_input_paths(&self, _descriptor: &super::super::AgentSpec) -> Vec<PathBuf> {
+    fn wiring_input_paths(
+        &self,
+        _descriptor: &super::super::AgentSpec,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Vec<PathBuf> {
         config_path().into_iter().collect()
     }
 }

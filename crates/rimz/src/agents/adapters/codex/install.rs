@@ -2,6 +2,7 @@
 //!
 //! This module owns the non-destructive TOML merge/uninstall path, RimZ hook command detection, and Codex trust-state reporting for managed hooks.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::agents::{
@@ -21,54 +22,61 @@ pub(super) static MANAGED_INTEGRATION: CodexManagedIntegration = CodexManagedInt
 pub(super) struct CodexManagedIntegration;
 
 impl ManagedIntegration for CodexManagedIntegration {
-    fn install(&self) -> Result<HookInstallReport> {
-        install_into(&codex_config_path()?)
+    fn install(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
+        install_into(&codex_config_path(login_env)?)
     }
 
-    fn preview(&self) -> Result<HookInstallPreview> {
-        preview_install_at(&codex_config_path()?)
+    fn preview(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
+        preview_install_at(&codex_config_path(login_env)?)
     }
 
-    fn uninstall(&self) -> Result<HookUninstallReport> {
-        uninstall_from(&codex_config_path()?)
+    fn uninstall(&self, login_env: &BTreeMap<String, String>) -> Result<HookUninstallReport> {
+        uninstall_from(&codex_config_path(login_env)?)
     }
 
-    fn installed(&self) -> bool {
-        codex_config_path().is_ok_and(|path| hooks_installed_at(&path))
+    fn installed(&self, login_env: &BTreeMap<String, String>) -> bool {
+        codex_config_path(login_env).is_ok_and(|path| hooks_installed_at(&path))
     }
 
-    fn managed_artifacts_present(&self) -> bool {
-        codex_config_path().is_ok_and(|path| managed_artifacts_at(&path))
+    fn managed_artifacts_present(&self, login_env: &BTreeMap<String, String>) -> bool {
+        codex_config_path(login_env).is_ok_and(|path| managed_artifacts_at(&path))
     }
 
-    fn wiring_input_paths(&self, _descriptor: &super::super::AgentSpec) -> Vec<PathBuf> {
-        codex_config_path().into_iter().collect()
+    fn wiring_input_paths(
+        &self,
+        _descriptor: &super::super::AgentSpec,
+        login_env: &BTreeMap<String, String>,
+    ) -> Vec<PathBuf> {
+        codex_config_path(login_env).into_iter().collect()
     }
 
-    fn untrusted_installed_hooks(&self) -> Vec<String> {
-        codex_config_path()
+    fn untrusted_installed_hooks(&self, login_env: &BTreeMap<String, String>) -> Vec<String> {
+        codex_config_path(login_env)
             .map(|path| untrusted_hook_events_at(&path))
             .unwrap_or_default()
     }
 
-    fn untrusted_preflight_hooks(&self) -> Vec<String> {
-        codex_config_path()
+    fn untrusted_preflight_hooks(&self, login_env: &BTreeMap<String, String>) -> Vec<String> {
+        codex_config_path(login_env)
             .map(|path| untrusted_preflight_hook_events_at(&path))
             .unwrap_or_default()
     }
 }
 
-pub(super) fn codex_config_path() -> Result<PathBuf> {
+pub(super) fn codex_config_path(login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
     // Mirror Codex's home lookup, with a config-only override for tests/tooling.
-    if let Some(raw) = std::env::var_os("RIMZ_CODEX_CONFIG").filter(|v| !v.is_empty()) {
+    if let Some(raw) = login_env.get("RIMZ_CODEX_CONFIG").filter(|v| !v.is_empty()) {
         return Ok(PathBuf::from(raw));
     }
-    super::codex_home()
-        .map(|home| home.join("config.toml"))
-        .ok_or_else(|| AgentErr::Install {
-            agent: "codex",
-            reason: "$CODEX_HOME and $HOME are not set; cannot resolve Codex config".to_owned(),
-        })
+    super::codex_home_from(
+        login_env.get("CODEX_HOME").map(std::ffi::OsStr::new),
+        login_env.get("HOME").map(std::ffi::OsStr::new),
+    )
+    .map(|home| home.join("config.toml"))
+    .ok_or_else(|| AgentErr::Install {
+        agent: "codex",
+        reason: "$CODEX_HOME and $HOME are not set; cannot resolve Codex config".to_owned(),
+    })
 }
 
 pub(super) fn install_into(path: &Path) -> Result<HookInstallReport> {

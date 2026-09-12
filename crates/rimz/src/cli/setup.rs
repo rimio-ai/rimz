@@ -118,6 +118,7 @@ struct DetectedAgent {
 
 impl SetupReport {
     fn detect(globals: &GlobalFlags) -> Self {
+        let login_env = rimz::agents::ambient_env();
         let mux = match rimz::mux::auto_detect_backend(globals.mux) {
             Ok(name) => {
                 let backend = rimz::mux::backend_for(name);
@@ -152,10 +153,10 @@ impl SetupReport {
                         .any(|name| which::which(name).is_ok()),
                     binary: rimz::agents::locate_binary(definition),
                     hook_install: definition.has_wired_hook_install(),
-                    hooks_installed: agent.hooks_installed(),
+                    hooks_installed: agent.hooks_installed(&login_env),
                     hook_upgrade_available: agent
                         .managed_integration()
-                        .is_some_and(rimz::agents::ManagedIntegration::upgrade_available),
+                        .is_some_and(|integration| integration.upgrade_available(&login_env)),
                     local_session_discovery: definition.capabilities.local_session_discovery,
                 }
             })

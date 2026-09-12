@@ -1,5 +1,6 @@
 //! Copilot whole-file hook and reversible statusline installer.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde_json::{Map, Value};
@@ -20,47 +21,54 @@ pub(super) static MANAGED_INTEGRATION: CopilotManagedIntegration = CopilotManage
 pub(super) struct CopilotManagedIntegration;
 
 impl ManagedIntegration for CopilotManagedIntegration {
-    fn install(&self) -> Result<HookInstallReport> {
+    fn install(&self, _login_env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
         install(
-            &super::paths::hooks_path()?,
+            &super::paths::hooks_path(_login_env)?,
             &super::paths::settings_path()?,
         )
     }
 
-    fn preview(&self) -> Result<HookInstallPreview> {
+    fn preview(&self, _login_env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
         preview(
-            &super::paths::hooks_path()?,
+            &super::paths::hooks_path(_login_env)?,
             &super::paths::settings_path()?,
         )
     }
 
-    fn uninstall(&self) -> Result<HookUninstallReport> {
+    fn uninstall(&self, _login_env: &BTreeMap<String, String>) -> Result<HookUninstallReport> {
         uninstall(
-            &super::paths::hooks_path()?,
+            &super::paths::hooks_path(_login_env)?,
             &super::paths::settings_path()?,
         )
     }
 
-    fn installed(&self) -> bool {
-        super::paths::hooks_path()
+    fn installed(&self, _login_env: &BTreeMap<String, String>) -> bool {
+        super::paths::hooks_path(_login_env)
             .and_then(|hooks| Ok((hooks, super::paths::settings_path()?)))
             .is_ok_and(|(hooks, settings)| installed(&hooks, &settings))
     }
 
-    fn managed_artifacts_present(&self) -> bool {
-        super::paths::hooks_path()
+    fn managed_artifacts_present(&self, _login_env: &BTreeMap<String, String>) -> bool {
+        super::paths::hooks_path(_login_env)
             .and_then(|hooks| Ok((hooks, super::paths::settings_path()?)))
             .is_ok_and(|(hooks, settings)| managed(&hooks, &settings))
     }
 
-    fn wiring_input_paths(&self, _descriptor: &super::super::AgentSpec) -> Vec<std::path::PathBuf> {
-        [super::paths::hooks_path(), super::paths::settings_path()]
-            .into_iter()
-            .flatten()
-            .collect()
+    fn wiring_input_paths(
+        &self,
+        _descriptor: &super::super::AgentSpec,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Vec<std::path::PathBuf> {
+        [
+            super::paths::hooks_path(_login_env),
+            super::paths::settings_path(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
     }
 
-    fn wrapped_status_line_command(&self) -> Option<String> {
+    fn wrapped_status_line_command(&self, _login_env: &BTreeMap<String, String>) -> Option<String> {
         wrapped_statusline_command(&super::paths::settings_path().ok()?)
     }
 }

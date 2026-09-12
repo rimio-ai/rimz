@@ -26,7 +26,7 @@ pub(super) fn parse(path: &Path, prices: &PriceBook) -> SpendParse {
         return SpendParse::default();
     }
     let canonical = if selector.starts_with("custom:") {
-        let Some(user_settings) = droid_settings_path().ok() else {
+        let Some(user_settings) = droid_settings_path(&crate::agents::ambient_env()).ok() else {
             return SpendParse::default();
         };
         let Some(session_cwd) = snapshot.session_cwd.as_deref() else {

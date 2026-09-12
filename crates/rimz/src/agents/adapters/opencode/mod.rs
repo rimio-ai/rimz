@@ -24,6 +24,7 @@ mod transcript;
 
 pub(crate) use crate::agents::capabilities::*;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
@@ -659,7 +660,7 @@ fn context_window_for(model: Option<&str>) -> Option<u64> {
     None
 }
 
-fn opencode_plugin_path() -> Result<PathBuf> {
+fn opencode_plugin_path(_login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
     if let Some(raw) = std::env::var_os("RIMZ_OPENCODE_PLUGIN").filter(|v| !v.is_empty()) {
         return Ok(PathBuf::from(raw));
     }
