@@ -23,6 +23,7 @@ pub(crate) mod jsonc;
 pub mod lifecycle;
 mod local_session_cache;
 pub(crate) mod locate;
+pub mod login;
 pub(crate) mod managed_json_hooks;
 mod managed_source;
 pub(crate) mod managed_statusline;
@@ -96,6 +97,9 @@ pub use lifecycle::{
 };
 pub use locate::locate_binary;
 pub(crate) use locate::{agent_config_path, probe_descriptor_version, read_optional_file};
+pub use login::{
+    LoginCatalog, LoginConfigErr, LoginErr, LoginMismatch, ProviderLogin, default_named_home,
+};
 pub use managed_source::ManagedIntegration;
 pub use observation::{
     AgentLifecycleObservation, AgentUsageSummary, LaunchParams, SessionOrigin, SpawnedSubagent,

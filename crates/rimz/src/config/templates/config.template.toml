@@ -37,6 +37,15 @@
 ## claude = 50.0
 ## codex = 25.0
 
+# Named provider accounts (Claude and Codex). Each one is a standalone provider
+# home a room launches into, selected at birth with `rimz start --account
+# claude=work`; `default` is the provider's own home and is never declared.
+# `rimz accounts add` writes these entries, creates the directory and installs
+# the RimZ hooks into it. An empty table takes RimZ's default location.
+## [accounts.claude.work]
+## home = "/home/you/.claude-work"
+## [accounts.codex.personal]
+
 [notifications]
 # enabled = true
 # triggers = ["waiting", "failed"]

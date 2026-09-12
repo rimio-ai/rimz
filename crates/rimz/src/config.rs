@@ -52,7 +52,7 @@ mod theme;
 mod web;
 mod worktree;
 
-pub use accounts::{AccountBudgetConfigError, AccountsConfig, UsageLimitUsd};
+pub use accounts::{AccountBudgetConfigError, AccountsConfig, NamedAccount, UsageLimitUsd};
 pub(crate) use agents::retired_agents_key;
 pub use agents::{
     AgentsConfig, CommandsConfig, DONE_STAGE, FlipCompact, Isolation, LaunchPlacement, Profile,
@@ -297,6 +297,12 @@ pub enum ConfigErr {
         #[source]
         source: AccountBudgetConfigError,
     },
+    #[error("invalid per-machine account at {path}: {source}")]
+    Account {
+        path: PathBuf,
+        #[source]
+        source: Box<crate::agents::LoginConfigErr>,
+    },
     #[error(
         "removed config table in {path}: {detail} (run `rimz config init --print` for the current shape)"
     )]
@@ -315,6 +321,7 @@ impl ConfigErr {
             | Self::Notifications { path, .. }
             | Self::Loop { path, .. }
             | Self::AccountBudget { path, .. }
+            | Self::Account { path, .. }
             | Self::RemovedTable { path, .. }
             | Self::RemovedKey { path, .. } => path,
         }
@@ -329,6 +336,7 @@ impl ConfigErr {
             Self::Notifications { source, .. } => source.to_string(),
             Self::Loop { source, .. } => source.to_string(),
             Self::AccountBudget { source, .. } => source.to_string(),
+            Self::Account { source, .. } => source.to_string(),
             Self::Io { .. } | Self::RemovedTable { .. } | Self::RemovedKey { .. } => {
                 self.to_string()
             }
@@ -1127,6 +1135,12 @@ fn validate_account_budgets(accounts: &AccountsConfig, path: &Path) -> Result<()
         .map_err(|source| ConfigErr::AccountBudget {
             path: path.to_path_buf(),
             source,
+        })?;
+    crate::agents::LoginCatalog::from_config(accounts)
+        .map(|_| ())
+        .map_err(|source| ConfigErr::Account {
+            path: path.to_path_buf(),
+            source: Box::new(source),
         })
 }
 
