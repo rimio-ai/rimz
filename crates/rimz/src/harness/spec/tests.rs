@@ -596,6 +596,10 @@ fn profile_inheritance_and_builtin_overrides_resolve() {
     let bare = resolve_profile("claude", &no_profiles()).expect("built-in");
     assert_eq!(bare.kind.as_str(), "claude");
     assert_eq!(bare.chain, ["claude"]);
+    assert_eq!(
+        resolve_profile("claude", &profiles).unwrap().chain,
+        ["claude"]
+    );
     let child = resolve_profile("child", &profiles).expect("child");
     assert_eq!(child.kind.as_str(), "codex");
     assert_eq!(child.chain, ["child", "base", "codex"]);

@@ -1041,7 +1041,9 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
     };
 
     let mut resolved = ResolvedProfile::bare(&terminal_kind);
-    seen.push(terminal_kind);
+    if seen.last() != Some(&terminal_kind) {
+        seen.push(terminal_kind);
+    }
     resolved.chain = seen;
     for layer in layers {
         resolved.fill_missing(layer);

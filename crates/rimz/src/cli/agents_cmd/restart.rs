@@ -1,4 +1,5 @@
 use super::*;
+use rimz::harness::launch::{ExecAction, ExecRequest};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FreshReason {
@@ -56,7 +57,6 @@ pub(in crate::cli) fn restart_resolved(
     )?;
     rimz::sandbox::preflight(machine_config.agents.isolation)?;
     let cell = restart_cell(agent, &posture);
-    let extra_args = posture.launch.args.clone();
 
     // Fail at the entry point if this project's configured launch environment
     // is not trusted, before the old pane is touched.
@@ -66,20 +66,7 @@ pub(in crate::cli) fn restart_resolved(
         &cwd,
     )?;
 
-    let resume_support = !agent.agent_id.is_provisional()
-        && agent.worktree_path.is_some()
-        && rimz::harness::launch::compile_provider_argv(
-            adapter,
-            agent.kind.as_str(),
-            &rimz::harness::launch::ExecAction::Resume {
-                session_id: agent.agent_id.to_string(),
-                extra_args: Vec::new(),
-            },
-            &cwd,
-        )
-        .is_ok();
-    let session_present = rimz::harness::resume::resume_session_present(agent);
-    let fresh_reason = fresh_reason(resume_support, session_present);
+    let (action, fresh_reason) = relaunch_action(agent, &cwd)?;
     let fresh_batch = if fresh_reason.is_some() {
         Some(append_fresh_launch(
             store,
@@ -96,56 +83,7 @@ pub(in crate::cli) fn restart_resolved(
         .as_ref()
         .map(AgentLaunchBatch::single_identity)
         .transpose()?;
-    let identity_name = fresh_identity.map_or(agent.name.as_deref(), |identity| {
-        Some(identity.name.as_str())
-    });
-    let restart_params = rimz::agents::LaunchParams {
-        parent_agent_id: agent.parent_agent_id.clone(),
-        parent_agent_kind: agent.parent_agent_kind.clone(),
-        launch_depth: agent.launch_depth,
-        profile: agent.profile.clone(),
-        role: agent.role.clone(),
-        team: agent.team.clone(),
-        launch_group: agent.launch_group.clone(),
-        launch_ordinal: agent.launch_ordinal,
-        channel: agent.channel.clone(),
-        mode: posture.launch.mode,
-        model: posture.launch.model.clone(),
-        effort: posture.launch.effort.clone(),
-        budget: posture.launch.budget.clone(),
-        kind_ordinal: None,
-    };
-    let invocation = rimz::harness::launch::ExecRequest {
-        kind: agent.kind.clone(),
-        action: match fresh_identity {
-            Some(_) => rimz::harness::launch::ExecAction::Launch {
-                prompt: None,
-                extra_args,
-            },
-            None => rimz::harness::launch::ExecAction::Resume {
-                session_id: agent.agent_id.to_string(),
-                extra_args,
-            },
-        },
-        system_prompt_file: posture.launch.system_prompt_file.clone(),
-        append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
-        skills: posture.launch.skills.clone(),
-        provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
-        run_id: None,
-        worktree_path: None,
-        close_pane_on_exit: true,
-        exit_on_run_completion: false,
-        subagent: false,
-        identity: rimz::harness::launch::ExecIdentity {
-            name: identity_name.map(ToOwned::to_owned),
-            name_explicit: fresh_identity
-                .map_or(agent.name_explicit, |identity| identity.name_explicit),
-            launch_id: fresh_identity
-                .map(|identity| identity.agent_id.to_string())
-                .or_else(|| agent.launch_id.as_ref().map(ToString::to_string)),
-            params: restart_params,
-        },
-    };
+    let invocation = relaunch_request(agent, &posture, action, fresh_identity);
     let pane_name = invocation
         .identity
         .params
@@ -205,8 +143,7 @@ pub(in crate::cli) fn restart_resolved(
     if let (Some(identity), Some(reason)) = (fresh_identity, fresh_reason) {
         Ok(format!(
             "restarted fresh as @{} — {}",
-            identity.name,
-            reason.as_str()
+            identity.name, reason
         ))
     } else {
         let handle = rimz::address::agent_handle(agent, peers, true);
@@ -214,6 +151,90 @@ pub(in crate::cli) fn restart_resolved(
             "restarted {handle} (resumed session {})",
             agent.agent_id
         ))
+    }
+}
+
+pub(super) fn relaunch_action(
+    agent: &AgentState,
+    cwd: &Path,
+) -> Result<(rimz::harness::launch::ExecAction, Option<&'static str>)> {
+    let adapter = rimz::agents::find_definition(agent.kind.as_str())
+        .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
+    let resume_support = !agent.agent_id.is_provisional()
+        && agent.worktree_path.is_some()
+        && rimz::harness::launch::compile_provider_argv(
+            adapter,
+            agent.kind.as_str(),
+            &ExecAction::Resume {
+                session_id: agent.agent_id.to_string(),
+                extra_args: Vec::new(),
+            },
+            cwd,
+        )
+        .is_ok();
+    let session_present = rimz::harness::resume::resume_session_present(agent);
+    let fresh_reason = fresh_reason(resume_support, session_present);
+    let action = if fresh_reason.is_some() {
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        }
+    } else {
+        ExecAction::Resume {
+            session_id: agent.agent_id.to_string(),
+            extra_args: Vec::new(),
+        }
+    };
+    Ok((action, fresh_reason.map(FreshReason::as_str)))
+}
+
+pub(super) fn relaunch_request(
+    agent: &AgentState,
+    posture: &ResumePosture,
+    mut action: ExecAction,
+    fresh_identity: Option<&AgentLaunchIdentity>,
+) -> ExecRequest {
+    *action.extra_args_mut() = posture.launch.args.clone();
+    let identity_name = fresh_identity.map_or(agent.name.as_deref(), |identity| {
+        Some(identity.name.as_str())
+    });
+    let restart_params = rimz::agents::LaunchParams {
+        parent_agent_id: agent.parent_agent_id.clone(),
+        parent_agent_kind: agent.parent_agent_kind.clone(),
+        launch_depth: agent.launch_depth,
+        profile: agent.profile.clone(),
+        role: agent.role.clone(),
+        team: agent.team.clone(),
+        launch_group: agent.launch_group.clone(),
+        launch_ordinal: agent.launch_ordinal,
+        channel: agent.channel.clone(),
+        mode: posture.launch.mode,
+        model: posture.launch.model.clone(),
+        effort: posture.launch.effort.clone(),
+        budget: posture.launch.budget.clone(),
+        kind_ordinal: None,
+    };
+    ExecRequest {
+        kind: agent.kind.clone(),
+        action,
+        system_prompt_file: posture.launch.system_prompt_file.clone(),
+        append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
+        skills: posture.launch.skills.clone(),
+        provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
+        run_id: None,
+        worktree_path: None,
+        close_pane_on_exit: true,
+        exit_on_run_completion: false,
+        subagent: false,
+        identity: rimz::harness::launch::ExecIdentity {
+            name: identity_name.map(ToOwned::to_owned),
+            name_explicit: fresh_identity
+                .map_or(agent.name_explicit, |identity| identity.name_explicit),
+            launch_id: fresh_identity
+                .map(|identity| identity.agent_id.to_string())
+                .or_else(|| agent.launch_id.as_ref().map(ToString::to_string)),
+            params: restart_params,
+        },
     }
 }
 

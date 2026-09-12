@@ -8,6 +8,7 @@ mod budget_park;
 mod check;
 mod compact;
 mod exec;
+mod explain;
 mod fork;
 mod history;
 mod idle_compact;
@@ -321,6 +322,8 @@ enum AgentsSubcmd {
             .args(["spec"])
     )]
     Launch(Box<AgentLaunchArgs>),
+    /// Print the launch plan for a profile, team role, or agent seat.
+    Explain(explain::ExplainArgs),
     /// Validate one third-party plugin's manifest, probes, and envelopes.
     Check(CheckArgs),
     /// Scaffold or validate a machine-tier third-party agent plugin.
@@ -604,6 +607,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             }
             return dispatch_launch(*launch, false, globals);
         }
+        Some(AgentsSubcmd::Explain(args)) => return explain::run(args, globals),
         Some(AgentsSubcmd::Check(args)) => return run_check(args),
         Some(AgentsSubcmd::Register(args)) => return run_register(args),
         Some(AgentsSubcmd::Profiles { json, path }) => {
