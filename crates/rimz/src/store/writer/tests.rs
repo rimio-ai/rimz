@@ -495,6 +495,75 @@ fn record_room_bin_publishes_a_sweep_safe_spawn_path() {
 }
 
 #[test]
+fn room_logins_freeze_at_birth_and_survive_a_generic_rerecord() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(&project).expect("project dir");
+    let workspace = WorkspaceResolver::resolve(&project, None).expect("workspace");
+    let paths = StatePaths::under(workspace.workspace_id.clone(), dir.path()).expect("state");
+    let runtime = RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).expect("runtime");
+    let store = Store::open(paths.clone(), runtime).expect("open store");
+    let logins = crate::ids::RoomLogins::from([(
+        crate::ids::AgentKind::new_unchecked("claude"),
+        "work".parse().expect("login name"),
+    )]);
+
+    store
+        .record_room_logins(&workspace, &logins)
+        .expect("freeze accounts");
+    store
+        .record_workspace(&workspace)
+        .expect("generic rerecord preserves accounts");
+    assert_eq!(
+        record::read(&paths.workspace_record)
+            .expect("read record")
+            .logins,
+        Some(logins.clone())
+    );
+
+    store
+        .record_room_logins(&workspace, &logins)
+        .expect("the same selection is a no-op");
+    let other = crate::ids::RoomLogins::from([(
+        crate::ids::AgentKind::new_unchecked("claude"),
+        "personal".parse().expect("login name"),
+    )]);
+    assert!(matches!(
+        store.record_room_logins(&workspace, &other),
+        Err(StoreErr::RoomLoginsFrozen { .. })
+    ));
+
+    store.reset_records(false).expect("soft reset");
+    assert_eq!(
+        record::read(&paths.workspace_record)
+            .expect("read record")
+            .logins,
+        None
+    );
+    store
+        .record_room_logins(&workspace, &other)
+        .expect("reset unfreezes the selection");
+}
+
+#[test]
+fn a_corrupt_workspace_record_refuses_a_rerecord_rather_than_clearing_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(&project).expect("project dir");
+    let workspace = WorkspaceResolver::resolve(&project, None).expect("workspace");
+    let paths = StatePaths::under(workspace.workspace_id.clone(), dir.path()).expect("state");
+    let runtime = RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).expect("runtime");
+    let store = Store::open(paths.clone(), runtime).expect("open store");
+    store.record_workspace(&workspace).expect("seed record");
+    std::fs::write(&paths.workspace_record, b"{ truncated").expect("corrupt record");
+
+    assert!(matches!(
+        store.record_workspace(&workspace),
+        Err(StoreErr::WorkspaceRecord(_))
+    ));
+}
+
+#[test]
 fn record_workspace_republishes_only_when_snapshot_record_fields_change() {
     let dir = tempfile::tempdir().expect("tempdir");
     let first_project = dir.path().join("first-project");
