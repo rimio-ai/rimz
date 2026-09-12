@@ -552,7 +552,11 @@ fn compact_flipper(
                         | CompactErr::Repeated { .. },
                     ),
                 ) => None,
-                _ => Some(message_id.to_string()),
+                // Store failures can precede or follow publication; retain the attempted ID.
+                Ok(_)
+                | Err(FlipCompactErr::Compact(
+                    CompactErr::Store(_) | CompactErr::Deliver(_) | CompactErr::Settled { .. },
+                )) => Some(message_id.to_string()),
             },
             delivered: matches!(outcome, Ok(CompactOutcome::Sent)),
             error: outcome.as_ref().err().map(ToString::to_string),

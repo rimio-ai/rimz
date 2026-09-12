@@ -83,7 +83,7 @@ layout = "claude,codex"
 ## profile = "planner"
 ## # Stages assigned to this role; Done is reserved and has no owner.
 ## owns = ["Explore", "Plan", "Reflect"]
-## # Override [harness] flip-compact for this role; "off" disables flip compaction.
+## # Override [harness] flip_compact for this role; "off" disables flip compaction.
 ## flip-compact = "220k"
 ## [[agents.teams.review.roles]]
 ## role = "coder"
