@@ -991,7 +991,6 @@ fn parse_set_value(path: &[String], raw: &str) -> Value {
         || is_harness_compact_instruction_edit(path)
         || is_harness_idle_compact_edit(path)
         || is_harness_idle_compact_after_edit(path)
-        || is_harness_rtk_edit(path)
         || is_daily_budget_edit(path)
         || is_turn_budget_edit(path)
         || is_auto_redeem_min_gain_edit(path)
@@ -1060,14 +1059,6 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
             invalid_value!("harness.idle_compact_after {err}; use a duration such as 59m or 2h");
         }
     }
-    if is_harness_rtk_edit(path) {
-        let Some(mode) = value.as_str() else {
-            invalid_value!("harness.rtk must be a string");
-        };
-        if !matches!(mode, "auto" | "on" | "off") {
-            invalid_value!("harness.rtk must be one of auto, on, or off");
-        }
-    }
     if matches!(
         path,
         [root, leaf] if root == "theme" && leaf == "scheme"
@@ -1125,10 +1116,6 @@ fn is_harness_idle_compact_edit(path: &[String]) -> bool {
 
 fn is_harness_idle_compact_after_edit(path: &[String]) -> bool {
     matches!(path, [root, child] if root == "harness" && child == "idle_compact_after")
-}
-
-fn is_harness_rtk_edit(path: &[String]) -> bool {
-    matches!(path, [root, child] if root == "harness" && child == "rtk")
 }
 
 fn is_daily_budget_edit(path: &[String]) -> bool {

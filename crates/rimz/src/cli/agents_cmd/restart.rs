@@ -62,7 +62,6 @@ pub(in crate::cli) fn restart_resolved(
     // is not trusted, before the old pane is touched.
     rimz::harness::launch::preflight_agent_kind(
         &workspace.project_root,
-        machine_config.harness.rtk,
         agent.kind.as_str(),
         &cwd,
     )?;

@@ -60,10 +60,6 @@ pub const ENV_AGENT_EFFORT: &str = "RIMZ_AGENT_EFFORT";
 /// The canonical dollar cap selected by launch flags, profiles, or roles.
 /// Set by the launch wrapper and read into lifecycle observations.
 pub const ENV_AGENT_BUDGET: &str = "RIMZ_AGENT_BUDGET";
-/// The configured `[harness] rtk` mode (`auto`/`on`/`off`), exported to every
-/// agent launch so `cargo xtask` can route recognized cargo commands through
-/// `rtk`. Read by xtask, never by rimz itself.
-pub(super) const ENV_RTK: &str = "RIMZ_RTK";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProgramLookupErr {
@@ -639,13 +635,11 @@ pub fn compile_provider_argv(
 /// Compile provider argv, launch environment, and login-shell wrapper together.
 pub fn compile_agent_process(
     project_root: &Path,
-    rtk: crate::config::RtkMode,
     request: &ExecRequest,
     cwd: &Path,
 ) -> AgentProcessResult<CompiledAgentProcess> {
     compile_agent_process_with_extra_env(
         project_root,
-        rtk,
         request,
         cwd,
         &BTreeMap::new(),
@@ -655,7 +649,6 @@ pub fn compile_agent_process(
 
 fn compile_agent_process_with_extra_env(
     project_root: &Path,
-    rtk: crate::config::RtkMode,
     request: &ExecRequest,
     cwd: &Path,
     extra_env: &BTreeMap<String, String>,
@@ -687,7 +680,6 @@ fn compile_agent_process_with_extra_env(
     let env = compose_agent_env(
         trusted_agent_env(project_root, kind)?,
         adapter,
-        rtk,
         request,
         extra_env,
     )?;
@@ -757,12 +749,11 @@ fn parse_toml_string_or_raw(value: &str) -> String {
 /// Compile one process and resolve managed-account applicability from its final inputs.
 pub fn compile_managed_agent_process(
     project_root: &Path,
-    rtk: crate::config::RtkMode,
     request: &ExecRequest,
     cwd: &Path,
     requested: &crate::agents::ManagedLaunchState,
 ) -> AgentProcessResult<(CompiledAgentProcess, crate::agents::ManagedLaunchState)> {
-    let process = compile_agent_process(project_root, rtk, request, cwd)?;
+    let process = compile_agent_process(project_root, request, cwd)?;
     let state = if matches!(
         requested,
         crate::agents::ManagedLaunchState::PendingResolution
@@ -785,13 +776,8 @@ pub fn compile_managed_agent_process(
 /// Pending stages re-enter through the login shell once; finalized stages
 /// execute raw provider argv after the adapter verifies the effective binding.
 /// `reminders` controls model identity, team context, and subagent policy text.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "explicit process compilation and reentry inputs without a duplicate launch context"
-)]
 pub fn compile_agent_process_stage_with_extra_env(
     project_root: &Path,
-    rtk: crate::config::RtkMode,
     request: &ExecRequest,
     cwd: &Path,
     rimz_bin: &Path,
@@ -804,14 +790,8 @@ pub fn compile_agent_process_stage_with_extra_env(
         return Err(AgentProcessStageErr::InvalidProviderBinding);
     }
 
-    let process = compile_agent_process_with_extra_env(
-        project_root,
-        rtk,
-        request,
-        cwd,
-        extra_env,
-        reminders,
-    )?;
+    let process =
+        compile_agent_process_with_extra_env(project_root, request, cwd, extra_env, reminders)?;
     let managed_launch = if bound {
         let adapter = crate::agents::find_definition(request.kind.as_str()).ok_or_else(|| {
             AgentProcessCompileErr::UnknownAgent {
@@ -870,7 +850,6 @@ fn finalize_agent_process_stage(
 fn compose_agent_env(
     mut env: BTreeMap<String, String>,
     adapter: &crate::agents::AgentDefinition,
-    rtk: crate::config::RtkMode,
     request: &ExecRequest,
     system_prompt_env: &BTreeMap<String, String>,
 ) -> AgentProcessResult<BTreeMap<String, String>> {
@@ -879,10 +858,6 @@ fn compose_agent_env(
     }
     env.extend(system_prompt_env.clone());
     env.extend(exec_identity_env(request));
-    env.insert(
-        crate::harness::launch::ENV_RTK.to_owned(),
-        rtk.as_str().to_owned(),
-    );
     if request.subagent {
         adapter.lockdown_subagent_env(&mut env);
     }
@@ -917,23 +892,16 @@ fn trusted_agent_env(
 /// before any launch allocation or mux mutation.
 pub fn preflight_agent_process(
     project_root: &Path,
-    rtk: crate::config::RtkMode,
     request: &ExecRequest,
     cwd: &Path,
 ) -> AgentProcessResult<()> {
-    compile_agent_process(project_root, rtk, request, cwd).map(drop)
+    compile_agent_process(project_root, request, cwd).map(drop)
 }
 
 /// Preflight one fresh provider launch before detailed pane identity exists.
-pub fn preflight_agent_kind(
-    project_root: &Path,
-    rtk: crate::config::RtkMode,
-    kind: &str,
-    cwd: &Path,
-) -> AgentProcessResult<()> {
+pub fn preflight_agent_kind(project_root: &Path, kind: &str, cwd: &Path) -> AgentProcessResult<()> {
     preflight_agent_process(
         project_root,
-        rtk,
         &ExecRequest::bare_launch(AgentKind::new_unchecked(kind), Vec::new()),
         cwd,
     )
@@ -1039,7 +1007,7 @@ fn validate_exec_request(request: &ExecRequest) -> Result<(), ExecWireErr> {
 }
 
 /// The RIMZ_* identity env for one invocation (kind, run id, identity fields).
-/// Callers merge trust env, adapter launch env, and rtk around it.
+/// Callers merge trust env and adapter launch env around it.
 pub fn exec_identity_env(request: &ExecRequest) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
     env.insert(

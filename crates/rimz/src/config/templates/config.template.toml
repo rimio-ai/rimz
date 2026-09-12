@@ -152,4 +152,3 @@ aggressive_resize = true
 ## compact_instruction = ""       # text for compact commands that accept it; unset = RimZ's summary brief, "" = bare command
 ## idle_compact = "auto"           # compact idle agents before the provider cache expires; auto = while another same-channel agent is running
 ## idle_compact_after = "59m"      # idle span before compaction
-# rtk = "auto"                    # wrap agent cargo runs (build/check/test/nextest/clippy) through `rtk`; auto = when rtk is on PATH, on = force, off = never

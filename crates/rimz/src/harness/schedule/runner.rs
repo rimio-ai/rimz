@@ -215,7 +215,7 @@ impl FireScope {
 }
 
 impl FireContext {
-    fn resolve(entry: &TaskEntry, action: TaskAction, config: &MachineConfig) -> Result<Self> {
+    fn resolve(entry: &TaskEntry, action: TaskAction) -> Result<Self> {
         let root = entry.resolved_root();
         if action.is_check_only() {
             return Ok(Self {
@@ -229,8 +229,7 @@ impl FireContext {
                 let workspace = WorkspaceResolver::resolve(&root, None)?;
                 let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
                 let resolved = crate::harness::plan::resolve_single_agent_launch(spec, &workspace)?;
-                let managed_launch =
-                    resolve_managed_spawn_state(entry, &workspace, &resolved, config)?;
+                let managed_launch = resolve_managed_spawn_state(entry, &workspace, &resolved)?;
                 let mut scope = FireScope::new(
                     crate::ids::AgentKind::new_unchecked(resolved.kind.clone()),
                     runtime,
@@ -382,7 +381,7 @@ impl<'a> TaskFire<'a> {
             .action
             .take()
             .context("loop task action already prepared")?;
-        let context = FireContext::resolve(&self.entry, action, &self.config)?;
+        let context = FireContext::resolve(&self.entry, action)?;
         if let Some(scope) = &context.scope
             && let Some(reason) = crate::harness::budget::scope_gate(
                 &scope.scope_runtime,
@@ -1100,7 +1099,6 @@ fn resolve_managed_spawn_state(
     entry: &TaskEntry,
     workspace: &crate::workspace::ResolvedWorkspace,
     resolved: &ResolvedSingleAgentLaunch,
-    config: &MachineConfig,
 ) -> Result<ManagedLaunchState> {
     let adapter = find_definition(&resolved.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", resolved.kind))?;
@@ -1130,7 +1128,6 @@ fn resolve_managed_spawn_state(
     invocation.identity.params = launch;
     let (_, managed_launch) = crate::harness::launch::compile_managed_agent_process(
         &workspace.project_root,
-        config.harness.rtk,
         &invocation,
         &workspace.worktree_root,
         &ManagedLaunchState::PendingResolution,

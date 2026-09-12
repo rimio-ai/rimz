@@ -107,7 +107,6 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     };
     let stage = rimz::harness::launch::compile_agent_process_stage_with_extra_env(
         &workspace.project_root,
-        machine_config.harness.rtk,
         &request,
         &provider_cwd,
         &rimz::proc::rimz_exe(),
@@ -1872,7 +1871,6 @@ mod tests {
         );
         let stage = rimz::harness::launch::compile_agent_process_stage_with_extra_env(
             project.path(),
-            rimz::config::RtkMode::Off,
             &request,
             project.path(),
             Path::new("/bin/rimz"),

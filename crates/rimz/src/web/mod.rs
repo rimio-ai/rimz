@@ -670,7 +670,6 @@ mod tests {
             "RIMZ_TTYD_BIN",
             "RIMZ_ZELLIJ_BIN",
             "RIMZ_WEB_FONTS_OFFLINE",
-            "RIMZ_RTK",
             "RUST_LOG",
         ] {
             assert!(!spec.env_remove.contains(key), "{key} should be inherited");
