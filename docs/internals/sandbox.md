@@ -16,7 +16,7 @@ Bubblewrap forks instead of becoming the provider. The wrapper always passes `--
 
 The command starts with `bwrap --bind / / --dev-bind /dev /dev --die-with-parent`, then applies these mounts in order before `--chdir <cwd> -- <provider wrapper>`:
 
-1. Bind the adapter-declared provider config home explicitly, source and target identical today. Built-ins resolve it from the effective launch environment; plugins need not declare one.
+1. Bind the adapter-declared provider config home explicitly, source and target identical today. Built-ins resolve it from the effective launch environment, which for a room's named account carries that account's home override (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`), so the bind follows the room's account; plugins need not declare one.
 2. Bind `StatePaths.tmp_dir` at `/tmp`.
 3. Rebind required host paths beneath `/tmp/` at their original absolute paths, so replacing host `/tmp` does not hide the room or its sockets.
 4. Overlay the provider skill root when its view differs from the host directory, using a tmpfs directory, reproducing host entry symlinks with their literal targets, and binding other entries read-only. Shadow rewritten skills reached through those symlinks read-only at their canonical locations, including locations outside the declared skill root.
@@ -27,7 +27,7 @@ Host-reach candidates include `HOME`, the five XDG roots, RimZ runtime, project 
 
 The tmux endpoint is the inherited `$TMUX` server, or the managed RimZ server when `$TMUX` is absent. An unrelated ambient server under `/tmp/tmux-<uid>` is not separately rebound; commands targeting that default socket directory see room tmp rather than the host directory.
 
-The plan pins its environment inputs across shell startup: existing root and provider-override values are reapplied, while consulted keys that were absent are removed with `env -u`. Adapters declare their native override keys beside their home resolver. This prevents shell startup files from moving provider discovery away from the mounted view. Export root overrides before launching RimZ, or put them in trusted launch environment config; changing them only inside the pane's startup files does not change its planned mounts. `TMPDIR` is always pinned to `/tmp`. Finalized provider-account launches retain their raw argv and apply the same environment policy without another shell.
+The plan pins its environment inputs across shell startup: existing root and provider-override values are reapplied (a named room account's home key among them), while consulted keys that were absent are removed with `env -u`. Adapters declare their native override keys beside their home resolver. This prevents shell startup files from moving provider discovery away from the mounted view. Export root overrides before launching RimZ, or put them in trusted launch environment config; changing them only inside the pane's startup files does not change its planned mounts. `TMPDIR` is always pinned to `/tmp`. Finalized provider-account launches retain their raw argv and apply the same environment policy without another shell.
 
 ## Room tmp
 
