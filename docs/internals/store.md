@@ -43,7 +43,7 @@ Freshness is an extent, not a timestamp. A derived rollup records the `LogExtent
 | [`sidecar.rs`](../../crates/rimz/src/store/sidecar.rs) | The shared latest-wins enrichment sidecar store behind `agent_context/` and `subagent_context/`. |
 | [`active_time.rs`](../../crates/rimz/src/store/active_time.rs) | The per-session estimated active-time accumulator, serialized by per-record flocks. |
 | [`gc.rs`](../../crates/rimz/src/store/gc.rs) | Global maintenance: stale runtime hints, recursive orphan-write-temp collection, and dead workspaces. |
-| [`disk/single_flight.rs`](../../crates/rimz/src/disk/single_flight.rs) | Cross-process producer election, imported by the sidebar and so free of every writer module. |
+| [`disk/single_flight.rs`](../../crates/rimz/src/disk/single_flight.rs) | Crate-internal cross-process producer election, imported by the sidebar and so free of every writer module. Callers own freshness and publication; election distinguishes shared reuse, exclusive production and local-only fallback. |
 
 Start at `writer.rs` for how a fact gets in, at `snapshot/fold.rs` for how it comes back out, and at `disk/atomic.rs` for what durability actually costs.
 
