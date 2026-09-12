@@ -13,6 +13,8 @@ scratch-files = ["/blackboard.md", "/*-notes.md"]
 # Tune the planner's model, effort, or tools here.
 [[agents.teams.forge.roles]]
 role = "planner"
+owns = ["Explore", "Plan", "Reflect"]
+compact-on-handoff = true
 profile = "claude"
 mode = "auto"
 model = "fable"
@@ -24,6 +26,7 @@ system-prompt-file = "planner.md"
 # Tune the coder's model, effort, or Codex feature flags here.
 [[agents.teams.forge.roles]]
 role = "coder"
+owns = ["Implement"]
 profile = "codex"
 signals = [
   { signal = "ci.failed" },
@@ -37,6 +40,7 @@ system-prompt-file = "coder.md"
 # Tune the reviewer's model, effort, or tools here.
 [[agents.teams.forge.roles]]
 role = "reviewer"
+owns = ["Review", "Submit"]
 profile = "claude"
 mode = "auto"
 model = "opus"

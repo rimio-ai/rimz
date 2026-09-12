@@ -90,6 +90,7 @@ So during the untrusted window you see the project task and keep running the mac
 | --- | --- | --- |
 | `Schedule` | `at`, `every`, or `cron` | the elder tick or the external timer, when `due` says so |
 | `Signal` | `signal = "<selector>"`, optional `match = { k = "v" }` | the process that emits a signal in the selector's family |
+| `Team` | `rimz teams flip` and the current stage owner's registration re-wake | `team.stage` |
 | `Watch` | `watch = "<shell>"` | the detached `rimz wake watch` process that ran the command, or the elder's watch-lost rule |
 
 A `SignalSelector` is `Exact(SignalName)` or `Family(String)`, parsed from `a.b` or `a.*` and serialized back to the same string; `*`, `a.b.*`, and `a*` are rejected, and emission still refuses wildcards outright.
@@ -184,9 +185,13 @@ A signal is a name, a JSON object payload, a source, and, for watched commands, 
 
 The payload carries `team`, `instance` (`team#channel`), `member` (the qualified handle that tripped it), and `members` with each handle and status. Membership is whatever `team_cohorts` counts as live for that `team#channel`, and a provider-native subagent's transition derives nothing. **The gap to know**: a member the reaper stops (a pane closed with no lifecycle hook, [`store/writer/reap.rs`](../../../crates/rimz/src/store/writer/reap.rs)) passes through no hook, so it derives neither `agent.ended` nor `team.ended`.
 
-Two facts about durability are easy to get backwards. `rimz events emit`, the wake watcher, and the hook's team derivation append a `signal.emit` event through the ordinary store commit ([store.md](../store.md#what-is-in-it)), so `rimz events follow` replays them; `agent.*` signals append nothing extra, because the `agent.lifecycle` record they were derived from is already the durable trace. And the durable record is the `SignalEventPayload`, which keeps only name, payload, and source: a watched command's exit status travels in the fire's argv, not in the log.
+`team.stage` is produced by `harness::team_stage`, not the cohort-edge derivation. Its string payload carries `team`, `instance` (`team#channel`), `from` when present, `to`, `owner` except for `Done`, `by` (role name, `user`, or `rimz`), optional `note`, `board` (absolute path), and `at` (RFC 3339). A flip writes the board and ledger before appending the signal with `SignalSource::Team` (serialized as `team`). Root-member registration re-wakes the current owner with `from == to` and `by = "rimz"`, covering resume, restart, single-member restart, and rebirth without editing the board or compacting. Neither producer is available through `rimz events emit`.
 
-`fire_signal` is the whole delivery mechanism, and it runs in the emitting process:
+Stage-open delivery goes directly through message dispatch as `Type: SIGNAL` / `From: @rimz`, at the done boundary unless the flip requests steer; no implicit subscription is armed for the owner. Explicit `team.stage` subscribers still fire independently, including on re-wakes. `Done` and a self-owned flip send no direct message; an owner who is not live is woken on registration.
+
+Two facts about durability are easy to get backwards. `rimz events emit`, the wake watcher, stage openings, and the hook's team derivation append a `signal.emit` event through the ordinary store commit ([store.md](../store.md#what-is-in-it)), so `rimz events follow` replays them; `agent.*` signals append nothing extra, because the `agent.lifecycle` record they were derived from is already the durable trace. And the durable record is the `SignalEventPayload`, which keeps only name, payload, and source: a watched command's exit status travels in the fire's argv, not in the log.
+
+`fire_signal` is the subscription delivery mechanism, and it runs in the emitting process:
 
 1. Load the runnable catalog for the project root, dropping untrusted project rows, and keep only tasks whose resolved root maps to this workspace.
 2. `resolve` each task's trigger against the signal, dropping `Ignore` and `Schedule` rows outright.
@@ -376,7 +381,7 @@ Both modules sit in the sidebar's read-only import graph, so they stay free of s
 
 That invariant is the assist log: `$XDG_STATE_HOME/rimz/assists.log.jsonl`, account-global, best-effort append, rotating at 4 MiB to one `assists.log.1.jsonl` predecessor. Readers fold both generations by timestamp. The intervention itself remains the operational truth when an append fails.
 
-Five `Assist` variants live in the log today:
+Six `Assist` variants live in the log today:
 
 | Variant | Writer | Records |
 | --- | --- | --- |
@@ -384,9 +389,12 @@ Five `Assist` variants live in the log today:
 | `auto_continue` | the detached continue helper | typed provider and session ids, display handle, park class, original park timestamp, delivery verdict, and the durable message id |
 | `auto_compact` | the message delivery path after a compact command lands | target session, display handle, threshold, occupied context when known, and the durable compact-command message id |
 | `idle_compact` | the detached idle-compaction helper | target provider and session, display handle, idle duration, occupied context, durable compact-command message id, delivery verdict, and error when present |
+| `handoff_compact` | `rimz teams flip` | flipper provider and session, display handle, previous and target stages, occupied context when known, durable compact-command message id, delivery verdict, and error when present |
 | `auto_resume` | rebirth recovery after materialization restores at least one pane | workspace, session, death cause, recovered pane count, and planned tab labels |
 
 `rimz stats` folds both assist-log generations together, scoped to the active dashboard window, and publishes one rollup: delivered continues and their summed `recorded_at - parked_since` recovered time; compact commands sent; redeem attempts and `reset` outcomes; and rebirths plus restored panes. The dashboard shows those four non-zero categories, `rimz stats --assists` renders the merged newest-first event stream, and `rimz stats --json` publishes both.
+
+Hand-off compaction is labelled `hand-off compaction` in the assist event stream and contributes sent commands to the compact rollup. A queued command is not counted as sent merely because the hand-off completed.
 
 **Shipping a new smart strategy is one accountable slice**: define its typed trigger, evidence, and outcome record; append it from a writer outside the sidebar import graph; fold it into the Assists stats surface; and add its variant and writer to the table above.
 
