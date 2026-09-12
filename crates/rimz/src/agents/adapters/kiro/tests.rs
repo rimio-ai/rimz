@@ -184,6 +184,7 @@ fn local_context_refresh_gates_an_unchanged_transcript_stat() {
         .local_context_refresh(
             RefreshTrigger::Tick,
             &crate::agents::LocalContextRefreshCtx {
+                login_env: &std::collections::BTreeMap::new(),
                 agent_id: session_id,
                 model_hint: None,
                 prior_session_name: None,
@@ -206,6 +207,7 @@ fn local_context_refresh_gates_an_unchanged_transcript_stat() {
             .local_context_refresh(
                 RefreshTrigger::Tick,
                 &crate::agents::LocalContextRefreshCtx {
+                    login_env: &std::collections::BTreeMap::new(),
                     agent_id: session_id,
                     model_hint: None,
                     prior_session_name: None,

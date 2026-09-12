@@ -29,7 +29,9 @@ pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
     let kind = request.kind.as_str();
     let session_id = request.session_id.as_str();
     let prior = rimz::store::agent_context::read_one(&runtime, kind, session_id);
+    let login_env = agents::ambient_env();
     let Some(refresh) = definition.refresh_session_context(&agents::SessionContextInput {
+        login_env: &login_env,
         session_id,
         model: request.model.as_deref(),
         server_url: request.server_url.as_deref(),

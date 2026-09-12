@@ -275,6 +275,7 @@ fn local_context_refresh_tracks_events_only_permission_changes() {
     std::fs::write(&updates, "{}\n").unwrap();
     std::fs::write(&events, "").unwrap();
     let ctx = LocalContextRefreshCtx {
+        login_env: &std::collections::BTreeMap::new(),
         agent_id: "session-1",
         model_hint: None,
         prior_session_name: None,
@@ -299,6 +300,7 @@ fn local_context_refresh_tracks_events_only_permission_changes() {
     )
     .unwrap();
     let requested_ctx = LocalContextRefreshCtx {
+        login_env: &std::collections::BTreeMap::new(),
         prior_transcript_stat: initial.transcript_stat.as_ref(),
         prior_spend_fold: None,
         ..ctx
@@ -317,6 +319,7 @@ fn local_context_refresh_tracks_events_only_permission_changes() {
     );
 
     let unchanged_ctx = LocalContextRefreshCtx {
+        login_env: &std::collections::BTreeMap::new(),
         prior_transcript_stat: requested.transcript_stat.as_ref(),
         prior_spend_fold: None,
         ..ctx
@@ -417,6 +420,7 @@ fn completed_usage_replaces_mid_turn_scalar_and_estimates_missing_cost() {
     std::fs::write(&updates, format!("{lines}\n")).unwrap();
     crate::agents::PriceBook::write_fixture_cache(&pricing);
     let ctx = LocalContextRefreshCtx {
+        login_env: &std::collections::BTreeMap::new(),
         agent_id: "session-1",
         model_hint: Some("grok-4.5"),
         prior_session_name: None,

@@ -75,7 +75,9 @@ pub struct ChangedSessionRefreshFixture {
 impl ChangedSessionRefreshFixture {
     pub fn refresh(&self) -> Option<crate::agents::LocalContextRefresh> {
         let transcript = self.transcript.to_str()?;
+        let login_env = crate::agents::ambient_env();
         let ctx = crate::agents::LocalContextRefreshCtx {
+            login_env: &login_env,
             agent_id: &self.session_id,
             model_hint: None,
             prior_session_name: None,

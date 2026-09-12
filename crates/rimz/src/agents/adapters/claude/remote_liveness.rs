@@ -13,7 +13,7 @@ use serde::Deserialize;
 use crate::agents::runtime_control::RuntimeControlLiveness;
 
 use super::local_sessions::project_directory_names;
-use super::spend::claude_config_dirs;
+use super::spend::claude_config_dirs_from;
 
 const POINTER_FILE: &str = "bridge-pointer.json";
 
@@ -25,8 +25,15 @@ struct BridgePointer {
 }
 
 /// Every config root's pointer for `project_root`, in discovery order.
-fn pointer_paths(project_root: &Path) -> Vec<PathBuf> {
-    pointer_paths_under(&claude_config_dirs(), project_root, project_directory_names)
+fn pointer_paths(
+    project_root: &Path,
+    login_env: &std::collections::BTreeMap<String, String>,
+) -> Vec<PathBuf> {
+    pointer_paths_under(
+        &claude_config_dirs_from(login_env),
+        project_root,
+        project_directory_names,
+    )
 }
 
 fn pointer_paths_under(
@@ -48,15 +55,19 @@ fn pointer_paths_under(
 /// Probe the host serving `project_root`. The first readable pointer decides;
 /// a pointer that names a dead process reports `Down` rather than falling
 /// through to another config root, because that pointer is the live answer.
-pub fn probe(project_root: &Path) -> RuntimeControlLiveness {
-    probe_with(project_root, crate::proc::process_is_live)
+pub fn probe(
+    project_root: &Path,
+    login_env: &std::collections::BTreeMap<String, String>,
+) -> RuntimeControlLiveness {
+    probe_with(project_root, login_env, crate::proc::process_is_live)
 }
 
 fn probe_with(
     project_root: &Path,
+    login_env: &std::collections::BTreeMap<String, String>,
     mut is_live: impl FnMut(u32, Option<&str>) -> bool,
 ) -> RuntimeControlLiveness {
-    for path in pointer_paths(project_root) {
+    for path in pointer_paths(project_root, login_env) {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -157,7 +168,11 @@ mod tests {
     fn a_project_root_with_no_pointer_is_unknown() {
         let dir = tempfile::tempdir().expect("tempdir");
         assert_eq!(
-            probe_with(dir.path(), |_: u32, _: Option<&str>| true),
+            probe_with(
+                dir.path(),
+                &std::collections::BTreeMap::new(),
+                |_: u32, _: Option<&str>| true
+            ),
             RuntimeControlLiveness::Unknown,
             "an unseen project root has no pointer to read",
         );

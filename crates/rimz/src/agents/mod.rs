@@ -854,6 +854,8 @@ fn is_false(value: &bool) -> bool {
 /// its current model hint, and the local-source gate state from the latest
 /// sidecar.
 pub struct LocalContextRefreshCtx<'a> {
+    /// The env the provider home resolves from; the ambient env for the default account.
+    pub login_env: &'a BTreeMap<String, String>,
     pub agent_id: &'a str,
     pub model_hint: Option<&'a str>,
     /// Stored name used to suppress unchanged local title writes.
@@ -1084,7 +1086,9 @@ mod tests {
     fn local_context_refresh_ctx(
         prior_transcript_stat: Option<&TranscriptStat>,
     ) -> LocalContextRefreshCtx<'_> {
+        static LOGIN_ENV: BTreeMap<String, String> = BTreeMap::new();
         LocalContextRefreshCtx {
+            login_env: &LOGIN_ENV,
             agent_id: "session",
             model_hint: None,
             prior_session_name: None,

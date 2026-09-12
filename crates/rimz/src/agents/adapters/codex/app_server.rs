@@ -247,8 +247,7 @@ impl CodexAppServer<WsTransport> {
     /// or it does not speak the current WebSocket control protocol — the liveness
     /// caller reads that as "unknown, keep all", never as "zero loaded". Used
     /// only by the sidebar cache refresher's TTL-gated ghost reap.
-    pub(crate) fn connect_daemon() -> Option<Self> {
-        let login_env = &crate::agents::ambient_env();
+    pub(crate) fn connect_daemon(login_env: &BTreeMap<String, String>) -> Option<Self> {
         let socket = daemon_socket(login_env).filter(|path| path.exists())?;
         let transport = WsTransport::connect(&socket, DAEMON_PROBE_DEADLINE).ok()?;
         let mut client = Self::new(transport);

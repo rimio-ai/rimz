@@ -2183,10 +2183,12 @@ pub fn resume_session_present(agent: &AgentState) -> bool {
     {
         return std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 0);
     }
+    let login_env = crate::agents::ambient_env();
     agent_worktree(agent)
         .and_then(|cwd| {
-            find_definition(&agent.kind)
-                .and_then(|adapter| adapter.local_conversation_present(&agent.agent_id, &cwd))
+            find_definition(&agent.kind).and_then(|adapter| {
+                adapter.local_conversation_present(&agent.agent_id, &cwd, &login_env)
+            })
         })
         .unwrap_or(true)
 }

@@ -280,7 +280,11 @@ impl crate::agents::capabilities::SessionCapability for KiroAdapter {
         session::resumed_session_id(cmdline)
     }
 
-    fn discover_local_sessions(&self, workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
+    fn discover_local_sessions(
+        &self,
+        workspaces: &[&Path],
+        _login_env: &BTreeMap<String, String>,
+    ) -> Vec<LocalSessionObservation> {
         session::discover(workspaces)
     }
 }

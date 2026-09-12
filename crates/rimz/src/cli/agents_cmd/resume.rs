@@ -194,9 +194,10 @@ fn local_worktrees(workspace: &rimz::ResolvedWorkspace) -> Result<Vec<LaneWorktr
 }
 
 fn discover_lane_sessions(path: &Path) -> Vec<LocalSessionObservation> {
+    let login_env = rimz::agents::ambient_env();
     rimz::agents::all_definitions()
         .filter(|adapter| adapter.spec().capabilities.local_session_discovery)
-        .flat_map(|adapter| adapter.discover_local_sessions(&[path]))
+        .flat_map(|adapter| adapter.discover_local_sessions(&[path], &login_env))
         .filter(|observation| {
             std::fs::metadata(&observation.transcript_path)
                 .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)

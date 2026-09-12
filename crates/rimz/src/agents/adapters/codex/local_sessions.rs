@@ -54,8 +54,14 @@ thread_local! {
     static DISCOVERY: RefCell<CodexDiscoverySnapshot> = RefCell::new(CodexDiscoverySnapshot::default());
 }
 
-pub(super) fn discover(workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
-    let Some(home) = super::codex_home() else {
+pub(super) fn discover(
+    workspaces: &[&Path],
+    login_env: &std::collections::BTreeMap<String, String>,
+) -> Vec<LocalSessionObservation> {
+    let Some(home) = super::codex_home_from(
+        login_env.get("CODEX_HOME").map(AsRef::as_ref),
+        login_env.get("HOME").map(AsRef::as_ref),
+    ) else {
         return Vec::new();
     };
     let today = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date();
@@ -431,6 +437,48 @@ mod tests {
             )
             .unwrap();
         path
+    }
+
+    #[test]
+    fn named_login_discovers_only_its_own_sessions() {
+        use crate::agents::capabilities::SessionCapability as _;
+
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = fixture_observation();
+        let named_home = temp.path().join("named");
+        let home_env = std::collections::BTreeMap::from([(
+            "HOME".to_owned(),
+            temp.path().to_string_lossy().into_owned(),
+        )]);
+        let named_env = crate::agents::ProviderLogin::named(
+            fixture.kind.clone(),
+            "work".parse().unwrap(),
+            named_home.clone(),
+        )
+        .unwrap()
+        .env(&home_env);
+        for (home, id) in [
+            (
+                temp.path().join(".codex"),
+                "22222222-2222-4222-8222-222222222222",
+            ),
+            (named_home, fixture.session_id.as_str()),
+        ] {
+            write_rollout(
+                &date_path(&home, false, 0),
+                id,
+                fixture.workspace.to_str().unwrap(),
+                &fixture.created_at.to_string(),
+                1_735_689_600,
+            );
+        }
+        let adapter = super::super::CodexAdapter;
+        let default = adapter.discover_local_sessions(&[&fixture.workspace], &home_env);
+        assert_eq!(default.len(), 1);
+        assert_ne!(default[0].session_id, fixture.session_id);
+        let named = adapter.discover_local_sessions(&[&fixture.workspace], &named_env);
+        assert_eq!(named.len(), 1);
+        assert_eq!(named[0].session_id, fixture.session_id);
     }
 
     #[test]

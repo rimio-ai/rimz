@@ -235,6 +235,8 @@ impl AgentContext {
 /// already resolved the runtime and read the prior sidecar, so the adapter only
 /// reads its own provider source.
 pub struct SessionContextInput<'a> {
+    /// The env the provider home resolves from; the ambient env for the default account.
+    pub login_env: &'a std::collections::BTreeMap<String, String>,
     /// The provider's own session id, the key the sidecar is filed under.
     pub session_id: &'a str,
     /// The session's current model id, when the launcher knows one.

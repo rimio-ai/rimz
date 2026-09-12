@@ -698,6 +698,7 @@ fn codex_context_refreshes_are_bounded_to_turn_and_progress_events() {
     let path = path.to_string_lossy().into_owned();
     let pricing_cache_path = dir.path().join("pricing-cache.json");
     let ctx = crate::agents::LocalContextRefreshCtx {
+        login_env: &std::collections::BTreeMap::new(),
         agent_id: "sess-1",
         model_hint: Some("gpt-5"),
         prior_session_name: None,
@@ -758,6 +759,7 @@ fn generated_session_title_reaches_activity_description_on_post_tool_refresh() {
         crate::agents::TranscriptStat::from_path(std::path::Path::new(&transcript_path)).unwrap();
     let pricing_cache_path = dir.path().join("pricing-cache.json");
     let ctx = crate::agents::LocalContextRefreshCtx {
+        login_env: &std::collections::BTreeMap::new(),
         agent_id: "sess-1",
         model_hint: Some("gpt-5"),
         prior_session_name: None,
@@ -791,6 +793,7 @@ fn generated_session_title_reaches_activity_description_on_post_tool_refresh() {
     );
 
     let unchanged_ctx = crate::agents::LocalContextRefreshCtx {
+        login_env: &std::collections::BTreeMap::new(),
         prior_session_name: Some("Plan database migration"),
         ..ctx
     };

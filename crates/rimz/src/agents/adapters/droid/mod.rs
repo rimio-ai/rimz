@@ -423,7 +423,7 @@ impl crate::agents::capabilities::ContextCapability for DroidAdapter {
         let resolved = raw_model
             .filter(|model| model.starts_with("custom:"))
             .and_then(|model| {
-                let user_settings = droid_settings_path(&crate::agents::ambient_env()).ok()?;
+                let user_settings = droid_settings_path(ctx.login_env).ok()?;
                 config::resolve_custom_model_from_cwd(
                     model,
                     refresh.session_cwd.as_deref()?,
