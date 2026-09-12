@@ -332,6 +332,41 @@ fn resume_tab_labels_and_replayed_channel() {
 }
 
 #[test]
+fn flat_resume_replays_every_durable_identity_field() {
+    let agent = AgentState {
+        name: Some("swift-otter".to_owned()),
+        name_explicit: true,
+        launch_id: Some("launch_a1".into()),
+        profile: Some("claude-planner".to_owned()),
+        role: Some("planner".to_owned()),
+        team: Some("forge".to_owned()),
+        launch_group: Some("launch_group_1".to_owned()),
+        launch_ordinal: Some(2),
+        channel: Some("design".to_owned()),
+        parent_agent_id: Some("parent".into()),
+        parent_agent_kind: Some(AgentKind::new_unchecked("codex")),
+        launch_depth: Some(1),
+        ..agent("claude", "a1", "/code/qe", 1)
+    };
+
+    let plan = plan(&[agent]);
+    let request = decode_exec_request(&first_argv(&plan.tabs[0]));
+    assert_eq!(request.identity.name.as_deref(), Some("swift-otter"));
+    assert!(request.identity.name_explicit);
+    assert_eq!(request.identity.launch_id.as_deref(), Some("launch_a1"));
+    let params = request.identity.params;
+    assert_eq!(params.profile.as_deref(), Some("claude-planner"));
+    assert_eq!(params.role.as_deref(), Some("planner"));
+    assert_eq!(params.team.as_deref(), Some("forge"));
+    assert_eq!(params.launch_group.as_deref(), Some("launch_group_1"));
+    assert_eq!(params.launch_ordinal, Some(2));
+    assert_eq!(params.channel.as_deref(), Some("design"));
+    assert_eq!(params.parent_agent_id.as_deref(), Some("parent"));
+    assert_eq!(params.parent_agent_kind.as_deref(), Some("codex"));
+    assert_eq!(params.launch_depth, Some(1));
+}
+
+#[test]
 fn resume_command_replays_launch_identity() {
     // A reborn agent re-stamps its durable launch identity, so it answers
     // to `@<profile>` and `@<role>` again after a mux rebirth.
