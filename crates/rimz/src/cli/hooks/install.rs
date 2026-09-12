@@ -5,7 +5,7 @@ use super::hook_install::{
     write_uninstall_result,
 };
 use super::*;
-use rimz::agents::HookUninstallReport;
+use rimz::agents::{HookUninstallReport, LoginConfigErr};
 
 pub(super) fn run_install(agent: Option<String>, dry_run: bool) -> Result<()> {
     let login_env = rimz::agents::ambient_env();
@@ -33,24 +33,35 @@ fn run_install_dry_run(agent: Option<String>) -> Result<()> {
 
 pub(super) fn run_uninstall(agent: Option<String>) -> Result<()> {
     let login_env = rimz::agents::ambient_env();
-    let reports = match agent {
-        Some(agent) => vec![definition_by_kind(&agent)?.uninstall_hooks(&login_env)?],
-        None => uninstall_managed_hooks()?
-            .into_iter()
-            .map(|(_, report)| report)
-            .collect(),
+    let (reports, config_err) = match agent {
+        Some(agent) => (
+            vec![definition_by_kind(&agent)?.uninstall_hooks(&login_env)?],
+            None,
+        ),
+        None => {
+            let (reports, config_err) = uninstall_managed_hooks()?;
+            (
+                reports.into_iter().map(|(_, report)| report).collect(),
+                config_err,
+            )
+        }
     };
     let mut out = crate::cli::render::out();
     if reports.is_empty() {
-        return crate::cli::render::finish(writeln!(
+        crate::cli::render::finish(writeln!(
             out,
             "No RimZ-managed hooks are installed; nothing to uninstall."
-        ));
+        ))?;
     }
     for report in &reports {
         crate::cli::render::finish(write_uninstall_result(&mut out, report))?;
     }
-    Ok(())
+    match config_err {
+        Some(err) => Err(anyhow::Error::new(err).context(
+            "only the providers' own homes were unhooked; fix the accounts config and rerun",
+        )),
+        None => Ok(()),
+    }
 }
 
 fn install_definitions(
@@ -78,12 +89,27 @@ type ManagedHookLogin = (
 );
 
 /// Every provider home that carries RimZ-managed hooks: each kind's own home
-/// and every declared account's, labelled by account.
-pub(crate) fn managed_hook_logins() -> Result<Vec<ManagedHookLogin>> {
+/// and every declared account's, labelled by account. An accounts config the
+/// catalog refuses still yields the providers' own homes, alongside its error.
+pub(crate) fn managed_hook_logins() -> (Vec<ManagedHookLogin>, Option<rimz::agents::LoginConfigErr>)
+{
     let ambient = rimz::agents::ambient_env();
-    let catalog = rimz::agents::LoginCatalog::from_config(&crate::cli::machine_config().accounts)?;
-    Ok(catalog
-        .all()
+    let (logins, config_err) =
+        match rimz::agents::LoginCatalog::from_config(&crate::cli::machine_config().accounts) {
+            Ok(catalog) => (catalog.all().cloned().collect::<Vec<_>>(), None),
+            Err(err) => (
+                rimz::agents::known_kinds()
+                    .map(|kind| {
+                        rimz::agents::ProviderLogin::default_for(
+                            rimz::ids::AgentKind::new_unchecked(kind),
+                        )
+                    })
+                    .collect(),
+                Some(err),
+            ),
+        };
+    let logins = logins
+        .into_iter()
         .filter_map(|login| {
             let adapter = rimz::agents::find_definition(login.kind().as_str())?;
             let login_env = login.env(&ambient);
@@ -91,13 +117,20 @@ pub(crate) fn managed_hook_logins() -> Result<Vec<ManagedHookLogin>> {
                 .managed_hook_artifacts_present(&login_env)
                 .then(|| (login.key(), adapter, login_env))
         })
-        .collect())
+        .collect();
+    (logins, config_err)
 }
 
-pub(crate) fn uninstall_managed_hooks() -> Result<Vec<(rimz::ids::LoginKey, HookUninstallReport)>> {
+/// Each unhooked home's account and what its uninstall changed.
+type LoginHookReports = Vec<(rimz::ids::LoginKey, HookUninstallReport)>;
+
+/// Unhook every managed home [`managed_hook_logins`] finds, passing its
+/// accounts config error through.
+pub(crate) fn uninstall_managed_hooks() -> Result<(LoginHookReports, Option<LoginConfigErr>)> {
+    let (logins, config_err) = managed_hook_logins();
     let mut reports = Vec::new();
-    for (key, integration, login_env) in managed_hook_logins()? {
+    for (key, integration, login_env) in logins {
         reports.push((key, integration.uninstall_hooks(&login_env)?));
     }
-    Ok(reports)
+    Ok((reports, config_err))
 }

@@ -256,6 +256,34 @@ fn uninstall_removes_managed_hooks() {
     assert!(!unhooked.contains("rimz"), "{unhooked}");
 }
 
+#[test]
+fn uninstall_unhooks_native_homes_when_the_accounts_config_is_refused() {
+    let fixture = UninstallFixture::new();
+    fixture.env.install_agent_hooks("claude");
+    let config = fixture.root(RootKind::Config);
+    fs::create_dir_all(&config).expect("config root");
+    fs::write(
+        config.join("config.toml"),
+        "[accounts.claude.a]\nhome = \"/srv/shared\"\n[accounts.claude.b]\nhome = \"/srv/shared\"\n",
+    )
+    .expect("seed refused accounts config");
+
+    let output = fixture
+        .rimz()
+        .args(["uninstall", "--yes", "--keep-binary"])
+        .output()
+        .expect("spawn uninstall");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "stderr:\n{stderr}");
+    assert!(!fixture.env.agent_hooks_installed("claude"), "{stderr}");
+    assert!(stderr.contains("Hooks: removed claude"), "{stderr}");
+    assert!(
+        stderr.contains("read provider accounts: `accounts.claude.b.home`"),
+        "{stderr}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn uninstall_removes_current_cargo_and_system_binaries() {
