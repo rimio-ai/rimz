@@ -217,7 +217,7 @@ fn cache_read_cold_drops_corrupt_and_unknown_versions() {
     write_cache(
         &runtime,
         &RateLimitsCache {
-            version: 3,
+            version: 4,
             entries: BTreeMap::from([("qwen".to_owned(), Default::default())]),
             ..Default::default()
         },
@@ -226,7 +226,7 @@ fn cache_read_cold_drops_corrupt_and_unknown_versions() {
         read_rate_limits_cache(&runtime.shared_rate_limits_path())
             .entries
             .is_empty(),
-        "the pre-binding v3 schema must cold-drop"
+        "v4 writers can discard model shares, so their schema must cold-drop"
     );
 }
 

@@ -207,9 +207,7 @@ fn scoped_window_identity_projection_and_wire_round_trip() {
         window.key(),
         RateLimitWindowKey::Scope("build_minutes".to_owned())
     );
-    let projected = window.clone().projected_at(now);
-    assert_eq!(projected.used_percentage, None);
-    assert_eq!(projected.resets_at, window.resets_at);
+    assert_eq!(window.clone().projected_at(now), window);
 
     let encoded = serde_json::to_value(&window).unwrap();
     assert_eq!(encoded["scope"]["id"], "build_minutes");
@@ -248,10 +246,7 @@ fn scoped_window_identity_projection_and_wire_round_trip() {
             .projected_at(now - SignedDuration::from_secs(2)),
         sub_cap
     );
-    let projected = sub_cap.clone().projected_at(now);
-    assert_eq!(projected.used_percentage, None);
-    assert_eq!(projected.resets_at, sub_cap.resets_at);
-    assert_eq!(projected.share_pct, Some(50));
+    assert_eq!(sub_cap.clone().projected_at(now), sub_cap);
     let parent = RateLimitWindow {
         scope: None,
         ..sub_cap

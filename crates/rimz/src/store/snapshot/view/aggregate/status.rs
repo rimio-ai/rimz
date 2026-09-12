@@ -187,6 +187,9 @@ fn rate_limit_window_kinds(
         let mut has_spent = false;
         let mut has_reset = false;
         for window in capacity.projected_windows(now) {
+            if window.scope.is_some() && window.duration_mins.is_some() {
+                continue;
+            }
             if !window.is_spent() {
                 continue;
             }
