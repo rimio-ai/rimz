@@ -13,7 +13,6 @@ mod gates;
 mod hooks;
 mod invariants;
 mod pricing;
-mod rtk;
 mod runner;
 mod sandbox;
 mod sccache;

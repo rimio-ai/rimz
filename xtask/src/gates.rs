@@ -13,9 +13,7 @@ use crate::atlas::conform_ratchet;
 use crate::build::{build_plugin, verify_vendored_plugin};
 use crate::docs_links::docs_links;
 use crate::invariants::invariants;
-use crate::runner::{
-    Captured, RtkPolicy, ensure_success, run, run_streamed, run_with_env_and_removed,
-};
+use crate::runner::{Captured, ensure_success, run, run_streamed, run_with_env_and_removed};
 use crate::sandbox::HostSandbox;
 use crate::spinner::Spinner;
 
@@ -377,15 +375,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
 {
-    let captured = run_streamed(
-        root,
-        "cargo",
-        args,
-        envs,
-        removed_envs,
-        RtkPolicy::Configured,
-        progress,
-    )?;
+    let captured = run_streamed(root, "cargo", args, envs, removed_envs, progress)?;
     if captured.status.success() {
         return Ok(GateResult::Pass {
             note: note.and_then(|extract| extract(&captured.output)),
@@ -402,7 +392,6 @@ fn capture_cargo_task<I, S>(
     args: I,
     envs: &[(&str, PathBuf)],
     removed_envs: &[&str],
-    rtk_policy: RtkPolicy,
 ) -> Result<Captured>
 where
     I: IntoIterator<Item = S>,
@@ -416,15 +405,7 @@ where
             spinner.set(format!("{label} — {line}"));
         }
     };
-    let captured = run_streamed(
-        root,
-        "cargo",
-        args,
-        envs,
-        removed_envs,
-        rtk_policy,
-        &mut progress,
-    );
+    let captured = run_streamed(root, "cargo", args, envs, removed_envs, &mut progress);
     drop(spinner);
     captured
 }
@@ -703,14 +684,7 @@ pub(crate) fn deps(root: &Path) -> Result<()> {
 }
 
 pub(crate) fn check(root: &Path) -> Result<()> {
-    let captured = capture_cargo_task(
-        root,
-        "check",
-        CHECK_ARGS.iter().copied(),
-        &[],
-        &[],
-        RtkPolicy::Configured,
-    )?;
+    let captured = capture_cargo_task(root, "check", CHECK_ARGS.iter().copied(), &[], &[])?;
     finish_cargo_task("check", captured, None, "cargo xtask check")
 }
 
@@ -723,14 +697,7 @@ pub(crate) fn test(root: &Path, args: &[String]) -> Result<()> {
     if command.list {
         let mut cargo_args = nextest_args("list");
         cargo_args.extend(command.forwarded);
-        let captured = capture_cargo_task(
-            root,
-            "test list",
-            cargo_args,
-            &env,
-            &["NO_COLOR"],
-            RtkPolicy::Bypass,
-        )?;
+        let captured = capture_cargo_task(root, "test list", cargo_args, &env, &["NO_COLOR"])?;
         if !captured.status.success() {
             report_task_failure("test list", &failure_detail(&captured.output), &invocation);
             bail!("test list failed");
@@ -748,14 +715,7 @@ pub(crate) fn test(root: &Path, args: &[String]) -> Result<()> {
         if streams_output {
             return run_streaming_tests(root, cargo_args, &env, &invocation, args);
         }
-        let captured = capture_cargo_task(
-            root,
-            "test",
-            cargo_args,
-            &env,
-            &["NO_COLOR"],
-            RtkPolicy::Configured,
-        )?;
+        let captured = capture_cargo_task(root, "test", cargo_args, &env, &["NO_COLOR"])?;
         if nextest_matched_no_tests(captured.status.code(), &captured.output) {
             report_zero_test_match(args);
             bail!("no tests matched");
@@ -852,14 +812,7 @@ fn run_named_tests(
         "--message-format".to_owned(),
         "json".to_owned(),
     ]);
-    let listed = capture_cargo_task(
-        root,
-        "test discovery",
-        list_args,
-        env,
-        &["NO_COLOR"],
-        RtkPolicy::Bypass,
-    )?;
+    let listed = capture_cargo_task(root, "test discovery", list_args, env, &["NO_COLOR"])?;
     if !listed.status.success() {
         report_task_failure(
             "test discovery",
@@ -888,14 +841,7 @@ fn run_named_tests(
         }
         return Ok(());
     }
-    let captured = capture_cargo_task(
-        root,
-        "test",
-        run_args,
-        env,
-        &["NO_COLOR"],
-        RtkPolicy::Configured,
-    )?;
+    let captured = capture_cargo_task(root, "test", run_args, env, &["NO_COLOR"])?;
     report_test_selection(&command.names, &matches);
     finish_cargo_task("test", captured, Some(extract_test_summary), invocation)?;
     if !matches.unmatched.is_empty() {
@@ -921,15 +867,7 @@ fn run_streaming_tests(
     invocation: &str,
     requested: &[String],
 ) -> Result<()> {
-    let status = crate::runner::run_inherited(
-        root,
-        "cargo",
-        cargo_args,
-        env,
-        &["NO_COLOR"],
-        // rtk would compress the very stream `--no-capture` exists to show; the listing and discovery runs bypass it for the same reason.
-        RtkPolicy::Bypass,
-    )?;
+    let status = crate::runner::run_inherited(root, "cargo", cargo_args, env, &["NO_COLOR"])?;
     if nextest_matched_no_tests(status.code(), "") {
         report_zero_test_match(requested);
         bail!("no tests matched");

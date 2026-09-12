@@ -32,13 +32,8 @@ pub(crate) struct HostSandbox {
 
 impl HostSandbox {
     pub(crate) fn for_tests(workspace_root: &Path) -> Result<Self> {
-        let mut sandbox = Self::new()?;
+        let sandbox = Self::new()?;
         sandbox.trust_workspace_for_git(workspace_root)?;
-        let tee_dir = workspace_root.join("target").join("xtask").join("rtk");
-        std::fs::create_dir_all(&tee_dir).with_context(|| {
-            format!("creating retained rtk log directory {}", tee_dir.display())
-        })?;
-        sandbox.env.insert("RTK_TEE_DIR", tee_dir);
         Ok(sandbox)
     }
 
@@ -413,10 +408,6 @@ mod tests {
         ] {
             assert!(sandbox.env[key].starts_with(sandbox.root()), "{key}");
         }
-        assert_eq!(
-            sandbox.env["RTK_TEE_DIR"],
-            workspace.path().join("target/xtask/rtk"),
-        );
         let trusted = Command::new("git")
             .arg("config")
             .arg("--file")
