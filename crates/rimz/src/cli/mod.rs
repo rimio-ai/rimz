@@ -1,6 +1,7 @@
 //! CLI parsing surface. Each subcommand has its own file under `cli/` and
 //! exposes a single `run(...)` entry called from `dispatch`.
 
+mod accounts;
 mod address;
 mod agents_cmd;
 mod answer;
@@ -161,6 +162,7 @@ pub fn dispatch() -> Result<()> {
                 attach: cli.attach,
                 no_resume: cli.no_resume,
                 refresh_ms: cli.refresh_ms,
+                account: Vec::new(),
             },
             &globals,
         ),
@@ -628,6 +630,10 @@ pub struct StartArgs {
     /// Override the sidebar render cadence for this launch.
     #[arg(long)]
     pub refresh_ms: Option<u16>,
+    /// Launch this provider's agents under a named account (repeatable).
+    /// Accounts are fixed at room birth; `rimz reset --account` changes them.
+    #[arg(long, value_name = "KIND=NAME", value_parser = accounts::parse_account_flag)]
+    pub account: Vec<accounts::AccountFlag>,
 }
 
 #[derive(Debug, Args, Default)]

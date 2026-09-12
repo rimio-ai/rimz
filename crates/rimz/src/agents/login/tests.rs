@@ -145,6 +145,97 @@ fn room_selection_names_one_login_per_kind() {
 }
 
 #[test]
+fn birth_selection_prefers_requested_over_project_and_keeps_a_frozen_room() {
+    let catalog = LoginCatalog::from_config_under(
+        &accounts("[claude.work]\n[claude.personal]\n[codex.work]\n"),
+        Some(Path::new("/home/u")),
+    )
+    .expect("catalog");
+    let requested = RoomLogins::from([(kind("claude"), name("work"))]);
+    let project = RoomLogins::from([
+        (kind("claude"), name("personal")),
+        (kind("codex"), name("work")),
+    ]);
+
+    let born = catalog
+        .birth_selection(None, &requested, &project)
+        .expect("fresh birth");
+    assert_eq!(
+        born,
+        RoomLogins::from([
+            (kind("claude"), name("work")),
+            (kind("codex"), name("work"))
+        ])
+    );
+    assert_eq!(
+        catalog
+            .birth_selection(None, &RoomLogins::new(), &RoomLogins::new())
+            .expect("default birth"),
+        RoomLogins::from([
+            (kind("claude"), LoginName::default_login()),
+            (kind("codex"), LoginName::default_login()),
+        ])
+    );
+
+    assert_eq!(
+        catalog.birth_selection(Some(&born), &RoomLogins::new(), &RoomLogins::new()),
+        Ok(born.clone())
+    );
+    assert_eq!(
+        catalog.birth_selection(Some(&born), &requested, &project),
+        Ok(born.clone())
+    );
+    let other = RoomLogins::from([(kind("claude"), name("personal"))]);
+    let refused = catalog
+        .birth_selection(Some(&born), &other, &RoomLogins::new())
+        .unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        "this room uses claude account `work`, not `personal`; accounts are fixed until reset, so run `rimz reset --account claude=personal`"
+    );
+
+    let unknown = RoomLogins::from([(kind("claude"), name("travel"))]);
+    assert!(matches!(
+        catalog.birth_selection(None, &RoomLogins::new(), &unknown),
+        Err(BirthLoginErr::Login(LoginErr::Unknown { .. }))
+    ));
+}
+
+#[test]
+fn a_named_account_preflights_its_home_and_hooks() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("work");
+    let ambient = BTreeMap::from([(
+        "HOME".to_owned(),
+        temp.path().join("u").to_string_lossy().into_owned(),
+    )]);
+    let login = ProviderLogin::named(kind("claude"), name("work"), home.clone()).unwrap();
+
+    assert!(matches!(
+        login.preflight(&ambient),
+        Err(BirthLoginErr::MissingHome { .. })
+    ));
+    std::fs::create_dir_all(&home).unwrap();
+    let missing = login.preflight(&ambient).unwrap_err();
+    assert!(matches!(missing, BirthLoginErr::HooksMissing { .. }));
+    assert!(
+        missing
+            .to_string()
+            .ends_with("run `rimz accounts add claude work`")
+    );
+
+    crate::agents::find_definition("claude")
+        .unwrap()
+        .install_hooks(&login.env(&ambient))
+        .unwrap();
+    assert_eq!(login.preflight(&ambient), Ok(()));
+    assert_eq!(
+        ProviderLogin::default_for(kind("claude")).preflight(&ambient),
+        Ok(())
+    );
+}
+
+#[test]
 fn mismatch_reads_an_absent_stamp_as_the_default_account() {
     let session = AgentSessionId::from("s-1");
     assert_eq!(

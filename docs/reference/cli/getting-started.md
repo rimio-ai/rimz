@@ -26,7 +26,7 @@ Enable command, flag, and live room completion from the [shell completion setup]
 
 ```sh
 rimz [--attach|--no-attach|--print] [--no-resume] [--refresh-ms <MS>]
-rimz start [PATH] [same flags]
+rimz start [PATH] [same flags] [--account <KIND=NAME>]...
 rimz attach [SESSION] [same flags]
 ```
 
@@ -39,6 +39,8 @@ When `[web] enabled = true`, room start also ensures the shared ttyd browser dae
 **Attach or print.** An interactive terminal attaches; a non-interactive caller prints the attach command instead, which is the shape scripts and shell wrappers want. `--attach`, `--no-attach`, and `--print` force the choice (`--print` is an alias for `--no-attach`). Inside the selected mux backend, the automatic `rimz` path reports the directory's room and exits so the existing client stays active; use `--attach` only to deliberately hand control to the mux attach command.
 
 **Resume on rebirth.** When a room comes back from a reboot or a crashed multiplexer, RimZ offers to recover the agents that were running, defaulting yes; non-interactive starts recover automatically. `start` prints context first, such as `rimz: this room's previous session ended with agents still running (2026-07-02 17:37)`, before the recovery prompt names the count and labels. `--no-resume` brings the room up empty. Live agents in a healthy room are never touched by this; the flag only governs the recovery launch.
+
+**Accounts.** `--account <KIND=NAME>` (repeatable, e.g. `--account claude=work`) launches that provider's agents under a named account, a separate provider home declared under `[accounts.<kind>.<name>]`; `default` names the provider's own home. Without the flag a fresh room takes the trusted project's `[accounts]` selection, else `default`. The selection is fixed when the room is born: a start whose `--account` disagrees with the room's recorded accounts refuses with the `rimz reset --account` fix, and a named account whose home is missing or lacks RimZ hooks refuses with the `rimz accounts add` fix.
 
 `--refresh-ms <MS>` overrides the sidebar render cadence for sidebars born by this launch; the persistent cadence lives in machine config.
 

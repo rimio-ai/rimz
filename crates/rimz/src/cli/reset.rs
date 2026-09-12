@@ -25,6 +25,9 @@ pub struct ResetArgs {
     /// Archive the current room records but do not seed prior agents on rebirth.
     #[arg(long)]
     pub hard: bool,
+    /// Rebuild the room under this provider account (repeatable).
+    #[arg(long, value_name = "KIND=NAME", value_parser = super::accounts::parse_account_flag, conflicts_with = "no_start")]
+    pub account: Vec<super::accounts::AccountFlag>,
     /// Path to use as the workspace cwd.
     #[arg(default_value = ".")]
     pub path: PathBuf,
@@ -89,6 +92,7 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
             // available for audit, but it does not re-seed the reborn room.
             no_resume: true,
             refresh_ms: None,
+            account: args.account,
         },
         globals,
     )
