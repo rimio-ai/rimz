@@ -4,7 +4,7 @@
 
 ```sh
 rimz providers                    # providers with a login, last-known account, or spend
-rimz providers codex              # filter the default report to one provider kind
+rimz providers codex              # filter accounts to one provider kind
 rimz providers --all              # include logged-out and empty registered providers
 rimz providers claude --refresh   # force fresh account and usage reads for Claude
 rimz providers --json             # stable report array for scripts
@@ -15,11 +15,13 @@ rimz providers --json             # stable report array for scripts
 | `KIND` | Keep one registered provider kind; an unknown kind fails with the known-kind list |
 | `--json` | Emit the stable JSON report array instead of human-readable provider blocks |
 | `--refresh` | Bypass account and account-usage TTLs for this invocation |
-| `--all` | Include logged-out and empty registered kinds; without it, a kind needs a login, last-known account, or recorded spend |
+| `--all` | Include logged-out and empty default accounts; without it, a default account needs a login, last-known account, or recorded provider spend. Declared named accounts are always included |
 
 ## Human output
 
 Each provider block starts with `Name — Plan · status`; its aligned detail rows always begin with `version: v…`, or a faint dash when the version is unknown.
+
+Every declared account gets its own block, with named accounts labelled `Claude · work`, for example. Usage, credits, and daily-cap state belong to that account. Spend is per provider and appears only on the default account's block; named blocks omit the spend row.
 
 Codex reset credits render as a count followed by up to the soonest three known expiry instants. Each bullet uses `YYYY-MM-DD HH:MM:SS ±HH:MM` in the configured machine timezone plus `in <interval>`, or `due` once the deadline passes. A cached count with only the legacy earliest-expiry summary renders that one deadline until the next refresh supplies per-credit detail.
 
@@ -37,11 +39,12 @@ Provider spend is always the last published `provider-spending.json` value. This
 
 ## JSON fields
 
-The document is an array in display order: providers with dashboard panels retain the dashboard's usage ranking, then providers without panels follow registry order.
+The document is an array in display order: providers with dashboard panels retain the dashboard's usage ranking, then providers without panels follow registry order. Within a provider, the default account comes first, followed by declared accounts in name order.
 
 | Field | Meaning |
 | --- | --- |
 | `kind`, `product_name` | Stable adapter kind and product display name |
+| `account` | Configured account name, or `default` for the provider's native account |
 | `status` | `logged_in`, `logged_out`, or `unavailable`; an unavailable probe may retain last-known account facts |
 | `probed_at` | Account probe timestamp in RFC 3339 form, or `null` before the first probe |
 | `plan`, `plan_label` | Raw provider plan tier and its formatted display label |
@@ -50,7 +53,7 @@ The document is an array in display order: providers with dashboard panels retai
 | `windows` | Included quotas with usage percentage, reset, duration or named scope, provenance, and lifted state |
 | `extra_credits`, `reset_credits` | Paid/API credit facts and redeemable reset-credit facts |
 | `reset_credits.count`, `.soonest_expiry`, `.expiries` | Provider-reported available count, earliest available expiry summary, and the additive sorted list of every known valid available-credit expiry; old caches and clients may omit `expiries` |
-| `spending` | Published headline, 7-day, 30-day, and 365-day spend/token tally |
+| `spending` | Published provider-wide headline, 7-day, 30-day, and 365-day spend/token tally on the default account; `null` on named accounts |
 | `day_budget` | Configured provider daily cap, current local-day spend, and parked state |
 | `active_sessions` | Currently bound root panes for this provider; zero outside a room-backed panel |
 

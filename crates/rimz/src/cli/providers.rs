@@ -1,6 +1,6 @@
 //! `rimz providers` — account plans, auth state, limits, credits, and spend.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io::{IsTerminal, Write};
 use std::time::Duration;
 
@@ -16,7 +16,9 @@ use super::spinner::Spinner;
 use rimz::RuntimePaths;
 use rimz::agents::spending::{ProviderSpendingCache, read_provider_spending_cache};
 use rimz::agents::{ExtraCredits, ProviderAccountScope, RateLimitWindow, ResetCredits, SpendTally};
+use rimz::agents::{LoginCatalog, ProviderLogin, RoomLoginSet, ambient_env};
 use rimz::config::MachineConfig;
+use rimz::ids::{AgentKind, LoginKey, RoomLogins};
 use rimz::sidebar::enrich::provider_panels_from_caches;
 use rimz::sidebar::refresh::{
     AccountsCache, ProviderRecord, ProviderStatus, query_provider_accounts, refresh_provider_usage,
@@ -50,9 +52,19 @@ pub fn run(args: ProvidersArgs, _globals: &GlobalFlags) -> Result<()> {
     let config = MachineConfig::load_lenient();
     let spinner = (!args.json && std::io::stdout().is_terminal())
         .then(|| Spinner::delayed("Querying provider accounts", SPINNER_MIN_AGE));
+    let catalog = LoginCatalog::from_config(&config.accounts).ok();
     let logins: Vec<_> = rimz::agents::known_kinds()
-        .map(|kind| {
-            rimz::agents::ProviderLogin::default_for(rimz::ids::AgentKind::new_unchecked(kind))
+        .flat_map(|kind| {
+            let mut logins = vec![ProviderLogin::default_for(AgentKind::new_unchecked(kind))];
+            if let Some(catalog) = &catalog {
+                logins.extend(
+                    catalog
+                        .all()
+                        .filter(|login| login.kind().as_str() == kind && !login.name().is_default())
+                        .cloned(),
+                );
+            }
+            logins
         })
         .collect();
     let accounts = query_provider_accounts(&runtime, &logins, args.refresh);
@@ -79,6 +91,7 @@ pub fn run(args: ProvidersArgs, _globals: &GlobalFlags) -> Result<()> {
     let provider_spending = read_provider_spending_cache(&runtime.shared_provider_spending_path());
     let account_facts: BTreeMap<_, _> = logins
         .iter()
+        .filter(|login| login.name().is_default())
         .filter_map(|login| {
             accounts
                 .logins
@@ -88,14 +101,56 @@ pub fn run(args: ProvidersArgs, _globals: &GlobalFlags) -> Result<()> {
                 .map(|account| (login.kind().to_string(), account))
         })
         .collect();
-    let panels = provider_panels_from_caches(
+    let native_panels = provider_panels_from_caches(
         &runtime,
-        &rimz::agents::RoomLoginSet::native(),
+        &RoomLoginSet::native(),
         &config,
         account_facts,
         &provider_spending,
     );
+    // Kinds with a panel keep the dashboard's usage ranking; the rest follow
+    // registry order, each kind's default account ahead of its named ones.
+    let mut logins = logins;
+    logins.sort_by_key(|login| {
+        native_panels
+            .iter()
+            .position(|panel| panel.kind == login.kind().as_str())
+            .unwrap_or(usize::MAX)
+    });
+    let mut panels: BTreeMap<_, _> = native_panels
+        .into_iter()
+        .map(|panel| {
+            (
+                LoginKey::default_for(AgentKind::new_unchecked(&panel.kind)),
+                panel,
+            )
+        })
+        .collect();
+    for login in logins.iter().filter(|login| !login.name().is_default()) {
+        let selection = RoomLogins::from([(login.kind().clone(), login.name().clone())]);
+        let account_facts = accounts
+            .logins
+            .get(&login.key())
+            .and_then(|record| record.account.clone())
+            .map(|account| (login.kind().to_string(), account))
+            .into_iter()
+            .collect();
+        let login_panels = provider_panels_from_caches(
+            &runtime,
+            &RoomLoginSet::new(Some(selection), catalog.clone(), ambient_env()),
+            &config,
+            account_facts,
+            &provider_spending,
+        );
+        if let Some(panel) = login_panels
+            .into_iter()
+            .find(|panel| panel.kind == login.kind().as_str())
+        {
+            panels.insert(login.key(), panel);
+        }
+    }
     let reports = assemble_reports(
+        &logins,
         &accounts,
         panels,
         &provider_spending,
@@ -131,6 +186,7 @@ fn validate_kind(kind: Option<&str>) -> Result<()> {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 struct ProviderReport {
     kind: String,
+    account: String,
     product_name: String,
     status: ProviderStatus,
     probed_at: Option<Timestamp>,
@@ -150,46 +206,25 @@ struct ProviderReport {
 }
 
 fn assemble_reports(
+    logins: &[ProviderLogin],
     accounts: &AccountsCache,
-    panels: Vec<SidebarProviderPanel>,
+    panels: BTreeMap<LoginKey, SidebarProviderPanel>,
     provider_spending: &ProviderSpendingCache,
     filter: Option<&str>,
     all: bool,
 ) -> Vec<ProviderReport> {
-    let known: BTreeSet<_> = rimz::agents::known_kinds().collect();
     let mut reports = Vec::new();
-    let mut emitted = BTreeSet::new();
-    for panel in panels {
-        let kind = panel.kind.as_str();
-        if !known.contains(kind)
-            || filter.is_some_and(|filter| filter != kind)
-            || !include_kind(kind, accounts, provider_spending, all)
-        {
-            continue;
-        }
-        emitted.insert(panel.kind.clone());
-        reports.push(build_report(
-            kind,
-            accounts.logins.get(&rimz::ids::LoginKey::default_for(
-                rimz::ids::AgentKind::new_unchecked(kind),
-            )),
-            Some(&panel),
-            provider_spending,
-        ));
-    }
-    for kind in rimz::agents::known_kinds() {
-        if emitted.contains(kind)
-            || filter.is_some_and(|filter| filter != kind)
-            || !include_kind(kind, accounts, provider_spending, all)
+    for login in logins {
+        let kind = login.kind().as_str();
+        if filter.is_some_and(|filter| filter != kind)
+            || (login.name().is_default() && !include_kind(kind, accounts, provider_spending, all))
         {
             continue;
         }
         reports.push(build_report(
-            kind,
-            accounts.logins.get(&rimz::ids::LoginKey::default_for(
-                rimz::ids::AgentKind::new_unchecked(kind),
-            )),
-            None,
+            login,
+            accounts.logins.get(&login.key()),
+            panels.get(&login.key()),
             provider_spending,
         ));
     }
@@ -217,18 +252,28 @@ fn include_kind(
 }
 
 fn build_report(
-    kind: &str,
+    login: &ProviderLogin,
     record: Option<&ProviderRecord>,
     panel: Option<&SidebarProviderPanel>,
     provider_spending: &ProviderSpendingCache,
 ) -> ProviderReport {
+    let kind = login.kind().as_str();
     let definition = rimz::agents::spec_by_kind(kind)
         .expect("reports are assembled only for registered provider kinds");
     let account = record.and_then(|record| record.account.as_ref());
     let raw_plan = account.and_then(|account| account.plan.clone());
     ProviderReport {
         kind: kind.to_owned(),
-        product_name: definition.display_name.to_owned(),
+        account: login.name().to_string(),
+        product_name: panel
+            .map(|panel| panel.product_name.clone())
+            .unwrap_or_else(|| {
+                if login.name().is_default() {
+                    definition.display_name.to_owned()
+                } else {
+                    format!("{} · {}", definition.display_name, login.name())
+                }
+            }),
         status: ProviderStatus::from_record(record),
         probed_at: record.and_then(|record| timestamp_from_millis(record.probed_at_ms)),
         plan_label: panel.and_then(|panel| panel.plan.clone()).or_else(|| {
@@ -251,9 +296,15 @@ fn build_report(
         windows: panel.map_or_else(Vec::new, |panel| panel.windows.clone()),
         extra_credits: panel.and_then(|panel| panel.extra_credits.clone()),
         reset_credits: panel.and_then(|panel| panel.reset_credits.clone()),
-        spending: panel
-            .and_then(|panel| panel.spending.clone())
-            .or_else(|| provider_spending.spending.by_provider.get(kind).cloned()),
+        spending: login
+            .name()
+            .is_default()
+            .then(|| {
+                panel
+                    .and_then(|panel| panel.spending.clone())
+                    .or_else(|| provider_spending.spending.by_provider.get(kind).cloned())
+            })
+            .flatten(),
         day_budget: panel.and_then(|panel| panel.day_budget),
         active_sessions: panel.map_or(0, |panel| panel.active_sessions),
     }
@@ -280,7 +331,11 @@ fn write_pretty(
             "{} — ",
             render::paint(
                 render::palette::identity(&report.kind).bold(),
-                &render::palette::identity_name(&report.kind),
+                &if report.account == "default" {
+                    render::palette::identity_name(&report.kind)
+                } else {
+                    report.product_name.clone()
+                },
             )
         )?;
         write_optional(out, report.plan_label.as_deref(), "")?;
@@ -344,7 +399,7 @@ fn write_pretty(
                     money_cell(spending.month.usd),
                 ],
             );
-        } else {
+        } else if report.account == "default" {
             rows.push("spend", unknown_cell());
         }
         if let Some(budget) = report.day_budget {

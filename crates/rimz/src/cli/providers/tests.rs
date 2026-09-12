@@ -26,7 +26,10 @@ fn panel(kind: &str) -> SidebarProviderPanel {
         kind: kind.to_owned(),
         account_scope: ProviderAccountScope::KindWide,
         account_key: None,
-        product_name: kind.to_owned(),
+        product_name: rimz::agents::spec_by_kind(kind)
+            .unwrap()
+            .display_name
+            .to_owned(),
         art: Vec::new(),
         art_tints: Vec::new(),
         color: 0,
@@ -76,6 +79,24 @@ fn account_fixture() -> AccountsCache {
     }
 }
 
+fn default_logins() -> Vec<ProviderLogin> {
+    rimz::agents::known_kinds()
+        .map(|kind| ProviderLogin::default_for(AgentKind::new_unchecked(kind)))
+        .collect()
+}
+
+fn default_panels(panels: Vec<SidebarProviderPanel>) -> BTreeMap<LoginKey, SidebarProviderPanel> {
+    panels
+        .into_iter()
+        .map(|panel| {
+            (
+                LoginKey::default_for(AgentKind::new_unchecked(&panel.kind)),
+                panel,
+            )
+        })
+        .collect()
+}
+
 #[test]
 fn report_assembly_covers_auth_states_raw_accounts_filters_and_all() {
     let accounts = account_fixture();
@@ -91,7 +112,14 @@ fn report_assembly_covers_auth_states_raw_accounts_filters_and_all() {
             ..Default::default()
         },
     );
-    let reports = assemble_reports(&accounts, vec![panel("claude")], &spending, None, false);
+    let reports = assemble_reports(
+        &default_logins(),
+        &accounts,
+        default_panels(vec![panel("claude")]),
+        &spending,
+        None,
+        false,
+    );
 
     assert_eq!(
         reports
@@ -109,16 +137,118 @@ fn report_assembly_covers_auth_states_raw_accounts_filters_and_all() {
     assert_eq!(reports[2].plan_label.as_deref(), Some("Openai Oauth"));
     assert_eq!(reports[2].metered, Some(false));
 
-    let filtered = assemble_reports(&accounts, Vec::new(), &spending, Some("pi"), false);
+    let filtered = assemble_reports(
+        &default_logins(),
+        &accounts,
+        BTreeMap::new(),
+        &spending,
+        Some("pi"),
+        false,
+    );
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].kind, "pi");
-    assert!(assemble_reports(&accounts, Vec::new(), &spending, Some("codex"), false).is_empty());
-    let logged_out = assemble_reports(&accounts, Vec::new(), &spending, Some("codex"), true);
+    assert!(
+        assemble_reports(
+            &default_logins(),
+            &accounts,
+            BTreeMap::new(),
+            &spending,
+            Some("codex"),
+            false
+        )
+        .is_empty()
+    );
+    let logged_out = assemble_reports(
+        &default_logins(),
+        &accounts,
+        BTreeMap::new(),
+        &spending,
+        Some("codex"),
+        true,
+    );
     assert_eq!(logged_out.len(), 1);
     assert_eq!(logged_out[0].status, ProviderStatus::LoggedOut);
 
-    let all = assemble_reports(&accounts, Vec::new(), &spending, None, true);
+    let all = assemble_reports(
+        &default_logins(),
+        &accounts,
+        BTreeMap::new(),
+        &spending,
+        None,
+        true,
+    );
     assert_eq!(all.len(), rimz::agents::known_kinds().count());
+}
+
+#[test]
+fn named_accounts_have_separate_reports_without_provider_spend() {
+    let kind = AgentKind::new_unchecked("claude");
+    let logins = vec![
+        ProviderLogin::default_for(kind.clone()),
+        ProviderLogin::named(kind, "work".parse().unwrap(), "/accounts/work".into()).unwrap(),
+    ];
+    let accounts = AccountsCache {
+        logins: logins
+            .iter()
+            .map(|login| (login.key(), record(1_000, true, Some(account("max", true)))))
+            .collect(),
+    };
+    let mut named_panel = panel("claude");
+    named_panel.product_name = "Claude · work".to_owned();
+    named_panel.day_budget = Some(DailyBudgetView {
+        cap_usd: 20.0,
+        spend_usd: 3.0,
+        parked: false,
+    });
+    named_panel.spending = Some(SpendTally::default());
+    let panels = BTreeMap::from([
+        (logins[0].key(), panel("claude")),
+        (logins[1].key(), named_panel.clone()),
+    ]);
+    let mut spending = ProviderSpendingCache::default();
+    spending
+        .spending
+        .by_provider
+        .insert("claude".to_owned(), SpendTally::default());
+    let reports = assemble_reports(&logins, &accounts, panels, &spending, Some("claude"), false);
+    assert_eq!(
+        reports
+            .iter()
+            .map(|report| (report.kind.as_str(), report.account.as_str()))
+            .collect::<Vec<_>>(),
+        [("claude", "default"), ("claude", "work")]
+    );
+    assert!(
+        reports
+            .iter()
+            .all(|report| report.status == ProviderStatus::LoggedIn)
+    );
+    assert_eq!(reports[1].product_name, "Claude · work");
+    assert_eq!(reports[1].spending, None);
+    assert_eq!(reports[1].day_budget, named_panel.day_budget);
+    let mut out = anstream::StripStream::new(Vec::new());
+    write_pretty(
+        &mut out,
+        &reports,
+        Timestamp::from_second(1).unwrap(),
+        &TimeZone::UTC,
+    )
+    .unwrap();
+    let pretty = String::from_utf8(out.into_inner()).unwrap();
+    assert_eq!(
+        pretty,
+        "Claude — Claude Max · logged in\n  version: v1.2.3\n  usage:   –\n  spend:   7d $0.00 · 30d $0.00\n\nClaude · work — Claude Max · logged in\n  version: v1.2.3\n  usage:   –\n  budget:  $3.00 of $20.00/day\n"
+    );
+    let unprobed = assemble_reports(
+        &logins,
+        &AccountsCache::default(),
+        BTreeMap::new(),
+        &ProviderSpendingCache::default(),
+        None,
+        false,
+    );
+    assert_eq!(unprobed.len(), 1);
+    assert_eq!(unprobed[0].product_name, "Claude · work");
 }
 
 #[test]
@@ -213,7 +343,14 @@ fn protocol_fixture(
 fn pretty_and_json_reports_are_stable() {
     let now = Timestamp::from_second(1_700_000_000).unwrap();
     let (accounts, panel, spending) = protocol_fixture(now);
-    let reports = assemble_reports(&accounts, vec![panel], &spending, None, false);
+    let reports = assemble_reports(
+        &default_logins(),
+        &accounts,
+        default_panels(vec![panel]),
+        &spending,
+        None,
+        false,
+    );
     let mut out = anstream::StripStream::new(Vec::new());
     let time_zone = TimeZone::get("America/New_York").unwrap();
     write_pretty(&mut out, &reports, now, &time_zone).unwrap();
@@ -293,7 +430,14 @@ fn reset_rendering_respects_count_falls_back_to_summary_and_marks_due() {
 fn provider_money_style_covers_only_dollar_tokens() {
     let now = Timestamp::from_second(1_700_000_000).unwrap();
     let (accounts, panel, spending) = protocol_fixture(now);
-    let reports = assemble_reports(&accounts, vec![panel], &spending, None, false);
+    let reports = assemble_reports(
+        &default_logins(),
+        &accounts,
+        default_panels(vec![panel]),
+        &spending,
+        None,
+        false,
+    );
     let mut raw = Vec::new();
     write_pretty(&mut raw, &reports, now, &TimeZone::UTC).unwrap();
     let raw = String::from_utf8(raw).unwrap();
