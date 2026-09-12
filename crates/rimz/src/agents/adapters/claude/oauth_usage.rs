@@ -98,6 +98,28 @@ struct UsageWire {
     five_hour: Option<WindowWire>,
     seven_day: Option<WindowWire>,
     extra_usage: Option<ExtraUsageWire>,
+    limits: Vec<LimitWire>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LimitWire {
+    kind: Option<String>,
+    percent: Option<f64>,
+    resets_at: Option<String>,
+    scope: Option<LimitScopeWire>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LimitScopeWire {
+    model: Option<LimitModelWire>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LimitModelWire {
+    display_name: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -310,7 +332,7 @@ fn parse_usage_response(body: &str) -> Result<AccountUsageSnapshot> {
 impl UsageWire {
     fn into_account_usage(self) -> AccountUsageSnapshot {
         AccountUsageSnapshot {
-            rate_limits: collect_rate_limits(self.five_hour, self.seven_day),
+            rate_limits: collect_rate_limits(self.five_hour, self.seven_day, self.limits),
             extra_credits: collect_extra_usage(self.extra_usage),
             ..Default::default()
         }
@@ -320,29 +342,48 @@ impl UsageWire {
 fn collect_rate_limits(
     five_hour: Option<WindowWire>,
     seven_day: Option<WindowWire>,
+    limits: Vec<LimitWire>,
 ) -> Option<AgentRateLimits> {
-    let windows: Vec<RateLimitWindow> = [
+    let mut windows: Vec<RateLimitWindow> = [
         window(five_hour, super::account::FIVE_HOUR_MINS),
         window(seven_day, super::account::SEVEN_DAY_MINS),
     ]
     .into_iter()
     .flatten()
     .collect();
+    windows.extend(limits.into_iter().filter_map(|limit| {
+        if limit.kind.as_deref() != Some("weekly_scoped") {
+            return None;
+        }
+        let display_name = limit.scope?.model?.display_name?;
+        let display_name = display_name.trim();
+        if display_name.is_empty() {
+            return None;
+        }
+        super::account::model_sub_cap_window(
+            display_name,
+            limit.percent,
+            parse_reset(limit.resets_at.as_deref()),
+            super::account::SEVEN_DAY_MINS,
+            WindowSource::Authoritative,
+        )
+    }));
     (!windows.is_empty()).then_some(AgentRateLimits { windows })
 }
 
 fn window(field: Option<WindowWire>, duration_mins: u32) -> Option<crate::agents::RateLimitWindow> {
     let field = field?;
-    let resets_at = field
-        .resets_at
-        .as_deref()
-        .and_then(|raw| raw.parse::<Timestamp>().ok());
+    let resets_at = parse_reset(field.resets_at.as_deref());
     super::account::budget_window(
         field.utilization,
         resets_at,
         duration_mins,
         WindowSource::Authoritative,
     )
+}
+
+fn parse_reset(raw: Option<&str>) -> Option<Timestamp> {
+    raw.and_then(|raw| raw.parse().ok())
 }
 
 fn collect_extra_usage(field: Option<ExtraUsageWire>) -> Option<ExtraCredits> {

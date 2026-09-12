@@ -430,10 +430,9 @@ fn project_rate_limits(
             .values()
             .cloned()
             .map(|window| {
-                let expired_named_quota = window.scope.is_some()
-                    && window.duration_mins.is_none()
-                    && window.resets_at.is_some_and(|reset| reset <= now);
-                if cache_unknown || expired_named_quota {
+                let expired_scoped_window =
+                    window.scope.is_some() && window.resets_at.is_some_and(|reset| reset <= now);
+                if cache_unknown || expired_scoped_window {
                     unknown_idle_window(window)
                 } else {
                     window.projected_at(now)
