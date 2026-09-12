@@ -221,24 +221,40 @@ where
 ///
 /// Returns directories that actually have a `projects/` child.
 pub(super) fn claude_config_dirs_from(login_env: &BTreeMap<String, String>) -> Vec<PathBuf> {
-    claude_config_roots(login_env)
+    let has_projects = |path: &PathBuf| path.join("projects").is_dir();
+    let dirs = env_config_roots(login_env)
         .into_iter()
-        .filter(|path| path.join("projects").is_dir())
+        .filter(has_projects)
+        .collect::<Vec<_>>();
+    if !dirs.is_empty() {
+        return dirs;
+    }
+    default_config_roots(login_env)
+        .into_iter()
+        .filter(has_projects)
         .collect()
 }
 
 /// Config roots without filesystem filtering, for the process-local discovery
 /// index to retain across a transiently unavailable provider home.
 pub(super) fn claude_config_roots(login_env: &BTreeMap<String, String>) -> Vec<PathBuf> {
-    if let Some(env_val) = login_env.get("CLAUDE_CONFIG_DIR") {
-        let roots = env_val
-            .split(',')
-            .filter_map(|raw| env_config_dir(raw, login_env))
-            .collect::<Vec<_>>();
-        if !roots.is_empty() {
-            return roots;
-        }
+    let roots = env_config_roots(login_env);
+    if roots.is_empty() {
+        return default_config_roots(login_env);
     }
+    roots
+}
+
+fn env_config_roots(login_env: &BTreeMap<String, String>) -> Vec<PathBuf> {
+    login_env
+        .get("CLAUDE_CONFIG_DIR")
+        .into_iter()
+        .flat_map(|env_val| env_val.split(','))
+        .filter_map(|raw| env_config_dir(raw, login_env))
+        .collect()
+}
+
+fn default_config_roots(login_env: &BTreeMap<String, String>) -> Vec<PathBuf> {
     let home = login_env
         .get("HOME")
         .map(PathBuf::from)
@@ -542,6 +558,22 @@ mod tests {
             writeln!(f, "{line}").unwrap();
         }
         path
+    }
+
+    #[test]
+    fn config_dirs_fall_back_to_the_default_roots_when_no_env_root_has_projects() {
+        let dir = TempDir::new().unwrap();
+        let native = dir.path().join(".claude");
+        std::fs::create_dir_all(native.join("projects")).unwrap();
+        let env = BTreeMap::from([
+            ("HOME".to_owned(), dir.path().display().to_string()),
+            (
+                "CLAUDE_CONFIG_DIR".to_owned(),
+                dir.path().join("empty").display().to_string(),
+            ),
+        ]);
+        assert_eq!(claude_config_dirs_from(&env), vec![native]);
+        assert_eq!(claude_config_roots(&env), vec![dir.path().join("empty")]);
     }
 
     fn claude_line(date: &str, cost: f64, msg_id: &str, req_id: &str) -> String {
