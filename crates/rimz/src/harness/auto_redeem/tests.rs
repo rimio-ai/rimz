@@ -551,7 +551,9 @@ fn stamp_round_trips_atomically() {
     let runtime =
         RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    let path = runtime.shared_auto_redeem_path("codex");
+    let path = runtime.shared_auto_redeem_path(&crate::ids::LoginKey::default_for(
+        crate::ids::AgentKind::new_unchecked("codex"),
+    ));
     let stamp = RedeemStamp {
         attempted_at: ts(1_700_000_000),
         request_id: "0195-request".to_owned(),
@@ -599,12 +601,21 @@ fn producer_reserves_a_spawn_and_paces_the_next_tick() {
         &config,
         now,
     );
-    let first = read_stamp(&runtime.shared_auto_redeem_path(CODEX_KIND)).unwrap();
+    let first = read_stamp(
+        &runtime.shared_auto_redeem_path(&crate::ids::LoginKey::default_for(
+            crate::ids::AgentKind::new_unchecked(CODEX_KIND),
+        )),
+    )
+    .unwrap();
     assert_eq!(first.attempted_at, now);
     assert_eq!(first.reason, RedeemReason::BlockedGain);
     assert_eq!(first.outcome, None);
     assert_eq!(
-        read_rate_stamp(&runtime.shared_auto_redeem_rate_path(CODEX_KIND)),
+        read_rate_stamp(
+            &runtime.shared_auto_redeem_rate_path(&crate::ids::LoginKey::default_for(
+                crate::ids::AgentKind::new_unchecked(CODEX_KIND)
+            ))
+        ),
         Some(RateStamp {
             window_resets_at: now + Duration::from_secs(3 * 86_400),
             last_used_pct: 100,
@@ -621,7 +632,11 @@ fn producer_reserves_a_spawn_and_paces_the_next_tick() {
         now + Duration::from_secs(1),
     );
     assert_eq!(
-        read_stamp(&runtime.shared_auto_redeem_path(CODEX_KIND)),
+        read_stamp(
+            &runtime.shared_auto_redeem_path(&crate::ids::LoginKey::default_for(
+                crate::ids::AgentKind::new_unchecked(CODEX_KIND)
+            ))
+        ),
         Some(first),
         "the pending reservation must pace producer ticks before the helper reports an outcome"
     );
@@ -634,18 +649,29 @@ fn spawn_failure_cancels_only_its_matching_reservation() {
     let runtime =
         RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    let path = runtime.shared_auto_redeem_path(CODEX_KIND);
+    let path = runtime.shared_auto_redeem_path(&crate::ids::LoginKey::default_for(
+        crate::ids::AgentKind::new_unchecked(CODEX_KIND),
+    ));
 
     assert!(reserve_attempt(
         &runtime,
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(CODEX_KIND)),
         RedeemReason::ExpiryRescue,
         now,
         "request-a"
     ));
-    cancel_attempt_reservation(&runtime, "request-b");
+    cancel_attempt_reservation(
+        &runtime,
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(CODEX_KIND)),
+        "request-b",
+    );
     assert_eq!(read_stamp(&path).unwrap().request_id, "request-a");
 
-    cancel_attempt_reservation(&runtime, "request-a");
+    cancel_attempt_reservation(
+        &runtime,
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(CODEX_KIND)),
+        "request-a",
+    );
     assert!(read_stamp(&path).is_none());
 }
 

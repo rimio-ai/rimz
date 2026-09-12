@@ -25,7 +25,7 @@ use crate::cli::runtime_paths_for;
 pub(super) fn run_refresh_usage(request: AccountUsageRefreshRequest) -> Result<()> {
     let runtime = runtime_paths_for(request.workspace_id)?;
 
-    let wrote = refresh_claimed_account_usage(&runtime, request.kind.as_str(), request.claim_id);
+    let wrote = refresh_claimed_account_usage(&runtime, &request.login, request.claim_id);
     if wrote {
         let _ = rimz::wakeup::wake_store_delta(&runtime, None, None);
     }

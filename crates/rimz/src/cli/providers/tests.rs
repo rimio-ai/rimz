@@ -48,14 +48,17 @@ fn panel(kind: &str) -> SidebarProviderPanel {
 
 fn account_fixture() -> AccountsCache {
     AccountsCache {
-        providers: BTreeMap::from([
+        logins: BTreeMap::from([
             (
-                "claude".to_owned(),
+                rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("claude")),
                 record(1_000, true, Some(account("max", true))),
             ),
-            ("codex".to_owned(), record(2_000, true, None)),
             (
-                "copilot".to_owned(),
+                rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("codex")),
+                record(2_000, true, None),
+            ),
+            (
+                rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("copilot")),
                 record(
                     3_000,
                     false,
@@ -66,7 +69,7 @@ fn account_fixture() -> AccountsCache {
                 ),
             ),
             (
-                "pi".to_owned(),
+                rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("pi")),
                 record(4_000, true, Some(account("openai-oauth", false))),
             ),
         ]),
@@ -183,8 +186,8 @@ fn protocol_fixture(
         parked: false,
     });
     let accounts = AccountsCache {
-        providers: BTreeMap::from([(
-            "claude".to_owned(),
+        logins: BTreeMap::from([(
+            rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("claude")),
             record(
                 u64::try_from(now.as_millisecond()).unwrap(),
                 true,

@@ -210,7 +210,7 @@ fn hidden_helper_requests_round_trip_through_cli() {
 
     let auto_redeem = AutoRedeemRequest {
         workspace_id: workspace_id.clone(),
-        kind: kind.clone(),
+        login: rimz::ids::LoginKey::default_for(kind.clone()),
         reason: RedeemReason::ScheduledRedeem,
         request_id: "018f7f2e-7b3a-7cc0-8ec1-000000000001".parse().unwrap(),
     };
@@ -269,7 +269,7 @@ fn hidden_helper_requests_round_trip_through_cli() {
 
     let refresh_usage = AccountUsageRefreshRequest {
         workspace_id: workspace_id.clone(),
-        kind: kind.clone(),
+        login: rimz::ids::LoginKey::default_for(kind.clone()),
         claim_id: "018f7f2e-7b3a-7cc0-8ec1-000000000002".parse().unwrap(),
     };
     let parsed = parse_helper_argv(rimz::child_process::agent_helper_argv(

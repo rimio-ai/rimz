@@ -11,7 +11,7 @@ use crate::common::{CommandTimeoutExt, Env, path_with_front};
 fn refresh_usage_argv(env: &Env, kind: &str, claim_id: &str) -> Vec<String> {
     let request = rimz::sidebar::refresh::usage::AccountUsageRefreshRequest {
         workspace_id: env.workspace_id.clone(),
-        kind: rimz::ids::AgentKind::new_unchecked(kind),
+        login: rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked(kind)),
         claim_id: claim_id.parse().expect("valid usage claim id"),
     };
     rimz::child_process::agent_helper_argv("refresh-usage", &request)
@@ -104,7 +104,9 @@ fn claude_old_workspace_session_cannot_repaint_switched_account_limits() {
         let limits = std::fs::read(runtime.shared_rate_limits_path())
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
-        let entry = limits.as_ref().map(|limits| &limits["entries"]["claude"]);
+        let entry = limits
+            .as_ref()
+            .map(|limits| &limits["entries"]["claude@default"]);
         let settled = entry.is_some_and(|entry| {
             entry["account_key"].as_str().is_some()
                 && entry["bound_limits"]["windows"]
@@ -136,7 +138,7 @@ fn claude_old_workspace_session_cannot_repaint_switched_account_limits() {
         None,
     );
     let limits = read_json(runtime.shared_rate_limits_path());
-    let entry = &limits["entries"]["claude"];
+    let entry = &limits["entries"]["claude@default"];
     assert_eq!(entry["account_key"], switched_key);
     assert!(
         entry["limits"]["windows"]
@@ -254,14 +256,14 @@ fn one_cold_snapshot_discovers_claude_and_publishes_first_usage_windows() {
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
         let settled = credits.as_ref().is_some_and(|credits| {
-            credits["entries"]["claude"]["oauth_read_at_ms"]
+            credits["logins"]["claude@default"]["oauth_read_at_ms"]
                 .as_u64()
                 .is_some_and(|stamp| stamp > 0)
-                && credits["entries"]["claude"]["direct_query_claim"].is_null()
+                && credits["logins"]["claude@default"]["direct_query_claim"].is_null()
         });
         let window_count = limits
             .as_ref()
-            .and_then(|limits| limits["entries"]["claude"]["limits"]["windows"].as_array())
+            .and_then(|limits| limits["entries"]["claude@default"]["limits"]["windows"].as_array())
             .map_or(0, Vec::len);
         if settled && window_count == 2 {
             break;
@@ -346,32 +348,35 @@ fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint(
     let runtime = env.runtime_paths();
     let credits = read_json(runtime.shared_credits_path());
     assert_eq!(
-        credits["entries"]["claude"]["extra_credits"]["known"]["used_usd"],
+        credits["logins"]["claude@default"]["extra_credits"]["known"]["used_usd"],
         7.25
     );
     assert_eq!(
-        credits["entries"]["claude"]["extra_credits"]["known"]["limit_usd"],
+        credits["logins"]["claude@default"]["extra_credits"]["known"]["limit_usd"],
         50.0
     );
     assert_eq!(
-        credits["entries"]["claude"]["account_key"]
+        credits["logins"]["claude@default"]["account_key"]
             .as_str()
             .map(str::len),
         Some(64)
     );
-    assert_ne!(credits["entries"]["claude"]["account_key"], "claude-token");
+    assert_ne!(
+        credits["logins"]["claude@default"]["account_key"],
+        "claude-token"
+    );
     let limits = read_json(runtime.shared_rate_limits_path());
     assert_eq!(
-        limits["entries"]["claude"]["limits"]["windows"][0]["used_percentage"],
+        limits["entries"]["claude@default"]["limits"]["windows"][0]["used_percentage"],
         13
     );
     assert_eq!(
-        limits["entries"]["claude"]["limits"]["windows"][1]["duration_mins"],
+        limits["entries"]["claude@default"]["limits"]["windows"][1]["duration_mins"],
         10080
     );
 
     let mut session_limits = limits;
-    for window in session_limits["entries"]["claude"]["limits"]["windows"]
+    for window in session_limits["entries"]["claude@default"]["limits"]["windows"]
         .as_array_mut()
         .expect("cached windows")
     {
@@ -471,9 +476,9 @@ fn claude_refresh_usage_refuses_an_untrusted_override_without_publishing_usage()
 
     let runtime = env.runtime_paths();
     let credits = read_json(runtime.shared_credits_path());
-    assert!(credits["entries"]["claude"]["oauth_read_at_ms"].as_u64() > Some(1));
-    assert_eq!(credits["entries"]["claude"]["auth_settled"], true);
-    assert!(credits["entries"]["claude"]["direct_query_claim"].is_null());
+    assert!(credits["logins"]["claude@default"]["oauth_read_at_ms"].as_u64() > Some(1));
+    assert_eq!(credits["logins"]["claude@default"]["auth_settled"], true);
+    assert!(credits["logins"]["claude@default"]["direct_query_claim"].is_null());
     assert!(
         std::fs::read(runtime.shared_rate_limits_path()).is_err(),
         "an untrusted endpoint must not publish usage windows"
@@ -531,7 +536,7 @@ fn claude_refresh_usage_retries_transient_http_failures() {
 
     let limits = read_json(env.runtime_paths().shared_rate_limits_path());
     assert!(
-        limits["entries"]["claude"]["limits"]["windows"]
+        limits["entries"]["claude@default"]["limits"]["windows"]
             .as_array()
             .is_some_and(|windows| !windows.is_empty())
     );
@@ -601,21 +606,21 @@ fn agents_refresh_usage_codex_falls_back_to_oauth_usage_when_app_server_is_unrea
     let runtime = env.runtime_paths();
     let credits = read_json(runtime.shared_credits_path());
     assert_eq!(
-        credits["entries"]["codex"]["extra_credits"]["known"]["remaining_usd"],
+        credits["logins"]["codex@default"]["extra_credits"]["known"]["remaining_usd"],
         18.5
     );
-    assert_eq!(credits["entries"]["codex"]["account_key"], "acc_123");
+    assert_eq!(credits["logins"]["codex@default"]["account_key"], "acc_123");
     let limits = read_json(runtime.shared_rate_limits_path());
     assert_eq!(
-        limits["entries"]["codex"]["limits"]["windows"][0]["used_percentage"],
+        limits["entries"]["codex@default"]["limits"]["windows"][0]["used_percentage"],
         42
     );
     assert_eq!(
-        limits["entries"]["codex"]["limits"]["windows"][0]["duration_mins"],
+        limits["entries"]["codex@default"]["limits"]["windows"][0]["duration_mins"],
         300
     );
     assert_eq!(
-        limits["entries"]["codex"]["limits"]["windows"][1]["duration_mins"],
+        limits["entries"]["codex@default"]["limits"]["windows"][1]["duration_mins"],
         10080
     );
 }

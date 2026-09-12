@@ -865,7 +865,7 @@ fn fold_machine_config(
     let (accounts, spending) = if let Some(lanes) = lanes {
         (lanes.accounts.clone(), lanes.spending.clone())
     } else {
-        let accounts = cached_accounts_for_snapshot(runtime, &snapshot);
+        let accounts = cached_accounts_for_snapshot(runtime, &snapshot, logins);
         // Consumers read producer publications only. A missing workspace
         // sidecar stays absent until the elected producer supplies it.
         let spending = super::refresh::consumer_spending_caches(runtime, &snapshot);
@@ -880,8 +880,9 @@ fn fold_machine_config(
     );
     // Every fold merges the producer-published account windows read-only. The
     // refresh lane owns writes.
+    label_provider_logins(&mut snapshot.providers, logins);
     apply_cached_rate_limits(&mut snapshot, runtime, logins);
-    apply_credits_cache(&mut snapshot, runtime, &accounts_config);
+    apply_credits_cache(&mut snapshot, runtime, &accounts_config, logins);
     (snapshot, spending)
 }
 
@@ -909,8 +910,9 @@ pub fn provider_panels_from_caches(
         &provider_spending.spending.by_provider,
         RemoteControlServerHealth::default(),
     );
+    label_provider_logins(&mut snapshot.providers, logins);
     apply_cached_rate_limits(&mut snapshot, runtime, logins);
-    apply_credits_cache(&mut snapshot, runtime, &config.accounts);
+    apply_credits_cache(&mut snapshot, runtime, &config.accounts, logins);
     crate::harness::budget::project_budget_views(
         &mut snapshot,
         runtime,
@@ -918,6 +920,17 @@ pub fn provider_panels_from_caches(
         provider_spending,
     );
     snapshot.providers
+}
+
+fn label_provider_logins(
+    panels: &mut [SidebarProviderPanel],
+    logins: &crate::agents::RoomLoginSet,
+) {
+    for panel in panels {
+        if let Some(key) = logins.key(&panel.kind).filter(|key| !key.name.is_default()) {
+            panel.product_name.push_str(&format!(" · {}", key.name));
+        }
+    }
 }
 
 /// Apply the resolved config and already-resolved accounts onto the snapshot:

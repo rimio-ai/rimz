@@ -197,7 +197,7 @@ mod tests {
         atomic::write_temp_then_rename_cache(
             &runtime.shared_accounts_path(),
             &AccountsCache {
-                providers: BTreeMap::new(),
+                logins: BTreeMap::new(),
             },
         )
         .unwrap();

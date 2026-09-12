@@ -101,7 +101,7 @@ fn cached_enrich_waits_for_producer_workspace_publication() {
     atomic::write_temp_then_rename_cache(
         &runtime.shared_accounts_path(),
         &AccountsCache {
-            providers: BTreeMap::new(),
+            logins: BTreeMap::new(),
         },
     )
     .unwrap();

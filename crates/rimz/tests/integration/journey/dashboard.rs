@@ -134,7 +134,17 @@ fn accounts() -> AccountsCache {
             }),
         },
     );
-    AccountsCache { providers }
+    AccountsCache {
+        logins: providers
+            .into_iter()
+            .map(|(kind, record)| {
+                (
+                    rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked(kind)),
+                    record,
+                )
+            })
+            .collect(),
+    }
 }
 
 fn spending() -> Spending {

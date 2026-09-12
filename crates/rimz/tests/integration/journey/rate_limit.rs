@@ -167,7 +167,17 @@ fn accounts() -> AccountsCache {
             }),
         },
     );
-    AccountsCache { providers }
+    AccountsCache {
+        logins: providers
+            .into_iter()
+            .map(|(kind, record)| {
+                (
+                    rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked(kind)),
+                    record,
+                )
+            })
+            .collect(),
+    }
 }
 
 fn rate_cache(used: u8, resets_at: Timestamp) -> RateLimitsCache {

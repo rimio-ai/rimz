@@ -15,14 +15,19 @@ pub(super) fn run_auto_redeem(request: AutoRedeemRequest) -> Result<()> {
 
     let result = rimz::harness::auto_redeem::execute_auto_redeem(
         &runtime,
-        &request.kind,
+        &request.login,
         request.reason,
         request.request_id,
         &config.resume,
     );
     match result {
         Ok(Some(report)) => {
-            append_report(request.kind.as_str(), request.request_id, &report, None);
+            append_report(
+                request.login.kind.as_str(),
+                request.request_id,
+                &report,
+                None,
+            );
             if report.reset {
                 let _ = rimz::wakeup::wake_store_delta(&runtime, None, None);
             }
@@ -31,7 +36,7 @@ pub(super) fn run_auto_redeem(request: AutoRedeemRequest) -> Result<()> {
         Err(err) => {
             if let Some(report) = err.attempted_report() {
                 append_report(
-                    request.kind.as_str(),
+                    request.login.kind.as_str(),
                     request.request_id,
                     report,
                     Some(err.to_string()),

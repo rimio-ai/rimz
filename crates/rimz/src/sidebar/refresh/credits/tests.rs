@@ -150,7 +150,7 @@ fn no_credentials_completion_adopts_preflight_scope_and_settles_cadence() {
     write_credits_cache(
         &runtime.shared_credits_path(),
         &CreditsCache {
-            entries: BTreeMap::from([("pi".to_owned(), next)]),
+            logins: BTreeMap::from([("pi@default".parse().unwrap(), next)]),
             ..Default::default()
         },
     );
@@ -158,7 +158,7 @@ fn no_credentials_completion_adopts_preflight_scope_and_settles_cadence() {
     assert_eq!(
         claim_provider_account_usage_with_hint_at(
             &runtime,
-            "pi",
+            &"pi@default".parse().unwrap(),
             Some(identity(Some(7), None, scope)),
             now + 1,
             nonce(44),
@@ -226,10 +226,65 @@ fn panel(kind: &str, metered: bool) -> SidebarProviderPanel {
 #[test]
 fn legacy_cache_defaults_missing_claim() {
     let cache: CreditsCache = serde_json::from_str(
-        r#"{"refreshed_at_ms":1,"entries":{"codex":{"observed_at_ms":1,"ok":true}}}"#,
+        r#"{"refreshed_at_ms":1,"logins":{"codex@default":{"observed_at_ms":1,"ok":true}}}"#,
     )
     .unwrap();
-    assert_eq!(cache.entries["codex"].direct_query_claim, None);
+    assert_eq!(
+        cache.logins
+            [&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"))]
+            .direct_query_claim,
+        None
+    );
+    let (dir, _) = runtime();
+    let path = dir.path().join("credits.json");
+    std::fs::write(&path, r#"{"refreshed_at_ms":1,"entries":{}}"#).unwrap();
+    assert!(read_credits_cache(&path).logins.is_empty());
+}
+
+#[test]
+fn credits_projection_selects_the_room_login_and_never_falls_back() {
+    let (_dir, runtime) = runtime();
+    let work_key: LoginKey = "claude@work".parse().unwrap();
+    let default_key: LoginKey = "claude@default".parse().unwrap();
+    let accounts = toml::from_str("[claude.work]\nhome = \"/srv/rimz-test-work\"\n").unwrap();
+    let work = RoomLoginSet::new(
+        Some(crate::ids::RoomLogins::from([(
+            work_key.kind.clone(),
+            work_key.name.clone(),
+        )])),
+        Some(crate::agents::LoginCatalog::from_config(&accounts).unwrap()),
+        BTreeMap::new(),
+    );
+    let cache = CreditsCache {
+        logins: [(default_key, 7.0), (work_key, 19.0)]
+            .into_iter()
+            .map(|(key, used)| {
+                (
+                    key,
+                    ProviderCreditsEntry {
+                        observed_at_ms: unix_now_ms(),
+                        ok: true,
+                        extra_credits: Some(ExtraCredits::known(Some(used), None, None)),
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect(),
+        ..Default::default()
+    };
+    write_credits_cache(&runtime.shared_credits_path(), &cache);
+    let mut snapshot = crate::sidebar::test_support::snapshot_with_panels(
+        runtime.workspace_id.clone(),
+        vec![panel("claude", true)],
+    );
+    apply_credits_cache(&mut snapshot, &runtime, &accounts, &work);
+    assert_eq!(
+        snapshot.providers[0].extra_credits,
+        Some(ExtraCredits::known(Some(19.0), None, None))
+    );
+    let unresolved = RoomLoginSet::new(None, None, BTreeMap::new());
+    apply_credits_cache(&mut snapshot, &runtime, &accounts, &unresolved);
+    assert_eq!(snapshot.providers[0].extra_credits, None);
 }
 
 #[test]
@@ -241,8 +296,8 @@ fn fold_applies_cached_credits_and_api_spend_ceiling() {
     );
     snapshot.providers = vec![panel("claude", true), panel("codex", false)];
     let cache = CreditsCache {
-        entries: BTreeMap::from([(
-            "claude".to_owned(),
+        logins: BTreeMap::from([(
+            crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
             ProviderCreditsEntry {
                 observed_at_ms: 100,
                 ok: true,
@@ -262,7 +317,13 @@ fn fold_applies_cached_credits_and_api_spend_ceiling() {
         crate::config::UsageLimitUsd::from_usd(25.0),
     );
 
-    apply_credits_cache_with(&mut snapshot, &cache, &accounts, 100);
+    apply_credits_cache_with(
+        &mut snapshot,
+        &cache,
+        &accounts,
+        &RoomLoginSet::native(),
+        100,
+    );
     assert_eq!(
         snapshot.providers[0].extra_credits,
         Some(ExtraCredits::known(Some(7.0), None, Some(50.0)))
@@ -280,8 +341,8 @@ fn account_usage_fresh_attempt_blocks_claim_but_identity_changes_are_due() {
     write_credits_cache(
         &runtime.shared_credits_path(),
         &CreditsCache {
-            entries: BTreeMap::from([(
-                "codex".to_owned(),
+            logins: BTreeMap::from([(
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
                 ProviderCreditsEntry {
                     scope: ProviderAccountScope::KindWide,
                     oauth_read_at_ms: now,
@@ -297,7 +358,7 @@ fn account_usage_fresh_attempt_blocks_claim_but_identity_changes_are_due() {
     assert_eq!(
         claim_provider_account_usage_at(
             &runtime,
-            "codex",
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
             identity(Some(7), Some("owner"), ProviderAccountScope::KindWide),
             now + 1,
             nonce(1),
@@ -320,8 +381,10 @@ fn account_usage_fresh_attempt_blocks_claim_but_identity_changes_are_due() {
         write_credits_cache(
             &runtime.shared_credits_path(),
             &CreditsCache {
-                entries: BTreeMap::from([(
-                    "codex".to_owned(),
+                logins: BTreeMap::from([(
+                    crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
+                        "codex",
+                    )),
                     ProviderCreditsEntry {
                         scope: ProviderAccountScope::KindWide,
                         oauth_read_at_ms: now,
@@ -338,21 +401,25 @@ fn account_usage_fresh_attempt_blocks_claim_but_identity_changes_are_due() {
         assert!(
             claim_provider_account_usage_at(
                 &runtime,
-                "codex",
+                &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
                 identity(stamp, key, scope),
                 now + 2,
                 claim_id,
             )
             .is_some()
         );
-        cancel_provider_account_usage_claim(&runtime, "codex", claim_id);
+        cancel_provider_account_usage_claim(
+            &runtime,
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+            claim_id,
+        );
     }
 
     write_credits_cache(
         &runtime.shared_credits_path(),
         &CreditsCache {
-            entries: BTreeMap::from([(
-                "codex".to_owned(),
+            logins: BTreeMap::from([(
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
                 ProviderCreditsEntry {
                     oauth_read_at_ms: now,
                     credentials_stamp: Some(7),
@@ -365,7 +432,7 @@ fn account_usage_fresh_attempt_blocks_claim_but_identity_changes_are_due() {
     assert!(
         claim_provider_account_usage_at(
             &runtime,
-            "codex",
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
             identity(Some(7), Some("owner"), ProviderAccountScope::KindWide),
             now + 2,
             nonce(9),
@@ -392,8 +459,10 @@ fn account_usage_cache_derived_claim_suppresses_fresh_reads_and_reopens_on_publi
         write_credits_cache(
             &runtime.shared_credits_path(),
             &CreditsCache {
-                entries: BTreeMap::from([(
-                    "codex".to_owned(),
+                logins: BTreeMap::from([(
+                    crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
+                        "codex",
+                    )),
                     ProviderCreditsEntry {
                         scope: prior_scope.clone(),
                         oauth_read_at_ms: now,
@@ -407,8 +476,14 @@ fn account_usage_cache_derived_claim_suppresses_fresh_reads_and_reopens_on_publi
             },
         );
         assert_eq!(
-            claim_provider_account_usage_with_hint_at(&runtime, "codex", hint, now + 1, nonce(11),)
-                .is_some(),
+            claim_provider_account_usage_with_hint_at(
+                &runtime,
+                &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+                hint,
+                now + 1,
+                nonce(11),
+            )
+            .is_some(),
             expected_claim
         );
     }
@@ -421,8 +496,8 @@ fn settled_attempt_waits_for_long_ttl_unless_credentials_change() {
     write_credits_cache(
         &runtime.shared_credits_path(),
         &CreditsCache {
-            entries: BTreeMap::from([(
-                "claude".to_owned(),
+            logins: BTreeMap::from([(
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderCreditsEntry {
                     oauth_read_at_ms: now,
                     auth_settled: true,
@@ -436,7 +511,7 @@ fn settled_attempt_waits_for_long_ttl_unless_credentials_change() {
     assert_eq!(
         claim_provider_account_usage_at(
             &runtime,
-            "claude",
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
             identity(Some(7), None, ProviderAccountScope::KindWide),
             now + OAUTH_USAGE_TTL.as_millis() as u64 + 1,
             nonce(1),
@@ -446,7 +521,7 @@ fn settled_attempt_waits_for_long_ttl_unless_credentials_change() {
     assert_eq!(
         claim_provider_account_usage_at(
             &runtime,
-            "claude",
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
             identity(Some(8), None, ProviderAccountScope::KindWide),
             now + 1,
             nonce(2),
@@ -462,8 +537,8 @@ fn account_usage_cache_derived_settled_attempt_waits_for_long_ttl() {
     write_credits_cache(
         &runtime.shared_credits_path(),
         &CreditsCache {
-            entries: BTreeMap::from([(
-                "claude".to_owned(),
+            logins: BTreeMap::from([(
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderCreditsEntry {
                     oauth_read_at_ms: now,
                     auth_settled: true,
@@ -478,7 +553,7 @@ fn account_usage_cache_derived_settled_attempt_waits_for_long_ttl() {
     assert_eq!(
         claim_provider_account_usage_with_hint_at(
             &runtime,
-            "claude",
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
             Some(identity(Some(7), None, ProviderAccountScope::KindWide,)),
             now + OAUTH_USAGE_TTL.as_millis() as u64 + 1,
             nonce(1),
@@ -488,7 +563,7 @@ fn account_usage_cache_derived_settled_attempt_waits_for_long_ttl() {
     assert_eq!(
         claim_provider_account_usage_with_hint_at(
             &runtime,
-            "claude",
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
             Some(identity(Some(7), None, ProviderAccountScope::KindWide,)),
             now + OAUTH_USAGE_SETTLED_TTL.as_millis() as u64 + 1,
             nonce(2),
@@ -535,8 +610,10 @@ fn completion_detects_symmetric_owner_and_scope_changes() {
         write_credits_cache(
             &runtime.shared_credits_path(),
             &CreditsCache {
-                entries: BTreeMap::from([(
-                    "codex".to_owned(),
+                logins: BTreeMap::from([(
+                    crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
+                        "codex",
+                    )),
                     ProviderCreditsEntry {
                         scope: prior_scope,
                         account_key: prior_key.map(ToOwned::to_owned),
@@ -547,12 +624,17 @@ fn completion_detects_symmetric_owner_and_scope_changes() {
             },
         );
         let current = identity(None, current_key, current_scope);
-        let claim =
-            claim_provider_account_usage_at(&runtime, "codex", current.clone(), 100, nonce(1))
-                .unwrap();
+        let claim = claim_provider_account_usage_at(
+            &runtime,
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+            current.clone(),
+            100,
+            nonce(1),
+        )
+        .unwrap();
         let completion = complete_provider_account_usage(
             &runtime,
-            "codex",
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
             claim,
             AccountUsageProbe::Found {
                 identity: current,
@@ -571,17 +653,29 @@ fn competing_claim_waits_and_expired_claim_is_replaced() {
     let second = nonce(2);
     let hint = identity(None, None, ProviderAccountScope::KindWide);
     assert_eq!(
-        claim_provider_account_usage_at(&runtime, "codex", hint.clone(), 100, first),
+        claim_provider_account_usage_at(
+            &runtime,
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+            hint.clone(),
+            100,
+            first
+        ),
         Some(first)
     );
     assert_eq!(
-        claim_provider_account_usage_at(&runtime, "codex", hint.clone(), 101, second),
+        claim_provider_account_usage_at(
+            &runtime,
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+            hint.clone(),
+            101,
+            second
+        ),
         None
     );
     assert_eq!(
         claim_provider_account_usage_at(
             &runtime,
-            "codex",
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
             hint.clone(),
             100 + ACCOUNT_USAGE_CLAIM_TTL.as_millis() as u64,
             second,
@@ -591,24 +685,49 @@ fn competing_claim_waits_and_expired_claim_is_replaced() {
     );
     let expired = 100 + ACCOUNT_USAGE_CLAIM_TTL.as_millis() as u64 + 1;
     assert_eq!(
-        claim_provider_account_usage_at(&runtime, "codex", hint, expired, second),
+        claim_provider_account_usage_at(
+            &runtime,
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+            hint,
+            expired,
+            second
+        ),
         Some(second)
     );
-    assert!(!account_usage_claim_matches(&runtime, "codex", first));
-    assert!(account_usage_claim_matches(&runtime, "codex", second));
+    assert!(!account_usage_claim_matches(
+        &runtime,
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+        first
+    ));
+    assert!(account_usage_claim_matches(
+        &runtime,
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+        second
+    ));
 }
 
 #[test]
 fn renewal_requires_the_matching_live_nonce() {
     let (_dir, runtime) = runtime();
     let first = nonce(1);
-    claim_provider_account_usage_at(&runtime, "codex", Default::default(), 100, first).unwrap();
+    claim_provider_account_usage_at(
+        &runtime,
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+        Default::default(),
+        100,
+        first,
+    )
+    .unwrap();
 
     assert!(renew_provider_account_usage_claim_at(
-        &runtime, "codex", first, 200
+        &runtime,
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+        first,
+        200
     ));
     assert_eq!(
-        read_credits_cache(&runtime.shared_credits_path()).entries["codex"]
+        read_credits_cache(&runtime.shared_credits_path()).logins
+            [&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"))]
             .direct_query_claim
             .as_ref()
             .map(|claim| claim.claimed_at_ms),
@@ -616,7 +735,7 @@ fn renewal_requires_the_matching_live_nonce() {
     );
     assert!(!renew_provider_account_usage_claim_at(
         &runtime,
-        "codex",
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
         nonce(2),
         300
     ));
@@ -624,16 +743,20 @@ fn renewal_requires_the_matching_live_nonce() {
     let second = nonce(2);
     claim_provider_account_usage_at(
         &runtime,
-        "codex",
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
         Default::default(),
         200 + ACCOUNT_USAGE_CLAIM_TTL.as_millis() as u64 + 1,
         second,
     )
     .unwrap();
     assert!(!renew_provider_account_usage_claim_at(
-        &runtime, "codex", first, 400
+        &runtime,
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+        first,
+        400
     ));
-    let claim = read_credits_cache(&runtime.shared_credits_path()).entries["codex"]
+    let claim = read_credits_cache(&runtime.shared_credits_path()).logins
+        [&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"))]
         .direct_query_claim
         .clone()
         .unwrap();
@@ -644,29 +767,47 @@ fn renewal_requires_the_matching_live_nonce() {
 #[test]
 fn cancel_and_late_completion_require_matching_nonce() {
     let (_dir, runtime) = runtime();
-    let first =
-        claim_provider_account_usage_at(&runtime, "codex", Default::default(), 100, nonce(1))
-            .unwrap();
+    let first = claim_provider_account_usage_at(
+        &runtime,
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+        Default::default(),
+        100,
+        nonce(1),
+    )
+    .unwrap();
     assert!(cancel_provider_account_usage_claim(
-        &runtime, "codex", first
+        &runtime,
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+        first
     ));
     assert!(!cancel_provider_account_usage_claim(
-        &runtime, "codex", first
+        &runtime,
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+        first
     ));
 
-    let second =
-        claim_provider_account_usage_at(&runtime, "codex", Default::default(), 101, nonce(2))
-            .unwrap();
+    let second = claim_provider_account_usage_at(
+        &runtime,
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+        Default::default(),
+        101,
+        nonce(2),
+    )
+    .unwrap();
     assert!(
         complete_provider_account_usage(
             &runtime,
-            "codex",
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
             first,
             AccountUsageProbe::Failed(Default::default()),
         )
         .is_none()
     );
-    assert!(account_usage_claim_matches(&runtime, "codex", second));
+    assert!(account_usage_claim_matches(
+        &runtime,
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+        second
+    ));
 }
 
 #[test]
@@ -686,14 +827,20 @@ fn failed_read_preserves_display_data_and_advances_attempt() {
     write_credits_cache(
         &runtime.shared_credits_path(),
         &CreditsCache {
-            entries: BTreeMap::from([("codex".to_owned(), prior.clone())]),
+            logins: BTreeMap::from([(
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+                prior.clone(),
+            )]),
             ..Default::default()
         },
     );
-    invalidate_oauth_read(&runtime, "codex");
+    invalidate_oauth_read(
+        &runtime,
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+    );
     let claim = claim_provider_account_usage_at(
         &runtime,
-        "codex",
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
         identity(None, Some("owner"), ProviderAccountScope::KindWide),
         100,
         nonce(1),
@@ -701,14 +848,14 @@ fn failed_read_preserves_display_data_and_advances_attempt() {
     .unwrap();
     complete_provider_account_usage(
         &runtime,
-        "codex",
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
         claim,
         AccountUsageProbe::Failed(Default::default()),
     )
     .unwrap();
     let entry = read_credits_cache(&runtime.shared_credits_path())
-        .entries
-        .remove("codex")
+        .logins
+        .remove(&"codex@default".parse().unwrap())
         .unwrap();
     assert!(entry.ok);
     assert_eq!(entry.plan, prior.plan);
@@ -726,8 +873,8 @@ fn failed_read_uses_claimed_owner_when_probe_cannot_repeat_identity() {
     write_credits_cache(
         &runtime.shared_credits_path(),
         &CreditsCache {
-            entries: BTreeMap::from([(
-                "plugin".to_owned(),
+            logins: BTreeMap::from([(
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("plugin")),
                 ProviderCreditsEntry {
                     account_key: Some("old".to_owned()),
                     plan: Some("pro".to_owned()),
@@ -740,7 +887,7 @@ fn failed_read_uses_claimed_owner_when_probe_cannot_repeat_identity() {
     );
     let claim = claim_provider_account_usage_at(
         &runtime,
-        "plugin",
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("plugin")),
         identity(None, Some("new"), ProviderAccountScope::KindWide),
         100,
         nonce(1),
@@ -748,13 +895,14 @@ fn failed_read_uses_claimed_owner_when_probe_cannot_repeat_identity() {
     .unwrap();
     let completion = complete_provider_account_usage(
         &runtime,
-        "plugin",
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("plugin")),
         claim,
         AccountUsageProbe::Failed(Default::default()),
     )
     .unwrap();
     assert!(completion.account_changed);
-    let entry = &read_credits_cache(&runtime.shared_credits_path()).entries["plugin"];
+    let entry = &read_credits_cache(&runtime.shared_credits_path()).logins
+        [&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("plugin"))];
     assert_eq!(entry.account_key.as_deref(), Some("new"));
     assert_eq!(entry.plan, None);
 }
@@ -766,8 +914,8 @@ fn successful_partial_read_preserves_prior_optional_credits() {
     write_credits_cache(
         &runtime.shared_credits_path(),
         &CreditsCache {
-            entries: BTreeMap::from([(
-                "codex".to_owned(),
+            logins: BTreeMap::from([(
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
                 ProviderCreditsEntry {
                     account_key: Some("owner".to_owned()),
                     plan: Some("pro".to_owned()),
@@ -783,11 +931,17 @@ fn successful_partial_read_preserves_prior_optional_credits() {
             ..Default::default()
         },
     );
-    let claim =
-        claim_provider_account_usage_at(&runtime, "codex", current.clone(), 100, nonce(1)).unwrap();
+    let claim = claim_provider_account_usage_at(
+        &runtime,
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+        current.clone(),
+        100,
+        nonce(1),
+    )
+    .unwrap();
     complete_provider_account_usage(
         &runtime,
-        "codex",
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
         claim,
         AccountUsageProbe::Found {
             identity: current,
@@ -795,7 +949,8 @@ fn successful_partial_read_preserves_prior_optional_credits() {
         },
     )
     .unwrap();
-    let entry = &read_credits_cache(&runtime.shared_credits_path()).entries["codex"];
+    let entry = &read_credits_cache(&runtime.shared_credits_path()).logins
+        [&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"))];
     assert_eq!(entry.plan.as_deref(), Some("pro"));
     assert_eq!(
         entry.extra_credits,
@@ -820,8 +975,8 @@ fn realtime_write_preserves_attempt_and_claim() {
     write_credits_cache(
         &runtime.shared_credits_path(),
         &CreditsCache {
-            entries: BTreeMap::from([(
-                "codex".to_owned(),
+            logins: BTreeMap::from([(
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
                 ProviderCreditsEntry {
                     oauth_read_at_ms: 55,
                     auth_settled: true,
@@ -842,14 +997,15 @@ fn realtime_write_preserves_attempt_and_claim() {
     );
     merge_provider_realtime_usage(
         &runtime,
-        "codex",
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
         ProviderAccountScope::KindWide,
         AccountUsageSnapshot {
             plan: Some(" pro ".to_owned()),
             ..Default::default()
         },
     );
-    let entry = &read_credits_cache(&runtime.shared_credits_path()).entries["codex"];
+    let entry = &read_credits_cache(&runtime.shared_credits_path()).logins
+        [&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"))];
     assert_eq!(entry.oauth_read_at_ms, 55);
     assert!(entry.auth_settled);
     assert_eq!(entry.direct_query_claim.as_ref(), Some(&claim));
@@ -865,7 +1021,7 @@ fn realtime_write_preserves_attempt_and_claim() {
 
     merge_provider_realtime_usage(
         &runtime,
-        "codex",
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
         ProviderAccountScope::KindWide,
         AccountUsageSnapshot {
             reset_credits: Some(ResetCredits {
@@ -876,7 +1032,8 @@ fn realtime_write_preserves_attempt_and_claim() {
             ..Default::default()
         },
     );
-    let entry = &read_credits_cache(&runtime.shared_credits_path()).entries["codex"];
+    let entry = &read_credits_cache(&runtime.shared_credits_path()).logins
+        [&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"))];
     assert_eq!(entry.oauth_read_at_ms, 55);
     assert_eq!(entry.direct_query_claim.as_ref(), Some(&claim));
     assert_eq!(

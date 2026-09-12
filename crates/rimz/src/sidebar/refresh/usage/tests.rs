@@ -29,13 +29,28 @@ fn account_usage_runtime() -> (tempfile::TempDir, RuntimePaths) {
 }
 
 #[test]
+fn claimed_usage_refuses_and_cancels_a_different_room_login() {
+    let (_dir, runtime) = account_usage_runtime();
+    let work: LoginKey = "claude@work".parse().unwrap();
+    let claim = claim_provider_account_usage(&runtime, &work, None).unwrap();
+    assert!(!refresh_claimed_account_usage_with(
+        &runtime,
+        &work,
+        claim,
+        &RoomLoginSet::native()
+    ));
+    assert!(!account_usage_claim_matches(&runtime, &work, claim));
+    assert!(claim_provider_account_usage(&runtime, &work, None).is_some());
+}
+
+#[test]
 fn forced_account_usage_refresh_invalidates_throttle_before_direct_claim() {
     let (_dir, runtime) = account_usage_runtime();
     super::super::credits::write_credits_cache(
         &runtime.shared_credits_path(),
         &CreditsCache {
-            entries: BTreeMap::from([(
-                "claude".to_owned(),
+            logins: BTreeMap::from([(
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderCreditsEntry {
                     oauth_read_at_ms: 123,
                     auth_settled: true,
@@ -49,13 +64,13 @@ fn forced_account_usage_refresh_invalidates_throttle_before_direct_claim() {
 
     assert!(refresh_provider_usage_with(
         &runtime,
-        "claude",
+        &ProviderLogin::default_for(crate::ids::AgentKind::new_unchecked("claude")),
         true,
         |runtime, kind| {
             called = true;
-            assert_eq!(kind, "claude");
+            assert_eq!(kind.kind().as_str(), "claude");
             let cache = super::super::credits::read_credits_cache(&runtime.shared_credits_path());
-            let entry = &cache.entries[kind];
+            let entry = &cache.logins[&kind.key()];
             assert_eq!(entry.oauth_read_at_ms, 0);
             assert!(!entry.auth_settled);
             assert_eq!(entry.direct_query_claim, None);
@@ -82,13 +97,22 @@ fn account_usage_completion_publishes_complete_realtime_without_fallback() {
     let mut realtime = complete_realtime();
     realtime.rate_limits = Some(usage_windows(12));
 
-    let wrote = complete_realtime_account_usage_with(&runtime, "codex", realtime, |_, _| {
-        unreachable!("complete realtime usage needs no direct fallback")
-    });
+    let wrote = complete_realtime_account_usage_with(
+        &runtime,
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+        realtime,
+        |_, _| unreachable!("complete realtime usage needs no direct fallback"),
+    );
 
     assert!(wrote);
     let credits = super::super::credits::read_credits_cache(&runtime.shared_credits_path());
-    assert_eq!(credits.entries["codex"].plan.as_deref(), Some("pro"));
+    assert_eq!(
+        credits.logins
+            [&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"))]
+            .plan
+            .as_deref(),
+        Some("pro")
+    );
     assert_eq!(
         read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries
             [&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"))]
@@ -107,8 +131,11 @@ fn account_usage_completion_combines_realtime_credits_with_direct_windows() {
         ..Default::default()
     };
 
-    let wrote =
-        complete_realtime_account_usage_with(&runtime, "codex", realtime, |runtime, kind| {
+    let wrote = complete_realtime_account_usage_with(
+        &runtime,
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+        realtime,
+        |runtime, kind| {
             publish_account_usage_snapshot(
                 runtime,
                 kind,
@@ -117,11 +144,18 @@ fn account_usage_completion_combines_realtime_credits_with_direct_windows() {
                     ..Default::default()
                 },
             )
-        });
+        },
+    );
 
     assert!(wrote);
     let credits = super::super::credits::read_credits_cache(&runtime.shared_credits_path());
-    assert_eq!(credits.entries["codex"].plan.as_deref(), Some("pro"));
+    assert_eq!(
+        credits.logins
+            [&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"))]
+            .plan
+            .as_deref(),
+        Some("pro")
+    );
     assert_eq!(
         read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries
             [&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"))]
@@ -154,18 +188,24 @@ fn account_usage_completion_offline_skips_publication_and_probe() {
     }
     let (_dir, runtime) = account_usage_runtime();
     let called = std::cell::Cell::new(false);
-    let wrote =
-        complete_realtime_account_usage_with(&runtime, "codex", complete_realtime(), |_, _| {
+    let wrote = complete_realtime_account_usage_with(
+        &runtime,
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+        complete_realtime(),
+        |_, _| {
             called.set(true);
             true
-        });
+        },
+    );
 
     assert!(!wrote);
     assert!(!called.get());
     assert!(
         !super::super::credits::read_credits_cache(&runtime.shared_credits_path())
-            .entries
-            .contains_key("codex")
+            .logins
+            .contains_key(&crate::ids::LoginKey::default_for(
+                crate::ids::AgentKind::new_unchecked("codex")
+            ))
     );
 }
 
@@ -180,8 +220,8 @@ fn authoritative_direct_completion_survives_live_session_exit() {
     super::super::credits::write_credits_cache(
         &runtime.shared_credits_path(),
         &CreditsCache {
-            entries: BTreeMap::from([(
-                "claude".to_owned(),
+            logins: BTreeMap::from([(
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderCreditsEntry {
                     account_key: identity.account_key.clone(),
                     ok: true,
@@ -212,10 +252,15 @@ fn authoritative_direct_completion_survives_live_session_exit() {
             ],
         },
     );
-    let claim = claim_provider_account_usage(&runtime, "claude", Some(identity.clone())).unwrap();
+    let claim = claim_provider_account_usage(
+        &runtime,
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
+        Some(identity.clone()),
+    )
+    .unwrap();
     assert!(complete_direct_account_usage(
         &runtime,
-        "claude",
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
         claim,
         crate::agents::AccountUsageProbe::Found {
             identity,
@@ -288,8 +333,10 @@ fn owned_usage_runtime(owner: &str) -> (tempfile::TempDir, RuntimePaths) {
     super::super::credits::write_credits_cache(
         &runtime.shared_credits_path(),
         &CreditsCache {
-            entries: BTreeMap::from([(
-                "antigravity".to_owned(),
+            logins: BTreeMap::from([(
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
+                    "antigravity",
+                )),
                 ProviderCreditsEntry {
                     account_key: Some(owner.to_owned()),
                     plan: Some("old plan".to_owned()),
@@ -324,7 +371,12 @@ fn usage_identity(owner: Option<&str>) -> AccountUsageIdentity {
 }
 
 fn claim(runtime: &RuntimePaths) -> Uuid {
-    claim_provider_account_usage(runtime, "antigravity", None).unwrap()
+    claim_provider_account_usage(
+        runtime,
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("antigravity")),
+        None,
+    )
+    .unwrap()
 }
 
 fn windows(runtime: &RuntimePaths) -> Vec<RateLimitWindow> {
@@ -342,7 +394,7 @@ fn direct_account_usage_completion_replaces_or_drops_windows_only_for_a_known_ne
     let (_dir, runtime) = owned_usage_runtime("owner-a");
     assert!(complete_direct_account_usage(
         &runtime,
-        "antigravity",
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("antigravity")),
         claim(&runtime),
         crate::agents::AccountUsageProbe::Found {
             identity: usage_identity(Some("owner-b")),
@@ -362,8 +414,8 @@ fn direct_account_usage_completion_replaces_or_drops_windows_only_for_a_known_ne
     ));
     assert_eq!(windows(&runtime)[0].used_percentage, Some(12));
     assert_eq!(
-        super::super::credits::read_credits_cache(&runtime.shared_credits_path()).entries
-            ["antigravity"]
+        super::super::credits::read_credits_cache(&runtime.shared_credits_path()).logins
+            [&"antigravity@default".parse().unwrap()]
             .account_key
             .as_deref(),
         Some("owner-b")
@@ -372,7 +424,7 @@ fn direct_account_usage_completion_replaces_or_drops_windows_only_for_a_known_ne
     let (_dir, runtime) = owned_usage_runtime("owner-a");
     assert!(complete_direct_account_usage(
         &runtime,
-        "antigravity",
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("antigravity")),
         claim(&runtime),
         crate::agents::AccountUsageProbe::Failed(usage_identity(Some("owner-b"))),
     ));
@@ -382,7 +434,7 @@ fn direct_account_usage_completion_replaces_or_drops_windows_only_for_a_known_ne
         let (_dir, runtime) = owned_usage_runtime("owner-a");
         assert!(complete_direct_account_usage(
             &runtime,
-            "antigravity",
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("antigravity")),
             claim(&runtime),
             crate::agents::AccountUsageProbe::Failed(failed_identity),
         ));
@@ -395,7 +447,7 @@ fn unknown_owner_source_reuses_same_scope_owner_until_ttl() {
     let (_dir, runtime) = owned_usage_runtime("owner-a");
     assert!(complete_direct_account_usage(
         &runtime,
-        "antigravity",
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("antigravity")),
         claim(&runtime),
         crate::agents::AccountUsageProbe::Found {
             identity: usage_identity(Some("owner-a")),
@@ -404,7 +456,11 @@ fn unknown_owner_source_reuses_same_scope_owner_until_ttl() {
     ));
 
     assert_eq!(
-        claim_provider_account_usage(&runtime, "antigravity", None),
+        claim_provider_account_usage(
+            &runtime,
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("antigravity")),
+            None
+        ),
         None
     );
 }
@@ -418,8 +474,8 @@ fn fresh_cached_account_usage_gates_helper_and_synchronous_refresh() {
     super::super::accounts::write_accounts_cache(
         &runtime.shared_accounts_path(),
         &AccountsCache {
-            providers: BTreeMap::from([(
-                "claude".to_owned(),
+            logins: BTreeMap::from([(
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderRecord {
                     probed_at_ms: 1,
                     ok: true,
@@ -435,8 +491,8 @@ fn fresh_cached_account_usage_gates_helper_and_synchronous_refresh() {
     super::super::credits::write_credits_cache(
         &runtime.shared_credits_path(),
         &CreditsCache {
-            entries: BTreeMap::from([(
-                "claude".to_owned(),
+            logins: BTreeMap::from([(
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderCreditsEntry {
                     oauth_read_at_ms: crate::utils::time::unix_now_ms(),
                     credentials_stamp: Some(7),
@@ -451,15 +507,19 @@ fn fresh_cached_account_usage_gates_helper_and_synchronous_refresh() {
     let snapshot = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
     let mut spawn_attempts = 0;
 
-    refresh_account_usage_with(&snapshot, &runtime, |_, _, _| {
+    refresh_account_usage_with(&snapshot, &runtime, &RoomLoginSet::native(), |_, _, _| {
         spawn_attempts += 1;
         true
     });
 
     assert_eq!(spawn_attempts, 0);
-    assert!(!merge_account_usage_if_due(&runtime, "claude"));
+    assert!(!merge_account_usage_if_due(
+        &runtime,
+        &ProviderLogin::default_for(crate::ids::AgentKind::new_unchecked("claude"))
+    ));
     assert_eq!(
-        super::super::credits::read_credits_cache(&runtime.shared_credits_path()).entries["claude"]
+        super::super::credits::read_credits_cache(&runtime.shared_credits_path()).logins
+            [&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude"))]
             .direct_query_claim,
         None
     );
@@ -474,8 +534,8 @@ fn account_usage_changed_cached_credentials_claim_once_without_rereading_owner()
     super::super::accounts::write_accounts_cache(
         &runtime.shared_accounts_path(),
         &AccountsCache {
-            providers: BTreeMap::from([(
-                "claude".to_owned(),
+            logins: BTreeMap::from([(
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderRecord {
                     probed_at_ms: 1,
                     ok: true,
@@ -491,8 +551,8 @@ fn account_usage_changed_cached_credentials_claim_once_without_rereading_owner()
     super::super::credits::write_credits_cache(
         &runtime.shared_credits_path(),
         &CreditsCache {
-            entries: BTreeMap::from([(
-                "claude".to_owned(),
+            logins: BTreeMap::from([(
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderCreditsEntry {
                     oauth_read_at_ms: crate::utils::time::unix_now_ms(),
                     credentials_stamp: Some(7),
@@ -507,17 +567,17 @@ fn account_usage_changed_cached_credentials_claim_once_without_rereading_owner()
     let snapshot = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
     let mut spawn_attempts = 0;
 
-    refresh_account_usage_with(&snapshot, &runtime, |_, _, _| {
+    refresh_account_usage_with(&snapshot, &runtime, &RoomLoginSet::native(), |_, _, _| {
         spawn_attempts += 1;
         true
     });
 
     assert_eq!(spawn_attempts, 1);
-    let claim =
-        super::super::credits::read_credits_cache(&runtime.shared_credits_path()).entries["claude"]
-            .direct_query_claim
-            .clone()
-            .unwrap();
+    let claim = super::super::credits::read_credits_cache(&runtime.shared_credits_path()).logins
+        [&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude"))]
+        .direct_query_claim
+        .clone()
+        .unwrap();
     assert_eq!(claim.credentials_stamp, Some(8));
     assert_eq!(claim.preflight_account_key.as_deref(), Some("owner"));
 }
@@ -530,15 +590,15 @@ fn metered_adapter_without_usage_source_creates_no_claim_or_helper() {
     runtime.ensure_dirs().unwrap();
     let snapshot = snapshot_with_panels(workspace, vec![provider_panel("cursor", Vec::new())]);
     let mut spawn_attempts = 0;
-    refresh_account_usage_with(&snapshot, &runtime, |_, _, _| {
+    refresh_account_usage_with(&snapshot, &runtime, &RoomLoginSet::native(), |_, _, _| {
         spawn_attempts += 1;
         true
     });
     assert_eq!(spawn_attempts, 0);
     assert!(
         !super::super::credits::read_credits_cache(&runtime.shared_credits_path())
-            .entries
-            .contains_key("cursor")
+            .logins
+            .contains_key(&"cursor@default".parse().unwrap())
     );
 }
 
@@ -551,8 +611,8 @@ fn failed_spawn_cancels_claim_for_immediate_retry() {
     super::super::accounts::write_accounts_cache(
         &runtime.shared_accounts_path(),
         &AccountsCache {
-            providers: std::collections::BTreeMap::from([(
-                "claude".to_owned(),
+            logins: std::collections::BTreeMap::from([(
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderRecord {
                     probed_at_ms: 1,
                     ok: true,
@@ -567,20 +627,21 @@ fn failed_spawn_cancels_claim_for_immediate_retry() {
     );
     let snapshot = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
     let mut spawn_attempts = 0;
-    refresh_account_usage_with(&snapshot, &runtime, |_, _, _| {
+    refresh_account_usage_with(&snapshot, &runtime, &RoomLoginSet::native(), |_, _, _| {
         spawn_attempts += 1;
         false
     });
     assert_eq!(spawn_attempts, 1);
     assert_eq!(
-        super::super::credits::read_credits_cache(&runtime.shared_credits_path()).entries["claude"]
+        super::super::credits::read_credits_cache(&runtime.shared_credits_path()).logins
+            [&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude"))]
             .direct_query_claim,
         None
     );
     assert!(
         claim_provider_account_usage(
             &runtime,
-            "claude",
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
             Some(AccountUsageIdentity {
                 credentials_stamp: Some(7),
                 ..Default::default()
@@ -599,8 +660,8 @@ fn simultaneous_schedulers_spawn_once_per_provider_kind() {
     super::super::accounts::write_accounts_cache(
         &runtime.shared_accounts_path(),
         &AccountsCache {
-            providers: BTreeMap::from([(
-                "claude".to_owned(),
+            logins: BTreeMap::from([(
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderRecord {
                     probed_at_ms: 1,
                     ok: true,
@@ -618,10 +679,15 @@ fn simultaneous_schedulers_spawn_once_per_provider_kind() {
     std::thread::scope(|scope| {
         for _ in 0..2 {
             scope.spawn(|| {
-                refresh_account_usage_with(&snapshot, &runtime, |_, _, _| {
-                    spawns.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    true
-                });
+                refresh_account_usage_with(
+                    &snapshot,
+                    &runtime,
+                    &RoomLoginSet::native(),
+                    |_, _, _| {
+                        spawns.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        true
+                    },
+                );
             });
         }
     });

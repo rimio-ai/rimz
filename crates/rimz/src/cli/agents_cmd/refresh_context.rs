@@ -56,8 +56,11 @@ pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
         wrote = true;
     }
 
-    if let Some(realtime) = refresh.realtime_usage {
-        wrote |= rimz::sidebar::refresh::complete_realtime_account_usage(&runtime, kind, realtime);
+    if let Some(realtime) = refresh.realtime_usage
+        && let Some(login) = agents::RoomLoginSet::for_runtime(&runtime).login(kind)
+    {
+        wrote |=
+            rimz::sidebar::refresh::complete_realtime_account_usage(&runtime, &login, realtime);
     }
 
     if let Some(observed) = refresh.observed {

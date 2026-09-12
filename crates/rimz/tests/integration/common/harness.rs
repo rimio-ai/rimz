@@ -71,10 +71,10 @@ impl Harness {
             },
         );
         let accounts = rimz::sidebar::refresh::AccountsCache {
-            providers: rimz::agents::known_kinds()
+            logins: rimz::agents::known_kinds()
                 .map(|kind| {
                     (
-                        kind.to_owned(),
+                        rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked(kind)),
                         rimz::sidebar::refresh::ProviderRecord {
                             probed_at_ms: now_ms,
                             ok: false,
