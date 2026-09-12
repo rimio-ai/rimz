@@ -36,6 +36,7 @@ pub(super) struct DoctorReport {
     pub(super) machine_config: MachineConfigHealth,
     pub(super) sandbox: Sandbox,
     pub(super) hooks: Vec<HookRow>,
+    pub(super) accounts: Probe<Accounts>,
     pub(super) plugins: Vec<PluginRow>,
     pub(super) loop_tasks: LoopTasks,
     pub(super) remote_control: RemoteControl,
@@ -468,6 +469,25 @@ pub(super) struct HookRow {
     pub(super) kind: String,
     pub(super) detected: bool,
     pub(super) status: HookStatus,
+}
+
+/// Named provider accounts, and the accounts the current room launches under.
+#[derive(Debug, Serialize)]
+pub(super) struct Accounts {
+    pub(super) rows: Vec<AccountRow>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct AccountRow {
+    pub(super) kind: String,
+    pub(super) name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) home: Option<String>,
+    /// The current room launches this kind under this account.
+    pub(super) room: bool,
+    /// Why a room cannot launch into this account, with the fix.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) problem: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

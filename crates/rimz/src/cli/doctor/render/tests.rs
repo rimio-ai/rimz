@@ -1,9 +1,10 @@
 use super::*;
 use crate::cli::doctor::model::{
-    HookRow, Host, IncidentAgent, LastIncident, LegacySession, LoopTaskRow, MachineConfigProblem,
-    MachineConfigProblemKind, MessageProblemRow, MuxBinaries, MuxLogIssue, OpenCounts,
-    PresenceCommandFailure, PresencePluginRow, PresencePluginStatus, PresencePluginTelemetry,
-    PresencePlugins, RemoteAgent, StorageRootView, TmuxCaps, ZellijCaps, ZellijKittyGraphics,
+    AccountRow, HookRow, Host, IncidentAgent, LastIncident, LegacySession, LoopTaskRow,
+    MachineConfigProblem, MachineConfigProblemKind, MessageProblemRow, MuxBinaries, MuxLogIssue,
+    OpenCounts, PresenceCommandFailure, PresencePluginRow, PresencePluginStatus,
+    PresencePluginTelemetry, PresencePlugins, RemoteAgent, StorageRootView, TmuxCaps, ZellijCaps,
+    ZellijKittyGraphics,
 };
 use rimz::ids::MuxName;
 
@@ -242,6 +243,7 @@ fn report_fixture() -> DoctorReport {
             ),
         },
         hooks: Vec::new(),
+        accounts: Probe::Ready(Accounts { rows: Vec::new() }),
         plugins: Vec::new(),
         loop_tasks: LoopTasks { tasks: Vec::new() },
         remote_control: RemoteControl::Off,
@@ -350,6 +352,47 @@ fn hooks_section_renders_glyph_status_and_fix() {
             .any(|line| line.contains("claude") && line.contains('│')),
         "a working agent never spends a table row:\n{out}"
     );
+}
+
+#[test]
+fn accounts_section_alarms_only_for_the_room_account_it_cannot_launch_into() {
+    let row = |name: &str, room: bool, problem: Option<&str>| AccountRow {
+        kind: "claude".to_owned(),
+        name: name.to_owned(),
+        home: (name != "default").then(|| format!("/srv/{name}")),
+        room,
+        problem: problem.map(str::to_owned),
+    };
+    let accounts = Probe::Ready(Accounts {
+        rows: vec![
+            row("default", false, None),
+            row("travel", true, Some("unknown claude account `travel`")),
+            row("work", false, Some("RimZ hooks are missing")),
+        ],
+    });
+    let out = strip(|w| {
+        let mut tally = Tally::default();
+        render_accounts(w, &accounts, &mut tally)?;
+        render_tally(w, &tally)
+    });
+    for expected in [
+        "ACCOUNTS",
+        "unknown claude account `travel`",
+        "RimZ hooks are missing",
+        "/srv/work",
+        "1 problem in ACCOUNTS",
+    ] {
+        assert!(out.contains(expected), "missing {expected}:\n{out}");
+    }
+
+    let quiet = strip(|w| {
+        render_accounts(
+            w,
+            &Probe::Ready(Accounts { rows: Vec::new() }),
+            &mut Tally::default(),
+        )
+    });
+    assert!(quiet.is_empty(), "no accounts, no section:\n{quiet}");
 }
 
 #[test]

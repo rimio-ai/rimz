@@ -193,7 +193,7 @@ fn list(json: bool) -> Result<()> {
             render::cell(row.kind.as_str()),
             render::cell(row.name.as_str()),
             row.home.as_ref().map_or_else(
-                || render::cell("").dash(),
+                || render::cell("-").dash(),
                 |home| render::cell(render::home_relative(&home.display().to_string())),
             ),
             if row.problem.is_some() {
