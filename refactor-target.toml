@@ -85,6 +85,14 @@ path = "crates/rimz/src/agents/adapters/claude"
 surface-budget = 5
 
 [[module]]
+path = "crates/rimz/src/agents/adapters/kimi"
+surface-budget = 1
+
+[[module]]
+path = "crates/rimz/src/agents/adapters/qwen"
+surface-budget = 1
+
+[[module]]
 path = "crates/rimz/src/agents/spending"
 # Parser wire, walker, and cache records stay public for the adapters, bench, perf and example crates.
 surface-budget = 83
@@ -1560,3 +1568,53 @@ reason = "Policy fields (target, env, placement, focus) stay caller-set by struc
 kind = "item"
 key = "mux::TabOptions"
 reason = "No one-pane constructor: only cli/supervised/pane.rs builds a single-pane tab; placement.rs takes an arbitrary LayoutPanes (pass 18c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::kimi::KimiAdapter"
+reason = "Registry registration is the only outside-provider interface; a constructor or static would replace rather than reduce this one name. Provider-neutral capabilities already hide the implementation (pass 19c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::qwen::QwenAdapter"
+reason = "Registry registration is the only outside-provider interface. Hook decoding retains provider-specific fresh-root stamping for startup/clear; Kimi has no equivalent stamp to share, preserving the pass-2 origin verdict (pass 19c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::kimi::wire::WireRecord"
+reason = "Wire records and their nested types serve context, transcript, subagent and spend siblings. Inferred fields and return values require adapter-local type visibility even when named-reference analysis suggests private; durable tagged records and serde aliases stay unchanged (pass 19c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::qwen::payloads::TranscriptRecord"
+reason = "Hook/transcript return and field types remain adapter-local for inferred sibling reads, including macro-generated parse functions. The active-root fold already owns replay, context and rewind-spend ancestry once; no new facade is needed (pass 19c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::qwen::payloads::QwenSubagentMeta"
+reason = "Keep the decoded sidecar shape, including unread created_at: 7c42e0184 introduced it with stable child labels, and deleting a typed field would change acceptance of malformed input. The visibility sweep exposes no dead-code lint requiring removal (pass 19c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::kimi::oauth_usage::probe"
+reason = "Kimi uses a fixed managed GET endpoint and bearer headers; Qwen proves a region/key then POSTs an Alibaba-specific body and headers. credits already shares HTTP transport, so another fetch wrapper would only move provider policy (pass 19c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::qwen::selection::resolve_managed_launch"
+reason = "Exact Alibaba account fingerprinting and JSONC/process/.env/settings precedence are launch authority, not generic configuration lookup. Ambiguous layers and provider overrides must remain Unresolved; no sibling adapter has the same proof (pass 19c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::qwen::statusline::StatuslinePayload"
+reason = "Qwen projects scalar occupancy and a complete routed-model cost estimate; Claude's payload and Copilot's wrapper-health fallback have different inputs and consumer decisions. Shared naming is not shared policy (pass 19c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::kimi::spend::parse"
+reason = "Kimi retains append/cursor attribution and a full-snapshot path; Qwen cold-folds rewinds and replaces entries. spending already shares pricing/cache policy, and moving parser helpers outside spend.rs would widen the filename-scoped read-only invariant (pass 19c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::kimi::install::MANAGED_INTEGRATION"
+reason = "Kimi's additive TOML hook merger and Qwen's existing ManagedSource over JSON/statusline machinery are distinct installs. The pass-2 report_files duplication belongs to Copilot/Cursor, not these adapters (pass 19c)."
