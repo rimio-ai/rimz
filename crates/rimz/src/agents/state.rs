@@ -10,7 +10,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agent_activity::ToolRepeat;
-use crate::ids::{AgentKind, AgentSessionId, AskId};
+use crate::ids::{AgentKind, AgentSessionId, AskId, LoginName};
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 
 use super::context::{
@@ -559,6 +559,9 @@ pub struct AgentState {
     /// sender-attribution identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// The provider account stamped by the launch event and carried forward like `profile`; `None` is the provider's own `default` home, including legacy rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login: Option<LoginName>,
     /// The permission posture selected for this launch, carried forward so an
     /// explicit restart can reproduce it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -789,6 +792,8 @@ struct AgentStateWire {
     kind_ordinal: Option<u32>,
     profile: Option<String>,
     #[serde(default)]
+    login: Option<LoginName>,
+    #[serde(default)]
     mode: Option<crate::agents::PermissionMode>,
     role: Option<String>,
     team: Option<String>,
@@ -887,6 +892,7 @@ impl From<AgentStateWire> for AgentState {
             name_explicit: wire.name_explicit,
             kind_ordinal: wire.kind_ordinal,
             profile: wire.profile,
+            login: wire.login,
             mode: wire.mode,
             role: wire.role,
             team: wire.team,
@@ -973,6 +979,7 @@ impl AgentState {
             name_explicit: false,
             kind_ordinal: None,
             profile: None,
+            login: None,
             mode: None,
             role: None,
             team: None,

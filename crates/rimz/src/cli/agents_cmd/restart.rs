@@ -203,6 +203,7 @@ pub(super) fn relaunch_request(
         parent_agent_kind: agent.parent_agent_kind.clone(),
         launch_depth: agent.launch_depth,
         profile: agent.profile.clone(),
+        login: agent.login.clone(),
         role: agent.role.clone(),
         team: agent.team.clone(),
         launch_group: agent.launch_group.clone(),

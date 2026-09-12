@@ -789,6 +789,7 @@ fn launch_role_and_profile_survive_roleless_lifecycle() {
         AgentLaunchPayload {
             launch: LaunchParams {
                 profile: Some("codex-coder".to_owned()),
+                login: Some("work".parse().expect("login name")),
                 role: Some("coder".to_owned()),
                 team: Some("forge".to_owned()),
                 launch_group: Some("launch_group_1".to_owned()),
@@ -814,6 +815,7 @@ fn launch_role_and_profile_survive_roleless_lifecycle() {
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0].agent_id.as_str(), "sess-1");
     assert_eq!(agents[0].profile.as_deref(), Some("codex-coder"));
+    assert_eq!(agents[0].login, Some("work".parse().expect("login name")));
     assert_eq!(agents[0].role.as_deref(), Some("coder"));
     assert_eq!(agents[0].team.as_deref(), Some("forge"));
     assert_eq!(agents[0].launch_group.as_deref(), Some("launch_group_1"));
@@ -872,6 +874,7 @@ fn same_process_successor_inherits_launch_identity_without_card_primacy() {
             agent_name_explicit: true,
             launch: LaunchParams {
                 profile: Some("codex-coder".to_owned()),
+                login: Some("work".parse().expect("login name")),
                 mode: Some(PermissionMode::Auto),
                 role: Some("coder".to_owned()),
                 team: Some("forge".to_owned()),
@@ -908,6 +911,8 @@ fn same_process_successor_inherits_launch_identity_without_card_primacy() {
 
     assert_eq!(successor.launch_id.as_deref(), Some("launch_coder"));
     assert_eq!(successor.profile.as_deref(), Some("codex-coder"));
+    assert_eq!(first.login, Some("work".parse().expect("login name")));
+    assert_eq!(successor.login, first.login);
     assert_eq!(successor.mode, Some(PermissionMode::Auto));
     assert_eq!(successor.role.as_deref(), Some("coder"));
     assert_eq!(successor.team.as_deref(), Some("forge"));
