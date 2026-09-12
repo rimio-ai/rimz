@@ -80,6 +80,7 @@ glyph_roles! {
         MeterBarHalf => "bar_half",
         MeterManaFilled => "mana_filled",
         MeterManaTrack => "mana_track",
+        MeterManaTick => "mana_tick",
         MeterReset => "reset",
         MeterUnlimited => "unlimited",
         MeterScrollThumb => "scroll_thumb",

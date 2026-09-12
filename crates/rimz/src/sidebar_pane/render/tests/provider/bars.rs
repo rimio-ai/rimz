@@ -554,6 +554,106 @@ fn extra_usage_value_is_the_rounded_whole_dollar_budget() {
 }
 
 #[test]
+fn model_sub_cap_partitions_only_its_parent_without_changing_rows() {
+    let theme = Theme::fixed(false);
+    let mut panel = provider_panel("claude", "Claude", 173, true, false, Some((25, 37)));
+    let text = |row: &Line<'_>| {
+        row.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    };
+    let baseline = metered_bar_rows(&theme, &panel);
+    let parent = panel.windows[1].clone();
+    panel.windows.push(RateLimitWindow {
+        scope: Some(crate::agents::RateLimitWindowScope {
+            id: "model:fable".to_owned(),
+            label: "Fable".to_owned(),
+        }),
+        used_percentage: Some(58),
+        share_pct: Some(50),
+        ..parent
+    });
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0], baseline[0]);
+    assert_eq!(text(&rows[1]).replace('╱', "▰"), text(&baseline[1]));
+    let bar = text(&rows[1])
+        .chars()
+        .filter(|ch| matches!(ch, '▰' | '▱' | '╱'))
+        .collect::<String>();
+    assert_eq!(bar, "▰▰▰▰╱▰▰▰▰▰▰▱▱▱▱▱▱");
+    let tick = rows[1]
+        .spans
+        .iter()
+        .find(|span| span.content == "╱")
+        .unwrap();
+    assert_eq!(tick.style, mana_style(&theme, 42, &Default::default()));
+    assert_eq!(bar_row_facts(&rows[1]), bar_row_facts(&baseline[1]));
+
+    panel.extra_credits = Some(crate::agents::ExtraCredits::known(
+        None,
+        Some(10.0),
+        Some(10.0),
+    ));
+    panel.windows[2].used_percentage = Some(100);
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows[0], baseline[0],
+        "a model cap cannot gate 5h or substitute ex"
+    );
+    assert!(text(&rows[1]).starts_with("7d  ╱"));
+    assert_eq!(bar_row_facts(&rows[1]), bar_row_facts(&baseline[1]));
+    assert_eq!(
+        rows[1]
+            .spans
+            .iter()
+            .find(|span| span.content == "╱")
+            .unwrap()
+            .style,
+        mana_style(&theme, 0, &Default::default())
+    );
+
+    panel.windows[0].used_percentage = Some(100);
+    let rows = metered_bar_rows(&theme, &panel);
+    assert!(text(&rows[0]).starts_with("ex"));
+    assert!(
+        text(&rows[1]).starts_with("7d  ╱"),
+        "the tick follows the parent through ex substitution"
+    );
+
+    let rows = metered_bar_rows(&Theme::fixed(true), &panel);
+    assert!(text(&rows[1]).contains('╱'));
+    assert!(
+        rows.iter()
+            .flat_map(|row| &row.spans)
+            .all(|span| span.style.fg.is_none())
+    );
+
+    panel.extra_credits = Some(crate::agents::ExtraCredits::Disabled);
+    panel.windows[0].used_percentage = Some(25);
+    panel.windows[1].used_percentage = Some(60);
+    panel.windows[2].used_percentage = Some(0);
+    assert!(
+        !metered_bar_rows(&theme, &panel)
+            .iter()
+            .any(|row| text(row).contains('╱'))
+    );
+    panel.windows[2].used_percentage = None;
+    assert!(
+        !metered_bar_rows(&theme, &panel)
+            .iter()
+            .any(|row| text(row).contains('╱'))
+    );
+    panel.windows[1].used_percentage = Some(100);
+    panel.windows[2].used_percentage = Some(100);
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| !text(row).contains(['╱', '▰'])));
+}
+
+#[test]
 fn named_quotas_remain_independent_and_bypass_temporal_substitution() {
     let theme = Theme::fixed(false);
     let now = fixed_now();

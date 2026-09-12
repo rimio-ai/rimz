@@ -14,8 +14,8 @@ use crate::sidebar_pane::render::fmt::{
     dollars_cap, dollars2, reset_countdown, tokens_int, tokens_short, window_label,
 };
 use crate::sidebar_pane::render::labels::{
-    TokenColumns, TokenDetail, attention_cell_style, mana_bar_spans, mana_style, pace_reading,
-    pace_style, token_breakdown_spans, unknown_mana_bar_spans, unread_anim,
+    ManaTick, TokenColumns, TokenDetail, attention_cell_style, mana_bar_spans, mana_style,
+    pace_reading, pace_style, token_breakdown_spans, unknown_mana_bar_spans, unread_anim,
 };
 use crate::sidebar_pane::render::layout::{clip, pad_line_to, spans_width, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
@@ -1155,6 +1155,7 @@ fn provider_token_detail(
 /// row per definition-declared placeholder, or one anonymous fallback row when
 /// the shape is unknown; an unmetered account shows one `api` budget row, full
 /// with `∞` when uncapped.
+/// Model-scoped sub-caps partition their parent window's bar without another row.
 /// Each reset reads a two-unit countdown scaled to its magnitude. Each row
 /// aligns front and back within `region`, so they line up across providers too.
 fn provider_bar_rows(
@@ -1182,12 +1183,17 @@ fn provider_bar_rows(
             .map(|label| unknown_bar_row(theme, label, region))
             .collect();
     }
-    select_provider_bars(panel)
+    let (sub_caps, windows): (Vec<_>, Vec<_>) = panel
+        .windows
+        .iter()
+        .partition(|window| panel.windows.iter().any(|parent| window.sub_cap_of(parent)));
+    select_provider_bars(panel, &windows)
         .into_iter()
         .map(|bar| match bar {
             ProviderBar::Window(window) => metered_bar_row(
                 theme,
                 window,
+                &sub_caps,
                 region,
                 longer_window_spent(panel, window),
                 zones,
@@ -1206,14 +1212,17 @@ enum ProviderBar<'a> {
     Extra,
 }
 
-fn select_provider_bars(panel: &SidebarProviderPanel) -> Vec<ProviderBar<'_>> {
-    if panel.windows.iter().any(|window| window.scope.is_some()) {
-        return panel.windows.iter().map(ProviderBar::Window).collect();
+fn select_provider_bars<'a>(
+    panel: &SidebarProviderPanel,
+    windows: &[&'a RateLimitWindow],
+) -> Vec<ProviderBar<'a>> {
+    if windows.iter().any(|window| window.scope.is_some()) {
+        return windows.iter().copied().map(ProviderBar::Window).collect();
     }
-    let Some(first) = panel.windows.first() else {
+    let Some(&first) = windows.first() else {
         return Vec::new();
     };
-    let last = panel.windows.last().unwrap_or(first);
+    let last = windows.last().copied().unwrap_or(first);
     let first_and_last = || provider_window_pair(first, last);
     let extra_disabled = panel
         .extra_credits
@@ -1228,9 +1237,9 @@ fn select_provider_bars(panel: &SidebarProviderPanel) -> Vec<ProviderBar<'_>> {
         .as_ref()
         .is_some_and(ExtraCredits::is_usable);
 
-    if let Some(longest_spent) = panel
-        .windows
+    if let Some(longest_spent) = windows
         .iter()
+        .copied()
         .filter(|window| window.is_spent())
         .max_by_key(|window| window.duration_mins.unwrap_or(0))
     {
@@ -1307,6 +1316,7 @@ fn longer_window_spent(panel: &SidebarProviderPanel, window: &RateLimitWindow) -
 fn metered_bar_row(
     theme: &Theme,
     window: &RateLimitWindow,
+    sub_caps: &[&RateLimitWindow],
     region: usize,
     force_exhausted: bool,
     zones: &BudgetBarConfig,
@@ -1318,7 +1328,7 @@ fn metered_bar_row(
         return bar_row(
             &label,
             mana_style(theme, 100, zones),
-            mana_bar_spans(theme, 100, bar_width, zones),
+            mana_bar_spans(theme, 100, bar_width, zones, &[]),
             unlimited_value_spans(theme),
         );
     }
@@ -1346,6 +1356,16 @@ fn metered_bar_row(
     } else {
         window.resets_at.map(|at| reset_countdown(at, now))
     };
+    let ticks: Vec<_> = sub_caps
+        .iter()
+        .filter(|sub| !force_exhausted && sub.sub_cap_of(window))
+        .filter_map(|sub| {
+            Some(ManaTick {
+                headroom_pct: sub.headroom_of_parent()?,
+                remaining_pct: 100u8.saturating_sub(sub.used_percentage?),
+            })
+        })
+        .collect();
     let bar_width = provider_bar_width(region);
     let reset_marker_style = if reset.is_none() {
         theme.body()
@@ -1367,7 +1387,7 @@ fn metered_bar_row(
     bar_row(
         &label,
         mana_style(theme, remaining, zones),
-        mana_bar_spans(theme, remaining, bar_width, zones),
+        mana_bar_spans(theme, remaining, bar_width, zones, &ticks),
         reset_value_spans(theme, reset.as_deref(), reset_marker_style),
     )
 }
@@ -1455,7 +1475,7 @@ fn extra_credits_bar_row(
         .map(|remaining| mana_style(theme, remaining, zones))
         .unwrap_or_else(|| theme.muted());
     let bar = if let Some(remaining) = remaining {
-        mana_bar_spans(theme, remaining, bar_width, zones)
+        mana_bar_spans(theme, remaining, bar_width, zones, &[])
     } else {
         unknown_mana_bar_spans(theme, bar_width)
     };
@@ -1477,7 +1497,7 @@ fn api_credits_bar_row(
         return bar_row(
             "api",
             mana_style(theme, remaining, zones),
-            mana_bar_spans(theme, remaining, bar_width, zones),
+            mana_bar_spans(theme, remaining, bar_width, zones, &[]),
             value,
         );
     }
@@ -1498,7 +1518,7 @@ fn api_credits_bar_row(
     bar_row(
         "api",
         mana_style(theme, 100, zones),
-        mana_bar_spans(theme, 100, bar_width, zones),
+        mana_bar_spans(theme, 100, bar_width, zones, &[]),
         unlimited_value_spans(theme),
     )
 }

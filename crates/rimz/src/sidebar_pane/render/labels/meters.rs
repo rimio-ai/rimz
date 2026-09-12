@@ -565,6 +565,11 @@ fn filled_run_spans(theme: &Theme, color: Color, count: usize) -> Vec<Span<'stat
     )]
 }
 
+pub(in crate::sidebar_pane::render) struct ManaTick {
+    pub headroom_pct: u8,
+    pub remaining_pct: u8,
+}
+
 /// The provider dashboard's draining budget ("mana / stamina") bar:
 /// `remaining_pct` of the width in `▰`, the rest a `▱` track, with no brackets.
 /// A full bar means budget *left*: it shortens as the window is spent, and the
@@ -576,11 +581,16 @@ fn filled_run_spans(theme: &Theme, color: Color, count: usize) -> Vec<Span<'stat
 /// context-gauge track, so the spent share stays legible on the dashboard. At
 /// 0% remaining — the budget fully spent — the whole empty track turns red;
 /// any nonzero remaining budget keeps at least one filled cell.
+/// A tick partitions the fill: cells to its left remain available to the
+/// sub-capped model; cells from it to the fill edge belong to other models.
+/// Ticks never sit in the track; collisions keep the lowest headroom, then
+/// the lowest remaining percentage on the sub-cap's own axis.
 pub(in crate::sidebar_pane::render) fn mana_bar_spans(
     theme: &Theme,
     remaining_pct: u8,
     width: usize,
     zones: &BudgetBarConfig,
+    ticks: &[ManaTick],
 ) -> Vec<Span<'static>> {
     // A fully spent window (0% remaining) reads as a full-width *red* empty track,
     // not the gray "no fill" track a plain drain leaves — an absent fill alone
@@ -595,14 +605,41 @@ pub(in crate::sidebar_pane::render) fn mana_bar_spans(
         )];
     }
     let filled = filled_cells(remaining_pct, width).max(1);
-    two_tone_bar(
-        filled,
-        width,
-        mana_style(theme, remaining_pct, zones),
-        theme.muted(),
-        theme.glyph(GlyphRole::MeterManaFilled),
-        theme.glyph(GlyphRole::MeterManaTrack),
-    )
+    let mut ticks: Vec<_> = ticks
+        .iter()
+        .filter(|tick| tick.headroom_pct < remaining_pct)
+        .map(|tick| (filled_cells(tick.headroom_pct, width).min(filled - 1), tick))
+        .collect();
+    ticks.sort_unstable_by_key(|(cell, tick)| (*cell, tick.headroom_pct, tick.remaining_pct));
+    ticks.dedup_by_key(|(cell, _)| *cell);
+    let fill_style = mana_style(theme, remaining_pct, zones);
+    let fill_glyph = theme.glyph(GlyphRole::MeterManaFilled);
+    let mut spans = Vec::with_capacity(ticks.len() * 2 + 2);
+    let mut next_cell = 0;
+    for (cell, tick) in ticks {
+        if cell > next_cell {
+            spans.push(Span::styled(
+                fill_glyph.repeat(cell - next_cell),
+                fill_style,
+            ));
+        }
+        spans.push(Span::styled(
+            theme.glyph(GlyphRole::MeterManaTick).to_owned(),
+            mana_style(theme, tick.remaining_pct, zones),
+        ));
+        next_cell = cell + 1;
+    }
+    if next_cell < width.max(1) {
+        spans.extend(two_tone_bar(
+            filled - next_cell,
+            width.max(1) - next_cell,
+            fill_style,
+            theme.muted(),
+            fill_glyph,
+            theme.glyph(GlyphRole::MeterManaTrack),
+        ));
+    }
+    spans
 }
 
 /// An unknown provider budget: the window identity is known (`5h`, `7d`, …) but
