@@ -154,6 +154,7 @@ impl Cell {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedProfile {
     pub kind: AgentKind,
+    pub chain: Vec<String>,
     pub launch: crate::agents::LaunchParams,
     pub auto_compact: Option<String>,
     pub system_prompt_file: Option<PathBuf>,
@@ -166,6 +167,7 @@ impl ResolvedProfile {
     fn bare(kind: &str) -> Self {
         Self {
             kind: AgentKind::new_unchecked(kind),
+            chain: Vec::new(),
             launch: crate::agents::LaunchParams::default(),
             auto_compact: None,
             system_prompt_file: None,
@@ -1039,6 +1041,8 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
     };
 
     let mut resolved = ResolvedProfile::bare(&terminal_kind);
+    seen.push(terminal_kind);
+    resolved.chain = seen;
     for layer in layers {
         resolved.fill_missing(layer);
     }
