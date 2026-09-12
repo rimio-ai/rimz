@@ -152,4 +152,4 @@ aggressive_resize = true
 ## compact_instruction = ""       # text for compact commands that accept it; unset = RimZ's summary brief, "" = bare command
 ## idle_compact = "auto"           # compact idle agents before the provider cache expires; auto = while another same-channel agent is running
 ## idle_compact_after = "59m"      # idle span before compaction
-## flip-compact = "180k"          # compact on stage hand-off at this context threshold; unset = off
+## flip_compact = "180k"          # compact on stage hand-off at this context threshold; unset = off

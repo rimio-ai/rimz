@@ -245,7 +245,6 @@ pub struct HarnessConfig {
     /// Compact a team member at the flip that hands its own stage to another role, once its context is at least this full. Unset keeps flips uncompacted; a role's `flip-compact` overrides it.
     #[serde(
         default,
-        rename = "flip-compact",
         skip_serializing_if = "Option::is_none",
         with = "smart_compact_serde"
     )]

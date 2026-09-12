@@ -68,7 +68,7 @@ pub(super) fn team_launch_context(
     let stage_handoffs = team.owned_stages().next().is_some();
     let board = if stage_handoffs {
         match scratch::board_stage(cwd) {
-            Some(stage) if stage.name == "Done" => BoardStart::Done,
+            Some(stage) if stage.name == crate::config::DONE_STAGE => BoardStart::Done,
             Some(stage) => BoardStart::Stage {
                 name: stage.name,
                 owner: stage.owner,

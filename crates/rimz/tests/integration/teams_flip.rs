@@ -239,7 +239,7 @@ fn flip_cli_persists_board_signal_and_owner_note() {
     fixture.running("coder", None);
     fixture.running("reviewer", None);
     std::fs::write(fixture.board(), BOARD).unwrap();
-    let note = "Review the consumer boundary.\nKeep the evidence.";
+    let note = "Review the consumer boundary.\rKeep the evidence.\nReady.";
     let output = success(fixture.flip("Review", None, Some(note)));
     assert!(
         output.contains("Flipped Build -> Review by @user"),
@@ -248,17 +248,14 @@ fn flip_cli_persists_board_signal_and_owner_note() {
     insta::assert_snapshot!(output.replace(fixture.env.project_root.file_name().unwrap().to_str().unwrap(), "<worktree>"), @"
     Flipped Build -> Review by @user  (forge#feature-team · <worktree>)
       Build → [Review] → Done
-      note     Review the consumer boundary.
-    Keep the evidence.
+      note     Review the consumer boundary. Keep the evidence. Ready.
       owner    @reviewer, woken at its next turn boundary
     ");
     let board = std::fs::read_to_string(fixture.board()).unwrap();
     assert!(board.contains("Stage: Review (@reviewer)\n"));
-    assert!(
-        board.contains(
-            "@user: Build -> Review — Review the consumer boundary. Keep the evidence.\n"
-        )
-    );
+    assert!(board.contains(
+        "@user: Build -> Review — Review the consumer boundary. Keep the evidence. Ready.\n"
+    ));
     assert!(board.ends_with("\n## Evidence\nKeep this section.\n"));
     assert!(board.contains("- existing entry\n"));
     let signals = fixture.signals();
@@ -380,6 +377,11 @@ fn flip_requires_a_positional_note_and_rejects_legacy_flags() {
     let output = fixture.flip("Review", None, None);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("<NOTE>"));
+    for note in ["", " ", "\t\r\n", "\u{2003}"] {
+        let output = fixture.flip("Review", None, Some(note));
+        assert_eq!(output.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("nonblank progress note"));
+    }
     for flag in ["--note", "-m", "--steer", "--worktree"] {
         let output = fixture
             .command()
@@ -404,15 +406,34 @@ fn flip_requires_a_positional_note_and_rejects_legacy_flags() {
 
 #[test]
 fn flip_bootstraps_a_missing_board_or_stage_without_losing_prose() {
-    for existing in [None, Some("# Work\n\n## Evidence\nKeep this section.\n")] {
+    for (existing, declared_stages) in [
+        (None, true),
+        (Some("# Work\n\n## Evidence\nKeep this section.\n"), true),
+        (None, false),
+    ] {
         let fixture = Fixture::new();
+        if !declared_stages {
+            std::fs::write(
+                fixture.env.config_root().join("rimz/agents.toml"),
+                CONFIG.replace("stages = [\"Build\", \"Review\"]\n", ""),
+            )
+            .unwrap();
+        }
         fixture.running("reviewer", None);
         if let Some(existing) = existing {
             std::fs::write(fixture.board(), existing).unwrap();
         }
         let output = success(fixture.flip("Review", None, Some("Start the review.")));
         assert!(output.contains("Opened Review by @user"), "{output}");
-        assert!(output.contains("Build → [Review] → Done"), "{output}");
+        if declared_stages {
+            assert!(output.contains("Build → [Review] → Done"), "{output}");
+        } else {
+            insta::assert_snapshot!(output.replace(fixture.env.project_root.file_name().unwrap().to_str().unwrap(), "<worktree>"), @"
+            Opened Review by @user  (forge#feature-team · <worktree>)
+              note     Start the review.
+              owner    @reviewer, woken at its next turn boundary
+            ");
+        }
         let board = std::fs::read_to_string(fixture.board()).unwrap();
         assert!(board.contains("Stage: Review (@reviewer)\n"), "{board}");
         assert!(
@@ -496,6 +517,30 @@ fn flip_selects_the_worktree_cohort_not_the_current_channel() {
     let signals = fixture.signals();
     assert_eq!(signals.len(), 1);
     assert_eq!(signals[0].payload["instance"], "forge#feature-team");
+    fixture.seed_member(
+        "duplicate-coder",
+        "coder",
+        None,
+        "duplicate-channel",
+        &fixture.env.project_root,
+    );
+    let board = std::fs::read_to_string(fixture.board()).unwrap();
+    for select_team in [false, true] {
+        let mut command = fixture.command();
+        command.args(["teams", "flip", "Build", "Ambiguous cohort."]);
+        if select_team {
+            command.args(["--team", "forge"]);
+        }
+        let output = command.output().unwrap();
+        assert!(!output.status.success());
+        let error = String::from_utf8(output.stderr).unwrap();
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(error.replace(fixture.env.project_root.to_str().unwrap(), "<worktree>"), @"error: team `forge` has multiple live cohorts in worktree <worktree> in channels #duplicate-channel, #feature-team; stop the extra cohorts with `rimz teams stop forge -w <channel>` before flipping");
+        }
+    }
+    assert_eq!(std::fs::read_to_string(fixture.board()).unwrap(), board);
+    assert_eq!(fixture.signals().len(), 1);
+    assert!(fixture.env.store().list_messages().unwrap().is_empty());
 }
 
 #[test]
@@ -553,48 +598,70 @@ fn foreign_team_member_cannot_flip_the_selected_worktree_as_a_user() {
 
 #[test]
 fn flip_compaction_threshold_is_checked_before_queuing_for_done() {
-    for used in [None, Some(99_999), Some(100_000), Some(100_001)] {
-        let fixture = Fixture::new();
-        fixture.running("coder", Some("terminal_3"));
-        fixture.live_panes(&["terminal_3"]);
-        if let Some(used) = used {
-            fixture.context_tokens("coder", used);
+    for live_pane in [true, false] {
+        for used in [None, Some(99_999), Some(100_000), Some(100_001)] {
+            let fixture = Fixture::new();
+            fixture.running("coder", Some("terminal_3"));
+            if live_pane {
+                fixture.live_panes(&["terminal_3"]);
+            }
+            if let Some(used) = used {
+                fixture.context_tokens("coder", used);
+            }
+            std::fs::write(fixture.board(), BOARD).unwrap();
+            let output = success(fixture.flip("Done", Some("coder"), Some("Finished building.")));
+            let messages = fixture.env.store().list_pending_messages().unwrap();
+            let reached = used.is_some_and(|used| used >= 100_000);
+            assert_eq!(
+                messages.len(),
+                usize::from(reached && live_pane),
+                "{used:?}: {output}"
+            );
+            let assists = rimz::harness::assist_log::recent(&fixture.env.state_root(), None);
+            assert_eq!(assists.len(), usize::from(reached));
+            if reached && live_pane {
+                assert!(output.contains("compact  queued"), "{output}");
+                assert_eq!(messages[0].body, MessageBody::Command);
+                assert_eq!(messages[0].agent_id.as_str(), "coder");
+                assert_eq!(messages[0].gate, DeliveryGate::Done);
+                assert_eq!(messages[0].compacted_context_tokens, used);
+                assert!(matches!(
+                    &assists[0].assist,
+                    rimz::harness::assist_log::Assist::FlipCompact { threshold: 100_000, occupied_tokens, .. } if *occupied_tokens == used
+                ));
+            } else if reached {
+                assert!(
+                    output.contains("compact  skipped: no bound pane"),
+                    "{output}"
+                );
+                assert!(matches!(
+                    &assists[0].assist,
+                    rimz::harness::assist_log::Assist::FlipCompact {
+                        message_id: None,
+                        ..
+                    }
+                ));
+            } else {
+                assert!(!output.contains("compact"), "{output}");
+            }
+            assert!(
+                std::fs::read_to_string(fixture.board())
+                    .unwrap()
+                    .contains("Stage: Done\n")
+            );
+            assert_eq!(fixture.signals().len(), 1);
         }
-        std::fs::write(fixture.board(), BOARD).unwrap();
-        let output = success(fixture.flip("Done", Some("coder"), Some("Finished building.")));
-        let messages = fixture.env.store().list_pending_messages().unwrap();
-        let reached = used.is_some_and(|used| used >= 100_000);
-        assert_eq!(messages.len(), usize::from(reached), "{used:?}: {output}");
-        let assists = rimz::harness::assist_log::recent(&fixture.env.state_root(), None);
-        assert_eq!(assists.len(), usize::from(reached));
-        if reached {
-            assert!(output.contains("compact  queued"), "{output}");
-            assert_eq!(messages[0].body, MessageBody::Command);
-            assert_eq!(messages[0].agent_id.as_str(), "coder");
-            assert_eq!(messages[0].gate, DeliveryGate::Done);
-            assert_eq!(messages[0].compacted_context_tokens, used);
-            assert!(matches!(
-                &assists[0].assist,
-                rimz::harness::assist_log::Assist::FlipCompact { threshold: 100_000, occupied_tokens, .. } if *occupied_tokens == used
-            ));
-        } else {
-            assert!(!output.contains("compact"), "{output}");
-        }
-        assert!(
-            std::fs::read_to_string(fixture.board())
-                .unwrap()
-                .contains("Stage: Done\n")
-        );
-        assert_eq!(fixture.signals().len(), 1);
     }
 }
 
 #[test]
 fn flip_compaction_inherits_harness_threshold_unless_role_overrides_it() {
-    for (role_policy, default, compact) in [
-        (None, "100k", true),
-        (Some("off"), "100k", false),
-        (Some("100k"), "200k", true),
+    for (role_policy, default, expected_threshold) in [
+        (None, "100k", Some(100_000)),
+        (Some("off"), "100k", None),
+        (Some("100k"), "200k", Some(100_000)),
+        (None, "70%", Some(140_000)),
+        (Some("70%"), "200k", Some(140_000)),
     ] {
         let fixture = Fixture::new();
         let role_config = CONFIG.replace(
@@ -610,7 +677,7 @@ fn flip_compaction_inherits_harness_threshold_unless_role_overrides_it() {
         .unwrap();
         std::fs::write(
             fixture.env.config_root().join("rimz/config.toml"),
-            format!("[harness]\nflip-compact = \"{default}\"\n"),
+            format!("[harness]\nflip_compact = \"{default}\"\n"),
         )
         .unwrap();
         fixture.running("coder", Some("terminal_3"));
@@ -618,11 +685,25 @@ fn flip_compaction_inherits_harness_threshold_unless_role_overrides_it() {
         fixture.context_tokens("coder", 150_000);
         std::fs::write(fixture.board(), BOARD).unwrap();
         let output = success(fixture.flip("Done", Some("coder"), Some("Finished.")));
-        assert_eq!(output.contains("compact  queued"), compact, "{output}");
+        assert_eq!(
+            output.contains("compact  queued"),
+            expected_threshold.is_some(),
+            "{output}"
+        );
         assert_eq!(
             fixture.env.store().list_pending_messages().unwrap().len(),
-            usize::from(compact)
+            usize::from(expected_threshold.is_some())
         );
+        if let Some(expected) = expected_threshold {
+            assert!(
+                output.contains(&format!("150k tokens, over {}k", expected / 1000)),
+                "{output}"
+            );
+            let assists = rimz::harness::assist_log::recent(&fixture.env.state_root(), None);
+            assert!(
+                matches!(&assists[0].assist, rimz::harness::assist_log::Assist::FlipCompact { threshold, .. } if *threshold == expected)
+            );
+        }
     }
 }
 
@@ -677,42 +758,55 @@ fn missing_pane_skips_compaction_without_failing_the_flip() {
 
 #[test]
 fn compaction_delivery_error_does_not_fail_a_completed_flip() {
-    let fixture = Fixture::new();
-    fixture.running("coder", Some("terminal_3"));
-    fixture.live_panes(&["terminal_3"]);
-    fixture.hook("coder", "Stop", Some("terminal_3"));
-    fixture.context_tokens("coder", 150_000);
-    std::fs::write(fixture.board(), BOARD).unwrap();
-    let output = success(
-        fixture
-            .command()
-            .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
-            .env(rimz::harness::launch::ENV_AGENT_ID, "launch_coder")
-            .env("RIMZ_TEST_ZELLIJ_MODE", "fail-write")
-            .args(["teams", "flip", "Done", "Finished.", "--team", "forge"])
-            .output()
-            .unwrap(),
-    );
-    assert!(output.contains("compact  queued"), "{output}");
-    assert!(
-        std::fs::read_to_string(fixture.board())
-            .unwrap()
-            .contains("Stage: Done\n")
-    );
-    assert_eq!(fixture.signals().len(), 1);
-    let messages = fixture.env.store().list_pending_messages().unwrap();
-    assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].body, MessageBody::Command);
-    assert!(messages[0].last_error.is_some());
-    let trace = std::fs::read_to_string(&fixture.trace).unwrap();
-    assert!(
-        trace.contains("\taction\twrite-chars\t--pane-id\tterminal_3\t--\t/compact"),
-        "compaction must attempt a pane write: {trace}"
-    );
-    assert!(rimz::harness::assist_log::recent(&fixture.env.state_root(), None).iter().any(|record| matches!(
+    for broken_wake_stamp in [false, true] {
+        let fixture = Fixture::new();
+        fixture.running("coder", Some("terminal_3"));
+        fixture.live_panes(&["terminal_3"]);
+        fixture.hook("coder", "Stop", Some("terminal_3"));
+        fixture.context_tokens("coder", 150_000);
+        std::fs::write(fixture.board(), BOARD).unwrap();
+        if broken_wake_stamp {
+            std::fs::create_dir(fixture.env.runtime_paths().root.join("message-wake.json"))
+                .unwrap();
+        }
+        let output = success(
+            fixture
+                .command()
+                .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+                .env(rimz::harness::launch::ENV_AGENT_ID, "launch_coder")
+                .env("RIMZ_TEST_ZELLIJ_MODE", "fail-write")
+                .args(["teams", "flip", "Done", "Finished.", "--team", "forge"])
+                .output()
+                .unwrap(),
+        );
+        assert!(
+            output.contains(if broken_wake_stamp {
+                "compact  skipped:"
+            } else {
+                "compact  queued"
+            }),
+            "{output}"
+        );
+        assert!(
+            std::fs::read_to_string(fixture.board())
+                .unwrap()
+                .contains("Stage: Done\n")
+        );
+        assert_eq!(fixture.signals().len(), 1);
+        let messages = fixture.env.store().list_pending_messages().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].body, MessageBody::Command);
+        assert!(messages[0].last_error.is_some());
+        let trace = std::fs::read_to_string(&fixture.trace).unwrap();
+        assert!(
+            trace.contains("\taction\twrite-chars\t--pane-id\tterminal_3\t--\t/compact"),
+            "compaction must attempt a pane write: {trace}"
+        );
+        assert!(rimz::harness::assist_log::recent(&fixture.env.state_root(), None).iter().any(|record| matches!(
         &record.assist,
-        rimz::harness::assist_log::Assist::FlipCompact { message_id: Some(id), delivered: false, .. } if id == messages[0].message_id.as_str()
+        rimz::harness::assist_log::Assist::FlipCompact { message_id: Some(id), delivered: false, error, .. } if id == messages[0].message_id.as_str() && error.is_some() == broken_wake_stamp
     )));
+    }
 }
 
 #[test]
