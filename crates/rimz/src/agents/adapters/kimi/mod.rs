@@ -1,15 +1,15 @@
 //! Kimi Code command-hook and durable agent-record adapter.
 
-pub(crate) mod account;
+mod account;
 mod install;
-pub(crate) mod oauth_usage;
-pub(crate) mod payloads;
-pub(crate) mod spend;
+mod oauth_usage;
+mod payloads;
+mod spend;
 mod subagents;
 mod transcript;
-pub mod wire;
+mod wire;
 
-pub(crate) use crate::agents::capabilities::*;
+use crate::agents::capabilities::*;
 
 use std::path::{Path, PathBuf};
 
@@ -36,7 +36,7 @@ use crate::agents::PermissionMode;
 use crate::ids::AgentSessionId;
 use crate::transcript::AskQuestion;
 
-pub(super) const KIMI_HOOKS: &[HookEventSpec] = &[
+const KIMI_HOOKS: &[HookEventSpec] = &[
     HookEventSpec::lifecycle( "SessionStart", r#"{"session_id":"s"}"#).progress(),
     HookEventSpec::lifecycle( "UserPromptSubmit", r#"{"session_id":"s","prompt":[{"type":"text","text":"fix"}]}"#).progress(),
     HookEventSpec::blocking( "PreToolUse", r#"{"session_id":"s","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Continue?"}]}}"#, super::AskKind::Question)
@@ -259,7 +259,7 @@ const KIMI_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
 };
 
 #[derive(Clone, Debug, Default)]
-pub struct KimiAdapter;
+pub(in crate::agents) struct KimiAdapter;
 
 fn kimi_ask_kind(
     adapter: &KimiAdapter,

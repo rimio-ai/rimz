@@ -18,7 +18,7 @@ struct KimiSpendState {
     request: Option<wire::RequestAttribution>,
 }
 
-pub fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> SpendParse {
+pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> SpendParse {
     let from = resume.map_or(0, |cursor| cursor.offset);
     let Some((records, next)) = wire::read_records(path, from) else {
         return SpendParse::stalled(resume);
@@ -26,7 +26,7 @@ pub fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> S
     fold_records(path, &records, next, resume, prices)
 }
 
-pub fn parse_snapshot(
+pub(super) fn parse_snapshot(
     path: &Path,
     snapshot: &wire::WireSnapshot,
     prices: &PriceBook,
@@ -142,12 +142,12 @@ fn non_empty(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_owned())
 }
 
-pub fn configured_model() -> Option<String> {
+pub(super) fn configured_model() -> Option<String> {
     let path = super::install::config_path().ok()?;
     configured_model_at(&path)
 }
 
-pub(crate) fn configured_model_at(path: &Path) -> Option<String> {
+fn configured_model_at(path: &Path) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
     let root: toml::Table = toml::from_str(&text).ok()?;
     root.get("default_model")

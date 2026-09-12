@@ -14,7 +14,7 @@ use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind};
 const USAGE_URL: &str = "https://api.kimi.com/coding/v1/usages";
 
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
+enum Error {
     #[error("kimi OAuth credentials not found")]
     NoCredentials,
     #[error("reading kimi OAuth credentials: {0}")]
@@ -45,7 +45,7 @@ struct Credentials {
     expires_at: Option<f64>,
 }
 
-pub fn probe() -> crate::agents::AccountUsageProbe {
+pub(super) fn probe() -> crate::agents::AccountUsageProbe {
     let identity = crate::agents::AccountUsageIdentity {
         credentials_stamp: credentials_stamp(),
         ..Default::default()
@@ -90,7 +90,7 @@ fn configured_managed_base() -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-pub fn credentials_stamp() -> Option<u64> {
+fn credentials_stamp() -> Option<u64> {
     file_mtime_ms(&super::account::credentials_path())
 }
 
@@ -135,7 +135,7 @@ fn usage_headers(token: &str) -> [(&'static str, String); 2] {
     ]
 }
 
-pub(crate) fn parse_response(body: &str) -> Result<AccountUsageSnapshot, Error> {
+fn parse_response(body: &str) -> Result<AccountUsageSnapshot, Error> {
     let root: Value = serde_json::from_str(body)?;
     let mut rows = Vec::new();
     if let Some(usage) = root.get("usage") {
@@ -335,6 +335,21 @@ fn timestamp(value: &Value) -> Option<Timestamp> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn quota_parser_accepts_nested_remaining_and_reset_spellings() {
+        let snapshot = parse_response(
+            r#"{"limits":[{"detail":{"limit":100,"remaining":25,"resetAt":"2030-01-01T00:00:00Z"},"window":{"duration":5,"timeUnit":"HOUR"}}],"boosterWallet":{"balance":{"type":"BOOSTER","amount":500000000,"amountLeft":125000000},"monthlyChargeLimitEnabled":true,"monthlyChargeLimit":{"priceInCents":500,"currency":"USD"},"monthlyUsed":{"priceInCents":125,"currency":"USD"}}}"#,
+        )
+        .unwrap();
+        let window = &snapshot.rate_limits.as_ref().unwrap().windows[0];
+        assert_eq!(window.used_percentage, Some(75));
+        assert_eq!(window.duration_mins, Some(300));
+        assert_eq!(
+            snapshot.extra_credits,
+            Some(ExtraCredits::known(Some(1.25), Some(1.25), Some(5.0)))
+        );
+    }
 
     #[test]
     fn token_requires_more_than_sixty_seconds_of_freshness() {

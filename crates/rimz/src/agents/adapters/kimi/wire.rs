@@ -9,13 +9,13 @@ use serde_json::Value;
 use crate::agents::transcript_fs::read_transcript_lines;
 
 #[derive(Clone, Debug)]
-pub struct WireRecord {
-    pub time: Option<f64>,
-    pub event: WireEvent,
+pub(super) struct WireRecord {
+    pub(super) time: Option<f64>,
+    pub(super) event: WireEvent,
 }
 
 impl WireRecord {
-    pub fn timestamp(&self) -> Option<Timestamp> {
+    pub(super) fn timestamp(&self) -> Option<Timestamp> {
         let millis = self.time?.trunc();
         if millis > i64::MAX as f64 {
             return None;
@@ -25,7 +25,7 @@ impl WireRecord {
 }
 
 #[derive(Clone, Debug)]
-pub enum WireEvent {
+pub(super) enum WireEvent {
     Metadata,
     Prompt {
         kind: PromptKind,
@@ -44,41 +44,41 @@ pub enum WireEvent {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PromptKind {
+pub(super) enum PromptKind {
     Prompt,
     Steer,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
-pub struct TokenUsage {
+pub(super) struct TokenUsage {
     #[serde(rename = "inputOther", alias = "input_other")]
-    pub input_other: Option<u64>,
-    pub output: Option<u64>,
+    pub(super) input_other: Option<u64>,
+    pub(super) output: Option<u64>,
     #[serde(rename = "inputCacheRead", alias = "input_cache_read")]
-    pub input_cache_read: Option<u64>,
+    pub(super) input_cache_read: Option<u64>,
     #[serde(rename = "inputCacheCreation", alias = "input_cache_creation")]
-    pub input_cache_creation: Option<u64>,
+    pub(super) input_cache_creation: Option<u64>,
 }
 
 impl TokenUsage {
-    pub fn input_total(&self) -> u64 {
+    fn input_total(&self) -> u64 {
         self.input_other.unwrap_or(0)
             + self.input_cache_read.unwrap_or(0)
             + self.input_cache_creation.unwrap_or(0)
     }
 
-    pub fn total(&self) -> u64 {
+    fn total(&self) -> u64 {
         self.input_total().saturating_add(self.output.unwrap_or(0))
     }
 
-    pub fn is_zero(&self) -> bool {
+    fn is_zero(&self) -> bool {
         self.total() == 0
     }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum UsageScope {
+enum UsageScope {
     Turn,
     #[default]
     Session,
@@ -102,41 +102,41 @@ impl<'de> Deserialize<'de> for UsageScope {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
-pub struct UsageRecord {
-    pub model: String,
-    pub usage: TokenUsage,
+pub(super) struct UsageRecord {
+    pub(super) model: String,
+    pub(super) usage: TokenUsage,
     #[serde(rename = "usageScope", alias = "scope")]
-    pub scope: UsageScope,
+    scope: UsageScope,
 }
 
 impl UsageRecord {
-    pub fn is_turn_scoped(&self) -> bool {
+    fn is_turn_scoped(&self) -> bool {
         self.scope == UsageScope::Turn
     }
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct PromptRecord {
-    pub input: Vec<ContentPart>,
-    pub origin: PromptOrigin,
+pub(super) struct PromptRecord {
+    pub(super) input: Vec<ContentPart>,
+    pub(super) origin: PromptOrigin,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum PromptOrigin {
+pub(super) enum PromptOrigin {
     User,
     #[default]
     Other,
 }
 
 #[derive(Clone, Debug, Default)]
-pub enum ContentPart {
+pub(super) enum ContentPart {
     Text(String),
     #[default]
     Other,
 }
 
 impl ContentPart {
-    pub fn text(&self) -> Option<&str> {
+    pub(super) fn text(&self) -> Option<&str> {
         match self {
             Self::Text(text) => Some(text),
             Self::Other => None,
@@ -145,7 +145,7 @@ impl ContentPart {
 }
 
 #[derive(Clone, Debug)]
-pub enum LoopEvent {
+pub(super) enum LoopEvent {
     StepBegin {
         id: Option<String>,
     },
@@ -161,20 +161,20 @@ pub enum LoopEvent {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct AppendedMessage {
-    pub role: MessageRole,
-    pub content: MessageContent,
+pub(super) struct AppendedMessage {
+    pub(super) role: MessageRole,
+    pub(super) content: MessageContent,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum MessageRole {
+pub(super) enum MessageRole {
     Assistant,
     #[default]
     Other,
 }
 
 #[derive(Clone, Debug, Default)]
-pub enum MessageContent {
+pub(super) enum MessageContent {
     Text(String),
     Parts(Vec<ContentPart>),
     #[default]
@@ -183,35 +183,35 @@ pub enum MessageContent {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
-pub struct RequestAttribution {
-    pub provider: Option<String>,
-    pub model: Option<String>,
+pub(super) struct RequestAttribution {
+    pub(super) provider: Option<String>,
+    pub(super) model: Option<String>,
     #[serde(rename = "modelAlias")]
-    pub model_alias: Option<String>,
+    pub(super) model_alias: Option<String>,
     #[serde(rename = "thinkingEffort")]
-    pub thinking_effort: Option<String>,
+    pub(super) thinking_effort: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
-pub struct ConfigUpdate {
+pub(super) struct ConfigUpdate {
     #[serde(rename = "modelAlias")]
-    pub model_alias: Option<String>,
+    model_alias: Option<String>,
     #[serde(rename = "thinkingEffort")]
-    pub thinking_effort: Option<String>,
+    thinking_effort: Option<String>,
     #[serde(rename = "profileName")]
-    pub profile_name: Option<String>,
+    pub(super) profile_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct EffectiveAttribution {
-    pub request: Option<RequestAttribution>,
-    pub model_alias: Option<String>,
-    pub thinking_effort: Option<String>,
+pub(super) struct EffectiveAttribution {
+    request: Option<RequestAttribution>,
+    model_alias: Option<String>,
+    pub(super) thinking_effort: Option<String>,
 }
 
 impl EffectiveAttribution {
-    pub fn observe(&mut self, record: &WireRecord) {
+    fn observe(&mut self, record: &WireRecord) {
         match &record.event {
             WireEvent::ConfigUpdate(config) => {
                 if let Some(alias) = non_empty(config.model_alias.clone()) {
@@ -240,7 +240,7 @@ impl EffectiveAttribution {
         }
     }
 
-    pub fn display_model(&self) -> Option<String> {
+    pub(super) fn display_model(&self) -> Option<String> {
         self.model_alias.clone().or_else(|| {
             self.request
                 .as_ref()
@@ -255,7 +255,7 @@ fn non_empty(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-pub fn normalize_model_alias(alias: &str) -> String {
+pub(super) fn normalize_model_alias(alias: &str) -> String {
     alias
         .trim()
         .strip_prefix("kimi-code/")
@@ -273,7 +273,7 @@ struct SessionIndexEntry {
     _work_dir: PathBuf,
 }
 
-pub fn kimi_home() -> PathBuf {
+pub(super) fn kimi_home() -> PathBuf {
     kimi_home_from(
         std::env::var_os("KIMI_CODE_HOME").as_deref(),
         std::env::var("HOME")
@@ -294,15 +294,11 @@ pub(super) fn kimi_home_from(
         .or_else(|| home.map(|home| PathBuf::from(home).join(".kimi-code")))
 }
 
-pub fn session_dir(session_id: &str, cwd: Option<&Path>) -> Option<PathBuf> {
+pub(super) fn session_dir(session_id: &str, cwd: Option<&Path>) -> Option<PathBuf> {
     session_dir_under(&kimi_home(), session_id, cwd)
 }
 
-pub(crate) fn session_dir_under(
-    root: &Path,
-    session_id: &str,
-    cwd: Option<&Path>,
-) -> Option<PathBuf> {
+fn session_dir_under(root: &Path, session_id: &str, cwd: Option<&Path>) -> Option<PathBuf> {
     let session_id = session_id.trim();
     if session_id.is_empty() {
         return None;
@@ -379,7 +375,7 @@ fn session_modified(path: &Path) -> Option<std::time::SystemTime> {
     .max()
 }
 
-pub fn wire_path(session_id: &str, cwd: Option<&Path>) -> Option<PathBuf> {
+pub(super) fn wire_path(session_id: &str, cwd: Option<&Path>) -> Option<PathBuf> {
     Some(session_dir(session_id, cwd)?.join("agents/main/wire.jsonl"))
 }
 
@@ -436,7 +432,7 @@ struct RawAppendedMessage {
     content: Value,
 }
 
-pub fn records_from_bytes(bytes: &[u8]) -> Vec<WireRecord> {
+fn records_from_bytes(bytes: &[u8]) -> Vec<WireRecord> {
     bytes
         .split(|byte| *byte == b'\n')
         .filter_map(record_from_slice)
@@ -447,14 +443,14 @@ pub fn records_from_bytes(bytes: &[u8]) -> Vec<WireRecord> {
 /// One torn-write-safe full read of a live Kimi wire. The full record set owns
 /// cumulative spend while the logical tail preserves bounded context semantics.
 #[derive(Debug)]
-pub struct WireSnapshot {
+pub(super) struct WireSnapshot {
     records: Vec<WireRecord>,
     tail_start: usize,
     consumed_offset: u64,
 }
 
 impl WireSnapshot {
-    pub fn read(path: &Path) -> Option<Self> {
+    pub(super) fn read(path: &Path) -> Option<Self> {
         let (bytes, consumed_offset) = read_transcript_lines(path, 0)?;
         let tail_byte_start = record_aligned_tail_start(&bytes);
         let mut records = Vec::new();
@@ -481,15 +477,15 @@ impl WireSnapshot {
         })
     }
 
-    pub fn records(&self) -> &[WireRecord] {
+    pub(super) fn records(&self) -> &[WireRecord] {
         &self.records
     }
 
-    pub fn tail_records(&self) -> &[WireRecord] {
+    pub(super) fn tail_records(&self) -> &[WireRecord] {
         &self.records[self.tail_start..]
     }
 
-    pub fn consumed_offset(&self) -> u64 {
+    pub(super) fn consumed_offset(&self) -> u64 {
         self.consumed_offset
     }
 }
@@ -640,13 +636,13 @@ fn loop_event(value: Value) -> LoopEvent {
     }
 }
 
-pub fn read_records(path: &Path, offset: u64) -> Option<(Vec<WireRecord>, u64)> {
+pub(super) fn read_records(path: &Path, offset: u64) -> Option<(Vec<WireRecord>, u64)> {
     let (bytes, next) = read_transcript_lines(path, offset)?;
     Some((records_from_bytes(&bytes), next))
 }
 
 #[cfg(test)]
-pub fn usage_records(records: &[WireRecord]) -> Vec<(Option<f64>, UsageRecord)> {
+pub(super) fn usage_records(records: &[WireRecord]) -> Vec<(Option<f64>, UsageRecord)> {
     records
         .iter()
         .filter_map(|record| match &record.event {
@@ -656,7 +652,7 @@ pub fn usage_records(records: &[WireRecord]) -> Vec<(Option<f64>, UsageRecord)> 
         .collect()
 }
 
-pub fn latest_context_tokens(records: &[WireRecord]) -> Option<u64> {
+pub(super) fn latest_context_tokens(records: &[WireRecord]) -> Option<u64> {
     records
         .iter()
         .fold(None, |latest, record| match &record.event {
@@ -669,14 +665,14 @@ pub fn latest_context_tokens(records: &[WireRecord]) -> Option<u64> {
         })
 }
 
-pub fn latest_turn_usage(records: &[WireRecord]) -> Option<UsageRecord> {
+pub(super) fn latest_turn_usage(records: &[WireRecord]) -> Option<UsageRecord> {
     records.iter().rev().find_map(|record| match &record.event {
         WireEvent::Usage(usage) if usage.is_turn_scoped() => Some(usage.clone()),
         _ => None,
     })
 }
 
-pub fn effective_attribution(records: &[WireRecord]) -> EffectiveAttribution {
+pub(super) fn effective_attribution(records: &[WireRecord]) -> EffectiveAttribution {
     records.iter().fold(
         EffectiveAttribution::default(),
         |mut attribution, record| {
@@ -684,4 +680,37 @@ pub fn effective_attribution(records: &[WireRecord]) -> EffectiveAttribution {
             attribution
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_index_resolves_valid_main_wire_and_rejects_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = dir.path().join("sessions/wd_project/s1");
+        std::fs::create_dir_all(session.join("agents/main")).unwrap();
+        std::fs::write(
+            session.join("state.json"),
+            r#"{"workDir":"/tmp/project","agents":{}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("session_index.jsonl"),
+            format!(
+                "{{\"sessionId\":\"s1\",\"sessionDir\":{},\"workDir\":\"/tmp/project\"}}\n{{\"sessionId\":\"s1\",\"sessionDir\":\"/tmp\",\"workDir\":\"/tmp/project\"}}\n",
+                serde_json::to_string(&session).unwrap()
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            session_dir_under(dir.path(), "s1", Some(Path::new("/tmp/project"))).as_deref(),
+            Some(std::fs::canonicalize(&session).unwrap().as_path())
+        );
+        assert_eq!(
+            session_dir_under(dir.path(), "s1", Some(Path::new("/other"))),
+            None
+        );
+    }
 }

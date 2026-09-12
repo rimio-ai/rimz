@@ -192,34 +192,6 @@ fn install_merge_includes_native_permission_hooks() {
 }
 
 #[test]
-fn session_index_resolves_valid_main_wire_and_rejects_escape() {
-    let dir = tempfile::tempdir().unwrap();
-    let session = dir.path().join("sessions/wd_project/s1");
-    std::fs::create_dir_all(session.join("agents/main")).unwrap();
-    std::fs::write(
-        session.join("state.json"),
-        r#"{"workDir":"/tmp/project","agents":{}}"#,
-    )
-    .unwrap();
-    std::fs::write(
-        dir.path().join("session_index.jsonl"),
-        format!(
-            "{{\"sessionId\":\"s1\",\"sessionDir\":{},\"workDir\":\"/tmp/project\"}}\n{{\"sessionId\":\"s1\",\"sessionDir\":\"/tmp\",\"workDir\":\"/tmp/project\"}}\n",
-            serde_json::to_string(&session).unwrap()
-        ),
-    )
-    .unwrap();
-    assert_eq!(
-        wire::session_dir_under(dir.path(), "s1", Some(Path::new("/tmp/project"))).as_deref(),
-        Some(std::fs::canonicalize(&session).unwrap().as_path())
-    );
-    assert_eq!(
-        wire::session_dir_under(dir.path(), "s1", Some(Path::new("/other"))),
-        None
-    );
-}
-
-#[test]
 fn subagent_start_join_matches_unique_and_swarm_children() {
     let dir = tempfile::tempdir().unwrap();
     let session = dir.path().join("session-1");
@@ -650,7 +622,7 @@ fn usage_records_drive_context_spend_and_additive_scopes() {
         ),
     )
     .unwrap();
-    let records = wire::records_from_bytes(&std::fs::read(&path).unwrap());
+    let records = wire::read_records(&path, 0).unwrap().0;
     assert_eq!(wire::usage_records(&records).len(), 3);
     let stat = TranscriptStat::from_path(&path).unwrap();
     let cache = dir.path().join("prices.json");
@@ -767,18 +739,15 @@ fn compaction_and_effective_model_config_drive_context() {
         Some(96_000)
     );
 
-    let records = wire::records_from_bytes(
-        concat!(
-            "{\"type\":\"config.update\",\"time\":1,\"modelAlias\":\"large\",\"thinkingEffort\":\"high\"}\n",
-            "{\"type\":\"config.update\",\"time\":1.5,\"thinkingEffort\":\"low\"}\n",
-            "{\"type\":\"context.append_loop_event\",\"time\":2,\"event\":{\"type\":\"step.end\",\"uuid\":\"a\",\"usage\":{\"inputOther\":50000,\"inputCacheRead\":30000,\"inputCacheCreation\":5000,\"output\":5000}}}\n",
-            "{\"type\":\"context.append_loop_event\",\"time\":3,\"event\":{\"type\":\"step.end\",\"uuid\":\"b\",\"usage\":{}}}\n",
-            "{\"type\":\"context.clear\",\"time\":4}\n",
-            "{\"type\":\"context.append_loop_event\",\"time\":5,\"event\":{\"type\":\"step.end\",\"uuid\":\"c\",\"usage\":{\"inputOther\":20000}}}\n",
-            "{\"type\":\"context.apply_compaction\",\"time\":6,\"tokensBefore\":20000,\"tokensAfter\":12000}\n",
-        )
-        .as_bytes(),
-    );
+    let records = wire::records_from_str(concat!(
+        "{\"type\":\"config.update\",\"time\":1,\"modelAlias\":\"large\",\"thinkingEffort\":\"high\"}\n",
+        "{\"type\":\"config.update\",\"time\":1.5,\"thinkingEffort\":\"low\"}\n",
+        "{\"type\":\"context.append_loop_event\",\"time\":2,\"event\":{\"type\":\"step.end\",\"uuid\":\"a\",\"usage\":{\"inputOther\":50000,\"inputCacheRead\":30000,\"inputCacheCreation\":5000,\"output\":5000}}}\n",
+        "{\"type\":\"context.append_loop_event\",\"time\":3,\"event\":{\"type\":\"step.end\",\"uuid\":\"b\",\"usage\":{}}}\n",
+        "{\"type\":\"context.clear\",\"time\":4}\n",
+        "{\"type\":\"context.append_loop_event\",\"time\":5,\"event\":{\"type\":\"step.end\",\"uuid\":\"c\",\"usage\":{\"inputOther\":20000}}}\n",
+        "{\"type\":\"context.apply_compaction\",\"time\":6,\"tokensBefore\":20000,\"tokensAfter\":12000}\n",
+    ));
     let attribution = wire::effective_attribution(&records);
     assert_eq!(attribution.display_model().as_deref(), Some("large"));
     assert_eq!(attribution.thinking_effort.as_deref(), Some("low"));
@@ -853,7 +822,7 @@ fn unknown_and_malformed_wire_records_do_not_block_following_facts() {
         "{\"type\":\"usage.record\",\"time\":8,\"model\":\"moonshot/kimi-k2.5\",\"usageScope\":\"turn\",\"usage\":{\"inputOther\":10}}\n",
     );
 
-    let records = wire::records_from_bytes(lines.as_bytes());
+    let records = wire::records_from_str(lines);
     assert!(matches!(records[0].event, wire::WireEvent::Unknown));
     assert!(matches!(records[1].event, wire::WireEvent::Unknown));
     assert!(matches!(
@@ -1128,24 +1097,5 @@ fn refresh_triggers_seed_and_stat_gate_the_stable_transcript_path() {
         KimiAdapter
             .local_context_refresh(RefreshTrigger::Hook("StopFailure"), &unchanged)
             .is_none()
-    );
-}
-
-#[test]
-fn quota_parser_accepts_nested_remaining_and_reset_spellings() {
-    let snapshot = oauth_usage::parse_response(
-        r#"{"limits":[{"detail":{"limit":100,"remaining":25,"resetAt":"2030-01-01T00:00:00Z"},"window":{"duration":5,"timeUnit":"HOUR"}}],"boosterWallet":{"balance":{"type":"BOOSTER","amount":500000000,"amountLeft":125000000},"monthlyChargeLimitEnabled":true,"monthlyChargeLimit":{"priceInCents":500,"currency":"USD"},"monthlyUsed":{"priceInCents":125,"currency":"USD"}}}"#,
-    )
-    .unwrap();
-    let window = &snapshot.rate_limits.as_ref().unwrap().windows[0];
-    assert_eq!(window.used_percentage, Some(75));
-    assert_eq!(window.duration_mins, Some(300));
-    assert_eq!(
-        snapshot.extra_credits,
-        Some(super::super::ExtraCredits::known(
-            Some(1.25),
-            Some(1.25),
-            Some(5.0)
-        ))
     );
 }
