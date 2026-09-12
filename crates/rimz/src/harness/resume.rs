@@ -24,8 +24,8 @@ use crate::agents::{AgentState, LocalSessionObservation};
 use crate::config::{CommandsConfig, ProfilesConfig, TeamsConfig};
 use crate::disk::paths::RuntimePaths;
 use crate::harness::plan::{
-    CohortCell, CohortResumePlan, CohortSeed, LayoutPaneParams, cohort_cells, compile_layout_panes,
-    launch_identity_requests,
+    CohortCell, CohortResumePlan, CohortSeed, LayoutPaneParams, ResumeLaunchPosture, cohort_cells,
+    compile_layout_panes, launch_identity_requests,
 };
 use crate::harness::spec::LayoutSpec;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
@@ -250,9 +250,7 @@ pub struct ResumeSkip {
     pub reason: ResumeSkipReason,
 }
 
-/// The profile-declared launch posture a relaunched session replays: the
-/// provider argv its profile renders plus the typed values its launch params
-/// carry.
+/// The planner's launch posture a relaunched session replays, with the reason it degraded when its stored profile no longer applies.
 ///
 /// A profile is durable, named configuration, so a session that launched as
 /// `@planner` comes back as a planner. One-off `--model` / `--effort` flags
@@ -260,14 +258,7 @@ pub struct ResumeSkip {
 /// choice, and `--resume` refuses them for the same reason.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ResumePosture {
-    pub args: Vec<String>,
-    pub system_prompt_file: Option<PathBuf>,
-    pub append_system_prompt_files: Vec<PathBuf>,
-    pub skills: Option<Vec<crate::config::SkillName>>,
-    pub mode: Option<PermissionMode>,
-    pub model: Option<String>,
-    pub effort: Option<String>,
-    pub budget: Option<String>,
+    pub launch: ResumeLaunchPosture,
     /// Set when the profile no longer applies and the session comes back bare.
     /// Unattended recovery prints it and continues; restart and fork escalate
     /// [`PostureDegrade::KindChanged`] because switching providers under a
@@ -293,33 +284,20 @@ pub enum PostureDegrade {
 }
 
 impl ResumePosture {
-    /// The posture a layout cell already carries. Team restore and cohort
-    /// resume resolve their layout up front, so the cell is the answer.
-    pub fn from_cell(cell: &crate::harness::spec::AgentCell) -> Self {
-        Self {
-            args: cell.args.clone(),
-            system_prompt_file: cell.system_prompt_file.clone(),
-            append_system_prompt_files: cell.append_system_prompt_files.clone(),
-            skills: cell.skills.clone(),
-            mode: cell.launch.mode,
-            model: cell.launch.model.clone(),
-            effort: cell.launch.effort.clone(),
-            budget: cell.launch.budget.clone(),
-            degraded: None,
-        }
-    }
-
     /// A bare posture that replays only the permission mode stamped on the
     /// original launch event, so an agent launched with no profile still comes
     /// back with the posture the user granted it.
     fn bare(stamped_mode: Option<PermissionMode>, kind: &AgentKind) -> Self {
         Self {
-            args: stamped_mode
-                .zip(find_definition(kind.as_str()))
-                .map(|(mode, adapter)| adapter.spec().launch.permission_args(mode))
-                .unwrap_or_default(),
-            mode: stamped_mode,
-            ..Self::default()
+            launch: ResumeLaunchPosture {
+                args: stamped_mode
+                    .zip(find_definition(kind.as_str()))
+                    .map(|(mode, adapter)| adapter.spec().launch.permission_args(mode))
+                    .unwrap_or_default(),
+                mode: stamped_mode,
+                ..Default::default()
+            },
+            degraded: None,
         }
     }
 
@@ -401,17 +379,21 @@ pub fn resolve_posture(request: PostureRequest<'_>, profiles: &ProfilesConfig) -
         };
         return ResumePosture::degrade(request.stamped_mode, request.kind, degraded);
     }
-    let mut posture = ResumePosture::from_cell(&cell);
+    let mut posture = ResumePosture {
+        launch: ResumeLaunchPosture::from(&cell),
+        degraded: None,
+    };
     // A profile that declares no mode leaves the granted posture to the launch
     // event, so replay the stamped mode's permission argv instead.
-    if posture.mode.is_none()
+    if posture.launch.mode.is_none()
         && let Some(mode) = request.stamped_mode
         && let Some(adapter) = find_definition(request.kind.as_str())
     {
         posture
+            .launch
             .args
             .extend(adapter.spec().launch.permission_args(mode));
-        posture.mode = Some(mode);
+        posture.launch.mode = Some(mode);
     }
     posture
 }
@@ -786,19 +768,6 @@ fn resume_launch_identity(
         parent_agent_id: candidate.parent_agent_id.clone(),
         parent_agent_kind: candidate.parent_agent_kind.clone(),
         launch_depth: candidate.launch_depth,
-    }
-}
-
-fn resume_launch_posture(posture: &ResumePosture) -> crate::harness::plan::ResumeLaunchPosture {
-    crate::harness::plan::ResumeLaunchPosture {
-        args: posture.args.clone(),
-        system_prompt_file: posture.system_prompt_file.clone(),
-        append_system_prompt_files: posture.append_system_prompt_files.clone(),
-        skills: posture.skills.clone(),
-        mode: posture.mode,
-        model: posture.model.clone(),
-        effort: posture.effort.clone(),
-        budget: posture.budget.clone(),
     }
 }
 
@@ -1745,7 +1714,7 @@ fn plan_resume_candidates_detailed(
             ctx.runtime,
             &resume_launch_identity(&candidate),
             channel.as_deref(),
-            &resume_launch_posture(&posture),
+            &posture.launch,
         );
         let tab_label = channel_label(channel.as_deref(), &candidate.cwd);
         let identity = resume_tab_identity(channel.as_deref(), &candidate.cwd);

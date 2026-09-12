@@ -66,7 +66,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     rimz::sandbox::preflight_skills(
         config.agents.isolation,
         &seed.kind,
-        posture.skills.is_some(),
+        posture.launch.skills.is_some(),
         adapter.manual_skill(),
     )?;
     rimz::sandbox::preflight(config.agents.isolation)?;
@@ -77,10 +77,10 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             seed.kind
         )?;
     }
-    seed.launch.mode = posture.mode;
-    seed.launch.model.clone_from(&posture.model);
-    seed.launch.effort.clone_from(&posture.effort);
-    seed.launch.budget.clone_from(&posture.budget);
+    seed.launch.mode = posture.launch.mode;
+    seed.launch.model.clone_from(&posture.launch.model);
+    seed.launch.effort.clone_from(&posture.launch.effort);
+    seed.launch.budget.clone_from(&posture.launch.budget);
     rimz::harness::launch::preflight_agent_process(
         &workspace.project_root,
         config.harness.rtk,
@@ -88,11 +88,11 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             kind: seed.kind.clone(),
             action: rimz::harness::launch::ExecAction::Fork {
                 session_id: seed.source_session_id.to_string(),
-                extra_args: posture.args.clone(),
+                extra_args: posture.launch.args.clone(),
             },
-            system_prompt_file: posture.system_prompt_file.clone(),
-            append_system_prompt_files: posture.append_system_prompt_files.clone(),
-            skills: posture.skills.clone(),
+            system_prompt_file: posture.launch.system_prompt_file.clone(),
+            append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
+            skills: posture.launch.skills.clone(),
             provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,
@@ -142,11 +142,11 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             kind: seed.kind.clone(),
             action: rimz::harness::launch::ExecAction::Fork {
                 session_id: seed.source_session_id.to_string(),
-                extra_args: posture.args,
+                extra_args: posture.launch.args,
             },
-            system_prompt_file: posture.system_prompt_file.clone(),
-            append_system_prompt_files: posture.append_system_prompt_files.clone(),
-            skills: posture.skills.clone(),
+            system_prompt_file: posture.launch.system_prompt_file.clone(),
+            append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
+            skills: posture.launch.skills.clone(),
             provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
             run_id: None,
             worktree_path: None,
@@ -371,7 +371,7 @@ mod tests {
             fork_posture(&seed("claude", Some("planner"), None), &profiles).expect("posture");
 
         assert_eq!(
-            posture.args,
+            posture.launch.args,
             vec![
                 "--model",
                 "opus",
@@ -382,10 +382,13 @@ mod tests {
                 "/tmp/plugin dir",
             ]
         );
-        assert_eq!(posture.system_prompt_file.as_deref(), Some(prompt.path()));
-        assert_eq!(posture.mode, Some(PermissionMode::Yolo));
-        assert_eq!(posture.model.as_deref(), Some("opus"));
-        assert_eq!(posture.effort.as_deref(), Some("high"));
+        assert_eq!(
+            posture.launch.system_prompt_file.as_deref(),
+            Some(prompt.path())
+        );
+        assert_eq!(posture.launch.mode, Some(PermissionMode::Yolo));
+        assert_eq!(posture.launch.model.as_deref(), Some("opus"));
+        assert_eq!(posture.launch.effort.as_deref(), Some("high"));
     }
 
     #[test]
@@ -408,7 +411,7 @@ mod tests {
         let posture =
             fork_posture(&seed, &ProfilesConfig::default()).expect("bare degraded posture");
 
-        assert_eq!(posture.args, vec!["--dangerously-skip-permissions"]);
+        assert_eq!(posture.launch.args, vec!["--dangerously-skip-permissions"]);
         assert!(matches!(
             posture.degraded,
             Some(PostureDegrade::Unresolved { .. })
@@ -421,8 +424,8 @@ mod tests {
 
         let posture = fork_posture(&seed, &ProfilesConfig::default()).expect("bare posture");
 
-        assert_eq!(posture.args, vec!["--dangerously-skip-permissions"]);
-        assert_eq!(posture.mode, Some(PermissionMode::Yolo));
+        assert_eq!(posture.launch.args, vec!["--dangerously-skip-permissions"]);
+        assert_eq!(posture.launch.mode, Some(PermissionMode::Yolo));
         assert_eq!(posture.degraded, None);
     }
 

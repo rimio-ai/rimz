@@ -10,6 +10,52 @@ use crate::harness::ancestry::LaunchAncestry;
 use crate::harness::spec::Column;
 use crate::ids::{AgentKind, AgentSessionId};
 
+#[test]
+fn cell_posture_projection_covers_every_agent_cell_field() {
+    let mut cell = AgentCell {
+        kind: AgentKind::new_unchecked("codex"),
+        args: vec!["--model".to_owned(), "o3".to_owned()],
+        auto_compact: None,
+        system_prompt_file: Some(PathBuf::from("system.md")),
+        append_system_prompt_files: vec![PathBuf::from("append.md")],
+        skills: Some(vec!["merge".parse().unwrap()]),
+        launch: LaunchParams {
+            mode: Some(PermissionMode::Yolo),
+            model: Some("o3".to_owned()),
+            effort: Some("high".to_owned()),
+            budget: Some("$10".to_owned()),
+            ..Default::default()
+        },
+    };
+    let AgentCell {
+        kind: _,
+        auto_compact: _,
+        args,
+        system_prompt_file,
+        append_system_prompt_files,
+        skills,
+        launch,
+    } = cell.clone();
+
+    assert_eq!(
+        ResumeLaunchPosture::from(&cell),
+        ResumeLaunchPosture {
+            args,
+            system_prompt_file,
+            append_system_prompt_files,
+            skills,
+            mode: launch.mode,
+            model: launch.model,
+            effort: launch.effort,
+            budget: launch.budget,
+        }
+    );
+    for skills in [None, Some(Vec::new())] {
+        cell.skills.clone_from(&skills);
+        assert_eq!(ResumeLaunchPosture::from(&cell).skills, skills);
+    }
+}
+
 fn role_binding(role: &str) -> RoleBinding {
     RoleBinding {
         signals: Vec::new(),

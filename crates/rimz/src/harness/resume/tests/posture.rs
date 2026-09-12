@@ -2,55 +2,6 @@
 //! with, and how a broken profile degrades instead of stranding the session.
 
 use super::*;
-use crate::agents::LaunchParams;
-use crate::harness::spec::AgentCell;
-
-#[test]
-fn cell_posture_projection_covers_every_agent_cell_field() {
-    let mut cell = AgentCell {
-        kind: AgentKind::new_unchecked("codex"),
-        args: vec!["--model".to_owned(), "o3".to_owned()],
-        auto_compact: None,
-        system_prompt_file: Some(PathBuf::from("system.md")),
-        append_system_prompt_files: vec![PathBuf::from("append.md")],
-        skills: Some(vec!["merge".parse().unwrap()]),
-        launch: LaunchParams {
-            mode: Some(PermissionMode::Yolo),
-            model: Some("o3".to_owned()),
-            effort: Some("high".to_owned()),
-            budget: Some("$10".to_owned()),
-            ..Default::default()
-        },
-    };
-    let AgentCell {
-        kind: _,
-        auto_compact: _,
-        args,
-        system_prompt_file,
-        append_system_prompt_files,
-        skills,
-        launch,
-    } = cell.clone();
-
-    assert_eq!(
-        ResumePosture::from_cell(&cell),
-        ResumePosture {
-            args,
-            system_prompt_file,
-            append_system_prompt_files,
-            skills,
-            mode: launch.mode,
-            model: launch.model,
-            effort: launch.effort,
-            budget: launch.budget,
-            degraded: None,
-        }
-    );
-    for skills in [None, Some(Vec::new())] {
-        cell.skills.clone_from(&skills);
-        assert_eq!(ResumePosture::from_cell(&cell).skills, skills);
-    }
-}
 
 #[test]
 fn resume_replays_the_profile_declared_posture() {
@@ -180,13 +131,13 @@ fn profile_mode_wins_over_the_stamped_mode() {
         &profiles,
     );
 
-    assert_eq!(posture.mode, Some(PermissionMode::Auto));
+    assert_eq!(posture.launch.mode, Some(PermissionMode::Auto));
     assert!(
         !yolo_argv("claude")
             .iter()
-            .any(|arg| posture.args.contains(arg)),
+            .any(|arg| posture.launch.args.contains(arg)),
         "stamped yolo argv leaked past the profile's mode: {:?}",
-        posture.args
+        posture.launch.args
     );
 }
 
@@ -204,7 +155,7 @@ fn a_profile_prompt_file_that_vanished_degrades_instead_of_refusing() {
 
     let posture = posture_for("codex", Some("planner"), None, &profiles);
 
-    assert!(posture.args.is_empty());
+    assert!(posture.launch.args.is_empty());
     assert!(matches!(
         posture.degraded,
         Some(PostureDegrade::PromptFileMissing { .. })
@@ -268,7 +219,7 @@ fn posture_reports_a_provider_switch_rather_than_refusing() {
 
     let posture = posture_for("claude", Some("planner"), None, &profiles);
 
-    assert!(posture.args.is_empty());
+    assert!(posture.launch.args.is_empty());
     assert!(matches!(
         posture.degraded,
         Some(PostureDegrade::KindChanged { .. })
