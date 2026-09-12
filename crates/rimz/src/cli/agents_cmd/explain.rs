@@ -532,13 +532,10 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
                 .map_or_else(|| "provider default".to_owned(), |mode| mode.to_string()),
         ),
     );
-    for (label, value) in [
-        ("model", report.model),
-        ("effort", report.effort),
-        ("budget", report.budget),
-    ] {
+    for (label, value) in [("model", report.model), ("effort", report.effort)] {
         plan.push(label, render::cell(value.unwrap_or("provider default")));
     }
+    plan.push("budget", render::cell(report.budget.unwrap_or("no cap")));
     plan.push(
         "overrides",
         render::cell(if report.overrides.is_empty() {

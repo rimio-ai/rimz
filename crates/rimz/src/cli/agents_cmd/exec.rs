@@ -40,8 +40,15 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         }
     };
     let attach_target = exec_attach_target(&request);
-    let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
-    let state = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())?;
+    let (runtime, state) = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
+        .and_then(|runtime| {
+            rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
+                .map(|state| (runtime, state))
+        })
+        .inspect_err(|_| {
+            mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
+            fail_run_on_exec_precondition(run_context.as_ref());
+        })?;
     let provider_cwd = request
         .worktree_path
         .as_deref()
