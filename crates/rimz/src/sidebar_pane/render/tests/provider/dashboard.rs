@@ -123,7 +123,18 @@ fn copilot_art_stays_out_of_narrow_headers() {
 /// other account stays a dim label resting in the rail, its block off screen.
 #[test]
 fn render_provider_dashboard_pins_panel_with_bars_and_rc_flag() {
-    let rendered = snapshot_to_screen(&tabbed_provider_snapshot(), 54, 34);
+    let mut snapshot = tabbed_provider_snapshot();
+    let parent = snapshot.providers[0].windows[1].clone();
+    snapshot.providers[0].windows.push(RateLimitWindow {
+        scope: Some(crate::agents::RateLimitWindowScope {
+            id: "model:fable".to_owned(),
+            label: "Fable".to_owned(),
+        }),
+        used_percentage: Some(58),
+        share_pct: Some(50),
+        ..parent
+    });
+    let rendered = snapshot_to_screen(&snapshot, 54, 34);
 
     // The tab rail names both accounts set into the line; the active chip is a
     // styled span, so text snapshots only pin the semantic labels.
@@ -148,6 +159,10 @@ fn render_provider_dashboard_pins_panel_with_bars_and_rc_flag() {
     assert!(rendered.contains("5h"), "{rendered}");
     assert!(rendered.contains("7d"), "{rendered}");
     assert!(rendered.contains('▰'), "a draining mana bar:\n{rendered}");
+    assert!(
+        rendered.contains('╱'),
+        "a model sub-cap partitions the weekly fill:\n{rendered}"
+    );
     assert!(rendered.contains('↻'), "a reset countdown:\n{rendered}");
     // The inactive Codex block stays off screen — only its tab label shows.
     assert!(

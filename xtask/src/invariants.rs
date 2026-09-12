@@ -938,11 +938,11 @@ fn ui_glyph_exempt(relative: &Path) -> bool {
 }
 
 fn ui_glyph_violation_lines(text: &str) -> Vec<(usize, &str)> {
-    const BANNED: [&str; 55] = [
+    const BANNED: [&str; 56] = [
         "◇", "↘", "↗", "◌", "◍", "◎", "↻", "⧉", "¤", "⇅", "∞", "━", "─", "╸", "╺", "▰", "▱", "▐",
         "▕", "▣", "▢", "▤", "◔", "◑", "◕", "◉", "▌", "▎", "🮇", "┤", "├", "⑂", "⇡", "⇣", "≡", "✓",
         "┄", "⌘", "⚠", "⇄", "●", "○", "⋯", "↕", "⏎", "␣", "✉", "↔", "⟳", "✕", "╭", "╮", "╰", "╯",
-        "│",
+        "│", "╱",
     ];
     let mut hits = Vec::new();
     let mut in_tests = false;

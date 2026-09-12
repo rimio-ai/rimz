@@ -562,13 +562,13 @@ fn context_gauge_uses_the_first_surviving_segments_tone() {
 fn mana_bar_drains_ramps_and_keeps_edge_shapes() {
     let zones = BudgetBarConfig::default();
     let plain = Theme::fixed(true);
-    let spans = mana_bar_spans(&plain, 70, 10, &zones);
+    let spans = mana_bar_spans(&plain, 70, 10, &zones, &[]);
     assert_eq!(text(&spans), "▰▰▰▰▰▰▰▱▱▱");
     assert_no_fg(&spans);
 
     for (remaining, expected) in [(0, "▱▱▱▱▱▱▱▱▱▱"), (1, "▰▱▱▱▱▱▱▱▱▱")]
     {
-        let spans = mana_bar_spans(&plain, remaining, 10, &zones);
+        let spans = mana_bar_spans(&plain, remaining, 10, &zones, &[]);
         assert_eq!(text(&spans), expected, "{remaining}% remaining");
         if remaining == 0 {
             assert_eq!(spans.len(), 1, "spent budget is one empty track span");
@@ -578,7 +578,7 @@ fn mana_bar_drains_ramps_and_keeps_edge_shapes() {
 
     let lit = Theme::fixed(false);
     let fg = |remaining| {
-        mana_bar_spans(&lit, remaining, 10, &zones)[0]
+        mana_bar_spans(&lit, remaining, 10, &zones, &[])[0]
             .style
             .fg
             .unwrap()
@@ -604,9 +604,9 @@ fn mana_bar_drains_ramps_and_keeps_edge_shapes() {
         lit.heat_tone(0.0),
         "a three-quarter window has left pure green"
     );
-    let track = &mana_bar_spans(&lit, 70, 10, &zones)[1];
+    let track = &mana_bar_spans(&lit, 70, 10, &zones, &[])[1];
     assert_eq!(track.style, lit.muted());
-    let spent = mana_bar_spans(&lit, 0, 10, &zones);
+    let spent = mana_bar_spans(&lit, 0, 10, &zones, &[]);
     assert_eq!(
         spent[0].style.fg,
         mana_style(&lit, 0, &zones).fg,
@@ -632,7 +632,7 @@ fn spent_budget_track_mirrors_its_label_under_ansi_alarm_override() {
     };
     let theme = Theme::fixed_for_theme(false, &theme_config);
     let zones = BudgetBarConfig::default();
-    let track = mana_bar_spans(&theme, 0, 10, &zones)[0].style.fg;
+    let track = mana_bar_spans(&theme, 0, 10, &zones, &[])[0].style.fg;
     assert_eq!(
         track,
         mana_style(&theme, 0, &zones).fg,
@@ -644,6 +644,110 @@ fn spent_budget_track_mirrors_its_label_under_ansi_alarm_override() {
         "both wear the ramp's alarm endpoint"
     );
     assert_ne!(track, Some(Color::Indexed(1)), "not the terminal ANSI red");
+}
+
+#[test]
+fn mana_ticks_partition_fill_without_changing_width_or_parent_tone() {
+    let zones = BudgetBarConfig::default();
+    for no_color in [false, true] {
+        let theme = Theme::fixed(no_color);
+        for (remaining, headroom, width, expected) in [
+            (63, 21, 10, "▰▰╱▰▰▰▱▱▱▱"),
+            (63, 59, 10, "▰▰▰▰▰╱▱▱▱▱"),
+            (63, 0, 10, "╱▰▰▰▰▰▱▱▱▱"),
+            (63, 63, 10, "▰▰▰▰▰▰▱▱▱▱"),
+            (63, 70, 10, "▰▰▰▰▰▰▱▱▱▱"),
+            (0, 0, 10, "▱▱▱▱▱▱▱▱▱▱"),
+            (1, 0, 0, "╱"),
+            (100, 99, 1, "╱"),
+        ] {
+            let tick_style = mana_style(&theme, 0, &zones);
+            let spans = mana_bar_spans(
+                &theme,
+                remaining,
+                width,
+                &zones,
+                &[ManaTick {
+                    headroom_pct: headroom,
+                    remaining_pct: 0,
+                }],
+            );
+            assert_eq!(text(&spans), expected);
+            assert_eq!(spans.iter().map(Span::width).sum::<usize>(), width.max(1));
+            for span in &spans {
+                if span.content == "╱" {
+                    assert_eq!(span.style, tick_style);
+                } else if span.content.contains('▰') || remaining == 0 {
+                    assert_eq!(span.style, mana_style(&theme, remaining, &zones));
+                } else {
+                    assert_eq!(span.style, theme.muted());
+                }
+            }
+            if no_color {
+                assert_no_fg(&spans);
+            }
+        }
+    }
+}
+
+#[test]
+fn mana_tick_collisions_keep_the_most_constrained_reading_in_either_order() {
+    let theme = Theme::fixed(false);
+    let zones = BudgetBarConfig::default();
+    for readings in [[(21, 80), (20, 40)], [(20, 80), (20, 40)]] {
+        for reverse in [false, true] {
+            let mut ticks: Vec<_> = readings
+                .into_iter()
+                .chain([(40, 60)])
+                .map(|(headroom_pct, remaining_pct)| ManaTick {
+                    headroom_pct,
+                    remaining_pct,
+                })
+                .collect();
+            if reverse {
+                ticks.reverse();
+            }
+            let spans = mana_bar_spans(&theme, 70, 10, &zones, &ticks);
+            assert_eq!(text(&spans), "▰▰╱▰╱▰▰▱▱▱");
+            let tick_styles: Vec<_> = spans
+                .iter()
+                .filter(|span| span.content == "╱")
+                .map(|span| span.style)
+                .collect();
+            assert_eq!(
+                tick_styles,
+                [
+                    mana_style(&theme, 40, &zones),
+                    mana_style(&theme, 60, &zones)
+                ]
+            );
+        }
+    }
+}
+
+#[test]
+fn mana_ticks_preserve_combining_glyph_overrides_as_terminal_cells() {
+    let theme = Theme::fixed_for_theme(
+        true,
+        &toml::from_str::<crate::config::ThemeConfig>(
+            "[glyphs.unicode.meter]\nmana_filled = 'x́'\nmana_track = 'ó'\nmana_tick = '|́'",
+        )
+        .expect("combining glyph overrides"),
+    );
+    let zones = BudgetBarConfig::default();
+    let spans = mana_bar_spans(
+        &theme,
+        70,
+        10,
+        &zones,
+        &[ManaTick {
+            headroom_pct: 20,
+            remaining_pct: 40,
+        }],
+    );
+    assert_eq!(text(&spans), "x́x́|́x́x́x́x́óóó");
+    assert_eq!(spans.iter().map(Span::width).sum::<usize>(), 10);
+    assert_no_fg(&spans);
 }
 
 #[test]
@@ -667,7 +771,7 @@ fn mana_style_honours_custom_and_misordered_zones() {
     assert_eq!(tone(40, &tuned), Some(lit.heat_tone(2.0 / 3.0)));
     assert_eq!(tone(19, &tuned), Some(lit.heat_tone(1.0)));
     assert_eq!(
-        mana_bar_spans(&lit, 80, 10, &tuned)[0].style.fg,
+        mana_bar_spans(&lit, 80, 10, &tuned, &[])[0].style.fg,
         tone(80, &tuned)
     );
 
