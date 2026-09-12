@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{AgentState, TranscriptStat, find_definition};
+use crate::ids::{AgentKind, LoginName};
 
 use super::aggregate::{DedupPayload, SidechainDedup, subagent_child_id};
 use super::{CachedEntry, PriceBook, session_entries};
@@ -58,6 +59,7 @@ pub struct SlotEffortBreakdown {
 #[derive(Clone, Copy, Debug)]
 pub struct EffortSessionRef<'a> {
     pub kind: &'a str,
+    pub login: Option<&'a LoginName>,
     pub session_id: &'a str,
     pub transcript_path: Option<&'a str>,
 }
@@ -66,6 +68,7 @@ impl<'a> EffortSessionRef<'a> {
     pub fn from_state(agent: &'a AgentState) -> Self {
         Self {
             kind: agent.kind.as_str(),
+            login: agent.login.as_ref(),
             session_id: agent.agent_id.as_str(),
             transcript_path: agent.transcript_path.as_deref(),
         }
@@ -120,17 +123,25 @@ fn slot_effort_breakdown_with_memo(
     prices: &PriceBook,
     memo: &mut EffortParseMemo,
 ) -> SlotEffortBreakdown {
-    let login_env = crate::agents::ambient_env();
+    let mut login_envs = BTreeMap::new();
     let resolved = sessions
         .iter()
         .filter_map(|session| {
             let adapter = find_definition(session.kind)?;
+            let login_env = login_envs
+                .entry((session.kind, session.login.cloned().unwrap_or_default()))
+                .or_insert_with(|| {
+                    crate::agents::session_login_env(
+                        &AgentKind::new_unchecked(session.kind),
+                        session.login,
+                    )
+                });
             let prior_path = session
                 .transcript_path
                 .filter(|path| !path.is_empty())
                 .map(Path::new);
             let paths =
-                adapter.session_spend_transcripts(session.session_id, prior_path, &login_env);
+                adapter.session_spend_transcripts(session.session_id, prior_path, login_env);
             (!paths.is_empty()).then_some((session.session_id, adapter, paths))
         })
         .collect::<Vec<_>>();
@@ -306,6 +317,7 @@ mod tests {
         let breakdown = slot_effort_breakdown(
             &[EffortSessionRef {
                 kind: "claude",
+                login: None,
                 session_id: "session",
                 transcript_path: Some(&main),
             }],
@@ -384,11 +396,13 @@ mod tests {
         let sessions = [
             EffortSessionRef {
                 kind: "opencode",
+                login: None,
                 session_id: "s1",
                 transcript_path: Some(&path),
             },
             EffortSessionRef {
                 kind: "opencode",
+                login: None,
                 session_id: "s2",
                 transcript_path: Some(&path),
             },

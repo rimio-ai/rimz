@@ -2252,7 +2252,7 @@ pub fn resume_session_present(agent: &AgentState) -> bool {
     {
         return std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 0);
     }
-    let login_env = session_login_env(agent);
+    let login_env = crate::agents::session_login_env(&agent.kind, agent.login.as_ref());
     agent_worktree(agent)
         .and_then(|cwd| {
             find_definition(&agent.kind).and_then(|adapter| {
@@ -2260,23 +2260,6 @@ pub fn resume_session_present(agent: &AgentState) -> bool {
             })
         })
         .unwrap_or(true)
-}
-
-/// The provider environment a session's conversation lives under: its stamped
-/// account's home, or the ambient default home.
-fn session_login_env(agent: &AgentState) -> BTreeMap<String, String> {
-    let ambient = crate::agents::ambient_env();
-    let Some(name) = agent.login.as_ref() else {
-        return ambient;
-    };
-    let accounts = &crate::config::MachineConfig::load_lenient().accounts;
-    match crate::agents::LoginCatalog::from_config(accounts)
-        .ok()
-        .and_then(|catalog| catalog.select(&agent.kind, name).ok())
-    {
-        Some(login) => login.env(&ambient),
-        None => ambient,
-    }
 }
 
 fn agent_worktree(agent: &AgentState) -> Option<PathBuf> {

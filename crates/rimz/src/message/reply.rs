@@ -150,7 +150,7 @@ impl ReplyPreparation {
         } else {
             None
         };
-        let mut checked_kinds = BTreeSet::new();
+        let mut checked_logins = BTreeSet::new();
         let mut prepared = Vec::with_capacity(targets.len());
         for target in targets {
             let identity = target.agent.ok_or_else(|| ReplyPrepareErr::PaneOnly {
@@ -165,7 +165,7 @@ impl ReplyPreparation {
                 })?;
             let adapter = crate::agents::find_definition(agent.kind.as_str())
                 .ok_or_else(|| ReplyPrepareErr::UnknownAgentKind(agent.kind.clone()))?;
-            if checked_kinds.insert(agent.kind.clone()) {
+            if checked_logins.insert(agent.login_key()) {
                 preflight_reply_hooks(agent, adapter)?;
             }
             if let (Some((self_kind, self_name)), Some((live, history))) =
@@ -682,7 +682,7 @@ fn preflight_reply_hooks(
 ) -> Result<(), ReplyPrepareErr> {
     match crate::agents::preflight_hooks(
         adapter,
-        &crate::agents::ambient_env(),
+        &crate::agents::session_login_env(&agent.kind, agent.login.as_ref()),
         crate::agents::TurnLifecycleNeed::NotUnsupported,
     ) {
         Ok(()) => Ok(()),

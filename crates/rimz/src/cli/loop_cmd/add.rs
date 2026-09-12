@@ -52,7 +52,11 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     let shape = schedule::TaskShape::compile(&args.name, &entry);
     let parsed = shape.trigger().as_ref().map_err(Clone::clone)?;
     let task_action = shape.action().map_err(Clone::clone)?;
-    preflight_entry(task_action, resolved_for_preflight.as_ref())?;
+    preflight_entry(
+        task_action,
+        resolved_for_preflight.as_ref(),
+        &rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())?,
+    )?;
     let catalog = TaskCatalog::load(Some(&project_root))?;
     let project_pre_state = args
         .project
