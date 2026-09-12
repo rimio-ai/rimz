@@ -420,6 +420,7 @@ fn subagent_observations_namespace_identity_and_keep_the_parent_link() {
             parent_agent_kind: None,
             launch_depth: None,
             profile: None,
+            login: None,
             mode: None,
             role: None,
             model: None,
