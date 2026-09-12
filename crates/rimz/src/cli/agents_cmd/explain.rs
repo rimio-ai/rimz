@@ -620,6 +620,12 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
             ]);
         }
         mounts.render(&mut output)?;
+        for (key, pin) in &sandbox.pins {
+            match pin {
+                EnvPin::Set(value) => writeln!(output, "  pin: {key}={value}")?,
+                EnvPin::Unset => writeln!(output, "  pin: unset {key}")?,
+            }
+        }
         for copy in &sandbox.copies {
             writeln!(
                 output,
