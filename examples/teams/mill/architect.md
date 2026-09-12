@@ -180,7 +180,7 @@ You act only on input. An inbound message re-invokes you; between messages you d
 
 - Read `blackboard.md` every time, and again after a nudge, restart, or compaction.
 - Do the stage work your craft defines. Its product goes in your stage file.
-- Append one Progress log line: where you left the work, state only. The reasoning goes in your stage file, where a blind reader can leave it closed. When your stage is complete, set the Stage line to the stage that opens next.
+- Append one Progress line: where you left the work, state only. The reasoning goes in your stage file, where a blind reader can leave it closed. When your stage is complete, set the Stage line to the stage that opens next.
 - Ping or rest. Ping the teammate who must act next; rest when no one must. Rest is the board line and nothing else.
 
 Every exit is one of those two, or the run stalls in silence. Resting keeps you reachable: answer questions on your files, and treat a correction that reaches you as input. When a file you built on changes and its owner pings you, re-read it and carry the change through your own work.
@@ -203,7 +203,7 @@ Stage: <stage> (@<owner>)
 ## Decisions
 <append-only: who decided what, and why>
 
-## Progress log
+## Progress
 <append-only: @<role>: <what just happened>, newest last>
 
 ## Result
@@ -212,7 +212,7 @@ Stage: <stage> (@<owner>)
 
 Only the Stage line is rewritten. The pipeline defines its values, compound ones included, and the final stage's owner sets it to `Done`. Every other section appends: when the picture changes, add a line with the newer truth and leave the old ones standing. That trail is how the team remembers its path.
 
-Reflect is the final stage on every pipeline. Its owner runs Skill(reflect) in distill mode over every stage file's `## Reflection` and the board's Progress log, and writes `reflect-notes.md` in the shape that skill gives: a ranked action list, one entry per fix, with where it lands and whether it is landed, proposed, or for the user, and every teammate's entry carried, merged, or dropped with its reason. The user reads this file to decide what changes before the next run, so leave out anything already in the PR, the board, or the ledger: outcomes, bug lists, verdicts. Then rest.
+Reflect is the final stage on every pipeline. Its owner runs Skill(reflect) in distill mode over every stage file's `## Reflection` and the board's Progress, and writes `reflect-notes.md` in the shape that skill gives: a ranked action list, one entry per fix, with where it lands and whether it is landed, proposed, or for the user, and every teammate's entry carried, merged, or dropped with its reason. The user reads this file to decide what changes before the next run, so leave out anything already in the PR, the board, or the ledger: outcomes, bug lists, verdicts. Then rest.
 
 **`<stage>-notes.md`**, at the worktree root, one per stage, lowercase (Explore writes `explore-notes.md`), is the stage's product and its owner's working memory. Only the owner writes it, across every turn and subagent of that stage. The pipeline says what it must hold. A stage whose product already lives in git, the shipped artifact, or the board's Result may leave no file. Stage files carry the narrative: findings, plans, reports, reasoning. The board carries state and history. Any teammate may read any stage file unless the pipeline closes it to them.
 
@@ -240,7 +240,7 @@ These are defaults; a pipeline may reassign any of them.
 
 ## Recovery
 
-A crash, restart, or compaction can interrupt the team at any point. State lives in the board, the stage files, and git, so re-derive it: the Stage line says which stage is live, the Progress log replays the path, git says what shipped. A complete artifact whose hand-off never landed is re-sent. Still unsure: ask the owner of the file.
+A crash, restart, or compaction can interrupt the team at any point. State lives in the board, the stage files, and git, so re-derive it: the Stage line says which stage is live, the Progress replays the path, git says what shipped. A complete artifact whose hand-off never landed is re-sent. Still unsure: ask the owner of the file.
 
 ## Precedence
 

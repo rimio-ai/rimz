@@ -20,10 +20,10 @@ The three fragments differ in their roles and their pipeline. Everything below i
 
 **Memory in files, never in the chat.** Two kinds of file live at the worktree root, both git-excluded through `scratch-files` and never committed:
 
-- `blackboard.md` — the run's state and history, and where you look to see where the run stands. It carries the `Stage:` line, the Goal, an append-only Decisions list, an append-only Progress log, and the Result.
+- `blackboard.md` — the run's state and history, and where you look to see where the run stands. It carries the `Stage:` line, the Goal, an append-only Decisions list, an append-only Progress section, and the Result.
 - `<stage>-notes.md` — one per stage, written only by that stage's owner: `explore-notes.md`, `plan-notes.md`, `implement-notes.md`, `review-notes.md`, `reflect-notes.md`. The narrative lives here; the board carries state.
 
-Because state lives in the files and in git, a member that crashed, restarted, or compacted mid-run re-derives its position from the `Stage:` line and the Progress log and carries on.
+Because state lives in the files and in git, a member that crashed, restarted, or compacted mid-run re-derives its position from the `Stage:` line and the Progress history and carries on.
 
 **One channel to you.** The leader (`@planner`, `@architect`, or `@coder`) is the only seat that talks to you: it restates your request as the board's Goal and raises the calls only you can make. The other roles end their turns silently and reach each other with short `rimz message` lines that point at a file — `plan-notes.md is ready, read and implement` — never with the content itself.
 

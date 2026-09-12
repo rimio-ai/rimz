@@ -14,7 +14,8 @@ scratch-files = ["/blackboard.md", "/*-notes.md"]
 [[agents.teams.forge.roles]]
 role = "planner"
 owns = ["Explore", "Plan", "Reflect"]
-compact-on-handoff = true
+# Overrides the optional [harness] flip-compact default.
+flip-compact = "180k"
 profile = "claude"
 mode = "auto"
 model = "fable"

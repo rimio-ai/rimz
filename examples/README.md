@@ -33,7 +33,7 @@ zellij setup --check
 
 ## Agent teams — `teams/`
 
-Three RimZ drop-in team fragments, one per shape of work: [`forge`](./teams/forge/) plans, builds, and reviews a change worth designing first; [`mill`](./teams/mill/) puts an architect in the lead for a refactor that has to remove surface; [`spot`](./teams/spot/) drops the design stage entirely for a small fix. Each directory is a `team.toml` declaring the roles, layout, pipeline stages, git-excluded scratch files, and a `ci.failed` → `coder` signal binding, plus one Markdown prompt per role. The [teams README](./teams/README.md) walks all three: pipelines, hand-offs, install, and customization.
+Three RimZ drop-in team fragments, one per shape of work: [`forge`](./teams/forge/) plans, builds, and reviews a change worth designing first; [`mill`](./teams/mill/) puts an architect in the lead for a refactor that has to remove surface; [`spot`](./teams/spot/) drops the design stage entirely for a small fix. Each directory is a `team.toml` declaring the roles, layout, pipeline stages, git-excluded scratch files, and a `ci.failed` → `coder` signal binding, plus one Markdown prompt per role. Their `blackboard.md` carries the Stage line and append-only Progress history; forge's first `rimz teams flip <stage> "<progress note>"` opens the board and records each later hand-off. The [teams README](./teams/README.md) walks all three: pipelines, hand-offs, install, and customization.
 
 Install a release-matched bundle from GitHub:
 

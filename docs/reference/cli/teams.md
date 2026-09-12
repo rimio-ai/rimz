@@ -4,7 +4,7 @@
 
 A team is a configured set of role bindings and a layout.
 Each role keeps its own model, prompt, context window, and address while the team shares one lane.
-The definition may set `leader`, `layout`, `stages`, and `scratch-files` alongside its `roles`; each role may declare its own `signals` array of inline tables, `owns` stage names, and `compact-on-handoff` opt-in. `stages` declares an optional ordered pipeline, such as `["Explore", "Plan", "Implement", "Review", "Submit", "Reflect"]`; names must be nonblank and unique, and an empty list means undeclared. `scratch-files` is a list of verbatim gitignore patterns for ephemeral team memory, registered on launch and resume.
+The definition may set `leader`, `layout`, `stages`, and `scratch-files` alongside its `roles`; each role may declare its own `signals` array of inline tables, `owns` stage names, and `flip-compact` threshold override. `stages` declares an optional ordered pipeline, such as `["Explore", "Plan", "Implement", "Review", "Submit", "Reflect"]`; names must be nonblank and unique, and an empty list means undeclared. `scratch-files` is a list of verbatim gitignore patterns for ephemeral team memory, registered on launch and resume.
 The [teams guide](../../guide/teams.md) explains how to design a team; this page owns the command forms.
 
 ## List teams
@@ -44,7 +44,7 @@ Each live cohort gets its own block headed by lane, cohort state, and advisory b
 
 The `isolation` line reports the room's current machine-wide `agents.isolation` setting, not a durable per-agent launch record. Host isolation shows `host · tmp /tmp`. Sandbox isolation shows the room's state tmp directory, home-relative where possible, with `(as /tmp)` indicating where it is mounted inside the sandbox.
 
-The current stage comes from the first `Stage:` line in `<worktree>/blackboard.md`, for example `Stage: Plan (@planner)`. A terminal ` (@owner)` suffix supplies the owner; other parenthesized text stays part of the stage name. `flip` writes this advisory text from configured ownership; hand-edited boards still parse the same way. It is never inferred from member status and never proof of completion. The stages line brackets the declared name equal to the board stage's first whitespace-delimited word, case-sensitively; an unknown stage brackets nothing. A missing or unreadable board omits the header's stage suffix, even when a pipeline is declared.
+The current stage comes from the first `Stage:` line in `<worktree>/blackboard.md`, for example `Stage: Plan (@planner)`. A terminal ` (@owner)` suffix supplies the owner; other parenthesized text stays part of the stage name. `flip` writes this advisory text from configured ownership; hand-edited boards still parse the same way. It is never inferred from member status and never proof of completion. The stages line includes implicit `Done` last and brackets the name matching the board stage exactly and case-sensitively; an unknown stage brackets nothing. A missing or unreadable board omits the header's stage suffix, even when a pipeline is declared.
 
 PR/CI comes from the sidebar-refreshed cache; `teams` and `show` do not contact the forge. Only available facts are shown, and `pr none` means nothing is projected, not that RimZ verified there is no PR. Before a room snapshot is published, live cohorts can still be inspected without projected PR or activity enrichment.
 
@@ -156,27 +156,72 @@ From outside those lanes, select one with `team#worktree` or `-w NAME`; use eith
 ## Flip the board to the next stage
 
 ```sh
-rimz teams flip Implement -m "plan ready in plan-notes.md, read and implement"
-rimz teams flip Review --team forge -w feat-rate-limits
-rimz teams flip Implement --steer
-rimz teams flip Done
+rimz teams flip Explore "board opened; sweep aimed at rate-limit handling"
+rimz teams flip Implement "plan ready in plan-notes.md; three advisories carried in"
+rimz teams flip Review "implementation committed; report in implement-notes.md" --team forge
+rimz teams flip Done "reflection recorded in reflect-notes.md; run complete"
 ```
 
-`rimz teams flip <STAGE> [-m, --note TEXT] [--steer] [--team NAME] [-w, --worktree NAME]` hands the existing board to the configured owner in one command. `--team` selects the definition explicitly; otherwise RimZ uses the caller's team, or the sole team live in the current lane from a user shell. Cohort selection prefers the current lane, then a sole live cohort; use `-w NAME` to resolve ambiguity. The board belongs to that cohort's worktree, not necessarily the shell's directory.
+`rimz teams flip <STAGE> <NOTE> [--team NAME]` records progress and hands the board to the configured owner. Both positional arguments are required, including the note for `Done`. The note records what is done or where the work stands, not an instruction to the receiver.
 
-Declare ownership on roles, for example `owns = ["Explore", "Plan", "Reflect"]` on the planner and `owns = ["Implement"]` on the coder. Stage names match exactly and case-sensitively against `stages`, or against the owned names when `stages` is empty. Put qualifiers such as “delta round” in `-m`, not in the stage name. The command does not enforce pipeline order or a Review gate.
+Selection is worktree-based:
 
-The team creates `<worktree>/blackboard.md` with a column-zero `Stage:` line. Under a per-worktree lock, `flip` atomically replaces that first line with `Stage: <stage> (@owner)` and appends a line to `## Progress log`, creating the section if absent. Other board text remains intact. The ledger format is `- 2026-09-12 14:02 @planner: Plan -> Implement — note`, using the configured local time zone and omitting the note suffix when none is given. The board remains freeform Markdown, not a store projection.
+1. RimZ uses `RIMZ_WORKTREE_PATH` when set, otherwise the Git toplevel of the current directory, with lexical path normalization.
+2. It selects the live cohort whose members record that worktree, limited by `--team` when supplied. No match reports the worktree; several teams reports their names so you can select one with `--team`. There is no worktree-selection flag: run the command in the intended worktree.
+3. A calling member of another cohort is refused. A caller outside the selected cohort acts as `@user`; a selected member acts as its role.
 
-After the board write, RimZ appends a durable `team.stage` signal with source `team`, fires explicit subscriptions, and directly delivers to the owner without requiring a role signal binding. The payload carries string fields `team`, `instance` (`team#channel`), `from` (omitted when absent), `to`, `owner` (omitted for `Done`), `by` (role name, `user`, or `rimz`), optional `note`, `board` (absolute path), and `at` (RFC 3339). The owner receives `Type: SIGNAL` / `From: @rimz`, a stage-open headline, the payload JSON with `"signal":"team.stage"`, and the note. Read `by`, not `From`, to identify the flipper.
+Declare ownership on roles, for example `owns = ["Explore", "Plan", "Reflect"]` on the planner and `owns = ["Implement"]` on the coder. Stage names match exactly and case-sensitively against `stages`, or against the owned names when `stages` is empty. Put qualifiers such as “delta round” in the note, not in the stage name. The command does not enforce pipeline order or a Review gate.
 
-Delivery parks at the owner's next done boundary by default; `--steer` interrupts instead. A flip to a stage the caller owns sends no message: carry on. An owner with no live member is not an error: the board and signal land, and the receipt says the owner will be woken on resume. When the current stage owner registers after resume, restart, single-member restart, or room rebirth, RimZ emits and delivers a new stage-open with `from == to` and `by = "rimz"`, without editing the board or ledger. Explicit subscriptions can receive these re-wakes too.
+The first flip creates `<worktree>/blackboard.md` if absent. Under a per-worktree lock, RimZ atomically replaces its first column-zero `Stage:` line with `Stage: <stage> (@owner)`. If the line is missing, it inserts it after a leading `# ` heading line, otherwise at the top. It appends the note to `## Progress`, creating the section if absent; existing `## Progress log` sections remain accepted. Other board text stays intact, and the leader writes the other sections. The ledger uses the configured local time zone:
 
-`Done` is reserved and cannot be owned. It writes `Stage: Done`, appends the ledger, and emits the signal without delivering a message. Same-stage flips are allowed: re-run the current stage to repeat its ledger entry, signal, and eligible delivery. To correct a mistaken flip, flip back to the intended stage; the ledger retains both actions.
+```text
+- 2026-09-12 14:02 @planner: opened Explore — board opened; sweep aimed at rate-limit handling
+- 2026-09-12 14:20 @planner: Plan -> Implement — plan ready in plan-notes.md; three advisories carried in
+```
 
-Missing board or `Stage:` line? Create them first. No role declares `owns`? Add ownership before using `flip`. Unknown stage? Use an exact declared name; a declared but unowned stage needs an owner. Launch and flip reject blank stage names, surrounding whitespace or control characters, duplicate owners, ownership of `Done`, or owned names missing from a nonempty `stages` list; fix the role's `owns` or the declared list. Stage-owner role names must also omit parentheses and control characters so their board suffix stays readable. A failure after the board write reports which steps completed and exits nonzero; re-run `rimz teams flip <stage>` to repeat the signal and delivery rather than undoing the board by hand.
+After the board write, RimZ appends a durable `team.stage` signal with source `team`, fires explicit subscriptions, and directly delivers to the owner without requiring a role signal binding. The payload carries string fields `team`, `instance` (`team#channel`), `from` (absent when opening a board), `to`, `owner` (omitted for `Done`), `by` (role name, `user`, or `rimz`), optional `note`, `board` (absolute path), and `at` (RFC 3339). Flip signals always include the required note; registration re-wakes have no note.
 
-Per-role `compact-on-handoff = true` defaults off. After a successful sent or queued hand-off to another member, it sends the adapter's compact command to the flipper's own session at its next done boundary. Self-owned flips, `Done`, and an owner who is not live do not compact. Already-compacting, pending, or repeat refusals appear as skipped in the receipt. Launch refuses the opt-in on adapters without a compact command; disable it or choose a supported adapter. This is separate from native `auto-compact`, smart compaction of a message target, and idle compaction. Hand-off compaction appends an assist record and appears in `rimz stats`.
+Direct delivery uses `Type: STAGE` / `From: @rimz` with prose only, not payload JSON. These are the flip, same-stage re-fire, and registration re-wake bodies:
+
+```text
+@planner flipped the stage Plan -> Implement. Implement is yours: pick it up from blackboard.md.
+
+Note: plan ready in plan-notes.md; three advisories carried in
+```
+
+```text
+@user re-opened Implement. It is still yours: pick it up from blackboard.md.
+
+Note: implementation paused after the first check
+```
+
+```text
+The team resumed at stage Implement, which is yours. Nothing flipped since the board's last Progress line: reread blackboard.md and continue from where it stops.
+```
+
+If the leader opens a board at a stage another role owns, the first sentence instead starts `@planner opened the stage Explore. Explore is yours: pick it up from blackboard.md.` Explicit signal subscriptions still receive the loop's signal body, independently of this direct notice.
+
+Delivery always parks at the owner's next done boundary; flip has no interrupt option. A flip to a stage the caller owns sends no message: carry on. An owner with no live member is not an error: the board and signal land, and the receipt says the owner will be woken on resume. When the current owner registers after resume, restart, single-member restart, or room rebirth, RimZ emits and delivers a re-wake with `from == to` and `by = "rimz"`, without editing the board or ledger.
+
+`Done` is implicit and always last in the pipeline display; declaring it in either `stages` or `owns` is refused. It writes `Stage: Done`, appends the required note, and emits the signal without delivering a message. Flipping out of `Done` is allowed: keep the board and flip to an owned stage for a follow-up run. Same-stage flips repeat the ledger entry, signal, and eligible delivery. To correct a mistaken flip, flip back to the intended stage; both actions stay in the ledger.
+
+The receipt names the flipper and cohort, brackets the current stage in the pipeline, and reports the note, owner delivery, and any compaction action. For example:
+
+```text
+Flipped Plan -> Implement by @planner  (forge#teams-flip · teams-flip)
+  Explore → Plan → [Implement] → Review → Submit → Reflect → Done
+  note     plan ready in plan-notes.md; three advisories carried in
+  owner    @coder, woken at its next turn boundary
+  compact  queued for you: 204k tokens, over 180k
+```
+
+A first flip says `Opened <stage>`. The owner row can also say `sent now`, `not live; woken on resume`, or `you, carry on`; it is omitted for `Done`. The compact row appears only for sent, queued, or skipped attempts, not when unconfigured, ineligible, or below threshold.
+
+No role declares `owns`? Add ownership before using `flip`. Unknown stage? Use an exact declared name; a declared but unowned stage needs an owner. Launch and flip reject blank stage names, surrounding whitespace or control characters, duplicate owners, explicit `Done`, or owned names missing from a nonempty `stages` list. Stage-owner role names must omit parentheses and control characters. A signal or delivery failure after the board write reports completed steps and exits nonzero; repeat `rimz teams flip <stage> "<progress note>"` to retry rather than undoing the board by hand.
+
+Set `[harness] flip-compact = "180k"` to compact a flipper's own context at its next turn boundary once it reaches that threshold; unset means off. A role's `flip-compact = "220k"` overrides the default, and `flip-compact = "off"` disables it for that role. Thresholds accept token counts or percentages such as `"70%"`. Compaction requires a cohort member leaving a stage its role owns for one it does not own. `Done` counts as not owned, and a non-live destination owner does not prevent compaction. User flips, same-stage re-fires, moves between self-owned stages, and flips of another role's stage never compact. There is no first-leave exemption: every eligible flip checks current occupied context.
+
+Compaction is best-effort enrichment: an unavailable pane or compact-command error appears as `skipped` without failing the flip. Attempts append a `flip compaction` assist record and appear in `rimz stats`. Launch refuses an effective threshold on adapters without a compact command; set `flip-compact = "off"` on that role or choose a supported adapter. This is separate from native `auto-compact`, smart compaction of a message target, and idle compaction.
 
 ## Install a team bundle
 
