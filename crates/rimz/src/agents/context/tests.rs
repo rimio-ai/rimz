@@ -229,17 +229,16 @@ fn scoped_window_identity_projection_and_wire_round_trip() {
     );
     let sub_cap = RateLimitWindow {
         duration_mins: Some(10_080),
-        share_pct: Some(50),
         ..window
     };
-    let encoded = serde_json::to_value(&sub_cap).unwrap();
-    assert_eq!(encoded["share_pct"], 50);
+    let mut encoded = serde_json::to_value(&sub_cap).unwrap();
+    assert!(encoded.get("share_pct").is_none());
+    encoded["share_pct"] = serde_json::json!(50);
     assert_eq!(
         serde_json::from_value::<RateLimitWindow>(encoded).unwrap(),
-        sub_cap
+        sub_cap,
+        "existing cache windows ignore the retired share field"
     );
-    let legacy: RateLimitWindow = serde_json::from_str(r#"{"duration_mins":300}"#).unwrap();
-    assert_eq!(legacy.share_pct, None);
     assert_eq!(
         sub_cap
             .clone()
@@ -260,7 +259,7 @@ fn scoped_window_identity_projection_and_wire_round_trip() {
 }
 
 #[test]
-fn sub_cap_headroom_and_parent_matching() {
+fn sub_cap_parent_matching() {
     let parent = RateLimitWindow {
         duration_mins: Some(10_080),
         ..Default::default()
@@ -271,23 +270,12 @@ fn sub_cap_headroom_and_parent_matching() {
             label: "Fable".to_owned(),
         }),
         duration_mins: parent.duration_mins,
-        share_pct: Some(50),
         used_percentage: Some(58),
         ..Default::default()
     };
     assert!(sub_cap.sub_cap_of(&parent));
     assert!(!parent.sub_cap_of(&sub_cap));
     assert!(!sub_cap.sub_cap_of(&sub_cap));
-    assert_eq!(sub_cap.headroom_of_parent(), Some(21));
-    for used in [100, 101] {
-        sub_cap.used_percentage = Some(used);
-        assert_eq!(sub_cap.headroom_of_parent(), Some(0));
-    }
-    sub_cap.used_percentage = None;
-    assert_eq!(sub_cap.headroom_of_parent(), None);
-    sub_cap.used_percentage = Some(58);
-    sub_cap.share_pct = None;
-    assert_eq!(sub_cap.headroom_of_parent(), Some(42));
     sub_cap.duration_mins = Some(300);
     assert!(!sub_cap.sub_cap_of(&parent));
     sub_cap.duration_mins = None;

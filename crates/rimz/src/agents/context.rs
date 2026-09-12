@@ -910,7 +910,7 @@ impl AgentCurrentUsage {
     }
 }
 
-/// The rate-limit windows the agent surfaces. Temporal windows carry their own length for labels and refill projection. Scoped windows retain provider identity: durationless named quotas stand alone, while model sub-caps carry their parent's duration and share without becoming account-wide temporal limits.
+/// The rate-limit windows the agent surfaces. Temporal windows carry their own length for labels and refill projection. Scoped windows retain provider identity: durationless named quotas stand alone, while model sub-caps carry their parent's duration without becoming account-wide temporal limits.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentRateLimits {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -988,9 +988,6 @@ pub struct RateLimitWindow {
     /// refills while idle. Named quotas leave it absent; model sub-caps carry their parent's duration and fold onto its bar.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_mins: Option<u32>,
-    /// A model sub-cap's share of its parent window's allowance. Usage is reported on the sub-cap's own axis; absent shares use the parent's axis.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub share_pct: Option<u8>,
     /// When this reading was captured. Provenance for fusion, not display. For a
     /// [`WindowSource::BestEffort`] statusline this is *capture* time, not
     /// content time — an idle session re-emits a days-old payload with a fresh
@@ -1069,13 +1066,6 @@ impl RateLimitWindow {
             && self.duration_mins == parent.duration_mins
     }
 
-    /// Remaining budget on the parent window's axis; a spent sub-cap has zero headroom.
-    pub(crate) fn headroom_of_parent(&self) -> Option<u8> {
-        self.used_percentage.map(|used| {
-            (u16::from(self.share_pct.unwrap_or(100)) * u16::from(100 - used.min(100)) / 100) as u8
-        })
-    }
-
     /// Project dated unscoped windows to `now`, refilling and rolling their reset forward. Scoped readings retain provider truth so status consumers can distinguish spent and elapsed quotas; display consumers clear expired scoped usage separately.
     pub fn projected_at(self, now: Timestamp) -> Self {
         match (self.resets_at, self.duration_mins) {
@@ -1086,7 +1076,6 @@ impl RateLimitWindow {
                     .checked_add(SignedDuration::from_secs(i64::from(mins) * 60))
                     .ok(),
                 duration_mins: Some(mins),
-                share_pct: self.share_pct,
                 observed_at: self.observed_at,
                 source: self.source,
                 lifted: self.lifted,

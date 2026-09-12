@@ -554,7 +554,7 @@ fn extra_usage_value_is_the_rounded_whole_dollar_budget() {
 }
 
 #[test]
-fn model_sub_cap_partitions_only_its_parent_without_changing_rows() {
+fn model_sub_cap_marks_its_own_axis_only_on_its_parent_without_changing_rows() {
     let theme = Theme::fixed(false);
     let mut panel = provider_panel("claude", "Claude", 173, true, false, Some((25, 37)));
     let text = |row: &Line<'_>| {
@@ -571,7 +571,6 @@ fn model_sub_cap_partitions_only_its_parent_without_changing_rows() {
             label: "Fable".to_owned(),
         }),
         used_percentage: Some(58),
-        share_pct: Some(50),
         ..parent
     });
     let rows = metered_bar_rows(&theme, &panel);
@@ -582,7 +581,7 @@ fn model_sub_cap_partitions_only_its_parent_without_changing_rows() {
         .chars()
         .filter(|ch| matches!(ch, '▰' | '▱' | '╱'))
         .collect::<String>();
-    assert_eq!(bar, "▰▰▰▰╱▰▰▰▰▰▰▱▱▱▱▱▱");
+    assert_eq!(bar, "▰▰▰▰▰▰▰╱▰▰▰▱▱▱▱▱▱");
     let tick = rows[1]
         .spans
         .iter()
@@ -635,11 +634,8 @@ fn model_sub_cap_partitions_only_its_parent_without_changing_rows() {
     panel.windows[0].used_percentage = Some(25);
     panel.windows[1].used_percentage = Some(60);
     panel.windows[2].used_percentage = Some(0);
-    assert!(
-        !metered_bar_rows(&theme, &panel)
-            .iter()
-            .any(|row| text(row).contains('╱'))
-    );
+    let rows = metered_bar_rows(&theme, &panel);
+    assert!(text(&rows[1]).contains("▱╱"), "a fresh cap ticks the track");
     panel.windows[2].used_percentage = None;
     assert!(
         !metered_bar_rows(&theme, &panel)
@@ -650,7 +646,21 @@ fn model_sub_cap_partitions_only_its_parent_without_changing_rows() {
     panel.windows[2].used_percentage = Some(100);
     let rows = metered_bar_rows(&theme, &panel);
     assert_eq!(rows.len(), 2);
-    assert!(rows.iter().all(|row| !text(row).contains(['╱', '▰'])));
+    assert!(rows.iter().all(|row| !text(row).contains('▰')));
+    assert!(text(&rows[1]).starts_with("7d  ╱"));
+
+    panel.windows[2].duration_mins = panel.windows[0].duration_mins;
+    panel.windows[2].used_percentage = Some(0);
+    let rows = metered_bar_rows(&theme, &panel);
+    assert!(
+        text(&rows[0]).contains("▱╱"),
+        "a gated parent keeps its tick"
+    );
+    assert!(!text(&rows[0]).contains('▰'));
+    panel.windows[2].duration_mins = panel.windows[1].duration_mins;
+
+    panel.windows[1].used_percentage = None;
+    assert!(!text(&metered_bar_rows(&theme, &panel)[1]).contains('╱'));
 
     panel.windows.remove(1);
     let rows = metered_bar_rows(&theme, &panel);

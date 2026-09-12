@@ -647,29 +647,32 @@ fn spent_budget_track_mirrors_its_label_under_ansi_alarm_override() {
 }
 
 #[test]
-fn mana_ticks_partition_fill_without_changing_width_or_parent_tone() {
+fn mana_ticks_use_their_own_axis_without_changing_width_or_parent_tone() {
     let zones = BudgetBarConfig::default();
     for no_color in [false, true] {
         let theme = Theme::fixed(no_color);
-        for (remaining, headroom, width, expected) in [
-            (63, 21, 10, "▰▰╱▰▰▰▱▱▱▱"),
-            (63, 59, 10, "▰▰▰▰▰╱▱▱▱▱"),
+        for (remaining, sub_remaining, width, expected) in [
+            (63, 42, 10, "▰▰▰▰╱▰▱▱▱▱"),
+            (63, 59, 10, "▰▰▰▰▰▰╱▱▱▱"),
             (63, 0, 10, "╱▰▰▰▰▰▱▱▱▱"),
-            (63, 63, 10, "▰▰▰▰▰▰▱▱▱▱"),
-            (63, 70, 10, "▰▰▰▰▰▰▱▱▱▱"),
-            (0, 0, 10, "▱▱▱▱▱▱▱▱▱▱"),
+            (63, 63, 10, "▰▰▰▰▰▰╱▱▱▱"),
+            (63, 70, 10, "▰▰▰▰▰▰▱╱▱▱"),
+            (63, 100, 10, "▰▰▰▰▰▰▱▱▱╱"),
+            (0, 0, 10, "╱▱▱▱▱▱▱▱▱▱"),
+            (0, 70, 10, "▱▱▱▱▱▱▱╱▱▱"),
+            (0, 100, 10, "▱▱▱▱▱▱▱▱▱╱"),
             (1, 0, 0, "╱"),
+            (1, 100, 0, "╱"),
             (100, 99, 1, "╱"),
         ] {
-            let tick_style = mana_style(&theme, 0, &zones);
+            let tick_style = mana_style(&theme, sub_remaining, &zones);
             let spans = mana_bar_spans(
                 &theme,
                 remaining,
                 width,
                 &zones,
                 &[ManaTick {
-                    headroom_pct: headroom,
-                    remaining_pct: 0,
+                    remaining_pct: sub_remaining,
                 }],
             );
             assert_eq!(text(&spans), expected);
@@ -691,24 +694,39 @@ fn mana_ticks_partition_fill_without_changing_width_or_parent_tone() {
 }
 
 #[test]
+fn mana_tick_endpoints_and_live_reading_span_the_full_width() {
+    let theme = Theme::fixed(false);
+    let zones = BudgetBarConfig::default();
+    for (width, readings) in [
+        (1, [(0, 0), (40, 0), (60, 0), (100, 0)]),
+        (10, [(0, 0), (40, 4), (60, 6), (100, 9)]),
+        (35, [(0, 0), (40, 14), (60, 21), (100, 34)]),
+    ] {
+        for (remaining_pct, cell) in readings {
+            let spans = mana_bar_spans(&theme, 61, width, &zones, &[ManaTick { remaining_pct }]);
+            let bar = text(&spans);
+            assert_eq!(bar.chars().position(|ch| ch == '╱'), Some(cell));
+            assert_eq!(spans.iter().map(Span::width).sum::<usize>(), width);
+        }
+    }
+}
+
+#[test]
 fn mana_tick_collisions_keep_the_most_constrained_reading_in_either_order() {
     let theme = Theme::fixed(false);
     let zones = BudgetBarConfig::default();
-    for readings in [[(21, 80), (20, 40)], [(20, 80), (20, 40)]] {
+    for readings in [[21, 20], [20, 20]] {
         for reverse in [false, true] {
             let mut ticks: Vec<_> = readings
                 .into_iter()
-                .chain([(40, 60)])
-                .map(|(headroom_pct, remaining_pct)| ManaTick {
-                    headroom_pct,
-                    remaining_pct,
-                })
+                .chain([80])
+                .map(|remaining_pct| ManaTick { remaining_pct })
                 .collect();
             if reverse {
                 ticks.reverse();
             }
             let spans = mana_bar_spans(&theme, 70, 10, &zones, &ticks);
-            assert_eq!(text(&spans), "▰▰╱▰╱▰▰▱▱▱");
+            assert_eq!(text(&spans), "▰▰╱▰▰▰▰▱╱▱");
             let tick_styles: Vec<_> = spans
                 .iter()
                 .filter(|span| span.content == "╱")
@@ -717,8 +735,8 @@ fn mana_tick_collisions_keep_the_most_constrained_reading_in_either_order() {
             assert_eq!(
                 tick_styles,
                 [
-                    mana_style(&theme, 40, &zones),
-                    mana_style(&theme, 60, &zones)
+                    mana_style(&theme, 20, &zones),
+                    mana_style(&theme, 80, &zones)
                 ]
             );
         }
@@ -735,17 +753,8 @@ fn mana_ticks_preserve_combining_glyph_overrides_as_terminal_cells() {
         .expect("combining glyph overrides"),
     );
     let zones = BudgetBarConfig::default();
-    let spans = mana_bar_spans(
-        &theme,
-        70,
-        10,
-        &zones,
-        &[ManaTick {
-            headroom_pct: 20,
-            remaining_pct: 40,
-        }],
-    );
-    assert_eq!(text(&spans), "x́x́|́x́x́x́x́óóó");
+    let spans = mana_bar_spans(&theme, 70, 10, &zones, &[ManaTick { remaining_pct: 80 }]);
+    assert_eq!(text(&spans), "x́x́x́x́x́x́x́ó|́ó");
     assert_eq!(spans.iter().map(Span::width).sum::<usize>(), 10);
     assert_no_fg(&spans);
 }

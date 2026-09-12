@@ -18,9 +18,6 @@ use crate::agents::payload::non_empty_trimmed;
 pub(crate) const FIVE_HOUR_MINS: u32 = 5 * 60;
 pub(crate) const SEVEN_DAY_MINS: u32 = 7 * 24 * 60;
 
-/// Anthropic caps a single model at this fixed share of the weekly allowance. The share is account knowledge, absent from the verified 2026-09 usage payload.
-pub(crate) const MODEL_WEEKLY_SHARE_PCT: u8 = 50;
-
 /// Normalize one already-parsed Claude subscription window.
 pub(crate) fn budget_window(
     utilization: Option<f64>,
@@ -45,7 +42,7 @@ pub(crate) fn budget_window(
     })
 }
 
-/// Normalize a model-scoped share using the same rounding and omission rules as the parent budget.
+/// Normalize a model-scoped window using the same rounding and omission rules as the parent budget.
 pub(crate) fn model_sub_cap_window(
     display_name: &str,
     utilization: Option<f64>,
@@ -58,7 +55,6 @@ pub(crate) fn model_sub_cap_window(
             id: format!("model:{}", display_name.to_ascii_lowercase()),
             label: display_name.to_owned(),
         }),
-        share_pct: Some(MODEL_WEEKLY_SHARE_PCT),
         ..budget_window(utilization, resets_at, duration_mins, source)?
     })
 }
@@ -215,7 +211,6 @@ mod tests {
                 assert_eq!(sub_cap.resets_at, parent.resets_at);
                 assert_eq!(sub_cap.source, parent.source);
                 assert!(sub_cap.sub_cap_of(&parent));
-                assert_eq!(sub_cap.share_pct, Some(50));
             }
         }
 

@@ -1358,10 +1358,9 @@ fn metered_bar_row(
     };
     let ticks: Vec<_> = sub_caps
         .iter()
-        .filter(|sub| !force_exhausted && sub.sub_cap_of(window))
+        .filter(|sub| sub.sub_cap_of(window))
         .filter_map(|sub| {
             Some(ManaTick {
-                headroom_pct: sub.headroom_of_parent()?,
                 remaining_pct: 100u8.saturating_sub(sub.used_percentage?),
             })
         })
