@@ -538,7 +538,7 @@ allowed-dependencies = [
     "utils::path",
     "worktree",
 ]
-surface-budget = 58
+surface-budget = 46
 
 [[module]]
 path = "crates/rimz/src/harness/launch.rs"
@@ -1853,3 +1853,73 @@ reason = "Journey migration tests inspect renderer-specific spending-cache paths
 kind = "item"
 key = "disk::paths::shared_spending_cursor_path"
 reason = "The separate CLI target stats tests read/write the shared cursor; production-only references incorrectly suggest pub(crate). (pass 19b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::plan::compile_layout_panes"
+reason = "Three phase-wide validation loops (support, prompt files, prompt text) are precedence, restored by 92b6fbeab; per-cell validate_finalized_cell would change which fault a multi-cell layout reports first (pass 19a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::plan::launch_identity_requests"
+reason = "Nine positional arguments with one-caller team/prompt flags: a request struct costs lines every caller still fills, a split duplicates the loop; the too_many_arguments expect records it (pass 19a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::plan::ResumeLaunchPosture"
+reason = "Public field of resume::ResumePosture, read by restart and fork in the binary; plan must not import resume, so the shared DTO lives here (pass 19a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::plan::LaunchFinalizeError"
+reason = "Returned or carried by pub finalize/resolve signatures the CLI matches on; atlas caveat 13 (pass 19a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::plan::LaunchFinalizeWarning"
+reason = "Returned or carried by pub finalize/resolve signatures the CLI matches on; atlas caveat 13 (pass 19a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::plan::ProfilePromptFileError"
+reason = "Returned or carried by pub finalize/resolve signatures the CLI matches on; atlas caveat 13 (pass 19a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::plan::ResolveLaunchError"
+reason = "Returned or carried by pub finalize/resolve signatures the CLI matches on; atlas caveat 13 (pass 19a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::resume::resolve_posture"
+reason = "The one relaunch posture seam shared by rebirth, lane, cohort, restart and fork; degradation is asymmetric by design (pass 19a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::resume::plan_resume"
+reason = "Integration suites plan flat resume from the separate test crate; production callers sit inside resume and rebirth (pass 19a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::resume::ResumeContext"
+reason = "Integration suites plan flat resume from the separate test crate; production callers sit inside resume and rebirth (pass 19a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::resume::ResumeSkipReason"
+reason = "Field of pub ResumeSkip; the CLI calls label() without naming the type (pass 19a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::resume::LaneRestorePlan"
+reason = "Payload of LaneResumeAction::RestoreClosed; the CLI materializes it (pass 19a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::resume::PlannedTeamTab"
+reason = "Returned by split_team_and_flat to rebirth, which reads cohort seeds without naming the type (pass 19a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::resume::RecoveryEntry"
+reason = "Payload of RecoveryPlan.entries, which rebirth's tests construct and reorder; pub(super) is its floor (pass 19a)."
