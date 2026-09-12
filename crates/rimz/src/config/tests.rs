@@ -1450,6 +1450,38 @@ fn agent_profiles_commands_and_teams_parse() {
 }
 
 #[test]
+fn team_owns_and_compact_on_handoff_parse_default_and_round_trip() {
+    let team: Team = toml::from_str(
+        r#"
+        [[roles]]
+        role = "planner"
+        profile = "claude"
+        owns = ["Explore", "Plan", "Reflect"]
+        compact-on-handoff = true
+        [[roles]]
+        role = "coder"
+        profile = "codex"
+        "#,
+    )
+    .expect("parse ownership");
+    assert!(team.roles[0].compact_on_handoff);
+    assert!(team.roles[1].owns.is_empty());
+    assert!(!team.roles[1].compact_on_handoff);
+    assert_eq!(team.owner_of("Plan"), Some("planner"));
+    assert_eq!(team.owner_of("plan"), None);
+    assert_eq!(team.owner_of(DONE_STAGE), None);
+    assert_eq!(
+        team.owned_stages().collect::<Vec<_>>(),
+        ["Explore", "Plan", "Reflect"]
+    );
+    let encoded = toml::to_string(&team).expect("serialize ownership");
+    assert_eq!(toml::from_str::<Team>(&encoded).expect("round trip"), team);
+    let defaults = toml::to_string(&team.roles[1]).expect("serialize defaults");
+    assert!(!defaults.contains("owns"));
+    assert!(!defaults.contains("compact-on-handoff"));
+}
+
+#[test]
 fn team_signal_bindings_parse_default_and_round_trip() {
     let config: AgentsConfig = toml::from_str(
         r#"

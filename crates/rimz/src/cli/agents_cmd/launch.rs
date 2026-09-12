@@ -1030,6 +1030,8 @@ mod tests {
                     "forge",
                     &rimz::config::Team {
                         roles: vec![rimz::config::RoleBinding {
+                            owns: Vec::new(),
+                            compact_on_handoff: false,
                             role: "coder".to_owned(),
                             profile: "codex".to_owned(),
                             mode: None,

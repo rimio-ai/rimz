@@ -320,7 +320,7 @@ pub enum LayoutErr {
         profile: String,
     },
     #[error(
-        "invalid role name `{name}` in team `{team}`; roles cannot be empty or contain whitespace, `,`, `+`, `/`, `:`, or `#`"
+        "invalid role name `{name}` in team `{team}`; roles cannot be empty or contain whitespace, `,`, `+`, `/`, `:`, or `#`; stage owners must also omit control characters and parentheses"
     )]
     InvalidRoleName { team: String, name: String },
     #[error("duplicate role `{role}` in team `{team}`")]
@@ -338,11 +338,39 @@ pub enum LayoutErr {
         reason: &'static str,
     },
     #[error(
-        "invalid stage name {name:?} in team `{team}`; stages cannot be empty or whitespace-only"
+        "invalid stage name {name:?} in team `{team}`; use a nonempty name without surrounding whitespace or control characters"
     )]
     InvalidStageName { team: String, name: String },
     #[error("duplicate stage `{name}` in team `{team}`")]
     DuplicateStage { team: String, name: String },
+    #[error(
+        "reserved stage `{name}` in team `{team}`; remove it from owns because Done has no owner"
+    )]
+    ReservedStage { team: String, name: String },
+    #[error(
+        "duplicate owner for stage `{stage}` in team `{team}`: {roles:?}; keep exactly one owns entry"
+    )]
+    DuplicateStageOwner {
+        team: String,
+        stage: String,
+        roles: [String; 2],
+    },
+    #[error(
+        "unknown owned stage `{stage}` for role `{role}` in team `{team}`; add \"{stage}\" to stages or drop it from owns"
+    )]
+    UnknownOwnedStage {
+        team: String,
+        role: String,
+        stage: String,
+    },
+    #[error(
+        "role `{role}` in team `{team}` enables compact-on-handoff but agent kind `{kind}` has no compact command; disable compact-on-handoff or choose a supporting agent"
+    )]
+    CompactOnHandoffUnsupported {
+        team: String,
+        role: String,
+        kind: AgentKind,
+    },
     #[error("invalid profile `{profile}`: {reason}")]
     InvalidProfile { profile: String, reason: String },
     #[error(
@@ -1599,15 +1627,10 @@ fn validate_team_names(teams: &TeamsConfig) -> Result<()> {
     Ok(())
 }
 
-fn prepare_team<'a>(
-    name: &str,
-    team: &'a Team,
-    profiles: &ProfilesConfig,
-    base_override: Option<&ResolvedProfile>,
-) -> Result<PreparedTeam<'a>> {
+pub fn validate_team_stages(name: &str, team: &Team) -> Result<()> {
     let mut stages = BTreeSet::new();
     for stage in &team.stages {
-        if stage.trim().is_empty() {
+        if stage.is_empty() || stage.trim() != stage || stage.chars().any(char::is_control) {
             return Err(LayoutErr::InvalidStageName {
                 team: name.to_owned(),
                 name: stage.clone(),
@@ -1620,6 +1643,57 @@ fn prepare_team<'a>(
             });
         }
     }
+    let mut owners = BTreeMap::new();
+    for role in &team.roles {
+        if !role.owns.is_empty()
+            && (invalid_role_name(&role.role)
+                || role.role.contains(['(', ')'])
+                || role.role.chars().any(char::is_control))
+        {
+            return Err(LayoutErr::InvalidRoleName {
+                team: name.to_owned(),
+                name: role.role.clone(),
+            });
+        }
+        for stage in &role.owns {
+            if stage.is_empty() || stage.trim() != stage || stage.chars().any(char::is_control) {
+                return Err(LayoutErr::InvalidStageName {
+                    team: name.to_owned(),
+                    name: stage.clone(),
+                });
+            }
+            if stage == crate::config::DONE_STAGE {
+                return Err(LayoutErr::ReservedStage {
+                    team: name.to_owned(),
+                    name: stage.clone(),
+                });
+            }
+            if let Some(previous) = owners.insert(stage, &role.role) {
+                return Err(LayoutErr::DuplicateStageOwner {
+                    team: name.to_owned(),
+                    stage: stage.clone(),
+                    roles: [previous.clone(), role.role.clone()],
+                });
+            }
+            if !stages.is_empty() && !stages.contains(stage) {
+                return Err(LayoutErr::UnknownOwnedStage {
+                    team: name.to_owned(),
+                    role: role.role.clone(),
+                    stage: stage.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn prepare_team<'a>(
+    name: &str,
+    team: &'a Team,
+    profiles: &ProfilesConfig,
+    base_override: Option<&ResolvedProfile>,
+) -> Result<PreparedTeam<'a>> {
+    validate_team_stages(name, team)?;
     for pattern in &team.scratch_files {
         if let Some(reason) = invalid_scratch_pattern(pattern) {
             return Err(LayoutErr::InvalidScratchPattern {
@@ -1676,6 +1750,17 @@ fn prepare_team<'a>(
         resolved.apply_role(binding);
         normalize_auto_compact(&mut resolved.auto_compact, &binding.profile)?;
         let resolved = rebase_onto(resolved, base_override);
+        if binding.compact_on_handoff
+            && crate::agents::spec_by_kind(resolved.kind.as_str())
+                .and_then(|spec| spec.launch.compact_command(""))
+                .is_none()
+        {
+            return Err(LayoutErr::CompactOnHandoffUnsupported {
+                team: name.to_owned(),
+                role: binding.role.clone(),
+                kind: resolved.kind.clone(),
+            });
+        }
         let args = render_profile_args(&binding.profile, &resolved)?;
         roles.push(PreparedRole {
             role: binding.role.clone(),

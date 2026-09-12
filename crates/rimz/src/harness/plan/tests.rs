@@ -59,6 +59,8 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
 fn role_binding(role: &str) -> RoleBinding {
     RoleBinding {
         signals: Vec::new(),
+        owns: Vec::new(),
+        compact_on_handoff: false,
         role: role.to_owned(),
         profile: format!("{role}-profile"),
         mode: None,
@@ -379,6 +381,8 @@ fn subagent_doorway_keeps_team_roles_on_agent_profiles() {
         Team {
             roles: vec![RoleBinding {
                 signals: Vec::new(),
+                owns: Vec::new(),
+                compact_on_handoff: false,
                 role: "reviewer".to_owned(),
                 profile: "claude-agent".to_owned(),
                 mode: None,

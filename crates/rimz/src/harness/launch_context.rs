@@ -35,6 +35,7 @@ pub(super) struct TeamLaunchContext {
     session: LaunchSession,
     scratch_patterns: Vec<String>,
     scratch: ScratchScan,
+    stage_handoffs: bool,
 }
 
 pub(super) fn team_launch_context(
@@ -67,6 +68,7 @@ pub(super) fn team_launch_context(
         session: action.into(),
         scratch_patterns: team.scratch_files.clone(),
         scratch,
+        stage_handoffs: team.owned_stages().next().is_some(),
     })
 }
 
@@ -103,9 +105,13 @@ pub(super) fn reminder(context: &TeamLaunchContext) -> String {
         LaunchSession::Forked => "This is a forked session.",
     };
     let scratch = scratch_reminder(context);
-    format!(
+    let mut text = format!(
         "{identity}\n{session}\n{scratch}\nThis is a launch-time snapshot; the files change as the team works."
-    )
+    );
+    if context.stage_handoffs {
+        text.push_str("\nHand the board to the next stage with `rimz teams flip <stage> [-m note]`; RimZ writes the Stage line and the ledger and wakes the owner.");
+    }
+    text
 }
 
 fn scratch_reminder(context: &TeamLaunchContext) -> String {
@@ -188,6 +194,8 @@ mod tests {
     fn role(role: &str) -> RoleBinding {
         RoleBinding {
             signals: Vec::new(),
+            owns: Vec::new(),
+            compact_on_handoff: false,
             auto_compact: None,
             role: role.to_owned(),
             profile: "claude".to_owned(),
@@ -276,11 +284,14 @@ mod tests {
         let context = team_launch_context(&params(), &action, &team, Path::new("/tmp/worktree"))
             .expect("team context");
         assert_eq!(context.leader, "coder");
+        assert!(!reminder(&context).contains("rimz teams flip"));
 
         team.leader = None;
+        team.roles[0].owns = vec!["Plan".to_owned()];
         let context = team_launch_context(&params(), &action, &team, Path::new("/tmp/worktree"))
             .expect("team context");
         assert_eq!(context.leader, "planner");
+        assert!(reminder(&context).contains("rimz teams flip <stage> [-m note]"));
     }
 
     #[test]
@@ -311,6 +322,7 @@ mod tests {
     #[test]
     fn renders_fresh_empty_context() {
         let context = TeamLaunchContext {
+            stage_handoffs: false,
             team: "forge".to_owned(),
             role: "coder".to_owned(),
             channel: Some("feature".to_owned()),
@@ -333,6 +345,7 @@ mod tests {
     #[test]
     fn renders_resumed_context_with_files() {
         let context = TeamLaunchContext {
+            stage_handoffs: true,
             team: "forge".to_owned(),
             role: "planner".to_owned(),
             channel: None,
@@ -356,12 +369,14 @@ mod tests {
         This is a resumed session: your earlier context continues.
         Team memory files declared by the team (git-excluded, at the worktree root): blackboard.md. At launch these existed: blackboard.md (42 lines). They are existing run state; read them before acting.
         This is a launch-time snapshot; the files change as the team works.
+        Hand the board to the next stage with `rimz teams flip <stage> [-m note]`; RimZ writes the Stage line and the ledger and wakes the owner.
         "###);
     }
 
     #[test]
     fn escapes_filesystem_text_in_reminder() {
         let context = TeamLaunchContext {
+            stage_handoffs: false,
             team: "forge".to_owned(),
             role: "coder".to_owned(),
             channel: None,

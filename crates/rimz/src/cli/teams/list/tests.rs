@@ -24,6 +24,8 @@ fn team() -> Team {
             append_system_prompt_files: vec!["consensus.md".into()],
             args: None,
             signals: Vec::new(),
+            owns: Vec::new(),
+            compact_on_handoff: false,
         }],
         leader: Some("planner".to_owned()),
         layout: None,

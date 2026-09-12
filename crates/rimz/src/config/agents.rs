@@ -209,6 +209,23 @@ pub struct Team {
     pub stages: Vec<String>,
 }
 
+pub const DONE_STAGE: &str = "Done";
+
+impl Team {
+    pub fn owner_of(&self, stage: &str) -> Option<&str> {
+        self.roles
+            .iter()
+            .find(|role| role.owns.iter().any(|owned| owned == stage))
+            .map(|role| role.role.as_str())
+    }
+
+    pub fn owned_stages(&self) -> impl Iterator<Item = &str> {
+        self.roles
+            .iter()
+            .flat_map(|role| role.owns.iter().map(String::as_str))
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TeamSignalBinding {
     pub signal: String,
@@ -226,6 +243,9 @@ pub struct RoleBinding {
     pub profile: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signals: Vec<TeamSignalBinding>,
+    /// Stages whose work this role owns.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owns: Vec<String>,
     #[serde(default)]
     pub mode: Option<PermissionMode>,
     #[serde(default)]
@@ -241,6 +261,13 @@ pub struct RoleBinding {
         skip_serializing_if = "Option::is_none"
     )]
     pub auto_compact: Option<String>,
+    /// Compact this role after handing a stage to another member.
+    #[serde(
+        default,
+        rename = "compact-on-handoff",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub compact_on_handoff: bool,
     /// A replacement system prompt. Relative paths use the declaring file's
     /// directory, so a role in `~/.agents/teams/<name>/team.toml` can name a
     /// prompt shipped beside that fragment.

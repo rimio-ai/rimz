@@ -118,6 +118,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stage_handoff_reminder_stays_inside_the_single_team_wrapper() {
+        let mut request =
+            ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
+        request.identity.params.team = Some("forge".to_owned());
+        request.identity.params.role = Some("coder".to_owned());
+        let team: Team =
+            toml::from_str("[[roles]]\nrole = 'coder'\nprofile = 'claude'\nowns = ['Implement']")
+                .expect("team");
+        let reminders = LaunchReminders {
+            team: Some(team),
+            ..LaunchReminders::default()
+        };
+        let text = render(&request, &reminders, Path::new("/worktree")).expect("reminder");
+        assert_eq!(text.matches("<system_reminder>").count(), 1);
+        assert_eq!(text.matches("</system_reminder>").count(), 1);
+        assert!(text.contains("rimz teams flip <stage> [-m note]"));
+        request.subagent = true;
+        let text = render(&request, &reminders, Path::new("/worktree")).expect("child reminder");
+        assert!(!text.contains("rimz teams flip"));
+    }
+
+    #[test]
     fn sandbox_reminder_is_opt_in_and_follows_model_before_policy() {
         let cwd = Path::new("/worktree");
         let mut request =
