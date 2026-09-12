@@ -332,6 +332,49 @@ fn registration_rewake_reaches_stop_and_message_sweep_consumer() {
 }
 
 #[test]
+fn steer_flip_delivers_while_the_owner_is_running() {
+    let fixture = Fixture::new();
+    fixture.running("reviewer", Some("terminal_3"));
+    fixture.live_panes(&["terminal_3"]);
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    let output = success(
+        fixture
+            .command()
+            .args([
+                "teams",
+                "flip",
+                "Review",
+                "--team",
+                "forge",
+                "--steer",
+                "-m",
+                "review now",
+            ])
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        output.contains("message  steered @reviewer#feature-team"),
+        "{output}"
+    );
+    let messages = fixture.env.store().list_messages().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].gate, DeliveryGate::Any);
+    assert_eq!(messages[0].status, MessageStatus::Sent);
+    assert!(messages[0].text.ends_with("review now"));
+    let trace = std::fs::read_to_string(&fixture.trace).unwrap();
+    let bytes = "stage Review is yours"
+        .bytes()
+        .map(|byte| byte.to_string())
+        .collect::<Vec<_>>()
+        .join("\t");
+    assert!(
+        trace.contains(&bytes),
+        "stage notice was not sent to the running owner: {trace}"
+    );
+}
+
+#[test]
 fn flip_precondition_errors_leave_board_signals_and_queue_unchanged() {
     let fixture = Fixture::new();
     fixture.running("coder", None);
