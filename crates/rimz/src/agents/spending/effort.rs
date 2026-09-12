@@ -128,6 +128,7 @@ fn slot_effort_breakdown_with_memo(
         .iter()
         .filter_map(|session| {
             let adapter = find_definition(session.kind)?;
+            // A session whose account is no longer declared has no home to read.
             let login_env = login_envs
                 .entry((session.kind, session.login.cloned().unwrap_or_default()))
                 .or_insert_with(|| {
@@ -135,7 +136,9 @@ fn slot_effort_breakdown_with_memo(
                         &AgentKind::new_unchecked(session.kind),
                         session.login,
                     )
-                });
+                    .ok()
+                })
+                .as_ref()?;
             let prior_path = session
                 .transcript_path
                 .filter(|path| !path.is_empty())

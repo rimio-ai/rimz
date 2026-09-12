@@ -231,6 +231,8 @@ pub enum DispatchErr {
     },
     #[error("`{label}` cannot receive now and has no durable session to park")]
     NoDurableSession { label: String },
+    #[error(transparent)]
+    Login(#[from] crate::agents::RoomLoginErr),
 }
 
 pub fn dispatch(
@@ -831,7 +833,7 @@ fn dispatch_targets(
             if preflighted_logins.insert(agent.login_key()) {
                 preflight_queue_hooks(
                     agent,
-                    &crate::agents::session_login_env(&agent.kind, agent.login.as_ref()),
+                    &crate::agents::session_login_env(&agent.kind, agent.login.as_ref())?,
                 )?;
             }
         }

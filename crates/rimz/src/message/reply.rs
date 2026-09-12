@@ -101,6 +101,8 @@ pub enum ReplyPrepareErr {
     },
     #[error(transparent)]
     Store(#[from] crate::store::StoreErr),
+    #[error(transparent)]
+    Login(#[from] crate::agents::RoomLoginErr),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -682,7 +684,7 @@ fn preflight_reply_hooks(
 ) -> Result<(), ReplyPrepareErr> {
     match crate::agents::preflight_hooks(
         adapter,
-        &crate::agents::session_login_env(&agent.kind, agent.login.as_ref()),
+        &crate::agents::session_login_env(&agent.kind, agent.login.as_ref())?,
         crate::agents::TurnLifecycleNeed::NotUnsupported,
     ) {
         Ok(()) => Ok(()),
