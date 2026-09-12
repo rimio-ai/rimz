@@ -34,7 +34,7 @@ Rerunning `add` for an existing account keeps its home and refreshes its hooks, 
 rimz accounts list [--json]
 ```
 
-One row per account of each supported kind, `default` included: kind, name, home, and status. `native` marks a `default` account, `ready` a named account a room can launch into, and `home missing`, `hooks missing`, or `hooks untrusted` a named account `rimz start` would refuse; each problem prints below the table with its fix. `--json` emits an array of `{kind, name, home, problem?}`.
+One row per account of each supported kind, `default` included: kind, name, home, and status. `native` marks a `default` account, `ready` a named account a room can launch into, and `home missing`, `hooks missing`, or `hooks untrusted` a named account `rimz start` would refuse; each problem prints below the table with its fix. `--json` emits an array of `{kind, name, home, problem?}`. `rimz doctor` repeats these verdicts in its ACCOUNTS section and marks the accounts the current room launches under; a broken account that room uses, or a selection naming an account no longer declared, counts as a problem.
 
 ## `remove`
 

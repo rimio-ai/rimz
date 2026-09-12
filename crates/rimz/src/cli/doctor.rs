@@ -78,6 +78,7 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
         machine_config: collect_machine_config(),
         sandbox: runtime::collect_sandbox(),
         hooks: agents::collect_hooks(),
+        accounts: agents::collect_accounts(ws),
         plugins: agents::collect_plugins(),
         loop_tasks: collect_loop(),
         remote_control: runtime::collect_remote_control(ws.map(|ws| ws.project_root.as_path())),

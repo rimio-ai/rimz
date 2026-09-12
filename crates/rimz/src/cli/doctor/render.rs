@@ -15,8 +15,8 @@ use rimz::agents::AgentStatus;
 use rimz::trust::TrustState;
 
 use super::model::{
-    AgentCounts, AgentRollup, Capabilities, Diagnostics, DoctorImpact, DoctorReport, DoctorState,
-    DuplicateSessions, HookStatus, Host, LogScope, LoopTasks, MachineConfigHealth,
+    Accounts, AgentCounts, AgentRollup, Capabilities, Diagnostics, DoctorImpact, DoctorReport,
+    DoctorState, DuplicateSessions, HookStatus, Host, LogScope, LoopTasks, MachineConfigHealth,
     MachineConfigProblemKind, MessageProblemRow, Messages, Mux, MuxBinaryRow, MuxLog, PluginRow,
     Presence, PresencePluginRow, PresencePluginStatus, PresencePluginTelemetry, PresencePlugins,
     Probe, Protocols, RemoteAgent, RemoteControl, Room, RoomState, SessionHealth, Storage,
@@ -179,6 +179,7 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     render_machine_config(w, &report.machine_config, &mut tally)?;
     render_sandbox(w, &report.sandbox, &mut tally)?;
     render_hooks(w, report, &mut tally)?;
+    render_accounts(w, &report.accounts, &mut tally)?;
     render_plugins(w, report, &mut tally)?;
     render_loop(w, &report.loop_tasks, &mut tally)?;
     render_remote_control(w, &report.remote_control, &mut tally)?;
@@ -1241,6 +1242,46 @@ fn render_hooks(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) ->
         )?;
     }
     Ok(())
+}
+
+/// Named accounts and the room's selection. A broken account the room launches
+/// under is an alarm; one nothing uses yet is a warning.
+fn render_accounts(
+    w: &mut impl Write,
+    accounts: &Probe<Accounts>,
+    tally: &mut Tally,
+) -> io::Result<()> {
+    let accounts = match accounts {
+        Probe::Ready(accounts) if accounts.rows.is_empty() => return Ok(()),
+        Probe::Ready(accounts) => accounts,
+        Probe::Unavailable { error } => {
+            section(w, tally, "ACCOUNTS")?;
+            return note(tally, w, Health::Alarm, error);
+        }
+    };
+    section(w, tally, "ACCOUNTS")?;
+    let mut table = Table::new(["", "KIND", "NAME", "HOME", "STATUS"]);
+    for row in &accounts.rows {
+        let (health, status) = match (&row.problem, row.room) {
+            (Some(problem), true) => (Health::Alarm, problem.as_str()),
+            (Some(problem), false) => (Health::Warn, problem.as_str()),
+            (None, true) => (Health::Ok, "this room's account"),
+            (None, false) => (Health::Ok, "ready"),
+        };
+        table.row([
+            badge(tally, health),
+            cell(row.kind.as_str()).fg(palette::identity(&row.kind)),
+            cell(row.name.as_str()),
+            cell(
+                row.home
+                    .as_deref()
+                    .map_or_else(|| "-".to_owned(), home_relative),
+            )
+            .dash(),
+            cell(status).fg(style_of(health)),
+        ]);
+    }
+    table.render(w)
 }
 
 fn render_plugins(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -> io::Result<()> {

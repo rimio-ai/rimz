@@ -3,8 +3,8 @@ use rimz::trust::{self};
 
 use super::super::open_store;
 use super::model::{
-    AgentCounts, AgentRollup, AgentRow, HookRow, HookStatus, PluginProbeRow, PluginRow, Probe,
-    Trust,
+    AccountRow, Accounts, AgentCounts, AgentRollup, AgentRow, HookRow, HookStatus, PluginProbeRow,
+    PluginRow, Probe, Trust,
 };
 
 /// Walk the snapshot's agent rollup into health counts and problem rows. The
@@ -65,6 +65,72 @@ pub(super) fn collect_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) ->
 /// until the agent's own hook system invokes `rimz hooks feed`, so this
 /// distinguishes installed, present-but-unwired, absent, and
 /// known-but-not-installable adapters.
+pub(super) fn collect_accounts(ws: Option<&rimz::ResolvedWorkspace>) -> Probe<Accounts> {
+    let catalog = rimz::config::MachineConfig::load()
+        .map_err(|err| err.to_string())
+        .and_then(|config| {
+            rimz::agents::LoginCatalog::from_config(&config.accounts).map_err(|err| err.to_string())
+        });
+    let room = ws.map(room_logins).transpose();
+    match (catalog, room) {
+        (Ok(catalog), Ok(room)) => Probe::Ready(Accounts {
+            rows: account_rows(
+                &catalog,
+                room.flatten().as_ref(),
+                &rimz::agents::ambient_env(),
+            ),
+        }),
+        (Err(error), _) | (_, Err(error)) => Probe::Unavailable { error },
+    }
+}
+
+fn room_logins(ws: &rimz::ResolvedWorkspace) -> Result<Option<rimz::ids::RoomLogins>, String> {
+    let paths =
+        rimz::StatePaths::for_workspace(ws.workspace_id.clone()).map_err(|err| err.to_string())?;
+    rimz::workspace::record::read_optional(&paths.workspace_record)
+        .map(|record| record.and_then(|record| record.logins))
+        .map_err(|err| err.to_string())
+}
+
+/// Every named account with its launch verdict, plus the room's `default`
+/// selections and any selection naming an account no longer declared.
+fn account_rows(
+    catalog: &rimz::agents::LoginCatalog,
+    room: Option<&rimz::ids::RoomLogins>,
+    ambient: &std::collections::BTreeMap<String, String>,
+) -> Vec<AccountRow> {
+    let in_room = |kind: &rimz::ids::AgentKind, name: &rimz::ids::LoginName| {
+        room.and_then(|room| room.get(kind)) == Some(name)
+    };
+    let mut rows: Vec<AccountRow> = catalog
+        .all()
+        .filter(|login| !login.is_default())
+        .map(|login| AccountRow {
+            kind: login.kind().to_string(),
+            name: login.name().to_string(),
+            home: login.home().map(|home| home.display().to_string()),
+            room: in_room(login.kind(), login.name()),
+            problem: login.preflight(ambient).err().map(|err| err.to_string()),
+        })
+        .collect();
+    for (kind, name) in room.into_iter().flatten() {
+        let problem = match catalog.select(kind, name) {
+            Ok(_) if !name.is_default() => continue,
+            Ok(_) => None,
+            Err(err) => Some(err.to_string()),
+        };
+        rows.push(AccountRow {
+            kind: kind.to_string(),
+            name: name.to_string(),
+            home: None,
+            room: true,
+            problem,
+        });
+    }
+    rows.sort_by(|a, b| (&a.kind, &a.name).cmp(&(&b.kind, &b.name)));
+    rows
+}
+
 pub(super) fn collect_hooks() -> Vec<HookRow> {
     let login_env = rimz::agents::ambient_env();
     rimz::agents::all_definitions()
