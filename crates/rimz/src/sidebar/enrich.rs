@@ -490,7 +490,6 @@ fn enrich_core(
     mut opts: FoldOpts<'_>,
     diag: &crate::diag::DiagSink,
 ) -> SidebarSnapshot {
-    let login_env = crate::agents::ambient_env();
     let producing = opts.producing;
     let machine_config = opts
         .config
@@ -606,15 +605,25 @@ fn enrich_core(
     // pane presence alone cannot see a host whose child stopped serving. The
     // provider's own record of the serving process settles it; a host with no
     // record stays healthy, because absence of evidence is not a failure.
+    let logins = crate::StatePaths::for_workspace(runtime.workspace_id.clone())
+        .ok()
+        .map(|paths| {
+            crate::agents::RoomLoginSet::resolve(&paths.workspace_record, &machine_config.accounts)
+        })
+        .unwrap_or_else(|| crate::agents::RoomLoginSet::new(None, None, Default::default()));
     let claude_rc_enabled = machine_config.remote_control.enabled_for("claude");
     let remote_control_health = RemoteControlServerHealth {
         claude_host_serving: frame.map(|frame| {
             let pane_present = crate::daemon_view::claude_host_present(&frame.to_pane_refs());
             // Probe only behind a live pane on an enabled host: a disabled or
             // paneless host has nothing the record could contradict.
-            let liveness = match snapshot.project_root.as_deref() {
-                Some(root) if claude_rc_enabled && pane_present => {
-                    crate::agents::runtime_control::host_liveness("claude", root, &login_env)
+            let liveness = match (snapshot.project_root.as_deref(), logins.login("claude")) {
+                (Some(root), Some(login)) if claude_rc_enabled && pane_present => {
+                    crate::agents::runtime_control::host_liveness(
+                        "claude",
+                        root,
+                        &logins.env(&login),
+                    )
                 }
                 _ => crate::agents::runtime_control::RuntimeControlLiveness::Unknown,
             };
@@ -633,12 +642,6 @@ fn enrich_core(
         exclude_pane: None,
     });
 
-    let logins = crate::StatePaths::for_workspace(runtime.workspace_id.clone())
-        .ok()
-        .map(|paths| {
-            crate::agents::RoomLoginSet::resolve(&paths.workspace_record, &machine_config.accounts)
-        })
-        .unwrap_or_else(|| crate::agents::RoomLoginSet::new(None, None, Default::default()));
     let provider_capacities = crate::agents::ProviderCapacity::read_all(runtime, &logins);
     let resume_messages = read_auto_continue_resume_messages(
         store,
@@ -878,6 +881,7 @@ fn fold_machine_config(
         accounts,
         &spending.provider.spending.by_provider,
         remote_control_health,
+        logins,
     );
     // Every fold merges the producer-published account windows read-only. The
     // refresh lane owns writes.
@@ -910,6 +914,7 @@ pub fn provider_panels_from_caches(
         accounts,
         &provider_spending.spending.by_provider,
         RemoteControlServerHealth::default(),
+        logins,
     );
     label_provider_logins(&mut snapshot.providers, logins);
     apply_cached_rate_limits(&mut snapshot, runtime, logins);
@@ -944,8 +949,8 @@ pub(super) fn fold_machine_config_with(
     accounts: BTreeMap<String, crate::agents::AgentAccount>,
     provider_spending: &BTreeMap<String, crate::agents::SpendTally>,
     remote_control_health: RemoteControlServerHealth,
+    logins: &crate::agents::RoomLoginSet,
 ) -> SidebarSnapshot {
-    let login_env = crate::agents::ambient_env();
     snapshot.sidebar = config.sidebar.clone();
     snapshot.theme = config.theme.clone();
 
@@ -962,10 +967,13 @@ pub(super) fn fold_machine_config_with(
     for adapter in crate::agents::all_definitions() {
         let definition = adapter.spec();
         let config_toggle = config.remote_control.enabled_for(definition.kind);
+        // A kind whose room account cannot be resolved reads no provider setting.
         let pane_auto = definition.capabilities.remote_control.pane_sessions
-            && adapter
-                .remote_control_status(accounts.get(definition.kind), &login_env)
-                .pane_auto;
+            && logins.login(definition.kind).is_some_and(|login| {
+                adapter
+                    .remote_control_status(accounts.get(definition.kind), &logins.env(&login))
+                    .pane_auto
+            });
         remote_control_flags.insert(
             definition.kind.to_owned(),
             remote_control_badge(

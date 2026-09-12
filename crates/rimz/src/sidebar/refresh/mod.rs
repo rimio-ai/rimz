@@ -241,6 +241,7 @@ pub(super) fn refresh_heavy_lanes(
         &spending.provider.spending.by_provider,
         // This scoped fold is not returned as the final snapshot.
         RemoteControlServerHealth::default(),
+        &logins,
     );
     refresh_rate_limits(&mut panels, runtime, &logins);
     // `with_provider_aggregates` rebuilds panels with empty credit fields; the
