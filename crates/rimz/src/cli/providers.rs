@@ -76,7 +76,13 @@ pub fn run(args: ProvidersArgs, _globals: &GlobalFlags) -> Result<()> {
                 .map(|account| (kind.clone(), account))
         })
         .collect();
-    let panels = provider_panels_from_caches(&runtime, &config, account_facts, &provider_spending);
+    let panels = provider_panels_from_caches(
+        &runtime,
+        &rimz::agents::RoomLoginSet::native(),
+        &config,
+        account_facts,
+        &provider_spending,
+    );
     let reports = assemble_reports(
         &accounts,
         panels,

@@ -269,7 +269,10 @@ pub fn confirm_codex_turn_death_from_pane(
     }
     if crate::agents::session::turn_death_needs_pane_confirmation("codex", error) {
         let now = Timestamp::now();
-        let capacity = crate::agents::ProviderCapacity::read(runtime, "codex");
+        let logins = crate::agents::RoomLoginSet::for_runtime(runtime);
+        let capacity = logins
+            .key("codex")
+            .and_then(|key| crate::agents::ProviderCapacity::read(runtime, &key));
         crate::agents::session::infer_turn_death_from_spent_window(
             "codex",
             error,

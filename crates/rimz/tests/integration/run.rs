@@ -320,7 +320,7 @@ fn qwen_supervised_run_exits_125_before_recording_when_exact_quota_is_spent() {
         &runtime.shared_rate_limits_path(),
         &RateLimitsCache {
             entries: [(
-                "qwen".to_owned(),
+                rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("qwen")),
                 RateLimitCacheEntry {
                     scope: binding.scope().clone(),
                     account_key: Some(account_key.clone()),
@@ -344,7 +344,13 @@ fn qwen_supervised_run_exits_125_before_recording_when_exact_quota_is_spent() {
     )
     .expect("write exact quota cache");
     assert!(
-        rimz::agents::provider_budget_gate(&runtime, "qwen", &binding, Timestamp::now()).is_some(),
+        rimz::agents::provider_budget_gate(
+            &runtime,
+            &rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("qwen")),
+            &binding,
+            Timestamp::now()
+        )
+        .is_some(),
         "the exact cache must close the provider gate before the subprocess runs"
     );
 

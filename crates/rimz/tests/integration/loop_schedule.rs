@@ -2463,7 +2463,7 @@ fn loop_qwen_exact_quota_skip_precedes_check_command() {
     runtime.ensure_dirs().expect("runtime dirs");
     let rate_cache = |used_7d, used_30d| RateLimitsCache {
         entries: [(
-            "qwen".to_owned(),
+            rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("qwen")),
             RateLimitCacheEntry {
                 scope: binding.scope().clone(),
                 account_key: Some(account_key.clone()),
@@ -2502,7 +2502,13 @@ fn loop_qwen_exact_quota_skip_precedes_check_command() {
     )
     .expect("write exact quota cache");
     assert!(
-        rimz::agents::provider_budget_gate(&runtime, "qwen", &binding, Timestamp::now()).is_some(),
+        rimz::agents::provider_budget_gate(
+            &runtime,
+            &rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("qwen")),
+            &binding,
+            Timestamp::now()
+        )
+        .is_some(),
         "the exact cache must close the provider gate before the loop runner starts"
     );
 

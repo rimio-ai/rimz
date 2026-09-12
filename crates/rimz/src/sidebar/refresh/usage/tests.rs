@@ -90,7 +90,8 @@ fn account_usage_completion_publishes_complete_realtime_without_fallback() {
     let credits = super::super::credits::read_credits_cache(&runtime.shared_credits_path());
     assert_eq!(credits.entries["codex"].plan.as_deref(), Some("pro"));
     assert_eq!(
-        read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries["codex"]
+        read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries
+            [&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"))]
             .limits
             .windows[0]
             .used_percentage,
@@ -122,7 +123,8 @@ fn account_usage_completion_combines_realtime_credits_with_direct_windows() {
     let credits = super::super::credits::read_credits_cache(&runtime.shared_credits_path());
     assert_eq!(credits.entries["codex"].plan.as_deref(), Some("pro"));
     assert_eq!(
-        read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries["codex"]
+        read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries
+            [&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex"))]
             .limits
             .windows[0]
             .used_percentage,
@@ -191,7 +193,7 @@ fn authoritative_direct_completion_survives_live_session_exit() {
     );
     super::super::merge_account_rate_limits(
         &runtime,
-        "claude",
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
         identity.clone(),
         AgentRateLimits {
             windows: vec![
@@ -243,11 +245,19 @@ fn authoritative_direct_completion_survives_live_session_exit() {
 
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
     assert_eq!(
-        cache.entries["claude"].limits.windows[0].used_percentage,
+        cache.entries
+            [&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude"))]
+            .limits
+            .windows[0]
+            .used_percentage,
         Some(36)
     );
     assert_eq!(
-        cache.entries["claude"].limits.windows[1].used_percentage,
+        cache.entries
+            [&crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude"))]
+            .limits
+            .windows[1]
+            .used_percentage,
         Some(4)
     );
 
@@ -255,7 +265,11 @@ fn authoritative_direct_completion_survives_live_session_exit() {
         runtime.workspace_id.clone(),
         vec![provider_panel("claude", Vec::new())],
     );
-    super::super::rate_limits::apply_cached_rate_limits(&mut idle, &runtime);
+    super::super::rate_limits::apply_cached_rate_limits(
+        &mut idle,
+        &runtime,
+        &crate::agents::RoomLoginSet::native(),
+    );
     assert_eq!(
         idle.providers[0]
             .windows
@@ -288,7 +302,7 @@ fn owned_usage_runtime(owner: &str) -> (tempfile::TempDir, RuntimePaths) {
     );
     super::super::merge_account_rate_limits(
         &runtime,
-        "antigravity",
+        &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("antigravity")),
         usage_identity(Some(owner)),
         AgentRateLimits {
             windows: vec![RateLimitWindow {
@@ -316,7 +330,9 @@ fn claim(runtime: &RuntimePaths) -> Uuid {
 fn windows(runtime: &RuntimePaths) -> Vec<RateLimitWindow> {
     read_rate_limits_cache(&runtime.shared_rate_limits_path())
         .entries
-        .get("antigravity")
+        .get(&crate::ids::LoginKey::default_for(
+            crate::ids::AgentKind::new_unchecked("antigravity"),
+        ))
         .map(|entry| entry.limits.windows.clone())
         .unwrap_or_default()
 }

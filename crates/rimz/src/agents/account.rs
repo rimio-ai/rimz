@@ -29,9 +29,10 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
+use super::RoomLoginSet;
 use super::{AgentRateLimits, ProviderAccountScope, RateLimitWindow, context::RateLimitWindowKey};
 use crate::RuntimePaths;
-use crate::ids::AgentKind;
+use crate::ids::{AgentKind, LoginKey};
 
 /// Informational account and CLI-version probes are best-effort enrichment.
 /// Bound every subprocess so one installed but wedged CLI cannot hold the
@@ -117,10 +118,10 @@ impl ManagedLaunchState {
         }
     }
 
-    pub fn capacity(&self, runtime: &RuntimePaths, kind: &str) -> Option<ProviderCapacity> {
+    pub fn capacity(&self, runtime: &RuntimePaths, key: &LoginKey) -> Option<ProviderCapacity> {
         match self {
-            Self::Unsupported => ProviderCapacity::read(runtime, kind),
-            Self::Bound(binding) => ProviderCapacity::read_bound(runtime, kind, binding),
+            Self::Unsupported => ProviderCapacity::read(runtime, key),
+            Self::Bound(binding) => ProviderCapacity::read_bound(runtime, key, binding),
             Self::PendingResolution | Self::Unresolved => None,
         }
     }
@@ -156,9 +157,9 @@ pub struct ProviderCapacity {
 
 impl ProviderCapacity {
     /// Read one kind-wide capacity from the shared provider cache.
-    pub fn read(runtime: &RuntimePaths, kind: &str) -> Option<Self> {
+    pub fn read(runtime: &RuntimePaths, key: &LoginKey) -> Option<Self> {
         let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-        let entry = cache.entries.get(kind)?;
+        let entry = cache.entries.get(key)?;
         entry.scope.is_kind_wide().then(|| Self {
             windows: entry.limits.windows.clone(),
             pacing_max_mins: None,
@@ -170,11 +171,11 @@ impl ProviderCapacity {
     /// all authoritative windows remain available to the exhaustion gate.
     pub(crate) fn read_bound(
         runtime: &RuntimePaths,
-        kind: &str,
+        key: &LoginKey,
         binding: &ProviderAccountBinding,
     ) -> Option<Self> {
         let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-        let entry = cache.entries.get(kind)?;
+        let entry = cache.entries.get(key)?;
         entry_matches_binding(entry, binding).then(|| Self {
             windows: entry
                 .bound_limits
@@ -187,14 +188,19 @@ impl ProviderCapacity {
     }
 
     /// Read all kind-wide capacities from the shared provider cache once.
-    pub(crate) fn read_all(runtime: &RuntimePaths) -> BTreeMap<AgentKind, Self> {
+    pub(crate) fn read_all(
+        runtime: &RuntimePaths,
+        logins: &RoomLoginSet,
+    ) -> BTreeMap<AgentKind, Self> {
         read_rate_limits_cache(&runtime.shared_rate_limits_path())
             .entries
             .into_iter()
-            .filter(|(_, entry)| entry.scope.is_kind_wide())
-            .map(|(kind, entry)| {
+            .filter(|(key, entry)| {
+                entry.scope.is_kind_wide() && logins.key(key.kind.as_str()).as_ref() == Some(key)
+            })
+            .map(|(key, entry)| {
                 (
-                    AgentKind::new_unchecked(kind),
+                    key.kind,
                     Self {
                         windows: entry.limits.windows,
                         pacing_max_mins: None,
@@ -311,11 +317,11 @@ fn entry_matches_binding(entry: &RateLimitCacheEntry, binding: &ProviderAccountB
 #[doc(hidden)]
 pub fn provider_budget_gate(
     runtime: &RuntimePaths,
-    kind: &str,
+    key: &LoginKey,
     binding: &ProviderAccountBinding,
     now: Timestamp,
 ) -> Option<String> {
-    let window = ProviderCapacity::read_bound(runtime, kind, binding)?.spent_window(now)?;
+    let window = ProviderCapacity::read_bound(runtime, key, binding)?.spent_window(now)?;
     let reset = window.resets_at?;
     let used_percentage = window.used_percentage.unwrap_or(100);
     let window_label = window
@@ -324,7 +330,7 @@ pub fn provider_budget_gate(
         .unwrap_or_else(|| "quota".to_owned());
     Some(format!(
         "{} {window_label} window exhausted ({used_percentage}% used); resets at {reset}",
-        binding.display_label(kind),
+        binding.display_label(key.kind.as_str()),
     ))
 }
 
@@ -351,14 +357,14 @@ fn window_spent_unreset(window: &RateLimitWindow, now: Timestamp) -> bool {
 }
 
 /// Producer-published per-provider rate-limit windows.
-const RATE_LIMITS_CACHE_VERSION: u32 = 5;
+const RATE_LIMITS_CACHE_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitsCache {
     pub version: u32,
     pub refreshed_at_ms: u64,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub entries: BTreeMap<String, RateLimitCacheEntry>,
+    pub entries: BTreeMap<LoginKey, RateLimitCacheEntry>,
 }
 
 impl Default for RateLimitsCache {

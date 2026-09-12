@@ -7,6 +7,10 @@ use crate::sidebar::test_support::{
 };
 use jiff::SignedDuration;
 
+fn login_key(kind: &str) -> LoginKey {
+    LoginKey::default_for(crate::ids::AgentKind::new_unchecked(kind))
+}
+
 fn runtime() -> (tempfile::TempDir, WorkspaceId, RuntimePaths) {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
@@ -18,6 +22,98 @@ fn runtime() -> (tempfile::TempDir, WorkspaceId, RuntimePaths) {
 fn authoritative(mut window: RateLimitWindow) -> RateLimitWindow {
     window.source = WindowSource::Authoritative;
     window
+}
+
+#[test]
+fn room_publications_preserve_other_logins_and_project_only_their_own_windows() {
+    let (dir, workspace, runtime) = runtime();
+    let other_workspace = WorkspaceId::from_project_root(&dir.path().join("other"));
+    let other_runtime = RuntimePaths::under(other_workspace.clone(), dir.path()).unwrap();
+    other_runtime.ensure_dirs().unwrap();
+    assert_eq!(
+        runtime.shared_rate_limits_path(),
+        other_runtime.shared_rate_limits_path()
+    );
+    let accounts = toml::from_str("[claude.work]\nhome = \"/srv/rimz-test-work\"\n").unwrap();
+    let work_key: LoginKey = "claude@work".parse().unwrap();
+    let work = RoomLoginSet::new(
+        Some(crate::ids::RoomLogins::from([(
+            work_key.kind.clone(),
+            work_key.name.clone(),
+        )])),
+        Some(crate::agents::LoginCatalog::from_config(&accounts).unwrap()),
+        BTreeMap::new(),
+    );
+    let native = RoomLoginSet::native();
+    let mut default_panel = snapshot_with_panels(
+        workspace.clone(),
+        vec![provider_panel("claude", vec![rl_window(20, None)])],
+    );
+    refresh_rate_limits(&mut default_panel, &runtime, &native);
+    let mut work_panel = snapshot_with_panels(
+        other_workspace.clone(),
+        vec![provider_panel("claude", vec![rl_window(70, None)])],
+    );
+    refresh_rate_limits(&mut work_panel, &other_runtime, &work);
+    let cached = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    assert_eq!(
+        cached.entries[&login_key("claude")].limits.windows[0].used_percentage,
+        Some(20)
+    );
+    assert_eq!(
+        cached.entries[&work_key].limits.windows[0].used_percentage,
+        Some(70)
+    );
+    let unresolved = RoomLoginSet::new(None, None, BTreeMap::new());
+    let mut unresolved_panel = snapshot_with_panels(
+        workspace.clone(),
+        vec![provider_panel("claude", Vec::new())],
+    );
+    refresh_rate_limits(&mut unresolved_panel, &runtime, &unresolved);
+    assert!(unresolved_panel.providers[0].windows.is_empty());
+    assert_eq!(
+        read_rate_limits_cache(&runtime.shared_rate_limits_path())
+            .entries
+            .len(),
+        2
+    );
+    for _ in 0..2 {
+        let mut default_panel = snapshot_with_panels(
+            workspace.clone(),
+            vec![provider_panel("claude", Vec::new())],
+        );
+        let mut work_panel = snapshot_with_panels(
+            other_workspace.clone(),
+            vec![provider_panel("claude", Vec::new())],
+        );
+        refresh_rate_limits(&mut default_panel, &runtime, &native);
+        refresh_rate_limits(&mut work_panel, &other_runtime, &work);
+        assert_eq!(
+            default_panel.providers[0].windows[0].used_percentage,
+            Some(20)
+        );
+        assert_eq!(work_panel.providers[0].windows[0].used_percentage, Some(70));
+        default_panel.providers[0].windows.clear();
+        work_panel.providers[0].windows.clear();
+        apply_cached_rate_limits(&mut default_panel, &runtime, &native);
+        apply_cached_rate_limits(&mut work_panel, &other_runtime, &work);
+        assert_eq!(
+            default_panel.providers[0].windows[0].used_percentage,
+            Some(20)
+        );
+        assert_eq!(work_panel.providers[0].windows[0].used_percentage, Some(70));
+        assert_eq!(
+            read_rate_limits_cache(&runtime.shared_rate_limits_path())
+                .entries
+                .len(),
+            2
+        );
+    }
+    let mut logged_out = snapshot_with_panels(workspace, Vec::new());
+    refresh_rate_limits(&mut logged_out, &runtime, &native);
+    let cached = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    assert!(!cached.entries.contains_key(&login_key("claude")));
+    assert!(cached.entries.contains_key(&work_key));
 }
 
 fn kind_wide_cache(
@@ -35,11 +131,11 @@ fn kind_wide_cache(
             pending: pending.remove(&kind).unwrap_or_default(),
             unknown_since_ms: None,
         };
-        entries.insert(kind, entry);
+        entries.insert(login_key(&kind), entry);
     }
     entries.extend(pending.into_iter().map(|(kind, pending)| {
         (
-            kind,
+            login_key(&kind),
             RateLimitCacheEntry {
                 pending,
                 ..Default::default()
@@ -58,7 +154,7 @@ fn cache_window<'a>(
     kind: &str,
     key: RateLimitWindowKey,
 ) -> &'a RateLimitWindow {
-    cache.entries[kind]
+    cache.entries[&login_key(kind)]
         .limits
         .windows
         .iter()
@@ -105,7 +201,7 @@ fn scoped_quota_windows_fuse_and_expire_independently() {
             ],
         )],
     );
-    refresh_rate_limits(&mut producer, &runtime);
+    refresh_rate_limits(&mut producer, &runtime, &RoomLoginSet::native());
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
     assert_eq!(
         cache_window(
@@ -142,7 +238,7 @@ fn scoped_quota_windows_fuse_and_expire_independently() {
         ),
     );
     let mut consumer = snapshot_with_panels(workspace, vec![provider_panel("plugin", Vec::new())]);
-    apply_cached_rate_limits(&mut consumer, &runtime);
+    apply_cached_rate_limits(&mut consumer, &runtime, &RoomLoginSet::native());
     let build = consumer.providers[0]
         .windows
         .iter()
@@ -171,7 +267,7 @@ fn expired_model_sub_cap_is_unknown_while_live_parent_refills() {
     write_claude_windows(&runtime, vec![parent.clone(), sub_cap]);
     let mut consumer =
         snapshot_with_panels(workspace, vec![provider_panel("claude", vec![parent])]);
-    apply_cached_rate_limits(&mut consumer, &runtime);
+    apply_cached_rate_limits(&mut consumer, &runtime, &RoomLoginSet::native());
     let windows = &consumer.providers[0].windows;
     assert_eq!(windows.len(), 2);
     assert_eq!(windows[0].used_percentage, Some(0));
@@ -188,14 +284,14 @@ fn producer_persisted_windows_feed_idle_consumers() {
         workspace.clone(),
         vec![provider_panel("claude", vec![rl_window(60, Some(future))])],
     );
-    refresh_rate_limits(&mut producer, &runtime);
+    refresh_rate_limits(&mut producer, &runtime, &RoomLoginSet::native());
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
     assert_eq!(
         cache_window(&cache, "claude", RateLimitWindowKey::Duration(Some(300))).used_percentage,
         Some(60)
     );
     let mut consumer = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
-    apply_cached_rate_limits(&mut consumer, &runtime);
+    apply_cached_rate_limits(&mut consumer, &runtime, &RoomLoginSet::native());
     assert_eq!(consumer.providers[0].windows[0].used_percentage, Some(60));
 }
 
@@ -208,7 +304,7 @@ fn account_scope_isolates_cached_windows() {
         &runtime.shared_rate_limits_path(),
         &RateLimitsCache {
             entries: BTreeMap::from([(
-                "qwen".to_owned(),
+                login_key("qwen"),
                 RateLimitCacheEntry {
                     scope: international.clone(),
                     account_key: None,
@@ -230,7 +326,7 @@ fn account_scope_isolates_cached_windows() {
     let mut matching = provider_panel("qwen", Vec::new());
     matching.account_scope = international.clone();
     let mut matching = snapshot_with_panels(workspace.clone(), vec![matching]);
-    apply_cached_rate_limits(&mut matching, &runtime);
+    apply_cached_rate_limits(&mut matching, &runtime, &RoomLoginSet::native());
     assert_eq!(
         matching.providers[0]
             .windows
@@ -242,22 +338,23 @@ fn account_scope_isolates_cached_windows() {
     let mut mismatched = provider_panel("qwen", Vec::new());
     mismatched.account_scope = china.clone();
     let mut mismatched = snapshot_with_panels(workspace.clone(), vec![mismatched]);
-    apply_cached_rate_limits(&mut mismatched, &runtime);
+    apply_cached_rate_limits(&mut mismatched, &runtime, &RoomLoginSet::native());
     assert!(mismatched.providers[0].windows.is_empty());
     assert_eq!(
-        read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries["qwen"].scope,
+        read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries[&login_key("qwen")]
+            .scope,
         international
     );
 
     let mut switched = provider_panel("qwen", vec![rl_window_mins(55, None, 43_200)]);
     switched.account_scope = china.clone();
     let mut switched = snapshot_with_panels(workspace, vec![switched]);
-    refresh_rate_limits(&mut switched, &runtime);
+    refresh_rate_limits(&mut switched, &runtime, &RoomLoginSet::native());
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    assert_eq!(cache.entries["qwen"].scope, china);
-    assert_eq!(cache.entries["qwen"].limits.windows.len(), 1);
+    assert_eq!(cache.entries[&login_key("qwen")].scope, china);
+    assert_eq!(cache.entries[&login_key("qwen")].limits.windows.len(), 1);
     assert_eq!(
-        cache.entries["qwen"].limits.windows[0].duration_mins,
+        cache.entries[&login_key("qwen")].limits.windows[0].duration_mins,
         Some(43_200)
     );
 }
@@ -312,7 +409,7 @@ fn reset_epoch_invalidates_oauth_usage_throttle() {
         workspace,
         vec![provider_panel("codex", vec![rl_window(1, Some(new_reset))])],
     );
-    refresh_rate_limits(&mut frame, &runtime);
+    refresh_rate_limits(&mut frame, &runtime, &RoomLoginSet::native());
 
     let credits =
         crate::sidebar::refresh::credits::read_credits_cache(&runtime.shared_credits_path());
@@ -357,7 +454,7 @@ fn oauth_read_at_ms(runtime: &RuntimePaths, kind: &str) -> u64 {
 fn unknown_since_ms(runtime: &RuntimePaths, kind: &str) -> Option<u64> {
     read_rate_limits_cache(&runtime.shared_rate_limits_path())
         .entries
-        .get(kind)
+        .get(&login_key(kind))
         .and_then(|entry| entry.unknown_since_ms)
 }
 
@@ -369,7 +466,7 @@ fn unknown_display_forces_immediate_account_refresh() {
     seed_settled_credits(&runtime, "claude", 1_700_000_000_000);
 
     let mut frame = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
-    refresh_rate_limits(&mut frame, &runtime);
+    refresh_rate_limits(&mut frame, &runtime, &RoomLoginSet::native());
 
     // The display went unknown, so the settled read is dropped and the next
     // claim is due immediately rather than an hour from now.
@@ -394,7 +491,7 @@ fn unknown_display_forces_refresh_once_per_episode() {
         workspace.clone(),
         vec![provider_panel("claude", Vec::new())],
     );
-    refresh_rate_limits(&mut first, &runtime);
+    refresh_rate_limits(&mut first, &runtime, &RoomLoginSet::native());
     assert_eq!(oauth_read_at_ms(&runtime, "claude"), 0);
     let forced_at = unknown_since_ms(&runtime, "claude").expect("episode marker");
 
@@ -403,7 +500,7 @@ fn unknown_display_forces_refresh_once_per_episode() {
     // with nothing to report costs one fetch rather than one per frame.
     seed_settled_credits(&runtime, "claude", 1_700_000_500_000);
     let mut second = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
-    refresh_rate_limits(&mut second, &runtime);
+    refresh_rate_limits(&mut second, &runtime, &RoomLoginSet::native());
 
     assert_eq!(oauth_read_at_ms(&runtime, "claude"), 1_700_000_500_000);
     assert_eq!(unknown_since_ms(&runtime, "claude"), Some(forced_at));
@@ -421,7 +518,7 @@ fn usable_window_rearms_the_unknown_refresh() {
         workspace.clone(),
         vec![provider_panel("claude", Vec::new())],
     );
-    refresh_rate_limits(&mut unknown, &runtime);
+    refresh_rate_limits(&mut unknown, &runtime, &RoomLoginSet::native());
     assert!(unknown_since_ms(&runtime, "claude").is_some());
 
     // A live reading paints a real value again, closing the episode so the next
@@ -435,7 +532,7 @@ fn usable_window_rearms_the_unknown_refresh() {
             vec![rl_window_mins(35, Some(future), 300)],
         )],
     );
-    refresh_rate_limits(&mut known, &runtime);
+    refresh_rate_limits(&mut known, &runtime, &RoomLoginSet::native());
 
     assert_eq!(known.providers[0].windows[0].used_percentage, Some(35));
     assert_eq!(unknown_since_ms(&runtime, "claude"), None);
@@ -449,7 +546,7 @@ fn cold_start_without_cached_windows_forces_refresh() {
     // No rate-limit cache at all: nothing expires, so the aged-out path never
     // trips, yet the dashboard is just as blank.
     let mut frame = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
-    refresh_rate_limits(&mut frame, &runtime);
+    refresh_rate_limits(&mut frame, &runtime, &RoomLoginSet::native());
 
     assert!(frame.providers[0].windows.is_empty());
     assert_eq!(oauth_read_at_ms(&runtime, "claude"), 0);
@@ -469,7 +566,7 @@ fn elapsed_short_idle_window_shows_full_without_persisting_projection() {
         ],
     );
     let mut idle = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
-    refresh_rate_limits(&mut idle, &runtime);
+    refresh_rate_limits(&mut idle, &runtime, &RoomLoginSet::native());
     assert_eq!(idle.providers[0].windows[0].used_percentage, Some(0));
     assert_eq!(idle.providers[0].windows[1].used_percentage, Some(70));
 
@@ -492,7 +589,7 @@ fn elapsed_long_live_window_rolls_forward_without_persisting_projection() {
             ],
         )],
     );
-    refresh_rate_limits(&mut frame, &runtime);
+    refresh_rate_limits(&mut frame, &runtime, &RoomLoginSet::native());
     assert_eq!(frame.providers[0].windows[0].used_percentage, Some(40));
     assert_eq!(frame.providers[0].windows[1].used_percentage, Some(0));
     assert!(
@@ -517,7 +614,7 @@ fn elapsed_longest_idle_cache_shows_unknown_without_persisting_projection() {
         ],
     );
     let mut idle = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
-    refresh_rate_limits(&mut idle, &runtime);
+    refresh_rate_limits(&mut idle, &runtime, &RoomLoginSet::native());
     let shown = &idle.providers[0].windows;
     assert!(
         shown
@@ -561,7 +658,7 @@ fn shortest_elapsed_undated_window_opens_unknown_refresh_episode() {
 
     let mut idle = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
     idle.now = observed_at + SignedDuration::from_mins(301);
-    refresh_rate_limits(&mut idle, &runtime);
+    refresh_rate_limits(&mut idle, &runtime, &RoomLoginSet::native());
 
     assert!(
         idle.providers[0]
@@ -586,7 +683,7 @@ fn lone_undated_weekly_window_keeps_its_weeklong_ceiling() {
 
     let mut idle = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
     idle.now = observed_at + SignedDuration::from_hours(6 * 24);
-    refresh_rate_limits(&mut idle, &runtime);
+    refresh_rate_limits(&mut idle, &runtime, &RoomLoginSet::native());
 
     assert_eq!(idle.providers[0].windows[0].used_percentage, Some(4));
     assert_eq!(unknown_since_ms(&runtime, "claude"), None);
@@ -625,7 +722,7 @@ fn dated_long_window_keeps_undated_lifted_window_cache_fresh() {
     );
 
     let mut idle = snapshot_with_panels(workspace, vec![provider_panel("codex", Vec::new())]);
-    refresh_rate_limits(&mut idle, &runtime);
+    refresh_rate_limits(&mut idle, &runtime, &RoomLoginSet::native());
 
     assert!(idle.providers[0].windows[0].lifted);
     assert_eq!(
@@ -649,24 +746,24 @@ fn producer_cache_tracks_logged_in_panels() {
             provider_panel("codex", vec![rl_window(30, Some(future))]),
         ],
     );
-    refresh_rate_limits(&mut seeded, &runtime);
+    refresh_rate_limits(&mut seeded, &runtime, &RoomLoginSet::native());
 
     let mut partial = snapshot_with_panels(
         workspace.clone(),
         vec![provider_panel("claude", vec![rl_window(40, Some(future))])],
     );
-    refresh_rate_limits(&mut partial, &runtime);
+    refresh_rate_limits(&mut partial, &runtime, &RoomLoginSet::native());
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    assert!(cache.entries.contains_key("claude"));
-    assert!(!cache.entries.contains_key("codex"));
+    assert!(cache.entries.contains_key(&login_key("claude")));
+    assert!(!cache.entries.contains_key(&login_key("codex")));
 
     let mut consumer = snapshot_with_panels(workspace.clone(), Vec::new());
-    apply_cached_rate_limits(&mut consumer, &runtime);
+    apply_cached_rate_limits(&mut consumer, &runtime, &RoomLoginSet::native());
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    assert!(cache.entries.contains_key("claude"));
+    assert!(cache.entries.contains_key(&login_key("claude")));
 
     let mut producer = snapshot_with_panels(workspace, Vec::new());
-    refresh_rate_limits(&mut producer, &runtime);
+    refresh_rate_limits(&mut producer, &runtime, &RoomLoginSet::native());
     assert!(
         read_rate_limits_cache(&runtime.shared_rate_limits_path())
             .entries
@@ -680,12 +777,12 @@ fn logged_out_producer_leaves_empty_cache_untouched() {
         workspace.clone(),
         vec![provider_panel("claude", vec![rl_window(40, None)])],
     );
-    refresh_rate_limits(&mut seeded, &runtime);
+    refresh_rate_limits(&mut seeded, &runtime, &RoomLoginSet::native());
     let path = runtime.shared_rate_limits_path();
     assert!(!read_rate_limits_cache(&path).entries.is_empty());
 
     let mut logged_out = snapshot_with_panels(workspace, Vec::new());
-    refresh_rate_limits(&mut logged_out, &runtime);
+    refresh_rate_limits(&mut logged_out, &runtime, &RoomLoginSet::native());
     assert!(read_rate_limits_cache(&path).entries.is_empty());
     std::fs::File::open(&path)
         .unwrap()
@@ -694,7 +791,7 @@ fn logged_out_producer_leaves_empty_cache_untouched() {
     let bytes = std::fs::read(&path).unwrap();
     let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
 
-    refresh_rate_limits(&mut logged_out, &runtime);
+    refresh_rate_limits(&mut logged_out, &runtime, &RoomLoginSet::native());
 
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
     assert_eq!(
@@ -709,7 +806,7 @@ fn account_merge_preserves_other_kinds() {
     write_claude_windows(&runtime, vec![rl_window(20, None)]);
     super::merge_account_rate_limits(
         &runtime,
-        "codex",
+        &login_key("codex"),
         Default::default(),
         AgentRateLimits {
             windows: vec![rl_window(55, None)],
@@ -721,7 +818,7 @@ fn account_merge_preserves_other_kinds() {
         cache_window(&cache, "codex", RateLimitWindowKey::Duration(Some(300))).used_percentage,
         Some(55)
     );
-    assert!(cache.entries.contains_key("claude"));
+    assert!(cache.entries.contains_key(&login_key("claude")));
 }
 
 #[test]
@@ -743,7 +840,7 @@ fn old_account_panel_cannot_reenter_bound_claude_limits() {
     };
     super::merge_account_rate_limits(
         &runtime,
-        "claude",
+        &login_key("claude"),
         AccountUsageIdentity {
             account_key: Some("new-account".to_owned()),
             ..Default::default()
@@ -763,10 +860,10 @@ fn old_account_panel_cannot_reenter_bound_claude_limits() {
     );
     old_panel.account_key = Some("old-account".to_owned());
     let mut old_workspace = snapshot_with_panels(other_workspace, vec![old_panel]);
-    refresh_rate_limits(&mut old_workspace, &other_runtime);
+    refresh_rate_limits(&mut old_workspace, &other_runtime, &RoomLoginSet::native());
 
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    let entry = &cache.entries["claude"];
+    let entry = &cache.entries[&login_key("claude")];
     assert_eq!(entry.account_key.as_deref(), Some("new-account"));
     assert_eq!(entry.limits, authoritative_limits);
     assert_eq!(entry.bound_limits.as_ref(), Some(&authoritative_limits));
@@ -774,7 +871,7 @@ fn old_account_panel_cannot_reenter_bound_claude_limits() {
 
     let mut providers_snapshot =
         snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
-    apply_cached_rate_limits(&mut providers_snapshot, &runtime);
+    apply_cached_rate_limits(&mut providers_snapshot, &runtime, &RoomLoginSet::native());
     assert_eq!(
         providers_snapshot.providers[0].windows,
         authoritative_limits.windows
@@ -791,7 +888,7 @@ fn empty_keyed_panel_preserves_the_bound_cache_entry() {
     };
     super::merge_account_rate_limits(
         &runtime,
-        "claude",
+        &login_key("claude"),
         AccountUsageIdentity {
             account_key: Some("new-account".to_owned()),
             ..Default::default()
@@ -802,10 +899,10 @@ fn empty_keyed_panel_preserves_the_bound_cache_entry() {
     let mut panel = provider_panel("claude", Vec::new());
     panel.account_key = Some("new-account".to_owned());
     let mut snapshot = snapshot_with_panels(workspace, vec![panel]);
-    refresh_rate_limits(&mut snapshot, &runtime);
+    refresh_rate_limits(&mut snapshot, &runtime, &RoomLoginSet::native());
 
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    let entry = &cache.entries["claude"];
+    let entry = &cache.entries[&login_key("claude")];
     assert_eq!(entry.account_key.as_deref(), Some("new-account"));
     assert_eq!(entry.limits, authoritative_limits);
     assert_eq!(entry.bound_limits.as_ref(), Some(&authoritative_limits));
@@ -818,7 +915,7 @@ fn matching_birth_account_panel_keeps_instant_climbs() {
     let reset = now + SignedDuration::from_secs(3_600);
     super::merge_account_rate_limits(
         &runtime,
-        "claude",
+        &login_key("claude"),
         AccountUsageIdentity {
             account_key: Some("same-account".to_owned()),
             ..Default::default()
@@ -833,11 +930,11 @@ fn matching_birth_account_panel_keeps_instant_climbs() {
     );
     panel.account_key = Some("same-account".to_owned());
     let mut producer = snapshot_with_panels(workspace, vec![panel]);
-    refresh_rate_limits(&mut producer, &runtime);
+    refresh_rate_limits(&mut producer, &runtime, &RoomLoginSet::native());
 
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
     assert_eq!(
-        cache.entries["claude"].limits.windows[0].used_percentage,
+        cache.entries[&login_key("claude")].limits.windows[0].used_percentage,
         Some(40)
     );
 }
@@ -859,7 +956,7 @@ fn authoritative_read_supersedes_older_session_reading_and_holds() {
         };
         super::merge_account_rate_limits(
             &runtime,
-            "claude",
+            &login_key("claude"),
             identity.clone(),
             AgentRateLimits {
                 windows: vec![RateLimitWindow {
@@ -872,7 +969,7 @@ fn authoritative_read_supersedes_older_session_reading_and_holds() {
             workspace.clone(),
             vec![provider_panel("claude", vec![session.clone()])],
         );
-        refresh_rate_limits(&mut producer, &runtime);
+        refresh_rate_limits(&mut producer, &runtime, &RoomLoginSet::native());
         assert_eq!(producer.providers[0].windows, vec![session.clone()]);
 
         let reading = AgentRateLimits {
@@ -881,9 +978,14 @@ fn authoritative_read_supersedes_older_session_reading_and_holds() {
                 ..auth(4, reset + SignedDuration::from_secs(1), now)
             }],
         };
-        super::merge_account_rate_limits(&runtime, "claude", identity.clone(), reading.clone());
+        super::merge_account_rate_limits(
+            &runtime,
+            &login_key("claude"),
+            identity.clone(),
+            reading.clone(),
+        );
         let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-        let entry = &cache.entries["claude"];
+        let entry = &cache.entries[&login_key("claude")];
         assert_eq!(entry.limits, reading);
         assert!(entry.pending.is_empty());
         assert_eq!(entry.account_key, identity.account_key);
@@ -896,15 +998,15 @@ fn authoritative_read_supersedes_older_session_reading_and_holds() {
             workspace,
             vec![provider_panel("claude", vec![session.clone()])],
         );
-        apply_cached_rate_limits(&mut consumer, &runtime);
+        apply_cached_rate_limits(&mut consumer, &runtime, &RoomLoginSet::native());
         assert_eq!(consumer.providers[0].windows, reading.windows);
         for _ in 0..3 {
             producer.providers[0].windows = vec![session.clone()];
-            refresh_rate_limits(&mut producer, &runtime);
+            refresh_rate_limits(&mut producer, &runtime, &RoomLoginSet::native());
             assert_eq!(producer.providers[0].windows, reading.windows);
         }
         consumer.providers[0].windows = vec![session];
-        apply_cached_rate_limits(&mut consumer, &runtime);
+        apply_cached_rate_limits(&mut consumer, &runtime, &RoomLoginSet::native());
         assert_eq!(consumer.providers[0].windows, reading.windows);
 
         let overlay = RateLimitWindow {
@@ -912,15 +1014,18 @@ fn authoritative_read_supersedes_older_session_reading_and_holds() {
             ..be(21, reset, now + SignedDuration::from_secs(1))
         };
         producer.providers[0].windows = vec![overlay.clone()];
-        refresh_rate_limits(&mut producer, &runtime);
+        refresh_rate_limits(&mut producer, &runtime, &RoomLoginSet::native());
         assert_eq!(producer.providers[0].windows, vec![overlay.clone()]);
         let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-        assert_eq!(cache.entries["claude"].limits.windows, vec![overlay]);
         assert_eq!(
-            cache.entries["claude"].bound_limits.as_ref(),
+            cache.entries[&login_key("claude")].limits.windows,
+            vec![overlay]
+        );
+        assert_eq!(
+            cache.entries[&login_key("claude")].bound_limits.as_ref(),
             identity.account_key.as_ref().map(|_| &reading)
         );
-        assert!(cache.entries["claude"].pending.is_empty());
+        assert!(cache.entries[&login_key("claude")].pending.is_empty());
     }
 }
 
@@ -950,10 +1055,15 @@ fn authoritative_omissions_track_lifted_duration_windows() {
         windows: vec![authoritative(rl_window_mins(41, None, seven_days))],
     };
     for _ in 0..2 {
-        super::merge_account_rate_limits(&runtime, "codex", Default::default(), only_week.clone());
+        super::merge_account_rate_limits(
+            &runtime,
+            &login_key("codex"),
+            Default::default(),
+            only_week.clone(),
+        );
     }
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    assert_eq!(cache.entries["codex"].limits.windows.len(), 2);
+    assert_eq!(cache.entries[&login_key("codex")].limits.windows.len(), 2);
     let lifted = cache_window(
         &cache,
         "codex",
@@ -971,7 +1081,7 @@ fn authoritative_omissions_track_lifted_duration_windows() {
 
     super::merge_account_rate_limits(
         &runtime,
-        "codex",
+        &login_key("codex"),
         Default::default(),
         AgentRateLimits {
             windows: vec![
@@ -981,7 +1091,7 @@ fn authoritative_omissions_track_lifted_duration_windows() {
         },
     );
     assert!(
-        read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries["codex"]
+        read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries[&login_key("codex")]
             .limits
             .windows
             .iter()
@@ -990,12 +1100,12 @@ fn authoritative_omissions_track_lifted_duration_windows() {
 
     super::merge_account_rate_limits(
         &runtime,
-        "codex",
+        &login_key("codex"),
         Default::default(),
         AgentRateLimits::default(),
     );
     assert!(
-        read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries["codex"]
+        read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries[&login_key("codex")]
             .limits
             .windows
             .is_empty()
@@ -1008,7 +1118,7 @@ fn authoritative_account_identity_survives_publication_and_rotates_by_key() {
 
     super::merge_account_rate_limits(
         &runtime,
-        "qwen",
+        &login_key("qwen"),
         AccountUsageIdentity {
             scope: scope.clone(),
             account_key: Some("first".to_owned()),
@@ -1019,11 +1129,14 @@ fn authoritative_account_identity_survives_publication_and_rotates_by_key() {
         },
     );
     let first = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    assert_eq!(first.entries["qwen"].account_key.as_deref(), Some("first"));
+    assert_eq!(
+        first.entries[&login_key("qwen")].account_key.as_deref(),
+        Some("first")
+    );
 
     super::merge_account_rate_limits(
         &runtime,
-        "qwen",
+        &login_key("qwen"),
         AccountUsageIdentity {
             scope: scope.clone(),
             account_key: Some("second".to_owned()),
@@ -1035,24 +1148,29 @@ fn authoritative_account_identity_survives_publication_and_rotates_by_key() {
     );
     let rotated = read_rate_limits_cache(&runtime.shared_rate_limits_path());
     assert_eq!(
-        rotated.entries["qwen"].account_key.as_deref(),
+        rotated.entries[&login_key("qwen")].account_key.as_deref(),
         Some("second")
     );
-    assert_eq!(rotated.entries["qwen"].limits.windows.len(), 1);
+    assert_eq!(rotated.entries[&login_key("qwen")].limits.windows.len(), 1);
 
     let mut snapshot = snapshot_with_panels(
         workspace,
         vec![provider_panel("qwen", vec![rl_window_mins(10, None, 300)])],
     );
     snapshot.providers[0].account_scope = scope;
-    refresh_rate_limits(&mut snapshot, &runtime);
+    refresh_rate_limits(&mut snapshot, &runtime, &RoomLoginSet::native());
     let after_display_fusion = read_rate_limits_cache(&runtime.shared_rate_limits_path());
     assert_eq!(
-        after_display_fusion.entries["qwen"].account_key.as_deref(),
+        after_display_fusion.entries[&login_key("qwen")]
+            .account_key
+            .as_deref(),
         Some("second")
     );
     assert_eq!(
-        after_display_fusion.entries["qwen"].limits.windows[0].used_percentage,
+        after_display_fusion.entries[&login_key("qwen")]
+            .limits
+            .windows[0]
+            .used_percentage,
         Some(70),
         "a scope-only panel cannot rewrite exact-account control truth"
     );
@@ -1124,7 +1242,7 @@ fn omission_completion_requires_matching_authoritative_duration_truth() {
         &runtime.shared_rate_limits_path(),
         &RateLimitsCache {
             entries: BTreeMap::from([(
-                "pi".to_owned(),
+                crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("pi")),
                 RateLimitCacheEntry {
                     scope: openai.clone(),
                     account_key: None,
@@ -1146,7 +1264,7 @@ fn omission_completion_requires_matching_authoritative_duration_truth() {
     let mut matching = provider_panel("pi", vec![weekly.clone()]);
     matching.account_scope = openai;
     let mut matching = snapshot_with_panels(workspace.clone(), vec![matching]);
-    apply_cached_rate_limits(&mut matching, &runtime);
+    apply_cached_rate_limits(&mut matching, &runtime, &RoomLoginSet::native());
     assert!(
         matching.providers[0]
             .windows
@@ -1157,7 +1275,7 @@ fn omission_completion_requires_matching_authoritative_duration_truth() {
     let mut mismatched = provider_panel("pi", vec![weekly]);
     mismatched.account_scope = ProviderAccountScope::sub_provider("anthropic", "oauth");
     let mut mismatched = snapshot_with_panels(workspace, vec![mismatched]);
-    apply_cached_rate_limits(&mut mismatched, &runtime);
+    apply_cached_rate_limits(&mut mismatched, &runtime, &RoomLoginSet::native());
     assert_eq!(mismatched.providers[0].windows.len(), 1);
     assert!(
         mismatched.providers[0]
@@ -1204,17 +1322,20 @@ fn drop_kind_removes_only_target_entry() {
         ),
     );
 
-    drop_kind_rate_limits(&runtime, "codex");
+    drop_login_rate_limits(&runtime, &login_key("codex"));
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    assert!(!cache.entries.contains_key("codex"));
-    assert_eq!(cache.entries["claude"].pending[0].used_percentage, 2);
+    assert!(!cache.entries.contains_key(&login_key("codex")));
     assert_eq!(
-        cache.entries["claude"].limits.windows[0].used_percentage,
+        cache.entries[&login_key("claude")].pending[0].used_percentage,
+        2
+    );
+    assert_eq!(
+        cache.entries[&login_key("claude")].limits.windows[0].used_percentage,
         Some(20)
     );
 
     let refreshed_at_ms = cache.refreshed_at_ms;
-    drop_kind_rate_limits(&runtime, "missing");
+    drop_login_rate_limits(&runtime, &login_key("missing"));
     assert_eq!(
         read_rate_limits_cache(&runtime.shared_rate_limits_path()).refreshed_at_ms,
         refreshed_at_ms
@@ -1238,13 +1359,13 @@ fn producer_lock_contention_degrades_to_read_only() {
         workspace,
         vec![provider_panel("codex", vec![rl_window(55, None)])],
     );
-    refresh_rate_limits(&mut contending, &runtime);
+    refresh_rate_limits(&mut contending, &runtime, &RoomLoginSet::native());
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
     assert_eq!(
         cache_window(&cache, "claude", RateLimitWindowKey::Duration(Some(300))).used_percentage,
         Some(20)
     );
-    assert!(!cache.entries.contains_key("codex"));
+    assert!(!cache.entries.contains_key(&login_key("codex")));
     lock_file.unlock().unwrap();
 }
 
@@ -1259,7 +1380,7 @@ fn detached_merge_waits_for_lock_and_preserves_other_kinds() {
     let worker = std::thread::spawn(move || {
         super::merge_account_rate_limits(
             &worker_runtime,
-            "codex",
+            &login_key("codex"),
             Default::default(),
             AgentRateLimits {
                 windows: vec![authoritative(rl_window(55, None))],
@@ -1279,8 +1400,8 @@ fn detached_merge_waits_for_lock_and_preserves_other_kinds() {
         .unwrap();
     worker.join().unwrap();
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    assert!(cache.entries.contains_key("claude"));
-    assert!(cache.entries.contains_key("codex"));
+    assert!(cache.entries.contains_key(&login_key("claude")));
+    assert!(cache.entries.contains_key(&login_key("codex")));
 }
 
 fn fuse_now() -> Timestamp {
@@ -1339,7 +1460,8 @@ fn parked_refill_requests_refresh_once_then_authoritative_read_corrects_display(
             vec![provider_panel("claude", vec![live.clone()])],
         );
         frame.now = now;
-        let (next, refresh) = project_rate_limits(&mut frame, &cache, producer, None);
+        let (next, refresh) =
+            project_rate_limits(&mut frame, &cache, &RoomLoginSet::native(), producer, None);
         assert_eq!(frame.providers[0].windows[0].used_percentage, Some(58));
         assert_eq!(
             refresh,
@@ -1351,7 +1473,7 @@ fn parked_refill_requests_refresh_once_then_authoritative_read_corrects_display(
         );
         if producer {
             cache = next.unwrap();
-            assert_eq!(cache.entries["claude"].pending.len(), 1);
+            assert_eq!(cache.entries[&login_key("claude")].pending.len(), 1);
         } else {
             assert!(next.is_none());
         }
@@ -1363,15 +1485,22 @@ fn parked_refill_requests_refresh_once_then_authoritative_read_corrects_display(
         vec![provider_panel("claude", vec![live])],
     );
     frame.now = now;
-    let (next, refresh) = project_rate_limits(&mut frame, &cache, true, None);
+    let (next, refresh) =
+        project_rate_limits(&mut frame, &cache, &RoomLoginSet::native(), true, None);
     let corrected = next.unwrap();
     assert_eq!(frame.providers[0].windows[0].used_percentage, Some(2));
-    assert!(corrected.entries["claude"].pending.is_empty());
+    assert!(corrected.entries[&login_key("claude")].pending.is_empty());
     assert!(refresh.is_empty());
 
     let mut consumer = snapshot_with_panels(workspace, vec![provider_panel("claude", vec![])]);
     consumer.now = now;
-    let (next, refresh) = project_rate_limits(&mut consumer, &corrected, false, None);
+    let (next, refresh) = project_rate_limits(
+        &mut consumer,
+        &corrected,
+        &RoomLoginSet::native(),
+        false,
+        None,
+    );
     assert_eq!(consumer.providers[0].windows[0].used_percentage, Some(2));
     assert!(next.is_none());
     assert!(refresh.is_empty());
@@ -1414,7 +1543,8 @@ fn parked_refill_refresh_transition_is_per_window() {
         let mut frame =
             snapshot_with_panels(workspace.clone(), vec![provider_panel("claude", windows)]);
         frame.now = now;
-        let (next, refresh) = project_rate_limits(&mut frame, &cache, true, None);
+        let (next, refresh) =
+            project_rate_limits(&mut frame, &cache, &RoomLoginSet::native(), true, None);
         assert_eq!(
             refresh,
             if should_refresh {
@@ -1424,8 +1554,11 @@ fn parked_refill_refresh_transition_is_per_window() {
             }
         );
         cache = next.unwrap();
-        assert_eq!(cache.entries["claude"].pending.len(), 2);
-        assert_eq!(cache.entries["claude"].pending[0].duration_mins, Some(300));
+        assert_eq!(cache.entries[&login_key("claude")].pending.len(), 2);
+        assert_eq!(
+            cache.entries[&login_key("claude")].pending[0].duration_mins,
+            Some(300)
+        );
     }
 }
 

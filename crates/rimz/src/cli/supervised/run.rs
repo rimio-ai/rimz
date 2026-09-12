@@ -813,10 +813,17 @@ pub(in crate::cli) fn run_supervised(
     let Some(prepared) = prepare_supervised(&request, &presentation, globals)? else {
         return Ok(None);
     };
+    let login_key = rimz::agents::RoomLoginSet::resolve(
+        &rimz::StatePaths::for_workspace(prepared.store.runtime_paths().workspace_id.clone())?
+            .workspace_record,
+        &prepared.machine_config.accounts,
+    )
+    .key(prepared.kind.as_str());
     if let Some(binding) = prepared.managed_launch.binding()
+        && let Some(key) = login_key.as_ref()
         && let Some(reason) = rimz::agents::provider_budget_gate(
             prepared.store.runtime_paths(),
-            prepared.kind.as_str(),
+            key,
             binding,
             jiff::Timestamp::now(),
         )
@@ -848,9 +855,10 @@ pub(in crate::cli) fn run_supervised(
     let mut attempt = 0;
     loop {
         if let Some(binding) = prepared.managed_launch.binding()
+            && let Some(key) = login_key.as_ref()
             && let Some(reason) = rimz::agents::provider_budget_gate(
                 prepared.store.runtime_paths(),
-                prepared.kind.as_str(),
+                key,
                 binding,
                 jiff::Timestamp::now(),
             )

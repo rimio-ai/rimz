@@ -633,7 +633,13 @@ fn enrich_core(
         exclude_pane: None,
     });
 
-    let provider_capacities = crate::agents::ProviderCapacity::read_all(runtime);
+    let logins = crate::StatePaths::for_workspace(runtime.workspace_id.clone())
+        .ok()
+        .map(|paths| {
+            crate::agents::RoomLoginSet::resolve(&paths.workspace_record, &machine_config.accounts)
+        })
+        .unwrap_or_else(|| crate::agents::RoomLoginSet::new(None, None, Default::default()));
+    let provider_capacities = crate::agents::ProviderCapacity::read_all(runtime, &logins);
     let resume_messages = read_auto_continue_resume_messages(
         store,
         &machine_config.resume,
@@ -693,6 +699,7 @@ fn enrich_core(
         snapshot,
         runtime,
         &machine_config,
+        &logins,
         remote_control_health,
         lanes,
     );
@@ -850,6 +857,7 @@ fn fold_machine_config(
     snapshot: SidebarSnapshot,
     runtime: &RuntimePaths,
     config: &crate::config::MachineConfig,
+    logins: &crate::agents::RoomLoginSet,
     remote_control_health: RemoteControlServerHealth,
     lanes: Option<&crate::sidebar::refresh::RefreshedLanes>,
 ) -> (SidebarSnapshot, SpendingCaches) {
@@ -872,7 +880,7 @@ fn fold_machine_config(
     );
     // Every fold merges the producer-published account windows read-only. The
     // refresh lane owns writes.
-    apply_cached_rate_limits(&mut snapshot, runtime);
+    apply_cached_rate_limits(&mut snapshot, runtime, logins);
     apply_credits_cache(&mut snapshot, runtime, &accounts_config);
     (snapshot, spending)
 }
@@ -881,6 +889,7 @@ fn fold_machine_config(
 /// without reading a room snapshot or starting a spending walk.
 pub fn provider_panels_from_caches(
     runtime: &RuntimePaths,
+    logins: &crate::agents::RoomLoginSet,
     config: &crate::config::MachineConfig,
     accounts: BTreeMap<String, crate::agents::AgentAccount>,
     provider_spending: &crate::agents::spending::ProviderSpendingCache,
@@ -900,7 +909,7 @@ pub fn provider_panels_from_caches(
         &provider_spending.spending.by_provider,
         RemoteControlServerHealth::default(),
     );
-    apply_cached_rate_limits(&mut snapshot, runtime);
+    apply_cached_rate_limits(&mut snapshot, runtime, logins);
     apply_credits_cache(&mut snapshot, runtime, &config.accounts);
     crate::harness::budget::project_budget_views(
         &mut snapshot,
