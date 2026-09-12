@@ -361,8 +361,7 @@ pub(super) fn build_entry(
         budget,
         sub_agents: card
             .map(|card| {
-                card.sub_agents
-                    .iter()
+                card.current_sub_agents()
                     .map(|sub_agent| SubAgentReport {
                         id: sub_agent.id.clone(),
                         name: sub_agent
@@ -761,6 +760,7 @@ mod tests {
                 sub_agent_count: 1,
                 sub_agents: vec![SidebarSubAgent {
                     id: "child".to_owned(),
+                    prior_turn: false,
                     name: "explorer".to_owned(),
                     petname: Some("swift-otter".to_owned()),
                     provider_native: false,
@@ -781,6 +781,13 @@ mod tests {
                 ..AgentCard::default()
             })),
         };
+        let mut row = row;
+        let card = row.as_agent_mut().unwrap();
+        let mut prior = card.sub_agents[0].clone();
+        prior.id = "prior-child".to_owned();
+        prior.prior_turn = true;
+        prior.status = AgentStatus::Success;
+        card.sub_agents.push(prior);
         let peers = [&state];
         let entry = build_entry(
             &state,

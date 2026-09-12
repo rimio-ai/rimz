@@ -1,6 +1,160 @@
 use super::*;
 use crate::mux::WidthAdjust;
 
+fn delegation_snapshot() -> SidebarSnapshot {
+    let mut snapshot = clickable_block_snapshot(&workspace());
+    let card = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
+    card.user_turn_started_at = Some(snapshot.now);
+    card.sub_agent_count = 2;
+    card.sub_agents = [
+        ("live-child", "running", false),
+        ("old-child", "success", true),
+    ]
+    .into_iter()
+    .map(|(name, status, prior_turn)| {
+        serde_json::from_value(serde_json::json!({
+            "id": name, "name": name, "status": status, "prior_turn": prior_turn,
+            "last_activity": snapshot.now,
+        }))
+        .unwrap()
+    })
+    .collect();
+    snapshot
+}
+
+#[test]
+fn delegation_line_click_toggles_entries_without_focus() {
+    let snapshot = delegation_snapshot();
+    let selected = snapshot.worktree_groups[0].rows[1]
+        .pane
+        .as_ref()
+        .unwrap()
+        .pane_id
+        .clone();
+    let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
+    let target = HitTarget::ToggleDelegation(row_id.clone());
+    let mut ui = UiState::default();
+    reconcile_selection(&mut ui, &snapshot, Some(selected.clone()));
+    let theme = ui.theme(&snapshot.theme);
+    let collapsed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+    assert!(
+        !collapsed
+            .lines
+            .iter()
+            .any(|line| line.to_string().contains("live-child"))
+    );
+    ui.interactions = collapsed.interactions;
+    let (_, summary) = ui.interactions.line_for_target(&target).unwrap();
+    assert_eq!(
+        handle_mouse_click(10, summary, &mut ui, &snapshot),
+        InputOutcome::redraw()
+    );
+    assert_eq!(ui.selected_pane, Some(selected.clone()));
+    assert_eq!(ui.selected_index, 1);
+    assert_eq!(
+        ui.manual_scroll,
+        Some(ManualScroll {
+            selection_at_start: Some(selected)
+        })
+    );
+
+    let expanded = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+    assert!(
+        expanded
+            .lines
+            .iter()
+            .any(|line| line.to_string().contains("old-child"))
+    );
+    let tail = expanded
+        .lines
+        .iter()
+        .position(|line| line.to_string().contains("− less"))
+        .unwrap();
+    ui.interactions = expanded.interactions;
+    assert_eq!(
+        ui.interactions.target_at(10, tail as u16),
+        Some(target.clone())
+    );
+    assert_eq!(
+        handle_mouse_click(10, tail as u16, &mut ui, &snapshot),
+        InputOutcome::redraw()
+    );
+    assert!(!ui.expanded_delegations.contains_key(&row_id));
+
+    let parent_pane = snapshot.worktree_groups[0].rows[0]
+        .pane
+        .as_ref()
+        .unwrap()
+        .pane_id
+        .clone();
+    reconcile_selection(&mut ui, &snapshot, Some(parent_pane));
+    let selected = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+    assert!(
+        selected
+            .lines
+            .iter()
+            .any(|line| line.to_string().contains("live-child"))
+    );
+    assert!(
+        !selected
+            .lines
+            .iter()
+            .any(|line| line.to_string().contains("old-child"))
+    );
+    let tail = selected
+        .lines
+        .iter()
+        .position(|line| line.to_string().contains("+1 more"))
+        .unwrap();
+    ui.interactions = selected.interactions;
+    assert_eq!(
+        handle_mouse_click(10, tail as u16, &mut ui, &snapshot),
+        InputOutcome::redraw()
+    );
+    let reopened = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+    assert!(
+        reopened
+            .lines
+            .iter()
+            .any(|line| line.to_string().contains("− less"))
+    );
+    let mut ordinals = (0..reopened.interactions.line_count())
+        .filter_map(|line| reopened.interactions.row_at_line(line))
+        .collect::<Vec<_>>();
+    ordinals.dedup();
+    assert_eq!(ordinals, vec![0, 1]);
+}
+
+#[test]
+fn delegation_toggle_expires_on_the_parents_next_prompt() {
+    let mut snapshot = delegation_snapshot();
+    let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
+    let mut ui = UiState::default();
+    toggle_delegation_expanded(&mut ui, &snapshot, row_id.clone());
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(54, 64)).unwrap();
+    render::draw_to_terminal_with_ui(&mut terminal, &snapshot, None, &mut ui).unwrap();
+    assert!(ui.expanded_delegations.contains_key(&row_id));
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .user_turn_started_at = Some(snapshot.now + std::time::Duration::from_secs(1));
+    let theme = ui.theme(&snapshot.theme);
+    let stale = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+    assert!(
+        !stale
+            .lines
+            .iter()
+            .any(|line| line.to_string().contains("old-child")),
+        "stale expansion is inert before pruning"
+    );
+    render::draw_to_terminal_with_ui(&mut terminal, &snapshot, None, &mut ui).unwrap();
+    assert!(!ui.expanded_delegations.contains_key(&row_id));
+    toggle_delegation_expanded(&mut ui, &snapshot, row_id.clone());
+    snapshot.worktree_groups[0].rows.remove(0);
+    render::draw_to_terminal_with_ui(&mut terminal, &snapshot, None, &mut ui).unwrap();
+    assert!(!ui.expanded_delegations.contains_key(&row_id));
+}
+
 #[test]
 fn width_keys_dispatch_without_redrawing() {
     let snapshot = snapshot(&workspace());

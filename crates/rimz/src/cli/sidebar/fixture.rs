@@ -1964,7 +1964,7 @@ fn agent_context(
 }
 
 fn default_sub_agents(kind: &str, now: jiff::Timestamp) -> Vec<SidebarSubAgent> {
-    vec![
+    let mut children = vec![
         sub_agent(
             SubAgentSpec {
                 id: "child:explore",
@@ -1995,7 +1995,9 @@ fn default_sub_agents(kind: &str, now: jiff::Timestamp) -> Vec<SidebarSubAgent> 
             },
             now,
         ),
-    ]
+    ];
+    children[0].prior_turn = true;
+    children
 }
 
 struct SubAgentSpec<'a> {
@@ -2020,6 +2022,7 @@ fn sub_agent(spec: SubAgentSpec<'_>, now: jiff::Timestamp) -> SidebarSubAgent {
         name: spec.name.to_owned(),
         petname: None,
         provider_native: true,
+        prior_turn: false,
         status: spec.status,
         phase: spec.phase,
         task: spec.task.map(ToOwned::to_owned),

@@ -38,13 +38,9 @@ pub(super) fn attach_sub_agents_indexed(
         let parent_user_turn_started_at = index
             .root(parent_key)
             .and_then(|parent| parent.user_turn_started_at);
-        let visible = children
-            .iter()
-            .copied()
-            .filter(|child| child_is_visible(child, parent_user_turn_started_at, now))
-            .collect::<Vec<_>>();
+        let all_newest = newest_by_id(children.iter().copied());
         let Some(row_index) = row_by_parent.get(parent_key).copied() else {
-            for child in visible {
+            for child in all_newest.values() {
                 let child_key = (child.kind.clone(), child.agent_id.clone());
                 if child.is_launched_child() && row_by_parent.contains_key(&child_key) {
                     continue;
@@ -63,8 +59,6 @@ pub(super) fn attach_sub_agents_indexed(
             }
             continue;
         };
-        let all_newest = newest_by_id(children.iter().copied());
-        let visible_newest = newest_by_id(visible);
         // `row_by_parent` includes only rows whose card is an agent.
         let parent = rows[row_index]
             .as_agent_mut()
@@ -79,15 +73,22 @@ pub(super) fn attach_sub_agents_indexed(
                 delegated_cost_usd =
                     crate::agents::spending::sum_optional_cost(delegated_cost_usd, cost_usd);
             }
+            let prior_turn = !child_is_current(child, parent_user_turn_started_at, now);
+            if prior_turn
+                && !matches!(
+                    child.sleeping_over(child.status),
+                    AgentStatus::Success | AgentStatus::Failed
+                )
+            {
+                continue;
+            }
+            parent
+                .sub_agents
+                .push(sub_agent_from_state(child, now, prior_turn));
         }
         parent.delegated_cost_usd = delegated_cost_usd;
         parent.sub_agent_count = u32::try_from(all_newest.len()).unwrap_or(u32::MAX);
         parent.sub_agent_cost_usd = sub_agent_cost_usd;
-        parent.sub_agents.extend(
-            visible_newest
-                .into_values()
-                .map(|child| sub_agent_from_state(child, now)),
-        );
     }
     for agent in rows.iter_mut().filter_map(SidebarRow::as_agent_mut) {
         agent.sub_agents.sort_by(|a, b| {
@@ -113,7 +114,7 @@ fn newest_by_id<'a>(
     newest
 }
 
-fn child_is_visible(
+fn child_is_current(
     child: &AgentState,
     parent_user_turn_started_at: Option<Timestamp>,
     now: Timestamp,
@@ -182,8 +183,7 @@ pub(super) fn fold_child_activity_onto_parents(rows: &mut [SidebarRow]) {
             continue;
         }
         if let Some(freshest) = agent
-            .sub_agents
-            .iter()
+            .current_sub_agents()
             .map(|child| child.last_activity)
             .max()
         {
@@ -197,6 +197,7 @@ pub(super) fn fold_child_activity_onto_parents(rows: &mut [SidebarRow]) {
 pub(in crate::store::snapshot) fn sub_agent_from_state(
     child: &AgentState,
     now: Timestamp,
+    prior_turn: bool,
 ) -> SidebarSubAgent {
     let name = if child.is_launched_child() {
         child
@@ -231,6 +232,7 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
     });
     SidebarSubAgent {
         id: child.agent_id.to_string(),
+        prior_turn,
         name,
         petname: child
             .is_launched_child()

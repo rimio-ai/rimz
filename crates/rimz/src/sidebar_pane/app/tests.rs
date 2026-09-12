@@ -137,6 +137,7 @@ fn sleeping_command_wait_keeps_the_animation_gate_running() {
     let mut snapshot = agent_snapshot(&ws);
     let agent = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
     agent.status = crate::agents::AgentStatus::Sleeping;
+    agent.user_turn_started_at = Some(snapshot.now);
     agent.pending_wakes.push(crate::agents::PendingWake {
         name: "command".to_owned(),
         trigger: crate::agents::PendingWakeTrigger::Command {
@@ -163,6 +164,13 @@ fn sleeping_command_wait_keeps_the_animation_gate_running() {
     );
     ui.selected_index = usize::MAX;
     assert!(!is_animating(&snapshot, &ui, 0, false));
+    let row = &snapshot.worktree_groups[0].rows[0];
+    ui.expanded_delegations
+        .insert(row.id.clone(), row.as_agent().unwrap().user_turn_started_at);
+    assert!(is_animating(&snapshot, &ui, 0, false));
+    ui.expanded_delegations.insert(row.id.clone(), None);
+    assert!(!is_animating(&snapshot, &ui, 0, false));
+    ui.expanded_delegations.clear();
     snapshot.theme.display.card_density = crate::config::CardDensityMode::Expanded;
     ui.theme(&snapshot.theme);
     assert!(is_animating(&snapshot, &ui, 0, false));
@@ -182,8 +190,23 @@ fn sleeping_command_wait_keeps_the_animation_gate_running() {
     assert!(!is_animating(&snapshot, &ui, 0, false));
     snapshot.theme.animations.working = None;
     ui.theme(&snapshot.theme);
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .pending_wakes[0]
+        .trigger = crate::agents::PendingWakeTrigger::Pid { pid: 16776 };
+    assert!(is_animating(&snapshot, &ui, 0, false));
+    ui.selected_index = usize::MAX;
+    assert!(!is_animating(&snapshot, &ui, 0, false));
+    let row = &snapshot.worktree_groups[0].rows[0];
+    ui.expanded_delegations
+        .insert(row.id.clone(), row.as_agent().unwrap().user_turn_started_at);
+    assert!(is_animating(&snapshot, &ui, 0, false));
     for trigger in [
-        crate::agents::PendingWakeTrigger::Timer { due: snapshot.now },
+        crate::agents::PendingWakeTrigger::Timer {
+            due: snapshot.now,
+            delay: None,
+        },
         crate::agents::PendingWakeTrigger::Signal {
             selector: "pr.merged".to_owned(),
             deadline: None,

@@ -120,6 +120,11 @@ pub struct PendingWake {
 pub enum PendingWakeTrigger {
     Timer {
         due: Timestamp,
+        #[serde(default)]
+        delay: Option<String>,
+    },
+    Pid {
+        pid: u32,
     },
     Command {
         command: String,
@@ -141,18 +146,27 @@ impl PendingWakeTrigger {
         use crate::theme::fmt::{command_preview, duration_label};
 
         match self {
-            Self::Timer { due } if *due <= now => "due".to_owned(),
-            Self::Timer { due } => {
-                let minutes = (due.duration_since(now).as_secs() as u64)
-                    .div_ceil(60)
-                    .max(1);
-                format!("in {}", duration_label(minutes))
+            Self::Timer { due, delay } => {
+                let mut label = "timer".to_owned();
+                if let Some(delay) = delay {
+                    label.push_str(&format!(" {delay}"));
+                }
+                if *due <= now {
+                    label.push_str(" · due");
+                } else {
+                    let minutes = (due.duration_since(now).as_secs() as u64)
+                        .div_ceil(60)
+                        .max(1);
+                    label.push_str(&format!(" · in {}", duration_label(minutes)));
+                }
+                label
             }
+            Self::Pid { pid } => format!("pid {pid}"),
             Self::Command { command } => {
-                format!("after: {}", command_preview(command))
+                format!("shell {}", command_preview(command))
             }
             Self::Signal { selector, deadline } => {
-                let mut label = format!("on {selector}");
+                let mut label = format!("signal {selector}");
                 if let Some(deadline) = deadline {
                     let seconds = deadline.duration_since(now).as_secs().max(0) as u64;
                     let left = if *deadline <= now {

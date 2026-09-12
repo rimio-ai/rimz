@@ -12,6 +12,7 @@ pub(crate) enum HitTarget {
     ProviderTab(String),
     BodyFilter(BodyFilter),
     ToggleGroup(String),
+    ToggleDelegation(String),
     UnreadBanner,
     Hyperlink(String),
 }
@@ -169,7 +170,7 @@ fn target_precedence(target: &HitTarget) -> u8 {
         HitTarget::ProviderTab(_) => 0,
         HitTarget::BodyFilter(_) => 1,
         HitTarget::UnreadBanner => 2,
-        HitTarget::ToggleGroup(_) => 3,
+        HitTarget::ToggleGroup(_) | HitTarget::ToggleDelegation(_) => 3,
         HitTarget::Row(_) => 4,
         HitTarget::Hyperlink(_) => 5,
     }

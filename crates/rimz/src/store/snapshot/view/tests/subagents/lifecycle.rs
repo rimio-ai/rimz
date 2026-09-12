@@ -208,6 +208,44 @@ fn sub_agent_nests_under_parent_and_orphans_drop() {
 }
 
 #[test]
+fn prior_children_do_not_lift_parent_attention() {
+    for status in [AgentStatus::Failed, AgentStatus::Waiting] {
+        let mut parent = agent("claude", "sess-root", AgentStatus::Idle, 100);
+        parent.user_turn_started_at = Some(ago(30));
+        let child = child_state("sess-root", "child-1", status, 60);
+        let snapshot = room_with_agent_panes(vec![parent, child]);
+        let parent_row = row(&snapshot, "sess-root");
+        assert_eq!(parent_row.attention_status(), Some(AgentStatus::Idle));
+        let card = parent_row.as_agent().unwrap();
+        assert_eq!(card.current_sub_agents().count(), 0);
+        assert_eq!(card.sub_agent_count, 1);
+        if status == AgentStatus::Failed {
+            assert_eq!(card.sub_agents.len(), 1);
+            assert!(card.sub_agents[0].prior_turn);
+        } else {
+            assert!(
+                card.sub_agents.is_empty(),
+                "old waiting children are not finished history"
+            );
+        }
+        assert!(
+            !snapshot.worktree_groups[0]
+                .status_counts
+                .iter()
+                .any(|count| {
+                    matches!(count.status, AgentStatus::Waiting | AgentStatus::Failed)
+                })
+        );
+        let published: SidebarSnapshot =
+            serde_json::from_value(serde_json::to_value(&snapshot).unwrap()).unwrap();
+        assert_eq!(
+            row(&published, "sess-root").attention_status(),
+            Some(AgentStatus::Idle)
+        );
+    }
+}
+
+#[test]
 fn waiting_provider_child_lifts_parent_card_attention() {
     let parent = agent("claude", "sess-root", AgentStatus::Idle, 100);
     let child = child_state("sess-root", "child-1", AgentStatus::Waiting, 5);
@@ -251,14 +289,35 @@ fn recently_finished_child_holds_off_the_stall() {
     let child = child_state("sess-root", "child-1", AgentStatus::Success, 240);
     let snapshot = room_with_agent_panes(vec![parent, child]);
 
-    let row = row(&snapshot, "sess-root");
-    assert_eq!(row.status(), Some(AgentStatus::Running), "not a stall");
-    assert_eq!(row.last_activity, ago(240));
+    let parent_row = row(&snapshot, "sess-root");
+    assert_eq!(
+        parent_row.status(),
+        Some(AgentStatus::Running),
+        "not a stall"
+    );
+    assert_eq!(parent_row.last_activity, ago(240));
     let rollup = rollup_agent(&snapshot, "sess-root");
     assert_eq!(
         rollup.last_activity,
         ago(660),
         "the fold is display-only; the rollup keeps the parent's own clock"
+    );
+
+    let parent = agent("claude", "sess-root", AgentStatus::Idle, 100)
+        .active_ago(GHOST_SESSION_TTL_SECS + 600);
+    let child = child_state(
+        "sess-root",
+        "child-1",
+        AgentStatus::Success,
+        GHOST_SESSION_TTL_SECS + 60,
+    );
+    let snapshot = room_with_agent_panes(vec![parent, child]);
+    let parent = row(&snapshot, "sess-root");
+    assert!(parent.sub_agents()[0].prior_turn);
+    assert_eq!(
+        parent.last_activity,
+        ago(GHOST_SESSION_TTL_SECS + 600),
+        "retained history does not refresh the parent's clock"
     );
 }
 

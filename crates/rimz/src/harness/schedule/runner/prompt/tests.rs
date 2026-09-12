@@ -19,6 +19,7 @@ fn meta(_handle: &str) -> WakeMeta {
     WakeMeta {
         armed_at: "2026-01-01T14:02:00Z".parse().unwrap(),
         delay: None,
+        pid: None,
     }
 }
 

@@ -2,7 +2,7 @@
 //! token line, and expanded subagent and wait entries. A state-to-template table fixes
 //! the ordered line slots from lifecycle facts; late or absent data only fills
 //! that skeleton. The card anatomy is drawn in docs/interface/sidebar.md; the
-//! density and selection invariants live in docs/internals/sidebar/sidebar.md.
+//! density and expansion invariants live in docs/internals/sidebar/sidebar.md.
 
 use crate::agents::{AgentContext, AgentCurrentUsage, CacheHealth, TurnPhase};
 use crate::agents::{AgentStatus, ContextSeverity, PendingWakeTrigger};
@@ -12,6 +12,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::pixel::meter::MeterPixels;
+use crate::sidebar_pane::render::HitTarget;
 use crate::sidebar_pane::render::fmt::{
     activity_short, age_secs, dollars2, elapsed_label, model_label, pct_label, tokens_int,
     window_short,
@@ -38,7 +39,20 @@ use identity::{display_context_window, identity_line};
 use template::{CardSlot, CardStage, template};
 
 use super::process::{process_detail_line, process_row_line};
-use super::{Gutter, RowCtx, Tier, content_width, pin_right, trim_spans_to_width, with_gutter};
+use super::{
+    CardExpansion, Gutter, RowCtx, Tier, content_width, pin_right, trim_spans_to_width, with_gutter,
+};
+
+pub(super) struct CardLine {
+    pub(super) line: Line<'static>,
+    pub(super) target: Option<HitTarget>,
+}
+
+impl From<Line<'static>> for CardLine {
+    fn from(line: Line<'static>) -> Self {
+        Self { line, target: None }
+    }
+}
 
 /// Width budget for the agent handle on line 1: kind-role handles through
 /// `opencode-docsmith` fit, and longer profiles clip with `…` rather than
@@ -73,28 +87,30 @@ pub(in crate::sidebar_pane::render) fn awaiting_first_prompt_affordance(row: &Si
 pub(in crate::sidebar_pane::render) fn has_command_wait_entries(
     row: &SidebarRow,
     density: CardDensityMode,
-    expanded: bool,
+    expanded: CardExpansion,
 ) -> bool {
     let Some(agent) = row.as_agent() else {
         return false;
     };
     template(CardStage::of(row), agent.status, density, expanded)
         .contains(&CardSlot::DelegationEntries)
-        && agent
-            .pending_wakes
-            .iter()
-            .any(|wake| matches!(wake.trigger, PendingWakeTrigger::Command { .. }))
+        && agent.pending_wakes.iter().any(|wake| {
+            matches!(
+                wake.trigger,
+                PendingWakeTrigger::Command { .. } | PendingWakeTrigger::Pid { .. }
+            )
+        })
 }
 
 pub(super) fn row_lines(
     ctx: &RowCtx<'_>,
     row: &SidebarRow,
     selected: bool,
-    expanded: bool,
+    expanded: CardExpansion,
     gutter: Gutter,
     cost_usd: Option<f64>,
     mut meter_pixels: Option<&mut MeterPixels>,
-) -> Vec<Line<'static>> {
+) -> Vec<CardLine> {
     let cw = content_width(ctx.width);
     let status = row.status().unwrap_or(AgentStatus::Idle);
     // The single lead unread row — the oldest one that needs an answer — keeps the
@@ -124,38 +140,73 @@ pub(super) fn row_lines(
     // the shell anchor — the build or `sudo` install reads in full while line 1
     // stays the stable shell label. Idle process rows have no detail to add.
     if row.is_process() {
-        inner.push(identity_line(ctx, row, attention, cost_usd));
+        inner.push(CardLine::from(identity_line(ctx, row, attention, cost_usd)));
         if let Some(line) = process_detail_line(ctx.theme, row, cw) {
-            inner.push(line);
+            inner.push(line.into());
         }
     } else if let Some(agent) = row.as_agent() {
         let stage = CardStage::of(row);
         for slot in template(stage, status, ctx.card_density, expanded) {
             match slot {
                 CardSlot::Identity => {
-                    inner.push(identity_line(ctx, row, attention, cost_usd));
+                    inner.push(identity_line(ctx, row, attention, cost_usd).into());
                 }
-                CardSlot::Description => inner.push(description_line(ctx, row, attention)),
+                CardSlot::Description => inner.push(description_line(ctx, row, attention).into()),
                 CardSlot::AwaitingDots => {
-                    inner.push(awaiting_prompt_line(ctx.animation_phase, cw));
+                    inner.push(awaiting_prompt_line(ctx.animation_phase, cw).into());
                 }
                 CardSlot::Gauge => {
-                    inner.push(gauge_line(ctx, row, meter_pixels.as_deref_mut()));
+                    inner.push(gauge_line(ctx, row, meter_pixels.as_deref_mut()).into());
                 }
-                CardSlot::Tokens => inner.push(context_tokens_line(ctx, row)),
+                CardSlot::Tokens => inner.push(context_tokens_line(ctx, row).into()),
                 CardSlot::Delegation => {
-                    inner.extend(delegation_line(ctx, agent));
+                    inner.extend(delegation_line(ctx, agent).map(|line| CardLine {
+                        line,
+                        target: Some(HitTarget::ToggleDelegation(row.id.clone())),
+                    }));
                 }
                 CardSlot::DelegationEntries => {
-                    inner.extend(sub_agent_entry_lines(ctx, &agent.sub_agents));
-                    inner.extend(waits::wait_entry_lines(ctx, &agent.pending_wakes));
+                    let children = agent
+                        .sub_agents
+                        .iter()
+                        .filter(|child| expanded.delegation || !child.prior_turn)
+                        .collect::<Vec<_>>();
+                    inner.extend(
+                        sub_agent_entry_lines(ctx, &children)
+                            .into_iter()
+                            .map(CardLine::from),
+                    );
+                    inner.extend(
+                        waits::wait_entry_lines(ctx, &agent.pending_wakes)
+                            .into_iter()
+                            .map(CardLine::from),
+                    );
+                    let hidden = agent
+                        .sub_agents
+                        .iter()
+                        .filter(|child| child.prior_turn)
+                        .count();
+                    if hidden > 0 {
+                        let label = if expanded.delegation {
+                            "  − less".to_owned()
+                        } else {
+                            format!("  +{hidden} more")
+                        };
+                        inner.push(CardLine {
+                            line: Line::styled(label, ctx.theme.muted()),
+                            target: Some(HitTarget::ToggleDelegation(row.id.clone())),
+                        });
+                    }
                 }
             }
         }
     }
     inner
         .into_iter()
-        .map(|line| with_gutter(ctx.theme, line, gutter, wash, ctx.width))
+        .map(|card| CardLine {
+            line: with_gutter(ctx.theme, card.line, gutter, wash, ctx.width),
+            target: card.target,
+        })
         .collect()
 }
 
@@ -216,7 +267,7 @@ fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>>
     Some(pin_right(left, right, width))
 }
 
-/// Up to two indented lines for each child visible in this turn. Line 1 leads
+/// Up to two indented lines for each visible child. Line 1 leads
 /// with the same live cell an agent row wears — the thinking head while the
 /// child reasons, the working fill while it acts, or the static `✓`/`!` verdict
 /// once it finishes — then its type, description, and known cost. Line 2 carries
@@ -227,7 +278,7 @@ fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>>
 /// `subagentStatusLine` figure and Codex-native children the current rollout
 /// context. A metadata-free child degrades to its bare type line, while a
 /// finished child keeps metadata but drops the elapsed clock.
-fn sub_agent_entry_lines(ctx: &RowCtx<'_>, sub_agents: &[SidebarSubAgent]) -> Vec<Line<'static>> {
+fn sub_agent_entry_lines(ctx: &RowCtx<'_>, sub_agents: &[&SidebarSubAgent]) -> Vec<Line<'static>> {
     let theme = ctx.theme;
     let width = content_width(ctx.width);
     let animation_phase = ctx.animation_phase;
@@ -241,7 +292,7 @@ fn sub_agent_entry_lines(ctx: &RowCtx<'_>, sub_agents: &[SidebarSubAgent]) -> Ve
     // metadata-free children render no second row.
     let token_col = sub_agents
         .iter()
-        .filter_map(sub_agent_tokens)
+        .filter_map(|sub| sub_agent_tokens(sub))
         .map(|total| tokens_int(total).chars().count())
         .max()
         .unwrap_or(0);

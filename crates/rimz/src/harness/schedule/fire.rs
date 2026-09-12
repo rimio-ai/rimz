@@ -738,6 +738,7 @@ mod tests {
             wake_meta: Some(crate::config::WakeMeta {
                 armed_at: prior,
                 delay: None,
+                pid: None,
             }),
             ..watch.entry().clone()
         });

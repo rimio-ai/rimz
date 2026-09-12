@@ -6,7 +6,7 @@ use crate::sidebar_pane::pixel::meter::MeterPixels;
 use crate::sidebar_pane::view::BodyFilter;
 use crate::store::snapshot::SidebarSnapshot;
 use jiff::Timestamp;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::rc::Rc;
 
 use super::theme::Theme;
@@ -131,6 +131,8 @@ pub struct UiState {
     /// roster, and a group drops from this set once it no longer has a capped
     /// tail to reveal.
     pub(crate) expanded_groups: BTreeSet<String>,
+    /// Renderer-local delegation expansion, expiring at the parent's next user turn.
+    pub(crate) expanded_delegations: BTreeMap<String, Option<Timestamp>>,
     /// Renderer-local status for a successful fetch that the regression gate is
     /// holding behind the last good frame. It is display-only evidence for the
     /// bottom chrome; the durable record is `gate_hold`/`gate_release`.

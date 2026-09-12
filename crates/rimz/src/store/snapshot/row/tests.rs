@@ -22,6 +22,17 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
         card: RowCard::Agent(Box::new(AgentCard {
             status: AgentStatus::Running,
             prompt: Some("fix auth flow".to_owned()),
+            user_turn_started_at: Some(row_time()),
+            sub_agents: vec![
+                serde_json::from_value(serde_json::json!({
+                    "id": "prior-child",
+                    "name": "Explore",
+                    "status": "success",
+                    "prior_turn": true,
+                    "last_activity": row_time(),
+                }))
+                .unwrap(),
+            ],
             tool_calls: BTreeMap::from([("Read".to_owned(), 4)]),
             usage: AgentUsageSummary {
                 context_pct: Some(42),
@@ -55,7 +66,32 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
     }
     assert_eq!(value["prompt"], "fix auth flow");
     assert_eq!(value["tool_calls"]["Read"], 4);
-    assert_eq!(serde_json::from_value::<SidebarRow>(value).unwrap(), agent);
+    assert_eq!(value["user_turn_started_at"], serde_json::json!(row_time()));
+    assert_eq!(value["sub_agents"][0]["prior_turn"], true);
+    assert_eq!(
+        serde_json::from_value::<SidebarRow>(value.clone()).unwrap(),
+        agent
+    );
+    let mut legacy = value;
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("user_turn_started_at");
+    legacy["sub_agents"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("prior_turn");
+    let legacy: SidebarRow = serde_json::from_value(legacy).unwrap();
+    let card = legacy.as_agent().unwrap();
+    assert_eq!(card.user_turn_started_at, None);
+    assert!(!card.sub_agents[0].prior_turn);
+    assert_eq!(card.current_sub_agents().count(), 1);
+    assert!(
+        serde_json::to_value(card)
+            .unwrap()
+            .get("user_turn_started_at")
+            .is_none()
+    );
 
     let process = SidebarRow {
         id: "process:%1".to_owned(),

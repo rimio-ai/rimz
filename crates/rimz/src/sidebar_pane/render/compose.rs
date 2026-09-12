@@ -821,6 +821,7 @@ pub(super) fn scroll_lines(
             animation_phase: ui.animation_phase,
             cost_rolls: &ui.cost_rolls,
             lead_unread: lead_unread_id,
+            expanded_delegations: &ui.expanded_delegations,
         };
         // A group the make-up filter empties is skipped whole — header,
         // rows, and separator — so the filtered body holds only worktrees

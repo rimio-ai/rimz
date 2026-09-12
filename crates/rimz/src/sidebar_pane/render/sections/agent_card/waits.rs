@@ -1,4 +1,4 @@
-//! Pending-wait entries lead by trigger kind, in projection order: timers by due, commands, then signals.
+//! Pending waits name their kind: timers by due, pid/shell watches, then signals. Only shell waits carry a second command line.
 
 use crate::agents::{PendingWake, PendingWakeTrigger};
 use crate::proc::command::{command_program_basename, program_label};
@@ -11,11 +11,11 @@ pub(super) fn wait_entry_lines(ctx: &RowCtx<'_>, wakes: &[PendingWake]) -> Vec<L
     let mut lines = Vec::new();
     for wake in wakes {
         let summary = match &wake.trigger {
-            PendingWakeTrigger::Command { command } => program_label(command),
+            PendingWakeTrigger::Command { command } => format!("shell {}", program_label(command)),
             _ => wake.trigger.summary(ctx.now),
         };
         let (lead, lead_style) = match &wake.trigger {
-            PendingWakeTrigger::Command { .. } => (
+            PendingWakeTrigger::Command { .. } | PendingWakeTrigger::Pid { .. } => (
                 role_glyph(theme, AnimationRole::Working, ctx.animation_phase),
                 working_style(theme, ctx.animation_phase).add_modifier(Modifier::DIM),
             ),

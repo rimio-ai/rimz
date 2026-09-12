@@ -323,6 +323,7 @@ fn provider_child_attention_matches_declared_status_count() {
         .sub_agents
         .push(SidebarSubAgent {
             id: "child".to_owned(),
+            prior_turn: false,
             name: "Explore".to_owned(),
             petname: None,
             provider_native: true,

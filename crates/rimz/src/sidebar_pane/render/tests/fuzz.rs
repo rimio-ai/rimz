@@ -121,6 +121,7 @@ fn sub_agents(count: usize, text: &str) -> Vec<SidebarSubAgent> {
     (0..count)
         .map(|idx| SidebarSubAgent {
             id: format!("sub-{idx}"),
+            prior_turn: false,
             name: text.to_owned(),
             petname: None,
             provider_native: true,

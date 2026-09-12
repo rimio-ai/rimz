@@ -15,7 +15,7 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     running.usage.total_tokens = Some(12_400);
     running.model = Some("claude-opus-4-8".to_owned());
     running.effort = Some("high".to_owned());
-    let sub = sub_agent_from_state(&running, now);
+    let sub = sub_agent_from_state(&running, now, false);
     assert_eq!(sub.phase, TurnPhase::Reasoning);
     assert_eq!(sub.description.as_deref(), Some("locate the render seam"));
     assert_eq!(sub.total_tokens, Some(12_400));
@@ -28,7 +28,7 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     let mut finished = child_state("sess-root", "child-2", AgentStatus::Success, 0);
     finished.last_activity = ago(60);
     finished.subagent_started_at = Some(started);
-    let sub = sub_agent_from_state(&finished, now);
+    let sub = sub_agent_from_state(&finished, now, false);
     assert_eq!(sub.elapsed_secs, Some(40));
 
     finished.pending_wakes.push(PendingWake {
@@ -38,13 +38,13 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
         },
         armed_at: Some(ago(60)),
     });
-    let sub = sub_agent_from_state(&finished, now);
+    let sub = sub_agent_from_state(&finished, now, false);
     assert_eq!(sub.status, AgentStatus::Sleeping);
     assert_eq!(sub.elapsed_secs, Some(40));
     assert_eq!(finished.status, AgentStatus::Success);
     finished.pending_wakes.clear();
     assert_eq!(
-        sub_agent_from_state(&finished, now).status,
+        sub_agent_from_state(&finished, now, false).status,
         AgentStatus::Success
     );
 
@@ -52,7 +52,7 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     let mut bare = child_state("sess-root", "child-3", AgentStatus::Running, 5);
     bare.registered_at = Some(ago(5));
     bare.description = Some("adapter task description".to_owned());
-    let sub = sub_agent_from_state(&bare, now);
+    let sub = sub_agent_from_state(&bare, now, false);
     assert_eq!(sub.phase, TurnPhase::Idle);
     assert_eq!(sub.description.as_deref(), Some("adapter task description"));
     assert_eq!(sub.total_tokens, None);
@@ -65,7 +65,7 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     named.name = Some("Atlas".to_owned());
     named.name_explicit = true;
     named.task = Some("research/explore_hooks".to_owned());
-    let sub = sub_agent_from_state(&named, now);
+    let sub = sub_agent_from_state(&named, now, false);
     assert_eq!(sub.name, "Atlas");
     assert_eq!(sub.petname, None);
     assert_eq!(sub.task.as_deref(), Some("research/explore_hooks"));
@@ -91,7 +91,8 @@ fn launched_child_projects_profile_cost_and_lifetime_delegated_spend() {
     });
     child.context = Some(context);
 
-    let projected = sub_agent_from_state(&child, epoch());
+    let projected = sub_agent_from_state(&child, epoch(), true);
+    assert!(projected.prior_turn);
     assert_eq!(projected.name, "explorer");
     assert_eq!(projected.petname.as_deref(), Some("helper"));
     assert_eq!(projected.profile.as_deref(), Some("explorer"));
@@ -99,14 +100,19 @@ fn launched_child_projects_profile_cost_and_lifetime_delegated_spend() {
 
     let mut bare = child.clone();
     bare.profile = None;
-    assert_eq!(sub_agent_from_state(&bare, epoch()).name, "codex");
+    assert_eq!(sub_agent_from_state(&bare, epoch(), true).name, "codex");
 
     let mut native = child_state("root", "native", AgentStatus::Success, 5);
     native.subagent_cost_usd = Some(0.25);
     let mut rows = vec![row_from_agent(&parent, epoch())];
     attach_sub_agents(&mut rows, &[parent, child, native], epoch());
     let card = rows[0].as_agent().expect("parent card");
-    assert!(card.sub_agents.iter().all(|child| child.id != "child"));
+    assert!(
+        card.sub_agents
+            .iter()
+            .any(|child| child.id == "child" && child.prior_turn)
+    );
+    assert!(card.current_sub_agents().all(|child| child.id != "child"));
     assert_eq!(card.sub_agent_count, 2);
     assert!((card.sub_agent_cost_usd.expect("known child cost") - 0.67).abs() < 1e-9);
     assert_eq!(card.delegated_cost_usd, Some(0.42));
@@ -132,7 +138,7 @@ fn launched_child_tokens_prefer_the_cumulative_session_fold() {
     child.context = Some(context);
 
     assert_eq!(
-        sub_agent_from_state(&child, epoch()).total_tokens,
+        sub_agent_from_state(&child, epoch(), false).total_tokens,
         Some(37_000)
     );
 
@@ -143,7 +149,7 @@ fn launched_child_tokens_prefer_the_cumulative_session_fold() {
         .expect("child token context")
         .session_usage = None;
     assert_eq!(
-        sub_agent_from_state(&child, epoch()).total_tokens,
+        sub_agent_from_state(&child, epoch(), false).total_tokens,
         Some(12_000)
     );
 }
@@ -180,11 +186,11 @@ fn live_descendant_projects_clean_resting_parents_to_delegating_running() {
 fn sub_agent_retention_tracks_the_parent_turn_boundary() {
     for (label, parent_turn_started_secs, child_status, child_secs, expect_kept) in [
         (
-            "finished child drops once parent starts next turn",
+            "finished child becomes prior once parent starts next turn",
             30,
             AgentStatus::Success,
             60,
-            false,
+            true,
         ),
         (
             "running child of current turn is kept",
@@ -222,6 +228,15 @@ fn sub_agent_retention_tracks_the_parent_turn_boundary() {
         let mut rows = vec![row_from_agent(&parent, epoch())];
         attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
         assert_eq!(!rows[0].sub_agents().is_empty(), expect_kept, "{label}");
+        let card = rows[0].as_agent().expect("parent card");
+        assert_eq!(card.user_turn_started_at, parent.user_turn_started_at);
+        if let Some(child) = card.sub_agents.first() {
+            assert_eq!(
+                child.prior_turn,
+                child_secs > parent_turn_started_secs,
+                "{label}"
+            );
+        }
         assert_eq!(
             rows[0].as_agent().expect("parent card").sub_agent_count,
             1,
@@ -448,15 +463,15 @@ fn launched_child_stays_while_live_and_retires_at_the_parents_next_turn() {
         1,
         "a newer parent turn does not supersede a pane-backed child"
     );
+    assert!(!rows[0].sub_agents()[0].prior_turn);
 
     child.ended_at = Some(ago(60));
     child.status = AgentStatus::Success;
     let mut rows = vec![row_from_agent(&parent, epoch())];
     attach_sub_agents(&mut rows, &[parent.clone(), child.clone()], epoch());
-    assert!(
-        rows[0].sub_agents().is_empty(),
-        "an ended child retires when the parent starts its next turn"
-    );
+    assert_eq!(rows[0].sub_agents().len(), 1);
+    assert!(rows[0].sub_agents()[0].prior_turn);
+    assert_eq!(rows[0].as_agent().unwrap().current_sub_agents().count(), 0);
 
     child.ended_at = Some(ago(5));
     child.last_activity = ago(5);
@@ -467,14 +482,13 @@ fn launched_child_stays_while_live_and_retires_at_the_parents_next_turn() {
         1,
         "an ended child from the parent's current turn remains visible"
     );
+    assert!(!rows[0].sub_agents()[0].prior_turn);
 
     child.ended_at = Some(ago(GHOST_SESSION_TTL_SECS + 1));
     child.last_activity = ago(GHOST_SESSION_TTL_SECS + 1);
     let parent_without_turn = agent("claude", "root", AgentStatus::Running, 100);
     let mut rows = vec![row_from_agent(&parent_without_turn, epoch())];
     attach_sub_agents(&mut rows, &[parent_without_turn, child], epoch());
-    assert!(
-        rows[0].sub_agents().is_empty(),
-        "the ghost TTL retires an ended child when no parent turn is known"
-    );
+    assert_eq!(rows[0].sub_agents().len(), 1);
+    assert!(rows[0].sub_agents()[0].prior_turn);
 }

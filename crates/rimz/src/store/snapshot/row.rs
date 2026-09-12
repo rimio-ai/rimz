@@ -123,15 +123,15 @@ impl SidebarRow {
         if status.is_actionable() {
             return Some(status);
         }
-        let children = self.sub_agents();
-        if children
-            .iter()
+        let agent = self.as_agent()?;
+        if agent
+            .current_sub_agents()
             .any(|child| child.provider_native && child.status == AgentStatus::Waiting)
         {
             return Some(AgentStatus::Waiting);
         }
-        if children
-            .iter()
+        if agent
+            .current_sub_agents()
             .any(|child| child.provider_native && child.status == AgentStatus::Failed)
         {
             return Some(AgentStatus::Failed);
@@ -302,6 +302,9 @@ pub struct AgentCard {
     /// The session's latest user prompt, carried forward from `AgentState`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    /// The parent's current user-authored turn boundary, copied from the rollup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_turn_started_at: Option<Timestamp>,
     /// Launch-seeded card label, shown until richer session naming arrives.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -333,12 +336,12 @@ pub struct AgentCard {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<AgentContext>,
     /// Cost of every pane-backed child this session launched, across all turns.
-    /// The turn-scoped `sub_agents` list can be shorter than this lifetime sum.
+    /// The retained `sub_agents` list excludes reaped running ghosts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegated_cost_usd: Option<f64>,
     /// Lifetime count of every child this session spawned — provider-native and
     /// pane-backed alike — as far back as the store retains them. The
-    /// turn-scoped `sub_agents` list is a subset.
+    /// retained `sub_agents` list is a subset.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub sub_agent_count: u32,
     /// Lifetime sum of every child's known cost. Provider-native cost is also
@@ -356,8 +359,8 @@ pub struct AgentCard {
     /// session's first cost; row ordering keys on pane creation, not this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registered_at: Option<Timestamp>,
-    /// This turn's children, nested under the parent. `sub_agent_count` is the
-    /// lifetime count as far back as the store retains them.
+    /// Current children and prior-turn finished children, nested under the parent.
+    /// `sub_agent_count` also includes reaped running ghosts retained by the store.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sub_agents: Vec<SidebarSubAgent>,
     /// The agent is condensing its context window right now.
@@ -387,6 +390,7 @@ impl Default for AgentCard {
             task: None,
             first_prompt: None,
             prompt: None,
+            user_turn_started_at: None,
             description: None,
             model: None,
             effort: None,
@@ -413,6 +417,10 @@ impl Default for AgentCard {
 }
 
 impl AgentCard {
+    pub fn current_sub_agents(&self) -> impl Iterator<Item = &SidebarSubAgent> {
+        self.sub_agents.iter().filter(|child| !child.prior_turn)
+    }
+
     /// Session cost plus the cost of pane-backed children this session launched.
     pub fn cost_usd(&self) -> Option<f64> {
         crate::agents::spending::sum_optional_cost(
@@ -603,6 +611,9 @@ fn is_false(value: &bool) -> bool {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SidebarSubAgent {
     pub id: String,
+    /// Finished child from before the parent's current user-authored turn; never `Running`.
+    #[serde(default)]
+    pub prior_turn: bool,
     /// The subagent's type (`Explore`, `review`, …). A launched child's type is
     /// its launch profile, or its agent kind for a bare-kind launch, never its
     /// petname. A provider-native child falls back to a short degraded id when

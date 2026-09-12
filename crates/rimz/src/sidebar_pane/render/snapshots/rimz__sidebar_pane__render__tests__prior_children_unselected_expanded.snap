@@ -7,14 +7,29 @@ expression: screen
  ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
  ¤ 1                                            $0.00
  ────────────────────────────────────────────────────
- ? 0   ! 0   ⏸︎ 0   ✓ 0                ⢿ 0   ☾ 1   ○ 0
+ ? 0   ! 0   ⏸︎ 0   ✓ 0                ⢿ 1   ☾ 0   ○ 0
 
  ⑂ main
- ☾ claude
-   wake timer · in 12m
+ ⢄ claude
+   delegate
    ▢ ──────────────────────────────────────────    0%
    ▤ 0
-   ⧉ subagents (1) · ⧖ waits (2)                $0.42
+   ⧉ subagents (7)
+     ⣾ task-0
+                                                ◔ <1m
+     ⣾ task-1
+                                                ◔ <1m
+     ✓ task-2
+     ✓ task-3
+     ✓ task-4
+     ✓ task-5
+     ✓ task-6
+   − less
+
+
+
+
+
 
 
 

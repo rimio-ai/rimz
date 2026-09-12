@@ -101,6 +101,7 @@ fn draw_into(
     // draw: store them so the mouse hit-test and the next frame's viewport read
     // the geometry of the frame the user is actually looking at.
     prune_expanded_groups(snapshot, ui);
+    prune_expanded_delegations(snapshot, ui);
     let theme = ui.theme(&snapshot.theme);
     let mut meter_pixels = ui.meter_pixels.take();
     let composed = compose_lines_with_meter(
@@ -316,6 +317,21 @@ fn prune_expanded_groups(snapshot: &SidebarSnapshot, ui: &mut UiState) {
     });
 }
 
+fn prune_expanded_delegations(snapshot: &SidebarSnapshot, ui: &mut UiState) {
+    ui.expanded_delegations.retain(|id, turn| {
+        snapshot
+            .worktree_groups
+            .iter()
+            .flat_map(|group| &group.rows)
+            .any(|row| {
+                row.id == *id
+                    && row
+                        .as_agent()
+                        .is_some_and(|agent| agent.user_turn_started_at == *turn)
+            })
+    });
+}
+
 fn selected_row<'a>(snapshot: &'a SidebarSnapshot, ui: &UiState) -> Option<&'a SidebarRow> {
     VisibleRoster::new(
         snapshot,
@@ -341,7 +357,8 @@ pub(crate) fn expanded_row_awaiting_first_prompt(snapshot: &SidebarSnapshot, ui:
             .range()
             .zip(group.rows(&roster).iter().copied())
             .any(|(row_index, row)| {
-                sections::row_expanded_by_selection(&roster, group, row_index, ui.selected_index)
+                (sections::row_expanded_by_selection(&roster, group, row_index, ui.selected_index)
+                    || sections::delegation_open(&ui.expanded_delegations, row))
                     && sections::awaiting_first_prompt_affordance(row)
             })
     })
@@ -369,12 +386,15 @@ pub(in crate::sidebar_pane) fn expanded_command_wait_needs_motion(
                 sections::has_command_wait_entries(
                     row,
                     snapshot.theme.display.card_density,
-                    sections::row_expanded_by_selection(
-                        &roster,
-                        group,
-                        row_index,
-                        ui.selected_index,
-                    ),
+                    sections::CardExpansion {
+                        by_selection: sections::row_expanded_by_selection(
+                            &roster,
+                            group,
+                            row_index,
+                            ui.selected_index,
+                        ),
+                        delegation: sections::delegation_open(&ui.expanded_delegations, row),
+                    },
                 )
             })
     })
@@ -588,6 +608,16 @@ pub fn render_expanded_line_ansi<W: Write>(
             .worktree_groups
             .iter()
             .map(|group| group.key.clone())
+            .collect(),
+        expanded_delegations: snapshot
+            .worktree_groups
+            .iter()
+            .flat_map(|group| &group.rows)
+            .filter_map(|row| {
+                row.as_agent()
+                    .filter(|agent| agent.sub_agents.iter().any(|child| child.prior_turn))
+                    .map(|agent| (row.id.clone(), agent.user_turn_started_at))
+            })
             .collect(),
         ..UiState::default()
     };

@@ -27,7 +27,7 @@ use crate::sidebar_pane::render::{HitTarget, RenderedBlock};
 use crate::sidebar_pane::view::{VisibleGroup, VisibleRoster};
 
 use super::agent_card::row_lines;
-use super::{Gutter, RowCtx, content_width, pin_right, with_gutter};
+use super::{CardExpansion, Gutter, RowCtx, content_width, pin_right, with_gutter};
 
 /// Inputs needed to render one projected worktree group.
 pub(in crate::sidebar_pane::render) struct WorktreeRenderContext<'render, 'snapshot> {
@@ -104,8 +104,15 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
     );
     for (this_row, row) in range.zip(visible_group.rows(roster).iter().copied()) {
         let selected = this_row == ctx.selected_index;
-        let expanded =
-            super::row_expanded_by_selection(roster, visible_group, this_row, ctx.selected_index);
+        let expanded = CardExpansion {
+            by_selection: super::row_expanded_by_selection(
+                roster,
+                visible_group,
+                this_row,
+                ctx.selected_index,
+            ),
+            delegation: super::delegation_open(ctx.expanded_delegations, row),
+        };
         let gutter = if selected { Gutter::Selected } else { lane };
         let cost_usd = super::agent_card::agent_card_cost_usd(group, row);
         for line in row_lines(
@@ -117,7 +124,11 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
             cost_usd,
             meter_pixels.as_deref_mut(),
         ) {
-            block.push_row(line, this_row);
+            block.push_with_regions(
+                line.line,
+                Some(this_row),
+                line.target.map(|target| (0..u16::MAX, target)),
+            );
         }
     }
     let target = HitTarget::ToggleGroup(group.key.clone());
