@@ -99,6 +99,8 @@ rimz accounts remove claude work
 
 This deletes the `[accounts.claude.work]` entry and nothing else: the home, its credentials, and its transcripts stay on disk, and `rimz accounts add claude work --home <that home>` brings the account back. A room still selecting a removed account refuses to start until `rimz reset --account` picks another.
 
+`rimz uninstall` keeps account homes too: it removes RimZ's hooks from every declared account's home, and when it clears RimZ's data directory it leaves `accounts/` in place.
+
 ## See also
 
 - [Accounts CLI](../reference/cli/accounts.md): every flag of `add`, `list`, and `remove`, and the JSON shape.

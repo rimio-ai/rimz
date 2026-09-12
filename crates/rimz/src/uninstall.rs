@@ -53,6 +53,36 @@ pub fn remove_root(path: &Path) -> RemovalOutcome {
     }
 }
 
+/// Remove everything under `root` except its child `keep`, which holds files
+/// RimZ does not own; the root itself stays while `keep` exists.
+pub fn remove_root_keeping(root: &Path, keep: &str) -> Vec<RemovalOutcome> {
+    if !root.join(keep).exists() {
+        return vec![remove_root(root)];
+    }
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(err) => return vec![RemovalOutcome::failed(root, err)],
+    };
+    entries
+        .filter_map(|entry| match entry {
+            Ok(entry) if entry.file_name() == keep => None,
+            Ok(entry) => {
+                let path = entry.path();
+                let removed = if path.is_dir() && !path.is_symlink() {
+                    fs::remove_dir_all(&path)
+                } else {
+                    fs::remove_file(&path)
+                };
+                Some(match removed {
+                    Ok(()) => RemovalOutcome::removed(path),
+                    Err(err) => RemovalOutcome::failed(path, err),
+                })
+            }
+            Err(err) => Some(RemovalOutcome::failed(root, err)),
+        })
+        .collect()
+}
+
 pub fn remove_runtime_root() -> Vec<RemovalOutcome> {
     remove_runtime_root_at(
         &paths::runtime_home(),
@@ -144,6 +174,33 @@ mod tests {
         let outcome = remove_root(&root);
 
         assert!(matches!(outcome.result, Ok(Removed::Removed)));
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn remove_root_keeping_spares_only_the_kept_child() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("rimz");
+        fs::create_dir_all(root.join("accounts/claude/work")).unwrap();
+        fs::create_dir_all(root.join("pets")).unwrap();
+        fs::write(root.join("room.bin"), b"data").unwrap();
+
+        let outcomes = remove_root_keeping(&root, "accounts");
+
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes.iter().all(|outcome| outcome.result.is_ok()));
+        assert!(root.join("accounts/claude/work").is_dir());
+        assert!(!root.join("pets").exists() && !root.join("room.bin").exists());
+
+        fs::remove_dir_all(root.join("accounts")).unwrap();
+        let outcomes = remove_root_keeping(&root, "accounts");
+        assert!(matches!(
+            outcomes[..],
+            [RemovalOutcome {
+                result: Ok(Removed::Removed),
+                ..
+            }]
+        ));
         assert!(!root.exists());
     }
 

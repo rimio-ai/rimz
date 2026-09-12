@@ -219,6 +219,22 @@ fn uninstall_removes_managed_hooks() {
     let fixture = UninstallFixture::new();
     fixture.env.install_agent_hooks("claude");
     assert!(fixture.env.agent_hooks_installed("claude"));
+    let added = fixture
+        .rimz()
+        .args(["accounts", "add", "claude", "work"])
+        .output()
+        .expect("spawn accounts add");
+    assert!(
+        added.status.success(),
+        "{}",
+        String::from_utf8_lossy(&added.stderr)
+    );
+    let work_home = fixture.root(RootKind::Data).join("accounts/claude/work");
+    let work_settings = work_home.join("settings.json");
+    let hooked = fs::read_to_string(&work_settings).expect("work settings");
+    assert!(hooked.contains("rimz"), "{hooked}");
+    fs::write(work_home.join(".credentials.json"), b"{}").expect("seed credentials");
+    fs::write(fixture.root(RootKind::Data).join("marker"), b"data").expect("seed data");
 
     let output = fixture
         .rimz()
@@ -226,12 +242,18 @@ fn uninstall_removes_managed_hooks() {
         .output()
         .expect("spawn uninstall");
 
-    assert!(
-        output.status.success(),
-        "stderr:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr:\n{stderr}");
     assert!(!fixture.env.agent_hooks_installed("claude"));
+    assert!(
+        stderr.contains("Hooks: removed claude, claude@work"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("kept provider account homes"), "{stderr}");
+    assert!(work_home.join(".credentials.json").is_file());
+    assert!(!fixture.root(RootKind::Data).join("marker").exists());
+    let unhooked = fs::read_to_string(&work_settings).expect("work settings kept");
+    assert!(!unhooked.contains("rimz"), "{unhooked}");
 }
 
 #[cfg(unix)]
