@@ -534,6 +534,15 @@ fn room_logins_freeze_at_birth_and_survive_a_generic_rerecord() {
         Err(StoreErr::RoomLoginsFrozen { .. })
     ));
 
+    store
+        .reset_records_keeping_logins()
+        .expect("recovery reset");
+    assert_eq!(
+        record::read(&paths.workspace_record)
+            .expect("read record")
+            .logins,
+        Some(logins.clone())
+    );
     store.reset_records(false).expect("soft reset");
     assert_eq!(
         record::read(&paths.workspace_record)

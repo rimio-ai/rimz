@@ -276,15 +276,7 @@ impl RoomContext {
         }
         // A recovery reset rebuilds the room this birth already froze accounts
         // for; unlike `rimz reset`, it must not unfreeze them.
-        let paths = StatePaths::for_workspace(self.workspace.workspace_id.clone())
-            .context("preparing store paths for reset")?;
-        let logins = crate::workspace::record::read_optional(&paths.workspace_record)
-            .context("reading the room's accounts")?
-            .and_then(|record| record.logins);
-        let reset = self.reset(false)?;
-        if let Some(logins) = &logins {
-            self.freeze_logins(logins)?;
-        }
+        let reset = self.reset_with(Store::reset_records_keeping_logins)?;
         match self.clean_session(sidebar, daemon) {
             Ok(SessionHealth::Healthy | SessionHealth::Reborn) => Ok(Some(reset)),
             Ok(SessionHealth::Stuck | SessionHealth::Unresponsive) => Err(ResetRecoveryError {
@@ -321,6 +313,16 @@ impl RoomContext {
 
     /// Tear down mux runtime and reset durable room records.
     pub fn reset(&self, hard: bool) -> Result<RoomResetReport> {
+        self.reset_with(|store| store.reset_records(hard))
+    }
+
+    fn reset_with(
+        &self,
+        reset_records: impl FnOnce(
+            &Store,
+        )
+            -> crate::store::Result<crate::store::writer::ResetRecordsOutcome>,
+    ) -> Result<RoomResetReport> {
         let paths = StatePaths::for_workspace(self.workspace.workspace_id.clone())
             .context("preparing store paths for reset")?;
         let teardown = crate::room::teardown::teardown_room(
@@ -334,9 +336,7 @@ impl RoomContext {
         store
             .record_workspace(&self.workspace)
             .context("recording workspace metadata for reset")?;
-        let records = store
-            .reset_records(hard)
-            .context("resetting workspace records")?;
+        let records = reset_records(&store).context("resetting workspace records")?;
         Ok(RoomResetReport { teardown, records })
     }
 }

@@ -119,10 +119,22 @@ impl Store {
     /// match that product boundary.
     #[must_use = "durability barrier; check the result"]
     pub fn reset_records(&self, hard: bool) -> Result<ResetRecordsOutcome> {
-        self.reset_records_with(hard, event_log::rotate)
+        self.reset_records_with(hard, true, event_log::rotate)
     }
 
-    fn reset_records_with<F>(&self, hard: bool, rotate: F) -> Result<ResetRecordsOutcome>
+    /// Soft-reset records for a recovery that rebuilds the same room, keeping
+    /// its frozen provider accounts in the same transaction.
+    #[must_use = "durability barrier; check the result"]
+    pub fn reset_records_keeping_logins(&self) -> Result<ResetRecordsOutcome> {
+        self.reset_records_with(false, false, event_log::rotate)
+    }
+
+    fn reset_records_with<F>(
+        &self,
+        hard: bool,
+        unfreeze_logins: bool,
+        rotate: F,
+    ) -> Result<ResetRecordsOutcome>
     where
         F: FnOnce(&Path, &Path, u64) -> event_log::Result<event_log::RotationOutcome>,
     {
@@ -141,8 +153,9 @@ impl Store {
 
             // A reset unfreezes the room's provider accounts, so the next
             // birth is free to select again.
-            if let Some(mut record) =
-                crate::workspace::record::read_optional(&paths.workspace_record)?
+            if unfreeze_logins
+                && let Some(mut record) =
+                    crate::workspace::record::read_optional(&paths.workspace_record)?
                 && record.logins.take().is_some()
             {
                 crate::workspace::record::write(paths, &record)?;
@@ -222,7 +235,7 @@ mod tests {
 
         let rotate_called = Cell::new(false);
         store
-            .reset_records_with(false, |events_log, archive_dir, min_bytes| {
+            .reset_records_with(false, true, |events_log, archive_dir, min_bytes| {
                 rotate_called.set(true);
                 assert!(
                     paths.agents_carryover.exists(),
