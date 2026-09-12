@@ -190,6 +190,8 @@ struct PreparedRun {
     stream_text: bool,
     managed_launch: rimz::agents::ManagedLaunchState,
     ancestry: Option<rimz::harness::ancestry::LaunchAncestry>,
+    /// The room's accounts as a cold birth would freeze them.
+    logins: rimz::ids::RoomLogins,
 }
 
 struct PresentationWaiter {
@@ -520,6 +522,24 @@ fn prepare_supervised(
         &launch.cwd,
         &request.managed_launch,
     )?;
+    // Judge the agent's hooks in the account home it will run under before
+    // probing the program or touching the multiplexer.
+    let logins = rimz::room::resolve_birth_logins(
+        &workspace.workspace_id,
+        &workspace.project_root,
+        &machine_config,
+        &rimz::ids::RoomLogins::new(),
+        false,
+    )?;
+    supervised::preflight_agent(
+        adapter,
+        &launch,
+        &rimz::agents::RoomLoginSet::new(
+            Some(logins.clone()),
+            rimz::agents::LoginCatalog::from_config(&machine_config.accounts).ok(),
+            rimz::agents::ambient_env(),
+        ),
+    )?;
     supervised::preflight_program(&process)?;
     let kind = adapter.spec().kind_id();
     if let Some(channel) = request.channel.as_deref() {
@@ -548,6 +568,7 @@ fn prepare_supervised(
         stream_text: presentation.stream_text,
         managed_launch,
         ancestry,
+        logins,
     }))
 }
 
@@ -812,24 +833,7 @@ pub(in crate::cli) fn run_supervised(
     let Some(prepared) = prepare_supervised(&request, &presentation, globals)? else {
         return Ok(None);
     };
-    // Judge the agent's hooks in the account home it will run under before
-    // touching the multiplexer.
-    let logins = rimz::room::resolve_birth_logins(
-        &prepared.workspace.workspace_id,
-        &prepared.workspace.project_root,
-        &prepared.machine_config,
-        &rimz::ids::RoomLogins::new(),
-        false,
-    )?;
-    supervised::preflight_agent(
-        prepared.adapter,
-        &prepared.launch,
-        &rimz::agents::RoomLoginSet::new(
-            Some(logins.clone()),
-            rimz::agents::LoginCatalog::from_config(&prepared.machine_config.accounts).ok(),
-            rimz::agents::ambient_env(),
-        ),
-    )?;
+    let logins = prepared.logins.clone();
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let mut room = rimz::room::RoomContext::from_resolved(
         &prepared.workspace,
@@ -840,6 +844,7 @@ pub(in crate::cli) fn run_supervised(
     let was_live = room.backend().list_sessions().map_or(true, |sessions| {
         sessions.iter().any(|name| name == room.session_name())
     });
+    // A live room answers from its record, not the cold-birth resolution.
     let logins = if was_live {
         rimz::room::resolve_birth_logins(
             &prepared.workspace.workspace_id,
