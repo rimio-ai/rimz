@@ -253,6 +253,35 @@ impl Store {
         })
     }
 
+    /// Freeze the room's provider accounts. Birth writes the selection once;
+    /// a later birth with the same selection is a no-op, and one that differs
+    /// is refused, because sessions are already stamped with the first.
+    #[must_use = "durability barrier; check the result"]
+    pub fn record_room_logins(
+        &self,
+        workspace: &ResolvedWorkspace,
+        logins: &crate::ids::RoomLogins,
+    ) -> Result<()> {
+        self.commit(|txn| {
+            let prior = record::read_optional(&txn.paths.workspace_record)?;
+            match prior.as_ref().and_then(|prior| prior.logins.as_ref()) {
+                Some(current) if current == logins => return Ok(()),
+                Some(current) => {
+                    return Err(StoreErr::RoomLoginsFrozen {
+                        current: render_logins(current),
+                        requested: render_logins(logins),
+                    });
+                }
+                None => {}
+            }
+            let mut record =
+                workspace_record_preserving_room_state(prior.as_ref(), workspace, None);
+            record.logins = Some(logins.clone());
+            record::write(txn.paths, &record)?;
+            Ok(())
+        })
+    }
+
     /// Rewrite durable workspace identity after a project root move.
     ///
     /// The caller has already moved the state directory to the new
@@ -279,8 +308,8 @@ impl Store {
             }
             event_log::replace_all(&paths.events_log, &events)?;
 
-            let prior = record::read(&paths.workspace_record).ok();
-            let record = workspace_record_preserving_rimz_target(prior.as_ref(), workspace, None);
+            let prior = record::read_optional(&paths.workspace_record)?;
+            let record = workspace_record_preserving_room_state(prior.as_ref(), workspace, None);
             record::write(paths, &record)?;
             Ok((
                 (messages_rewritten, events_rewritten),
@@ -595,8 +624,8 @@ fn write_workspace_record(
     workspace: &ResolvedWorkspace,
     rimz_target: Option<(PathBuf, String)>,
 ) -> Result<()> {
-    let prior = record::read(&txn.paths.workspace_record).ok();
-    let record = workspace_record_preserving_rimz_target(prior.as_ref(), workspace, rimz_target);
+    let prior = record::read_optional(&txn.paths.workspace_record)?;
+    let record = workspace_record_preserving_room_state(prior.as_ref(), workspace, rimz_target);
     if prior.as_ref().is_none_or(|prior| {
         prior.project_root != record.project_root
             || prior.session_name != record.session_name
@@ -608,12 +637,18 @@ fn write_workspace_record(
     Ok(())
 }
 
-fn workspace_record_preserving_rimz_target(
+/// A re-record keeps the room state only the owner flows set: the room-owning
+/// binary and the frozen account selection. Everything else is rebuilt from
+/// the resolved workspace.
+fn workspace_record_preserving_room_state(
     prior: Option<&record::WorkspaceRecord>,
     workspace: &ResolvedWorkspace,
     rimz_target: Option<(PathBuf, String)>,
 ) -> record::WorkspaceRecord {
     let mut record = record::WorkspaceRecord::from_resolved(workspace);
+    if let Some(prior) = prior {
+        record.logins.clone_from(&prior.logins);
+    }
     match rimz_target {
         Some((rimz_bin, rimz_build)) => {
             record.rimz_bin = Some(rimz_bin);
@@ -678,6 +713,14 @@ fn allocate_agent_launch_identities(
         });
     }
     Ok(identities)
+}
+
+fn render_logins(logins: &crate::ids::RoomLogins) -> String {
+    logins
+        .iter()
+        .map(|(kind, name)| format!("{kind}={name}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn validate_agent_launch_name(name: &str) -> Result<()> {

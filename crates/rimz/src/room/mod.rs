@@ -540,6 +540,7 @@ mod tests {
             root_class: RootClass::Marker,
             rimz_bin: None,
             rimz_build: None,
+            logins: None,
             updated_at: jiff::Timestamp::now(),
         };
         let workspace = RoomContext::workspace_from_record(&record, MuxName::Tmux);

@@ -139,6 +139,15 @@ impl Store {
 
             paths.ensure_dirs()?;
 
+            // A reset unfreezes the room's provider accounts, so the next
+            // birth is free to select again.
+            if let Some(mut record) =
+                crate::workspace::record::read_optional(&paths.workspace_record)?
+                && record.logins.take().is_some()
+            {
+                crate::workspace::record::write(paths, &record)?;
+            }
+
             let mut state_entries_removed = 0;
             state_entries_removed += remove_diag_logs(&paths.root)?;
             state_entries_removed +=

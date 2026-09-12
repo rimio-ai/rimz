@@ -86,6 +86,7 @@ pub(in crate::backend::zellij) fn publish_room_bin(state_root: &Path, opts: &Sid
             root_class: rimz::workspace::RootClass::Directory,
             rimz_bin: Some(state.room_bin.clone()),
             rimz_build: None,
+            logins: None,
             updated_at: jiff::Timestamp::now(),
         },
     )

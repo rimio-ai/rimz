@@ -521,6 +521,7 @@ mod tests {
                     root_class: crate::workspace::RootClass::Directory,
                     rimz_bin: None,
                     rimz_build: None,
+                    logins: None,
                     updated_at: Timestamp::UNIX_EPOCH,
                 },
             )

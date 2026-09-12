@@ -95,6 +95,10 @@ pub enum StoreErr {
     WorkspaceRecord(#[from] crate::workspace::record::WorkspaceRecordErr),
     #[error("{0}")]
     AgentLaunchIdentity(String),
+    #[error(
+        "this room already uses accounts {current}, not {requested}; run `rimz reset` to choose again"
+    )]
+    RoomLoginsFrozen { current: String, requested: String },
     #[error("cannot access {path}: {source}")]
     Io {
         path: PathBuf,

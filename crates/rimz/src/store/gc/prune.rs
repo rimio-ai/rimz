@@ -253,6 +253,7 @@ mod tests {
             root_class: crate::workspace::RootClass::Repo,
             rimz_bin: None,
             rimz_build: None,
+            logins: None,
             updated_at: jiff::Timestamp::now(),
         };
         fs::write(

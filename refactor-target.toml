@@ -307,7 +307,7 @@ path = "crates/rimz/src/store"
 # Exec cleanup probes waiter liveness without owning socket paths.
 # Conversation surfaces share sender classification with the CLI binary.
 # Flip and smart compaction share the typed occupied-context threshold predicate.
-surface-budget = 343
+surface-budget = 344
 
 [[module]]
 path = "crates/rimz/src/theme"

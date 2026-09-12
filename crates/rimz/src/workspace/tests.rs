@@ -64,6 +64,7 @@ fn known_workspaces_reads_records_and_skips_recordless_dirs() {
                 root_class: RootClass::Repo,
                 rimz_bin: None,
                 rimz_build: None,
+                logins: None,
                 updated_at: jiff::Timestamp::UNIX_EPOCH,
             },
         )
@@ -113,6 +114,7 @@ fn known_workspaces_repairs_record_fields_for_the_canonical_workspace_dir() {
             root_class: RootClass::Repo,
             rimz_bin: None,
             rimz_build: None,
+            logins: None,
             updated_at: jiff::Timestamp::UNIX_EPOCH,
         },
     )
@@ -155,6 +157,7 @@ fn known_workspaces_skips_obsolete_noncanonical_duplicate_records() {
             root_class: RootClass::Repo,
             rimz_bin: None,
             rimz_build: None,
+            logins: None,
             updated_at: jiff::Timestamp::UNIX_EPOCH,
         },
     )
@@ -175,6 +178,7 @@ fn known_workspaces_skips_obsolete_noncanonical_duplicate_records() {
             root_class: RootClass::Repo,
             rimz_bin: None,
             rimz_build: None,
+            logins: None,
             updated_at: jiff::Timestamp::now(),
         },
     )
