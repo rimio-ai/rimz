@@ -48,6 +48,14 @@ pub enum LoginConfigErr {
         home: PathBuf,
     },
     #[error(
+        "`accounts.{kind}.{name}.home` is `{home}`; provider home lists split on `,` and Claude reads a trailing `projects` as its transcript folder, so choose a directory without either"
+    )]
+    AmbiguousHome {
+        kind: AgentKind,
+        name: LoginName,
+        home: PathBuf,
+    },
+    #[error(
         "`accounts.{kind}.{name}.home` is `{home}`, already used by `accounts.{kind}.{first}`; give each account its own directory"
     )]
     DuplicateHome {
@@ -222,6 +230,17 @@ impl LoginCatalog {
                     });
                 }
                 let normalized = normalize_path_lexical(&declared_home);
+                if normalized.to_string_lossy().contains(',')
+                    || normalized
+                        .file_name()
+                        .is_some_and(|last| last == "projects")
+                {
+                    return Err(LoginConfigErr::AmbiguousHome {
+                        kind,
+                        name: name.clone(),
+                        home: declared_home,
+                    });
+                }
                 if native.as_ref() == Some(&normalized) {
                     return Err(LoginConfigErr::NativeHome {
                         kind,

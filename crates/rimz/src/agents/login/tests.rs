@@ -121,6 +121,15 @@ fn catalog_refuses_reserved_duplicate_relative_and_native_homes() {
     );
     assert!(matches!(relative, Err(LoginConfigErr::RelativeHome { .. })));
 
+    for toml in ["[claude.work]\nhome = \"/srv/a,b\"", "[claude.projects]\n"] {
+        let ambiguous =
+            LoginCatalog::from_config_under(&accounts(toml), Some(Path::new("/home/u")));
+        assert!(matches!(
+            ambiguous,
+            Err(LoginConfigErr::AmbiguousHome { .. })
+        ));
+    }
+
     let duplicate = LoginCatalog::from_config_under(
         &accounts("[claude.a]\nhome = \"/srv/work\"\n[claude.b]\nhome = \"/srv/./work\""),
         Some(Path::new("/home/u")),
