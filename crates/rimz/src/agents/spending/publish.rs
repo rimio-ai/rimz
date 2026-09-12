@@ -29,7 +29,8 @@ use super::{SPENDING_TTL, ScopedSpending, SpendingWalkResult};
 /// per-provider window supports account daily caps independently of headline.
 /// v11: provider session headlines share the machine-global activity burst.
 /// v12 publishes per-tool counts in windows and model/agent breakdowns.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 12;
+/// v13: per-account local-day windows for account daily caps.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 13;
 
 /// Aggregate version for the per-workspace cockpit tally cache. This is
 /// independent of the shared raw-entry cache version: a semantic change here
@@ -62,6 +63,9 @@ pub struct ProviderSpendingCache {
     /// Account-local calendar-day spend by provider kind.
     #[serde(default)]
     pub day_by_provider: BTreeMap<String, SpendWindow>,
+    /// Account-local calendar-day spend by account, for account daily caps.
+    #[serde(default)]
+    pub day_by_login: BTreeMap<crate::ids::LoginKey, SpendWindow>,
     /// Epoch second at which the published local calendar day began.
     #[serde(default)]
     pub day_cutoff_secs: u64,
@@ -83,6 +87,7 @@ impl ProviderSpendingCache {
             version: PROVIDER_SPENDING_VERSION,
             refreshed_at_ms,
             day_by_provider: result.provider_day.clone(),
+            day_by_login: result.login_day.clone(),
             day_cutoff_secs: result.day_cutoff_secs,
             days: result.days.clone(),
             models: result.models.clone(),

@@ -244,8 +244,16 @@ fn cold_refresh_publishes_sidebar_provider_rollups() {
     );
     let claude = rimz::agents::definition_by_kind("claude").unwrap();
     let _discovery = rimz::agents::spending::override_discovered_spending_files_for_test(vec![
-        (claude, first.clone()),
-        (claude, second.clone()),
+        rimz::agents::spending::SpendingFile {
+            adapter: claude,
+            login: rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("claude")),
+            path: first.clone(),
+        },
+        rimz::agents::spending::SpendingFile {
+            adapter: claude,
+            login: rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("claude")),
+            path: second.clone(),
+        },
     ]);
     let mut progress = Vec::new();
     let mut record_progress = |reading| progress.push(reading);

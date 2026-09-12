@@ -6,10 +6,36 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use glob::{MatchOptions, Pattern};
 
-use crate::agents::AgentDefinition;
+use crate::agents::{AgentDefinition, LoginCatalog, ProviderLogin};
+use crate::ids::LoginKey;
 
+use super::SpendingFile;
 use super::aggregate::cold_parse_out_of_window;
 use super::cache::SpendingDiskCache;
+
+/// Every account on this machine with its adapter; `default` logins alone
+/// when the account config does not load.
+pub(super) fn runtime_logins() -> Vec<(ProviderLogin, &'static AgentDefinition)> {
+    match LoginCatalog::from_config(&crate::config::MachineConfig::load_lenient().accounts) {
+        Ok(catalog) => catalog
+            .all()
+            .filter_map(|login| {
+                crate::agents::find_definition(login.kind().as_str())
+                    .map(|adapter| (login.clone(), adapter))
+            })
+            .collect(),
+        Err(_) => crate::agents::all_definitions()
+            .map(|adapter| {
+                (
+                    ProviderLogin::default_for(crate::ids::AgentKind::new_unchecked(
+                        adapter.spec().kind,
+                    )),
+                    adapter,
+                )
+            })
+            .collect(),
+    }
+}
 
 const COMPLETE_RECONCILE_INTERVAL: Duration = Duration::from_secs(15 * 60);
 type RelativeFilter = (&'static str, fn(&Path) -> bool);
@@ -252,7 +278,7 @@ fn relative_components_match(pattern: &[RelativePatternComponent], path: &[&str]
 
 #[derive(Default)]
 pub(crate) struct SpendingDiscoveryIndex {
-    adapters: HashMap<&'static str, AdapterState>,
+    adapters: HashMap<LoginKey, AdapterState>,
     last_complete: Option<Instant>,
     last_authoritative: bool,
     force_complete: bool,
@@ -318,28 +344,28 @@ pub(crate) struct DiscoveryStats {
 impl SpendingDiscoveryIndex {
     pub(crate) fn discover(
         &mut self,
-        adapters: impl Iterator<Item = &'static AgentDefinition>,
+        logins: impl Iterator<Item = (ProviderLogin, &'static AgentDefinition)>,
+        ambient: &BTreeMap<String, String>,
         now_secs: u64,
-    ) -> Vec<(&'static AgentDefinition, PathBuf)> {
-        let login_env = crate::agents::ambient_env();
+    ) -> Vec<SpendingFile> {
         self.stats = DiscoveryStats::default();
         let force_complete = self.complete_due();
         let mut authoritative = true;
         let mut discovered = Vec::new();
-        let mut seen_kinds = HashSet::new();
-        for adapter in adapters {
-            let kind = adapter.spec().kind;
-            if !seen_kinds.insert(kind) {
-                continue;
-            }
-            let declarations = adapter.spending_sources(&login_env);
+        let mut seen_paths = HashSet::new();
+        for (login, adapter) in logins {
+            let login_key = login.key();
+            let declarations = adapter.spending_sources(&login.env(ambient));
             let key = source_set_key(&declarations);
-            let changed = self.adapters.get(kind).is_none_or(|state| state.key != key);
+            let changed = self
+                .adapters
+                .get(&login_key)
+                .is_none_or(|state| state.key != key);
             if changed {
                 self.adapters
-                    .insert(kind, AdapterState::new(key, declarations));
+                    .insert(login_key.clone(), AdapterState::new(key, declarations));
             }
-            let Some(state) = self.adapters.get_mut(kind) else {
+            let Some(state) = self.adapters.get_mut(&login_key) else {
                 continue;
             };
             let full = force_complete && !changed;
@@ -354,7 +380,14 @@ impl SpendingDiscoveryIndex {
                     .materialized_paths(&mut self.stats)
                     .iter()
                     .cloned()
-                    .map(|path| (adapter, path)),
+                    // Declared homes are distinct, so a repeat is an ambient
+                    // comma list naming an account's home: count it once.
+                    .filter(|path| seen_paths.insert(path.clone()))
+                    .map(|path| SpendingFile {
+                        adapter,
+                        login: login_key.clone(),
+                        path,
+                    }),
             );
         }
         if (force_complete || self.last_complete.is_none()) && authoritative {
@@ -429,16 +462,21 @@ impl SpendingDiscoveryIndex {
         sources: Vec<SpendingSource>,
         now_secs: u64,
     ) -> Vec<PathBuf> {
+        let kind = LoginKey::default_for(crate::ids::AgentKind::new_unchecked(kind));
         self.stats = DiscoveryStats::default();
         let key = source_set_key(&sources);
-        let changed = self.adapters.get(kind).is_none_or(|state| state.key != key);
+        let changed = self
+            .adapters
+            .get(&kind)
+            .is_none_or(|state| state.key != key);
         if changed {
-            self.adapters.insert(kind, AdapterState::new(key, sources));
+            self.adapters
+                .insert(kind.clone(), AdapterState::new(key, sources));
         }
         let full = self.complete_due() && !changed;
         let state = self
             .adapters
-            .get_mut(kind)
+            .get_mut(&kind)
             .expect("declared state inserted");
         let before = self.stats.frontier_work();
         let authoritative = scan_adapter(state, now_secs, full, Some(&mut self.stats));

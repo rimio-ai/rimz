@@ -35,9 +35,9 @@ fn cache_compaction_rolls_old_entries_losslessly_and_is_idempotent() {
         ]),
         ..Default::default()
     };
-    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![
-        (claude_adapter(), project_file.clone()),
-        (claude_adapter(), other_file.clone()),
+    let files: Vec<SpendingFile> = vec![
+        spending_file(claude_adapter(), project_file.clone()),
+        spending_file(claude_adapter(), other_file.clone()),
     ];
     let scope = SpendScope::from_roots(Some(&project), &[]);
     let before_counted = dedup_cached_entries(&files, &cache).into_counted();
@@ -144,9 +144,9 @@ fn cache_compaction_handles_sidechain_replay_edges() {
         ]),
         ..Default::default()
     };
-    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![
-        (claude_adapter(), main.clone()),
-        (claude_adapter(), replay.clone()),
+    let files: Vec<SpendingFile> = vec![
+        spending_file(claude_adapter(), main.clone()),
+        spending_file(claude_adapter(), replay.clone()),
     ];
 
     assert!(compact_spending_cache(&mut cache, &files, NOW_SECS));
@@ -194,7 +194,7 @@ fn cache_compaction_handles_sidechain_replay_edges() {
         files: HashMap::from([cached_file(&file, vec![old_main, recent_replay])]),
         ..Default::default()
     };
-    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![(claude_adapter(), file.clone())];
+    let files: Vec<SpendingFile> = vec![spending_file(claude_adapter(), file.clone())];
 
     assert!(!compact_spending_cache(&mut cache, &files, NOW_SECS));
     let counted = dedup_cached_entries(&files, &cache).into_counted();
@@ -274,7 +274,7 @@ fn cache_compaction_evicts_dead_file_records() {
     };
 
     compute_spending(
-        &[(claude_adapter(), discovered_old)],
+        &[spending_file(claude_adapter(), discovered_old)],
         &mut cache,
         &PriceBook::default(),
         NOW_SECS,
@@ -299,7 +299,7 @@ fn cache_compaction_preserves_old_native_thread_sessions() {
         )]),
         ..Default::default()
     };
-    let files: Vec<(&'static AgentDefinition, PathBuf)> = vec![(opencode_adapter(), file)];
+    let files: Vec<SpendingFile> = vec![spending_file(opencode_adapter(), file)];
 
     assert!(compact_spending_cache(&mut cache, &files, NOW_SECS));
     let counted = dedup_cached_entries(&files, &cache).into_counted();

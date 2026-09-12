@@ -13,7 +13,8 @@ use crate::agents::definition::ThreadKey;
 
 use super::cache::{CachedEntry, FileCacheEntry, SpendingDiskCache};
 use super::user_input::UserInputRecord;
-use super::{ScopedSpending, SpendingWalkResult};
+use super::{ScopedSpending, SpendingFile, SpendingWalkResult};
+use crate::ids::LoginKey;
 
 type FastHashMap<K, V> = HashMap<K, V, foldhash::fast::RandomState>;
 type FastHashSet<K> = HashSet<K, foldhash::fast::RandomState>;
@@ -194,7 +195,7 @@ pub(crate) struct HeadlineContext<'a> {
 }
 
 pub(crate) fn aggregate_counted_rollups(
-    files: &[(&'static AgentDefinition, PathBuf)],
+    files: &[SpendingFile],
     cache: &SpendingDiskCache,
     counted: &[impl CountedPayload],
     workspace: Option<&SpendScope>,
@@ -214,6 +215,8 @@ pub(crate) fn aggregate_counted_rollups(
         .unwrap_or_else(|| trailing_window_cutoff(now_secs, 86_400));
     let mut workspace_day = SpendWindow::default();
     let mut provider_day = BTreeMap::<String, SpendWindow>::new();
+    let mut login_day = BTreeMap::<LoginKey, SpendWindow>::new();
+    let mut login_day_sessions = BTreeMap::<LoginKey, FastHashSet<SessionKey<'_>>>::new();
     // These collections only establish session uniqueness. Hashing avoids
     // repeatedly ordering transcript paths while the final public maps retain
     // their deterministic `BTreeMap` representation.
@@ -234,6 +237,14 @@ pub(crate) fn aggregate_counted_rollups(
             cutoffs.total,
         );
         if entry.ts_secs >= day_cutoff_secs && within_widest_window(entry.ts_secs, now_secs) {
+            login_day
+                .entry(counted.login().clone())
+                .or_default()
+                .add(entry.cost_usd, entry);
+            login_day_sessions
+                .entry(counted.login().clone())
+                .or_default()
+                .insert(counted.session_key());
             provider_day
                 .entry(provider.to_owned())
                 .or_default()
@@ -297,6 +308,10 @@ pub(crate) fn aggregate_counted_rollups(
         provider_day.entry(provider).or_default().sessions =
             sessions.len().try_into().unwrap_or(u32::MAX);
     }
+    for (login, sessions) in login_day_sessions {
+        login_day.entry(login).or_default().sessions =
+            sessions.len().try_into().unwrap_or(u32::MAX);
+    }
 
     SpendingWalkResult {
         spending,
@@ -314,6 +329,7 @@ pub(crate) fn aggregate_counted_rollups(
             day_cutoff_secs,
         },
         provider_day,
+        login_day,
         day_cutoff_secs,
         days,
         models: if include_history_rollups {
@@ -399,7 +415,7 @@ impl CountedCutoffs {
 /// regardless of which file a duplicated turn was kept in.
 fn add_spending_sessions(
     spending: &mut Spending,
-    files: &[(&'static AgentDefinition, PathBuf)],
+    files: &[SpendingFile],
     cache: &SpendingDiskCache,
     now_secs: u64,
     headline_cutoff: u64,
@@ -408,7 +424,12 @@ fn add_spending_sessions(
         files.len(),
         foldhash::fast::RandomState::default(),
     );
-    for (adapter, file) in files {
+    for SpendingFile {
+        adapter,
+        path: file,
+        ..
+    } in files
+    {
         let cache_key = file.to_string_lossy().into_owned();
         let Some(cached_file) = cache.files.get(&cache_key) else {
             continue;
@@ -436,14 +457,19 @@ fn add_spending_sessions(
 
 fn add_scoped_sessions(
     tally: &mut SpendTally,
-    files: &[(&'static AgentDefinition, PathBuf)],
+    files: &[SpendingFile],
     cache: &SpendingDiskCache,
     scope: &SpendScope,
     now_secs: u64,
     headline_cutoff: u64,
 ) {
     let mut threads = FastHashMap::<SessionKey<'_>, u64>::default();
-    for (adapter, file) in files {
+    for SpendingFile {
+        adapter,
+        path: file,
+        ..
+    } in files
+    {
         let cache_key = file.to_string_lossy().into_owned();
         let Some(cached_file) = cache.files.get(&cache_key) else {
             continue;
@@ -563,6 +589,7 @@ pub(crate) trait DedupPayload {
 }
 
 pub(crate) trait CountedPayload: DedupPayload {
+    fn login(&self) -> &LoginKey;
     fn kind(&self) -> &'static str;
     fn origin(&self) -> Option<&Path>;
     fn session_key(&self) -> SessionKey<'_>;
@@ -697,6 +724,7 @@ impl SessionKey<'_> {
 }
 
 pub(crate) struct Counted<'a> {
+    login: &'a LoginKey,
     kind: &'static str,
     origin: Option<&'a Path>,
     session_key: SessionKey<'a>,
@@ -710,6 +738,9 @@ impl DedupPayload for Counted<'_> {
 }
 
 impl CountedPayload for Counted<'_> {
+    fn login(&self) -> &LoginKey {
+        self.login
+    }
     fn kind(&self) -> &'static str {
         self.kind
     }
@@ -743,11 +774,16 @@ impl DedupPayload for LocatedCounted<'_> {
 }
 
 pub(crate) fn dedup_cached_entries<'a>(
-    files: &'a [(&'static AgentDefinition, PathBuf)],
+    files: &'a [SpendingFile],
     cache: &'a SpendingDiskCache,
 ) -> SidechainDedup<Counted<'a>> {
     let mut deduped = SidechainDedup::default();
-    for (adapter, file) in files {
+    for SpendingFile {
+        adapter,
+        path: file,
+        login,
+    } in files
+    {
         let kind = adapter.spec().kind;
         let key = file.to_string_lossy().into_owned();
         let Some(cached_file) = cache.files.get(&key) else {
@@ -755,6 +791,7 @@ pub(crate) fn dedup_cached_entries<'a>(
         };
         for entry in &cached_file.entries {
             deduped.insert(Counted {
+                login,
                 kind,
                 origin: cached_file.origin_path.as_deref(),
                 session_key: session_key(adapter, file, entry),
@@ -766,11 +803,11 @@ pub(crate) fn dedup_cached_entries<'a>(
 }
 
 pub(crate) fn dedup_cached_entry_locations(
-    files: &[(&'static AgentDefinition, PathBuf)],
+    files: &[SpendingFile],
     cache: &SpendingDiskCache,
 ) -> Vec<CountedLocation> {
     let mut deduped = SidechainDedup::default();
-    for (file_index, (_, file)) in files.iter().enumerate() {
+    for (file_index, SpendingFile { path: file, .. }) in files.iter().enumerate() {
         let key = file.to_string_lossy().into_owned();
         let Some(cached_file) = cache.files.get(&key) else {
             continue;
@@ -793,11 +830,12 @@ pub(crate) fn dedup_cached_entry_locations(
 }
 
 pub(crate) fn indexed_counted_entries<'a>(
-    files: &'a [(&'static AgentDefinition, PathBuf)],
+    files: &'a [SpendingFile],
     cache: &'a SpendingDiskCache,
     locations: &[CountedLocation],
 ) -> Vec<Counted<'a>> {
     struct IndexedFile<'a> {
+        login: &'a LoginKey,
         adapter: &'static AgentDefinition,
         path: &'a Path,
         cache: &'a FileCacheEntry,
@@ -805,14 +843,21 @@ pub(crate) fn indexed_counted_entries<'a>(
 
     let table = files
         .iter()
-        .map(|(adapter, file)| {
-            let key = file.to_string_lossy().into_owned();
-            cache.files.get(&key).map(|cached| IndexedFile {
-                adapter,
-                path: file,
-                cache: cached,
-            })
-        })
+        .map(
+            |SpendingFile {
+                 adapter,
+                 path: file,
+                 login,
+             }| {
+                let key = file.to_string_lossy().into_owned();
+                cache.files.get(&key).map(|cached| IndexedFile {
+                    login,
+                    adapter,
+                    path: file,
+                    cache: cached,
+                })
+            },
+        )
         .collect::<Vec<_>>();
 
     locations
@@ -831,6 +876,7 @@ pub(crate) fn indexed_counted_entries<'a>(
                 .get(location.entry_index)
                 .expect("counted entry must resolve under its memo key");
             Counted {
+                login: file.login,
                 kind: file.adapter.spec().kind,
                 origin: file.cache.origin_path.as_deref(),
                 session_key: session_key(file.adapter, file.path, entry),
@@ -1011,9 +1057,15 @@ pub(super) fn subagent_child_id(path: &Path) -> Option<String> {
     Some(stem.strip_prefix("agent-").unwrap_or(stem).to_owned())
 }
 
-pub(crate) fn spending_files_signature(files: &[(&'static AgentDefinition, PathBuf)]) -> u64 {
+pub(crate) fn spending_files_signature(files: &[SpendingFile]) -> u64 {
     let mut hasher = DefaultHasher::new();
-    for (adapter, file) in files {
+    for SpendingFile {
+        adapter,
+        path: file,
+        login,
+    } in files
+    {
+        login.hash(&mut hasher);
         adapter.spec().kind.hash(&mut hasher);
         file.hash(&mut hasher);
     }

@@ -73,6 +73,7 @@ fn provider_cache_staleness_and_error_cases_are_explicit() {
             ..Default::default()
         },
     )]);
+    let login_day = BTreeMap::from([("claude@work".parse().unwrap(), local_day["claude"].clone())]);
     write_provider_spending_cache(
         &path,
         &ProviderSpendingCache {
@@ -81,6 +82,7 @@ fn provider_cache_staleness_and_error_cases_are_explicit() {
             days: days.clone(),
             models: models.clone(),
             day_by_provider: local_day.clone(),
+            day_by_login: login_day.clone(),
             day_cutoff_secs: 12_000,
             ..Default::default()
         },
@@ -92,12 +94,14 @@ fn provider_cache_staleness_and_error_cases_are_explicit() {
     assert_eq!(cache.days, days);
     assert_eq!(cache.models, models);
     assert_eq!(cache.day_by_provider, local_day);
+    assert_eq!(cache.day_by_login, login_day);
     assert_eq!(cache.day_cutoff_secs, 12_000);
 
     std::fs::write(&path, serde_json::to_vec(&spending).unwrap()).unwrap();
     let pre_stamp = read_provider_spending_cache(&path);
     assert_eq!(pre_stamp.refreshed_at_ms, 0);
     assert_eq!(pre_stamp.spending, spending);
+    assert!(pre_stamp.day_by_login.is_empty());
     assert!(pre_stamp.days.is_empty());
     assert!(pre_stamp.models.is_empty());
     assert!(!pre_stamp.is_fresh(NOW_SECS * 1_000));

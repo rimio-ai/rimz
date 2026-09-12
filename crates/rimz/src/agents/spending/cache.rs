@@ -9,8 +9,9 @@ use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
+use super::SpendingFile;
+use crate::agents::TranscriptStat;
 use crate::agents::pricing::TokenSplit;
-use crate::agents::{AgentDefinition, TranscriptStat};
 
 use super::aggregate::{
     DedupPayload, SidechainDedup, cold_parse_out_of_window, within_raw_retain_window,
@@ -301,7 +302,7 @@ pub(crate) struct CacheStamp {
 
 pub(crate) fn compact_spending_cache(
     cache: &mut SpendingDiskCache,
-    files: &[(&'static AgentDefinition, PathBuf)],
+    files: &[SpendingFile],
     now_secs: u64,
 ) -> bool {
     let retained_message_ids = retained_raw_message_ids(cache, files, now_secs);
@@ -317,7 +318,7 @@ pub(crate) fn compact_spending_cache(
     }
 
     let mut changed = false;
-    for (_, file) in files {
+    for SpendingFile { path: file, .. } in files {
         let file_key = file.to_string_lossy().into_owned();
         let Some(cached_file) = cache.files.get_mut(&file_key) else {
             continue;
@@ -361,11 +362,11 @@ pub(crate) fn compact_spending_cache(
 
 fn retained_raw_message_ids(
     cache: &SpendingDiskCache,
-    files: &[(&'static AgentDefinition, PathBuf)],
+    files: &[SpendingFile],
     now_secs: u64,
 ) -> BTreeSet<String> {
     let mut message_ids = BTreeSet::new();
-    for (_, file) in files {
+    for SpendingFile { path: file, .. } in files {
         let file_key = file.to_string_lossy().into_owned();
         let Some(cached_file) = cache.files.get(&file_key) else {
             continue;
@@ -425,12 +426,12 @@ impl DedupPayload for CompactionSourceEntry {
 
 fn old_counted_entries_for_compaction(
     cache: &SpendingDiskCache,
-    files: &[(&'static AgentDefinition, PathBuf)],
+    files: &[SpendingFile],
     now_secs: u64,
     retained_message_ids: &BTreeSet<String>,
 ) -> Vec<CompactionSourceEntry> {
     let mut deduped = SidechainDedup::default();
-    for (_, file) in files {
+    for SpendingFile { path: file, .. } in files {
         let file_key = file.to_string_lossy().into_owned();
         let Some(cached_file) = cache.files.get(&file_key) else {
             continue;

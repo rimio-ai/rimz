@@ -88,7 +88,7 @@ struct FoldFixture {
 struct SpendingFixture {
     _tempdir: TempDir,
     cache_path: PathBuf,
-    files: Vec<(&'static rimz::agents::AgentDefinition, PathBuf)>,
+    files: Vec<rimz::agents::spending::SpendingFile>,
     prices: rimz::agents::PriceBook,
     walker: rimz::agents::spending::SpendingWalker,
     sources: Vec<rimz::agents::spending::SpendingSource>,
@@ -329,10 +329,11 @@ fn spending_fixture_scaled(
                 unknown_models: BTreeMap::new(),
             },
         );
-        files.push((
-            rimz::agents::definition_by_kind("claude").expect("Claude definition"),
-            transcript,
-        ));
+        files.push(rimz::agents::spending::SpendingFile {
+            adapter: rimz::agents::definition_by_kind("claude").expect("Claude definition"),
+            login: rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("claude")),
+            path: transcript,
+        });
     }
     rimz::agents::spending::write_spending_cache(&cache_path, &cache);
     let prices = rimz::agents::PriceBook::default();

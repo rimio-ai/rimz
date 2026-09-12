@@ -37,6 +37,14 @@ fn claude_adapter() -> &'static AgentDefinition {
     rimz::agents::definition_by_kind("claude").expect("Claude definition")
 }
 
+fn spending_file(path: PathBuf) -> rimz::agents::spending::SpendingFile {
+    rimz::agents::spending::SpendingFile {
+        adapter: claude_adapter(),
+        login: rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("claude")),
+        path,
+    }
+}
+
 fn claude_line(i: usize) -> String {
     format!(
         r#"{{"timestamp":"2026-06-01T10:00:00.000Z","costUSD":0.001,"requestId":"req-{i}","message":{{"id":"msg-{i}","usage":{{"input_tokens":1200,"output_tokens":80,"cache_read_input_tokens":800}}}}}}"#
@@ -88,7 +96,7 @@ fn seed_spending_cache(
     dir: &std::path::Path,
     cache_path: &std::path::Path,
     entries_per_file: usize,
-) -> Vec<(&'static AgentDefinition, PathBuf)> {
+) -> Vec<rimz::agents::spending::SpendingFile> {
     let mut files = Vec::new();
     let mut cache = read_spending_cache(cache_path);
     cache.files = HashMap::new();
@@ -111,7 +119,7 @@ fn seed_spending_cache(
             transcript.to_string_lossy().into_owned(),
             file_cache_entry(&transcript, entries),
         );
-        files.push((claude_adapter(), transcript));
+        files.push(spending_file(transcript));
     }
     write_spending_cache(cache_path, &cache);
     files
@@ -146,7 +154,7 @@ macro_rules! walk_spending {
 fn spending_walk_io_is_history_independent() {
     let dir = tempfile::tempdir().expect("tempdir");
     let file = seed_history(dir.path());
-    let files = [(claude_adapter(), file.clone())];
+    let files = [spending_file(file.clone())];
     let prices = PriceBook::default();
     let cache_path = dir.path().join("spending.json");
     let mut walker = SpendingWalker::new();
@@ -275,7 +283,7 @@ fn spending_memo_rebuilds_once_per_cache_generation() {
     let dir = tempfile::tempdir().expect("tempdir");
     let cache_path = dir.path().join("spending.json");
     let files = seed_spending_cache(dir.path(), &cache_path, 10);
-    let transcript = files[0].1.clone();
+    let transcript = files[0].path.clone();
     let prices = PriceBook::default();
     let mut walker = SpendingWalker::new();
 
@@ -343,7 +351,7 @@ fn spending_walk_warm_keeps_trailing_windows_fresh() {
         ),
     );
     write_spending_cache(&cache_path, &cache);
-    let files = vec![(claude_adapter(), transcript)];
+    let files = vec![spending_file(transcript)];
     let prices = PriceBook::default();
     let mut walker = SpendingWalker::new();
 
@@ -384,7 +392,7 @@ fn spending_walk_local_seeds_from_disk() {
         ),
     );
     write_spending_cache(&cache_path, &cache);
-    let files = vec![(claude_adapter(), transcript.clone())];
+    let files = vec![spending_file(transcript.clone())];
     let prices = PriceBook::default();
     let mut local_walker = SpendingWalker::new();
 
@@ -537,12 +545,12 @@ fn spending_discovery_retires_a_large_historical_tree_from_warm_passes() {
 
     let cold = walker.discover_declared_spending_files(claude_adapter(), sources.clone(), NOW_SECS);
     assert_eq!(
-        cold.into_iter().map(|(_, path)| path).collect::<Vec<_>>(),
+        cold.into_iter().map(|file| file.path).collect::<Vec<_>>(),
         std::slice::from_ref(&active)
     );
     let warm = walker.discover_declared_spending_files(claude_adapter(), sources, NOW_SECS);
     assert_eq!(
-        warm.into_iter().map(|(_, path)| path).collect::<Vec<_>>(),
+        warm.into_iter().map(|file| file.path).collect::<Vec<_>>(),
         [active]
     );
 }

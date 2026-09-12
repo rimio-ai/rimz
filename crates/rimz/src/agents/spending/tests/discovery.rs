@@ -19,6 +19,66 @@ fn recursive(root: &std::path::Path) -> SpendingSource {
 }
 
 #[test]
+fn catalog_logins_discover_separate_homes_and_deduplicate_shared_paths() {
+    use crate::agents::LoginCatalog;
+    use crate::config::{AccountsConfig, NamedAccount};
+    use crate::ids::LoginKey;
+    use std::collections::BTreeMap;
+
+    let dir = tempdir().unwrap();
+    let native = dir.path().join("native");
+    let work = dir.path().join("work");
+    let native_file = native.join("projects/project/native.jsonl");
+    let work_file = work.join("projects/project/work.jsonl");
+    for path in [&native_file, &work_file] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "{}\n").unwrap();
+    }
+    let accounts = AccountsConfig {
+        claude: BTreeMap::from([(
+            "work".parse().unwrap(),
+            NamedAccount {
+                home: Some(work.clone()),
+            },
+        )]),
+        ..Default::default()
+    };
+    let catalog = LoginCatalog::from_config(&accounts).unwrap();
+    let adapter = crate::agents::definition_by_kind("claude").unwrap();
+    let logins = || {
+        catalog
+            .all()
+            .filter(|login| login.kind().as_str() == "claude")
+            .map(|login| (login.clone(), adapter))
+    };
+    let mut ambient = BTreeMap::from([(
+        "CLAUDE_CONFIG_DIR".to_owned(),
+        native.to_string_lossy().into_owned(),
+    )]);
+    let mut index = SpendingDiscoveryIndex::default();
+    let files = index.discover(logins(), &ambient, now_secs());
+    assert_eq!(files.len(), 2);
+    assert!(
+        files.iter().any(|file| file.path == work_file
+            && file.login == "claude@work".parse::<LoginKey>().unwrap())
+    );
+    assert!(files.iter().any(|file| file.path == native_file
+        && file.login == LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude"))));
+
+    ambient.insert(
+        "CLAUDE_CONFIG_DIR".to_owned(),
+        work.to_string_lossy().into_owned(),
+    );
+    let files = index.discover(logins(), &ambient, now_secs());
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].path, work_file);
+    assert_eq!(
+        files[0].login,
+        LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude"))
+    );
+}
+
+#[test]
 fn warm_discovery_reuses_unchanged_directories_and_finds_changed_frontier() {
     let dir = tempdir().unwrap();
     let root = dir.path().join("sessions");

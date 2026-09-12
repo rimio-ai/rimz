@@ -70,7 +70,7 @@ fn transient_file_stat_failure_preserves_the_cached_parse() {
         "chat.jsonl",
         &[&claude_line(&utc_date(NOW_SECS), 0.5, "msg-1", "req-1")],
     );
-    let files = vec![(claude_adapter(), file.clone())];
+    let files = vec![spending_file(claude_adapter(), file.clone())];
     let cache_path = dir.path().join("spending.json");
     let mut walker = SpendingWalker::new();
     let first = walk_spending!(
@@ -108,7 +108,7 @@ fn spending_walk_threads_user_inputs_into_session_headline() {
             "req-session",
         )],
     );
-    let files = [(claude_adapter(), file)];
+    let files = [spending_file(claude_adapter(), file)];
     let prices = PriceBook::default();
     let origin_overrides = HashMap::new();
     let user_inputs = [user_input::UserInputRecord {
@@ -152,7 +152,7 @@ fn spending_walker_retains_only_winner_locations() {
         &format!("{{\"unused\":\"{padding}\",\"timestamp\""),
     );
     let file = write_jsonl(dir.path(), "large.jsonl", &[&first, &second]);
-    let files = vec![(claude_adapter(), file)];
+    let files = vec![spending_file(claude_adapter(), file)];
     let cache_path = dir.path().join("spending.json");
     let mut walker = SpendingWalker::new();
 
@@ -207,7 +207,7 @@ fn file_change_cache_paths_parse_suffix_or_reparse_cold() {
     );
     let mut cache = SpendingDiskCache::default();
     let first = compute_spending(
-        &[(claude_adapter(), suffix_file.clone())],
+        &[spending_file(claude_adapter(), suffix_file.clone())],
         &mut cache,
         &PriceBook::default(),
         NOW_SECS,
@@ -225,7 +225,7 @@ fn file_change_cache_paths_parse_suffix_or_reparse_cold() {
     }
     append_line(&suffix_file, &claude_line(&today, 0.25, "msg-2", "req-2"));
     let suffix = compute_spending(
-        &[(claude_adapter(), suffix_file)],
+        &[spending_file(claude_adapter(), suffix_file)],
         &mut cache,
         &PriceBook::default(),
         NOW_SECS,
@@ -237,14 +237,14 @@ fn file_change_cache_paths_parse_suffix_or_reparse_cold() {
     let truncated_file = write_jsonl(dir.path(), "truncated.jsonl", &[&line_a, &line_b]);
     let mut cache = SpendingDiskCache::default();
     compute_spending(
-        &[(claude_adapter(), truncated_file.clone())],
+        &[spending_file(claude_adapter(), truncated_file.clone())],
         &mut cache,
         &PriceBook::default(),
         NOW_SECS,
     );
     write_jsonl(dir.path(), "truncated.jsonl", &[&line_a]);
     let truncated = compute_spending(
-        &[(claude_adapter(), truncated_file)],
+        &[spending_file(claude_adapter(), truncated_file)],
         &mut cache,
         &PriceBook::default(),
         NOW_SECS,
@@ -259,7 +259,7 @@ fn file_change_cache_paths_parse_suffix_or_reparse_cold() {
     set_file_mtime_nanos(&rewrite_file, NOW_SECS, 100);
     let mut cache = SpendingDiskCache::default();
     compute_spending(
-        &[(claude_adapter(), rewrite_file.clone())],
+        &[spending_file(claude_adapter(), rewrite_file.clone())],
         &mut cache,
         &PriceBook::default(),
         NOW_SECS,
@@ -277,7 +277,7 @@ fn file_change_cache_paths_parse_suffix_or_reparse_cold() {
     assert_eq!(rewritten_stat.mtime_secs, i64::try_from(NOW_SECS).unwrap());
     assert_eq!(rewritten_stat.mtime_nanos, 200);
     let rewritten = compute_spending(
-        &[(claude_adapter(), rewrite_file)],
+        &[spending_file(claude_adapter(), rewrite_file)],
         &mut cache,
         &PriceBook::default(),
         NOW_SECS,
@@ -307,7 +307,7 @@ fn opencode_wal_commit_refreshes_spending() {
         )
         .unwrap();
 
-    let files = [(opencode_adapter(), path.clone())];
+    let files = [spending_file(opencode_adapter(), path.clone())];
     let mut cache = SpendingDiskCache::default();
     let warmed = compute_spending(&files, &mut cache, &PriceBook::default(), NOW_SECS);
     assert!((warmed.total.headline.usd - 1.25).abs() < 1e-9);
@@ -362,7 +362,7 @@ fn cold_parse_skip_ignores_new_files_outside_widest_window() {
     let mtime = crate::agents::TranscriptStat::from_path(&file)
         .unwrap()
         .newest_mtime_secs();
-    let files = vec![(claude_adapter(), file.clone())];
+    let files = vec![spending_file(claude_adapter(), file.clone())];
     let mut cache = SpendingDiskCache::default();
 
     let skipped = compute_spending(
@@ -387,7 +387,7 @@ fn cold_parse_skip_ignores_new_files_outside_widest_window() {
     );
     let mut fresh_cache = SpendingDiskCache::default();
     let parsed = compute_spending(
-        &[(claude_adapter(), fresh_file)],
+        &[spending_file(claude_adapter(), fresh_file)],
         &mut fresh_cache,
         &PriceBook::default(),
         mtime + 60,
@@ -414,14 +414,18 @@ fn unknown_model_chase_filters_sentinels_and_stale_records() {
     );
     let mut cache = SpendingDiskCache::default();
     let spending = compute_spending(
-        &[(claude_adapter(), file.clone())],
+        &[spending_file(claude_adapter(), file.clone())],
         &mut cache,
         &PriceBook::from_litellm_json("{}"),
         NOW_SECS,
     );
     assert_eq!(spending.total.headline.tokens, 150);
     assert_eq!(
-        recorded_unknown_models(&[(claude_adapter(), file.clone())], &cache, NOW_SECS),
+        recorded_unknown_models(
+            &[spending_file(claude_adapter(), file.clone())],
+            &cache,
+            NOW_SECS
+        ),
         std::collections::BTreeSet::from([model.to_owned()])
     );
 
@@ -435,7 +439,7 @@ fn unknown_model_chase_filters_sentinels_and_stale_records() {
             NOW_SECS.saturating_sub(WIDEST_SPEND_WINDOW_SECS),
         );
     assert_eq!(
-        recorded_unknown_models(&[(claude_adapter(), file)], &cache, NOW_SECS),
+        recorded_unknown_models(&[spending_file(claude_adapter(), file)], &cache, NOW_SECS),
         std::collections::BTreeSet::from([model.to_owned()])
     );
 }
@@ -469,7 +473,7 @@ fn spending_walk_observer_checkpoints_on_first_interval() {
                     &format!("req-{i}"),
                 )],
             );
-            (claude_adapter(), file)
+            spending_file(claude_adapter(), file)
         })
         .collect::<Vec<_>>();
     let cache_path = dir.path().join("spending.json");
@@ -511,7 +515,7 @@ fn parallel_cold_parse_aggregates_deterministically() {
                     &format!("req-parallel-{i}"),
                 )],
             );
-            (claude_adapter(), file)
+            spending_file(claude_adapter(), file)
         })
         .collect::<Vec<_>>();
     let expected = (1..=16).map(|i| i as f64 / 10.0).sum::<f64>();
@@ -555,8 +559,7 @@ fn spending_walk_persists_cursor_before_aggregate() {
     let mut cache = read_spending_cache(&cache_path);
     cache.files = HashMap::from([cached_file(&transcript, vec![old_a, old_b])]);
     write_spending_cache(&cache_path, &cache);
-    let files: Vec<(&'static AgentDefinition, PathBuf)> =
-        vec![(claude_adapter(), transcript.clone())];
+    let files: Vec<SpendingFile> = vec![spending_file(claude_adapter(), transcript.clone())];
     let mut walker = SpendingWalker::new();
 
     panic_after_next_refresh_for_test();
@@ -594,8 +597,7 @@ fn spending_walk_gates_warm_cursor_persists() {
         &[&claude_line(&today, 1.0, "msg-1", "req-1")],
     );
     set_file_mtime(&transcript, NOW_SECS);
-    let files: Vec<(&'static AgentDefinition, PathBuf)> =
-        vec![(claude_adapter(), transcript.clone())];
+    let files: Vec<SpendingFile> = vec![spending_file(claude_adapter(), transcript.clone())];
     let mut walker = SpendingWalker::new();
 
     let first = walk_spending!(
