@@ -4,9 +4,10 @@ use std::time::Duration;
 
 use crate::agents::lifecycle::{self, LifecycleEvent, LifecycleSignal, Transition, TransitionKind};
 use crate::agents::{AgentLifecycleObservation, AgentState, AgentStatus, SpawnedSubagent};
-use crate::ids::{AgentKind, AgentSessionId, EventId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, EventId, LoginName, WorkspaceId};
 use crate::store::event::{self, EventEnvelope};
 use crate::store::snapshot;
+use crate::workspace::record;
 
 use super::{Store, debounce};
 use crate::store::Result;
@@ -64,6 +65,27 @@ impl Store {
                 .and_then(|agent_id| find_agent(&agents, &intent.agent_kind, agent_id))
                 .map(|agent| agent.status);
             let transition = lifecycle_transition(&agents, &intent.agent_kind, intent.observation);
+            // A row this ingress creates carries the room's account, as a launch batch stamps it.
+            let creates_row = |agent_id: &AgentSessionId| {
+                find_agent(&agents, &intent.agent_kind, agent_id).is_none()
+            };
+            let login = if intent
+                .observation
+                .agent_id
+                .as_ref()
+                .is_some_and(creates_row)
+                || intent
+                    .spawned_subagents
+                    .iter()
+                    .any(|child| creates_row(&child.child_agent_id))
+            {
+                record::read_optional(&txn.paths.workspace_record)?
+                    .and_then(|record| record.logins)
+                    .and_then(|mut logins| logins.remove(&intent.agent_kind))
+                    .filter(|name| !name.is_default())
+            } else {
+                None
+            };
             let append_primary = append_lifecycle_event(
                 &intent.observation.signal,
                 transition,
@@ -71,7 +93,10 @@ impl Store {
             );
             let mut staged = Vec::new();
             let primary_event_id = if append_primary {
-                let observation = event::observation_for_event(intent.observation);
+                let mut observation = event::observation_for_event(intent.observation);
+                if prior_status.is_none() {
+                    observation.launch.login.clone_from(&login);
+                }
                 let envelope = EventEnvelope::agent_lifecycle(
                     self.inner.paths.workspace_id.clone(),
                     intent.session_name,
@@ -106,6 +131,7 @@ impl Store {
                 &intent,
                 &agents,
                 transition,
+                login.as_ref(),
                 &mut staged,
             );
             let envelopes = staged
@@ -164,6 +190,7 @@ fn derive_lifecycle_events(
     intent: &AgentLifecycleIntent<'_>,
     agents: &[AgentState],
     primary_transition: Option<Transition>,
+    login: Option<&LoginName>,
     staged: &mut Vec<StagedLifecycleEvent>,
 ) {
     if matches!(
@@ -185,6 +212,7 @@ fn derive_lifecycle_events(
             intent.observation.clone(),
             intent.observation.signal.clone(),
             primary_transition,
+            login,
             staged,
         );
     }
@@ -221,6 +249,7 @@ fn derive_lifecycle_events(
                     observation,
                     LifecycleSignal::SubagentStopped { errored },
                     None,
+                    login,
                     staged,
                 );
             }
@@ -267,6 +296,7 @@ fn append_adoption(
     mut observation: AgentLifecycleObservation,
     signal: LifecycleSignal,
     primary_transition: Option<Transition>,
+    login: Option<&LoginName>,
     staged: &mut Vec<StagedLifecycleEvent>,
 ) {
     let Some(child_id) = observation.agent_id.clone() else {
@@ -284,6 +314,9 @@ fn append_adoption(
         return;
     }
     observation.signal = signal;
+    if child_state.is_none() {
+        observation.launch.login = login.cloned();
+    }
     let parent_kind = root_parent_kind(agents, &intent.agent_kind, parent_id);
     observation.parent_agent_id = Some(root_parent_id(agents, &intent.agent_kind, parent_id));
     if parent_kind != intent.agent_kind {
@@ -750,6 +783,57 @@ mod tests {
                 .and_then(|state| state.parent_agent_id.as_ref()),
             None
         );
+    }
+
+    #[test]
+    fn ingress_stamps_the_rooms_account_only_on_rows_it_creates() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace =
+            crate::workspace::WorkspaceResolver::resolve(dir.path(), None).expect("workspace");
+        let paths = StatePaths::under(workspace.workspace_id.clone(), dir.path()).expect("state");
+        let runtime =
+            RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).expect("runtime");
+        let store = Store::open(paths.clone(), runtime).expect("open store");
+        let append = |kind: &str, id: &str, signal: LifecycleSignal| {
+            store
+                .append_agent_lifecycle(AgentLifecycleIntent {
+                    session_name: "rimz-test",
+                    agent_kind: AgentKind::new_unchecked(kind),
+                    event_name: "SessionStart",
+                    observation: &AgentLifecycleObservation::new(
+                        Some(AgentSessionId::from(id)),
+                        signal,
+                    ),
+                    spawned_subagents: &[],
+                })
+                .expect("append lifecycle")
+        };
+        let login = |id: &str| {
+            snapshot::catch_up_rollup(&paths)
+                .expect("rollup")
+                .1
+                .into_iter()
+                .find(|state| state.agent_id == id)
+                .map(|state| state.login)
+        };
+
+        append("claude", "before", LifecycleSignal::Registered);
+        let work = "work".parse::<LoginName>().expect("login name");
+        store
+            .record_room_logins(
+                &workspace,
+                &crate::ids::RoomLogins::from([(AgentKind::new_unchecked("claude"), work.clone())]),
+            )
+            .expect("freeze accounts");
+        append("claude", "before", LifecycleSignal::Registered);
+        append("claude", "resumed", LifecycleSignal::Registered);
+        append("claude", "unseen", LifecycleSignal::TurnStarted);
+        append("codex", "other", LifecycleSignal::Registered);
+
+        assert_eq!(login("before"), Some(None));
+        assert_eq!(login("resumed"), Some(Some(work.clone())));
+        assert_eq!(login("unseen"), Some(Some(work)));
+        assert_eq!(login("other"), Some(None));
     }
 
     #[test]
