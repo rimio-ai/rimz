@@ -85,7 +85,7 @@ The bare team name and the longer `launch` form use the same reconciliation engi
 
 Fresh launches that open a new pane or tab print the worktree lane, absolute path, `board blackboard.md`, and each member's handle and resolved model, marking the effective leader with `<- leader`. When signal bindings are configured, a `signals` line closes the member list. If you supplied a task, the receipt names its recipient and echoes a shortened version of that prompt. This tells you how the team was launched, not whether its providers are ready: startup is asynchronous, and members may not yet appear in `teams show`.
 
-Run `rimz teams show forge#feat-query` to see each cohort's state, member status, activity, context fill, cost, and time since last activity. The report shows the absolute worktree path once and lists existing memory files relative to the worktree with line counts and modification ages, so you can open the board or notes directly rather than read every pane. The isolation line identifies the room's current setting and temporary directory, not each member's launch history. Stage comes from the team's `Stage:` line in the worktree's `blackboard.md`; it is an advisory progress note, not a state inferred from idle or running agents. PR/CI reflects the room's cached observations, not a fresh forge query; `none` means no PR information is available in the report, not a verified absence of a PR.
+Run `rimz teams show forge#feat-query` to see each cohort's state, member status, activity, context fill, cost, and time since last activity. The report shows the absolute worktree path once and lists existing memory files relative to the worktree with line counts and modification ages, so you can open the board or notes directly rather than read every pane. The isolation line identifies the room's current setting and temporary directory, not each member's launch history. Stage comes from the `Stage:` line that `rimz teams flip` updates in the worktree's `blackboard.md`; it is an advisory progress note, not a state inferred from idle or running agents. PR/CI reflects the room's cached observations, not a fresh forge query; `none` means no PR information is available in the report, not a verified absence of a PR.
 
 Use `rimz message @planner#feat-query '<text>'` to message the leader, or arm a wake on the cohort's next idle transition instead of polling. For an agent waiting on this cohort:
 
@@ -116,6 +116,8 @@ stages = ["Explore", "Plan", "Implement", "Review", "Submit", "Reflect"]
 
 [[agents.teams.forge.roles]]
 role = "planner"
+owns = ["Explore", "Plan", "Reflect"]
+compact-on-handoff = true
 profile = "claude"
 mode = "auto"
 model = "fable"
@@ -125,6 +127,7 @@ system-prompt-file = "planner.md"
 
 [[agents.teams.forge.roles]]
 role = "coder"
+owns = ["Implement"]
 profile = "codex"
 effort = "xhigh"
 args = "--strict-config -c 'web_search=\"cached\"' -c 'features.goals=false' -c 'features.multi_agent=false' -c 'features.shell_snapshot=true' -c 'features.shell_tool=true' -c 'features.skill_mcp_dependency_install=false' -c 'features.tool_call_mcp_elicitation=false' -c 'features.unified_exec=true' -c 'features.browser_use=false' -c 'features.browser_use_external=false' -c 'features.computer_use=false' -c 'features.in_app_browser=false' -c 'features.image_generation=false' -c 'features.tool_suggest=false' -c 'features.memories=false' -c 'features.default_mode_request_user_input=false' -c 'skills.include_instructions=true'"
@@ -132,6 +135,7 @@ system-prompt-file = "coder.md"
 
 [[agents.teams.forge.roles]]
 role = "reviewer"
+owns = ["Review", "Submit"]
 profile = "claude"
 mode = "auto"
 model = "opus"
@@ -142,13 +146,25 @@ system-prompt-file = "reviewer.md"
 
 `scratch-files` declares the workflow's ephemeral team memory as verbatim gitignore patterns. On every launch or resume, RimZ appends missing patterns to the repository's `.git/info/exclude`; the leading `/` anchors these names at the checkout root. Linked worktrees commonly share that exclude file with the main checkout, so a declared name is ignored as untracked everywhere in the repository, not only in this team's worktree. To reverse it, delete those pattern lines from `.git/info/exclude`. Once the branch content has landed, excluded scratch files no longer keep the worktree dirty: post-exit cleanup and `rimz gc` may remove the tree without a dirty-tree prompt, deleting the scratch files with it.
 
-Declare `stages` when the team follows a repeatable pipeline, so `show` can display what lies ahead and mark its current step. The team writes and updates `blackboard.md`, for example with `Stage: Implement (@coder)`, and creates its own notes; RimZ does not create these files or advance stages. The board path is fixed at the worktree root, even if it is not listed in `scratch-files`. Stage ordering and validation are covered in [configuration](./configuration.md#teams).
+Declare `stages` when the team follows a repeatable pipeline, so `show` can display what lies ahead and mark its current step. The team creates `blackboard.md` with a `Stage:` line, for example `Stage: Plan (@planner)`, and creates its own notes; `rimz teams flip` advances the board using each role's `owns` list. The board path is fixed at the worktree root, even if it is not listed in `scratch-files`. Stage ordering and validation are covered in [configuration](./configuration.md#teams).
 
 At launch, adapters with reminder support (currently Claude, Codex, Qwen, and Droid) tell each member its worktree, team, role, channel, leader and teammates; which model and effort it runs on; whether the session is fresh or resumed; and which declared scratch files existed then, with line counts. `teams show` scans those same patterns again when you inspect the cohort. The model line comes from the role's resolved launch settings and is switched off per profile with [`model-reminder = false`](./configuration.md#profiles). On a reused worktree, RimZ reports leftover scratch files as earlier run state rather than touching them, so the member can read them before acting.
 
 Launching the team name opens every member in that layout, and each answers to its role handle: `@reviewer` inside the team's channel, `forge.reviewer` from anywhere in the workspace. A team launched by another agent is still a top-level peer cohort, not a child of the caller. The optional `leader` names the role that receives a trailing launch prompt; without it, the first declared role leads. `rimz teams forge -w feat-x "task"` therefore seeds the planner directly, while the rest of the team starts ready for its hand-offs. `rimz agents forge.reviewer` launches or re-adds that one role with the same identity it has inside the full team, and from a pane in the team's own channel the bare `rimz agents reviewer` means the same thing.
 
 Start from one of the three shipped directories — `forge`, `mill`, or `spot` — or from scratch: rename the roles, add or drop some, swap the models and prompts — a pair, a trio, or a whole bench of specialists. The role prompts do the heavy lifting: each one states the role's craft, how the roles hand work to each other, and who owns which decision, which is what turns co-launched agents into a team instead of a row of panes. The full config shape, override fields included, is in [configuration → agent profiles, commands, and teams](./configuration.md#agent-profiles-commands-and-teams).
+
+### Hand off with one command
+
+Editing the board and separately messaging the next owner leaves two steps to forget. Once your stage's work is saved, hand it off with one command:
+
+```sh
+rimz teams flip Implement -m "plan ready in plan-notes.md, read and implement"
+```
+
+RimZ updates the worktree's `blackboard.md` Stage line, appends the hand-off to its Progress log, records the stage opening, and sends the note to the configured owner at its next turn boundary. You do not need a separate message. Use exact stage names; put qualifiers in the note. To correct a hand-off, flip back to the intended stage; both actions stay in the ledger. `rimz teams flip Done` closes the board without waking anyone.
+
+On resume or restart, RimZ reads the board when its current owner registers and wakes that owner to continue, without another ledger entry. The planner's `compact-on-handoff = true` in the example also compacts its own context at its next turn boundary after handing work to another member, not when moving between stages it owns. Remove the opt-in to stop future hand-off compactions. See the [command reference](../reference/cli/teams.md#flip-the-board-to-the-next-stage) for selection, delivery, and recovery details.
 
 ### Send events to the responsible role
 
