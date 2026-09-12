@@ -388,7 +388,7 @@ impl<'a> TaskFire<'a> {
         if let Some(scope) = &context.scope
             && let Some(reason) = crate::harness::budget::scope_gate(
                 &scope.scope_runtime,
-                &scope.kind,
+                scope.login_key.as_ref(),
                 &self.config,
                 self.now,
             )

@@ -771,12 +771,12 @@ fn scope_ledgers_round_trip_and_labels_name_the_binding_scope() {
             .contains_key("override_spec"),
         "account ledgers do not invent a fleet override"
     );
-    let account_scope = DailyBudgetScope::Account(kind.clone());
+    let account_scope = DailyBudgetScope::Account(LoginKey::default_for(kind.clone()));
     assert_eq!(
         account_scope.ledger_path(&runtime),
         runtime
             .persistent_shared_root
-            .join("budget.account.claude.json")
+            .join("budget.account.claude@default.json")
     );
     account_scope
         .write_ledger(&runtime, &account)
@@ -846,7 +846,7 @@ fn scope_ledgers_require_config_to_arm_runtime_caps() {
     let unarmed = MachineConfig::default();
 
     let fleet_scope = DailyBudgetScope::Fleet;
-    let account_scope = DailyBudgetScope::Account(kind.clone());
+    let account_scope = DailyBudgetScope::Account(LoginKey::default_for(kind.clone()));
     assert_eq!(fleet_scope.effective_cap_usd(&fleet, &unarmed), None);
     assert_eq!(
         fleet_scope.cap_source(&fleet, &unarmed),
@@ -889,7 +889,7 @@ fn unsupported_account_budget_is_ignored_by_projection_and_enforcement() {
         }),
         ..Default::default()
     };
-    let scope = DailyBudgetScope::Account(kind);
+    let scope = DailyBudgetScope::Account(LoginKey::default_for(kind));
     assert_eq!(scope.effective_cap_usd(&ledger, &config), None);
     assert_eq!(scope.cap_source(&ledger, &config), BudgetCapSource::None);
 }
@@ -924,7 +924,7 @@ fn park_projection_uses_agent_then_turn_then_fleet_then_account_precedence() {
             },
         )
         .expect("fleet ledger");
-    DailyBudgetScope::Account(state.kind.clone())
+    DailyBudgetScope::Account(LoginKey::default_for(state.kind.clone()))
         .write_ledger(
             &runtime,
             &DailyBudgetLedger {
@@ -1013,8 +1013,13 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
     );
     let kind = AgentKind::new_unchecked("claude");
     assert!(
-        scope_gate(&runtime, &kind, &config, now)
-            .is_some_and(|reason| reason.contains("fleet budget exhausted"))
+        scope_gate(
+            &runtime,
+            Some(&LoginKey::default_for(kind.clone())),
+            &config,
+            now
+        )
+        .is_some_and(|reason| reason.contains("fleet budget exhausted"))
     );
 
     let mut fleet = DailyBudgetScope::Fleet.read_ledger(&runtime);
@@ -1024,7 +1029,7 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
         .expect("disable fleet");
     let spending = crate::agents::spending::Spending::default();
     let provider_day = BTreeMap::from([(
-        "claude".to_owned(),
+        LoginKey::default_for(kind.clone()),
         crate::agents::spending::SpendWindow {
             usd: 10.5,
             ..Default::default()
@@ -1037,13 +1042,139 @@ fn scope_gate_reads_room_and_account_local_day_caches() {
             spending,
             days: BTreeMap::new(),
             models: BTreeMap::new(),
-            day_by_provider: provider_day,
+            day_by_login: provider_day,
             day_cutoff_secs: cutoff,
             ..Default::default()
         },
     );
     assert!(
-        scope_gate(&runtime, &kind, &config, now)
-            .is_some_and(|reason| reason.contains("claude account budget exhausted"))
+        scope_gate(&runtime, Some(&LoginKey::default_for(kind)), &config, now)
+            .is_some_and(|reason| reason.contains("claude@default account budget exhausted"))
+    );
+}
+
+#[test]
+fn account_budget_isolates_logins_and_projects_the_room_account() {
+    use crate::agents::spending::{
+        ProviderSpendingCache, SpendWindow, write_provider_spending_cache,
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime");
+    runtime.ensure_dirs().expect("dirs");
+    let config: MachineConfig = toml::from_str(
+        "timezone = \"UTC\"\n[accounts.budget]\nclaude = \"10/day\"\n[accounts.claude.work]\nhome = \"/srv/budget-test-work\"\n",
+    ).expect("config");
+    let now: Timestamp = "2026-06-02T12:00:00Z".parse().expect("now");
+    let cutoff = local_day_cutoff_secs(now, &TimeZone::UTC).expect("cutoff");
+    let default = agent(0.0, AgentStatus::Running, Some(now));
+    let mut work = default.clone();
+    work.agent_id = "work-session".into();
+    work.login = Some("work".parse().expect("login"));
+    let default_key = LoginKey::default_for(default.kind.clone());
+    let work_key = LoginKey::new(work.kind.clone(), work.login.clone().expect("login"));
+    let mut snapshot = SidebarSnapshot::build_with_agents(workspace_id, vec![default, work], now)
+        .with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
+    let mut provider = ProviderSpendingCache {
+        day_cutoff_secs: cutoff,
+        day_by_provider: BTreeMap::from([(
+            "claude".to_owned(),
+            SpendWindow {
+                usd: 99.0,
+                ..Default::default()
+            },
+        )]),
+        ..Default::default()
+    };
+    write_provider_spending_cache(&runtime.shared_provider_spending_path(), &provider);
+    let scopes = evaluate_scopes(&snapshot, &runtime, &config, now, Some(cutoff));
+    assert_eq!(binding_scope_park(&scopes, &default_key), None);
+    assert_eq!(
+        binding_scope_park(&scopes, &work_key),
+        None,
+        "kind-wide spend cannot park a missing login"
+    );
+
+    provider.day_by_login = BTreeMap::from([
+        (
+            default_key.clone(),
+            SpendWindow {
+                usd: 2.0,
+                ..Default::default()
+            },
+        ),
+        (
+            work_key.clone(),
+            SpendWindow {
+                usd: 12.0,
+                ..Default::default()
+            },
+        ),
+    ]);
+    write_provider_spending_cache(&runtime.shared_provider_spending_path(), &provider);
+    let scopes = evaluate_scopes(&snapshot, &runtime, &config, now, Some(cutoff));
+    assert_eq!(scopes.daily.len(), 3);
+    assert_eq!(binding_scope_park(&scopes, &default_key), None);
+    assert_eq!(binding_scope_park(&scopes, &work_key), Some(now));
+    enforce(&snapshot, &runtime, None, &config);
+    let scope = DailyBudgetScope::Account(work_key.clone());
+    assert_eq!(
+        scope.ledger_path(&runtime).file_name().unwrap(),
+        "budget.account.claude@work.json"
+    );
+    assert!(scope.read_ledger(&runtime).parked.is_some());
+    assert!(
+        !DailyBudgetScope::Account(default_key)
+            .ledger_path(&runtime)
+            .exists()
+    );
+    project_parks(&mut snapshot, &runtime, &config);
+    assert!(snapshot.agents[0].budget_park.is_none());
+    assert_eq!(
+        snapshot.agents[1]
+            .budget_park
+            .as_ref()
+            .expect("work park")
+            .scope,
+        BudgetScope::Account
+    );
+
+    let logins = RoomLoginSet::new(
+        Some(BTreeMap::from([(
+            work_key.kind.clone(),
+            work_key.name.clone(),
+        )])),
+        Some(crate::agents::LoginCatalog::from_config(&config.accounts).expect("catalog")),
+        BTreeMap::new(),
+    );
+    project_budget_views(&mut snapshot, &runtime, &config, &provider, &logins);
+    let panel = snapshot
+        .providers
+        .iter()
+        .find(|panel| panel.kind == "claude")
+        .expect("panel");
+    let budget = panel.day_budget.as_ref().expect("budget");
+    assert_eq!(budget.spend_usd, 12.0);
+    assert!(budget.parked);
+    provider.day_by_login.clear();
+    write_provider_spending_cache(&runtime.shared_provider_spending_path(), &provider);
+    assert!(scope_gate(&runtime, Some(&work_key), &config, now).is_some());
+    project_parks(&mut snapshot, &runtime, &config);
+    assert_eq!(
+        snapshot.agents[1]
+            .budget_park
+            .as_ref()
+            .expect("park survives missing spend")
+            .spend_usd,
+        12.0
+    );
+    let unresolved = RoomLoginSet::new(None, None, BTreeMap::new());
+    project_budget_views(&mut snapshot, &runtime, &config, &provider, &unresolved);
+    assert!(
+        snapshot
+            .providers
+            .iter()
+            .all(|panel| panel.day_budget.is_none())
     );
 }

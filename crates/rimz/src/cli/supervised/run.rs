@@ -867,7 +867,7 @@ pub(in crate::cli) fn run_supervised(
         }
         if let Some(reason) = rimz::harness::budget::scope_gate(
             prepared.store.runtime_paths(),
-            &prepared.kind,
+            login_key.as_ref(),
             &prepared.machine_config,
             jiff::Timestamp::now(),
         ) {

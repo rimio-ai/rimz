@@ -730,6 +730,7 @@ fn enrich_core(
         runtime,
         &machine_config,
         &spending_caches.provider,
+        &logins,
     );
     super::unread::derive(&mut snapshot, &episodes, &read_marks);
     // Git facts and late unread bits land after the pane fold's initial sort,
@@ -918,6 +919,7 @@ pub fn provider_panels_from_caches(
         runtime,
         &config,
         provider_spending,
+        logins,
     );
     snapshot.providers
 }
