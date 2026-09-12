@@ -49,7 +49,7 @@ pub fn env_var(pid: u32, key: &str) -> Option<String> {
     )
 }
 
-pub fn environ(pid: u32) -> Option<Vec<(String, String)>> {
+pub(crate) fn environ(pid: u32) -> Option<Vec<(String, String)>> {
     process_with(
         pid,
         ProcessRefreshKind::nothing().with_environ(UpdateKind::Always),
@@ -57,7 +57,7 @@ pub fn environ(pid: u32) -> Option<Vec<(String, String)>> {
     )
 }
 
-pub fn cmdline(pid: u32) -> Option<String> {
+pub(crate) fn cmdline(pid: u32) -> Option<String> {
     process_with(
         pid,
         ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always),
@@ -65,7 +65,7 @@ pub fn cmdline(pid: u32) -> Option<String> {
     )
 }
 
-pub fn real_uid(pid: u32) -> Option<u32> {
+pub(crate) fn real_uid(pid: u32) -> Option<u32> {
     process_with(
         pid,
         ProcessRefreshKind::nothing().with_user(UpdateKind::Always),
@@ -73,7 +73,7 @@ pub fn real_uid(pid: u32) -> Option<u32> {
     )
 }
 
-pub fn process_start(pid: u32) -> Option<jiff::Timestamp> {
+pub(crate) fn process_start(pid: u32) -> Option<jiff::Timestamp> {
     process_with(pid, process_refresh_identity(), |process| {
         let seconds = i64::try_from(process.start_time()).ok()?;
         jiff::Timestamp::from_second(seconds).ok()
@@ -107,7 +107,7 @@ pub fn cwd(pid: u32) -> Option<PathBuf> {
     )
 }
 
-pub fn exe_path(pid: u32) -> Option<(PathBuf, bool)> {
+pub(crate) fn exe_path(pid: u32) -> Option<(PathBuf, bool)> {
     process_with(
         pid,
         ProcessRefreshKind::nothing().with_exe(UpdateKind::Always),
@@ -115,7 +115,7 @@ pub fn exe_path(pid: u32) -> Option<(PathBuf, bool)> {
     )
 }
 
-pub fn stat_metrics(pid: u32) -> Option<StatMetrics> {
+pub(crate) fn stat_metrics(pid: u32) -> Option<StatMetrics> {
     process_with(pid, process_refresh_stat(), |process| {
         Some(StatMetrics {
             state: status_state(process.status()),
@@ -142,7 +142,7 @@ pub fn children(pid: u32) -> Vec<u32> {
 
 /// Combined disk I/O bytes for `pid`. macOS reports disk read/write counters;
 /// tty, pipe, and cached-VFS traffic are outside this narrower source.
-pub fn io_bytes(pid: u32) -> Option<u64> {
+pub(crate) fn io_bytes(pid: u32) -> Option<u64> {
     process_with(
         pid,
         ProcessRefreshKind::nothing().with_disk_usage(),

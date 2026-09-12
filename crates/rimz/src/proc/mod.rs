@@ -2,7 +2,7 @@
 //! reset` orphan sweep walks every process
 //! ([`list_processes`]); the sidebar resolves a pane's owning shell from its root
 //! pid ([`comm`]), dates an in-pane agent instance from its start
-//! ([`process_start`]), and matches a process to a pane by working directory
+//! (`process_start`), and matches a process to a pane by working directory
 //! ([`cwd`]). Unsupported platforms return an empty list / `None`, so callers
 //! fall back rather than guessing. It also owns the hot-path subprocess spawn
 //! seams the perf guards count and the user's login-shell selection.
@@ -23,10 +23,12 @@ use std::time::{Duration, Instant};
 /// can retire an orphaned predecessor before entering the multiplexer.
 pub const REMOTE_LINEAGE_ENV: &str = "RIMZ_REMOTE_LINEAGE";
 
-pub(crate) use pane_probe::command_starts_with_elevation_wrapper;
 pub use pane_probe::{
-    HostedAgentProcess, InPaneAgentProcess, elevated_in_pane_agent, hosted_agent_absent_under_root,
-    hosted_agent_process_for_root, in_pane_agent_process_for_root, in_pane_agent_start,
+    HostedAgentProcess, InPaneAgentProcess, hosted_agent_process_for_root,
+    in_pane_agent_process_for_root, in_pane_agent_start,
+};
+pub(crate) use pane_probe::{
+    command_starts_with_elevation_wrapper, elevated_in_pane_agent, hosted_agent_absent_under_root,
     in_pane_agent_start_for_root, in_pane_agent_starts,
 };
 
@@ -39,9 +41,12 @@ pub fn tail_output(bytes: &[u8], cap: usize) -> String {
 
 #[cfg(target_os = "macos")]
 pub use macos::{
-    argv, children, clk_tck, cmdline, comm, comm_and_ppid, cwd, env_var, environ, exe_path,
-    io_bytes, list_processes, process_is_live, process_start, process_start_token, real_uid,
-    stat_metrics, write_bytes,
+    argv, children, clk_tck, comm, comm_and_ppid, cwd, env_var, list_processes, process_is_live,
+    process_start_token, write_bytes,
+};
+#[cfg(target_os = "macos")]
+pub(crate) use macos::{
+    cmdline, environ, exe_path, io_bytes, process_start, real_uid, stat_metrics,
 };
 
 fn git_binary() -> &'static Path {
@@ -408,14 +413,14 @@ pub fn env_var(_pid: u32, _key: &str) -> Option<String> {
 /// empty environment is `Some(Vec::new())`; an unreadable process environment
 /// is `None`, so signal callers can spare a process whose domain is unknown.
 #[cfg(target_os = "linux")]
-pub fn environ(pid: u32) -> Option<Vec<(String, String)>> {
+pub(crate) fn environ(pid: u32) -> Option<Vec<(String, String)>> {
     Some(parse_environ_pairs(
         &std::fs::read(format!("/proc/{pid}/environ")).ok()?,
     ))
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn environ(_pid: u32) -> Option<Vec<(String, String)>> {
+pub(crate) fn environ(_pid: u32) -> Option<Vec<(String, String)>> {
     None
 }
 
@@ -511,7 +516,7 @@ fn parse_status_name_ppid(status: &str) -> Option<(String, u32)> {
 /// it. `None` on a non-Linux target or an unreadable entry — another user's
 /// process — so callers fall back rather than guess.
 #[cfg(target_os = "linux")]
-pub fn cmdline(pid: u32) -> Option<String> {
+pub(crate) fn cmdline(pid: u32) -> Option<String> {
     let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
     Some(
         String::from_utf8_lossy(&raw)
@@ -522,7 +527,7 @@ pub fn cmdline(pid: u32) -> Option<String> {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn cmdline(_pid: u32) -> Option<String> {
+pub(crate) fn cmdline(_pid: u32) -> Option<String> {
     None
 }
 
@@ -531,13 +536,13 @@ pub fn cmdline(_pid: u32) -> Option<String> {
 /// the sidebar distinguish an elevated descendant without crossing into that
 /// user's private environment or config.
 #[cfg(target_os = "linux")]
-pub fn real_uid(pid: u32) -> Option<u32> {
+pub(crate) fn real_uid(pid: u32) -> Option<u32> {
     parse_status_identity(&std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?)
         .map(|(_, uid)| uid)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn real_uid(_pid: u32) -> Option<u32> {
+pub(crate) fn real_uid(_pid: u32) -> Option<u32> {
     None
 }
 
@@ -549,7 +554,7 @@ pub fn real_uid(_pid: u32) -> Option<u32> {
 /// `pane_start_allows_bind` guard). `None` on a non-Linux target or an unreadable
 /// `/proc` — another user's process — so callers fall back rather than guess.
 #[cfg(target_os = "linux")]
-pub fn process_start(pid: u32) -> Option<jiff::Timestamp> {
+pub(crate) fn process_start(pid: u32) -> Option<jiff::Timestamp> {
     let ticks = parse_starttime_ticks(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)?;
     let btime = parse_btime(&std::fs::read_to_string("/proc/stat").ok()?)?;
     let seconds = btime.checked_add((ticks / clk_tck()) as i64)?;
@@ -557,7 +562,7 @@ pub fn process_start(pid: u32) -> Option<jiff::Timestamp> {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn process_start(_pid: u32) -> Option<jiff::Timestamp> {
+pub(crate) fn process_start(_pid: u32) -> Option<jiff::Timestamp> {
     None
 }
 
@@ -625,7 +630,7 @@ pub fn cwd(pid: u32) -> Option<std::path::PathBuf> {
 /// suffix as part of the filesystem path. Non-Linux, or an unreadable link,
 /// yields `None`.
 #[cfg(target_os = "linux")]
-pub fn exe_path(pid: u32) -> Option<(std::path::PathBuf, bool)> {
+pub(crate) fn exe_path(pid: u32) -> Option<(std::path::PathBuf, bool)> {
     use std::ffi::OsString;
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
@@ -676,7 +681,7 @@ pub fn cwd(_pid: u32) -> Option<std::path::PathBuf> {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn exe_path(_pid: u32) -> Option<(std::path::PathBuf, bool)> {
+pub(crate) fn exe_path(_pid: u32) -> Option<(std::path::PathBuf, bool)> {
     None
 }
 
@@ -707,30 +712,30 @@ pub mod testkit {
 /// the pid-reuse guard — where a separate `status` read used to pay a second
 /// file open per pane for `VmRSS` alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StatMetrics {
+pub(crate) struct StatMetrics {
     /// Process state character from field 3 (`R`, `S`, `D`, `Z`, ...).
-    pub state: char,
+    pub(crate) state: char,
     /// utime + stime (fields 14 + 15), in clock ticks. Two readings diffed
     /// over a known interval give CPU%.
-    pub cpu_ticks: u64,
+    pub(crate) cpu_ticks: u64,
     /// cutime + cstime (fields 16 + 17), in clock ticks. The kernel accounts
     /// CPU used by waited-for children here, so pane-tree sampling can keep
     /// short-lived rustc/linker work visible after the child process exits.
-    pub child_cpu_ticks: u64,
+    pub(crate) child_cpu_ticks: u64,
     /// Resident set size in KiB: field 24 (`rss`, in pages) × the page size.
     /// `rss` is the kernel's resident-page counter and can run a few pages
     /// apart from `status`'s `VmRSS`; invisible at the display's MiB
     /// granularity, and the field is display-only by contract.
-    pub rss_kb: u64,
+    pub(crate) rss_kb: u64,
     /// Raw `starttime` (field 22) in clock ticks since boot — an exact integer
     /// identity for pid-reuse detection, with no `btime` anchoring round-trip.
-    pub start_ticks: u64,
+    pub(crate) start_ticks: u64,
 }
 
-/// Read [`StatMetrics`] for `pid`. `None` on a non-Linux target or an
+/// Read `StatMetrics` for `pid`. `None` on a non-Linux target or an
 /// unreadable/garbled stat line, so callers abstain rather than guess.
 #[cfg(target_os = "linux")]
-pub fn stat_metrics(pid: u32) -> Option<StatMetrics> {
+pub(crate) fn stat_metrics(pid: u32) -> Option<StatMetrics> {
     parse_stat_metrics(
         &std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?,
         page_size_kb(),
@@ -738,11 +743,11 @@ pub fn stat_metrics(pid: u32) -> Option<StatMetrics> {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn stat_metrics(_pid: u32) -> Option<StatMetrics> {
+pub(crate) fn stat_metrics(_pid: u32) -> Option<StatMetrics> {
     None
 }
 
-/// Parse a `/proc/<pid>/stat` line into [`StatMetrics`]. The same
+/// Parse a `/proc/<pid>/stat` line into `StatMetrics`. The same
 /// `rsplit_once(')')` anchor as [`parse_starttime_ticks`] — `comm` may carry
 /// spaces and parens — then, indexed past the closing paren: state 0, utime 11,
 /// stime 12, cutime 13, cstime 14, starttime 19, rss 21.
@@ -897,13 +902,13 @@ fn parse_children(raw: &str) -> Vec<u32> {
 /// non-Linux target, an unreadable file (e.g. another user's process), or a
 /// missing field.
 #[cfg(target_os = "linux")]
-pub fn io_bytes(pid: u32) -> Option<u64> {
+pub(crate) fn io_bytes(pid: u32) -> Option<u64> {
     let io = std::fs::read_to_string(format!("/proc/{pid}/io")).ok()?;
     parse_io_bytes(&io)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn io_bytes(_pid: u32) -> Option<u64> {
+pub(crate) fn io_bytes(_pid: u32) -> Option<u64> {
     None
 }
 
