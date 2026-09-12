@@ -154,7 +154,7 @@ impl Cell {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedProfile {
     pub kind: AgentKind,
-    pub chain: Vec<String>,
+    pub layers: Vec<String>,
     pub launch: crate::agents::LaunchParams,
     pub auto_compact: Option<String>,
     pub system_prompt_file: Option<PathBuf>,
@@ -164,10 +164,17 @@ pub struct ResolvedProfile {
 }
 
 impl ResolvedProfile {
+    /// Consume the resolved profile into its effective display chain.
+    pub fn into_chain(mut self) -> Vec<String> {
+        self.layers.push(self.kind.to_string());
+        dedup_first(&mut self.layers);
+        self.layers
+    }
+
     fn bare(kind: &str) -> Self {
         Self {
             kind: AgentKind::new_unchecked(kind),
-            chain: vec![kind.to_owned()],
+            layers: Vec::new(),
             launch: crate::agents::LaunchParams::default(),
             auto_compact: None,
             system_prompt_file: None,
@@ -1027,10 +1034,7 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
     };
 
     let mut resolved = ResolvedProfile::bare(&terminal_kind);
-    if seen.last() != Some(&terminal_kind) {
-        seen.push(terminal_kind);
-    }
-    resolved.chain = seen;
+    resolved.layers = seen;
     for layer in layers {
         resolved.fill_missing(layer);
     }
@@ -1849,8 +1853,8 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     let same_kind = original.kind == base.kind;
 
     original.kind.clone_from(&base.kind);
-    original.chain.pop();
-    original.chain.extend_from_slice(&base.chain);
+    original.layers.extend_from_slice(&base.layers);
+    dedup_first(&mut original.layers);
     if original.skills.is_none() {
         original.skills.clone_from(&base.skills);
     }
@@ -1889,6 +1893,11 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     }
 
     original
+}
+
+fn dedup_first(layers: &mut Vec<String>) {
+    let mut seen = BTreeSet::new();
+    layers.retain(|layer| seen.insert(layer.clone()));
 }
 
 fn invalid_scratch_pattern(pattern: &str) -> Option<&'static str> {

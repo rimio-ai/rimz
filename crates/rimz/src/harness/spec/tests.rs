@@ -595,14 +595,14 @@ fn profile_inheritance_and_builtin_overrides_resolve() {
 
     let bare = resolve_profile("claude", &no_profiles()).expect("built-in");
     assert_eq!(bare.kind.as_str(), "claude");
-    assert_eq!(bare.chain, ["claude"]);
+    assert!(bare.layers.is_empty());
     assert_eq!(
-        resolve_profile("claude", &profiles).unwrap().chain,
+        resolve_profile("claude", &profiles).unwrap().layers,
         ["claude"]
     );
     let child = resolve_profile("child", &profiles).expect("child");
     assert_eq!(child.kind.as_str(), "codex");
-    assert_eq!(child.chain, ["child", "base", "codex"]);
+    assert_eq!(child.layers, ["child", "base"]);
     assert_eq!(child.launch.model.as_deref(), Some("base-model"));
     assert_eq!(child.launch.effort.as_deref(), Some("high"));
     assert_eq!(child.args.as_deref(), Some("--child"));
@@ -875,6 +875,49 @@ fn profile_override_supplies_provider_base_and_orders_prompt_fragments() {
 
 #[test]
 fn same_kind_and_chained_overrides_resolve_without_drops() {
+    let self_named = profiles([("codex", profile("codex"))]);
+    let resolved = resolve_profile("codex", &self_named).unwrap();
+    assert_eq!(resolved.layers, ["codex"]);
+    assert_eq!(resolved.kind, "codex");
+    assert_eq!(resolved.into_chain(), ["codex"]);
+    let rebased = resolve_profile_rebased("codex", Some("claude"), &self_named).unwrap();
+    assert_eq!(rebased.layers, ["codex"]);
+    assert_eq!(rebased.kind, "claude");
+    assert_eq!(rebased.into_chain(), ["codex", "claude"]);
+
+    let mut writer_profiles = profiles([("writer", profile("claude")), ("fast", profile("codex"))]);
+    for (name, agent_override, layers, kind, chain) in [
+        (
+            "writer",
+            Some("writer"),
+            vec!["writer"],
+            "claude",
+            vec!["writer", "claude"],
+        ),
+        (
+            "writer",
+            Some("fast"),
+            vec!["writer", "fast"],
+            "codex",
+            vec!["writer", "fast", "codex"],
+        ),
+        ("claude", None, Vec::new(), "claude", vec!["claude"]),
+    ] {
+        let resolved = resolve_profile_rebased(name, agent_override, &writer_profiles).unwrap();
+        assert_eq!(resolved.layers, layers);
+        assert_eq!(resolved.kind, kind);
+        assert_eq!(resolved.into_chain(), chain);
+    }
+    writer_profiles
+        .0
+        .insert("claude".to_owned(), profile("claude"));
+    let original = resolve_profile("writer", &writer_profiles).unwrap();
+    let rebased = resolve_profile_rebased("writer", Some("writer"), &writer_profiles).unwrap();
+    assert_eq!(original.layers, ["writer", "claude"]);
+    assert_eq!(rebased.layers, original.layers);
+    assert_eq!(rebased.kind, original.kind);
+    assert_eq!(rebased.into_chain(), original.into_chain());
+
     let profiles = profiles([
         (
             "planner",
@@ -888,20 +931,19 @@ fn same_kind_and_chained_overrides_resolve_without_drops() {
         ("switch", profile("switch-base")),
         ("switch-base", profile("codex")),
     ]);
-    for (agent_override, chain, kind) in [
-        (None, vec!["planner", "claude"], "claude"),
-        (Some("claude"), vec!["planner", "claude"], "claude"),
-        (Some(" codex "), vec!["planner", "codex"], "codex"),
+    for (agent_override, layers, kind) in [
+        (None, vec!["planner"], "claude"),
+        (Some("claude"), vec!["planner"], "claude"),
+        (Some(" codex "), vec!["planner"], "codex"),
         (
             Some("switch"),
-            vec!["planner", "switch", "switch-base", "codex"],
+            vec!["planner", "switch", "switch-base"],
             "codex",
         ),
     ] {
         let resolved = resolve_profile_rebased("planner", agent_override, &profiles).unwrap();
-        assert_eq!(resolved.chain, chain);
+        assert_eq!(resolved.layers, layers);
         assert_eq!(resolved.kind, kind);
-        assert_eq!(resolved.chain.last().unwrap(), resolved.kind.as_str());
     }
     let same = resolve_spec_with_agent_override(
         Some("planner"),
