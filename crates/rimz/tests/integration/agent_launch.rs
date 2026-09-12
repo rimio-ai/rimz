@@ -366,6 +366,341 @@ fn user_shell_subagent_entrypoints_do_not_create_room_state() {
 
 #[cfg(unix)]
 #[test]
+fn explain_prints_the_plan_without_side_effects() {
+    let env = Env::new();
+    let state = env.state_path_for(&env.project_root);
+    let runtime = env.runtime_paths();
+    let config_dir = env.config_root().join("rimz");
+    std::fs::create_dir_all(&config_dir).expect("mkdir config");
+    let base = env.home_root.join("base.md");
+    let more = env.home_root.join("more.md");
+    std::fs::write(&base, "Base instructions.\n").expect("base prompt");
+    std::fs::write(&more, "More instructions.\n").expect("prompt fragment");
+    std::fs::write(
+        config_dir.join("agents.toml"),
+        format!(
+            "[agents]\nisolation = \"host\"\n\
+             [agents.profiles.writer]\nagent = \"claude\"\nmodel = \"fable\"\neffort = \"high\"\nmode = \"ask\"\n\
+             system-prompt-file = {base:?}\nappend-system-prompt-files = [{more:?}]\n\
+             [agents.profiles.worker]\nagent = \"writer\"\nskills = []\n\
+             [subagents.profiles.scout]\nagent = \"codex\"\ndescription = \"Inspect the code\"\n"
+        ),
+    )
+    .expect("write explain profiles");
+    assert!(!state.root.exists());
+    assert!(!runtime.prompt_dir().exists());
+
+    let output = env
+        .rimz()
+        .args(["agents", "explain", "worker", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("explain JSON");
+    let artifact = std::path::Path::new(report["prompt"]["artifact"].as_str().unwrap());
+    assert_eq!(artifact.parent(), Some(runtime.prompt_dir().as_path()));
+    let filename = artifact.file_name().unwrap().to_str().unwrap();
+    let digest = filename
+        .strip_prefix("sys.")
+        .unwrap()
+        .strip_suffix(".md")
+        .unwrap();
+    assert_eq!(digest.len(), 32);
+    assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    assert!(
+        !artifact.exists(),
+        "explain materialized its planned prompt"
+    );
+    let provider_argv = report["provider_argv"].as_array().unwrap();
+    assert!(provider_argv.windows(2).any(|pair| {
+        pair[0] == "--system-prompt-file" && pair[1] == report["prompt"]["artifact"]
+    }));
+    assert!(
+        provider_argv
+            .windows(2)
+            .any(|pair| pair[0] == "--model" && pair[1] == "fable")
+    );
+    let reminder = report["prompt"]["reminder"].as_str().unwrap();
+    assert!(reminder.starts_with("<system_reminder>\nYou are @worker, running on"));
+    assert!(reminder.contains("at high effort."));
+    assert!(reminder.contains("- `scout` (codex): Inspect the code"));
+    assert!(reminder.ends_with("\n</system_reminder>"));
+    assert!(
+        provider_argv
+            .windows(2)
+            .any(|pair| { pair[0] == "--append-system-prompt" && pair[1] == reminder })
+    );
+    assert_eq!(report["env"]["RIMZ_AGENT_PROFILE"], "worker");
+    assert_eq!(report["env"]["RIMZ_AGENT_ID"], "");
+    assert!(report["env"].get("RIMZ_AGENT_NAME").is_none());
+
+    let mut protocol = serde_json::json!({
+        "target": report["target"], "kind": report["kind"], "action": report["action"],
+        "name": report["name"], "launch_id": report["launch_id"], "cwd": report["cwd"],
+        "profile": report["profile"], "mode": report["mode"], "model": report["model"],
+        "effort": report["effort"], "skills": report["skills"], "program": report["program"],
+        "shell": report["argv"][0], "prompt": report["prompt"], "sandbox": report["sandbox"]
+    });
+    assert_eq!(protocol["shell"], "/bin/sh");
+    protocol["shell"] = "<shell>".into();
+    protocol["prompt"]["artifact"] = "<runtime>/prompt/sys.<digest>.md".into();
+    protocol["prompt"]["reminder"] =
+        "<system_reminder>\n<model and subagent catalog>\n</system_reminder>".into();
+    let protocol = serde_json::to_string(&protocol)
+        .unwrap()
+        .replace(env.home_root.to_str().unwrap(), "<home>");
+    insta::assert_json_snapshot!(
+        serde_json::from_str::<serde_json::Value>(&protocol).unwrap(),
+        @r###"
+    {
+      "action": "launch",
+      "cwd": "<home>/project",
+      "effort": "high",
+      "kind": "claude",
+      "launch_id": null,
+      "mode": "ask",
+      "model": "fable",
+      "name": null,
+      "profile": {
+        "chain": [
+          "worker",
+          "writer",
+          "claude"
+        ],
+        "name": "worker",
+        "role": null,
+        "team": null
+      },
+      "program": "claude",
+      "prompt": {
+        "artifact": "<runtime>/prompt/sys.<digest>.md",
+        "channel": "--system-prompt-file",
+        "composed": "Base instructions.\n\nMore instructions.\n",
+        "reminder": "<system_reminder>\n<model and subagent catalog>\n</system_reminder>",
+        "reminder_channel": "--append-system-prompt",
+        "reminder_delivered": true,
+        "sources": [
+          {
+            "bytes": 19,
+            "path": "<home>/base.md"
+          },
+          {
+            "bytes": 19,
+            "path": "<home>/more.md"
+          }
+        ]
+      },
+      "sandbox": null,
+      "shell": "<shell>",
+      "skills": {
+        "applied": false,
+        "callable": []
+      },
+      "target": "worker"
+    }
+    "###
+    );
+
+    let prompt = env
+        .rimz()
+        .args(["agents", "explain", "worker", "--prompt"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(
+        prompt,
+        format!("Base instructions.\n\nMore instructions.\n\n\n{reminder}").as_bytes()
+    );
+
+    let overridden = env
+        .rimz()
+        .args([
+            "agents", "explain", "worker", "--json", "--model", "opus", "--yolo", "--", "--foo",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let overridden: serde_json::Value = serde_json::from_slice(&overridden).unwrap();
+    assert_eq!(
+        overridden["overrides"],
+        serde_json::json!(["--model opus", "--yolo", "-- --foo"])
+    );
+    assert_eq!(overridden["model"], "opus");
+    assert_eq!(overridden["mode"], "ask");
+    let argv = overridden["provider_argv"].as_array().unwrap();
+    assert!(
+        argv.windows(2)
+            .any(|pair| pair[0] == "--model" && pair[1] == "opus")
+    );
+    assert!(
+        !argv
+            .iter()
+            .any(|arg| arg == "--dangerously-skip-permissions")
+    );
+    assert!(argv.iter().any(|arg| arg == "--foo"));
+    assert!(
+        !state.root.exists(),
+        "explain created room state or launch events"
+    );
+    assert!(!state.tmp_dir.exists(), "explain created room tmp");
+    assert!(
+        !runtime.prompt_dir().exists(),
+        "explain created prompt artifacts"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn explain_redacts_trusted_project_env_in_json_and_human_output() {
+    let env = Env::new();
+    let secret = "explain-credential-not-for-output";
+    env.write_config(
+        &env.project_root,
+        &format!("[[agents]]\nname = \"claude\"\nenv = {{ RIMZ_TEST_CREDENTIAL = {secret:?} }}\n"),
+    );
+    env.rimz().args(["trust", "grant"]).assert().success();
+    for json in [true, false] {
+        let mut command = env.rimz();
+        command.args(["agents", "explain", "claude"]);
+        if json {
+            command.arg("--json");
+        }
+        let output = command.assert().success().get_output().clone();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(!stdout.contains(secret), "credential leaked on stdout");
+        assert!(
+            !String::from_utf8_lossy(&output.stderr).contains(secret),
+            "credential leaked on stderr"
+        );
+        assert!(stdout.contains("RIMZ_TEST_CREDENTIAL"));
+        assert!(stdout.contains("<redacted>"));
+        if json {
+            let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+            assert_eq!(report["env"]["RIMZ_TEST_CREDENTIAL"], "<redacted>");
+            assert_eq!(
+                report["redacted_keys"],
+                serde_json::json!(["RIMZ_TEST_CREDENTIAL"])
+            );
+            assert!(
+                report["argv"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|arg| arg == "RIMZ_TEST_CREDENTIAL=<redacted>")
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn explain_seat_replays_current_profile_without_writes_and_refuses_overrides() {
+    let env = Env::new();
+    let provider_home = env.home_root.join(".claude");
+    std::fs::create_dir_all(provider_home.join("projects")).expect("empty conversation catalog");
+    let config_dir = env.config_root().join("rimz");
+    std::fs::create_dir_all(&config_dir).expect("mkdir config");
+    std::fs::write(
+        config_dir.join("agents.toml"),
+        "[agents]\nisolation = \"host\"\n[agents.profiles.worker]\nagent = \"claude\"\nmodel = \"opus\"\n",
+    ).expect("write current profile");
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let store = env.store();
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id,
+            &workspace.session_name,
+            &AgentKind::new_unchecked("claude"),
+            AgentLaunchPayload {
+                agent_id: AgentSessionId::from("missing-conversation"),
+                launch_id: Some(AgentSessionId::from("launch_explain_worker")),
+                agent_name: "worker".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams {
+                    profile: Some("worker".to_owned()),
+                    model: Some("fable".to_owned()),
+                    ..Default::default()
+                },
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .expect("seed durable seat");
+    let before = serde_json::to_value(store.read_events().unwrap()).unwrap();
+    let output = env
+        .rimz()
+        .env("CLAUDE_CONFIG_DIR", &provider_home)
+        .args(["agents", "explain", "@worker", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(report["action"], "launch");
+    assert_eq!(report["action_note"], "no recorded conversation");
+    assert_eq!(report["name"], "worker");
+    assert_eq!(report["launch_id"], "launch_explain_worker");
+    assert_eq!(report["model"], "opus");
+    assert_eq!(report["env"]["RIMZ_AGENT_NAME"], "worker");
+    assert!(
+        report["provider_argv"]
+            .as_array()
+            .unwrap()
+            .windows(2)
+            .any(|pair| pair[0] == "--model" && pair[1] == "opus")
+    );
+    for overrides in [
+        &["--model", "fable"][..],
+        &["--yolo"],
+        &["--budget", "1"],
+        &["--", "--foo"],
+    ] {
+        env.rimz()
+            .args(["agents", "explain", "@worker"])
+            .args(overrides)
+            .assert()
+            .failure()
+            .stderr(contains("overrides apply to profile plans"));
+    }
+    assert_eq!(
+        serde_json::to_value(store.read_events().unwrap()).unwrap(),
+        before
+    );
+    assert!(!env.runtime_paths().prompt_dir().exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn explain_refuses_missing_seats_and_multi_agent_layouts_without_state() {
+    let env = Env::new();
+    let state = env.state_path_for(&env.project_root);
+    env.rimz()
+        .args(["agents", "explain", "@missing"])
+        .assert()
+        .failure()
+        .stderr(contains("@handle needs a room that has run"));
+    env.rimz()
+        .args(["agents", "explain", "claude,codex"])
+        .assert()
+        .failure()
+        .stderr(contains("explain describes one agent"));
+    assert!(!state.root.exists(), "explain refusal created room state");
+}
+
+#[cfg(unix)]
+#[test]
 fn unresolved_subagent_list_caller_falls_back_to_channel_scope() {
     let env = Env::new();
     let output = env
