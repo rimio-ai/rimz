@@ -1061,6 +1061,8 @@ rimz help subagents wait
 
 rimz help teams
 
+rimz help teams flip
+
 rimz help teams focus
 
 rimz help teams install
@@ -2371,6 +2373,19 @@ rimz teams
     -w, --worktree <NAME>  [action=set takes=0..=1]
     --zellij  [action=set-true takes=0..=0 global]
 
+rimz teams flip
+    <stage>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    -m, --note <NOTE>  [action=set takes=1..=1]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --steer  [action=set-true takes=0..=0]
+    --team <NAME>  [action=set takes=1..=1]
+    --tmux  [action=set-true takes=0..=0 global]
+    -w, --worktree <NAME>  [action=set takes=1..=1]
+    --zellij  [action=set-true takes=0..=0 global]
+
 rimz teams focus
     <name>  [action=set takes=1..=1 required]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
@@ -2382,6 +2397,8 @@ rimz teams focus
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz teams help
+
+rimz teams help flip
 
 rimz teams help focus
 
