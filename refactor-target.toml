@@ -75,7 +75,7 @@ upward-dependencies = ["address"]
 # Native config-home resolution is shared with sandbox launch planning.
 # Native skill roots and user-only markers belong to the same capability seam.
 # Model sub-cap matching and parent-axis headroom are shared with the renderer.
-surface-budget = 957
+surface-budget = 982
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -108,7 +108,7 @@ surface-budget = 1
 [[module]]
 path = "crates/rimz/src/agents/spending"
 # Parser wire, walker, and cache records stay public for the adapters, bench, perf and example crates.
-surface-budget = 83
+surface-budget = 84
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -190,7 +190,7 @@ upward-dependencies = ["sidebar::refresh"]
 # The validated exec envelope establishes cleanup context before artifact I/O.
 # Sandbox env pins rebuild shell argv while preserving post-rc account stages.
 # The typed team.stage payload and its flip reader feed transcript rendering.
-surface-budget = 516
+surface-budget = 517
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -263,7 +263,7 @@ surface-budget = 177
 
 [[module]]
 path = "crates/rimz/src/remote_control.rs"
-surface-budget = 12
+surface-budget = 18
 
 [[module]]
 path = "crates/rimz/src/sandbox"
@@ -282,7 +282,7 @@ upward-dependencies = [
     "sidebar",
     "sidebar::body_filter",
 ]
-surface-budget = 48
+surface-budget = 50
 
 [[module]]
 path = "crates/rimz/src/sidebar"
@@ -324,7 +324,7 @@ surface-budget = 19
 [[module]]
 path = "crates/rimz/src/trust.rs"
 upward-dependencies = ["agents"]
-surface-budget = 36
+surface-budget = 39
 
 [[module]]
 path = "crates/rimz/src/tui.rs"
@@ -556,7 +556,7 @@ allowed-dependencies = [
     "utils::path",
     "worktree",
 ]
-surface-budget = 46
+surface-budget = 47
 
 [[module]]
 path = "crates/rimz/src/harness/launch.rs"
