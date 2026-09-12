@@ -332,7 +332,7 @@ mod tests {
         assert_eq!(claude.materialized.args[1], artifact.to_string_lossy());
         apply_system_prompt(&claude).expect("apply prompt");
         assert_eq!(
-            std::fs::read_to_string(&artifact).expect("artifact"),
+            std::fs::read_to_string(artifact).expect("artifact"),
             "base\n\nfirst\n"
         );
         assert_eq!(
