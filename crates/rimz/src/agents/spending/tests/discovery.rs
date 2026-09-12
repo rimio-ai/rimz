@@ -72,10 +72,7 @@ fn catalog_logins_discover_separate_homes_and_deduplicate_shared_paths() {
     let files = index.discover(logins(), &ambient, now_secs());
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].path, work_file);
-    assert_eq!(
-        files[0].login,
-        LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude"))
-    );
+    assert_eq!(files[0].login, "claude@work".parse::<LoginKey>().unwrap());
 }
 
 #[test]

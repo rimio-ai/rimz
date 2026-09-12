@@ -353,6 +353,10 @@ impl SpendingDiscoveryIndex {
         let mut authoritative = true;
         let mut discovered = Vec::new();
         let mut seen_paths = HashSet::new();
+        // Named logins claim their paths first, so a default login whose
+        // ambient home names a declared account's home cannot take its spend.
+        let mut logins = logins.collect::<Vec<_>>();
+        logins.sort_by_key(|(login, _)| login.is_default());
         for (login, adapter) in logins {
             let login_key = login.key();
             let declarations = adapter.spending_sources(&login.env(ambient));
@@ -380,7 +384,7 @@ impl SpendingDiscoveryIndex {
                     .materialized_paths(&mut self.stats)
                     .iter()
                     // Declared homes are distinct, so a repeat is an ambient
-                    // comma list naming an account's home: count it once.
+                    // home naming an account's home: count it once, as the account's.
                     .filter(|&path| seen_paths.insert(path.clone()))
                     .cloned()
                     .map(|path| SpendingFile {
