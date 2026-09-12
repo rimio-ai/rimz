@@ -10,16 +10,31 @@ expression: screen
  ? 0   ! 0   ⏸︎ 0   ✓ 0                ⢿ 1   ☾ 0   ○ 0
 
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-▌⣾ claude                                            ▐
-▌  working                                           ▐
+▌⢄ claude                                            ▐
+▌  delegate                                          ▐
 ▌  ▢ ──────────────────────────────────────────    0%▐
 ▌  ▤ 0                                               ▐
-▌  ⧖ waits (4)                                       ▐
-▌    ◷ timer 30m · in 12m                       ◑ <t>▐
-▌    ⣾ pid 16776                                ◔  3m▐
-▌    ⣾ shell cargo                              ◔  4m▐
-▌      cargo xtask gate --name foo_test              ▐
-▌    ⌁ signal pr.merged · 2h left               ●  1h▐
+▌  ⧉ subagents (7)                                   ▐
+▌    ⣾ task-0                                        ▐
+▌                                               ◔ <1m▐
+▌    ⣾ task-1                                        ▐
+▌                                               ◔ <1m▐
+▌  +5 more                                           ▐
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
  ────────────────────────────────────────────────────
   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00

@@ -537,6 +537,7 @@ mod tests {
             wake_meta: Some(crate::config::WakeMeta {
                 armed_at: "2026-06-01T10:00:00Z".parse().unwrap(),
                 delay: None,
+                pid: None,
             }),
             ..command.clone()
         };
@@ -544,6 +545,17 @@ mod tests {
             Tasks(BTreeMap::from([
                 ("z-command".into(), command.clone()),
                 ("a-command".into(), command.clone()),
+                (
+                    "m-pid".into(),
+                    TaskEntry {
+                        wake_meta: Some(crate::config::WakeMeta {
+                            armed_at: "2026-06-01T10:00:00Z".parse().unwrap(),
+                            delay: None,
+                            pid: Some(16776),
+                        }),
+                        ..command.clone()
+                    },
+                ),
                 ("a-later-timer".into(), timer.clone()),
                 (
                     "z-sooner-timer".into(),
@@ -598,6 +610,7 @@ mod tests {
             vec![
                 "a-command",
                 "a-later-timer",
+                "m-pid",
                 "signal",
                 "standing",
                 "z-command",
@@ -618,6 +631,7 @@ mod tests {
                 "z-sooner-timer",
                 "a-later-timer",
                 "a-command",
+                "m-pid",
                 "z-command",
                 "signal"
             ]
@@ -735,6 +749,7 @@ mod tests {
         entry.wake_meta = Some(crate::config::WakeMeta {
             armed_at: jiff::Timestamp::UNIX_EPOCH,
             delay: None,
+            pid: None,
         });
         assert!(super::super::TaskShape::compile("task", &entry).is_ephemeral());
         assert_eq!(TaskSource::from_entry(&entry), TaskSource::Instance);

@@ -21,6 +21,7 @@ fn pending_wakes_line_counts_armed_wakes() {
             name: "timer".to_owned(),
             trigger: PendingWakeTrigger::Timer {
                 due: fixed_now() + Duration::from_secs(720),
+                delay: None,
             },
             armed_at: Some(fixed_now()),
         },
@@ -86,7 +87,7 @@ fn pending_wakes_line_counts_armed_wakes() {
     assert!(
         !collapsed_text
             .iter()
-            .any(|line| line.contains("◷ in 12m") || line.contains("make check"))
+            .any(|line| line.contains("◷ timer") || line.contains("make check"))
     );
     assert_snapshot(
         "pending_wakes_line",
@@ -113,9 +114,9 @@ fn pending_wakes_line_counts_armed_wakes() {
     assert!(expanded[stats].ends_with("$0.42▐"));
     assert!(expanded[stats + 1].contains("inspect the renderer"));
     assert!(expanded[stats + 2].contains("12k"));
-    assert!(expanded[stats + 3].contains("◷ in 12m"));
+    assert!(expanded[stats + 3].contains("◷ timer · in 12m"));
     assert!(expanded[stats + 4].contains(&format!(
-        "{} make",
+        "{} shell make",
         role_glyph(&theme, AnimationRole::Working, 0)
     )));
     assert!(expanded[stats + 5].contains("make check"));
@@ -189,7 +190,7 @@ fn pending_wakes_line_counts_armed_wakes() {
         assert_eq!(lead.style.fg, style.fg);
         assert_eq!(lead.style.add_modifier, style.add_modifier);
     }
-    assert!(with_signal_text[stats + 6].contains("on pr.merged"));
+    assert!(with_signal_text[stats + 6].contains("signal pr.merged"));
     assert!(
         with_signal_text[stats + 3..=stats + 6]
             .iter()
@@ -226,16 +227,14 @@ fn wait_entries_show_trigger_program_and_command() {
             name: "timer".to_owned(),
             trigger: PendingWakeTrigger::Timer {
                 due: fixed_now() + Duration::from_secs(720),
+                delay: Some("30m".to_owned()),
             },
             armed_at: Some(fixed_now() - Duration::from_secs(1080)),
         },
         PendingWake {
-            name: "signal".to_owned(),
-            trigger: PendingWakeTrigger::Signal {
-                selector: "pr.merged".to_owned(),
-                deadline: Some(fixed_now() + Duration::from_secs(7200)),
-            },
-            armed_at: Some(fixed_now() - Duration::from_secs(300)),
+            name: "pid".to_owned(),
+            trigger: PendingWakeTrigger::Pid { pid: 16776 },
+            armed_at: Some(fixed_now() - Duration::from_secs(180)),
         },
         PendingWake {
             name: "command".to_owned(),
@@ -244,6 +243,14 @@ fn wait_entries_show_trigger_program_and_command() {
             },
             armed_at: Some(fixed_now() - Duration::from_secs(240)),
         },
+        PendingWake {
+            name: "signal".to_owned(),
+            trigger: PendingWakeTrigger::Signal {
+                selector: "pr.merged".to_owned(),
+                deadline: Some(fixed_now() + Duration::from_secs(7200)),
+            },
+            armed_at: Some(fixed_now() - Duration::from_secs(3600)),
+        },
     ];
     let mut snapshot = snapshot_with(vec![parent]);
     let theme = Theme::fixed(false);
@@ -251,17 +258,29 @@ fn wait_entries_show_trigger_program_and_command() {
     let rows = line_texts(&lines);
     let start = rows
         .iter()
-        .position(|line| line.contains("◷ in 12m"))
+        .position(|line| line.contains("◷ timer 30m · in 12m"))
         .unwrap();
     for (offset, label, seconds, elapsed) in [
-        (0, "◷ in 12m".to_owned(), 1080, "18m"),
-        (1, "⌁ on pr.merged · 2h left".to_owned(), 300, "5m"),
+        (0, "◷ timer 30m · in 12m".to_owned(), 1080, "18m"),
+        (
+            1,
+            format!(
+                "{} pid 16776",
+                role_glyph(&theme, AnimationRole::Working, 0)
+            ),
+            180,
+            "3m",
+        ),
         (
             2,
-            format!("{} cargo", role_glyph(&theme, AnimationRole::Working, 0)),
+            format!(
+                "{} shell cargo",
+                role_glyph(&theme, AnimationRole::Working, 0)
+            ),
             240,
             "4m",
         ),
+        (4, "⌁ signal pr.merged · 2h left".to_owned(), 3600, "1h"),
     ] {
         assert!(rows[start + offset].contains(&label));
         assert!(
@@ -282,6 +301,7 @@ fn wait_entries_show_trigger_program_and_command() {
         );
     }
     assert!(rows[start + 3].contains("      cargo xtask gate --name foo_test"));
+    assert!(!rows.iter().any(|line| line.contains("kill -0")));
     assert!(!rows[start + 3].contains("/usr/bin"));
     assert!(!rows[start + 3].contains(elapsed_glyph(&theme, 240).as_str()));
     let detail = lines[start + 3]
@@ -305,7 +325,13 @@ fn wait_entries_show_trigger_program_and_command() {
         assert_eq!(lead.style.fg, working_style(&theme, phase).fg);
         assert!(lead.style.add_modifier.contains(Modifier::DIM));
         assert_eq!(block.lines[start], lines[start]);
-        assert_eq!(block.lines[start + 1], lines[start + 1]);
+        assert_eq!(block.lines[start + 4], lines[start + 4]);
+        let pid_lead = block.lines[start + 1]
+            .spans
+            .iter()
+            .find(|span| span.content == role_glyph(&theme, AnimationRole::Working, phase))
+            .unwrap();
+        assert_eq!(pid_lead.style, lead.style);
     }
     assert_ne!(
         leads[0], leads[1],
@@ -314,26 +340,36 @@ fn wait_entries_show_trigger_program_and_command() {
 
     let narrow = group_lines_at_width(&snapshot, &theme, 0, 24);
     let narrow_text = line_texts(&narrow);
-    assert!(narrow_text[start + 1].contains("⌁ on pr.merg"));
-    assert!(narrow_text[start + 1].ends_with("5m▐"));
+    assert!(narrow_text[start + 4].contains("⌁ signal"));
+    assert!(narrow_text[start + 4].ends_with("1h▐"));
     assert!(narrow_text[start + 3].contains("cargo xtask gate"));
     assert!(!narrow_text[start + 3].contains("foo_test"));
     assert!(
-        narrow[start..=start + 3]
+        narrow[start..=start + 4]
             .iter()
             .all(|line| line.width() == 24)
     );
 
     snapshot.now += Duration::from_secs(720);
     let advanced = line_texts(&group_lines(&snapshot, &theme, 0));
-    assert!(advanced[start].contains("◷ due"));
+    assert!(advanced[start].contains("◷ timer 30m · due"));
     assert!(advanced[start].ends_with("30m▐"));
-    assert!(advanced[start + 1].contains("on pr.merged · 108m left"));
-    assert!(advanced[start + 1].ends_with("17m▐"));
+    assert!(advanced[start + 1].ends_with("15m▐"));
+    assert!(advanced[start + 4].contains("signal pr.merged · 108m left"));
+    assert!(advanced[start + 4].ends_with("1h▐"));
     assert!(advanced[start + 2].ends_with("16m▐"));
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .unwrap()
+        .pending_wakes[0]
+        .trigger = PendingWakeTrigger::Timer {
+        due: snapshot.now,
+        delay: None,
+    };
+    assert!(line_texts(&group_lines(&snapshot, &theme, 0))[start].contains("◷ timer · due"));
     snapshot.now += Duration::from_secs(6480);
     let expired = line_texts(&group_lines(&snapshot, &theme, 0));
-    assert!(expired[start + 1].contains("on pr.merged · 0m left"));
+    assert!(expired[start + 4].contains("signal pr.merged · 0m left"));
     for (command, detail) in [
         ("env A=b /usr/bin/cargo build", "env A=b cargo build"),
         ("sh -c '/usr/bin/cargo build'", "sh -c 'cargo build'"),
@@ -347,7 +383,7 @@ fn wait_entries_show_trigger_program_and_command() {
         };
         let wrapped = line_texts(&group_lines(&snapshot, &theme, 0));
         assert!(wrapped[start + 2].contains(&format!(
-            "{} cargo",
+            "{} shell cargo",
             role_glyph(&theme, AnimationRole::Working, 0)
         )));
         assert!(wrapped[start + 3].contains(detail));
@@ -381,7 +417,7 @@ fn wait_entry_without_armed_at_has_no_clock() {
     assert_eq!(rows[stats].trim_matches(['▌', '▐', ' ']), "⧖ waits (1)");
     assert_eq!(
         rows[stats + 1].trim_matches(['▌', '▐', ' ']),
-        "⌁ on pr.merged"
+        "⌁ signal pr.merged"
     );
     let narrow = line_texts(&group_lines_at_width(
         &snapshot,
@@ -407,6 +443,7 @@ fn long_wait_clocks_stay_muted_while_subagent_clocks_heat() {
         name: "timer".to_owned(),
         trigger: PendingWakeTrigger::Timer {
             due: fixed_now() + Duration::from_secs(7200),
+            delay: None,
         },
         armed_at: Some(started),
     });

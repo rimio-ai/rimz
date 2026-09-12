@@ -42,18 +42,20 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
             DeliveryTrigger::Delay(delay),
             format!("in {}", duration_label(delay)),
         )
+    } else if let Some(pid) = args.pid {
+        let process = nix::unistd::Pid::from_raw(i32::try_from(pid)?);
+        if nix::sys::signal::kill(process, None) == Err(nix::errno::Errno::EPERM) {
+            bail!("cannot watch PID {pid}: permission denied; choose a process owned by your user");
+        }
+        (
+            DeliveryTrigger::Pid {
+                pid,
+                timeout: args.timeout.unwrap_or(Duration::from_secs(30 * 60)),
+            },
+            format!("pid {pid}"),
+        )
     } else {
-        let command = if let Some(pid) = args.pid {
-            let process = nix::unistd::Pid::from_raw(i32::try_from(pid)?);
-            if nix::sys::signal::kill(process, None) == Err(nix::errno::Errno::EPERM) {
-                bail!(
-                    "cannot watch PID {pid}: permission denied; choose a process owned by your user"
-                );
-            }
-            format!("while kill -0 {pid} 2>/dev/null; do sleep 1; done")
-        } else {
-            command_string(&args.command)?
-        };
+        let command = command_string(&args.command)?;
         let description = format!("watch: {}", rimz::theme::fmt::command_preview(&command));
         (
             DeliveryTrigger::Watch {

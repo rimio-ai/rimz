@@ -186,8 +186,18 @@ fn wake_pid_checks_in_then_delivers_after_process_disappears_with_empty_summary(
     let pid = process.id().to_string();
     let receipt = wake_ok(&env, &["wake", "--pid", &pid, "--timeout", "1s", "--json"]);
     let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
-    assert!(receipt["trigger"].as_str().unwrap().contains(&pid));
-    assert_eq!(receipt["trigger"], receipt["pending"][0]["trigger"]);
+    assert_eq!(receipt["trigger"], format!("pid {pid}"));
+    let tasks = wake_instances(&env);
+    let entry = &tasks.0[receipt["name"].as_str().unwrap()];
+    assert_eq!(entry.wake_meta.as_ref().unwrap().pid, Some(process.id()));
+    assert_eq!(entry.on, Some(rimz::config::CheckOn::Any));
+    let report: serde_json::Value =
+        serde_json::from_str(&wake_ok(&env, &["agents", "show", "@planner", "--json"]))
+            .expect("agent report");
+    assert_eq!(
+        report["agent"]["pending_wakes"][0]["trigger"],
+        serde_json::json!({"kind": "pid", "pid": process.id()})
+    );
     let checkin = wait_for_wake_messages(&env, 1);
     assert!(checkin[0].text.contains("still running after"));
     assert!(checkin[0].text.contains("output (0 B, 0 lines):"));
@@ -206,7 +216,9 @@ fn wake_pid_checks_in_then_delivers_after_process_disappears_with_empty_summary(
     assert!(!completed.text.contains("(no output)"));
     wait_for_no_wake_instances(&env);
 
-    wake_ok(&env, &["wake", "--pid", &pid]);
+    let receipt = wake_ok(&env, &["wake", "--pid", &pid]);
+    assert!(receipt.starts_with("armed wake-"), "{receipt}");
+    assert!(receipt.contains(&format!(": pid {pid} →")), "{receipt}");
     assert_eq!(wait_for_wake_messages(&env, 3).len(), 3);
     wait_for_no_wake_instances(&env);
 }

@@ -130,6 +130,8 @@ pub struct WakeMeta {
     pub armed_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delay: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
 }
 
 impl TaskEntry {
@@ -327,6 +329,7 @@ mod tests {
             wake_meta: Some(WakeMeta {
                 armed_at: deadline,
                 delay: Some("30m".to_owned()),
+                pid: Some(16776),
             }),
             prompt: Some("wake".to_owned()),
             check: Some("cargo test".to_owned()),
@@ -360,6 +363,16 @@ mod tests {
         let toml = toml::to_string(&loop_config).expect("toml");
         let toml_round: LoopConfig = toml::from_str(&toml).expect("toml round trip");
         assert_eq!(toml_round.tasks.0["ci"], entry);
+        let mut legacy_toml: toml::Value = toml::from_str(&toml).expect("toml value");
+        legacy_toml["tasks"]["ci"]["wake-meta"]
+            .as_table_mut()
+            .unwrap()
+            .remove("pid");
+        let legacy_toml: LoopConfig = legacy_toml.try_into().expect("legacy toml");
+        assert_eq!(
+            legacy_toml.tasks.0["ci"].wake_meta.as_ref().unwrap().pid,
+            None
+        );
         assert_eq!(toml_round.tasks.0["ci"].wake_meta, entry.wake_meta);
         assert_eq!(
             toml_round
@@ -436,6 +449,17 @@ mod tests {
             let decoded: Tasks = serde_json::from_value(legacy.clone()).expect("legacy json");
             assert_eq!(decoded.0.get("ci"), Some(&entry));
         }
+        legacy["ci"]["wake-meta"]
+            .as_object_mut()
+            .unwrap()
+            .remove("pid");
+        let decoded: Tasks = serde_json::from_value(legacy).expect("legacy json without pid");
+        assert_eq!(decoded.0["ci"].wake_meta.as_ref().unwrap().pid, None);
+        assert!(
+            serde_json::to_value(&decoded).unwrap()["ci"]["wake-meta"]
+                .get("pid")
+                .is_none()
+        );
     }
 
     #[test]

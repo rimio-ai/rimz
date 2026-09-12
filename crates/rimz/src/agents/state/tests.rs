@@ -133,37 +133,67 @@ fn pending_wake_labels_and_wire_preserve_trigger_details() {
     let now = Timestamp::from_second(1_000).unwrap();
     let due = Timestamp::from_second(1_720).unwrap();
     for (trigger, label) in [
-        (PendingWakeTrigger::Timer { due }, "wake in 12m"),
-        (PendingWakeTrigger::Timer { due: now }, "wake due"),
+        (
+            PendingWakeTrigger::Timer { due, delay: None },
+            "wake timer · in 12m",
+        ),
+        (
+            PendingWakeTrigger::Timer {
+                due,
+                delay: Some("30m".into()),
+            },
+            "wake timer 30m · in 12m",
+        ),
+        (
+            PendingWakeTrigger::Timer {
+                due: now,
+                delay: None,
+            },
+            "wake timer · due",
+        ),
+        (
+            PendingWakeTrigger::Timer {
+                due: now,
+                delay: Some("30m".into()),
+            },
+            "wake timer 30m · due",
+        ),
+        (PendingWakeTrigger::Pid { pid: 16776 }, "wake pid 16776"),
         (
             PendingWakeTrigger::Command {
                 command: "cargo test".into(),
             },
-            "wake after: cargo test",
+            "wake shell cargo test",
         ),
         (
             PendingWakeTrigger::Signal {
                 selector: "pr.merged".into(),
                 deadline: None,
             },
-            "wake on pr.merged",
+            "wake signal pr.merged",
         ),
         (
             PendingWakeTrigger::Signal {
                 selector: "pr.merged".into(),
                 deadline: Some(due),
             },
-            "wake on pr.merged · 12m left",
+            "wake signal pr.merged · 12m left",
         ),
         (
             PendingWakeTrigger::Signal {
                 selector: "pr.merged".into(),
                 deadline: Some(now),
             },
-            "wake on pr.merged · 0m left",
+            "wake signal pr.merged · 0m left",
         ),
     ] {
         assert_eq!(trigger.summary(now), label.strip_prefix("wake ").unwrap());
+        if matches!(trigger, PendingWakeTrigger::Pid { .. }) {
+            assert_eq!(
+                serde_json::to_value(&trigger).unwrap(),
+                serde_json::json!({"kind": "pid", "pid": 16776})
+            );
+        }
         let wake = PendingWake {
             name: "wake".into(),
             trigger,
@@ -177,6 +207,14 @@ fn pending_wake_labels_and_wire_preserve_trigger_details() {
         assert_eq!(decoded.pending_wakes, vec![wake]);
         assert_eq!(decoded.effective_status(), AgentStatus::Sleeping);
     }
+    assert_eq!(
+        serde_json::from_value::<PendingWakeTrigger>(serde_json::json!({
+            "kind": "timer",
+            "due": due,
+        }))
+        .unwrap(),
+        PendingWakeTrigger::Timer { due, delay: None }
+    );
     assert_eq!(
         serde_json::to_string(&AgentStatus::Sleeping).unwrap(),
         "\"sleeping\""

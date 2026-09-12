@@ -314,6 +314,10 @@ pub(super) fn handle_mouse_click(
             toggle_group_expanded(ui, snapshot, group_key);
             InputOutcome::redraw()
         }
+        Some(HitTarget::ToggleDelegation(row_id)) => {
+            toggle_delegation_expanded(ui, snapshot, row_id);
+            InputOutcome::redraw()
+        }
         Some(HitTarget::Row(index)) => active_roster(snapshot, ui)
             .pane_at_ordinal(index)
             .map_or_else(InputOutcome::default, InputOutcome::focus),
@@ -355,6 +359,26 @@ fn toggle_group_expanded(ui: &mut UiState, snapshot: &SidebarSnapshot, group_key
     // A toggle reshapes the body below the clicked line, so hold the viewport
     // instead of snapping back to the selected card. Capture the post-toggle
     // selection because collapsing a selected group can clear it.
+    ui.manual_scroll = Some(ManualScroll {
+        selection_at_start: ui.selected_pane.clone(),
+    });
+}
+
+fn toggle_delegation_expanded(ui: &mut UiState, snapshot: &SidebarSnapshot, row_id: String) {
+    let Some(agent) = snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .find(|row| row.id == row_id)
+        .and_then(|row| row.as_agent())
+    else {
+        return;
+    };
+    if ui.expanded_delegations.remove(&row_id) != Some(agent.user_turn_started_at) {
+        ui.expanded_delegations
+            .insert(row_id, agent.user_turn_started_at);
+    }
+    anchor_selection(ui, snapshot);
     ui.manual_scroll = Some(ManualScroll {
         selection_at_start: ui.selected_pane.clone(),
     });

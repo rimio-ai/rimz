@@ -15,25 +15,26 @@ fn sleeping_card_describes_its_wake_using_the_snapshot_clock() {
         name: "wake-test".to_owned(),
         trigger: crate::agents::PendingWakeTrigger::Timer {
             due: fixed_now() + jiff::SignedDuration::from_mins(12),
+            delay: Some("30m".to_owned()),
         },
         armed_at: Some(fixed_now()),
     });
     let mut snapshot = snapshot_with(vec![sleeper]);
     let screen = snapshot_to_screen(&snapshot, 44, 20);
     assert!(screen.contains(Theme::fixed(false).glyph(GlyphRole::StatusSleeping)));
-    assert!(screen.contains("wake in 12m"));
+    assert!(screen.contains("wake timer 30m · in 12m"));
     assert!(screen.contains("⧖ 1"));
     assert!(!screen.contains("finished work"));
     assert_snapshot("sleeping_card", screen);
 
     let theme = Theme::fixed(false);
     let lines = group_lines(&snapshot, &theme, 0);
-    let style = span_for(&lines, "wake in 12m").style;
+    let style = span_for(&lines, "wake timer 30m · in 12m").style;
     assert_eq!(style.fg, theme.body().fg);
     assert!(style.add_modifier.contains(Modifier::ITALIC));
 
     snapshot.now += jiff::SignedDuration::from_mins(12);
-    assert!(snapshot_to_screen(&snapshot, 44, 20).contains("wake due"));
+    assert!(snapshot_to_screen(&snapshot, 44, 20).contains("wake timer 30m · due"));
 
     snapshot.worktree_groups[0].rows[0]
         .as_agent_mut()
@@ -41,7 +42,7 @@ fn sleeping_card_describes_its_wake_using_the_snapshot_clock() {
         .turn_error_label = Some("api error".to_owned());
     let screen = snapshot_to_screen(&snapshot, 44, 20);
     assert!(screen.contains("api error"));
-    assert!(!screen.contains("wake due"));
+    assert!(!screen.contains("wake timer"));
 
     for status in [
         AgentStatus::Running,
@@ -53,7 +54,7 @@ fn sleeping_card_describes_its_wake_using_the_snapshot_clock() {
         card.status = status;
         let screen = snapshot_to_screen(&snapshot, 44, 20);
         assert!(screen.contains("finished work"), "{status:?}: {screen}");
-        assert!(!screen.contains("wake due"), "{status:?}: {screen}");
+        assert!(!screen.contains("wake timer"), "{status:?}: {screen}");
         assert!(screen.contains("⧖ 1"), "{status:?}: {screen}");
     }
 }

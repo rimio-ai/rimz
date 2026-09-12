@@ -523,6 +523,7 @@ fn test_row_ctx<'a>(
         animation_phase,
         cost_rolls,
         lead_unread: lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
+        expanded_delegations: const { &std::collections::BTreeMap::new() },
     }
 }
 

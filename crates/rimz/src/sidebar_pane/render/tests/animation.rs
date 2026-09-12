@@ -308,6 +308,7 @@ fn selected_pet_action_follows_the_focused_card() {
         .sub_agents
         .push(crate::store::snapshot::SidebarSubAgent {
             id: "child-1".to_owned(),
+            prior_turn: false,
             name: "Explore".to_owned(),
             petname: None,
             provider_native: true,

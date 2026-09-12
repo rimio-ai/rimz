@@ -238,6 +238,7 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
         name: "timer".to_owned(),
         trigger: crate::agents::PendingWakeTrigger::Timer {
             due: fixed_now() + Duration::from_secs(720),
+            delay: Some("30m".to_owned()),
         },
         armed_at: Some(fixed_now() - Duration::from_secs(240)),
     });
@@ -282,11 +283,42 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
         .unwrap();
     let wait_entry = rendered
         .lines()
-        .position(|line| line.contains("◷ in 12m"))
+        .position(|line| line.contains("◷ timer 30m · in 12m"))
         .unwrap();
     assert!(wait_entry > child_entry);
     assert!(subagent_line.contains("· ⧖ waits (1)"));
     assert_snapshot("card_density_expanded_non_selected_subagents", rendered);
+
+    let row = snapshot.worktree_groups[0]
+        .rows
+        .iter_mut()
+        .find(|row| {
+            row.as_agent()
+                .is_some_and(|agent| !agent.sub_agents.is_empty())
+        })
+        .unwrap();
+    let row_id = row.id.clone();
+    let parent = row.as_agent_mut().unwrap();
+    let mut prior = parent.sub_agents[0].clone();
+    prior.id = "prior-child".to_owned();
+    prior.prior_turn = true;
+    prior.description = Some("previous render audit".to_owned());
+    parent.sub_agents.push(prior);
+    parent.sub_agent_count += 1;
+    let turn = parent.user_turn_started_at;
+    let mut ui = UiState {
+        selected_index: 0,
+        ..Default::default()
+    };
+    let folded = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 31);
+    assert!(folded.contains("map the render path"));
+    assert!(folded.contains("+1 more"));
+    assert!(!folded.contains("previous render audit"));
+    ui.expanded_delegations.insert(row_id, turn);
+    let opened = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 31);
+    assert!(opened.contains("previous render audit"));
+    assert!(opened.contains("− less"));
+    assert!(!opened.contains("+1 more"));
 }
 
 fn density_agent(

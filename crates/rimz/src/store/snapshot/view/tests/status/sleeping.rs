@@ -4,7 +4,10 @@ use crate::agents::{PendingWake, PendingWakeTrigger};
 fn pending_wake() -> PendingWake {
     PendingWake {
         name: "wake-soon".to_owned(),
-        trigger: PendingWakeTrigger::Timer { due: ago(-60) },
+        trigger: PendingWakeTrigger::Timer {
+            due: ago(-60),
+            delay: None,
+        },
         armed_at: Some(ago(60)),
     }
 }

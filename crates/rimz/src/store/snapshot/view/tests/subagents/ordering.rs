@@ -6,8 +6,9 @@ fn sub_agents_sort_by_creation_time_ascending() {
     // child's durable `registered_at` leads, so the list holds still across
     // refreshes. A child with no registration instant sorts after the dated
     // ones, by id.
-    let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
-    let mut first = child_state("sess-root", "c-first-spawn", AgentStatus::Idle, 40);
+    let mut parent = agent("claude", "sess-root", AgentStatus::Running, 100);
+    parent.user_turn_started_at = Some(ago(30));
+    let mut first = child_state("sess-root", "c-first-spawn", AgentStatus::Success, 40);
     first.registered_at = Some(ago(90));
     first.subagent_started_at = Some(ago(10));
     let mut second = child_state("sess-root", "c-second-spawn", AgentStatus::Running, 2);
@@ -27,6 +28,8 @@ fn sub_agents_sort_by_creation_time_ascending() {
         ids,
         vec!["c-first-spawn", "c-second-spawn", "c-unregistered"]
     );
+    assert!(rows[0].sub_agents()[0].prior_turn);
+    assert_eq!(rows[0].as_agent().unwrap().current_sub_agents().count(), 2);
 }
 
 #[test]
@@ -77,10 +80,10 @@ fn child_without_turn_boundary_uses_ghost_ttl_backstop() {
             true,
         ),
         (
-            "finished child past ttl is reaped",
+            "finished child past ttl is retained as prior",
             AgentStatus::Success,
             GHOST_SESSION_TTL_SECS + 10,
-            false,
+            true,
         ),
     ] {
         let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
@@ -89,5 +92,12 @@ fn child_without_turn_boundary_uses_ghost_ttl_backstop() {
         let mut rows = vec![row_from_agent(&parent, epoch())];
         attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
         assert_eq!(!rows[0].sub_agents().is_empty(), expect_kept, "{label}");
+        if let Some(child) = rows[0].sub_agents().first() {
+            assert_eq!(
+                child.prior_turn,
+                age_secs >= GHOST_SESSION_TTL_SECS,
+                "{label}"
+            );
+        }
     }
 }

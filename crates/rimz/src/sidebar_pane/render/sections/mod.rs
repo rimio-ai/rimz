@@ -13,6 +13,8 @@
 //! This file owns only the shared section primitives — the width tiers and the
 //! gutter every section composes with.
 
+use std::collections::BTreeMap;
+
 use jiff::Timestamp;
 use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
@@ -74,6 +76,20 @@ pub(super) fn row_expanded_by_selection(
     roster.row(row_index).and_then(SidebarRow::team) == Some(selected_team)
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct CardExpansion {
+    pub(super) by_selection: bool,
+    pub(super) delegation: bool,
+}
+
+pub(super) fn delegation_open(
+    expanded: &BTreeMap<String, Option<Timestamp>>,
+    row: &SidebarRow,
+) -> bool {
+    row.as_agent()
+        .is_some_and(|agent| expanded.get(&row.id) == Some(&agent.user_turn_started_at))
+}
+
 pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) theme: &'a Theme,
     pub(in crate::sidebar_pane::render) now: Timestamp,
@@ -86,6 +102,8 @@ pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) animation_phase: u64,
     pub(in crate::sidebar_pane::render) cost_rolls: &'a CostRolls,
     pub(in crate::sidebar_pane::render) lead_unread: Option<&'a str>,
+    pub(in crate::sidebar_pane::render) expanded_delegations:
+        &'a BTreeMap<String, Option<Timestamp>>,
 }
 
 /// Inner content width: the sidebar width less the one-cell left gutter and the

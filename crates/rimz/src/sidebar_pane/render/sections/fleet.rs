@@ -253,7 +253,8 @@ pub(in crate::sidebar_pane::render) fn fleet_size(
     let subs = groups
         .iter()
         .flat_map(|group| &group.rows)
-        .map(|row| row.sub_agents().len())
+        .filter_map(|row| row.as_agent())
+        .map(|agent| agent.current_sub_agents().count())
         .sum();
     (main, subs)
 }

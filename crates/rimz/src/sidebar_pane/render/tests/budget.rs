@@ -22,6 +22,7 @@ fn sub_agent(parent: &str, index: usize) -> SidebarSubAgent {
     let now = super::fixed_now();
     SidebarSubAgent {
         id: format!("{parent}-sub-{index}"),
+        prior_turn: false,
         name: "Explore".to_owned(),
         petname: None,
         provider_native: true,

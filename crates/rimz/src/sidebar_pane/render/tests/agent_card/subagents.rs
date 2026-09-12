@@ -1,6 +1,71 @@
 use super::*;
 
 #[test]
+fn prior_turn_children_expand_without_hiding_running_children() {
+    let mut parent = agent(
+        "parent",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("delegate"),
+    );
+    parent.user_turn_started_at = Some(fixed_now() - Duration::from_secs(10));
+    let mut agents = vec![parent];
+    for index in 0..7 {
+        let running = index < 2;
+        let mut child = agent(
+            &format!("child-{index}"),
+            "claude",
+            if running {
+                AgentStatus::Running
+            } else {
+                AgentStatus::Success
+            },
+            None,
+            None,
+            Some(&format!("task-{index}")),
+        );
+        child.parent_agent_id = Some("parent".into());
+        child.last_activity = fixed_now() - Duration::from_secs(if running { 5 } else { 60 });
+        child.last_seen = child.last_activity;
+        agents.push(child);
+    }
+    let snapshot = snapshot_with(agents);
+    let row = &snapshot.worktree_groups[0].rows[0];
+    for (selected_index, open, name) in [
+        (0, false, "prior_children_selected"),
+        (0, true, "prior_children_expanded"),
+        (usize::MAX, false, "prior_children_unselected"),
+        (usize::MAX, true, "prior_children_unselected_expanded"),
+    ] {
+        let mut ui = UiState {
+            selected_index,
+            ..Default::default()
+        };
+        if open {
+            ui.expanded_delegations
+                .insert(row.id.clone(), row.as_agent().unwrap().user_turn_started_at);
+        }
+        let rendered = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 38);
+        assert!(rendered.contains("subagents (7)"));
+        assert_eq!(
+            rendered.contains("task-0"),
+            selected_index == 0 || open,
+            "{rendered}"
+        );
+        assert_eq!(rendered.contains("task-6"), open, "{rendered}");
+        assert_eq!(
+            rendered.contains("+5 more"),
+            selected_index == 0 && !open,
+            "{rendered}"
+        );
+        assert_eq!(rendered.contains("− less"), open, "{rendered}");
+        assert_snapshot(name, rendered);
+    }
+}
+
+#[test]
 fn render_selected_card_keeps_finished_metadata_without_a_live_clock() {
     // A selected parent expands its `⧉ subagents` list. A finished child
     // keeps its exact token/model/effort row, while the elapsed clock is dropped
@@ -269,8 +334,9 @@ fn subagent_stats_line_outlives_the_turn() {
     );
 
     let selected = line_texts(&group_lines(&snapshot, &theme, 0));
-    assert_eq!(selected.len(), 6, "{}", selected.join("\n"));
+    assert_eq!(selected.len(), 7, "{}", selected.join("\n"));
     assert!(selected[5].contains("⧉ subagents (1)"));
+    assert!(selected[6].contains("+1 more"));
     assert!(!selected.iter().any(|line| line.contains("map sidebar")));
 
     let rendered = snapshot_to_screen_with_alert_and_ui(

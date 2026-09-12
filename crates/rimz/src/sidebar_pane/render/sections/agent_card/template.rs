@@ -5,6 +5,7 @@ use crate::agents::AgentStatus;
 use crate::config::CardDensityMode;
 use crate::store::snapshot::SidebarRow;
 
+use super::CardExpansion;
 use super::description::awaiting_first_prompt;
 
 /// The card lifecycle state. Its line set is stable; enrichment only changes
@@ -44,7 +45,7 @@ pub(super) enum CardSlot {
     /// Standing lifetime child count and cost plus armed one-shot wakes; empty
     /// until either exists.
     Delegation,
-    /// Current-turn child entries followed by pending-wait entries.
+    /// Child entries, pending waits, and the prior-turn overflow toggle.
     DelegationEntries,
 }
 
@@ -75,8 +76,9 @@ pub(super) fn template(
     stage: CardStage,
     status: AgentStatus,
     density: CardDensityMode,
-    expanded: bool,
+    expansion: CardExpansion,
 ) -> &'static [CardSlot] {
+    let expanded = expansion.by_selection || expansion.delegation;
     if density == CardDensityMode::Compact && !expanded {
         return match status {
             AgentStatus::Idle => IDENTITY,
@@ -156,11 +158,30 @@ mod tests {
         for stage in STAGES {
             for status in STATUSES {
                 for density in DENSITIES {
-                    for expanded in [false, true] {
+                    for expansion in [
+                        CardExpansion::default(),
+                        CardExpansion {
+                            by_selection: true,
+                            delegation: false,
+                        },
+                        CardExpansion {
+                            by_selection: false,
+                            delegation: true,
+                        },
+                        CardExpansion {
+                            by_selection: true,
+                            delegation: true,
+                        },
+                    ] {
                         assert_eq!(
-                            template(stage, status, density, expanded),
-                            expected_template(stage, status, density, expanded),
-                            "{stage:?} {status:?} {density:?} expanded={expanded}"
+                            template(stage, status, density, expansion),
+                            expected_template(
+                                stage,
+                                status,
+                                density,
+                                expansion.by_selection || expansion.delegation
+                            ),
+                            "{stage:?} {status:?} {density:?} {expansion:?}"
                         );
                     }
                 }
@@ -177,7 +198,15 @@ mod tests {
             for status in STATUSES {
                 for density in DENSITIES {
                     for expanded in [false, true] {
-                        let template = template(stage, status, density, expanded);
+                        let template = template(
+                            stage,
+                            status,
+                            density,
+                            CardExpansion {
+                                by_selection: expanded,
+                                delegation: false,
+                            },
+                        );
                         assert!(!template.contains(&CardSlot::Tokens));
                         assert!(!template.contains(&CardSlot::Delegation));
                         assert!(!template.contains(&CardSlot::DelegationEntries));
@@ -190,7 +219,7 @@ mod tests {
                 CardStage::Fresh { labeled: false },
                 AgentStatus::Idle,
                 CardDensityMode::Auto,
-                false
+                CardExpansion::default()
             ),
             IDENTITY
         );

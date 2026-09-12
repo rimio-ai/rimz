@@ -34,7 +34,8 @@ fn pending_wake(name: &str, task: &LoadedTask, now: &jiff::Zoned) -> Option<Pend
         return None;
     }
     let parsed = task.trigger().as_ref().ok()?;
-    let armed_at = task.entry().wake_meta.as_ref().map(|meta| meta.armed_at);
+    let meta = task.entry().wake_meta.as_ref();
+    let armed_at = meta.map(|meta| meta.armed_at);
     let trigger = match &parsed.trigger {
         Trigger::Schedule(schedule) => {
             // A deadline shortens row lifetime, but does not make a recurring
@@ -44,10 +45,16 @@ fn pending_wake(name: &str, task: &LoadedTask, now: &jiff::Zoned) -> Option<Pend
             }
             let anchor = armed_at.map(|at| at.to_zoned(now.time_zone().clone()));
             let due = parsed.next_after(anchor.as_ref().unwrap_or(now))?;
-            PendingWakeTrigger::Timer { due }
+            PendingWakeTrigger::Timer {
+                due,
+                delay: meta.and_then(|meta| meta.delay.clone()),
+            }
         }
-        Trigger::Watch { command } => PendingWakeTrigger::Command {
-            command: command.clone(),
+        Trigger::Watch { command } => match meta.and_then(|meta| meta.pid) {
+            Some(pid) => PendingWakeTrigger::Pid { pid },
+            None => PendingWakeTrigger::Command {
+                command: command.clone(),
+            },
         },
         Trigger::Signal { selector, .. } => PendingWakeTrigger::Signal {
             selector: selector.to_string(),
@@ -82,8 +89,8 @@ pub fn pending_wakes_by_session(
     for wakes in wakes.values_mut() {
         wakes.sort_by_key(|wake| {
             let (kind, due) = match wake.trigger {
-                PendingWakeTrigger::Timer { due } => (0, Some(due)),
-                PendingWakeTrigger::Command { .. } => (1, None),
+                PendingWakeTrigger::Timer { due, .. } => (0, Some(due)),
+                PendingWakeTrigger::Pid { .. } | PendingWakeTrigger::Command { .. } => (1, None),
                 PendingWakeTrigger::Signal { .. } => (2, None),
             };
             (kind, due, wake.name.clone())
@@ -162,6 +169,60 @@ mod tests {
     }
 
     #[test]
+    fn pending_wakes_preserve_pid_and_delay() {
+        let now = "2026-06-01T10:00:00Z[UTC]".parse().unwrap();
+        let armed_at = "2026-06-01T09:42:00Z".parse().unwrap();
+        let meta = crate::config::WakeMeta {
+            armed_at,
+            delay: Some("30m".into()),
+            pid: None,
+        };
+        let timer = LoadedTask::new(
+            "timer",
+            TaskEntry {
+                at: Some("10:12".into()),
+                wake_meta: Some(meta.clone()),
+                ..TaskEntry::default()
+            },
+            TaskSource::Instance,
+        );
+        let wake = pending_wake("timer", &timer, &now).unwrap();
+        assert_eq!(wake.armed_at, Some(armed_at));
+        assert_eq!(
+            wake.trigger,
+            PendingWakeTrigger::Timer {
+                due: "2026-06-01T10:12:00Z".parse().unwrap(),
+                delay: Some("30m".into()),
+            }
+        );
+        let command = "while kill -0 16776 2>/dev/null; do sleep 1; done";
+        for pid in [None, Some(16776)] {
+            let task = LoadedTask::new(
+                "watch",
+                TaskEntry {
+                    watch: Some(command.into()),
+                    wake_meta: Some(crate::config::WakeMeta {
+                        delay: None,
+                        pid,
+                        ..meta.clone()
+                    }),
+                    ..TaskEntry::default()
+                },
+                TaskSource::Instance,
+            );
+            assert_eq!(
+                pending_wake("watch", &task, &now).unwrap().trigger,
+                match pid {
+                    Some(pid) => PendingWakeTrigger::Pid { pid },
+                    None => PendingWakeTrigger::Command {
+                        command: command.into()
+                    },
+                }
+            );
+        }
+    }
+
+    #[test]
     fn clock_due_uses_arm_time_or_the_snapshot_clock() {
         let now = "2026-06-02T10:00:00Z[UTC]".parse().unwrap();
         for (armed_at, expected) in [
@@ -175,6 +236,7 @@ mod tests {
                     wake_meta: armed_at.map(|at| crate::config::WakeMeta {
                         armed_at: at.parse().unwrap(),
                         delay: None,
+                        pid: None,
                     }),
                     ..TaskEntry::default()
                 },
@@ -183,7 +245,8 @@ mod tests {
             assert_eq!(
                 pending_wake("timer", &task, &now).unwrap().trigger,
                 PendingWakeTrigger::Timer {
-                    due: expected.parse().unwrap()
+                    due: expected.parse().unwrap(),
+                    delay: None,
                 },
             );
         }
