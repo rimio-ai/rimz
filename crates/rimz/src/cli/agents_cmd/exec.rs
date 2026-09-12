@@ -69,9 +69,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     if let Err(err) = &effective {
         let _ = writeln!(crate::cli::render::err(), "rimz: {err}");
     }
-    let ambient_env = std::env::vars_os()
-        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
-        .collect();
+    let ambient_env = rimz::agents::ambient_env();
     let plan = rimz::harness::launch_plan::compile(rimz::harness::launch_plan::LaunchPlanInputs {
         request: &request,
         cwd: &provider_cwd,

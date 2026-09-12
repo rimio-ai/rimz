@@ -182,9 +182,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
         adapter.manual_skill(),
     )?;
     let bwrap = rimz::sandbox::preflight(machine.agents.isolation)?;
-    let ambient_env = std::env::vars_os()
-        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
-        .collect();
+    let ambient_env = rimz::agents::ambient_env();
     let plan = launch_plan::compile(LaunchPlanInputs {
         request: &request,
         cwd: &cwd,
