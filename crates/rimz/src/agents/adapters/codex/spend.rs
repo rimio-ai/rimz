@@ -40,7 +40,6 @@ use crate::agents::pricing::{PriceBook, Pricing, TokenSplit};
 use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, iso_to_unix_secs, record_unknown_model,
 };
-use crate::agents::transcript_fs::home_dir;
 
 mod parse;
 #[cfg(test)]
@@ -54,8 +53,8 @@ use parse::{CodexSpendState, parse_codex_session};
 
 // ── Path discovery ────────────────────────────────────────────────────────────
 
-pub(super) fn codex_homes() -> Vec<PathBuf> {
-    if let Ok(env_val) = std::env::var("CODEX_HOME") {
+pub(super) fn codex_homes(login_env: &BTreeMap<String, String>) -> Vec<PathBuf> {
+    if let Some(env_val) = login_env.get("CODEX_HOME") {
         env_val
             .split(',')
             .map(str::trim)
@@ -63,7 +62,11 @@ pub(super) fn codex_homes() -> Vec<PathBuf> {
             .map(PathBuf::from)
             .collect()
     } else {
-        vec![home_dir().join(".codex")]
+        login_env
+            .get("HOME")
+            .map(|home| PathBuf::from(home).join(".codex"))
+            .into_iter()
+            .collect()
     }
 }
 

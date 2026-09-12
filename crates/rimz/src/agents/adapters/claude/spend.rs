@@ -36,7 +36,7 @@ use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, iso_to_unix_secs, origin_path, price_split,
 };
 
-use crate::agents::transcript_fs::{bytes_contains, expand_tilde, home_dir, read_transcript_lines};
+use crate::agents::transcript_fs::{bytes_contains, read_transcript_lines};
 
 // ── Typed structs ─────────────────────────────────────────────────────────────
 
@@ -220,22 +220,25 @@ where
 /// 3. `~/.claude`
 ///
 /// Returns directories that actually have a `projects/` child.
-pub(super) fn claude_config_dirs_from(
-    login_env: &std::collections::BTreeMap<String, String>,
-) -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
+pub(super) fn claude_config_dirs_from(login_env: &BTreeMap<String, String>) -> Vec<PathBuf> {
+    claude_config_roots(login_env)
+        .into_iter()
+        .filter(|path| path.join("projects").is_dir())
+        .collect()
+}
 
+/// Config roots without filesystem filtering, for the process-local discovery
+/// index to retain across a transiently unavailable provider home.
+pub(super) fn claude_config_roots(login_env: &BTreeMap<String, String>) -> Vec<PathBuf> {
     if let Some(env_val) = login_env.get("CLAUDE_CONFIG_DIR") {
-        dirs.extend(
-            env_val
-                .split(',')
-                .filter_map(|raw| env_config_dir(raw, login_env)),
-        );
-        if !dirs.is_empty() {
-            return dirs;
+        let roots = env_val
+            .split(',')
+            .filter_map(|raw| env_config_dir(raw, login_env))
+            .collect::<Vec<_>>();
+        if !roots.is_empty() {
+            return roots;
         }
     }
-
     let home = login_env
         .get("HOME")
         .map(PathBuf::from)
@@ -244,46 +247,10 @@ pub(super) fn claude_config_dirs_from(
         .get("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(".config"));
-    for candidate in [xdg.join("claude"), home.join(".claude")] {
-        if candidate.join("projects").is_dir() {
-            dirs.push(candidate);
-        }
-    }
-    dirs
-}
-
-/// Config roots without filesystem filtering, for the process-local discovery
-/// index to retain across a transiently unavailable provider home.
-pub(super) fn claude_config_roots() -> Vec<PathBuf> {
-    if let Ok(env_val) = std::env::var("CLAUDE_CONFIG_DIR") {
-        let roots = env_val
-            .split(',')
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(expand_tilde)
-            .map(|path| {
-                if path.file_name().is_some_and(|name| name == "projects") {
-                    path.parent().map(Path::to_path_buf).unwrap_or(path)
-                } else {
-                    path
-                }
-            })
-            .collect::<Vec<_>>();
-        if !roots.is_empty() {
-            return roots;
-        }
-    }
-    let home = home_dir();
-    let xdg = std::env::var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| home.join(".config"));
     vec![xdg.join("claude"), home.join(".claude")]
 }
 
-fn env_config_dir(
-    raw: &str,
-    login_env: &std::collections::BTreeMap<String, String>,
-) -> Option<PathBuf> {
+fn env_config_dir(raw: &str, login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
     let raw = raw.trim();
     if raw.is_empty() {
         return None;
@@ -296,12 +263,11 @@ fn env_config_dir(
     } else {
         PathBuf::from(raw)
     };
-    let path = if path.file_name().is_some_and(|name| name == "projects") && path.is_dir() {
+    Some(if path.file_name().is_some_and(|name| name == "projects") {
         path.parent().map(Path::to_path_buf).unwrap_or(path)
     } else {
         path
-    };
-    path.join("projects").is_dir().then_some(path)
+    })
 }
 
 // ── Validation helpers ────────────────────────────────────────────────────────

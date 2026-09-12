@@ -947,7 +947,9 @@ fn prior_transcript_path_must_be_the_bound_main_agent_wire() {
     std::fs::write(&child, "").unwrap();
 
     assert_eq!(
-        KimiAdapter.session_transcript("s1", Some(&main)).as_deref(),
+        KimiAdapter
+            .session_transcript("s1", Some(&main), &std::collections::BTreeMap::new())
+            .as_deref(),
         Some(main.as_path())
     );
     assert!(!valid_main_wire(&child, "s1"));

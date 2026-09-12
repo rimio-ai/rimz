@@ -214,7 +214,11 @@ fn spend_transcripts_include_sorted_companions_for_both_session_layouts() {
             ]
         );
         assert_eq!(
-            ClaudeAdapter.session_spend_transcripts("parent", Some(&parent)),
+            ClaudeAdapter.session_spend_transcripts(
+                "parent",
+                Some(&parent),
+                &std::collections::BTreeMap::new()
+            ),
             [
                 parent.clone(),
                 children.join("agent-a.jsonl"),
@@ -227,7 +231,11 @@ fn spend_transcripts_include_sorted_companions_for_both_session_layouts() {
     let parent = dir.path().join("missing.jsonl");
     std::fs::write(&parent, "").unwrap();
     assert_eq!(
-        ClaudeAdapter.session_spend_transcripts("missing", Some(&parent)),
+        ClaudeAdapter.session_spend_transcripts(
+            "missing",
+            Some(&parent),
+            &std::collections::BTreeMap::new()
+        ),
         [parent]
     );
 }

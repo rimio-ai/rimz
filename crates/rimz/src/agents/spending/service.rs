@@ -39,11 +39,12 @@ struct SpendingServiceNamespace(String);
 
 impl SpendingServiceNamespace {
     fn for_runtime(runtime: &RuntimePaths) -> Self {
+        let login_env = crate::agents::ambient_env();
         let declarations = crate::agents::all_definitions()
             .flat_map(|adapter| {
                 let kind = adapter.spec().kind;
                 adapter
-                    .spending_sources()
+                    .spending_sources(&login_env)
                     .into_iter()
                     .map(move |source| (kind, source.fingerprint()))
             })

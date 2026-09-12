@@ -301,8 +301,11 @@ impl crate::agents::capabilities::ContextCapability for KiroAdapter {
         _trigger: RefreshTrigger<'_>,
         ctx: &LocalContextRefreshCtx<'_>,
     ) -> Option<LocalContextRefresh> {
-        let path =
-            self.session_transcript(ctx.agent_id, ctx.prior_transcript_path.map(Path::new))?;
+        let path = self.session_transcript(
+            ctx.agent_id,
+            ctx.prior_transcript_path.map(Path::new),
+            ctx.login_env,
+        )?;
         let stat = ctx.changed_transcript(TranscriptStat::from_path(&path)?)?;
         Some(LocalContextRefresh {
             context: LocalContextPatch::authoritative_current(),
@@ -314,7 +317,12 @@ impl crate::agents::capabilities::ContextCapability for KiroAdapter {
 }
 
 impl crate::agents::capabilities::SpendingCapability for KiroAdapter {
-    fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
+    fn session_transcript(
+        &self,
+        session_id: &str,
+        prior_path: Option<&Path>,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Option<PathBuf> {
         if let Some(path) = prior_path.filter(|path| session::valid_transcript(path, session_id)) {
             return Some(path.to_path_buf());
         }

@@ -321,6 +321,7 @@ impl SpendingDiscoveryIndex {
         adapters: impl Iterator<Item = &'static AgentDefinition>,
         now_secs: u64,
     ) -> Vec<(&'static AgentDefinition, PathBuf)> {
+        let login_env = crate::agents::ambient_env();
         self.stats = DiscoveryStats::default();
         let force_complete = self.complete_due();
         let mut authoritative = true;
@@ -331,7 +332,7 @@ impl SpendingDiscoveryIndex {
             if !seen_kinds.insert(kind) {
                 continue;
             }
-            let declarations = adapter.spending_sources();
+            let declarations = adapter.spending_sources(&login_env);
             let key = source_set_key(&declarations);
             let changed = self.adapters.get(kind).is_none_or(|state| state.key != key);
             if changed {

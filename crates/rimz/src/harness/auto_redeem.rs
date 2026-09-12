@@ -450,16 +450,20 @@ pub fn execute_auto_redeem(
 
     let rate_pct_per_day =
         cached_rate(read_rate_stamp(&runtime.shared_auto_redeem_rate_path(CODEX_KIND)).as_ref());
-    let action = prepare_reset_credit_redemption(CODEX_KIND, |capacity, credits| {
-        redeem_verdict(
-            capacity,
-            credits,
-            rate_pct_per_day,
-            config.auto_redeem_min_gain(),
-            config.auto_redeem,
-            now,
-        )
-    });
+    let action = prepare_reset_credit_redemption(
+        CODEX_KIND,
+        |capacity, credits| {
+            redeem_verdict(
+                capacity,
+                credits,
+                rate_pct_per_day,
+                config.auto_redeem_min_gain(),
+                config.auto_redeem,
+                now,
+            )
+        },
+        &crate::agents::ambient_env(),
+    );
     let action = action.map_err(AutoRedeemErr::Codex)?;
     let Some(action) = action else {
         return Ok(None);

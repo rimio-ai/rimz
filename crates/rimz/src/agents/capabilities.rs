@@ -112,7 +112,12 @@ pub trait InstallationCapability: CoreCapability {
     /// The fix when this agent would stop at a directory-trust prompt instead
     /// of taking its task. Any recorded trust level counts as decided.
     /// `repo_root` is the checkout's main repository root, when it has one.
-    fn launch_dir_trust_gap(&self, _cwd: &Path, _repo_root: Option<&Path>) -> Option<String> {
+    fn launch_dir_trust_gap(
+        &self,
+        _cwd: &Path,
+        _repo_root: Option<&Path>,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Option<String> {
         None
     }
 
@@ -610,7 +615,10 @@ pub trait ContextCapability: CoreCapability {
 
 #[doc(hidden)]
 pub trait AccountCapability: CoreCapability {
-    fn prepare_reset_credit(&self) -> std::result::Result<account::ResetCreditOffer, String> {
+    fn prepare_reset_credit(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+    ) -> std::result::Result<account::ResetCreditOffer, String> {
         Err(format!(
             "{} does not support reset-credit redemption",
             self.spec().kind
@@ -679,9 +687,9 @@ pub trait SpendingCapability: CoreCapability {
     /// Conversation/store candidates used to resolve a live session for
     /// transcript UI and session-cost lookup. Historical fleet spending uses
     /// [`spending_sources`](Self::spending_sources) instead.
-    fn transcript_files(&self) -> Vec<PathBuf> {
+    fn transcript_files(&self, login_env: &BTreeMap<String, String>) -> Vec<PathBuf> {
         let mut files = self
-            .spending_sources()
+            .spending_sources(login_env)
             .into_iter()
             .flat_map(|source| source.complete_files())
             .collect::<Vec<_>>();
@@ -701,7 +709,10 @@ pub trait SpendingCapability: CoreCapability {
     /// Declarative historical-spend stores consumed by the persistent
     /// [`spending::SpendingWalker`]. An adapter with no historical spend keeps
     /// the empty default even when it exposes transcripts for session lookup.
-    fn spending_sources(&self) -> Vec<spending::SpendingSource> {
+    fn spending_sources(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Vec<spending::SpendingSource> {
         Vec::new()
     }
 
@@ -710,7 +721,12 @@ pub trait SpendingCapability: CoreCapability {
     /// steady session pays one stat before falling back to provider discovery.
     /// Providers with one-file-per-session stores usually need no override; stores
     /// whose file name does not contain the session id provide their own mapping.
-    fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
+    fn session_transcript(
+        &self,
+        session_id: &str,
+        prior_path: Option<&Path>,
+        login_env: &BTreeMap<String, String>,
+    ) -> Option<PathBuf> {
         if let Some(path) = prior_path.filter(|path| path.is_file()) {
             return Some(path.to_path_buf());
         }
@@ -718,7 +734,7 @@ pub trait SpendingCapability: CoreCapability {
         if session_id.is_empty() {
             return None;
         }
-        self.transcript_files().into_iter().find(|path| {
+        self.transcript_files(login_env).into_iter().find(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.contains(session_id))
@@ -731,8 +747,9 @@ pub trait SpendingCapability: CoreCapability {
         &self,
         session_id: &str,
         prior_path: Option<&Path>,
+        login_env: &BTreeMap<String, String>,
     ) -> Vec<PathBuf> {
-        self.session_transcript(session_id, prior_path)
+        self.session_transcript(session_id, prior_path, login_env)
             .into_iter()
             .collect()
     }

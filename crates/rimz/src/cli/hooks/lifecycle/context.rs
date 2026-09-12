@@ -302,7 +302,9 @@ pub(super) fn supplement_realtime_cost(
         .and_then(|refresh| refresh.transcript_path.as_deref())
         .or_else(|| prior.and_then(|record| record.transcript_path.as_deref()))
         .map(Path::new);
-    let Some(path) = agent.session_transcript(context_agent_id, prior_path) else {
+    let Some(path) =
+        agent.session_transcript(context_agent_id, prior_path, &rimz::agents::ambient_env())
+    else {
         return;
     };
     let Some(stat) = agent.transcript_stat(&path) else {

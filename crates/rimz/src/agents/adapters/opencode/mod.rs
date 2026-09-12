@@ -344,7 +344,7 @@ impl crate::agents::capabilities::CoreCapability for OpencodeAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for OpencodeAdapter {
-    fn config_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
+    fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         opencode_config_home(
             env.get("XDG_CONFIG_HOME").map(std::ffi::OsStr::new),
             env.get("HOME").map(std::ffi::OsStr::new),
@@ -624,18 +624,26 @@ impl crate::agents::capabilities::SpendingCapability for OpencodeAdapter {
         database::logical_stat(path)
     }
 
-    fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
+    fn spending_sources(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Vec<crate::agents::spending::SpendingSource> {
         database::files()
             .into_iter()
             .map(crate::agents::spending::SpendingSource::exact)
             .collect()
     }
 
-    fn session_transcript(&self, _session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
+    fn session_transcript(
+        &self,
+        _session_id: &str,
+        prior_path: Option<&Path>,
+        login_env: &BTreeMap<String, String>,
+    ) -> Option<PathBuf> {
         if let Some(path) = prior_path.filter(|path| path.is_file()) {
             return Some(path.to_path_buf());
         }
-        self.transcript_files().into_iter().next()
+        self.transcript_files(login_env).into_iter().next()
     }
 
     fn parse_spend(

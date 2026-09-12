@@ -477,7 +477,7 @@ impl crate::agents::capabilities::InstallationCapability for AntigravityAdapter 
 }
 
 impl crate::agents::capabilities::LaunchCapability for AntigravityAdapter {
-    fn config_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
+    fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         session::resolve_home(None, env.get("HOME").map(std::ffi::OsStr::new))
     }
 
@@ -553,7 +553,12 @@ impl crate::agents::capabilities::AccountCapability for AntigravityAdapter {
 }
 
 impl crate::agents::capabilities::SpendingCapability for AntigravityAdapter {
-    fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
+    fn session_transcript(
+        &self,
+        session_id: &str,
+        prior_path: Option<&Path>,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Option<PathBuf> {
         if let Some(path) = prior_path.filter(|path| session::valid_transcript(path, session_id)) {
             return Some(path.to_path_buf());
         }

@@ -656,7 +656,12 @@ impl crate::agents::capabilities::AccountCapability for CopilotAdapter {
 }
 
 impl crate::agents::capabilities::SpendingCapability for CopilotAdapter {
-    fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
+    fn session_transcript(
+        &self,
+        session_id: &str,
+        prior_path: Option<&Path>,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Option<PathBuf> {
         if let Some(path) = prior_path
             .and_then(|path| paths::validated_transcript_path(path, session_id))
             .filter(|path| path.is_file())
@@ -666,7 +671,10 @@ impl crate::agents::capabilities::SpendingCapability for CopilotAdapter {
         paths::session_transcript_path(session_id)
     }
 
-    fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
+    fn spending_sources(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Vec<crate::agents::spending::SpendingSource> {
         paths::copilot_home()
             .map(|home| {
                 crate::agents::spending::SpendingSource::tree(

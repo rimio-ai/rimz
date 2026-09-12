@@ -345,7 +345,7 @@ impl crate::agents::capabilities::LaunchCapability for PiAdapter {
         &["PI_CODING_AGENT_DIR"]
     }
 
-    fn config_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
+    fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         spend::pi_config_dir_from(
             env.get("PI_CODING_AGENT_DIR").map(String::as_str),
             env.get("HOME").map(Path::new),
@@ -560,7 +560,10 @@ impl crate::agents::capabilities::AccountCapability for PiAdapter {
 }
 
 impl crate::agents::capabilities::SpendingCapability for PiAdapter {
-    fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
+    fn spending_sources(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Vec<crate::agents::spending::SpendingSource> {
         spend::pi_session_roots()
             .into_iter()
             .flat_map(|root| crate::agents::spending::SpendingSource::tree(root, "**/*.jsonl"))

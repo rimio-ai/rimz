@@ -515,7 +515,7 @@ impl crate::agents::capabilities::LaunchCapability for KimiAdapter {
         &["KIMI_CODE_HOME"]
     }
 
-    fn config_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
+    fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         wire::kimi_home_from(
             env.get("KIMI_CODE_HOME").map(std::ffi::OsStr::new),
             env.get("HOME").map(std::ffi::OsStr::new),
@@ -586,14 +586,22 @@ impl crate::agents::capabilities::AccountCapability for KimiAdapter {
 }
 
 impl crate::agents::capabilities::SpendingCapability for KimiAdapter {
-    fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
+    fn spending_sources(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Vec<crate::agents::spending::SpendingSource> {
         crate::agents::spending::SpendingSource::tree(
             wire::kimi_home().join("sessions"),
             "*/*/agents/main/wire.jsonl",
         )
     }
 
-    fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
+    fn session_transcript(
+        &self,
+        session_id: &str,
+        prior_path: Option<&Path>,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Option<PathBuf> {
         if let Some(path) = prior_path.filter(|path| valid_main_wire(path, session_id)) {
             return Some(path.to_path_buf());
         }
@@ -667,8 +675,11 @@ fn parse_questions(input: &Value) -> Option<Vec<AskQuestion>> {
 }
 
 fn refresh_wire_context(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRefresh> {
-    let path =
-        KimiAdapter.session_transcript(ctx.agent_id, ctx.prior_transcript_path.map(Path::new))?;
+    let path = KimiAdapter.session_transcript(
+        ctx.agent_id,
+        ctx.prior_transcript_path.map(Path::new),
+        ctx.login_env,
+    )?;
     let stat = TranscriptStat::from_path(&path)?;
     refresh_wire_path(&path, ctx.agent_id, stat, ctx)
 }

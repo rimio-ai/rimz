@@ -458,7 +458,7 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         &["CLAUDE_CONFIG_DIR"]
     }
 
-    fn config_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
+    fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         remote_consent::configured_dir(env.get("CLAUDE_CONFIG_DIR").map(String::as_str)).or_else(
             || {
                 env.get("HOME")
@@ -468,7 +468,7 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         )
     }
 
-    fn skills_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
+    fn skills_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         Some(self.config_home(env)?.join("skills"))
     }
 
@@ -798,8 +798,11 @@ impl crate::agents::capabilities::AccountCapability for ClaudeAdapter {
 }
 
 impl crate::agents::capabilities::SpendingCapability for ClaudeAdapter {
-    fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
-        spend::claude_config_roots()
+    fn spending_sources(
+        &self,
+        login_env: &BTreeMap<String, String>,
+    ) -> Vec<crate::agents::spending::SpendingSource> {
+        spend::claude_config_roots(login_env)
             .into_iter()
             .flat_map(|dir| {
                 crate::agents::spending::SpendingSource::tree(dir.join("projects"), "**/*.jsonl")
@@ -807,7 +810,12 @@ impl crate::agents::capabilities::SpendingCapability for ClaudeAdapter {
             .collect()
     }
 
-    fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
+    fn session_transcript(
+        &self,
+        session_id: &str,
+        prior_path: Option<&Path>,
+        login_env: &BTreeMap<String, String>,
+    ) -> Option<PathBuf> {
         if let Some(path) = prior_path.filter(|path| path.is_file()) {
             return Some(path.to_path_buf());
         }
@@ -820,7 +828,7 @@ impl crate::agents::capabilities::SpendingCapability for ClaudeAdapter {
                 .any(|component| component.as_os_str().to_string_lossy().contains(session_id))
         };
         let files: Vec<PathBuf> = self
-            .transcript_files()
+            .transcript_files(login_env)
             .into_iter()
             .filter(|path| matches_session(path) && !subagents::is_subagent_transcript(path))
             .collect();
@@ -835,8 +843,9 @@ impl crate::agents::capabilities::SpendingCapability for ClaudeAdapter {
         &self,
         session_id: &str,
         prior_path: Option<&Path>,
+        login_env: &BTreeMap<String, String>,
     ) -> Vec<PathBuf> {
-        let Some(main) = self.session_transcript(session_id, prior_path) else {
+        let Some(main) = self.session_transcript(session_id, prior_path, login_env) else {
             return Vec::new();
         };
         let mut transcripts = vec![main.clone()];

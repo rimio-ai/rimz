@@ -456,14 +456,14 @@ impl crate::agents::capabilities::LaunchCapability for QwenAdapter {
         &["QWEN_HOME"]
     }
 
-    fn config_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
+    fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         install::qwen_home_from(
             env.get("QWEN_HOME").map(std::ffi::OsStr::new),
             env.get("HOME").map(std::ffi::OsStr::new),
         )
     }
 
-    fn skills_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
+    fn skills_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         Some(self.config_home(env)?.join("skills"))
     }
 
@@ -607,7 +607,7 @@ impl crate::agents::capabilities::AccountCapability for QwenAdapter {
     fn resolve_managed_launch(
         &self,
         cwd: &Path,
-        env: &std::collections::BTreeMap<String, String>,
+        env: &BTreeMap<String, String>,
         model: Option<&str>,
         argv: &[String],
     ) -> super::ManagedLaunchState {
@@ -616,7 +616,10 @@ impl crate::agents::capabilities::AccountCapability for QwenAdapter {
 }
 
 impl crate::agents::capabilities::SpendingCapability for QwenAdapter {
-    fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
+    fn spending_sources(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Vec<crate::agents::spending::SpendingSource> {
         crate::agents::spending::SpendingSource::tree(
             spend::runtime_base().join("projects"),
             "*/chats/*.jsonl",

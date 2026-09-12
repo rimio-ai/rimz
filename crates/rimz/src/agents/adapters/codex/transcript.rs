@@ -2,7 +2,6 @@
 //!
 //! This module locates session JSONL files, reads bounded tails, folds token usage, and enriches context/cost fields without touching the live app-server. Costs use the shared cached price book, so refreshed prices heal post-release models.
 
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
@@ -37,11 +36,12 @@ pub fn refresh_transcript_context(
     prior_transcript_stat: Option<&TranscriptStat>,
     prior_spend_fold: Option<&LocalSpendFold>,
     pricing_cache_path: &Path,
+    login_env: &std::collections::BTreeMap<String, String>,
 ) -> Option<LocalContextRefresh> {
     let mut path = prior_transcript_path.map(PathBuf::from);
     let mut stat = path.as_deref().and_then(TranscriptStat::from_path);
     if stat.is_none() {
-        path = find_session_transcript(session_id);
+        path = find_session_transcript(session_id, login_env);
         stat = path.as_deref().and_then(TranscriptStat::from_path);
     }
     let path = path?;
@@ -77,7 +77,7 @@ pub fn refresh_transcript_context(
         Some(RestingTurnOutcome::Died(error)) => (None, Some(error)),
         None => (None, None),
     };
-    let (mut tokens, model_id) = transcript_enrichment(&usage, model_hint);
+    let (mut tokens, model_id) = transcript_enrichment(&usage, model_hint, login_env);
     if let Some(session_usage) = spend_fold.session_usage() {
         tokens
             .get_or_insert_with(AgentTokenUsage::default)
@@ -107,7 +107,7 @@ pub fn refresh_transcript_context(
 /// the rollout was absent, unreadable, malformed, or did not start with
 /// `session_meta`, so callers keep every session.
 pub fn session_origin(session_id: &str) -> Option<SessionOrigin> {
-    let path = find_session_transcript(session_id)?;
+    let path = find_session_transcript(session_id, &crate::agents::ambient_env())?;
     let header = read_rollout_header(&path)?;
     Some(if header.forked_from_id.is_some() {
         SessionOrigin::Forked
@@ -118,7 +118,7 @@ pub fn session_origin(session_id: &str) -> Option<SessionOrigin> {
 
 /// Read the predecessor id named by a forked Codex rollout.
 pub(super) fn session_forked_from(session_id: &str) -> Option<AgentSessionId> {
-    let path = find_session_transcript(session_id)?;
+    let path = find_session_transcript(session_id, &crate::agents::ambient_env())?;
     read_rollout_header(&path)?
         .forked_from_id
         .map(AgentSessionId::from)
@@ -154,6 +154,7 @@ pub(super) struct TranscriptUsage {
 pub(super) fn transcript_enrichment(
     usage: &TranscriptUsage,
     model_hint: Option<&str>,
+    login_env: &std::collections::BTreeMap<String, String>,
 ) -> (Option<AgentTokenUsage>, Option<String>) {
     let current_usage = if usage.last_input_tokens.is_some()
         || usage.last_cached_input_tokens.is_some()
@@ -193,7 +194,7 @@ pub(super) fn transcript_enrichment(
         .filter(|model| !model.is_empty())
         .map(ToOwned::to_owned)
         .or_else(|| usage.model.clone())
-        .or_else(configured_model);
+        .or_else(|| configured_model(login_env));
     (tokens, model_id)
 }
 
@@ -204,21 +205,29 @@ pub(super) fn payload_reasoning_effort(payload: &Value) -> Option<String> {
     )
 }
 
-pub(super) fn configured_reasoning_effort() -> Option<String> {
-    configured_config_path().and_then(|path| configured_reasoning_effort_at(&path))
+pub(super) fn configured_reasoning_effort(
+    login_env: &std::collections::BTreeMap<String, String>,
+) -> Option<String> {
+    configured_config_path(login_env).and_then(|path| configured_reasoning_effort_at(&path))
 }
 
-pub(super) fn configured_model() -> Option<String> {
-    configured_config_path().and_then(|path| configured_model_at(&path))
+pub(super) fn configured_model(
+    login_env: &std::collections::BTreeMap<String, String>,
+) -> Option<String> {
+    configured_config_path(login_env).and_then(|path| configured_model_at(&path))
 }
 
 #[cfg(not(test))]
-fn configured_config_path() -> Option<PathBuf> {
-    codex_config_path(&crate::agents::ambient_env()).ok()
+fn configured_config_path(
+    login_env: &std::collections::BTreeMap<String, String>,
+) -> Option<PathBuf> {
+    codex_config_path(login_env).ok()
 }
 
 #[cfg(test)]
-fn configured_config_path() -> Option<PathBuf> {
+fn configured_config_path(
+    login_env: &std::collections::BTreeMap<String, String>,
+) -> Option<PathBuf> {
     if let Some(path) = TEST_CODEX_CONFIG
         .lock()
         .expect("test config mutex is not poisoned")
@@ -226,8 +235,8 @@ fn configured_config_path() -> Option<PathBuf> {
     {
         return Some(path);
     }
-    std::env::var_os("RIMZ_CODEX_CONFIG")?;
-    codex_config_path(&crate::agents::ambient_env()).ok()
+    login_env.get("RIMZ_CODEX_CONFIG")?;
+    codex_config_path(login_env).ok()
 }
 
 #[cfg(test)]
@@ -331,7 +340,7 @@ impl TranscriptUsage {
 /// Root directory holding Codex rollout JSONL files. Honours
 /// `RIMZ_CODEX_SESSIONS` so tests can point at a tempdir without touching the
 /// real `~/.codex/sessions/` tree.
-fn codex_sessions_root() -> Option<PathBuf> {
+fn codex_sessions_root(login_env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
     #[cfg(test)]
     if let Some(path) = TEST_CODEX_SESSIONS_ROOT
         .lock()
@@ -340,12 +349,17 @@ fn codex_sessions_root() -> Option<PathBuf> {
     {
         return Some(path);
     }
-    if let Some(raw) = env::var_os("RIMZ_CODEX_SESSIONS").filter(|v| !v.is_empty()) {
+    if let Some(raw) = login_env
+        .get("RIMZ_CODEX_SESSIONS")
+        .filter(|v| !v.is_empty())
+    {
         return Some(PathBuf::from(raw));
     }
-    env::var_os("HOME")
-        .filter(|v| !v.is_empty())
-        .map(|home| PathBuf::from(home).join(".codex").join("sessions"))
+    super::codex_home_from(
+        login_env.get("CODEX_HOME").map(AsRef::as_ref),
+        login_env.get("HOME").map(AsRef::as_ref),
+    )
+    .map(|home| home.join("sessions"))
 }
 
 /// Locate the rollout JSONL for a Codex session by its `session_id`. Codex
@@ -353,8 +367,11 @@ fn codex_sessions_root() -> Option<PathBuf> {
 /// `~/.codex/sessions/YYYY/MM/DD/rollout-*-{session_id}[_rollout_id].jsonl`,
 /// so the walk descends the date hierarchy newest-first, then checks the flat
 /// sibling `archived_sessions/` directory.
-pub(super) fn find_session_transcript(session_id: &str) -> Option<PathBuf> {
-    let sessions = codex_sessions_root()?;
+pub(super) fn find_session_transcript(
+    session_id: &str,
+    login_env: &std::collections::BTreeMap<String, String>,
+) -> Option<PathBuf> {
+    let sessions = codex_sessions_root(login_env)?;
     find_session_transcript_under(&sessions, session_id).or_else(|| {
         if sessions.file_name().and_then(|name| name.to_str()) != Some("sessions") {
             return None;

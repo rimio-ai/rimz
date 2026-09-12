@@ -153,43 +153,29 @@ fn project_trust_accepts_canonical_and_symlink_keys() {
 
 #[test]
 fn codex_config_path_honors_codex_home_and_override() {
-    const PROBE: &str = "RIMZ_TEST_CODEX_CONFIG_PATH";
-    if let Some(expected) = std::env::var_os(PROBE) {
-        let path = super::super::install::codex_config_path(&crate::agents::ambient_env()).unwrap();
-        assert_eq!(path, std::path::PathBuf::from(expected));
+    let dir = tempfile::tempdir().unwrap();
+    for override_name in [None, Some("override.toml")] {
+        let expected = dir.path().join(override_name.unwrap_or("config.toml"));
+        let mut login_env = std::collections::BTreeMap::from([(
+            "CODEX_HOME".to_owned(),
+            dir.path().to_string_lossy().into_owned(),
+        )]);
+        if override_name.is_some() {
+            login_env.insert(
+                "RIMZ_CODEX_CONFIG".to_owned(),
+                expected.to_string_lossy().into_owned(),
+            );
+        }
+        let path = super::super::install::codex_config_path(&login_env).unwrap();
+        assert_eq!(path, expected);
         let adapter = crate::agents::definition_by_kind("codex").unwrap();
         let cwd = path.parent().unwrap();
-        let error = crate::agents::preflight_launch_dir(adapter, cwd, None).unwrap_err();
+        let error =
+            crate::agents::preflight_launch_dir(adapter, cwd, None, &login_env).unwrap_err();
         assert_eq!(error.kind, "codex");
         assert_eq!(error.dir, cwd);
         assert!(error.fix.contains(path.to_str().unwrap()));
         write_trust(&path, &[(cwd, "untrusted")], None);
-        assert!(crate::agents::preflight_launch_dir(adapter, cwd, None).is_ok());
-        return;
-    }
-
-    let dir = tempfile::tempdir().unwrap();
-    for override_name in [None, Some("override.toml")] {
-        let expected = dir.path().join(override_name.unwrap_or("config.toml"));
-        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-        command
-            .args([
-                "--exact",
-                "agents::adapters::codex::tests::project_trust::codex_config_path_honors_codex_home_and_override",
-                "--nocapture",
-            ])
-            .env("CODEX_HOME", dir.path())
-            .env_remove("RIMZ_CODEX_CONFIG")
-            .env(PROBE, &expected);
-        if override_name.is_some() {
-            command.env("RIMZ_CODEX_CONFIG", &expected);
-        }
-        let output = command.output().unwrap();
-        assert!(
-            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+        assert!(crate::agents::preflight_launch_dir(adapter, cwd, None, &login_env).is_ok());
     }
 }

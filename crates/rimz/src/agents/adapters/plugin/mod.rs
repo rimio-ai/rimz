@@ -249,7 +249,7 @@ impl crate::agents::capabilities::HookCapability for PluginAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for PluginAdapter {
-    fn skills_home(&self, _env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
+    fn skills_home(&self, _env: &BTreeMap<String, String>) -> Option<PathBuf> {
         None
     }
 
@@ -306,7 +306,7 @@ impl crate::agents::capabilities::AccountCapability for PluginAdapter {
 }
 
 impl crate::agents::capabilities::SpendingCapability for PluginAdapter {
-    fn transcript_files(&self) -> Vec<PathBuf> {
+    fn transcript_files(&self, _login_env: &BTreeMap<String, String>) -> Vec<PathBuf> {
         let mut files = self
             .transcript_sources()
             .into_iter()
@@ -317,7 +317,10 @@ impl crate::agents::capabilities::SpendingCapability for PluginAdapter {
         files
     }
 
-    fn spending_sources(&self) -> Vec<super::spending::SpendingSource> {
+    fn spending_sources(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Vec<super::spending::SpendingSource> {
         if self.manifest.transcripts.is_none() || self.manifest.probes.spend.is_none() {
             return Vec::new();
         }
@@ -1033,9 +1036,23 @@ globs = ["history/**/*.jsonl"]
     #[test]
     fn historical_discovery_requires_transcripts_and_spend_probe() {
         let transcript_only = transcript_adapter(false);
-        assert_eq!(transcript_only.transcript_files().len(), 1);
-        assert!(transcript_only.spending_sources().is_empty());
-        assert_eq!(transcript_adapter(true).spending_sources().len(), 1);
+        assert_eq!(
+            transcript_only
+                .transcript_files(&std::collections::BTreeMap::new())
+                .len(),
+            1
+        );
+        assert!(
+            transcript_only
+                .spending_sources(&std::collections::BTreeMap::new())
+                .is_empty()
+        );
+        assert_eq!(
+            transcript_adapter(true)
+                .spending_sources(&std::collections::BTreeMap::new())
+                .len(),
+            1
+        );
     }
 
     #[test]

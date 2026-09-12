@@ -351,7 +351,7 @@ impl crate::agents::capabilities::InstallationCapability for AmpAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for AmpAdapter {
-    fn config_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
+    fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         amp_config_home(
             env.get("XDG_CONFIG_HOME").map(std::ffi::OsStr::new),
             env.get("HOME").map(std::ffi::OsStr::new),
@@ -452,14 +452,22 @@ impl crate::agents::capabilities::AccountCapability for AmpAdapter {
 }
 
 impl crate::agents::capabilities::SpendingCapability for AmpAdapter {
-    fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
+    fn spending_sources(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Vec<crate::agents::spending::SpendingSource> {
         crate::agents::spending::SpendingSource::tree(
             spend::data_root().join("threads"),
             "T-?*.json",
         )
     }
 
-    fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
+    fn session_transcript(
+        &self,
+        session_id: &str,
+        prior_path: Option<&Path>,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Option<PathBuf> {
         spend::resolve_session_file(session_id, prior_path)
     }
 
