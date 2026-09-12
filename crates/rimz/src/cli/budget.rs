@@ -8,16 +8,16 @@ use clap::Args;
 use jiff::Timestamp;
 
 use super::{Ctx, GlobalFlags};
-use rimz::agents::BudgetWindow;
+use rimz::agents::{BudgetWindow, LoginCatalog, RoomLoginSet};
 use rimz::config::{DayCap, MachineConfig};
 use rimz::harness::budget::{BudgetSpec, DailyBudgetScope, read_scope_state, scope_interrupted};
-use rimz::ids::AgentKind;
+use rimz::ids::{AgentKind, LoginKey};
 
 #[derive(Debug, Args)]
 pub struct BudgetArgs {
     /// New `/day` cap, `+AMOUNT`, or `off`/`clear`; omit to inspect.
     value: Option<String>,
-    /// Target one provider login instead of this room's fleet.
+    /// Target this room's account of one provider instead of the fleet.
     #[arg(long, value_name = "KIND")]
     account: Option<String>,
     /// Lift a park without queueing the configured continue prompt.
@@ -41,7 +41,16 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = &ctx.workspace;
     let store = &ctx.store;
     let now = Timestamp::now();
-    let scope = account.map_or(DailyBudgetScope::Fleet, DailyBudgetScope::Account);
+    let scope = match account {
+        None => DailyBudgetScope::Fleet,
+        Some(kind) => DailyBudgetScope::Account(
+            RoomLoginSet::for_runtime(store.runtime_paths())
+                .key(kind.as_str())
+                .with_context(|| {
+                    format!("cannot resolve this room's {kind} account; check `rimz accounts list`")
+                })?,
+        ),
+    };
     let fleet_spend =
         matches!(scope, DailyBudgetScope::Fleet).then(|| live_fleet_spend(&ctx, &config, now));
     if args.value.is_none() {
@@ -65,7 +74,7 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
                 && !agent.agent_id.is_provisional()
                 && match &scope {
                     DailyBudgetScope::Fleet => true,
-                    DailyBudgetScope::Account(kind) => agent.kind == *kind,
+                    DailyBudgetScope::Account(key) => agent.login_key() == *key,
                 }
         });
     let continue_text = config.resume.auto_continue_text.trim();
@@ -223,14 +232,26 @@ fn inspect(
         writeln!(out)?;
         let mut table =
             crate::cli::render::Table::new(["ACCOUNT", "CAP", "SOURCE", "SPEND", "PARKED"]);
-        for kind in config.accounts.budget.keys() {
-            let kind = AgentKind::new_unchecked(kind);
-            let scope = DailyBudgetScope::Account(kind);
+        let logins = LoginCatalog::from_config(&config.accounts)
+            .map(|catalog| catalog.all().map(|login| login.key()).collect::<Vec<_>>())
+            .unwrap_or_else(|_| {
+                config
+                    .accounts
+                    .budget
+                    .keys()
+                    .map(|kind| LoginKey::default_for(AgentKind::new_unchecked(kind)))
+                    .collect()
+            });
+        for key in logins
+            .into_iter()
+            .filter(|key| config.accounts.budget(key.kind.as_str()).is_some())
+        {
+            let scope = DailyBudgetScope::Account(key);
             let account = scope.read_ledger(runtime);
             table.row([
                 crate::cli::render::cell(
                     scope
-                        .account_kind()
+                        .account_login()
                         .expect("account table contains account scopes")
                         .to_string(),
                 ),

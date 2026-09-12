@@ -10,7 +10,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agent_activity::ToolRepeat;
-use crate::ids::{AgentKind, AgentSessionId, AskId, LoginName};
+use crate::ids::{AgentKind, AgentSessionId, AskId, LoginKey, LoginName};
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 
 use super::context::{
@@ -1049,6 +1049,11 @@ impl AgentState {
     /// A provider-native, paneless child rather than a full agent session.
     pub fn is_provider_subagent(&self) -> bool {
         self.parent_agent_id.is_some() && self.launch_depth.is_none()
+    }
+
+    /// The provider account this session belongs to.
+    pub fn login_key(&self) -> LoginKey {
+        LoginKey::new(self.kind.clone(), self.login.clone().unwrap_or_default())
     }
 
     /// Match the parent link to a candidate session or launch of the right kind.

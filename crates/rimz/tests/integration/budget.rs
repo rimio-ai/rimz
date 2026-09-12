@@ -4,7 +4,7 @@ use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
 
 use crate::common::Env;
-use rimz::ids::AgentKind;
+use rimz::ids::{AgentKind, LoginKey};
 
 #[test]
 fn budget_set_raise_clear_and_config_routes() {
@@ -18,6 +18,29 @@ fn budget_set_raise_clear_and_config_routes() {
         .args(["config", "set", "accounts.budget.claude", "100/day"])
         .assert()
         .success();
+    env.rimz()
+        .args([
+            "config",
+            "set",
+            "accounts.claude.work.home",
+            "/srv/budget-test-work",
+        ])
+        .assert()
+        .success();
+    let inspected = env.rimz().arg("budget").assert().success();
+    let output = String::from_utf8_lossy(&inspected.get_output().stdout);
+    let table_rows = output
+        .lines()
+        .filter(|line| line.starts_with("claude@"))
+        .map(|line| line.split_whitespace().collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        table_rows,
+        vec![
+            vec!["claude@default", "$100.00/day", "config", "$0.00", "no"],
+            vec!["claude@work", "$100.00/day", "config", "$0.00", "no"],
+        ]
+    );
 
     env.rimz()
         .args(["budget", "20/day", "--no-continue"])
@@ -35,7 +58,7 @@ fn budget_set_raise_clear_and_config_routes() {
         .args(["budget", "--account", "claude", "80/day", "--no-continue"])
         .assert()
         .success()
-        .stdout(contains("scope:  claude account"))
+        .stdout(contains("scope:  claude@default account"))
         .stdout(contains("cap:    $80.00/day"));
     env.rimz()
         .args(["budget", "--account", "claude", "clear", "--no-continue"])
@@ -94,8 +117,8 @@ fn unsupported_account_caps_leave_config_and_ledger_untouched() {
     );
 
     let cursor = AgentKind::new_unchecked("cursor");
-    let ledger =
-        rimz::harness::budget::DailyBudgetScope::Account(cursor).ledger_path(&env.runtime_paths());
+    let ledger = rimz::harness::budget::DailyBudgetScope::Account(LoginKey::default_for(cursor))
+        .ledger_path(&env.runtime_paths());
     env.rimz()
         .args(["budget", "--account", "cursor", "100/day", "--no-continue"])
         .assert()

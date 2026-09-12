@@ -19,10 +19,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::RuntimePaths;
-use crate::agents::{AgentState, AgentStatus, BudgetPark, BudgetScope, BudgetWindow};
+use crate::agents::{AgentState, AgentStatus, BudgetPark, BudgetScope, BudgetWindow, RoomLoginSet};
 use crate::config::MachineConfig;
 use crate::disk::atomic::write_temp_then_rename_cache;
-use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, LoginKey, PaneId, WorkspaceId};
 use crate::store::Store;
 use crate::store::message::{DeliveryGate, MessageRecord, MessageSender, MessageStatus};
 use crate::store::snapshot::SidebarSnapshot;
@@ -111,7 +111,7 @@ pub struct BudgetParkStamp {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DailyBudgetScope {
     Fleet,
-    Account(AgentKind),
+    Account(LoginKey),
 }
 
 /// Runtime override and park state shared by daily budget scopes.
@@ -167,7 +167,8 @@ impl DailyBudgetScope {
     fn configured_cap_usd(&self, config: &MachineConfig) -> Option<f64> {
         match self {
             Self::Fleet => config.harness.budget.map(|cap| cap.as_usd()),
-            Self::Account(kind) => {
+            Self::Account(key) => {
+                let kind = &key.kind;
                 crate::agents::spec_by_kind(kind.as_str())?
                     .has_authoritative_account_spend()
                     .then_some(())?;
@@ -196,14 +197,14 @@ impl DailyBudgetScope {
     pub fn label(&self) -> String {
         match self {
             Self::Fleet => "fleet".to_owned(),
-            Self::Account(kind) => format!("{kind} account"),
+            Self::Account(key) => format!("{key} account"),
         }
     }
 
-    pub fn account_kind(&self) -> Option<&AgentKind> {
+    pub fn account_login(&self) -> Option<&LoginKey> {
         match self {
             Self::Fleet => None,
-            Self::Account(kind) => Some(kind),
+            Self::Account(key) => Some(key),
         }
     }
 
@@ -223,8 +224,8 @@ impl DailyBudgetScope {
                 "no fleet budget is configured; turn it on with `rimz config set harness.budget 50/day`"
                     .to_owned()
             }
-            Self::Account(kind) => format!(
-                "no {kind} account budget is configured; turn it on with `rimz config set accounts.budget.{kind} 100/day`"
+            Self::Account(key) => format!(
+                "no {key} account budget is configured; turn it on with `rimz config set accounts.budget.{} 100/day`", key.kind
             ),
         })
     }
@@ -235,8 +236,9 @@ impl DailyBudgetScope {
                 "cannot raise a cleared or unset fleet budget; set an absolute `/day` cap first"
                     .to_owned()
             }
-            Self::Account(kind) => format!(
-                "cannot raise a cleared or unset {kind} account budget; set an absolute `/day` cap first"
+            Self::Account(key) => format!(
+                "cannot raise a cleared or unset {} account budget; set an absolute `/day` cap first",
+                key.kind
             ),
         }
     }
@@ -247,8 +249,9 @@ impl DailyBudgetScope {
             Self::Fleet => {
                 format!("fleet budget exhausted ({spend}); use `rimz budget` to raise or clear it")
             }
-            Self::Account(kind) => format!(
-                "{kind} account budget exhausted ({spend}); use `rimz budget --account {kind}` to raise or clear it"
+            Self::Account(key) => format!(
+                "{key} account budget exhausted ({spend}); use `rimz budget --account {}` to raise or clear it",
+                key.kind
             ),
         }
     }
@@ -268,8 +271,8 @@ impl DailyBudgetScope {
         let cutoff = local_day_cutoff_secs(now, &config.time_zone());
         match self {
             Self::Fleet => current_workspace_day(runtime, cutoff).unwrap_or_default(),
-            Self::Account(kind) => provider
-                .and_then(|provider| provider_day_usd(provider, cutoff, kind.as_str()))
+            Self::Account(key) => provider
+                .and_then(|provider| login_day_usd(provider, cutoff, key))
                 .unwrap_or_default(),
         }
     }
@@ -312,8 +315,8 @@ impl DailyBudgetScope {
                 path: runtime.root.join("budget.fleet.json"),
                 lock_path: runtime.root.join("budget.fleet.lock"),
             },
-            Self::Account(kind) => {
-                let component = account_ledger_component(kind);
+            Self::Account(key) => {
+                let component = account_ledger_component(key);
                 ScopeLedgerFile {
                     path: runtime
                         .persistent_shared_root
@@ -647,18 +650,13 @@ pub(crate) fn project_parks(
             agent.budget_park = Some(park);
             continue;
         }
+        let key = agent.login_key();
+        let scope = DailyBudgetScope::Account(key.clone());
         let account = accounts
-            .entry(agent.kind.clone())
-            .or_insert_with(|| DailyBudgetScope::Account(agent.kind.clone()).read_ledger(runtime));
+            .entry(key)
+            .or_insert_with(|| scope.read_ledger(runtime));
         agent.budget_park = daily_scope_park(
-            &DailyBudgetScope::Account(agent.kind.clone()),
-            account,
-            runtime,
-            config,
-            &provider,
-            day_cutoff,
-            now,
-            &zone,
+            &scope, account, runtime, config, &provider, day_cutoff, now, &zone,
         );
     }
 }
@@ -727,12 +725,12 @@ fn daily_scope_park(
     let cap_usd = scope.effective_cap_usd(ledger, config)?;
     let spend = match scope {
         DailyBudgetScope::Fleet => current_workspace_day(runtime, day_cutoff),
-        DailyBudgetScope::Account(kind) => provider_day_usd(provider, day_cutoff, kind.as_str()),
+        DailyBudgetScope::Account(key) => login_day_usd(provider, day_cutoff, key),
     };
     let spend_usd = spend.map_or(parked.at_cost, |spend| spend.max(parked.at_cost));
     let (park_scope, account_kind) = match scope {
         DailyBudgetScope::Fleet => (BudgetScope::Fleet, None),
-        DailyBudgetScope::Account(kind) => (BudgetScope::Account, Some(kind.clone())),
+        DailyBudgetScope::Account(key) => (BudgetScope::Account, Some(key.kind.clone())),
     };
     Some(BudgetPark {
         cap_usd,
@@ -829,11 +827,11 @@ fn evaluate_scopes(
     let provider = crate::agents::spending::read_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
     );
-    let root_kinds = snapshot
+    let root_logins = snapshot
         .agents
         .iter()
         .filter(|agent| !agent.is_provider_subagent())
-        .map(|agent| agent.kind.clone())
+        .map(|agent| agent.login_key())
         .collect::<BTreeSet<_>>();
     let mut daily = vec![DailyScopeVerdict {
         scope: fleet_scope,
@@ -841,12 +839,12 @@ fn evaluate_scopes(
         parked_before: fleet_parked_before,
         verdict: fleet_verdict,
     }];
-    for kind in root_kinds {
-        let scope = DailyBudgetScope::Account(kind.clone());
+    for key in root_logins {
+        let scope = DailyBudgetScope::Account(key.clone());
         let mut ledger = scope.read_ledger(runtime);
         let parked_before = ledger.parked.clone();
         let cap = scope.effective_cap_usd(&ledger, config);
-        let spend = provider_day_usd(&provider, day_cutoff, kind.as_str()).unwrap_or_default();
+        let spend = login_day_usd(&provider, day_cutoff, &key).unwrap_or_default();
         let verdict = evaluate_daily_scope(&mut ledger.parked, cap, spend, now);
         daily.push(DailyScopeVerdict {
             scope,
@@ -899,7 +897,7 @@ fn enforce_agent(agent: &AgentState, ctx: &mut EnforceCtx<'_>) {
     }
     let scope_verdict = evaluate_scope_waiver(
         agent,
-        binding_scope_park(ctx.scopes, &agent.kind),
+        binding_scope_park(ctx.scopes, &agent.login_key()),
         latest_delivery,
         ctx.scope_state,
         ctx.now,
@@ -1148,10 +1146,10 @@ fn evaluate_scope_waiver(
     }
 }
 
-fn binding_scope_park(scopes: &ScopeVerdicts, kind: &AgentKind) -> Option<Timestamp> {
+fn binding_scope_park(scopes: &ScopeVerdicts, key: &LoginKey) -> Option<Timestamp> {
     scopes.daily.iter().find_map(|daily| {
         let applies = matches!(daily.scope, DailyBudgetScope::Fleet)
-            || matches!(&daily.scope, DailyBudgetScope::Account(account) if account == kind);
+            || matches!(&daily.scope, DailyBudgetScope::Account(account) if account == key);
         (applies && matches!(daily.verdict, BudgetVerdict::Park { .. }))
             .then(|| daily.ledger.parked.as_ref().map(|park| park.at))
             .flatten()
@@ -1256,13 +1254,13 @@ fn local_day_cutoff_secs(now: Timestamp, zone: &TimeZone) -> Option<u64> {
     local_day_start(now, zone).map(|stamp| stamp.as_second().max(0) as u64)
 }
 
-fn provider_day_usd(
+fn login_day_usd(
     provider: &crate::agents::spending::ProviderSpendingCache,
     cutoff_secs: Option<u64>,
-    kind: &str,
+    key: &LoginKey,
 ) -> Option<f64> {
     (Some(provider.day_cutoff_secs) == cutoff_secs)
-        .then(|| provider.day_by_provider.get(kind).map(|day| day.usd))
+        .then(|| provider.day_by_login.get(key).map(|day| day.usd))
         .flatten()
 }
 
@@ -1299,6 +1297,7 @@ pub(crate) fn project_budget_views(
     runtime: &RuntimePaths,
     config: &MachineConfig,
     provider: &crate::agents::spending::ProviderSpendingCache,
+    logins: &RoomLoginSet,
 ) {
     let now = snapshot.now;
     let cutoff = local_day_cutoff_secs(now, &config.time_zone());
@@ -1315,11 +1314,14 @@ pub(crate) fn project_budget_views(
             }
         });
     for panel in &mut snapshot.providers {
-        let kind = AgentKind::new_unchecked(panel.kind.clone());
-        let scope = DailyBudgetScope::Account(kind);
+        panel.day_budget = None;
+        let Some(key) = logins.key(&panel.kind) else {
+            continue;
+        };
+        let scope = DailyBudgetScope::Account(key.clone());
         let ledger = scope.read_ledger(runtime);
         panel.day_budget = scope.effective_cap_usd(&ledger, config).map(|cap_usd| {
-            let spend_usd = provider_day_usd(provider, cutoff, &panel.kind).unwrap_or_default();
+            let spend_usd = login_day_usd(provider, cutoff, &key).unwrap_or_default();
             crate::store::snapshot::DailyBudgetView {
                 cap_usd,
                 spend_usd,
@@ -1333,7 +1335,7 @@ pub(crate) fn project_budget_views(
 /// a delivered human message can waive their next parked turn.
 pub fn scope_gate(
     runtime: &RuntimePaths,
-    kind: &AgentKind,
+    login: Option<&LoginKey>,
     config: &MachineConfig,
     now: Timestamp,
 ) -> Option<String> {
@@ -1342,10 +1344,9 @@ pub fn scope_gate(
     let cutoff_secs = local_day_cutoff_secs(now, &zone)?;
 
     let mut provider = None;
-    for scope in [
-        DailyBudgetScope::Fleet,
-        DailyBudgetScope::Account(kind.clone()),
-    ] {
+    for scope in std::iter::once(DailyBudgetScope::Fleet)
+        .chain(login.cloned().map(DailyBudgetScope::Account))
+    {
         let ledger = scope.read_ledger(runtime);
         let Some(cap) = scope.effective_cap_usd(&ledger, config) else {
             continue;
@@ -1354,13 +1355,13 @@ pub fn scope_gate(
             DailyBudgetScope::Fleet => {
                 current_workspace_day(runtime, Some(cutoff_secs)).unwrap_or_default()
             }
-            DailyBudgetScope::Account(kind) => {
+            DailyBudgetScope::Account(key) => {
                 let provider = provider.get_or_insert_with(|| {
                     crate::agents::spending::read_provider_spending_cache(
                         &runtime.shared_provider_spending_path(),
                     )
                 });
-                provider_day_usd(provider, Some(cutoff_secs), kind.as_str()).unwrap_or_default()
+                login_day_usd(provider, Some(cutoff_secs), key).unwrap_or_default()
             }
         };
         if let Some(parked) = ledger.parked.as_ref().filter(|parked| parked.at >= cutoff) {
@@ -1446,17 +1447,22 @@ pub fn write_ledger(
     write_temp_then_rename_cache(&path, ledger)
 }
 
-fn account_ledger_component(kind: &AgentKind) -> String {
-    if kind
+fn account_ledger_component(key: &LoginKey) -> String {
+    if key
+        .kind
         .as_str()
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
     {
-        kind.as_str().to_owned()
+        key.to_string()
     } else {
         let mut hasher = Sha256::new();
-        hasher.update(kind.as_str().as_bytes());
-        format!("kind-{}", &hex::encode(hasher.finalize())[..16])
+        hasher.update(key.kind.as_str().as_bytes());
+        format!(
+            "kind-{}@{}",
+            &hex::encode(hasher.finalize())[..16],
+            key.name
+        )
     }
 }
 
