@@ -52,6 +52,9 @@ pub(super) fn report_resume(plan: &rimz::harness::resume::ResumePlan) {
             .join(", ");
         let _ = writeln!(std::io::stderr(), "rimz: not resumed: {detail}");
     }
+    for warning in &plan.warnings {
+        let _ = writeln!(std::io::stderr(), "rimz: {warning}");
+    }
 }
 
 #[cfg(test)]
