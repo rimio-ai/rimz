@@ -1,6 +1,7 @@
 //! `rimz teams` — discover, inspect, launch, and drive named teams.
 
 mod cohort;
+mod flip;
 mod install;
 mod list;
 mod show;
@@ -71,6 +72,8 @@ enum TeamsSubcmd {
     Focus(CohortArgs),
     /// Restart every live member of a team cohort.
     Restart(CohortArgs),
+    /// Hand the cohort's board to the next stage's owner.
+    Flip(FlipArgs),
     /// List or install team bundles from the matching RimZ release.
     Install(install::InstallArgs),
 }
@@ -128,6 +131,24 @@ struct CohortArgs {
         value_name = "NAME",
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::worktrees)
     )]
+    worktree: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct FlipArgs {
+    #[arg(value_name = "STAGE")]
+    stage: String,
+    /// Note delivered to the stage's owner and recorded in the board ledger.
+    #[arg(short = 'm', long = "note")]
+    note: Option<String>,
+    /// Interrupt the owner's current turn to deliver the stage.
+    #[arg(long)]
+    steer: bool,
+    /// Select a configured team instead of the caller's team.
+    #[arg(long, value_name = "NAME")]
+    team: Option<String>,
+    /// Select one live cohort by worktree name or lane.
+    #[arg(short = 'w', long, value_name = "NAME")]
     worktree: Option<String>,
 }
 
@@ -193,6 +214,7 @@ pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
             cohort::restart(&name, worktree.as_deref(), globals)
         }
         Some(TeamsSubcmd::Install(args)) => install::run(args),
+        Some(TeamsSubcmd::Flip(args)) => flip::run(args, globals),
     }
 }
 
@@ -332,6 +354,31 @@ mod tests {
 
         let error = validate_team_name("forge.reviewer", &teams).unwrap_err();
         assert!(error.to_string().contains("rimz agents forge.reviewer"));
+    }
+
+    #[test]
+    fn flip_parses_stage_and_delivery_options() {
+        let args = parse_teams(&[
+            "rimz",
+            "flip",
+            "Implement",
+            "-m",
+            "note",
+            "--steer",
+            "-w",
+            "lane",
+            "--team",
+            "forge",
+        ]);
+        let Some(TeamsSubcmd::Flip(args)) = args.command else {
+            panic!("flip verb");
+        };
+        assert_eq!(args.stage, "Implement");
+        assert_eq!(args.note.as_deref(), Some("note"));
+        assert!(args.steer);
+        assert_eq!(args.worktree.as_deref(), Some("lane"));
+        assert_eq!(args.team.as_deref(), Some("forge"));
+        assert!(TeamsHarness::try_parse_from(["rimz", "flip"]).is_err());
     }
 
     #[test]

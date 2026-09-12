@@ -87,6 +87,10 @@ pub struct BoardStage {
 /// Read the first `Stage:` line, separating only a terminal ` (@owner)` suffix.
 pub fn board_stage(root: &Path) -> Option<BoardStage> {
     let board = std::fs::read_to_string(root.join("blackboard.md")).ok()?;
+    parse_board_stage(&board)
+}
+
+pub(super) fn parse_board_stage(board: &str) -> Option<BoardStage> {
     let stage = board
         .lines()
         .find_map(|line| line.strip_prefix("Stage:"))?

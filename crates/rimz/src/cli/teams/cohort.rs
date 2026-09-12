@@ -7,7 +7,7 @@ use super::super::{Ctx, GlobalFlags, agents_cmd, render};
 use rimz::address::TeamCohort;
 use rimz::agents::AgentState;
 
-fn select<'a>(
+pub(super) fn select<'a>(
     team: &str,
     worktree: Option<&str>,
     current_channel: Option<&str>,

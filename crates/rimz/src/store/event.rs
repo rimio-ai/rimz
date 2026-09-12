@@ -132,6 +132,7 @@ pub enum SignalSource {
     Watch,
     Lifecycle,
     Forge,
+    Team,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

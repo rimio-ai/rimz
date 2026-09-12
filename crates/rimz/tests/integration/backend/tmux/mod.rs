@@ -24,6 +24,7 @@ mod server_cwd;
 mod session;
 mod sidebar;
 mod support;
+mod team_stage;
 mod title;
 
 pub(in crate::backend) use support::TmuxServer;
