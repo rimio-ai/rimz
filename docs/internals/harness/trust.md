@@ -75,6 +75,8 @@ Adapter built-ins apply after the project env so a trusted config tunes an agent
 
 A project puts credentials in that env, so `CompiledAgentProcess` and `AgentProcessStage` carry hand-written `Debug` impls rather than derived ones: the env map prints its keys against `<redacted>`, and every `KEY=VALUE` token the login-shell wrapper added to `argv` prints as `KEY=<redacted>`. Debug-formatting a compiled process — in a log line, a panic message, or an error context — therefore never puts a launch env value in cleartext.
 
+[`rimz agents explain`](../../reference/cli/agents.md#explain-a-launch) passes through the same trust gate and uses `CompiledAgentProcess.secret_keys` to redact trusted project `[[agents]]` env values in both human and JSON reports. Keys stay visible; matching environment tokens in provider, wrapper, and reentry argv and matching sandbox set-pins use `<redacted>` too. Unlike the broader `Debug` redaction, other launch overrides, adapter values, and identity env remain visible. The report shows launch environment overrides and unset keys, not the entire ambient environment. User prompt text and raw configured arguments otherwise remain full, and there is no `--show-secrets` escape hatch.
+
 ## Storage
 
 The committed **project config** is `<project_root>/.rimz/config.toml`. The **trust record** is per-machine, at `$XDG_CONFIG_HOME/rimz/projects/<workspace_id>/trust.toml`, written with atomic temp-plus-rename through [`disk::atomic::write_bytes_atomically`](../../../crates/rimz/src/disk/atomic.rs). Its schema:
