@@ -74,7 +74,8 @@ upward-dependencies = ["address"]
 # Trigger summaries share wording between sleeping descriptions and expanded waits.
 # Native config-home resolution is shared with sandbox launch planning.
 # Native skill roots and user-only markers belong to the same capability seam.
-surface-budget = 926
+# Model sub-cap matching and parent-axis headroom are shared with the renderer.
+surface-budget = 928
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/codex"
