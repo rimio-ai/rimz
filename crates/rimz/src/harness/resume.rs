@@ -24,8 +24,8 @@ use crate::agents::{AgentState, LocalSessionObservation};
 use crate::config::{CommandsConfig, ProfilesConfig, TeamsConfig};
 use crate::disk::paths::RuntimePaths;
 use crate::harness::plan::{
-    CohortCell, CohortResumePlan, CohortSeed, LayoutPaneParams, ResumeLaunchPosture, cohort_cells,
-    compile_layout_panes, launch_identity_requests,
+    CohortCell, CohortResumePlan, CohortSeed, LayoutPaneParams, ResumeLaunchIdentity,
+    ResumeLaunchPosture, cohort_cells, compile_layout_panes, launch_identity_requests,
 };
 use crate::harness::spec::LayoutSpec;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
@@ -663,23 +663,10 @@ enum ResumeCandidateKey {
 
 #[derive(Clone, Debug)]
 struct ResumeCandidate {
-    kind: AgentKind,
-    session_id: AgentSessionId,
-    launch_id: Option<AgentSessionId>,
-    name: Option<String>,
-    name_explicit: bool,
-    profile: Option<String>,
+    identity: ResumeLaunchIdentity,
     /// The permission mode the original launch event recorded, replayed when
     /// the profile declares none of its own.
     stamped_mode: Option<PermissionMode>,
-    role: Option<String>,
-    team: Option<String>,
-    launch_group: Option<String>,
-    launch_ordinal: Option<u32>,
-    channel: Option<String>,
-    parent_agent_id: Option<AgentSessionId>,
-    parent_agent_kind: Option<AgentKind>,
-    launch_depth: Option<u8>,
     cwd: PathBuf,
     pane_id: Option<PaneId>,
     last_activity: Timestamp,
@@ -696,21 +683,8 @@ impl ResumeCandidate {
 
     fn from_agent_identity(agent: &AgentState, conversation_present: bool) -> Self {
         Self {
-            kind: agent.kind.clone(),
-            session_id: agent.agent_id.clone(),
-            launch_id: agent.launch_id.clone(),
-            name: agent.name.clone(),
-            name_explicit: agent.name_explicit,
-            profile: agent.profile.clone(),
+            identity: ResumeLaunchIdentity::from(agent),
             stamped_mode: agent.mode,
-            role: agent.role.clone(),
-            team: agent.team.clone(),
-            launch_group: agent.launch_group.clone(),
-            launch_ordinal: agent.launch_ordinal,
-            channel: agent.channel.clone(),
-            parent_agent_id: agent.parent_agent_id.clone(),
-            parent_agent_kind: agent.parent_agent_kind.clone(),
-            launch_depth: agent.launch_depth,
             cwd: agent_worktree(agent).unwrap_or_default(),
             pane_id: agent.pane.as_ref().map(|pane| pane.pane_id.clone()),
             last_activity: agent.last_activity,
@@ -723,21 +697,23 @@ impl ResumeCandidate {
             return None;
         }
         Some(Self {
-            kind: observation.kind.clone(),
-            session_id: observation.session_id.clone(),
-            launch_id: None,
-            name: None,
-            name_explicit: false,
-            profile: None,
+            identity: ResumeLaunchIdentity {
+                kind: observation.kind.clone(),
+                session_id: observation.session_id.clone(),
+                launch_id: None,
+                name: None,
+                name_explicit: false,
+                profile: None,
+                role: None,
+                team: None,
+                launch_group: None,
+                launch_ordinal: None,
+                channel: None,
+                parent_agent_id: None,
+                parent_agent_kind: None,
+                launch_depth: None,
+            },
             stamped_mode: None,
-            role: None,
-            team: None,
-            launch_group: None,
-            launch_ordinal: None,
-            channel: None,
-            parent_agent_id: None,
-            parent_agent_kind: None,
-            launch_depth: None,
             cwd: observation.workspace.clone(),
             pane_id: None,
             last_activity: observation.last_activity,
@@ -746,28 +722,11 @@ impl ResumeCandidate {
     }
 
     fn key(&self) -> ResumeCandidateKey {
-        resume_candidate_key(&self.kind, &self.session_id, self.pane_id.as_ref())
-    }
-}
-
-fn resume_launch_identity(
-    candidate: &ResumeCandidate,
-) -> crate::harness::plan::ResumeLaunchIdentity {
-    crate::harness::plan::ResumeLaunchIdentity {
-        kind: candidate.kind.clone(),
-        session_id: candidate.session_id.clone(),
-        launch_id: candidate.launch_id.clone(),
-        name: candidate.name.clone(),
-        name_explicit: candidate.name_explicit,
-        profile: candidate.profile.clone(),
-        role: candidate.role.clone(),
-        team: candidate.team.clone(),
-        launch_group: candidate.launch_group.clone(),
-        launch_ordinal: candidate.launch_ordinal,
-        channel: candidate.channel.clone(),
-        parent_agent_id: candidate.parent_agent_id.clone(),
-        parent_agent_kind: candidate.parent_agent_kind.clone(),
-        launch_depth: candidate.launch_depth,
+        resume_candidate_key(
+            &self.identity.kind,
+            &self.identity.session_id,
+            self.pane_id.as_ref(),
+        )
     }
 }
 
@@ -1123,7 +1082,7 @@ fn plan_discovered_lane(
         .collect::<Vec<_>>();
     let preflight_kinds = candidates
         .iter()
-        .map(|candidate| candidate.kind.clone())
+        .map(|candidate| candidate.identity.kind.clone())
         .collect();
     let flat = plan_resume_candidates_detailed(candidates, request.context(profiles), path_exists);
     if flat.tabs.is_empty() {
@@ -1630,9 +1589,9 @@ fn plan_resume_candidates_detailed(
     candidates.sort_by(|left, right| {
         newest_cmp(
             left.last_activity,
-            left.session_id.as_str(),
+            left.identity.session_id.as_str(),
             right.last_activity,
-            right.session_id.as_str(),
+            right.identity.session_id.as_str(),
         )
     });
 
@@ -1646,10 +1605,12 @@ fn plan_resume_candidates_detailed(
             continue;
         }
         let channel = candidate_room_channel(ctx.project_root, &candidate);
-        let label = build_label(&candidate.kind, channel.as_deref(), &candidate.cwd);
+        let label = build_label(&candidate.identity.kind, channel.as_deref(), &candidate.cwd);
         if !worktree_exists(&candidate.cwd) {
-            plan.agents_to_end
-                .push((candidate.kind.clone(), candidate.session_id.clone()));
+            plan.agents_to_end.push((
+                candidate.identity.kind.clone(),
+                candidate.identity.session_id.clone(),
+            ));
             continue;
         }
         if !supports_candidate_resume(&candidate) {
@@ -1681,8 +1642,8 @@ fn plan_resume_candidates_detailed(
         // resume argv.
         let posture = resolve_posture(
             PostureRequest {
-                profile: candidate.profile.as_deref(),
-                kind: &candidate.kind,
+                profile: candidate.identity.profile.as_deref(),
+                kind: &candidate.identity.kind,
                 stamped_mode: candidate.stamped_mode,
             },
             ctx.profiles,
@@ -1712,18 +1673,21 @@ fn plan_resume_candidates_detailed(
         let command = crate::harness::plan::resume_command(
             ctx.rimz_bin,
             ctx.runtime,
-            &resume_launch_identity(&candidate),
+            &candidate.identity,
             channel.as_deref(),
             &posture.launch,
         );
         let tab_label = channel_label(channel.as_deref(), &candidate.cwd);
         let identity = resume_tab_identity(channel.as_deref(), &candidate.cwd);
-        let resumed_key = (candidate.kind.clone(), candidate.session_id.clone());
+        let resumed_key = (
+            candidate.identity.kind.clone(),
+            candidate.identity.session_id.clone(),
+        );
         if let Some(tab) = tabs.iter_mut().find(|tab| tab.identity == identity) {
             if let Some(column) = tab.tab.layout.columns.first_mut() {
                 column.panes.push(crate::mux::PaneCmd {
                     argv: command,
-                    name: Some(candidate.kind.to_string()),
+                    name: Some(candidate.identity.kind.to_string()),
                 });
                 tab.resumed.insert(resumed_key.clone());
                 plan.resumed.insert(resumed_key);
@@ -1739,7 +1703,7 @@ fn plan_resume_candidates_detailed(
                         columns: vec![crate::mux::LayoutColumn {
                             panes: vec![crate::mux::PaneCmd {
                                 argv: command,
-                                name: Some(candidate.kind.to_string()),
+                                name: Some(candidate.identity.kind.to_string()),
                             }],
                             stacked: false,
                         }],
@@ -1764,10 +1728,11 @@ fn candidate_room_channel(
         Some(project_root) => crate::harness::spec::resolve_room_channel(
             project_root,
             &candidate.cwd,
-            candidate.team.as_deref(),
-            candidate.channel.as_deref(),
+            candidate.identity.team.as_deref(),
+            candidate.identity.channel.as_deref(),
         ),
         None => candidate
+            .identity
             .channel
             .as_deref()
             .filter(|channel| !channel.is_empty())
@@ -2184,12 +2149,12 @@ fn supports_agent_resume(agent: &AgentState) -> bool {
 }
 
 fn supports_candidate_resume(candidate: &ResumeCandidate) -> bool {
-    if candidate.session_id.is_provisional() {
+    if candidate.identity.session_id.is_provisional() {
         return false;
     }
-    find_definition(&candidate.kind).is_some_and(|adapter| {
+    find_definition(&candidate.identity.kind).is_some_and(|adapter| {
         adapter
-            .resume_command(&candidate.session_id, &candidate.cwd)
+            .resume_command(&candidate.identity.session_id, &candidate.cwd)
             .is_some()
     })
 }
