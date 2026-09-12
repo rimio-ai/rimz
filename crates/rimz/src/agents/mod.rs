@@ -100,6 +100,7 @@ pub(crate) use locate::{agent_config_path, probe_descriptor_version, read_option
 pub use login::{
     BirthLoginErr, LoginCatalog, LoginConfigErr, LoginErr, LoginMismatch, ProviderLogin,
     RoomLoginErr, RoomLoginSet, ambient_env, default_named_home, room_login, room_logins,
+    session_login_env,
 };
 pub use managed_source::ManagedIntegration;
 pub use observation::{

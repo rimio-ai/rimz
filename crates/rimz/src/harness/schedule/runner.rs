@@ -651,7 +651,7 @@ impl<'a> TaskFire<'a> {
                 .resolved
                 .as_ref()
                 .context("loop spawn context missing resolved task spec")?;
-            preflight_resolved_task(resolved)?;
+            preflight_resolved_task(resolved, &scope.scope_runtime)?;
             scope.managed_launch.clone()
         };
         let prompt = self.resolve_effect_prompt(fired_check.as_ref())?;
@@ -982,29 +982,37 @@ fn relative_age(ts: Timestamp, now: Timestamp) -> String {
 pub fn preflight_entry(
     action: &TaskAction,
     resolved: Option<&ResolvedSingleAgentLaunch>,
+    runtime: &RuntimePaths,
 ) -> Result<()> {
     match action {
         TaskAction::Spawn(spec) => {
             let resolved = resolved
                 .with_context(|| format!("missing resolved loop task spec for `{spec}`"))?;
-            preflight_resolved_task(resolved)?;
+            preflight_resolved_task(resolved, runtime)?;
         }
-        TaskAction::Deliver(target) => preflight_kind(&target.kind)?,
+        TaskAction::Deliver(target) => preflight_kind(&target.kind, runtime)?,
         TaskAction::CheckOnly => {}
     }
     Ok(())
 }
 
-fn preflight_resolved_task(resolved: &ResolvedSingleAgentLaunch) -> Result<()> {
-    preflight_kind(&resolved.kind)
+fn preflight_resolved_task(
+    resolved: &ResolvedSingleAgentLaunch,
+    runtime: &RuntimePaths,
+) -> Result<()> {
+    preflight_kind(&resolved.kind, runtime)
 }
 
-fn preflight_kind(kind: &str) -> Result<()> {
+fn preflight_kind(kind: &str, runtime: &RuntimePaths) -> Result<()> {
     let adapter =
         find_definition(kind).ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
+    let logins = crate::agents::RoomLoginSet::for_runtime(runtime);
+    let login = logins.login(kind).with_context(|| {
+        format!("cannot resolve the room's {kind} account; run `rimz accounts list`")
+    })?;
     match preflight_hooks(
         adapter,
-        &crate::agents::ambient_env(),
+        &logins.env(&login),
         TurnLifecycleNeed::NotUnsupported,
     ) {
         Ok(()) => Ok(()),

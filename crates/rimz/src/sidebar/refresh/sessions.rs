@@ -153,7 +153,11 @@ fn refresh_session_transcript_context_core(
     };
     let prior = crate::store::agent_context::read_one(runtime, kind, session_id);
     let shared_pricing_cache_path = runtime.shared_pricing_cache_path();
-    let login_env = crate::agents::ambient_env();
+    let logins = crate::agents::RoomLoginSet::for_runtime(runtime);
+    let login_env = logins
+        .login(kind)
+        .map(|login| logins.env(&login))
+        .unwrap_or_else(crate::agents::ambient_env);
     let ctx = LocalContextRefreshCtx {
         login_env: &login_env,
         agent_id: session_id,

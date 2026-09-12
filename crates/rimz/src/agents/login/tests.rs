@@ -38,6 +38,28 @@ fn named_login_overrides_only_the_provider_home_key() {
 }
 
 #[test]
+fn session_login_env_resolves_named_accounts_and_falls_back_to_ambient() {
+    let ambient = BTreeMap::from([("HOME".to_owned(), "/home/u".to_owned())]);
+    let accounts = accounts("[claude.work]\nhome = \"/srv/work\"\n");
+    let work = session_login_env_from(&kind("claude"), &name("work"), &accounts, ambient.clone());
+    assert_eq!(
+        work.get("CLAUDE_CONFIG_DIR").map(String::as_str),
+        Some("/srv/work")
+    );
+    assert_eq!(work.get("HOME"), ambient.get("HOME"));
+    assert_eq!(
+        session_login_env_from(
+            &kind("claude"),
+            &name("missing"),
+            &accounts,
+            ambient.clone()
+        ),
+        ambient
+    );
+    assert_eq!(session_login_env(&kind("claude"), None), ambient_env());
+}
+
+#[test]
 fn a_kind_without_a_home_override_carries_no_named_login() {
     assert_eq!(
         ProviderLogin::named(kind("amp"), name("work"), PathBuf::from("/srv/work")),

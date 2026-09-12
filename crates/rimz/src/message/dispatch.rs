@@ -817,7 +817,7 @@ fn dispatch_targets(
         })
         .collect::<Vec<_>>();
     let mut live_send = send::LiveSend::new(mode.draft.force, mode.steer);
-    let mut preflighted_kinds = BTreeSet::new();
+    let mut preflighted_logins = BTreeSet::new();
     let mut outcomes = Vec::with_capacity(targets.len());
     let mut compacted = Vec::new();
     for (target, decision) in targets.iter().zip(decisions) {
@@ -828,8 +828,11 @@ fn dispatch_targets(
                 .ok_or_else(|| DispatchErr::NoDurableSession {
                     label: target.label(state.snapshot),
                 })?;
-            if preflighted_kinds.insert(agent.kind.clone()) {
-                preflight_queue_hooks(agent)?;
+            if preflighted_logins.insert(agent.login_key()) {
+                preflight_queue_hooks(
+                    agent,
+                    &crate::agents::session_login_env(&agent.kind, agent.login.as_ref()),
+                )?;
             }
         }
         outcomes.push(dispatch_one(
@@ -1022,15 +1025,15 @@ fn push_pending(state: &mut DispatchState<'_>, message: MessageRecord) {
     }
 }
 
-fn preflight_queue_hooks(agent: &AgentState) -> Result<()> {
+fn preflight_queue_hooks(
+    agent: &AgentState,
+    login_env: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
     let Some(adapter) = crate::agents::find_definition(agent.kind.as_str()) else {
         return Err(DispatchErr::UnknownAgentKind(agent.kind.clone()));
     };
-    match crate::agents::preflight_hooks(
-        adapter,
-        &crate::agents::ambient_env(),
-        crate::agents::TurnLifecycleNeed::None,
-    ) {
+    match crate::agents::preflight_hooks(adapter, login_env, crate::agents::TurnLifecycleNeed::None)
+    {
         Ok(()) => Ok(()),
         Err(crate::agents::HookPreflightErr::HooksMissing) => Err(DispatchErr::HooksMissing {
             kind: agent.kind.clone(),
@@ -1074,6 +1077,37 @@ mod tests {
     use crate::agents::AgentStatus;
     use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
     use crate::pane::PaneRef;
+
+    #[test]
+    fn queue_preflight_checks_the_target_account_home() {
+        let temp = tempfile::tempdir().unwrap();
+        let ambient = std::collections::BTreeMap::from([(
+            "HOME".to_owned(),
+            temp.path().join("u").to_string_lossy().into_owned(),
+        )]);
+        let mut target = agent("session", AgentStatus::Idle);
+        target.login = Some("work".parse().unwrap());
+        let login = crate::agents::ProviderLogin::named(
+            target.kind.clone(),
+            target.login.clone().unwrap(),
+            temp.path().join("work"),
+        )
+        .unwrap();
+        let login_env = login.env(&ambient);
+        assert!(matches!(
+            preflight_queue_hooks(&target, &login_env),
+            Err(DispatchErr::HooksMissing { .. })
+        ));
+        crate::agents::find_definition(target.kind.as_str())
+            .unwrap()
+            .install_hooks(&login_env)
+            .unwrap();
+        assert!(preflight_queue_hooks(&target, &login_env).is_ok());
+        assert!(matches!(
+            preflight_queue_hooks(&target, &ambient),
+            Err(DispatchErr::HooksMissing { .. })
+        ));
+    }
 
     #[test]
     fn condition_broadcast_is_typed_before_resolution() {
