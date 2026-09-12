@@ -3121,7 +3121,7 @@ fn codex_rate_limit_refresh_merges_account_cache_from_app_server() {
     let claim_id = env.seed_usage_claim("codex");
     let request = rimz::sidebar::refresh::usage::AccountUsageRefreshRequest {
         workspace_id: env.workspace_id.clone(),
-        kind: rimz::ids::AgentKind::new_unchecked("codex"),
+        login: rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("codex")),
         claim_id: claim_id.parse().expect("valid usage claim id"),
     };
     let out = env
@@ -3143,11 +3143,11 @@ fn codex_rate_limit_refresh_merges_account_cache_from_app_server() {
     let cache: Value = serde_json::from_slice(&std::fs::read(cache_path).expect("rate cache"))
         .expect("rate cache json");
     assert_eq!(
-        cache["entries"]["codex"]["limits"]["windows"][0]["used_percentage"], 42,
+        cache["entries"]["codex@default"]["limits"]["windows"][0]["used_percentage"], 42,
         "the short window comes from the app-server primary window"
     );
     assert_eq!(
-        cache["entries"]["codex"]["limits"]["windows"][1]["used_percentage"], 7,
+        cache["entries"]["codex@default"]["limits"]["windows"][1]["used_percentage"], 7,
         "the long window comes from the app-server secondary window"
     );
     let credits_path = env.runtime_paths().shared_credits_path();
@@ -3155,11 +3155,11 @@ fn codex_rate_limit_refresh_merges_account_cache_from_app_server() {
         serde_json::from_slice(&std::fs::read(credits_path).expect("credits cache"))
             .expect("credits cache json");
     assert_eq!(
-        credits["entries"]["codex"]["extra_credits"]["known"]["remaining_usd"], 18.5,
+        credits["logins"]["codex@default"]["extra_credits"]["known"]["remaining_usd"], 18.5,
         "the app-server credits balance lands in the shared credits cache"
     );
     assert_eq!(
-        credits["entries"]["codex"]["plan"], "team",
+        credits["logins"]["codex@default"]["plan"], "team",
         "the app-server plan remains available after the session goes idle"
     );
 }

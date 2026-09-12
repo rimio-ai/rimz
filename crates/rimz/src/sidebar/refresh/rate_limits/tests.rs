@@ -380,8 +380,8 @@ fn reset_epoch_invalidates_oauth_usage_throttle() {
         &runtime.shared_credits_path(),
         &crate::sidebar::refresh::credits::CreditsCache {
             refreshed_at_ms: unix_now_ms(),
-            entries: BTreeMap::from([(
-                "codex".to_owned(),
+            logins: BTreeMap::from([(
+                login_key("codex"),
                 crate::sidebar::refresh::credits::ProviderCreditsEntry {
                     scope: Default::default(),
                     observed_at_ms: 1,
@@ -413,8 +413,8 @@ fn reset_epoch_invalidates_oauth_usage_throttle() {
 
     let credits =
         crate::sidebar::refresh::credits::read_credits_cache(&runtime.shared_credits_path());
-    assert_eq!(credits.entries["codex"].oauth_read_at_ms, 0);
-    assert_eq!(credits.entries["codex"].direct_query_claim, None);
+    assert_eq!(credits.logins[&login_key("codex")].oauth_read_at_ms, 0);
+    assert_eq!(credits.logins[&login_key("codex")].direct_query_claim, None);
 }
 
 /// A settled OAuth read inside its one-hour ceiling — the state that holds the
@@ -424,8 +424,8 @@ fn seed_settled_credits(runtime: &RuntimePaths, kind: &str, oauth_read_at_ms: u6
         &runtime.shared_credits_path(),
         &crate::sidebar::refresh::credits::CreditsCache {
             refreshed_at_ms: unix_now_ms(),
-            entries: BTreeMap::from([(
-                kind.to_owned(),
+            logins: BTreeMap::from([(
+                login_key(kind),
                 crate::sidebar::refresh::credits::ProviderCreditsEntry {
                     scope: Default::default(),
                     observed_at_ms: oauth_read_at_ms,
@@ -446,8 +446,8 @@ fn seed_settled_credits(runtime: &RuntimePaths, kind: &str, oauth_read_at_ms: u6
 }
 
 fn oauth_read_at_ms(runtime: &RuntimePaths, kind: &str) -> u64 {
-    crate::sidebar::refresh::credits::read_credits_cache(&runtime.shared_credits_path()).entries
-        [kind]
+    crate::sidebar::refresh::credits::read_credits_cache(&runtime.shared_credits_path()).logins
+        [&login_key(kind)]
         .oauth_read_at_ms
 }
 
@@ -1466,7 +1466,7 @@ fn parked_refill_requests_refresh_once_then_authoritative_read_corrects_display(
         assert_eq!(
             refresh,
             if expected_refresh {
-                vec!["claude"]
+                vec![login_key("claude")]
             } else {
                 vec![]
             }
@@ -1548,7 +1548,7 @@ fn parked_refill_refresh_transition_is_per_window() {
         assert_eq!(
             refresh,
             if should_refresh {
-                vec!["claude"]
+                vec![login_key("claude")]
             } else {
                 vec![]
             }

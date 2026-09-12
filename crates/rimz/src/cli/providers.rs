@@ -50,30 +50,42 @@ pub fn run(args: ProvidersArgs, _globals: &GlobalFlags) -> Result<()> {
     let config = MachineConfig::load_lenient();
     let spinner = (!args.json && std::io::stdout().is_terminal())
         .then(|| Spinner::delayed("Querying provider accounts", SPINNER_MIN_AGE));
-    let accounts = query_provider_accounts(&runtime, args.refresh);
+    let logins: Vec<_> = rimz::agents::known_kinds()
+        .map(|kind| {
+            rimz::agents::ProviderLogin::default_for(rimz::ids::AgentKind::new_unchecked(kind))
+        })
+        .collect();
+    let accounts = query_provider_accounts(&runtime, &logins, args.refresh);
     if let Some(spinner) = &spinner {
         spinner.set("Refreshing provider usage");
     }
-    for (kind, record) in &accounts.providers {
-        if args.kind.as_deref().is_some_and(|filter| filter != kind)
+    for login in &logins {
+        let Some(record) = accounts.logins.get(&login.key()) else {
+            continue;
+        };
+        if args
+            .kind
+            .as_deref()
+            .is_some_and(|filter| filter != login.kind().as_str())
             || !record.ok
             || record.account.is_none()
         {
             continue;
         }
-        refresh_provider_usage(&runtime, kind, args.refresh);
+        refresh_provider_usage(&runtime, login, args.refresh);
     }
     drop(spinner);
 
     let provider_spending = read_provider_spending_cache(&runtime.shared_provider_spending_path());
-    let account_facts: BTreeMap<_, _> = accounts
-        .providers
+    let account_facts: BTreeMap<_, _> = logins
         .iter()
-        .filter_map(|(kind, record)| {
-            record
+        .filter_map(|login| {
+            accounts
+                .logins
+                .get(&login.key())?
                 .account
                 .clone()
-                .map(|account| (kind.clone(), account))
+                .map(|account| (login.kind().to_string(), account))
         })
         .collect();
     let panels = provider_panels_from_caches(
@@ -158,7 +170,9 @@ fn assemble_reports(
         emitted.insert(panel.kind.clone());
         reports.push(build_report(
             kind,
-            accounts.providers.get(kind),
+            accounts.logins.get(&rimz::ids::LoginKey::default_for(
+                rimz::ids::AgentKind::new_unchecked(kind),
+            )),
             Some(&panel),
             provider_spending,
         ));
@@ -172,7 +186,9 @@ fn assemble_reports(
         }
         reports.push(build_report(
             kind,
-            accounts.providers.get(kind),
+            accounts.logins.get(&rimz::ids::LoginKey::default_for(
+                rimz::ids::AgentKind::new_unchecked(kind),
+            )),
             None,
             provider_spending,
         ));
@@ -187,8 +203,10 @@ fn include_kind(
     all: bool,
 ) -> bool {
     all || accounts
-        .providers
-        .get(kind)
+        .logins
+        .get(&rimz::ids::LoginKey::default_for(
+            rimz::ids::AgentKind::new_unchecked(kind),
+        ))
         .and_then(|record| record.account.as_ref())
         .is_some()
         || provider_spending

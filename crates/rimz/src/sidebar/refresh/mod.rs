@@ -224,7 +224,7 @@ pub(super) fn refresh_heavy_lanes(
         config.remote_control.enabled_for("codex"),
     );
 
-    let accounts = produce_accounts(base, runtime);
+    let accounts = produce_accounts(base, runtime, &logins);
     let spending = compute_fleet_spending_via_service(
         runtime,
         base,
@@ -246,10 +246,10 @@ pub(super) fn refresh_heavy_lanes(
     // `with_provider_aggregates` rebuilds panels with empty credit fields; the
     // scoped producer fold must reapply the shared cache before auto-redeem can
     // evaluate the already-known reset credits.
-    credits::apply_credits_cache(&mut panels, runtime, &config.accounts);
+    credits::apply_credits_cache(&mut panels, runtime, &config.accounts, &logins);
 
     refresh_live_sessions(base, runtime);
-    refresh_account_usage(&panels, runtime);
+    refresh_account_usage(&panels, runtime, &logins);
     let resume_messages = read_auto_continue_resume_messages(
         store.as_ref(),
         &config.resume,

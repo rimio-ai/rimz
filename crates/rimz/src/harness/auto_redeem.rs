@@ -22,7 +22,7 @@ use crate::agents::{AccountUsageSnapshot, RateLimitWindow, ResetCredits};
 use crate::config::ResumeConfig;
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::harness::assist_log::AssistWindowReset;
-use crate::ids::{AgentKind, WorkspaceId};
+use crate::ids::{LoginKey, WorkspaceId};
 use crate::store::snapshot::SidebarProviderPanel;
 
 const CODEX_KIND: &str = "codex";
@@ -47,7 +47,7 @@ pub enum RedeemReason {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoRedeemRequest {
     pub workspace_id: WorkspaceId,
-    pub kind: AgentKind,
+    pub login: LoginKey,
     pub reason: RedeemReason,
     pub request_id: uuid::Uuid,
 }
@@ -303,10 +303,11 @@ fn cached_rate(stamp: Option<&RateStamp>) -> Option<f64> {
 
 fn update_rate_cache(
     runtime: &RuntimePaths,
+    key: &LoginKey,
     capacity: Option<&ProviderCapacity>,
     now: Timestamp,
 ) -> Option<f64> {
-    let path = runtime.shared_auto_redeem_rate_path(CODEX_KIND);
+    let path = runtime.shared_auto_redeem_rate_path(key);
     let prior = read_rate_stamp(&path);
     let Some(next) = capacity
         .and_then(|value| value.longest_window_observation(now))
@@ -335,18 +336,19 @@ fn write_stamp(path: &Path, stamp: &RedeemStamp) -> Result<(), AutoRedeemErr> {
 
 fn reserve_attempt(
     runtime: &RuntimePaths,
+    key: &LoginKey,
     reason: RedeemReason,
     now: Timestamp,
     request_id: &str,
 ) -> bool {
     let Some(_guard) =
-        crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_auto_redeem_lock(CODEX_KIND))
+        crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_auto_redeem_lock(key))
             .ok()
             .flatten()
     else {
         return false;
     };
-    let stamp_path = runtime.shared_auto_redeem_path(CODEX_KIND);
+    let stamp_path = runtime.shared_auto_redeem_path(key);
     if !stamp_allows_attempt(read_stamp(&stamp_path).as_ref(), now) {
         return false;
     }
@@ -362,15 +364,15 @@ fn reserve_attempt(
     .is_ok()
 }
 
-fn cancel_attempt_reservation(runtime: &RuntimePaths, request_id: &str) {
+fn cancel_attempt_reservation(runtime: &RuntimePaths, key: &LoginKey, request_id: &str) {
     let Some(_guard) =
-        crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_auto_redeem_lock(CODEX_KIND))
+        crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_auto_redeem_lock(key))
             .ok()
             .flatten()
     else {
         return;
     };
-    let stamp_path = runtime.shared_auto_redeem_path(CODEX_KIND);
+    let stamp_path = runtime.shared_auto_redeem_path(key);
     let owns_reservation = read_stamp(&stamp_path)
         .is_some_and(|stamp| stamp.request_id == request_id && stamp.outcome.is_none());
     if owns_reservation {
@@ -388,13 +390,15 @@ pub(crate) fn redeem_credits(
     config: &ResumeConfig,
     now: Timestamp,
 ) {
+    let Some(login) = logins.login(CODEX_KIND) else {
+        return;
+    };
+    let key = login.key();
     let Some(panel) = panels.iter().find(|panel| panel.kind == CODEX_KIND) else {
         return;
     };
-    let capacity = logins
-        .key(CODEX_KIND)
-        .and_then(|key| ProviderCapacity::read(runtime, &key));
-    let rate_pct_per_day = update_rate_cache(runtime, capacity.as_ref(), now);
+    let capacity = ProviderCapacity::read(runtime, &key);
+    let rate_pct_per_day = update_rate_cache(runtime, &key, capacity.as_ref(), now);
     let Some(credits) = panel.reset_credits.as_ref() else {
         return;
     };
@@ -413,11 +417,11 @@ pub(crate) fn redeem_credits(
     // A pending reservation deliberately uses the 10-minute attempt cooldown
     // as its dead-helper lease. Redemption is rare and account-scoped, so the
     // conservative backstop is preferable to a second freshness clock.
-    if !reserve_attempt(runtime, reason, now, &request_id.to_string()) {
+    if !reserve_attempt(runtime, &key, reason, now, &request_id.to_string()) {
         return;
     }
-    if !spawn_auto_redeem(runtime, reason, request_id) {
-        cancel_attempt_reservation(runtime, &request_id.to_string());
+    if !spawn_auto_redeem(runtime, &key, reason, request_id) {
+        cancel_attempt_reservation(runtime, &key, &request_id.to_string());
     }
 }
 
@@ -426,22 +430,31 @@ pub(crate) fn redeem_credits(
 /// retained in a report, including on an attempted error.
 pub fn execute_auto_redeem(
     runtime: &RuntimePaths,
-    kind: &AgentKind,
+    key: &LoginKey,
     requested_reason: RedeemReason,
     request_id: uuid::Uuid,
     config: &ResumeConfig,
 ) -> Result<Option<RedeemReport>, AutoRedeemErr> {
-    if kind.as_str() != CODEX_KIND {
-        return Err(AutoRedeemErr::UnsupportedKind(kind.to_string()));
+    if key.kind.as_str() != CODEX_KIND {
+        return Err(AutoRedeemErr::UnsupportedKind(key.kind.to_string()));
     }
+    let logins = crate::agents::RoomLoginSet::for_runtime(runtime);
+    let Some(login) = logins.login(CODEX_KIND).filter(|login| login.key() == *key) else {
+        cancel_attempt_reservation(runtime, key, &request_id.to_string());
+        tracing::debug!(
+            kind = key.kind.as_str(),
+            outcome = "login_changed",
+            "auto-redeem: room login changed"
+        );
+        return Ok(None);
+    };
     if crate::agents::credits::oauth_usage_offline() {
         return Ok(None);
     }
     let request_id = request_id.to_string();
 
-    let _guard =
-        crate::disk::lock::WorkspaceLock::acquire(&runtime.shared_auto_redeem_lock(CODEX_KIND))?;
-    let stamp_path = runtime.shared_auto_redeem_path(CODEX_KIND);
+    let _guard = crate::disk::lock::WorkspaceLock::acquire(&runtime.shared_auto_redeem_lock(key))?;
+    let stamp_path = runtime.shared_auto_redeem_path(key);
     let now = Timestamp::now();
     let prior_stamp = read_stamp(&stamp_path);
     let owns_reservation = prior_stamp
@@ -452,7 +465,7 @@ pub fn execute_auto_redeem(
     }
 
     let rate_pct_per_day =
-        cached_rate(read_rate_stamp(&runtime.shared_auto_redeem_rate_path(CODEX_KIND)).as_ref());
+        cached_rate(read_rate_stamp(&runtime.shared_auto_redeem_rate_path(key)).as_ref());
     let action = prepare_reset_credit_redemption(
         CODEX_KIND,
         |capacity, credits| {
@@ -465,7 +478,7 @@ pub fn execute_auto_redeem(
                 now,
             )
         },
-        &crate::agents::ambient_env(),
+        &logins.env(&login),
     );
     let action = action.map_err(AutoRedeemErr::Codex)?;
     let Some(action) = action else {
@@ -538,7 +551,7 @@ pub fn execute_auto_redeem(
                 .collect()
         })
         .unwrap_or_default();
-    publish_usage(runtime, usage_identity, refreshed);
+    publish_usage(runtime, key, usage_identity, refreshed);
     Ok(Some(report))
 }
 
@@ -569,30 +582,31 @@ fn attempted_error(report: &RedeemReport, error: AutoRedeemErr) -> AutoRedeemErr
 
 fn publish_usage(
     runtime: &RuntimePaths,
+    key: &LoginKey,
     identity: crate::agents::AccountUsageIdentity,
     snapshot: AccountUsageSnapshot,
 ) {
     let scope = identity.scope.clone();
     if let Some(windows) = snapshot.rate_limits.clone() {
-        let logins = crate::agents::RoomLoginSet::for_runtime(runtime);
-        if let Some(key) = logins.key(CODEX_KIND) {
-            crate::sidebar::refresh::merge_account_rate_limits(runtime, &key, identity, windows);
-        }
+        crate::sidebar::refresh::merge_account_rate_limits(runtime, key, identity, windows);
     }
     if snapshot.plan.is_some()
         || snapshot.extra_credits.is_some()
         || snapshot.reset_credits.is_some()
     {
-        crate::sidebar::refresh::merge_provider_realtime_usage(
-            runtime, CODEX_KIND, scope, snapshot,
-        );
+        crate::sidebar::refresh::merge_provider_realtime_usage(runtime, key, scope, snapshot);
     }
 }
 
-fn spawn_auto_redeem(runtime: &RuntimePaths, reason: RedeemReason, request_id: uuid::Uuid) -> bool {
+fn spawn_auto_redeem(
+    runtime: &RuntimePaths,
+    key: &LoginKey,
+    reason: RedeemReason,
+    request_id: uuid::Uuid,
+) -> bool {
     let request = AutoRedeemRequest {
         workspace_id: runtime.workspace_id.clone(),
-        kind: AgentKind::new_unchecked(CODEX_KIND),
+        login: key.clone(),
         reason,
         request_id,
     };

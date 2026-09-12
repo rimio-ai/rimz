@@ -150,8 +150,8 @@ impl Env {
             runtime.shared_credits_path(),
             serde_json::to_vec(&serde_json::json!({
                 "refreshed_at_ms": 1,
-                "entries": {
-                    (kind): {
+                "logins": {
+                    (rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked(kind)).to_string()): {
                         "observed_at_ms": 0,
                         "ok": false,
                         "direct_query_claim": {

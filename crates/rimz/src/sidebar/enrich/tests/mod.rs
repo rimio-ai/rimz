@@ -22,6 +22,29 @@ mod git;
 mod labels;
 mod spend;
 
+#[test]
+fn provider_labels_include_only_non_default_logins() {
+    let accounts = toml::from_str("[claude.work]\nhome = \"/srv/rimz-test-work\"\n").unwrap();
+    let key: crate::ids::LoginKey = "claude@work".parse().unwrap();
+    let work = crate::agents::RoomLoginSet::new(
+        Some(crate::ids::RoomLogins::from([(
+            key.kind.clone(),
+            key.name.clone(),
+        )])),
+        Some(crate::agents::LoginCatalog::from_config(&accounts).unwrap()),
+        BTreeMap::new(),
+    );
+    let mut panels = vec![crate::sidebar::test_support::provider_panel(
+        "claude",
+        Vec::new(),
+    )];
+    panels[0].product_name = "Claude".to_owned();
+    label_provider_logins(&mut panels, &crate::agents::RoomLoginSet::native());
+    assert_eq!(panels[0].product_name, "Claude");
+    label_provider_logins(&mut panels, &work);
+    assert_eq!(panels[0].product_name, "Claude · work");
+}
+
 fn runtime() -> (tempfile::TempDir, RuntimePaths, SidebarSnapshot) {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());

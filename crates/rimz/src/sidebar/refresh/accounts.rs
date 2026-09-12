@@ -6,8 +6,9 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
-use crate::agents::AgentAccount;
 use crate::agents::account::AccountProbe;
+use crate::agents::{AgentAccount, ProviderLogin, RoomLoginSet};
+use crate::ids::LoginKey;
 use crate::sidebar::timing::{ACCOUNTS_RETRY_TTL, ACCOUNTS_TTL};
 use crate::utils::time::unix_now_ms;
 
@@ -42,7 +43,7 @@ impl ProbeOutcomeClass {
 
 #[derive(Debug)]
 struct ProviderProbeResult {
-    kind: String,
+    key: LoginKey,
     outcome: AccountProbe,
     outcome_class: ProbeOutcomeClass,
     version: Option<String>,
@@ -57,11 +58,11 @@ struct ProbeBatch {
     total_ms: u64,
 }
 
-/// The producer's published account probe state, keyed by provider so one
-/// transient failure retries without expiring every provider's successful read.
+/// The producer's published account probe state, keyed by login so one
+/// transient failure retries without expiring every account's successful read.
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AccountsCache {
-    pub providers: BTreeMap<String, ProviderRecord>,
+    pub logins: BTreeMap<LoginKey, ProviderRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -93,46 +94,81 @@ impl ProviderStatus {
 }
 
 /// Resolve provider accounts for the producer behind a process-wide
-/// single-flight. Fresh providers ride their own timestamps; only due kinds
+/// single-flight. Fresh logins ride their own timestamps; only due logins
 /// fork, and the winner merges those records into the shared cache.
 pub(super) fn produce_accounts(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
+    logins: &RoomLoginSet,
 ) -> BTreeMap<String, AgentAccount> {
-    produce_accounts_with(snapshot, runtime, probe_accounts)
+    let selected = provider_logins(snapshot, logins);
+    produce_accounts_with(
+        snapshot,
+        runtime,
+        logins,
+        |snapshot, runtime, due, cache| probe_accounts(snapshot, runtime, &selected, due, cache),
+    )
 }
 
 fn produce_accounts_with(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
-    probe: impl Fn(&SidebarSnapshot, &RuntimePaths, &BTreeSet<String>, &AccountsCache) -> AccountsCache,
+    logins: &RoomLoginSet,
+    probe: impl Fn(
+        &SidebarSnapshot,
+        &RuntimePaths,
+        &BTreeSet<LoginKey>,
+        &AccountsCache,
+    ) -> AccountsCache,
 ) -> BTreeMap<String, AgentAccount> {
     let context_versions = context_versions(snapshot);
-    let cache = query_provider_accounts_with(snapshot, runtime, false, probe);
-    accounts_with_context_versions(&cache, &context_versions)
+    let cache = query_provider_accounts_with(
+        snapshot,
+        runtime,
+        &provider_logins(snapshot, logins),
+        false,
+        probe,
+    );
+    accounts_with_context_versions(&cache, &context_versions, logins)
 }
 
-/// Query every registered provider account through the shared account-cache
-/// single-flight. A forced query bypasses per-provider TTLs for this call while
+/// Query the requested logins through the shared account-cache single-flight.
+/// A forced query bypasses per-login TTLs for this call while
 /// preserving cache publication and contention behavior.
-pub fn query_provider_accounts(runtime: &RuntimePaths, force: bool) -> AccountsCache {
+pub fn query_provider_accounts(
+    runtime: &RuntimePaths,
+    logins: &[ProviderLogin],
+    force: bool,
+) -> AccountsCache {
     let snapshot = SidebarSnapshot::build_with_agents(
         runtime.workspace_id.clone(),
         Vec::new(),
         jiff::Timestamp::now(),
     );
-    query_provider_accounts_with(&snapshot, runtime, force, probe_accounts)
+    query_provider_accounts_with(
+        &snapshot,
+        runtime,
+        logins,
+        force,
+        |snapshot, runtime, due, cache| probe_accounts(snapshot, runtime, logins, due, cache),
+    )
 }
 
 fn query_provider_accounts_with(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
+    logins: &[ProviderLogin],
     force: bool,
-    probe: impl Fn(&SidebarSnapshot, &RuntimePaths, &BTreeSet<String>, &AccountsCache) -> AccountsCache,
+    probe: impl Fn(
+        &SidebarSnapshot,
+        &RuntimePaths,
+        &BTreeSet<LoginKey>,
+        &AccountsCache,
+    ) -> AccountsCache,
 ) -> AccountsCache {
     let path = runtime.shared_accounts_path();
     let cache = read_accounts_cache(&path);
-    if !force && due_provider_kinds(&cache, snapshot, unix_now_ms()).is_empty() {
+    if !force && due_provider_logins(&cache, snapshot, logins, unix_now_ms()).is_empty() {
         return cache;
     }
 
@@ -142,7 +178,7 @@ fn query_provider_accounts_with(
             return None;
         }
         let cache = read_accounts_cache(&path);
-        due_provider_kinds(&cache, snapshot, unix_now_ms())
+        due_provider_logins(&cache, snapshot, logins, unix_now_ms())
             .is_empty()
             .then_some(cache)
     };
@@ -157,9 +193,9 @@ fn query_provider_accounts_with(
         crate::disk::single_flight::Coordination::Produce(_guard) => {
             let cache = read_accounts_cache(&path);
             let due = if force {
-                provider_kinds(snapshot)
+                logins.iter().map(ProviderLogin::key).collect()
             } else {
-                due_provider_kinds(&cache, snapshot, unix_now_ms())
+                due_provider_logins(&cache, snapshot, logins, unix_now_ms())
             };
             if due.is_empty() {
                 return cache;
@@ -173,9 +209,9 @@ fn query_provider_accounts_with(
         crate::disk::single_flight::Coordination::Unavailable => {
             let cache = read_accounts_cache(&path);
             let due = if force {
-                provider_kinds(snapshot)
+                logins.iter().map(ProviderLogin::key).collect()
             } else {
-                due_provider_kinds(&cache, snapshot, unix_now_ms())
+                due_provider_logins(&cache, snapshot, logins, unix_now_ms())
             };
             probe(snapshot, runtime, &due, &cache)
         }
@@ -201,18 +237,19 @@ fn query_provider_accounts_with(
 pub(in crate::sidebar) fn cached_accounts_for_snapshot(
     runtime: &RuntimePaths,
     snapshot: &SidebarSnapshot,
+    logins: &RoomLoginSet,
 ) -> BTreeMap<String, AgentAccount> {
     let cache = read_accounts_cache(&runtime.shared_accounts_path());
-    accounts_with_context_versions(&cache, &context_versions(snapshot))
+    accounts_with_context_versions(&cache, &context_versions(snapshot), logins)
 }
 
 /// Cheap scheduling hint from the already-published account cache.
 pub(super) fn cached_account_usage_hint(
     runtime: &RuntimePaths,
-    kind: &str,
+    key: &LoginKey,
 ) -> Option<crate::agents::AccountUsageIdentity> {
     let cache = read_accounts_cache(&runtime.shared_accounts_path());
-    let account = cache.providers.get(kind)?.account.as_ref()?;
+    let account = cache.logins.get(key)?.account.as_ref()?;
     Some(crate::agents::AccountUsageIdentity {
         scope: account.scope.clone(),
         credentials_stamp: account.credentials_updated_at_ms,
@@ -220,17 +257,20 @@ pub(super) fn cached_account_usage_hint(
     })
 }
 
-fn due_provider_kinds(
+fn due_provider_logins(
     cache: &AccountsCache,
     snapshot: &SidebarSnapshot,
+    logins: &[ProviderLogin],
     now_ms: u64,
-) -> BTreeSet<String> {
+) -> BTreeSet<LoginKey> {
     let active_version_kinds = active_version_probe_kinds(snapshot);
     let context_versions = context_versions(snapshot);
-    provider_kinds(snapshot)
-        .into_iter()
-        .filter(|kind| {
-            let Some(record) = cache.providers.get(kind) else {
+    logins
+        .iter()
+        .map(ProviderLogin::key)
+        .filter(|key| {
+            let kind = key.kind.as_str();
+            let Some(record) = cache.logins.get(key) else {
                 return true;
             };
             let age_ms = now_ms.saturating_sub(record.probed_at_ms);
@@ -248,6 +288,13 @@ fn due_provider_kinds(
         .collect()
 }
 
+fn provider_logins(snapshot: &SidebarSnapshot, logins: &RoomLoginSet) -> Vec<ProviderLogin> {
+    provider_kinds(snapshot)
+        .iter()
+        .filter_map(|kind| logins.login(kind))
+        .collect()
+}
+
 fn provider_kinds(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
     let mut kinds: BTreeSet<String> = crate::agents::known_kinds().map(str::to_owned).collect();
     kinds.extend(active_version_probe_kinds(snapshot));
@@ -255,16 +302,22 @@ fn provider_kinds(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
 }
 
 /// Keep the adapter calls at the edge; `probe_accounts_with` owns the pure
-/// per-kind record merge and is exercised without subprocesses in unit tests.
+/// per-login record merge and is exercised without subprocesses in unit tests.
 fn probe_accounts(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
-    due_kinds: &BTreeSet<String>,
+    logins: &[ProviderLogin],
+    due_keys: &BTreeSet<LoginKey>,
     previous: &AccountsCache,
 ) -> AccountsCache {
     let active_version_kinds = active_version_probe_kinds(snapshot);
     let probed_at_ms = unix_now_ms();
-    let batch = execute_account_probes(due_kinds, &active_version_kinds, probe_one_account);
+    let due: Vec<_> = logins
+        .iter()
+        .filter(|login| due_keys.contains(&login.key()))
+        .cloned()
+        .collect();
+    let batch = execute_account_probes(&due, &active_version_kinds, probe_one_account);
     let success_count = batch
         .results
         .iter()
@@ -274,13 +327,13 @@ fn probe_accounts(
     for result in &batch.results {
         if result.outcome_class == ProbeOutcomeClass::Unavailable {
             tracing::warn!(
-                kind = result.kind.as_str(),
+                kind = result.key.kind.as_str(),
                 tags.operation = "accounts.probe_unavailable",
                 "provider account probe unavailable",
             );
         }
         trace::record(runtime, || TraceEvent::ProviderProbe {
-            kind: &result.kind,
+            kind: result.key.kind.as_str(),
             outcome: result.outcome_class.as_str(),
             account_ms: result.account_ms,
             version_ms: result.version_ms,
@@ -288,7 +341,7 @@ fn probe_accounts(
         });
     }
     trace::record(runtime, || TraceEvent::ProbeBatch {
-        due_count: due_kinds.len(),
+        due_count: due_keys.len(),
         worker_count: batch.worker_count,
         total_ms: batch.total_ms,
         success_count,
@@ -297,8 +350,9 @@ fn probe_accounts(
     merge_probe_results(previous, &active_version_kinds, probed_at_ms, batch.results)
 }
 
-fn probe_one_account(kind: &str, active: bool) -> Option<ProviderProbeResult> {
-    let login_env = crate::agents::ambient_env();
+fn probe_one_account(login: &ProviderLogin, active: bool) -> Option<ProviderProbeResult> {
+    let login_env = login.env(&crate::agents::ambient_env());
+    let kind = login.kind().as_str();
     let started = Instant::now();
     let adapter = crate::agents::find_definition(kind)?;
     let account_started = Instant::now();
@@ -319,7 +373,7 @@ fn probe_one_account(kind: &str, active: bool) -> Option<ProviderProbeResult> {
     };
     let version_ms = duration_ms(version_started.elapsed());
     Some(ProviderProbeResult {
-        kind: kind.to_owned(),
+        key: login.key(),
         outcome,
         outcome_class,
         version,
@@ -330,11 +384,11 @@ fn probe_one_account(kind: &str, active: bool) -> Option<ProviderProbeResult> {
 }
 
 fn execute_account_probes(
-    due_kinds: &BTreeSet<String>,
+    logins: &[ProviderLogin],
     active_version_kinds: &BTreeSet<String>,
-    probe: impl Fn(&str, bool) -> Option<ProviderProbeResult> + Sync,
+    probe: impl Fn(&ProviderLogin, bool) -> Option<ProviderProbeResult> + Sync,
 ) -> ProbeBatch {
-    if due_kinds.is_empty() {
+    if logins.is_empty() {
         return ProbeBatch {
             results: Vec::new(),
             worker_count: 0,
@@ -342,11 +396,11 @@ fn execute_account_probes(
         };
     }
     let started = Instant::now();
-    let jobs: Vec<_> = due_kinds.iter().cloned().collect();
+    let jobs: Vec<_> = logins.to_vec();
     let worker_count = MAX_PARALLEL_ACCOUNT_PROBES.min(jobs.len());
     let results: Vec<_> =
-        super::runner::bounded_map(crate::lane::current(), worker_count, &jobs, |kind| {
-            probe(kind, active_version_kinds.contains(kind))
+        super::runner::bounded_map(crate::lane::current(), worker_count, &jobs, |login| {
+            probe(login, active_version_kinds.contains(login.kind().as_str()))
         })
         .into_iter()
         .flatten()
@@ -364,17 +418,17 @@ fn merge_probe_results(
     probed_at_ms: u64,
     results: impl IntoIterator<Item = ProviderProbeResult>,
 ) -> AccountsCache {
-    let mut providers = previous.providers.clone();
+    let mut logins = previous.logins.clone();
     for result in results {
         let ProviderProbeResult {
-            kind,
+            key,
             outcome,
             version: probed_version,
             ..
         } = result;
-        let active = active_version_kinds.contains(&kind);
+        let active = active_version_kinds.contains(key.kind.as_str());
         let ok = !matches!(&outcome, AccountProbe::Unavailable);
-        let previous_record = previous.providers.get(&kind);
+        let previous_record = previous.logins.get(&key);
         let account = match outcome {
             AccountProbe::Found(mut account) => {
                 if account_version(Some(&account)).is_none() {
@@ -405,8 +459,8 @@ fn merge_probe_results(
                 account
             }
         };
-        providers.insert(
-            kind,
+        logins.insert(
+            key,
             ProviderRecord {
                 probed_at_ms,
                 ok,
@@ -414,18 +468,19 @@ fn merge_probe_results(
             },
         );
     }
-    AccountsCache { providers }
+    AccountsCache { logins }
 }
 
 #[cfg(test)]
 fn probe_accounts_with(
-    due_kinds: &BTreeSet<String>,
+    due_keys: &BTreeSet<LoginKey>,
     previous: &AccountsCache,
     active_version_kinds: &BTreeSet<String>,
     probed_at_ms: u64,
     mut probe: impl FnMut(&str, bool) -> Option<(AccountProbe, Option<String>)>,
 ) -> AccountsCache {
-    let results = due_kinds.iter().filter_map(|kind| {
+    let results = due_keys.iter().filter_map(|key| {
+        let kind = key.kind.as_str();
         let active = active_version_kinds.contains(kind);
         let (outcome, version) = probe(kind, active)?;
         let outcome_class = match &outcome {
@@ -434,7 +489,7 @@ fn probe_accounts_with(
             AccountProbe::Unavailable => ProbeOutcomeClass::Unavailable,
         };
         Some(ProviderProbeResult {
-            kind: kind.clone(),
+            key: key.clone(),
             outcome,
             outcome_class,
             version,
@@ -457,15 +512,17 @@ fn account_version(account: Option<&AgentAccount>) -> Option<String> {
 fn accounts_with_context_versions(
     cache: &AccountsCache,
     context_versions: &BTreeMap<String, String>,
+    logins: &RoomLoginSet,
 ) -> BTreeMap<String, AgentAccount> {
     let accounts = cache
-        .providers
+        .logins
         .iter()
-        .filter_map(|(kind, record)| {
+        .filter(|(key, _)| logins.key(key.kind.as_str()).as_ref() == Some(*key))
+        .filter_map(|(key, record)| {
             record
                 .account
                 .as_ref()
-                .map(|account| (kind.clone(), account.clone()))
+                .map(|account| (key.kind.to_string(), account.clone()))
         })
         .collect();
     merge_context_versions(accounts, context_versions)
@@ -553,6 +610,14 @@ mod tests {
     use crate::sidebar::test_support::root_agent;
     use crate::store::snapshot::SidebarSnapshot;
 
+    fn key(kind: &str) -> LoginKey {
+        LoginKey::default_for(crate::ids::AgentKind::new_unchecked(kind))
+    }
+
+    fn native_logins() -> Vec<ProviderLogin> {
+        provider_logins(&empty_snapshot(), &RoomLoginSet::native())
+    }
+
     fn record(probed_at_ms: u64, ok: bool, account: Option<AgentAccount>) -> ProviderRecord {
         ProviderRecord {
             probed_at_ms,
@@ -563,8 +628,8 @@ mod tests {
 
     fn fresh_cache(now_ms: u64) -> AccountsCache {
         AccountsCache {
-            providers: crate::agents::known_kinds()
-                .map(|kind| (kind.to_owned(), record(now_ms, true, None)))
+            logins: crate::agents::known_kinds()
+                .map(|kind| (key(kind), record(now_ms, true, None)))
                 .collect(),
         }
     }
@@ -587,7 +652,7 @@ mod tests {
 
     fn successful_probe(kind: &str) -> ProviderProbeResult {
         ProviderProbeResult {
-            kind: kind.to_owned(),
+            key: key(kind),
             outcome: AccountProbe::Found(AgentAccount {
                 plan: Some(kind.to_owned()),
                 ..Default::default()
@@ -602,14 +667,21 @@ mod tests {
 
     #[test]
     fn account_probe_pool_runs_each_kind_once_with_four_worker_ceiling() {
-        let due: BTreeSet<_> = (0..8).map(|index| format!("kind-{index}")).collect();
+        let due: Vec<_> = (0..8)
+            .map(|index| {
+                ProviderLogin::default_for(crate::ids::AgentKind::new_unchecked(format!(
+                    "kind-{index}"
+                )))
+            })
+            .collect();
         let barrier = Arc::new(Barrier::new(MAX_PARALLEL_ACCOUNT_PROBES));
         let first_wave = AtomicUsize::new(0);
         let active = AtomicUsize::new(0);
         let maximum = AtomicUsize::new(0);
         let calls = Mutex::new(BTreeMap::<String, usize>::new());
 
-        let batch = execute_account_probes(&due, &BTreeSet::new(), |kind, _active| {
+        let batch = execute_account_probes(&due, &BTreeSet::new(), |login, _active| {
+            let kind = login.kind().as_str();
             *calls.lock().unwrap().entry(kind.to_owned()).or_default() += 1;
             let live = active.fetch_add(1, Ordering::SeqCst) + 1;
             maximum.fetch_max(live, Ordering::SeqCst);
@@ -625,7 +697,9 @@ mod tests {
         assert_eq!(maximum.load(Ordering::SeqCst), MAX_PARALLEL_ACCOUNT_PROBES);
         assert_eq!(
             calls.into_inner().unwrap(),
-            due.into_iter().map(|kind| (kind, 1)).collect()
+            due.into_iter()
+                .map(|login| (login.kind().to_string(), 1))
+                .collect()
         );
 
         let merged = merge_probe_results(
@@ -643,7 +717,10 @@ mod tests {
 
     #[test]
     fn missing_worker_result_preserves_prior_record() {
-        let due = BTreeSet::from(["ok".to_owned(), "panic".to_owned()]);
+        let due: Vec<_> = ["ok", "panic"]
+            .into_iter()
+            .map(|kind| ProviderLogin::default_for(key(kind).kind))
+            .collect();
         let prior = record(
             7,
             true,
@@ -653,16 +730,17 @@ mod tests {
             }),
         );
         let previous = AccountsCache {
-            providers: BTreeMap::from([("panic".to_owned(), prior.clone())]),
+            logins: BTreeMap::from([(key("panic"), prior.clone())]),
         };
-        let batch = execute_account_probes(&due, &BTreeSet::new(), |kind, _active| {
+        let batch = execute_account_probes(&due, &BTreeSet::new(), |login, _active| {
+            let kind = login.kind().as_str();
             assert_ne!(kind, "panic", "injected worker failure");
             Some(successful_probe(kind))
         });
         let merged = merge_probe_results(&previous, &BTreeSet::new(), 20, batch.results);
 
-        assert_eq!(merged.providers["panic"], prior);
-        assert_eq!(merged.providers["ok"].probed_at_ms, 20);
+        assert_eq!(merged.logins[&key("panic")], prior);
+        assert_eq!(merged.logins[&key("ok")].probed_at_ms, 20);
     }
 
     #[test]
@@ -683,10 +761,15 @@ mod tests {
         let probes = AtomicUsize::new(0);
 
         assert!(
-            produce_accounts_with(&empty_snapshot(), &runtime, |_, _, _, cache| {
-                probes.fetch_add(1, Ordering::SeqCst);
-                cache.clone()
-            })
+            produce_accounts_with(
+                &empty_snapshot(),
+                &runtime,
+                &RoomLoginSet::native(),
+                |_, _, _, cache| {
+                    probes.fetch_add(1, Ordering::SeqCst);
+                    cache.clone()
+                }
+            )
             .is_empty()
         );
 
@@ -704,17 +787,22 @@ mod tests {
         let snapshot = empty_snapshot();
         let due = Mutex::new(Vec::new());
 
-        let refreshed =
-            query_provider_accounts_with(&snapshot, &runtime, true, |_, _, kinds, cache| {
+        let refreshed = query_provider_accounts_with(
+            &snapshot,
+            &runtime,
+            &native_logins(),
+            true,
+            |_, _, kinds, cache| {
                 due.lock().unwrap().push(kinds.clone());
                 cache.clone()
-            });
-
-        assert_eq!(due.into_inner().unwrap(), [provider_kinds(&snapshot)]);
-        assert_eq!(
-            refreshed.providers.len(),
-            crate::agents::known_kinds().count()
+            },
         );
+
+        assert_eq!(
+            due.into_inner().unwrap(),
+            [native_logins().iter().map(ProviderLogin::key).collect()]
+        );
+        assert_eq!(refreshed.logins.len(), crate::agents::known_kinds().count());
     }
 
     #[test]
@@ -727,11 +815,16 @@ mod tests {
         write_accounts_cache(&runtime.shared_accounts_path(), &expected);
         let probes = AtomicUsize::new(0);
 
-        let cached =
-            query_provider_accounts_with(&empty_snapshot(), &runtime, false, |_, _, _, cache| {
+        let cached = query_provider_accounts_with(
+            &empty_snapshot(),
+            &runtime,
+            &native_logins(),
+            false,
+            |_, _, _, cache| {
                 probes.fetch_add(1, Ordering::SeqCst);
                 cache.clone()
-            });
+            },
+        );
 
         assert_eq!(cached, expected);
         assert_eq!(probes.load(Ordering::SeqCst), 0);
@@ -742,8 +835,8 @@ mod tests {
         let now_ms = unix_now_ms();
         let stale_ms = now_ms.saturating_sub(ACCOUNTS_RETRY_TTL.as_millis() as u64 + 1);
         let mut cache = fresh_cache(now_ms);
-        cache.providers.insert(
-            "copilot".to_owned(),
+        cache.logins.insert(
+            key("copilot"),
             record(
                 stale_ms,
                 false,
@@ -753,8 +846,8 @@ mod tests {
                 }),
             ),
         );
-        cache.providers.insert(
-            "claude".to_owned(),
+        cache.logins.insert(
+            key("claude"),
             record(
                 stale_ms,
                 true,
@@ -765,10 +858,10 @@ mod tests {
             ),
         );
         let snapshot = empty_snapshot();
-        let due = due_provider_kinds(&cache, &snapshot, now_ms);
-        assert_eq!(due, BTreeSet::from(["copilot".to_owned()]));
+        let due = due_provider_logins(&cache, &snapshot, &native_logins(), now_ms);
+        assert_eq!(due, BTreeSet::from([key("copilot")]));
 
-        let successful = cache.providers["claude"].clone();
+        let successful = cache.logins[&key("claude")].clone();
         let mut probed = Vec::new();
         let merged =
             probe_accounts_with(&due, &cache, &BTreeSet::new(), now_ms, |kind, _active| {
@@ -777,8 +870,8 @@ mod tests {
             });
 
         assert_eq!(probed, ["copilot"]);
-        assert_eq!(merged.providers["claude"], successful);
-        assert_eq!(merged.providers["copilot"].probed_at_ms, now_ms);
+        assert_eq!(merged.logins[&key("claude")], successful);
+        assert_eq!(merged.logins[&key("copilot")].probed_at_ms, now_ms);
     }
 
     #[test]
@@ -789,31 +882,34 @@ mod tests {
             ..Default::default()
         };
         let previous = AccountsCache {
-            providers: BTreeMap::from([(
-                "copilot".to_owned(),
+            logins: BTreeMap::from([(
+                key("copilot"),
                 record(10, true, Some(previous_account.clone())),
             )]),
         };
 
         let merged = probe_accounts_with(
-            &BTreeSet::from(["copilot".to_owned()]),
+            &BTreeSet::from([key("copilot")]),
             &previous,
             &BTreeSet::new(),
             20,
             |_kind, _active| Some((AccountProbe::Unavailable, None)),
         );
 
-        assert_eq!(merged.providers["copilot"].account, Some(previous_account));
-        assert!(!merged.providers["copilot"].ok);
+        assert_eq!(
+            merged.logins[&key("copilot")].account,
+            Some(previous_account)
+        );
+        assert!(!merged.logins[&key("copilot")].ok);
 
         let active = probe_accounts_with(
-            &BTreeSet::from(["copilot".to_owned()]),
+            &BTreeSet::from([key("copilot")]),
             &previous,
             &BTreeSet::from(["copilot".to_owned()]),
             20,
             |_kind, _active| Some((AccountProbe::Unavailable, Some("1.0.0".to_owned()))),
         );
-        let account = active.providers["copilot"].account.as_ref().unwrap();
+        let account = active.logins[&key("copilot")].account.as_ref().unwrap();
         assert_eq!(account.account_id.as_deref(), Some("octocat"));
         assert_eq!(account.version.as_deref(), Some("1.0.0"));
     }
@@ -821,8 +917,8 @@ mod tests {
     #[test]
     fn refreshed_accounts_keep_versions_and_logged_out_active_kinds_keep_version_only_records() {
         let previous = AccountsCache {
-            providers: BTreeMap::from([(
-                "pi".to_owned(),
+            logins: BTreeMap::from([(
+                key("pi"),
                 record(
                     10,
                     true,
@@ -833,7 +929,7 @@ mod tests {
                 ),
             )]),
         };
-        let due = BTreeSet::from(["pi".to_owned()]);
+        let due = BTreeSet::from([key("pi")]);
         let active = BTreeSet::from(["pi".to_owned()]);
         let found = probe_accounts_with(&due, &previous, &active, 20, |_kind, _active| {
             Some((
@@ -845,7 +941,7 @@ mod tests {
             ))
         });
         assert_eq!(
-            found.providers["pi"]
+            found.logins[&key("pi")]
                 .account
                 .as_ref()
                 .and_then(|account| account.version.as_deref()),
@@ -856,7 +952,7 @@ mod tests {
             Some((AccountProbe::LoggedOut, None))
         });
         assert_eq!(
-            logged_out.providers["pi"]
+            logged_out.logins[&key("pi")]
                 .account
                 .as_ref()
                 .and_then(|account| account.version.as_deref()),
@@ -866,7 +962,7 @@ mod tests {
         let idle = probe_accounts_with(&due, &previous, &BTreeSet::new(), 20, |_kind, _active| {
             Some((AccountProbe::LoggedOut, None))
         });
-        assert_eq!(idle.providers["pi"].account, None);
+        assert_eq!(idle.logins[&key("pi")].account, None);
     }
 
     #[test]
@@ -876,8 +972,8 @@ mod tests {
         write_accounts_cache(
             &path,
             &AccountsCache {
-                providers: BTreeMap::from([(
-                    "codex".to_owned(),
+                logins: BTreeMap::from([(
+                    key("codex"),
                     record(
                         42,
                         true,
@@ -892,10 +988,10 @@ mod tests {
         let cache = read_accounts_cache(&path);
         let versions = BTreeMap::from([("codex".to_owned(), "0.135.0".to_owned())]);
 
-        let merged = accounts_with_context_versions(&cache, &versions);
+        let merged = accounts_with_context_versions(&cache, &versions, &RoomLoginSet::native());
         let persisted = read_accounts_cache(&path);
 
-        assert_eq!(persisted.providers["codex"].probed_at_ms, 42);
+        assert_eq!(persisted.logins[&key("codex")].probed_at_ms, 42);
         assert_eq!(
             merged
                 .get("codex")
@@ -903,7 +999,7 @@ mod tests {
             Some("0.135.0")
         );
         assert_eq!(
-            persisted.providers["codex"]
+            persisted.logins[&key("codex")]
                 .account
                 .as_ref()
                 .and_then(|account| account.version.as_deref()),
@@ -913,18 +1009,76 @@ mod tests {
     }
 
     #[test]
+    fn account_merges_and_projection_are_login_scoped() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let work_key: LoginKey = "claude@work".parse().unwrap();
+        let accounts = toml::from_str("[claude.work]\nhome = \"/srv/rimz-test-work\"\n").unwrap();
+        let work = RoomLoginSet::new(
+            Some(crate::ids::RoomLogins::from([(
+                work_key.kind.clone(),
+                work_key.name.clone(),
+            )])),
+            Some(crate::agents::LoginCatalog::from_config(&accounts).unwrap()),
+            BTreeMap::new(),
+        );
+        let mut cache = AccountsCache::default();
+        for (login, plan) in [
+            (key("claude"), "default"),
+            (work_key.clone(), "work"),
+            (key("claude"), "updated"),
+        ] {
+            let mut result = successful_probe("claude");
+            result.key = login;
+            result.outcome = AccountProbe::Found(AgentAccount {
+                plan: Some(plan.to_owned()),
+                ..Default::default()
+            });
+            cache = merge_probe_results(&cache, &BTreeSet::new(), 100, [result]);
+        }
+        assert_eq!(cache.logins.len(), 2);
+        assert_eq!(
+            cache.logins[&key("claude")]
+                .account
+                .as_ref()
+                .unwrap()
+                .plan
+                .as_deref(),
+            Some("updated")
+        );
+        assert_eq!(
+            cache.logins[&work_key]
+                .account
+                .as_ref()
+                .unwrap()
+                .plan
+                .as_deref(),
+            Some("work")
+        );
+        write_accounts_cache(&runtime.shared_accounts_path(), &cache);
+        assert_eq!(
+            cached_accounts_for_snapshot(&runtime, &empty_snapshot(), &work)["claude"]
+                .plan
+                .as_deref(),
+            Some("work")
+        );
+    }
+
+    #[test]
     fn old_schema_cache_is_discarded_and_every_provider_is_due() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("accounts.json");
-        std::fs::write(&path, br#"{"refreshed_at_ms":42,"accounts":{},"ok":true}"#).unwrap();
+        std::fs::write(&path, br#"{"providers":{}}"#).unwrap();
 
         let cache = read_accounts_cache(&path);
 
-        assert!(cache.providers.is_empty());
+        assert!(cache.logins.is_empty());
         let snapshot = empty_snapshot();
         assert_eq!(
-            due_provider_kinds(&cache, &snapshot, 100),
-            provider_kinds(&snapshot)
+            due_provider_logins(&cache, &snapshot, &native_logins(), 100),
+            native_logins().iter().map(ProviderLogin::key).collect()
         );
     }
 
@@ -934,8 +1088,8 @@ mod tests {
             let snapshot = snapshot_with(kind);
             let now_ms = unix_now_ms();
             let mut cache = fresh_cache(now_ms);
-            cache.providers.insert(
-                kind.to_owned(),
+            cache.logins.insert(
+                key(kind),
                 record(
                     now_ms,
                     true,
@@ -945,19 +1099,24 @@ mod tests {
                     }),
                 ),
             );
-            assert!(!due_provider_kinds(&cache, &snapshot, now_ms).contains(kind));
+            assert!(
+                !due_provider_logins(&cache, &snapshot, &native_logins(), now_ms)
+                    .contains(&key(kind))
+            );
 
-            cache.providers.get_mut(kind).unwrap().probed_at_ms =
+            cache.logins.get_mut(&key(kind)).unwrap().probed_at_ms =
                 now_ms.saturating_sub(ACCOUNTS_RETRY_TTL.as_millis() as u64 + 1);
             assert!(
-                due_provider_kinds(&cache, &snapshot, now_ms).contains(kind),
+                due_provider_logins(&cache, &snapshot, &native_logins(), now_ms)
+                    .contains(&key(kind)),
                 "an active {kind} account without a version re-probes after the retry window"
             );
 
-            cache.providers.get_mut(kind).unwrap().ok = false;
-            cache.providers.get_mut(kind).unwrap().probed_at_ms = now_ms;
+            cache.logins.get_mut(&key(kind)).unwrap().ok = false;
+            cache.logins.get_mut(&key(kind)).unwrap().probed_at_ms = now_ms;
             assert!(
-                !due_provider_kinds(&cache, &snapshot, now_ms).contains(kind),
+                !due_provider_logins(&cache, &snapshot, &native_logins(), now_ms)
+                    .contains(&key(kind)),
                 "a failed {kind} probe waits for its own failure TTL"
             );
         }

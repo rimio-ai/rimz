@@ -479,18 +479,18 @@ impl RuntimePaths {
         self.shared_root.join("credits.lock")
     }
 
-    pub(crate) fn shared_auto_redeem_path(&self, kind: &str) -> PathBuf {
+    pub(crate) fn shared_auto_redeem_path(&self, key: &crate::ids::LoginKey) -> PathBuf {
         self.persistent_shared_root
-            .join(format!("auto_redeem.{kind}.json"))
+            .join(format!("auto_redeem.{key}.json"))
     }
 
-    pub(crate) fn shared_auto_redeem_rate_path(&self, kind: &str) -> PathBuf {
+    pub(crate) fn shared_auto_redeem_rate_path(&self, key: &crate::ids::LoginKey) -> PathBuf {
         self.persistent_shared_root
-            .join(format!("auto_redeem_rate.{kind}.json"))
+            .join(format!("auto_redeem_rate.{key}.json"))
     }
 
-    pub(crate) fn shared_auto_redeem_lock(&self, kind: &str) -> PathBuf {
-        self.shared_root.join(format!("auto_redeem.{kind}.lock"))
+    pub(crate) fn shared_auto_redeem_lock(&self, key: &crate::ids::LoginKey) -> PathBuf {
+        self.shared_root.join(format!("auto_redeem.{key}.lock"))
     }
 
     pub fn shared_provider_spending_path(&self) -> PathBuf {
@@ -1092,25 +1092,31 @@ mod tests {
                 .join("spending.lock")
         );
         assert_eq!(
-            paths.shared_auto_redeem_path("codex"),
+            paths.shared_auto_redeem_path(&crate::ids::LoginKey::default_for(
+                crate::ids::AgentKind::new_unchecked("codex")
+            )),
             state_root
                 .join("rimz")
                 .join("shared")
-                .join("auto_redeem.codex.json")
+                .join("auto_redeem.codex@default.json")
         );
         assert_eq!(
-            paths.shared_auto_redeem_rate_path("codex"),
+            paths.shared_auto_redeem_rate_path(&crate::ids::LoginKey::default_for(
+                crate::ids::AgentKind::new_unchecked("codex")
+            )),
             state_root
                 .join("rimz")
                 .join("shared")
-                .join("auto_redeem_rate.codex.json")
+                .join("auto_redeem_rate.codex@default.json")
         );
         assert_eq!(
-            paths.shared_auto_redeem_lock("codex"),
+            paths.shared_auto_redeem_lock(&crate::ids::LoginKey::default_for(
+                crate::ids::AgentKind::new_unchecked("codex")
+            )),
             runtime_root
                 .join("rimz")
                 .join("shared")
-                .join("auto_redeem.codex.lock")
+                .join("auto_redeem.codex@default.lock")
         );
 
         paths.ensure_dirs().unwrap();

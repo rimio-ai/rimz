@@ -7,22 +7,24 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::RuntimePaths;
+use crate::agents::RoomLoginSet;
 use crate::agents::{
     AccountUsageIdentity, AccountUsageProbe, AccountUsageSnapshot, ExtraCredits,
     ProviderAccountScope, ResetCredits,
 };
 use crate::config::AccountsConfig;
+use crate::ids::LoginKey;
 use crate::sidebar::timing::{
     ACCOUNT_USAGE_CLAIM_TTL, CREDITS_DISPLAY_MAX_AGE, OAUTH_USAGE_SETTLED_TTL, OAUTH_USAGE_TTL,
 };
 use crate::store::snapshot::{SidebarSnapshot, format_plan_label};
 use crate::utils::time::unix_now_ms;
 
-/// Shared provider extra-credits cache, keyed by agent kind.
+/// Shared provider extra-credits cache, keyed by provider login.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub(super) struct CreditsCache {
     pub refreshed_at_ms: u64,
-    pub entries: BTreeMap<String, ProviderCreditsEntry>,
+    pub logins: BTreeMap<LoginKey, ProviderCreditsEntry>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
@@ -231,7 +233,7 @@ pub(super) fn write_credits_cache(path: &Path, cache: &CreditsCache) {
 
 pub fn merge_provider_realtime_usage(
     runtime: &RuntimePaths,
-    kind: &str,
+    key: &LoginKey,
     scope: ProviderAccountScope,
     snapshot: AccountUsageSnapshot,
 ) {
@@ -255,8 +257,8 @@ pub fn merge_provider_realtime_usage(
     };
     let mut cache = read_credits_cache(&path);
     if let Some(prior) = cache
-        .entries
-        .get(kind)
+        .logins
+        .get(key)
         .filter(|prior| prior.scope == entry.scope)
     {
         entry.oauth_read_at_ms = prior.oauth_read_at_ms;
@@ -267,19 +269,19 @@ pub fn merge_provider_realtime_usage(
         fill_missing_display_fields(&mut entry, prior);
     }
     cache.refreshed_at_ms = unix_now_ms();
-    cache.entries.insert(kind.to_owned(), entry);
+    cache.logins.insert(key.to_owned(), entry);
     write_credits_cache(&path, &cache);
 }
 
 /// Claim one due direct account-usage read under the shared credits lock.
 pub(super) fn claim_provider_account_usage(
     runtime: &RuntimePaths,
-    kind: &str,
+    key: &LoginKey,
     cached_hint: Option<AccountUsageIdentity>,
 ) -> Option<Uuid> {
     claim_provider_account_usage_with_hint_at(
         runtime,
-        kind,
+        key,
         cached_hint,
         unix_now_ms(),
         Uuid::now_v7(),
@@ -288,12 +290,12 @@ pub(super) fn claim_provider_account_usage(
 
 fn claim_provider_account_usage_with_hint_at(
     runtime: &RuntimePaths,
-    kind: &str,
+    key: &LoginKey,
     cached_hint: Option<AccountUsageIdentity>,
     now_ms: u64,
     nonce: Uuid,
 ) -> Option<Uuid> {
-    claim_provider_account_usage_locked(runtime, kind, now_ms, nonce, |entry| {
+    claim_provider_account_usage_locked(runtime, key, now_ms, nonce, |entry| {
         cache_derived_claim_identity(entry, cached_hint)
     })
 }
@@ -301,17 +303,17 @@ fn claim_provider_account_usage_with_hint_at(
 #[cfg(test)]
 fn claim_provider_account_usage_at(
     runtime: &RuntimePaths,
-    kind: &str,
+    key: &LoginKey,
     identity: AccountUsageIdentity,
     now_ms: u64,
     nonce: Uuid,
 ) -> Option<Uuid> {
-    claim_provider_account_usage_locked(runtime, kind, now_ms, nonce, |_| identity)
+    claim_provider_account_usage_locked(runtime, key, now_ms, nonce, |_| identity)
 }
 
 fn claim_provider_account_usage_locked(
     runtime: &RuntimePaths,
-    kind: &str,
+    key: &LoginKey,
     now_ms: u64,
     nonce: Uuid,
     identity: impl FnOnce(&ProviderCreditsEntry) -> AccountUsageIdentity,
@@ -321,7 +323,7 @@ fn claim_provider_account_usage_locked(
         .ok()
         .flatten()?;
     let mut cache = read_credits_cache(&path);
-    let entry = cache.entries.entry(kind.to_owned()).or_default();
+    let entry = cache.logins.entry(key.to_owned()).or_default();
     let identity = identity(entry);
     if entry.direct_query_claim.as_ref().is_some_and(|claim| {
         now_ms.saturating_sub(claim.claimed_at_ms) <= ACCOUNT_USAGE_CLAIM_TTL.as_millis() as u64
@@ -360,10 +362,14 @@ fn cache_derived_claim_identity(
     hint
 }
 
-pub(super) fn account_usage_claim_matches(runtime: &RuntimePaths, kind: &str, nonce: Uuid) -> bool {
+pub(super) fn account_usage_claim_matches(
+    runtime: &RuntimePaths,
+    key: &LoginKey,
+    nonce: Uuid,
+) -> bool {
     read_credits_cache(&runtime.shared_credits_path())
-        .entries
-        .get(kind)
+        .logins
+        .get(key)
         .and_then(|entry| entry.direct_query_claim.as_ref())
         .is_some_and(|claim| claim.nonce == nonce)
 }
@@ -372,15 +378,15 @@ pub(super) fn account_usage_claim_matches(runtime: &RuntimePaths, kind: &str, no
 /// provider work. A replaced claim or contended credits lock cannot be renewed.
 pub(super) fn renew_provider_account_usage_claim(
     runtime: &RuntimePaths,
-    kind: &str,
+    key: &LoginKey,
     nonce: Uuid,
 ) -> bool {
-    renew_provider_account_usage_claim_at(runtime, kind, nonce, unix_now_ms())
+    renew_provider_account_usage_claim_at(runtime, key, nonce, unix_now_ms())
 }
 
 fn renew_provider_account_usage_claim_at(
     runtime: &RuntimePaths,
-    kind: &str,
+    key: &LoginKey,
     nonce: Uuid,
     now_ms: u64,
 ) -> bool {
@@ -394,8 +400,8 @@ fn renew_provider_account_usage_claim_at(
     };
     let mut cache = read_credits_cache(&path);
     let Some(claim) = cache
-        .entries
-        .get_mut(kind)
+        .logins
+        .get_mut(key)
         .and_then(|entry| entry.direct_query_claim.as_mut())
         .filter(|claim| claim.nonce == nonce)
     else {
@@ -409,7 +415,7 @@ fn renew_provider_account_usage_claim_at(
 
 pub(super) fn cancel_provider_account_usage_claim(
     runtime: &RuntimePaths,
-    kind: &str,
+    key: &LoginKey,
     nonce: Uuid,
 ) -> bool {
     let path = runtime.shared_credits_path();
@@ -421,7 +427,7 @@ pub(super) fn cancel_provider_account_usage_claim(
         return false;
     };
     let mut cache = read_credits_cache(&path);
-    let Some(entry) = cache.entries.get_mut(kind) else {
+    let Some(entry) = cache.logins.get_mut(key) else {
         return false;
     };
     if entry.direct_query_claim.as_ref().map(|claim| claim.nonce) != Some(nonce) {
@@ -435,7 +441,7 @@ pub(super) fn cancel_provider_account_usage_claim(
 
 pub(super) fn complete_provider_account_usage(
     runtime: &RuntimePaths,
-    kind: &str,
+    key: &LoginKey,
     nonce: Uuid,
     probe: AccountUsageProbe,
 ) -> Option<AccountUsageCompletion> {
@@ -445,10 +451,10 @@ pub(super) fn complete_provider_account_usage(
         .ok()
         .flatten()?;
     let mut cache = read_credits_cache(&path);
-    let prior = cache.entries.get(kind).cloned()?;
+    let prior = cache.logins.get(key).cloned()?;
     let (entry, completion) = prior.complete_account_usage(nonce, probe, now_ms)?;
     cache.refreshed_at_ms = now_ms;
-    cache.entries.insert(kind.to_owned(), entry);
+    cache.logins.insert(key.to_owned(), entry);
     write_credits_cache(&path, &cache);
     Some(completion)
 }
@@ -464,7 +470,7 @@ fn account_usage_credit_fields(
     (plan, extra_credits, reset_credits)
 }
 
-pub(super) fn invalidate_oauth_read(runtime: &RuntimePaths, kind: &str) {
+pub(super) fn invalidate_oauth_read(runtime: &RuntimePaths, key: &LoginKey) {
     let path = runtime.shared_credits_path();
     let Some(_guard) =
         crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_credits_lock())
@@ -474,7 +480,7 @@ pub(super) fn invalidate_oauth_read(runtime: &RuntimePaths, kind: &str) {
         return;
     };
     let mut cache = read_credits_cache(&path);
-    let Some(entry) = cache.entries.get_mut(kind) else {
+    let Some(entry) = cache.logins.get_mut(key) else {
         return;
     };
     entry.oauth_read_at_ms = 0;
@@ -532,26 +538,28 @@ pub(in crate::sidebar) fn apply_credits_cache(
     snapshot: &mut SidebarSnapshot,
     runtime: &RuntimePaths,
     accounts: &AccountsConfig,
+    logins: &RoomLoginSet,
 ) {
     if snapshot.providers.is_empty() {
         return;
     }
     let cache = read_credits_cache(&runtime.shared_credits_path());
-    apply_credits_cache_with(snapshot, &cache, accounts, unix_now_ms());
+    apply_credits_cache_with(snapshot, &cache, accounts, logins, unix_now_ms());
 }
 
 fn apply_credits_cache_with(
     snapshot: &mut SidebarSnapshot,
     cache: &CreditsCache,
     accounts: &AccountsConfig,
+    logins: &RoomLoginSet,
     now_ms: u64,
 ) {
     for panel in &mut snapshot.providers {
         let ceiling = accounts.usage_limit(&panel.kind);
         if panel.metered {
-            let displayable_entry = cache
-                .entries
-                .get(&panel.kind)
+            let displayable_entry = logins
+                .key(&panel.kind)
+                .and_then(|key| cache.logins.get(&key))
                 .filter(|entry| entry.scope == panel.account_scope)
                 .filter(|entry| entry_is_displayable(entry, now_ms));
             if panel.plan.is_none() {

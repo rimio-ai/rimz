@@ -276,10 +276,12 @@ pub mod fleet {
         }
 
         let accounts = AccountsCache {
-            providers: agents::known_kinds()
+            logins: agents::known_kinds()
                 .map(|kind| {
                     (
-                        kind.to_owned(),
+                        crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked(
+                            kind,
+                        )),
                         ProviderRecord {
                             probed_at_ms: now_ms,
                             ok: false,

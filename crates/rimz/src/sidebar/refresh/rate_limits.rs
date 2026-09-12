@@ -335,7 +335,7 @@ fn project_rate_limits(
     logins: &RoomLoginSet,
     producer: bool,
     trace: Option<&Path>,
-) -> (Option<RateLimitsCache>, Vec<String>) {
+) -> (Option<RateLimitsCache>, Vec<LoginKey>) {
     // The snapshot's single projection clock, so the idle-window reset
     // projection agrees with the dashboard windows resolved on the same frame.
     let now = snapshot.now;
@@ -345,7 +345,7 @@ fn project_rate_limits(
     };
     next.entries
         .retain(|key, _| logins.key(key.kind.as_str()).as_ref() != Some(key));
-    let mut refresh_kinds = BTreeSet::new();
+    let mut refresh_logins = BTreeSet::new();
 
     for panel in &mut snapshot.providers {
         let login_key = logins.key(&panel.kind);
@@ -413,14 +413,14 @@ fn project_rate_limits(
                 // Verify a newly suspected refill without forcing another read
                 // on every frame while the same window remains parked.
                 if producer && login_key.is_some() && !index.pending.contains_key(&refill.key()) {
-                    refresh_kinds.insert(panel.kind.clone());
+                    refresh_logins.extend(login_key.clone());
                 }
                 pending.push(refill);
             }
         }
         let cache_unknown = index.live.is_empty() && longest_cached_window_expired(&truth, now);
         if producer && login_key.is_some() && !cache_unknown && kind_reset_advanced {
-            refresh_kinds.insert(panel.kind.clone());
+            refresh_logins.extend(login_key.clone());
         }
 
         // Display: roll every fused window's reset-to-max projection forward to
@@ -461,7 +461,7 @@ fn project_rate_limits(
             _ if !display_unknown => None,
             Some(since) => Some(since),
             None => {
-                refresh_kinds.insert(panel.kind.clone());
+                refresh_logins.extend(login_key.clone());
                 Some(unix_now_ms())
             }
         };
@@ -507,7 +507,7 @@ fn project_rate_limits(
         (producer
             && (!snapshot.providers.is_empty() || next.entries.len() != cached.entries.len()))
         .then_some(next),
-        refresh_kinds.into_iter().collect(),
+        refresh_logins.into_iter().collect(),
     )
 }
 
