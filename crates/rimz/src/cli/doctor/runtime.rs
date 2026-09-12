@@ -841,21 +841,39 @@ fn topology_writer_id(writer: pane_topology::TopologyWriter) -> model::TopologyW
 pub(super) fn collect_remote_control(
     project_root: Option<&std::path::Path>,
 ) -> model::RemoteControl {
-    let login_env = rimz::agents::ambient_env();
-    let config = match MachineConfig::load() {
-        Ok(config) => config.remote_control,
+    let machine = match MachineConfig::load() {
+        Ok(config) => config,
         Err(err) => {
             return model::RemoteControl::Unavailable {
                 error: super::config_file_error_detail(&err, err.diagnosis()),
             };
         }
     };
+    let config = &machine.remote_control;
     if !config.enabled_for("claude") && !config.enabled_for("codex") {
         return model::RemoteControl::Off;
     }
 
-    let readiness = rimz::remote_control::ReadinessSnapshot::probe(&config);
-    let advisories = rimz::remote_control::advisories(&config);
+    let state = project_root
+        .and_then(|root| rimz::workspace::WorkspaceResolver::persisted_workspace_id(root).ok())
+        .and_then(|id| StatePaths::for_workspace(id).ok());
+    let envs = match state {
+        Some(state) => match rimz::remote_control::HostLoginEnvs::for_room(
+            &state.workspace_record,
+            &machine.accounts,
+        ) {
+            Ok(envs) => envs,
+            Err(err) => {
+                return model::RemoteControl::Unavailable {
+                    error: err.to_string(),
+                };
+            }
+        },
+        None => rimz::remote_control::HostLoginEnvs::ambient(),
+    };
+    let login_env = envs.for_host(rimz::remote_control::RemoteControlHost::Claude);
+    let readiness = rimz::remote_control::ReadinessSnapshot::probe(config, &envs);
+    let advisories = rimz::remote_control::advisories(config, &envs);
     let mut agents = Vec::new();
     if config.enabled_for("claude") {
         let (detail, ready) = match readiness
@@ -866,7 +884,7 @@ pub(super) fn collect_remote_control(
             // doctor is the place a stalled host should become visible.
             RuntimeControlReadiness::Ready { .. } => {
                 match project_root
-                    .map(|root| runtime_control::host_liveness("claude", root, &login_env))
+                    .map(|root| runtime_control::host_liveness("claude", root, login_env))
                 {
                     Some(RuntimeControlLiveness::Up) => ("ready, host serving".to_owned(), true),
                     Some(RuntimeControlLiveness::Down) => (

@@ -194,12 +194,27 @@ impl RoomContext {
     }
 
     fn launch_background_view(&self, options: &BackgroundViewOptions) {
-        let login_env = crate::agents::ambient_env();
-        crate::agents::runtime_control::ensure(
-            "codex",
-            self.machine_config.remote_control.enabled_for("codex"),
-            &login_env,
-        );
+        match StatePaths::for_workspace(self.workspace.workspace_id.clone()) {
+            Ok(state) => match crate::agents::room_login(
+                &state.workspace_record,
+                &self.machine_config.accounts,
+                &crate::ids::AgentKind::new_unchecked("codex"),
+            )
+            .map(|login| login.env(&crate::agents::ambient_env()))
+            {
+                Ok(login_env) => crate::agents::runtime_control::ensure(
+                    "codex",
+                    self.machine_config.remote_control.enabled_for("codex"),
+                    &login_env,
+                ),
+                Err(err) => {
+                    tracing::warn!(workspace = %self.workspace.workspace_id, error = %err, "Codex daemon account unavailable; skipping ensure")
+                }
+            },
+            Err(err) => {
+                tracing::warn!(workspace = %self.workspace.workspace_id, error = %err, "Codex daemon state paths unavailable; skipping ensure")
+            }
+        }
         match self.backend.open_background_view(options) {
             Ok(BackgroundViewLaunch::Launched) => tracing::info!(
                 session = %self.workspace.session_name,
