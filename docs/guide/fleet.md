@@ -149,6 +149,8 @@ coder  15:41
 
 Add `--capture` to append the pane's visible text, or `--json` to hand the same report to a script.
 
+**See what a profile will actually run.** With a bare CLI, you can read the flags you typed; after a profile inherits settings and adds prompt fragments, that final command is harder to see. Run `rimz agents explain coder` to inspect the resolved command, settings, prompt, and sandbox view without launching an agent or writing launch artifacts. Use `rimz agents explain coder --prompt > prompt.md` to read the composed configured prompt and RimZ reminder in a file, or `rimz agents explain @coder` to see its restart posture under current configuration. The [explain reference](../reference/cli/agents.md#explain-a-launch) covers overrides, redaction, and reminders a provider cannot receive.
+
 **Read along without leaving your pane.** `rimz agents logs` tails an agent's transcript; `-f` follows new lines as the turn writes them, so you watch a long run from the pane you are already in:
 
 ```console
@@ -285,7 +287,9 @@ That is the whole daily workflow. The two sections below are the detail it names
 
 ## Profiles: shape an agent for one job
 
-A **profile** is a named preset in `agents.toml`: the base CLI plus the fields that shape it — model, reasoning effort, system prompt, permission mode, and raw flags. Define it once, launch it by name:
+A **profile** is a named preset in `agents.toml`: the base CLI plus the fields that shape it — model, reasoning effort, system prompt, permission mode, and raw flags. Define it once, launch it by name.
+
+Before launching a changed preset, [`rimz agents explain <profile>`](../reference/cli/agents.md#explain-a-launch) shows the resolved profile chain and final launch settings. For example:
 
 ```toml
 [agents.profiles.claude]                                   # named for the kind, so it becomes the tuned default

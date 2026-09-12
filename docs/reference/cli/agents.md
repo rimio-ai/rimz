@@ -70,6 +70,26 @@ rimz agents profiles --json --path
 
 `profiles` lists `[agents.profiles]` profiles and configured launch commands as compact cards. Profile cards include their optional descriptions; `--path` adds the defining-file path. JSON also omits `path` unless `--path` is passed, keeps that path absolute, and includes `source` to distinguish profiles from commands. Built-in and registered agent kinds remain directly launchable but are omitted from this configured-profile catalog. Teams are excluded because the catalog describes reusable cell types rather than cohort layouts.
 
+### Explain a launch
+
+```sh
+rimz agents explain <profile|team.role|@handle> [overrides] [--json | --prompt]
+rimz agents explain coder --model gpt-6-astra --effort high
+rimz agents explain forge.coder --json
+rimz agents explain @coder
+rimz agents explain coder --prompt > prompt.md
+```
+
+`explain` prints one agent's launch plan without opening a pane, minting an identity, writing store records, or materializing prompt artifacts, room tmp, or skill copies. A profile or `<team>.<role>` follows fresh-launch resolution and works without an existing room store; multi-cell layouts are rejected. Agent names and launch ids are minted only at launch, not during profile inspection. An `@handle` requires existing room state and describes restart from the recorded identity and current profile configuration, not the original launch command: it resumes a recorded conversation when supported, otherwise shows a fresh-launch reason. Missing or incompatible profile posture is shown bare with a degraded warning.
+
+Profile plans accept `--ask`, `--yolo`, `--model`, `--agent`, `--effort`, `--system-prompt-file`, repeatable `--append-system-prompt-file`, `--budget AMOUNT[/day]`, and provider arguments after `--`. `--ask` and `--yolo` conflict; they fill only an unset permission mode, so an explicit profile mode wins. Model and effort overrides replace profile values. The report's `overrides` list records supplied flags, not proof that each won. All overrides, including budget and passthrough arguments, are refused with `@handle`; edit the profile or inspect a fresh profile launch instead.
+
+The default report includes the profile chain, action, cwd, effective settings, provider and wrapped argv, launch environment overrides and unset keys, prompt sources and composed text, RimZ reminder delivery, and sandbox mounts, pins, skill copies, and omissions. The environment is not the entire ambient environment. `--json` carries `target`, `kind`, `action`, `action_note`, `name`, `launch_id`, `cwd`, `profile`, `overrides`, `mode`, `model`, `effort`, `budget`, `skills`, `program`, `provider_argv`, `argv`, `reentry`, `env`, `unset`, `redacted_keys`, `prompt`, `sandbox`, and `warnings`.
+
+`--prompt` preserves the composed configured system-prompt text and appends the RimZ reminder after two newline characters. It does not reveal hidden provider-default instructions or expand native prompt options supplied through raw provider arguments; those arguments remain visible in the argv report. It still prints the reminder when the provider has no append-system-text channel, with a stderr notice that the reminder is not delivered. Warnings also go to stderr. `--prompt` and `--json` are mutually exclusive.
+
+Human and JSON reports replace trusted project `[[agents]]` env values with `<redacted>`, including matching argv environment tokens and sandbox pins. Other values, user prompt text, and raw configured arguments remain full; there is no `--show-secrets` flag. Sandbox planning uses the invoking environment merged with launch overrides, not a captured environment from the target pane, so differing home, XDG, provider-home, or mux variables can change the view. Configured sandbox and skill capabilities must pass the same preflights as launch; a failed preflight is an error, not a partial plan.
+
 ### Register a third-party kind
 
 ```sh
@@ -301,6 +321,8 @@ Every report key is present: an unknown scalar or object is `null`, a count is `
 The activity description — the same field the sidebar card shows — renders under each row, whitespace-collapsed and wrapped to at most three indented lines with an ellipsis when truncated; agents without one omit the description block.
 
 #### `show` / `inspect`
+
+For what a profile would launch or an agent would restart with, use [`explain`](#explain-a-launch); `show` describes recorded activity and placement instead.
 
 `show` and its `inspect` alias print a describe-style report with Agent, Activity, Context, Placement, Run, Messages, and Recent transcript sections. The Context section's cost, token split, and active time cover the durable agent seat's lifetime across resumed sessions and pane-backed children it launched. Attribution uses the same all-in cost and token fold across every subagent the member spawned; addressing a child directly reports that child's own session. Live context fill, window, tool activity, and the no-transcript fallback remain session-scoped. An open identical-tool run appears once it reaches the configured warning threshold (`Bash ×23, 4m`). `--capture` appends a Capture section that frames the bound pane's visible area with its pane id in the top border (an error when the agent has no bound pane), and `--ansi` keeps colors inside that frame.
 
