@@ -220,7 +220,6 @@ fn usage_response_maps_windows_and_extra_usage() {
     assert_eq!(sub_cap.scope.as_ref().unwrap().label, "Fable");
     assert_eq!(sub_cap.used_percentage, Some(58));
     assert_eq!(sub_cap.duration_mins, Some(10_080));
-    assert_eq!(sub_cap.share_pct, Some(50));
     assert_eq!(sub_cap.resets_at, windows.windows[1].resets_at);
     assert!(
         windows

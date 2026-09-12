@@ -100,7 +100,7 @@ What fills each part of a panel:
 
 **Where the caches live.** The account, rate-limit, and credits caches are user-scoped and persistent under `$XDG_STATE_HOME/rimz/shared/`, single-flighted across rooms by locks under `$XDG_RUNTIME_DIR/rimz/shared/`. The elected producer publishes `accounts.json`, `rate_limits.json`, and `credits.json`; consumers read them and never fork. A due account batch runs independent account-then-version chains through four scoped workers and joins them before one deterministic atomic `accounts.json` publication. A caller that cannot open the coordination lock may probe locally without publishing, and a caller that times out behind a live producer serves the current cache for that frame and lets the next tick observe the winner, so fresh rooms do not duplicate the cold subprocess wave.
 
-The rate-limit cache schema is version 5: older versions cold-drop because pre-share writers can discard a model sub-cap's `share_pct` and turn its headroom into the wrong axis. Scoped quota values remain intact for status decisions after their reset; only display projection clears expired scoped usage to unknown.
+The rate-limit cache schema remains version 5: existing v5 caches ignore the removed `share_pct` field on read, so its removal requires no cold invalidation. Older versions still cold-drop under the existing version gate. Scoped quota values remain intact for status decisions after their reset; only display projection clears expired scoped usage to unknown.
 
 ### Per-provider spend
 

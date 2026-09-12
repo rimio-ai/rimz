@@ -272,7 +272,6 @@ pub(in crate::agents::adapters::antigravity) fn parse_rate_limits(
             used_percentage,
             resets_at,
             duration_mins: Some(period.duration_mins()),
-            share_pct: None,
             observed_at: Some(observed_at),
             source: WindowSource::Authoritative,
             lifted: false,

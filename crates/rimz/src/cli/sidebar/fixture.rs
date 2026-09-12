@@ -2188,7 +2188,6 @@ fn add_provider_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             used_percentage: Some(58),
             resets_at: weekly_reset,
             duration_mins: Some(10080),
-            share_pct: Some(50),
             source: rimz::agents::context::WindowSource::Authoritative,
             ..Default::default()
         });

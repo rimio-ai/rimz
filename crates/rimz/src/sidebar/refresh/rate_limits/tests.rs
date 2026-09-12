@@ -166,7 +166,6 @@ fn expired_model_sub_cap_is_unknown_while_live_parent_refills() {
     let parent = authoritative(rl_window_mins(37, Some(past), 10_080));
     let sub_cap = RateLimitWindow {
         duration_mins: Some(10_080),
-        share_pct: Some(50),
         ..scoped_window("model:fable", "Fable", 58, past)
     };
     write_claude_windows(&runtime, vec![parent.clone(), sub_cap]);
@@ -179,7 +178,6 @@ fn expired_model_sub_cap_is_unknown_while_live_parent_refills() {
     assert!(windows[0].resets_at.unwrap() > consumer.now);
     assert_eq!(windows[1].used_percentage, None);
     assert_eq!(windows[1].resets_at, None);
-    assert_eq!(windows[1].share_pct, Some(50));
 }
 
 #[test]

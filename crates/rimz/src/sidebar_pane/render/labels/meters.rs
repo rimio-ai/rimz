@@ -565,9 +565,8 @@ fn filled_run_spans(theme: &Theme, color: Color, count: usize) -> Vec<Span<'stat
     )]
 }
 
-/// A sub-cap tick: `headroom_pct` is on the parent budget's axis; `remaining_pct` is on the sub-cap's own axis.
+/// A sub-cap tick positioned and toned on its own remaining-budget axis.
 pub(in crate::sidebar_pane::render) struct ManaTick {
-    pub headroom_pct: u8,
     pub remaining_pct: u8,
 }
 
@@ -582,10 +581,9 @@ pub(in crate::sidebar_pane::render) struct ManaTick {
 /// context-gauge track, so the spent share stays legible on the dashboard. At
 /// 0% remaining — the budget fully spent — the whole empty track turns red;
 /// any nonzero remaining budget keeps at least one filled cell.
-/// A tick partitions the fill: cells to its left remain available to the
-/// sub-capped model; cells from it to the fill edge belong to other models.
-/// Ticks never sit in the track; collisions keep the lowest headroom, then
-/// the lowest remaining percentage on the sub-cap's own axis.
+/// Ticks use each sub-cap's own 0–100 remaining axis across the full width,
+/// independently of the parent fill, including on a fully spent track.
+/// Collisions keep the lowest remaining percentage.
 pub(in crate::sidebar_pane::render) fn mana_bar_spans(
     theme: &Theme,
     remaining_pct: u8,
@@ -593,35 +591,33 @@ pub(in crate::sidebar_pane::render) fn mana_bar_spans(
     zones: &BudgetBarConfig,
     ticks: &[ManaTick],
 ) -> Vec<Span<'static>> {
-    // A fully spent window (0% remaining) reads as a full-width *red* empty track,
-    // not the gray "no fill" track a plain drain leaves — an absent fill alone
-    // would read as the same calm chrome as a barely-touched window. Paint the
-    // empty `▱` track the bar's own spent tone (`mana_style` at 0%, the ramp's
-    // alarm-red endpoint) so the label keeps mirroring its bar and "used up" is
-    // unmistakable; only the tone changes, the glyph stays the empty track.
-    if remaining_pct == 0 {
-        return vec![Span::styled(
-            theme.glyph(GlyphRole::MeterManaTrack).repeat(width.max(1)),
-            mana_style(theme, remaining_pct, zones),
-        )];
-    }
-    let filled = filled_cells(remaining_pct, width).max(1);
+    let width = width.max(1);
+    let filled = filled_cells(remaining_pct, width).max(usize::from(remaining_pct > 0));
     let mut ticks: Vec<_> = ticks
         .iter()
-        .filter(|tick| tick.headroom_pct < remaining_pct)
-        .map(|tick| (filled_cells(tick.headroom_pct, width).min(filled - 1), tick))
+        .map(|tick| (filled_cells(tick.remaining_pct, width).min(width - 1), tick))
         .collect();
-    ticks.sort_unstable_by_key(|(cell, tick)| (*cell, tick.headroom_pct, tick.remaining_pct));
+    ticks.sort_unstable_by_key(|(cell, tick)| (*cell, tick.remaining_pct));
     ticks.dedup_by_key(|(cell, _)| *cell);
     let fill_style = mana_style(theme, remaining_pct, zones);
+    let track_style = if remaining_pct == 0 {
+        fill_style
+    } else {
+        theme.muted()
+    };
     let fill_glyph = theme.glyph(GlyphRole::MeterManaFilled);
+    let track_glyph = theme.glyph(GlyphRole::MeterManaTrack);
     let mut spans = Vec::with_capacity(ticks.len() * 2 + 2);
     let mut next_cell = 0;
     for (cell, tick) in ticks {
         if cell > next_cell {
-            spans.push(Span::styled(
-                fill_glyph.repeat(cell - next_cell),
+            spans.extend(two_tone_bar(
+                filled.saturating_sub(next_cell),
+                cell - next_cell,
                 fill_style,
+                track_style,
+                fill_glyph,
+                track_glyph,
             ));
         }
         spans.push(Span::styled(
@@ -630,14 +626,14 @@ pub(in crate::sidebar_pane::render) fn mana_bar_spans(
         ));
         next_cell = cell + 1;
     }
-    if next_cell < width.max(1) {
+    if next_cell < width {
         spans.extend(two_tone_bar(
-            filled - next_cell,
-            width.max(1) - next_cell,
+            filled.saturating_sub(next_cell),
+            width - next_cell,
             fill_style,
-            theme.muted(),
+            track_style,
             fill_glyph,
-            theme.glyph(GlyphRole::MeterManaTrack),
+            track_glyph,
         ));
     }
     spans

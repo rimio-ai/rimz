@@ -131,7 +131,6 @@ fn render_provider_dashboard_pins_panel_with_bars_and_rc_flag() {
             label: "Fable".to_owned(),
         }),
         used_percentage: Some(58),
-        share_pct: Some(50),
         ..parent
     });
     let rendered = snapshot_to_screen(&snapshot, 54, 34);
@@ -161,7 +160,7 @@ fn render_provider_dashboard_pins_panel_with_bars_and_rc_flag() {
     assert!(rendered.contains('▰'), "a draining mana bar:\n{rendered}");
     assert!(
         rendered.contains('╱'),
-        "a model sub-cap partitions the weekly fill:\n{rendered}"
+        "a model sub-cap marks its own remaining budget on the weekly bar:\n{rendered}"
     );
     assert!(rendered.contains('↻'), "a reset countdown:\n{rendered}");
     // The inactive Codex block stays off screen — only its tab label shows.

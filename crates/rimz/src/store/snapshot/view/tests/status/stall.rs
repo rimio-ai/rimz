@@ -328,7 +328,6 @@ fn model_sub_caps_cannot_park_stalled_sibling_models() {
             label: "Fable".to_owned(),
         }),
         duration_mins: Some(10_080),
-        share_pct: Some(50),
         ..window(100, 86_400)
     };
     for (parent_used, expected) in [(37, AgentStatus::Failed), (100, AgentStatus::Paused)] {

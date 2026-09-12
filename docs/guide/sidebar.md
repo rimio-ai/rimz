@@ -67,7 +67,7 @@ Cards arrive already triaged (the [ranking below](#how-the-column-is-ordered) de
 
 Budgets are account-scoped, one account shared by every session of a provider, so they live in a pinned panel at the bottom rather than on the cards. Each provider block names the account and plan (`Claude Max`, `ChatGPT Pro`) and drains a "mana" bar per budget window (5-hour, 7-day) toward its reset, so a glance reads how much of the plan is left. The block also carries that provider's spend, and two totals rows below sum the fleet across the trailing week and month. Reading those figures, and how every one is calculated, is [Token Insight](./insight.md).
 
-Claude's Fable weekly cap shares the 7-day bar rather than adding a row: when it is the tighter limit, a `╱` tick separates what Fable can still spend on the left from the allowance only other models can use on the right, so a healthy weekly bar does not hide a nearly spent model cap.
+Claude's Fable weekly cap shares the 7-day bar rather than adding a row, so a healthy weekly bar does not hide a nearly spent model cap. The fill and `╱` tick use different rulers: the fill shows the percentage of the weekly budget left, while the tick's position and color show the percentage of Fable's own cap left. The tick travels across the full bar, from 0% at the left to 100% at the right, and can sit in either the fill or the empty track. It stays visible even on an exhausted bar when Fable's reading is known; unknown budget rows and lifted unlimited rows have no tick. The row's label and reset countdown stay unchanged.
 
 With several providers the panel tabs, following whichever agent you have selected; `←`/`→` or a click picks one by hand. With [pets enabled](./pets.md), the companion rides the panel's right edge.
 
