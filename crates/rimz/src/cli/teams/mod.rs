@@ -145,10 +145,19 @@ struct FlipArgs {
     #[arg(long)]
     steer: bool,
     /// Select a configured team instead of the caller's team.
-    #[arg(long, value_name = "NAME")]
+    #[arg(
+        long,
+        value_name = "NAME",
+        add = clap_complete::ArgValueCandidates::new(crate::cli::complete::team_names)
+    )]
     team: Option<String>,
     /// Select one live cohort by worktree name or lane.
-    #[arg(short = 'w', long, value_name = "NAME")]
+    #[arg(
+        short = 'w',
+        long,
+        value_name = "NAME",
+        add = clap_complete::ArgValueCandidates::new(crate::cli::complete::worktrees)
+    )]
     worktree: Option<String>,
 }
 

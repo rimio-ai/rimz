@@ -1627,7 +1627,7 @@ fn validate_team_names(teams: &TeamsConfig) -> Result<()> {
     Ok(())
 }
 
-pub fn validate_team_stages(name: &str, team: &Team) -> Result<()> {
+pub(crate) fn validate_team_stages(name: &str, team: &Team) -> Result<()> {
     let mut stages = BTreeSet::new();
     for stage in &team.stages {
         if stage.is_empty() || stage.trim() != stage || stage.chars().any(char::is_control) {

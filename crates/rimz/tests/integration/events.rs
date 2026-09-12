@@ -46,6 +46,7 @@ fn signal_vocabulary_shape_and_cap_are_pinned() {
         (SignalSource::Watch, "watch"),
         (SignalSource::Lifecycle, "lifecycle"),
         (SignalSource::Forge, "forge"),
+        (SignalSource::Team, "team"),
     ] {
         let serialized = serde_json::to_value(source).expect("signal source JSON");
         assert_eq!(serialized, json!(wire));

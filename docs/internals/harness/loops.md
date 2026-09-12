@@ -90,7 +90,6 @@ So during the untrusted window you see the project task and keep running the mac
 | --- | --- | --- |
 | `Schedule` | `at`, `every`, or `cron` | the elder tick or the external timer, when `due` says so |
 | `Signal` | `signal = "<selector>"`, optional `match = { k = "v" }` | the process that emits a signal in the selector's family |
-| `Team` | `rimz teams flip` and the current stage owner's registration re-wake | `team.stage` |
 | `Watch` | `watch = "<shell>"` | the detached `rimz wake watch` process that ran the command, or the elder's watch-lost rule |
 
 A `SignalSelector` is `Exact(SignalName)` or `Family(String)`, parsed from `a.b` or `a.*` and serialized back to the same string; `*`, `a.b.*`, and `a*` are rejected, and emission still refuses wildcards outright.
@@ -170,6 +169,7 @@ A signal is a name, a JSON object payload, a source, and, for watched commands, 
 | `Cli` | `rimz events emit <name> --json '{…}'` | anything the grammar accepts outside the reserved families |
 | `Forge` | the sidebar's PR-state refresh, which spawns `rimz events emit --source forge` on a transition ([state.md](../sidebar/state.md#push-channels)) | `ci.passed`, `ci.failed`, `pr.merged`, `pr.closed` |
 | `Lifecycle` | the lifecycle hook, from the events its own store append produced | `agent.started`, `agent.idle`, `agent.waiting`, `agent.failed`, `agent.ended`, and `team.idle`, `team.waiting`, `team.failed`, `team.ended` |
+| `Team` | `rimz teams flip` and the current stage owner's registration re-wake | `team.stage` |
 | `Watch` | `rimz wake watch <name>` when its command exits, and the elder's watch-lost rule | `wake.<task-name>` |
 
 `lifecycle_signal` maps the state machine onto the five agent names: `Registered` and `SubagentStarted` are `agent.started`, an errored `TurnEnded` is `agent.failed` and any other is `agent.idle`, `AwaitingInput` is `agent.waiting`, and `Ended`, `Lost`, and `SubagentStopped` are `agent.ended`. `Ended` and `Lost` derive their signal even though the state machine classifies a root session's end as an `Ignored` transition ([`agents/lifecycle.rs`](../../../crates/rimz/src/agents/lifecycle.rs) stamps the row in the reducer instead); every other `Ignored` transition produces no signal. The payload carries `kind`, `session`, `status`, and `errored`, plus `handle` when the card has a name and `parent` for a subagent event, which is exactly the set a subscription can filter on.
