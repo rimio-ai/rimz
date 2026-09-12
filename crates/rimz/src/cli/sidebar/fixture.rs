@@ -57,10 +57,8 @@ pub(super) fn sidebar_fixture_snapshot(state: SidebarFixtureState) -> Result<Sid
 
     match state {
         SidebarFixtureState::Empty => {}
-        SidebarFixtureState::Fleet => add_fleet_fixture(&mut snapshot, now),
-        SidebarFixtureState::Provider => {
+        SidebarFixtureState::Fleet | SidebarFixtureState::Provider => {
             add_fleet_fixture(&mut snapshot, now);
-            add_provider_fixture(&mut snapshot, now);
         }
         SidebarFixtureState::Cockpit => add_cockpit_fixture(&mut snapshot, now),
         SidebarFixtureState::Focus => add_focus_fixture(&mut snapshot, now),
@@ -73,9 +71,7 @@ pub(super) fn sidebar_fixture_snapshot(state: SidebarFixtureState) -> Result<Sid
         group.status_counts = status_counts_from_rows(&group.rows);
     }
     if matches!(state, SidebarFixtureState::Provider) {
-        snapshot.worktree_groups[0]
-            .rows
-            .sort_by_key(|row| row.name != "claude");
+        add_provider_fixture(&mut snapshot, now);
     }
     Ok(snapshot)
 }
@@ -2154,6 +2150,10 @@ fn status_counts_from_rows(rows: &[SidebarRow]) -> Vec<SidebarStatusCount> {
 }
 
 fn add_provider_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
+    // The selected row picks the provider tab, so keep Claude first to show its sub-cap tick.
+    snapshot.worktree_groups[0]
+        .rows
+        .sort_by_key(|row| row.name != "claude");
     snapshot.theme.display.provider_tabs = rimz::config::ProviderTabsMode::Always;
     snapshot.providers = vec![
         provider_panel(

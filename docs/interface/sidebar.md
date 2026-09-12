@@ -394,7 +394,7 @@ With `[theme.pets] enabled = true`, the active provider block narrows and one pa
           Claude Max · v2.1.169      ▄▟████▙▄
  ▐▛███▜▌ ◎ 58  ◇ 17M ↘ 15M ↗ 2M ◌ 198M $188.88
 ▝▜█████▛▘ 5h ▰▰▰▰▰▰▱▱ ↻ 1h47m       ██▀█ █▀██
-  ▘▘ ▝▝   7d ▰▰╱▰▰▱▱▱ ↻ 5d22h       ██ ▄ ▄ ██
+  ▘▘ ▝▝   7d ▰▰╱▰▰▰▱▱ ↻ 5d22h       ██ ▄ ▄ ██
                                       ▜█▄██▄█▛
  ── Total: ────────────────────────    ▀▀  ▀▀
  W: ◎ 420        ◇ 202.9M ◌ 5.2B
