@@ -187,6 +187,10 @@ fn wake_pid_checks_in_then_delivers_after_process_disappears_with_empty_summary(
     let receipt = wake_ok(&env, &["wake", "--pid", &pid, "--timeout", "1s", "--json"]);
     let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
     assert_eq!(receipt["trigger"], format!("pid {pid}"));
+    assert_eq!(receipt["trigger"], receipt["pending"][0]["trigger"]);
+    let listed: serde_json::Value =
+        serde_json::from_str(&wake_ok(&env, &["wake", "list", "--json"])).unwrap();
+    assert_eq!(listed[0]["trigger"], receipt["trigger"]);
     let tasks = wake_instances(&env);
     let entry = &tasks.0[receipt["name"].as_str().unwrap()];
     assert_eq!(entry.wake_meta.as_ref().unwrap().pid, Some(process.id()));

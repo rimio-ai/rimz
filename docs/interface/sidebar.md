@@ -31,7 +31,7 @@ A complete frame: a selected agent in a worktree, with the per-provider dashboar
 ▌    ⠁ Explore — audit the trust hash                     ← active child: thinking head
 ▌      ◇ 3k · Opus 4.8                           ◔  3m    ← running child: tokens · model · elapsed
 ▌    ◷ timer 30m · in 12m                        ◔ 18m    ← timer: armed delay · time until wake · elapsed since armed
-▌    ⢿ shell cargo                              ◔  4m    ← shell: program · elapsed since armed
+▌    ⢿ shell cargo                               ◔  4m    ← shell: program · elapsed since armed
 ▌      cargo test                                         ← shell command, muted
 ▌    ⌁ signal pr.merged                          ◔  5m    ← signal: selector · elapsed since armed
 
@@ -262,8 +262,8 @@ The expanded card lists the current **subagents**, including still-running RimZ-
 The **waits** follow the subagent entries: timers by due time, then PID/shell waits, then signals. Timer entries lead with `◷`, PID and shell waits with a dim working spinner using the running head's animation, and signals with `⌁`; timer and signal leads stay static and violet. The PID and shell spinners keep moving while the agent sleeps. The section title keeps `⧖` (a sleeping bell in Nerd Font), distinct from the agent's sleeping status. Every entry names its kind first. A timer takes one line, reading `timer 30m · in 12m` or `timer 30m · due`; without a stored delay (such as a loop `--at` delivery), it reads `timer · in 12m`. A PID wait is one line, `pid 16776`. A signal is one line, `signal pr.merged · 2h left`, or `signal pr.merged` without a deadline. A shell wait takes two lines: `shell cargo` on line 1, then the shell command with the program's path trimmed on a deeper-indented, muted line 2. The elapsed-since-armed clock pins right on line 1 in the same glyph and duration vocabulary as subagents, but stays muted rather than heating with age: a wake is pending by design. It is absent when the arm time is unknown.
 
 ```
-▌  ⧉ subagents (7) · ⧖ waits (4)            $0.42
-▌    ◷ timer 30m · in 12m                    ◔ 18m
+▌  ⧉ subagents (7) · ⧖ waits (4)              $0.42
+▌    ◷ timer 30m · in 12m                     ◔ 18m
 ▌    ⢿ pid 16776                              ◔  3m
 ▌    ⢿ shell cargo                            ◔  4m
 ▌      cargo xtask gate --name foo_test

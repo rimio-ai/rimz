@@ -113,10 +113,18 @@ fn row(ctx: &Ctx, name: &str, task: &LoadedTask, arm_state: ArmState) -> Result<
         name: name.to_owned(),
         trigger: match &parsed.trigger {
             Trigger::Watch { command } => {
-                let preview = rimz::theme::fmt::command_preview(command);
+                let trigger = task
+                    .entry()
+                    .wake_meta
+                    .as_ref()
+                    .and_then(|meta| meta.pid)
+                    .map_or_else(
+                        || format!("watch: {}", rimz::theme::fmt::command_preview(command)),
+                        |pid| format!("pid {pid}"),
+                    );
                 match dir.as_deref() {
-                    Some(dir) => format!("watch: {preview} · in {dir}"),
-                    None => format!("watch: {preview}"),
+                    Some(dir) => format!("{trigger} · in {dir}"),
+                    None => trigger,
                 }
             }
             _ => parsed.describe(),
