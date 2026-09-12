@@ -8,6 +8,7 @@
 
 mod common;
 
+mod accounts;
 mod agent_launch;
 mod agent_plugin;
 mod asks;

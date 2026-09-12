@@ -118,6 +118,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::List(args)) => list::run(args, &globals),
         Some(Subcmd::Stats(args)) => stats::run(args, &globals),
         Some(Subcmd::Providers(args)) => providers::run(args, &globals),
+        Some(Subcmd::Accounts(args)) => accounts::run(args, &globals),
         Some(Subcmd::Budget(args)) => budget::run(args, &globals),
         Some(Subcmd::ListPets(args)) => list_pets::run(args, &globals),
         Some(Subcmd::ListThemes(args)) => list_themes::run(args, &globals),
@@ -525,6 +526,10 @@ enum Subcmd {
     Stats(stats::StatsArgs),
     /// Query provider account plans, auth, limits, credits, and spend.
     Providers(providers::ProvidersArgs),
+    /// Declare, list, and remove named provider accounts.
+    ///
+    /// A named account is a separate provider home a room launches into.
+    Accounts(accounts::AccountsArgs),
     /// Inspect or change room and provider-account daily dollar caps.
     Budget(budget::BudgetArgs),
     /// Preview the bundled provider-dashboard pets.
