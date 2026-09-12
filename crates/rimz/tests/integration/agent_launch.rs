@@ -384,6 +384,7 @@ fn explain_prints_the_plan_without_side_effects() {
              system-prompt-file = {base:?}\nappend-system-prompt-files = [{more:?}]\n\
              [agents.profiles.worker]\nagent = \"writer\"\nskills = []\n\
              [agents.profiles.fast]\nagent = \"codex\"\n\
+             [agents.profiles.codex]\nagent = \"codex\"\n\
              [agents.profiles.\"duo.lead\"]\nagent = \"claude\"\n\
              [agents.teams.duo]\nlayout = \"lead\"\n\
              [[agents.teams.duo.roles]]\nrole = \"lead\"\nprofile = \"duo.lead\"\n\
@@ -402,6 +403,7 @@ fn explain_prints_the_plan_without_side_effects() {
         .get_output()
         .clone();
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("explain JSON");
+    assert!(report.get("reentry").is_none());
     let artifact = std::path::Path::new(report["prompt"]["artifact"].as_str().unwrap());
     assert_eq!(artifact.parent(), Some(runtime.prompt_dir().as_path()));
     let filename = artifact.file_name().unwrap().to_str().unwrap();
@@ -558,11 +560,30 @@ fn explain_prints_the_plan_without_side_effects() {
     let team = String::from_utf8(team).unwrap();
     assert!(team.contains("duo.lead ← claude"), "{team}");
     assert!(!team.contains("duo.lead ← duo.lead"), "{team}");
-    for (agent_override, chain) in [
-        (" codex ", serde_json::json!(["worker", "writer", "codex"])),
+    for (target, agent_override, kind, chain) in [
         (
+            "worker",
+            " codex ",
+            "codex",
+            serde_json::json!(["worker", "writer", "codex"]),
+        ),
+        (
+            "worker",
             "fast",
+            "codex",
             serde_json::json!(["worker", "writer", "fast", "codex"]),
+        ),
+        (
+            "codex",
+            "claude",
+            "claude",
+            serde_json::json!(["codex", "claude"]),
+        ),
+        (
+            "writer",
+            "writer",
+            "claude",
+            serde_json::json!(["writer", "claude"]),
         ),
     ] {
         let output = env
@@ -570,7 +591,7 @@ fn explain_prints_the_plan_without_side_effects() {
             .args([
                 "agents",
                 "explain",
-                "worker",
+                target,
                 "--agent",
                 agent_override,
                 "--json",
@@ -581,7 +602,7 @@ fn explain_prints_the_plan_without_side_effects() {
             .stdout
             .clone();
         let report: serde_json::Value = serde_json::from_slice(&output).unwrap();
-        assert_eq!(report["kind"], "codex");
+        assert_eq!(report["kind"], kind);
         assert_eq!(report["profile"]["chain"], chain);
     }
     assert!(

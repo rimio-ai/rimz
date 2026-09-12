@@ -11,7 +11,7 @@ use serde::Serialize;
 use rimz::agents::{PermissionMode, PresetArgMatcher, PresetField};
 use rimz::config::{SkillName, effective::LaunchAgents};
 use rimz::harness::budget::BudgetSpec;
-use rimz::harness::launch::{self, AgentProcessStage, ExecAction, ExecIdentity, ExecRequest};
+use rimz::harness::launch::{self, ExecAction, ExecIdentity, ExecRequest};
 use rimz::harness::launch_plan::{self, LaunchPlan, LaunchPlanInputs};
 use rimz::sandbox::{EnvPin, Mount, SkippedSkill};
 
@@ -257,7 +257,6 @@ struct ExplainReport<'a> {
     program: &'a str,
     provider_argv: Vec<String>,
     argv: Vec<String>,
-    reentry: Option<Vec<String>>,
     env: BTreeMap<String, String>,
     unset: &'a BTreeSet<String>,
     redacted_keys: &'a BTreeSet<String>,
@@ -329,7 +328,7 @@ impl<'a> ExplainReport<'a> {
                     .as_deref(),
                 &effective.profiles,
             )
-            .map(|profile| profile.chain)
+            .map(rimz::harness::spec::ResolvedProfile::into_chain)
             .unwrap_or_default(),
             role: params.role.as_deref(),
             team: params.team.as_deref(),
@@ -410,14 +409,6 @@ impl<'a> ExplainReport<'a> {
                 process.secret_keys.contains(key)
             }),
             argv: launch::redact_env_tokens(&process.argv, |key| process.secret_keys.contains(key)),
-            reentry: match &plan.stage {
-                AgentProcessStage::LoginShellReentry { argv, .. } => {
-                    Some(launch::redact_env_tokens(argv, |key| {
-                        process.secret_keys.contains(key)
-                    }))
-                }
-                _ => None,
-            },
             env,
             unset: &process.unset,
             redacted_keys: &process.secret_keys,
@@ -567,9 +558,6 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
         "via login shell",
         report.argv.iter().map(|arg| vec![render::cell(arg)]),
     );
-    if let Some(reentry) = &report.reentry {
-        command.push_lines("reentry", reentry.iter().map(|arg| vec![render::cell(arg)]));
-    }
     command.render(&mut output)?;
     writeln!(output, "\nEnvironment")?;
     for (key, value) in &report.env {
