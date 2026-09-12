@@ -35,7 +35,10 @@ pub(super) fn run_uninstall(agent: Option<String>) -> Result<()> {
     let login_env = rimz::agents::ambient_env();
     let reports = match agent {
         Some(agent) => vec![definition_by_kind(&agent)?.uninstall_hooks(&login_env)?],
-        None => uninstall_managed_hooks()?,
+        None => uninstall_managed_hooks()?
+            .into_iter()
+            .map(|(_, report)| report)
+            .collect(),
     };
     let mut out = crate::cli::render::out();
     if reports.is_empty() {
@@ -67,14 +70,33 @@ fn install_definitions(
     Ok(adapters)
 }
 
-pub(crate) fn uninstall_managed_hooks() -> Result<Vec<HookUninstallReport>> {
-    let login_env = rimz::agents::ambient_env();
-    let adapters = rimz::agents::all_definitions()
-        .filter(|adapter| adapter.managed_hook_artifacts_present(&login_env))
-        .collect::<Vec<_>>();
+/// Every provider home that carries RimZ-managed hooks: each kind's own home
+/// and every declared account's, labelled by account.
+pub(crate) fn managed_hook_logins() -> Result<
+    Vec<(
+        rimz::ids::LoginKey,
+        &'static rimz::agents::AgentDefinition,
+        std::collections::BTreeMap<String, String>,
+    )>,
+> {
+    let ambient = rimz::agents::ambient_env();
+    let catalog = rimz::agents::LoginCatalog::from_config(&crate::cli::machine_config().accounts)?;
+    Ok(catalog
+        .all()
+        .filter_map(|login| {
+            let adapter = rimz::agents::find_definition(login.kind().as_str())?;
+            let login_env = login.env(&ambient);
+            adapter
+                .managed_hook_artifacts_present(&login_env)
+                .then(|| (login.key(), adapter, login_env))
+        })
+        .collect())
+}
+
+pub(crate) fn uninstall_managed_hooks() -> Result<Vec<(rimz::ids::LoginKey, HookUninstallReport)>> {
     let mut reports = Vec::new();
-    for integration in adapters {
-        reports.push(integration.uninstall_hooks(&login_env)?);
+    for (key, integration, login_env) in managed_hook_logins()? {
+        reports.push((key, integration.uninstall_hooks(&login_env)?));
     }
     Ok(reports)
 }

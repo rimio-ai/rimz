@@ -50,7 +50,7 @@ struct Preview<'a> {
     remove_state: bool,
     remove_config: bool,
     live_rooms: &'a [LiveRoom],
-    hook_agents: &'a [&'static str],
+    hook_agents: &'a [String],
     loop_timer: &'a TimerStatus,
     keep_binary: bool,
     binaries: &'a [PathBuf],
@@ -75,7 +75,13 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
     let disk_usage = rimz::disk::usage::measure();
     let (live_rooms, session_failures) = live_rooms(&workspaces);
     failures.extend(session_failures);
-    let hook_agents = managed_hook_agents();
+    let hook_agents = match managed_hook_agents() {
+        Ok(agents) => agents,
+        Err(err) => {
+            failures.push(format!("read managed hooks: {err}"));
+            Vec::new()
+        }
+    };
     let timer_status = loop_timer::status().unwrap_or(TimerStatus::NotInstalled);
     let binaries = if args.keep_binary {
         Vec::new()
@@ -113,7 +119,7 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
         Ok(reports) => {
             let agents = reports
                 .iter()
-                .map(|report| report.agent)
+                .map(|(key, _)| hook_label(key))
                 .collect::<Vec<_>>()
                 .join(", ");
             writeln!(stderr, "Hooks: removed {agents}")?;
@@ -180,7 +186,11 @@ fn render_preview(preview: Preview<'_>) -> Result<()> {
     writeln!(stderr, "RimZ uninstall preview")?;
     writeln!(stderr, "Storage:")?;
     for root in &preview.disk_usage.roots {
-        let action = if root_removed(root.kind, preview.remove_state, preview.remove_config) {
+        let action = if root.kind == StorageKind::Data
+            && root.path.join(rimz::agents::ACCOUNTS_DIR).exists()
+        {
+            format!("remove, keeping {}/", rimz::agents::ACCOUNTS_DIR)
+        } else if root_removed(root.kind, preview.remove_state, preview.remove_config) {
             "remove".to_owned()
         } else if root.kind == StorageKind::State {
             "kept (pass --state)".to_owned()
@@ -420,6 +430,21 @@ fn remove_roots(
             failures.push(format!("missing {} disk_usage root", kind.label()));
             continue;
         };
+        if kind == StorageKind::Data {
+            let outcomes =
+                rimz::uninstall::remove_root_keeping(&root.path, rimz::agents::ACCOUNTS_DIR);
+            render_removal_outcomes(kind.label(), &outcomes, stderr, failures, None)?;
+            let accounts = root.path.join(rimz::agents::ACCOUNTS_DIR);
+            if accounts.exists() {
+                writeln!(
+                    stderr,
+                    "{}: kept provider account homes {}",
+                    kind.label(),
+                    accounts.display()
+                )?;
+            }
+            continue;
+        }
         let outcomes = [rimz::uninstall::remove_root(&root.path)];
         render_removal_outcomes(kind.label(), &outcomes, stderr, failures, None)?;
     }
@@ -471,12 +496,20 @@ fn storage_root(disk_usage: &RuntimeStorage, kind: StorageKind) -> Option<&Stora
     disk_usage.roots.iter().find(|root| root.kind == kind)
 }
 
-fn managed_hook_agents() -> Vec<&'static str> {
-    let login_env = rimz::agents::ambient_env();
-    rimz::agents::all_definitions()
-        .filter(|adapter| adapter.managed_hook_artifacts_present(&login_env))
-        .map(|adapter| adapter.spec().kind)
-        .collect()
+fn managed_hook_agents() -> Result<Vec<String>> {
+    Ok(super::hooks::managed_hook_logins()?
+        .iter()
+        .map(|(key, _, _)| hook_label(key))
+        .collect())
+}
+
+/// A provider's own home reads as its kind; a named account as `kind@name`.
+fn hook_label(key: &rimz::ids::LoginKey) -> String {
+    if key.name.is_default() {
+        key.kind.to_string()
+    } else {
+        key.to_string()
+    }
 }
 
 fn cargo_bin_dir() -> Option<PathBuf> {
