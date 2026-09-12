@@ -154,9 +154,15 @@ fn failed_commands_retry_recovery_first_and_settle_only_for_start() {
 fn commands_anchor_descendants_to_codex_home() {
     let bin = Path::new("/home/u/.codex/packages/standalone/current/codex");
     let home = Path::new("/home/u/.codex");
+    let login_env =
+        BTreeMap::from([("CODEX_HOME".to_owned(), home.to_string_lossy().into_owned())]);
     for argv in [command(bin, true), command(bin, false)] {
-        let command = control_command(&argv, home).expect("non-empty Codex command");
+        let command = control_command(&argv, home, &login_env).expect("non-empty Codex command");
         assert_eq!(command.get_current_dir(), Some(home));
+        assert_eq!(
+            command.get_envs().collect::<Vec<_>>(),
+            vec![(OsStr::new("CODEX_HOME"), Some(home.as_os_str()))]
+        );
         assert_eq!(command.get_program(), argv[0].as_str());
         assert_eq!(
             command.get_args().collect::<Vec<_>>(),
@@ -179,7 +185,7 @@ fn run_command_reports_exit_status_and_stderr() {
         status,
         stderr,
         ..
-    }) = run_command(&argv, true, home.path())
+    }) = run_command(&argv, true, home.path(), &BTreeMap::new())
     else {
         panic!("nonzero command should report its exit");
     };
@@ -187,7 +193,7 @@ fn run_command_reports_exit_status_and_stderr() {
     assert_eq!(status.code(), Some(3));
     assert_eq!(stderr, "boom");
 
-    assert!(run_command(&["true".to_owned()], false, home.path()).is_ok());
+    assert!(run_command(&["true".to_owned()], false, home.path(), &BTreeMap::new()).is_ok());
 }
 
 #[cfg(unix)]

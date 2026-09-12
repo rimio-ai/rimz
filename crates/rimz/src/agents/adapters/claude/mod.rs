@@ -35,6 +35,7 @@ mod subagent_statusline;
 mod subagents;
 
 pub(crate) use crate::agents::capabilities::*;
+use std::collections::BTreeMap;
 
 use std::path::{Path, PathBuf};
 
@@ -628,7 +629,7 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
             let mut observation =
                 build_claude_observation(payload, &parts, signal, agent_id, parent_agent_id);
             enrich_root_registration(&mut observation, &parts, || {
-                oauth_usage::load_account_key().ok()
+                oauth_usage::load_account_key(&crate::agents::ambient_env()).ok()
             });
             decoded.attach_lifecycle(observation);
         }
@@ -762,19 +763,26 @@ impl crate::agents::capabilities::ContextCapability for ClaudeAdapter {
 }
 
 impl crate::agents::capabilities::AccountCapability for ClaudeAdapter {
-    fn probe_account(&self) -> crate::agents::account::AccountProbe {
-        account::probe()
+    fn probe_account(
+        &self,
+        login_env: &BTreeMap<String, String>,
+    ) -> crate::agents::account::AccountProbe {
+        account::probe(login_env)
     }
 
-    fn probe_account_usage(&self) -> crate::agents::AccountUsageProbe {
-        oauth_usage::probe_usage(None)
+    fn probe_account_usage(
+        &self,
+        login_env: &BTreeMap<String, String>,
+    ) -> crate::agents::AccountUsageProbe {
+        oauth_usage::probe_usage(None, login_env)
     }
 
     fn remote_control_status(
         &self,
         account: Option<&crate::agents::AgentAccount>,
+        login_env: &BTreeMap<String, String>,
     ) -> RemoteControlStatus {
-        let (_, settings) = remote_control::read_rc_settings();
+        let (_, settings) = remote_control::read_rc_settings(login_env);
         let version = account
             .and_then(|account| account.version.as_deref())
             .and_then(|version| version.parse().ok());
@@ -858,23 +866,28 @@ impl crate::agents::capabilities::RuntimeControlCapability for ClaudeAdapter {
     fn runtime_control_readiness(
         &self,
         enabled: bool,
+        login_env: &BTreeMap<String, String>,
     ) -> super::runtime_control::RuntimeControlReadiness {
-        remote_control::readiness(enabled)
+        remote_control::readiness(enabled, login_env)
     }
 
-    fn prepare_runtime_control(&self, enabled: bool) {
-        remote_control::ensure_consent(enabled);
+    fn prepare_runtime_control(&self, enabled: bool, login_env: &BTreeMap<String, String>) {
+        remote_control::ensure_consent(enabled, login_env);
     }
 
     fn runtime_control_liveness(
         &self,
         project_root: &Path,
+        _login_env: &BTreeMap<String, String>,
     ) -> super::runtime_control::RuntimeControlLiveness {
         remote_liveness::probe(project_root)
     }
 
-    fn runtime_control_wiring_input_path(&self) -> Option<PathBuf> {
-        Some(remote_control::settings_path())
+    fn runtime_control_wiring_input_path(
+        &self,
+        login_env: &BTreeMap<String, String>,
+    ) -> Option<PathBuf> {
+        Some(remote_control::settings_path(login_env))
     }
 }
 

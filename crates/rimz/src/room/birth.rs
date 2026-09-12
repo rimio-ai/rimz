@@ -194,9 +194,11 @@ impl RoomContext {
     }
 
     fn launch_background_view(&self, options: &BackgroundViewOptions) {
+        let login_env = crate::agents::ambient_env();
         crate::agents::runtime_control::ensure(
             "codex",
             self.machine_config.remote_control.enabled_for("codex"),
+            &login_env,
         );
         match self.backend.open_background_view(options) {
             Ok(BackgroundViewLaunch::Launched) => tracing::info!(

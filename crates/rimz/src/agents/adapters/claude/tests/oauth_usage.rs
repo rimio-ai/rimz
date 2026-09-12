@@ -2,6 +2,28 @@ use super::*;
 use crate::agents::credits::AccountUsageReportable;
 
 #[test]
+fn named_login_env_reads_account_credentials_under_the_named_home() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let named = temp.path().join("named");
+    std::fs::create_dir_all(&named).unwrap();
+    let home_env = BTreeMap::from([("HOME".to_owned(), home.to_string_lossy().into_owned())]);
+    let login_env = crate::agents::ProviderLogin::named(
+        crate::ids::AgentKind::new_unchecked("claude"),
+        "work".parse().unwrap(),
+        named.clone(),
+    )
+    .unwrap()
+    .env(&home_env);
+    let path = named.join(".credentials.json");
+    std::fs::write(&path, "{}").unwrap();
+    let stamp = file_mtime_ms(&path).unwrap();
+    assert_eq!(credentials_stamp(&login_env), Some(stamp));
+    assert_eq!(credentials_stamp(&home_env), None);
+    assert_eq!(credentials_path(&login_env), Some(path));
+}
+
+#[test]
 fn reportable_classifier_treats_unauthorized_as_settled_auth() {
     assert!(
         !ClaudeOauthUsageErr::Http {

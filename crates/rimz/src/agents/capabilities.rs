@@ -615,7 +615,7 @@ pub trait AccountCapability: CoreCapability {
     /// never runs on the per-tick hot path (see [`account`]). Defaults to
     /// [`account::AccountProbe::LoggedOut`] for an agent with no out-of-band
     /// login surface.
-    fn probe_account(&self) -> account::AccountProbe {
+    fn probe_account(&self, _login_env: &BTreeMap<String, String>) -> account::AccountProbe {
         account::AccountProbe::LoggedOut
     }
 
@@ -626,7 +626,7 @@ pub trait AccountCapability: CoreCapability {
     /// refresh driver single-flights it behind the credits cache and keys the
     /// cache TTL on the returned arm. Defaults to
     /// [`AccountUsageProbe::Unsupported`] for an agent with no account-usage surface.
-    fn probe_account_usage(&self) -> AccountUsageProbe {
+    fn probe_account_usage(&self, _login_env: &BTreeMap<String, String>) -> AccountUsageProbe {
         AccountUsageProbe::Unsupported
     }
 
@@ -648,6 +648,7 @@ pub trait AccountCapability: CoreCapability {
     fn probe_realtime_account_usage(
         &self,
         _runtime: &crate::RuntimePaths,
+        _login_env: &BTreeMap<String, String>,
     ) -> Option<AccountUsageSnapshot> {
         None
     }
@@ -656,7 +657,11 @@ pub trait AccountCapability: CoreCapability {
     /// account facts.
     /// Best-effort and read-only: failures return the default "off/unknown"
     /// state. The sidebar uses this only to light a capability-gated flag.
-    fn remote_control_status(&self, _account: Option<&AgentAccount>) -> RemoteControlStatus {
+    fn remote_control_status(
+        &self,
+        _account: Option<&AgentAccount>,
+        _login_env: &BTreeMap<String, String>,
+    ) -> RemoteControlStatus {
         RemoteControlStatus::default()
     }
 }
@@ -754,17 +759,18 @@ pub trait RuntimeControlCapability: CoreCapability {
     fn runtime_control_readiness(
         &self,
         _enabled: bool,
+        _login_env: &BTreeMap<String, String>,
     ) -> runtime_control::RuntimeControlReadiness {
         runtime_control::RuntimeControlReadiness::Disabled
     }
 
-    fn ensure_runtime_control(&self, _enabled: bool) {}
+    fn ensure_runtime_control(&self, _enabled: bool, _login_env: &BTreeMap<String, String>) {}
 
     /// Fill the preconditions this host needs before it can be launched at all —
     /// a recorded first-run answer, a required file — without starting anything.
     /// Readiness gates read the result, so this runs before they judge the host.
     /// Starting a daemon belongs to [`Self::ensure_runtime_control`].
-    fn prepare_runtime_control(&self, _enabled: bool) {}
+    fn prepare_runtime_control(&self, _enabled: bool, _login_env: &BTreeMap<String, String>) {}
 
     /// Report whether this host still serves `project_root` from the host's own
     /// durable record. A provider that keeps no such record leaves the default,
@@ -772,6 +778,7 @@ pub trait RuntimeControlCapability: CoreCapability {
     fn runtime_control_liveness(
         &self,
         _project_root: &std::path::Path,
+        _login_env: &BTreeMap<String, String>,
     ) -> runtime_control::RuntimeControlLiveness {
         runtime_control::RuntimeControlLiveness::Unknown
     }
@@ -779,15 +786,19 @@ pub trait RuntimeControlCapability: CoreCapability {
     fn reconcile_runtime_control(
         &self,
         _enabled: bool,
+        _login_env: &BTreeMap<String, String>,
     ) -> std::result::Result<(), runtime_control::RuntimeControlError> {
         Ok(())
     }
 
-    fn runtime_control_advisory(&self) -> Option<String> {
+    fn runtime_control_advisory(&self, _login_env: &BTreeMap<String, String>) -> Option<String> {
         None
     }
 
-    fn runtime_control_wiring_input_path(&self) -> Option<PathBuf> {
+    fn runtime_control_wiring_input_path(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Option<PathBuf> {
         None
     }
 }

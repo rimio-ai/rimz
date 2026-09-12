@@ -102,8 +102,9 @@ impl ChildIo {
 /// stderr is nulled (the fresh-stdio invariant — the pane shows this broker's own
 /// `tracing`, not the child's diagnostics).
 fn spawn_and_handshake() -> Result<ChildIo, AppServerErr> {
-    let mut transport = FramedTransport::spawn(&codex_bin(), HANDSHAKE_DEADLINE)?;
-    let auth_stamp = oauth_usage::credentials_stamp();
+    let login_env = crate::agents::ambient_env();
+    let mut transport = FramedTransport::spawn(&codex_bin(), HANDSHAKE_DEADLINE, &login_env)?;
+    let auth_stamp = oauth_usage::credentials_stamp(&login_env);
     transport.set_deadline(HANDSHAKE_DEADLINE);
     let init_result = initialize(&mut transport, None)?;
     Ok(ChildIo {
@@ -131,7 +132,7 @@ fn serve_request(
         return Ok(lock(shared).init_result.clone());
     }
     let mut io = lock(shared);
-    let auth_stamp = oauth_usage::credentials_stamp();
+    let auth_stamp = oauth_usage::credentials_stamp(&crate::agents::ambient_env());
     if io.auth_stamp != auth_stamp {
         tracing::info!("codex auth changed; respawning app-server child");
         io.respawn()?;

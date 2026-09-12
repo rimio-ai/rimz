@@ -443,7 +443,10 @@ impl crate::agents::capabilities::ContextCapability for AmpAdapter {
 }
 
 impl crate::agents::capabilities::AccountCapability for AmpAdapter {
-    fn probe_account(&self) -> crate::agents::account::AccountProbe {
+    fn probe_account(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+    ) -> crate::agents::account::AccountProbe {
         account::probe()
     }
 }

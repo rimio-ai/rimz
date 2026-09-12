@@ -34,6 +34,7 @@
 //! Best-effort, never correctness: every failure maps to an omitted field or a
 //! `None` record — it never fails a hook or a turn.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -49,7 +50,8 @@ mod tests;
 mod transport;
 mod wire;
 
-use super::codex_home;
+use super::CodexAdapter;
+use crate::agents::capabilities::LaunchCapability;
 use transport::WsTransport;
 pub(super) use transport::{
     AppServerErr, FramedTransport, JsonRpcTransport, codex_bin, initialize, write_frame,
@@ -207,9 +209,12 @@ impl CodexAppServer<Transport> {
     /// (warm) first, then the per-user daemon control socket, then a fresh
     /// cold-spawned `app-server`. The first that handshakes wins. `None` when none
     /// do (codex missing, not runnable, protocol mismatch) — best-effort.
-    pub(crate) fn connect(broker_socket: Option<&Path>) -> Option<Self> {
+    pub(crate) fn connect(
+        broker_socket: Option<&Path>,
+        login_env: &BTreeMap<String, String>,
+    ) -> Option<Self> {
         let bin = codex_bin();
-        for attempt in connect_attempts(broker_socket) {
+        for attempt in connect_attempts(broker_socket, login_env) {
             let transport = match &attempt {
                 ConnectAttempt::Broker(path) => {
                     FramedTransport::connect(path, DAEMON_PROBE_DEADLINE).map(Transport::Framed)
@@ -218,7 +223,7 @@ impl CodexAppServer<Transport> {
                     .map(Box::new)
                     .map(Transport::Ws),
                 ConnectAttempt::Spawn(deadline) => {
-                    FramedTransport::spawn(&bin, *deadline).map(Transport::Framed)
+                    FramedTransport::spawn(&bin, *deadline, login_env).map(Transport::Framed)
                 }
             };
             let Ok(transport) = transport else {
@@ -243,7 +248,8 @@ impl CodexAppServer<WsTransport> {
     /// caller reads that as "unknown, keep all", never as "zero loaded". Used
     /// only by the sidebar cache refresher's TTL-gated ghost reap.
     pub(crate) fn connect_daemon() -> Option<Self> {
-        let socket = daemon_socket().filter(|path| path.exists())?;
+        let login_env = &crate::agents::ambient_env();
+        let socket = daemon_socket(login_env).filter(|path| path.exists())?;
         let transport = WsTransport::connect(&socket, DAEMON_PROBE_DEADLINE).ok()?;
         let mut client = Self::new(transport);
         client.handshake().ok()?;
@@ -253,10 +259,15 @@ impl CodexAppServer<WsTransport> {
 
 /// The attempts [`CodexAppServer::connect`] tries, in preference order, after
 /// resolving which sockets actually exist on disk.
-fn connect_attempts(broker_socket: Option<&Path>) -> Vec<ConnectAttempt> {
+fn connect_attempts(
+    broker_socket: Option<&Path>,
+    login_env: &BTreeMap<String, String>,
+) -> Vec<ConnectAttempt> {
     attempts_for(
         broker_socket.filter(|path| path.exists()),
-        daemon_socket().filter(|path| path.exists()).as_deref(),
+        daemon_socket(login_env)
+            .filter(|path| path.exists())
+            .as_deref(),
     )
 }
 
@@ -280,12 +291,13 @@ fn attempts_for(broker: Option<&Path>, daemon: Option<&Path>) -> Vec<ConnectAtte
 /// The daemon control socket to prefer: an explicit `RIMZ_CODEX_APP_SERVER_SOCK`
 /// path, or the default `$CODEX_HOME/app-server-control/app-server-control.sock`
 /// (`~/.codex/...`). An empty override means "no daemon" — cold-spawn only.
-fn daemon_socket() -> Option<PathBuf> {
-    match std::env::var_os(CODEX_APP_SERVER_SOCK_ENV) {
+fn daemon_socket(login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    match login_env.get(CODEX_APP_SERVER_SOCK_ENV) {
         Some(value) if value.is_empty() => None,
         Some(value) => Some(PathBuf::from(value)),
         None => Some(
-            codex_home()?
+            CodexAdapter
+                .config_home(login_env)?
                 .join("app-server-control")
                 .join("app-server-control.sock"),
         ),

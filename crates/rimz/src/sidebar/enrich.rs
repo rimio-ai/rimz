@@ -490,6 +490,7 @@ fn enrich_core(
     mut opts: FoldOpts<'_>,
     diag: &crate::diag::DiagSink,
 ) -> SidebarSnapshot {
+    let login_env = crate::agents::ambient_env();
     let producing = opts.producing;
     let machine_config = opts
         .config
@@ -613,7 +614,7 @@ fn enrich_core(
             // paneless host has nothing the record could contradict.
             let liveness = match snapshot.project_root.as_deref() {
                 Some(root) if claude_rc_enabled && pane_present => {
-                    crate::agents::runtime_control::host_liveness("claude", root)
+                    crate::agents::runtime_control::host_liveness("claude", root, &login_env)
                 }
                 _ => crate::agents::runtime_control::RuntimeControlLiveness::Unknown,
             };
@@ -920,6 +921,7 @@ pub(super) fn fold_machine_config_with(
     provider_spending: &BTreeMap<String, crate::agents::SpendTally>,
     remote_control_health: RemoteControlServerHealth,
 ) -> SidebarSnapshot {
+    let login_env = crate::agents::ambient_env();
     snapshot.sidebar = config.sidebar.clone();
     snapshot.theme = config.theme.clone();
 
@@ -938,7 +940,7 @@ pub(super) fn fold_machine_config_with(
         let config_toggle = config.remote_control.enabled_for(definition.kind);
         let pane_auto = definition.capabilities.remote_control.pane_sessions
             && adapter
-                .remote_control_status(accounts.get(definition.kind))
+                .remote_control_status(accounts.get(definition.kind), &login_env)
                 .pane_auto;
         remote_control_flags.insert(
             definition.kind.to_owned(),

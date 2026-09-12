@@ -841,6 +841,7 @@ fn topology_writer_id(writer: pane_topology::TopologyWriter) -> model::TopologyW
 pub(super) fn collect_remote_control(
     project_root: Option<&std::path::Path>,
 ) -> model::RemoteControl {
+    let login_env = rimz::agents::ambient_env();
     let config = match MachineConfig::load() {
         Ok(config) => config.remote_control,
         Err(err) => {
@@ -864,7 +865,9 @@ pub(super) fn collect_remote_control(
             // now is a separate question the provider's own record answers, and
             // doctor is the place a stalled host should become visible.
             RuntimeControlReadiness::Ready { .. } => {
-                match project_root.map(|root| runtime_control::host_liveness("claude", root)) {
+                match project_root
+                    .map(|root| runtime_control::host_liveness("claude", root, &login_env))
+                {
                     Some(RuntimeControlLiveness::Up) => ("ready, host serving".to_owned(), true),
                     Some(RuntimeControlLiveness::Down) => (
                         "ready, but the host stopped serving this project".to_owned(),

@@ -4,6 +4,7 @@
 //! daemon views, and runtime toggles consume one neutral readiness result.
 
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::PathBuf;
 
@@ -93,8 +94,10 @@ pub(crate) struct ClaudeRcSettings {
     pub env_endpoint_conflict: bool,
 }
 
-pub(crate) fn read_rc_settings() -> (PathBuf, ClaudeRcSettings) {
-    let path = settings_path();
+pub(crate) fn read_rc_settings(
+    login_env: &BTreeMap<String, String>,
+) -> (PathBuf, ClaudeRcSettings) {
+    let path = settings_path(login_env);
     let settings = match read_existing_json(&path) {
         Ok(root) => rc_settings_from(&root),
         Err(err) => {
@@ -109,8 +112,8 @@ pub(crate) fn read_rc_settings() -> (PathBuf, ClaudeRcSettings) {
     (path, settings)
 }
 
-pub(crate) fn settings_path() -> PathBuf {
-    match claude_settings_path(&crate::agents::ambient_env()) {
+pub(crate) fn settings_path(login_env: &BTreeMap<String, String>) -> PathBuf {
+    match claude_settings_path(login_env) {
         Ok(path) => path,
         Err(err) => {
             tracing::warn!(error = %err, "Claude settings path unavailable for remote-control read");
@@ -332,7 +335,7 @@ impl std::fmt::Display for Issue {
 impl std::error::Error for Issue {}
 
 /// Probe configured Claude readiness once and return launch argv with success.
-pub fn readiness(enabled: bool) -> RuntimeControlReadiness {
+pub fn readiness(enabled: bool, login_env: &BTreeMap<String, String>) -> RuntimeControlReadiness {
     if !enabled {
         return RuntimeControlReadiness::Disabled;
     }
@@ -343,7 +346,7 @@ pub fn readiness(enabled: bool) -> RuntimeControlReadiness {
             &Issue::Uninstalled,
         ));
     }
-    let (settings_path, settings) = read_rc_settings();
+    let (settings_path, settings) = read_rc_settings(login_env);
     let version = (!settings.disable_remote_control)
         .then(probed_version)
         .flatten();
@@ -355,7 +358,7 @@ pub fn readiness(enabled: bool) -> RuntimeControlReadiness {
         env_value_present(ANTHROPIC_AUTH_TOKEN),
         env_value_present(CLAUDE_CODE_OAUTH_TOKEN),
         launch_endpoint_conflict(),
-        remote_consent::read_consent(),
+        remote_consent::read_consent(login_env),
     ) {
         Ok(host_argv) => RuntimeControlReadiness::Ready {
             host_argv: Some(host_argv),
@@ -371,11 +374,11 @@ pub fn readiness(enabled: bool) -> RuntimeControlReadiness {
 /// config toggle is the operator's intent; this carries it to Claude. Failures
 /// stay quiet here and surface as a refusal from [`readiness`], so a room never
 /// launches a host that will hang.
-pub fn ensure_consent(enabled: bool) {
+pub fn ensure_consent(enabled: bool, login_env: &BTreeMap<String, String>) {
     if !enabled {
         return;
     }
-    let Some(path) = remote_consent::global_config_path() else {
+    let Some(path) = remote_consent::global_config_path(login_env) else {
         tracing::warn!(
             "Claude global config path unavailable; remote-control consent was not recorded",
         );

@@ -4,6 +4,7 @@
 //! daemon protocol. This module probes each provider once per operation and
 //! coordinates effects.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::agents::runtime_control::{
@@ -38,21 +39,23 @@ pub struct ReadinessSnapshot {
 
 impl ReadinessSnapshot {
     pub fn probe(config: &RemoteControlConfig) -> Self {
+        let login_env = crate::agents::ambient_env();
         Self::from_readiness(
-            runtime_control::readiness("claude", config.enabled_for("claude")),
-            runtime_control::readiness("codex", config.enabled_for("codex")),
+            runtime_control::readiness("claude", config.enabled_for("claude"), &login_env),
+            runtime_control::readiness("codex", config.enabled_for("codex"), &login_env),
         )
     }
 
     fn probe_transition(host: RemoteControlHost) -> Self {
+        let login_env = crate::agents::ambient_env();
         match host {
             RemoteControlHost::Claude => Self::from_readiness(
-                runtime_control::readiness("claude", true),
+                runtime_control::readiness("claude", true, &login_env),
                 RuntimeControlReadiness::Disabled,
             ),
             RemoteControlHost::Codex => Self::from_readiness(
                 RuntimeControlReadiness::Disabled,
-                runtime_control::readiness("codex", true),
+                runtime_control::readiness("codex", true, &login_env),
             ),
         }
     }
@@ -101,22 +104,25 @@ impl ReadinessSnapshot {
 /// will actually start with. Best-effort and idempotent: a provider that cannot
 /// fill its precondition reports it through readiness instead of failing here.
 pub fn prepare_hosts(config: &RemoteControlConfig) {
+    let login_env = crate::agents::ambient_env();
     for host in [RemoteControlHost::Claude, RemoteControlHost::Codex] {
-        runtime_control::prepare(host.kind(), config.enabled_for(host.kind()));
+        runtime_control::prepare(host.kind(), config.enabled_for(host.kind()), &login_env);
     }
 }
 
 /// Gate turning one host on before the config records it. Seeding runs first because the request to enable is the intent a host's own precondition needs; judging the pre-transition state would refuse the very configuration the toggle is about to create.
 pub fn preflight_enable(host: RemoteControlHost) -> Result<(), RuntimeControlIssue> {
-    runtime_control::prepare(host.kind(), true);
+    let login_env = crate::agents::ambient_env();
+    runtime_control::prepare(host.kind(), true, &login_env);
     ReadinessSnapshot::probe_transition(host).start_gate()
 }
 
 /// Advisory-only provider daemon findings. These never gate `rimz start`.
 pub fn advisories(config: &RemoteControlConfig) -> Vec<String> {
+    let login_env = crate::agents::ambient_env();
     let mut out = Vec::new();
     if config.enabled_for("codex")
-        && let Some(skew) = runtime_control::updater_advisory("codex")
+        && let Some(skew) = runtime_control::updater_advisory("codex", &login_env)
     {
         out.push(skew);
     }
@@ -129,8 +135,13 @@ pub fn apply_runtime_toggle(
     host: RemoteControlHost,
     machine: &crate::config::MachineConfig,
 ) -> Result<(), RuntimeControlError> {
+    let login_env = crate::agents::ambient_env();
     if host == RemoteControlHost::Codex {
-        runtime_control::reconcile("codex", machine.remote_control.enabled_for("codex"))?;
+        runtime_control::reconcile(
+            "codex",
+            machine.remote_control.enabled_for("codex"),
+            &login_env,
+        )?;
     }
 
     let workspaces = match crate::workspace::known_workspaces() {
@@ -201,9 +212,9 @@ pub fn apply_runtime_toggle(
 
 /// Claude settings input used by readiness and daemon repair invalidation.
 /// Resolving the path performs no parsing or CLI probe.
-pub(crate) fn claude_settings_path() -> PathBuf {
+pub(crate) fn claude_settings_path(login_env: &BTreeMap<String, String>) -> PathBuf {
     // The validated built-in Claude definition always supplies this input.
-    runtime_control::wiring_input_path("claude")
+    runtime_control::wiring_input_path("claude", login_env)
         .expect("Claude runtime-control wiring input must be registered")
 }
 

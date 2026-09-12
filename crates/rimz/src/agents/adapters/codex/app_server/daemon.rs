@@ -4,6 +4,7 @@
 //! updater whose PID records, process start times, ownership, executable, argv,
 //! and sole zombie child prove the known upstream stale-daemon shape.
 
+use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -11,7 +12,8 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use super::codex_home;
+use super::super::CodexAdapter;
+use crate::agents::capabilities::LaunchCapability;
 
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
 const PID_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -23,7 +25,7 @@ const START_RETRY_DELAY: Duration = Duration::from_secs(3);
 const INSTALL_COMMAND: &str = "curl -fsSL https://chatgpt.com/codex/install.sh | sh";
 /// Provider lifecycle command that refreshes both the app-server and updater.
 /// Shell expansion preserves non-UTF-8 environment bytes and mirrors
-/// [`codex_home`]'s empty-value fallback without trusting `codex` on PATH.
+/// [`CodexAdapter::config_home`]'s empty-value fallback without trusting `codex` on PATH.
 const RECYCLE_COMMAND: &str = "cd ~; \
     \"${CODEX_HOME:-$HOME/.codex}/packages/standalone/current/codex\" \
     app-server daemon bootstrap --remote-control";
@@ -82,12 +84,15 @@ impl std::fmt::Display for UpdaterSkew {
     }
 }
 
-pub fn readiness(enabled: bool) -> crate::agents::runtime_control::RuntimeControlReadiness {
+pub fn readiness(
+    enabled: bool,
+    login_env: &BTreeMap<String, String>,
+) -> crate::agents::runtime_control::RuntimeControlReadiness {
     use crate::agents::runtime_control::{RuntimeControlIssue, RuntimeControlReadiness};
 
     if !enabled {
         RuntimeControlReadiness::Disabled
-    } else if standalone_bin().is_some() {
+    } else if standalone_bin(login_env).is_some() {
         RuntimeControlReadiness::Ready { host_argv: None }
     } else {
         RuntimeControlReadiness::Uninstalled(RuntimeControlIssue::new(
@@ -104,8 +109,8 @@ pub fn readiness(enabled: bool) -> crate::agents::runtime_control::RuntimeContro
 /// This is diagnostic only. A healthy but skewed daemon keeps serving until
 /// its next successful update pass or a user-scheduled provider bootstrap;
 /// RimZ does not choose the disruptive timing this warning exists to explain.
-pub fn updater_skew() -> Option<UpdaterSkew> {
-    let home = codex_home()?;
+pub fn updater_skew(login_env: &BTreeMap<String, String>) -> Option<UpdaterSkew> {
+    let home = CodexAdapter.config_home(login_env)?;
     updater_skew_under(&home)
 }
 
@@ -160,8 +165,8 @@ fn classify_updater_skew(
 }
 
 /// Ensure the enabled per-user daemon once the managed standalone resolves.
-pub fn ensure(enabled: bool) {
-    let home = codex_home();
+pub fn ensure(enabled: bool, login_env: &BTreeMap<String, String>) {
+    let home = CodexAdapter.config_home(login_env);
     let standalone = home.as_deref().and_then(standalone_bin_under);
     if !should_ensure(enabled, standalone.is_some()) {
         return;
@@ -174,21 +179,21 @@ pub fn ensure(enabled: bool) {
             "recovered a stale Codex daemon updater after its app-server became a zombie"
         );
     }
-    spawn(&bin, &home);
+    spawn(&bin, &home, login_env);
 }
 
 /// Apply one synchronous start/stop transition, retrying once after a fully
 /// verified stale-updater recovery or, for start, after a provider teardown
 /// settle delay.
-pub fn reconcile(enabled: bool) -> Result<(), ControlError> {
-    let Some(home) = codex_home() else {
+pub fn reconcile(enabled: bool, login_env: &BTreeMap<String, String>) -> Result<(), ControlError> {
+    let Some(home) = CodexAdapter.config_home(login_env) else {
         return Ok(());
     };
     let Some(bin) = standalone_bin_under(&home) else {
         return Ok(());
     };
     let argv = command(&bin, enabled);
-    let Err(first_error) = run_command(&argv, enabled, &home) else {
+    let Err(first_error) = run_command(&argv, enabled, &home, login_env) else {
         return Ok(());
     };
     match failed_command_retry(enabled, recover_stale(&home)) {
@@ -197,7 +202,7 @@ pub fn reconcile(enabled: bool) -> Result<(), ControlError> {
                 action = action(enabled),
                 "recovered a stale Codex daemon updater after its app-server became a zombie",
             );
-            run_command(&argv, enabled, &home)
+            run_command(&argv, enabled, &home, login_env)
         }
         FailedCommandRetry::AfterStartSettle => {
             tracing::warn!(
@@ -207,7 +212,7 @@ pub fn reconcile(enabled: bool) -> Result<(), ControlError> {
                 "Codex remote-control start failed during daemon teardown; retrying after settle delay",
             );
             std::thread::sleep(START_RETRY_DELAY);
-            run_command(&argv, enabled, &home)
+            run_command(&argv, enabled, &home, login_env)
         }
         FailedCommandRetry::None => Err(first_error),
     }
@@ -256,8 +261,13 @@ pub enum ControlError {
     },
 }
 
-fn run_command(argv: &[String], enabled: bool, home: &Path) -> Result<(), ControlError> {
-    let Some(mut command) = control_command(argv, home) else {
+fn run_command(
+    argv: &[String],
+    enabled: bool,
+    home: &Path,
+    login_env: &BTreeMap<String, String>,
+) -> Result<(), ControlError> {
+    let Some(mut command) = control_command(argv, home, login_env) else {
         return Ok(());
     };
     command.stdin(Stdio::null());
@@ -299,16 +309,23 @@ fn command(bin: &Path, enabled: bool) -> Vec<String> {
     ]
 }
 
-fn control_command(argv: &[String], home: &Path) -> Option<Command> {
+fn control_command(
+    argv: &[String],
+    home: &Path,
+    login_env: &BTreeMap<String, String>,
+) -> Option<Command> {
     let (program, args) = argv.split_first()?;
     let mut command = Command::new(program);
     command.args(args).current_dir(home);
+    if let Some(home) = login_env.get("CODEX_HOME") {
+        command.env("CODEX_HOME", home);
+    }
     Some(command)
 }
 
-fn spawn(bin: &Path, home: &Path) {
+fn spawn(bin: &Path, home: &Path, login_env: &BTreeMap<String, String>) {
     let argv = command(bin, true);
-    let Some(mut cmd) = control_command(&argv, home) else {
+    let Some(mut cmd) = control_command(&argv, home, login_env) else {
         return;
     };
     cmd.stdin(Stdio::null())
@@ -320,8 +337,8 @@ fn spawn(bin: &Path, home: &Path) {
 }
 
 /// Managed standalone at `$CODEX_HOME/packages/standalone/current/codex`.
-fn standalone_bin() -> Option<PathBuf> {
-    standalone_bin_under(&codex_home()?)
+fn standalone_bin(login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    standalone_bin_under(&CodexAdapter.config_home(login_env)?)
 }
 
 fn standalone_bin_under(home: &Path) -> Option<PathBuf> {
