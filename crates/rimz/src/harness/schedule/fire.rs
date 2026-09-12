@@ -87,7 +87,7 @@ fn fire_tasks(
                 fired.push(name);
             }
             Action::WatchLost => {
-                let signal_name = match format!("wake.{name}").parse() {
+                let signal_name = match format!("wait.{name}").parse() {
                     Ok(signal_name) => signal_name,
                     Err(err) => {
                         tracing::debug!(
@@ -135,14 +135,14 @@ fn lost_watch_outcome(
     let paths = StatePaths::for_workspace(WorkspaceId::from_project_root(
         &task.entry().resolved_root(),
     ))?;
-    let path = super::signal::wake_output_path(&paths, name);
+    let path = super::signal::wait_output_path(&paths, name);
     let armed_at = task
         .entry()
-        .wake_meta
+        .wait_meta
         .as_ref()
         .map_or(arm_stamp, |meta| meta.armed_at);
     let elapsed_ms = u64::try_from(now.duration_since(armed_at).as_millis()).unwrap_or(0);
-    let output = match super::signal::read_wake_tail(&path) {
+    let output = match super::signal::read_wait_tail(&path) {
         Ok(output) => output,
         Err(err) => {
             if err.kind() != std::io::ErrorKind::NotFound {
@@ -417,8 +417,8 @@ pub(super) fn wait_loop_run(
     command.args(loop_run_args(project_root, name, Some(signal_json)));
     match command.status() {
         Ok(status) if status.success() => {}
-        Ok(status) => tracing::warn!(task = name, %status, "watched wake delivery failed"),
-        Err(err) => tracing::warn!(task = name, error = %err, "running watched wake delivery"),
+        Ok(status) => tracing::warn!(task = name, %status, "watched wait delivery failed"),
+        Err(err) => tracing::warn!(task = name, error = %err, "running watched wait delivery"),
     }
 }
 
@@ -730,12 +730,12 @@ mod tests {
             crate::disk::summary::FileSummary::default()
         );
         let paths = StatePaths::for_workspace(WorkspaceId::from_project_root(root.path())).unwrap();
-        let path = super::super::signal::wake_output_path(&paths, NAME);
+        let path = super::super::signal::wait_output_path(&paths, NAME);
         assert_eq!(outcome.output_path, Some(path.clone()));
         paths.ensure_tmp_dir().unwrap();
         std::fs::write(&path, "watcher failed before launching command").unwrap();
         let watch = loaded(TaskEntry {
-            wake_meta: Some(crate::config::WakeMeta {
+            wait_meta: Some(crate::config::WaitMeta {
                 armed_at: prior,
                 delay: None,
                 pid: None,

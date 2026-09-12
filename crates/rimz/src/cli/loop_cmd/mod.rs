@@ -11,7 +11,7 @@
 //! terminal presentation. [`rimz::harness::schedule::runner::TaskFire`] owns the
 //! hidden runner policy and its exactly-one history transition. Pure trigger
 //! parsing and due evaluation live in [`rimz::harness::schedule`]; delivery mode
-//! reuses the shared message seam, and ephemeral self-wakes live in
+//! reuses the shared message seam, and ephemeral self-waits live in
 //! [`rimz::harness::schedule::instances`].
 
 use std::collections::BTreeMap;
@@ -130,7 +130,7 @@ struct AddArgs {
     /// Kind, profile, or virtual cell; launches a fresh supervised pane.
     #[arg(
         long,
-        conflicts_with = "wake",
+        conflicts_with = "wait",
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::agent_specs)
     )]
     agent: Option<String>,
@@ -143,7 +143,7 @@ struct AddArgs {
         conflicts_with = "agent",
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::handles)
     )]
-    wake: Option<String>,
+    wait: Option<String>,
     /// Inline prompt for the triggered turn.
     #[arg(long, conflicts_with = "prompt_file")]
     prompt: Option<String>,

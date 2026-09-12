@@ -1039,7 +1039,7 @@ test "$(cat "$HOME/.agents/skills/c/agents/openai.yaml")" = 'policy:
 test -d "$XDG_RUNTIME_DIR/rimz/$RIMZ_TEST_WORKSPACE_ID"
 test -c /dev/null
 test -d /tmp/scratchpad
-test -d /tmp/rimz-wakes
+test -d /tmp/rimz-waits
 test -d /tmp/rimz-subagents
 test "$(cat "$HOME/.codex/config.toml")" = sandbox-test
 if touch "$HOME/.agents/skills/b/changed" 2>/dev/null; then exit 1; fi

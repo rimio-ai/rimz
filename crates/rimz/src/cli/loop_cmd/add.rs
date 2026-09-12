@@ -185,7 +185,7 @@ fn add_delivery(
         entry,
         task.trigger().as_ref().map_err(Clone::clone)?,
         task.action().map_err(Clone::clone)?,
-        entry.wake.as_ref().map(|target| target.kind.as_str()),
+        entry.wait.as_ref().map(|target| target.kind.as_str()),
     )?;
     writeln!(
         out,
@@ -200,8 +200,8 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
     let project_error = args.project.then(|| {
         [
             (
-                args.wake.is_some(),
-                "--project tasks cannot use --wake; project config cannot pin a machine-local session",
+                args.wait.is_some(),
+                "--project tasks cannot use --wait; project config cannot pin a machine-local session",
             ),
             (
                 args.until.is_some(),
@@ -226,11 +226,11 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
         .agent
         .as_ref()
         .map(|_| TaskActionKind::Spawn)
-        .or(args.wake.as_ref().map(|_| TaskActionKind::Deliver))
+        .or(args.wait.as_ref().map(|_| TaskActionKind::Deliver))
         .or(args.check.as_ref().map(|_| TaskActionKind::CheckOnly))
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "loop task `{}` needs --agent, --wake, or --check",
+                "loop task `{}` needs --agent, --wait, or --check",
                 args.name
             )
         })?;
@@ -244,7 +244,7 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
     if args.once && args.signal.is_none() {
         bail!("--once requires --signal");
     }
-    if args.wake.is_some()
+    if args.wait.is_some()
         && args
             .signal
             .as_deref()
@@ -252,10 +252,10 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
         && !matches.contains_key("handle")
         && !matches.contains_key("session")
     {
-        bail!(self_wake_guard_message());
+        bail!(self_wait_guard_message());
     }
     if !action_kind.has_effect() && (args.surplus.is_some() || args.surplus_after.is_some()) {
-        bail!("--surplus and --surplus-after require --agent or --wake");
+        bail!("--surplus and --surplus-after require --agent or --wait");
     }
     if args.max_attempts == Some(0) {
         bail!("--max-attempts must be at least 1");
@@ -266,7 +266,7 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
             (args.every.is_none(), "--until requires --every"),
             (
                 !action_kind.has_effect(),
-                "--until requires --agent or --wake",
+                "--until requires --agent or --wait",
             ),
             (args.in_after.is_some(), "--until conflicts with --in"),
         ]
@@ -311,9 +311,9 @@ fn resolve_add_action(
             }
         }
         TaskActionKind::Deliver => {
-            let address = args.wake.as_deref().unwrap_or_default();
+            let address = args.wait.as_deref().unwrap_or_default();
             let (target, matches) = resolve_delivery_target(workspace, args, address)?;
-            validate_self_wake(args, &target)?;
+            validate_self_wait(args, &target)?;
             AddTaskAction::Deliver { target, matches }
         }
         TaskActionKind::CheckOnly => AddTaskAction::CheckOnly,
@@ -619,7 +619,7 @@ fn parse_matches(raw: &[String]) -> Result<BTreeMap<String, String>> {
         .collect()
 }
 
-fn validate_self_wake(args: &AddArgs, target: &TaskTarget) -> Result<()> {
+fn validate_self_wait(args: &AddArgs, target: &TaskTarget) -> Result<()> {
     let Some(raw) = args.signal.as_deref() else {
         return Ok(());
     };
@@ -628,8 +628,8 @@ fn validate_self_wake(args: &AddArgs, target: &TaskTarget) -> Result<()> {
     Ok(arm::validate_self_signal(&selector, &matches, target)?)
 }
 
-fn self_wake_guard_message() -> &'static str {
-    "--wake on an agent.* signal requires --match handle=<other> or --match session=<other> to avoid waking the target from its own lifecycle signal"
+fn self_wait_guard_message() -> &'static str {
+    "--wait on an agent.* signal requires --match handle=<other> or --match session=<other> to avoid waking the target from its own lifecycle signal"
 }
 
 fn reject_unsupported_action_flags(args: &AddArgs, kind: TaskActionKind) -> Result<()> {
@@ -663,7 +663,7 @@ fn reject_unsupported_action_flags(args: &AddArgs, kind: TaskActionKind) -> Resu
     }
     if kind == TaskActionKind::Deliver {
         bail!(
-            "`{}` uses --wake, so {} only apply to --agent tasks",
+            "`{}` uses --wait, so {} only apply to --agent tasks",
             args.name,
             flags.join(", ")
         );
@@ -714,7 +714,7 @@ fn write_add_feedback(
         TaskAction::Deliver(target) => {
             writeln!(
                 out,
-                "action: wakes {} — pinned to {} session `{}` now; skipped and removed if that session exits",
+                "action: waits {} — pinned to {} session `{}` now; skipped and removed if that session exits",
                 target.handle, target.kind, target.session
             )?;
         }

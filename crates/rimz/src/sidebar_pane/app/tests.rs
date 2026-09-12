@@ -138,9 +138,9 @@ fn sleeping_command_wait_keeps_the_animation_gate_running() {
     let agent = snapshot.worktree_groups[0].rows[0].as_agent_mut().unwrap();
     agent.status = crate::agents::AgentStatus::Sleeping;
     agent.user_turn_started_at = Some(snapshot.now);
-    agent.pending_wakes.push(crate::agents::PendingWake {
+    agent.pending_waits.push(crate::agents::PendingWait {
         name: "command".to_owned(),
-        trigger: crate::agents::PendingWakeTrigger::Command {
+        trigger: crate::agents::PendingWaitTrigger::Command {
             command: "cargo test".to_owned(),
         },
         armed_at: None,
@@ -193,8 +193,8 @@ fn sleeping_command_wait_keeps_the_animation_gate_running() {
     snapshot.worktree_groups[0].rows[0]
         .as_agent_mut()
         .unwrap()
-        .pending_wakes[0]
-        .trigger = crate::agents::PendingWakeTrigger::Pid { pid: 16776 };
+        .pending_waits[0]
+        .trigger = crate::agents::PendingWaitTrigger::Pid { pid: 16776 };
     assert!(is_animating(&snapshot, &ui, 0, false));
     ui.selected_index = usize::MAX;
     assert!(!is_animating(&snapshot, &ui, 0, false));
@@ -203,11 +203,11 @@ fn sleeping_command_wait_keeps_the_animation_gate_running() {
         .insert(row.id.clone(), row.as_agent().unwrap().user_turn_started_at);
     assert!(is_animating(&snapshot, &ui, 0, false));
     for trigger in [
-        crate::agents::PendingWakeTrigger::Timer {
+        crate::agents::PendingWaitTrigger::Timer {
             due: snapshot.now,
             delay: None,
         },
-        crate::agents::PendingWakeTrigger::Signal {
+        crate::agents::PendingWaitTrigger::Signal {
             selector: "pr.merged".to_owned(),
             deadline: None,
         },
@@ -215,7 +215,7 @@ fn sleeping_command_wait_keeps_the_animation_gate_running() {
         snapshot.worktree_groups[0].rows[0]
             .as_agent_mut()
             .unwrap()
-            .pending_wakes[0]
+            .pending_waits[0]
             .trigger = trigger;
         assert!(!is_animating(&snapshot, &ui, 0, false));
     }

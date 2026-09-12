@@ -118,9 +118,9 @@ fn spawn_entry(check: bool, on: CheckOn) -> TaskEntry {
     }
 }
 
-fn wake_entry(check: bool, on: CheckOn) -> TaskEntry {
+fn wait_entry(check: bool, on: CheckOn) -> TaskEntry {
     TaskEntry {
-        wake: Some(TaskTarget {
+        wait: Some(TaskTarget {
             kind: rimz::ids::AgentKind::new_unchecked("claude"),
             session: "sess-planner".into(),
             handle: "@planner".to_owned(),
@@ -267,7 +267,7 @@ fn skipped_check_summary_uses_check_time_and_action_verbs() {
         " — codex not started; fires when the check fails"
     )));
 
-    let wake = RunOutcome::check_result(
+    let wait = RunOutcome::check_result(
         LoopRunResult::CheckSkipped,
         CheckRecord {
             output_path: None,
@@ -277,9 +277,9 @@ fn skipped_check_summary_uses_check_time_and_action_verbs() {
         },
         2_000,
     );
-    let entry = wake_entry(true, CheckOn::Success);
+    let entry = wait_entry(true, CheckOn::Success);
     assert_eq!(
-        summary("nudge", &entry, 8_000, LoopRunMode::Manual, false, &wake,),
+        summary("nudge", &entry, 8_000, LoopRunMode::Manual, false, &wait,),
         "○ check failed (exit 1) in 2.0s — @planner not woken; fires when the check passes\n"
     );
 }
@@ -437,7 +437,7 @@ fn delivered_summary_names_target_handle() {
     assert_eq!(
         summary(
             "nudge",
-            &wake_entry(false, CheckOn::Fail),
+            &wait_entry(false, CheckOn::Fail),
             90,
             LoopRunMode::Manual,
             false,
@@ -513,7 +513,7 @@ fn keep_hint_only_prints_for_manual_spawn_without_keep() {
 
 #[test]
 fn manual_early_exits_explain_what_stays_in_place() {
-    let entry = wake_entry(false, CheckOn::Fail);
+    let entry = wait_entry(false, CheckOn::Fail);
     let gone = RunOutcome::target_gone("@planner", None);
     assert_eq!(
         summary("nudge", &entry, 100, LoopRunMode::Manual, false, &gone,),
@@ -553,7 +553,7 @@ fn watch_trip_and_summary_use_verdict_elapsed_once() {
             },
             timed_out: matches!(verdict, WatchVerdict::TimedOut { .. }),
             output: String::new(),
-            output_path: Some("/tmp/wake.log".into()),
+            output_path: Some("/tmp/wait.log".into()),
         };
         let mut out = Vec::new();
         write_check_trip_line(
@@ -575,7 +575,7 @@ fn watch_trip_and_summary_use_verdict_elapsed_once() {
             for mode in [LoopRunMode::Manual, LoopRunMode::Scheduled] {
                 let out = summary(
                     "watch",
-                    &wake_entry(true, CheckOn::Success),
+                    &wait_entry(true, CheckOn::Success),
                     0,
                     mode,
                     false,

@@ -63,7 +63,7 @@ case "$RIMZ_AGENT_ROLE" in
         "$rimz" --mux tmux message @other "sandbox-handoff:$child_text" > /tmp/message-send 2>&1
         while [ ! -s /tmp/other-consumed ]; do sleep 0.1; done
         test "$(cat /tmp/other-consumed)" = "$child_text"
-        "$rimz" --mux tmux wake -- sh -c "printf 'wake-file\n'" > /tmp/wake-launch 2>&1
+        "$rimz" --mux tmux wait -- sh -c "printf 'wait-file\n'" > /tmp/wait-launch 2>&1
         while IFS= read -r line; do
             case "$line" in
                 *'response: /tmp/rimz-subagents/'*)
@@ -73,14 +73,14 @@ case "$RIMZ_AGENT_ROLE" in
                     case "$line" in *'(1 line)'*) ;; *) exit 1 ;; esac
                     printf '%s\n' "$response_path" > /tmp/response-consumed
                     ;;
-                *'output (10 B, 1 line): /tmp/rimz-wakes/'*)
-                    wake_path=${line#*: /tmp/rimz-wakes/}
-                    wake_path=/tmp/rimz-wakes/${wake_path%% *}
-                    test "$(cat "$wake_path")" = wake-file
-                    printf '%s\n' "$wake_path" > /tmp/wake-consumed
+                *'output (10 B, 1 line): /tmp/rimz-waits/'*)
+                    wake_path=${line#*: /tmp/rimz-waits/}
+                    wake_path=/tmp/rimz-waits/${wake_path%% *}
+                    test "$(cat "$wake_path")" = wait-file
+                    printf '%s\n' "$wake_path" > /tmp/wait-consumed
                     ;;
             esac
-            if [ -s /tmp/response-consumed ] && [ -s /tmp/wake-consumed ]; then break; fi
+            if [ -s /tmp/response-consumed ] && [ -s /tmp/wait-consumed ]; then break; fi
         done
         printf '%s\n' "parent-read:$child_text" > /tmp/journey-complete
         ;;
@@ -162,13 +162,13 @@ profile = "worker"
         }
         assert!(
             Instant::now() < deadline,
-            "sandbox consumers did not finish: completion={completed:?}, child launch={:?}, message send={:?}, teammate read={:?}, wake launch={:?}, response read={:?}, wake read={:?}",
+            "sandbox consumers did not finish: completion={completed:?}, child launch={:?}, message send={:?}, teammate read={:?}, wait launch={:?}, response read={:?}, wait read={:?}",
             std::fs::read_to_string(tmp.join("child-launch")),
             std::fs::read_to_string(tmp.join("message-send")),
             std::fs::read_to_string(tmp.join("other-consumed")),
-            std::fs::read_to_string(tmp.join("wake-launch")),
+            std::fs::read_to_string(tmp.join("wait-launch")),
             std::fs::read_to_string(tmp.join("response-consumed")),
-            std::fs::read_to_string(tmp.join("wake-consumed")),
+            std::fs::read_to_string(tmp.join("wait-consumed")),
         );
         std::thread::sleep(Duration::from_millis(50));
     }

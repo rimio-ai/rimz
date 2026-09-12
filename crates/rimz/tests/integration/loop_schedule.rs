@@ -61,7 +61,7 @@ fn team_signal_binding_registers_delivers_and_retires() {
         cwd.display().to_string()
     );
     assert_eq!(
-        entry.wake.as_ref().unwrap().session.as_str(),
+        entry.wait.as_ref().unwrap().session.as_str(),
         "sess-team-coder"
     );
     team_signal_hook(&env, &cwd, "sess-team-coder", "SessionStart");
@@ -229,7 +229,7 @@ fn team_signal_binding_resume_keeps_session_rows_separate() {
             .values()
             .next()
             .unwrap()
-            .wake
+            .wait
             .as_ref()
             .unwrap()
             .session
@@ -277,7 +277,7 @@ fn team_idle_and_root_end_hooks_deliver_only_to_the_matching_instance() {
                     "loop",
                     "add",
                     name,
-                    "--wake",
+                    "--wait",
                     "@claude#project",
                     "--signal",
                     signal,
@@ -447,13 +447,13 @@ fn loop_deliveries_always_persist_as_instances() {
         loop_ok(
             &env,
             &[
-                "loop", "add", name, "--wake", "@claude", trigger[0], trigger[1],
+                "loop", "add", name, "--wait", "@claude", trigger[0], trigger[1],
             ],
         );
     }
     let instances = read_loop_instances(&env);
     for name in ["recurring", "standing", "one-shot"] {
-        assert!(instances.0[name].wake.is_some());
+        assert!(instances.0[name].wait.is_some());
     }
     let config = std::fs::read_to_string(loop_config_path(&env)).unwrap_or_default();
     assert!(!config.contains("[tasks."), "{config}");
@@ -462,9 +462,9 @@ fn loop_deliveries_always_persist_as_instances() {
         &[
             "loop",
             "add",
-            "project-wake",
+            "project-wait",
             "--project",
-            "--wake",
+            "--wait",
             "@claude",
             "--every",
             "15m",
@@ -474,17 +474,17 @@ fn loop_deliveries_always_persist_as_instances() {
 }
 
 #[test]
-fn loop_wake_me_and_bare_wake_pin_the_calling_session() {
+fn loop_wait_me_and_bare_wait_pin_the_calling_session() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-caller", "feature-loop");
-    for (name, wake) in [
-        ("explicit", vec!["--wake", "@me"]),
-        ("bare", vec!["--wake"]),
+    for (name, wait) in [
+        ("explicit", vec!["--wait", "@me"]),
+        ("bare", vec!["--wait"]),
     ] {
         let output = calling_loop(&env, "sess-loop-caller")
             .args(["loop", "add", name, "--every", "15m"])
-            .args(wake)
+            .args(wait)
             .output()
             .unwrap();
         assert!(
@@ -493,10 +493,10 @@ fn loop_wake_me_and_bare_wake_pin_the_calling_session() {
             String::from_utf8_lossy(&output.stderr)
         );
         let instances = read_loop_instances(&env);
-        let target = instances.0[name].wake.as_ref().unwrap();
+        let target = instances.0[name].wait.as_ref().unwrap();
         assert_eq!(target.kind, AgentKind::new_unchecked("claude"));
         assert_eq!(target.session, AgentSessionId::from("sess-loop-caller"));
-        assert!(instances.0[name].wake_meta.is_none());
+        assert!(instances.0[name].wait_meta.is_none());
     }
 }
 
@@ -511,7 +511,7 @@ fn loop_signal_dedupe_preserves_the_existing_definition_and_overlays() {
             "loop",
             "add",
             "original",
-            "--wake",
+            "--wait",
             "@claude",
             "--signal",
             "deploy.done",
@@ -549,7 +549,7 @@ fn loop_signal_dedupe_preserves_the_existing_definition_and_overlays() {
             "loop",
             "add",
             "replacement",
-            "--wake",
+            "--wait",
             "@claude",
             "--signal",
             "deploy.done",
@@ -572,7 +572,7 @@ fn loop_signal_dedupe_preserves_the_existing_definition_and_overlays() {
             "loop",
             "add",
             "different-match",
-            "--wake",
+            "--wait",
             "@claude",
             "--signal",
             "deploy.done",
@@ -588,7 +588,7 @@ fn loop_signal_dedupe_preserves_the_existing_definition_and_overlays() {
             "loop",
             "add",
             "different-selector",
-            "--wake",
+            "--wait",
             "@claude",
             "--signal",
             "deploy.failed",
@@ -605,7 +605,7 @@ fn loop_signal_dedupe_preserves_the_existing_definition_and_overlays() {
             "loop",
             "add",
             "different-target",
-            "--wake",
+            "--wait",
             "@me",
             "--signal",
             "deploy.done",
@@ -625,7 +625,7 @@ fn loop_signal_dedupe_preserves_the_existing_definition_and_overlays() {
     assert_eq!(instances.0.len(), 4);
     assert_eq!(
         instances.0["different-target"]
-            .wake
+            .wait
             .as_ref()
             .unwrap()
             .session,
@@ -644,7 +644,7 @@ fn concurrent_signal_adds_return_one_existing_name() {
                 "loop",
                 "add",
                 name,
-                "--wake",
+                "--wait",
                 "@claude",
                 "--signal",
                 "deploy.done",
@@ -695,7 +695,7 @@ fn loop_signal_defaults_follow_the_caller_worktree_and_team() {
                 "loop",
                 "add",
                 name,
-                "--wake",
+                "--wait",
                 "@claude#project",
                 "--signal",
                 signal,
@@ -710,12 +710,12 @@ fn loop_signal_defaults_follow_the_caller_worktree_and_team() {
         let instances = read_loop_instances(&env);
         assert_eq!(instances.0[name].matches.as_ref().unwrap()[key], expected);
         assert_eq!(
-            instances.0[name].wake.as_ref().unwrap().session,
+            instances.0[name].wait.as_ref().unwrap().session,
             AgentSessionId::from("sess-scope-target")
         );
     }
     let output = calling_loop(&env, "sess-scope-target")
-        .args(["loop", "add", "root-ci", "--wake", "--signal", "ci.failed"])
+        .args(["loop", "add", "root-ci", "--wait", "--signal", "ci.failed"])
         .output()
         .unwrap();
     assert!(!output.status.success());
@@ -738,7 +738,7 @@ fn signal_siblings_keep_subscriptions_and_matches_consume_only_once() {
             "loop",
             "add",
             "standing",
-            "--wake",
+            "--wait",
             "@claude",
             "--signal",
             "deploy.done",
@@ -807,7 +807,7 @@ fn session_end_hook_retires_all_own_deliveries_and_their_overlays() {
         loop_ok(
             &env,
             &[
-                "loop", "add", name, "--wake", "@claude", trigger[0], trigger[1],
+                "loop", "add", name, "--wait", "@claude", trigger[0], trigger[1],
             ],
         );
     }
@@ -815,7 +815,7 @@ fn session_end_hook_retires_all_own_deliveries_and_their_overlays() {
     loop_ok(&env, &["loop", "pause", "signal", "--for", "2h"]);
     let mut instances = read_loop_instances(&env);
     let mut sibling = instances.0["clock"].clone();
-    sibling.wake.as_mut().unwrap().session = AgentSessionId::from("sess-retire-sibling");
+    sibling.wait.as_mut().unwrap().session = AgentSessionId::from("sess-retire-sibling");
     instances.0.insert("sibling".to_owned(), sibling.clone());
     write_loop_instances(&env, instances);
     std::fs::write(
@@ -861,7 +861,7 @@ fn retired_delivery_runner_preserves_replacement_session_subscription() {
             "loop",
             "add",
             "reused",
-            "--wake",
+            "--wait",
             "@retired-session",
             "--every",
             "15m",
@@ -893,7 +893,7 @@ fn retired_delivery_runner_preserves_replacement_session_subscription() {
             "loop",
             "add",
             "reused",
-            "--wake",
+            "--wait",
             "@replacement-session",
             "--every",
             "15m",
@@ -910,7 +910,7 @@ fn retired_delivery_runner_preserves_replacement_session_subscription() {
     );
     assert_eq!(
         read_loop_instances(&env).0["reused"]
-            .wake
+            .wait
             .as_ref()
             .unwrap()
             .session
@@ -1414,7 +1414,7 @@ fn loop_watch_reloads_tasks_without_reprobing_workspace() {
 }
 
 #[test]
-fn loop_wake_workflow_pins_and_delivers_to_live_session() {
+fn loop_wait_workflow_pins_and_delivers_to_live_session() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-live", "feature-loop");
@@ -1425,8 +1425,8 @@ fn loop_wake_workflow_pins_and_delivers_to_live_session() {
         &[
             "loop",
             "add",
-            "wake",
-            "--wake",
+            "wait",
+            "--wait",
             "@claude",
             "--every",
             "15m",
@@ -1437,19 +1437,19 @@ fn loop_wake_workflow_pins_and_delivers_to_live_session() {
     assert!(added.contains("pinned to claude session `sess-loop-live`"));
     let instances = read_loop_instances(&env);
     assert_eq!(
-        instances.0["wake"]
-            .wake
+        instances.0["wait"]
+            .wait
             .as_ref()
-            .map(|wake| wake.session.as_str()),
+            .map(|wait| wait.session.as_str()),
         Some("sess-loop-live")
     );
 
-    loop_ok(&env, &["loop", "run", "wake"]);
+    loop_ok(&env, &["loop", "run", "wait"]);
     assert_pending_message(&env, "sess-loop-live", "next step");
     assert_eq!(
         env.store().list_pending_messages().unwrap()[0].sender,
         rimz::store::message::MessageSender::Harness {
-            notice: rimz::store::message::HarnessNotice::Wake,
+            notice: rimz::store::message::HarnessNotice::Wait,
         }
     );
     assert_eq!(
@@ -1462,10 +1462,10 @@ fn loop_wake_workflow_pins_and_delivers_to_live_session() {
         Some(env.project_root.as_path())
     );
     let list = loop_ok(&env, &["loop", "list"]);
-    let show = loop_ok(&env, &["loop", "show", "wake"]);
+    let show = loop_ok(&env, &["loop", "show", "wait"]);
     assert!(
         list.lines()
-            .any(|line| line.contains("wake") && line.contains("delivered"))
+            .any(|line| line.contains("wait") && line.contains("delivered"))
             && show.contains("source:")
             && show.contains("state"),
         "list/show smoke failed:\n{list}\n{show}"
@@ -1473,7 +1473,7 @@ fn loop_wake_workflow_pins_and_delivers_to_live_session() {
 }
 
 #[test]
-fn emitted_signal_reaches_the_matching_wake_consumer() {
+fn emitted_signal_reaches_the_matching_wait_consumer() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).unwrap();
@@ -1523,8 +1523,8 @@ fn emitted_signal_reaches_the_matching_wake_consumer() {
         &[
             "loop",
             "add",
-            "ci-wake",
-            "--wake",
+            "ci-wait",
+            "--wait",
             "@claude",
             "--signal",
             "deploy.finished",
@@ -1585,7 +1585,7 @@ fn emitted_signal_reaches_the_matching_wake_consumer() {
     assert!(
         message
             .text
-            .starts_with("waited on deploy.finished\nfired [ci-wake]\n"),
+            .starts_with("waited on deploy.finished\nfired [ci-wait]\n"),
         "{}",
         message.text
     );
@@ -1597,14 +1597,14 @@ fn emitted_signal_reaches_the_matching_wake_consumer() {
     );
     assert!(message.text.ends_with("\n\nInspect deployment"));
 
-    let show = loop_ok(&env, &["loop", "show", "ci-wake"]);
+    let show = loop_ok(&env, &["loop", "show", "ci-wait"]);
     assert!(show.contains("signal: deploy.finished"), "{show}");
     assert!(
         show.contains(&format!("message: {}", message.message_id)),
         "{show}"
     );
 
-    loop_ok(&env, &["loop", "disable", "ci-wake"]);
+    loop_ok(&env, &["loop", "disable", "ci-wait"]);
     loop_ok(
         &env,
         &[
@@ -1631,7 +1631,7 @@ fn lifecycle_signal_wakes_only_for_the_matching_agent_session() {
             "loop",
             "add",
             "review-finished",
-            "--wake",
+            "--wait",
             "@claude",
             "--signal",
             "agent.idle",
@@ -2251,7 +2251,7 @@ fn loop_repeated_failures_auto_disable_notify_once_and_enable() {
             "loop",
             "add",
             "watchdog",
-            "--wake",
+            "--wait",
             "@claude",
             "--every",
             "15m",
@@ -2823,7 +2823,7 @@ fn loop_guard_skips_or_delivers_with_evidence() {
             "loop",
             "add",
             "healthy",
-            "--wake",
+            "--wait",
             "@claude",
             "--every",
             "15m",
@@ -2852,7 +2852,7 @@ fn loop_guard_skips_or_delivers_with_evidence() {
             "loop",
             "add",
             "broken",
-            "--wake",
+            "--wait",
             "@claude",
             "--every",
             "15m",
@@ -2886,7 +2886,7 @@ fn loop_trip_then_preparation_error_records_and_renders() {
         &env,
         &format!(
             "[tasks.trip_error]\n\
-             wake = {{ kind = \"claude\", session = \"sess-loop-trip-error\", handle = \"@claude\" }}\n\
+             wait = {{ kind = \"claude\", session = \"sess-loop-trip-error\", handle = \"@claude\" }}\n\
              prompt-file = \"missing-prompt.txt\"\ncheck = \"false\"\nroot = \"{}\"\nevery = \"15m\"\n",
             env.project_root.display()
         ),
@@ -3066,7 +3066,7 @@ fn loop_poll_until_delivers_once_or_expires() {
             "loop",
             "add",
             "green",
-            "--wake",
+            "--wait",
             "@claude",
             "--every",
             "2m",
@@ -3091,7 +3091,7 @@ fn loop_poll_until_delivers_once_or_expires() {
         Tasks(BTreeMap::from([(
             "expired".to_owned(),
             TaskEntry {
-                wake: Some(TaskTarget {
+                wait: Some(TaskTarget {
                     kind: AgentKind::new_unchecked("claude"),
                     session: AgentSessionId::from("sess-expired"),
                     handle: "@claude".to_owned(),
@@ -3151,8 +3151,8 @@ fn loop_worktree_target_delivery_preserves_session() {
         .args([
             "loop",
             "add",
-            "wake-worktree",
-            "--wake",
+            "wait-worktree",
+            "--wait",
             "@claude",
             "--every",
             "15m",
@@ -3166,7 +3166,7 @@ fn loop_worktree_target_delivery_preserves_session() {
         "{}",
         String::from_utf8_lossy(&added.stderr)
     );
-    loop_ok(&env, &["loop", "run", "wake-worktree"]);
+    loop_ok(&env, &["loop", "run", "wait-worktree"]);
     assert_pending_message(&env, "sess-loop-worktree", "worktree next step");
 }
 
@@ -3174,7 +3174,7 @@ fn loop_worktree_target_delivery_preserves_session() {
 fn loop_dead_target_run_removes_but_fire_keeps_task() {
     let env = Env::new();
     let config = format!(
-        "[tasks.dead]\nwake = {{ kind = \"claude\", session = \"sess-dead\", handle = \"@claude\" }}\n\
+        "[tasks.dead]\nwait = {{ kind = \"claude\", session = \"sess-dead\", handle = \"@claude\" }}\n\
          prompt = \"wake up\"\ncheck = \"false\"\nroot = \"{}\"\nat = \"07:00\"\n",
         env.project_root.display()
     );
@@ -3256,7 +3256,7 @@ fn malformed_schedule_stays_visible_and_manual_action_remains_runnable() {
         toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
     let entry = config.tasks.0.get_mut("invalid").unwrap();
     entry.check = None;
-    entry.wake = Some(TaskTarget {
+    entry.wait = Some(TaskTarget {
         kind: AgentKind::new_unchecked("claude"),
         session: AgentSessionId::from("manual-invalid-session"),
         handle: "@claude#feature-manual".to_owned(),
@@ -3627,17 +3627,17 @@ fn loop_add_persists_machine_and_project_signal_triggers() {
 }
 
 #[test]
-fn loop_add_rejects_agent_signal_self_wakes() {
+fn loop_add_rejects_agent_signal_self_waits() {
     let env = Env::new();
     env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-loop-self-wake", "feature-loop");
+    register_running_agent(&env, "sess-loop-self-wait", "feature-loop");
 
     for extra in [Vec::new(), vec!["--match", "handle=@claude"]] {
         let mut args = vec![
             "loop",
             "add",
-            "self-wake",
-            "--wake",
+            "self-wait",
+            "--wait",
             "@claude",
             "--signal",
             "agent.idle",
@@ -3657,8 +3657,8 @@ fn loop_add_rejects_agent_signal_self_wakes() {
         &[
             "loop",
             "add",
-            "peer-wake",
-            "--wake",
+            "peer-wait",
+            "--wait",
             "@claude",
             "--signal",
             "agent.idle",
@@ -3670,7 +3670,7 @@ fn loop_add_rejects_agent_signal_self_wakes() {
     );
     let instances = read_loop_instances(&env);
     assert_eq!(
-        instances.0["peer-wake"]
+        instances.0["peer-wait"]
             .matches
             .as_ref()
             .and_then(|matches| matches.get("handle"))
@@ -3687,11 +3687,11 @@ fn loop_add_rejects_invalid_action_shapes() {
     let cases = [
         (
             vec!["loop", "add", "missing", "--every", "15m", "--prompt", "x"],
-            "needs --agent, --wake, or --check",
+            "needs --agent, --wait, or --check",
         ),
         (
             vec![
-                "loop", "add", "conflict", "--agent", "claude", "--wake", "@claude", "--every",
+                "loop", "add", "conflict", "--agent", "claude", "--wait", "@claude", "--every",
                 "15m", "--prompt", "x",
             ],
             "cannot be used with",
@@ -3700,8 +3700,8 @@ fn loop_add_rejects_invalid_action_shapes() {
             vec![
                 "loop",
                 "add",
-                "wake-mode",
-                "--wake",
+                "wait-mode",
+                "--wait",
                 "@claude",
                 "--mode",
                 "auto",
@@ -3710,14 +3710,14 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "--prompt",
                 "x",
             ],
-            "`wake-mode` uses --wake, so --mode only apply to --agent tasks",
+            "`wait-mode` uses --wait, so --mode only apply to --agent tasks",
         ),
         (
             vec![
                 "loop",
                 "add",
-                "wake-flags",
-                "--wake",
+                "wait-flags",
+                "--wait",
                 "@claude",
                 "--mode",
                 "auto",
@@ -3736,7 +3736,7 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "--prompt",
                 "x",
             ],
-            "`wake-flags` uses --wake, so --mode, --effort, --budget, --budget-per-day, --system-prompt-file, --timeout only apply to --agent tasks",
+            "`wait-flags` uses --wait, so --mode, --effort, --budget, --budget-per-day, --system-prompt-file, --timeout only apply to --agent tasks",
         ),
         (
             vec![
@@ -3825,7 +3825,7 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "--every",
                 "15m",
             ],
-            "--surplus and --surplus-after require --agent or --wake",
+            "--surplus and --surplus-after require --agent or --wait",
         ),
         (
             vec![
@@ -3896,22 +3896,22 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "--every",
                 "15m",
             ],
-            "--until requires --agent or --wake",
+            "--until requires --agent or --wait",
         ),
         (
             vec![
                 "loop",
                 "add",
-                "project-wake",
+                "project-wait",
                 "--project",
-                "--wake",
+                "--wait",
                 "@claude",
                 "--every",
                 "15m",
                 "--prompt",
                 "x",
             ],
-            "--project tasks cannot use --wake; project config cannot pin a machine-local session",
+            "--project tasks cannot use --wait; project config cannot pin a machine-local session",
         ),
         (
             vec![

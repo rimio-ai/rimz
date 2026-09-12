@@ -453,11 +453,11 @@ mod tests {
             Path::new("/state"),
         )
         .unwrap();
-        let output = paths.wakes_dir.join("wake-test.output");
+        let output = paths.waits_dir.join("wait-test.output");
         let sandbox = TmpView::new(Isolation::Sandbox, &paths);
         assert_eq!(
             sandbox.agent_path(&output),
-            Path::new("/tmp/rimz-wakes/wake-test.output")
+            Path::new("/tmp/rimz-waits/wait-test.output")
         );
         assert_eq!(
             sandbox.agent_path(Path::new("/elsewhere/file")),

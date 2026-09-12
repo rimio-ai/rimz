@@ -291,7 +291,7 @@ fn settle(facts: SettleFacts<'_>) -> Settled {
 
     if status == AgentStatus::Running && phase == TurnPhase::Parked {
         // A clean end parked on background work: the turn's verdict was
-        // earned; the chore hums on under the ⋯ bg marker. The wake's
+        // earned; the chore hums on under the ⋯ bg marker. The wait's
         // turn_started re-runs the row.
         return Settled::status(AgentStatus::Success);
     }

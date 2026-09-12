@@ -6,7 +6,7 @@ use crate::store::event::SignalSource;
 
 fn task() -> TaskEntry {
     TaskEntry {
-        wake: Some(TaskTarget {
+        wait: Some(TaskTarget {
             kind: crate::ids::AgentKind::new_unchecked("claude"),
             session: "session".into(),
             handle: "@coder#feat-x".to_owned(),
@@ -15,8 +15,8 @@ fn task() -> TaskEntry {
     }
 }
 
-fn meta(_handle: &str) -> WakeMeta {
-    WakeMeta {
+fn meta(_handle: &str) -> WaitMeta {
+    WaitMeta {
         armed_at: "2026-01-01T14:02:00Z".parse().unwrap(),
         delay: None,
         pid: None,
@@ -41,7 +41,7 @@ fn assert_watch(verdict: WatchVerdict, label: &str) {
         watch: Some("cargo test".to_owned()),
         ..task()
     };
-    for output_path in [None, Some("/tmp/rimz-wakes/wake-test.output".into())] {
+    for output_path in [None, Some("/tmp/rimz-waits/wait-test.output".into())] {
         for output in ["", "  last line\nnext line  \n"] {
             let signal = Signal {
                 watch: Some(WatchOutcome {
@@ -57,18 +57,18 @@ fn assert_watch(verdict: WatchVerdict, label: &str) {
                         }
                     },
                 }),
-                ..signal("wake.test", serde_json::json!({}))
+                ..signal("wait.test", serde_json::json!({}))
             };
             let path = if output_path.is_none() {
                 ""
             } else if output.is_empty() {
-                " · output (0 B, 0 lines): /tmp/rimz-wakes/wake-test.output"
+                " · output (0 B, 0 lines): /tmp/rimz-waits/wait-test.output"
             } else {
-                " · output (24 B, 2 lines): /tmp/rimz-wakes/wake-test.output"
+                " · output (24 B, 2 lines): /tmp/rimz-waits/wait-test.output"
             };
             assert_eq!(
-                compose_wake(
-                    "wake-test",
+                compose_wait(
+                    "wait-test",
                     &task,
                     Some(&meta("@coder#feat-x")),
                     Evidence::Signal(&signal),
@@ -76,7 +76,7 @@ fn assert_watch(verdict: WatchVerdict, label: &str) {
                     now(),
                 ),
                 format!(
-                    "waited on `cargo test`\n{label}{path} [wake-test]\n\n  Inspect {{{{branch}}}}.\nKeep this line.  \n"
+                    "waited on `cargo test`\n{label}{path} [wait-test]\n\n  Inspect {{{{branch}}}}.\nKeep this line.  \n"
                 )
             );
         }
@@ -131,7 +131,7 @@ fn watch_checkin_keeps_summary_path_and_next_actions() {
                         elapsed_ms: 1_800_000,
                     },
                     output: output.to_owned(),
-                    output_path: Some("/tmp/rimz-wakes/wake-test.output".into()),
+                    output_path: Some("/tmp/rimz-waits/wait-test.output".into()),
                     summary: if output.is_empty() {
                         FileSummary::default()
                     } else {
@@ -141,17 +141,17 @@ fn watch_checkin_keeps_summary_path_and_next_actions() {
                         }
                     },
                 }),
-                ..signal("wake.test", serde_json::json!({}))
+                ..signal("wait.test", serde_json::json!({}))
             };
             let delay = timeout.unwrap_or("30m");
             let path = if output.is_empty() {
-                " · output (0 B, 0 lines): /tmp/rimz-wakes/wake-test.output"
+                " · output (0 B, 0 lines): /tmp/rimz-waits/wait-test.output"
             } else {
-                " · output (10 B, 1 line): /tmp/rimz-wakes/wake-test.output"
+                " · output (10 B, 1 line): /tmp/rimz-waits/wait-test.output"
             };
             assert_eq!(
-                compose_wake(
-                    "wake-test",
+                compose_wait(
+                    "wait-test",
                     &task,
                     None,
                     Evidence::Signal(&signal),
@@ -159,7 +159,7 @@ fn watch_checkin_keeps_summary_path_and_next_actions() {
                     now()
                 ),
                 format!(
-                    "waited on `cargo test`\nstill running after 30m{path} [wake-test]\n\nStop it: rimz wake cancel wake-test\nAnother check-in: rimz wake --in {delay}"
+                    "waited on `cargo test`\nstill running after 30m{path} [wait-test]\n\nStop it: rimz wait cancel wait-test\nAnother check-in: rimz wait --in {delay}"
                 )
             );
         }
@@ -194,15 +194,15 @@ fn signal_uses_elapsed_time_and_compact_canonical_payload() {
         serde_json::json!({"branch":"feat-x","number":91,"signal":"not-canonical"}),
     );
     assert_eq!(
-        compose_wake(
-            "wake-test",
+        compose_wait(
+            "wait-test",
             &task(),
             Some(&meta("@coder#feat-x")),
             Evidence::Signal(&signal),
             "",
             now()
         ),
-        "waited on ci.failed on feat-x (PR #91)\nfired after 18m [wake-test]\n{\"branch\":\"feat-x\",\"number\":91,\"signal\":\"ci.failed\"}"
+        "waited on ci.failed on feat-x (PR #91)\nfired after 18m [wait-test]\n{\"branch\":\"feat-x\",\"number\":91,\"signal\":\"ci.failed\"}"
     );
 }
 
@@ -212,27 +212,27 @@ fn signal_without_metadata_keeps_scope_and_has_no_elapsed_time() {
         (
             "pr.merged",
             serde_json::json!({"branch":"feat-x","number":91}),
-            "waited on pr.merged on feat-x (PR #91)\nfired [wake-test]\n{\"branch\":\"feat-x\",\"number\":91,\"signal\":\"pr.merged\"}",
+            "waited on pr.merged on feat-x (PR #91)\nfired [wait-test]\n{\"branch\":\"feat-x\",\"number\":91,\"signal\":\"pr.merged\"}",
         ),
         (
             "agent.idle",
             serde_json::json!({"handle":"@coder"}),
-            "waited on agent.idle @coder\nfired [wake-test]\n{\"handle\":\"@coder\",\"signal\":\"agent.idle\"}",
+            "waited on agent.idle @coder\nfired [wait-test]\n{\"handle\":\"@coder\",\"signal\":\"agent.idle\"}",
         ),
         (
             "team.idle",
             serde_json::json!({"instance":"forge#feat-x"}),
-            "waited on team.idle forge#feat-x\nfired [wake-test]\n{\"instance\":\"forge#feat-x\",\"signal\":\"team.idle\"}",
+            "waited on team.idle forge#feat-x\nfired [wait-test]\n{\"instance\":\"forge#feat-x\",\"signal\":\"team.idle\"}",
         ),
         (
             "deploy.finished",
             serde_json::json!({}),
-            "waited on deploy.finished\nfired [wake-test]\n{\"signal\":\"deploy.finished\"}",
+            "waited on deploy.finished\nfired [wait-test]\n{\"signal\":\"deploy.finished\"}",
         ),
     ] {
         assert_eq!(
-            compose_wake(
-                "wake-test",
+            compose_wait(
+                "wait-test",
                 &task(),
                 None,
                 Evidence::Signal(&signal(name, payload)),
@@ -246,28 +246,28 @@ fn signal_without_metadata_keeps_scope_and_has_no_elapsed_time() {
 
 #[test]
 fn delay_ends_with_name() {
-    let meta = WakeMeta {
+    let meta = WaitMeta {
         delay: Some("30m".to_owned()),
         ..meta("@coder#feat-x")
     };
     assert_eq!(
-        compose_wake(
-            "wake-test",
+        compose_wait(
+            "wait-test",
             &task(),
             Some(&meta),
             Evidence::Scheduled,
             "",
             now()
         ),
-        "waited 30m [wake-test]"
+        "waited 30m [wait-test]"
     );
 }
 
 #[test]
-fn scheduled_wake_without_metadata_does_not_fabricate_delay() {
+fn scheduled_wait_without_metadata_does_not_fabricate_delay() {
     assert_eq!(
-        compose_wake("wake-test", &task(), None, Evidence::Scheduled, "", now()),
-        "scheduled wake\nfired [wake-test]"
+        compose_wait("wait-test", &task(), None, Evidence::Scheduled, "", now()),
+        "scheduled wait\nfired [wait-test]"
     );
 }
 
@@ -278,7 +278,7 @@ fn watch_command_preview_preserves_both_ends() {
         watch: Some(command.clone()),
         ..task()
     };
-    let body = compose_wake("wake-test", &task, None, Evidence::Manual, "", now());
+    let body = compose_wait("wait-test", &task, None, Evidence::Manual, "", now());
     let headline = body.lines().next().unwrap();
     assert!(headline.starts_with("waited on `cargo test "));
     assert!(headline.ends_with(" --all-targets`"));
@@ -295,7 +295,7 @@ fn manual_watch_and_signal_name_subject_and_fire_by_hand() {
                 watch: Some("cargo test".to_owned()),
                 ..task()
             },
-            "waited on `cargo test`\nfired by hand [wake-test]",
+            "waited on `cargo test`\nfired by hand [wait-test]",
         ),
         (
             TaskEntry {
@@ -303,12 +303,12 @@ fn manual_watch_and_signal_name_subject_and_fire_by_hand() {
                 matches: Some([("branch".to_owned(), "feat-x".to_owned())].into()),
                 ..task()
             },
-            "waited on ci.* on feat-x\nfired by hand [wake-test]",
+            "waited on ci.* on feat-x\nfired by hand [wait-test]",
         ),
     ] {
         assert_eq!(
-            compose_wake(
-                "wake-test",
+            compose_wait(
+                "wait-test",
                 &task,
                 Some(&meta("@coder#feat-x")),
                 Evidence::Manual,
@@ -328,23 +328,23 @@ fn signal_note_is_verbatim_regardless_of_armer() {
     );
     for handle in ["@planner#feat-x", "@coder#other"] {
         assert_eq!(
-            compose_wake(
-                "wake-test",
+            compose_wait(
+                "wait-test",
                 &task(),
                 Some(&meta(handle)),
                 Evidence::Signal(&signal),
                 "  the migration window is open\n{{branch}}  \n",
                 now()
             ),
-            "waited on ci.passed on feat-x (PR #91)\nfired after 18m [wake-test]\n{\"branch\":\"feat-x\",\"number\":91,\"signal\":\"ci.passed\"}\n\n  the migration window is open\n{{branch}}  \n"
+            "waited on ci.passed on feat-x (PR #91)\nfired after 18m [wait-test]\n{\"branch\":\"feat-x\",\"number\":91,\"signal\":\"ci.passed\"}\n\n  the migration window is open\n{{branch}}  \n"
         );
     }
 }
 
 #[test]
-fn signal_note_and_guard_evidence_remain_after_wake_body() {
+fn signal_note_and_guard_evidence_remain_after_wait_body() {
     let signal = signal("deploy.failed", serde_json::json!({"branch":"feature"}));
-    let body = compose_wake(
+    let body = compose_wait(
         "deployment",
         &task(),
         None,

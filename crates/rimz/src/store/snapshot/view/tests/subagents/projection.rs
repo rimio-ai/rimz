@@ -1,5 +1,5 @@
 use super::*;
-use crate::agents::{PendingWake, PendingWakeTrigger};
+use crate::agents::{PendingWait, PendingWaitTrigger};
 
 #[test]
 fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
@@ -31,9 +31,9 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     let sub = sub_agent_from_state(&finished, now, false);
     assert_eq!(sub.elapsed_secs, Some(40));
 
-    finished.pending_wakes.push(PendingWake {
-        name: "wake-command".to_owned(),
-        trigger: PendingWakeTrigger::Command {
+    finished.pending_waits.push(PendingWait {
+        name: "wait-command".to_owned(),
+        trigger: PendingWaitTrigger::Command {
             command: "cargo test".to_owned(),
         },
         armed_at: Some(ago(60)),
@@ -42,7 +42,7 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     assert_eq!(sub.status, AgentStatus::Sleeping);
     assert_eq!(sub.elapsed_secs, Some(40));
     assert_eq!(finished.status, AgentStatus::Success);
-    finished.pending_wakes.clear();
+    finished.pending_waits.clear();
     assert_eq!(
         sub_agent_from_state(&finished, now, false).status,
         AgentStatus::Success

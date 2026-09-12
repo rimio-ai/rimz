@@ -15,7 +15,7 @@ use crate::store::message::MessageRecord;
 
 /// Derive team signals from the transitioning audit row and its live cohort members.
 /// `pending` is the complete pending queue, including delayed and resume-gated messages.
-/// `sleeping` contains sessions with a pending one-shot wake in this workspace.
+/// `sleeping` contains sessions with a pending one-shot wait in this workspace.
 pub fn team_lifecycle_signals(
     event: &LifecycleEvent,
     member: &AgentState,
@@ -57,7 +57,7 @@ pub fn team_lifecycle_signals(
         })
     };
     let others_at_rest = others.iter().all(|agent| at_rest(agent.status));
-    let has_wake = |members: &[&AgentState]| {
+    let has_wait = |members: &[&AgentState]| {
         members
             .iter()
             .any(|agent| sleeping.contains(&(agent.kind.clone(), agent.agent_id.clone())))
@@ -79,13 +79,13 @@ pub fn team_lifecycle_signals(
         && others_at_rest
         && (terminal || at_rest(event.status))
         && !has_pending(&live)
-        && !has_wake(&live);
+        && !has_wait(&live);
     let mut members = others;
     members.push(member);
     let prior_idle = others_at_rest
         && event.prior_status.is_some_and(at_rest)
         && !has_pending(&members)
-        && !has_wake(&members);
+        && !has_wait(&members);
     if post_idle && !prior_idle {
         names.push("team.idle");
     }

@@ -15,7 +15,7 @@ pub(super) fn run(
 ) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     caller_session(&ctx)?.context(
-        "canceling a wake requires an agent RimZ can identify; run this command from an agent pane",
+        "canceling a wait requires an agent RimZ can identify; run this command from an agent pane",
     )?;
     let pending = list::pending_rows(&ctx)?;
     let names = if all {
@@ -23,7 +23,7 @@ pub(super) fn run(
     } else {
         let name = name.expect("clap requires a name or --all").to_string();
         if !pending.iter().any(|row| row.name == name) {
-            bail!("no pending wake named `{name}`; see `rimz wake list`");
+            bail!("no pending wait named `{name}`; see `rimz wait list`");
         }
         vec![name]
     };

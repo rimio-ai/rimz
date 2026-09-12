@@ -430,10 +430,10 @@ fn schedule_detail(check: &deliver::DeliveryCheck, now: Timestamp) -> (bool, Str
     let detail = if check.schedule.ready {
         match check.schedule.retry_after {
             Some(retry_after) if retry_after > now => format!(
-                "ok; retry wake {}",
+                "ok; retry wait {}",
                 time_until_with_absolute(retry_after, now)
             ),
-            Some(retry_after) => format!("ok; retry wake {}", time_with_absolute(retry_after, now)),
+            Some(retry_after) => format!("ok; retry wait {}", time_with_absolute(retry_after, now)),
             None => "ok".to_owned(),
         }
     } else {

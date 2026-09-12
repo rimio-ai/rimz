@@ -1,7 +1,7 @@
 # RimZ per-machine loop configuration.
 #
 # Save as ~/.config/rimz/loop.toml, or run `rimz config init`.
-# Durable recurring loop tasks live here. One-shots and self-wakes created by
+# Durable recurring loop tasks live here. One-shots and self-waits created by
 # RimZ live in the state store instead, so this file stays hand-editable.
 
 # Supervised scheduled turns without a task-specific timeout use two hours.
@@ -10,7 +10,7 @@
 # Scheduled loop tasks. Each entry drives one `rimz loop run <name>` wake-up,
 # fired by the sidebar elder while a room for the task's project is open, or by
 # the OS timer installed with `rimz loop timer install` otherwise. Use either
-# `agent` to spawn a supervised turn or `wake` to wake one pinned live session.
+# `agent` to spawn a supervised turn or `wait` to wake one pinned live session.
 # Edit entries here or with `rimz loop add`.
 # [tasks]
 ## [tasks.morning]
@@ -38,7 +38,7 @@
 ## root = "/home/you/code/app"
 ## every = "15m"
 ## check = "cargo test"                # shell command runs in task dir (project root when absent) before the agent
-## on = "fail"                         # "fail" wakes on non-zero/timeout; "success" wakes on zero
+## on = "fail"                         # "fail" waits on non-zero/timeout; "success" waits on zero
 ##
 ## [tasks.ci_green]
 ## prompt = "CI is green; merge the PR"
@@ -47,16 +47,16 @@
 ## check = "gh run watch --exit-status"
 ## on = "success"
 ## deadline = "2026-07-01T12:00:00Z"   # `rimz loop add --until 30m` stores this as state
-## [tasks.ci_green.wake]
+## [tasks.ci_green.wait]
 ## kind = "claude"
 ## session = "sess-abc123"
 ## handle = "@planner"
 ##
-## [tasks.self_wake]
+## [tasks.self_wait]
 ## prompt = "resume the review and fix the next blocking comment"
 ## root = "/home/you/code/app"
 ## at = "09:30"
-## [tasks.self_wake.wake]
+## [tasks.self_wait.wait]
 ## kind = "claude"
 ## session = "sess-abc123"
 ## handle = "@planner"

@@ -208,7 +208,7 @@ fn launch_registered_at_stamps_first_launch_event() {
 }
 
 #[test]
-fn turn_started_at_survives_parked_wake_then_restamps_on_next_turn() {
+fn turn_started_at_survives_parked_wait_then_restamps_on_next_turn() {
     let start = raw_lifecycle_at(
         "claude",
         0,

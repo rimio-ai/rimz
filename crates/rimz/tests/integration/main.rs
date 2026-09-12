@@ -64,7 +64,7 @@ mod trust;
 mod uninstall;
 #[cfg(unix)]
 mod update_homebrew;
-mod wake;
+mod wait;
 mod wakeup_pipe;
 mod web;
 mod workspace;

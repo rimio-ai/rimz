@@ -80,9 +80,9 @@ pub enum TaskActionErr {
     AttemptsWithoutVerify { name: String },
     #[error("loop task `{name}` sets `max-attempts` to 0; use at least 1")]
     ZeroAttempts { name: String },
-    #[error("loop task `{name}` sets both `agent` and `wake`; keep exactly one")]
+    #[error("loop task `{name}` sets both `agent` and `wait`; keep exactly one")]
     ConflictingActions { name: String },
-    #[error("loop task `{name}` needs `agent`, `wake`, or `check`")]
+    #[error("loop task `{name}` needs `agent`, `wait`, or `check`")]
     MissingAction { name: String },
 }
 
@@ -103,7 +103,7 @@ impl TaskAction {
                 name: name.to_owned(),
             });
         }
-        match (entry.agent.as_deref(), entry.wake.as_ref()) {
+        match (entry.agent.as_deref(), entry.wait.as_ref()) {
             (Some(agent), None) if !agent.trim().is_empty() => Ok(Self::Spawn(agent.to_owned())),
             (None, Some(target)) => Ok(Self::Deliver(target.clone())),
             (None, None) if entry.check.is_some() => Ok(Self::CheckOnly),
@@ -390,7 +390,7 @@ impl Trigger {
                     _ => Deliver,
                 }
             }
-            Self::Watch { .. } if signal.name.as_str() == format!("wake.{task_name}") => Deliver,
+            Self::Watch { .. } if signal.name.as_str() == format!("wait.{task_name}") => Deliver,
             Self::Watch { .. } => Ignore,
         }
     }

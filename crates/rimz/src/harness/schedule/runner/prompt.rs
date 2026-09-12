@@ -1,9 +1,9 @@
-//! Self-explaining wake headlines, evidence, and verbatim notes.
+//! Self-explaining wait headlines, evidence, and verbatim notes.
 
 use jiff::Timestamp;
 use serde_json::{Map, Value};
 
-use crate::config::{TaskEntry, WakeMeta};
+use crate::config::{TaskEntry, WaitMeta};
 use crate::harness::schedule::signal::{Signal, elapsed_label};
 
 pub(super) enum Evidence<'a> {
@@ -12,10 +12,10 @@ pub(super) enum Evidence<'a> {
     Manual,
 }
 
-pub(super) fn compose_wake(
+pub(super) fn compose_wait(
     name: &str,
     task: &TaskEntry,
-    meta: Option<&WakeMeta>,
+    meta: Option<&WaitMeta>,
     evidence: Evidence<'_>,
     note: &str,
     now: Timestamp,
@@ -44,7 +44,7 @@ pub(super) fn compose_wake(
     {
         let delay = task.timeout.as_deref().unwrap_or("30m");
         body.push_str(&format!(
-            "\n\nStop it: rimz wake cancel {name}\nAnother check-in: rimz wake --in {delay}"
+            "\n\nStop it: rimz wait cancel {name}\nAnother check-in: rimz wait --in {delay}"
         ));
     }
     if !note.is_empty() {
@@ -54,7 +54,7 @@ pub(super) fn compose_wake(
     body
 }
 
-fn wait_line(task: &TaskEntry, meta: Option<&WakeMeta>, evidence: &Evidence<'_>) -> String {
+fn wait_line(task: &TaskEntry, meta: Option<&WaitMeta>, evidence: &Evidence<'_>) -> String {
     if let Some(command) = &task.watch {
         return format!(
             "waited on `{}`",
@@ -70,12 +70,12 @@ fn wait_line(task: &TaskEntry, meta: Option<&WakeMeta>, evidence: &Evidence<'_>)
     if let Some(delay) = meta.and_then(|meta| meta.delay.as_deref()) {
         return format!("waited {delay}");
     }
-    "scheduled wake".to_owned()
+    "scheduled wait".to_owned()
 }
 
 fn verdict_line(
     evidence: &Evidence<'_>,
-    meta: Option<&WakeMeta>,
+    meta: Option<&WaitMeta>,
     now: Timestamp,
     name: &str,
 ) -> Option<String> {

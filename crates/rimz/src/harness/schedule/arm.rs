@@ -14,7 +14,7 @@ use super::catalog::{LoadedTask, TaskSource};
 use super::signal::SignalSelector;
 use super::{ParsedSchedule, Schedule, ScheduleErr};
 use crate::agents::AgentState;
-use crate::config::{CheckOn, TaskEntry, TaskTarget, WakeMeta};
+use crate::config::{CheckOn, TaskEntry, TaskTarget, WaitMeta};
 use crate::ids::TeamInstanceId;
 use crate::workspace::ResolvedWorkspace;
 
@@ -37,7 +37,7 @@ impl std::fmt::Display for TaskName {
 }
 
 pub enum DeliveryName {
-    MintWake,
+    MintWait,
     Named(TaskName),
 }
 
@@ -72,7 +72,7 @@ pub enum DeliveryPrompt {
 }
 
 pub enum DeliveryProvenance {
-    SelfWake,
+    SelfWait,
     Loop,
     Team(TeamInstanceId),
 }
@@ -130,7 +130,7 @@ pub fn arm_delivery(
     let catalog = super::catalog::TaskCatalog::load(Some(&workspace.project_root))
         .map_err(|err| ArmFailure::State(err.into()))?;
     let name = match &name {
-        DeliveryName::MintWake => None,
+        DeliveryName::MintWait => None,
         DeliveryName::Named(name) => Some(name.0.as_str()),
     };
     if let Some(name) = name
@@ -161,7 +161,7 @@ pub fn arm_delivery(
     if entry.watch.is_some() {
         let spawn = || -> std::io::Result<()> {
             paths.ensure_tmp_dir().map_err(std::io::Error::other)?;
-            let path = super::signal::wake_output_path(&paths, &name);
+            let path = super::signal::wait_output_path(&paths, &name);
             let output = OpenOptions::new()
                 .create(true)
                 .write(true)
@@ -171,13 +171,13 @@ pub fn arm_delivery(
             command
                 .arg("--root")
                 .arg(&workspace.project_root)
-                .args(["wake", "watch", &name])
+                .args(["wait", "watch", &name])
                 .current_dir(&workspace.project_root)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::from(output))
                 .process_group(0);
-            crate::child_process::spawn_detached_reaped(&mut command, "wake-watch")?;
+            crate::child_process::spawn_detached_reaped(&mut command, "wait-watch")?;
             Ok(())
         };
         if let Err(error) = spawn() {
@@ -233,13 +233,13 @@ pub fn retire_session(
 #[derive(Debug, thiserror::Error)]
 pub enum DeliveryScopeFailure {
     #[error(
-        "CI on the root checkout is not watched: RimZ polls the forge for worktree branches. Pass --match branch=<name> or --match path=<worktree-path>, or watch it with: rimz wake -- gh run watch --exit-status"
+        "CI on the root checkout is not watched: RimZ polls the forge for worktree branches. Pass --match branch=<name> or --match path=<worktree-path>, or watch it with: rimz wait -- gh run watch --exit-status"
     )]
     RootCheckout,
-    #[error("team.* wakes need a team member; pass --match instance=<team#channel>")]
+    #[error("team.* waits need a team member; pass --match instance=<team#channel>")]
     NoTeam,
     #[error(
-        "--wake on an agent.* signal requires --match handle=<other> or --match session=<other> to avoid waking the target from its own lifecycle signal"
+        "--wait on an agent.* signal requires --match handle=<other> or --match session=<other> to avoid waking the target from its own lifecycle signal"
     )]
     SelfSignal,
 }
@@ -309,8 +309,8 @@ fn build_entry(
     spec: DeliverySpec,
     now: Timestamp,
 ) -> Result<(DeliveryName, LoadedTask), ArmFailure> {
-    let self_wake = matches!(spec.provenance, DeliveryProvenance::SelfWake);
-    if self_wake
+    let self_wait = matches!(spec.provenance, DeliveryProvenance::SelfWait);
+    if self_wait
         && (!matches!(
             spec.trigger,
             DeliveryTrigger::Delay(_) | DeliveryTrigger::Pid { .. } | DeliveryTrigger::Watch { .. }
@@ -320,7 +320,7 @@ fn build_entry(
             || spec.deadline.is_some())
     {
         return Err(ArmFailure::InvalidProvenance(
-            "self wakes require a timer or watched command without a prompt or guard",
+            "self waits require a timer or watched command without a prompt or guard",
         ));
     }
     if matches!(spec.provenance, DeliveryProvenance::Team(_))
@@ -337,7 +337,7 @@ fn build_entry(
         ));
     }
     let mut entry = TaskEntry {
-        wake: Some(spec.target),
+        wait: Some(spec.target),
         root: workspace.project_root.clone(),
         dir: (workspace.worktree_root != workspace.project_root)
             .then(|| workspace.worktree_root.clone()),
@@ -391,7 +391,7 @@ fn build_entry(
             validate_self_signal(
                 &selector,
                 &matches,
-                entry.wake.as_ref().expect("delivery target was set above"),
+                entry.wait.as_ref().expect("delivery target was set above"),
             )?;
             entry.signal = Some(selector.to_string());
             entry.matches = (!matches.is_empty()).then_some(matches);
@@ -423,15 +423,15 @@ fn build_entry(
             (None, None)
         }
     };
-    if self_wake {
-        entry.wake_meta = Some(WakeMeta {
+    if self_wait {
+        entry.wait_meta = Some(WaitMeta {
             armed_at: now,
             delay,
             pid,
         });
     }
     let name = match &spec.name {
-        DeliveryName::MintWake => "wake",
+        DeliveryName::MintWait => "wait",
         DeliveryName::Named(name) => &name.0,
     };
     let task = LoadedTask::new(name, entry, TaskSource::Instance);

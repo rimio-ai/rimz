@@ -1184,8 +1184,8 @@ fn setup_yes_merges_loop_tasks_as_table_blocks() {
     write_machine_file(
         &loop_config_path(&env),
         r#"
-[tasks.self_wake]
-wake = { kind = "claude", session = "s1", handle = "@planner" }
+[tasks.self_wait]
+wait = { kind = "claude", session = "s1", handle = "@planner" }
 prompt = "resume"
 root = "/r"
 
@@ -1206,16 +1206,16 @@ every = "15m"
 
     let text = std::fs::read_to_string(loop_config_path(&env)).expect("read merged loop");
     assert!(
-        text.contains("[tasks.self_wake]"),
+        text.contains("[tasks.self_wait]"),
         "task should render as a table block:\n{text}"
     );
     assert!(
         text.contains("[tasks.pr_watch]"),
-        "wake-less task should render as a table block:\n{text}"
+        "wait-less task should render as a table block:\n{text}"
     );
     assert!(
-        text.contains("[tasks.self_wake.wake]"),
-        "wake should render as a nested table block:\n{text}"
+        text.contains("[tasks.self_wait.wait]"),
+        "wait should render as a nested table block:\n{text}"
     );
     assert!(
         !text.contains("tasks = {"),

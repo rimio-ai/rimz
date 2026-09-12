@@ -758,14 +758,14 @@ fn missing_pane_skips_compaction_without_failing_the_flip() {
 
 #[test]
 fn compaction_delivery_error_does_not_fail_a_completed_flip() {
-    for broken_wake_stamp in [false, true] {
+    for broken_wait_stamp in [false, true] {
         let fixture = Fixture::new();
         fixture.running("coder", Some("terminal_3"));
         fixture.live_panes(&["terminal_3"]);
         fixture.hook("coder", "Stop", Some("terminal_3"));
         fixture.context_tokens("coder", 150_000);
         std::fs::write(fixture.board(), BOARD).unwrap();
-        if broken_wake_stamp {
+        if broken_wait_stamp {
             std::fs::create_dir(fixture.env.runtime_paths().root.join("message-wake.json"))
                 .unwrap();
         }
@@ -780,7 +780,7 @@ fn compaction_delivery_error_does_not_fail_a_completed_flip() {
                 .unwrap(),
         );
         assert!(
-            output.contains(if broken_wake_stamp {
+            output.contains(if broken_wait_stamp {
                 "compact  skipped:"
             } else {
                 "compact  queued"
@@ -804,7 +804,7 @@ fn compaction_delivery_error_does_not_fail_a_completed_flip() {
         );
         assert!(rimz::harness::assist_log::recent(&fixture.env.state_root(), None).iter().any(|record| matches!(
         &record.assist,
-        rimz::harness::assist_log::Assist::FlipCompact { message_id: Some(id), delivered: false, error, .. } if id == messages[0].message_id.as_str() && error.is_some() == broken_wake_stamp
+        rimz::harness::assist_log::Assist::FlipCompact { message_id: Some(id), delivered: false, error, .. } if id == messages[0].message_id.as_str() && error.is_some() == broken_wait_stamp
     )));
     }
 }

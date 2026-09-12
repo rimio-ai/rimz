@@ -11,7 +11,7 @@ use crate::common::{CommandTimeoutExt, Env, ZellijNamespace};
 use super::support::*;
 
 #[test]
-fn self_wake_steers_to_live_consumer_when_idle_and_working() {
+fn self_wait_steers_to_live_consumer_when_idle_and_working() {
     require_zellij!();
 
     for working in [false, true] {
@@ -33,12 +33,12 @@ fn self_wake_steers_to_live_consumer_when_idle_and_working() {
         wait_for_pane_count(xdg, room.name(), 2);
         let _client = AttachedClient::attach(&room, 160, 40);
 
-        let agent_id = AgentSessionId::from("self-wake-session");
-        let launch_id = AgentSessionId::from("self-wake-launch");
+        let agent_id = AgentSessionId::from("self-wait-session");
+        let launch_id = AgentSessionId::from("self-wait-launch");
         let agent_bin = write_sleeping_agent_shim(&env, "claude");
-        let ready = env.home_root.join("self-wake-agent-ready");
+        let ready = env.home_root.join("self-wait-agent-ready");
         let command = zellij_agent_exec_command(&env, xdg, &agent_bin, &ready, agent_id.as_str());
-        let tab_name = "#self-wake";
+        let tab_name = "#self-wait";
         backend
             .open_tab(&TabOptions {
                 title: tab_name.to_owned(),
@@ -101,7 +101,7 @@ fn self_wake_steers_to_live_consumer_when_idle_and_working() {
         } else {
             AgentStatus::Idle
         };
-        let snapshot = store.snapshot().expect("snapshot before wake");
+        let snapshot = store.snapshot().expect("snapshot before wait");
         let agent = snapshot
             .agents
             .iter()
@@ -118,16 +118,16 @@ fn self_wake_steers_to_live_consumer_when_idle_and_working() {
             .args([
                 "--mux",
                 "zellij",
-                "wake",
+                "wait",
                 "--",
                 "printf",
-                "self-wake-marker",
+                "self-wait-marker",
             ])
             .bounded_output()
-            .expect("arm self wake");
+            .expect("arm self wait");
         assert!(
             output.status.success(),
-            "self wake failed (working={working}): {}",
+            "self wait failed (working={working}): {}",
             String::from_utf8_lossy(&output.stderr),
         );
         poll_until(
@@ -138,10 +138,10 @@ fn self_wake_steers_to_live_consumer_when_idle_and_working() {
                     .map(|capture| capture.raw_text)
                     .map_err(|err| err.to_string())
             },
-            |capture| capture.contains("Type: WAKE") && capture.contains("self-wake-marker"),
-            &format!("self wake in original live pane (working={working})"),
+            |capture| capture.contains("Type: WAIT") && capture.contains("self-wait-marker"),
+            &format!("self wait in original live pane (working={working})"),
         );
-        let snapshot = store.snapshot().expect("snapshot after wake");
+        let snapshot = store.snapshot().expect("snapshot after wait");
         let agent = snapshot
             .agents
             .iter()

@@ -1,31 +1,31 @@
 //! Pending waits name their kind: timers by due, pid/shell watches, then signals. Only shell waits carry a second command line.
 
-use crate::agents::{PendingWake, PendingWakeTrigger};
+use crate::agents::{PendingWait, PendingWaitTrigger};
 use crate::proc::command::{command_program_basename, program_label};
 
 use super::*;
 
-pub(super) fn wait_entry_lines(ctx: &RowCtx<'_>, wakes: &[PendingWake]) -> Vec<Line<'static>> {
+pub(super) fn wait_entry_lines(ctx: &RowCtx<'_>, waits: &[PendingWait]) -> Vec<Line<'static>> {
     let theme = ctx.theme;
     let width = content_width(ctx.width);
     let mut lines = Vec::new();
-    for wake in wakes {
-        let summary = match &wake.trigger {
-            PendingWakeTrigger::Command { command } => format!("shell {}", program_label(command)),
-            _ => wake.trigger.summary(ctx.now),
+    for wait in waits {
+        let summary = match &wait.trigger {
+            PendingWaitTrigger::Command { command } => format!("shell {}", program_label(command)),
+            _ => wait.trigger.summary(ctx.now),
         };
-        let (lead, lead_style) = match &wake.trigger {
-            PendingWakeTrigger::Command { .. } | PendingWakeTrigger::Pid { .. } => (
+        let (lead, lead_style) = match &wait.trigger {
+            PendingWaitTrigger::Command { .. } | PendingWaitTrigger::Pid { .. } => (
                 role_glyph(theme, AnimationRole::Working, ctx.animation_phase),
                 working_style(theme, ctx.animation_phase).add_modifier(Modifier::DIM),
             ),
-            PendingWakeTrigger::Timer { .. } => (
+            PendingWaitTrigger::Timer { .. } => (
                 theme.glyph(GlyphRole::CardWaitTimer).to_owned(),
-                theme.styled(Component::WakeHeader, Modifier::empty()),
+                theme.styled(Component::WaitHeader, Modifier::empty()),
             ),
-            PendingWakeTrigger::Signal { .. } => (
+            PendingWaitTrigger::Signal { .. } => (
                 theme.glyph(GlyphRole::CardWaitSignal).to_owned(),
-                theme.styled(Component::WakeHeader, Modifier::empty()),
+                theme.styled(Component::WaitHeader, Modifier::empty()),
             ),
         };
         let left = vec![
@@ -34,7 +34,7 @@ pub(super) fn wait_entry_lines(ctx: &RowCtx<'_>, wakes: &[PendingWake]) -> Vec<L
             Span::raw(" "),
             Span::styled(summary, theme.body()),
         ];
-        let elapsed = wake
+        let elapsed = wait
             .armed_at
             .map(|at| {
                 let secs = age_secs(at, ctx.now);
@@ -43,7 +43,7 @@ pub(super) fn wait_entry_lines(ctx: &RowCtx<'_>, wakes: &[PendingWake]) -> Vec<L
             .unwrap_or_default();
         lines.push(pin_right(left, elapsed, width));
 
-        if let PendingWakeTrigger::Command { command } = &wake.trigger {
+        if let PendingWaitTrigger::Command { command } = &wait.trigger {
             let detail = vec![
                 Span::raw("      "),
                 Span::styled(command_program_basename(command), theme.muted()),

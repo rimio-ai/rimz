@@ -176,22 +176,22 @@ fn trusted_project_tasks_load_with_project_root_and_prompt_paths() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.wake]\nagent = \"codex\"\nprompt-file = \"prompts/wake.md\"\nsystem-prompt-file = \"prompts/system.md\"\nevery = \"day\"\nat = \"08:00\"\n",
+        "[tasks.wait]\nagent = \"codex\"\nprompt-file = \"prompts/wait.md\"\nsystem-prompt-file = \"prompts/system.md\"\nevery = \"day\"\nat = \"08:00\"\n",
     );
     crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
 
     let loaded = load_project_tasks(project.path(), config.path()).expect("project tasks");
-    let wake = loaded.tasks.0.get("wake").expect("wake task");
+    let wait = loaded.tasks.0.get("wait").expect("wait task");
 
     assert_eq!(loaded.state, TrustState::Trusted);
     assert_eq!(loaded.config_path, project.path().join(".rimz/config.toml"));
-    assert_eq!(wake.root, project.path());
+    assert_eq!(wait.root, project.path());
     assert_eq!(
-        wake.prompt_file.as_ref(),
-        Some(&project.path().join(".rimz/prompts/wake.md"))
+        wait.prompt_file.as_ref(),
+        Some(&project.path().join(".rimz/prompts/wait.md"))
     );
     assert_eq!(
-        wake.system_prompt_file.as_ref(),
+        wait.system_prompt_file.as_ref(),
         Some(&project.path().join(".rimz/prompts/system.md"))
     );
 }
@@ -202,37 +202,37 @@ fn untrusted_project_tasks_stay_visible_with_state() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.wake]\nagent = \"codex\"\nprompt = \"wake\"\nevery = \"day\"\nat = \"08:00\"\n",
+        "[tasks.wait]\nagent = \"codex\"\nprompt = \"wait\"\nevery = \"day\"\nat = \"08:00\"\n",
     );
 
     let loaded = load_project_tasks(project.path(), config.path()).expect("project tasks");
 
     assert_eq!(loaded.state, TrustState::Untrusted);
-    assert!(loaded.tasks.0.contains_key("wake"));
+    assert!(loaded.tasks.0.contains_key("wait"));
 }
 
 #[test]
 fn project_tasks_reject_machine_local_fields() {
     let cases = [
         (
-            "[tasks.wake]\nagent = \"codex\"\ndir = \"/tmp/linked\"\nevery = \"day\"\nat = \"08:00\"\n",
+            "[tasks.wait]\nagent = \"codex\"\ndir = \"/tmp/linked\"\nevery = \"day\"\nat = \"08:00\"\n",
             "dir",
         ),
         (
-            "[tasks.wake]\nagent = \"codex\"\nroot = \"/tmp/other\"\nevery = \"day\"\nat = \"08:00\"\n",
+            "[tasks.wait]\nagent = \"codex\"\nroot = \"/tmp/other\"\nevery = \"day\"\nat = \"08:00\"\n",
             "root",
         ),
         (
-            "[tasks.wake]\nagent = \"codex\"\nwake = { kind = \"codex\", session = \"sess\", handle = \"@codex\" }\nevery = \"day\"\nat = \"08:00\"\n",
-            "wake",
+            "[tasks.wait]\nagent = \"codex\"\nwait = { kind = \"codex\", session = \"sess\", handle = \"@codex\" }\nevery = \"day\"\nat = \"08:00\"\n",
+            "wait",
         ),
         (
-            "[tasks.wake]\nagent = \"codex\"\ndeadline = \"2026-07-01T12:00:00Z\"\nevery = \"day\"\nat = \"08:00\"\n",
+            "[tasks.wait]\nagent = \"codex\"\ndeadline = \"2026-07-01T12:00:00Z\"\nevery = \"day\"\nat = \"08:00\"\n",
             "deadline",
         ),
         (
-            "[tasks.wake]\nagent = \"codex\"\nsignal = \"ci.failed\"\nwake-meta = { armed_by = { kind = \"human\" }, armed_at = \"2026-07-01T12:00:00Z\" }\n",
-            "wake-meta",
+            "[tasks.wait]\nagent = \"codex\"\nsignal = \"ci.failed\"\nwait-meta = { armed_by = { kind = \"human\" }, armed_at = \"2026-07-01T12:00:00Z\" }\n",
+            "wait-meta",
         ),
     ];
     for (text, field) in cases {
@@ -258,7 +258,7 @@ fn project_tasks_require_prompt_for_spawn_tasks() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.wake]\nagent = \"codex\"\nevery = \"day\"\nat = \"08:00\"\n",
+        "[tasks.wait]\nagent = \"codex\"\nevery = \"day\"\nat = \"08:00\"\n",
     );
 
     let err = project_tasks(project.path(), config.path()).expect_err("missing prompt");
@@ -268,17 +268,17 @@ fn project_tasks_require_prompt_for_spawn_tasks() {
         EffectiveConfigErr::Tasks {
             source: ProjectTasksErr::MissingPrompt { ref task },
             ..
-        } if task == "wake"
+        } if task == "wait"
     ));
     assert!(
         err.to_string()
-            .contains("task `wake` has no prompt; set `prompt` or `prompt-file`"),
+            .contains("task `wait` has no prompt; set `prompt` or `prompt-file`"),
         "unexpected error: {err}"
     );
 
     write_project_config(
         &project,
-        "[tasks.wake]\nagent = \"codex\"\nprompt = \"triage\"\nevery = \"day\"\nat = \"08:00\"\n",
+        "[tasks.wait]\nagent = \"codex\"\nprompt = \"triage\"\nevery = \"day\"\nat = \"08:00\"\n",
     );
 
     let loaded = load_project_tasks(project.path(), config.path()).expect("prompted project task");
@@ -287,7 +287,7 @@ fn project_tasks_require_prompt_for_spawn_tasks() {
         loaded
             .tasks
             .0
-            .get("wake")
+            .get("wait")
             .and_then(|entry| entry.prompt.as_deref()),
         Some("triage")
     );
@@ -299,7 +299,7 @@ fn project_tasks_validate_schedule_shape() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.wake]\nagent = \"codex\"\nprompt = \"wake\"\nevery = \"weekday\"\n",
+        "[tasks.wait]\nagent = \"codex\"\nprompt = \"wait\"\nevery = \"weekday\"\n",
     );
 
     let err = project_tasks(project.path(), config.path()).expect_err("invalid schedule");
@@ -309,7 +309,7 @@ fn project_tasks_validate_schedule_shape() {
         EffectiveConfigErr::Tasks {
             source: ProjectTasksErr::Schedule(crate::harness::schedule::ScheduleErr::EveryNeedsAt { name }),
             ..
-        } if name == "wake"
+        } if name == "wait"
     ));
 }
 
@@ -319,7 +319,7 @@ fn project_tasks_validate_budget_fields() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.wake]\nagent = \"codex\"\nprompt = \"wake\"\nevery = \"day\"\nbudget-per-day = \"$20.00\"\n",
+        "[tasks.wait]\nagent = \"codex\"\nprompt = \"wait\"\nevery = \"day\"\nbudget-per-day = \"$20.00\"\n",
     );
 
     let err = project_tasks(project.path(), config.path()).expect_err("invalid budget");
@@ -329,7 +329,7 @@ fn project_tasks_validate_budget_fields() {
         EffectiveConfigErr::Tasks {
             source: ProjectTasksErr::Budget(crate::config::TaskBudgetError::MissingRunBudget { ref task }),
             ..
-        } if task == "wake"
+        } if task == "wait"
     ));
 }
 
@@ -339,7 +339,7 @@ fn project_tasks_must_repeat() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.wake]\nagent = \"codex\"\nprompt = \"wake\"\nat = \"08:00\"\n",
+        "[tasks.wait]\nagent = \"codex\"\nprompt = \"wait\"\nat = \"08:00\"\n",
     );
 
     let err = project_tasks(project.path(), config.path()).expect_err("one-shot project task");
@@ -349,7 +349,7 @@ fn project_tasks_must_repeat() {
         EffectiveConfigErr::Tasks {
             source: ProjectTasksErr::MustRepeat { ref task },
             ..
-        } if task == "wake"
+        } if task == "wait"
     ));
 }
 
@@ -359,11 +359,11 @@ fn project_tasks_accept_signals_and_reject_machine_only_trigger_fields() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.wake]\nagent = \"codex\"\nprompt = \"wake\"\nsignal = \"ci.failed\"\nmatch = { branch = \"feature\" }\n",
+        "[tasks.wait]\nagent = \"codex\"\nprompt = \"wait\"\nsignal = \"ci.failed\"\nmatch = { branch = \"feature\" }\n",
     );
 
     let loaded = load_project_tasks(project.path(), config.path()).expect("signal project task");
-    let task = &loaded.tasks.0["wake"];
+    let task = &loaded.tasks.0["wait"];
     assert_eq!(task.signal.as_deref(), Some("ci.failed"));
     assert_eq!(
         task.matches
@@ -377,7 +377,7 @@ fn project_tasks_accept_signals_and_reject_machine_only_trigger_fields() {
         write_project_config(
             &project,
             &format!(
-                "[tasks.wake]\nagent = \"codex\"\nprompt = \"wake\"\nsignal = \"ci.failed\"\n{field} = {value}\n"
+                "[tasks.wait]\nagent = \"codex\"\nprompt = \"wait\"\nsignal = \"ci.failed\"\n{field} = {value}\n"
             ),
         );
         let err = project_tasks(project.path(), config.path()).expect_err(field);

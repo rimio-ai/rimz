@@ -16,7 +16,7 @@ fn room_tmp_layout_is_private_and_created_on_demand() {
     paths.ensure_tmp_dir().unwrap();
     for directory in [
         &paths.scratchpad_dir,
-        &paths.wakes_dir,
+        &paths.waits_dir,
         &paths.subagents_dir,
     ] {
         assert!(directory.is_dir());

@@ -613,7 +613,7 @@ fn message_header_parser_round_trips_attributed_senders() {
         Some((HeaderKind::Subagent, "@rimz".to_owned(), body.to_owned()))
     );
     for (notice, kind, header_type) in [
-        (HarnessNotice::Wake, HeaderKind::Wake, "WAKE"),
+        (HarnessNotice::Wait, HeaderKind::Wait, "WAIT"),
         (HarnessNotice::Signal, HeaderKind::Signal, "SIGNAL"),
         (HarnessNotice::Stage, HeaderKind::Stage, "STAGE"),
     ] {

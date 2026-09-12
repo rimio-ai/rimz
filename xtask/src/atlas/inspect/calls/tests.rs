@@ -212,7 +212,7 @@ fn inspect_groups_repeated_assembly_across_caller_modules() {
 fn builder_chain_folds_for_callers_heaviest_and_call_shapes() {
     let target = Source::new(
         "crates/demo/src/store.rs",
-        "pub struct MessageRecord;\nimpl MessageRecord {\n    pub fn new() {}\n    pub fn with_channel() {}\n    pub fn with_sender() {}\n    pub fn with_automated() {}\n    pub fn with_body() {}\n    pub fn with_pane_id() {}\n}\npub fn load() {}\npub fn route() {}\npub fn park() {}\npub fn send() {}\npub fn wake() {}\npub fn record() {}\n",
+        "pub struct MessageRecord;\nimpl MessageRecord {\n    pub fn new() {}\n    pub fn with_channel() {}\n    pub fn with_sender() {}\n    pub fn with_automated() {}\n    pub fn with_body() {}\n    pub fn with_pane_id() {}\n}\npub fn load() {}\npub fn route() {}\npub fn park() {}\npub fn send() {}\npub fn wait() {}\npub fn record() {}\n",
     );
     let caller = Source::new(
         "crates/demo/src/caller.rs",
@@ -236,7 +236,7 @@ fn builder_chain_folds_for_callers_heaviest_and_call_shapes() {
         "route",
         "park",
         "send",
-        "wake",
+        "wait",
         "record",
     ];
     let mut edges = names
@@ -293,7 +293,7 @@ fn builder_chain_folds_for_callers_heaviest_and_call_shapes() {
 fn type_aliases_are_not_assembly_items() {
     let target = Source::new(
         "crates/demo/src/store.rs",
-        "pub type Result<T> = std::result::Result<T, ()>;\npub fn load() {}\npub fn route() {}\npub fn park() {}\npub fn send() {}\npub fn wake() {}\n",
+        "pub type Result<T> = std::result::Result<T, ()>;\npub fn load() {}\npub fn route() {}\npub fn park() {}\npub fn send() {}\npub fn wait() {}\n",
     );
     let caller = Source::new(
         "crates/demo/src/caller.rs",
@@ -305,7 +305,7 @@ fn type_aliases_are_not_assembly_items() {
         .iter()
         .find(|file| file.module_path == "store")
         .unwrap();
-    let edges = ["Result", "load", "route", "park", "send", "wake"]
+    let edges = ["Result", "load", "route", "park", "send", "wait"]
         .iter()
         .enumerate()
         .map(|(index, name)| {

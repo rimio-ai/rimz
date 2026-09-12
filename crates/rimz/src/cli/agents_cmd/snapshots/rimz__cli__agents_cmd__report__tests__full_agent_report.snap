@@ -14,7 +14,7 @@ expression: entry
   "mode": "yolo",
   "me": true,
   "status": "running",
-  "pending_wakes": [],
+  "pending_waits": [],
   "phase": "acting",
   "turn_error": null,
   "ask": null,

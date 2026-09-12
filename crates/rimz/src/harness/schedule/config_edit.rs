@@ -156,12 +156,12 @@ fn task_entry_table(entry: &TaskEntry, include_root: bool) -> Result<Table> {
         table.remove("root");
         table.remove("dir");
     }
-    if let Some(wake) = table.remove("wake") {
+    if let Some(wait) = table.remove("wait") {
         table.insert(
-            "wake",
+            "wait",
             Item::Table(
-                wake.into_table()
-                    .map_err(|_| anyhow::anyhow!("serialized loop wake is not a table"))?,
+                wait.into_table()
+                    .map_err(|_| anyhow::anyhow!("serialized loop wait is not a table"))?,
             ),
         );
     }
@@ -199,14 +199,14 @@ mod tests {
         let entry = TaskEntry {
             agent: Some("claude".to_owned()),
             team: None,
-            wake: Some(TaskTarget {
+            wait: Some(TaskTarget {
                 kind: crate::ids::AgentKind::new_unchecked("claude"),
                 session: "session-1".into(),
                 handle: "@claude".to_owned(),
             }),
-            wake_meta: None,
-            prompt: Some("wake".to_owned()),
-            prompt_file: Some(PathBuf::from("prompts/wake.md")),
+            wait_meta: None,
+            prompt: Some("wait".to_owned()),
+            prompt_file: Some(PathBuf::from("prompts/wait.md")),
             check: Some("cargo check".to_owned()),
             verify: Some("cargo xtask gate".to_owned()),
             max_attempts: Some(3),
@@ -248,7 +248,7 @@ mod tests {
         assert!(machine.contains_key("max-attempts"));
         assert!(machine.contains_key("budget-per-day"));
         assert!(machine.contains_key("system-prompt-file"));
-        assert!(machine_text.contains("[tasks.full.wake]"));
+        assert!(machine_text.contains("[tasks.full.wait]"));
         assert!(machine_text.contains("[tasks.full.match]"));
         assert!(machine_text.contains("branch = \"feature\""));
         assert_eq!(

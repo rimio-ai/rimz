@@ -58,7 +58,7 @@ where
 #[serde(transparent)]
 pub struct Tasks(pub BTreeMap<String, TaskEntry>);
 
-/// One triggered loop wake-up. `agent` spawns a supervised turn and `wake`
+/// One triggered loop wake-up. `agent` spawns a supervised turn and `wait`
 /// delivers to a pinned session.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
@@ -66,9 +66,9 @@ pub struct TaskEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub wake: Option<TaskTarget>,
-    #[serde(rename = "wake-meta", skip_serializing_if = "Option::is_none")]
-    pub wake_meta: Option<WakeMeta>,
+    pub wait: Option<TaskTarget>,
+    #[serde(rename = "wait-meta", skip_serializing_if = "Option::is_none")]
+    pub wait_meta: Option<WaitMeta>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub team: Option<crate::ids::TeamInstanceId>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -126,7 +126,7 @@ pub struct TaskEntry {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct WakeMeta {
+pub struct WaitMeta {
     pub armed_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delay: Option<String>,
@@ -191,7 +191,7 @@ impl TaskEntry {
         }
         if (self.surplus.is_some() || self.surplus_after.is_some())
             && self.agent.is_none()
-            && self.wake.is_none()
+            && self.wait.is_none()
         {
             return Err(TaskBudgetError::SurplusNeedsAgent {
                 task: task.to_owned(),
@@ -218,7 +218,7 @@ pub enum TaskBudgetError {
         field: &'static str,
         detail: String,
     },
-    #[error("task `{task}` sets a surplus gate without `agent` or `wake`")]
+    #[error("task `{task}` sets a surplus gate without `agent` or `wait`")]
     SurplusNeedsAgent { task: String },
 }
 
@@ -321,17 +321,17 @@ mod tests {
     fn task_entry_check_fields_round_trip_toml_and_json() {
         let deadline = Timestamp::from_second(1_783_000_000).expect("deadline");
         let entry = TaskEntry {
-            wake: Some(TaskTarget {
+            wait: Some(TaskTarget {
                 kind: AgentKind::new_unchecked("claude"),
                 session: "sess-1".into(),
                 handle: "@claude".to_owned(),
             }),
-            wake_meta: Some(WakeMeta {
+            wait_meta: Some(WaitMeta {
                 armed_at: deadline,
                 delay: Some("30m".to_owned()),
                 pid: Some(16776),
             }),
-            prompt: Some("wake".to_owned()),
+            prompt: Some("wait".to_owned()),
             check: Some("cargo test".to_owned()),
             verify: Some("cargo xtask gate".to_owned()),
             max_attempts: Some(4),
@@ -364,16 +364,16 @@ mod tests {
         let toml_round: LoopConfig = toml::from_str(&toml).expect("toml round trip");
         assert_eq!(toml_round.tasks.0["ci"], entry);
         let mut legacy_toml: toml::Value = toml::from_str(&toml).expect("toml value");
-        legacy_toml["tasks"]["ci"]["wake-meta"]
+        legacy_toml["tasks"]["ci"]["wait-meta"]
             .as_table_mut()
             .unwrap()
             .remove("pid");
         let legacy_toml: LoopConfig = legacy_toml.try_into().expect("legacy toml");
         assert_eq!(
-            legacy_toml.tasks.0["ci"].wake_meta.as_ref().unwrap().pid,
+            legacy_toml.tasks.0["ci"].wait_meta.as_ref().unwrap().pid,
             None
         );
-        assert_eq!(toml_round.tasks.0["ci"].wake_meta, entry.wake_meta);
+        assert_eq!(toml_round.tasks.0["ci"].wait_meta, entry.wait_meta);
         assert_eq!(
             toml_round
                 .tasks
@@ -437,26 +437,26 @@ mod tests {
         assert_eq!(json_round.0.get("ci"), Some(&entry));
         let mut legacy = serde_json::to_value(&loop_config.tasks).expect("json value");
         assert_eq!(
-            legacy["ci"]["wake"],
+            legacy["ci"]["wait"],
             serde_json::json!({"kind": "claude", "session": "sess-1", "handle": "@claude"})
         );
-        assert!(legacy["ci"]["wake-meta"].get("armed_by").is_none());
+        assert!(legacy["ci"]["wait-meta"].get("armed_by").is_none());
         for armed_by in [
             serde_json::json!({"kind": "human"}),
             serde_json::json!({"kind": "agent", "handle": "@planner"}),
         ] {
-            legacy["ci"]["wake-meta"]["armed_by"] = armed_by;
+            legacy["ci"]["wait-meta"]["armed_by"] = armed_by;
             let decoded: Tasks = serde_json::from_value(legacy.clone()).expect("legacy json");
             assert_eq!(decoded.0.get("ci"), Some(&entry));
         }
-        legacy["ci"]["wake-meta"]
+        legacy["ci"]["wait-meta"]
             .as_object_mut()
             .unwrap()
             .remove("pid");
         let decoded: Tasks = serde_json::from_value(legacy).expect("legacy json without pid");
-        assert_eq!(decoded.0["ci"].wake_meta.as_ref().unwrap().pid, None);
+        assert_eq!(decoded.0["ci"].wait_meta.as_ref().unwrap().pid, None);
         assert!(
-            serde_json::to_value(&decoded).unwrap()["ci"]["wake-meta"]
+            serde_json::to_value(&decoded).unwrap()["ci"]["wait-meta"]
                 .get("pid")
                 .is_none()
         );

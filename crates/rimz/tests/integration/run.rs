@@ -2056,7 +2056,7 @@ fn agents_show_filters_live_and_delivered_system_messages_in_human_and_json_view
                 (
                     "harness-only text",
                     MessageSender::Harness {
-                        notice: HarnessNotice::Wake,
+                        notice: HarnessNotice::Wait,
                     },
                 ),
             ] {

@@ -433,8 +433,8 @@ fn reject_project_task_state_fields(
         for field in [
             "root",
             "dir",
-            "wake",
-            "wake-meta",
+            "wait",
+            "wait-meta",
             "deadline",
             "watch",
             "once",
@@ -446,12 +446,12 @@ fn reject_project_task_state_fields(
                     fix: match field {
                         "root" => "project tasks run at the project root; remove `root`",
                         "dir" => "project tasks run at the project root; remove `dir`",
-                        "wake" => "project tasks cannot pin a machine-local session; use `agent`",
-                        "wake-meta" => "wake provenance is machine state; arm it with `rimz wake`",
+                        "wait" => "project tasks cannot pin a machine-local session; use `agent`",
+                        "wait-meta" => "wait provenance is machine state; arm it with `rimz wait`",
                         "deadline" => {
                             "poll-until deadlines are machine state; create them with `rimz loop add --until`"
                         }
-                        "watch" => "watched commands are machine state; use `rimz wake`",
+                        "watch" => "watched commands are machine state; use `rimz wait`",
                         "once" => "one-shot subscriptions are machine state; remove `once`",
                         _ => unreachable!("field list is fixed"),
                     },

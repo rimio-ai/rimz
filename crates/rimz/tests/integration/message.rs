@@ -159,7 +159,7 @@ fn message_list_hides_system_traffic_unless_asked() {
     let mut system_ids = Vec::new();
     for sender in [
         MessageSender::Harness {
-            notice: HarnessNotice::Wake,
+            notice: HarnessNotice::Wait,
         },
         MessageSender::System,
     ] {
@@ -578,10 +578,10 @@ fn scheduled_message_parks_and_sweep_delivers_due_work() {
     let parsed: serde_json::Value = serde_json::from_slice(&listed.stdout).expect("json");
     assert!(parsed[0]["not_before"].is_string());
 
-    let wake: Option<jiff::Timestamp> =
+    let wait: Option<jiff::Timestamp> =
         serde_json::from_slice(&std::fs::read(wake_stamp_path(&env)).expect("wake stamp"))
             .expect("wake stamp json");
-    assert_eq!(wake, Some(not_before));
+    assert_eq!(wait, Some(not_before));
 
     run_hook(
         &env,
@@ -634,10 +634,10 @@ fn scheduled_message_parks_and_sweep_delivers_due_work() {
         .find(|message| message.message_id == due_id)
         .expect("swept message");
     assert_eq!(sent.status, MessageStatus::Sent);
-    let wake: Option<jiff::Timestamp> =
+    let wait: Option<jiff::Timestamp> =
         serde_json::from_slice(&std::fs::read(wake_stamp_path(&env)).expect("wake stamp"))
             .expect("wake stamp json");
-    assert_eq!(wake, sent.sent_reconcile_deadline());
+    assert_eq!(wait, sent.sent_reconcile_deadline());
 }
 
 #[test]

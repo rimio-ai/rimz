@@ -40,7 +40,7 @@ fn seed_sets_status_phase_clocks_and_empty_enrichment() {
     assert!(running.usage.total_tokens.is_none());
     assert!(running.context.is_none());
     assert!(running.budget_park.is_none());
-    assert!(running.pending_wakes.is_empty());
+    assert!(running.pending_waits.is_empty());
     assert!(running.subagent_description.is_none());
     assert!(running.open_ask.is_none());
     assert_eq!(running.compaction_count, 0);
@@ -91,10 +91,10 @@ fn agent_status_labels_are_stable() {
 }
 
 #[test]
-fn effective_status_projects_pending_wake_to_sleeping() {
-    let wake = PendingWake {
+fn effective_status_projects_pending_wait_to_sleeping() {
+    let wait = PendingWait {
         name: "watch".into(),
-        trigger: PendingWakeTrigger::Command {
+        trigger: PendingWaitTrigger::Command {
             command: "cargo test".into(),
         },
         armed_at: None,
@@ -108,19 +108,19 @@ fn effective_status_projects_pending_wake_to_sleeping() {
         AgentStatus::Paused,
     ] {
         let mut agent = test_agent(status, 1_000);
-        agent.pending_wakes.push(wake.clone());
+        agent.pending_waits.push(wait.clone());
         let expected = if matches!(status, AgentStatus::Idle | AgentStatus::Success) {
             AgentStatus::Sleeping
         } else {
             status
         };
         assert_eq!(agent.effective_status(), expected, "{status:?}");
-        agent.pending_wakes.clear();
+        agent.pending_waits.clear();
         assert_eq!(agent.effective_status(), status);
     }
     let mut parked = test_agent(AgentStatus::Running, 1_000);
     parked.phase = TurnPhase::Parked;
-    parked.pending_wakes.push(wake);
+    parked.pending_waits.push(wait);
     assert_eq!(parked.effective_status(), AgentStatus::Sleeping);
     assert!(!parked.holds_open_turn());
     assert!(!AgentStatus::Sleeping.is_attention());
@@ -129,91 +129,91 @@ fn effective_status_projects_pending_wake_to_sleeping() {
 }
 
 #[test]
-fn pending_wake_labels_and_wire_preserve_trigger_details() {
+fn pending_wait_labels_and_wire_preserve_trigger_details() {
     let now = Timestamp::from_second(1_000).unwrap();
     let due = Timestamp::from_second(1_720).unwrap();
     for (trigger, label) in [
         (
-            PendingWakeTrigger::Timer { due, delay: None },
-            "wake timer · in 12m",
+            PendingWaitTrigger::Timer { due, delay: None },
+            "wait timer · in 12m",
         ),
         (
-            PendingWakeTrigger::Timer {
+            PendingWaitTrigger::Timer {
                 due,
                 delay: Some("30m".into()),
             },
-            "wake timer 30m · in 12m",
+            "wait timer 30m · in 12m",
         ),
         (
-            PendingWakeTrigger::Timer {
+            PendingWaitTrigger::Timer {
                 due: now,
                 delay: None,
             },
-            "wake timer · due",
+            "wait timer · due",
         ),
         (
-            PendingWakeTrigger::Timer {
+            PendingWaitTrigger::Timer {
                 due: now,
                 delay: Some("30m".into()),
             },
-            "wake timer 30m · due",
+            "wait timer 30m · due",
         ),
-        (PendingWakeTrigger::Pid { pid: 16776 }, "wake pid 16776"),
+        (PendingWaitTrigger::Pid { pid: 16776 }, "wait pid 16776"),
         (
-            PendingWakeTrigger::Command {
+            PendingWaitTrigger::Command {
                 command: "cargo test".into(),
             },
-            "wake shell cargo test",
+            "wait shell cargo test",
         ),
         (
-            PendingWakeTrigger::Signal {
+            PendingWaitTrigger::Signal {
                 selector: "pr.merged".into(),
                 deadline: None,
             },
-            "wake signal pr.merged",
+            "wait signal pr.merged",
         ),
         (
-            PendingWakeTrigger::Signal {
+            PendingWaitTrigger::Signal {
                 selector: "pr.merged".into(),
                 deadline: Some(due),
             },
-            "wake signal pr.merged · 12m left",
+            "wait signal pr.merged · 12m left",
         ),
         (
-            PendingWakeTrigger::Signal {
+            PendingWaitTrigger::Signal {
                 selector: "pr.merged".into(),
                 deadline: Some(now),
             },
-            "wake signal pr.merged · 0m left",
+            "wait signal pr.merged · 0m left",
         ),
     ] {
-        assert_eq!(trigger.summary(now), label.strip_prefix("wake ").unwrap());
-        if matches!(trigger, PendingWakeTrigger::Pid { .. }) {
+        assert_eq!(trigger.summary(now), label.strip_prefix("wait ").unwrap());
+        if matches!(trigger, PendingWaitTrigger::Pid { .. }) {
             assert_eq!(
                 serde_json::to_value(&trigger).unwrap(),
                 serde_json::json!({"kind": "pid", "pid": 16776})
             );
         }
-        let wake = PendingWake {
-            name: "wake".into(),
+        let wait = PendingWait {
+            name: "wait".into(),
             trigger,
             armed_at: Some(now),
         };
-        assert_eq!(wake.label(now), label);
+        assert_eq!(wait.label(now), label);
         let mut agent = test_agent(AgentStatus::Success, 1_000);
-        agent.pending_wakes.push(wake.clone());
+        agent.pending_waits.push(wait.clone());
         let value = serde_json::to_value(&agent).unwrap();
         let decoded: AgentState = serde_json::from_value(value).unwrap();
-        assert_eq!(decoded.pending_wakes, vec![wake]);
+        assert_eq!(decoded.pending_waits, vec![wait]);
         assert_eq!(decoded.effective_status(), AgentStatus::Sleeping);
     }
     assert_eq!(
-        serde_json::from_value::<PendingWakeTrigger>(serde_json::json!({
+        serde_json::from_value::<PendingWaitTrigger>(serde_json::json!({
             "kind": "timer",
             "due": due,
         }))
         .unwrap(),
-        PendingWakeTrigger::Timer { due, delay: None }
+        PendingWaitTrigger::Timer { due, delay: None }
     );
     assert_eq!(
         serde_json::to_string(&AgentStatus::Sleeping).unwrap(),
@@ -224,11 +224,11 @@ fn pending_wake_labels_and_wire_preserve_trigger_details() {
         AgentStatus::Sleeping
     );
     let empty = serde_json::to_value(test_agent(AgentStatus::Success, 1_000)).unwrap();
-    assert!(empty.get("pending_wakes").is_none());
+    assert!(empty.get("pending_waits").is_none());
     assert!(
         serde_json::from_value::<AgentState>(empty)
             .unwrap()
-            .pending_wakes
+            .pending_waits
             .is_empty()
     );
 }

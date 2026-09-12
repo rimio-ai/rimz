@@ -84,7 +84,7 @@ use glyphs::{is_named_glyph_set, validate_glyph_source};
 pub use harness::{
     DayCap, DayCapParseError, HarnessConfig, IdleCompactMode, TurnCap, TurnCapParseError,
 };
-pub use loop_::{CheckOn, LoopConfig, TaskBudgetError, TaskEntry, TaskTarget, Tasks, WakeMeta};
+pub use loop_::{CheckOn, LoopConfig, TaskBudgetError, TaskEntry, TaskTarget, Tasks, WaitMeta};
 pub use mux::{
     MultiplexerConfig, MuxConfig, TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderLines,
     TmuxPaneBorderStatus, TmuxSetClipboard, ZellijClipboard, ZellijConfig, ZellijForceClose,

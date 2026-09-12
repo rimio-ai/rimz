@@ -215,7 +215,7 @@ mod tests {
         }
         for raw in [
             "agent.idle",
-            "wake.task",
+            "wait.task",
             "team.idle",
             "ci.finished",
             "ci.custom",

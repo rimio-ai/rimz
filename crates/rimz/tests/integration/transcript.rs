@@ -622,7 +622,7 @@ fn signal_delivery_is_acknowledged_and_hidden_from_rendered_transcript() {
         .iter()
         .find(|entry| entry.message_id.as_ref() == Some(&record.message_id))
         .expect("signal transcript entry");
-    assert_eq!(signal.entry, TranscriptKind::Wake);
+    assert_eq!(signal.entry, TranscriptKind::Wait);
     assert_eq!(signal.from.as_deref(), Some("@rimz"));
     assert_eq!(signal.text, record.text);
     let output = run_ok(env.rimz().args(["transcript", "#signal-transcript"]));

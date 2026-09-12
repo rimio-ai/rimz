@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn harness_prompt_keeps_finished_children_listed() {
-    for header in ["AGENT_MESSAGE", "SUBAGENT_REPORT", "WAKE", "SIGNAL"] {
+    for header in ["AGENT_MESSAGE", "SUBAGENT_REPORT", "WAIT", "SIGNAL"] {
         let mut events = vec![
             raw_lifecycle_at(
                 "claude",
@@ -728,7 +728,7 @@ fn typeless_subagent_stop_without_start_is_ignored() {
 }
 
 #[test]
-fn finished_subagent_verdict_survives_the_parked_wake() {
+fn finished_subagent_verdict_survives_the_parked_wait() {
     let root_start = raw_lifecycle_at(
         "claude",
         0,

@@ -542,7 +542,7 @@ Resolve the rebase conflicts in this repository. Preserve both upstream and loca
 
     def request_loop_repair(self) -> None:
         print(self.rebase_repair_text(loop_managed=True), file=sys.stderr, flush=True)
-        die('rebase conflicts need agent repair; RimZ loop should wake on `on = "fail"`')
+        die('rebase conflicts need agent repair; RimZ loop should wait on `on = "fail"`')
 
     def spawn_codex_for_rebase(self) -> None:
         if shutil.which(self.config.rimz_bin) is None:

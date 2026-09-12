@@ -253,12 +253,12 @@ fn user_shell_subagents_list_inspects_the_channel() {
 
     let instances_path = env.store().paths().root.join("loop-instances.json");
     let tasks = std::collections::BTreeMap::from([(
-        "wake-child",
+        "wait-child",
         rimz::config::TaskEntry {
             root: env.project_root.clone(),
             signal: Some("deploy.done".to_owned()),
             once: Some(true),
-            wake: Some(rimz::config::TaskTarget {
+            wait: Some(rimz::config::TaskTarget {
                 kind: AgentKind::new_unchecked("codex"),
                 session: AgentSessionId::from("swift-child"),
                 handle: "@swift-otter".to_owned(),

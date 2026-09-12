@@ -5,7 +5,7 @@
 //! density and expansion invariants live in docs/internals/sidebar/sidebar.md.
 
 use crate::agents::{AgentContext, AgentCurrentUsage, CacheHealth, TurnPhase};
-use crate::agents::{AgentStatus, ContextSeverity, PendingWakeTrigger};
+use crate::agents::{AgentStatus, ContextSeverity, PendingWaitTrigger};
 use crate::config::{AnimationRole, CardDensityMode, ContextMeterConfig, GlyphRole};
 use crate::store::snapshot::{AgentCard, SidebarRow, SidebarSubAgent, SidebarWorktreeGroup};
 use ratatui::style::{Color, Modifier, Style};
@@ -94,10 +94,10 @@ pub(in crate::sidebar_pane::render) fn has_command_wait_entries(
     };
     template(CardStage::of(row), agent.status, density, expanded)
         .contains(&CardSlot::DelegationEntries)
-        && agent.pending_wakes.iter().any(|wake| {
+        && agent.pending_waits.iter().any(|wait| {
             matches!(
-                wake.trigger,
-                PendingWakeTrigger::Command { .. } | PendingWakeTrigger::Pid { .. }
+                wait.trigger,
+                PendingWaitTrigger::Command { .. } | PendingWaitTrigger::Pid { .. }
             )
         })
 }
@@ -177,7 +177,7 @@ pub(super) fn row_lines(
                             .map(CardLine::from),
                     );
                     inner.extend(
-                        waits::wait_entry_lines(ctx, &agent.pending_wakes)
+                        waits::wait_entry_lines(ctx, &agent.pending_waits)
                             .into_iter()
                             .map(CardLine::from),
                     );
@@ -213,7 +213,7 @@ pub(super) fn row_lines(
 /// The standing delegation line carries lifetime children, their known cost,
 /// and pending waits. Expansion only appends their entries.
 fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>> {
-    if agent.sub_agent_count == 0 && agent.pending_wakes.is_empty() {
+    if agent.sub_agent_count == 0 && agent.pending_waits.is_empty() {
         return None;
     }
     let theme = ctx.theme;
@@ -221,12 +221,12 @@ fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>>
     let (subagents_label, waits_label) = if ctx.tier == Tier::L2 {
         (
             format!(" subagents ({})", agent.sub_agent_count),
-            format!(" waits ({})", agent.pending_wakes.len()),
+            format!(" waits ({})", agent.pending_waits.len()),
         )
     } else {
         (
             format!(" {}", agent.sub_agent_count),
-            format!(" {}", agent.pending_wakes.len()),
+            format!(" {}", agent.pending_waits.len()),
         )
     };
     let mut left = vec![Span::raw("  ")];
@@ -242,14 +242,14 @@ fn delegation_line(ctx: &RowCtx<'_>, agent: &AgentCard) -> Option<Line<'static>>
             Span::styled(subagents_label, theme.body()),
         ]);
     }
-    if !agent.pending_wakes.is_empty() {
+    if !agent.pending_waits.is_empty() {
         if agent.sub_agent_count > 0 {
             left.push(Span::styled(" · ", theme.muted()));
         }
         left.extend([
             Span::styled(
                 theme.glyph(GlyphRole::CardWaits).to_owned(),
-                theme.styled(Component::WakeHeader, Modifier::empty()),
+                theme.styled(Component::WaitHeader, Modifier::empty()),
             ),
             Span::styled(waits_label, theme.body()),
         ]);

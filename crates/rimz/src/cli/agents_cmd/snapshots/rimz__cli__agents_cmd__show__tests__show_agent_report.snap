@@ -15,7 +15,7 @@ expression: report
     "mode": null,
     "me": false,
     "status": "idle",
-    "pending_wakes": [],
+    "pending_waits": [],
     "phase": "idle",
     "turn_error": null,
     "ask": null,

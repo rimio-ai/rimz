@@ -786,7 +786,7 @@ fn write_launch_hints(
     if let (Some(team), Some(channel)) = (team, channel) {
         writeln!(
             w,
-            "Wait:  rimz loop add team-idle --wake @me --signal team.idle --match instance={team}#{channel} --once"
+            "Wait:  rimz loop add team-idle --wait @me --signal team.idle --match instance={team}#{channel} --once"
         )?;
     }
     Ok(())
@@ -1161,7 +1161,7 @@ mod tests {
         assert!(output.contains("\n\nCheck: rimz teams show forge#feat-x"));
         assert!(output.contains("Reach: rimz message @planner#feat-x '<text>'"));
         assert!(
-            output.contains("Wait:  rimz loop add team-idle --wake @me --signal team.idle --match instance=forge#feat-x --once")
+            output.contains("Wait:  rimz loop add team-idle --wait @me --signal team.idle --match instance=forge#feat-x --once")
         );
         let wait = output
             .lines()

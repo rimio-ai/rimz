@@ -189,9 +189,9 @@ pub(super) fn insert_delivery(
                     now,
                 ) == super::arming::ArmState::Live
                 && current
-                    .wake
+                    .wait
                     .as_ref()
-                    .zip(entry.wake.as_ref())
+                    .zip(entry.wait.as_ref())
                     .is_some_and(|(a, b)| a.kind == b.kind && a.session == b.session)
                 && current
                     .signal
@@ -213,9 +213,9 @@ pub(super) fn insert_delivery(
             tasks
                 .keys()
                 .chain(taken)
-                .filter_map(|name| name.strip_prefix("wake-")),
+                .filter_map(|name| name.strip_prefix("wait-")),
         );
-        format!("wake-{petname}")
+        format!("wait-{petname}")
     });
     let key = super::arming::TaskKey::for_task(
         &name,
@@ -238,7 +238,7 @@ pub(super) fn retire_session(
         let names = tasks
             .iter()
             .filter(|(_, entry)| {
-                entry.wake.as_ref().is_some_and(|target| {
+                entry.wait.as_ref().is_some_and(|target| {
                     target.kind == kind.as_str() && target.session == session.as_str()
                 })
             })
@@ -259,7 +259,7 @@ mod tests {
     fn task() -> TaskEntry {
         TaskEntry {
             agent: Some("claude".to_owned()),
-            prompt: Some("wake".to_owned()),
+            prompt: Some("wait".to_owned()),
             root: PathBuf::from("/repo"),
             at: Some("07:00".to_owned()),
             ..TaskEntry::default()
@@ -281,24 +281,24 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let entry = task();
 
-        insert(dir.path(), "wake", &entry).expect("insert");
+        insert(dir.path(), "wait", &entry).expect("insert");
         let encoded = std::fs::read_to_string(path(dir.path())).expect("serialized instances");
         let value: serde_json::Value = serde_json::from_str(&encoded).expect("instances json");
-        assert_eq!(value["wake"]["agent"], "claude");
-        assert_eq!(value["wake"]["prompt"], "wake");
-        assert_eq!(value["wake"]["root"], "/repo");
-        assert_eq!(value["wake"]["at"], "07:00");
+        assert_eq!(value["wait"]["agent"], "claude");
+        assert_eq!(value["wait"]["prompt"], "wait");
+        assert_eq!(value["wait"]["root"], "/repo");
+        assert_eq!(value["wait"]["at"], "07:00");
         assert_eq!(
             load_from(dir.path())
                 .0
-                .get("wake")
+                .get("wait")
                 .map(|entry| entry.prompt.as_deref()),
-            Some(Some("wake"))
+            Some(Some("wait"))
         );
 
-        assert!(remove(dir.path(), "wake", None).expect("remove"));
+        assert!(remove(dir.path(), "wait", None).expect("remove"));
         assert!(load_from(dir.path()).0.is_empty());
-        assert!(!remove(dir.path(), "wake", None).expect("remove absent"));
+        assert!(!remove(dir.path(), "wait", None).expect("remove absent"));
     }
 
     #[test]
@@ -306,16 +306,16 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let entry = task();
 
-        insert(dir.path(), "wake", &entry).expect("insert");
+        insert(dir.path(), "wait", &entry).expect("insert");
 
-        assert!(rename(dir.path(), "wake", "nudge").expect("rename"));
+        assert!(rename(dir.path(), "wait", "nudge").expect("rename"));
         let tasks = load_from(dir.path());
-        assert!(!tasks.0.contains_key("wake"));
+        assert!(!tasks.0.contains_key("wait"));
         assert_eq!(
             tasks.0.get("nudge").map(|entry| entry.prompt.as_deref()),
-            Some(Some("wake"))
+            Some(Some("wait"))
         );
-        assert!(!rename(dir.path(), "wake", "later").expect("rename absent"));
+        assert!(!rename(dir.path(), "wait", "later").expect("rename absent"));
     }
 
     #[test]

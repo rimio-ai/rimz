@@ -101,7 +101,7 @@ fn events_emit_rejects_reserved_names_and_non_object_payloads() {
     let env = Env::new();
     for (args, expected) in [
         (vec!["events", "emit", "agent.idle"], "reserved for RimZ"),
-        (vec!["events", "emit", "wake.task"], "reserved for RimZ"),
+        (vec!["events", "emit", "wait.task"], "reserved for RimZ"),
         (
             vec!["events", "emit", "deploy.finished", "--json", "[]"],
             "must be a JSON object",

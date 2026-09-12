@@ -36,7 +36,7 @@ pub(super) fn chat_entry_for_log_entry(
             questions: entry.questions.clone(),
             answers: entry.answers.clone(),
         },
-        TranscriptKind::Message | TranscriptKind::SubagentReport | TranscriptKind::Wake => {
+        TranscriptKind::Message | TranscriptKind::SubagentReport | TranscriptKind::Wait => {
             ChatLine {
                 from: entry.from.clone().unwrap_or_else(|| "user".to_owned()),
                 to: Some(receiver),

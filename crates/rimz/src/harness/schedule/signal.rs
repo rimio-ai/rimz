@@ -96,7 +96,7 @@ impl From<&Signal> for SignalEventPayload {
     }
 }
 
-pub(super) const WAKE_TAIL_CAP: usize = 4 * 1024;
+pub(super) const WAIT_TAIL_CAP: usize = 4 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "result", rename_all = "snake_case")]
@@ -170,7 +170,7 @@ impl WatchOutcome {
         view: &TmpView,
     ) -> Self {
         let summary = FileSummary::measure(host_path).unwrap_or_else(|err| {
-            tracing::warn!(path = %host_path.display(), error = %err, "measuring wake output");
+            tracing::warn!(path = %host_path.display(), error = %err, "measuring wait output");
             FileSummary::default()
         });
         Self {
@@ -195,26 +195,26 @@ impl WatchOutcome {
     }
 }
 
-pub(super) fn wake_output_path(paths: &StatePaths, name: &str) -> PathBuf {
-    paths.wakes_dir.join(format!("{name}.output"))
+pub(super) fn wait_output_path(paths: &StatePaths, name: &str) -> PathBuf {
+    paths.waits_dir.join(format!("{name}.output"))
 }
 
-pub(super) fn read_wake_tail(path: &Path) -> std::io::Result<String> {
+pub(super) fn read_wait_tail(path: &Path) -> std::io::Result<String> {
     let mut file = File::open(path)?;
-    let start = file.metadata()?.len().saturating_sub(WAKE_TAIL_CAP as u64);
+    let start = file.metadata()?.len().saturating_sub(WAIT_TAIL_CAP as u64);
     file.seek(std::io::SeekFrom::Start(start))?;
-    let mut bytes = Vec::with_capacity(WAKE_TAIL_CAP);
-    file.take(WAKE_TAIL_CAP as u64).read_to_end(&mut bytes)?;
+    let mut bytes = Vec::with_capacity(WAIT_TAIL_CAP);
+    file.take(WAIT_TAIL_CAP as u64).read_to_end(&mut bytes)?;
     let output = String::from_utf8_lossy(&bytes);
-    let mut start = output.len().saturating_sub(WAKE_TAIL_CAP);
+    let mut start = output.len().saturating_sub(WAIT_TAIL_CAP);
     while !output.is_char_boundary(start) {
         start += 1;
     }
     Ok(output[start..].to_owned())
 }
 
-/// Prune old wake audit output, retaining definitions and running watchers.
-pub fn prune_wake_outputs() -> anyhow::Result<usize> {
+/// Prune old wait audit output, retaining definitions and running watchers.
+pub fn prune_wait_outputs() -> anyhow::Result<usize> {
     let entries = match std::fs::read_dir(crate::disk::paths::workspaces_dir()) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(0),
@@ -223,7 +223,7 @@ pub fn prune_wake_outputs() -> anyhow::Result<usize> {
     let machine = match TaskCatalog::load(None) {
         Ok(catalog) => catalog,
         Err(err) => {
-            tracing::warn!(error = %err, "wake log gc retained output with unreadable task state");
+            tracing::warn!(error = %err, "wait log gc retained output with unreadable task state");
             return Ok(0);
         }
     };
@@ -233,7 +233,7 @@ pub fn prune_wake_outputs() -> anyhow::Result<usize> {
         let entry = match entry {
             Ok(entry) => entry,
             Err(err) => {
-                tracing::warn!(error = %err, "wake log gc skipped unreadable directory entry");
+                tracing::warn!(error = %err, "wait log gc skipped unreadable directory entry");
                 continue;
             }
         };
@@ -259,8 +259,8 @@ pub fn prune_wake_outputs() -> anyhow::Result<usize> {
                 .map(|(name, _)| name.clone())
                 .collect();
             let runtime = RuntimePaths::for_workspace(id.clone())?;
-            Ok(prune_wake_outputs_in(
-                &paths.wakes_dir,
+            Ok(prune_wait_outputs_in(
+                &paths.waits_dir,
                 &runtime,
                 &retained,
                 now,
@@ -269,14 +269,14 @@ pub fn prune_wake_outputs() -> anyhow::Result<usize> {
         match pruned {
             Ok(count) => removed += count,
             Err(err) => {
-                tracing::warn!(workspace = %id, error = %err, "wake log gc skipped unreadable workspace")
+                tracing::warn!(workspace = %id, error = %err, "wait log gc skipped unreadable workspace")
             }
         }
     }
     Ok(removed)
 }
 
-fn prune_wake_outputs_in(
+fn prune_wait_outputs_in(
     dir: &Path,
     runtime: &RuntimePaths,
     retained: &std::collections::BTreeSet<String>,
@@ -382,43 +382,43 @@ pub fn lifecycle_signal(event: &crate::agents::LifecycleEvent) -> Option<Signal>
 
 pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> anyhow::Result<()> {
     let Some(_guard) =
-        acquire_watch_lock(store.runtime_paths(), name).context("locking wake watcher")?
+        acquire_watch_lock(store.runtime_paths(), name).context("locking wait watcher")?
     else {
         return Ok(());
     };
     let catalog = TaskCatalog::load(Some(&workspace.project_root))?;
     let Some(task) = catalog.for_run(name) else {
-        anyhow::bail!("no wake named {name} in the catalog");
+        anyhow::bail!("no wait named {name} in the catalog");
     };
     if task.entry().resolved_root() != workspace.project_root {
         anyhow::bail!(
-            "wake {name} belongs to {}, watcher started for {}",
+            "wait {name} belongs to {}, watcher started for {}",
             task.entry().resolved_root().display(),
             workspace.project_root.display()
         );
     }
     let Some(command) = task.entry().watch.as_deref() else {
-        anyhow::bail!("wake {name} has no watched command");
+        anyhow::bail!("wait {name} has no watched command");
     };
     let timeout = task_timeout(task.entry())?.unwrap_or(std::time::Duration::from_secs(30 * 60));
-    let output_path = wake_output_path(store.paths(), name);
+    let output_path = wait_output_path(store.paths(), name);
     let view = TmpView::current(store.paths());
     let file = OpenOptions::new()
         .append(true)
         .open(&output_path)
-        .with_context(|| format!("opening wake output {}", output_path.display()))?;
+        .with_context(|| format!("opening wait output {}", output_path.display()))?;
     let started = std::time::Instant::now();
     let emit = |verdict, output| {
         let signal = Signal {
-            name: format!("wake.{name}")
+            name: format!("wait.{name}")
                 .parse()
-                .expect("generated wake signal name is valid"),
+                .expect("generated wait signal name is valid"),
             payload: Map::new(),
             source: SignalSource::Watch,
             watch: Some(WatchOutcome::measured(verdict, output, &output_path, &view)),
         };
         if let Err(err) = store.append_signal(&workspace.session_name, (&signal).into()) {
-            tracing::warn!(task = name, error = %err, "appending wake signal");
+            tracing::warn!(task = name, error = %err, "appending wait signal");
         }
         if let Err(err) = fire_signal_with_wait(
             store.runtime_paths(),
@@ -426,7 +426,7 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
             &signal,
             true,
         ) {
-            tracing::warn!(task = name, error = %err, "firing watched wake");
+            tracing::warn!(task = name, error = %err, "firing watched wait");
         }
     };
     let outcome = run_command(
@@ -679,7 +679,7 @@ mod tests {
             let outcome = WatchOutcome {
                 verdict,
                 output: "actual tail".to_owned(),
-                output_path: Some(PathBuf::from("/tmp/rimz-wakes/wake.output")),
+                output_path: Some(PathBuf::from("/tmp/rimz-waits/wait.output")),
                 summary: FileSummary {
                     bytes: 11,
                     lines: 1,
@@ -706,27 +706,27 @@ mod tests {
     }
 
     #[test]
-    fn wake_tail_bounds_lossy_utf8_and_keeps_the_end() {
+    fn wait_tail_bounds_lossy_utf8_and_keeps_the_end() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wake.log");
-        let mut bytes = vec![0xff; WAKE_TAIL_CAP * 2];
+        let path = dir.path().join("wait.log");
+        let mut bytes = vec![0xff; WAIT_TAIL_CAP * 2];
         bytes.extend_from_slice(b"final diagnostic");
         std::fs::write(&path, bytes).unwrap();
-        let tail = read_wake_tail(&path).unwrap();
-        assert!(tail.len() <= WAKE_TAIL_CAP);
+        let tail = read_wait_tail(&path).unwrap();
+        assert!(tail.len() <= WAIT_TAIL_CAP);
         assert!(tail.ends_with("final diagnostic"));
         assert!(tail.contains('�'));
         std::fs::write(&path, "short output").unwrap();
-        assert_eq!(read_wake_tail(&path).unwrap(), "short output");
+        assert_eq!(read_wait_tail(&path).unwrap(), "short output");
     }
 
     #[test]
-    fn wake_output_gc_retains_recent_defined_and_live_output() {
+    fn wait_output_gc_retains_recent_defined_and_live_output() {
         let dir = tempfile::tempdir().unwrap();
         let id = WorkspaceId::from_project_root(dir.path());
         let runtime = RuntimePaths::under(id, dir.path()).unwrap();
         std::fs::create_dir_all(&runtime.root).unwrap();
-        let logs = dir.path().join("wakes");
+        let logs = dir.path().join("waits");
         std::fs::create_dir(&logs).unwrap();
         let now = std::time::SystemTime::now();
         let old =
@@ -747,7 +747,7 @@ mod tests {
         let guard = acquire_watch_lock(&runtime, "live").unwrap().unwrap();
         let retained = std::collections::BTreeSet::from(["defined".to_owned()]);
         assert_eq!(
-            prune_wake_outputs_in(&logs, &runtime, &retained, now).unwrap(),
+            prune_wait_outputs_in(&logs, &runtime, &retained, now).unwrap(),
             1
         );
         assert!(!logs.join("old.output").exists());

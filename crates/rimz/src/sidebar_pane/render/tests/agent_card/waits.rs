@@ -1,5 +1,5 @@
 use super::*;
-use crate::agents::{PendingWake, PendingWakeTrigger};
+use crate::agents::{PendingWait, PendingWaitTrigger};
 use crate::config::AnimationRole;
 use crate::sidebar_pane::render::labels::{
     activity_age_style, elapsed_glyph, role_glyph, working_style,
@@ -7,7 +7,7 @@ use crate::sidebar_pane::render::labels::{
 use crate::sidebar_pane::render::theme::Component;
 
 #[test]
-fn pending_wakes_line_counts_armed_wakes() {
+fn pending_waits_line_counts_armed_waits() {
     let mut parent = agent(
         "claude-1",
         "claude",
@@ -16,18 +16,18 @@ fn pending_wakes_line_counts_armed_wakes() {
         Some("main"),
         Some("finished work"),
     );
-    parent.pending_wakes = vec![
-        PendingWake {
+    parent.pending_waits = vec![
+        PendingWait {
             name: "timer".to_owned(),
-            trigger: PendingWakeTrigger::Timer {
+            trigger: PendingWaitTrigger::Timer {
                 due: fixed_now() + Duration::from_secs(720),
                 delay: None,
             },
             armed_at: Some(fixed_now()),
         },
-        PendingWake {
+        PendingWait {
             name: "command".to_owned(),
-            trigger: PendingWakeTrigger::Command {
+            trigger: PendingWaitTrigger::Command {
                 command: "make check".to_owned(),
             },
             armed_at: Some(fixed_now()),
@@ -56,7 +56,7 @@ fn pending_wakes_line_counts_armed_wakes() {
     let summary = &collapsed[stats];
     for (glyph, component) in [
         (GlyphRole::CardSubagents, Component::SubagentHeader),
-        (GlyphRole::CardWaits, Component::WakeHeader),
+        (GlyphRole::CardWaits, Component::WaitHeader),
     ] {
         let span = summary
             .spans
@@ -90,7 +90,7 @@ fn pending_wakes_line_counts_armed_wakes() {
             .any(|line| line.contains("◷ timer") || line.contains("make check"))
     );
     assert_snapshot(
-        "pending_wakes_line",
+        "pending_waits_line",
         snapshot_to_screen_with_alert_and_ui(
             &snapshot,
             None,
@@ -153,10 +153,10 @@ fn pending_wakes_line_counts_armed_wakes() {
     snapshot.worktree_groups[0].rows[0]
         .as_agent_mut()
         .unwrap()
-        .pending_wakes
-        .push(PendingWake {
+        .pending_waits
+        .push(PendingWait {
             name: "signal".to_owned(),
-            trigger: PendingWakeTrigger::Signal {
+            trigger: PendingWaitTrigger::Signal {
                 selector: "pr.merged".to_owned(),
                 deadline: None,
             },
@@ -169,7 +169,7 @@ fn pending_wakes_line_counts_armed_wakes() {
         (
             3,
             theme.glyph(GlyphRole::CardWaitTimer).to_owned(),
-            theme.styled(Component::WakeHeader, Modifier::empty()),
+            theme.styled(Component::WaitHeader, Modifier::empty()),
         ),
         (
             4,
@@ -179,7 +179,7 @@ fn pending_wakes_line_counts_armed_wakes() {
         (
             6,
             theme.glyph(GlyphRole::CardWaitSignal).to_owned(),
-            theme.styled(Component::WakeHeader, Modifier::empty()),
+            theme.styled(Component::WaitHeader, Modifier::empty()),
         ),
     ] {
         let lead = with_signal[stats + offset]
@@ -200,7 +200,7 @@ fn pending_wakes_line_counts_armed_wakes() {
     snapshot.worktree_groups[0].rows[0]
         .as_agent_mut()
         .unwrap()
-        .pending_wakes
+        .pending_waits
         .clear();
     let cleared = line_texts(&group_lines(&snapshot, &theme, 0));
     assert!(cleared[stats].contains("⧉ subagents (1)"));
@@ -222,30 +222,30 @@ fn wait_entries_show_trigger_program_and_command() {
         Some("main"),
         Some("working"),
     );
-    parent.pending_wakes = vec![
-        PendingWake {
+    parent.pending_waits = vec![
+        PendingWait {
             name: "timer".to_owned(),
-            trigger: PendingWakeTrigger::Timer {
+            trigger: PendingWaitTrigger::Timer {
                 due: fixed_now() + Duration::from_secs(720),
                 delay: Some("30m".to_owned()),
             },
             armed_at: Some(fixed_now() - Duration::from_secs(1080)),
         },
-        PendingWake {
+        PendingWait {
             name: "pid".to_owned(),
-            trigger: PendingWakeTrigger::Pid { pid: 16776 },
+            trigger: PendingWaitTrigger::Pid { pid: 16776 },
             armed_at: Some(fixed_now() - Duration::from_secs(180)),
         },
-        PendingWake {
+        PendingWait {
             name: "command".to_owned(),
-            trigger: PendingWakeTrigger::Command {
+            trigger: PendingWaitTrigger::Command {
                 command: "/usr/bin/cargo xtask gate --name foo_test".to_owned(),
             },
             armed_at: Some(fixed_now() - Duration::from_secs(240)),
         },
-        PendingWake {
+        PendingWait {
             name: "signal".to_owned(),
-            trigger: PendingWakeTrigger::Signal {
+            trigger: PendingWaitTrigger::Signal {
                 selector: "pr.merged".to_owned(),
                 deadline: Some(fixed_now() + Duration::from_secs(7200)),
             },
@@ -361,8 +361,8 @@ fn wait_entries_show_trigger_program_and_command() {
     snapshot.worktree_groups[0].rows[0]
         .as_agent_mut()
         .unwrap()
-        .pending_wakes[0]
-        .trigger = PendingWakeTrigger::Timer {
+        .pending_waits[0]
+        .trigger = PendingWaitTrigger::Timer {
         due: snapshot.now,
         delay: None,
     };
@@ -377,8 +377,8 @@ fn wait_entries_show_trigger_program_and_command() {
         snapshot.worktree_groups[0].rows[0]
             .as_agent_mut()
             .unwrap()
-            .pending_wakes[2]
-            .trigger = PendingWakeTrigger::Command {
+            .pending_waits[2]
+            .trigger = PendingWaitTrigger::Command {
             command: command.to_owned(),
         };
         let wrapped = line_texts(&group_lines(&snapshot, &theme, 0));
@@ -400,9 +400,9 @@ fn wait_entry_without_armed_at_has_no_clock() {
         Some("main"),
         Some("working"),
     );
-    parent.pending_wakes.push(PendingWake {
+    parent.pending_waits.push(PendingWait {
         name: "signal".to_owned(),
-        trigger: PendingWakeTrigger::Signal {
+        trigger: PendingWaitTrigger::Signal {
             selector: "pr.merged".to_owned(),
             deadline: None,
         },
@@ -439,9 +439,9 @@ fn long_wait_clocks_stay_muted_while_subagent_clocks_heat() {
         Some("working"),
     );
     let started = fixed_now() - Duration::from_secs(7200);
-    parent.pending_wakes.push(PendingWake {
+    parent.pending_waits.push(PendingWait {
         name: "timer".to_owned(),
-        trigger: PendingWakeTrigger::Timer {
+        trigger: PendingWaitTrigger::Timer {
             due: fixed_now() + Duration::from_secs(7200),
             delay: None,
         },

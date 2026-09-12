@@ -23,7 +23,7 @@ Detail lives in four places, narrowing as you go:
 
 ## Runtime shape
 
-There is no general RimZ daemon. Every durable write is a short-lived CLI or hook subprocess; the sidebar is a native pane that reads store state in process. The optional loop timer is an OS-owned one-minute trigger for a one-off `rimz loop tick`, not a resident RimZ process, and it yields roots with a live sidebar elder. Its fires run in transient user scopes under systemd and in their own process groups, so they and any room they birth outlive the tick. Spawn and scheduled check-only fires open their root's room if needed, leaving its elder to own later occurrences. Signals follow the same shape: whichever process observes the event (`rimz events emit`, the sidebar producer's forge diff, a lifecycle write) fires the tasks listening for it in place, and a `rimz wake -- <command>` watcher is a detached subprocess holding a runtime lock for its command's lifetime ([loops.md](./docs/internals/harness/loops.md#the-signal-vocabulary)).
+There is no general RimZ daemon. Every durable write is a short-lived CLI or hook subprocess; the sidebar is a native pane that reads store state in process. The optional loop timer is an OS-owned one-minute trigger for a one-off `rimz loop tick`, not a resident RimZ process, and it yields roots with a live sidebar elder. Its fires run in transient user scopes under systemd and in their own process groups, so they and any room they birth outlive the tick. Spawn and scheduled check-only fires open their root's room if needed, leaving its elder to own later occurrences. Signals follow the same shape: whichever process observes the event (`rimz events emit`, the sidebar producer's forge diff, a lifecycle write) fires the tasks listening for it in place, and a `rimz wait -- <command>` watcher is a detached subprocess holding a runtime lock for its command's lifetime ([loops.md](./docs/internals/harness/loops.md#the-signal-vocabulary)).
 
 ```text
 terminal emulator
@@ -76,7 +76,7 @@ workspace store         ~/.local/state/rimz/workspaces/<workspace_id>/
 
 per-workspace runtime   $XDG_RUNTIME_DIR/rimz/<workspace_id>/  (or /tmp/rimz-<uid>/…)
   one room's disposable tier: wakeup sockets, heartbeats, read receipts,
-  enrichment sidecars, wake watcher locks, and active-time accumulators
+  enrichment sidecars, wait watcher locks, and active-time accumulators
 
 shared persistent       ~/.local/state/rimz/shared/
   account-global provider state: accounts, rate limits, credits, spend, pricing

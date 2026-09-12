@@ -154,7 +154,7 @@ fn collect_loop() -> model::LoopTasks {
                 spec: entry
                     .agent
                     .clone()
-                    .or_else(|| entry.wake.as_ref().map(|target| target.handle.clone()))
+                    .or_else(|| entry.wait.as_ref().map(|target| target.handle.clone()))
                     .unwrap_or_else(|| "<invalid>".to_owned()),
                 when,
                 root: entry.root.display().to_string(),

@@ -252,7 +252,7 @@ impl TaskCatalog {
             );
         }
         let instance_root = instance_root(&entry.resolved_root());
-        if entry.wake.is_some() || super::ephemeral_lifetime(entry) {
+        if entry.wait.is_some() || super::ephemeral_lifetime(entry) {
             instances::insert(&instance_root, name, entry)?;
             config_edit::remove(config_edit::TaskStore::Machine, name)?;
         } else {
@@ -399,7 +399,7 @@ impl TaskCatalog {
 
 impl TaskSource {
     fn from_entry(entry: &TaskEntry) -> Self {
-        if entry.wake.is_some() || super::ephemeral_lifetime(entry) {
+        if entry.wait.is_some() || super::ephemeral_lifetime(entry) {
             Self::Instance
         } else {
             Self::Config
@@ -510,7 +510,7 @@ mod tests {
 
     #[test]
     fn pending_deliveries_filter_scope_and_sort_one_shot_triggers() {
-        use super::super::pending::{pending_wakes_by_session, session_deliveries};
+        use super::super::pending::{pending_waits_by_session, session_deliveries};
         use crate::config::TaskTarget;
         use crate::ids::{AgentKind, AgentSessionId};
 
@@ -521,7 +521,7 @@ mod tests {
         };
         let command = TaskEntry {
             root: PathBuf::from("/repo"),
-            wake: Some(target.clone()),
+            wait: Some(target.clone()),
             watch: Some("cargo test".into()),
             ..TaskEntry::default()
         };
@@ -534,7 +534,7 @@ mod tests {
         let timer = TaskEntry {
             watch: None,
             at: Some("12:00".into()),
-            wake_meta: Some(crate::config::WakeMeta {
+            wait_meta: Some(crate::config::WaitMeta {
                 armed_at: "2026-06-01T10:00:00Z".parse().unwrap(),
                 delay: None,
                 pid: None,
@@ -548,7 +548,7 @@ mod tests {
                 (
                     "m-pid".into(),
                     TaskEntry {
-                        wake_meta: Some(crate::config::WakeMeta {
+                        wait_meta: Some(crate::config::WaitMeta {
                             armed_at: "2026-06-01T10:00:00Z".parse().unwrap(),
                             delay: None,
                             pid: Some(16776),
@@ -582,7 +582,7 @@ mod tests {
                 (
                     "other-session".into(),
                     TaskEntry {
-                        wake: Some(TaskTarget {
+                        wait: Some(TaskTarget {
                             session: AgentSessionId::from("other"),
                             ..target.clone()
                         }),
@@ -592,7 +592,7 @@ mod tests {
                 (
                     "no-delivery".into(),
                     TaskEntry {
-                        wake: None,
+                        wait: None,
                         agent: Some("claude".into()),
                         ..command.clone()
                     },
@@ -617,15 +617,15 @@ mod tests {
                 "z-sooner-timer"
             ]
         );
-        let wakes = pending_wakes_by_session(
+        let waits = pending_waits_by_session(
             &catalog,
             Path::new("/repo"),
             &"2026-06-01T10:00:00Z[UTC]".parse().unwrap(),
         );
         assert_eq!(
-            wakes[&session]
+            waits[&session]
                 .iter()
-                .map(|wake| wake.name.as_str())
+                .map(|wait| wait.name.as_str())
                 .collect::<Vec<_>>(),
             vec![
                 "z-sooner-timer",
@@ -636,7 +636,7 @@ mod tests {
                 "signal"
             ]
         );
-        assert_eq!(wakes.len(), 2);
+        assert_eq!(waits.len(), 2);
     }
 
     #[test]
@@ -734,7 +734,7 @@ mod tests {
 
     #[test]
     fn ephemeral_tasks_are_one_shot_or_deadline_bound() {
-        let mut entry = task("wake");
+        let mut entry = task("wait");
         assert!(!super::super::TaskShape::compile("task", &entry).is_ephemeral());
 
         entry.every = None;
@@ -746,7 +746,7 @@ mod tests {
 
         entry.every = None;
         entry.signal = Some("ci.failed".to_owned());
-        entry.wake_meta = Some(crate::config::WakeMeta {
+        entry.wait_meta = Some(crate::config::WaitMeta {
             armed_at: jiff::Timestamp::UNIX_EPOCH,
             delay: None,
             pid: None,

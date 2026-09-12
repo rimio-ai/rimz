@@ -18,13 +18,13 @@ struct WakeReceipt<'a> {
     pending: Vec<list::WakeRow>,
 }
 
-pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
+pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
     validate_shape(&args)?;
     let ctx = Ctx::open(globals)?;
     let caller = caller(&ctx)?;
     let snapshot = ctx.resolution_snapshot()?;
     let agent = caller_agent(&snapshot, caller.as_ref())?
-        .context("arming a wake is only available to an agent RimZ can identify; run this command from an agent pane")?;
+        .context("arming a wait is only available to an agent RimZ can identify; run this command from an agent pane")?;
     if agent.agent_id.is_provisional() {
         bail!("the calling agent has not registered a real session yet");
     }
@@ -69,11 +69,11 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
     let ArmOutcome::Armed { name, .. } = arm_delivery(
         &ctx.workspace,
         DeliverySpec {
-            name: DeliveryName::MintWake,
+            name: DeliveryName::MintWait,
             target: target.clone(),
             trigger,
             prompt: DeliveryPrompt::None,
-            provenance: DeliveryProvenance::SelfWake,
+            provenance: DeliveryProvenance::SelfWait,
             check: None,
             deadline: None,
             max_strikes: None,
@@ -81,7 +81,7 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
         },
     )?
     else {
-        unreachable!("timer, process, and command wakes are not subscriptions")
+        unreachable!("timer, process, and command waits are not subscriptions")
     };
     let pending = list::pending_rows(&ctx)?;
     if args.json {
@@ -97,13 +97,13 @@ pub(super) fn run(args: WakeArgs, globals: &GlobalFlags) -> Result<()> {
     list::write_rows(&mut out, pending)
 }
 
-fn validate_shape(args: &WakeArgs) -> Result<()> {
+fn validate_shape(args: &WaitArgs) -> Result<()> {
     if usize::from(args.in_after.is_some())
         + usize::from(args.pid.is_some())
         + usize::from(!args.command.is_empty())
         != 1
     {
-        bail!("choose exactly one wake trigger: --in, --pid, or a command after --");
+        bail!("choose exactly one wait trigger: --in, --pid, or a command after --");
     }
     if args.on.is_some() && args.command.is_empty() {
         bail!("--on requires a command after --");

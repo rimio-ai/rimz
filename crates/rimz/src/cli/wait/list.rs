@@ -49,7 +49,7 @@ pub(super) fn pending_rows(ctx: &Ctx) -> Result<Vec<WakeRow>> {
 
 pub(super) fn write_rows(out: &mut impl Write, rows: Vec<WakeRow>) -> Result<()> {
     if rows.is_empty() {
-        writeln!(out, "no pending wakes")?;
+        writeln!(out, "no pending waits")?;
         return Ok(());
     }
     let mut table = super::super::render::Table::new(["NAME", "STATE", "TARGET", "AGE", "TRIGGER"])
@@ -71,9 +71,9 @@ fn row(ctx: &Ctx, name: &str, task: &LoadedTask, arm_state: ArmState) -> Result<
     let parsed = task.trigger().as_ref().map_err(Clone::clone)?;
     let target = task
         .entry()
-        .wake
+        .wait
         .as_ref()
-        .expect("wake rows have delivery targets");
+        .expect("wait rows have delivery targets");
     let (age, state) = match &parsed.trigger {
         Trigger::Schedule(_) => (
             "-".to_owned(),
@@ -90,7 +90,7 @@ fn row(ctx: &Ctx, name: &str, task: &LoadedTask, arm_state: ArmState) -> Result<
                     )
                 },
             );
-            let age = task.entry().wake_meta.as_ref().map_or_else(
+            let age = task.entry().wait_meta.as_ref().map_or_else(
                 || "-".to_owned(),
                 |meta| super::super::render::age_short(meta.armed_at, now),
             );
@@ -115,7 +115,7 @@ fn row(ctx: &Ctx, name: &str, task: &LoadedTask, arm_state: ArmState) -> Result<
             Trigger::Watch { command } => {
                 let trigger = task
                     .entry()
-                    .wake_meta
+                    .wait_meta
                     .as_ref()
                     .and_then(|meta| meta.pid)
                     .map_or_else(

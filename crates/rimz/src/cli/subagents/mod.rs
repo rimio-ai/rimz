@@ -529,13 +529,13 @@ fn list_children(json: bool, globals: &GlobalFlags) -> Result<()> {
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading agent history")?;
     let root = &ctx.workspace.project_root;
-    let mut wakes = rimz::harness::schedule::pending::pending_wakes_by_session(
+    let mut waits = rimz::harness::schedule::pending::pending_waits_by_session(
         &rimz::harness::schedule::catalog::TaskCatalog::load_lenient(Some(root)),
         root,
         &jiff::Timestamp::now().to_zoned(rimz::config::MachineConfig::load_lenient().time_zone()),
     );
     for agent in &mut audit.agents {
-        agent.pending_wakes = wakes
+        agent.pending_waits = waits
             .remove(&(agent.kind.clone(), agent.agent_id.clone()))
             .unwrap_or_default();
     }

@@ -593,9 +593,9 @@ fn child_reports_name_each_parent_and_channel() {
     first.parent_agent_kind = Some(planner.kind.clone());
     first.launch_depth = Some(1);
     first.channel = Some("feat-x".to_owned());
-    first.pending_wakes.push(rimz::agents::PendingWake {
-        name: "wake-command".to_owned(),
-        trigger: rimz::agents::PendingWakeTrigger::Command {
+    first.pending_waits.push(rimz::agents::PendingWait {
+        name: "wait-command".to_owned(),
+        trigger: rimz::agents::PendingWaitTrigger::Command {
             command: "cargo test".to_owned(),
         },
         armed_at: None,

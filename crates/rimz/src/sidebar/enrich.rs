@@ -579,10 +579,10 @@ fn enrich_core(
         );
         snapshot = snapshot.with_active_time(&active_time);
         crate::harness::budget::project_parks(&mut snapshot, runtime, &machine_config);
-        // Wakes are loop-catalog rows, not store state; producer and consumer
+        // Waits are loop-catalog rows, not store state; producer and consumer
         // both attach them here because the rollup base carries none.
         let project_root = snapshot.project_root.clone();
-        crate::harness::schedule::pending::project_pending_wakes(
+        crate::harness::schedule::pending::project_pending_waits(
             &mut snapshot,
             project_root.as_deref(),
             &machine_config,

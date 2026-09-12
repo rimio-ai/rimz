@@ -71,9 +71,9 @@ rimz pane list                       # every pane, labelled with @handles
 rimz pane capture @coder             # what the agent's pane shows right now
 rimz loop show <task>                # schedule, next fire, run forensics
 rimz loop logs <task>                # full forensics for recent runs
-rimz wake --in 30m                   # wake me once, 30 minutes from now
-rimz wake -- cargo test              # wake me when the command exits
-rimz loop add merged --signal pr.merged --wake --once # deliver the next merge signal to me
+rimz wait --in 30m                   # wake me once, 30 minutes from now
+rimz wait -- cargo test              # wake me when the command exits
+rimz loop add merged --signal pr.merged --wait --once # deliver the next merge signal to me
 rimz events emit deploy.done         # fire a signal for whoever is listening
 ```
 

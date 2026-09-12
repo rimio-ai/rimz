@@ -39,7 +39,7 @@ fn team_signal_report_matches_origin_and_session() {
     let agent = AgentState::stub("claude", "sess-planner", AgentStatus::Running);
     let entry = TaskEntry {
         team: Some("forge#feat-x".parse().unwrap()),
-        wake: Some(rimz::config::TaskTarget {
+        wait: Some(rimz::config::TaskTarget {
             kind: rimz::ids::AgentKind::new_unchecked("claude"),
             session: "sess-planner".into(),
             handle: "@old-handle".to_owned(),
@@ -77,15 +77,15 @@ fn team_signal_report_matches_origin_and_session() {
         assert!(live_signal("binding", &entry, source, "forge#feat-x", &agent).is_none());
     }
     let mut wrong_kind = entry.clone();
-    wrong_kind.wake.as_mut().unwrap().kind = rimz::ids::AgentKind::new_unchecked("codex");
+    wrong_kind.wait.as_mut().unwrap().kind = rimz::ids::AgentKind::new_unchecked("codex");
     let mut old_session = entry.clone();
-    old_session.wake.as_mut().unwrap().session = "previous-planner".into();
+    old_session.wait.as_mut().unwrap().session = "previous-planner".into();
     let mut manual = entry.clone();
     manual.team = None;
     let mut timer = entry.clone();
     timer.signal = None;
     let mut spawn = entry;
-    spawn.wake = None;
+    spawn.wait = None;
     for entry in [wrong_kind, old_session, manual, timer, spawn] {
         assert!(
             live_signal(

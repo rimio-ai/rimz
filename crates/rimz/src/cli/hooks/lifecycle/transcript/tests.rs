@@ -256,7 +256,7 @@ fn harness_notices_retain_delivery_attribution_in_transcripts() {
                 notice: HarnessNotice::Stage,
             },
             "STAGE",
-            TranscriptKind::Wake,
+            TranscriptKind::Wait,
         ),
     ] {
         let (_dir, store) = store();

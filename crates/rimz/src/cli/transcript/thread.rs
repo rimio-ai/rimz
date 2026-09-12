@@ -100,7 +100,7 @@ pub(super) fn assemble_threads(
             TranscriptKind::Prompt
             | TranscriptKind::Message
             | TranscriptKind::SubagentReport
-            | TranscriptKind::Wake => {
+            | TranscriptKind::Wait => {
                 latest_opener.insert(entry.agent.clone(), index);
             }
             TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error
@@ -176,7 +176,7 @@ fn thread_edge(parent: &RenderEntry, child: &RenderEntry) -> bool {
         TranscriptKind::Prompt
         | TranscriptKind::Message
         | TranscriptKind::SubagentReport
-        | TranscriptKind::Wake => {
+        | TranscriptKind::Wait => {
             parent.chat.from != "user"
                 && child
                     .chat

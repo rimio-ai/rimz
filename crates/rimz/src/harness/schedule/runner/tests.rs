@@ -383,7 +383,7 @@ fn skipped_check_preserves_poll_until_and_consumes_watch() {
     );
 
     let signal = TriggerSignal {
-        name: "wake.runner-skipped-watch".parse().expect("signal name"),
+        name: "wait.runner-skipped-watch".parse().expect("signal name"),
         payload: serde_json::Map::new(),
         source: crate::store::event::SignalSource::Watch,
         watch: Some(crate::harness::schedule::signal::WatchOutcome {
@@ -683,8 +683,8 @@ fn watched_check_keeps_full_output_and_a_bounded_tail() {
     assert!(full.contains("1\n2\n3\n"));
     assert!(full.contains("4999\n5000\n"));
     assert!(full.contains("stderr"));
-    assert!(full.len() > WAKE_TAIL_CAP);
-    assert!(output.output.len() <= WAKE_TAIL_CAP);
+    assert!(full.len() > WAIT_TAIL_CAP);
+    assert!(output.output.len() <= WAIT_TAIL_CAP);
     assert!(full.ends_with(&output.output));
     assert!(output.output.contains("5000"));
 }
@@ -694,17 +694,17 @@ fn check_capture_bounds_chatty_chunks_before_decoding() {
     let mut capture = CheckCapture {
         file: None,
         tail: Vec::new(),
-        cap: WAKE_TAIL_CAP,
+        cap: WAIT_TAIL_CAP,
     };
     for chunk in [
-        vec![b'a'; WAKE_TAIL_CAP * 3],
+        vec![b'a'; WAIT_TAIL_CAP * 3],
         vec![b'b'; 17],
-        vec![b'c'; WAKE_TAIL_CAP],
+        vec![b'c'; WAIT_TAIL_CAP],
     ] {
         capture.push(&chunk).unwrap();
-        assert!(capture.tail.len() <= WAKE_TAIL_CAP);
+        assert!(capture.tail.len() <= WAIT_TAIL_CAP);
     }
-    assert_eq!(capture.tail, vec![b'c'; WAKE_TAIL_CAP]);
+    assert_eq!(capture.tail, vec![b'c'; WAIT_TAIL_CAP]);
 }
 
 #[test]
@@ -779,17 +779,17 @@ fn loop_signal_prompts_keep_braces_and_check_evidence() {
 }
 
 #[test]
-fn wake_prompt_is_optional_but_spawn_prompt_is_required() {
+fn wait_prompt_is_optional_but_spawn_prompt_is_required() {
     let mut entry = TaskEntry {
-        wake: Some(TaskTarget {
+        wait: Some(TaskTarget {
             kind: crate::ids::AgentKind::new_unchecked("claude"),
             session: "session".into(),
             handle: "@coder".to_owned(),
         }),
         ..TaskEntry::default()
     };
-    assert_eq!(resolve_task_prompt("wake-test", &entry).unwrap(), "");
-    entry.wake = None;
+    assert_eq!(resolve_task_prompt("wait-test", &entry).unwrap(), "");
+    entry.wait = None;
     entry.agent = Some("claude".to_owned());
     assert!(
         resolve_task_prompt("spawn-test", &entry)

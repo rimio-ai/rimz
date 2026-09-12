@@ -109,15 +109,15 @@ impl BudgetPark {
 /// One armed one-shot delivery aimed at this session, read from the loop
 /// instance catalog when a snapshot is enriched. Never folded from the log.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PendingWake {
+pub struct PendingWait {
     pub name: String,
-    pub trigger: PendingWakeTrigger,
+    pub trigger: PendingWaitTrigger,
     pub armed_at: Option<Timestamp>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
-pub enum PendingWakeTrigger {
+pub enum PendingWaitTrigger {
     Timer {
         due: Timestamp,
         #[serde(default)]
@@ -135,13 +135,13 @@ pub enum PendingWakeTrigger {
     },
 }
 
-impl PendingWake {
+impl PendingWait {
     pub fn label(&self, now: Timestamp) -> String {
-        format!("wake {}", self.trigger.summary(now))
+        format!("wait {}", self.trigger.summary(now))
     }
 }
 
-impl PendingWakeTrigger {
+impl PendingWaitTrigger {
     pub(crate) fn summary(&self, now: Timestamp) -> String {
         use crate::theme::fmt::{command_preview, duration_label};
 
@@ -214,8 +214,8 @@ pub enum AgentStatus {
     /// status, never reported by the agent.
     Paused,
     /// Resting (`idle`/`success`) with a one-shot delivery armed in the loop
-    /// catalog: a wake timer, watched command, or one-shot subscription.
-    /// Projected from `pending_wakes`, never reported by a hook.
+    /// catalog: a wait timer, watched command, or one-shot subscription.
+    /// Projected from `pending_waits`, never reported by a hook.
     Sleeping,
 }
 
@@ -688,7 +688,7 @@ pub struct AgentState {
     pub budget_park: Option<BudgetPark>,
     /// Loop-catalog projection rebuilt at enrichment, never reduced from events.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub pending_wakes: Vec<PendingWake>,
+    pub pending_waits: Vec<PendingWait>,
     /// What the parent asked this *subagent* to do, harvested from Claude's
     /// `subagentStatusLine`. Folded in at snapshot time by
     /// `SidebarSnapshot::with_subagent_context`, never reduced from the event
@@ -838,7 +838,7 @@ struct AgentStateWire {
     #[serde(default)]
     budget_park: Option<BudgetPark>,
     #[serde(default)]
-    pending_wakes: Vec<PendingWake>,
+    pending_waits: Vec<PendingWait>,
     subagent_description: Option<String>,
     #[serde(default)]
     subagent_cost_usd: Option<f64>,
@@ -920,7 +920,7 @@ impl From<AgentStateWire> for AgentState {
             context: wire.context,
             estimated_active_secs: None,
             budget_park: wire.budget_park,
-            pending_wakes: wire.pending_wakes,
+            pending_waits: wire.pending_waits,
             subagent_description: wire.subagent_description,
             subagent_cost_usd: wire.subagent_cost_usd,
             subagent_started_at: wire.subagent_started_at,
@@ -1009,7 +1009,7 @@ impl AgentState {
             context: None,
             estimated_active_secs: None,
             budget_park: None,
-            pending_wakes: Vec::new(),
+            pending_waits: Vec::new(),
             subagent_description: None,
             subagent_cost_usd: None,
             subagent_started_at: None,
@@ -1130,7 +1130,7 @@ impl AgentState {
 
     pub fn sleeping_over(&self, status: AgentStatus) -> AgentStatus {
         if matches!(status, AgentStatus::Idle | AgentStatus::Success)
-            && !self.pending_wakes.is_empty()
+            && !self.pending_waits.is_empty()
         {
             AgentStatus::Sleeping
         } else {

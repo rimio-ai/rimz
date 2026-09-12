@@ -25,7 +25,7 @@ Unknown fields print a warning, are ignored, and can be removed with `rimz setup
 
 ## Inspect one team
 
-An instance's `state` follows member-status priority: `blocked` (any waiting or failed member), then `paused`, `working` (running), `sleeping`, `done` (success), and finally `idle`. Thus a resting member with an armed one-shot delivery keeps the cohort `sleeping` rather than `done`, unless a higher-priority member state wins. Standing subscriptions do not make members sleep. Any live member's pending one-shot wake withholds `team.idle`; cancellation is reevaluated on the caller's following lifecycle boundary, not immediately on row removal.
+An instance's `state` follows member-status priority: `blocked` (any waiting or failed member), then `paused`, `working` (running), `sleeping`, `done` (success), and finally `idle`. Thus a resting member with an armed one-shot delivery keeps the cohort `sleeping` rather than `done`, unless a higher-priority member state wins. Standing subscriptions do not make members sleep. Any live member's pending one-shot wait withholds `team.idle`; cancellation is reevaluated on the caller's following lifecycle boundary, not immediately on row removal.
 
 ```sh
 rimz teams show forge
@@ -90,10 +90,10 @@ Inspect, message, or subscribe to the cohort with lane-qualified commands (shown
 ```sh
 rimz teams show forge#feat-rate-limits
 rimz message @planner#feat-rate-limits '<text>'
-rimz loop add team-idle --wake @me --signal team.idle --match instance=forge#feat-rate-limits --once
+rimz loop add team-idle --wait @me --signal team.idle --match instance=forge#feat-rate-limits --once
 ```
 
-Startup remains asynchronous: the receipt is not a readiness barrier, and members may not yet appear in `teams show`. Inspect the cohort for live status. The `loop add` command above arms a one-shot subscription on a future transition to `team.idle`; it does not block until readiness or completion, and idle does not mean the task is done. Signals do not replay: if the cohort was already idle before the subscription was armed, that transition will not wake you. Inspect current state as well as arming the subscription; [signal delivery](./loop.md#signals) applies. Launch has no JSON receipt; `--json` is for list and inspection.
+Startup remains asynchronous: the receipt is not a readiness barrier, and members may not yet appear in `teams show`. Inspect the cohort for live status. The `loop add` command above arms a one-shot subscription on a future transition to `team.idle`; it does not block until readiness or completion, and idle does not mean the task is done. Signals do not replay: if the cohort was already idle before the subscription was armed, that transition will not wait you. Inspect current state as well as arming the subscription; [signal delivery](./loop.md#signals) applies. Launch has no JSON receipt; `--json` is for list and inspection.
 
 For configured bindings, a `signals` line closes the receipt's member list, for example `signals   ci.failed → @coder`; this describes intent, not an already-armed row. Root members arm their bindings when their real sessions register, including resume, restart, and role re-add; children do not. End, loss, or stop retires the session's subscriptions, and missed signals are never replayed.
 
@@ -201,7 +201,7 @@ The team resumed at stage Implement, which is yours. Nothing flipped since the b
 
 If the leader opens a board at a stage another role owns, the first sentence instead starts `@planner opened the stage Explore. Explore is yours: pick it up from blackboard.md.` Explicit signal subscriptions still receive the loop's signal body, independently of this direct notice.
 
-Delivery always parks at the owner's next done boundary; flip has no interrupt option. A flip to a stage the caller owns sends no message: carry on. An owner with no live member is not an error: the board and signal land, and the receipt says the owner will be woken on resume. When the current owner registers after resume, restart, single-member restart, or room rebirth, RimZ emits and delivers a re-wake with `from == to` and `by = "rimz"`, without editing the board or ledger.
+Delivery always parks at the owner's next done boundary; flip has no interrupt option. A flip to a stage the caller owns sends no message: carry on. An owner with no live member is not an error: the board and signal land, and the receipt says the owner will be woken on resume. When the current owner registers after resume, restart, single-member restart, or room rebirth, RimZ emits and delivers a re-wait with `from == to` and `by = "rimz"`, without editing the board or ledger.
 
 `Done` is implicit and always last in the pipeline display; declaring it in either `stages` or `owns` is refused. It writes `Stage: Done`, appends the required note, and emits the signal without delivering a message. Flipping out of `Done` is allowed: keep the board and flip to an owned stage for a follow-up run. Same-stage flips repeat the ledger entry, signal, and eligible delivery. To correct a mistaken flip, flip back to the intended stage; both actions stay in the ledger.
 

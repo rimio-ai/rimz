@@ -152,7 +152,7 @@ fn gc_prunes_dead_root_workspace() {
 }
 
 #[test]
-fn gc_prunes_wake_outputs_despite_another_projects_invalid_config() {
+fn gc_prunes_wait_outputs_despite_another_projects_invalid_config() {
     let env = Env::new();
     let other = env.home_root.join("other-project");
     env.record(&other);
@@ -164,7 +164,7 @@ fn gc_prunes_wake_outputs_despite_another_projects_invalid_config() {
     .unwrap();
     let paths = env.state_path_for(&other);
     paths.ensure_tmp_dir().unwrap();
-    let log = paths.wakes_dir.join("wake-retired.output");
+    let log = paths.waits_dir.join("wait-retired.output");
     std::fs::write(&log, "old command output").unwrap();
     std::fs::File::open(&log)
         .unwrap()
@@ -175,8 +175,8 @@ fn gc_prunes_wake_outputs_despite_another_projects_invalid_config() {
     env.record(&damaged);
     let damaged_paths = env.state_path_for(&damaged);
     damaged_paths.ensure_tmp_dir().unwrap();
-    std::fs::remove_dir(&damaged_paths.wakes_dir).unwrap();
-    std::fs::write(&damaged_paths.wakes_dir, "not a directory").unwrap();
+    std::fs::remove_dir(&damaged_paths.waits_dir).unwrap();
+    std::fs::write(&damaged_paths.waits_dir, "not a directory").unwrap();
 
     let gone = env.home_root.join("gone-project");
     env.record(&gone);
@@ -186,14 +186,14 @@ fn gc_prunes_wake_outputs_despite_another_projects_invalid_config() {
         .args(["gc"])
         .assert()
         .success()
-        .stdout(contains("1 wake log pruned"));
+        .stdout(contains("1 wait log pruned"));
     assert!(
         !log.exists(),
         "retired log is pruned without loading project config"
     );
     assert!(
-        damaged_paths.wakes_dir.is_file(),
-        "unreadable wake area is kept"
+        damaged_paths.waits_dir.is_file(),
+        "unreadable wait area is kept"
     );
     assert!(
         !gone_paths.root.exists(),
@@ -207,7 +207,7 @@ fn gc_prunes_wake_outputs_despite_another_projects_invalid_config() {
         .unwrap();
     let output = env.rimz().args(["gc", "--json"]).assert().success();
     let report: serde_json::Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
-    assert_eq!(report["wake_logs_pruned"], 1);
+    assert_eq!(report["wait_logs_pruned"], 1);
     assert!(!log.exists());
 }
 
@@ -268,12 +268,12 @@ fn gc_reaps_dead_loop_delivery_schedule() {
         &config_path,
         format!(
             "[tasks.dead]\n\
-             wake = {{ kind = \"claude\", session = \"sess-dead\", handle = \"@claude\" }}\n\
+             wait = {{ kind = \"claude\", session = \"sess-dead\", handle = \"@claude\" }}\n\
              prompt = \"wake up\"\n\
              root = \"{}\"\n\
              at = \"07:00\"\n\
              [tasks.ended]\n\
-             wake = {{ kind = \"claude\", session = \"sess-ended\", handle = \"@claude\" }}\n\
+             wait = {{ kind = \"claude\", session = \"sess-ended\", handle = \"@claude\" }}\n\
              prompt = \"wake up\"\n\
              root = \"{}\"\n\
              at = \"07:00\"\n",
@@ -394,7 +394,7 @@ fn gc_json_emits_report() {
         serde_json::from_slice(&assert.get_output().stdout).expect("gc json");
 
     assert_eq!(value["dry_run"], false);
-    assert_eq!(value["wake_logs_pruned"], 0);
+    assert_eq!(value["wait_logs_pruned"], 0);
     assert!(
         value.get("reclaimed_bytes").is_some(),
         "json includes reclaimed_bytes: {value}"
@@ -414,13 +414,13 @@ fn gc_keeps_spawn_and_live_loop_schedules() {
         format!(
             "[tasks.spawn]\n\
              agent = \"claude\"\n\
-             prompt = \"spawn wake\"\n\
+             prompt = \"spawn wait\"\n\
              root = \"{}\"\n\
              at = \"07:00\"\n\
              \n\
              [tasks.live]\n\
-             wake = {{ kind = \"claude\", session = \"sess-live\", handle = \"@claude\" }}\n\
-             prompt = \"live wake\"\n\
+             wait = {{ kind = \"claude\", session = \"sess-live\", handle = \"@claude\" }}\n\
+             prompt = \"live wait\"\n\
              root = \"{}\"\n\
              at = \"07:00\"\n",
             env.project_root.display(),

@@ -42,7 +42,7 @@ pub(super) enum CardSlot {
     AwaitingDots,
     Gauge,
     Tokens,
-    /// Standing lifetime child count and cost plus armed one-shot wakes; empty
+    /// Standing lifetime child count and cost plus armed one-shot waits; empty
     /// until either exists.
     Delegation,
     /// Child entries, pending waits, and the prior-turn overflow toggle.

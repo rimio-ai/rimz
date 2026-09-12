@@ -57,7 +57,7 @@ pub enum MessageSender {
 #[serde(rename_all = "snake_case")]
 pub enum HarnessNotice {
     SubagentReport,
-    Wake,
+    Wait,
     Signal,
     Stage,
     /// Preserve newer notices verbatim through older queue rewrites and history pruning.
@@ -69,7 +69,7 @@ impl HarnessNotice {
     pub(crate) fn header_type(&self) -> String {
         match self {
             Self::SubagentReport => "SUBAGENT_REPORT".to_owned(),
-            Self::Wake => "WAKE".to_owned(),
+            Self::Wait => "WAIT".to_owned(),
             Self::Signal => "SIGNAL".to_owned(),
             Self::Stage => "STAGE".to_owned(),
             Self::Other(notice) => notice.to_ascii_uppercase(),
@@ -438,7 +438,7 @@ pub struct MessageRecord {
     /// this message can enter its receiver's FIFO lane.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub when: Vec<WhenCondition>,
-    /// Wake-only retry floor set by the elder sweep when a ready queued head
+    /// Wait-only retry floor set by the elder sweep when a ready queued head
     /// cannot deliver. This never gates FIFO readiness or turn-boundary
     /// delivery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -537,7 +537,7 @@ impl MessageRecord {
     }
 
     /// Fresh `Queued` copy of a terminal record for `message requeue`. The
-    /// reply-wait stamp resets because a requeue has no waiting CLI behind it.
+    /// reply-wake stamp resets because a requeue has no waiting CLI behind it.
     pub fn requeue_from(record: &MessageRecord) -> MessageRecord {
         Self::new_for_card(
             record.workspace_id.clone(),
@@ -922,7 +922,7 @@ pub fn claim_expired(last_attempt_at: Option<Timestamp>, now: Timestamp) -> bool
 pub enum HeaderKind {
     Agent,
     Subagent,
-    Wake,
+    Wait,
     Signal,
     Stage,
     User,
@@ -932,7 +932,7 @@ fn classify_header_line(line: &str) -> Option<HeaderKind> {
     match line {
         "Type: AGENT_MESSAGE" => Some(HeaderKind::Agent),
         "Type: SUBAGENT_REPORT" => Some(HeaderKind::Subagent),
-        "Type: WAKE" => Some(HeaderKind::Wake),
+        "Type: WAIT" => Some(HeaderKind::Wait),
         "Type: SIGNAL" => Some(HeaderKind::Signal),
         "Type: STAGE" => Some(HeaderKind::Stage),
         "Type: USER_MESSAGE" => Some(HeaderKind::User),

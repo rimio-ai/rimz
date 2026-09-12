@@ -737,7 +737,7 @@ mod tests {
             agent_sender("planner", None),
             MessageSender::System,
             MessageSender::Harness {
-                notice: rimz::store::message::HarnessNotice::Wake,
+                notice: rimz::store::message::HarnessNotice::Wait,
             },
             MessageSender::Subagent {
                 kind: AgentKind::new_unchecked("codex"),

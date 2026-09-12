@@ -87,7 +87,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         }
     };
     spinner.set("reaping dead schedules…");
-    let (schedules_reaped, wake_logs_pruned) = if args.dry_run {
+    let (schedules_reaped, wait_logs_pruned) = if args.dry_run {
         (0, 0)
     } else {
         let reaped = rimz::harness::schedule::catalog::TaskCatalog::reap_dead_deliveries()
@@ -98,9 +98,9 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         rimz::harness::schedule::catalog::TaskCatalog::load(project_root.as_deref())?
             .prune_orphan_overlays()
             .context("pruning orphan loop arming state")?;
-        let wake_logs = rimz::harness::schedule::signal::prune_wake_outputs()
-            .context("pruning old wake output")?;
-        (reaped, wake_logs)
+        let wait_logs = rimz::harness::schedule::signal::prune_wait_outputs()
+            .context("pruning old wait output")?;
+        (reaped, wait_logs)
     };
     spinner.set("pruning dead workspaces…");
     let prune = gc::prune_dead_workspaces(args.dry_run).context("pruning dead workspaces")?;
@@ -114,7 +114,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         temps,
         store_maintenance,
         schedules_reaped,
-        wake_logs_pruned,
+        wait_logs_pruned,
         prune,
         worktrees,
     };
@@ -136,7 +136,7 @@ struct GcOutcome {
     temps: gc::TempSweepReport,
     store_maintenance: StoreMaintenance,
     schedules_reaped: usize,
-    wake_logs_pruned: usize,
+    wait_logs_pruned: usize,
     prune: gc::WorkspacePruneReport,
     worktrees: WorktreeSweepStatus,
 }
@@ -314,7 +314,7 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
         }
     } else if reclaimed > 0 {
         format!("gc — reclaimed {}", fmt_bytes(reclaimed))
-    } else if out.schedules_reaped > 0 || out.wake_logs_pruned > 0 {
+    } else if out.schedules_reaped > 0 || out.wait_logs_pruned > 0 {
         "gc — maintenance complete".to_owned()
     } else if problems > 0 {
         "gc — no bytes reclaimed".to_owned()
@@ -701,16 +701,16 @@ fn render_loop_schedules(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> 
             "loop schedules",
             "skipped (dry run)",
         )
-    } else if out.schedules_reaped > 0 || out.wake_logs_pruned > 0 {
+    } else if out.schedules_reaped > 0 || out.wait_logs_pruned > 0 {
         let mut counts = Vec::new();
         if out.schedules_reaped > 0 {
             counts.push(plural(out.schedules_reaped, "dead reaped", "dead reaped"));
         }
-        if out.wake_logs_pruned > 0 {
+        if out.wait_logs_pruned > 0 {
             counts.push(plural(
-                out.wake_logs_pruned,
-                "wake log pruned",
-                "wake logs pruned",
+                out.wait_logs_pruned,
+                "wait log pruned",
+                "wait logs pruned",
             ));
         }
         render_row(w, RowVerdict::Acted, "loop schedules", &counts.join(" · "))
@@ -835,7 +835,7 @@ struct JsonReport {
     messages: JsonMessages,
     carryover_pruned: usize,
     schedules_reaped: usize,
-    wake_logs_pruned: usize,
+    wait_logs_pruned: usize,
     repair: Option<JsonRepair>,
     store_maintenance: &'static str,
 }
@@ -856,7 +856,7 @@ impl From<&GcOutcome> for JsonReport {
             },
             carryover_pruned: carryover_pruned(&out.store_maintenance),
             schedules_reaped: out.schedules_reaped,
-            wake_logs_pruned: out.wake_logs_pruned,
+            wait_logs_pruned: out.wait_logs_pruned,
             repair: repair_outcome(&out.store_maintenance).map(JsonRepair::from),
             store_maintenance: out.store_maintenance.status_json(),
         }
@@ -1375,7 +1375,7 @@ mod tests {
                 }
             },
             schedules_reaped: usize::from(!dry_run),
-            wake_logs_pruned: usize::from(!dry_run),
+            wait_logs_pruned: usize::from(!dry_run),
             prune: gc::WorkspacePruneReport {
                 removed: vec![gc::RemovedWorkspace {
                     workspace_id: rimz::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),

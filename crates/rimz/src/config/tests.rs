@@ -1240,7 +1240,7 @@ fn removed_agents_tables_fail_fast_with_the_rename() {
         (
             "[agents.loop.tasks.old]\n\
              spec = \"claude\"\n\
-             prompt = \"wake\"\n\
+             prompt = \"wait\"\n\
              root = \"/repo\"\n\
              at = \"07:00\"\n",
             "loop.toml",
@@ -1973,8 +1973,8 @@ fn loop_tasks_parse_and_default_empty() {
              prompt-file = \"prompts/pr-watch.md\"\n\
              root = \"/home/me/app\"\n\
              every = \"15m\"\n\
-             [tasks.self_wake]\n\
-             wake = { kind = \"claude\", session = \"sess-1\", handle = \"@planner\" }\n\
+             [tasks.self_wait]\n\
+             wait = { kind = \"claude\", session = \"sess-1\", handle = \"@planner\" }\n\
              prompt = \"pick up the review\"\n\
              root = \"/home/me/app\"\n\
              at = \"07:00\"\n",
@@ -1982,7 +1982,7 @@ fn loop_tasks_parse_and_default_empty() {
     .expect("load");
     let entry = config.r#loop.tasks.0.get("morning").expect("morning task");
     assert_eq!(entry.agent.as_deref(), Some("claude"));
-    assert_eq!(entry.wake, None);
+    assert_eq!(entry.wait, None);
     assert_eq!(entry.prompt.as_deref(), Some("triage"));
     assert_eq!(entry.root, std::path::Path::new("/home/me/app"));
     assert_eq!(entry.at.as_deref(), Some("07:00"));
@@ -2005,9 +2005,9 @@ fn loop_tasks_parse_and_default_empty() {
     );
     assert_eq!(general.every.as_deref(), Some("15m"));
 
-    let bound = config.r#loop.tasks.0.get("self_wake").expect("bind task");
+    let bound = config.r#loop.tasks.0.get("self_wait").expect("bind task");
     assert_eq!(bound.agent, None);
-    let target = bound.wake.as_ref().expect("target");
+    let target = bound.wait.as_ref().expect("target");
     assert_eq!(target.kind, "claude");
     assert_eq!(target.session, "sess-1");
     assert_eq!(target.handle, "@planner");

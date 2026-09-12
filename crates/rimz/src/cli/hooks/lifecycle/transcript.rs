@@ -277,7 +277,7 @@ pub(super) fn record_conversation(
                             Some((
                                 header @ (rimz::store::message::HeaderKind::Agent
                                 | rimz::store::message::HeaderKind::Subagent
-                                | rimz::store::message::HeaderKind::Wake
+                                | rimz::store::message::HeaderKind::Wait
                                 | rimz::store::message::HeaderKind::Signal
                                 | rimz::store::message::HeaderKind::Stage),
                                 sender,
@@ -291,10 +291,10 @@ pub(super) fn record_conversation(
                                     rimz::store::message::HeaderKind::Subagent => {
                                         rimz::transcript::TranscriptKind::SubagentReport
                                     }
-                                    rimz::store::message::HeaderKind::Wake
+                                    rimz::store::message::HeaderKind::Wait
                                     | rimz::store::message::HeaderKind::Signal
                                     | rimz::store::message::HeaderKind::Stage => {
-                                        rimz::transcript::TranscriptKind::Wake
+                                        rimz::transcript::TranscriptKind::Wait
                                     }
                                     rimz::store::message::HeaderKind::User => {
                                         unreachable!("user header matched separately")

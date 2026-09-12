@@ -54,7 +54,7 @@ lifetime_fields!(transcript_path; account_key; role, team, channel, profile);
 
 pub(crate) const MAX_SIGNAL_NAME_BYTES: usize = 64;
 
-const RESERVED_FAMILIES: &[&str] = &["agent", "wake", "team", "ci", "pr"];
+const RESERVED_FAMILIES: &[&str] = &["agent", "wait", "team", "ci", "pr"];
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SignalName(String);

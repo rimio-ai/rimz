@@ -205,13 +205,13 @@ fn target_rule_rows_use_each_rules_files_and_resolved_admissions() {
     let sources = [
         Source::new(
             "crates/demo/src/store.rs",
-            "fn run() { crate::harness::target::wake(); crate::agents::run(); }",
+            "fn run() { crate::harness::target::wait(); crate::agents::run(); }",
         ),
         Source::new(
             "crates/demo/src/store/atomic.rs",
             "fn save() { crate::diag::record(); }",
         ),
-        Source::new("crates/demo/src/harness/target.rs", "pub fn wake() {}"),
+        Source::new("crates/demo/src/harness/target.rs", "pub fn wait() {}"),
         Source::new("crates/demo/src/agents.rs", "pub fn run() {}"),
         Source::new("crates/demo/src/diag.rs", "pub fn record() {}"),
     ];

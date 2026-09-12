@@ -952,7 +952,7 @@ fn is_disallowed_set_container(path: &[String]) -> bool {
         )
         || matches!(path, [root, child, set, _, _, ..] if root == "theme" && child == "glyphs" && is_named_glyph_set(set) && path.len() > 5)
         || matches!(path, [root, tasks, _] if root == "loop" && tasks == "tasks")
-        || matches!(path, [root, tasks, _, wake] if root == "loop" && tasks == "tasks" && wake == "wake")
+        || matches!(path, [root, tasks, _, wait] if root == "loop" && tasks == "tasks" && wait == "wait")
 }
 
 fn is_animation_role(role: &str) -> bool {

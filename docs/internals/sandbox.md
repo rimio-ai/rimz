@@ -31,7 +31,7 @@ The plan pins its environment inputs across shell startup: existing root and pro
 
 ## Room tmp
 
-`${XDG_STATE_HOME:-~/.local/state}/rimz/workspaces/<workspace_id>/tmp/` is ensured at mode `0700` before sandbox room birth and again during launch preparation. `StatePaths::ensure_tmp_dir` builds one layout: `scratchpad/` for agent scratch files, `rimz-wakes/` for watched-command output, and `rimz-subagents/` for settled child responses. Host mode creates this layout on demand for RimZ's own output files. The sandbox launch environment pins reapply `TMPDIR=/tmp` after shell startup files.
+`${XDG_STATE_HOME:-~/.local/state}/rimz/workspaces/<workspace_id>/tmp/` is ensured at mode `0700` before sandbox room birth and again during launch preparation. `StatePaths::ensure_tmp_dir` builds one layout: `scratchpad/` for agent scratch files, `rimz-waits/` for watched-command output, and `rimz-subagents/` for settled child responses. Host mode creates this layout on demand for RimZ's own output files. The sandbox launch environment pins reapply `TMPDIR=/tmp` after shell startup files.
 
 `sandbox::TmpView` owns the host-to-agent path mapping for output records and messages: paths under room tmp become `/tmp/<relative path>` under sandbox isolation and remain host paths otherwise. `TmpView::current` reads current machine policy for emitters without a launch config. Room tmp is separate from host `/tmp`, not hidden from host processes: the host state path remains accessible inside and outside the sandbox.
 
@@ -47,7 +47,7 @@ The launch compiler sets `LaunchReminders.sandbox` from successful bubblewrap pr
 
 > This pane runs in a bubblewrap sandbox. `/tmp` is the room's: shared with teammates and subagents, separate from the host's `/tmp`, removed when the room closes; the host state path stays reachable. Scratch files go under `/tmp/scratchpad`.
 
-The wake and subagent output directories are not named: every wake message and subagent report carries its file path.
+The wait and subagent output directories are not named: every wait message and subagent report carries its file path.
 
 It reaches Claude, Qwen, Droid, and Codex through their existing native append-system-text channels on every launch kind, including subagents. Host-mode launches omit it. Other providers gain no fallback; their child user-prompt fallback remains the no-delegation body only.
 

@@ -44,7 +44,7 @@ fn spawn_entry() -> TaskEntry {
     }
 }
 
-fn wake_target() -> TaskTarget {
+fn wait_target() -> TaskTarget {
     TaskTarget {
         kind: crate::ids::AgentKind::new_unchecked("claude"),
         session: "sess".into(),
@@ -115,7 +115,7 @@ fn task_action_from_entry_maps_field_combinations() {
         (spawn_entry(), TaskActionKind::Spawn, (true, true, false)),
         (
             TaskEntry {
-                wake: Some(wake_target()),
+                wait: Some(wait_target()),
                 ..TaskEntry::default()
             },
             TaskActionKind::Deliver,
@@ -143,10 +143,10 @@ fn task_action_from_entry_maps_field_combinations() {
     for (entry, message) in [
         (
             TaskEntry {
-                wake: Some(wake_target()),
+                wait: Some(wait_target()),
                 ..spawn_entry()
             },
-            "loop task `task` sets both `agent` and `wake`; keep exactly one",
+            "loop task `task` sets both `agent` and `wait`; keep exactly one",
         ),
         (
             TaskEntry {
@@ -173,7 +173,7 @@ fn task_action_from_entry_maps_field_combinations() {
         ),
         (
             TaskEntry::default(),
-            "loop task `task` needs `agent`, `wake`, or `check`",
+            "loop task `task` needs `agent`, `wait`, or `check`",
         ),
     ] {
         let err = TaskAction::from_entry("task", &entry).expect_err("invalid action");
@@ -461,7 +461,7 @@ fn triggers_match_names_and_top_level_payload_values() {
         watch.resolve(
             "task",
             &signal::Signal {
-                name: "wake.task".parse().unwrap(),
+                name: "wait.task".parse().unwrap(),
                 ..signal.clone()
             }
         ),
@@ -471,7 +471,7 @@ fn triggers_match_names_and_top_level_payload_values() {
         watch.resolve(
             "other",
             &signal::Signal {
-                name: "wake.task".parse().unwrap(),
+                name: "wait.task".parse().unwrap(),
                 ..signal.clone()
             }
         ),

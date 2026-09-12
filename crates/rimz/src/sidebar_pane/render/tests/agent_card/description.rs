@@ -2,7 +2,7 @@ use super::*;
 use ratatui::text::Span;
 
 #[test]
-fn sleeping_card_describes_its_wake_using_the_snapshot_clock() {
+fn sleeping_card_describes_its_wait_using_the_snapshot_clock() {
     let mut sleeper = agent(
         "claude-1",
         "claude",
@@ -11,9 +11,9 @@ fn sleeping_card_describes_its_wake_using_the_snapshot_clock() {
         Some("main"),
         Some("finished work"),
     );
-    sleeper.pending_wakes.push(crate::agents::PendingWake {
-        name: "wake-test".to_owned(),
-        trigger: crate::agents::PendingWakeTrigger::Timer {
+    sleeper.pending_waits.push(crate::agents::PendingWait {
+        name: "wait-test".to_owned(),
+        trigger: crate::agents::PendingWaitTrigger::Timer {
             due: fixed_now() + jiff::SignedDuration::from_mins(12),
             delay: Some("30m".to_owned()),
         },
@@ -22,19 +22,19 @@ fn sleeping_card_describes_its_wake_using_the_snapshot_clock() {
     let mut snapshot = snapshot_with(vec![sleeper]);
     let screen = snapshot_to_screen(&snapshot, 44, 20);
     assert!(screen.contains(Theme::fixed(false).glyph(GlyphRole::StatusSleeping)));
-    assert!(screen.contains("wake timer 30m · in 12m"));
+    assert!(screen.contains("wait timer 30m · in 12m"));
     assert!(screen.contains("⧖ 1"));
     assert!(!screen.contains("finished work"));
     assert_snapshot("sleeping_card", screen);
 
     let theme = Theme::fixed(false);
     let lines = group_lines(&snapshot, &theme, 0);
-    let style = span_for(&lines, "wake timer 30m · in 12m").style;
+    let style = span_for(&lines, "wait timer 30m · in 12m").style;
     assert_eq!(style.fg, theme.body().fg);
     assert!(style.add_modifier.contains(Modifier::ITALIC));
 
     snapshot.now += jiff::SignedDuration::from_mins(12);
-    assert!(snapshot_to_screen(&snapshot, 44, 20).contains("wake timer 30m · due"));
+    assert!(snapshot_to_screen(&snapshot, 44, 20).contains("wait timer 30m · due"));
 
     snapshot.worktree_groups[0].rows[0]
         .as_agent_mut()
@@ -42,7 +42,7 @@ fn sleeping_card_describes_its_wake_using_the_snapshot_clock() {
         .turn_error_label = Some("api error".to_owned());
     let screen = snapshot_to_screen(&snapshot, 44, 20);
     assert!(screen.contains("api error"));
-    assert!(!screen.contains("wake timer"));
+    assert!(!screen.contains("wait timer"));
 
     for status in [
         AgentStatus::Running,
@@ -54,7 +54,7 @@ fn sleeping_card_describes_its_wake_using_the_snapshot_clock() {
         card.status = status;
         let screen = snapshot_to_screen(&snapshot, 44, 20);
         assert!(screen.contains("finished work"), "{status:?}: {screen}");
-        assert!(!screen.contains("wake timer"), "{status:?}: {screen}");
+        assert!(!screen.contains("wait timer"), "{status:?}: {screen}");
         assert!(screen.contains("⧖ 1"), "{status:?}: {screen}");
     }
 }

@@ -20,7 +20,7 @@ A cap is a dollar amount (`5`, `$4.50`), optionally windowed with `/day`, which 
 
 Every scope is checked independently, so the first cap crossed is the one that parks.
 
-Qwen's experimental Alibaba Coding Plan reading adds a launch-only provider quota boundary beside those four dollar scopes. A fresh managed supervised or loop launch binds its final Qwen process to the exact official region and an opaque fingerprint of the selected API key, then reads only that account's cached `5h`, `7d`, and `30d` windows. An exhausted window exits `125` or records `budget skipped` before a run record, pane, or loop `--check` command exists. Missing quota data permits an ordinary fresh launch; the surplus gate requires complete data for that exact account and fails closed. Interactive hand launches, resume, fork, wake, and mid-run auto-continue stay outside this boundary.
+Qwen's experimental Alibaba Coding Plan reading adds a launch-only provider quota boundary beside those four dollar scopes. A fresh managed supervised or loop launch binds its final Qwen process to the exact official region and an opaque fingerprint of the selected API key, then reads only that account's cached `5h`, `7d`, and `30d` windows. An exhausted window exits `125` or records `budget skipped` before a run record, pane, or loop `--check` command exists. Missing quota data permits an ordinary fresh launch; the surplus gate requires complete data for that exact account and fails closed. Interactive hand launches, resume, fork, wait, and mid-run auto-continue stay outside this boundary.
 
 ### Cap one agent
 
@@ -118,7 +118,7 @@ Two task flags arm the gate, and they compose:
 
 The gate is a read, nothing more. The headroom comes from the provider's own usage reporting, the same account-scoped reading that draws the dashboard bars, cached on disk by the sessions you already run. Checking it runs no command and spends no tokens. A closed gate records `surplus skipped` in the task's run history with the reading it saw (`claude 7d window surplus 1.4x below 1.5x`), adds no [strike](./loops.md#budgets-and-strikes), and the schedule keeps polling until real surplus appears. It also fails closed: a missing, incomplete, expired, or not-yet-started window reading keeps the gate shut, so an API-key account, which has no subscription window to read, never fires a surplus-gated task.
 
-The gate rides loop tasks only, on `--agent` and `--wake` actions, and it is evaluated before any `--check` guard, so a closed gate does not even run the check. The loop-side recipe is [loops → gate a task on surplus](./loops.md#gate-a-task-on-surplus); the exact flag grammar is the [loop reference](../reference/cli/loop.md).
+The gate rides loop tasks only, on `--agent` and `--wait` actions, and it is evaluated before any `--check` guard, so a closed gate does not even run the check. The loop-side recipe is [loops → gate a task on surplus](./loops.md#gate-a-task-on-surplus); the exact flag grammar is the [loop reference](../reference/cli/loop.md).
 
 ## See also
 

@@ -45,7 +45,7 @@ pub enum TranscriptKind {
     Prompt,
     Message,
     SubagentReport,
-    Wake,
+    Wait,
     Assistant,
     Ask,
     Answer,
@@ -91,11 +91,11 @@ pub struct TranscriptEntry {
 }
 
 impl TranscriptEntry {
-    /// RimZ-authored automation: fleet digests, wakes and signals, and headerless system prompts. Human rendering and conversation counts skip these.
+    /// RimZ-authored automation: fleet digests, waits and signals, and headerless system prompts. Human rendering and conversation counts skip these.
     pub fn is_harness(&self) -> bool {
         matches!(
             self.entry,
-            TranscriptKind::SubagentReport | TranscriptKind::Wake
+            TranscriptKind::SubagentReport | TranscriptKind::Wait
         ) || (self.entry == TranscriptKind::Prompt && self.from.as_deref() == Some(HARNESS_FROM))
     }
 
@@ -491,7 +491,7 @@ mod tests {
             TranscriptKind::Prompt,
             TranscriptKind::Message,
             TranscriptKind::SubagentReport,
-            TranscriptKind::Wake,
+            TranscriptKind::Wait,
             TranscriptKind::Assistant,
             TranscriptKind::Ask,
             TranscriptKind::Answer,

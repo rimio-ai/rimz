@@ -14,7 +14,7 @@
 //!   sidecar.rs      shared stat-gated enrichment sidecar store
 //!   active_time.rs   grace-capped per-session working-time accumulator
 //!   session_death.rs shared store-provable session death rules
-//!   writer.rs       mutation vocabulary + choreography: lock → write → append → wake → publish
+//!   writer.rs       mutation vocabulary + choreography: lock → write → append → wait → publish
 //!   writer/         debounce, lifecycle policy, publish, queue, reap, reset
 //!   gc.rs           maintenance façade
 //!   gc/             runtime collection and dead-workspace pruning

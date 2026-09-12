@@ -220,7 +220,7 @@ pub struct HarnessConfig {
     /// Default per-turn dollar cap for every agent in the room.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_budget: Option<TurnCap>,
-    /// Compact before messages and scheduled loop wakes when the agent's
+    /// Compact before messages and scheduled loop waits when the agent's
     /// context window has reached this threshold. Unset keeps compaction opt-in.
     #[serde(
         default,

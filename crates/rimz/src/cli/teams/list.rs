@@ -573,7 +573,7 @@ fn live_signal(
     instance: &str,
     agent: &AgentState,
 ) -> Option<LiveSignal> {
-    let target = entry.wake.as_ref()?;
+    let target = entry.wait.as_ref()?;
     if source != TaskSource::Instance
         || entry
             .team

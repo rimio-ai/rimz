@@ -20,7 +20,7 @@ fn conversation_senders_exclude_system_traffic() {
         .is_conversation()
     );
     for notice in [
-        HarnessNotice::Wake,
+        HarnessNotice::Wait,
         HarnessNotice::Signal,
         HarnessNotice::Stage,
         HarnessNotice::SubagentReport,
@@ -64,18 +64,18 @@ fn delivery_gates_follow_agent_lifecycle() {
 fn prompt_origin_requires_only_non_user_headers() {
     let agent = "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst";
     let report = "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nfinished";
-    let wake = "Type: WAKE\nFrom: @rimz\nContent:\ncheck back";
+    let wait = "Type: WAIT\nFrom: @rimz\nContent:\ncheck back";
     let signal = "Type: SIGNAL\nFrom: @rimz\nContent:\nCI failed";
     let stage = "Type: STAGE\nFrom: @rimz\nContent:\nImplement is yours.";
     let human = "Type: USER_MESSAGE\nFrom: @user\nContent:\nnext task";
     for prompt in [
         agent.to_owned(),
         report.to_owned(),
-        wake.to_owned(),
+        wait.to_owned(),
         signal.to_owned(),
         stage.to_owned(),
         format!("{signal}\n\n{stage}"),
-        format!("{report}\n\n{wake}"),
+        format!("{report}\n\n{wait}"),
         format!("\n\n{agent}\n\n"),
         "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\n".to_owned(),
     ] {
@@ -87,8 +87,8 @@ fn prompt_origin_requires_only_non_user_headers() {
         format!("composer text\n\n{agent}"),
         format!("{agent}\n\n{human}"),
         format!("{stage}\n\n{human}"),
-        format!("{human}\n\n{wake}"),
-        format!("{agent}\n\nType: WAKE\nFrom: rimz\nContent:\ninvalid"),
+        format!("{human}\n\n{wait}"),
+        format!("{agent}\n\nType: WAIT\nFrom: rimz\nContent:\ninvalid"),
         "Type: FUTURE_NOTICE\nFrom: @rimz\nContent:\nunknown".to_owned(),
         String::new(),
         " \n\t\n".to_owned(),
@@ -116,10 +116,10 @@ fn message_header_parser_rejects_near_misses() {
 fn signal_headers_split_mixed_batches() {
     let agent = "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst";
     let signal = "Type: SIGNAL\nFrom: @rimz\nContent:\nCI failed\n\ninspect the log";
-    let wake = "Type: WAKE\nFrom: @rimz\nContent:\ncheck back";
+    let wait = "Type: WAIT\nFrom: @rimz\nContent:\ncheck back";
     let human = "Type: USER_MESSAGE\nFrom: @user\nContent:\nsecond";
     let report = "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nfinished";
-    let sections = [agent, signal, wake, report, human, signal];
+    let sections = [agent, signal, wait, report, human, signal];
     let prompt = sections.join("\n\n");
     assert_eq!(split_batched_prompt(&prompt), sections);
     assert!(
@@ -428,7 +428,7 @@ fn requeue_preserves_intent_and_rearms_dependencies() {
 }
 
 #[test]
-fn wake_deadline_arms_queue_retry_schedule_and_sent_reconciliation() {
+fn wait_deadline_arms_queue_retry_schedule_and_sent_reconciliation() {
     let base = MessageRecord::new(
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
         &agent("s1", None),
@@ -1100,7 +1100,7 @@ fn align_submitted_prompt_consumes_harness_report_header() {
     let recipient = agent("session-recipient", None);
     for (notice, header_type) in [
         (HarnessNotice::SubagentReport, "SUBAGENT_REPORT"),
-        (HarnessNotice::Wake, "WAKE"),
+        (HarnessNotice::Wait, "WAIT"),
         (HarnessNotice::Signal, "SIGNAL"),
         (HarnessNotice::Stage, "STAGE"),
     ] {

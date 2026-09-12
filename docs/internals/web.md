@@ -8,7 +8,7 @@ RimZ serves every local Zellij and tmux room through one Basic-authenticated wri
 
 The daemon owns browser transport and rendering; RimZ owns room birth, session validation, attach argv, credential state, URL construction, diagnostics, and remote SSH forwarding.
 
-The store, hooks, sidebar, and wake paths are unchanged for a browser client, and RimZ proxies no pane I/O.
+The store, hooks, sidebar, and wait paths are unchanged for a browser client, and RimZ proxies no pane I/O.
 
 `[web] interface` selects both bind addresses, `port` selects the writable listener at 8200 by default, and `share_port` selects the broadcast listener at 8201 by default. The writable daemon can reach every room after machine-wide authentication; the broadcast daemon reaches only its durable allowlist.
 

@@ -234,9 +234,9 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
         0,
     );
     parent.prompt = Some("delegated sweep".to_owned());
-    parent.pending_wakes.push(crate::agents::PendingWake {
+    parent.pending_waits.push(crate::agents::PendingWait {
         name: "timer".to_owned(),
-        trigger: crate::agents::PendingWakeTrigger::Timer {
+        trigger: crate::agents::PendingWaitTrigger::Timer {
             due: fixed_now() + Duration::from_secs(720),
             delay: Some("30m".to_owned()),
         },

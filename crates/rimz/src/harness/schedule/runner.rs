@@ -38,7 +38,7 @@ use crate::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
     RunTransition, SignalRecord,
 };
-use crate::harness::schedule::signal::{Signal as TriggerSignal, WAKE_TAIL_CAP, WatchVerdict};
+use crate::harness::schedule::signal::{Signal as TriggerSignal, WAIT_TAIL_CAP, WatchVerdict};
 use crate::harness::schedule::{TaskAction, Trigger};
 use crate::ids::{RunId, WorkspaceId};
 use crate::store::run::RunRecord;
@@ -118,8 +118,8 @@ pub struct PreparedSpawn {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeliveryIntent {
-    SelfWake,
-    Wake,
+    SelfWait,
+    Wait,
     Signal,
 }
 
@@ -751,10 +751,10 @@ impl<'a> TaskFire<'a> {
                 .is_ok_and(|parsed| matches!(parsed.trigger, Trigger::Signal { .. }))
             {
                 DeliveryIntent::Signal
-            } else if self.entry.wake_meta.is_some() {
-                DeliveryIntent::SelfWake
+            } else if self.entry.wait_meta.is_some() {
+                DeliveryIntent::SelfWait
             } else {
-                DeliveryIntent::Wake
+                DeliveryIntent::Wait
             },
         }))
     }
@@ -794,7 +794,7 @@ impl<'a> TaskFire<'a> {
     fn resolve_effect_prompt(&self, fired_check: Option<&FiredCheck>) -> Result<String> {
         let mut body = resolve_task_prompt(&self.name, &self.entry)?;
         let signal_trigger = self.entry.signal.is_some() || self.entry.watch.is_some();
-        if self.entry.wake.is_some() || signal_trigger || self.signal.is_some() {
+        if self.entry.wait.is_some() || signal_trigger || self.signal.is_some() {
             let evidence = if let Some(signal) = &self.signal {
                 prompt::Evidence::Signal(signal)
             } else if signal_trigger {
@@ -802,10 +802,10 @@ impl<'a> TaskFire<'a> {
             } else {
                 prompt::Evidence::Scheduled
             };
-            body = prompt::compose_wake(
+            body = prompt::compose_wait(
                 &self.name,
                 &self.entry,
-                self.entry.wake_meta.as_ref(),
+                self.entry.wait_meta.as_ref(),
                 evidence,
                 &body,
                 self.now,
@@ -1049,12 +1049,12 @@ fn resolve_task_prompt(name: &str, entry: &TaskEntry) -> Result<String> {
     if let Some(prompt) = entry
         .prompt
         .as_deref()
-        .filter(|prompt| entry.wake.is_some() || !prompt.trim().is_empty())
+        .filter(|prompt| entry.wait.is_some() || !prompt.trim().is_empty())
     {
         return Ok(prompt.to_owned());
     }
     let Some(path) = entry.prompt_file.as_deref() else {
-        if entry.wake.is_some() {
+        if entry.wait.is_some() {
             return Ok(String::new());
         }
         anyhow::bail!("loop task `{name}` has no prompt; set `prompt` or `prompt-file`");
@@ -1557,7 +1557,7 @@ pub(super) fn run_command(
 ) -> Result<CheckOutcome> {
     let (prefix, file, cap) = match echo {
         CheckEcho::Capture => (None, None, CHECK_OUTPUT_CAP),
-        CheckEcho::Tee { file } => (None, Some(file), WAKE_TAIL_CAP),
+        CheckEcho::Tee { file } => (None, Some(file), WAIT_TAIL_CAP),
         CheckEcho::Stream {
             announcement,
             prefix,

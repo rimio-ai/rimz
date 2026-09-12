@@ -253,7 +253,7 @@ fn validates_config_key_read_and_write_surfaces() {
         "loop.tasks.watch.check",
         "loop.tasks.watch.on",
         "loop.tasks.watch.deadline",
-        "loop.tasks.watch.wake.kind",
+        "loop.tasks.watch.wait.kind",
         "theme.providers.claude.color",
         "theme.pets.enabled",
         "theme.pets.pet",
@@ -1120,7 +1120,7 @@ fn set_document_value_renders_inline_tables_as_table_blocks() {
     let mut doc = DocumentMut::new();
     let path = document_key_for_set(&parse_key("loop.tasks").expect("key"));
     let value = parse_edit_value(
-        r#"{ pr_watch = { agent = "codex", prompt = "check CI", root = "/r", every = "15m" }, self_wake = { wake = { kind = "claude", session = "s1", handle = "@planner" }, prompt = "resume", root = "/r", at = "09:30" } }"#,
+        r#"{ pr_watch = { agent = "codex", prompt = "check CI", root = "/r", every = "15m" }, self_wait = { wait = { kind = "claude", session = "s1", handle = "@planner" }, prompt = "resume", root = "/r", at = "09:30" } }"#,
     );
 
     set_document_value(&mut doc, &path, value).expect("set tasks");
@@ -1131,14 +1131,14 @@ fn set_document_value_renders_inline_tables_as_table_blocks() {
         "scalar-only task should render as a table block:\n{rendered}"
     );
     let task = rendered
-        .find("[tasks.self_wake]")
+        .find("[tasks.self_wait]")
         .unwrap_or_else(|| panic!("task should render as a table block:\n{rendered}"));
-    let wake = rendered
-        .find("[tasks.self_wake.wake]")
-        .unwrap_or_else(|| panic!("wake should render as a nested table block:\n{rendered}"));
+    let wait = rendered
+        .find("[tasks.self_wait.wait]")
+        .unwrap_or_else(|| panic!("wait should render as a nested table block:\n{rendered}"));
     assert!(
-        task < wake,
-        "task table should render before wake table:\n{rendered}"
+        task < wait,
+        "task table should render before wait table:\n{rendered}"
     );
     assert!(
         !rendered.contains("= { "),

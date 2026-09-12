@@ -77,13 +77,13 @@ pub(super) fn description_line(
         .and_then(crate::agents::single_line_description)
     {
         left.extend(body_spans(&label, true));
-    } else if let Some(wake) = row
+    } else if let Some(wait) = row
         .as_agent()
         .filter(|agent| agent.status == AgentStatus::Sleeping)
-        .and_then(|agent| agent.pending_wakes.first())
+        .and_then(|agent| agent.pending_waits.first())
     {
         left.push(Span::styled(
-            wake.label(ctx.now),
+            wait.label(ctx.now),
             theme.body().add_modifier(Modifier::ITALIC),
         ));
     } else {

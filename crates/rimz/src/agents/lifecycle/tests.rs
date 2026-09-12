@@ -247,11 +247,11 @@ fn interrupted_turn_ignores_only_its_own_trailing_tool_completion() {
 }
 
 #[test]
-fn parked_wake_and_answered_prompt_preserve_boundary_facts() {
+fn parked_wait_and_answered_prompt_preserve_boundary_facts() {
     let reasoning = state(AgentStatus::Running, TurnPhase::Reasoning, false);
     let parked = state(AgentStatus::Running, TurnPhase::Parked, false);
-    let wake = assert_next(
-        "parked wake",
+    let wait = assert_next(
+        "parked wait",
         Some(parked),
         LifecycleSignal::TurnStarted,
         reasoning,
@@ -263,7 +263,7 @@ fn parked_wake_and_answered_prompt_preserve_boundary_facts() {
         LifecycleSignal::TurnStarted,
         reasoning,
     );
-    assert_eq!((wake.opened_turn, prompt.opened_turn), (false, true));
+    assert_eq!((wait.opened_turn, prompt.opened_turn), (false, true));
 
     let waiting = state(AgentStatus::Waiting, TurnPhase::Idle, false);
     let answer = assert_next(

@@ -10,7 +10,7 @@ fn room_badge_names_the_external_timer_only_without_a_room() {
 
 fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
     LoopRunRecord {
-        task: "wake".to_owned(),
+        task: "wait".to_owned(),
         root: None,
         at: Timestamp::from_second(second).expect("timestamp"),
         result,
@@ -52,8 +52,8 @@ fn task_rules_and_check_rows_use_action_specific_verbs() {
         Some("cargo test (starts codex on fail)")
     );
 
-    let wake = TaskEntry {
-        wake: Some(TaskTarget {
+    let wait = TaskEntry {
+        wait: Some(TaskTarget {
             kind: rimz::ids::AgentKind::new_unchecked("claude"),
             session: "sess-planner".into(),
             handle: "@planner".to_owned(),
@@ -62,16 +62,16 @@ fn task_rules_and_check_rows_use_action_specific_verbs() {
         on: Some(CheckOn::Success),
         ..TaskEntry::default()
     };
-    let wake_action = schedule::TaskShape::compile("task", &wake)
+    let wait_action = schedule::TaskShape::compile("task", &wait)
         .action()
         .unwrap()
         .clone();
     assert_eq!(
-        task_run_rule(&wake, &wake_action),
+        task_run_rule(&wait, &wait_action),
         "check, then wake @planner on success"
     );
     assert_eq!(
-        check_summary(&wake, Some(&wake_action)).as_deref(),
+        check_summary(&wait, Some(&wait_action)).as_deref(),
         Some("cargo test (wakes @planner on success)")
     );
 
@@ -100,13 +100,13 @@ fn task_rules_and_check_rows_use_action_specific_verbs() {
         "start claude, verify `cargo xtask gate` (up to 4 attempts)"
     );
 
-    let mut wake_only = wake;
-    wake_only.check = None;
-    let wake_action = schedule::TaskShape::compile("task", &wake_only)
+    let mut wait_only = wait;
+    wait_only.check = None;
+    let wait_action = schedule::TaskShape::compile("task", &wait_only)
         .action()
         .unwrap()
         .clone();
-    assert_eq!(task_run_rule(&wake_only, &wake_action), "wake @planner");
+    assert_eq!(task_run_rule(&wait_only, &wait_action), "wake @planner");
 }
 
 #[test]
@@ -796,7 +796,7 @@ fn failure_pointer_links_to_filtered_logs_without_full_forensics() {
 
     write_failure_pointer(
         &mut out,
-        "wake",
+        "wait",
         &failure,
         Timestamp::from_second(30).unwrap(),
     )
@@ -804,7 +804,7 @@ fn failure_pointer_links_to_filtered_logs_without_full_forensics() {
 
     let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
     assert!(out.contains(
-        "last failure — ✗ error · 10s ago · scheduled · dig in: rimz loop logs wake --failed"
+        "last failure — ✗ error · 10s ago · scheduled · dig in: rimz loop logs wait --failed"
     ));
     assert!(!out.contains("outer error"));
 }
@@ -863,7 +863,7 @@ fn watch_history_uses_verdict_words_and_output_path() {
                 },
                 timed_out: matches!(verdict, WatchVerdict::TimedOut { .. }),
                 output: "last line".to_owned(),
-                output_path: Some("/tmp/wake.log".into()),
+                output_path: Some("/tmp/wait.log".into()),
             });
             assert_eq!(record_exit(&detail).as_deref(), Some(expected));
             let mut out = Vec::new();
@@ -880,7 +880,7 @@ fn watch_history_uses_verdict_words_and_output_path() {
             let out = anstream::adapter::strip_str(&raw).to_string();
             assert_eq!(out.matches(expected).count(), 1, "{out}");
             assert!(
-                out.contains("  output: /tmp/wake.log\n  │ last line"),
+                out.contains("  output: /tmp/wait.log\n  │ last line"),
                 "{out}"
             );
             assert!(!out.contains("after 3s in"), "{out}");

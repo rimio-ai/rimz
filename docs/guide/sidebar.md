@@ -84,14 +84,14 @@ The sidebar follows its attached view at the explicit `[theme.display].width_per
   <br/><sub>A finished card with the subagents it fanned out this turn; the idle agent below collapses to a single line.</sub>
 </p>
 
-Each agent is a small stacked card, four lines at rest, plus one shared line counting subagents and pending one-shot wakes; either count appears alone when only one applies:
+Each agent is a small stacked card, four lines at rest, plus one shared line counting subagents and pending one-shot waits; either count appears alone when only one applies:
 
 ```
 ⢿ claude · Opus 4.8 · xhigh · 1m                $1.27    ← state · identity · cost
   store refactor                                         ← what it is working on
   ▣ ━━━━━━━━━━━━━━━━─────────────────────────── 38.2%    ← context meter: how full the window is
   ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                   ◔ 8m    ← tokens in the window · last activity
-  ⧉ subagents (2) · ⧖ waits (2)                 $0.42    ← lifetime child count and cost · pending one-shot wakes
+  ⧉ subagents (2) · ⧖ waits (2)                 $0.42    ← lifetime child count and cost · pending one-shot waits
 ```
 
 - **The identity line.** The state glyph leads, animated while the agent works. Then the agent's handle (its team role, profile, or kind, so a team reads `planner` / `coder` / `reviewer`), the model, one reasoning-configuration token (effort or `thinking`), and the size of its context window. The session's dollar cost pins right and counts up live once the session has spent anything, including sessions it launched through `rimz subagents`.
@@ -104,7 +104,7 @@ To check delegated work without leaving your pane, click the subagents and waits
 
 How much of the card shows at rest is yours to tune with `card_density` ([theme.md → Display](./theme.md#display)): `compact` trims resting cards, including the shared subagents and waits line, `expanded` shows subagent and wait entries everywhere. In compact mode, select the card first to expose the clickable count line. Narrow sidebars shorten the shared count line to `⧉ N · ⧖ M` so both counts and the cost fit.
 
-The **waits count** covers armed one-shot wakes: timers, existing processes, watched shell commands, and one-shot signals. It shares the subagents line and disappears when none remain. It stays visible on standard cards while the agent works as well as while it sleeps. Selecting the card or opening its count line lists each wait beneath the subagent entries. Labels name the kind first: `timer 30m · in 12m`, `pid 16776`, `shell cargo`, or `signal pr.merged · 2h left`. Shell waits show the command on a second line; the others use one line. PID and shell waits show the same animated spinner as running work, even while the agent sleeps; timer and signal icons stay still.
+The **waits count** covers armed one-shot waits: timers, existing processes, watched shell commands, and one-shot signals. It shares the subagents line and disappears when none remain. It stays visible on standard cards while the agent works as well as while it sleeps. Selecting the card or opening its count line lists each wait beneath the subagent entries. Labels name the kind first: `timer 30m · in 12m`, `pid 16776`, `shell cargo`, or `signal pr.merged · 2h left`. Shell waits show the command on a second line; the others use one line. PID and shell waits show the same animated spinner as running work, even while the agent sleeps; timer and signal icons stay still.
 
 ## Process rows
 
@@ -122,7 +122,7 @@ Every card wears one state, and seven cover the life of a session:
 | `!` | failed | the turn errored, died on a provider API error, or a running agent went silent past the stall window | **yes** |
 | `⏸` | paused | stopped mid-turn on a provider rate limit or overload | when it recovers |
 | `✓` | done | the turn finished cleanly and holds a result | a look, when convenient |
-| `☾` | sleeping | resting until an armed one-shot wake fires; the description names the wake | nothing yet |
+| `☾` | sleeping | resting until an armed one-shot wait fires; the description names the wait | nothing yet |
 
 The full glyph vocabulary, including the transient heads that ride over a running card (thinking before the first file edit, compacting, waiting on subagents, parked on background work), is the [interface legend](../interface/sidebar.md#reading-the-glyphs).
 
@@ -143,7 +143,7 @@ A session's life traces one loop through those states:
 
 RimZ also derives states rather than waiting for an agent report. **Paused** is derived: when a turn stops because the provider's budget window is spent, the API is overloaded, or the connection drops mid-response, the card parks at `⏸` instead of pretending to fail, and with [auto-continue](./configuration.md#resume) enabled it resumes by itself the moment the window resets or the backoff clears. **Stall** is the safety net: a running agent silent past the stall window (30 minutes by default) escalates to `!`, because silence that long usually means something needs a look; a parent quietly waiting on its subagents is exempt.
 
-**Sleeping** distinguishes a finished turn from finished work: after an agent arms a [one-shot wake](./loops.md#wake-a-running-agent) and rests, its card wears a static cool-toned moon and a description such as `wake timer 30m · in 12m` or `wake shell cargo test`. Working, waiting, failed, paused, and waiting on live subagents take precedence; standing subscriptions do not make an agent sleep. You can message it now without canceling the future wake. Its last result can still be unread, but sleeping itself needs no answer and sends no notification. Sleeping cards rank below running and above idle, and their cockpit bucket sits between those two on the right; click it or press `z` to filter the cards.
+**Sleeping** distinguishes a finished turn from finished work: after an agent arms a [one-shot wait](./loops.md#wake-a-running-agent) and rests, its card wears a static cool-toned moon and a description such as `wait timer 30m · in 12m` or `wait shell cargo test`. Working, waiting, failed, paused, and waiting on live subagents take precedence; standing subscriptions do not make an agent sleep. You can message it now without canceling the future wait. Its last result can still be unread, but sleeping itself needs no answer and sends no notification. Sleeping cards rank below running and above idle, and their cockpit bucket sits between those two on the right; click it or press `z` to filter the cards.
 
 ## Attention: the funnel
 
@@ -170,7 +170,7 @@ Glance, jump, answer: that loop is the product. Desktop, bell, and command notif
 
 ### The unread inbox surfaces in place
 
-A card turns *unread* the moment it enters `waiting`, `failed`, `paused`, or `done`, and stays unread until you focus its pane or mark it read, even after the agent recovers and moves on. The wash and blink mark it, and the jump key walks unread rows oldest-actionable-first. Sleeping opens no unread mark and sends no notification; the mark and any configured success notification arrive when the wake cycle finishes at done. An earlier unread result stays unread across the sleep. The card keeps its place in the time and status order while the inbox gets you to it.
+A card turns *unread* the moment it enters `waiting`, `failed`, `paused`, or `done`, and stays unread until you focus its pane or mark it read, even after the agent recovers and moves on. The wash and blink mark it, and the jump key walks unread rows oldest-actionable-first. Sleeping opens no unread mark and sends no notification; the mark and any configured success notification arrive when the wait cycle finishes at done. An earlier unread result stays unread across the sleep. The card keeps its place in the time and status order while the inbox gets you to it.
 
 ## How the column is ordered
 
@@ -182,13 +182,13 @@ Measured from each card's last activity, in three windows:
 
 1. **Inside the first hour, blocked work climbs.** An ask, failure, or park grows more urgent the longer it waits, so a failure overdue fifty minutes outranks an ask from two minutes ago and blocked work reads oldest-first — the cheapest order to clear. Calm work keeps a flat weight, so live agents hold their place while they run. (The hour matches the agent's prompt-cache lifetime: answer inside it and the agent resumes warm.)
 2. **Between one hour and twenty-four, everything cools.** Urgency decays instead of climbing: a stale ask still leads stale calm work, but the whole window sinks beneath anything currently hot, so yesterday's unanswered question stops competing with the agent blocked right now.
-3. **Past twenty-four hours, a card archives.** It parks at the back, keeping only its state order, so an archived ask still reads above an archived idle agent. This age band is separate from the sleeping status of an agent awaiting a wake.
+3. **Past twenty-four hours, a card archives.** It parks at the back, keeping only its state order, so an archived ask still reads above an archived idle agent. This age band is separate from the sleeping status of an agent awaiting a wait.
 
 A non-dirty merged or closed line of work with no running or attention member skips the clock and enters the archive immediately. A new run, ask, failure, or park revives it into the activity-ranked bands.
 
 ### Teams read as one
 
-A co-launched team is one line of work, so it holds one contiguous block. For sidebar ordering, any member asking or failed makes the block **blocked**, else a parked member makes it **paused**, else a running member makes it **working**, else a finished member makes it **done**, else it ranks with **idle**; sleeping members count as calm rest here. One blocked member lifts the whole block, so a planner waiting on you blocks its coder and reviewer too, whatever they are doing. The block ranks by that derived state on its oldest blocked member's clock and stays contiguous, so teammates sit side by side in their declared role order. The [`rimz teams` report](../reference/cli/teams.md#inspect-one-team) distinguishes **sleeping** between working and done, and a pending one-shot wake keeps the team from emitting `team.idle`.
+A co-launched team is one line of work, so it holds one contiguous block. For sidebar ordering, any member asking or failed makes the block **blocked**, else a parked member makes it **paused**, else a running member makes it **working**, else a finished member makes it **done**, else it ranks with **idle**; sleeping members count as calm rest here. One blocked member lifts the whole block, so a planner waiting on you blocks its coder and reviewer too, whatever they are doing. The block ranks by that derived state on its oldest blocked member's clock and stays contiguous, so teammates sit side by side in their declared role order. The [`rimz teams` report](../reference/cli/teams.md#inspect-one-team) distinguishes **sleeping** between working and done, and a pending one-shot wait keeps the team from emitting `team.idle`.
 
 ### Activity decides among the calm
 

@@ -70,7 +70,7 @@ path = "crates/rimz/src/agents"
 upward-dependencies = ["address"]
 # The parent-link predicate is shared by store, harness and CLI consumers.
 # Attribution adds lifetime values, boundary queries and unreadable-path warnings.
-# Pending-wake vocabulary and rest projection are shared by harness and renderers.
+# Pending-wait vocabulary and rest projection are shared by harness and renderers.
 # Trigger summaries share wording between sleeping descriptions and expanded waits.
 # Native config-home resolution is shared with sandbox launch planning.
 # Native skill roots and user-only markers belong to the same capability seam.
@@ -157,7 +157,7 @@ allowed-dependencies = [
 ]
 # Pane writers share one user-scoped lock path across workspace boundaries.
 # Room lifecycle owns private tmp and rewritten-skill directory creation and removal.
-# Wake and subagent reports share streaming output-file measurements.
+# Wait and subagent reports share streaming output-file measurements.
 # Stage flips share a canonical-worktree board lock across rooms.
 surface-budget = 132
 
@@ -172,7 +172,7 @@ upward-dependencies = ["sidebar::refresh"]
 # Launch-row selection is shared by ancestry and CLI parent consumers.
 # Team inspection shares scratch discovery and board-stage records with launch reminders.
 # Delivery specs and team subscriptions share the CLI/library boundary.
-# Read-only pending deliveries are shared by wake listings, hooks and enrichment.
+# Read-only pending deliveries are shared by wait listings, hooks and enrichment.
 # Submitted-prompt header grammar now belongs to store.
 # Loop hosts and check ownership cross the scheduler/CLI/room seams.
 # The validated exec envelope establishes cleanup context before artifact I/O.
@@ -299,7 +299,7 @@ surface-budget = 343
 [[module]]
 path = "crates/rimz/src/theme"
 upward-dependencies = ["agents"]
-# Wake prompts and CLI reports share the byte-size formatter.
+# Wait prompts and CLI reports share the byte-size formatter.
 surface-budget = 33
 
 [[module]]
@@ -1137,7 +1137,7 @@ reason = "Pass 13: allow_fanout, mux and automated each gate one decision (arity
 [[verdict]]
 kind = "item"
 key = "message::dispatch::dispatch"
-reason = "Pass 13: one memoized config read inherits the smart-compact default for loop wakes (9000c0f24)."
+reason = "Pass 13: one memoized config read inherits the smart-compact default for loop waits (9000c0f24)."
 
 [[verdict]]
 kind = "item"
@@ -1647,7 +1647,7 @@ reason = "Kimi's additive TOML hook merger and Qwen's existing ManagedSource ove
 [[verdict]]
 kind = "item"
 key = "proc::process_is_live"
-reason = "Integration wake, run, sandbox and backend lifecycle tests call this process-liveness seam; pub(crate) would break the separate test crate. (pass 19b)."
+reason = "Integration wait, run, sandbox and backend lifecycle tests call this process-liveness seam; pub(crate) would break the separate test crate. (pass 19b)."
 
 [[verdict]]
 kind = "item"

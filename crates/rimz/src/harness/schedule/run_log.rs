@@ -485,17 +485,17 @@ mod tests {
     fn append_then_stats_round_trips_records() {
         let dir = tempfile::tempdir().expect("tempdir");
 
-        append_to(dir.path(), &record("wake", 10, LoopRunResult::Delivered));
-        append_to(dir.path(), &record("wake", 12, LoopRunResult::TargetGone));
+        append_to(dir.path(), &record("wait", 10, LoopRunResult::Delivered));
+        append_to(dir.path(), &record("wait", 12, LoopRunResult::TargetGone));
 
         let now = Timestamp::from_second(20)
             .expect("timestamp")
             .to_zoned(jiff::tz::TimeZone::UTC);
         let stats = stats(dir.path(), &now, None);
-        let wake = stats.get("wake").expect("wake stats");
-        assert_eq!(wake.runs, 2);
-        assert_eq!(wake.streak, 1);
-        assert_eq!(wake.last.result, LoopRunResult::TargetGone);
+        let wait = stats.get("wait").expect("wait stats");
+        assert_eq!(wait.runs, 2);
+        assert_eq!(wait.streak, 1);
+        assert_eq!(wait.last.result, LoopRunResult::TargetGone);
     }
 
     #[test]
@@ -607,10 +607,10 @@ mod tests {
         let now = "2026-06-02T00:30:00-04:00[America/New_York]"
             .parse::<Zoned>()
             .expect("zoned");
-        let mut prior = record("wake", 0, LoopRunResult::Completed);
+        let mut prior = record("wait", 0, LoopRunResult::Completed);
         prior.at = "2026-06-01T23:30:00Z".parse().expect("timestamp");
         prior.cost_usd = Some(3.0);
-        let mut today = record("wake", 0, LoopRunResult::Completed);
+        let mut today = record("wait", 0, LoopRunResult::Completed);
         today.at = "2026-06-02T04:10:00Z".parse().expect("timestamp");
         today.cost_usd = Some(4.0);
         assert_eq!(spend_on_local_day(&[prior, today], &now), 4.0);
@@ -620,16 +620,16 @@ mod tests {
     fn cost_summary_uses_the_last_ten_costed_runs() {
         assert_eq!(cost_summary(&[]), TaskCostSummary::default());
 
-        let mut records = vec![record("wake", 0, LoopRunResult::BudgetSkipped)];
+        let mut records = vec![record("wait", 0, LoopRunResult::BudgetSkipped)];
         records[0].cost_usd = Some(f64::NAN);
-        let mut first = record("wake", 1, LoopRunResult::Completed);
+        let mut first = record("wait", 1, LoopRunResult::Completed);
         first.cost_usd = Some(1.0);
         records.push(first);
         assert_eq!(cost_summary(&records).last_usd, Some(1.0));
         assert_eq!(cost_summary(&records).costed_runs, 1);
 
         for cost in 2..=12 {
-            let mut costed = record("wake", cost, LoopRunResult::Completed);
+            let mut costed = record("wait", cost, LoopRunResult::Completed);
             costed.cost_usd = Some(cost as f64);
             records.push(costed);
         }
@@ -647,10 +647,10 @@ mod tests {
             .expect("zoned");
         let path = log_path(dir.path());
         std::fs::create_dir_all(path.parent().expect("log parent")).expect("log dir");
-        let mut prior = record("wake", 0, LoopRunResult::Completed);
+        let mut prior = record("wait", 0, LoopRunResult::Completed);
         prior.at = "2026-06-02T03:00:00Z".parse().expect("timestamp");
         prior.cost_usd = Some(3.0);
-        let mut today = record("wake", 0, LoopRunResult::Completed);
+        let mut today = record("wait", 0, LoopRunResult::Completed);
         today.at = "2026-06-02T04:00:00Z".parse().expect("timestamp");
         today.cost_usd = Some(4.0);
         std::fs::write(
@@ -663,7 +663,7 @@ mod tests {
         )
         .expect("write run log");
 
-        assert_eq!(stats(dir.path(), &now, None)["wake"].spend_today_usd, 4.0);
+        assert_eq!(stats(dir.path(), &now, None)["wait"].spend_today_usd, 4.0);
     }
 
     #[test]
@@ -700,12 +700,12 @@ mod tests {
         crate::disk::rotating::append(
             &log_path(dir.path()),
             1,
-            &record("wake", 20, LoopRunResult::Completed),
+            &record("wait", 20, LoopRunResult::Completed),
         );
         crate::disk::rotating::append(
             &log_path(dir.path()),
             1,
-            &record("wake", 10, LoopRunResult::Failed),
+            &record("wait", 10, LoopRunResult::Failed),
         );
         std::fs::OpenOptions::new()
             .append(true)
@@ -718,10 +718,10 @@ mod tests {
             .expect("timestamp")
             .to_zoned(jiff::tz::TimeZone::UTC);
         let stats = stats(dir.path(), &now, None);
-        let wake = stats.get("wake").expect("wake stats");
-        assert_eq!(wake.runs, 2);
-        assert_eq!(wake.streak, 1);
-        assert_eq!(wake.last.result, LoopRunResult::Completed);
+        let wait = stats.get("wait").expect("wait stats");
+        assert_eq!(wait.runs, 2);
+        assert_eq!(wait.streak, 1);
+        assert_eq!(wait.last.result, LoopRunResult::Completed);
     }
 
     #[test]
@@ -730,32 +730,32 @@ mod tests {
         crate::disk::rotating::append(
             &log_path(dir.path()),
             1,
-            &record("wake", 10, LoopRunResult::Failed),
+            &record("wait", 10, LoopRunResult::Failed),
         );
         crate::disk::rotating::append(
             &log_path(dir.path()),
             1,
-            &record("wake", 20, LoopRunResult::Failed),
+            &record("wait", 20, LoopRunResult::Failed),
         );
 
         let now = Timestamp::from_second(30)
             .expect("timestamp")
             .to_zoned(jiff::tz::TimeZone::UTC);
         let stats = stats(dir.path(), &now, None);
-        let wake = stats.get("wake").expect("wake stats");
-        assert_eq!(wake.runs, 2);
-        assert_eq!(wake.streak, 2);
-        assert_eq!(wake.last.result, LoopRunResult::Failed);
+        let wait = stats.get("wait").expect("wait stats");
+        assert_eq!(wait.runs, 2);
+        assert_eq!(wait.streak, 2);
+        assert_eq!(wait.last.result, LoopRunResult::Failed);
     }
 
     #[test]
     fn new_fields_round_trip_and_task_records_filter() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut with_detail = record("wake", 10, LoopRunResult::Failed);
+        let mut with_detail = record("wait", 10, LoopRunResult::Failed);
         with_detail.mode = Some(LoopRunMode::Manual);
         with_detail.duration_ms = Some(123);
         with_detail.check = Some(CheckRecord {
-            output_path: Some(PathBuf::from("/tmp/wake.log")),
+            output_path: Some(PathBuf::from("/tmp/wait.log")),
             code: Some(127),
             timed_out: false,
             output: "missing command".to_owned(),
@@ -765,26 +765,26 @@ mod tests {
             elapsed_ms: 3_000,
         });
         with_detail.run_id = Some("run_0123456789abcdef0123456789abcdef".to_owned());
-        with_detail.transcript_path = Some("/tmp/rimz/sessions/wake.jsonl".to_owned());
+        with_detail.transcript_path = Some("/tmp/rimz/sessions/wait.jsonl".to_owned());
         with_detail.last_message = Some("last words".to_owned());
         with_detail.target = Some("@coder".to_owned());
         append_to(dir.path(), &with_detail);
         append_to(dir.path(), &record("other", 11, LoopRunResult::Completed));
 
-        assert_eq!(task_records(dir.path(), "wake", None), vec![with_detail]);
+        assert_eq!(task_records(dir.path(), "wait", None), vec![with_detail]);
     }
 
     #[test]
     fn old_minimal_records_still_parse() {
-        let line = r#"{"task":"wake","at":"1970-01-01T00:00:10Z","result":"completed"}"#;
+        let line = r#"{"task":"wait","at":"1970-01-01T00:00:10Z","result":"completed"}"#;
         let record: LoopRunRecord = serde_json::from_str(line).expect("legacy record");
-        assert_eq!(record.task, "wake");
+        assert_eq!(record.task, "wait");
         assert_eq!(record.result, LoopRunResult::Completed);
         assert_eq!(record.mode, None);
         assert_eq!(record.check, None);
         assert_eq!(record.transcript_path, None);
         assert_eq!(record.watch, None);
-        let line = r#"{"task":"wake","at":"1970-01-01T00:00:10Z","result":"completed","check":{"code":0,"timed_out":false,"output":"ok"}}"#;
+        let line = r#"{"task":"wait","at":"1970-01-01T00:00:10Z","result":"completed","check":{"code":0,"timed_out":false,"output":"ok"}}"#;
         let record: LoopRunRecord = serde_json::from_str(line).expect("legacy check record");
         assert_eq!(record.watch, None);
         assert_eq!(record.check.as_ref().unwrap().output_path, None);
@@ -798,7 +798,7 @@ mod tests {
     #[test]
     fn append_caps_forensic_fields() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut record = record("wake", 10, LoopRunResult::Errored);
+        let mut record = record("wait", 10, LoopRunResult::Errored);
         record.error = Some("e".repeat(ERROR_CAP + 20));
         record.last_message = Some("m".repeat(LAST_MESSAGE_CAP + 20));
         record.check = Some(CheckRecord {
@@ -816,7 +816,7 @@ mod tests {
         });
 
         append_to(dir.path(), &record);
-        let stored = task_records(dir.path(), "wake", None)
+        let stored = task_records(dir.path(), "wait", None)
             .pop()
             .expect("stored record");
         assert_eq!(stored.error.expect("error").len(), ERROR_CAP);

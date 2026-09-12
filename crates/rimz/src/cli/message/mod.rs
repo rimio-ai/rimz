@@ -158,7 +158,7 @@ struct ListArgs {
     /// Include every channel and archived messages.
     #[arg(long)]
     all: bool,
-    /// Include system traffic: wakes, signals, subagent digests, nudges, and --no-from text.
+    /// Include system traffic: waits, signals, subagent digests, nudges, and --no-from text.
     #[arg(long)]
     system: bool,
     /// Exact status filter.

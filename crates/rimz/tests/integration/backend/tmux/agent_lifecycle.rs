@@ -587,7 +587,7 @@ fn git(cwd: &Path, args: &[&str]) {
 }
 
 #[test]
-fn self_wake_steers_to_live_consumer_when_idle_and_working() {
+fn self_wait_steers_to_live_consumer_when_idle_and_working() {
     require_tmux!();
     for status in [AgentStatus::Idle, AgentStatus::Running] {
         let env = Env::new();
@@ -604,16 +604,16 @@ fn self_wake_steers_to_live_consumer_when_idle_and_working() {
                 Some((160, 40)),
             ))
             .expect("ensure session");
-        let agent_id = "self-wake-provider";
-        let launch_id = "self-wake-launch";
+        let agent_id = "self-wait-provider";
+        let launch_id = "self-wait-launch";
         let agent_bin = write_sleeping_agent_shim(&env, "claude");
-        let ready = env.home_root.join("self-wake-ready");
+        let ready = env.home_root.join("self-wait-ready");
         let command = tmux_direct_resume_command(&env, &agent_bin, &ready, "claude", agent_id);
         let (_stub_dir, stub) = sidebar_command_stub();
         server
             .backend
             .open_tab(&TabOptions {
-                title: "#self-wake".to_owned(),
+                title: "#self-wait".to_owned(),
                 panes: LayoutPanes {
                     columns: vec![tiled_column(vec![PaneCmd {
                         argv: command,
@@ -631,8 +631,8 @@ fn self_wake_steers_to_live_consumer_when_idle_and_working() {
                 },
             })
             .expect("open live agent pane");
-        wait_for_path(&ready, "self-wake agent shim did not start");
-        let target = format!("{}:#self-wake", workspace.session_name);
+        wait_for_path(&ready, "self-wait agent shim did not start");
+        let target = format!("{}:#self-wait", workspace.session_name);
         let pane_id = PaneId::from_parts(MuxName::Tmux, server.display(&target, "#{pane_id}"));
         let store = env.store();
         let kind = AgentKind::new_unchecked("claude");
@@ -705,9 +705,9 @@ fn self_wake_steers_to_live_consumer_when_idle_and_working() {
             .env("RIMZ_AGENT_KIND", "claude")
             .env("RIMZ_AGENT_ID", launch_id)
             .env("RIMZ_AGENT_NAME", "planner")
-            .args(["--mux", "tmux", "wake", "--", "printf", "self-wake-marker"])
+            .args(["--mux", "tmux", "wait", "--", "printf", "self-wait-marker"])
             .bounded_output()
-            .expect("arm live self wake");
+            .expect("arm live self wait");
         assert!(
             output.status.success(),
             "{status:?}: {}",
@@ -716,12 +716,12 @@ fn self_wake_steers_to_live_consumer_when_idle_and_working() {
         let capture = capture_pane_until(
             &server.backend,
             &pane_id,
-            "self-wake-marker",
+            "self-wait-marker",
             Duration::from_secs(15),
         );
-        assert!(capture.contains("Type: WAKE"), "{status:?}: {capture}");
+        assert!(capture.contains("Type: WAIT"), "{status:?}: {capture}");
         assert!(
-            capture.contains("self-wake-marker"),
+            capture.contains("self-wait-marker"),
             "{status:?}: {capture}"
         );
         assert_status();

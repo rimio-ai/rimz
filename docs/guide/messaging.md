@@ -161,7 +161,7 @@ Bare `rimz message` opens the current lane's inbox. Every message is a durable r
 ```sh
 rimz message list                       # the current lane's inbox, newest first
 rimz message list --all                 # every channel, grouped by #channel
-rimz message list --system              # include wakes, signals, subagent digests, and nudges
+rimz message list --system              # include waits, signals, subagent digests, and nudges
 rimz message show msg_01k…              # full text, event timeline, and the first delivery blocker
 rimz message edit msg_01k… --text "…"   # revise a still-queued message before it lands
 rimz message steer msg_01k…             # push a queued record through now, skipping its schedule and gate
@@ -176,7 +176,7 @@ Statuses read straight across: `queued` and `claimed` are still live, `sent` mea
 
 ## Agents message each other
 
-`rimz message` is the same command whether you type it or an agent runs it, so a running agent hands work to a teammate exactly as you do. Every attributed delivery starts with a `Type` / `From` / `Content` header: agent sends use `AGENT_MESSAGE` and their handle, the status digest sent once the current fleet of an agent's launched subagents settles uses `SUBAGENT_REPORT` and `@rimz`, while your sends use `USER_MESSAGE` and `@user`. Agent deliveries land as first-class conversation lines, but `rimz transcript` hides `@rimz` digests, wakes, and `rimz`-authored prompts from its human view; `rimz transcript --json` retains them. User headers are removed when the prompt is recorded. `--no-from` delivers verbatim without a header when a script wants the raw text.
+`rimz message` is the same command whether you type it or an agent runs it, so a running agent hands work to a teammate exactly as you do. Every attributed delivery starts with a `Type` / `From` / `Content` header: agent sends use `AGENT_MESSAGE` and their handle, the status digest sent once the current fleet of an agent's launched subagents settles uses `SUBAGENT_REPORT` and `@rimz`, while your sends use `USER_MESSAGE` and `@user`. Agent deliveries land as first-class conversation lines, but `rimz transcript` hides `@rimz` digests, waits, and `rimz`-authored prompts from its human view; `rimz transcript --json` retains them. User headers are removed when the prompt is recorded. `--no-from` delivers verbatim without a header when a script wants the raw text.
 
 Read the root-agent conversation back across a channel, with each exchange grouped under the message that opened it, using `rimz transcript`. Name a launched child to read its separate conversation: `rimz transcript @<petname>` ([transcript CLI](../reference/cli/transcript.md)).
 

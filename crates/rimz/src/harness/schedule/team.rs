@@ -36,7 +36,7 @@ pub enum TeamBindingFailure {
     #[error(transparent)]
     Arm(#[from] arm::ArmFailure),
     #[error(
-        "CI on the root checkout is not watched: RimZ polls the forge for worktree branches. Set match = {{ branch = \"<name>\" }} or match = {{ path = \"<worktree-path>\" }}, launch with -w <worktree>, or watch it with: rimz wake -- gh run watch --exit-status"
+        "CI on the root checkout is not watched: RimZ polls the forge for worktree branches. Set match = {{ branch = \"<name>\" }} or match = {{ path = \"<worktree-path>\" }}, launch with -w <worktree>, or watch it with: rimz wait -- gh run watch --exit-status"
     )]
     RootCheckout,
 }

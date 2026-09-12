@@ -69,7 +69,7 @@ pub struct StatePaths {
     pub messages_dir: PathBuf,
     pub transcript_dir: PathBuf,
     pub runs_dir: PathBuf,
-    pub wakes_dir: PathBuf,
+    pub waits_dir: PathBuf,
     pub locks_dir: PathBuf,
     pub workspace_lock: PathBuf,
     pub(crate) publish_lock: PathBuf,
@@ -106,7 +106,7 @@ impl StatePaths {
             workspace_id,
             scratchpad_dir: tmp_dir.join("scratchpad"),
             subagents_dir: tmp_dir.join("rimz-subagents"),
-            wakes_dir: tmp_dir.join("rimz-wakes"),
+            waits_dir: tmp_dir.join("rimz-waits"),
             tmp_dir,
             skills_dir: root.join("skills"),
             events_log: root.join("events.log.jsonl"),
@@ -144,7 +144,7 @@ impl StatePaths {
     pub fn ensure_tmp_dir(&self) -> Result<()> {
         ensure_private_runtime_dir(&self.tmp_dir)?;
         mkdir_p(&self.scratchpad_dir)?;
-        mkdir_p(&self.wakes_dir)?;
+        mkdir_p(&self.waits_dir)?;
         mkdir_p(&self.subagents_dir)
     }
 
@@ -934,7 +934,7 @@ mod tests {
         assert_eq!(paths.rollup_cache.file_name().unwrap(), "rollup.json");
         assert!(paths.rollup_cache.starts_with(&paths.snapshots_dir));
         assert_eq!(paths.runs_dir.file_name().unwrap(), "runs");
-        assert_eq!(paths.wakes_dir, paths.tmp_dir.join("rimz-wakes"));
+        assert_eq!(paths.waits_dir, paths.tmp_dir.join("rimz-waits"));
         assert_eq!(paths.subagents_dir, paths.tmp_dir.join("rimz-subagents"));
         assert_eq!(paths.scratchpad_dir, paths.tmp_dir.join("scratchpad"));
         assert_eq!(paths.transcript_dir.file_name().unwrap(), "transcript");

@@ -1,4 +1,4 @@
-//! `rimz wake` — self-only timer, process, and command waits over the loop scheduler.
+//! `rimz wait` — self-only timer, process, and command waits over the loop scheduler.
 
 use std::time::Duration;
 
@@ -20,22 +20,22 @@ mod watch;
 
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true)]
-pub struct WakeCommand {
+pub struct WaitCommand {
     #[command(subcommand)]
-    command: Option<WakeSubcmd>,
+    command: Option<WaitSubcmd>,
     #[command(flatten)]
-    wake: WakeArgs,
+    wait: WaitArgs,
 }
 
 #[derive(Debug, Subcommand)]
-enum WakeSubcmd {
-    /// List pending wakes and subscriptions aimed at you.
+enum WaitSubcmd {
+    /// List pending waits and subscriptions aimed at you.
     #[command(alias = "ls")]
     List {
         #[arg(long)]
         json: bool,
     },
-    /// Cancel your pending wake or subscription, including its watched command.
+    /// Cancel your pending wait or subscription, including its watched command.
     Cancel {
         #[arg(required_unless_present = "all", conflicts_with = "all")]
         name: Option<TaskName>,
@@ -50,11 +50,11 @@ enum WakeSubcmd {
 }
 
 #[derive(Debug, Default, Args)]
-struct WakeArgs {
-    /// Wake yourself once after this duration (less than 24h).
+struct WaitArgs {
+    /// Wait out this duration once (less than 24h).
     #[arg(long = "in", value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
     in_after: Option<Duration>,
-    /// Wake when this existing process disappears; its exit status is not available.
+    /// Wait for this existing process to disappear; its exit status is not available.
     #[arg(long, value_name = "PID", value_parser = clap::value_parser!(u32).range(1..=i32::MAX as i64))]
     pid: Option<u32>,
     /// Deliver for a failed, successful, or any command outcome (default: any).
@@ -70,17 +70,17 @@ struct WakeArgs {
     command: Vec<String>,
 }
 
-pub fn run(args: WakeCommand, globals: &GlobalFlags) -> Result<()> {
+pub fn run(args: WaitCommand, globals: &GlobalFlags) -> Result<()> {
     match args.command {
-        Some(WakeSubcmd::List { json }) => list::run(json, globals),
-        Some(WakeSubcmd::Cancel { name, all, json }) => cancel::run(name, all, json, globals),
-        Some(WakeSubcmd::Watch { name }) => watch::run(&name, globals),
-        None if args.wake.is_empty() => list::run(args.wake.json, globals),
-        None => add::run(args.wake, globals),
+        Some(WaitSubcmd::List { json }) => list::run(json, globals),
+        Some(WaitSubcmd::Cancel { name, all, json }) => cancel::run(name, all, json, globals),
+        Some(WaitSubcmd::Watch { name }) => watch::run(&name, globals),
+        None if args.wait.is_empty() => list::run(args.wait.json, globals),
+        None => add::run(args.wait, globals),
     }
 }
 
-impl WakeArgs {
+impl WaitArgs {
     fn is_empty(&self) -> bool {
         self.in_after.is_none()
             && self.pid.is_none()

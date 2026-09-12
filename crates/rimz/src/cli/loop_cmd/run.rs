@@ -323,7 +323,7 @@ fn execute_prepared_delivery(
             rimz::harness::schedule::runner::DeliveryIntent::Signal => {
                 rimz::store::message::HarnessNotice::Signal
             }
-            _ => rimz::store::message::HarnessNotice::Wake,
+            _ => rimz::store::message::HarnessNotice::Wait,
         },
     };
     tracing::debug!(
@@ -345,7 +345,7 @@ fn execute_prepared_delivery(
             allow_fanout: false,
             reply: None,
             mux: globals.mux,
-            mode: if prepared.intent == rimz::harness::schedule::runner::DeliveryIntent::SelfWake {
+            mode: if prepared.intent == rimz::harness::schedule::runner::DeliveryIntent::SelfWait {
                 rimz::message::dispatch::DispatchMode::Steer {
                     enter: true,
                     force: false,
@@ -381,9 +381,9 @@ fn execute_prepared_delivery(
                         message_id, ..
                     } => message_id.clone(),
                 })
-                .context("loop wake dispatch returned no outcome")?;
+                .context("loop wait dispatch returned no outcome")?;
             crate::cli::send::report_dispatch(
-                if prepared.intent == rimz::harness::schedule::runner::DeliveryIntent::SelfWake {
+                if prepared.intent == rimz::harness::schedule::runner::DeliveryIntent::SelfWait {
                     crate::cli::send::ReportMode::Steer
                 } else {
                     crate::cli::send::ReportMode::Boundary

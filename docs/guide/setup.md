@@ -36,7 +36,7 @@ Four files carry the settings this guide touches:
 | `~/.config/rimz/config.toml` | room behavior: resume, auto-continue, smart compaction, notifications, multiplexer room overrides |
 | `~/.config/rimz/theme.toml` | sidebar appearance: scheme, color depth, glyphs, pets |
 | `~/.config/rimz/agents.toml` | agent profiles, teams, worktree defaults, attention timing |
-| `~/.config/rimz/loop.toml` | scheduled loop tasks: recurring turns, watchdogs, self-wakes |
+| `~/.config/rimz/loop.toml` | scheduled loop tasks: recurring turns, watchdogs, self-waits |
 
 Every key ships commented with its default and an inline note, so the generated template is the field reference:
 
@@ -147,7 +147,7 @@ A turn that dies mid-flight — a rate limit, a spend limit, a provider overload
 smart_compact = "200k"   # occupied-token count; a percentage of the window such as "70%" works too
 ```
 
-`smart_compact` makes `rimz message` sends and scheduled loop wakes compact-first: when the target agent's context window has reached the threshold, RimZ submits the agent's compact command ahead of the text so the prompt lands against a fresh window instead of dying at the context ceiling. Agents whose command accepts guidance receive [`compact_instruction`](./configuration.md#smart-compaction); the rest receive their bare command. Unset, compaction stays opt-in per message through `rimz message --smart-compact`. The mechanics are in [message internals → Smart compaction](../internals/harness/messaging.md#smart-compaction).
+`smart_compact` makes `rimz message` sends and scheduled loop waits compact-first: when the target agent's context window has reached the threshold, RimZ submits the agent's compact command ahead of the text so the prompt lands against a fresh window instead of dying at the context ceiling. Agents whose command accepts guidance receive [`compact_instruction`](./configuration.md#smart-compaction); the rest receive their bare command. Unset, compaction stays opt-in per message through `rimz message --smart-compact`. The mechanics are in [message internals → Smart compaction](../internals/harness/messaging.md#smart-compaction).
 
 ### Put a turn on a schedule
 
@@ -164,7 +164,7 @@ every = "day"
 
 `rimz loop add` writes the same entries, so you never have to hand-edit unless you want to. Two things about the model are worth knowing before you write your first task: the room's sidebar keeps the clock by default, while one opt-in `rimz loop timer install` keeps every task root ticking when its room is closed; and a task that repeats needs `every` or `cron` — a bare `at` fires once and retires itself. The timer is a user-level systemd timer on Linux or launchd agent on macOS, not a resident RimZ daemon. Agent and scheduled check-only fires open the root's room if needed and leave it open; [loops → Who keeps time](./loops.md#who-keeps-time) explains that lifecycle. `rimz loop timer remove` stops the timer without closing rooms already opened.
 
-The same table carries watchdogs and self-wakes, where an agent turn runs on an interval behind a shell check such as `cargo test` or `gh run watch`. What you would schedule and why is [loops](./loops.md); the field-by-field shape is [configuration → Loop tasks](./configuration.md#loop-tasks), and every flag is in [the loop CLI](../reference/cli/loop.md).
+The same table carries watchdogs and self-waits, where an agent turn runs on an interval behind a shell check such as `cargo test` or `gh run watch`. What you would schedule and why is [loops](./loops.md); the field-by-field shape is [configuration → Loop tasks](./configuration.md#loop-tasks), and every flag is in [the loop CLI](../reference/cli/loop.md).
 
 ## Configure your multiplexer
 
