@@ -259,7 +259,8 @@ allowed-dependencies = ["agents", "config", "disk", "ids", "mux", "utils"]
 # Static profile preflight shares typed provider identity across CLI entry points.
 # Host-side output writers share the current agent-visible room tmp view.
 # Exec presents typed skill omissions returned by sandbox preparation.
-surface-budget = 18
+# Inspection shares read-only mount/copy plans and explicit application with exec.
+surface-budget = 22
 
 [[module]]
 path = "crates/rimz/src/room"
@@ -552,6 +553,7 @@ allowed-dependencies = [
     "disk::paths",
     "harness::launch_reminders",
     "harness::prompt_compose",
+    "harness::spec",
     "ids",
     "proc",
     "sandbox",
@@ -560,7 +562,26 @@ allowed-dependencies = [
 ]
 # Validated envelope access establishes failure cleanup before prompt-file I/O.
 # Mount-input pins are reapplied through the compiled shell wrapper.
-surface-budget = 45
+# Fresh requests and selectively redacted process plans serve launch inspection.
+surface-budget = 50
+
+[[module]]
+path = "crates/rimz/src/harness/launch_plan.rs"
+allowed-dependencies = [
+    "agents",
+    "agents::capabilities",
+    "config",
+    "config::effective",
+    "disk::paths",
+    "harness::launch",
+    "harness::launch_reminders",
+    "harness::prompt_compose",
+    "harness::subagent_policy",
+    "ids",
+    "sandbox",
+]
+# The exec wrapper and inspection share one read-only compiler and write boundary.
+surface-budget = 8
 
 [[module]]
 path = "crates/rimz/src/harness/run.rs"
@@ -609,7 +630,8 @@ allowed-dependencies = [
     "proc",
 ]
 # Launch and system prompts share the artifact writer and argv-size limit.
-surface-budget = 11
+# Composed prompts can be planned without materializing their artifacts.
+surface-budget = 14
 
 [[module]]
 path = "crates/rimz/src/harness/schedule/runner.rs"

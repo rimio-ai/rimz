@@ -952,23 +952,23 @@ pub fn exec_argv(
     Ok(plan.argv)
 }
 
-pub struct ExecArgvPlan {
-    pub argv: Vec<String>,
-    pub prompt_artifact: Option<PromptArtifact>,
+struct ExecArgvPlan {
+    argv: Vec<String>,
+    prompt_artifact: Option<PromptArtifact>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct PromptArtifact {
-    pub path: PathBuf,
-    pub contents: String,
+    path: PathBuf,
+    contents: String,
 }
 
-pub fn write_prompt_artifact(artifact: &PromptArtifact) -> Result<(), ExecWireErr> {
+pub(super) fn write_prompt_artifact(artifact: &PromptArtifact) -> Result<(), ExecWireErr> {
     crate::disk::atomic::write_cache_bytes_atomically(&artifact.path, artifact.contents.as_bytes())
         .map_err(ExecWireErr::PromptWrite)
 }
 
-pub fn plan_exec_argv(
+fn plan_exec_argv(
     rimz_bin: &Path,
     runtime: &RuntimePaths,
     request: &ExecRequest,
