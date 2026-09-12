@@ -1425,3 +1425,62 @@ fn sidebar_glyphs_set_key_is_set_shorthand() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn named_account_edits_preserve_comments_and_sibling_account_keys() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        "# my machine\n[accounts.budget]\nclaude = \"100/day\" # the cap\n",
+    )
+    .expect("write config");
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        &path,
+        dir.path().join("agents-home"),
+    ));
+    let claude = crate::ids::AgentKind::new_unchecked("claude");
+    let work = "work".parse::<crate::ids::LoginName>().unwrap();
+    let personal = "personal".parse::<crate::ids::LoginName>().unwrap();
+
+    editor
+        .upsert_named_account(&claude, &work, Some(Path::new("/srv/homes/work")))
+        .expect("declare work");
+    editor
+        .upsert_named_account(&claude, &personal, None)
+        .expect("declare personal");
+    let text = std::fs::read_to_string(&path).expect("read config");
+    assert!(text.contains("# my machine"), "{text}");
+    assert!(text.contains("claude = \"100/day\" # the cap"), "{text}");
+    let parsed: crate::config::AccountsConfig = toml::from_str::<toml::Table>(&text)
+        .expect("parse")["accounts"]
+        .clone()
+        .try_into()
+        .expect("accounts");
+    assert_eq!(
+        parsed.claude["work"].home.as_deref(),
+        Some(Path::new("/srv/homes/work"))
+    );
+    assert_eq!(parsed.claude["personal"].home, None);
+
+    assert!(editor.remove_named_account(&claude, &work).expect("remove"));
+    assert!(
+        !editor
+            .remove_named_account(&claude, &work)
+            .expect("remove twice")
+    );
+    let text = std::fs::read_to_string(&path).expect("read config");
+    assert!(text.contains("# my machine"), "{text}");
+    assert!(text.contains("claude = \"100/day\" # the cap"), "{text}");
+    assert!(text.contains("[accounts.claude.personal]"), "{text}");
+    assert!(!text.contains("work"), "{text}");
+
+    assert!(
+        editor
+            .remove_named_account(&claude, &personal)
+            .expect("remove last")
+    );
+    let text = std::fs::read_to_string(&path).expect("read config");
+    assert!(!text.contains("[accounts.claude"), "{text}");
+    assert!(text.contains("[accounts.budget]"), "{text}");
+}

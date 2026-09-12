@@ -75,7 +75,7 @@ upward-dependencies = ["address"]
 # Native config-home resolution is shared with sandbox launch planning.
 # Native skill roots and user-only markers belong to the same capability seam.
 # Model sub-cap matching and parent-axis headroom are shared with the renderer.
-surface-budget = 928
+surface-budget = 957
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
@@ -194,7 +194,7 @@ surface-budget = 516
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
-surface-budget = 46
+surface-budget = 57
 
 [[module]]
 path = "crates/rimz/src/lane.rs"

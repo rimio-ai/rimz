@@ -132,16 +132,7 @@ impl ConfigEditor {
         validate_set_key(&self.files, &key)?;
         let file = file_for_key(&self.files, &key);
         let text = read_config_or_template(file.path(), file.template())?;
-        let mut doc =
-            text.parse::<DocumentMut>()
-                .map_err(|source| ConfigEditErr::DocumentParse {
-                    path: file.path().to_path_buf(),
-                    diagnosis: Box::new(ConfigFileDiagnosis::from_toml_edit(
-                        file.path(),
-                        &text,
-                        &source,
-                    )),
-                })?;
+        let mut doc = parse_document(file.path(), &text)?;
         let doc_key = document_key_for_set(&key);
         if item_at(&doc, &doc_key).is_none()
             && let Some(uncommented) = uncomment_template_default(&text, &doc_key)
@@ -158,6 +149,61 @@ impl ConfigEditor {
             self.files.core_path(),
         )?;
         write(file.path(), doc.to_string().as_bytes())
+    }
+
+    /// Declare `[accounts.<kind>.<name>]`. An account without an explicit home
+    /// is written as an empty table so the default location stays derived.
+    pub fn upsert_named_account(
+        &self,
+        kind: &crate::ids::AgentKind,
+        name: &crate::ids::LoginName,
+        home: Option<&Path>,
+    ) -> Result<()> {
+        let file = self.files.file(MachineConfigFileKind::Core);
+        let text = read_config_or_template(file.path(), file.template())?;
+        let mut doc = parse_document(file.path(), &text)?;
+        let mut key = vec!["accounts".to_owned(), kind.to_string(), name.to_string()];
+        match home {
+            Some(home) => {
+                key.push("home".to_owned());
+                apply_logical_key(
+                    &mut doc,
+                    file.path(),
+                    &key,
+                    Value::from(home.to_string_lossy().as_ref()),
+                    self.files.agents_home(),
+                    self.files.core_path(),
+                )?;
+            }
+            None => {
+                table_at_mut(&mut doc, &key)?;
+            }
+        }
+        write(file.path(), doc.to_string().as_bytes())
+    }
+
+    /// Drop `[accounts.<kind>.<name>]`, and the kind table with it once it
+    /// holds no accounts. Reports whether the entry was there.
+    pub fn remove_named_account(
+        &self,
+        kind: &crate::ids::AgentKind,
+        name: &crate::ids::LoginName,
+    ) -> Result<bool> {
+        let file = self.files.file(MachineConfigFileKind::Core);
+        let Some(text) = read_existing(file.path())? else {
+            return Ok(false);
+        };
+        let mut doc = parse_document(file.path(), &text)?;
+        let kinds = vec!["accounts".to_owned(), kind.to_string()];
+        let table = table_at_mut(&mut doc, &kinds)?;
+        if table.remove(name.as_str()).is_none() {
+            return Ok(false);
+        }
+        if table.is_empty() {
+            table_at_mut(&mut doc, &kinds[..1])?.remove(kind.as_str());
+        }
+        write(file.path(), doc.to_string().as_bytes())?;
+        Ok(true)
     }
 
     pub fn write_defaults(&self, force: bool) -> Result<bool> {
@@ -721,6 +767,33 @@ fn template_has_same_value(doc: &DocumentMut, logical: &[String], value: &Value)
     as_toml_value(&existing) == as_toml_value(value)
 }
 
+fn parse_document(path: &Path, text: &str) -> Result<DocumentMut> {
+    text.parse::<DocumentMut>()
+        .map_err(|source| ConfigEditErr::DocumentParse {
+            path: path.to_path_buf(),
+            diagnosis: Box::new(ConfigFileDiagnosis::from_toml_edit(path, text, &source)),
+        })
+}
+
+/// The table at `path`, created as an empty table where the document has none.
+fn table_at_mut<'a>(doc: &'a mut DocumentMut, path: &[String]) -> Result<&'a mut Table> {
+    let mut table = doc.as_table_mut();
+    for segment in path {
+        let item = table
+            .entry(segment)
+            .or_insert_with(|| Item::Table(Table::new()));
+        if item.is_none() {
+            *item = Item::Table(Table::new());
+        }
+        table = item
+            .as_table_mut()
+            .ok_or_else(|| ConfigEditErr::DocumentShape {
+                segment: segment.clone(),
+            })?;
+    }
+    Ok(table)
+}
+
 fn item_at<'a>(doc: &'a DocumentMut, path: &[String]) -> Option<&'a Item> {
     let (leaf, parents) = path.split_last()?;
     let mut table = doc.as_table();
@@ -868,6 +941,8 @@ fn is_unknown_get_shape(path: &[String]) -> bool {
         || matches!(path, [root, teams, _, field] if root == "agents" && teams == "teams" && !TEAM_FIELDS.contains(&field.as_str()))
         || matches!(path, [root, child, _, ..] if root == "accounts" && child == "usage_limit_usd" && path.len() > 3)
         || matches!(path, [root, child, _, ..] if root == "accounts" && child == "budget" && path.len() > 3)
+        || matches!(path, [root, child, _, field] if root == "accounts" && is_named_account_kind(child) && field != "home")
+        || matches!(path, [root, child, _, _, _, ..] if root == "accounts" && is_named_account_kind(child))
         || matches!(path, [root, child, _, ..] if root == "agents" && child == "commands" && path.len() > 3)
         || matches!(
             path,
@@ -913,6 +988,14 @@ fn is_context_meter_subfield(path: &[String]) -> bool {
                 && CONTEXT_METER_BANDS.contains(&band.as_str())
                 && path.len() > 4
     )
+}
+
+/// A kind whose `[accounts.<kind>]` table holds named accounts rather than a
+/// per-kind scalar.
+fn is_named_account_kind(segment: &str) -> bool {
+    super::AccountsConfig::default()
+        .named(&crate::ids::AgentKind::new_unchecked(segment))
+        .is_some()
 }
 
 fn is_disallowed_set_container(path: &[String]) -> bool {

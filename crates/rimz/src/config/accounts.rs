@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
 use std::fmt;
+use std::path::PathBuf;
 
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::harness::DayCap;
+use crate::ids::{AgentKind, LoginName};
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum AccountBudgetConfigError {
@@ -29,11 +31,38 @@ pub struct AccountsConfig {
     /// extra/API usage bar when no provider limit is available; it is not a
     /// provider-enforced spending limit.
     pub usage_limit_usd: BTreeMap<String, UsageLimitUsd>,
+    /// Named Claude accounts: each one a standalone `CLAUDE_CONFIG_DIR`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub claude: BTreeMap<LoginName, NamedAccount>,
+    /// Named Codex accounts: each one a standalone `CODEX_HOME`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub codex: BTreeMap<LoginName, NamedAccount>,
+}
+
+/// One declared account of a provider kind. An empty table takes the default
+/// home under the RimZ data root.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct NamedAccount {
+    /// The provider home this account launches into. `None` means the default
+    /// location RimZ derives from the kind and the name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<PathBuf>,
 }
 
 impl AccountsConfig {
     pub fn budget(&self, kind: &str) -> Option<DayCap> {
         self.budget.get(kind).copied()
+    }
+
+    /// The declared accounts of a kind, or `None` for a kind that cannot carry
+    /// named accounts. This is the only place the supported kinds are listed.
+    pub fn named(&self, kind: &AgentKind) -> Option<&BTreeMap<LoginName, NamedAccount>> {
+        match kind.as_str() {
+            "claude" => Some(&self.claude),
+            "codex" => Some(&self.codex),
+            _ => None,
+        }
     }
 
     pub fn usage_limit(&self, kind: &str) -> Option<f64> {
@@ -208,6 +237,39 @@ mod tests {
             unknown.validate_budgets(),
             Err(AccountBudgetConfigError::UnknownKind { kind }) if kind == "future"
         ));
+    }
+
+    #[test]
+    fn named_accounts_parse_beside_the_kind_keyed_tables() {
+        let config: AccountsConfig = toml::from_str(
+            r#"
+            [budget]
+            claude = "100/day"
+
+            [claude.work]
+            home = "/srv/homes/work"
+
+            [codex.personal]
+            "#,
+        )
+        .expect("parse named accounts");
+        let claude = config.named(&AgentKind::new_unchecked("claude")).unwrap();
+        assert_eq!(claude["work"].home, Some(PathBuf::from("/srv/homes/work")));
+        let codex = config.named(&AgentKind::new_unchecked("codex")).unwrap();
+        assert_eq!(codex["personal"].home, None);
+        assert!(config.named(&AgentKind::new_unchecked("grok")).is_none());
+        assert_eq!(config.budget("claude").map(DayCap::as_usd), Some(100.0));
+    }
+
+    #[test]
+    fn named_account_refuses_an_unknown_field_and_a_bad_name() {
+        assert!(
+            toml::from_str::<AccountsConfig>("[claude.work]\npath = \"/srv/work\"")
+                .unwrap_err()
+                .to_string()
+                .contains("unknown field")
+        );
+        assert!(toml::from_str::<AccountsConfig>("[claude.Work]\n").is_err());
     }
 
     #[test]

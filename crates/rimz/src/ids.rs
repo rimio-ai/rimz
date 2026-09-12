@@ -595,6 +595,166 @@ impl std::borrow::Borrow<str> for AgentKind {
     }
 }
 
+/// Name of a provider login — the user-facing "account" of a provider kind.
+///
+/// A login is a standalone provider home: `default` is the provider's own
+/// native resolution and stores no path, every other name is a directory the
+/// user declared under `[accounts.<kind>.<name>]`. The grammar is deliberately
+/// narrow because the name appears in file names (`budget.account.<key>.json`)
+/// and in cache keys.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct LoginName(String);
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "invalid account name `{0}`; expected 1-32 characters of `a-z`, `0-9`, `_` or `-`, starting with a letter or digit"
+)]
+pub struct InvalidLoginName(pub String);
+
+impl LoginName {
+    /// The provider's native home: selected when nothing else is, never declared.
+    pub const DEFAULT: &'static str = "default";
+
+    pub fn default_login() -> Self {
+        Self(Self::DEFAULT.to_owned())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn is_default(&self) -> bool {
+        self.0 == Self::DEFAULT
+    }
+}
+
+impl Default for LoginName {
+    fn default() -> Self {
+        Self::default_login()
+    }
+}
+
+impl FromStr for LoginName {
+    type Err = InvalidLoginName;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let valid = (1..=32).contains(&s.len())
+            && s.bytes()
+                .next()
+                .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+            && s.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_' || byte == b'-'
+            });
+        if !valid {
+            return Err(InvalidLoginName(s.to_owned()));
+        }
+        Ok(Self(s.to_owned()))
+    }
+}
+
+impl TryFrom<String> for LoginName {
+    type Error = InvalidLoginName;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+
+impl From<LoginName> for String {
+    fn from(value: LoginName) -> Self {
+        value.0
+    }
+}
+
+impl fmt::Display for LoginName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+// Sound: `Ord`/`Eq`/`Hash` all delegate to the inner string, so a borrowed
+// `&str` keys sets and maps consistently.
+impl std::borrow::Borrow<str> for LoginName {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+/// A provider login across every kind: `<kind>@<name>`, e.g. `claude@work`.
+///
+/// This is the key user-scoped caches, the budget ledger and published spending
+/// windows are partitioned by, so the encoding is stable and round-trips.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct LoginKey {
+    pub kind: AgentKind,
+    pub name: LoginName,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum InvalidLoginKey {
+    #[error("invalid account key `{0}`; expected `<kind>@<name>`")]
+    Shape(String),
+    #[error(transparent)]
+    Name(#[from] InvalidLoginName),
+}
+
+impl LoginKey {
+    pub fn new(kind: AgentKind, name: LoginName) -> Self {
+        Self { kind, name }
+    }
+
+    pub fn default_for(kind: AgentKind) -> Self {
+        Self::new(kind, LoginName::default_login())
+    }
+
+    pub fn is_default(&self) -> bool {
+        self.name.is_default()
+    }
+}
+
+impl FromStr for LoginKey {
+    type Err = InvalidLoginKey;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (kind, name) = s
+            .split_once('@')
+            .ok_or_else(|| InvalidLoginKey::Shape(s.to_owned()))?;
+        if kind.is_empty() {
+            return Err(InvalidLoginKey::Shape(s.to_owned()));
+        }
+        Ok(Self {
+            kind: AgentKind::new_unchecked(kind),
+            name: name.parse()?,
+        })
+    }
+}
+
+impl TryFrom<String> for LoginKey {
+    type Error = InvalidLoginKey;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+
+impl From<LoginKey> for String {
+    fn from(value: LoginKey) -> Self {
+        value.to_string()
+    }
+}
+
+impl fmt::Display for LoginKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}@{}", self.kind, self.name)
+    }
+}
+
+/// A room's frozen account selection: the login each provider kind launches
+/// under. A kind absent from the map launches under `default`.
+pub type RoomLogins = std::collections::BTreeMap<AgentKind, LoginName>;
+
 /// Agent-supplied session identifier — the `agent_id` half of the rollup key
 /// `(kind, agent_id)`.
 ///
@@ -1015,6 +1175,51 @@ mod tests {
             PaneId::from_parts(MuxName::Tmux, "pane").creation_ordinal(),
             None
         );
+    }
+
+    #[test]
+    fn login_name_accepts_the_grammar_and_refuses_everything_else() {
+        for name in [
+            "default",
+            "work",
+            "a",
+            "0",
+            "team-1",
+            "team_1",
+            &"x".repeat(32),
+        ] {
+            assert!(name.parse::<LoginName>().is_ok(), "{name}");
+        }
+        for name in [
+            "",
+            "-work",
+            "_work",
+            "Work",
+            "wörk",
+            "work dir",
+            "work/dir",
+            &"x".repeat(33),
+        ] {
+            assert!(name.parse::<LoginName>().is_err(), "{name}");
+        }
+        assert!(LoginName::default_login().is_default());
+        assert!(!"work".parse::<LoginName>().unwrap().is_default());
+    }
+
+    #[test]
+    fn login_key_round_trips_through_its_rendered_form() {
+        let key: LoginKey = "claude@work".parse().unwrap();
+        assert_eq!(key.kind, "claude");
+        assert_eq!(key.name.as_str(), "work");
+        assert_eq!(key.to_string(), "claude@work");
+        assert_eq!(serde_json::to_string(&key).unwrap(), "\"claude@work\"",);
+        assert_eq!(
+            serde_json::from_str::<LoginKey>("\"codex@default\"").unwrap(),
+            LoginKey::default_for(AgentKind::new_unchecked("codex"))
+        );
+        assert!("claude".parse::<LoginKey>().is_err());
+        assert!("@work".parse::<LoginKey>().is_err());
+        assert!("claude@Work".parse::<LoginKey>().is_err());
     }
 
     #[test]
