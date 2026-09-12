@@ -21,6 +21,36 @@ use crate::agents::AskKind;
 use crate::transcript::{AskOption, AskQuestion};
 
 #[test]
+fn named_login_env_resolves_hook_install_under_the_named_home() {
+    for (kind, filename) in [("claude", "settings.json"), ("codex", "config.toml")] {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let named = temp.path().join("named");
+        fs::create_dir_all(&named).unwrap();
+        let ambient = std::collections::BTreeMap::from([(
+            "HOME".to_owned(),
+            home.to_string_lossy().into_owned(),
+        )]);
+        let login_env = super::ProviderLogin::named(
+            crate::ids::AgentKind::new_unchecked(kind),
+            "work".parse().unwrap(),
+            named.clone(),
+        )
+        .unwrap()
+        .env(&ambient);
+        let adapter = super::find_definition(kind).unwrap();
+        for path in adapter.wiring_input_paths(&login_env) {
+            assert!(path.starts_with(&named), "{kind}: {path:?}");
+            assert!(!path.starts_with(&home), "{kind}: {path:?}");
+        }
+        adapter.install_hooks(&login_env).unwrap();
+        assert!(named.join(filename).is_file(), "{kind}");
+        assert!(adapter.hooks_installed(&login_env), "{kind}");
+        assert!(!adapter.hooks_installed(&ambient), "{kind}");
+    }
+}
+
+#[test]
 fn builtin_config_homes_resolve_only_the_explicit_launch_env() {
     let defaults = [
         ("claude", ".claude"),
@@ -806,9 +836,10 @@ fn realtime_cost_matches_coverage() {
 
 #[test]
 fn wiring_inputs_cover_every_provider_file_used_for_admission() {
+    let login_env = crate::agents::ambient_env();
     for adapter in BUILTINS {
         let kind = adapter.spec().kind;
-        let paths = adapter.wiring_input_paths();
+        let paths = adapter.wiring_input_paths(&login_env);
         match kind {
             "claude" | "antigravity" | "cursor" | "kiro" => assert!(
                 paths.is_empty(),

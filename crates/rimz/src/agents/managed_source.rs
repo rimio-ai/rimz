@@ -2,6 +2,7 @@
 //! merges. Adapters declare one source; backend-specific ownership and merge
 //! policy stays behind it.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::disk::atomic;
@@ -17,37 +18,44 @@ pub(crate) const RIMZ_MANAGED_MARKER: &str = "_rimz_managed";
 
 /// Provider-owned file transaction behind the adapter's managed integration seam.
 pub trait ManagedIntegration: Sync {
-    fn install(&self) -> Result<HookInstallReport>;
-    fn preview(&self) -> Result<HookInstallPreview>;
-    fn uninstall(&self) -> Result<HookUninstallReport>;
-    fn installed(&self) -> bool;
+    fn install(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallReport>;
+    fn preview(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallPreview>;
+    fn uninstall(&self, login_env: &BTreeMap<String, String>) -> Result<HookUninstallReport>;
+    fn installed(&self, login_env: &BTreeMap<String, String>) -> bool;
 
-    fn managed_artifacts_present(&self) -> bool {
-        self.installed()
+    fn managed_artifacts_present(&self, login_env: &BTreeMap<String, String>) -> bool {
+        self.installed(login_env)
     }
 
-    fn upgrade_available(&self) -> bool {
+    fn upgrade_available(&self, _login_env: &BTreeMap<String, String>) -> bool {
         false
     }
 
-    fn wiring_input_paths(&self, _descriptor: &AgentSpec) -> Vec<PathBuf> {
+    fn wiring_input_paths(
+        &self,
+        _descriptor: &AgentSpec,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Vec<PathBuf> {
         Vec::new()
     }
 
-    fn wrapped_status_line_command(&self) -> Option<String> {
+    fn wrapped_status_line_command(&self, _login_env: &BTreeMap<String, String>) -> Option<String> {
         None
     }
 
-    fn wrapped_subagent_status_line_command(&self) -> Option<String> {
+    fn wrapped_subagent_status_line_command(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Option<String> {
         None
     }
 
-    fn untrusted_installed_hooks(&self) -> Vec<String> {
+    fn untrusted_installed_hooks(&self, _login_env: &BTreeMap<String, String>) -> Vec<String> {
         Vec::new()
     }
 
-    fn untrusted_preflight_hooks(&self) -> Vec<String> {
-        self.untrusted_installed_hooks()
+    fn untrusted_preflight_hooks(&self, login_env: &BTreeMap<String, String>) -> Vec<String> {
+        self.untrusted_installed_hooks(login_env)
     }
 }
 
@@ -64,7 +72,7 @@ enum ManagedSourceBackend {
 /// One adapter's managed integration source.
 pub struct ManagedSource {
     agent: &'static str,
-    path: fn() -> Result<PathBuf>,
+    path: fn(&BTreeMap<String, String>) -> Result<PathBuf>,
     backend: ManagedSourceBackend,
 }
 
@@ -74,7 +82,7 @@ impl ManagedSource {
         source: &'static str,
         catalog: &'static [HookEventSpec],
         artifact_noun: &'static str,
-        path: fn() -> Result<PathBuf>,
+        path: fn(&BTreeMap<String, String>) -> Result<PathBuf>,
         upgradeable: bool,
     ) -> Self {
         Self {
@@ -91,7 +99,7 @@ impl ManagedSource {
 
     pub(crate) const fn json(
         spec: &'static ManagedJsonHookSpec,
-        path: fn() -> Result<PathBuf>,
+        path: fn(&BTreeMap<String, String>) -> Result<PathBuf>,
     ) -> Self {
         Self {
             agent: spec.agent,
@@ -100,44 +108,50 @@ impl ManagedSource {
         }
     }
 
-    pub fn install(&self) -> Result<HookInstallReport> {
-        let path = (self.path)()?;
+    pub fn install(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
+        let path = (self.path)(login_env)?;
         self.install_into(&path)
     }
 
     /// Resolve the provider-owned path without reading or mutating it.
-    pub fn resolved_path(&self) -> Result<PathBuf> {
-        (self.path)()
+    pub fn resolved_path(&self, login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
+        (self.path)(login_env)
     }
 
-    pub fn preview(&self) -> Result<HookInstallPreview> {
-        let path = (self.path)()?;
+    pub fn preview(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
+        let path = (self.path)(login_env)?;
         self.preview_at(&path)
     }
 
-    pub fn uninstall(&self) -> Result<HookUninstallReport> {
-        let path = (self.path)()?;
+    pub fn uninstall(&self, login_env: &BTreeMap<String, String>) -> Result<HookUninstallReport> {
+        let path = (self.path)(login_env)?;
         self.uninstall_from(&path)
     }
 
-    pub fn installed(&self) -> bool {
-        (self.path)().is_ok_and(|path| self.installed_at(&path))
+    pub fn installed(&self, login_env: &BTreeMap<String, String>) -> bool {
+        (self.path)(login_env).is_ok_and(|path| self.installed_at(&path))
     }
 
-    pub fn upgrade_available(&self) -> bool {
-        (self.path)().is_ok_and(|path| self.upgrade_available_at(&path))
+    pub fn upgrade_available(&self, login_env: &BTreeMap<String, String>) -> bool {
+        (self.path)(login_env).is_ok_and(|path| self.upgrade_available_at(&path))
     }
 
-    pub fn managed_artifacts_present(&self) -> bool {
-        (self.path)().is_ok_and(|path| self.managed_artifacts_at(&path))
+    pub fn managed_artifacts_present(&self, login_env: &BTreeMap<String, String>) -> bool {
+        (self.path)(login_env).is_ok_and(|path| self.managed_artifacts_at(&path))
     }
 
-    pub fn wrapped_status_line_command(&self) -> Option<String> {
-        self.wrapped_status_line_command_at(0)
+    pub fn wrapped_status_line_command(
+        &self,
+        login_env: &BTreeMap<String, String>,
+    ) -> Option<String> {
+        self.wrapped_status_line_command_at(0, login_env)
     }
 
-    pub fn wrapped_subagent_status_line_command(&self) -> Option<String> {
-        self.wrapped_status_line_command_at(1)
+    pub fn wrapped_subagent_status_line_command(
+        &self,
+        login_env: &BTreeMap<String, String>,
+    ) -> Option<String> {
+        self.wrapped_status_line_command_at(1, login_env)
     }
 
     /// Install is whole-file ownership: the embedded source overwrites the path
@@ -230,8 +244,12 @@ impl ManagedSource {
         }
     }
 
-    fn wrapped_status_line_command_at(&self, index: usize) -> Option<String> {
-        let path = (self.path)().ok()?;
+    fn wrapped_status_line_command_at(
+        &self,
+        index: usize,
+        login_env: &BTreeMap<String, String>,
+    ) -> Option<String> {
+        let path = (self.path)(login_env).ok()?;
         match &self.backend {
             ManagedSourceBackend::WholeFile { .. } => None,
             ManagedSourceBackend::JsonHooks(spec) => {
@@ -283,43 +301,50 @@ impl ManagedSource {
 }
 
 impl ManagedIntegration for ManagedSource {
-    fn install(&self) -> Result<HookInstallReport> {
-        ManagedSource::install(self)
+    fn install(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
+        ManagedSource::install(self, login_env)
     }
 
-    fn preview(&self) -> Result<HookInstallPreview> {
-        ManagedSource::preview(self)
+    fn preview(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
+        ManagedSource::preview(self, login_env)
     }
 
-    fn uninstall(&self) -> Result<HookUninstallReport> {
-        ManagedSource::uninstall(self)
+    fn uninstall(&self, login_env: &BTreeMap<String, String>) -> Result<HookUninstallReport> {
+        ManagedSource::uninstall(self, login_env)
     }
 
-    fn installed(&self) -> bool {
-        ManagedSource::installed(self)
+    fn installed(&self, login_env: &BTreeMap<String, String>) -> bool {
+        ManagedSource::installed(self, login_env)
     }
 
-    fn managed_artifacts_present(&self) -> bool {
-        ManagedSource::managed_artifacts_present(self)
+    fn managed_artifacts_present(&self, login_env: &BTreeMap<String, String>) -> bool {
+        ManagedSource::managed_artifacts_present(self, login_env)
     }
 
-    fn upgrade_available(&self) -> bool {
-        ManagedSource::upgrade_available(self)
+    fn upgrade_available(&self, login_env: &BTreeMap<String, String>) -> bool {
+        ManagedSource::upgrade_available(self, login_env)
     }
 
-    fn wiring_input_paths(&self, definition: &AgentSpec) -> Vec<PathBuf> {
+    fn wiring_input_paths(
+        &self,
+        definition: &AgentSpec,
+        login_env: &BTreeMap<String, String>,
+    ) -> Vec<PathBuf> {
         if definition.capabilities.local_session_discovery || !definition.has_wired_hook_install() {
             return Vec::new();
         }
-        self.resolved_path().into_iter().collect()
+        self.resolved_path(login_env).into_iter().collect()
     }
 
-    fn wrapped_status_line_command(&self) -> Option<String> {
-        ManagedSource::wrapped_status_line_command(self)
+    fn wrapped_status_line_command(&self, login_env: &BTreeMap<String, String>) -> Option<String> {
+        ManagedSource::wrapped_status_line_command(self, login_env)
     }
 
-    fn wrapped_subagent_status_line_command(&self) -> Option<String> {
-        ManagedSource::wrapped_subagent_status_line_command(self)
+    fn wrapped_subagent_status_line_command(
+        &self,
+        login_env: &BTreeMap<String, String>,
+    ) -> Option<String> {
+        ManagedSource::wrapped_subagent_status_line_command(self, login_env)
     }
 }
 

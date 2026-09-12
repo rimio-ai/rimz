@@ -1,5 +1,6 @@
 //! Cursor `hooks.json` merge installer.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
@@ -26,7 +27,7 @@ pub(super) static MANAGED_INTEGRATION: CursorManagedIntegration = CursorManagedI
 pub(super) struct CursorManagedIntegration;
 
 impl ManagedIntegration for CursorManagedIntegration {
-    fn install(&self) -> Result<HookInstallReport> {
+    fn install(&self, _login_env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
         install_into(
             &cursor_hooks_path()?,
             &cursor_cli_config_path()?,
@@ -34,7 +35,7 @@ impl ManagedIntegration for CursorManagedIntegration {
         )
     }
 
-    fn preview(&self) -> Result<HookInstallPreview> {
+    fn preview(&self, _login_env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
         preview_at(
             &cursor_hooks_path()?,
             &cursor_cli_config_path()?,
@@ -42,7 +43,7 @@ impl ManagedIntegration for CursorManagedIntegration {
         )
     }
 
-    fn uninstall(&self) -> Result<HookUninstallReport> {
+    fn uninstall(&self, _login_env: &BTreeMap<String, String>) -> Result<HookUninstallReport> {
         uninstall_from(
             &cursor_hooks_path()?,
             &cursor_cli_config_path()?,
@@ -50,7 +51,7 @@ impl ManagedIntegration for CursorManagedIntegration {
         )
     }
 
-    fn installed(&self) -> bool {
+    fn installed(&self, _login_env: &BTreeMap<String, String>) -> bool {
         let Ok(hooks_path) = cursor_hooks_path() else {
             return false;
         };
@@ -60,13 +61,13 @@ impl ManagedIntegration for CursorManagedIntegration {
         hooks_installed_at(&hooks_path) && statusline_installed_at(&config_path)
     }
 
-    fn managed_artifacts_present(&self) -> bool {
+    fn managed_artifacts_present(&self, _login_env: &BTreeMap<String, String>) -> bool {
         cursor_hooks_path().is_ok_and(|path| managed_artifacts_at(&path))
             || cursor_cli_config_path().is_ok_and(|path| statusline_artifact_at(&path))
             || cursor_statusline_state_path().is_ok_and(|path| path.exists())
     }
 
-    fn wrapped_status_line_command(&self) -> Option<String> {
+    fn wrapped_status_line_command(&self, _login_env: &BTreeMap<String, String>) -> Option<String> {
         wrapped_status_line_command_at(
             &cursor_cli_config_path().ok()?,
             &cursor_statusline_state_path().ok()?,

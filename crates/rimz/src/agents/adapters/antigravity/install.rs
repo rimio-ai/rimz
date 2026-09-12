@@ -6,6 +6,7 @@
 //! permission policy. The settings file wraps a pre-existing statusline and
 //! restores its complete value on uninstall.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
@@ -28,31 +29,31 @@ pub(super) static MANAGED_INTEGRATION: AntigravityManagedIntegration =
 pub(super) struct AntigravityManagedIntegration;
 
 impl ManagedIntegration for AntigravityManagedIntegration {
-    fn install(&self) -> Result<HookInstallReport> {
+    fn install(&self, _login_env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
         install(&hooks_path()?, &settings_path()?)
     }
 
-    fn preview(&self) -> Result<HookInstallPreview> {
+    fn preview(&self, _login_env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
         preview(&hooks_path()?, &settings_path()?)
     }
 
-    fn uninstall(&self) -> Result<HookUninstallReport> {
+    fn uninstall(&self, _login_env: &BTreeMap<String, String>) -> Result<HookUninstallReport> {
         uninstall(&hooks_path()?, &settings_path()?)
     }
 
-    fn installed(&self) -> bool {
+    fn installed(&self, _login_env: &BTreeMap<String, String>) -> bool {
         hooks_path()
             .and_then(|hooks| settings_path().map(|settings| installed(&hooks, &settings)))
             .unwrap_or(false)
     }
 
-    fn managed_artifacts_present(&self) -> bool {
+    fn managed_artifacts_present(&self, _login_env: &BTreeMap<String, String>) -> bool {
         hooks_path()
             .and_then(|hooks| settings_path().map(|settings| managed(&hooks, &settings)))
             .unwrap_or(false)
     }
 
-    fn wrapped_status_line_command(&self) -> Option<String> {
+    fn wrapped_status_line_command(&self, _login_env: &BTreeMap<String, String>) -> Option<String> {
         settings_path()
             .ok()
             .and_then(|path| wrapped_statusline_command(&path))

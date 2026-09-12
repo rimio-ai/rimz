@@ -8,6 +8,7 @@
 //! [docs/internals/agents/adapter.md](../../../../docs/internals/agents/adapter.md).
 
 use super::*;
+use std::collections::BTreeMap;
 
 /// Launch-scoped provider channel for additive system or developer text.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -119,10 +120,10 @@ pub trait InstallationCapability: CoreCapability {
     /// or the default launch model. The list covers every file read by
     /// [`Self::hooks_installed`] and [`Self::default_launch_model`]. Resolving a
     /// path performs no provider-file I/O.
-    fn wiring_input_paths(&self) -> Vec<PathBuf> {
+    fn wiring_input_paths(&self, login_env: &BTreeMap<String, String>) -> Vec<PathBuf> {
         self.managed_integration()
             .map_or_else(Vec::new, |integration| {
-                integration.wiring_input_paths(self.spec())
+                integration.wiring_input_paths(self.spec(), login_env)
             })
     }
 
@@ -131,12 +132,10 @@ pub trait InstallationCapability: CoreCapability {
         None
     }
 
-    /// Write or merge the adapter's hook config into the agent's per-user
-    /// config file. Defaults to an explicit "not implemented" error until an
-    /// adapter owns installation.
-    fn install_hooks(&self) -> Result<HookInstallReport> {
+    /// Write or merge the adapter's hook config under the home `login_env` resolves. Defaults to an explicit "not implemented" error until an adapter owns installation.
+    fn install_hooks(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
         if let Some(integration) = self.managed_integration() {
-            return integration.install();
+            return integration.install(login_env);
         }
         Err(AgentErr::Install {
             agent: self.spec().kind,
@@ -144,11 +143,13 @@ pub trait InstallationCapability: CoreCapability {
         })
     }
 
-    /// Preview the exact per-user config write the installer would make,
-    /// without touching disk. Used by the first-run consent gate.
-    fn preview_hook_install(&self) -> Result<HookInstallPreview> {
+    /// Preview the exact config write under the home `login_env` resolves, without touching disk. Used by the first-run consent gate.
+    fn preview_hook_install(
+        &self,
+        login_env: &BTreeMap<String, String>,
+    ) -> Result<HookInstallPreview> {
         if let Some(integration) = self.managed_integration() {
-            return integration.preview();
+            return integration.preview(login_env);
         }
         Err(AgentErr::Install {
             agent: self.spec().kind,
@@ -156,11 +157,10 @@ pub trait InstallationCapability: CoreCapability {
         })
     }
 
-    /// Remove the adapter's hook entries from the agent's per-user config
-    /// file. Defaults to an explicit "not implemented" error.
-    fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
+    /// Remove the adapter's hook entries from the config under the home `login_env` resolves. Defaults to an explicit "not implemented" error.
+    fn uninstall_hooks(&self, login_env: &BTreeMap<String, String>) -> Result<HookUninstallReport> {
         if let Some(integration) = self.managed_integration() {
-            return integration.uninstall();
+            return integration.uninstall(login_env);
         }
         Err(AgentErr::Install {
             agent: self.spec().kind,
@@ -168,14 +168,11 @@ pub trait InstallationCapability: CoreCapability {
         })
     }
 
-    /// Whether the user's config carries any RimZ-managed hook artifact, including
-    /// partial or legacy installs that are not complete enough to be considered
-    /// usable by [`Self::hooks_installed`]. No-arg uninstall uses this so
-    /// "ensure absent" cleans damaged configs without rewriting untouched ones.
-    fn managed_hook_artifacts_present(&self) -> bool {
+    /// Whether the config under the home `login_env` resolves carries any RimZ-managed hook artifact, including partial or legacy installs that are not complete enough to be considered usable by [`Self::hooks_installed`]. No-arg uninstall uses this so "ensure absent" cleans damaged configs without rewriting untouched ones.
+    fn managed_hook_artifacts_present(&self, login_env: &BTreeMap<String, String>) -> bool {
         self.managed_integration().map_or_else(
-            || self.hooks_installed(),
-            ManagedIntegration::managed_artifacts_present,
+            || self.hooks_installed(login_env),
+            |integration| integration.managed_artifacts_present(login_env),
         )
     }
 
@@ -184,9 +181,9 @@ pub trait InstallationCapability: CoreCapability {
     /// wrap is configured. The `rimz statusline feed` CLI calls this to find
     /// its pass-through target. Best-effort: a read/parse failure reads as
     /// `None`.
-    fn wrapped_status_line_command(&self) -> Option<String> {
+    fn wrapped_status_line_command(&self, login_env: &BTreeMap<String, String>) -> Option<String> {
         self.managed_integration()
-            .and_then(ManagedIntegration::wrapped_status_line_command)
+            .and_then(|integration| integration.wrapped_status_line_command(login_env))
     }
 
     /// Match the provider's invocation contract when forwarding a wrapped
@@ -201,19 +198,18 @@ pub trait InstallationCapability: CoreCapability {
     /// --subagent`. `None` when the agent manages no subagent statusline (Codex)
     /// or no wrap is configured. Best-effort: a read/parse failure reads as
     /// `None`.
-    fn wrapped_subagent_status_line_command(&self) -> Option<String> {
+    fn wrapped_subagent_status_line_command(
+        &self,
+        login_env: &BTreeMap<String, String>,
+    ) -> Option<String> {
         self.managed_integration()
-            .and_then(ManagedIntegration::wrapped_subagent_status_line_command)
+            .and_then(|integration| integration.wrapped_subagent_status_line_command(login_env))
     }
 
-    /// Whether this agent's per-user config currently carries RimZ-managed
-    /// hooks — i.e. the user ran `rimz hooks install`. Best-effort: a missing
-    /// file or any read/parse failure reads as "not installed". An agent only
-    /// ever fires `rimz hooks feed` when this holds, so `rimz doctor` surfaces
-    /// it — an un-wired agent is invisible, never silently broken.
-    fn hooks_installed(&self) -> bool {
+    /// Whether the config under the home `login_env` resolves currently carries RimZ-managed hooks — i.e. the user ran `rimz hooks install`. Best-effort: a missing file or any read/parse failure reads as "not installed". An agent only ever fires `rimz hooks feed` when this holds, so `rimz doctor` surfaces it — an un-wired agent is invisible, never silently broken.
+    fn hooks_installed(&self, login_env: &BTreeMap<String, String>) -> bool {
         self.managed_integration()
-            .is_some_and(ManagedIntegration::installed)
+            .is_some_and(|integration| integration.installed(login_env))
     }
 
     /// RimZ-installed hook events this agent will silently skip until the
@@ -221,9 +217,11 @@ pub trait InstallationCapability: CoreCapability {
     /// trust gate; Codex overrides it from `[hooks.state]` in its config.
     /// RimZ cannot trust on the user's behalf, so `rimz start` and
     /// `rimz doctor` surface the fix ([`hook_trust_fix`]) instead.
-    fn untrusted_installed_hooks(&self) -> Vec<String> {
+    fn untrusted_installed_hooks(&self, login_env: &BTreeMap<String, String>) -> Vec<String> {
         self.managed_integration()
-            .map_or_else(Vec::new, ManagedIntegration::untrusted_installed_hooks)
+            .map_or_else(Vec::new, |integration| {
+                integration.untrusted_installed_hooks(login_env)
+            })
     }
 }
 

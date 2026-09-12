@@ -680,8 +680,11 @@ fn preflight_reply_hooks(
     agent: &AgentState,
     adapter: &AgentDefinition,
 ) -> Result<(), ReplyPrepareErr> {
-    match crate::agents::preflight_hooks(adapter, crate::agents::TurnLifecycleNeed::NotUnsupported)
-    {
+    match crate::agents::preflight_hooks(
+        adapter,
+        &crate::agents::ambient_env(),
+        crate::agents::TurnLifecycleNeed::NotUnsupported,
+    ) {
         Ok(()) => Ok(()),
         Err(crate::agents::HookPreflightErr::TurnLifecycleUnsupported { reason }) => {
             Err(ReplyPrepareErr::TurnLifecycleUnsupported {

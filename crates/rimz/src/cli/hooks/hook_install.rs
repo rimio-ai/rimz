@@ -21,11 +21,12 @@ pub(super) enum InstallDisposition {
 }
 
 pub(super) fn install_disposition(agent: &rimz::agents::AgentDefinition) -> InstallDisposition {
-    if !agent.hooks_installed() {
+    let login_env = rimz::agents::ambient_env();
+    if !agent.hooks_installed(&login_env) {
         InstallDisposition::Installed
     } else if agent
         .managed_integration()
-        .is_some_and(rimz::agents::ManagedIntegration::upgrade_available)
+        .is_some_and(|integration| integration.upgrade_available(&login_env))
     {
         InstallDisposition::Refreshed
     } else {
@@ -59,20 +60,24 @@ pub(super) fn detected_installable_adapters() -> Vec<&'static rimz::agents::Agen
 }
 
 pub(in crate::cli) fn ensure_detected_agent_hooks(attended: bool) -> Result<bool> {
+    let login_env = rimz::agents::ambient_env();
     let mut actionable = Vec::new();
 
     for agent in detected_installable_adapters() {
         let definition = agent.spec();
-        if !agent.hooks_installed()
+        if !agent.hooks_installed(&login_env)
             || agent
                 .managed_integration()
-                .is_some_and(rimz::agents::ManagedIntegration::upgrade_available)
+                .is_some_and(|integration| integration.upgrade_available(&login_env))
         {
-            actionable.push(agent.preview_hook_install()?);
+            actionable.push(agent.preview_hook_install(&login_env)?);
             continue;
         }
 
-        warn_untrusted_hooks(definition.kind, &agent.untrusted_installed_hooks())?;
+        warn_untrusted_hooks(
+            definition.kind,
+            &agent.untrusted_installed_hooks(&login_env),
+        )?;
     }
 
     if actionable.is_empty() {
@@ -125,6 +130,7 @@ fn prompt_consent(
 }
 
 fn install_selected(selected: &[&'static str], out: &mut dyn Write) -> Result<()> {
+    let login_env = rimz::agents::ambient_env();
     writeln!(out)?;
     if selected.is_empty() {
         writeln!(
@@ -137,9 +143,9 @@ fn install_selected(selected: &[&'static str], out: &mut dyn Write) -> Result<()
     for name in selected {
         let agent = rimz::agents::definition_by_kind(name)?;
         let disposition = install_disposition(agent);
-        let report = agent.install_hooks()?;
+        let report = agent.install_hooks(&login_env)?;
         write_install_result(out, &report, disposition)?;
-        write_untrusted_hooks_notice(name, &agent.untrusted_installed_hooks(), out)?;
+        write_untrusted_hooks_notice(name, &agent.untrusted_installed_hooks(&login_env), out)?;
     }
 
     Ok(write_post_install_footer(out)?)

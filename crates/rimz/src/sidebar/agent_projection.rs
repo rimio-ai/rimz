@@ -166,8 +166,9 @@ static WIRING_MEMO: Mutex<Option<MemoizedProjection>> = Mutex::new(None);
 /// metadata checks; a raced edit keeps the last stable projection and retries
 /// on the next call.
 pub fn probe_current() -> WiredAgentProjection {
+    let login_env = crate::agents::ambient_env();
     let mut paths = crate::agents::all_definitions()
-        .flat_map(|adapter| adapter.wiring_input_paths())
+        .flat_map(|adapter| adapter.wiring_input_paths(&login_env))
         .collect::<Vec<_>>();
     paths.sort();
     paths.dedup();
@@ -175,11 +176,12 @@ pub fn probe_current() -> WiredAgentProjection {
 }
 
 fn probe_adapters() -> WiredAgentProjection {
+    let login_env = crate::agents::ambient_env();
     let mut projection = WiredAgentProjection::default();
     for agent in crate::agents::all_definitions() {
         let definition = agent.spec();
         let wired = definition.capabilities.local_session_discovery
-            || (definition.has_wired_hook_install() && agent.hooks_installed());
+            || (definition.has_wired_hook_install() && agent.hooks_installed(&login_env));
         if !wired {
             continue;
         }

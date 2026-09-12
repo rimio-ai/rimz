@@ -8,6 +8,7 @@ use super::*;
 use rimz::agents::HookUninstallReport;
 
 pub(super) fn run_install(agent: Option<String>, dry_run: bool) -> Result<()> {
+    let login_env = rimz::agents::ambient_env();
     if dry_run {
         return run_install_dry_run(agent);
     }
@@ -16,11 +17,11 @@ pub(super) fn run_install(agent: Option<String>, dry_run: bool) -> Result<()> {
     let mut out = crate::cli::render::out();
     for integration in adapters {
         let disposition = install_disposition(integration);
-        let report = integration.install_hooks()?;
+        let report = integration.install_hooks(&login_env)?;
         crate::cli::render::finish(write_install_result(&mut out, &report, disposition))?;
         crate::cli::render::finish(write_untrusted_hooks_notice(
             report.agent,
-            &integration.untrusted_installed_hooks(),
+            &integration.untrusted_installed_hooks(&login_env),
             &mut out,
         ))?;
     }
@@ -28,17 +29,19 @@ pub(super) fn run_install(agent: Option<String>, dry_run: bool) -> Result<()> {
 }
 
 fn run_install_dry_run(agent: Option<String>) -> Result<()> {
+    let login_env = rimz::agents::ambient_env();
     let mut previews = Vec::new();
     for integration in install_definitions(agent)? {
-        previews.push(integration.preview_hook_install()?);
+        previews.push(integration.preview_hook_install(&login_env)?);
     }
     let mut out = crate::cli::render::out();
     crate::cli::render::finish(render_dry_run(&mut out, &previews))
 }
 
 pub(super) fn run_uninstall(agent: Option<String>) -> Result<()> {
+    let login_env = rimz::agents::ambient_env();
     let reports = match agent {
-        Some(agent) => vec![definition_by_kind(&agent)?.uninstall_hooks()?],
+        Some(agent) => vec![definition_by_kind(&agent)?.uninstall_hooks(&login_env)?],
         None => uninstall_managed_hooks()?,
     };
     let mut out = crate::cli::render::out();
@@ -72,12 +75,13 @@ fn install_definitions(
 }
 
 pub(crate) fn uninstall_managed_hooks() -> Result<Vec<HookUninstallReport>> {
+    let login_env = rimz::agents::ambient_env();
     let adapters = rimz::agents::all_definitions()
-        .filter(|adapter| adapter.managed_hook_artifacts_present())
+        .filter(|adapter| adapter.managed_hook_artifacts_present(&login_env))
         .collect::<Vec<_>>();
     let mut reports = Vec::new();
     for integration in adapters {
-        reports.push(integration.uninstall_hooks()?);
+        reports.push(integration.uninstall_hooks(&login_env)?);
     }
     Ok(reports)
 }

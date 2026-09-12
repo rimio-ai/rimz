@@ -1008,6 +1008,7 @@ pub enum HookPreflightErr {
 /// needed before a hook-driven operation starts.
 pub fn preflight_hooks(
     adapter: &AgentDefinition,
+    login_env: &BTreeMap<String, String>,
     lifecycle: TurnLifecycleNeed,
 ) -> std::result::Result<(), HookPreflightErr> {
     let coverage = adapter
@@ -1018,12 +1019,14 @@ pub fn preflight_hooks(
             reason: reason.to_owned(),
         });
     }
-    if !adapter.hooks_installed() {
+    if !adapter.hooks_installed(login_env) {
         return Err(HookPreflightErr::HooksMissing);
     }
     let untrusted = adapter
         .managed_integration()
-        .map_or_else(Vec::new, ManagedIntegration::untrusted_preflight_hooks);
+        .map_or_else(Vec::new, |integration| {
+            integration.untrusted_preflight_hooks(login_env)
+        });
     if !untrusted.is_empty() {
         return Err(HookPreflightErr::HooksUntrusted {
             hooks: untrusted.join(", "),

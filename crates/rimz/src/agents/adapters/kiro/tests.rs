@@ -563,9 +563,10 @@ fn workspace_hash_and_resume_parser_are_exact() {
 
 #[test]
 fn hook_install_refuses_but_legacy_owned_files_can_be_removed() {
+    let login_env = crate::agents::ambient_env();
     for result in [
-        KiroAdapter.install_hooks().map(|_| ()),
-        KiroAdapter.preview_hook_install().map(|_| ()),
+        KiroAdapter.install_hooks(&login_env).map(|_| ()),
+        KiroAdapter.preview_hook_install(&login_env).map(|_| ()),
     ] {
         let err = result.expect_err("Kiro v3 hook install must fail");
         assert!(
@@ -573,7 +574,7 @@ fn hook_install_refuses_but_legacy_owned_files_can_be_removed() {
                 .contains("does not execute standalone hook configs")
         );
     }
-    assert!(!KiroAdapter.hooks_installed());
+    assert!(!KiroAdapter.hooks_installed(&login_env));
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hooks/rimz.json");

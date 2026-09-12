@@ -1,5 +1,6 @@
 //! Qwen `settings.json` hook and nested statusline integration.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::{QWEN_HOOK_TIMEOUT_MS, QWEN_HOOKS, RIMZ_HOOK_COMMAND, RIMZ_HOOK_MARKER, STATUS_LINE};
@@ -19,7 +20,7 @@ static SPEC: ManagedJsonHookSpec = ManagedJsonHookSpec {
 
 pub(super) static MANAGED_SOURCE: ManagedSource = ManagedSource::json(&SPEC, qwen_settings_path);
 
-pub(super) fn qwen_settings_path() -> Result<PathBuf> {
+pub(super) fn qwen_settings_path(_login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
     if std::env::var_os("RIMZ_QWEN_SETTINGS").is_some() {
         return agent_config_path(
             "qwen",

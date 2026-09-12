@@ -1,5 +1,6 @@
 //! Droid `settings.json` managed hook integration.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::{DROID_HOOK_TIMEOUT_SECS, DROID_HOOKS, RIMZ_HOOK_COMMAND, RIMZ_HOOK_MARKER};
@@ -19,7 +20,7 @@ static SPEC: ManagedJsonHookSpec = ManagedJsonHookSpec {
 
 pub(super) static MANAGED_SOURCE: ManagedSource = ManagedSource::json(&SPEC, droid_settings_path);
 
-pub(super) fn droid_settings_path() -> Result<PathBuf> {
+pub(super) fn droid_settings_path(_login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
     agent_config_path(
         "droid",
         "RIMZ_DROID_SETTINGS",

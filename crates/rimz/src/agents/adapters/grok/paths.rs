@@ -1,5 +1,6 @@
 //! Grok Build per-user paths and session transcript validation.
 
+use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 use crate::agents::{AgentErr, Result};
@@ -33,7 +34,7 @@ pub(super) fn auth_path() -> PathBuf {
     home().join("auth.json")
 }
 
-pub(super) fn hooks_path() -> Result<PathBuf> {
+pub(super) fn hooks_path(_login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("RIMZ_GROK_HOOKS").filter(|value| !value.is_empty()) {
         return Ok(PathBuf::from(path));
     }

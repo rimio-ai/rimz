@@ -214,7 +214,7 @@ pub(super) fn configured_model() -> Option<String> {
 
 #[cfg(not(test))]
 fn configured_config_path() -> Option<PathBuf> {
-    codex_config_path().ok()
+    codex_config_path(&crate::agents::ambient_env()).ok()
 }
 
 #[cfg(test)]
@@ -227,7 +227,7 @@ fn configured_config_path() -> Option<PathBuf> {
         return Some(path);
     }
     std::env::var_os("RIMZ_CODEX_CONFIG")?;
-    codex_config_path().ok()
+    codex_config_path(&crate::agents::ambient_env()).ok()
 }
 
 #[cfg(test)]

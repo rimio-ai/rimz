@@ -1026,7 +1026,11 @@ fn preflight_queue_hooks(agent: &AgentState) -> Result<()> {
     let Some(adapter) = crate::agents::find_definition(agent.kind.as_str()) else {
         return Err(DispatchErr::UnknownAgentKind(agent.kind.clone()));
     };
-    match crate::agents::preflight_hooks(adapter, crate::agents::TurnLifecycleNeed::None) {
+    match crate::agents::preflight_hooks(
+        adapter,
+        &crate::agents::ambient_env(),
+        crate::agents::TurnLifecycleNeed::None,
+    ) {
         Ok(()) => Ok(()),
         Err(crate::agents::HookPreflightErr::HooksMissing) => Err(DispatchErr::HooksMissing {
             kind: agent.kind.clone(),
