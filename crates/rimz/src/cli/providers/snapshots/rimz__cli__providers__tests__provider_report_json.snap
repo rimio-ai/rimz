@@ -5,6 +5,7 @@ expression: json
 [
   {
     "kind": "claude",
+    "account": "default",
     "product_name": "Claude",
     "status": "logged_in",
     "probed_at": "2023-11-14T22:13:20Z",
