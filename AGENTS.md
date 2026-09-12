@@ -83,6 +83,7 @@ rimz events emit deploy.done         # fire a signal for whoever is listening
 - Rust unless the task targets docs, tests, scripts, examples, or build glue. Use `uv` for Python helpers.
 - Root docs stay short and authoritative; detail lives in `docs/` and is linked. Update the [code map](#code-map) when modules move, [ARCHITECTURE.md](./ARCHITECTURE.md) when the runtime shape changes, and [DESIGN.md](./DESIGN.md) only when a product or runtime invariant changes.
 - Leave [CHANGELOG.md](./CHANGELOG.md) untouched in a pull request. It is written as a standalone change once the work merges and before the version release, so concurrent branches never contend over the same lines.
+- `examples/` is sample configuration for users to copy, not source code and not documentation. Do not read it while working unless the user asks you to, and do not treat it as authority on behaviour.
 - Contributor automation lives in `xtask/`; repository loop tasks each own a directory under [loops/](./loops/README.md), with dedicated coordinator and worker worktrees. Command surface and gate stack live in [rust-conventions.md](./docs/contributing/rust-conventions.md).
 - Bulk command output — `--json` snapshots, transcript tails, gate logs — reaches an agent truncated, so a command that prints one to stdout burns a turn and still loses the part that mattered. Redirect to a file under `/tmp` in the same command, then narrow it with `jq` or a targeted read.
 
@@ -97,7 +98,7 @@ rimz events emit deploy.done         # fire a signal for whoever is listening
 
 This indexes what lives where; runtime shape and the single-binary rationale live in [ARCHITECTURE.md](./ARCHITECTURE.md), and each module's `//!` header is the per-file authority.
 
-**Repository** — `crates/rimz/` (the binary plus the runtime/domain library; `benches/`, and `presence/`/`pricing/`/`themes/` data `build.rs` embeds), `crates/rimz-presence-zellij/` (headless Zellij presence plugin, wasm32-wasip1, no rimz-crate deps), `docs/` (product and engineering docs; `docs/externals/` mirrors upstream), `xtask/` (task runner and every gate), `loops/` (one directory per isolated automation task), `examples/`, `ci/`, `docker/`, `scripts/`, `supply-chain/`.
+**Repository** — `crates/rimz/` (the binary plus the runtime/domain library; `benches/`, and `presence/`/`pricing/`/`themes/` data `build.rs` embeds), `crates/rimz-presence-zellij/` (headless Zellij presence plugin, wasm32-wasip1, no rimz-crate deps), `docs/` (product and engineering docs; `docs/externals/` mirrors upstream), `xtask/` (task runner and every gate), `loops/` (one directory per isolated automation task), `examples/` (user-facing sample configuration, read only on request), `ci/`, `docker/`, `scripts/`, `supply-chain/`.
 
 **Subsystems — `crates/rimz/src/`**, each carrying its own `AGENTS.md` contract:
 - `cli/` — command parsing, one `run(...)` per subcommand, shared `cli/render/` output, and the subagent fleet digest.
