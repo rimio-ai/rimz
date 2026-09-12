@@ -92,10 +92,14 @@ fn anchor_subagent_workspace(
 pub(super) fn preflight_agent(
     adapter: &AgentDefinition,
     launch: &rimz::worktree::LaunchCheckout,
+    logins: &rimz::agents::RoomLoginSet,
 ) -> Result<()> {
     let definition = adapter.spec();
     let kind = definition.kind;
-    let login_env = rimz::agents::ambient_env();
+    let login = logins.login(kind).with_context(|| {
+        format!("cannot resolve the room's {kind} account; run `rimz accounts list`")
+    })?;
+    let login_env = logins.env(&login);
     match preflight_hooks(adapter, &login_env, TurnLifecycleNeed::Wired) {
         Ok(()) => {}
         Err(HookPreflightErr::TurnLifecycleUnsupported { reason }) => bail!(
