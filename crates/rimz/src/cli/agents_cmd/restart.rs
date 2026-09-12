@@ -51,12 +51,12 @@ pub(in crate::cli) fn restart_resolved(
     rimz::sandbox::preflight_skills(
         machine_config.agents.isolation,
         &agent.kind,
-        posture.skills.is_some(),
+        posture.launch.skills.is_some(),
         adapter.manual_skill(),
     )?;
     rimz::sandbox::preflight(machine_config.agents.isolation)?;
     let cell = restart_cell(agent, &posture);
-    let extra_args = posture.args.clone();
+    let extra_args = posture.launch.args.clone();
 
     // Fail at the entry point if this project's configured launch environment
     // is not trusted, before the old pane is touched.
@@ -88,7 +88,7 @@ pub(in crate::cli) fn restart_resolved(
             agent,
             &cwd,
             cell,
-            posture.mode,
+            posture.launch.mode,
         )?)
     } else {
         None
@@ -110,10 +110,10 @@ pub(in crate::cli) fn restart_resolved(
         launch_group: agent.launch_group.clone(),
         launch_ordinal: agent.launch_ordinal,
         channel: agent.channel.clone(),
-        mode: posture.mode,
-        model: posture.model.clone(),
-        effort: posture.effort.clone(),
-        budget: posture.budget.clone(),
+        mode: posture.launch.mode,
+        model: posture.launch.model.clone(),
+        effort: posture.launch.effort.clone(),
+        budget: posture.launch.budget.clone(),
         kind_ordinal: None,
     };
     let invocation = rimz::harness::launch::ExecRequest {
@@ -128,9 +128,9 @@ pub(in crate::cli) fn restart_resolved(
                 extra_args,
             },
         },
-        system_prompt_file: posture.system_prompt_file.clone(),
-        append_system_prompt_files: posture.append_system_prompt_files.clone(),
-        skills: posture.skills.clone(),
+        system_prompt_file: posture.launch.system_prompt_file.clone(),
+        append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
+        skills: posture.launch.skills.clone(),
         provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
         run_id: None,
         worktree_path: None,
@@ -259,18 +259,18 @@ fn restart_posture(
 fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
     Cell::Agent(AgentCell {
         kind: agent.kind.clone(),
-        args: posture.args.clone(),
+        args: posture.launch.args.clone(),
         auto_compact: None,
         system_prompt_file: None,
         append_system_prompt_files: Vec::new(),
-        skills: posture.skills.clone(),
+        skills: posture.launch.skills.clone(),
         launch: rimz::agents::LaunchParams {
             profile: agent.profile.clone(),
             role: agent.role.clone(),
-            mode: posture.mode,
-            model: posture.model.clone(),
-            effort: posture.effort.clone(),
-            budget: posture.budget.clone(),
+            mode: posture.launch.mode,
+            model: posture.launch.model.clone(),
+            effort: posture.launch.effort.clone(),
+            budget: posture.launch.budget.clone(),
             ..Default::default()
         },
     })
