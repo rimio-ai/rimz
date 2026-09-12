@@ -85,6 +85,23 @@ pub(super) enum AssistEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    HandoffCompact {
+        at: Timestamp,
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        from: Option<String>,
+        to: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        occupied_tokens: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
+        delivered: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     #[serde(rename = "auto_resume")]
     Resume {
         at: Timestamp,
@@ -130,7 +147,8 @@ impl AssistStats {
                     }
                 }
                 AssistEvent::Compact { .. } => rollup.compacts += 1,
-                AssistEvent::IdleCompact { delivered, .. } => {
+                AssistEvent::IdleCompact { delivered, .. }
+                | AssistEvent::HandoffCompact { delivered, .. } => {
                     rollup.compacts += usize::from(*delivered);
                 }
                 AssistEvent::Resume { recovered, .. } => {
@@ -232,6 +250,28 @@ impl AssistEvent {
                 delivered,
                 error,
             },
+            Assist::HandoffCompact {
+                kind,
+                agent_id,
+                label,
+                from,
+                to,
+                occupied_tokens,
+                message_id,
+                delivered,
+                error,
+            } => Self::HandoffCompact {
+                at: record.at,
+                kind,
+                agent_id,
+                label,
+                from,
+                to,
+                occupied_tokens,
+                message_id,
+                delivered,
+                error,
+            },
             Assist::AutoResume {
                 workspace_id,
                 session_name,
@@ -255,6 +295,7 @@ impl AssistEvent {
             | Self::Continue { at, .. }
             | Self::Compact { at, .. }
             | Self::IdleCompact { at, .. }
+            | Self::HandoffCompact { at, .. }
             | Self::Resume { at, .. } => *at,
         }
     }
@@ -448,6 +489,28 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 compact_token_count(*occupied_tokens),
             )
         }
+        AssistEvent::HandoffCompact {
+            kind,
+            label,
+            from,
+            to,
+            occupied_tokens,
+            delivered,
+            error,
+            ..
+        } => {
+            let agent = label.as_deref().unwrap_or(kind.as_str());
+            let outcome = if *delivered { "" } else { " held" };
+            let from = from.as_deref().unwrap_or("(none)");
+            let context = occupied_tokens
+                .map(|tokens| format!(" — {} ctx", compact_token_count(tokens)))
+                .unwrap_or_default();
+            let error = error
+                .as_deref()
+                .map(|error| format!(" ({})", first_line(error)))
+                .unwrap_or_default();
+            format!("{time} ⌁ {agent} hand-off compaction{outcome} — {from} → {to}{context}{error}")
+        }
         AssistEvent::Resume {
             cause,
             recovered,
@@ -513,6 +576,18 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
         } => format!(
             "{at} {benefit} · agent {agent_id} · message {message_id} · delivered {delivered}"
         ),
+        AssistEvent::HandoffCompact {
+            agent_id,
+            message_id,
+            delivered,
+            ..
+        } => {
+            let message = message_id
+                .as_deref()
+                .map(|id| format!(" · message {id}"))
+                .unwrap_or_default();
+            format!("{at} {benefit} · agent {agent_id}{message} · delivered {delivered}")
+        }
         AssistEvent::Resume {
             workspace_id,
             session_name,
@@ -607,4 +682,58 @@ fn plural(count: usize) -> &'static str {
 
 fn first_line(text: &str) -> &str {
     text.lines().next().unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn handoff_compaction_fold_and_render_preserve_skipped_attempts() {
+        let records = [true, false]
+            .into_iter()
+            .map(|delivered| AssistRecord {
+                at: Timestamp::from_second(if delivered { 0 } else { 60 }).expect("timestamp"),
+                assist: Assist::HandoffCompact {
+                    kind: AgentKind::new_unchecked("codex"),
+                    agent_id: AgentSessionId::from("session-1"),
+                    label: delivered.then(|| "@coder".to_owned()),
+                    from: delivered.then(|| "Implement".to_owned()),
+                    to: "Review".to_owned(),
+                    occupied_tokens: delivered.then_some(180_000),
+                    message_id: delivered.then(|| "msg_1".to_owned()),
+                    delivered,
+                    error: (!delivered).then(|| "already compacting\nmore detail".to_owned()),
+                },
+            })
+            .collect::<Vec<_>>();
+        for record in &records {
+            let json = serde_json::to_string(record).expect("serialize");
+            let decoded: AssistRecord = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(&decoded, record);
+        }
+
+        let stats = AssistStats::from_records("all", records);
+        assert_eq!(stats.rollup.compacts, 1);
+        assert_eq!(stats.events.len(), 2);
+        let json = serde_json::to_value(&stats).expect("stats JSON");
+        let skipped = &json["events"][0];
+        assert_eq!(skipped["assist"], "handoff_compact");
+        assert_eq!(skipped["delivered"], false);
+        for field in ["message_id", "from", "occupied_tokens", "label"] {
+            assert!(skipped.get(field).is_none(), "omits absent {field}");
+        }
+        assert_eq!(json["events"][1]["message_id"], "msg_1");
+
+        let lines = stats
+            .events
+            .iter()
+            .map(|event| forensic_line(event, &jiff::tz::TimeZone::UTC))
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!(lines, @"
+        1970-01-01 00:01 ⌁ codex hand-off compaction held — (none) → Review (already compacting) · agent session-1 · delivered false
+        1970-01-01 00:00 ⌁ @coder hand-off compaction — Implement → Review — 180k ctx · agent session-1 · message msg_1 · delivered true
+        ");
+    }
 }
