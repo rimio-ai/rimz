@@ -809,6 +809,7 @@ fn write_project_trust_offer_to(
     write_project_trust_list(&mut *out, "subagent profiles", &summary.subagent_profiles)?;
     write_project_trust_list(&mut *out, "teams", &summary.teams)?;
     write_project_trust_list(&mut *out, "env for", &summary.env_agents)?;
+    write_project_trust_list(&mut *out, "accounts", &summary.accounts)?;
     if summary.hooks > 0 {
         writeln!(out, "  hooks: {}", summary.hooks)?;
     }

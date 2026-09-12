@@ -1,4 +1,5 @@
 use super::*;
+use crate::ids::AgentKind;
 use tempfile::tempdir;
 
 fn project_with(text: &str) -> tempfile::TempDir {
@@ -420,6 +421,9 @@ fn hash_covers_every_documented_surface_field() {
         "[tasks.x]\nmatch = { branch = \"feature\" }\n",
         "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
         "[env]\nPATH_PREPEND = \"/opt/rimz/bin\"\n",
+        "[accounts]\nclaude = \"work\"\n",
+        "[accounts]\nclaude = \"personal\"\n",
+        "[accounts]\ncodex = \"work\"\n",
     ];
     let mut hashes = std::collections::HashSet::new();
     for text in cases {
@@ -478,6 +482,30 @@ fn empty_team_signals_preserve_executable_surface_hash() {
         serde_json::to_string(&ExecutableSurface::from(&config).teams).expect("team surface"),
         r#"[{"name":"review","layout":"coder","roles":[{"role":"coder","profile":"codex","mode":null,"model":null,"effort":null,"system_prompt_file":null,"append_system_prompt_file":null,"args":null}]}]"#,
     );
+}
+
+#[test]
+fn project_accounts_apply_only_under_trust_and_leave_old_hashes_alone() {
+    let config = tempdir().expect("config root");
+    let dir = project_with("[accounts]\nclaude = \"work\"\n");
+    assert_eq!(
+        project_logins_with_roots(dir.path(), config.path()).expect("project logins"),
+        ProjectLogins::Blocked(TrustState::Untrusted),
+    );
+    grant_with_roots(dir.path(), config.path()).expect("grant");
+    assert_eq!(
+        project_logins_with_roots(dir.path(), config.path()).expect("project logins"),
+        ProjectLogins::Apply(RoomLogins::from([(
+            AgentKind::new_unchecked("claude"),
+            "work".parse().expect("login name"),
+        )])),
+    );
+
+    let invalid = project_with("[accounts]\nclaude = \"Work Laptop\"\n");
+    assert!(project_logins_with_roots(invalid.path(), config.path()).is_err());
+
+    let config: ProjectConfig = toml::from_str("[env]\nA = \"1\"\n").expect("parse");
+    assert!(!surface_snapshot(&config).json.contains("accounts"));
 }
 
 #[test]
