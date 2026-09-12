@@ -12,7 +12,7 @@ use crate::agents::runtime_control::{
 };
 use crate::config::{AccountsConfig, RemoteControlConfig};
 use crate::disk::paths::StatePaths;
-use crate::ids::{AgentKind, RoomLogins};
+use crate::ids::{AgentKind, LoginKey, RoomLogins};
 use crate::mux::LiveSessions;
 use crate::workspace::record;
 
@@ -210,16 +210,17 @@ pub fn apply_runtime_toggle(
     host: RemoteControlHost,
     machine: &crate::config::MachineConfig,
 ) -> Result<(), RuntimeControlError> {
-    let login_env = crate::agents::ambient_env();
+    let workspaces = crate::workspace::known_workspaces();
     if host == RemoteControlHost::Codex {
-        runtime_control::reconcile(
-            "codex",
-            machine.remote_control.enabled_for("codex"),
-            &login_env,
-        )?;
+        let enabled = machine.remote_control.enabled_for("codex");
+        for login_env in
+            codex_daemon_envs(machine, workspaces.as_deref().unwrap_or_default(), enabled)
+        {
+            runtime_control::reconcile("codex", enabled, &login_env)?;
+        }
     }
 
-    let workspaces = match crate::workspace::known_workspaces() {
+    let workspaces = match workspaces {
         Ok(workspaces) => workspaces,
         Err(err) => {
             tracing::warn!(error = %err, "remote-control toggle could not enumerate workspaces");
@@ -294,6 +295,37 @@ pub fn apply_runtime_toggle(
         }
     }
     Ok(())
+}
+
+/// The Codex homes a toggle reconciles, one per account: the provider's own
+/// home and every room's account, plus, when turning off, every declared
+/// account, so a daemon a reset room left behind stops too.
+fn codex_daemon_envs(
+    machine: &crate::config::MachineConfig,
+    workspaces: &[crate::workspace::KnownWorkspace],
+    enabled: bool,
+) -> Vec<BTreeMap<String, String>> {
+    let codex = AgentKind::new_unchecked("codex");
+    let ambient = crate::agents::ambient_env();
+    let mut envs = BTreeMap::from([(LoginKey::default_for(codex.clone()), ambient.clone())]);
+    if let Ok(catalog) = crate::agents::LoginCatalog::from_config(&machine.accounts)
+        && !enabled
+    {
+        for login in catalog.all().filter(|login| login.kind() == &codex) {
+            envs.insert(login.key(), login.env(&ambient));
+        }
+    }
+    for workspace in workspaces {
+        let Ok(paths) = StatePaths::for_workspace(workspace.workspace_id.clone()) else {
+            continue;
+        };
+        if let Ok(login) =
+            crate::agents::room_login(&paths.workspace_record, &machine.accounts, &codex)
+        {
+            envs.insert(login.key(), login.env(&ambient));
+        }
+    }
+    envs.into_values().collect()
 }
 
 /// Claude settings input used by readiness and daemon repair invalidation.
