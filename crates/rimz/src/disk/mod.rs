@@ -8,6 +8,6 @@ pub mod lock;
 pub(crate) mod parse_cache;
 pub mod paths;
 pub(crate) mod rotating;
-pub mod single_flight;
+pub(crate) mod single_flight;
 pub mod summary;
 pub mod usage;

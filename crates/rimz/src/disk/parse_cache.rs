@@ -41,7 +41,7 @@ pub(crate) struct FileStamp {
 }
 
 impl FileStamp {
-    pub(crate) fn of(path: &Path) -> Self {
+    fn of(path: &Path) -> Self {
         let Ok(meta) = std::fs::metadata(path) else {
             return Self {
                 len: 0,

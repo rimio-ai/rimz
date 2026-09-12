@@ -12,7 +12,7 @@ use crate::disk::paths;
 const RIMZ_SUBDIR: &str = "rimz";
 
 /// Best-effort recursive size for a path without following symlinks.
-pub fn dir_size(path: &Path) -> u64 {
+pub(crate) fn dir_size(path: &Path) -> u64 {
     dir_size_inner(path, &mut HashSet::new())
 }
 

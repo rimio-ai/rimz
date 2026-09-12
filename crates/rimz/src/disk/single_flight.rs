@@ -23,7 +23,7 @@ use std::path::Path;
 use std::time::Duration;
 
 /// Outcome of contending for the single-flight lock.
-pub enum Coalesced<T> {
+pub(crate) enum Coalesced<T> {
     /// A peer already produced a value this caller can use — read back from the
     /// shared cache, either on the post-win re-check or while polling. Use it
     /// directly; do not produce.
@@ -51,7 +51,7 @@ pub(crate) enum Coordination<T> {
 /// Holds the exclusive single-flight lock for the elected producer. Releases on
 /// drop (the flock also auto-releases when the fd closes or the process exits),
 /// so the producer keeps it alive across its produce-and-write.
-pub struct ProducerGuard {
+pub(crate) struct ProducerGuard {
     file: std::fs::File,
 }
 
@@ -76,7 +76,7 @@ impl std::fmt::Debug for ProducerGuard {
 ///
 /// The caller checks its own fast path *before* calling this — by the time we
 /// contend, the caller has already missed a fresh read.
-pub fn coalesce<T>(
+pub(crate) fn coalesce<T>(
     lock_path: &Path,
     wait_step: Duration,
     wait_steps: u32,

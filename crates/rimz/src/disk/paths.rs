@@ -48,7 +48,7 @@ pub enum PathErr {
     RuntimeDirInsecure { path: PathBuf, mode: u32 },
 }
 
-pub type Result<T> = std::result::Result<T, PathErr>;
+type Result<T> = std::result::Result<T, PathErr>;
 
 #[derive(Clone, Debug)]
 pub struct StatePaths {
@@ -70,11 +70,11 @@ pub struct StatePaths {
     pub wakes_dir: PathBuf,
     pub locks_dir: PathBuf,
     pub workspace_lock: PathBuf,
-    pub publish_lock: PathBuf,
+    pub(crate) publish_lock: PathBuf,
     pub workspace_record: PathBuf,
     pub room_bin: PathBuf,
     pub channels_record: PathBuf,
-    pub boot_marker: PathBuf,
+    pub(crate) boot_marker: PathBuf,
     pub live_roster: PathBuf,
     pub last_death_marker: PathBuf,
     pub doctor_watermark: PathBuf,
@@ -157,7 +157,7 @@ impl StatePaths {
         }
     }
 
-    pub fn remove_skills_dir(&self) -> Result<()> {
+    pub(crate) fn remove_skills_dir(&self) -> Result<()> {
         match fs::remove_dir_all(&self.skills_dir) {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -206,17 +206,17 @@ pub struct RuntimePaths {
     /// Written by CLI producers, read by the snapshot CLI — never the sidebar.
     /// Kept apart from `agent_context/` so each reader deserializes only its own
     /// record shape.
-    pub subagent_context_dir: PathBuf,
+    pub(crate) subagent_context_dir: PathBuf,
     /// Provider telemetry exported inside one room. This is disposable live
     /// cache data: provider processes append here while the room is alive and
     /// runtime GC reclaims stale files with the rest of the workspace root.
-    pub agent_telemetry_dir: PathBuf,
+    pub(crate) agent_telemetry_dir: PathBuf,
     /// Per-agent activity heartbeats (see [`crate::agent_activity`]). Latency
     /// hints the snapshot folds into each agent's `last_activity`.
     pub agent_activity_dir: PathBuf,
     /// Per-root-session estimated active-time accumulators. Hook producers
     /// update them under per-record locks; snapshot enrichment reads them.
-    pub active_time_dir: PathBuf,
+    pub(crate) active_time_dir: PathBuf,
 }
 
 /// Data-cache filenames that lived in the runtime `shared/` dir before
@@ -231,7 +231,7 @@ const LEGACY_RUNTIME_SHARED_CACHES: [&str; 6] = [
     "pricing-cache.json",
 ];
 
-pub fn is_workspace_spending_file(name: &str) -> bool {
+pub(crate) fn is_workspace_spending_file(name: &str) -> bool {
     name.strip_prefix("workspace-spending.")
         .and_then(|rest| rest.strip_suffix(".json"))
         .is_some()
@@ -352,7 +352,7 @@ impl RuntimePaths {
     }
 
     /// Wakeup socket owned by one sidebar render worker.
-    pub fn sidebar_socket_path(&self, instance_id: &SidebarInstanceId) -> PathBuf {
+    pub(crate) fn sidebar_socket_path(&self, instance_id: &SidebarInstanceId) -> PathBuf {
         // The short id keeps the bound path inside the platform AF_UNIX budget.
         self.sock_dir
             .join(format!("sidebar.{}.sock", instance_id.short()))
@@ -367,12 +367,12 @@ impl RuntimePaths {
     }
 
     /// Room-runtime sidebar width selected by the renderer.
-    pub fn sidebar_width_path(&self) -> PathBuf {
+    pub(crate) fn sidebar_width_path(&self) -> PathBuf {
         self.root.join("sidebar-width.json")
     }
 
     /// Shared cockpit body filter adopted by every renderer in the room.
-    pub fn sidebar_filter_path(&self) -> PathBuf {
+    pub(crate) fn sidebar_filter_path(&self) -> PathBuf {
         self.root.join("sidebar-filter.json")
     }
 
@@ -393,15 +393,15 @@ impl RuntimePaths {
     }
 
     /// Serializes Zellij topology writer fencing and cache publication.
-    pub fn topology_writer_lock(&self) -> PathBuf {
+    pub(crate) fn topology_writer_lock(&self) -> PathBuf {
         self.root.join("topology-writer.lock")
     }
 
-    pub fn authoritative_pane_probe_path(&self) -> PathBuf {
+    pub(crate) fn authoritative_pane_probe_path(&self) -> PathBuf {
         self.root.join("authoritative-pane-probe.json")
     }
 
-    pub fn authoritative_pane_probe_lock(&self) -> PathBuf {
+    pub(crate) fn authoritative_pane_probe_lock(&self) -> PathBuf {
         self.root.join("authoritative-pane-probe.lock")
     }
 
@@ -409,11 +409,11 @@ impl RuntimePaths {
         self.root.join("diff-stats.json")
     }
 
-    pub fn cohort_spend_path(&self) -> PathBuf {
+    pub(crate) fn cohort_spend_path(&self) -> PathBuf {
         self.root.join("cohort-spend.json")
     }
 
-    pub fn pr_state_path(&self) -> PathBuf {
+    pub(crate) fn pr_state_path(&self) -> PathBuf {
         self.root.join("pr-state.json")
     }
 
@@ -421,12 +421,12 @@ impl RuntimePaths {
     /// viewport offset that keeps its card where the user clicked. Renderers read
     /// it on the fold that adopts the focus, so a cross-tab jump lands the card at
     /// the same on-screen row. Display-only runtime state, TTL-gated.
-    pub fn focus_anchor_path(&self) -> PathBuf {
+    pub(crate) fn focus_anchor_path(&self) -> PathBuf {
         self.root.join("focus-anchor.json")
     }
 
     /// Serializes nonce-gated focus action intent transitions.
-    pub fn focus_anchor_lock(&self) -> PathBuf {
+    pub(crate) fn focus_anchor_lock(&self) -> PathBuf {
         self.root.join("focus-anchor.lock")
     }
 
@@ -449,7 +449,7 @@ impl RuntimePaths {
         self.persistent_shared_root.join("accounts.json")
     }
 
-    pub fn shared_accounts_lock(&self) -> PathBuf {
+    pub(crate) fn shared_accounts_lock(&self) -> PathBuf {
         self.shared_root.join("accounts.lock")
     }
 
@@ -457,7 +457,7 @@ impl RuntimePaths {
         self.persistent_shared_root.join("rate_limits.json")
     }
 
-    pub fn shared_rate_limits_lock(&self) -> PathBuf {
+    pub(crate) fn shared_rate_limits_lock(&self) -> PathBuf {
         self.shared_root.join("rate_limits.lock")
     }
 
@@ -465,21 +465,21 @@ impl RuntimePaths {
         self.persistent_shared_root.join("credits.json")
     }
 
-    pub fn shared_credits_lock(&self) -> PathBuf {
+    pub(crate) fn shared_credits_lock(&self) -> PathBuf {
         self.shared_root.join("credits.lock")
     }
 
-    pub fn shared_auto_redeem_path(&self, kind: &str) -> PathBuf {
+    pub(crate) fn shared_auto_redeem_path(&self, kind: &str) -> PathBuf {
         self.persistent_shared_root
             .join(format!("auto_redeem.{kind}.json"))
     }
 
-    pub fn shared_auto_redeem_rate_path(&self, kind: &str) -> PathBuf {
+    pub(crate) fn shared_auto_redeem_rate_path(&self, kind: &str) -> PathBuf {
         self.persistent_shared_root
             .join(format!("auto_redeem_rate.{kind}.json"))
     }
 
-    pub fn shared_auto_redeem_lock(&self, kind: &str) -> PathBuf {
+    pub(crate) fn shared_auto_redeem_lock(&self, kind: &str) -> PathBuf {
         self.shared_root.join(format!("auto_redeem.{kind}.lock"))
     }
 
@@ -487,7 +487,7 @@ impl RuntimePaths {
         self.persistent_shared_root.join("provider-spending.json")
     }
 
-    pub fn shared_spending_lock(&self) -> PathBuf {
+    pub(crate) fn shared_spending_lock(&self) -> PathBuf {
         self.shared_root.join("spending.lock")
     }
 
@@ -496,7 +496,7 @@ impl RuntimePaths {
     /// persistent/discovery namespace so incompatible clients elect independent
     /// owners.
     #[allow(clippy::too_many_arguments)]
-    pub fn shared_spending_service_socket_path(
+    pub(crate) fn shared_spending_service_socket_path(
         &self,
         protocol_version: u32,
         cache_version: u32,
@@ -510,7 +510,7 @@ impl RuntimePaths {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn shared_spending_service_owner_lock(
+    pub(crate) fn shared_spending_service_owner_lock(
         &self,
         protocol_version: u32,
         cache_version: u32,
@@ -536,7 +536,7 @@ impl RuntimePaths {
         self.root.join(format!("workspace-spending.{prefix}.json"))
     }
 
-    pub fn workspace_spending_files(&self) -> Vec<PathBuf> {
+    pub(crate) fn workspace_spending_files(&self) -> Vec<PathBuf> {
         fs::read_dir(&self.root)
             .into_iter()
             .flatten()
@@ -777,7 +777,7 @@ fn persistent_shared_home() -> PathBuf {
 /// pinned to the default RimZ already computes instead of drifting per pane.
 /// Deriving these beside [`runtime_home`] is what keeps socket identity and
 /// stamped environment two projections of one domain.
-pub fn runtime_domain_env() -> BTreeMap<String, String> {
+pub(crate) fn runtime_domain_env() -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
     let mut put = |key: &str, path: PathBuf| {
         env.insert(key.to_owned(), path.display().to_string());
@@ -824,7 +824,7 @@ pub fn agents_home() -> PathBuf {
 
 /// Per-user data root. RimZ stores stable, user-level artifacts here, including
 /// the materialized embedded Zellij presence plugin.
-pub fn data_home() -> PathBuf {
+pub(crate) fn data_home() -> PathBuf {
     if let Some(value) = env_path("XDG_DATA_HOME") {
         return value;
     }
@@ -837,7 +837,7 @@ pub fn data_home() -> PathBuf {
 /// Per-user cache root, where Zellij keeps its serialized-session cache
 /// (`<cache>/zellij/<contract_version>/session_info/<name>`). `rimz reset` wipes
 /// the matching entry so a stuck room cannot be resurrected.
-pub fn cache_home() -> PathBuf {
+pub(crate) fn cache_home() -> PathBuf {
     if let Some(value) = env_path("XDG_CACHE_HOME") {
         return value;
     }
