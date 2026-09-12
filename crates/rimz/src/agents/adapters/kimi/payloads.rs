@@ -5,23 +5,23 @@ use serde_json::Value;
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
-pub struct KimiHookPayload {
-    pub session_id: Option<String>,
-    pub cwd: Option<String>,
-    pub agent_name: Option<String>,
+pub(super) struct KimiHookPayload {
+    pub(super) session_id: Option<String>,
+    pub(super) cwd: Option<String>,
+    pub(super) agent_name: Option<String>,
     #[serde(deserialize_with = "deserialize_prompt")]
-    pub prompt: Option<String>,
-    pub response: Option<String>,
-    pub tool_name: Option<String>,
-    pub tool_input: Option<Value>,
-    pub error_type: Option<String>,
-    pub error_message: Option<String>,
-    pub trigger: Option<String>,
-    pub action: Option<String>,
+    pub(super) prompt: Option<String>,
+    pub(super) response: Option<String>,
+    pub(super) tool_name: Option<String>,
+    pub(super) tool_input: Option<Value>,
+    pub(super) error_type: Option<String>,
+    pub(super) error_message: Option<String>,
+    pub(super) trigger: Option<String>,
+    pub(super) action: Option<String>,
 }
 
 impl KimiHookPayload {
-    pub fn question_background(&self) -> bool {
+    pub(super) fn question_background(&self) -> bool {
         self.tool_input
             .as_ref()
             .and_then(|input| input.get("background"))
@@ -30,7 +30,7 @@ impl KimiHookPayload {
     }
 }
 
-pub fn parse(payload: &Value) -> KimiHookPayload {
+pub(super) fn parse(payload: &Value) -> KimiHookPayload {
     serde_json::from_value(payload.clone()).unwrap_or_default()
 }
 

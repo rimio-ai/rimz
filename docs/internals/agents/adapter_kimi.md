@@ -4,6 +4,8 @@
 
 Kimi runs in its stock interactive pane. Command hooks carry lifecycle boundaries and blocking waits; the durable per-agent `wire.jsonl` supplies transcript, model, token, and recovery enrichment.
 
+Only the registry reaches the concrete adapter. Account and quota probes, payloads, wire parsing, transcript normalization, subagent joins, installation, and spend stay private to the Kimi adapter; other modules consume the provider-neutral capabilities.
+
 **Product boundary.** This adapter maps [`MoonshotAI/kimi-code`](https://github.com/MoonshotAI/kimi-code) and uses `$KIMI_CODE_HOME` (default `~/.kimi-code`) plus top-level agent-record logs. Binary discovery includes the official `~/.kimi-code/bin/kimi` install location, and process binding accepts both the executable name `kimi` and Kimi Code's runtime process title `kimi-code`. The retired Python `MoonshotAI/kimi-cli` protocol is unsupported: its `$KIMI_SHARE_DIR`, `~/.kimi`, `--afk`, enveloped Wire messages, and tool names stay outside the adapter.
 
 ## Hooks and lifecycle

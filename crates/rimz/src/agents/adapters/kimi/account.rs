@@ -15,15 +15,15 @@ struct CredentialShape {
     expires_at: Option<f64>,
 }
 
-pub fn credentials_path() -> PathBuf {
+pub(super) fn credentials_path() -> PathBuf {
     super::wire::kimi_home().join("credentials/kimi-code.json")
 }
 
-pub fn probe() -> AccountProbe {
+pub(super) fn probe() -> AccountProbe {
     probe_at(&credentials_path())
 }
 
-pub(crate) fn probe_at(path: &Path) -> AccountProbe {
+fn probe_at(path: &Path) -> AccountProbe {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
