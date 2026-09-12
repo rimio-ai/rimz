@@ -117,7 +117,7 @@ stages = ["Explore", "Plan", "Implement", "Review", "Submit", "Reflect"]
 [[agents.teams.forge.roles]]
 role = "planner"
 owns = ["Explore", "Plan", "Reflect"]
-compact-on-handoff = true
+flip-compact = "180k"
 profile = "claude"
 mode = "auto"
 model = "fable"
@@ -146,7 +146,7 @@ system-prompt-file = "reviewer.md"
 
 `scratch-files` declares the workflow's ephemeral team memory as verbatim gitignore patterns. On every launch or resume, RimZ appends missing patterns to the repository's `.git/info/exclude`; the leading `/` anchors these names at the checkout root. Linked worktrees commonly share that exclude file with the main checkout, so a declared name is ignored as untracked everywhere in the repository, not only in this team's worktree. To reverse it, delete those pattern lines from `.git/info/exclude`. Once the branch content has landed, excluded scratch files no longer keep the worktree dirty: post-exit cleanup and `rimz gc` may remove the tree without a dirty-tree prompt, deleting the scratch files with it.
 
-Declare `stages` when the team follows a repeatable pipeline, so `show` can display what lies ahead and mark its current step. The team creates `blackboard.md` with a `Stage:` line, for example `Stage: Plan (@planner)`, and creates its own notes; `rimz teams flip` advances the board using each role's `owns` list. The board path is fixed at the worktree root, even if it is not listed in `scratch-files`. Stage ordering and validation are covered in [configuration](./configuration.md#teams).
+Declare `stages` when the team follows a repeatable pipeline, so `show` can display what lies ahead and mark its current step. `Done` is implicit and always last, never declared or owned. The leader's first `rimz teams flip` creates `blackboard.md` if absent, with a `Stage:` line such as `Stage: Explore (@planner)` and a `## Progress` entry; the leader adds the other sections and the team creates its own notes. The board path is fixed at the worktree root, even if it is not listed in `scratch-files`. Stage ordering and validation are covered in [configuration](./configuration.md#teams).
 
 At launch, adapters with reminder support (currently Claude, Codex, Qwen, and Droid) tell each member its worktree, team, role, channel, leader and teammates; which model and effort it runs on; whether the session is fresh or resumed; and which declared scratch files existed then, with line counts. `teams show` scans those same patterns again when you inspect the cohort. The model line comes from the role's resolved launch settings and is switched off per profile with [`model-reminder = false`](./configuration.md#profiles). On a reused worktree, RimZ reports leftover scratch files as earlier run state rather than touching them, so the member can read them before acting.
 
@@ -159,12 +159,14 @@ Start from one of the three shipped directories â€” `forge`, `mill`, or `spot` â
 Editing the board and separately messaging the next owner leaves two steps to forget. Once your stage's work is saved, hand it off with one command:
 
 ```sh
-rimz teams flip Implement -m "plan ready in plan-notes.md, read and implement"
+rimz teams flip Implement "plan ready in plan-notes.md; three advisories carried in"
 ```
 
-RimZ updates the worktree's `blackboard.md` Stage line, appends the hand-off to its Progress log, records the stage opening, and sends the note to the configured owner at its next turn boundary. You do not need a separate message. Use exact stage names; put qualifiers in the note. To correct a hand-off, flip back to the intended stage; both actions stay in the ledger. `rimz teams flip Done` closes the board without waking anyone.
+RimZ updates the worktree's `blackboard.md` Stage line, appends the required progress note to `## Progress`, records the stage opening, and sends a prose `Type: STAGE` notice to the configured owner at its next turn boundary. The note records where the work stands, not a request to the receiver; no separate message is needed. Run the command in the team's worktree, and use `--team NAME` if several teams live there. Use exact stage names and put qualifiers in the note. To correct a hand-off, flip back to the intended stage; both actions stay in the ledger. `rimz teams flip Done "reflection recorded; run complete"` closes the board without waking anyone.
 
-On resume or restart, RimZ reads the board when its current owner registers and wakes that owner to continue, without another ledger entry. The planner's `compact-on-handoff = true` in the example also compacts its own context at its next turn boundary after handing work to another member, not when moving between stages it owns. Remove the opt-in to stop future hand-off compactions. See the [command reference](../reference/cli/teams.md#flip-the-board-to-the-next-stage) for selection, delivery, and recovery details.
+The launch reminder distinguishes three starts: a fresh worktree has no board, so the leader opens it with `rimz teams flip Explore "board opened; sweep aimed at the request"` and adds the Goal and other sections; an unfinished board is a continuation, with its owner woken to reread it while everyone else rests; a board at `Done` belongs to a finished run, so the leader either clears the old board and memory files for a new request or keeps them and flips out of `Done` for a follow-up. On resume or restart, the current owner's registration re-wake says nothing flipped since the last Progress line; it adds no ledger entry.
+
+The example planner's `flip-compact = "180k"` is a role override of the optional `[harness] flip-compact` default. After it leaves a stage it owns for one it does not, including `Done`, RimZ compacts its own context at the next turn boundary only if occupied context has reached the threshold. Moving between stages it owns does not compact. Set the role to `"off"` to disable it; removing the override inherits the harness default. A skipped compaction does not fail the hand-off. See the [command reference](../reference/cli/teams.md#flip-the-board-to-the-next-stage) for selection, delivery, and recovery details.
 
 ### Send events to the responsible role
 
