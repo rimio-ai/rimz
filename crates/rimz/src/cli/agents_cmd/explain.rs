@@ -189,7 +189,6 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
         request: &request,
         cwd: &cwd,
         project_root: &workspace.project_root,
-        rtk: machine.harness.rtk,
         rimz_bin: &rimz::proc::rimz_exe(),
         runtime: &runtime,
         state: &state,

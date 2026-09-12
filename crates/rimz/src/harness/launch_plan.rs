@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::agents::capabilities::SystemTextChannel;
-use crate::config::effective::LaunchAgents;
 use crate::config::CommandsConfig;
+use crate::config::effective::LaunchAgents;
 use crate::disk::paths::{RuntimePaths, StatePaths};
 use crate::sandbox::{self, SandboxPlan};
 

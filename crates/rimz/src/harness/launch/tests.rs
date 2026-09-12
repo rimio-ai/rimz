@@ -1479,7 +1479,10 @@ fn posix_wrapper_shape_reapplies_env_after_rc() {
 
 #[test]
 fn compiled_process_debug_prints_launch_env_keys_without_values() {
-    let launch_env = env(&[("ANTHROPIC_API_KEY", "sk-secret"), ("VISIBLE_SETTING", "auto")]);
+    let launch_env = env(&[
+        ("ANTHROPIC_API_KEY", "sk-secret"),
+        ("VISIBLE_SETTING", "auto"),
+    ]);
     let provider_argv = argv(&["claude", "--print", "--setting=visible"]);
     let wrapped = login_shell_argv_with(
         Some(Path::new("/bin/sh")),
