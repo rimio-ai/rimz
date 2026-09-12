@@ -322,6 +322,7 @@ fn map_reply_prepare_err(err: ReplyPrepareErr) -> anyhow::Error {
         ReplyPrepareErr::HooksMissing { kind } => anyhow::anyhow!(
             "--wait requires {kind} hooks so the reply turn can report its boundaries; run `rimz hooks install {kind}`"
         ),
+        ReplyPrepareErr::Login(err) => anyhow::Error::new(err),
         ReplyPrepareErr::HooksUntrusted { kind, hooks, fix } => {
             anyhow::anyhow!("{kind} hooks are installed but not trusted ({hooks}); {fix}")
         }

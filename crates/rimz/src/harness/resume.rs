@@ -2260,7 +2260,10 @@ pub fn resume_session_present(agent: &AgentState) -> bool {
     {
         return std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 0);
     }
-    let login_env = crate::agents::session_login_env(&agent.kind, agent.login.as_ref());
+    // An undeclared account has no home to probe, so presence abstains.
+    let Ok(login_env) = crate::agents::session_login_env(&agent.kind, agent.login.as_ref()) else {
+        return true;
+    };
     agent_worktree(agent)
         .and_then(|cwd| {
             find_definition(&agent.kind).and_then(|adapter| {

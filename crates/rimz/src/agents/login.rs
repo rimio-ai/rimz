@@ -455,29 +455,29 @@ pub fn ambient_env() -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Resolve a session's stamped account, falling back to the ambient provider home.
-pub fn session_login_env(kind: &AgentKind, login: Option<&LoginName>) -> BTreeMap<String, String> {
+/// Resolve the env of a session's stamped account; an unstamped session runs
+/// under the ambient provider home.
+pub fn session_login_env(
+    kind: &AgentKind,
+    login: Option<&LoginName>,
+) -> Result<BTreeMap<String, String>, RoomLoginErr> {
     let ambient = ambient_env();
     let Some(name) = login else {
-        return ambient;
+        return Ok(ambient);
     };
     let accounts = &crate::config::MachineConfig::load_lenient().accounts;
-    session_login_env_from(kind, name, accounts, ambient)
+    session_login_env_from(kind, name, accounts, &ambient)
 }
 
 fn session_login_env_from(
     kind: &AgentKind,
     name: &LoginName,
     accounts: &AccountsConfig,
-    ambient: BTreeMap<String, String>,
-) -> BTreeMap<String, String> {
-    match LoginCatalog::from_config(accounts)
-        .ok()
-        .and_then(|catalog| catalog.select(kind, name).ok())
-    {
-        Some(login) => login.env(&ambient),
-        None => ambient,
-    }
+    ambient: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, RoomLoginErr> {
+    Ok(LoginCatalog::from_config(accounts)?
+        .select(kind, name)?
+        .env(ambient))
 }
 
 /// Resolving the login a room launches a kind under.

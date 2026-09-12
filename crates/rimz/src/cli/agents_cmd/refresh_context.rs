@@ -30,10 +30,11 @@ pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
     let session_id = request.session_id.as_str();
     let prior = rimz::store::agent_context::read_one(&runtime, kind, session_id);
     let logins = agents::RoomLoginSet::for_runtime(&runtime);
-    let login_env = logins
-        .login(kind)
-        .map(|login| logins.env(&login))
-        .unwrap_or_else(agents::ambient_env);
+    // A room account that no longer resolves has no home to refresh from.
+    let Some(login) = logins.login(kind) else {
+        return Ok(());
+    };
+    let login_env = logins.env(&login);
     let Some(refresh) = definition.refresh_session_context(&agents::SessionContextInput {
         login_env: &login_env,
         session_id,

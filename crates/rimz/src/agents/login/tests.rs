@@ -38,25 +38,24 @@ fn named_login_overrides_only_the_provider_home_key() {
 }
 
 #[test]
-fn session_login_env_resolves_named_accounts_and_falls_back_to_ambient() {
+fn session_login_env_resolves_named_accounts_and_refuses_an_undeclared_one() {
     let ambient = BTreeMap::from([("HOME".to_owned(), "/home/u".to_owned())]);
     let accounts = accounts("[claude.work]\nhome = \"/srv/work\"\n");
-    let work = session_login_env_from(&kind("claude"), &name("work"), &accounts, ambient.clone());
+    let work = session_login_env_from(&kind("claude"), &name("work"), &accounts, &ambient)
+        .expect("declared account");
     assert_eq!(
         work.get("CLAUDE_CONFIG_DIR").map(String::as_str),
         Some("/srv/work")
     );
     assert_eq!(work.get("HOME"), ambient.get("HOME"));
+    assert!(matches!(
+        session_login_env_from(&kind("claude"), &name("missing"), &accounts, &ambient),
+        Err(RoomLoginErr::Login(LoginErr::Unknown { .. }))
+    ));
     assert_eq!(
-        session_login_env_from(
-            &kind("claude"),
-            &name("missing"),
-            &accounts,
-            ambient.clone()
-        ),
-        ambient
+        session_login_env(&kind("claude"), None).expect("ambient"),
+        ambient_env()
     );
-    assert_eq!(session_login_env(&kind("claude"), None), ambient_env());
 }
 
 #[test]
