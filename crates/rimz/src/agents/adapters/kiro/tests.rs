@@ -106,8 +106,16 @@ fn stock_store_transcript_context_and_lifecycle_are_normalized() {
 
 #[test]
 fn unsupported_history_stays_out_of_spending_discovery() {
-    assert!(KiroAdapter.transcript_files().is_empty());
-    assert!(KiroAdapter.spending_sources().is_empty());
+    assert!(
+        KiroAdapter
+            .transcript_files(&std::collections::BTreeMap::new())
+            .is_empty()
+    );
+    assert!(
+        KiroAdapter
+            .spending_sources(&std::collections::BTreeMap::new())
+            .is_empty()
+    );
 }
 
 #[test]

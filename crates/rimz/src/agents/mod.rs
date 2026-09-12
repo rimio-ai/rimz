@@ -1051,8 +1051,9 @@ pub fn preflight_launch_dir(
     adapter: &AgentDefinition,
     cwd: &Path,
     repo_root: Option<&Path>,
+    login_env: &BTreeMap<String, String>,
 ) -> std::result::Result<(), LaunchDirUntrusted> {
-    if let Some(fix) = adapter.launch_dir_trust_gap(cwd, repo_root) {
+    if let Some(fix) = adapter.launch_dir_trust_gap(cwd, repo_root, login_env) {
         return Err(LaunchDirUntrusted {
             kind: adapter.spec().kind,
             dir: cwd.to_path_buf(),

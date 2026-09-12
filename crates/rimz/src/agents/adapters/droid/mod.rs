@@ -492,7 +492,12 @@ impl crate::agents::capabilities::ContextCapability for DroidAdapter {
 }
 
 impl crate::agents::capabilities::SpendingCapability for DroidAdapter {
-    fn session_transcript(&self, _session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
+    fn session_transcript(
+        &self,
+        _session_id: &str,
+        prior_path: Option<&Path>,
+        _login_env: &std::collections::BTreeMap<String, String>,
+    ) -> Option<PathBuf> {
         let prior = prior_path?;
         let settings = transcript::settings_path(prior)?;
         settings.is_file().then_some(settings)

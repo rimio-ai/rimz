@@ -644,6 +644,7 @@ fn transcript_refresh_stamps_plan_marker_instead_of_completion() {
         None,
         None,
         &dir.path().join("prices.json"),
+        &std::collections::BTreeMap::new(),
     )
     .expect("transcript refresh");
     assert_eq!(
@@ -725,6 +726,7 @@ fn turn_interrupted_detector_marks_resting_abort_and_self_clears() {
         None,
         None,
         &pricing_cache_path,
+        &std::collections::BTreeMap::new(),
     )
     .expect("changed transcript refreshes");
     assert_eq!(
@@ -768,6 +770,7 @@ fn messageless_task_complete_refreshes_as_overload_death() {
             None,
             None,
             &pricing_cache_path,
+            &std::collections::BTreeMap::new(),
         )
         .expect("changed transcript refreshes");
         let error = refresh
@@ -813,6 +816,7 @@ fn resting_outcome_skips_compaction_blip_and_prefers_real_errors() {
         None,
         None,
         &pricing_cache_path,
+        &std::collections::BTreeMap::new(),
     )
     .expect("changed transcript refreshes");
     assert_eq!(refresh.context.turn_error, crate::agents::FieldPatch::Clear);
@@ -835,6 +839,7 @@ fn resting_outcome_skips_compaction_blip_and_prefers_real_errors() {
         None,
         None,
         &pricing_cache_path,
+        &std::collections::BTreeMap::new(),
     )
     .expect("changed transcript refreshes");
     let error = refresh
@@ -1073,7 +1078,8 @@ fn transcript_enrichment_maps_split_to_rich_usage() {
         last_cache_write_tokens: Some(100),
         last_output_tokens: Some(80),
     };
-    let (tokens, model_id) = transcript_enrichment(&split, None);
+    let (tokens, model_id) =
+        transcript_enrichment(&split, None, &std::collections::BTreeMap::new());
     let tokens = tokens.expect("tokens are mapped");
     let current = tokens.current_usage.expect("current usage is mapped");
     assert_eq!(tokens.context_window_size, Some(10_000));
@@ -1110,7 +1116,9 @@ fn transcript_enrichment_uses_configured_model_when_tail_lacks_turn_context() {
         last_output_tokens: None,
     };
 
-    let (_tokens, model_id) = with_codex_config_path(&path, || transcript_enrichment(&usage, None));
+    let (_tokens, model_id) = with_codex_config_path(&path, || {
+        transcript_enrichment(&usage, None, &std::collections::BTreeMap::new())
+    });
 
     assert_eq!(model_id.as_deref(), Some("gpt-5"));
 }
@@ -1135,6 +1143,7 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
             Some(&stat),
             None,
             &pricing_cache_path,
+            &std::collections::BTreeMap::new()
         )
         .is_none(),
         "unchanged stat skips the tail read and sidecar write"
@@ -1157,6 +1166,7 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
         Some(&stat),
         None,
         &pricing_cache_path,
+        &std::collections::BTreeMap::new(),
     )
     .expect("changed stat refreshes");
     assert_eq!(
@@ -1189,6 +1199,7 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
             Some(&unchanged_stat),
             None,
             &pricing_cache_path,
+            &std::collections::BTreeMap::new()
         )
         .is_none(),
         "unchanged stat remains gated regardless of prior effort"
@@ -1210,6 +1221,7 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
         None,
         None,
         &pricing_cache_path,
+        &std::collections::BTreeMap::new(),
     )
     .expect("missing stat refreshes");
     assert_eq!(refresh.context.effort, crate::agents::FieldPatch::Keep);
@@ -1247,6 +1259,7 @@ fn refresh_transcript_context_backfills_unchanged_legacy_fold() {
         Some(&stat),
         Some(&legacy),
         &pricing_cache_path,
+        &std::collections::BTreeMap::new(),
     )
     .expect("unchanged legacy fold bypasses the stat gate for one cold backfill");
     let usage = refresh
@@ -1273,6 +1286,7 @@ fn refresh_transcript_context_backfills_unchanged_legacy_fold() {
             Some(&stat),
             Some(&rebuilt),
             &pricing_cache_path,
+            &std::collections::BTreeMap::new()
         )
         .is_none(),
         "the unchanged rebuilt fold returns to the cheap stat-gated path"
@@ -1307,6 +1321,7 @@ fn refresh_transcript_context_prices_model_from_shared_cache() {
         None,
         None,
         &pricing_cache_path,
+        &std::collections::BTreeMap::new(),
     )
     .expect("changed transcript refreshes");
 
@@ -1351,6 +1366,7 @@ fn refresh_prices_each_request_before_cumulative_input_crosses_long_tier() {
         None,
         None,
         &pricing_cache_path,
+        &std::collections::BTreeMap::new(),
     )
     .expect("changed transcript refreshes");
     let actual = refresh
@@ -1421,7 +1437,9 @@ fn find_session_transcript_falls_back_to_flat_archive() {
     let expected = archived.join("rollout-2026-05-26T21-57-38-sess-archived.jsonl");
     std::fs::write(&expected, "{}\n").unwrap();
 
-    let found = with_codex_sessions_root(&sessions, || find_session_transcript("sess-archived"));
+    let found = with_codex_sessions_root(&sessions, || {
+        find_session_transcript("sess-archived", &std::collections::BTreeMap::new())
+    });
 
     assert_eq!(found.as_deref(), Some(expected.as_path()));
 }

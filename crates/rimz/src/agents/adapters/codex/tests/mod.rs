@@ -41,6 +41,43 @@ fn hook_ingress_ignores_internal_servers_and_normalizes_daemon_owners() {
 }
 
 #[test]
+fn named_login_scopes_spending_and_session_transcripts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let named = tmp.path().join("work");
+    let native_file = home
+        .join(".codex")
+        .join("sessions/2026/01/01/rollout-2026-01-01T00-00-00-shared-session.jsonl");
+    let named_file =
+        named.join("sessions/2026/01/01/rollout-2026-01-01T00-00-00-shared-session.jsonl");
+    for path in [&native_file, &named_file] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "{}\n").unwrap();
+    }
+    let home_env = std::collections::BTreeMap::from([(
+        "HOME".to_owned(),
+        home.to_string_lossy().into_owned(),
+    )]);
+    let named_env = crate::agents::ProviderLogin::named(
+        crate::ids::AgentKind::new_unchecked("codex"),
+        "work".parse().unwrap(),
+        named,
+    )
+    .unwrap()
+    .env(&home_env);
+    let files = CodexAdapter
+        .spending_sources(&named_env)
+        .into_iter()
+        .flat_map(|source| source.complete_files())
+        .collect::<Vec<_>>();
+    assert_eq!(files, vec![named_file.clone()]);
+    assert_eq!(
+        CodexAdapter.session_transcript("shared-session", None, &named_env),
+        Some(named_file),
+    );
+}
+
+#[test]
 fn codex_commands_and_permission_args_match_run_posture() {
     let preset = crate::agents::LaunchPreset {
         auto_compact: Some("200000".to_owned()),

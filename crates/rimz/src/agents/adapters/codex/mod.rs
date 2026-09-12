@@ -666,8 +666,13 @@ impl crate::agents::capabilities::HookCapability for CodexAdapter {
 }
 
 impl crate::agents::capabilities::InstallationCapability for CodexAdapter {
-    fn launch_dir_trust_gap(&self, cwd: &Path, repo_root: Option<&Path>) -> Option<String> {
-        match install::codex_config_path(&crate::agents::ambient_env()) {
+    fn launch_dir_trust_gap(
+        &self,
+        cwd: &Path,
+        repo_root: Option<&Path>,
+        login_env: &BTreeMap<String, String>,
+    ) -> Option<String> {
+        match install::codex_config_path(login_env) {
             Ok(config) => project_trust::trust_gap_at(&config, cwd, repo_root),
             Err(err) => Some(format!(
                 "set CODEX_HOME to the Codex config directory: {err}"
@@ -701,11 +706,15 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
     }
 
     fn default_launch_model(&self) -> Option<String> {
-        configured_model()
+        configured_model(&crate::agents::ambient_env())
     }
 
     fn configured_identity(&self) -> (Option<String>, Option<String>) {
-        (configured_model(), configured_reasoning_effort())
+        let login_env = crate::agents::ambient_env();
+        (
+            configured_model(&login_env),
+            configured_reasoning_effort(&login_env),
+        )
     }
 
     fn append_system_text_channel(&self) -> Option<SystemTextChannel> {
@@ -824,6 +833,7 @@ impl crate::agents::capabilities::ContextCapability for CodexAdapter {
                 .and_then(|record| record.transcript_stat.as_ref()),
             input.prior.and_then(|record| record.spend_fold.as_ref()),
             input.pricing_cache_path,
+            input.login_env,
         );
         if !app_server_due(input.prior) {
             return local.map(|local| SessionContextRefresh {
@@ -883,6 +893,7 @@ fn refresh_local_context_under(
         ctx.prior_transcript_stat,
         ctx.prior_spend_fold,
         ctx.shared_pricing_cache_path,
+        ctx.login_env,
     );
     let session_name = codex_home
         .and_then(|home| session_index::session_name_under(home, ctx.agent_id))
@@ -902,10 +913,10 @@ fn refresh_local_context_under(
 impl crate::agents::capabilities::AccountCapability for CodexAdapter {
     fn prepare_reset_credit(
         &self,
+        login_env: &BTreeMap<String, String>,
     ) -> std::result::Result<super::account::ResetCreditOffer, String> {
-        let (credentials, base_url) =
-            oauth_usage::load_configured_credentials(&crate::agents::ambient_env())
-                .map_err(|error| error.to_string())?;
+        let (credentials, base_url) = oauth_usage::load_configured_credentials(login_env)
+            .map_err(|error| error.to_string())?;
         let identity = credentials.account_usage_identity();
         let usage = oauth_usage::fetch_usage_with_url(
             &oauth_usage::usage_url(base_url.as_deref()),
@@ -1022,8 +1033,11 @@ impl super::account::ResetCreditAction for CodexResetCreditAction {
 }
 
 impl crate::agents::capabilities::SpendingCapability for CodexAdapter {
-    fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
-        spend::codex_homes()
+    fn spending_sources(
+        &self,
+        login_env: &BTreeMap<String, String>,
+    ) -> Vec<crate::agents::spending::SpendingSource> {
+        spend::codex_homes(login_env)
             .into_iter()
             .filter_map(|home| {
                 let active = crate::agents::spending::SpendingSourceTree::new(
@@ -1046,11 +1060,16 @@ impl crate::agents::capabilities::SpendingCapability for CodexAdapter {
             .collect()
     }
 
-    fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
+    fn session_transcript(
+        &self,
+        session_id: &str,
+        prior_path: Option<&Path>,
+        login_env: &BTreeMap<String, String>,
+    ) -> Option<PathBuf> {
         if let Some(path) = prior_path.filter(|path| path.is_file()) {
             return Some(path.to_path_buf());
         }
-        find_session_transcript(session_id)
+        find_session_transcript(session_id, login_env)
     }
 
     /// Codex logs token counts, not dollars — each event is multiplied
@@ -1305,7 +1324,7 @@ fn codex_transcript_path(payload: &Value) -> Option<PathBuf> {
         .filter(|path| path.is_file())
         .or_else(|| {
             optional_payload_string(payload, &["session_id"])
-                .and_then(|id| find_session_transcript(&id))
+                .and_then(|id| find_session_transcript(&id, &crate::agents::ambient_env()))
         })
 }
 
@@ -1333,9 +1352,11 @@ fn codex_child_transcript_path(payload: &Value, child_id: &str) -> Option<CodexC
             })
         })
         .or_else(|| {
-            find_session_transcript(child_id).map(|path| CodexChildTranscript {
-                path,
-                validated_header: None,
+            find_session_transcript(child_id, &crate::agents::ambient_env()).map(|path| {
+                CodexChildTranscript {
+                    path,
+                    validated_header: None,
+                }
             })
         })
 }
@@ -1488,14 +1509,19 @@ fn build_codex_observation(
                 .or_else(|| agent_type.clone())
         })
         .flatten();
+    let login_env = crate::agents::ambient_env();
     observation.launch.model = parts
         .hook_model()
         .or_else(|| optional_payload_string(payload, &["model"]))
         .or(usage.model)
-        .or_else(|| is_subagent.then(configured_model).flatten());
+        .or_else(|| is_subagent.then(|| configured_model(&login_env)).flatten());
     observation.launch.effort = payload_reasoning_effort(payload)
         .or(usage_effort)
-        .or_else(|| is_subagent.then(configured_reasoning_effort).flatten());
+        .or_else(|| {
+            is_subagent
+                .then(|| configured_reasoning_effort(&login_env))
+                .flatten()
+        });
     observation.usage.context_window = reported_context_window;
     observation.usage.total_tokens = if is_subagent {
         usage.total_tokens

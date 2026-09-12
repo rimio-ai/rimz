@@ -95,11 +95,8 @@ pub(super) fn preflight_agent(
 ) -> Result<()> {
     let definition = adapter.spec();
     let kind = definition.kind;
-    match preflight_hooks(
-        adapter,
-        &rimz::agents::ambient_env(),
-        TurnLifecycleNeed::Wired,
-    ) {
+    let login_env = rimz::agents::ambient_env();
+    match preflight_hooks(adapter, &login_env, TurnLifecycleNeed::Wired) {
         Ok(()) => {}
         Err(HookPreflightErr::TurnLifecycleUnsupported { reason }) => bail!(
             "`rimz agents -p` cannot supervise {kind}: a verified executable turn-lifecycle signal is required; {}",
@@ -114,9 +111,12 @@ pub(super) fn preflight_agent(
             fix
         ),
     }
-    if let Err(error) =
-        rimz::agents::preflight_launch_dir(adapter, &launch.cwd, launch.repo_root.as_deref())
-    {
+    if let Err(error) = rimz::agents::preflight_launch_dir(
+        adapter,
+        &launch.cwd,
+        launch.repo_root.as_deref(),
+        &login_env,
+    ) {
         bail!(
             "`rimz agents -p` cannot start {kind} in `{}`: {kind} has not recorded a trust decision for that directory and would stop at its trust prompt instead of taking the task; {}",
             launch.cwd.display(),

@@ -332,7 +332,7 @@ impl crate::agents::capabilities::LaunchCapability for GrokAdapter {
         &["GROK_HOME"]
     }
 
-    fn config_home(&self, env: &std::collections::BTreeMap<String, String>) -> Option<PathBuf> {
+    fn config_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         paths::home_from(
             env.get("GROK_HOME").map(std::ffi::OsStr::new),
             env.get("HOME").map(std::ffi::OsStr::new),
@@ -408,7 +408,12 @@ impl crate::agents::capabilities::HookCapability for GrokAdapter {
                 .transcript_path
                 .as_deref()
                 .and_then(|path| paths::validate_transcript(Path::new(path), session_id))
-                .or_else(|| paths::transcript_for_session(session_id, self.transcript_files()))
+                .or_else(|| {
+                    paths::transcript_for_session(
+                        session_id,
+                        self.transcript_files(&crate::agents::ambient_env()),
+                    )
+                })
                 .map(|path| path.to_string_lossy().into_owned())
         });
         if canonical == "SessionStart" {
@@ -483,7 +488,7 @@ impl crate::agents::capabilities::ContextCapability for GrokAdapter {
             ctx.agent_id,
             ctx.current_transcript_path.map(Path::new),
             ctx.prior_transcript_path.map(Path::new),
-            self.transcript_files(),
+            self.transcript_files(ctx.login_env),
         )?;
         let events = paths::events_companion(&path, ctx.agent_id);
         refresh_resolved_context(&path, events.as_deref(), ctx)
@@ -497,12 +502,25 @@ impl crate::agents::capabilities::AccountCapability for GrokAdapter {
 }
 
 impl crate::agents::capabilities::SpendingCapability for GrokAdapter {
-    fn spending_sources(&self) -> Vec<crate::agents::spending::SpendingSource> {
+    fn spending_sources(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Vec<crate::agents::spending::SpendingSource> {
         crate::agents::spending::SpendingSource::tree(paths::sessions_root(), "**/updates.jsonl")
     }
 
-    fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
-        paths::resolve_transcript(session_id, None, prior_path, self.transcript_files())
+    fn session_transcript(
+        &self,
+        session_id: &str,
+        prior_path: Option<&Path>,
+        login_env: &BTreeMap<String, String>,
+    ) -> Option<PathBuf> {
+        paths::resolve_transcript(
+            session_id,
+            None,
+            prior_path,
+            self.transcript_files(login_env),
+        )
     }
 
     fn parse_spend(

@@ -25,6 +25,42 @@ fn hook_ingress_ignores_remote_control_and_preserves_ordinary_owner() {
 }
 
 #[test]
+fn named_login_scopes_spending_and_session_transcripts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let named = tmp.path().join("work");
+    let native_file = home
+        .join(".claude")
+        .join("projects/project/shared-session.jsonl");
+    let named_file = named.join("projects/project/shared-session.jsonl");
+    for path in [&native_file, &named_file] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "{}\n").unwrap();
+    }
+    let home_env = std::collections::BTreeMap::from([(
+        "HOME".to_owned(),
+        home.to_string_lossy().into_owned(),
+    )]);
+    let named_env = crate::agents::ProviderLogin::named(
+        crate::ids::AgentKind::new_unchecked("claude"),
+        "work".parse().unwrap(),
+        named,
+    )
+    .unwrap()
+    .env(&home_env);
+    let files = ClaudeAdapter
+        .spending_sources(&named_env)
+        .into_iter()
+        .flat_map(|source| source.complete_files())
+        .collect::<Vec<_>>();
+    assert_eq!(files, vec![named_file.clone()]);
+    assert_eq!(
+        ClaudeAdapter.session_transcript("shared-session", None, &named_env),
+        Some(named_file),
+    );
+}
+
+#[test]
 fn claude_commands_and_permission_args_match_run_posture() {
     let preset = crate::agents::LaunchPreset {
         auto_compact: Some("200000".to_owned()),

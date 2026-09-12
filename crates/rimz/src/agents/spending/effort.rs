@@ -120,6 +120,7 @@ fn slot_effort_breakdown_with_memo(
     prices: &PriceBook,
     memo: &mut EffortParseMemo,
 ) -> SlotEffortBreakdown {
+    let login_env = crate::agents::ambient_env();
     let resolved = sessions
         .iter()
         .filter_map(|session| {
@@ -128,7 +129,8 @@ fn slot_effort_breakdown_with_memo(
                 .transcript_path
                 .filter(|path| !path.is_empty())
                 .map(Path::new);
-            let paths = adapter.session_spend_transcripts(session.session_id, prior_path);
+            let paths =
+                adapter.session_spend_transcripts(session.session_id, prior_path, &login_env);
             (!paths.is_empty()).then_some((session.session_id, adapter, paths))
         })
         .collect::<Vec<_>>();

@@ -407,7 +407,7 @@ fn transcript_only_kiro_declares_no_historical_spend_source() {
     assert!(
         crate::agents::definition_by_kind("kiro")
             .expect("Kiro definition")
-            .spending_sources()
+            .spending_sources(&std::collections::BTreeMap::new())
             .is_empty()
     );
 }

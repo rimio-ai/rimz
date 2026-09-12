@@ -30,7 +30,7 @@ pub(crate) fn probe_usage() -> AccountUsageProbe {
 
 /// Provider of the freshest Pi session, tail-scanned newest-first.
 fn used_provider() -> Option<String> {
-    used_provider_from(PiAdapter.transcript_files())
+    used_provider_from(PiAdapter.transcript_files(&crate::agents::ambient_env()))
 }
 
 fn used_provider_from(files: impl IntoIterator<Item = std::path::PathBuf>) -> Option<String> {

@@ -620,7 +620,12 @@ impl crate::agents::capabilities::AccountCapability for CursorAdapter {
 }
 
 impl crate::agents::capabilities::SpendingCapability for CursorAdapter {
-    fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
+    fn session_transcript(
+        &self,
+        session_id: &str,
+        prior_path: Option<&Path>,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Option<PathBuf> {
         transcript::resolve_transcript(session_id, None, prior_path)
     }
 }
