@@ -274,7 +274,17 @@ impl RoomContext {
                 self.workspace.session_name,
             );
         }
+        // A recovery reset rebuilds the room this birth already froze accounts
+        // for; unlike `rimz reset`, it must not unfreeze them.
+        let paths = StatePaths::for_workspace(self.workspace.workspace_id.clone())
+            .context("preparing store paths for reset")?;
+        let logins = crate::workspace::record::read_optional(&paths.workspace_record)
+            .context("reading the room's accounts")?
+            .and_then(|record| record.logins);
         let reset = self.reset(false)?;
+        if let Some(logins) = &logins {
+            self.freeze_logins(logins)?;
+        }
         match self.clean_session(sidebar, daemon) {
             Ok(SessionHealth::Healthy | SessionHealth::Reborn) => Ok(Some(reset)),
             Ok(SessionHealth::Stuck | SessionHealth::Unresponsive) => Err(ResetRecoveryError {
