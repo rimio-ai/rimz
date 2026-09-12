@@ -53,18 +53,21 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .worktree_path
         .as_deref()
         .map(absolute_lexical_path)
-        .transpose()?
-        .unwrap_or(match &request.action {
-            rimz::harness::launch::ExecAction::Launch { .. } => workspace.worktree_root.clone(),
-            _ => std::env::current_dir().context("reading the agent pane cwd")?,
-        });
+        .unwrap_or_else(|| match &request.action {
+            rimz::harness::launch::ExecAction::Launch { .. } => Ok(workspace.worktree_root.clone()),
+            _ => std::env::current_dir().context("reading the agent pane cwd"),
+        })
+        .inspect_err(|_| {
+            mark_launch_failed_if_provisional(&invocation, launch_identity.as_ref());
+            fail_run_on_exec_precondition(run_context.as_ref());
+        })?;
     let effective = rimz::config::effective::load_with_roots(
         &machine_config,
         &workspace.project_root,
         &rimz::disk::paths::config_home(),
     );
     if let Err(err) = &effective {
-        writeln!(crate::cli::render::err(), "rimz: {err}")?;
+        let _ = writeln!(crate::cli::render::err(), "rimz: {err}");
     }
     let ambient_env = std::env::vars_os()
         .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
@@ -86,11 +89,11 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         fail_run_on_exec_precondition(run_context.as_ref());
     })?;
     for warning in &plan.warnings {
-        writeln!(crate::cli::render::err(), "rimz: {warning}")?;
+        let _ = writeln!(crate::cli::render::err(), "rimz: {warning}");
     }
     if let Some(sandbox) = &plan.sandbox {
         for skipped in &sandbox.skipped {
-            writeln!(crate::cli::render::err(), "rimz: {skipped}")?;
+            let _ = writeln!(crate::cli::render::err(), "rimz: {skipped}");
         }
     }
     rimz::harness::launch_plan::apply(&plan).inspect_err(|_| {
