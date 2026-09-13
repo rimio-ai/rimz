@@ -2,7 +2,7 @@
 
 Local contract for `crates/rimz/src/message/`: delivery that routes durable text into a running agent's pane. Extends [crates/rimz/AGENTS.md](../../AGENTS.md).
 
-Topic detail lives in [messaging.md](../../../../docs/internals/harness/messaging.md), which owns the record, the ordered delivery check, the pipeline, reply waits, channels, and the transcript.
+Topic detail lives in [messaging.md](../../../../docs/internals/harness/messaging.md), which owns the record, the ordered delivery check, the pipeline, reply waits, and channels; the transcript log and asks are [transcript.md](../../../../docs/internals/harness/transcript.md).
 
 ## Invariants
 
