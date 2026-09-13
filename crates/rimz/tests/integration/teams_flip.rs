@@ -272,6 +272,13 @@ fn flip_cli_persists_board_signal_and_owner_note() {
         json!(fixture.board().canonicalize().unwrap())
     );
     assert_eq!(payload["note"], note);
+    let flips = rimz::harness::team_stage::stage_flips(&fixture.env.store()).unwrap();
+    assert_eq!(flips.len(), 1);
+    assert_eq!(flips[0].channel(), "feature-team");
+    assert_eq!(flips[0].from.as_deref(), Some("Build"));
+    assert_eq!(flips[0].to, "Review");
+    assert_eq!(flips[0].by, "user");
+    assert_eq!(flips[0].note.as_deref(), Some(note));
     let messages = fixture.env.store().list_pending_messages().unwrap();
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].agent_id.as_str(), "reviewer");
@@ -299,6 +306,11 @@ fn registration_rewake_reaches_stop_and_message_sweep_consumer() {
     fixture.hook("coder", "SessionStart", None);
     assert_eq!(std::fs::read_to_string(fixture.board()).unwrap(), BOARD);
     assert_eq!(fixture.signals().len(), 1);
+    assert!(
+        rimz::harness::team_stage::stage_flips(&fixture.env.store())
+            .unwrap()
+            .is_empty()
+    );
     let messages = fixture.env.store().list_pending_messages().unwrap();
     assert_eq!(messages.len(), 1);
     let id = messages[0].message_id.clone();

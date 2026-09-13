@@ -1,9 +1,10 @@
-//! Team stage transitions: locked board edits, durable signals, owner delivery, and hand-off compaction.
+//! Team stage transitions: locked board edits, durable signals, owner delivery, and hand-off compaction; the typed `StageSignal` payload and `stage_flips`, the read side `rimz transcript` renders.
 
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
-use serde_json::{Map, json};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use crate::Store;
 use crate::agents::AgentState;
@@ -12,13 +13,74 @@ use crate::disk::{atomic, lock::WorkspaceLock};
 use crate::ids::{EventId, MessageId, MuxName, PaneId};
 use crate::message::compact::{self, CompactErr, CompactOutcome, CompactRequest};
 use crate::message::dispatch::{self, DispatchMode, DispatchOutcome, DispatchRequest};
-use crate::store::event::SignalSource;
+use crate::store::event::{EventKind, SignalSource};
 use crate::store::message::{AutoCompact, DeliveryGate, HarnessNotice, MessageSender};
 use crate::workspace::ResolvedWorkspace;
 
 use super::assist_log::{self, Assist, AssistRecord};
 use super::schedule::signal::{Signal, fire_signal};
 use super::scratch::parse_board_stage;
+
+const STAGE_SIGNAL: &str = "team.stage";
+const REWAKE_BY: &str = "rimz";
+
+/// The `team.stage` signal payload one stage opening appends.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StageSignal {
+    pub team: String,
+    /// `<team>#<channel>`.
+    pub instance: String,
+    pub to: String,
+    /// The flipping role, `user`, or `rimz` for a registration re-wake.
+    pub by: String,
+    pub board: PathBuf,
+    pub at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl StageSignal {
+    pub fn channel(&self) -> &str {
+        self.instance
+            .split_once('#')
+            .map_or("", |(_, channel)| channel)
+    }
+
+    /// A registration re-wake reopens the current stage without a flip.
+    pub fn is_rewake(&self) -> bool {
+        self.by == REWAKE_BY
+    }
+
+    fn payload(&self) -> Map<String, Value> {
+        match serde_json::to_value(self) {
+            Ok(Value::Object(payload)) => payload,
+            // A struct of strings, a path, and a timestamp always serializes to an object.
+            _ => unreachable!("stage signal serializes to a JSON object"),
+        }
+    }
+}
+
+/// Every stage flip in the workspace's active event log, oldest first.
+/// Re-wakes are skipped; flips rotated into the event-log archive are not read.
+pub fn stage_flips(store: &Store) -> Result<Vec<StageSignal>, crate::store::StoreErr> {
+    let mut flips = store
+        .read_events()?
+        .iter()
+        .filter_map(|event| match event.kind() {
+            EventKind::Signal(signal) if signal.name.as_str() == STAGE_SIGNAL => {
+                serde_json::from_value::<StageSignal>(Value::Object(signal.payload)).ok()
+            }
+            _ => None,
+        })
+        .filter(|stage| !stage.is_rewake())
+        .collect::<Vec<_>>();
+    flips.sort_by_key(|stage| stage.at);
+    Ok(flips)
+}
 
 pub enum Flipper<'a> {
     Member {
@@ -234,7 +296,7 @@ pub fn rewake(
             from: Some(&stage.name),
             to: &stage.name,
             owner,
-            by: "rimz",
+            by: REWAKE_BY,
             self_owned: false,
             note: None,
             mux,
@@ -324,30 +386,21 @@ fn open_stage(
     opening: &StageOpening<'_>,
     completed: &'static str,
 ) -> Result<(EventId, Delivery), FlipErr> {
-    let mut payload = Map::from_iter([
-        ("team".to_owned(), json!(opening.team_name)),
-        (
-            "instance".to_owned(),
-            json!(format!("{}#{}", opening.team_name, opening.channel)),
-        ),
-        ("to".to_owned(), json!(opening.to)),
-        ("by".to_owned(), json!(opening.by)),
-        ("board".to_owned(), json!(opening.board)),
-        ("at".to_owned(), json!(opening.now.to_string())),
-    ]);
-    if let Some(from) = opening.from {
-        payload.insert("from".to_owned(), json!(from));
-    }
-    if let Some(owner) = opening.owner {
-        payload.insert("owner".to_owned(), json!(owner));
-    }
-    if let Some(note) = opening.note {
-        payload.insert("note".to_owned(), json!(note));
-    }
+    let stage = StageSignal {
+        team: opening.team_name.to_owned(),
+        instance: format!("{}#{}", opening.team_name, opening.channel),
+        to: opening.to.to_owned(),
+        by: opening.by.to_owned(),
+        board: opening.board.to_path_buf(),
+        at: opening.now,
+        from: opening.from.map(ToOwned::to_owned),
+        owner: opening.owner.map(ToOwned::to_owned),
+        note: opening.note.map(ToOwned::to_owned),
+    };
     let signal = Signal {
         // A fixed reserved signal name always satisfies the signal grammar.
-        name: "team.stage".parse().expect("static signal name"),
-        payload,
+        name: STAGE_SIGNAL.parse().expect("static signal name"),
+        payload: stage.payload(),
         source: SignalSource::Team,
         watch: None,
     };
