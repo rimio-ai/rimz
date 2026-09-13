@@ -349,6 +349,10 @@ fn workspaces_with_channel_under(state_root: &Path, channel: &str) -> Vec<KnownW
     known
         .into_iter()
         .filter(|workspace| {
+            if !workspace.project_root.is_dir() {
+                tracing::debug!(workspace = %workspace.workspace_id, root = %workspace.project_root.display(), "skipping workspace whose project root is gone");
+                return false;
+            }
             let Ok(paths) = StatePaths::under(workspace.workspace_id.clone(), state_root) else {
                 return false;
             };
@@ -500,7 +504,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let state_root = dir.path().join("state");
         let mut ids = Vec::new();
-        for (name, channel) in [("alpha", "x"), ("beta", "y")] {
+        for (name, channel) in [("alpha", "x"), ("beta", "y"), ("gone", "x")] {
             let project = dir.path().join(name);
             fs::create_dir_all(&project).expect("mkdir project");
             let project = project.canonicalize().expect("canonical project");
@@ -526,6 +530,7 @@ mod tests {
             append(&paths, &line).expect("append");
             ids.push(id);
         }
+        fs::remove_dir_all(dir.path().join("gone")).expect("remove gone project");
 
         let found = workspaces_with_channel_under(&state_root, "x");
 

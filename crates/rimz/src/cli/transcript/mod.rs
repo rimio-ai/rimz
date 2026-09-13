@@ -273,9 +273,7 @@ pub(crate) fn resolve_view_workspace(
     };
     match channel_home(&channel, current_has, candidates)? {
         ChannelHome::Current => Ok(current),
-        ChannelHome::Elsewhere(known) => {
-            Ok(WorkspaceResolver::resolve(&known.project_root, None).unwrap_or(current))
-        }
+        ChannelHome::Elsewhere(known) => Ok(WorkspaceResolver::resolve(&known.project_root, None)?),
     }
 }
 
