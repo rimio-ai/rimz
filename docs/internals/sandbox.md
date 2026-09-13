@@ -45,9 +45,9 @@ Storage reports include tmp and skill copies in the State root's on-disk footpri
 
 The launch compiler sets `LaunchReminders.sandbox` from successful bubblewrap preflight; the apply step ensures the tmp layout before provider execution, including on restart of an older room. The reminder renderer inserts this paragraph after the identity and channel paragraphs and before the catalog or child policy, inside the same `<system_reminder>` tag:
 
-> This pane runs in a bubblewrap sandbox. `/tmp` is the room's: shared with teammates and subagents, separate from the host's `/tmp`, removed when the room closes; the host state path stays reachable. Any file another agent must find (a report for your caller, a file for a teammate, a hand-off) goes under `/tmp/scratchpad`: it is the room's shared scratch and the one path they look in. Your harness may name a session-specific scratchpad and say to use `/tmp` only when asked; this is that ask. Files only you read may stay in the session scratchpad.
+> This pane runs in a bubblewrap sandbox. `/tmp` is all yours, separate from the host's `/tmp`, removed when the room closes; the host state path stays reachable. Every temporary file you make goes under `/tmp/scratchpad`. If your harness names a session-specific scratchpad and says to use `/tmp` only when asked, this is that ask: use `/tmp/scratchpad` in its place.
 
-The two directories split by reader, not by importance: a shared path is the only way a teammate or a collator can find a file it did not write, while private intermediates need no agreed path, so the reminder permits the harness's own scratchpad for them rather than contesting it.
+One path, stated once: a harness such as Claude Code injects its own environment block naming a session-specific scratchpad and reserving `/tmp` for an explicit ask, so the reminder supplies that ask and overrides the private path outright rather than splitting files by reader. An agent that had to merge two rules from two places is the failure this paragraph replaced.
 
 The wait and subagent output directories are not named: every wait message and subagent report carries its file path.
 
