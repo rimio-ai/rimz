@@ -148,7 +148,7 @@ Together the rungs cover rebased, cherry-picked, squash-landed, and merge-back s
 
 The sidebar's git-stats refresh (`sidebar/refresh/git_stats.rs`) uses the same proof with different inputs, so its worktree header can disagree with `worktree list`.
 
-- Its landed marker is measured against the sidebar's own trunk, never the marker's `base_branch`: zero commits ahead is landed, and a clean tree with commits ahead goes through `content_landed`. That trunk tries the per-machine `[sidebar] trunk` setting before `main`, `master`, and the `origin/HEAD` target ([sidebar/state.md](../sidebar/state.md)).
+- Its landed marker is measured against the sidebar's own trunk, never the marker's `base_branch`: zero commits ahead is landed, and a clean tree with commits ahead goes through `content_landed`. That trunk tries the per-machine `[sidebar] trunk` setting before `main`, `master`, and the `origin/HEAD` target ([sidebar.md → Worktree groups](../sidebar/sidebar.md#worktree-groups)).
 - Its `did_work` marker answers whether the tree has done any work of its own. HEAD equal to the marker's `base_ref` is no work; otherwise `on_trunk_first_parent` checks whether HEAD sits on the trunk's first-parent chain (scan capped at `LANDED_BASE_SCAN_CAP`), where a tree that only tracked the trunk sits and a tree carrying its own commits does not.
 
 The sidebar reads markers through `read_marker_from_checkout_metadata`, which follows the checkout's `.git` file directly and forks no Git process.
