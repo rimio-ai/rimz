@@ -215,17 +215,11 @@ pub(super) fn relaunch_request(
         kind_ordinal: None,
     };
     ExecRequest {
-        kind: agent.kind.clone(),
         action,
         system_prompt_file: posture.launch.system_prompt_file.clone(),
         append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
         skills: posture.launch.skills.clone(),
-        provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
-        run_id: None,
-        worktree_path: None,
         close_pane_on_exit: true,
-        exit_on_run_completion: false,
-        subagent: false,
         identity: rimz::harness::launch::ExecIdentity {
             name: identity_name.map(ToOwned::to_owned),
             name_explicit: fresh_identity
@@ -235,6 +229,7 @@ pub(super) fn relaunch_request(
                 .or_else(|| agent.launch_id.as_ref().map(ToString::to_string)),
             params: restart_params,
         },
+        ..ExecRequest::bare_launch(agent.kind.clone(), Vec::new())
     }
 }
 

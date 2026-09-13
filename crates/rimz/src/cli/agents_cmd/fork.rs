@@ -84,7 +84,6 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     rimz::harness::launch::preflight_agent_process(
         &workspace.project_root,
         &rimz::harness::launch::ExecRequest {
-            kind: seed.kind.clone(),
             action: rimz::harness::launch::ExecAction::Fork {
                 session_id: seed.source_session_id.to_string(),
                 extra_args: posture.launch.args.clone(),
@@ -92,13 +91,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             system_prompt_file: posture.launch.system_prompt_file.clone(),
             append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
             skills: posture.launch.skills.clone(),
-            provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
-            run_id: None,
-            worktree_path: None,
-            close_pane_on_exit: false,
-            exit_on_run_completion: false,
-            subagent: false,
-            identity: rimz::harness::launch::ExecIdentity::default(),
+            ..rimz::harness::launch::ExecRequest::bare_launch(seed.kind.clone(), Vec::new())
         },
         &seed.cwd,
     )?;
@@ -138,7 +131,6 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         &rimz::proc::rimz_exe(),
         store.runtime_paths(),
         &rimz::harness::launch::ExecRequest {
-            kind: seed.kind.clone(),
             action: rimz::harness::launch::ExecAction::Fork {
                 session_id: seed.source_session_id.to_string(),
                 extra_args: posture.launch.args,
@@ -146,18 +138,14 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             system_prompt_file: posture.launch.system_prompt_file.clone(),
             append_system_prompt_files: posture.launch.append_system_prompt_files.clone(),
             skills: posture.launch.skills.clone(),
-            provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
-            run_id: None,
-            worktree_path: None,
             close_pane_on_exit: placement != Placement::SamePane,
-            exit_on_run_completion: false,
-            subagent: false,
             identity: rimz::harness::launch::ExecIdentity {
                 name: Some(launch.name.clone()),
                 name_explicit: launch.name_explicit,
                 launch_id: Some(launch.agent_id.to_string()),
                 params: launch.launch.clone(),
             },
+            ..rimz::harness::launch::ExecRequest::bare_launch(seed.kind.clone(), Vec::new())
         },
     )?;
     let panes = LayoutPanes {
