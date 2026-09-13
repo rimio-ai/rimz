@@ -115,6 +115,9 @@ enum LineSource {
         kind: TranscriptKind,
         agent: AgentKey,
         harness: bool,
+        /// The turn's latest-opener fallback pointed at a hidden harness
+        /// opener, so no older visible opener may stand in for it.
+        opener_hidden: bool,
     },
     Stage,
 }

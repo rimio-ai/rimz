@@ -61,6 +61,7 @@ fn render_entry(
             kind,
             agent: agent_key(),
             harness: false,
+            opener_hidden: false,
         },
         chat: ChatLine {
             from: from.to_owned(),
@@ -727,6 +728,9 @@ fn harness_turn_output_hides_with_its_opener() {
     push(Ask, None, "blocking ask", None, &[4]);
     push(Assistant, None, "asked reply", None, &[4]);
     push(Assistant, None, "mixed reply", None, &[2, 1]);
+    push(Wait, Some("@rimz"), "unrecorded", Some(6), &[]);
+    push(Ask, None, "unlinked ask", None, &[]);
+    push(Assistant, None, "unlinked asked reply", None, &[]);
     for entry in &logged {
         rimz::transcript::append(&paths, entry).expect("append");
     }
@@ -760,9 +764,10 @@ fn harness_turn_output_hides_with_its_opener() {
                 "user prompt",
                 "user reply",
                 "superseded reply",
-                "blocking ask",
                 "asked reply",
-                "mixed reply"
+                "mixed reply",
+                "unlinked ask",
+                "unlinked asked reply"
             ]
         );
         let mut out = Vec::new();
@@ -773,18 +778,26 @@ fn harness_turn_output_hides_with_its_opener() {
             "unlinked wait reply",
             "report",
             "superseded ask",
+            "blocking ask",
         ] {
             assert!(!rendered.contains(hidden), "{rendered}");
         }
-        let last_visible = if flat { "mixed reply" } else { "asked reply" };
-        assert_eq!(texts(&view(false, flat, Some(1))), [last_visible]);
+        assert_eq!(texts(&view(false, flat, Some(1))), ["unlinked asked reply"]);
     }
     let threaded = entries_for_view(&view(false, false, None));
     assert_eq!(threaded[0].entry.chat.text, "user prompt");
     assert_eq!(threaded[1].entry.chat.text, "user reply");
     assert_eq!(threaded[0].block, threaded[1].block);
-    // JSON keeps harness turns; only the superseded ask dedups.
-    assert_eq!(texts(&view(true, true, None)).len(), logged.len() - 1);
+    // Unlinked output of a hidden opener's turn never falls back to the user prompt.
+    for unlinked in ["unlinked ask", "unlinked asked reply"] {
+        let line = threaded
+            .iter()
+            .find(|line| line.entry.chat.text == unlinked)
+            .expect("unlinked line");
+        assert_ne!(line.block, threaded[0].block, "{unlinked}");
+    }
+    // JSON keeps harness turns; only the superseded asks dedup.
+    assert_eq!(texts(&view(true, true, None)).len(), logged.len() - 2);
 }
 
 #[test]
