@@ -12,9 +12,9 @@ use crate::agents::pricing::{PriceBook, TokenSplit};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
-pub(crate) struct StatuslinePayload {
+pub(super) struct StatuslinePayload {
     #[serde(alias = "conversationId")]
-    pub(crate) conversation_id: Option<String>,
+    pub(super) conversation_id: Option<String>,
     version: Option<String>,
     model: Model,
     context_window: ContextWindow,
@@ -108,7 +108,7 @@ fn normalize_model_display(
 }
 
 impl StatuslinePayload {
-    pub(crate) fn cost(&self, prices: &PriceBook) -> Option<AgentCost> {
+    pub(super) fn cost(&self, prices: &PriceBook) -> Option<AgentCost> {
         let model_id = self.model.id.as_deref()?.trim();
         (!model_id.is_empty()).then_some(())?;
         let usage = &self.context_window.current_usage;
@@ -141,7 +141,7 @@ impl StatuslinePayload {
         })
     }
 
-    pub(crate) fn into_context(self, source: &str, observed_at: Timestamp) -> AgentContext {
+    pub(super) fn into_context(self, source: &str, observed_at: Timestamp) -> AgentContext {
         let (model_display_name, effort, thinking_enabled) =
             normalize_model_display(self.model.display_name);
         let settle = (self.tool_confirmation_pending == Some(true))
