@@ -20,7 +20,7 @@ use jiff::Timestamp;
 
 use super::{AnomalyDraft, AnomalyKind, ObserveMsg, ObserveRole, RosterSig, cap_vec};
 
-pub fn spawn(
+pub(crate) fn spawn(
     runtime: RuntimePaths,
     sink: DiagSink,
     election: ProducerElectionTracker,
@@ -127,7 +127,7 @@ fn current_role(election: &ProducerElectionTracker) -> ObserveRole {
     }
 }
 
-pub fn compare_roster_to_frame(roster: &RosterSig, frame: &PaneFrame) -> Vec<AnomalyKind> {
+fn compare_roster_to_frame(roster: &RosterSig, frame: &PaneFrame) -> Vec<AnomalyKind> {
     if roster.panes_produced_at_ms != Some(frame.produced_at_ms) {
         return Vec::new();
     }
@@ -293,7 +293,7 @@ mod tests {
     use crate::ids::{MuxName, PaneId, SidebarInstanceId, ViewKind, WorkspaceId};
     use crate::pane::PaneRef;
     use crate::sidebar::frame::assemble_frame;
-    use crate::sidebar::observe::RosterRowSig;
+    use crate::sidebar::observe::sig::RosterRowSig;
 
     fn roster(produced_at: u64, rows: Vec<(&str, &str)>) -> RosterSig {
         RosterSig {
