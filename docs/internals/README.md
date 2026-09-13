@@ -32,7 +32,8 @@ The harness runs the fleet: spawn, address, message, and reclaim. It is a produc
 | [budget.md](./harness/budget.md) | Dollar caps: the scopes, the ledgers on disk, the verdict, the human waiver, the pane interrupt, and the fail-fast gate. |
 | [messaging.md](./harness/messaging.md) | Message routing: send modes, durable records, the delivery pipeline, the pane write, compaction commands, reply waits, and the channel lanes. |
 | [transcript.md](./harness/transcript.md) | The durable conversation log: entry kinds, causality, the `rimz transcript` projection, and the ask lifecycle behind `rimz asks` and `rimz answer`. |
-| [worktrees.md](./harness/worktrees.md) | RimZ-owned Git worktrees: creation, the ownership marker, seeding, and landed-work cleanup. |
+| [worktrees.md](./harness/worktrees.md) | RimZ-owned Git worktrees: the ownership marker, creation and seeding, the landed-content proof, landing on main, removal protection, and every reclaiming caller. |
+| [teams.md](./harness/teams.md) | Team memory: the scratch-file scan, the `blackboard.md` stage board, stage flips and the hand-off check, and registration re-wakes. |
 | [trust.md](./harness/trust.md) | The permission model: the executable launch surface, grants, and the stale-grant diff. |
 
 ## The sidebar

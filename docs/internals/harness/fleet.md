@@ -62,7 +62,7 @@ Placement and reconciliation belong to the interactive launch command. Every oth
 
 ## Where the code lives
 
-The harness is a product area spanning several source modules, and the eight pages in this folder are grouped by the job they document.
+The harness is a product area spanning several source modules, and the ten pages in this folder are grouped by the job they document.
 
 | Page | Owns | Source |
 | --- | --- | --- |
@@ -72,7 +72,9 @@ The harness is a product area spanning several source modules, and the eight pag
 | [loops.md](./loops.md) | Scheduled tasks, signals, waits, and the assist log | [`harness/schedule/`](../../../crates/rimz/src/harness/schedule), [`assist_log.rs`](../../../crates/rimz/src/harness/assist_log.rs) |
 | [budget.md](./budget.md) | Dollar caps and the park they produce | [`harness/budget.rs`](../../../crates/rimz/src/harness/budget.rs), [`cli/budget.rs`](../../../crates/rimz/src/cli/budget.rs) |
 | [messaging.md](./messaging.md) | Getting text into a running agent | [`message/`](../../../crates/rimz/src/message) |
+| [transcript.md](./transcript.md) | The durable conversation log and asks | [`transcript.rs`](../../../crates/rimz/src/transcript.rs) |
 | [worktrees.md](./worktrees.md) | RimZ-owned Git worktrees | [`worktree.rs`](../../../crates/rimz/src/worktree.rs) |
+| [teams.md](./teams.md) | Team scratch files, the stage board, and stage flips | [`harness/scratch.rs`](../../../crates/rimz/src/harness/scratch.rs), [`harness/team_stage.rs`](../../../crates/rimz/src/harness/team_stage.rs) |
 | [trust.md](./trust.md) | Which parts of a project config may execute | [`trust.rs`](../../../crates/rimz/src/trust.rs) |
 
 Every file below is under `harness/` except the top-level `address.rs`, the petname grammar in `agents/`, and the durable run record in `store/`.
@@ -86,8 +88,8 @@ Every file below is under `harness/` except the top-level `address.rs`, the petn
 | [`prompt_compose.rs`](../../../crates/rimz/src/harness/prompt_compose.rs) | Ordered system-prompt composition, content-addressed runtime artifacts, and adapter replacement argv or environment. |
 | [`launch_reminders.rs`](../../../crates/rimz/src/harness/launch_reminders.rs) | The one `<system_reminder>` tag: paragraph order and the model fragment. |
 | [`launch_context.rs`](../../../crates/rimz/src/harness/launch_context.rs) | A team member's identity sentence, launch-time run state, and channel rule. |
-| [`scratch.rs`](../../../crates/rimz/src/harness/scratch.rs) | Team memory-file scan and the advisory `blackboard.md` stage parser, shared by launch reminders and cohort reports. |
-| [`team_stage.rs`](../../../crates/rimz/src/harness/team_stage.rs) | `rimz teams flip`: locked board edits, the durable `team.stage` signal, owner delivery, and hand-off compaction. |
+| [`scratch.rs`](../../../crates/rimz/src/harness/scratch.rs) | Team memory-file scan and the advisory `blackboard.md` stage parser, shared by launch reminders and cohort reports. See [teams.md](./teams.md). |
+| [`team_stage.rs`](../../../crates/rimz/src/harness/team_stage.rs) | `rimz teams flip`: locked board edits, the durable `team.stage` signal, owner delivery, and hand-off compaction. See [teams.md](./teams.md). |
 | [`ancestry.rs`](../../../crates/rimz/src/harness/ancestry.rs) | Durable caller resolution and launch-chain policy. |
 | [`subagent_policy.rs`](../../../crates/rimz/src/harness/subagent_policy.rs), [`parent_watch.rs`](../../../crates/rimz/src/harness/parent_watch.rs), [`orphan_sweep.rs`](../../../crates/rimz/src/harness/orphan_sweep.rs) | What a subagent caller may launch, the child's parent watchdog, and the elder's backstop when that watchdog fails. See [subagents.md](./subagents.md). |
 | [`address.rs`](../../../crates/rimz/src/address.rs) | The address: parsing `@handle#channel`, resolving it against a snapshot, binding a match to a live pane, rendering the canonical handle back, and launch-instance grouping and lineage. |
