@@ -126,7 +126,7 @@ Programmatic entry points do not consult the waiver at all. See [the fail-fast g
 
 1. **Evaluate.** One agent verdict from its own ledger, one turn verdict from `budget.scopes.json`, plus one scope verdict from the binding fleet or account park and this agent's waiver state.
 2. **Classify.** All-under, agent-parked, turn-parked, or scope-parked. All-under includes the turn verdict, clears the auto-continue budget record, and stops there.
-3. **Arm the day reset.** A parked daily scope, or a parked `/day` agent cap, arms an auto-continue park with the next local midnight as its deadline. A turn-only park clears any armed budget auto-continue because its reset is a prompt rather than a clock. The `Budget` park class is described in [loops.md § Recovery the elder runs](./loops.md#recovery-the-elder-runs), and it is checked before any provider-derived classification.
+3. **Arm the day reset.** A parked daily scope, or a parked `/day` agent cap, arms an auto-continue park with the next local midnight as its deadline. A turn-only park clears any armed budget auto-continue because its reset is a prompt rather than a clock. The `Budget` park class is described in [providers.md § Auto-continue](../agents/providers.md#auto-continue), and it is checked before any provider-derived classification.
 4. **Interrupt.** A `Running` agent with a live bound pane, past its interrupt throttle, gets the detached `rimz agents budget-park` helper. The throttle is 120 seconds, so an agent that keeps running past a park is re-interrupted every two minutes rather than every tick.
 5. **Persist.** Changed agent ledgers, merged scope parks, and changed scope state are written back.
 
@@ -173,5 +173,5 @@ Both queue the configured continue prompt after lifting a park, and only to agen
 - [providers.md](../agents/providers.md#daily-dollar-caps): account cap eligibility.
 - [spending.md](../agents/spending.md): the spend caches and cost coverage.
 - [scripting.md](./scripting.md): supervised runs and the exit-code contract that carries `125`.
-- [loops.md](./loops.md): the fire gate ladder and the `Budget` auto-continue park class.
+- [loops.md](./loops.md): the fire gate ladder.
 - [messaging.md](./messaging.md): delivery gates, the `automated` flag, and what a waiving message looks like.
