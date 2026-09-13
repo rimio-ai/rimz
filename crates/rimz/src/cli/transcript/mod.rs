@@ -248,8 +248,9 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 /// The workspace a view reads: the participant's own, unless the view names a
-/// channel that workspace has no conversation for and exactly one other known
-/// workspace does. `--root` pins the participant's workspace.
+/// channel that workspace has neither a conversation nor a live agent for and
+/// exactly one other known workspace does. `--root` pins the participant's
+/// workspace.
 pub(crate) fn resolve_view_workspace(
     target: Option<&str>,
     worktree: Option<&str>,
@@ -264,8 +265,11 @@ pub(crate) fn resolve_view_workspace(
     };
     let paths = rimz::StatePaths::for_workspace(current.workspace_id.clone())
         .context("preparing state paths")?;
-    let current_has = rimz::transcript::channels(&paths)
-        .is_ok_and(|channels| channels.contains(channel.as_str()));
+    let current_has = live_agents(crate::cli::open_store(&current).ok().as_ref())
+        .iter()
+        .any(|agent| agent.channel.as_deref() == Some(channel.as_str()))
+        || rimz::transcript::channels(&paths)
+            .is_ok_and(|channels| channels.contains(channel.as_str()));
     let candidates = if current_has {
         Vec::new()
     } else {
