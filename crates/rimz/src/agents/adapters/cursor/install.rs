@@ -5,13 +5,13 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value, json};
 
 use crate::agents::{
-    AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
-    HookUninstallReport, ManagedIntegration, Result, StatusLineChange, agent_config_path,
-    read_optional_file,
+    AgentErr, HookInstallFilePreview, HookInstallPreview, HookInstallReport, HookUninstallReport,
+    ManagedIntegration, Result, StatusLineChange, agent_config_path, read_optional_file,
     settings_json::{self, PendingWrite},
 };
 use crate::disk::atomic;
 
+use super::super::install_report::report_files;
 use super::{
     CURSOR_HOOKS, RETAINED_RENDERING_KEYS, RIMZ_HOOK_COMMAND, RIMZ_HOOK_MARKER,
     RIMZ_STATUS_LINE_COMMAND, RIMZ_STATUS_LINE_MARKER,
@@ -126,13 +126,16 @@ pub(super) fn install_into(
     Ok(HookInstallReport {
         agent: "cursor",
         files: report_files(
-            hooks_path,
-            hooks_original.is_some(),
-            config_path,
-            config_original.is_some(),
-            displaced
-                .is_some()
-                .then_some((state_path, state_original.is_some())),
+            [
+                (hooks_path, hooks_original.is_some()),
+                (config_path, config_original.is_some()),
+            ]
+            .into_iter()
+            .chain(
+                displaced
+                    .is_some()
+                    .then_some((state_path, state_original.is_some())),
+            ),
         ),
         installed_events: events,
     })
@@ -214,11 +217,12 @@ pub(super) fn uninstall_from(
     Ok(HookUninstallReport {
         agent: "cursor",
         files: report_files(
-            hooks_path,
-            hooks_original.is_some(),
-            config_path,
-            config_original.is_some(),
-            state_existed.then_some((state_path, true)),
+            [
+                (hooks_path, hooks_original.is_some()),
+                (config_path, config_original.is_some()),
+            ]
+            .into_iter()
+            .chain(state_existed.then_some((state_path, true))),
         ),
         removed_events,
     })
@@ -520,30 +524,4 @@ fn entry_is_owned(entry: &Value) -> bool {
 
 pub(super) fn read_existing_json(path: &Path) -> Result<Map<String, Value>> {
     settings_json::read_json_object("cursor", path)
-}
-
-fn report_files(
-    hooks_path: &Path,
-    hooks_existed: bool,
-    config_path: &Path,
-    config_existed: bool,
-    state: Option<(&Path, bool)>,
-) -> Vec<HookInstallFileReport> {
-    let mut files = vec![
-        HookInstallFileReport {
-            path: hooks_path.to_path_buf(),
-            existed: hooks_existed,
-        },
-        HookInstallFileReport {
-            path: config_path.to_path_buf(),
-            existed: config_existed,
-        },
-    ];
-    if let Some((path, existed)) = state {
-        files.push(HookInstallFileReport {
-            path: path.to_path_buf(),
-            existed,
-        });
-    }
-    files
 }

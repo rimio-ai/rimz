@@ -11,12 +11,12 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value, json};
 
 use crate::agents::{
-    AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
-    HookUninstallReport, ManagedIntegration, Result, StatusLineChange, agent_config_path,
-    read_optional_file,
+    AgentErr, HookInstallFilePreview, HookInstallPreview, HookInstallReport, HookUninstallReport,
+    ManagedIntegration, Result, StatusLineChange, agent_config_path, read_optional_file,
     settings_json::{self, PendingWrite},
 };
 
+use super::super::install_report::report_files;
 use super::{ANTIGRAVITY_HOOKS, HOOK_TIMEOUT_SECS, RIMZ_HOOK_MARKER, STATUS_LINE};
 
 const AGENT: &str = "antigravity";
@@ -93,16 +93,10 @@ pub(super) fn install(hooks_path: &Path, settings_path: &Path) -> Result<HookIns
     )?;
     Ok(HookInstallReport {
         agent: AGENT,
-        files: vec![
-            HookInstallFileReport {
-                path: hooks_path.to_path_buf(),
-                existed: hooks_existed,
-            },
-            HookInstallFileReport {
-                path: settings_path.to_path_buf(),
-                existed: settings_existed,
-            },
-        ],
+        files: report_files([
+            (hooks_path, hooks_existed),
+            (settings_path, settings_existed),
+        ]),
         installed_events: installed_event_names(),
     })
 }
@@ -148,16 +142,7 @@ pub(super) fn uninstall(hooks_path: &Path, settings_path: &Path) -> Result<HookU
     uninstall_statusline_file(settings_path)?;
     Ok(HookUninstallReport {
         agent: AGENT,
-        files: vec![
-            HookInstallFileReport {
-                path: hooks_path.to_path_buf(),
-                existed,
-            },
-            HookInstallFileReport {
-                path: settings_path.to_path_buf(),
-                existed: settings_existed,
-            },
-        ],
+        files: report_files([(hooks_path, existed), (settings_path, settings_existed)]),
         removed_events,
     })
 }

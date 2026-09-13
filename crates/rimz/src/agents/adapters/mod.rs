@@ -19,6 +19,7 @@ pub(super) mod copilot;
 pub(super) mod cursor;
 pub(super) mod droid;
 pub(super) mod grok;
+mod install_report;
 pub(super) mod kimi;
 pub(super) mod kiro;
 pub(super) mod opencode;

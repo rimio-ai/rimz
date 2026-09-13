@@ -5,11 +5,12 @@ use std::path::Path;
 use serde_json::{Map, Value};
 
 use crate::agents::{
-    AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
-    HookUninstallReport, ManagedIntegration, Result, read_optional_file,
+    AgentErr, HookInstallFilePreview, HookInstallPreview, HookInstallReport, HookUninstallReport,
+    ManagedIntegration, Result, read_optional_file,
     settings_json::{self, PendingWrite},
 };
 
+use super::super::install_report::report_files;
 use super::{COPILOT_HOOKS, COPILOT_MANAGED_SOURCE, RIMZ_STATUS_LINE_MARKER, STATUS_LINE};
 
 const AGENT: &str = "copilot";
@@ -89,12 +90,10 @@ pub(super) fn install(hooks_path: &Path, settings_path: &Path) -> Result<HookIns
     )?;
     Ok(HookInstallReport {
         agent: AGENT,
-        files: report_files(
-            hooks_path,
-            hooks_original.is_some(),
-            settings_path,
-            settings_original.is_some(),
-        ),
+        files: report_files([
+            (hooks_path, hooks_original.is_some()),
+            (settings_path, settings_original.is_some()),
+        ]),
         installed_events: event_names(),
     })
 }
@@ -164,12 +163,10 @@ pub(super) fn uninstall_with(
     };
     Ok(HookUninstallReport {
         agent: AGENT,
-        files: report_files(
-            hooks_path,
-            hooks_original.is_some(),
-            settings_path,
-            settings_original.is_some(),
-        ),
+        files: report_files([
+            (hooks_path, hooks_original.is_some()),
+            (settings_path, settings_original.is_some()),
+        ]),
         removed_events: hook_report.removed_events,
     })
 }
@@ -279,22 +276,4 @@ fn event_names() -> Vec<String> {
         .iter()
         .map(|hook| hook.event.to_owned())
         .collect()
-}
-
-fn report_files(
-    hooks_path: &Path,
-    hooks_existed: bool,
-    settings_path: &Path,
-    settings_existed: bool,
-) -> Vec<HookInstallFileReport> {
-    vec![
-        HookInstallFileReport {
-            path: hooks_path.to_path_buf(),
-            existed: hooks_existed,
-        },
-        HookInstallFileReport {
-            path: settings_path.to_path_buf(),
-            existed: settings_existed,
-        },
-    ]
 }
