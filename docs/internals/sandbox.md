@@ -1,82 +1,191 @@
 # Agent sandbox mount views
 
-`agents.isolation = "sandbox"` is Linux-only machine policy in `agents.toml`; the default is `host`. It wraps agent panes in bubblewrap, not raw command panes or the room's multiplexer. This is a filesystem view for room tmp and profile skill discovery, not containment: the host root remains writable, credentials stay visible, and PID, network, and IPC namespaces are not unshared. Provider permission modes remain separate.
+Sandbox isolation runs each agent's provider process inside Linux bubblewrap with a rearranged filesystem view. It is machine policy, `agents.isolation = "sandbox"` in `agents.toml`, and the default is `host`. The view gives every agent in a room a private shared `/tmp` ([room tmp](#room-tmp)) and lets a profile decide which skills the model may call ([profile skill views](#profile-skill-views)). Raw command panes and the room's multiplexer stay on the host.
 
-## Launch and preflight
+The view is not containment. The host root stays bound read-write, credentials stay visible, the PID, network, and IPC namespaces are shared, and provider permission modes apply unchanged. Trust decides what a repository may run; a sandbox does not make an untrusted command safe ([trust.md](./harness/trust.md#the-executable-surface)).
 
-`rimz config set agents.isolation sandbox` probes bubblewrap before writing. Start and launch preflights refuse non-Linux systems, missing `bwrap`, or a failed mount probe, with a fix rather than a host-mode fallback. Start also preflights sandbox when a rebirth it is about to recover includes an agent whose recorded `--isolation` override (or machine policy) is sandbox. `rimz doctor` reports the mode, binary/version, probe verdict, and fix; in host mode the diagnostic is informational.
+The code lives in `crates/rimz/src/sandbox/`: `mod.rs` plans the mounts, pins, and bubblewrap argv, `linux.rs` probes bubblewrap, `skills.rs` builds the skill view, and `rewrite.rs` produces the user-only skill copies. `harness/launch_plan.rs` is the one caller that plans and applies a view for a launch.
 
-The exec wrapper takes the launch's recorded `--isolation` override (`LaunchParams.isolation`, carried in the exec envelope), else current machine policy, and wraps only the ready provider process, using the absolute bubblewrap path that its preflight probed. A trusted provider `PATH` override does not change the wrapper binary. Qwen's login-shell reentry runs first on the host; its finalized exec builds the one view. Each pane gets one RimZ sandbox, not nested wrappers. Subagents launch through the multiplexer and build their own view with their own profile, sharing room tmp; without their own `--isolation` they inherit the parent's recorded override. Restart, fork, and rebirth replay the recorded override and otherwise pick up the current isolation setting.
+## Choosing the isolation
 
-`sandbox::plan` reads environment, paths, skill directories, and source bytes into a `SandboxPlan`: ordered mounts, environment pins, skipped skills, and rewritten copies planned in memory at content-addressed targets. It creates no directories or copies. `sandbox::apply` writes those copies and ensures the private tmp directory; `prepare` remains a plan-then-apply convenience. The exec wrapper uses the shared [launch plan](./harness/fleet.md#the-exec-wrapper), whose apply step also ensures the room tmp layout. [`rimz agents explain`](../reference/cli/agents.md#explain-a-launch) shows mounts, pins, copy targets, and omissions without applying them. It requires successful preflight and calculates the view from its invoking environment plus launch overrides, which can differ from a target pane's environment.
+A launch runs under its recorded `--isolation` override (`LaunchParams.isolation`, carried in the exec envelope) when it has one, and under current machine policy otherwise. A repository cannot choose either, because `agents.isolation` lives in machine config outside the trust hash.
 
-Bubblewrap forks instead of becoming the provider. The wrapper always passes `--die-with-parent` so terminating the supervised bubblewrap process also terminates its child. Bubblewrap sets `NoNewPrivs`: `sudo` and setuid privilege escalation do not work inside these panes. Use a host shell for privileged work.
+The override travels with the launch. Restart, fork, and rebirth replay a recorded override and otherwise read the current machine policy. A subagent launched without its own `--isolation` inherits its parent's recorded override. Subagents open their own panes through the multiplexer, so each builds its own view from its own profile and shares the parent's room tmp.
+
+## Preflight
+
+Every entry point that can start a sandboxed agent probes bubblewrap first and refuses with the fix; none falls back to host mode. `sandbox::preflight` runs `bwrap --bind / / --dev-bind /dev /dev --die-with-parent -- /usr/bin/true` from the `bwrap` found on `PATH` and returns its absolute path. The errors are the `SandboxErr` variants `UnsupportedOs`, `MissingBwrap`, and `ProbeFailed`, each ending with what to change.
+
+| Entry point | When it probes |
+| --- | --- |
+| `rimz config set agents.isolation sandbox` | Before writing the value. |
+| `rimz start` and detached room ensure (`cli/room/mod.rs`) | When machine policy is sandbox. |
+| `rimz start` recovering a rebirth | When the plan includes an agent whose recorded override, or machine policy, is sandbox (`RebirthPreview::requires_sandbox`). |
+| `rimz agents launch`, `restart`, `fork`, supervised runs | For the launch's effective isolation. |
+| Cohort resume (`launch_resume_layout` in `cli/agents_cmd/launch.rs`) | For each resumed agent's recorded override, else machine policy. |
+| The exec wrapper (`cli/agents_cmd/exec.rs`) | For the launch's effective isolation; a failure marks the launch failed and fails its run. |
+| `rimz agents explain` | For the explained launch's isolation. |
+| `rimz doctor` | Always; reports mode, binary path, version, probe verdict, and fix. In host mode the check is informational. |
+
+`launch`, `restart`, `fork`, supervised runs, the exec wrapper, and `explain` call `sandbox::preflight_skills` before the probe. It refuses a configured profile `skills` list under sandbox isolation when the adapter cannot mark skills user-only, so that refusal needs no bubblewrap at all.
+
+## The launch plan
+
+`sandbox::plan` reads the environment, paths, skill directories, and skill source bytes into a `SandboxPlan` without creating anything. The plan holds the ordered `MountPlan`, the environment `pins`, the `skipped` skills, and the rewritten `copies` with their content-addressed targets. `sandbox::apply` writes the copies and ensures the private tmp directory; `sandbox::prepare` runs both.
+
+The exec wrapper uses the shared [launch plan](./harness/fleet.md#the-exec-wrapper). `launch_plan::compile` plans a view only for a ready provider process (`AgentProcessStage::Ready`), pins its environment into the compiled process, and lowers the mounts with `sandbox::bwrap_argv`. `launch_plan::apply` ensures the room tmp layout and then calls `sandbox::apply`, so a launch in a room whose birth never created room tmp (a host-policy birth, for example) still gets it. Qwen's login-shell reentry stage runs on the host without a view; its finalized exec is the ready stage that builds one.
+
+[`rimz agents explain`](../reference/cli/agents.md#explain-a-launch) prints the mounts, pins, copy targets, and omissions without applying them. It plans from its own invoking environment plus the launch overrides, which can differ from the target pane's environment.
+
+The wrapped process has three properties a contributor should expect:
+
+- Each pane gets exactly one RimZ sandbox, never nested wrappers. The wrapper runs the absolute bubblewrap path its preflight probed, so a trusted provider `PATH` override does not change it.
+- Bubblewrap forks the provider instead of becoming it. `--die-with-parent` ensures that terminating the supervised bubblewrap process also terminates the provider.
+- Bubblewrap sets `NoNewPrivs`, so `sudo` and setuid binaries cannot escalate inside the pane. Privileged work belongs in a host shell.
 
 ## Mount order
 
-The command starts with `bwrap --bind / / --dev-bind /dev /dev --die-with-parent`, then applies these mounts in order before `--chdir <cwd> -- <provider wrapper>`:
+`sandbox::bwrap_argv` emits `bwrap --bind / / --dev-bind /dev /dev --die-with-parent`, then the plan's mounts in this order, then `--chdir <cwd> -- <provider argv>`:
 
-1. Bind the adapter-declared provider config home explicitly, source and target identical today. Built-ins resolve it from the effective launch environment, which for a room's named account carries that account's home override (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`), so the bind follows the room's account; plugins need not declare one.
-2. Bind `StatePaths.tmp_dir` at `/tmp`.
-3. Rebind required host paths beneath `/tmp/` at their original absolute paths, so replacing host `/tmp` does not hide the room or its sockets.
-4. Overlay the provider skill root when its view differs from the host directory, using a tmpfs directory, reproducing host entry symlinks with their literal targets, and binding other entries read-only. Shadow rewritten skills reached through those symlinks read-only at their canonical locations, including locations outside the declared skill root.
+1. The adapter's provider config home (`config_home`), bound at its own path, when it exists. Built-ins resolve it from the effective launch environment, and a room's named account carries its home override there (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`), so the bind follows the room's account. Plugins declare no config home.
+2. `StatePaths.tmp_dir` bound at `/tmp`.
+3. Host paths beneath `/tmp` that must stay reachable, rebound at their original paths ([reachable host paths](#reachable-host-paths)).
+4. The skill view, when one is needed: a tmpfs over the resolved skill root, one entry per skill, and read-only shadows of rewritten skills at their canonical paths ([building the view](#building-the-view)).
 
-There is no `--unshare-*`, replacement `/proc`, or cleared environment. `/dev` needs a device bind rather than an ordinary root bind for tools using device files such as `/dev/null`.
+The command has no `--unshare-*` flag, no replacement `/proc`, and no cleared environment. `/dev` takes `--dev-bind` because an ordinary bind breaks device files such as `/dev/null`.
 
-Host-reach candidates include `HOME`, the five XDG roots, RimZ runtime, project root, worktree, cwd, provider home, and mux endpoint directories resolved by the mux domain. Paths remain identical inside and outside: process ownership comparisons and short Unix socket paths depend on this. A required root equal to `/tmp` cannot coexist with the tmp replacement and is refused. Bubblewrap may create missing mount-point directories beneath the tmp bind; empty host-visible directories in room tmp are therefore expected, not leaked host data. Skill roots may themselves be symlinks: overlays target the resolved directories, while entry sources are resolved before any overlay hides them. Overlaying a missing skill root may create an empty root directory on the host.
+## Reachable host paths
 
-The tmux endpoint is the inherited `$TMUX` server, or the managed RimZ server when `$TMUX` is absent. An unrelated ambient server under `/tmp/tmux-<uid>` is not separately rebound; commands targeting that default socket directory see room tmp rather than the host directory.
+Replacing `/tmp` would hide any RimZ state, socket, or project that lives under host `/tmp`, so `sandbox::plan` rebinds those paths at their original locations. Paths stay identical inside and outside the sandbox because process ownership comparisons and short Unix socket paths depend on it.
 
-The plan pins its environment inputs across shell startup: existing root and provider-override values are reapplied (a named room account's home key among them), while consulted keys that were absent are removed with `env -u`. Adapters declare their native override keys beside their home resolver. This prevents shell startup files from moving provider discovery away from the mounted view. Export root overrides before launching RimZ, or put them in trusted launch environment config; changing them only inside the pane's startup files does not change its planned mounts. `TMPDIR` is always pinned to `/tmp`. Finalized provider-account launches retain their raw argv and apply the same environment policy without another shell.
+| Candidate | Source |
+| --- | --- |
+| `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR`, `RIMZ_AGENTS_HOME` | Each non-empty value in the launch environment. |
+| RimZ state home, runtime home, Zellij socket base, tmux socket directory | `mux::domain::ProcessDomain::required_paths`. |
+| Working directory, project root, worktree | The launch. |
+| Provider config home | Mount step 1, when it exists. |
+
+Each candidate is normalized lexically. A candidate equal to `/tmp` refuses the launch with `SandboxErr::TmpCollision`. A candidate below `/tmp` that exists is rebound, and a candidate nested under one already rebound is skipped. Candidates elsewhere need no mount, since the root bind already shows them.
+
+The tmux endpoint is the server named by an inherited `$TMUX`, or RimZ's managed server when `$TMUX` is absent. An unrelated tmux server under `/tmp/tmux-<uid>` is not rebound, so a command inside the pane that targets that default socket directory sees room tmp instead.
+
+Bubblewrap creates missing mount-point directories beneath the tmp bind. Empty directories named after host paths therefore appear in room tmp; they are mount points, not leaked host data.
+
+## Environment pins
+
+The plan pins every environment variable it consulted, so shell startup files cannot move provider discovery away from the mounted view. `CompiledAgentProcess::pin_env` applies the pins as the top layer of the launch environment ([env application](./harness/trust.md#env-application)), after shell startup and before the provider starts.
+
+| Key | Pin |
+| --- | --- |
+| `HOME`, the five `XDG_*` roots above, `RIMZ_AGENTS_HOME` | Reapplied with the planned value; removed with `env -u` when absent. |
+| `TMUX`, `ZELLIJ_SOCKET_DIR` | Same. |
+| The adapter's native override keys (`config_home_env_keys`: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `QWEN_HOME`, `KIRO_HOME`, and others) | Same, so a room account's home key is among them. |
+| `TMPDIR` | Always `/tmp`. |
+
+A key present with an empty value is pinned to the empty value. To move a root, export it before launching RimZ or set it in trusted launch environment config; changing it only in the pane's startup files does not change the planned mounts. Finalized provider-account launches keep their raw argv and get the same pins without another shell.
 
 ## Room tmp
 
-`${XDG_STATE_HOME:-~/.local/state}/rimz/workspaces/<workspace_id>/tmp/` is ensured at mode `0700` before sandbox room birth and again during launch preparation. `StatePaths::ensure_tmp_dir` builds one layout: `scratchpad/` for agent scratch files, `rimz-waits/` for watched-command output, and `rimz-subagents/` for settled child responses. Host mode creates this layout on demand for RimZ's own output files. The sandbox launch environment pins reapply `TMPDIR=/tmp` after shell startup files.
+Room tmp is one directory per workspace, `${XDG_STATE_HOME:-~/.local/state}/rimz/workspaces/<workspace_id>/tmp/`, created at mode `0700`. Sandboxed panes see it at `/tmp`. `StatePaths::ensure_tmp_dir` builds its layout:
 
-`sandbox::TmpView` owns the host-to-agent path mapping for output records and messages: paths under room tmp become `/tmp/<relative path>` under sandbox isolation and remain host paths otherwise. `TmpView::current` maps for a recipient's recorded override (subagent reports use the parent's) and falls back to current machine policy; emitters without a recipient, such as wait watchers, pass no override, so a wait armed by an agent whose override differs from machine policy names the path as machine policy maps it. Room tmp is separate from host `/tmp`, not hidden from host processes: the host state path remains accessible inside and outside the sandbox.
+| Path | Holds |
+| --- | --- |
+| `scratchpad/` | Agent scratch files, as the [launch reminder](#launch-reminder) instructs. |
+| `rimz-waits/` | Watched-command output ([loops.md](./harness/loops.md#watched-commands)). |
+| `rimz-subagents/` | Settled child responses ([subagents.md](./harness/subagents.md)). |
 
-All sandboxed agents and subagents in the room see the same temporary files. Room tmp survives agent restart and lives at a persistent location, but is not a durable store record and carries no fsync guarantee. Room teardown, including reset and uninstall, removes it after the process sweep; dead-workspace GC removes it with the state root. `rimz agents show` exposes the host path when it exists. Reset with rebirth may immediately create a new empty tmp directory. Team `scratch-files` config is separate and unchanged.
+Three callers ensure the layout. Room birth does so under sandbox policy, `launch_plan::apply` on every sandbox launch, and the output writers (wait arming in `harness/schedule/arm.rs`, subagent reports in `cli/agents_cmd/subagent_report.rs`) on demand in either isolation mode. Host mode therefore has room tmp too, for RimZ's own output files.
 
-Rewritten skill copies live beside `tmp/`, under `StatePaths.skills_dir` at `<workspace store>/skills/<sha256>/`. The digest covers the rewrite kind, relative paths, and file bytes. Copies are immutable and deduplicated across concurrent launches; changed sources produce new copies. The private `skills/` directory is created only when needed. Copies remain for the room's lifetime so running mounts retain their files, and teardown, reset, uninstall, and dead-workspace GC reclaim them with the room.
+`sandbox::TmpView` maps host paths to agent paths for output records and messages. Under sandbox isolation a path inside room tmp becomes `/tmp/<relative path>`; every other path, and every path under host isolation, stays a host path. `TmpView::current` takes the recipient's recorded override and falls back to machine policy. Subagent reports pass the parent's override. Wait watchers and signal firing pass none, so a wait armed by an agent whose override differs from machine policy names its output path as machine policy maps it.
 
-Storage reports include tmp and skill copies in the State root's on-disk footprint; the State category describes their location, not a durability guarantee.
+Room tmp is separate from host `/tmp`, not hidden from the host. The host state path stays reachable inside and outside the sandbox, and host processes can read the directory directly. `rimz agents show` prints the host path when the directory exists.
+
+Every sandboxed agent and subagent in the room sees the same files. Room tmp survives agent restart but is not a store record and carries no fsync guarantee. `room::teardown::teardown_room` removes it after the process sweep, which covers `rimz reset`, the auto-reset in `rimz start`, and `rimz uninstall`; dead-workspace GC removes it with the state root. A plain session exit leaves it in place, and a reset followed by rebirth can create a fresh empty one straight away. Team scratch files are a different mechanism that lives in the worktree ([teams.md](./harness/teams.md#scratch-files)).
+
+### Rewritten skill copies
+
+Rewritten skills live beside room tmp in `StatePaths.skills_dir`, as `<workspace state root>/skills/<sha256>/`. `rewrite::digest` hashes the rewrite kind and, for each source entry, its relative path, mode, file-or-directory flag, and bytes, so any change to a source produces a new copy. `rewrite::apply` builds a copy in a temporary sibling and renames it into place; a target that already exists is kept, which deduplicates concurrent launches. The `skills/` directory is created only when a copy is needed.
+
+Copies are immutable and stay for the room's lifetime, so a running mount never loses its files. The same teardown, reset, uninstall, and dead-workspace GC paths that remove room tmp remove them. Both directories sit under the workspace state root, so storage reports count them in that root's footprint.
 
 ## Launch reminder
 
-The launch compiler sets `LaunchReminders.sandbox` from successful bubblewrap preflight; the apply step ensures the tmp layout before provider execution, including on restart of an older room. The reminder renderer inserts this paragraph after the identity and channel paragraphs and before the catalog or child policy, inside the same `<system_reminder>` tag:
+A sandbox launch adds one paragraph to the agent's launch reminder. `launch_plan::compile` sets `LaunchReminders.sandbox` when the bubblewrap preflight succeeded, and `harness/launch_reminders.rs` renders `SANDBOX_REMINDER_BODY`:
 
 > This pane runs in a bubblewrap sandbox. `/tmp` is all yours, separate from the host's `/tmp`, removed when the room closes; the host state path stays reachable. Every temporary file you make goes under `/tmp/scratchpad`. If your harness names a session-specific scratchpad and says to use `/tmp` only when asked, this is that ask: use `/tmp/scratchpad` in its place.
 
-One path, stated once: a harness such as Claude Code injects its own environment block naming a session-specific scratchpad and reserving `/tmp` for an explicit ask, so the reminder supplies that ask and overrides the private path outright rather than splitting files by reader. An agent that had to merge two rules from two places is the failure this paragraph replaced.
+The paragraph gives the agent one scratch path. A harness such as Claude Code injects its own environment block that names a session-specific scratchpad and reserves `/tmp` for an explicit request. The reminder supplies that request and replaces the private path outright, so the agent never has to reconcile two rules from two sources.
 
-The wait and subagent output directories are not named: every wait message and subagent report carries its file path.
-
-It reaches Claude, Qwen, Droid, and Codex through their existing native append-system-text channels on every launch kind, including subagents. Host-mode launches omit it. Other providers gain no fallback; their child user-prompt fallback remains the no-delegation body only.
+The paragraph does not name `rimz-waits/` or `rimz-subagents/`, because every wait message and subagent report carries its own file path. Host launches omit it. Its position among the reminder paragraphs and the providers that receive it (Claude, Qwen, Droid, and Codex, on every launch kind including subagents) are owned by [fleet.md](./harness/fleet.md#launch-reminders).
 
 ## Profile skill views
 
-Host isolation ignores profile `skills` lists, including `[]` and lists for providers without skill-view support, without a warning. Native skill discovery and invocation remain unchanged. Config parsing still rejects duplicate and invalid names in every isolation mode.
+A profile `skills` list decides which user skills the model may invoke on its own. The list takes effect only under sandbox isolation. Host isolation ignores every list, including `[]` and lists for providers without skill-view support, without a warning, and native discovery and invocation stay unchanged. Config parsing rejects duplicate and invalid names in both modes.
 
-Each sandbox launch overlays at most one user skill root, declared by its adapter through `skills_home`:
+### Skill roots and user-only markers
 
-| Provider | Skill root |
+Each sandbox launch overlays at most one user skill root, declared by the adapter's `skills_home`, and marks skills user-only with the adapter's `manual_skill`. Both appear in `agents/conformance.rs`.
+
+| Provider | Skill root (`skills_home`) | User-only marker (`manual_skill`) |
+| --- | --- | --- |
+| Claude | First non-empty `CLAUDE_CONFIG_DIR` entry (default `$HOME/.claude`), plus `/skills` | `Frontmatter` |
+| Qwen | `QWEN_HOME` (default `$HOME/.qwen`), plus `/skills` | `Frontmatter` |
+| Codex | `$HOME/.agents/skills` | `OpenAiPolicy` |
+| Cursor, Copilot, Droid, Kimi, Pi | `$HOME/.agents/skills` | `Frontmatter` |
+| Kiro | `KIRO_HOME` (default `$HOME/.kiro`), plus `/skills` | `Unsupported` |
+| Antigravity, Amp, OpenCode, Grok | `$HOME/.agents/skills` | `Unsupported` |
+| Plugins | None | `Unsupported` |
+
+A provider marked `Unsupported`, or without a root, refuses every configured list under sandbox isolation, whatever skills are installed. `Frontmatter` writes `disable-model-invocation: true` into `SKILL.md` frontmatter. `OpenAiPolicy` writes `policy.allow_implicit_invocation: false` into `agents/openai.yaml`.
+
+The RimZ skill library at `${XDG_CONFIG_HOME:-~/.config}/rimz/skills/` is merged into the provider root; a name already in the provider root shadows the library entry. `RIMZ_AGENTS_HOME` moves RimZ config fragments, not the library. Project-chain skills and Codex's `$CODEX_HOME/skills` are outside the view and keep their native behaviour.
+
+### What a list means
+
+`skills = ["merge", "review"]` lists bare skill names. Listed skills stay model-callable. Unlisted skills that RimZ can prepare stay visible but become user-invoked only. `skills = []` makes every available skill user-invoked only.
+
+An omitted list inherits the parent profile's, and a child's list replaces its parent's instead of extending it. Once a profile in the chain configures a list, no descendant can return to unconfigured behaviour. When no profile in the chain configures one, invocation behaviour is native.
+
+Listing a skill never lifts a native user-only marker. Listed skills are bound with their host metadata unparsed, so an author's own invocation restrictions still apply.
+
+### Building the view
+
+`skills::plan` enumerates the provider root and the library on the host, before any overlay hides them. A skill is a directory that contains `SKILL.md`. Other entries, such as `_shared`, `AGENTS.md`, and `CLAUDE.md`, are carried into the view without copying or rewriting. Broken symlinks are skipped with a debug log.
+
+The view preserves the provider root's shape:
+
+- The tmpfs covers the resolved root, since the root itself may be a symlink. A root that does not exist can be created empty on the host when bubblewrap mounts over it.
+- A symlink in the provider root is recreated with its literal target, so a skill script that resolves its own path still reaches its canonical parent and shared sibling modules. Its target is resolved before the overlay hides it.
+- Every other entry, and every library entry, is a read-only bind. The host library path itself is shadowed only when a preserved provider-root symlink points into it.
+
+Unlisted skills are rewritten once per canonical directory. A provider-root entry binds its rewritten copy directly. A skill reached through a preserved symlink instead gets one read-only shadow of the copy at its canonical path, which can lie outside the declared skill root. Aliases that resolve to the same skill directory must be all listed or all unlisted; a mix refuses the launch with `ConflictingSkillAliases`, naming both and the fix.
+
+A view exists only when it changes something. With no library entries to merge and no copies to make, there is no tmpfs and no snapshot of the host directory. An unconfigured list never rewrites skills, and RimZ never rewrites or removes host skill files or symlinks.
+
+### The user-only rewrite
+
+The rewrite edits a full directory copy line by line and never touches the host source. `Frontmatter` sets the key in `SKILL.md` frontmatter, prepends a frontmatter block when the file has none, and leaves the document body untouched. `OpenAiPolicy` sets the key under `policy` in `agents/openai.yaml`, creating the file and its `agents/` directory when absent.
+
+Both rewrites accept a limited YAML subset:
+
+- block mappings and block sequences, without anchors, aliases, tags, or explicit `?` keys;
+- a flow collection (`[...]`, `{...}`) as a value only when it opens and closes on one line with no anchor, alias, or tag;
+- quoted values on one line, with block scalars for multiline text;
+- space indentation, consistent at the top level.
+
+Metadata outside the subset makes the skill unpreparable, and the rules below decide what happens to it. An unlisted skill is never bound unrewritten with implicit invocation still enabled.
+
+### Omissions and refusals
+
+Whether a problem refuses the launch or drops one skill depends on whether a list is configured and what failed.
+
+| Situation | Result |
 | --- | --- |
-| Claude | First `CLAUDE_CONFIG_DIR` entry (default `$HOME/.claude`), plus `/skills` |
-| Qwen | Config home (`QWEN_HOME`, default `$HOME/.qwen`), plus `/skills` |
-| Kiro | Config home (`KIRO_HOME`, default `$HOME/.kiro`), plus `/skills` |
-| Other built-ins | `$HOME/.agents/skills` |
-| Plugins | No declared skill root |
+| No list configured, and the view cannot be built (unreadable root, undecodable entry name) | Native discovery unchanged; a debug diagnostic only. |
+| List configured, provider has no skill root or an `Unsupported` marker | Launch refused (`SkillsNeedRoot`, `ManualSkillsUnsupported`). |
+| List configured, a listed name is in neither the provider root nor the library | Launch refused (`UnknownSkill`, naming the searched roots). |
+| List configured, aliases of one skill disagree | Launch refused (`ConflictingSkillAliases`). |
+| List configured, an unlisted skill has an unreadable source, a symlink cycle, a non-file entry, or unsupported metadata | Skill omitted from this launch; others proceed. |
+| List configured, listing the root fails (including an undecodable entry name) or writing under `skills_dir` fails | Launch refused. |
 
-The RimZ library at `${XDG_CONFIG_HOME:-~/.config}/rimz/skills/` is merged into that root. A name already present in the provider root shadows the library entry. `RIMZ_AGENTS_HOME` controls RimZ config fragments, not the library location. Project-chain skills and Codex's deprecated `$CODEX_HOME/skills` are unscoped.
-
-`skills = ["merge", "review"]` lists bare names: listed skills are model-callable, while unlisted skills RimZ can prepare remain visible but are user-invoked only. `skills = []` makes every available skill user-invoked only. An omitted list inherits; a child list replaces its parent's list rather than appending. Once a parent configures a list, a child cannot return to unconfigured behaviour. When no profile in the chain configures a list, native invocation behaviour is unchanged. With no library entries to merge and no copies to rewrite, there is no skill overlay or snapshot of the host directory.
-
-Listing a skill never lifts a native user-only marker: listed skills retain their host metadata without parsing it, so an author's existing invocation restrictions still apply.
-
-Without a configured list, an unavailable skill view (for example an unreadable root or an undecodable entry name) leaves native discovery unchanged and only logs a debug diagnostic. With a configured list, an unlisted skill RimZ cannot prepare because of an unreadable source, symlink cycle, non-file entry, or metadata outside the supported grammar is omitted from that launch's view. The tmpfs root hides it at its discovery path and the launch proceeds; `SandboxPlan.skipped` carries a `SkippedSkill` for each omission, which the exec handler prints to the pane's stderr as `rimz: starting without skill …` before provider execution. Installed skills are untouched and unaffected skills remain available with their invocation restrictions intact. Failures listing the root itself, including undecodable entry names, or writing under `skills_dir` still refuse the launch.
-
-In sandbox isolation, every configured list, including `[]`, requires a provider skill root and a user-only marker. Launch refuses when the provider declares no root, cannot mark skills user-only, or a listed name is absent from both the provider root and the library; the error names the fix. Antigravity, Amp, OpenCode, Kiro, Grok, and plugins refuse a configured list in sandbox mode regardless of installed skills.
-
-Adapters declare the user-only rewrite through `manual_skill`. Claude, Cursor, Copilot, Droid, Kimi, Qwen, and Pi write `disable-model-invocation: true` in `SKILL.md` frontmatter. Codex writes `policy.allow_implicit_invocation: false` in `agents/openai.yaml`, creating that file when absent. These are line-structured edits in full directory copies, not edits to host sources; the frontmatter rewrite leaves the document body untouched. Metadata must use block mappings and block sequences without anchors, aliases, or tags; a flow collection (`[...]`, `{...}`) is accepted as a value when it opens and closes on one line and carries no anchor, alias, or tag. Quoted values must fit on one line; use block scalars for multiline descriptions. Unsupported forms omit the unlisted skill rather than bind it unrewritten with implicit invocation enabled; the warning names the source path and RimZ's rewrite limitation.
-
-Roots are enumerated on the host before overlays are applied; broken symlinks are skipped with a debug log. A skill is a directory containing `SKILL.md`; non-skill entries such as `_shared`, `AGENTS.md`, and `CLAUDE.md` are mirrored without copying or metadata changes. Provider-root symlinks retain their literal targets, so resolving a skill script still reaches its canonical parent and shared sibling modules. Library entries remain read-only binds under the provider root; the host library path is not shadowed unless a preserved provider-root symlink reaches it. Unlisted skills share one rewritten copy per canonical directory; those reached through preserved symlinks also receive one read-only canonical shadow, which can replace paths outside the declared skill root. Aliases of the same skill must all be listed or all unlisted: conflicting invocation policies refuse launch with both names and the fix. Unconfigured views do not rewrite skills. Host skill files and symlinks are never rewritten or removed. These views control ordinary discovery, not containment: the writable root bind is still present.
+An omitted skill is hidden at its discovery path by the tmpfs. `SandboxPlan.skipped` carries a `SkippedSkill` for it, and the exec wrapper prints each one to the pane's stderr before the provider starts, as `rimz: starting without skill "<name>": RimZ cannot …`, naming the source path and the reason. The installed skill is untouched, and the remaining skills keep their invocation restrictions.
