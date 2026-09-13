@@ -77,40 +77,22 @@ pub(super) fn assemble_threads(
         return flat_entries(entries, archive_prefix);
     }
 
-    let mut by_message_id = HashMap::new();
-    for (index, entry) in entries.iter().enumerate() {
-        if let Some(message_id) = entry.chat.message_id.as_ref() {
-            by_message_id.entry(message_id.clone()).or_insert(index);
-        }
-    }
-
+    let by_message_id = message_index(entries);
+    let openers = turn_openers(entries);
     let mut components = Components::new(entries.len());
-    let mut latest_opener = HashMap::<AgentKey, usize>::new();
     for (index, entry) in entries.iter().enumerate() {
+        if is_turn_output(entry) {
+            for &opener in &openers[index] {
+                components.union(index, opener);
+            }
+            continue;
+        }
         for parent in &entry.chat.reply_to {
-            if let Some(parent_index) = by_message_id.get(parent).copied()
+            if let Some(parent_index) = by_message_id.get(parent.as_str()).copied()
                 && thread_edge(&entries[parent_index], entry)
             {
                 components.union(index, parent_index);
             }
-        }
-        // Typed prompts have no recorded linkage, so their output falls back
-        // to the latest opener for the same agent session.
-        match entry.kind {
-            TranscriptKind::Prompt
-            | TranscriptKind::Message
-            | TranscriptKind::SubagentReport
-            | TranscriptKind::Wait => {
-                latest_opener.insert(entry.agent.clone(), index);
-            }
-            TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error
-                if entry.chat.reply_to.is_empty() =>
-            {
-                if let Some(opener) = latest_opener.get(&entry.agent).copied() {
-                    components.union(index, opener);
-                }
-            }
-            _ => {}
         }
     }
 
@@ -149,6 +131,84 @@ pub(super) fn assemble_threads(
     display
 }
 
+/// Drops RimZ automation from the human view as whole turns: harness openers,
+/// and the `Assistant`/`Error` output of turns opened only by harness messages.
+/// Asks stay because a blocking question still needs the user.
+pub(super) fn hide_harness_turns(entries: Vec<RenderEntry>) -> Vec<RenderEntry> {
+    let openers = turn_openers(&entries);
+    let hidden = entries
+        .iter()
+        .zip(&openers)
+        .map(|(entry, openers)| {
+            entry.is_harness()
+                || (matches!(
+                    entry.kind(),
+                    Some(TranscriptKind::Assistant | TranscriptKind::Error)
+                ) && !openers.is_empty()
+                    && openers.iter().all(|&opener| entries[opener].is_harness()))
+        })
+        .collect::<Vec<_>>();
+    entries
+        .into_iter()
+        .zip(hidden)
+        .filter_map(|(entry, hidden)| (!hidden).then_some(entry))
+        .collect()
+}
+
+/// The entries that opened each turn-output entry's turn: its resolved
+/// `reply_to` parents, or, when nothing was recorded (typed prompts), the
+/// latest opener for the same agent session. Other entries open no turn.
+pub(super) fn turn_openers(entries: &[RenderEntry]) -> Vec<Vec<usize>> {
+    let by_message_id = message_index(entries);
+    let mut latest_opener = HashMap::<&AgentKey, usize>::new();
+    let mut openers = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
+        let (Some(kind), Some(agent)) = (entry.kind(), entry.agent()) else {
+            openers.push(Vec::new());
+            continue;
+        };
+        openers.push(match kind {
+            TranscriptKind::Prompt
+            | TranscriptKind::Message
+            | TranscriptKind::SubagentReport
+            | TranscriptKind::Wait => {
+                latest_opener.insert(agent, index);
+                Vec::new()
+            }
+            TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error
+                if entry.chat.reply_to.is_empty() =>
+            {
+                latest_opener.get(agent).copied().into_iter().collect()
+            }
+            TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error => entry
+                .chat
+                .reply_to
+                .iter()
+                .filter_map(|parent| by_message_id.get(parent.as_str()).copied())
+                .collect(),
+            TranscriptKind::Answer => Vec::new(),
+        });
+    }
+    openers
+}
+
+fn is_turn_output(entry: &RenderEntry) -> bool {
+    matches!(
+        entry.kind(),
+        Some(TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error)
+    )
+}
+
+fn message_index(entries: &[RenderEntry]) -> HashMap<&str, usize> {
+    let mut by_message_id = HashMap::new();
+    for (index, entry) in entries.iter().enumerate() {
+        if let Some(message_id) = entry.chat.message_id.as_deref() {
+            by_message_id.entry(message_id).or_insert(index);
+        }
+    }
+    by_message_id
+}
+
 pub(super) fn keep_last_blocks(entries: &mut Vec<DisplayEntry>, last: Option<usize>) {
     let Some(last) = last else {
         return;
@@ -164,11 +224,15 @@ pub(super) fn keep_last_blocks(entries: &mut Vec<DisplayEntry>, last: Option<usi
 }
 
 /// A causal `reply_to` edge joins a thread only when it continues the
-/// conversation: a turn's output pairs with the message that opened the turn,
-/// and a sent message continues the thread only as a reply back to its
-/// parent's sender. A hand-off to a third party roots a new exchange.
+/// conversation: a turn's output pairs with the message that opened the turn
+/// (see [`turn_openers`]), and a sent message continues the thread only as a
+/// reply back to its parent's sender. A hand-off to a third party roots a new
+/// exchange.
 fn thread_edge(parent: &RenderEntry, child: &RenderEntry) -> bool {
-    match child.kind {
+    let Some(kind) = child.kind() else {
+        return false;
+    };
+    match kind {
         TranscriptKind::Assistant
         | TranscriptKind::Ask
         | TranscriptKind::Error
