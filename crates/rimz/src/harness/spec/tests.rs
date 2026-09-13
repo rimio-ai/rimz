@@ -990,6 +990,64 @@ fn same_kind_and_chained_overrides_resolve_without_drops() {
 }
 
 #[test]
+fn rebase_takes_the_engine_from_the_base_and_keeps_the_role() {
+    let engine = |agent: &str, model: Option<&str>, effort: Option<&str>| Profile {
+        model: model.map(str::to_owned),
+        effort: effort.map(str::to_owned),
+        ..profile(agent)
+    };
+    let profiles = profiles([
+        (
+            "fixer",
+            Profile {
+                system_prompt_file: Some("/prompts/fixer.md".into()),
+                ..engine("claude", Some("fable"), Some("medium"))
+            },
+        ),
+        ("opus", engine("claude", Some("opus[1m]"), Some("high"))),
+        ("plain", profile("claude")),
+        ("luna", engine("codex", None, Some("xhigh"))),
+    ]);
+    for (agent_override, kind, model, effort, chain) in [
+        (
+            "opus",
+            "claude",
+            Some("opus[1m]"),
+            "high",
+            vec!["fixer", "opus", "claude"],
+        ),
+        (
+            "plain",
+            "claude",
+            Some("fable"),
+            "medium",
+            vec!["fixer", "plain", "claude"],
+        ),
+        (
+            "luna",
+            "codex",
+            None,
+            "xhigh",
+            vec!["fixer", "luna", "codex"],
+        ),
+    ] {
+        let resolved = resolve_profile_rebased("fixer", Some(agent_override), &profiles).unwrap();
+        assert_eq!(resolved.kind, kind, "{agent_override}");
+        assert_eq!(resolved.launch.model.as_deref(), model, "{agent_override}");
+        assert_eq!(
+            resolved.launch.effort.as_deref(),
+            Some(effort),
+            "{agent_override}"
+        );
+        assert_eq!(
+            resolved.system_prompt_file.as_deref(),
+            Some(std::path::Path::new("/prompts/fixer.md"))
+        );
+        assert_eq!(resolved.into_chain(), chain, "{agent_override}");
+    }
+}
+
+#[test]
 fn team_roles_and_virtual_cells_rebase_through_the_same_path() {
     let profiles = profiles([
         (
