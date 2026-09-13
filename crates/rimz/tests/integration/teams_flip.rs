@@ -299,6 +299,48 @@ fn flip_cli_persists_board_signal_and_owner_note() {
 }
 
 #[test]
+fn transcript_renders_flips_in_the_lane() {
+    let fixture = Fixture::new();
+    fixture.running("reviewer", None);
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    success(fixture.flip("Review", None, Some("Review the seam.")));
+
+    let json: serde_json::Value = serde_json::from_str(&success(
+        fixture
+            .command()
+            .args(["transcript", "#feature-team", "--json"])
+            .output()
+            .unwrap(),
+    ))
+    .unwrap();
+    let flip = json["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry.get("stage").is_some())
+        .expect("flip entry");
+    assert_eq!(flip["from"], "user");
+    assert_eq!(flip["text"], "Review the seam.");
+    assert_eq!(flip["stage"]["from"], "Build");
+    assert_eq!(flip["stage"]["to"], "Review");
+    let human = success(
+        fixture
+            .command()
+            .args(["transcript", "#feature-team", "--color", "never"])
+            .output()
+            .unwrap(),
+    );
+    // The user's flip continues the user's own prompt line from `running`.
+    let flip_line = human
+        .lines()
+        .skip_while(|line| *line != "work")
+        .nth(1)
+        .unwrap_or_default();
+    assert!(flip_line.starts_with("⇢ Build → Review  "), "{human}");
+    assert!(flip_line.ends_with("  Review the seam."), "{human}");
+}
+
+#[test]
 fn registration_rewake_reaches_stop_and_message_sweep_consumer() {
     let fixture = Fixture::new();
     std::fs::write(fixture.board(), BOARD).unwrap();

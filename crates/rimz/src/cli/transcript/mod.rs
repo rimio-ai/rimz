@@ -81,6 +81,20 @@ pub(crate) struct ChatLine {
     pub questions: Vec<rimz::transcript::AskQuestion>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub answers: Vec<rimz::transcript::AskAnswer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage: Option<StageLine>,
+}
+
+/// A `rimz teams flip`, carried as a conversation line whose `text` is the note.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct StageLine {
+    team: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    from: Option<String>,
+    to: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner: Option<String>,
+    by: String,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -102,25 +116,33 @@ enum LineSource {
         agent: AgentKey,
         harness: bool,
     },
+    Stage,
 }
 
 impl RenderEntry {
     fn kind(&self) -> Option<TranscriptKind> {
         match &self.source {
             LineSource::Log { kind, .. } => Some(*kind),
+            LineSource::Stage => None,
         }
     }
 
     fn agent(&self) -> Option<&AgentKey> {
         match &self.source {
             LineSource::Log { agent, .. } => Some(agent),
+            LineSource::Stage => None,
         }
     }
 
     fn is_harness(&self) -> bool {
         match &self.source {
             LineSource::Log { harness, .. } => *harness,
+            LineSource::Stage => false,
         }
+    }
+
+    fn is_stage(&self) -> bool {
+        matches!(self.source, LineSource::Stage)
     }
 }
 
@@ -169,10 +191,10 @@ mod layout;
 mod scope;
 mod thread;
 
-use chat::{format_marker_when, render_entry_for_log_entry};
+use chat::{format_marker_when, render_entry_for_flip, render_entry_for_log_entry};
 use scope::{
-    build_identities, compare_optional_timestamps, dedup_asks, entry_in_scope, entry_matches_focus,
-    live_agents, live_boundary, resolve_scope,
+    build_identities, channel_matches, compare_optional_timestamps, dedup_asks, entry_in_scope,
+    entry_matches_focus, live_agents, live_boundary, resolve_scope, sender_matches_focus,
 };
 use thread::entries_for_view;
 #[cfg(test)]
@@ -294,7 +316,8 @@ fn chat_view_with_mode(
         });
     }
     let identities = build_identities(&entries);
-    let live_agents = live_agents(workspace);
+    let store = crate::cli::open_store(workspace).ok();
+    let live_agents = live_agents(store.as_ref());
     let live_root_keys = live_agents
         .iter()
         .filter(|agent| agent.root)
@@ -315,6 +338,26 @@ fn chat_view_with_mode(
             entry_matches_focus(entry, &render.chat, &scope, &identities).then_some(render)
         })
         .collect();
+    let flips = store
+        .as_ref()
+        .and_then(|store| rimz::harness::team_stage::stage_flips(store).ok())
+        .unwrap_or_default();
+    entries.extend(
+        flips
+            .iter()
+            .filter(|flip| channel_matches(Some(flip.channel()), scope.channel_filter.as_deref()))
+            .map(|flip| render_entry_for_flip(flip, scope.include_channel))
+            .filter(|render| {
+                scope.focus_keys.as_ref().is_none_or(|focus| {
+                    sender_matches_focus(
+                        &render.chat.from,
+                        focus,
+                        &identities,
+                        scope.channel_filter.as_deref(),
+                    )
+                })
+            }),
+    );
     entries.sort_by(|left, right| compare_optional_timestamps(left.chat.at, right.chat.at));
     if mode.hidden == Hidden::Skip {
         entries = thread::hide_harness_turns(entries);

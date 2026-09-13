@@ -19,6 +19,42 @@ pub(super) fn render_entry_for_log_entry(
     }
 }
 
+pub(super) fn render_entry_for_flip(
+    flip: &rimz::harness::team_stage::StageSignal,
+    include_channel: bool,
+) -> RenderEntry {
+    let from = if flip.by == "user" {
+        flip.by.clone()
+    } else {
+        render_handle(
+            &format!("@{}", flip.by),
+            Some(flip.channel()),
+            include_channel,
+        )
+    };
+    RenderEntry {
+        source: LineSource::Stage,
+        chat: ChatLine {
+            from,
+            to: None,
+            at: Some(flip.at),
+            text: flip.note.clone().unwrap_or_default(),
+            message_id: None,
+            reply_to: Vec::new(),
+            error: false,
+            questions: Vec::new(),
+            answers: Vec::new(),
+            stage: Some(StageLine {
+                team: flip.team.clone(),
+                from: flip.from.clone(),
+                to: flip.to.clone(),
+                owner: flip.owner.clone(),
+                by: flip.by.clone(),
+            }),
+        },
+    }
+}
+
 pub(super) fn chat_entry_for_log_entry(
     entry: &TranscriptEntry,
     identities: &HashMap<AgentKey, Identity>,
@@ -38,6 +74,7 @@ pub(super) fn chat_entry_for_log_entry(
             error: false,
             questions: entry.questions.clone(),
             answers: entry.answers.clone(),
+            stage: None,
         },
         TranscriptKind::Message | TranscriptKind::SubagentReport | TranscriptKind::Wait => {
             ChatLine {
@@ -50,6 +87,7 @@ pub(super) fn chat_entry_for_log_entry(
                 error: false,
                 questions: entry.questions.clone(),
                 answers: entry.answers.clone(),
+                stage: None,
             }
         }
         TranscriptKind::Assistant | TranscriptKind::Ask => ChatLine {
@@ -62,6 +100,7 @@ pub(super) fn chat_entry_for_log_entry(
             error: false,
             questions: entry.questions.clone(),
             answers: entry.answers.clone(),
+            stage: None,
         },
         TranscriptKind::Error => ChatLine {
             from: receiver,
@@ -73,6 +112,7 @@ pub(super) fn chat_entry_for_log_entry(
             error: true,
             questions: Vec::new(),
             answers: Vec::new(),
+            stage: None,
         },
         TranscriptKind::Answer => ChatLine {
             from: entry.from.clone().unwrap_or_else(|| "answered".to_owned()),
@@ -84,6 +124,7 @@ pub(super) fn chat_entry_for_log_entry(
             error: false,
             questions: entry.questions.clone(),
             answers: entry.answers.clone(),
+            stage: None,
         },
     }
 }
@@ -243,6 +284,8 @@ pub(super) fn render_display_chat_to(
         let continuation = last_group.as_ref().is_some_and(|group| {
             if is_ask {
                 group.matches_without_window(display, grouped, entry_date)
+            } else if entry.is_stage() {
+                group.matches_sender(display, grouped, entry_date)
             } else {
                 group.matches(display, grouped, entry_date)
             }
@@ -332,7 +375,9 @@ fn write_entry_content(
     if !continuation {
         write_entry_header(out, entry, grouped, brands, tz, show_date)?;
     }
-    if entry.kind() == Some(TranscriptKind::Ask) {
+    if let Some(stage) = &entry.chat.stage {
+        write_stage_line(out, stage, entry, continuation, tz, prose, width)
+    } else if entry.kind() == Some(TranscriptKind::Ask) {
         write_ask_card(out, entry, answer, !suppress_ask_context, prose, width)
     } else if entry.chat.error {
         write_body_lines_with(
@@ -345,6 +390,54 @@ fn write_entry_content(
     } else {
         write_body_lines(out, &entry.chat.text, prose, width)
     }
+}
+
+/// `⇢ Explore → Plan  HH:MM  note`: the transition in the accent tone, the
+/// time (only when no header carries it) and the note faint, the note's
+/// wrapped lines hanging under it.
+fn write_stage_line(
+    out: &mut impl Write,
+    stage: &StageLine,
+    entry: &RenderEntry,
+    continuation: bool,
+    tz: &TimeZone,
+    prose: Prose,
+    width: usize,
+) -> Result<()> {
+    let faint = render::palette::faint();
+    let transition = match stage.from.as_deref() {
+        Some(from) if from == stage.to => format!("{} · re-opened", stage.to),
+        Some(from) => format!("{from} → {}", stage.to),
+        None => format!("{} · opened", stage.to),
+    };
+    let mut line = render::paint(faint, "⇢ ");
+    line.push_str(&render::paint(render::palette::accent(), &transition));
+    if continuation && let Some(at) = entry.chat.at {
+        let time = at.to_zoned(tz.clone()).strftime("%H:%M").to_string();
+        line.push_str(&render::paint(faint, &format!("  {time}")));
+    }
+    let note = entry.chat.text.trim();
+    let note_lines = if prose == Prose::Raw {
+        note.lines()
+            .map(|line| render::paint(faint, line))
+            .collect()
+    } else {
+        prose.lines_with_style(note, width.saturating_sub(2), Some(faint))
+    };
+    let mut note_lines = note_lines.into_iter();
+    if let Some(first) = note_lines.next() {
+        line.push_str("  ");
+        line.push_str(&first);
+    }
+    writeln!(out, "{line}")?;
+    for rest in note_lines {
+        if rest.is_empty() {
+            writeln!(out)?;
+        } else {
+            writeln!(out, "  {rest}")?;
+        }
+    }
+    Ok(())
 }
 
 fn write_thread_lines(out: &mut impl Write, rendered: &[u8]) -> Result<()> {
@@ -422,14 +515,17 @@ impl GroupState {
     }
 
     fn matches(&self, entry: &DisplayEntry, grouped: bool, date: Option<Date>) -> bool {
-        if !self.matches_without_window(entry, grouped, date) {
-            return false;
-        }
-        let (Some(previous), Some(current)) = (self.at, entry.entry.chat.at) else {
-            return false;
-        };
-        let gap = current.duration_since(previous);
-        !gap.is_negative() && gap.as_secs() <= GROUP_WINDOW_SECS
+        self.matches_without_window(entry, grouped, date)
+            && within_window(self.at, entry.entry.chat.at)
+    }
+
+    /// A flip continues its flipper's line whoever that line addressed.
+    fn matches_sender(&self, entry: &DisplayEntry, grouped: bool, date: Option<Date>) -> bool {
+        let (from, _) = group_key(&entry.entry, grouped);
+        self.lane == entry.lane.group_key()
+            && self.from == from
+            && self.date == date
+            && within_window(self.at, entry.entry.chat.at)
     }
 
     fn matches_without_window(
@@ -444,6 +540,17 @@ impl GroupState {
         let (from, to) = group_key(&entry.entry, grouped);
         self.from == from && self.to == to && self.date == date
     }
+}
+
+pub(super) fn within_window(
+    previous: Option<jiff::Timestamp>,
+    current: Option<jiff::Timestamp>,
+) -> bool {
+    let (Some(previous), Some(current)) = (previous, current) else {
+        return false;
+    };
+    let gap = current.duration_since(previous);
+    !gap.is_negative() && gap.as_secs() <= GROUP_WINDOW_SECS
 }
 
 pub(super) fn group_key(entry: &RenderEntry, grouped: bool) -> (String, Option<String>) {
