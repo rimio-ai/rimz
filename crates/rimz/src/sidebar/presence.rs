@@ -641,7 +641,7 @@ fn write_plugin_presence_sample(
     );
 }
 
-pub(super) fn command_is_launch_chrome(command: &str) -> bool {
+fn command_is_launch_chrome(command: &str) -> bool {
     let mut tokens = command.split_whitespace().filter(|token| !token.is_empty());
     let Some(program) = tokens.next() else {
         return false;
