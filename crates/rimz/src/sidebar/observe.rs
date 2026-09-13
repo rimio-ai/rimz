@@ -8,25 +8,23 @@
 
 mod detect;
 mod sig;
-pub mod writer;
+pub(crate) mod writer;
 
-pub use crate::diag::record::{AggregateKey, AnomalyKind, FrameStamp, ObserveRole, WatchedField};
-pub use detect::Observer;
-pub use sig::{
-    AggregateSig, EventsSig, FrameSig, GroupSig, OwnViewSig, PulledFrameSig, RosterRowSig,
-    RosterSig, RowSig, StatusCountSig, WatchedValues, extract_sig,
-};
+use crate::diag::record::{AnomalyKind, FrameStamp, ObserveRole, WatchedField};
+pub(crate) use detect::Observer;
+use sig::{EventsSig, FrameSig, RosterSig};
+pub(crate) use sig::{PulledFrameSig, extract_sig};
 
 const EVIDENCE_LIMIT: usize = 32;
 
 #[derive(Clone, Debug)]
-pub enum ObserveMsg {
+pub(crate) enum ObserveMsg {
     Anomaly(Box<AnomalyDraft>),
     Roster(RosterSig),
 }
 
 #[derive(Clone, Debug)]
-pub struct AnomalyDraft {
+pub(crate) struct AnomalyDraft {
     pub at_ms: u64,
     pub kind: AnomalyKind,
     pub window_ms: Option<u64>,
@@ -38,7 +36,7 @@ pub struct AnomalyDraft {
 }
 
 impl AnomalyDraft {
-    pub fn from_sig(sig: &FrameSig, kind: AnomalyKind, window_ms: Option<u64>) -> Self {
+    fn from_sig(sig: &FrameSig, kind: AnomalyKind, window_ms: Option<u64>) -> Self {
         Self::from_sig_at_frame(sig, kind, window_ms, frame_stamp_from_sig(sig))
     }
 
@@ -47,7 +45,7 @@ impl AnomalyDraft {
     /// fault (a presence flap fires when the row returns) name the causal frame
     /// here, so the `produced_at_ms` join reaches the producer records for the
     /// same episode and every renderer's copy of one fault carries one stamp.
-    pub fn from_sig_at_frame(
+    fn from_sig_at_frame(
         sig: &FrameSig,
         kind: AnomalyKind,
         window_ms: Option<u64>,
@@ -65,7 +63,7 @@ impl AnomalyDraft {
         }
     }
 
-    pub fn from_roster(at_ms: u64, roster: &RosterSig, kind: AnomalyKind) -> Self {
+    fn from_roster(at_ms: u64, roster: &RosterSig, kind: AnomalyKind) -> Self {
         Self {
             at_ms,
             kind,
