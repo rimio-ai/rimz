@@ -901,6 +901,46 @@ fn flip_precondition_errors_leave_board_signals_and_queue_unchanged() {
 }
 
 #[test]
+fn member_hand_off_is_refused_on_an_uncommitted_worktree() {
+    let fixture = Fixture::new();
+    let root = &fixture.env.project_root;
+    success(
+        Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(root)
+            .output()
+            .unwrap(),
+    );
+    std::fs::write(
+        root.join(".git/info/exclude"),
+        "/blackboard.md\n/stage-mux.log\n",
+    )
+    .unwrap();
+    fixture.running("coder", None);
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    std::fs::write(root.join("half-done.rs"), "fn broken(\n").unwrap();
+
+    let output = fixture.flip("Review", Some("coder"), Some("handoff"));
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains(
+            "has uncommitted changes: half-done.rs; commit or discard them, then flip again"
+        ),
+        "{error}"
+    );
+    assert_eq!(std::fs::read_to_string(fixture.board()).unwrap(), BOARD);
+    assert!(fixture.signals().is_empty());
+
+    success(fixture.flip("Build", Some("coder"), Some("still building")));
+    success(fixture.flip("Review", None, Some("user forces the hand-off")));
+    std::fs::remove_file(root.join("half-done.rs")).unwrap();
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    success(fixture.flip("Review", Some("coder"), Some("committed")));
+    assert_eq!(fixture.signals().len(), 3);
+}
+
+#[test]
 fn concurrent_flips_keep_the_board_ledger_and_signals_in_one_order() {
     let fixture = Fixture::new();
     fixture.running("coder", None);

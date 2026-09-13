@@ -172,6 +172,17 @@ pub enum FlipErr {
     UnknownStage { to: String, declared: Vec<String> },
     #[error("stage `{to}` has no owner; add it to a role's owns list")]
     UnownedStage { to: String },
+    #[error(
+        "worktree {} has uncommitted changes: {}; commit or discard them, then flip again",
+        worktree.display(),
+        paths.join(", ")
+    )]
+    DirtyWorktree {
+        worktree: PathBuf,
+        paths: Vec<String>,
+    },
+    #[error("cannot read git status of {}: {stderr}", worktree.display())]
+    GitStatus { worktree: PathBuf, stderr: String },
     #[error(transparent)]
     Config(#[from] super::spec::LayoutErr),
     #[error("cannot read {path}: {source}")]
@@ -216,6 +227,12 @@ pub fn flip(request: FlipRequest<'_>) -> Result<FlipReceipt, FlipErr> {
     let _lock = WorkspaceLock::acquire(&request.store.runtime_paths().board_lock(&worktree))?;
     let text = read_board(&board)?;
     let from = parse_board_stage(&text).map(|stage| stage.name);
+    if hands_off(&request.by, request.team, from.as_deref(), owner) {
+        let paths = uncommitted_paths(&worktree)?;
+        if !paths.is_empty() {
+            return Err(FlipErr::DirtyWorktree { worktree, paths });
+        }
+    }
     let ledger = ledger_line(
         request.now,
         request.by.name(),
@@ -244,7 +261,7 @@ pub fn flip(request: FlipRequest<'_>) -> Result<FlipReceipt, FlipErr> {
         rewake: false,
     };
     let (signal_event, delivery) = open_stage(&opening, "board")?;
-    let compaction = compact_flipper(&request, from.as_deref(), &delivery);
+    let compaction = compact_flipper(&request, from.as_deref(), owner);
     Ok(FlipReceipt {
         board,
         from,
@@ -537,10 +554,59 @@ fn stage_open_body(
     body
 }
 
+/// A member leaving a stage its role owns for one it does not own, `Done` included.
+fn hands_off(by: &Flipper<'_>, team: &Team, from: Option<&str>, owner: Option<&str>) -> bool {
+    let Flipper::Member { role, .. } = by else {
+        return false;
+    };
+    from.and_then(|stage| team.owner_of(stage)) == Some(*role) && owner != Some(*role)
+}
+
+/// Every path `git status` reports, untracked files included; team memory files are git-excluded.
+/// A worktree outside any git repository has nothing to commit and reports none.
+fn uncommitted_paths(worktree: &Path) -> Result<Vec<String>, FlipErr> {
+    let git = |args: &[&str]| {
+        crate::proc::git_command(worktree)
+            .args(args)
+            .env("LC_ALL", "C")
+            .output()
+            .map_err(|source| FlipErr::Io {
+                path: worktree.to_path_buf(),
+                source,
+            })
+    };
+    let status = git(&["status", "--porcelain=v1", "-z", "--untracked-files=all"])?;
+    if !status.status.success() {
+        if !git(&["rev-parse", "--is-inside-work-tree"])?
+            .status
+            .success()
+        {
+            return Ok(Vec::new());
+        }
+        return Err(FlipErr::GitStatus {
+            worktree: worktree.to_path_buf(),
+            stderr: String::from_utf8_lossy(&status.stderr).trim().to_owned(),
+        });
+    }
+    let mut paths = Vec::new();
+    let mut entries = status.stdout.split(|byte| *byte == 0);
+    while let Some(entry) = entries.next() {
+        let Some(path) = entry.get(3..) else {
+            continue;
+        };
+        paths.push(String::from_utf8_lossy(path).into_owned());
+        // A rename or copy entry is followed by its source path.
+        if entry[..2].iter().any(|code| matches!(code, b'R' | b'C')) {
+            entries.next();
+        }
+    }
+    Ok(paths)
+}
+
 fn compact_flipper(
     request: &FlipRequest<'_>,
     from: Option<&str>,
-    delivery: &Delivery,
+    owner: Option<&str>,
 ) -> Compaction {
     let Flipper::Member { role, agent, pane } = &request.by else {
         return Compaction::NotConfigured;
@@ -548,15 +614,7 @@ fn compact_flipper(
     let Some(policy) = request.flip_compact else {
         return Compaction::NotConfigured;
     };
-    if from.and_then(|stage| request.team.owner_of(stage)) != Some(*role)
-        || !matches!(
-            delivery,
-            Delivery::Sent { .. }
-                | Delivery::Queued { .. }
-                | Delivery::OwnerNotLive { .. }
-                | Delivery::Terminal
-        )
-    {
+    if !hands_off(&request.by, request.team, from, owner) {
         return Compaction::NotHandedOff;
     }
     let occupied = agent.occupied_context_tokens();
@@ -852,6 +910,79 @@ mod tests {
         assert_eq!(
             stage_open_body(Some("Implement"), "Implement", "rimz", None, true, None),
             "The team resumed at stage Implement, which is yours. Nothing flipped since the board's last Progress line: reread blackboard.md and continue from where it stops."
+        );
+    }
+
+    #[test]
+    fn hand_off_is_a_member_leaving_its_own_stage_for_another_owner() {
+        let team: Team = toml::from_str(
+            r#"
+            [[roles]]
+            role = "coder"
+            profile = "claude"
+            owns = ["Build", "Polish"]
+            [[roles]]
+            role = "reviewer"
+            profile = "claude"
+            owns = ["Review"]
+            "#,
+        )
+        .unwrap();
+        let agent = crate::testkit::agent_state("claude", "coder", Timestamp::UNIX_EPOCH);
+        let coder = Flipper::Member {
+            role: "coder",
+            agent: &agent,
+            pane: None,
+        };
+        for (by, from, owner, expected) in [
+            (&coder, Some("Build"), Some("reviewer"), true),
+            (&coder, Some("Build"), None, true),
+            (&coder, Some("Build"), Some("coder"), false),
+            (&coder, Some("Review"), Some("coder"), false),
+            (&coder, None, Some("reviewer"), false),
+            (&Flipper::User, Some("Build"), Some("reviewer"), false),
+        ] {
+            assert_eq!(
+                hands_off(by, &team, from, owner),
+                expected,
+                "{} {from:?} -> {owner:?}",
+                by.name()
+            );
+        }
+    }
+
+    #[test]
+    fn uncommitted_paths_list_changes_and_untracked_files() {
+        let outside = tempfile::tempdir().unwrap();
+        assert!(uncommitted_paths(outside.path()).unwrap().is_empty());
+        let repo = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .current_dir(repo.path())
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(repo.path().join("moved.rs"), "fn a() {}\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "init"]);
+        assert!(uncommitted_paths(repo.path()).unwrap().is_empty());
+        git(&["mv", "moved.rs", "renamed.rs"]);
+        std::fs::create_dir(repo.path().join("src")).unwrap();
+        std::fs::write(repo.path().join("src/new file.rs"), "").unwrap();
+        assert_eq!(
+            uncommitted_paths(repo.path()).unwrap(),
+            ["renamed.rs", "src/new file.rs"]
         );
     }
 
