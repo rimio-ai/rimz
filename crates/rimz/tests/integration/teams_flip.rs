@@ -911,11 +911,7 @@ fn member_hand_off_is_refused_on_an_uncommitted_worktree() {
             .output()
             .unwrap(),
     );
-    std::fs::write(
-        root.join(".git/info/exclude"),
-        "/blackboard.md\n/stage-mux.log\n",
-    )
-    .unwrap();
+    std::fs::write(root.join(".git/info/exclude"), "/stage-mux.log\n").unwrap();
     fixture.running("coder", None);
     std::fs::write(fixture.board(), BOARD).unwrap();
     std::fs::write(root.join("half-done.rs"), "fn broken(\n").unwrap();
