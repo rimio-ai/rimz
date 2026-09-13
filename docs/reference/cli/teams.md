@@ -42,7 +42,7 @@ When a role has system-prompt files, the human report points to `--json`, whose 
 
 Each live cohort gets its own block headed by lane, cohort state, and advisory board stage with optional owner. The absolute worktree path appears once, with a branch suffix only when the branch differs from the checkout directory's name. The block also shows isolation, declared stages, cached PR/CI facts and URL, and matching memory files with paths relative to the worktree, line counts, and modification ages. The member table is `MEMBER STATUS ACTIVITY CTX COST AGE`; `AGE` measures time since last activity, not the last heartbeat. Undeclared stages and empty memory scans omit their lines. If members disagree on the worktree or branch, that value is unavailable rather than chosen from an arbitrary member.
 
-The `isolation` line reports the room's current machine-wide `agents.isolation` setting, not a durable per-agent launch record. Host isolation shows `host · tmp /tmp`. Sandbox isolation shows the room's state tmp directory, home-relative where possible, with `(as /tmp)` indicating where it is mounted inside the sandbox.
+The `isolation` line reports the members' isolation: the `--isolation` override recorded at launch, else the current machine-wide `agents.isolation` setting. Members that disagree show the machine setting. Host isolation shows `host · tmp /tmp`. Sandbox isolation shows the room's state tmp directory, home-relative where possible, with `(as /tmp)` indicating where it is mounted inside the sandbox.
 
 The current stage comes from the first `Stage:` line in `<worktree>/blackboard.md`, for example `Stage: Plan (@planner)`. A terminal ` (@owner)` suffix supplies the owner; other parenthesized text stays part of the stage name. `flip` writes this advisory text from configured ownership; hand-edited boards still parse the same way. It is never inferred from member status and never proof of completion. The stages line includes implicit `Done` last and brackets the name matching the board stage exactly and case-sensitively; an unknown stage brackets nothing. A missing or unreadable board omits the header's stage suffix, even when a pipeline is declared.
 
@@ -58,7 +58,7 @@ The report has no trailing launch, resume, reach, or focus command hints.
 | Field | Meaning |
 | --- | --- |
 | `worktree`, `branch` | Absolute checkout path and branch, or `null` when unavailable or conflicting. |
-| `isolation` | Current machine setting: `host` or `sandbox`, not a per-agent launch record. |
+| `isolation` | `host` or `sandbox`: the members' recorded `--isolation` override, else the current machine setting. |
 | `tmp_dir` | `/tmp` for host isolation; the absolute room state tmp directory mounted at `/tmp` for sandbox isolation. |
 | `stages` | Ordered declared stage names; `[]` when undeclared or the definition is gone. |
 | `stage` | `{ "name": "Plan", "owner": "planner" }`, with the owner stored without `@`; `owner` can be `null`, and absent board stage is `null`. |
@@ -114,10 +114,11 @@ The team surface carries these cohort-level controls:
 - `--resume` reopens a matching closed cohort instead of launching a fresh one.
 - `--fresh` launches new sessions into a named worktree instead of resuming or removing it, keeping the checkout and its files. It needs the worktree named, as `team#worktree` or `-w NAME`.
 - `--budget AMOUNT[/day]` caps each member separately; it is not a pooled team cap.
+- `--isolation host|sandbox` runs every member under that isolation instead of the machine's `agents.isolation`, recorded per member as for [`rimz agents`](./agents.md#shared-launch-params).
 - `--bg` leaves focus where it is.
 - `--new-tab` opens the launch in a new tab or window.
 
-Because resume takes identity from the store, it conflicts with `PROMPT`, `--from-pr`, `--channel`, `--description`, and `--budget`. `--fresh` answers the same reconciliation the other way, so it conflicts with `--resume` and `--from-pr`; the reconciliation it answers is described in [`rimz agents`](./agents.md#channel-worktree-and-placement).
+Because resume takes identity from the store, it conflicts with `PROMPT`, `--from-pr`, `--channel`, `--description`, `--budget`, and `--isolation`. `--fresh` answers the same reconciliation the other way, so it conflicts with `--resume` and `--from-pr`; the reconciliation it answers is described in [`rimz agents`](./agents.md#channel-worktree-and-placement).
 
 Per-agent model, prompt-file, permission, supervised-run, and pane-placement overrides stay on [`rimz agents`](./agents.md).
 Put stable role-specific choices in the team definition.
