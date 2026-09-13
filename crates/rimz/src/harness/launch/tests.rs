@@ -1127,6 +1127,57 @@ fn exec_identity_env_maps_identity_fields() {
 }
 
 #[test]
+fn exec_identity_env_round_trips_launch_params() {
+    let params = crate::agents::LaunchParams {
+        profile: Some("planner".to_owned()),
+        role: Some("coder".to_owned()),
+        team: Some("forge".to_owned()),
+        launch_group: Some("launch_group_1".to_owned()),
+        launch_ordinal: Some(2),
+        channel: Some("design".to_owned()),
+        model: Some("opus".to_owned()),
+        effort: Some("high".to_owned()),
+        budget: Some("$12.50/day".to_owned()),
+        ..Default::default()
+    };
+    let mut invocation = request(
+        "claude",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    invocation.identity.params = params.clone();
+    let env = exec_identity_env(&invocation);
+
+    let mut decoded = crate::agents::LaunchParams::default();
+    let mut read = Vec::new();
+    fill_launch_identity_env(&mut decoded, |var| {
+        read.push(var);
+        env.get(var).cloned()
+    });
+    fill_launch_identity_env(&mut decoded, |var| {
+        panic!("populated field {var} must not be re-read")
+    });
+
+    assert_eq!(decoded, params);
+    read.sort_unstable();
+    let mut expected = vec![
+        ENV_AGENT_ROLE,
+        ENV_TEAM,
+        ENV_LAUNCH_GROUP,
+        ENV_LAUNCH_ORDINAL,
+        crate::workspace::ENV_CHANNEL,
+        ENV_AGENT_PROFILE,
+        ENV_AGENT_MODEL,
+        ENV_AGENT_EFFORT,
+        ENV_AGENT_BUDGET,
+    ];
+    expected.sort_unstable();
+    assert_eq!(read, expected);
+}
+
+#[test]
 fn exec_wire_rejects_launch_id_without_a_name() {
     let mut invocation = request(
         "claude",

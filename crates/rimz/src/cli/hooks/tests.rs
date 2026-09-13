@@ -372,10 +372,7 @@ fn seed_subagent_candidate(store: &rimz::Store, agent_id: &str, parent_id: &str)
         .unwrap();
 }
 
-fn launch_identity_env(
-    _observation: &AgentLifecycleObservation,
-    var: &'static str,
-) -> Option<String> {
+fn launch_identity_env(_agent_pid: Option<u32>, var: &'static str) -> Option<String> {
     match var {
         rimz::harness::launch::ENV_AGENT_ROLE => Some("coder".to_owned()),
         rimz::harness::launch::ENV_TEAM => Some("forge".to_owned()),
@@ -527,10 +524,14 @@ fn canonical_droid_prompt_and_worker_stop_record_one_conversation() {
 #[test]
 fn root_launch_identity_fills_from_env_then_config_without_clobbering_payload() {
     let mut observed = root_observation();
+    observed.agent_pid = Some(123);
     fill_root_launch_identity(
         &mut observed,
         (Some("cfg-model".to_owned()), Some("cfg-effort".to_owned())),
-        launch_identity_env,
+        |agent_pid, var| {
+            assert_eq!(agent_pid, Some(123));
+            launch_identity_env(agent_pid, var)
+        },
     );
     assert_eq!(observed.launch.role.as_deref(), Some("coder"));
     assert_eq!(observed.launch.team.as_deref(), Some("forge"));
@@ -571,7 +572,7 @@ fn root_launch_identity_fills_from_env_then_config_without_clobbering_payload() 
     fill_root_launch_identity(
         &mut configured,
         (Some("cfg-model".to_owned()), Some("cfg-effort".to_owned())),
-        |_observation, var| match var {
+        |_agent_pid, var| match var {
             rimz::harness::launch::ENV_AGENT_ROLE => Some("coder".to_owned()),
             rimz::harness::launch::ENV_TEAM => Some("forge".to_owned()),
             rimz::harness::launch::ENV_LAUNCH_ORDINAL => Some("not-a-number".to_owned()),
@@ -592,7 +593,7 @@ fn subagent_launch_identity_is_not_inherited_from_parent_env() {
     fill_root_launch_identity(
         &mut observed,
         (Some("cfg-model".to_owned()), Some("cfg-effort".to_owned())),
-        launch_identity_env,
+        |_, _| panic!("child identity must not read parent env"),
     );
 
     assert_eq!(observed.launch.role, None);

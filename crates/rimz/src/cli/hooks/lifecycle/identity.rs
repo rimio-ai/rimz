@@ -20,7 +20,7 @@ pub(super) fn env_run_id() -> Option<rimz::RunId> {
 type IdentityValidator = fn(String, &str, &str) -> Option<String>;
 
 pub(super) fn agent_identity_env(
-    observation: &AgentLifecycleObservation,
+    agent_pid: Option<u32>,
     var: &str,
     validate: IdentityValidator,
 ) -> Option<String> {
@@ -33,54 +33,24 @@ pub(super) fn agent_identity_env(
             return Some(value);
         }
     }
-    let raw = rimz::proc::env_var(observation.agent_pid?, var)?;
+    let raw = rimz::proc::env_var(agent_pid?, var)?;
     validate(raw, "process", var)
 }
 
 pub(in crate::cli::hooks) fn fill_root_launch_identity(
     observation: &mut AgentLifecycleObservation,
     configured_identity: (Option<String>, Option<String>),
-    mut identity_env: impl FnMut(&AgentLifecycleObservation, &'static str) -> Option<String>,
+    mut identity_env: impl FnMut(Option<u32>, &'static str) -> Option<String>,
 ) {
     if observation.parent_agent_id.is_some() {
         return;
     }
-    if observation.launch.role.is_none() {
-        observation.launch.role = identity_env(observation, rimz::harness::launch::ENV_AGENT_ROLE);
-    }
-    if observation.launch.team.is_none() {
-        observation.launch.team = identity_env(observation, rimz::harness::launch::ENV_TEAM);
-    }
-    if observation.launch.launch_group.is_none() {
-        observation.launch.launch_group =
-            identity_env(observation, rimz::harness::launch::ENV_LAUNCH_GROUP);
-    }
-    if observation.launch.launch_ordinal.is_none() {
-        observation.launch.launch_ordinal =
-            identity_env(observation, rimz::harness::launch::ENV_LAUNCH_ORDINAL)
-                .and_then(|raw| raw.parse::<u32>().ok());
-    }
-    if observation.launch.channel.is_none() {
-        observation.launch.channel = identity_env(observation, rimz::workspace::ENV_CHANNEL);
-    }
-    if observation.launch.profile.is_none() {
-        observation.launch.profile =
-            identity_env(observation, rimz::harness::launch::ENV_AGENT_PROFILE);
-    }
-    if observation.launch.model.is_none() {
-        observation.launch.model =
-            identity_env(observation, rimz::harness::launch::ENV_AGENT_MODEL)
-                .or(configured_identity.0);
-    }
-    if observation.launch.effort.is_none() {
-        observation.launch.effort =
-            identity_env(observation, rimz::harness::launch::ENV_AGENT_EFFORT)
-                .or(configured_identity.1);
-    }
-    if observation.launch.budget.is_none() {
-        observation.launch.budget =
-            identity_env(observation, rimz::harness::launch::ENV_AGENT_BUDGET);
-    }
+    let agent_pid = observation.agent_pid;
+    rimz::harness::launch::fill_launch_identity_env(&mut observation.launch, |var| {
+        identity_env(agent_pid, var)
+    });
+    observation.launch.model = observation.launch.model.take().or(configured_identity.0);
+    observation.launch.effort = observation.launch.effort.take().or(configured_identity.1);
 }
 
 pub(super) fn validate_agent_name_env(raw: String, source: &str, _var: &str) -> Option<String> {

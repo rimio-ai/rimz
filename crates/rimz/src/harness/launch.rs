@@ -305,76 +305,66 @@ pub struct ExecIdentity {
     pub params: crate::agents::LaunchParams,
 }
 
-#[derive(Clone, Copy)]
 enum LaunchFieldValue<'a> {
-    Text(Option<&'a str>),
-    Mode(Option<crate::agents::PermissionMode>),
-    Ordinal(Option<u32>),
+    Text(&'a mut Option<String>),
+    Ordinal(&'a mut Option<u32>),
 }
 
-impl LaunchFieldValue<'_> {
-    fn into_env(self) -> Option<String> {
-        match self {
-            Self::Text(value) => value.map(ToOwned::to_owned),
-            Self::Mode(value) => value.map(|value| value.to_string()),
-            Self::Ordinal(value) => value.map(|value| value.to_string()),
-        }
-    }
+/// One env-backed launch parameter: the key both the pane env encoder and the
+/// lifecycle hook decoder use, so the two sides cannot drift apart.
+struct LaunchField {
+    env: &'static str,
+    encode: fn(&crate::agents::LaunchParams) -> Option<String>,
+    target: fn(&mut crate::agents::LaunchParams) -> LaunchFieldValue<'_>,
 }
 
-#[derive(Clone, Copy)]
-struct LaunchField<'a> {
-    env: Option<&'static str>,
-    value: LaunchFieldValue<'a>,
-}
-
-fn launch_fields(params: &crate::agents::LaunchParams) -> [LaunchField<'_>; 10] {
-    let text = |field: fn(&crate::agents::LaunchParams) -> Option<&str>| {
-        LaunchFieldValue::Text(field(params))
-    };
-    [
-        LaunchField {
-            env: Some(crate::harness::launch::ENV_AGENT_PROFILE),
-            value: text(|params| params.profile.as_deref()),
-        },
-        LaunchField {
-            env: None,
-            value: LaunchFieldValue::Mode(params.mode),
-        },
-        LaunchField {
-            env: Some(crate::harness::launch::ENV_AGENT_ROLE),
-            value: text(|params| params.role.as_deref()),
-        },
-        LaunchField {
-            env: Some(crate::harness::launch::ENV_TEAM),
-            value: text(|params| params.team.as_deref()),
-        },
-        LaunchField {
-            env: Some(crate::harness::launch::ENV_LAUNCH_GROUP),
-            value: text(|params| params.launch_group.as_deref()),
-        },
-        LaunchField {
-            env: Some(crate::harness::launch::ENV_LAUNCH_ORDINAL),
-            value: LaunchFieldValue::Ordinal(params.launch_ordinal),
-        },
-        LaunchField {
-            env: Some(crate::workspace::ENV_CHANNEL),
-            value: text(|params| params.channel.as_deref()),
-        },
-        LaunchField {
-            env: Some(crate::harness::launch::ENV_AGENT_MODEL),
-            value: text(|params| params.model.as_deref()),
-        },
-        LaunchField {
-            env: Some(crate::harness::launch::ENV_AGENT_EFFORT),
-            value: text(|params| params.effort.as_deref()),
-        },
-        LaunchField {
-            env: Some(crate::harness::launch::ENV_AGENT_BUDGET),
-            value: text(|params| params.budget.as_deref()),
-        },
-    ]
-}
+const LAUNCH_FIELDS: [LaunchField; 9] = [
+    LaunchField {
+        env: crate::harness::launch::ENV_AGENT_ROLE,
+        encode: |params| params.role.clone(),
+        target: |params| LaunchFieldValue::Text(&mut params.role),
+    },
+    LaunchField {
+        env: crate::harness::launch::ENV_TEAM,
+        encode: |params| params.team.clone(),
+        target: |params| LaunchFieldValue::Text(&mut params.team),
+    },
+    LaunchField {
+        env: crate::harness::launch::ENV_LAUNCH_GROUP,
+        encode: |params| params.launch_group.clone(),
+        target: |params| LaunchFieldValue::Text(&mut params.launch_group),
+    },
+    LaunchField {
+        env: crate::harness::launch::ENV_LAUNCH_ORDINAL,
+        encode: |params| params.launch_ordinal.map(|value| value.to_string()),
+        target: |params| LaunchFieldValue::Ordinal(&mut params.launch_ordinal),
+    },
+    LaunchField {
+        env: crate::workspace::ENV_CHANNEL,
+        encode: |params| params.channel.clone(),
+        target: |params| LaunchFieldValue::Text(&mut params.channel),
+    },
+    LaunchField {
+        env: crate::harness::launch::ENV_AGENT_PROFILE,
+        encode: |params| params.profile.clone(),
+        target: |params| LaunchFieldValue::Text(&mut params.profile),
+    },
+    LaunchField {
+        env: crate::harness::launch::ENV_AGENT_MODEL,
+        encode: |params| params.model.clone(),
+        target: |params| LaunchFieldValue::Text(&mut params.model),
+    },
+    LaunchField {
+        env: crate::harness::launch::ENV_AGENT_EFFORT,
+        encode: |params| params.effort.clone(),
+        target: |params| LaunchFieldValue::Text(&mut params.effort),
+    },
+    LaunchField {
+        env: crate::harness::launch::ENV_AGENT_BUDGET,
+        encode: |params| params.budget.clone(),
+        target: |params| LaunchFieldValue::Text(&mut params.budget),
+    },
+];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
@@ -1098,12 +1088,30 @@ pub fn exec_identity_env(request: &ExecRequest) -> BTreeMap<String, String> {
             name.clone(),
         );
     }
-    for field in launch_fields(&request.identity.params) {
-        if let (Some(key), Some(value)) = (field.env, field.value.into_env()) {
-            env.insert(key.to_owned(), value);
+    for field in &LAUNCH_FIELDS {
+        if let Some(value) = (field.encode)(&request.identity.params) {
+            env.insert(field.env.to_owned(), value);
         }
     }
     env
+}
+
+/// Fills each unset launch parameter from its identity env var, the inverse
+/// of [`exec_identity_env`]. `identity_env` owns lookup and validation; a
+/// malformed ordinal stays unset.
+pub fn fill_launch_identity_env(
+    params: &mut crate::agents::LaunchParams,
+    mut identity_env: impl FnMut(&'static str) -> Option<String>,
+) {
+    for field in &LAUNCH_FIELDS {
+        match (field.target)(params) {
+            LaunchFieldValue::Text(value) if value.is_none() => *value = identity_env(field.env),
+            LaunchFieldValue::Ordinal(value) if value.is_none() => {
+                *value = identity_env(field.env).and_then(|raw| raw.parse::<u32>().ok());
+            }
+            LaunchFieldValue::Text(_) | LaunchFieldValue::Ordinal(_) => {}
+        }
+    }
 }
 
 /// Process environment after applying RimZ's launch overrides. Non-Unicode
