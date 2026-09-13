@@ -80,7 +80,7 @@ Two tiers render the same sheet. **Pixel** draws the sprite through the kitty gr
 
 Sextant pets fit their source proportions inside the fixed dashboard footprint. RimZ probes the terminal's cell pixel dimensions when the pty exposes them. If a terminal or mux reports none and the pet looks tall or wide, set the ratio manually: `rimz config set theme.pets.cell_aspect 2.5`. Explicit config wins over the probe, and a neutral `13/6` fallback preserves the previous rendering when neither fact is available.
 
-On macOS, terminal graphics updates can make AppKit re-evaluate the pointer shape while pixel pets animate; RimZ transmits each sprite image once to minimize that traffic, and `glyphs = "sextant"` switches to the flicker-free cell-art path when you want it fully gone.
+On macOS, terminal graphics updates can make AppKit re-evaluate the pointer shape while pixel pets animate; RimZ keeps that traffic low by sending each sprite image once and re-sending it at most every two seconds, and `glyphs = "sextant"` switches to the flicker-free cell-art path when you want it fully gone.
 
 ## Offline and privacy
 
