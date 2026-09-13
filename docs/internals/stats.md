@@ -1,10 +1,10 @@
 # The stats panel
 
-`rimz stats` renders your account-global token and dollar history: a heatmap of daily use, totals for a chosen window, where the spend went by model and by agent, activity insights, and the automated assists RimZ performed on your behalf. It reads only — it touches no agent, writes nothing to any session, and answers from the shared spend cache the sidebar producer already maintains, so it runs in or out of a room and in or out of a project.
+`rimz stats` renders account-global token and dollar history: a heatmap of daily use, a windows row of totals, the spend by model and by agent, activity insights, and the assists RimZ performed for the user. It touches no agent and writes nothing to any session, and it runs in or out of a room and in or out of a project. Its only writes are the shared state directories and, on a cold run, the spending cache it computes ([where the figures come from](#where-the-figures-come-from)).
 
-The command has two homes. A one-shot `rimz stats` prints the panel and returns to the shell, so it pipes and scrolls like any report. `rimz stats --refresh` holds the same panel open as a live screen, and that held pane is the default middle-column content of the `rimzd` runtime view.
+The command has two homes. A one-shot `rimz stats` prints the panel and returns to the shell, so it pipes and scrolls like any report. `rimz stats --refresh` holds the same panel open as a live screen, and that held pane is the default middle-column content of the `rimzd` view ([rimzd.md](./rimzd.md#what-the-view-contains)).
 
-The code is `crates/rimz/src/cli/stats/`. The user-facing counterparts are the [Token Insight guide](../guide/insight.md), which explains what every figure means, and the [stats CLI reference](../reference/cli/stats.md).
+The code is [`crates/rimz/src/cli/stats/`](../../crates/rimz/src/cli/stats/mod.rs). The user-facing counterparts are the [Token Insight guide](../guide/insight.md), which explains what every figure means, and the [stats CLI reference](../reference/cli/stats.md).
 
 ## What it renders
 
@@ -53,103 +53,177 @@ A one-shot run on a machine with recorded history, default glyph set:
   Cost/session: $6.20          Daily avg: $191.53
 ```
 
-The `Assists` block appears under the insight rows when the account has recorded any; this capture has none.
-
-Each heatmap cell is one UTC day on a five-step ramp that reserves `·` for a day with no usage and rises `░ ▒ ▓ █` through active days, scaled against the busiest day in view rather than an absolute ceiling. Weeks open on Monday. `--dollars` scales the same grid by spend instead of tokens.
+From the top: the wordmark, the heatmap, the windows row, the Models and Agents breakdowns, and the insight rows. An `Assists` block follows the insights when the selected window holds a counted assist; this capture has none. With no recorded days, the panel prints one muted line (`No token usage recorded yet - run an agent and check back.`) in place of everything below the wordmark, plus the assists block when it has rows.
 
 ## Where the figures come from
 
-This module owns no spend arithmetic. Walking transcripts, pricing models, and publishing the aggregate all belong to the spending producer described in [spending.md](./agents/spending.md). Stats is a reader over one artifact: `provider-spending.json` under the shared state root (`disk::paths::RuntimePaths::shared_provider_spending_path`), which carries the per-day buckets, the per-model and per-agent tallies, and the trailing windows. `Stats::from_provider` is the whole translation.
+Stats owns no spend arithmetic. It reads `provider-spending.json` under the shared state root (`RuntimePaths::shared_provider_spending_path`), the aggregate the spending walk publishes with per-day buckets, per-model and per-provider tallies, and the trailing windows ([spending.md](./agents/spending.md#what-reads-the-totals)). `Stats::from_provider` is the whole translation: the cache's `days`, `models`, and `by_provider` become `by_day`, `by_model`, and `by_agent`.
 
-Three load paths in `mod.rs` answer a run, in order of preference:
+Three load paths in `mod.rs` answer a run:
 
-| Path | When it runs | What happens |
+| Path | Runs when | What happens |
 | --- | --- | --- |
-| Published cache | The cache exists and `is_current_version` | Read and render. The common case, and the reason a warm `rimz stats` is instant. |
-| Cold walk | The cache is missing or on an older shape | Single-flight through `coalesce` on `shared_spending_lock`: one process walks with a `SpendingWalker` and publishes, every other process waits and then reads what it published. |
-| Elected service | The held `--refresh` worker thread | `spending::service::request` with `SpendingServiceStartup::HostEligible`, so a long-lived dashboard can become the warm owner and keeps no walker of its own. |
+| Published cache | a one-shot run finds a cache whose `is_current_version` holds | read and render, with no walk and no freshness check |
+| Cold walk | a one-shot run finds the cache missing or on another schema version | `refresh_global_spending_direct` walks with a fresh `SpendingWalker`, coalescing on `shared_spending_lock` |
+| Elected service | every refresh of the held `--refresh` dashboard | `spending::service::request` with `SpendingServiceStartup::HostEligible`, so the dashboard can host the warm walker ([spending.md](./agents/spending.md#one-walk-per-namespace)) |
 
-The cold walk shows a progress spinner only when the run is human-facing and both stdout and stderr are TTYs (`should_animate_cold_stats`), so a pipe gets the report and no progress chrome. If the service call fails, the held loop falls back to whatever is published rather than surfacing an error frame.
+A one-shot run never refreshes a current-version cache, however old. Its figures are as fresh as the last walk a sidebar producer, a held dashboard, or a cold run published.
 
-Account-global setup creates the shared roots only (`ensure_shared_runtime`); stats never opens a workspace tree.
+The cold walk's single flight is short. A process that finds the lock held waits up to 15 steps of 20 ms (`SPENDING_WAIT_STEPS`, `SPENDING_WAIT_STEP` in `agents/spending/engine.rs`) for a fresh publication, then walks locally without publishing. Only the lock holder writes the cache, so concurrent cold runs each pay a full walk.
 
-## The window model
+The cold walk shows a progress spinner (`Reading session files [bar] n/total`) only when the run is human-facing and both stdout and stderr are TTYs (`should_animate_cold_stats`); `--json` and pipes get no progress chrome. When the spinner runs, the wordmark prints before the walk and the panel after it skips its own.
 
-`Window` has four variants: `AllTime`, `Week`, `Month`, `Year`. Four behaviors are worth knowing before you read the render code.
+If the service call fails, the held dashboard falls back to any current-version published cache and reports an error only when none exists. Setup on every path creates the shared directories only (`ensure_shared_runtime`); stats never opens a workspace tree.
 
-- **The heatmap ignores the window.** It always draws the full available history, which is the trailing year the cache spans. The window scopes the model breakdown, the agent breakdown, and the insight rows beneath them.
-- **All time and Year are the same number.** `Window::select` maps both onto the trailing-year tally, because a year is the longest span the cache carries. "All time" is a label, not a wider read.
-- **Non-interactive runs are always All time.** `render_panel` receives `active: None` and falls back to `AllTime`, so the report shape stays fixed for pipes, scripts, and `--json`.
-- **Only the held dashboard can change it.** `Tab` and `Shift-Tab` cycle the windows row into a tab bar; a one-shot run has no way to select a different window.
+## Windows
 
-Every window's displayed token total uses [`SpendWindow::display_tokens`](../../crates/rimz/src/agents/spending/aggregate.rs), which adds cache-read tokens to the input-plus-output total. Tokens are attributed per model and per agent independently of pricing coverage, so an unpriced model still contributes its tokens to the breakdown. Spending cache v21 also carries the named tool-call map parsed with each supported response; aggregation sums those maps into `u64` totals per window, model, and agent, and the one-time version bump reparses finalized history.
+`Window` has four variants, `AllTime`, `Week`, `Month`, and `Year`, and the selected one scopes everything below the windows row. The heatmap ignores it.
 
-Full-width model and agent rows append the input-side cache-hit percentage: `cache_read / (cache_read + input)`, where the aggregate `input` already includes cache writes. The integer uses round-half-up and stays absent for a zero denominator. The shared health classifier paints 90% and above green, 70–89% yellow, and lower values red. Compact rows omit the column.
+A one-shot run and `--json` always use `AllTime`: `render_panel` receives `active: None` and falls back to it. Only the held dashboard selects another window, with `Tab` and `Shift-Tab`, and its windows row renders as a tab bar with the active cell highlighted.
 
-Each named model must carry at least 1.0% of the window's model spend, and each named agent must carry at least 1.0% of its sessions. Smaller entries fold into `Other` before the row cap applies. A section with no priced model spend or no agent sessions has no defined percentage denominator, so its entries remain itemized until the cap applies. Machine-readable JSON keeps every entry separate.
+`Window::select` maps `AllTime` and `Year` onto the same trailing-365-day tally, because the cache carries no longer span. "All time" is a label, and its figures equal Year's. The insight and assist rules still differ between the two:
 
-## Rendering
+| Figure | All time | Week, Month, Year |
+| --- | --- | --- |
+| Models, Agents, Sessions, Spend, Cost/session | the 365-day tally | the 7-, 30-, or 365-day tally |
+| Active days | active days in the trailing 28, shown as `N/28` | active days in the trailing 7, 30, or 365 |
+| Most active day, streaks | every day in the cache | days inside the window |
+| Daily avg | spend over active days in the trailing 365 | spend over active days in the window |
+| Spend trend | none | Week and Month append `(↑n% vs prior week)` against the preceding equal span when that span had spend; Year shows none |
+| Assists | every record | records from the last 7, 30, or 365 days (`assist_since`) |
 
-The panel is plain strings, not widgets. `render_panel` builds a `Vec<String>` and `emit` writes it with a shared left pad. Crossterm enters only for key events in the held loop, and the sidebar pane's ratatui stack is not on this path at all — expect string arithmetic, and expect tests that assert on rendered text.
+Every token total on the panel is `SpendWindow::display_tokens`, which adds cache-read tokens to input plus output. A day counts as active when its bucket has tokens, priced or not.
 
-**Geometry.** `PanelGeometry::current` reads the terminal once per render. Columns choose the heatmap width through `weeks_for_terminal`, clamped between 4 and 52 weeks; the week count then fixes the panel width, and the panel centres in the terminal. Row count is read only when stdout is a TTY, so a pipe carries `None` and never degrades.
+## The heatmap
 
-**Degradation.** `fit` spends a row budget with data outranking chrome. The wordmark drops first, before any data row. The two breakdowns then shrink toward a floor of three rows each, split by `allocate_breakdown_rows` in proportion to what each section naturally wants after the 1.0% fold. Both cap at six rows with the remaining tail folded into the same final `Other`, so a breakdown never grows without bound. A piped run keeps the full panel.
+Each cell is one UTC day, columns are weeks opening on Monday, and the rightmost column is the current week with future days left blank. The week count comes from the terminal width (`weeks_for_terminal`: columns minus the 6-column gutter, halved, clamped to 4 through 52), so a narrow terminal shows as few as four weeks of history. `--dollars` shades by `DaySpend::usd` instead of tokens and retitles the block `Spend activity`.
 
-**Glyphs.** `resolve_panel_glyphs` reads the machine theme, so `[theme] style = "modern"` with `[theme.glyphs] set = "nerd_font"` swaps the token vocabulary (`◎ ◇ ↘ ↗ ◌`) for its Nerd Font equivalents while the CLI colors stay on the default palette. The [theme pipeline](./theme.md) owns that resolution.
+Shading is relative to the visible grid (`Grid::build`, `shade`, `level` in `panel.rs`):
 
-**Empty state.** With no recorded days the panel prints one muted line instead of an empty grid, plus the assists block if any assists exist.
+1. The ceiling is the 90th-percentile value among active days in the grid (`HEAT_CEILING_PERCENTILE`), so one outlier day does not flatten the rest.
+2. A day's value over the ceiling is clamped to 1, raised to the power 0.5 (`HEAT_GAMMA`), and floored at 0.15 (`HEAT_TRACE_FLOOR`).
+3. `level` maps the result onto the ramp `· ░ ▒ ▓ █`: `·` only for a day with no usage, and at least `░` for any active day.
+
+The month row labels the column where each month begins, and the `Less · ░ ▒ ▓ █ More` key closes the block.
+
+## The breakdowns
+
+The Models and Agents sections share one row shape: a bullet, the name, a left column of figures, the share percentage, and a share bar. They differ in what ranks and divides:
+
+| | Models | Agents |
+| --- | --- | --- |
+| Left column | dollars, `↘` input, `↗` output, `◌` cache read, cache hit | dollars, `◎` sessions, `◇` display tokens, cache hit |
+| Sort | dollars, then tokens | sessions, then tokens |
+| Share | the row's dollars over the window's model dollars | the row's sessions over all sessions in the window |
+| Folds into `Other` | an empty model id, or under 1.0% of the window's model dollars | under 1.0% of the window's sessions |
+| Bullet color | cool | the provider's identity color; `Other` muted |
+
+Entries with zero tokens in the window are dropped. The 1.0% fold (`MIN_BREAKDOWN_SHARE`) applies first and does nothing when its denominator is zero. The row cap (`MAX_MODELS`, `MAX_AGENTS`, 6 each, or fewer when the terminal is short) then folds the tail into the same final `Other` row. Model names go through `model_display::display_model`, agent names through the adapter's display name.
+
+The cache-hit column is `SpendWindow::cache_hit_percent`: `cache_read / (cache_read + input)`, where `input` already includes cache writes, rounded half up and absent for a zero denominator. `CacheHealth::classify` colors it green at 90% and above, yellow from 70% to 89%, and red below.
+
+Both sections share one column layout (`stat_section_layout`), chosen by what fits the panel width:
+
+1. The full left column, the percentage, and a share bar of at least 10 cells.
+2. The full left column and the percentage, with no bar.
+3. The compact left column: models keep only dollars, agents drop the cache-hit column.
+
+## Fitting the terminal
+
+The panel is plain strings. `render_panel` builds a `Vec<String>` and `emit` writes it with one shared left pad; crossterm enters only for key events in the held loop, and the sidebar pane's ratatui stack is not on this path. Tests therefore assert on rendered text.
+
+`PanelGeometry::current` reads the terminal once per render. The week count fixes the panel width (`6 + 2 × weeks`), and the panel centres in the terminal. Rows are read only when stdout is a TTY, so a pipe carries `None` and always gets the full panel.
+
+`fit` spends the row budget (terminal rows minus one) after the fixed rows, the section chrome, and the assist rows, and it keeps data ahead of chrome:
+
+1. With room for everything, each breakdown gets its natural row count, capped at 6.
+2. With less room, the breakdowns shrink toward 3 rows each (or their natural count, if smaller), and `allocate_breakdown_rows` splits the space in proportion to each section's natural size. The 9-row wordmark header stays.
+3. When even those floors do not fit beside the header, the header drops, each section's cap becomes its 3-row floor, and each can shrink to 1 row.
+
+A run whose wordmark the cold-walk spinner already printed skips `fit` and renders every capped row.
+
+Glyphs come from `resolve_panel_glyphs`, which resolves the token, session, and meter-bar glyph roles through the machine theme, so a Nerd Font glyph set swaps `◎ ◇ ↘ ↗ ◌` and the bar characters while colors stay on the CLI palette ([theme.md](./theme.md#glyphs)).
 
 ## The held dashboard
 
-`--refresh` runs `hold::run_refresh`. `TerminalModeGuard` takes the terminal in raw mode on the alternate screen with mouse capture off, so the dashboard owns the full pane without adding mux scrollback, keypresses arrive as events rather than echoing, and stray mouse reports get drained instead of printed.
+`--refresh` runs `hold::run_refresh`. `TerminalModeGuard` puts the terminal in raw mode on the alternate screen with mouse capture off, so the dashboard owns the pane without adding mux scrollback, and keypresses and stray mouse reports arrive as events the loop drains.
 
-Each cycle spawns a worker thread that loads through the elected spending service and sends back a single `Result<Stats>`; the foreground polls for keys every 100ms against a 60-second refresh deadline. A failed refresh holds the last frame and logs the failure streak's first warning rather than exiting; consecutive failures drop to debug until a refresh succeeds. A dashboard that has no frame yet retries after 5 seconds, then returns to the 60-second cadence once a refresh succeeds. Stderr logging is off for this rendered command, so warnings cannot smear its raw-mode frame; the reporting layer still receives them.
+Each cycle spawns a worker thread that loads through the elected service and sends back one `Result<Stats>`, with a panic caught and turned into an error. The foreground polls for events every 100 ms (`REFRESH_POLL_TICK`) and starts the next cycle once the refresh has landed and the 60-second deadline (`REFRESH_INTERVAL`) has passed. Until the first successful frame, a landed result moves the deadline to 5 seconds out (`EMPTY_REFRESH_RETRY`).
 
-Rendering follows three states. A current stats frame always wins, including while the latest refresh is failing, so a live panel gets no staleness marker. A failure before the first stats frame paints a centred unavailable message with the cause and retry status; resize and window keys repaint that same state. Before either outcome arrives, the dashboard writes nothing. The unavailable frame is identical for interactive `--refresh` and rimzd's `--refresh --hold`, and the first successful refresh replaces it in place.
+A failed refresh never exits. The first failure in a streak logs a warning and later ones log at debug until a refresh succeeds. `main.rs` turns stderr logging off for `stats --refresh`, so warnings cannot smear the raw-mode frame; the reporting layer still receives them.
+
+Each repaint picks one of three frames:
+
+| State | Frame |
+| --- | --- |
+| a stats frame exists | the panel, even while later refreshes fail; no staleness marker |
+| no frame yet, a refresh failed | the wordmark and a centred `Spending refresh unavailable - retrying. <cause>`, ellipsized to the panel width |
+| no outcome yet | nothing is written |
+
+A resize repaints the current frame, and the first successful refresh replaces the unavailable frame in place. The frames are identical under `--hold`.
 
 | Key | Outcome |
 | --- | --- |
-| `Tab` / `Shift-Tab` | Cycle the selected window, repainting from the frame already in hand with no refetch |
-| `r` | Reload the binary in place |
-| `Ctrl-C` | Quit, unless `--hold` is set |
+| `Tab` / `Shift-Tab` | cycle the window and repaint from the stats in hand, reloading only the assist log |
+| `r` / `R` | reload the binary in place |
+| `Ctrl-C` | quit, unless `--hold` is set |
 
-**Reload.** The `r` key and `SIGUSR1` set the same flag, which the cycle consumes once and turns into a re-exec of `reload::current_reexec_target()` with the original argv. `rimz reload` drives that signal remotely. Registering the handler replaces `SIGUSR1`'s default-terminate disposition, so the dashboard catches the signal instead of dying on it.
+Reload re-execs `reload::current_reexec_target()` with the original arguments. The `r` key returns the reload outcome directly; `SIGUSR1` sets a flag the cycle reads and clears, which is how `rimz reload` restarts running dashboards. Registering that handler replaces `SIGUSR1`'s default terminate disposition. When no re-exec target resolves, the dashboard keeps running.
 
-**`--hold`.** A hidden flag that requires `--refresh` and belongs to the daemon view. It makes `Ctrl-C` a no-op, so leaving the pane does not kill the dashboard, while closing the pane still ends the process. `daemon_content::stats_argv` is exactly `rimz stats --refresh --hold`; `[daemon]` in `config.toml` replaces or extends that pane, and the pane count takes effect on room restart.
+`--hold` is a hidden flag that requires `--refresh` and exists for the daemon view: `Ctrl-C` becomes a no-op, and closing the pane still ends the process. `daemon_content::stats_argv` is exactly `rimz stats --refresh --hold`; how `[daemon]` panes replace it and how a pane-count change reaches a running room are in [rimzd.md](./rimzd.md#the-content-supervisor).
 
 ## Machine-readable surfaces
 
-`--json` (`json.rs`) emits the stats document instead of the panel: unit, session count, active-day and streak insights, the trailing windows, the per-model and per-agent breakdowns with optional `cache_hit_pct`, tool-call totals and per-name maps on every window and breakdown, the per-day buckets, and the assists rollup with its events. This is the stable surface for scripts. It renders All time and conflicts with `--refresh`.
+`--json` (`json.rs`) emits the stats document instead of the panel. It always describes All time and conflicts with `--refresh`; `--dollars` only sets `unit` to `usd`.
 
-`--assists` (`assists.rs`) prints the complete newest-first assist timeline instead of the dashboard, one line per event with its forensics. It conflicts with `--json` and `--refresh`.
+| Field | Contents |
+| --- | --- |
+| `unit` | `tokens`, or `usd` under `--dollars` |
+| `sessions` | the 365-day session count |
+| `active_days_28`, `longest_streak`, `current_streak`, `most_active_day` | the All time insights; `most_active_day` omitted when there is none |
+| `windows` | `week`, `month`, `year`, each with display `tokens` and `usd` |
+| `models` | every model in the cache, unfolded and uncapped, sorted by dollars: id, display name, token split, `usd`, `share` as a fraction |
+| `agents` | every agent with tokens, unfolded and uncapped, sorted by sessions: kind, name, tokens, `usd`, `sessions`, `share` |
+| `days` | per-day `date`, `tokens`, `usd` |
+| `assists` | the window label, the rollup, and every event |
 
-Assists come from the durable `harness::assist_log`, folded into an `AssistRollup` of four categories: auto-continue with resumes and recovered time, auto-compact with its count, auto-redeem with attempts and resets, and auto-resume with restores and the sessions they brought back. The panel prints only the categories with a non-zero count; the timeline prints everything.
+Windows, models, and agents carry `tool_calls` and a per-name `tools` map, each omitted when zero or empty. Models and agents carry `cache_hit_pct`, omitted when the denominator is zero.
 
-The line this draws is what counts as an assist. Automation that benefits the user earns a record here; RimZ repairing its own mux state does not, which is why focus repair keeps a durable record in the [diagnostics log](./diagnostics.md) rather than a row in this panel. A new smart strategy adds its record here when it acts for the user.
+`--assists` (`assists.rs`) prints `assists (all)` with the non-zero category counts, then one forensic line per event, newest first, in the configured time zone; an empty log prints `no assists recorded`. It conflicts with `--json` and `--refresh`.
+
+Assists come from the account-global assist log, which [loops.md](./harness/loops.md#the-assist-log) owns along with what counts as an assist and how its records fold. `AssistStats::from_records` folds them into four panel categories, and the panel prints only those with a non-zero count:
+
+| Row | Counts |
+| --- | --- |
+| `Auto-continue:` | delivered continues, with the summed recovered hours |
+| `Auto-compact:` | every `auto_compact` record, plus delivered `idle_compact` and `flip_compact` records |
+| `Auto-redeem:` | redeem attempts, with the `reset` outcomes |
+| `Auto-resume:` | rebirth restores, with the agents they brought back |
 
 ## Where the code lives
 
-| File | What it owns |
+| File | Owns |
 | --- | --- |
 | `mod.rs` | `StatsArgs`, `Window`, `Stats`, the three load paths, the shared constants, and the wordmark |
-| `panel.rs` | Geometry, the `fit` degradation ladder, the unavailable and empty frames, the heatmap, both breakdowns, insights, and `emit` |
-| `hold.rs` | The `--refresh` loop, key handling, the reload signal and re-exec, and the cold-load spinner |
-| `assists.rs` | The assist rollup, its panel rows, and the `--assists` timeline |
-| `json.rs` | The `--json` document |
-| `fmt.rs` | Token, dollar, and day formatting, and week fitting |
-| `tests.rs` | The unit suite |
+| `panel.rs` | geometry, `fit`, the heatmap, the windows row, both breakdowns, the insights, the unavailable and empty frames, and `emit` |
+| `hold.rs` | the `--refresh` loop, key handling, the reload signal and re-exec, and the cold-walk spinner |
+| `assists.rs` | the assist fold, its panel rows, and the `--assists` timeline |
+| `json.rs` | the `--json` document |
+| `fmt.rs` | token, dollar, and day formatting, display names, and `weeks_for_terminal` |
+| `tests.rs` | the unit suite |
 
 ## Tests
 
-`tests.rs` covers this module as pure unit tests over rendered strings. There are no golden `.snap` frames here — that pattern belongs to the sidebar pane. The load paths run against temporary `disk::paths::RuntimePaths` (a published cache served without a walk, a cold refresh publishing the rollups the sidebar then reads), the panel is asserted through `strip_ansi` on layout, ranking, folding, and the fit ladder, and the held loop is driven through `key_outcome` and `HeldStats` without a terminal.
+`tests.rs` holds pure unit tests over rendered strings, with no golden `.snap` frames. The load paths run against temporary `RuntimePaths` (a published cache served without a walk, and a cold refresh publishing the rollups the sidebar reads). Panel tests strip ANSI with `strip_ansi` and assert layout, ranking, folding, and the `fit` ladder. The held loop is driven through `key_outcome` and `HeldStats` without a terminal.
 
 ```sh
-cargo xtask test stats
+cargo xtask test 'cli::stats'
 ```
 
 ## See also
 
-- [spending.md](./agents/spending.md) — spend computation, the incremental cache, and the pricing table behind every figure here.
-- [theme.md](./theme.md) — the color pipeline and glyph catalog the panel resolves through.
-- [Token Insight guide](../guide/insight.md) — what the figures mean, for the reader who is using RimZ rather than changing it.
+- [spending.md](./agents/spending.md): the walk, the incremental cache, the spending service, and the pricing behind every figure.
+- [loops.md](./harness/loops.md#the-assist-log): the assist log and its rollup.
+- [rimzd.md](./rimzd.md): the daemon view that holds the dashboard.
+- [theme.md](./theme.md): the palette and glyph resolution the panel uses.
+- [Token Insight guide](../guide/insight.md): what the figures mean, for someone using RimZ.

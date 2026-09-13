@@ -60,7 +60,7 @@ Each of these subsystems is one file at the top level.
 | [rimzd.md](./rimzd.md) | The managed `rimzd` view: its panes, how they are identified, and how they are repaired. |
 | [remote.md](./remote.md) | SSH attach and aliases, the reconnect supervisor, link health, port forwarding, and bandwidth attribution. |
 | [web.md](./web.md) | Browser access: the writable and broadcast ttyd daemons, their records and reuse, the trusted-header gate, room attach and the session picker, the credential, the generated browser page, and remote web tunnels. |
-| [stats.md](./stats.md) | The `rimz stats` panel: the spend cache it reads, the window model, the render ladder, and the held dashboard. |
+| [stats.md](./stats.md) | The `rimz stats` panel: the cache it reads, the window model, the heatmap and breakdowns, terminal fitting, the held dashboard, and the JSON and assists surfaces. |
 | [diagnostics.md](./diagnostics.md) | The diagnostics log, the frame observer, and off-box Sentry. |
 | [performance.md](./performance.md) | The performance model: threads and clocks, the cost map, the principles, and fleet overhead. |
 | [profiling.md](./profiling.md) | The field guide for profiling a live fleet. |
