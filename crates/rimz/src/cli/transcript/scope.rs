@@ -10,9 +10,8 @@ pub(super) struct LiveAgent {
     pub(super) root: bool,
 }
 
-pub(super) fn live_agents(workspace: &rimz::ResolvedWorkspace) -> Vec<LiveAgent> {
-    crate::cli::open_store(workspace)
-        .ok()
+pub(super) fn live_agents(store: Option<&rimz::Store>) -> Vec<LiveAgent> {
+    store
         .and_then(|store| store.snapshot_cached().ok())
         .map(|snapshot| {
             snapshot

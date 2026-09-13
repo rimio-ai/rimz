@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
-use super::chat::base_handle;
+use super::chat::{base_handle, within_window};
 use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,7 +80,22 @@ pub(super) fn assemble_threads(
     let by_message_id = message_index(entries);
     let openers = turn_openers(entries);
     let mut components = Components::new(entries.len());
+    let mut attached = HashMap::<usize, usize>::new();
+    let mut latest_by_sender = HashMap::<&str, usize>::new();
     for (index, entry) in entries.iter().enumerate() {
+        let sender = base_handle(&entry.chat.from);
+        if entry.is_stage() {
+            // A flip hangs under its flipper's latest line while the grouping
+            // window holds; otherwise it stands as its own block.
+            if let Some(&latest) = latest_by_sender.get(sender)
+                && within_window(entries[latest].chat.at, entry.chat.at)
+            {
+                attached.insert(index, latest);
+                components.union(index, latest);
+            }
+            continue;
+        }
+        latest_by_sender.insert(sender, index);
         if is_turn_output(entry) {
             for &opener in &openers[index] {
                 components.union(index, opener);
@@ -107,21 +122,25 @@ pub(super) fn assemble_threads(
     blocks.sort_by_key(|members| members[0]);
 
     let mut display = Vec::with_capacity(entries.len());
+    let mut lanes = HashMap::<usize, DisplayLane>::new();
     for members in blocks {
         let block = members[0];
         let root_at = entries[block].chat.at;
         let threaded = members.len() > 1;
         for (position, source_index) in members.into_iter().enumerate() {
+            let lane = match attached.get(&source_index) {
+                // The target has a lower index in this block, so it was emitted first.
+                Some(target) => lanes[target].clone(),
+                None if threaded && position > 0 => DisplayLane::Thread {
+                    component: block,
+                    root_at,
+                },
+                None => DisplayLane::Margin,
+            };
+            lanes.insert(source_index, lane.clone());
             display.push(DisplayEntry {
                 entry: entries[source_index].clone(),
-                lane: if threaded && position > 0 {
-                    DisplayLane::Thread {
-                        component: block,
-                        root_at,
-                    }
-                } else {
-                    DisplayLane::Margin
-                },
+                lane,
                 block,
                 archived: source_index < archive_prefix,
                 source_index,

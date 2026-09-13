@@ -72,6 +72,7 @@ fn render_entry(
             error: kind == TranscriptKind::Error,
             questions: Vec::new(),
             answers: Vec::new(),
+            stage: None,
         },
     }
 }
@@ -783,6 +784,128 @@ fn turn_openers_resolve_reply_to_then_fall_back() {
         turn_openers(&entries),
         [vec![], vec![], vec![0], vec![1], vec![]]
     );
+}
+
+fn flip_entry(at: &str, by: &str, from: Option<&str>, to: &str, note: Option<&str>) -> RenderEntry {
+    let flip = rimz::harness::team_stage::StageSignal {
+        team: "forge".to_owned(),
+        instance: "forge#chat".to_owned(),
+        to: to.to_owned(),
+        by: by.to_owned(),
+        board: "/tmp/blackboard.md".into(),
+        at: ts(at),
+        from: from.map(ToOwned::to_owned),
+        owner: Some("coder".to_owned()),
+        note: note.map(ToOwned::to_owned),
+    };
+    render_entry_for_flip(&flip, false)
+}
+
+#[test]
+fn flip_attaches_to_flippers_latest_line_within_window() {
+    let entries = vec![
+        linked(entry("2026-06-28T04:00:00Z", "brief"), Some(1), &[]),
+        linked(assistant_entry("2026-06-28T04:01:00Z", "done"), None, &[1]),
+        flip_entry(
+            "2026-06-28T04:02:00Z",
+            "claude",
+            Some("Explore"),
+            "Plan",
+            None,
+        ),
+        flip_entry(
+            "2026-06-28T04:10:00Z",
+            "claude",
+            Some("Plan"),
+            "Implement",
+            None,
+        ),
+    ];
+
+    let display = assemble_threads(&entries, 0, false);
+
+    assert_eq!(
+        display[2].entry.chat.stage.as_ref().map(|s| s.to.as_str()),
+        Some("Plan")
+    );
+    assert_eq!(display[2].block, display[1].block);
+    assert_eq!(display[2].lane, display[1].lane);
+    assert!(!display[2].lane.is_margin());
+    assert_ne!(display[3].block, display[1].block);
+    assert!(display[3].lane.is_margin());
+}
+
+#[test]
+fn flip_renders_as_glyph_line_inside_block() {
+    let entries = vec![
+        linked(entry("2026-06-28T04:00:00Z", "brief"), Some(1), &[]),
+        linked(assistant_entry("2026-06-28T04:01:00Z", "done"), None, &[1]),
+        flip_entry(
+            "2026-06-28T04:02:00Z",
+            "claude",
+            Some("Explore"),
+            "Plan",
+            Some("notes written\nsecond line"),
+        ),
+        flip_entry(
+            "2026-06-28T04:10:00Z",
+            "claude",
+            Some("Plan"),
+            "Implement",
+            None,
+        ),
+        flip_entry("2026-06-28T04:20:00Z", "user", None, "Explore", Some("go")),
+        flip_entry(
+            "2026-06-28T04:21:00Z",
+            "user",
+            Some("Explore"),
+            "Explore",
+            None,
+        ),
+    ];
+
+    let out = render_threaded(&entries, jiff::civil::date(2026, 6, 28));
+
+    assert_eq!(
+        out,
+        concat!(
+            " user  → @claude  00:00\n",
+            "brief\n",
+            "│\n",
+            "│ @claude  00:01\n",
+            "│ done\n",
+            "│ ⇢ Explore → Plan  00:02  notes written\n",
+            "│   second line\n",
+            "\n",
+            "@claude  00:10\n",
+            "⇢ Plan → Implement\n",
+            "\n",
+            " user   00:20\n",
+            "⇢ Explore · opened  go\n",
+            "⇢ Explore · re-opened  00:21\n",
+        )
+    );
+}
+
+#[test]
+fn flip_json_carries_stage() {
+    let line = flip_entry(
+        "2026-06-28T04:02:00Z",
+        "claude",
+        Some("Explore"),
+        "Plan",
+        Some("note"),
+    )
+    .chat;
+
+    let json = serde_json::to_value(&line).expect("json");
+
+    assert_eq!(json["from"], "@claude");
+    assert_eq!(json["text"], "note");
+    assert_eq!(json["stage"]["from"], "Explore");
+    assert_eq!(json["stage"]["to"], "Plan");
+    assert_eq!(json["stage"]["by"], "claude");
+    assert!(json.get("to").is_none());
 }
 
 fn log_entry(
