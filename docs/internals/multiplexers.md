@@ -36,7 +36,7 @@ Shared seam, `crates/rimz/src/mux/`:
 | [`reconcile.rs`](../../crates/rimz/src/mux/reconcile.rs) | The structural sidebar repair planner, pane-role precedence, and transaction executor. |
 | [`mount_proof.rs`](../../crates/rimz/src/mux/mount_proof.rs) | Current-build heartbeat proof for panes mounted during repair. |
 | [`width.rs`](../../crates/rimz/src/mux/width.rs) | Sidebar sizing: share resolution, native steps, and target spellings. |
-| [`companion_layout.rs`](../../crates/rimz/src/mux/companion_layout.rs) | Pure bounded column planning and equal-area targets for [subagent companion tabs](./harness/subagents.md#what-a-launch-desugars-to). |
+| [`companion_layout.rs`](../../crates/rimz/src/mux/companion_layout.rs) | Pure bounded column planning and equal-area targets for [subagent companion tabs](./harness/subagents.md#pane-zones). |
 | [`tab_name.rs`](../../crates/rimz/src/mux/tab_name.rs) | Pure pane-derived tab labels, name ownership, and `TabNameIntent`. |
 | [`width_target.rs`](../../crates/rimz/src/mux/width_target.rs) | The room-runtime width record every renderer resolves against: its file, its pin flag, and the change broadcast. |
 | [`focus_anchor.rs`](../../crates/rimz/src/mux/focus_anchor.rs) | The durable two-phase intent behind every RimZ-initiated focus action: nonce, anchor file, pre-action fence, and the five observation verdicts. |

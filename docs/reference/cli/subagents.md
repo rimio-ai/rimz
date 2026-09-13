@@ -74,10 +74,10 @@ Children of a team member share companion tabs named `<view> subagents`, with nu
 | Checkout | parent's checkout | fixed |
 | Deadline | 30 minutes | `--timeout`, then `[agents.subagents] timeout` |
 | Isolation | parent's recorded `--isolation` override, else machine `agents.isolation` | `--isolation host\|sandbox` |
-| Pane after completion | closes when the run settles | `--keep` holds it until `stop` or `rimz gc` |
+| Pane after completion | closes when the run settles | `--keep` holds it until `rimz subagents stop` |
 | Address | minted petname | fixed |
 
-A finished child's in-pane wrapper stamps its durable end and closes the pane after stopping the provider. The run result remains joinable, and the finished child stays on the parent card until the parent's next prompt boundary. `--keep` instead holds the pane after completion and past parent exit, leaving reclamation to `stop` or `rimz gc`.
+A finished child's in-pane wrapper stamps its durable end and closes the pane after stopping the provider. The run result remains joinable, and the finished child stays on the parent card until the parent's next prompt boundary. `--keep` instead holds the pane after completion and past parent exit, until `rimz subagents stop` closes it; `rimz gc` does not reclaim it.
 
 The single-launch surface deliberately omits `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--resume`, placement flags, output/input formats, retries, and verification. Use `rimz agents` when the launch needs those controls; use `rimz teams` when the workers are peers rather than children.
 
