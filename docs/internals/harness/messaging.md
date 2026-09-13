@@ -423,9 +423,10 @@ Hook and delivery paths append to fixed 7-day buckets at `transcript/<bucket-sta
 
 | Kind | Records | Reads back as |
 | --- | --- | --- |
-| `Prompt` | a human prompt when no question is open, or a confirmed system prompt with `from: "rimz"` | `user: @receiver, text` for human prompts; system prompts hidden from human rendering, retained by `--json` |
+| `Prompt` | a human prompt when no question is open, or a confirmed system prompt with `from: "rimz"` | `user: @receiver, text` for human prompts; system prompts hidden from human rendering with the output of the turn they open, retained by `--json` |
 | `Message` | an inter-agent delivery, or a launched child's run-matched launch brief, with structured `from` | `@sender: @receiver, text` |
-| `SubagentReport` | the status-only launched-child fleet digest, with `from: @rimz` | hidden from human rendering; included by `--json` |
+| `SubagentReport` | the status-only launched-child fleet digest, with `from: @rimz` | hidden from human rendering with the output of the turn it opens; included by `--json` |
+| `Wait` | a `Type: WAIT`, `Type: SIGNAL`, or `Type: STAGE` delivery, with `from: @rimz` | hidden from human rendering with the output of the turn it opens; included by `--json` |
 | `Assistant` | a root turn's final assistant message | `@receiver: text` |
 | `Ask` | a native question, when a blocking hook marks the agent waiting; `questions` carry option labels and descriptions | the agent's question |
 | `Answer` | the effective answer from the native prompt UI or the first human prompt submitted while a question is open | `you` to the agent, folded into its ask card |
@@ -441,9 +442,11 @@ Two fields link entries into conversations, and both default empty so older JSON
 
 `parent_agent_id` and `parent_agent_kind` carry the direct parent of a pane-backed launched child. The read side folds that stamp from any entry into the session identity, keeping the child's whole conversation out of channel, `@all`, and parent-focused transcript scopes even after the live store row is gone. Targeting the child directly still shows it.
 
-A launched child's initial headerless prompt becomes a `Message` from its parent when it exactly matches the durable subagent run prompt; later headerless input remains a human `Prompt`. A batched delivery splits on blank-line boundaries that introduce another `Type: AGENT_MESSAGE`, `Type: SUBAGENT_REPORT`, `Type: WAIT`, `Type: SIGNAL`, or `Type: USER_MESSAGE` header, so each section becomes its own entry. A provider turn-error becomes an `Error` entry only on the hook-path merge (`StopFailure` or a `Stop` tail refresh); statusline-only detections stay card enrichment, because that path is lock-free and writes no transcript.
+A launched child's initial headerless prompt becomes a `Message` from its parent when it exactly matches the durable subagent run prompt; later headerless input remains a human `Prompt`. A batched delivery splits on blank-line boundaries that introduce another `Type: AGENT_MESSAGE`, `Type: SUBAGENT_REPORT`, `Type: WAIT`, `Type: SIGNAL`, `Type: STAGE`, or `Type: USER_MESSAGE` header, so each section becomes its own entry. A provider turn-error becomes an `Error` entry only on the hook-path merge (`StopFailure` or a `Stop` tail refresh); statusline-only detections stay card enrichment, because that path is lock-free and writes no transcript.
 
 `rimz transcript` projects linked entries into flat conversation components: it unions output edges from an `Assistant`, `Ask`, `Error`, or `Answer` to the messages that opened its turn, plus reply-back edges from a message to a parent whose sender is that message's receiver. Other causal edges, including hand-offs to third parties, root new conversations. The earliest entry in a component is its root; the rest follow chronologically beneath it. `--flat` skips the assembly.
+
+Before assembly the human view drops harness turns as units. A turn's openers are the resolved `reply_to` parents of its output, or the agent session's latest opener when none were recorded; an `Assistant` or `Error` entry whose openers are all harness entries (`SubagentReport`, `Wait`, `rimz`-authored `Prompt`) hides with them, while an `Ask` and agent-sent `Message`s stay. `rimz transcript` also joins the lane's `team.stage` signals by time as flip lines, attached to the flipper's latest line within the grouping window.
 
 The reader computes a current-life boundary at read time: the earliest `registered_at` among the matching live root agents. Earlier entries are prior-session archive, hidden by default when a live cohort exists, rendered under a dated marker with `--all`, and rendered wholesale as archive when no live cohort exists. The buckets themselves are never mutated.
 

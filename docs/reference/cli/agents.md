@@ -334,7 +334,7 @@ When room tmp exists, `show` reports its host path and notes that sandboxed pane
 
 #### `logs`
 
-`logs <ref>` is the agent-centric transcript view: `-n/--tail N` keeps the last N chat lines, `-f/--follow` prints new lines as they land, `--all` includes prior-session history, and `--json` emits JSON for one-shot reads or NDJSON in follow mode. It uses the same transcript scope and rendering as [`rimz transcript @ref`](./transcript.md): human output hides subagent digests, waits, and `rimz`-authored prompts; JSON retains them.
+`logs <ref>` is the agent-centric transcript view: `-n/--tail N` keeps the last N chat lines, `-f/--follow` prints new lines as they land, `--all` includes prior-session history, and `--json` emits JSON for one-shot reads or NDJSON in follow mode. It uses the same transcript scope and rendering as [`rimz transcript @ref`](./transcript.md): human output hides subagent digests, waits, and `rimz`-authored prompts together with the output of the turns they open; JSON retains them.
 
 #### `history`
 

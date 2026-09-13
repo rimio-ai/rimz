@@ -179,7 +179,7 @@ The first flip creates `<worktree>/blackboard.md` if absent. Under a per-worktre
 - 2026-09-12 14:20 @planner: Plan -> Implement — plan ready in plan-notes.md; three advisories carried in
 ```
 
-After the board write, RimZ appends a durable `team.stage` signal with source `team`, fires explicit subscriptions, and directly delivers to the owner without requiring a role signal binding. The payload carries string fields `team`, `instance` (`team#channel`), `from` (absent when opening a board), `to`, `owner` (omitted for `Done`), `by` (role name, `user`, or `rimz`), optional `note`, `board` (absolute path), and `at` (RFC 3339). Flip signals always include the required note; registration re-wakes have no note.
+After the board write, RimZ appends a durable `team.stage` signal with source `team`, fires explicit subscriptions, and directly delivers to the owner without requiring a role signal binding. The payload carries string fields `team`, `instance` (`team#channel`), `from` (absent when opening a board), `to`, `owner` (omitted for `Done`), `by` (role name, `user`, or `rimz`), optional `note`, `board` (absolute path), and `at` (RFC 3339). Flip signals always include the required note; registration re-wakes have no note. `rimz transcript` renders each flip inside the lane's conversation ([transcript](./transcript.md)).
 
 Direct delivery uses `Type: STAGE` / `From: @rimz` with prose only, not payload JSON. These are the flip, same-stage re-fire, and registration re-wake bodies:
 
