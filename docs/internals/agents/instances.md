@@ -81,7 +81,7 @@ These rules apply only after kind, pane incarnation, process identity, directory
 
 The in-pane agent process is the liveness truth, read through the pane: the CLI is the pane's foreground process or the single hosted descendant under the pane root, so when it exits the pane returns to a shell and stops reading as an agent. The instance leaves the sidebar on the next snapshot with no exit hook, and there is no `offline` status: a dead agent is a shell row or no row, never a retracted store fact.
 
-The session ends separately. A Claude `SessionEnd` hook stamps the session ended and removes its context sidecar at once; runtime views hide the row, and audit views keep its provider identity for explicit resume within retention. Codex has no `SessionEnd`, so the [reaper](#session-death) stamps the same state once pane liveness proves the process gone.
+The session ends separately. A Claude `SessionEnd` hook stamps the session ended and removes its context sidecar at once; runtime views hide the row, and audit views keep its provider identity for explicit resume within retention. Codex leaves its `SessionEnd` hook unwired ([adapter_codex.md](./adapter_codex.md#hooks-and-lifecycle)), so the [reaper](#session-death) stamps the same state once pane liveness proves the process gone.
 
 ## Session death
 
