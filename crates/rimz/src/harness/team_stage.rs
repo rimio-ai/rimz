@@ -562,30 +562,27 @@ fn hands_off(by: &Flipper<'_>, team: &Team, from: Option<&str>, owner: Option<&s
     from.and_then(|stage| team.owner_of(stage)) == Some(*role) && owner != Some(*role)
 }
 
-/// Every path `git status` reports, untracked files included; team memory files are git-excluded.
-/// A worktree outside any git repository has nothing to commit and reports none.
+/// Every path under the worktree `git status` reports, untracked files included, except the board
+/// flip itself writes. A worktree outside any git repository has nothing to commit and reports none.
 fn uncommitted_paths(worktree: &Path) -> Result<Vec<String>, FlipErr> {
-    let git = |args: &[&str]| {
-        crate::proc::git_command(worktree)
-            .args(args)
-            .env("LC_ALL", "C")
-            .output()
-            .map_err(|source| FlipErr::Io {
-                path: worktree.to_path_buf(),
-                source,
-            })
-    };
-    let status = git(&["status", "--porcelain=v1", "-z", "--untracked-files=all"])?;
+    let status = crate::proc::git_command(worktree)
+        .args(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
+        .args(["--", ".", ":(exclude)blackboard.md"])
+        .env("LC_ALL", "C")
+        .output()
+        .map_err(|source| FlipErr::Io {
+            path: worktree.to_path_buf(),
+            source,
+        })?;
     if !status.status.success() {
-        if !git(&["rev-parse", "--is-inside-work-tree"])?
-            .status
-            .success()
-        {
+        let stderr = String::from_utf8_lossy(&status.stderr);
+        // `LC_ALL=C` pins git's wording; other failures inside a repo, dubious ownership included, refuse.
+        if stderr.contains("not a git repository") {
             return Ok(Vec::new());
         }
         return Err(FlipErr::GitStatus {
             worktree: worktree.to_path_buf(),
-            stderr: String::from_utf8_lossy(&status.stderr).trim().to_owned(),
+            stderr: stderr.trim().to_owned(),
         });
     }
     let mut paths = Vec::new();
@@ -976,6 +973,7 @@ mod tests {
         std::fs::write(repo.path().join("moved.rs"), "fn a() {}\n").unwrap();
         git(&["add", "."]);
         git(&["commit", "-q", "-m", "init"]);
+        std::fs::write(repo.path().join("blackboard.md"), "Stage: Build\n").unwrap();
         assert!(uncommitted_paths(repo.path()).unwrap().is_empty());
         git(&["mv", "moved.rs", "renamed.rs"]);
         std::fs::create_dir(repo.path().join("src")).unwrap();
