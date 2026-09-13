@@ -1,6 +1,6 @@
 # Droid adapter
 
-> Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Accounts, balances, and spend are in [providers.md](./providers.md); the raw upstream protocol is in [droid-reference.md](../../externals/agent-adapter/droid-reference.md).
+> Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md); the raw upstream protocol is in [droid-reference.md](../../externals/agent-adapter/droid-reference.md).
 
 Factory Droid reports basic lifecycle through native `settings.json` hooks. RimZ installs a slim additive hook set into `~/.factory/settings.json`; it leaves Droid's user-owned `statusLine` and persistent autonomy settings untouched. The adapter is intentionally interactive-only: supervised `rimz agents droid -p` launches the stock TUI with a positional prompt and completes from the native `Stop` hook rather than replacing the TUI with a separate exec transport.
 

@@ -1,6 +1,6 @@
 # Codex adapter
 
-> Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Binding, same-pane ownership, and session death are in [instances.md](./instances.md); accounts, balances, and spend are in [providers.md](./providers.md); the raw upstream protocol is in [codex-reference.md](../../externals/agent-adapter/codex-reference.md).
+> Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Binding, same-pane ownership, and session death are in [instances.md](./instances.md); accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md); the raw upstream protocol is in [codex-reference.md](../../externals/agent-adapter/codex-reference.md).
 
 `CodexAdapter` maps Codex hooks, rollout files, and the read-only `codex app-server` onto RimZ's agent model, and `CODEX_DESCRIPTOR` declares its launch facts. Codex has no statusline, so the live gauge comes from the rollout tail and the remaining session metadata comes from the app-server. The code lives under [`agents/adapters/codex/`](../../../crates/rimz/src/agents/adapters/codex/mod.rs):
 
@@ -179,7 +179,7 @@ The adapter emits raw tokens and the window; the snapshot fold derives the gauge
 
 ### Local refresh
 
-[`refresh_transcript_context`](../../../crates/rimz/src/agents/adapters/codex/transcript.rs) runs inline and stat-gated: it reads the tail only when the rollout's stat changed, or when a live spend fold still needs token-counter backfill. It resumes the spend fold from the byte cursor on the context sidecar, so later refreshes price only appended requests, and an unknown model adds zero until the history walk's reprice heals the tally ([providers.md](./providers.md#token-pricing)). The same pass reads the newest name for the session from `$CODEX_HOME/session_index.jsonl` into `session_name`, ahead of the first-message preview.
+[`refresh_transcript_context`](../../../crates/rimz/src/agents/adapters/codex/transcript.rs) runs inline and stat-gated: it reads the tail only when the rollout's stat changed, or when a live spend fold still needs token-counter backfill. It resumes the spend fold from the byte cursor on the context sidecar, so later refreshes price only appended requests, and an unknown model adds zero until the history walk's reprice heals the tally ([spending.md](./spending.md#token-pricing)). The same pass reads the newest name for the session from `$CODEX_HOME/session_index.jsonl` into `session_name`, ahead of the first-message preview.
 
 Four callers run it, and all write the runtime sidecar and wake the sidebar without touching the durable store:
 
@@ -295,12 +295,12 @@ The probe reads `$CODEX_HOME/auth.json` first:
 
 ## Cost
 
-[`spend.rs`](../../../crates/rimz/src/agents/adapters/codex/spend.rs) parses Codex's full history for the [`SpendingWalker`](../../../crates/rimz/src/agents/spending/mod.rs), read-only and without network, into the windows described in [providers.md](./providers.md#cost-history). The stateful line parser is [`spend/parse.rs`](../../../crates/rimz/src/agents/adapters/codex/spend/parse.rs); it reads both the interactive rollout format and the headless flat `usage` format.
+[`spend.rs`](../../../crates/rimz/src/agents/adapters/codex/spend.rs) parses Codex's full history for the [`SpendingWalker`](../../../crates/rimz/src/agents/spending/mod.rs), read-only and without network, into the windows described in [spending.md](./spending.md#cost-history). The stateful line parser is [`spend/parse.rs`](../../../crates/rimz/src/agents/adapters/codex/spend/parse.rs); it reads both the interactive rollout format and the headless flat `usage` format.
 
 - Discovery covers `sessions/`, `archived_sessions/`, and legacy JSONL files elsewhere in each Codex home: every comma-separated `CODEX_HOME` entry, or `~/.codex` when it is unset. An active rollout wins over its archived twin, so archiving never double-counts.
 - Ordinary scans prune date partitions outside the 365-day window; the 15-minute complete reconcile ignores pruning.
 - Forked and subagent rollouts open with a replay of the parent's cumulative history. The parser suppresses that prefix and keeps its last cumulative total as the baseline for the first new delta.
 - A fingerprint of `codex:`, timestamp, model, and token split collapses events copied across files while keeping events that differ at subsecond precision.
-- Each `CodexTokenEvent` is priced per model: fresh input (input minus cache reads and writes) at the input rate, cache writes at the cache-create rate, cache reads at the cache-read rate when the price book states one and at the input rate otherwise, and output (which includes reasoning) at the output rate ([token pricing](./providers.md#token-pricing)).
+- Each `CodexTokenEvent` is priced per model: fresh input (input minus cache reads and writes) at the input rate, cache writes at the cache-create rate, cache reads at the cache-read rate when the price book states one and at the input rate otherwise, and output (which includes reasoning) at the output rate ([token pricing](./spending.md#token-pricing)).
 - The fallback model is `gpt-5`. A model with no price keeps its tokens at zero dollars while the pricing refresh looks for a rate.
 - Tool calls come from `function_call`, `custom_tool_call`, `local_shell_call`, and `web_search_call` records and attach to the next token event, so tools that bypass hooks still count.

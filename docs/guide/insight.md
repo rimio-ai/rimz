@@ -120,7 +120,7 @@ Two scopes and a set of windows keep the surfaces honest:
 - The cockpit is scoped to the room you are in. The provider dashboard totals and everything in `rimz stats` are account-global, summed per provider account across every project on the machine.
 - The cockpit window is `session`, `24h`, or `today` (above). The dashboard's totals rows are the trailing week and month, `rimz stats` adds year and all-time, and the heatmap buckets by calendar day.
 
-None of this can fail into a wrong-looking number. Spend is enrichment, so a missing binary, a logged-out account, or an unpriced model degrades to an explicitly absent field or a zero inside a real historical tally, never a bad figure dressed up as a real one. Provider totals and locally priced token counters render identically as dollars. For the mechanism in full, the caches, the price-table precedence, and the window fusion, see [providers internals](../internals/agents/providers.md).
+None of this can fail into a wrong-looking number. Spend is enrichment, so a missing binary, a logged-out account, or an unpriced model degrades to an explicitly absent field or a zero inside a real historical tally, never a bad figure dressed up as a real one. Provider totals and locally priced token counters render identically as dollars. For the mechanism in full, the caches and the window fusion, see [providers internals](../internals/agents/providers.md); for the price-table precedence, see [spending internals](../internals/agents/spending.md#token-pricing).
 
 ## Configuration
 
@@ -138,4 +138,5 @@ A few knobs, all plain TOML ([configuration](./configuration.md)):
 - [Loops](./loops.md#keep-the-fleet-moving): auto-continue when a budget window empties mid-turn.
 - [Configuration](./configuration.md#sidebar-rendering): the spend window, timezone, and provider-display knobs.
 - [The sidebar on screen](../interface/sidebar.md#zone-3--the-provider-dashboard): every bar, tone, and glyph drawn exactly.
-- [Providers internals](../internals/agents/providers.md): accounts, budgets, spend, and the price table in depth.
+- [Providers internals](../internals/agents/providers.md): accounts, balances, and parked turns in depth.
+- [Spending internals](../internals/agents/spending.md): spend and the price table in depth.

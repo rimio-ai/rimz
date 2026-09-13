@@ -59,7 +59,7 @@ Each heatmap cell is one UTC day on a five-step ramp that reserves `·` for a da
 
 ## Where the figures come from
 
-This module owns no spend arithmetic. Walking transcripts, pricing models, and publishing the aggregate all belong to the spending producer described in [providers.md](./agents/providers.md). Stats is a reader over one artifact: `provider-spending.json` under the shared state root (`disk::paths::RuntimePaths::shared_provider_spending_path`), which carries the per-day buckets, the per-model and per-agent tallies, and the trailing windows. `Stats::from_provider` is the whole translation.
+This module owns no spend arithmetic. Walking transcripts, pricing models, and publishing the aggregate all belong to the spending producer described in [spending.md](./agents/spending.md). Stats is a reader over one artifact: `provider-spending.json` under the shared state root (`disk::paths::RuntimePaths::shared_provider_spending_path`), which carries the per-day buckets, the per-model and per-agent tallies, and the trailing windows. `Stats::from_provider` is the whole translation.
 
 Three load paths in `mod.rs` answer a run, in order of preference:
 
@@ -150,6 +150,6 @@ cargo xtask test stats
 
 ## See also
 
-- [providers.md](./agents/providers.md) — accounts, spend computation, the incremental cache, and the pricing table behind every figure here.
+- [spending.md](./agents/spending.md) — spend computation, the incremental cache, and the pricing table behind every figure here.
 - [theme.md](./theme.md) — the color pipeline and glyph catalog the panel resolves through.
 - [Token Insight guide](../guide/insight.md) — what the figures mean, for the reader who is using RimZ rather than changing it.

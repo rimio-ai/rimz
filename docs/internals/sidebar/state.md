@@ -225,7 +225,7 @@ The fetch worker publishes process metrics and group roots alongside pane produc
 | `link-stats.json` | Room | The latest remote-SSH probe stats behind the footer link badge ([remote.md](../remote.md)). |
 | `provider-spending.json` | Account-global | User-global fleet and provider spend totals plus the walk stamp. |
 | `spending.json` | Account-global | The incremental transcript parse cache behind the spend walk. |
-| `pricing-cache.json` | Account-global | The remote token-price refresh over the embedded snapshot ([providers.md](../agents/providers.md#token-pricing)). |
+| `pricing-cache.json` | Account-global | The remote token-price refresh over the embedded snapshot ([spending.md](../agents/spending.md#token-pricing)). |
 | `accounts.json` | Account-global | Per-provider login, plan, and account state. |
 | `rate_limits.json` | Account-global | Per-account budget windows. |
 | `credits.json` | Account-global | Provider-reported paid and extra usage. |

@@ -1,6 +1,6 @@
 # Kimi Code adapter
 
-> Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Accounts, balances, and spend are in [providers.md](./providers.md); the raw upstream protocol is in [kimi-reference.md](../../externals/agent-adapter/kimi-reference.md).
+> Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md); the raw upstream protocol is in [kimi-reference.md](../../externals/agent-adapter/kimi-reference.md).
 
 Kimi runs in its stock interactive pane. Command hooks carry lifecycle boundaries and blocking waits; the durable per-agent `wire.jsonl` supplies transcript, model, token, and recovery enrichment.
 

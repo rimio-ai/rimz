@@ -1,6 +1,6 @@
 # Grok Build adapter
 
-> Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Accounts, balances, and spend are in [providers.md](./providers.md); the raw upstream protocol is in [grok-reference.md](../../externals/agent-adapter/grok-reference.md).
+> Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md); the raw upstream protocol is in [grok-reference.md](../../externals/agent-adapter/grok-reference.md).
 
 Grok is an eagerly registered stock-TUI adapter. RimZ launches `grok`, installs passive global hooks in `${GROK_HOME:-~/.grok}/hooks/rimz.json`, and enriches each session from its durable `updates.jsonl`, `summary.json`, `signals.json`, and optional `events.jsonl` files. ACP and provider-private billing APIs stay outside this adapter.
 

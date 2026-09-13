@@ -1,6 +1,6 @@
 # Copilot adapter
 
-> Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Accounts, balances, and spend are in [providers.md](./providers.md); the raw upstream protocol is in [copilot-reference.md](../../externals/agent-adapter/copilot-reference.md).
+> Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md); the raw upstream protocol is in [copilot-reference.md](../../externals/agent-adapter/copilot-reference.md).
 
 GitHub Copilot CLI reports through native camelCase command hooks installed as one RimZ-owned user file at `$COPILOT_HOME/hooks/rimz.json`, falling back to `~/.copilot/hooks/rimz.json`. Each command passes its event name to `rimz hooks feed --source copilot --event <event>` because native payloads carry no event-name field. Hook stdout stays empty, preserving Copilot's own permission engine and question UI.
 
