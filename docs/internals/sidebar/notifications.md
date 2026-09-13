@@ -1,99 +1,183 @@
 # Notifications
 
-RimZ sends best-effort attention alerts from the same state that drives the sidebar. The store remains truth; notifications are latency and reachability.
+Notifications push the sidebar's attention signal to a user who is not looking at it: a desktop banner, a terminal bell, a reminder, or a command the user configured. They are best-effort. The durable inputs are the store and the unread episode set; a missed notification costs latency, and the row stays unread in the sidebar until someone reads it.
+
+This page owns the push path: who decides a notification, who delivers it on each channel, the reminder loop, handler matching and templates, and the trace log. Unread episodes and the read receipts that clear them are [sidebar.md → Unread and read receipts](./sidebar.md#unread-and-read-receipts). The user-facing pages are [the notifications guide](../../guide/notifications.md) and [configuration → Notifications](../../guide/configuration.md#notifications).
+
+## Where it lives
+
+| Path | Role |
+| --- | --- |
+| [`sidebar/notify.rs`](../../../crates/rimz/src/sidebar/notify.rs) | `NotificationState` push policy over newly opened episodes, title and body rendering, `spawn_notify_handlers`, and `LinkNotificationState` for the link-health record |
+| [`sidebar/unread.rs`](../../../crates/rimz/src/sidebar/unread.rs) | `UnreadEpisodes`: `unread.json`, `reconcile`, and the `OpenedUnread` records the policy consumes |
+| [`sidebar_pane/app/fetch.rs`](../../../crates/rimz/src/sidebar_pane/app/fetch.rs) | `evaluate_notifications` and `deliver_notifications`, run by the elected producer on its fetch cycle |
+| [`sidebar_pane/app/notify.rs`](../../../crates/rimz/src/sidebar_pane/app/notify.rs) | `emit_terminal_notification`: the renderer's desktop targeting and `bell_decision` |
+| [`sidebar_pane/app/remind.rs`](../../../crates/rimz/src/sidebar_pane/app/remind.rs) | `RemindState`: renderer-local unread reminders |
+| [`osc.rs`](../../../crates/rimz/src/osc.rs) | OSC 777 and BEL bytes, the tmux DCS wrap, and the terminal-local variant for processes outside a sidebar pane |
+| [`config/notifications.rs`](../../../crates/rimz/src/config/notifications.rs) | `NotificationsPrefs`, `NotificationKind`, handler conditions, template rendering and validation |
+| [`diag/notify.rs`](../../../crates/rimz/src/diag/notify.rs) | The `notify.log.jsonl` record schema |
 
 ## Channels
 
-| Channel | Mechanism | Crosses SSH | tmux | Zellij | Notes |
-| --- | --- | --- | --- | --- | --- |
-| In-band attention | sidebar rows, ranking, and glyphs | n/a | yes | yes | The authoritative user-facing surface. |
-| Desktop banner | OSC 777 written by pane renderers; DCS-wrapped under tmux | yes | yes | no | Ghostty, iTerm2, and WezTerm turn the OSC into a native desktop banner. Zellij drops notification OSCs today. |
-| Sound | BEL written by the renderer | yes | yes | partial | The terminal owns whether BEL is audible. |
-| Notify handlers | per-machine shell commands spawned by the elected producer when their conditions match | command-defined | yes | yes | The portable escape hatch for push services, detached rooms, and Zellij. |
-| Remote-link alert | local `rimz remote connect` supervisor writes OSC/BEL and spawns matching notify handlers for confirmed drops/recoveries | local only | yes | best-effort | Lost and restored edges are emitted locally because a dead SSH link cannot rely on the remote-rendered sidebar. Probe blackout emits terminal-local OSC/BEL only. |
+| Channel | Mechanism | Crosses SSH | tmux | Zellij |
+| --- | --- | --- | --- | --- |
+| In-band attention | Sidebar rows, ranking, unread emphasis | n/a | yes | yes |
+| Desktop banner | OSC 777 written by a renderer, DCS-wrapped under tmux | yes | yes | off under `desktop = "auto"`, because Zellij drops notification OSCs |
+| Sound and tab marker | BEL written by a renderer | yes | yes | tab `[!]` marker; audibility is the terminal's |
+| Handlers | `sh -c` commands from `[[notifications.handler]]` | command-defined | yes | yes |
 
-## Producer And Renderer Split
+The sidebar is the authoritative surface; every other channel mirrors it. Ghostty, iTerm2, and WezTerm turn OSC 777 into a native desktop banner. Handlers are the portable route: they reach a push service, a detached room, or a Zellij user whose terminal never sees the OSC.
 
-The elected sidebar producer is the notification brain. Each fetch cycle folds the latest snapshot, reconciles the durable unread episode set, applies the per-machine `[notifications]` push policy to newly opened unread episodes, and emits notifications only from that elected process.
+## Who emits which kind
 
-Unread is the inbox bit. A row opens an unread episode in `unread.json` when its displayed status is `waiting`, `failed`, `paused`, or `success` and no read mark reaches that row activity. The episode stays open while the agent returns to `running` or `idle`; only a read receipt from focus, the tab-switch view sweep for all rows in a visited tab, or `rimz sidebar mark-read` clears the derived unread bit. The elder prunes read episodes and rows that disappear, and every snapshot fold derives `SidebarRow::unread` from `unread.json` plus merged renderer receipts (`read-marks/sidebar.<instance>.json`) and the room-durable manual receipt (`read-marks/manual.json`).
+Five code paths construct a notification, and each sets its `NotificationKind`. Handlers match on that kind, and `RIMZ_NOTIFY_KIND` carries it.
 
-The first reconciliation when `unread.json` is absent opens current attention rows silently: they render unread on attach, but they do not replay a desktop/banner storm. After the file exists, only new episode opens are eligible for a push. The same durable set dedupes producer handoff and renderer restart because an already-open episode is already recorded.
+| Kind | Emitter | Channels |
+| --- | --- | --- |
+| `waiting`, `failed`, `paused`, `success`, `coalesced` | The elected producer, over newly opened unread episodes ([the producer](#the-producer)) | Handlers, then `SidebarEvent::Notify` to every renderer for OSC and bell |
+| `reminder` | Each renderer, over its own unread scope ([reminders](#unread-reminders)) | The renderer's own OSC and bell, and handlers |
+| `link_lost`, `link_restored` | The local `rimz remote connect` supervisor ([remote link alerts](#remote-link-alerts)) | OSC and BEL on the supervisor's stderr, and handlers |
+| `loop_disabled` | `rimz loop` when a task auto-disables after consecutive failed fires (`notify_loop_disabled` in `cli/loop_cmd/run.rs`) | Handlers, then a `Notify` event with no panes |
+| any | `rimz sidebar notify-test <target>`, a hidden verb in `cli/sidebar.rs` (`--kind`, default `waiting`; `--force-bell`; `--no-command`) | Handlers, then a `Notify` event for the target rows' panes |
 
-The producer applies trigger filtering, per-agent debounce, burst coalescing, and focus suppression to pushes only. The built-in trigger set is `waiting` and `failed`; `paused` and `success` open unread and stay quiet unless configured. A trigger filter can suppress a handler/banner while the row still becomes unread. Focus suppression reads the same live pane focus bit the sidebar already folds into snapshots; it is a conservative visibility hint, not store truth.
+Only the producer path applies triggers, debounce, coalescing, and focus suppression, and only the producer writes `notification_emitted` trace records.
 
-For each notification, the producer first renders the event into its banner text, applying `[notifications].title` and `[notifications].body` only for agent-status and coalesced notifications. It then spawns each matching `[[notifications.handler]]` and broadcasts `SidebarEvent::Notify` to the sidebar socket with the triggering agent pane ids. The legacy `[notifications].command` key desugars to one unconditional handler. Every handler command receives `RIMZ_NOTIFY_TITLE`, `RIMZ_NOTIFY_BODY`, `RIMZ_NOTIFY_AGENT`, `RIMZ_NOTIFY_KIND`, `RIMZ_NOTIFY_PANE`, `RIMZ_NOTIFY_ROOT`, and `RIMZ_NOTIFY_ASK`; reminders also receive `RIMZ_NOTIFY_UNREAD` with the unread actionable count. Pane and root are filled for a single-agent notification, and ask is filled only for a single-agent `waiting` notification whose row carries an open ask; all three are empty for coalesced or sparse notifications. The child inherits no hook stdout and is handed to the global child reaper.
+## The producer
 
-The renderer is the terminal mouth. The sticky tab and window bell is a marker the renderer cannot retract, so on `SidebarEvent::Notify` it is bound to current unread attention rather than the bare push event: a pane-resident renderer rings only when a triggering agent pane it owns still maps to an unread row. The bell and the card therefore clear together when you look, rather than the bell outliving the card. A daemon-only view (whose siblings are infrastructure panes, never agents that need you) never rings. Unread reminders carry that re-check cleared and ring directly on an owned, non-daemon pane. Desktop OSC is a reachability channel: under tmux, pane-resident renderers with their own view emit the DCS-wrapped OSC 777 banner so the active client stream can carry it even when the agent is in a background window. Detached sessions have no attached terminal stream, and inactive-pane passthrough is mux/client-defined, so handler delivery is the deterministic off-screen path.
+The elected sidebar producer is the one process that decides agent notifications, so a room with several sidebars pushes each event once. Election is [state.md → Renderers, the producer, and consumers](./state.md#renderers-the-producer-and-consumers).
 
-Unread reminders are renderer-local. A renderer starts or refreshes the reminder clock when it relays an initial terminal notification, and also starts it when unread `waiting`/`failed` scope first appears in the renderer's folded snapshot; `success` and `paused` stay unread visually but sit outside the reminder scope. Pane-backed rows ring only in views that own the row's pane. Paneless rows ring through non-focused working panes in the same visible worktree when such panes exist; a fully detached paneless row still relies on the sidebar row and notify-handler path. The reminder respects `suppress_focused`, stops when the scope is empty, emits terminal OSC/BEL through the same renderer path, and spawns matching handlers with `RIMZ_NOTIFY_KIND=reminder` and `RIMZ_NOTIFY_UNREAD=N`. No reminder is broadcast back through `SidebarEvent::Notify`, so multiple sidebar views dedupe by pane ownership rather than by a global producer lock.
+Each fetch cycle, `evaluate_notifications` loads `unread.json` and the merged read receipts and calls `UnreadEpisodes::reconcile`. Reconcile prunes episodes a receipt reaches (silently) and episodes whose row has left the snapshot (an `unread_cleared` record with `cause: row_gone`), then opens an episode for every row whose displayed status needs a look and that has no open episode and no receipt reaching its `last_activity`. The returned `OpenedUnread` list is the only input to push policy. An episode opened by `rimz sidebar mark-unread` or the renderer's `m` key is written directly to `unread.json`, never appears in that list, and pushes nothing.
 
-Unread and notifications share one eligible set for opening the inbox bit: `waiting`, `failed`, `paused`, and `success`. The producer decides whether an opened unread episode gets a push; the renderer decides whether the sticky tab bell rings, gating it on the triggering row's live unread bit at emit time. Because unread stays set until you look, a recovered `paused` or completed `success` row keeps its unread glyph and tab target until read, while handler/banner delivery still respects `[notifications].triggers`, debounce, coalescing, and focus suppression.
+When `unread.json` is absent at load, every open in that pass is marked `silent`. Attaching to a busy room therefore renders its current attention rows unread without a burst of banners. Once the file exists, the durable set also dedupes across producer handoff and renderer restart: an episode already recorded does not open again.
 
-`rimz remote connect` is the notification brain for remote-link loss and recovery. It emits local OSC/BEL and matching notify handlers directly with `RIMZ_NOTIFY_KIND=link_lost` or `link_restored`; it does not broadcast a sidebar event, because the remote stream may be stalled or gone. Probe blackout emits only local OSC/BEL, so ingest-side failures do not fire handlers.
+`NotificationState::evaluate` then applies the user's policy to each opened episode, in this order:
 
-A degraded-but-alive link — slow or lossy while bytes still flow — surfaces through the footer link badge alone, which renders its latency and loss continuously. The link-health episode (a fresh degraded or bad tier held for ten seconds, ended by a fresh good tier held for thirty seconds, both clocks paused while link stats are stale) is recorded as a `link_alert` diagnostic for `rimz doctor`; it raises no tab bell, desktop OSC, or notify handler. Confirmed link loss and recovery still alert locally through `rimz remote connect` above.
+1. With `enabled = false`, drop everything pending and push nothing. Episodes still open, so the sidebar still shows unread.
+2. Skip a silent open, and a status outside `triggers` (default `waiting` and `failed`).
+3. With `suppress_focused`, skip a row whose pane is in the snapshot's `viewed_panes`. `viewed_panes` comes from live mux focus, so this is a conservative visibility hint with no durable record behind it.
+4. Skip an agent notified less than `debounce_ms` ago. Debounce is keyed by agent kind and session id, and a key is forgotten once its row leaves the snapshot.
+5. Skip an agent already pending, then add it to the pending batch with its open ask id, if any.
 
-## Backend Behavior
+The first addition to an empty batch starts the coalesce window. The batch flushes when `coalesce_ms` has passed (at once when it is 0). A pending entry whose row is no longer unread by then is dropped before the flush, so a row read within the window pushes nothing. A batch of one becomes a notification of the agent's status kind, with built-in text such as `RimZ: <label> needs you`. A larger batch becomes one `coalesced` notification titled `RimZ: <N> agents need attention`, its body joining `<label>: <status>` pairs with ` | `. Flushing stamps every batched agent's debounce clock.
 
-tmux forwards OSC notifications when `allow-passthrough` is on; RimZ enables that room option by default. The renderer wraps the OSC payload as `DCS tmux; ... ST` so the local terminal emulator receives it through tmux and SSH. BEL stays targeted to the triggering agent's window; desktop OSC stays broad enough to reach the active client.
+`[notifications].title` and `.body` then replace the built-in text for the status kinds and `coalesced`; reminders, link alerts, and `loop_disabled` keep their built-in text. A template that fails to render leaves the built-in text in place.
 
-Zellij currently drops OSC 9, 777, and 99 notification sequences. `desktop = "auto"` therefore disables desktop OSC under Zellij and leaves notify handlers as the portable route. The targeted BEL marks only the Zellij tab whose sidebar shares an unread triggering agent — never a daemon-only `rimzd` tab — so the tab bar `[!]` points at an agent that still needs you and clears when you visit the tab and look, not when the agent resumes on its own. `desktop = "osc"` forces emission for users testing a future Zellij or terminal path.
+`deliver_notifications` sends each notification three ways, in order: it spawns the matching handlers, appends `notification_emitted` to the trace log, and broadcasts `SidebarEvent::Notify` with the title, body, the agents' pane ids, `recheck_unread: true`, and the kind. The producer writes no terminal bytes itself; its own renderer receives the broadcast like every other.
 
-## Trace Log
+## The renderer
 
-A tab `[!]` with no matching unread card is invisible after the fact, so every notification decision appends to `notify.log.jsonl` in the workspace state directory (`~/.local/state/rimz/workspaces/<id>/`), beside the anomaly `diag.log.jsonl` and rotated at the same 1 MiB cap. The log is diagnostic evidence written through the same `DiagSink` that carries workspace identity to each emission site; correctness never reads it, and nothing rate-limits it, so the full timeline survives.
+A renderer turns a `Notify` event into terminal bytes in `emit_terminal_notification`, outside the draw cycle. It decides the desktop banner and the bell separately.
 
-Three record kinds reconstruct an episode:
+**The bell is bound to current unread attention.** A BEL sets a tab or window marker the renderer cannot retract, so the marker must point at a row that still needs a look. `bell_decision` checks, in order:
 
-- `notification_emitted` — the producer flushed a notification: its kind, the named agents, the status that opened the unread episode, the targeted panes, and a reminder's `unread_count`.
-- `bell_ring` — a renderer reached a tab-bell decision: whether it `fired`, the panes, the kind, and a `suppressed` reason when it did not (`no_own_view`, `daemon_view`, `pane_not_in_view`, `not_unread`).
-- `unread_marked` / `unread_cleared` — a row opened or cleared an unread episode with row id, label, agent kind/session, worktree, pane id, status, episode timestamp, and clear `cause` (`focus`, `mark_read`, `row_gone`). The renderer or CLI that writes a read receipt emits `focus` or `mark_read`; the producer emits only row-gone clears while pruning read-reached episodes silently. `UnreadMarked` records the reached status; it does not claim a previous-status edge.
+| Check | Result when it fails |
+| --- | --- |
+| The renderer has an own view (it sits in a tab with working panes) | `no_own_view` |
+| The view is not a daemon-only view, whose siblings are infrastructure panes | `daemon_view` |
+| A target pane is one of the view's working panes | `pane_not_in_view` |
+| With `recheck_unread`, a target pane in the view maps to a row with `SidebarRow::unread` set | `not_unread` |
 
-To trace a stray tab marker, grep the agent or pane and read the timeline: a `bell_ring` with `fired: true` whose only later clear is an `unread_cleared` with `cause: row_gone` is the non-retractable marker outliving a row that vanished before you looked, while `suppressed: not_unread` is the gate correctly refusing to ring a row no longer needing a look.
+A bell that passes writes BEL when `sound = "bell"`. Because the unread bit stays set until a read receipt reaches the episode, the tab marker and the unread card clear together when the user looks. A `Notify` event with no panes (`loop_disabled`) never rings. `notify-test --force-bell` and reminders send `recheck_unread: false`.
+
+**The desktop banner is a reachability channel.** Under tmux, every renderer with an own view writes the DCS-wrapped OSC 777, so the banner reaches the active client stream even when the agent sits in a background window. Under Zellij, only a renderer whose view holds a target pane writes it, and only with `desktop = "osc"`. `desktop = "auto"` skips desktop OSC under Zellij (`mux::drops_desktop_osc`), and `off` skips it everywhere. The text passes through `osc_text`, which strips control bytes and turns `;` into `:`.
+
+tmux forwards the wrapped payload (`ESC P tmux; ... ESC \`, inner escapes doubled) only when `allow-passthrough` is on, and RimZ turns it on for its rooms by default (`[tmux] allow_passthrough`). Passthrough from an inactive pane and delivery to a detached session are up to the multiplexer and client, so handlers are the deterministic path for a user who is away from the terminal.
+
+When a `Notify` event writes any bytes, the renderer restarts its reminder clock.
+
+## Unread reminders
+
+Reminders are renderer-local and re-ring actionable rows the user has not read. Each renderer runs `RemindState::maybe_remind` on its serve loop, independent of the producer, and no reminder is broadcast as a `Notify` event.
+
+The reminder scope is the renderer's unread rows whose status is `waiting` or `failed` (`AgentStatus::is_actionable`); unread `paused` and `success` rows stay emphasized in the sidebar but never remind.
+
+- A pane-backed row counts when its pane is one of the view's working panes.
+- A paneless row counts when the view has working panes that belong to rows in the same worktree path; those panes become the targets. A paneless row with no such pane in any view reminds nowhere and relies on the sidebar and on the producer's handlers.
+- With `suppress_focused`, a pane in `viewed_panes` neither counts nor serves as a paneless row's target.
+
+The clock arms when the scope first becomes non-empty or when a `Notify` event writes bytes, and a reminder fires `remind_secs` (default 60) after the later of the arming and the previous reminder. An empty scope, `enabled = false`, or `remind_secs = 0` clears the clock.
+
+A reminder writes through `emit_terminal_notification` with `recheck_unread: false`, since its scope is already unread; the daemon-view and in-view checks still apply. It then spawns matching handlers with kind `reminder`, title `RimZ: <N> unread rows need you`, and `RIMZ_NOTIFY_UNREAD` set to the count. Pane ownership keeps renderers from double-counting a pane-backed row; a paneless row whose worktree has working panes in two views is counted, and its handlers spawned, by both.
+
+## Remote link alerts
+
+The local `rimz remote connect` supervisor alerts on link loss itself, because a dead link cannot carry the remote sidebar's output. A confirmed transport loss emits `link_lost` and the recovery emits `link_restored`: OSC and BEL on the supervisor's stderr when stderr is a terminal (`osc::local_terminal_notification_bytes`, which detects tmux or Zellij from the environment and honours `desktop` and `sound`), plus matching handlers. A probe blackout writes the terminal bytes only and spawns no handler. No link alert is broadcast as a `Notify` event.
+
+A link that is degraded but still passing bytes raises no bell, OSC, or handler; the footer badge shows it, and `LinkNotificationState` writes a `link_alert` diagnostic at each episode edge. The edge rules, hold times, and the supervisor's outage actions are [remote.md → Alerts](../remote.md#alerts).
+
+## Handlers
+
+A handler is a user command spawned when a notification matches. `[[notifications.handler]]` entries run in config order, and the `[notifications].command` key is shorthand for one more handler with an empty `when`, appended last (`NotificationsPrefs::effective_handlers`).
+
+**Matching.** `NotifyCondition::matches` ANDs the clauses that are present, and an empty `when` matches every notification.
+
+| Clause | Matches when |
+| --- | --- |
+| `kind` | The notification's kind is listed: `waiting`, `failed`, `paused`, `success`, `coalesced`, `reminder`, `loop_disabled`, `link_lost`, `link_restored` (`loop_paused` is accepted as an alias of `loop_disabled`) |
+| `worktree` | Some agent's worktree, its branch or else its path, matches a glob |
+| `handle` | Some agent's handle or role matches a glob; a leading `@` in the pattern is stripped |
+
+For a coalesced notification each clause may be satisfied by a different agent. A notification that names no agent (`reminder`, link alerts, `loop_disabled`) never matches a handler with a `worktree` or `handle` clause.
+
+**Templates.** Handler commands and the `title` and `body` templates substitute `{{name}}` from a closed set. `NotificationsPrefs::validate` rejects an unknown name, `{{title}}` or `{{body}}` inside the `title` and `body` templates themselves, an empty handler command, and an invalid glob. A strict config load fails on that error. The sidebar, `rimz loop`, and the remote supervisor load leniently (`MachineConfig::load_lenient`): they log a warning and run with the built-in `[notifications]` defaults, which have no handlers. In a handler command each value is shell-quoted with `shlex`, so a template writes variables bare as arguments.
+
+| Variable | Value |
+| --- | --- |
+| `kind` | The notification kind |
+| `agent`, `handle` | Agent handles or roles, joined with `, ` for several agents |
+| `count` | Number of agents named |
+| `unread` | Unread count, for reminders; empty otherwise |
+| `status`, `worktree`, `task`, `pane`, `root` | The single agent's reached status, worktree, task, pane id, and worktree path; empty when the notification names zero or several agents |
+| `title`, `body` | The rendered banner text; handler commands only |
+
+**Environment.** Every handler receives these variables; an unavailable value is the empty string.
+
+| Variable | Value |
+| --- | --- |
+| `RIMZ_NOTIFY_TITLE`, `RIMZ_NOTIFY_BODY` | The rendered banner text |
+| `RIMZ_NOTIFY_KIND` | The notification kind |
+| `RIMZ_NOTIFY_AGENT` | The agents' row labels (task or prompt, else handle and short id), joined with `, `; this differs from `{{agent}}` |
+| `RIMZ_NOTIFY_PANE`, `RIMZ_NOTIFY_ROOT` | The single agent's pane id and worktree path |
+| `RIMZ_NOTIFY_ASK` | The open ask id, for a single-agent `waiting` notification from the producer |
+| `RIMZ_NOTIFY_UNREAD` | Set only on reminders: the unread actionable count |
+
+**Process.** `spawn_notify_handlers` runs each rendered command as `sh -c` with stdin, stdout, and stderr on `/dev/null`, hands the child to the global reaper (`child_process::spawn_detached_reaped`), and does not wait. A render or spawn failure logs at debug and skips that handler. Handlers inherit no hook stdout, so they can never write into a hook's decision channel.
+
+**Trust.** Handlers live only in the per-machine `~/.config/rimz/config.toml`, never in a project `.rimz/config.toml`, and sit outside the trust hash: they are personal routing that often carries push credentials, and a cloned repository cannot supply one. The threat model is [security](../../guide/security.md).
+
+A handler can act on the event as well as relay it. With `RIMZ_NOTIFY_ASK` it can read `rimz asks show <id> --json` and answer through `rimz answer <id> <choice>`, which accepts only the supported answers ([transcript.md → Asks and answers](../harness/transcript.md#asks-and-answers)); the user-facing patterns are [the guide → Handlers that act](../../guide/notifications.md#handlers-that-act-not-just-alert). A script that reads pane text is reading agent output and must treat it as untrusted.
 
 ## Configuration
 
-Notification preferences live in `~/.config/rimz/config.toml`, not in `.rimz/config.toml`.
+All keys live in `[notifications]` of `~/.config/rimz/config.toml` (`NotificationsPrefs`). The user-facing description is [configuration → Notifications](../../guide/configuration.md#notifications).
 
-```toml
-[notifications]
-enabled = true
-triggers = ["waiting", "failed"]
-desktop = "auto"          # "auto" | "osc" | "off"
-sound = "bell"            # "bell" | "off"
-suppress_focused = true
-debounce_ms = 5000
-coalesce_ms = 1000
-remind_secs = 60
-title = "RimZ: {{agent}} {{kind}}"
-body = "{{task}}"
-command = "ntfy publish rimz"
+| Key | Default | Effect |
+| --- | --- | --- |
+| `enabled` | `true` | `false` stops producer pushes, reminders, and link alerts; unread still opens |
+| `triggers` | `["waiting", "failed"]` | Statuses whose new episode may push; any of `waiting`, `failed`, `paused`, `success` |
+| `desktop` | `"auto"` | `auto` emits OSC except under Zellij, `osc` always, `off` never |
+| `sound` | `"bell"` | `bell` writes BEL, `off` writes none (and so no tab marker) |
+| `suppress_focused` | `true` | Skips pushes and reminders for panes in `viewed_panes` |
+| `debounce_ms` | `5000` | Minimum gap between producer pushes for one agent |
+| `coalesce_ms` | `1000` | Window that batches producer pushes into one; `0` flushes each cycle |
+| `remind_secs` | `60` | Reminder interval; `0` disables reminders |
+| `title`, `body` | unset | Templates for status and `coalesced` banner text |
+| `command` | unset | One unconditional handler |
+| `[[notifications.handler]]` | none | `name` (optional), `command`, `when` |
 
-[[notifications.handler]]
-name = "waiting-ntfy"
-command = "ntfy publish --title {{title}} rimz {{body}}"
-when = { kind = ["waiting"], worktree = ["feat/*"], handle = ["@planner"] }
-```
+RimZ writes no dock badge escape, because badge APIs differ per terminal and OS; a handler that wants a badge reads `RIMZ_NOTIFY_UNREAD` from reminders.
 
-`remind_secs = 0` disables reminders. Desktop badge APIs are terminal- and OS-specific, so RimZ exports the unread count to the handler path instead of writing a dock badge escape itself.
+## The trace log
 
-`title` and `body` are global banner templates for agent-status and coalesced notifications. The closed variable set is `kind`, `agent`, `handle`, `status`, `worktree`, `task`, `count`, `unread`, `pane`, and `root`, plus `title` and `body` inside handler commands after banner rendering. `agent` and `handle` carry the agent handles or roles, joined for multi-agent notifications. Unknown variables fail strict config load, and unavailable variables render empty for sparse kinds such as reminders, link alerts, and coalesced rows.
+Every notification decision appends to `notify.log.jsonl` in the workspace state directory (`$XDG_STATE_HOME/rimz/workspaces/<id>/`), because a tab `[!]` with no matching unread card leaves nothing else behind. The log sits beside `diag.log.jsonl` and rotates at the same 1 MiB cap (`NOTIFY_LOG_MAX_BYTES`). Records go through `DiagSink::trace_notify`, which is never rate-limited, and no correctness path reads them. Each record is an envelope (`rimz.notify_trace.v1`, build id, workspace id, session name, renderer instance id when a renderer wrote it, `at_ms`) around one event.
 
-Handler conditions AND their present clauses. `kind` matches the notification taxonomy (`waiting`, `failed`, `paused`, `success`, `coalesced`, `reminder`, `loop_disabled`, `link_lost`, `link_restored`), `worktree` glob-matches an agent branch/path, and `handle` glob-matches the agent handle or role; coalesced notifications match if any agent satisfies the worktree or handle pattern. A leading `@` in a handle pattern is accepted as the usual address sigil. An empty `when` matches every notification. Command templates shell-quote each substituted value with `shlex`, so users write bare variables as command arguments and keep their own quotes around literal shell syntax only.
+| `kind` | Writer | Fields |
+| --- | --- | --- |
+| `notification_emitted` | The producer, per delivered notification | `notification_kind`, `agents` (kind, id, label, pane, `new_status`), `panes` |
+| `bell_ring` | A renderer, per `Notify` event and per reminder | `notification_kind`, `fired`, `recheck_unread`, `panes`, `suppressed` (`no_own_view`, `daemon_view`, `pane_not_in_view`, `not_unread`) |
+| `unread_marked` | The producer on reconcile opens; the renderer and `rimz sidebar mark-unread` on manual opens | `row_id`, `label`, agent kind and id, `worktree`, `pane_id`, the reached `status`, `episode_ms` |
+| `unread_cleared` | The renderer (`focus`, `tab_view`, `mark_read`), `rimz sidebar mark-read` (`mark_read`), the producer (`row_gone`) | `row_id`, `label`, agent kind and id, `worktree`, `pane_id`, `cause`, `cleared_at_ms` |
 
-Handlers are per-machine and outside project trust. They are personal routing, often carrying host-specific push credentials, and a cloned repository never inherits them. The legacy `command` key stays as an unconditional handler shorthand so existing ntfy, Slack, Pushover, and OS-notifier scripts keep their environment contract.
+The producer prunes receipt-reached episodes without a record, because the renderer or CLI that wrote the receipt already logged the clear. Notifications from the remote supervisor, `rimz loop`, and `notify-test` write no `notification_emitted` record; their renderer-side `bell_ring` records still land.
 
-## Building on handlers
-
-A handler is a wakeup you can script against: it fires with the agent, kind, pane, root, and current ask id in hand, and everything it might do next is a public command. A `waiting`-triggered handler can fetch `rimz asks show "$RIMZ_NOTIFY_ASK" --json`, publish its listed options as chat buttons, and pass the human's choice back through `rimz answer "$RIMZ_NOTIFY_ASK" <choice>`. Claude permission payloads list only `allow`, and plan approvals list only caution-marked `approve`; actions that lack durable confirmation route the human to the pane. Handlers run from the elected sidebar producer with fresh stdio, so their output never touches a hook decision channel.
-
-```toml
-[[notifications.handler]]
-when = { kind = ["waiting"] }
-command = "~/bin/waiting_hook $RIMZ_NOTIFY_ASK {{pane}} {{root}}"
-```
-
-A script that reads pane text handles untrusted data: an agent's output can contain anything, so match it against patterns the script owns and do nothing on unknown shapes. Keep handler credentials in per-machine config; the operator-facing threat model is [security](../../guide/security.md).
-
-Handlers are also where off-box attention routing would grow from: a future bridge subsystem — first-class outbound channels (push services, chat, mail) with delivery guarantees — would be handlers grown up, not a parallel mechanism.
+To trace a stray tab marker, grep the log for the agent's row id or pane and read the timeline. A `bell_ring` with `fired: true` whose only later clear is `unread_cleared` with `cause: row_gone` is a marker that outlived a row which vanished before anyone looked. A `bell_ring` with `suppressed: not_unread` is the gate refusing to ring a row that no longer needs a look.
