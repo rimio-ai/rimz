@@ -60,7 +60,7 @@ pub const ENV_AGENT_MODEL: &str = "RIMZ_AGENT_MODEL";
 pub const ENV_AGENT_EFFORT: &str = "RIMZ_AGENT_EFFORT";
 /// The canonical dollar cap selected by launch flags, profiles, or roles.
 /// Set by the launch wrapper and read into lifecycle observations.
-pub const ENV_AGENT_BUDGET: &str = "RIMZ_AGENT_BUDGET";
+pub(crate) const ENV_AGENT_BUDGET: &str = "RIMZ_AGENT_BUDGET";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProgramLookupErr {
