@@ -21,7 +21,7 @@ The marker lives in the worktree's Git admin directory (`.git/worktrees/<name>/r
 | `base_ref` | Resolved base commit at creation. The last-resort comparison when no branch survives. |
 | `from_pr` | Pull-request number for a `--from-pr` tree. |
 | `repo_root`, `worktree_path` | Where the tree came from and where it lives. |
-| `created_at` | Creation timestamp, and the boundary that scopes [attribution](../agents/model.md#attribution) to this incarnation of the tree. |
+| `created_at` | Creation timestamp, and the boundary that scopes [attribution](../agents/attribution.md#selecting-records) to this incarnation of the tree. |
 
 `created_at` is also the attribution lifetime boundary, composed with the report's observed-branch scope. Creation writes it once, reuse of an existing tree keeps the marker it finds, and a tree removed and recreated under the same name gets a fresh one, which makes it the durable birth of the lane's current incarnation. Attribution reads it to admit only the agent records registered at or after that birth, so the sessions of an earlier tree at the same path stop being counted the moment a new one replaces it.
 

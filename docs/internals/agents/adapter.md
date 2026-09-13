@@ -61,7 +61,7 @@ The launch block is declarative on purpose. Because permission argv, resume shap
 | --- | --- |
 | `native_ask_ui` | the agent draws its own permission and question prompts, so RimZ can mark the row waiting and route you to the pane |
 | `transcript_tail_context` | a local transcript tail is a live context source, refreshable on a producer tick |
-| `registers_lazily` | a session can exist before its pane stamp does, so binding goes through the [recovery ladder](./model.md#the-instance-lifecycle) |
+| `registers_lazily` | a session can exist before its pane stamp does, so binding goes through the [recovery ladder](./instances.md#binding-a-session) |
 | `local_session_discovery` | session identity and lifecycle come from a provider-owned local store rather than hooks |
 | `daemon_hooked_sessions` | hooks fire from a per-user daemon that outlives any one conversation |
 | `direct_account_usage` | an authoritative identity-bearing account-usage probe exists ([providers.md](./providers.md#refresh-cadences)) |

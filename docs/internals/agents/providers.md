@@ -37,7 +37,7 @@ Four facts, all account-scoped rather than session-scoped.
 
 **Reset credits** ([`ResetCredits`](../../../crates/rimz/src/agents/credits.rs)): Codex-only redeemable rate-limit resets. The cache stores the provider-reported available count, every known valid available-credit expiry, and the earliest expiry summary. The compact dashboard uses the count and earliest instant to color its glyph and blink while a spent duration window makes a manual redemption useful; the standalone provider report can list individual deadlines.
 
-Account identity and included balance ride [`AgentContext`](../../../crates/rimz/src/agents/context.rs), the session-scoped rich-context record ([model.md](./model.md#rich-context-agentcontext)); the producer lifts them to the account scope at aggregation time. Paid usage rides the shared credits cache when a provider reports it, or a read-time local spend projection for API-key accounts.
+Account identity and included balance ride [`AgentContext`](../../../crates/rimz/src/agents/context.rs), the session-scoped rich-context record ([model.md](./model.md#rich-context)); the producer lifts them to the account scope at aggregation time. Paid usage rides the shared credits cache when a provider reports it, or a read-time local spend projection for API-key accounts.
 
 ### Account scope
 

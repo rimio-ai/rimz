@@ -1,357 +1,295 @@
 # The agent model
 
-A coding agent runs in a pane, reports through its own hooks, and appears in the sidebar as one card. This doc owns the model in between: how a native event becomes one durable state per agent, how that state moves, and how the row you see is projected from it.
-
-The pipeline has three stages, each owned by a different doc:
-
-```text
-adapter ── produces ──►  AgentLifecycleObservation   (one per native event)   adapter.md
-this doc ── folds ────►  AgentState                  (one per agent)          model.md
-sidebar ── projects ──►  a sidebar row                                        sidebar.md
-```
-
-An adapter produces an [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs) from each native event ([adapter.md](./adapter.md)); this doc folds those observations into one [`AgentState`](../../../crates/rimz/src/agents/state.rs) per agent; [sidebar.md](../sidebar/sidebar.md) projects that state into a row. The observation is agent-agnostic by construction, so everything below is too: a new agent that emits well-formed observations gets the state machine, ranking, liveness, and attention routing for free.
-
-The commitments this operationalizes are in [DESIGN.md](../../../DESIGN.md). Which native event means what for each agent is that agent's own page ([adapter_claude.md](./adapter_claude.md), [adapter_codex.md](./adapter_codex.md), and eleven siblings); the account, balance, spend, and pricing model is [providers.md](./providers.md).
-
-## Four nouns
-
-- An **agent kind** is a wired integration (`claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `cursor`, `droid`, `kiro`, `qwen`, `grok`), described by an [`AgentSpec`](../../../crates/rimz/src/agents/definition.rs).
-- An **agent instance** is presence: a live local pane running a known agent right now, read from the multiplexer every tick.
-- A **session** is identity: the id the agent's own hooks report, keyed `(kind, agent_id)`, where every durable fact attaches.
-- The **rollup entry** is the one `AgentState` per session that store replay derives: the durable record the sidebar enriches and renders.
-
-Joining instances to sessions is [the instance lifecycle](#the-instance-lifecycle). The data flow between them:
+This page owns how RimZ turns an agent's native events into one durable state per session, how that state moves, and how the status a reader sees is projected from it. An adapter turns each native event into an [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs) ([adapter.md](./adapter.md)); the rollup described here folds those observations into one [`AgentState`](../../../crates/rimz/src/agents/state.rs) per session; the sidebar projects that state into a row ([sidebar.md](../sidebar/sidebar.md)).
 
 ```text
 native agent event
-  │  the adapter normalizes it                        (adapter.md)
+  │  the adapter normalizes it                                   adapter.md
   ▼
-AgentLifecycleObservation ──► one Store lifecycle transaction
-  │  replay: reduce_agent_states folds each signal through step()
+AgentLifecycleObservation ──► one Store lifecycle transaction    store.md
+  │  replay folds each signal through step()                     this page
   ▼
-AgentState ──► one rollup entry per (kind, agent_id)
-  │  snapshot: live panes bind instances; the heartbeat and
-  │  sidecars refine the displayed row
+AgentState, one per (kind, agent_id)
+  │  live panes bind instances to sessions                       instances.md
+  │  the heartbeat and context sidecars refine the status        this page
   ▼
-sidebar row                  (sidebar.md projects, the interface legend paints)
+sidebar row                                                      sidebar.md
 ```
+
+Everything on this page is provider-neutral. An integration that emits well-formed observations gets the state machine, ranking, liveness, and attention routing without code of its own. Which native event carries which signal is each adapter's page ([adapter_claude.md](./adapter_claude.md), [adapter_codex.md](./adapter_codex.md), and eleven siblings). How a session binds to a pane and when RimZ declares it dead is [instances.md](./instances.md). Accounts, spend, and pricing are [providers.md](./providers.md), and the credit report built over the audit rollup is [attribution.md](./attribution.md). The commitments behind the model are in [DESIGN.md](../../../DESIGN.md).
+
+## Terms
+
+| Term | Meaning |
+| --- | --- |
+| agent kind | A wired integration (`claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `cursor`, `droid`, `kiro`, `qwen`, `grok`), described by an [`AgentSpec`](../../../crates/rimz/src/agents/definition.rs). |
+| session | Identity: the id the agent's own hooks report. Every durable fact attaches to a session, keyed `(kind, agent_id)`. |
+| agent instance | Presence: a live local pane running a known agent right now, read from the multiplexer on every snapshot. Joining instances to sessions is [instances.md](./instances.md). |
+| rollup entry | The one `AgentState` per session that store replay derives. The sidebar enriches and renders it. |
+| signal | The provider-neutral intent one native event carries ([`LifecycleSignal`](../../../crates/rimz/src/agents/lifecycle.rs)). |
 
 ## Status and phase
 
-A reduced state is two axes plus one head ([`LifecycleState`](../../../crates/rimz/src/agents/lifecycle.rs)): a **status**, the running turn's **phase**, and a transient **compacting** head painted over either.
+A session's lifecycle state is a status, the running turn's phase, and a transient compacting head painted over both ([`LifecycleState`](../../../crates/rimz/src/agents/lifecycle.rs)). The glyph, animation, and color for each value are [the interface legend](../../interface/sidebar.md#reading-the-glyphs); this page owns what the values mean and how they move.
 
-The statuses, in ranking order, most attention-hungry first ([`status_weight`](../../../crates/rimz/src/store/snapshot/view/score.rs)):
+The statuses rank by a base weight, most attention-hungry first ([`status_weight`](../../../crates/rimz/src/store/snapshot/view/score.rs)). The rollup stores only `waiting`, `failed`, `success`, `running`, and `idle`; `paused` and `sleeping` exist only in the [displayed status](#displayed-status).
 
-| Status | Weight | Meaning | Decided by |
-| --- | --- | --- | --- |
-| `waiting` | 600 | blocked on a human decision | the lifecycle channel: a blocking hook's `awaiting_input` signal |
-| `failed` | 560 | the last turn errored | the lifecycle channel |
-| `paused` | 400 | stopped mid-turn on a provider limit | derived at projection ([Displayed status](#displayed-status)) |
-| `success` | 300 | last turn completed cleanly | the lifecycle channel, or projection when a turn finished without a `Stop` hook |
-| `running` | 200 | actively working a task | the lifecycle channel |
-| `idle` | 100 | wired in, nothing in flight | the lifecycle channel |
+| Status | Weight | Meaning |
+| --- | --- | --- |
+| `waiting` | 600 | blocked on a human decision in the agent's own UI |
+| `failed` | 560 | the last turn errored, stalled, or looped |
+| `paused` | 400 | stopped on a provider limit, a dollar cap, or a transient API error (display only) |
+| `success` | 300 | the last turn completed cleanly |
+| `running` | 200 | working a turn |
+| `sleeping` | 150 | at rest with a pending one-shot wait armed (display only) |
+| `idle` | 100 | wired in, nothing in flight |
 
-`waiting` and `failed` sit close enough that the time curve can interleave an older failure above a fresh ask, and the lowest attention state still starts above the highest calm state. Among the calm statuses, a finished `success` outranks a working `running` row, because a result deserves one look while work in progress does not. Only the base weight lives here; the time curve that multiplies it is [sidebar.md](../sidebar/sidebar.md).
+`waiting` and `failed` sit close enough that the time curve can lift an older failure above a fresh ask, and the lowest attention weight still starts above the highest calm one. A finished `success` outranks a working `running` row because a result deserves one look and work in progress does not. The time curve that multiplies the base weight is [sidebar.md](../sidebar/sidebar.md#attention-ranking-and-the-cap).
 
-The phase ([`TurnPhase`](../../../crates/rimz/src/agents/lifecycle.rs)) is `reasoning`, `acting`, or `parked` inside a running turn, and `idle` everywhere else. The machine normalizes that invariant, so a resting agent mid-phase is unrepresentable.
-
-The glyph, animation, and color for each are the canonical table in [the interface legend](../../interface/sidebar.md#reading-the-glyphs); this doc owns the transitions, not the painting.
+The phase ([`TurnPhase`](../../../crates/rimz/src/agents/lifecycle.rs)) is `reasoning`, `acting`, or `parked` while the status is `running`, and `idle` for every other status. `step` enforces that rule on every transition, so a resting row with a live phase cannot exist in the rollup. [Turn phase](#turn-phase) covers how it moves.
 
 ## The rollup
 
-[`reduce_agent_states`](../../../crates/rimz/src/store/snapshot/project.rs) folds the `agent.lifecycle` events into one `AgentState` keyed by `(kind, agent_id)`, where `agent_id` is the session id, so two concurrent agents of the same kind never share a row.
+The reducer folds `agent.lifecycle` events, in log order, into one `AgentState` keyed by `(kind, agent_id)`. Because `agent_id` is the session id, two concurrent agents of the same kind never share a row. Production replay runs through `reduce_agent_states_seeded_with_identity` in [`project.rs`](../../../crates/rimz/src/store/snapshot/project.rs), which also assigns card names and applies [launch identity inheritance](./instances.md#launch-identity-across-conversations) after each event.
 
-Each event is a *partial* update. How the reducer treats a field the event omits is that field's **lifetime**, and the lifetimes are the rule the types themselves do not state:
+Each event is a partial update. `carried_base` clones the prior row, `assemble_agent_state` overlays what the event carries, and the rule for a field the event omits is that field's lifetime. The types do not state these rules, so the table does. [`AgentState`](../../../crates/rimz/src/agents/state.rs) is the full field catalog.
 
-| Lifetime | Rule | Fields |
+| Lifetime | Fields | Rule |
 | --- | --- | --- |
-| identity | set once when the session registers, stable thereafter | `agent_id`, `kind`, `parent_agent_id` |
-| registration | replaced when a keyed registration arrives, then carried | `account_key` |
-| placement | replaced when the session moves into a resumed pane or a newer observation re-owns it | `pane`, `runtime_owner` |
-| set-once | fills from the first usable observation, then stays stable | `first_prompt` |
-| activity | replaced by the latest event, where *clearing* it is meaningful: an idle agent has no `task` | `status`, `task`, `last_activity` |
-| carry-forward | persists until a newer value arrives; a missing value never resets it | `model`, `effort`, `context_pct`, `context_window`, `prompt`, `description`, `transcript_path`, `recent_prompts` |
-| accumulated | increments from durable named events and survives replay | `tool_calls` |
-| compaction guard | carries across events and rotation; set by a sent compact command or successful manual compaction, cleared only by `TurnStarted`; consulted for adapters with native turn-start hooks | `compacted_awaiting_prompt` |
-| live-derived | computed at snapshot time from the live pane or git over the stored fallback | `worktree_path`, `worktree_branch` |
-| transient heads | opened and closed by signals, painted over the base status | the turn [phase](#turn-phase), the [compaction bracket](#the-compaction-bracket) |
+| identity | `kind`, `agent_id`, `registered_at` | Set when the row is created. A compaction continuation takes its predecessor's earlier `registered_at` so it keeps the predecessor's ownership rank. |
+| lineage | `parent_agent_id` | Set by the event that creates the row. On an existing parentless row only a `SubagentAdopted` event can set it; an established parent never changes. |
+| launch | `launch_id`, `profile`, `login`, `mode`, `isolation`, `role`, `team`, `channel`, `launch_group`, `launch_ordinal`, `launch_depth` | Set from launch parameters, then carried. A same-instance successor conversation inherits them ([instances.md](./instances.md#launch-identity-across-conversations)). |
+| registration | `account_key`, `transcript_path` | Replaced whenever an event carries a value, otherwise carried. The event projection strips both from root events that do not establish identity (`transcript_path` also survives on `turn_ended`), so in practice a registration sets them. |
+| placement | `pane`, `runtime_owner` | Replaced by the event's pane stamp and owner. A bare stamp naming the same pane keeps the richer prior stamp, and a daemon owner never displaces the session's own agent-process owner. |
+| checkout | `worktree_path`, `worktree_branch`, `worktree_branches` | The path is taken from an identity-establishing event and otherwise pinned to the prior value. A branch is accepted only when the event's path is absent or matches the pinned path; `worktree_branch` is the latest accepted branch and `worktree_branches` accumulates every one. |
+| set-once | `first_prompt` | The first prompt that is neither blank nor a harness control turn, then stable. |
+| activity | `status`, `phase`, `last_activity`, `ended_at`, and a root's `task` | Replaced by every event. An event that omits `task` clears it, because an idle agent has no task. Every event except `ended` clears `ended_at`. |
+| carry-forward | `model`, `effort`, `usage` (`context_pct`, `context_window`, `total_tokens`), `prompt`, `description`, `recent_prompts`, `origin`, `compacted_from`, `budget` | Replaced when an event carries a value; a missing value never resets it. `recent_prompts` keeps the newest 16. |
+| counters | `tool_calls`, `compaction_count` | Incremented from durable events, so replay reproduces them. |
+| turn boundaries | `turn_started_at`, `user_turn_started_at` | Advanced by the signals in [the edge table](#edges); otherwise carried. |
+| open ask | `waiting_since`, `open_ask`, `interrupted_turn_id` | `waiting_since` and `open_ask` live only while the row is `waiting`. `interrupted_turn_id` is recorded by `turn_interrupted` and cleared by `registered` or a newly opened turn. |
+| compaction | `compacting_since`, `compacted_awaiting_prompt` | `compacting_since` marks an open [compaction bracket](#the-compaction-bracket). `compacted_awaiting_prompt` is set by a sent compact command or a successful manual close, cleared only by `turn_started`, and consulted only for adapters with a native turn-start hook. |
 
-[`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs) and [`AgentState`](../../../crates/rimz/src/agents/state.rs) are the field catalog. Five rules earn a note:
+Five of these rules need their reason stated:
 
-- A subagent's `task` is the one activity-lifetime exception: it holds the child's type (`Explore`, and so on) and carries forward as identity, so a finished child stays labeled when its `SubagentStop` omits the type.
-- `first_prompt` accepts the first user prompt that is neither blank nor a harness control turn. It labels an unnamed session ahead of the changing latest `prompt`; an adapter-emitted `description`, such as a native title or child task description, supersedes it through the normal carry-forward path.
-- The live-derived fields follow the pane, which knows its current directory every tick, so `worktree_path` and `worktree_branch` track a `git checkout`. Pinning them at registration would be the branch-tracking bug.
-- `account_key` is the opaque provider account fingerprint an adapter stamps when a root session registers, so a row records the login it was born on; it is never the credential. Only a registration observation carries it: the event projection strips the field from every other event and the reducer carries the stamped value forward, so a re-registration of the same session id (a Claude `--resume`) rebinds the row to the login in force at that moment. It is durable rollup state rather than [rich context](#rich-context-agentcontext), because the provider dashboard partitions live budget readings by it ([providers.md](./providers.md#producer-aggregation)).
-- `model` is stored canonicalized: a trailing capability tag is stripped (`claude-opus-4-8[1m]` becomes `claude-opus-4-8`). The tag rides only the fresh-launch payload, so without canonicalization the carry-forward would flip the label the first time a suffix-less event arrived. Canonicalizing at reduce time pins one stable label while the event log stays faithful to the raw payload.
+- A provider-native subagent's `task` holds the child's type (`Explore`, and so on) and carries forward, so a finished child stays labeled when its `SubagentStop` omits the type. A root's `task` follows the activity rule.
+- `first_prompt` labels an unnamed session ahead of the changing latest `prompt`. An adapter-emitted `description`, such as a native title or a child task description, supersedes it for display.
+- `account_key` is the opaque fingerprint of the provider account a root session registered on; it is never the credential. A re-registration of the same session id (a Claude `--resume`) rebinds the row to the login in force at that moment. It lives in the rollup, and never in [rich context](#rich-context), because the provider dashboard partitions live budget readings by it ([providers.md](./providers.md#producer-aggregation)).
+- `model` is stored canonicalized: a trailing capability tag is stripped (`claude-opus-4-8[1m]` becomes `claude-opus-4-8`). The tag rides only a fresh-launch payload, so without canonicalization the carried label would flip the first time a tagless event arrived. The event log keeps the raw payload.
+- The live row reads `worktree_path` and falls back to the pane's current directory only when no path is stored. The sidebar looks up the displayed branch from that path, so a `git checkout` inside the tree shows on the card while the rollup's branch record stays tied to observed events.
 
-### Instance identity and age
-
-`last_activity` is always the agent's *own* latest event, never inherited from a previous instance of the same kind. Identity is required: a payload carrying no session id is quarantined (logged under `rimz::agent::lifecycle` and folded to nothing), so two distinct session-less instances can never merge into one row. No agent hits this today, since every adapter carries a session id on its first state-bearing event, but it is where a real per-instance key would land if a future agent emitted session-less transitions.
+Identity is required. An event with no session id is quarantined: ingestion logs it at `warn!` under `rimz::agent::lifecycle`, and the reducer folds it to nothing, so two session-less instances can never merge into one row. Every shipped adapter carries a session id on its first state-bearing event. For a session the rollup has not seen, the reducer also quarantines a `lost` marker, a typeless `subagent_stopped`, and a compaction signal with no provider-named predecessor ([the compaction bracket](#the-compaction-bracket)). `registered` and `subagent_started` are the signals meant to create a row; any other signal that creates one is logged at `debug!` under `rimz::agent::binding`.
 
 ## The state machine
 
-An adapter emits an agent-agnostic **lifecycle signal**: the *intent* a native event carries ([`LifecycleSignal`](../../../crates/rimz/src/agents/lifecycle.rs)). Every `agent.lifecycle` event carries its signal explicitly in the params; a payload without one folds to nothing. Which native event maps to which signal is each provider's adapter doc. `ToolUsed.name` carries the provider's tool name when that adapter supports tool statistics; replay increments the session's `tool_calls` map, while unnamed legacy and unsupported-adapter events preserve lifecycle behavior without inventing a count.
+One pure, total function, [`step`](../../../crates/rimz/src/agents/lifecycle.rs), folds a signal onto the prior `LifecycleState` and is the only home for transitions. Roots and subagents share it. The reducer calls it on replay, and Store calls it under the workspace lock against the latest durable state for each fresh event, returning the transition in its receipt so hook ingestion can log anomalies without re-reading state. Every `agent.lifecycle` event carries its signal explicitly; a payload without one folds to nothing.
 
-One pure transition function, [`step`](../../../crates/rimz/src/agents/lifecycle.rs), folds a signal onto the prior state. It is the single home for every transition, reused identically for root agents and subagents: the reducer calls it on replay to derive the rollup, and Store calls it under the workspace lock against the latest durable state for each fresh event. Store returns the transition classification in its receipt, so hook ingestion can log anomalies without re-reading state.
-
-### The lifecycle event envelope
-
-[`LifecycleEvent`](../../../crates/rimz/src/agents/lifecycle/event.rs) is the versioned public projection of one durable transition: event and workspace identity, agent lineage, the complete signal, before-and-after status, phase, transition classification, and the compaction and waiting-clear facts. Store builds the envelope at the same commit seam that appends `agent.lifecycle`, so an append suppressed by lifecycle policy produces no envelope and a derived subagent append produces its own envelope in log order.
-
-Hook ingestion dispatches these envelopes through a static reactor table. Each reactor declares a [`SignalSet`](../../../crates/rimz/src/agents/lifecycle/event.rs) beside its action; queued-delivery nudges, terminal run waits, and ended-agent message archival consume the same vocabulary that external harnesses receive. Reactors remain latency paths and re-check durable state before acting.
-
-[`rimz events follow`](../../reference/cli/events.md) uses the read-only [`store::follow`](../../../crates/rimz/src/store/follow.rs) follower to fold the same `step` function over the durable log and emit one envelope per conforming lifecycle record. The stream starts from a read-only rollup seed at the live edge, or from an empty state at the start of the current generation under `--replay`, and drains a rotated tail before reading the new active log. The durable log remains truth; polling and reactor dispatch only surface it sooner.
+Store does not append every observation. An unnamed `tool_used` that neither mutates nor edits is proof of work only, and the writer appends it only when it is child-owned or its transition closes a compaction bracket, clears a wait, or reconciles a stale status ([`store/writer/lifecycle.rs`](../../../crates/rimz/src/store/writer/lifecycle.rs)). A named `tool_used` is always appended, and replay counts it into `tool_calls`.
 
 ```text
  ●
  │ registered
  ▼
-idle
- │ turn started (a mutating tool on an idle row also reconciles it)
- ▼
-running ───── turn ended ─────┬── clean ─────► success ──┐
- ▲     reasoning ──► acting   │                          │
- │                            └── errored ───► failed ───┤
- │                                                       │
- └── turn started re-enters · a mutating tool on ────────┘
-     success reconciles (failed holds until a new turn)
+idle ──── turn started ───► running ──── turn ended ──┬── clean ───► success
+ ▲                           │  ▲                     └── errored ─► failed
+ │                           │  │
+ └──── turn interrupted ─────┘  └── turn started, or a tool on idle / success
 
- parked     : a clean end with background work in flight keeps the rollup running;
-              display shows ✓ ⋯ bg, and a prompt wake resumes the same boundary
- subagents  : subagent started establishes the child row in running;
-              subagent stopped resolves it to success / failed, and that terminal
-              verdict absorbs a reordered late start
- compacting : a transient head held over any status, and the one signal that
-              clears waiting outright (the bracket below)
- waiting    : awaiting input enters from any status; the next turn, tool,
-              compaction open, or compaction close returns the row to running
- ended      : an observed end resolves a running or waiting row to failed, a
-              reaper's guess rests it at idle, and a resting status holds;
-              runtime hides it, audit retains it for explicit resume
+awaiting input        any status ──► waiting; the next tool, turn, or compaction returns it to running
+clean end, bg work    running stays running in the parked phase; display shows success with ⋯ bg
+ended                 running or waiting ──► failed (a reaped end rests at idle); resting statuses hold
 ```
 
-The edges, precisely:
+### Edges
 
-| Signal | From → to | Note |
+| Signal | Status | Also |
 | --- | --- | --- |
-| `registered` | *(none)* → `idle` | establishes the row; with `subagent_started`, the only signal that does |
-| `turn_started` | any → `running` | opens the turn in the `reasoning` phase and stamps a fresh provider-turn boundary (`turn_started_at`); `user_turn_started_at` advances only for a user-authored prompt, not a harness-delivered one; a parked running row resumes and carries both prior boundaries |
-| `turn_ended`, clean | `running` → `success` | the turn resolved; the phase rests |
-| `turn_ended`, errored | `running` → `failed` | the error bit always wins |
-| `turn_ended`, clean with background work in flight | `running` → `running` | the rollup parks; display projects `success` with `⋯ bg` |
-| `turn_interrupted` | any → `idle` | the provider or user canceled the turn, closing it with no result; carries the provider turn id when known |
-| `awaiting_input` | any → `waiting` | a blocking prompt ([`AskKind`](../../../crates/rimz/src/agents/lifecycle.rs): permission, plan approval, or question) holds the row for a human; a repeat restamps it |
-| `subagent_started` | *(none)* → `running` | establishes the child row, keyed by the child's own id; a terminal `success` or `failed` child holds its verdict when a reordered start arrives late |
-| `subagent_stopped` | `running` → `success` / `failed` | the child's terminal verdict, kept through the parent's turn |
-| `tool_used` (mutating) | resting or *(none)* → `running`, reconciled; `waiting` → `running` | completed work proves a turn, except a completion carrying the id of the turn just interrupted is trailing canceled-turn output and is ignored; attention rows hold; a keyed ask clears only for a tool with the same native key, while either key being absent preserves the any-completion fallback; the first file-editing tool moves the phase to `acting` |
-| `compacting` | status and phase held, except `waiting` → `running`, reconciled | stamps the [compaction head](#the-compaction-bracket); compaction proves the native prompt released the pane, so it clears a waiting row and the ask behind it |
-| `compaction_ended` | auto → `running` (phase carried) · manual → prior resting status resumed, or stale `running` → `idle` · trigger unknown → held · any close on `waiting` → `running` | closes and counts an open [bracket](#the-compaction-bracket) |
-| `ended` | `running` / `waiting` → `failed`, phase rests; a resting status held; row stamped ended | a session that ends mid-turn delivered nothing, so `step` gives the row the failed disposition of [`terminal_disposition`](../../../crates/rimz/src/agents/lifecycle.rs); an already terminal run record keeps its more specific outcome, such as `timed_out` or `canceled`; a `parked` running row fails like any other running row; the reducer records `ended_at`, and an open compaction bracket closes with the row; a [reaper-stamped end](#observed-ends-and-reaped-ends) rests an active row at `idle` instead |
-| `lost` | held | legacy `rimz.agent-lost` marker retained for log replay compatibility, reaching `step` as an ignored no-op |
+| `registered` | any → `idle` | Establishes a row. On a row that has opened a turn, advances both turn boundaries, which retires the prior turn's subagents (a `/clear`). |
+| `turn_started` | any → `running` | Opens the `reasoning` phase and stamps `turn_started_at`. `user_turn_started_at` advances only for a user-authored prompt, not a harness-delivered one. On a `parked` row it resumes the same turn and keeps both boundaries. |
+| `turn_ended` clean | → `success` | Rests the phase. |
+| `turn_ended` errored | → `failed` | The error bit wins over the parked bit. |
+| `turn_ended` clean, `parked_on_background` | → `running` | Moves the phase to `parked` ([turn endings](#turn-endings-and-parked-turns)). |
+| `turn_interrupted` | any → `idle` | The provider or user canceled the turn, which closes it with no result. Records the provider turn id when known. |
+| `awaiting_input` | any → `waiting` | Rests the phase, stamps `waiting_since`, and opens the ask ([`AskKind`](../../../crates/rimz/src/agents/lifecycle.rs): permission, plan approval, or question). A repeat restamps it. |
+| `subagent_started` | → `running` | Establishes the child row under the child's own id and opens `reasoning`. A child already at `success` or `failed` holds its verdict, so a late reordered start is ignored. |
+| `subagent_stopped` | any → `success` or `failed` | The child's verdict, by its error bit. |
+| `tool_used` | `idle`, `success`, or no row → `running` (reconciled); `running` and `waiting` → `running`; `failed` holds | Ignored when it carries the id of the turn just interrupted (trailing output). On a `waiting` row with a keyed ask, a tool carrying a different native key is a parallel sibling and is ignored. Moves the phase ([turn phase](#turn-phase)). |
+| `compacting` | held; `waiting` → `running` (reconciled) | Opens the [compaction bracket](#the-compaction-bracket). |
+| `compaction_ended` | by trigger ([the bracket](#the-compaction-bracket)) | Closes the bracket. |
+| `ended` | `running` or `waiting` → `failed`; other statuses hold | Rests the phase and stamps `ended_at`. A [reaped end](#observed-ends-and-reaped-ends) rests an active row at `idle` instead. |
+| `lost` | held | A legacy `rimz.agent-lost` marker kept parseable for log replay; `step` ignores it. |
 
-A `turn_ended` resolves the turn to `success`, or to `failed` on its error bit, never back to `idle`; a provider-native `turn_interrupted` closes the turn at `idle` without a result. One `turn_ended` exception keeps the rollup running: a clean end also carrying `parked_on_background` means the main thread parked on still-in-flight background work, so lifecycle truth stays `running` in the `parked` phase while the sidebar immediately displays `success` and retains the `⋯ bg` marker (the provider-specific detection is in [adapter_claude.md](./adapter_claude.md#hooks-and-lifecycle)). Claude waits a parked parent by injecting the finished background task's notification as a `UserPromptSubmit`: folded onto the parked running rollup, that `turn_started` resumes the same logical turn, restores the displayed row to `running`, and carries both `turn_started_at` and `user_turn_started_at` forward so child verdicts stay visible through the delegation wave. Once the turn reaches a clean end, the next prompt stamps a fresh provider turn, but only a user-authored prompt advances `user_turn_started_at` and clears past-turn verdicts ([retention and headerless prompts](../sidebar/sidebar.md#sub-agent-lists)).
+An `ended` mid-turn delivered nothing, so it takes the failed disposition of [`terminal_disposition`](../../../crates/rimz/src/agents/lifecycle.rs), which supervised runs share. A run record that already holds a more specific terminal outcome, such as `timed_out` or `canceled`, keeps it ([scripting.md](../harness/scripting.md)). An open compaction bracket closes with the row. Runtime views hide an ended row, and audit views keep it for explicit resume.
 
-A `subagent_stopped` resolves the *child* the same way, and the sidebar keeps that `✓` or `!` through the parent's user-authored turn ([sidebar.md](../sidebar/sidebar.md#sub-agent-lists)). A pane-backed launched child that never reaches a `subagent_stopped` (it timed out, was stopped, or its provider died mid-turn) resolves through `ended` instead, and lands on the same `failed` verdict for an observed end, or at `idle` for a [reaped one](#observed-ends-and-reaped-ends). Either way the retained child row is at rest, which is what keeps it out of the parent's live-child count ([subagents.md](../harness/subagents.md#the-lifecycle-end-to-end)).
+### Turn endings and parked turns
 
-`waiting` arrives like every other status: a blocking hook classifies as [awaiting-user](./adapter.md#two-channels) and records an `awaiting_input` signal, and `step` moves the row to `waiting`. The reducer stamps `waiting_since` from the signal, and the shared guard [`is_awaiting_input`](../../../crates/rimz/src/agents/state.rs) reserves pane input while that durable ask postdates activity. An activity heartbeat newer than the ask releases the prompt without waiting for a durable clear, so an agent answered in its own UI returns to work at once; a *keyed* ask instead holds through newer activity until its correlated durable clear, because a parallel sibling tool also advances the heartbeat. A provider interruption marker newer than `last_activity` releases a waiting row to `idle`, proving Esc cancelled the native prompt when no lifecycle hook reports the cancellation. A transition off `waiting` sets `waiting_cleared`, and the ingestion path appends those durably even for signals it would otherwise skip, so a non-mutating approved tool still clears the row on replay.
+A `turn_ended` resolves the turn to `success`, or to `failed` on its error bit, never back to `idle`; only `turn_interrupted` closes a turn at `idle`. The exception is a clean end carrying `parked_on_background`: the main thread stopped while background work is still in flight. The rollup stays `running` in the `parked` phase, and the displayed status reads `success` at once while the card keeps a `⋯ bg` marker for the pending work. Claude is the provider that reports this ([adapter_claude.md](./adapter_claude.md#hooks-and-lifecycle)).
 
-### Observed ends and reaped ends
+Claude wakes a parked parent by injecting the finished background task's notification as a `UserPromptSubmit`. That `turn_started`, folded onto the parked row, resumes the same logical turn: the displayed status returns to `running`, and both turn boundaries carry forward so child verdicts stay visible through the delegation wave. After a clean end, the next prompt stamps a fresh provider turn, and only a user-authored one advances `user_turn_started_at` and retires past-turn child verdicts ([sidebar.md](../sidebar/sidebar.md#sub-agent-lists)).
 
-Not every `ended` is observed. The supervised wrapper's `rimz.agent-ended` and a provider `SessionEnd` hook report an end that happened. The [reaper](#liveness-and-presence) instead infers one from the store plus the process table and stamps `ReapedSuperseded`, `ReapedDead`, or `ReapedStale`, and worktree retirement stamps `WorktreeRemoved` ([`reap.rs`](../../../crates/rimz/src/store/writer/reap.rs)). A guess is not a verdict on the turn, so [`assemble_agent_state`](../../../crates/rimz/src/store/snapshot/project.rs) overrides `step` for exactly those four event names: a prior `running` or `waiting` row lands at `idle` rather than `failed`. `step` itself is unchanged, and every other end, including one whose event name is absent or unrecognized, keeps the failed edge; a `failed` recorded before the stamp is preserved either way, since the override reads the prior status.
+A parked row is still `running`, so an `ended` fails it like any other running row.
 
-Resting at `idle` is what lets a live session that raced the stamp recover. Its next tool or turn signal clears `ended_at` and reconciles the row back to `running` through the ordinary edge, while a session that really did end stays at rest: never `running`, elapsed frozen at the end stamp, and never counted as the live child that would hold its parent in `running`. The rule is uniform for roots and launched children, so a previously active reaped child rests under its parent rather than showing `!`; for a supervised child the run record still carries the specific outcome the digest reports.
+### Subagents
+
+A `subagent_stopped` resolves the child row, and the sidebar keeps that `✓` or `!` through the parent's user-authored turn ([sidebar.md](../sidebar/sidebar.md#sub-agent-lists)). A child owns its own `agent_id`, so its signals never move the parent's status or phase.
+
+A pane-backed launched child that never reaches `subagent_stopped` (it timed out, was stopped, or its provider died mid-turn) resolves through `ended` instead: `failed` for an observed end, `idle` for a reaped one. Either way the retained child row is at rest, which keeps it out of the parent's live-child count ([subagents.md](../harness/subagents.md#the-lifecycle-end-to-end)).
+
+Providers whose hooks identify a child only at its brackets fold `subagent_started` and `subagent_stopped` and keep the child's per-tool work on its heartbeat. Codex hooks carry the child's identity on prompt, tool, permission, and compaction events as well, so those signals fold onto the child row ([adapter_codex.md](./adapter_codex.md)).
+
+### Waiting and asks
+
+A blocking hook classifies as [awaiting-user](./adapter.md#two-channels) and records `awaiting_input`, and `step` moves the row to `waiting`. From there, the shared guard [`is_awaiting_input`](../../../crates/rimz/src/agents/state.rs) decides whether the ask still holds, and message delivery reserves pane input while it does. It holds in three cases:
+
+- The row is `waiting` and no activity is newer than `waiting_since`. An activity heartbeat newer than the ask releases it at once, so an agent answered in its own UI returns to work without waiting for a durable clear.
+- The row is `waiting` on a keyed ask (one carrying a native key). A keyed ask holds through newer activity until a tool with the same native key completes, because a parallel sibling tool also advances the heartbeat.
+- A `running` row's context sidecar carries a provider native-wait or plan-proposal marker newer than `last_activity`. This covers native dialogs without inventing a durable ask.
+
+A transition off `waiting` sets `waiting_cleared`, and Store appends it even for a proof-of-work tool it would otherwise skip, so a non-mutating approved tool still clears the row on replay. A compaction open or close also clears a waiting row, because a compaction runs only after the native prompt releases the pane ([the compaction bracket](#the-compaction-bracket)). A provider interruption marker newer than `last_activity` displays a waiting row as `idle`, which is how RimZ learns that Esc cancelled a native prompt when no hook reports it.
 
 ### Fail-soft, never silent
 
-`step` is total: an unexpected `(state, signal)` pair never panics and never freezes. It takes the signal's natural edge, because the agent is authoritative about its own activity, and tags the result [`TransitionKind::Reconciled`](../../../crates/rimz/src/agents/lifecycle.rs) with the state it overrode and why.
+`step` is total: no `(state, signal)` pair panics or freezes the row. An unexpected pair takes the signal's natural edge, because the agent is authoritative about its own activity, and the result is tagged [`TransitionKind::Reconciled`](../../../crates/rimz/src/agents/lifecycle.rs) with the status it overrode and why. The common case is a tool observed on a resting row, which proves the rollup is stale.
 
-The reducer discards the tag. Store returns it in the lifecycle receipt, and the ingestion path logs it once per fresh event under `rimz::agent::lifecycle` to stderr: `warn!` on a reconciled edge, `debug!` on an ignored no-op, `error!` on a quarantined identity, keeping hook stdout for [the decision channel](./adapter.md#hook-stdout-is-the-decision-channel). Drift between the model and reality leaves a structured breadcrumb instead of a wrong-but-quiet row. The headline case is in the edge table: a tool observed on a resting row proves the rollup is stale, so `step` moves it to `running` and logs the edge.
+The reducer discards the tag. Hook ingestion logs it once per fresh event under `rimz::agent::lifecycle` to stderr: `warn!` for a reconciled edge and `debug!` for an ignored no-op. A subagent event with unusable identity (a missing child or parent id, or a child id equal to its parent) is quarantined at `error!` and emits no observation. Hook stdout stays reserved for [the decision channel](./adapter.md#hook-stdout-is-the-decision-channel). Drift between the model and reality leaves a structured breadcrumb instead of a quietly wrong row.
 
-Adding a new signal variant is a deliberately high bar, since every variant costs an edge in this one table; the gate is in [adapter.md](./adapter.md#extending-the-signal-vocabulary).
+Adding a signal variant costs an edge in this one table, so the bar is deliberately high; the gate is in [adapter.md](./adapter.md#extending-the-signal-vocabulary).
 
 ### Turn phase
 
-The phase is the running turn's shape: the agent owns its status, and RimZ derives the phase from the turn's own hook events. Every turn opens in `reasoning` (`turn_started` and `subagent_started` set it), and the sidebar paints the thinking head while the turn reads, searches, and decides. The turn's first **file-editing** tool moves it to `acting` (`tool_used { edits: true }`, each adapter's file-writing subset read through `tool_edits_files`). The trigger is always a hook event, never prompt or transcript content.
+The phase is the running turn's shape, derived only from hook signals, never from prompt or transcript content. `turn_started` and `subagent_started` open `reasoning`, where the sidebar paints the thinking head. The first file-editing tool moves the turn to `acting` (`tool_used` with `edits`, each adapter's file-writing subset read through `tool_edits_files`).
 
 ```text
-turn starts ──► reasoning  ──first file-editing tool──► acting ──► turn ends
-                    │                                                  ▲
-                    └── a research turn that never edits a file ───────┘
-clean end with background work still in flight ──► parked (rollup running; display ✓ ⋯ bg)
+turn starts ──► reasoning ──first file-editing tool──► acting ──► turn ends
+                    │                                                 ▲
+                    └────── a turn that never edits a file ───────────┘
+clean end with background work in flight ──► parked
 ```
 
-- A research turn stays in the thinking head end to end: searches, reads, and shell commands write no file, so a turn that answers without editing stays in `reasoning`.
-- A shell command is work without writing. It keeps the row live and leaves the phase in place, and a phase that left `reasoning` never re-arms mid-turn.
-- Any turn boundary rests the phase. `turn_ended` and `subagent_stopped` drop it, and the next prompt re-arms it. A clean end with background work still in flight parks it instead.
-- Subagents own separate `agent_id`s, so a child observation never mutates its parent's phase. Providers with bracket-only identity fold `subagent_started` and `subagent_stopped` and keep child per-tool work on its heartbeat; Codex hooks carry distinct child identity on prompt, tool, permission, and compaction progress, so those signals fold onto the child row with rollout enrichment.
+A non-editing tool, such as a search or a shell command, keeps `reasoning` when the turn is already in it, so a research turn stays in the thinking head from start to end. Once a turn leaves `reasoning` it never re-arms mid-turn. A tool that arrives outside `reasoning` moves the phase to `acting` whether or not it edits: that covers a resting row reconciled back to `running`, a waiting row whose ask was answered, and a parked row that visibly went back to work.
 
-A `parked` row settles to `success` immediately, or `sleeping` with a pending one-shot wait, and retains its phase solely to paint `⋯ bg`, while silent `reasoning` and `acting` rows escalate as stalled. The phase vocabulary is painted once, in [the interface legend](../../interface/sidebar.md#reading-the-glyphs).
+Every turn boundary rests the phase: `turn_ended`, `turn_interrupted`, `subagent_stopped`, `awaiting_input`, `registered`, and `ended`. A clean end with background work parks it instead, and compaction holds it.
 
 ### The compaction bracket
 
-Compaction is a transient head over the status. The opening signal (`Compacting`) stamps `compacting_since` and holds the prior status and phase, so the sidebar pulses the compaction head over whatever the agent was doing. A `waiting` row is the one exception: a compaction runs only once the native prompt has released the pane, so the open is proof the ask resolved and the row clears to `running` — the reconciled edge that recovers a prompt dismissed with `esc`, which reaches RimZ through no hook of its own. Without it a stale `?` outranks the head at the [lead cell](../../interface/sidebar.md#reading-the-glyphs), where a human-blocked glyph always wins, and the card paints an ask the agent no longer holds. The session's next lifecycle signal closes the bracket: `step` emits the close as a transition fact ([`Transition::compaction_closed`](../../../crates/rimz/src/agents/lifecycle.rs)), and the rollup increments the durable `compaction_count` from it exactly once per bracket. The card surfaces the count as `↻ N` on the context line.
+Compaction is a transient head over the status. `compacting` stamps `compacting_since` and holds the prior status and phase, so the sidebar pulses the compaction head over whatever the agent was doing. The one status it changes is `waiting`, which moves to `running`: a compaction runs only after the native prompt releases the pane, so the open proves the ask is gone, including a prompt dismissed with Esc that no hook reports. Without this edge a stale `?` would win the [lead cell](../../interface/sidebar.md#reading-the-glyphs) and the card would paint an ask the agent no longer holds.
+
+The session's next signal of any kind closes the bracket. `step` reports the close as [`Transition::compaction_closed`](../../../crates/rimz/src/agents/lifecycle.rs), and the rollup increments `compaction_count` once per bracket that did not close as failed. The card shows the count as `↻ N` on the context line.
 
 `compaction_ended` is the explicit close, and its trigger decides where the agent lands:
 
-| Trigger | Lands | Because |
+| Close | Lands | Because |
 | --- | --- | --- |
-| known automatic | `running`, interrupted phase carried | automatic compaction happens mid-turn |
-| known manual | prior resting status resumed; a stale `running` row rests to `idle` | `/compact` runs between turns |
-| absent | prior status and phase held | the provider reported no trigger bit |
+| automatic | `idle`, `success`, or `waiting` → `running` with the phase carried; `running` stays; `failed` holds | automatic compaction happens mid-turn |
+| manual | `running` → `idle`; `waiting` → `running`; other statuses hold | `/compact` runs between turns, so a still-running row is stale |
+| trigger unknown, or failed | status and phase held; `waiting` → `running` | the provider reported no trigger, or the compaction did not complete |
 
-A close that rests the agent after a turn has opened advances both `turn_started_at` and `user_turn_started_at`, retiring the prior turn's subagents the same as a fresh user-authored prompt or `/clear`; an automatic mid-turn close resumes the turn and holds both boundaries. Redundant close signals are idempotent, since an absent bracket closes nothing, and the projection expires the head past a short display window, so a crash mid-compact can never pulse it forever.
+A successful close that leaves the row at rest after a turn has opened advances both turn boundaries, retiring the prior turn's subagents the same way `/clear` does. An automatic close that resumes a turn from rest opens a fresh turn boundary. A close with no open bracket and nothing to change is ignored. The projection expires the head 90 seconds after `compacting_since` (`COMPACTING_WINDOW_SECS`), so a crash mid-compaction cannot pulse forever.
 
-A compaction signal for a session the rollup has never seen folds to nothing unless provider evidence names the predecessor condensed into that session. A linked Codex compact close seeds the successor immediately and carries the exact `compacted_from` identity; an unlinked rotated id still waits for its first turn or tool signal, so aborted compactions cannot create unreapable ghosts that steal pane primacy.
+A compaction signal for a session the rollup has never seen folds to nothing unless the observation names the predecessor it condensed (`compacted_from`). A linked Codex compact close seeds the successor immediately and carries the predecessor's identity; an unlinked rotated id waits for its first turn or tool signal. That rule keeps aborted compactions from creating ghost rows that steal pane ownership.
+
+### Observed ends and reaped ends
+
+An `ended` is either observed or inferred. The supervised wrapper's `rimz.agent-ended`, a provider `SessionEnd` hook, and room rebirth's end for a session it did not recover ([`harness/rebirth.rs`](../../../crates/rimz/src/harness/rebirth.rs)) report an end that happened. The [reaper](./instances.md#session-death) infers one from the store and the process table and names its reason as the event name: `ReapedSuperseded`, `ReapedDead`, or `ReapedStale`; worktree retirement uses `WorktreeRemoved` ([`store/writer/reap.rs`](../../../crates/rimz/src/store/writer/reap.rs)).
+
+An inference is not a verdict on the turn. For exactly those four event names, [`assemble_agent_state`](../../../crates/rimz/src/store/snapshot/project.rs) overrides `step` and lands a prior `running` or `waiting` row at `idle` instead of `failed`. `step` itself is unchanged: every other end, including one with an absent or unrecognized event name, takes the failed edge, and a `failed` recorded before the reap stays `failed`.
+
+Resting at `idle` lets a live session that raced the reap recover: its next tool or turn signal clears `ended_at` and moves the row back to `running` through the ordinary edge. A session that really ended stays at rest, with its elapsed time frozen at the end stamp, and never counts as a live child holding its parent in `running`. The rule is the same for roots and launched children, so a reaped child rests under its parent without showing `!`; a supervised child's run record still carries the specific outcome the digest reports.
+
+## Publishing transitions
+
+[`LifecycleEvent`](../../../crates/rimz/src/agents/lifecycle/event.rs) is the versioned public projection of one durable transition: event and workspace identity, agent lineage, the complete signal, status and phase before and after, the transition classification, and the compaction and waiting-clear facts. Store builds it at the same commit that appends `agent.lifecycle`, so an append that lifecycle policy suppresses produces no envelope, and a derived subagent append produces its own envelope in log order.
+
+Hook ingestion dispatches envelopes through a static reactor table. Each reactor declares a [`SignalSet`](../../../crates/rimz/src/agents/lifecycle/event.rs) beside its action; queued-message nudges, terminal run waits, and ended-agent message archival are reactors. They are latency paths and re-check durable state before acting.
+
+[`rimz events follow`](../../reference/cli/events.md) reads the same vocabulary. The read-only [`store::follow`](../../../crates/rimz/src/store/follow.rs) follower folds `step` over the durable log and emits one envelope per conforming lifecycle record. It starts from a rollup seed at the live edge, or from empty state at the start of the current log generation under `--replay`, and drains a rotated tail before reading the new active log.
 
 ## Displayed status
 
-The rollup keeps the agent-owned truth. `snapshot.agents`, as `rimz sidebar snapshot` reports it, always holds the true lifecycle status; the *displayed* status is a projection over it, and two layers compute it.
+The rollup holds the agent-reported lifecycle status, and `rimz sidebar snapshot` reports it unchanged in `snapshot.agents`. The displayed status is a projection over it, computed in two layers.
 
-[`effective_status`](../../../crates/rimz/src/agents/state.rs) is the cheap shared projection every read path uses, so `rimz pane list` and message delivery agree with the sidebar about hookless state: a still-`running` turn with an active park marker reads as `paused`, a hookless plan proposal reads as `waiting`, a hookless completion or interruption reads as `success` or `idle`, and a clean end parked on background work reads as `success`.
+[`effective_status`](../../../crates/rimz/src/agents/state.rs) is the cheap projection every read path shares, so `rimz pane list`, message delivery gates, and the sidebar agree about state no hook reported. It reads the rollup, the budget park, pending waits, and the context sidecar's markers, in this order:
 
-The sidebar row projection ([`project_display_status`](../../../crates/rimz/src/store/snapshot/view/aggregate/status.rs)) adds liveness and budget-aware refinements on top. The order is a pinned contract, top rung wins:
+1. A `running` row with a native-wait or plan-proposal marker reads `waiting`.
+2. A row with a budget park, unless it is `waiting`, reads `paused`.
+3. A `waiting` row with an interruption marker reads `idle`.
+4. A `running` row with a turn-error marker of a pausing class reads `paused`.
+5. A `running` row with a completion marker reads `success`; with an interruption marker, `idle`; in the `parked` phase, `success`.
+6. An `idle` or `success` result with a pending wait reads `sleeping`.
+
+A marker counts only when it is newer than `last_activity`, so any newer hook event clears it.
+
+### The sidebar ladder
+
+The sidebar row projection, [`project_display_status`](../../../crates/rimz/src/store/snapshot/view/aggregate/status.rs), adds liveness, children, and provider budget windows on top. The first rung whose condition holds decides the displayed status:
 
 | Rung | Condition | Displays |
 | --- | --- | --- |
-| 1 | a human-blocked `waiting` row | `waiting` |
-| 2 | a budget park, or a turn-error certificate whose class parks the turn | `paused` |
-| 3 | a turn-error certificate of a fatal class | `failed`, with the upstream label |
-| 4 | a live subagent under an otherwise calm parent | `running` |
-| 5 | a turn that completed without a `Stop` hook | `success` |
-| 6 | a turn or ask interrupted without a terminal hook | `idle` |
-| 7 | a clean turn parked on background work | `success`, retaining the `parked` phase |
-| 8 | a consecutive identical-tool run reaches the attention threshold | `failed`, with the tool and repeat count |
-| 9 | silent past the stall window | `paused` on a spent window, otherwise `failed` |
-| 10 | nothing above applies | `effective_status` |
+| 1 | a `waiting` row that `is_awaiting_input` holds | `waiting` |
+| 2 | a `running` row with a native-wait or plan-proposal marker | `waiting` |
+| 3 | a budget park | `paused`, with spend against cap |
+| 4 | a turn-error marker of a pausing class | `paused`; `failed` with the upstream label once retries are exhausted or the limit window reset with no spent window |
+| 5 | a turn-error marker of a fatal class | `failed`, with the upstream label |
+| 6 | a live subagent under an `idle`, `success`, or `running` parent | `running` |
+| 7 | a completion marker (a turn finished without a `Stop` hook) | `success` |
+| 8 | an interruption marker (a turn or ask cancelled without a terminal hook) | `idle` |
+| 9 | a clean turn parked on background work | `success`, keeping the `parked` phase |
+| 10 | identical consecutive tool calls reach the attention threshold | `failed`, labelled `loop: <tool> ×<count>` |
+| 11 | a `running` row silent past the stall window | `paused` when the kind has a spent window, otherwise `failed` |
+| 12 | none of the above | `effective_status` |
 
-Rung by rung:
+A `waiting` row that fails rung 1 first resolves: with an interruption marker it becomes `idle` and continues down the ladder skipping rung 3; without one, activity newer than the ask proves it was answered in the pane, so it continues as `running` in the `reasoning` phase until a durable clear lands. The [`displayed_status_precedence_ladder_holds`](../../../crates/rimz/src/store/snapshot/view/tests/status/stall.rs) test stacks the causes against each other, so a reordering fails the suite even when every single-cause test passes.
 
-1. **Waiting outranks everything.** An open blocking prompt holds the row unless a newer turn-interruption marker proves Esc cancelled it, in which case the row settles to `idle`. A keyless `waiting` row that fails [`is_awaiting_input`](../../../crates/rimz/src/agents/state.rs), because activity postdating the ask proves it was answered in the pane, projects back to `running` in the `reasoning` phase until a durable clear lands.
-2. **Paused** covers an agent whose latest turn stopped on a provider limit, a RimZ dollar cap, or a transient API error. No hook emits `paused`: RimZ derives it here, and it joins the cockpit tally just under the actionable attention states. A launch `budget` reads the session's cumulative live cost against a per-session runtime ledger; crossing it sends Esc and stamps the row with spend against cap. Provider `rate_limit` and `spend_limit` certificates are per-agent while their budget decision is account-scoped, and `overloaded` covers provider overload, serving capacity, 5xx-class failures, stalled streams, timeouts, and connection drops. Two conditions promote a park to `failed` instead: the auto-continue retry budget is exhausted, or a rate-limit marker survives past its window's reset with no spent window left to explain it ([providers.md](./providers.md#spent-windows-and-paused-rows)).
-3. **Turn death.** A non-transient provider API error or unclassified turn-death marker escalates to `!` at once, and the card quotes the upstream or derived error label. For a still-`running` row the marker must postdate `last_activity`, so the explicit death certificate beats both live-child activity and the stall window; for a terminal `failed` row the marker must fall inside the row's current turn, so an old marker never explains a fresh failure. Any newer hook event self-clears it.
-4. **Waiting on children.** An otherwise clean `idle`, `success`, or `running` agent with a live subagent projects to `running` and paints a quiet wave. The stall clock reads the row's displayed activity, which folds in the children's, so a child that just finished defers escalation too, and the durable resting parent status returns after the final child stops.
-5. **Turn completion.** Codex's `/review` ends on a clean rollout `task_complete` with a non-empty `last_agent_message` and no `Stop`, so the completion marker postdates `last_activity` and settles the row instead of letting the stall window misread a finished review as failed ([adapter_codex.md](./adapter_codex.md#turn-completion-marker)). A newer prompt self-clears it.
-6. **Turn interruption.** The derived marker source is provider-specific: Codex writes rollout `turn_aborted` for Esc and `/clear` mid-turn ([adapter_codex.md](./adapter_codex.md#turn-interruption-marker)); Claude writes a transcript `user` sentinel beginning `[Request interrupted by user` ([adapter_claude.md](./adapter_claude.md#turn-interruption-marker)). The marker postdates `last_activity` and settles the row as at rest with no result, instead of letting a false wait persist or the stall window misread it as failed.
-7. **Parked settle** displays a clean turn parked on background work as `success` immediately, since the turn's verdict was earned and only the background chore is still humming. The display row retains the `parked` phase so `⋯ bg` keeps that pending work legible; a wait's `turn_started` re-runs the row.
-8. **Tool-loop detection** catches a `running` agent whose completed tool calls keep refreshing the heartbeat while making no progress: the same tool name and canonicalized arguments repeated to the configured attention threshold project to `!` with a `loop: <tool> ×<count>` label. The next differing tool or other progress event clears the consecutive run and returns the row to `running` without human action.
-9. **Stall** is the backstop for any other `running` agent silent past the configurable window. A kind with a spent, unreset budget window reads `paused`. Everything else escalates to the attention `!` ([Liveness and presence](#liveness-and-presence)).
-10. **The bottom rung** is `effective_status`, which is where the hookless plan-approval projection lands: a `running` Codex row whose completed planning turn rests on a rollout `Plan` item reads as `waiting`. The normal `Stop` hook records the durable plan ask, so this marker is the missed-hook backstop that keeps the row and the message-delivery gate safe without inventing an ask record ([adapter_codex.md](./adapter_codex.md#plan-approval-marker)).
+The rungs that need more than their row:
 
-After the ladder settles, an `idle` or `success` result with `pending_waits` becomes `sleeping`; `effective_status` applies the same rest-only projection. Enrichment reads these waits from instance-sourced, one-shot delivery rows in the loop catalog, matching the workspace root and target kind/session, without writing a store event. Timers, watched commands, and one-shot or deadline signal deliveries count; standing subscriptions and recurring clocks do not. `running`, `waiting`, `failed`, and `paused` remain unchanged, and a parent with a live child remains `running`/delegating. A parked clean turn can therefore display `sleeping` while retaining its `parked` phase.
+- **Native waits and plans (2).** A provider marker says a native dialog is open without a durable ask. The Codex case is a `running` row whose completed planning turn rests on a rollout `Plan` item: the normal `Stop` hook records a durable plan ask, and this marker is the backstop when that hook was missed ([adapter_codex.md](./adapter_codex.md#plan-approval-marker)).
+- **Paused (3, 4).** No hook emits `paused`. A launch `budget` reads the session's cumulative live cost against a per-session runtime ledger; crossing it sends Esc and stamps the park ([budget.md](../harness/budget.md)). The pausing turn-error classes are `rate_limit` and `spend_limit`, which are per-agent markers with an account-scoped budget decision, and `overloaded`, which covers provider overload, serving capacity, 5xx-class failures, stalled streams, timeouts, and connection drops. The promotion to `failed` happens when auto-continue has exhausted its retries, or when a rate-limit marker outlives its window's reset with no spent window left to explain it ([providers.md](./providers.md#spent-windows-and-paused-rows)).
+- **Turn death (5).** A non-transient provider API error or unclassified turn-death marker escalates to `!` at once, and the card quotes the upstream or derived label. For a `running` row the marker must postdate `last_activity`, so an explicit death certificate beats both live-child activity and the stall window. For a `failed` row the marker must fall inside the current turn, so an old marker never explains a fresh failure.
+- **Waiting on children (6).** The parent paints a quiet wave. The stall clock reads the row's displayed activity, which folds in the children's, so a child that just finished defers escalation too. The durable resting status returns after the last child stops.
+- **Completion (7).** Codex `/review` ends on a clean rollout `task_complete` with a non-empty `last_agent_message` and no `Stop`; the marker settles the row instead of letting the stall window misread a finished review ([adapter_codex.md](./adapter_codex.md#turn-completion-marker)).
+- **Interruption (8).** Codex writes rollout `turn_aborted` for Esc and for `/clear` mid-turn ([adapter_codex.md](./adapter_codex.md#turn-interruption-marker)); Claude writes a transcript `user` entry beginning `[Request interrupted by user` ([adapter_claude.md](./adapter_claude.md#turn-interruption-marker)).
+- **Tool loops (10).** A looping agent completes tools and refreshes its heartbeat, so it can never stall. A run of the same tool name with the same canonicalized arguments reaching `[agents.attention] tool_repeat_attention_after` (20 by default) is the progress-failure certificate. The next differing tool or other progress clears the run without human action.
+- **Stall (11).** The backstop for any other silent `running` row, after `[agents.attention] stalled_after_secs` (30 minutes by default). The next heartbeat clears it.
 
-The read-side projection requires a parsed trigger. Self-wait timers anchor their due time at `wait_meta.armed_at`; human one-shot `loop add --wait --at HH:MM` rows have no arm timestamp, so their due time is the next occurrence after the snapshot clock in the configured timezone. Recurring clocks do not count even when their row has a deadline.
+Each rung leaves the rollup's lifecycle status untouched. Claude transcript-death can leave the rollup `running` while Codex's `Stop` over a rollout error records it `failed`, and the projection displays either as `paused` when the error class pauses.
 
-`Sleeping` is neither attention nor actionable, and `needs_a_look` is false: the unread episode and any configured success notification open when the wait cycle finishes at `Success`, not on the intermediate rest. An existing unread episode persists across sleep as it does across running. Its score weight is 150, below `running` (200) and above `idle` (100); cockpit counts read `waiting → failed → paused → success → running → sleeping → idle`. `Done` and `Any` delivery gates open for it, so a message can start a turn without consuming the armed wait; `Resume` does not open for it. Reply waits treat it as completed. Idle compaction remains eligible while sleeping, subject to its usual context, timing, and safety guards. `--when` still reads raw lifecycle status and does not accept `sleeping`; `agent.idle` remains a turn-boundary event.
+A projection to any status other than `running` drops the phase, except `success` or `sleeping` over `parked`, the settled shapes that keep pending background work visible. The compaction head pulses over any displayed status.
 
-Each rung reads enrichment plus liveness, and each leaves the rollup holding the true lifecycle status: Claude transcript-death can leave the rollup `running` while Codex Stop-over-rollout-error records the rollup `failed`, and projection refines either display to `paused`. The [`displayed_status_precedence_ladder_holds`](../../../crates/rimz/src/store/snapshot/view/tests/status/stall.rs) test stacks the causes against each other, so a reordering fails the suite even when every single-cause test still passes.
+### Sleeping
 
-The phase and head paints ride over this base: a `running` agent in `reasoning` renders the thinking head, and an open compaction bracket pulses over any base status. A projection to a non-running status drops the phase except for `success` or `sleeping` with `parked`, the settled shapes that keep pending background work visible.
+After the ladder settles, an `idle` or `success` result with `pending_waits` displays `sleeping`; `running`, `waiting`, `failed`, and `paused` never do, and a parent with a live child stays `running`. A parked clean turn can therefore display `sleeping` while keeping its `parked` phase. Enrichment reads pending waits from instance-sourced, one-shot delivery rows in the loop catalog that match the workspace root and the target kind and session, without writing a store event. Timers, watched commands, and one-shot or deadline signal deliveries count; standing subscriptions and recurring clocks do not, even when a recurring row has a deadline.
 
-## The instance lifecycle
+A pending wait needs a parsed trigger. A self-wait timer's due time anchors at `wait_meta.armed_at`. A human one-shot `loop add --wait --at HH:MM` row has no arm timestamp, so its due time is the next occurrence after the snapshot clock in the configured timezone.
 
-An agent reaches the sidebar as an **agent instance**: a live local pane running a known agent command or hosting one live agent CLI under its pane root, bound one-to-one to its pane id, `pane_pid`, and process-start. A **session** binds to it, and the instance exits when its pane reverts to a shell.
+`sleeping` is neither attention nor actionable, so `needs_a_look` is false: the unread episode and any configured success notification open when the wait cycle finishes at `success`, not on the intermediate rest, and an existing unread episode persists across sleep. The cockpit tally orders `waiting → failed → paused → success → running → sleeping → idle`. The `Done` and `Any` delivery gates open for a sleeping agent, so a message can start a turn without consuming the armed wait; `Resume` does not open. Reply waits treat it as completed, and idle compaction stays eligible under its usual guards. `--when` still reads the raw lifecycle status and does not accept `sleeping`, and `agent.idle` remains a turn-boundary event.
 
-The instance exists before any session id is known, and the lifecycle's one hard problem is joining the two. The join turns on two independent axes.
+## Activity clocks
 
-**Hook identity: stamped or daemon-routed.** A *standalone* agent runs in its pane, so the hook is a descendant of it and reads the pane environment and pid directly: it stamps the pane id onto the session. A *daemon-routed* agent runs through a background daemon, so the hook fires from the daemon (no pane environment, the daemon's shared pid) and the session is unstamped. Claude, Copilot, and Droid are standalone. Droid 0.170.0 is the narrow exception to direct `$PPID` ownership, because its canonical hook emitter is an internal exec worker whose observations are reassigned to the structurally verified outer TUI pid. Codex 0.137+ daemon-routes its hooks through the shared app-server, so even in-pane Codex sessions are unstamped ([adapter_codex.md](./adapter_codex.md#session-registration-and-launch-quirks)); Pi and interactive OpenCode run in-process in the pane and are standalone.
+`last_activity` is the session's own latest event, never inherited from another instance. The durable log is turn-grained, so on its own `last_activity` would advance only at turn boundaries. Hook ingestion therefore touches a per-session runtime heartbeat ([`agent_activity`](../../../crates/rimz/src/agent_activity.rs)) on every progress-proving event (each completed tool call, the turn boundaries, subagent start and stop), and the snapshot folds the freshest touch into `last_activity`. A pre-tool event or a blocked wait touches nothing. The heartbeat is keyed by the event's own session, so a background subagent's progress touches the child's heartbeat, and a parent blocked on an ask keeps its clock frozen until it acts.
 
-**Presence: in-pane or remote.** Orthogonal to hook identity is where the agent actually runs. An *in-pane* agent has a local pane with its own `pane_pid`, so you can jump to it: a standalone agent binds its pane by the stamped id, and a daemon-routed in-pane agent (a Codex CLI thin-wrapping the daemon) binds through the recovery ladder. Either way it renders as a normal, jump-able row. A *remote* agent runs only in the daemon, with no local pane (`claude remote-control --spawn worktree`, or a Codex thread started from the web): it carries a worktree but nothing to focus. RimZ does not render remote agents yet, a documented gap deferred to a future round ([sidebar.md](../sidebar/sidebar.md#presence-model)). The `claude remote-control` host pane itself is separate infrastructure, filtered out of the room and surfaced as the `⇅ rc` flag.
+The heartbeat keeps a busy row animating, drives the [stall rung](#the-sidebar-ladder), and releases a keyless ask answered in the pane once `last_activity` passes `waiting_since`. It is latency, not truth: a missing heartbeat file leaves `last_activity` at the event-log timestamp.
 
-So the binding test is one question: does a live local pane bind the session? A stamped session binds by id, an unstamped session binds through the recovery ladder, and a session no pane binds is a remote agent.
-
-**Hosted CLI identity is adapter-wide.** When a multiplexer exposes only a shared runtime basename such as `node`, the pane producer walks one bounded root-to-single-child process chain and classifies each full command line through the adapter registry. The outermost proven known CLI supplies the hosted kind and process start; an unreadable, branching, startless, depth-exhausted, or unclassified chain supplies none. This proof applies to every known adapter and does not consult `registers_lazily`, which governs only the recovery of an unstamped session.
-
-The lifecycle then runs in three phases.
-
-**Phase 1: pre-session presence.** A wired instance with no bound session yet renders as an idle agent row, so a just-launched agent reads as itself rather than a bare process. Claude reaches this at the login screen and in the short span before `SessionStart` stamps the pane; Codex and OpenCode reach it before their first real session exists; Kiro remains identity-less until its provider-owned local store yields a safe binding, while Antigravity binds on its first invocation hook or an exact local-session match. RimZ synthesizes an idle `○ <kind>` row until a lifecycle hook or local-session observation binds the real session ([`idle_agent_row`](../../../crates/rimz/src/store/snapshot/panes/lazy.rs)). Installed hooks activate hook capabilities, and the declared provider-store observation path activates session capabilities; an integration with neither active path stays a [process row](../sidebar/sidebar.md#process-rows).
-
-**Phase 2: session binding.** A lifecycle hook arrives carrying a session id, and RimZ joins it to the right instance. A standalone hook stamped the pane id, so the join is exact and free. Only a definition whose spec sets `registers_lazily` enters the unstamped recovery ladder:
-
-1. Hook ingestion writes a recovered same-directory pane stamp from the repaired live frame.
-2. A `codex resume <session-id>` pane binds exactly.
-3. Same-directory sessions pair newest-first to the latest viable pane process-start before the session's first event.
-
-Residual ambiguity binds deterministically and appends a `binding.log.jsonl` breadcrumb. The ladder's guards and limits are [sidebar.md](../sidebar/sidebar.md#presence-model).
-
-A native resume establishes identity and placement before this hook path: the exec wrapper appends `agent.attached` with the stable launch id exported to the process, its ambient pane, and the runtime owner of the agent process the row belongs to, without emitting a lifecycle signal. Which process that is follows the launch mode. A wrapper that execs the provider in place becomes it, so one attach names the right pid. A wrapper that spawns the provider (the worktree, close-on-exit, and supervised launches) attaches itself first, so the row can be addressed before the provider starts, then re-attaches with the spawned provider's pid ([fleet.md](../harness/fleet.md#posture)). Existing cards retain their lifecycle state; a discovered provider session gets an idle seed so it can identify itself before the provider's first hook. The later hook or local-session observation remains authoritative for lifecycle state.
-
-Same-pane ownership starts with the provider-neutral open-turn predicate: a co-resident root holding an open turn outranks every rested root. Adapter policy orders only co-resident open turns: `KeepPrimary` chooses the earliest registered root, preserving the Codex `/side`-while-primary-is-running behavior, while `FollowLatest` chooses the latest registered root for providers that switch conversation ids in place. Among rested roots, the latest `last_activity` owns the pane regardless of policy. Every other same-pane root's clocks fold display-only onto the bound row.
-
-Launch identity is scoped to one live agent instance rather than one conversation row. Every root proven to share the pane and agent-process incarnation inherits that launch's routing, team, role, profile, channel, and parent linkage, including a fork. The proof matches owner pids, which is why the resume attach must name the provider process: a row still owned by the wrapper shares no incarnation with the provider's successor, and the successor inherits nothing. Inheritance runs after each lifecycle reduction, so a successor that registers before the provider-owned attach lands carries no launch identity yet and picks it up at its next lifecycle event, such as a turn start or tool hook. The attach itself does not retroactively repair an already-registered successor. Rows that reuse a `launch_id` across a relaunch remain separate because launch grouping also requires the same instance, and an unstamped row forms its own group. The same ownership rule selects one un-ended row as the launch's current occupant; only that row renders and resolves launch-derived handles such as the role. Other conversations remain audit records, and a pane-bearing snapshot never exposes them as message targets. If every row has ended, the latest-active row keeps the launch handle as its audit and resume representative. Inherited launch identity excludes the card `name`, `name_explicit`, `kind_ordinal`, and `registered_at`; only a provider-linked compact continuation inherits its predecessor's `registered_at`, so it keeps the open-turn rank the predecessor would have held. The policy applies only after kind, pane incarnation, process identity, directory, and root-session guards establish one live instance. Occupied-pane recovery still prefers unique focus evidence and otherwise admits only one rested same-kind owner, while open, ambiguous, already-known, wrong-directory, and wrong-incarnation candidates abstain.
-
-Providers with their own local session stores normalize binding separately, through `LocalSessionObservation`. Adapters validate and discover these typed observations; the elected room producer batches the admitted workspaces per kind and publishes the normalized observations; every renderer binds only an exact session-matching publication against its current admitted panes. The observation's projection declares its source authority. `IdentityOnly` proves session identity and activity bounds but defers status, phase, prompt, wait, ask, compaction, context, and lifecycle clocks to an exact durable hook row, synthesizing idle only when adopting a provisional row or creating a session with no durable state. `Lifecycle` carries a provider-validated fold and overlays an exact durable row only when its provider activity is at least as current as durable `last_activity`; an accepted provider-native wait is pane-only and clears any durable routable ask. Exact resume identity binds first, and exact pane and session binding consumes both sides before that freshness decision, so a stale fold cannot rebind the pane through a later same-directory candidate. Fresh fallback additionally skips sessions the runtime projection has ended or expelled for a dead owner. For runtime-visible rows, it also skips sessions whose durable pane stamp names a pane absent from the live frame; exact resume and exact pane identity remain unguarded. A cwd-only fallback requires a positive pane-incarnation clock: the strongest of the live process start and RimZ's durable launch time. The observation must begin and remain active no earlier than that clock; an occupied registered pane is reserved, and a pane with neither clock fails closed until an exact hook, resume id, or process-start backfill arrives. Rejections append contained `local_session_bind_rejected` diagnostics; an exact old stamp contradicted by a newer durable launch appends the investigative `ghost_session_bind` regression signal. The caching and revalidation policy behind those reads lives in [`local_session_cache.rs`](../../../crates/rimz/src/agents/local_session_cache.rs); stamps are an optimization only, and unstable or wrong-kind inputs fail closed.
-
-**Phase 3: instance exit.** The in-pane agent process is the liveness truth, surfaced through the pane: the CLI client is the pane's foreground process or the single hosted descendant under the pane root, so when it exits the pane reverts to a shell and stops reading as an agent. The instance leaves with no exit hook, in both launch modes. A `SessionEnd` hook (Claude) stamps the durable session ended and removes its context sidecar at once; runtime views hide the row while audit views retain its provider identity for explicit resume within retention. Codex has no `SessionEnd`, so the [reaper](#liveness-and-presence) stamps the same state after pane liveness proves the process gone.
-
-Daemon-routed Codex hooks first name the shared app-server daemon, then the recovery ladder re-owns the local session to its in-pane CLI process and stores the full pane stamp (`pane_id`, tab id, directory, pane pid, and process start). An unbound daemon-owned session abstains from pid liveness and ages through the ghost TTL like a pidless row; the app-server loaded-thread reaper is a faster secondary signal, dropping a daemon-mode session absent from `thread/loaded/list` before the pane fold, while an unreachable daemon or untrusted list keeps every session.
-
-## Liveness and presence
-
-Presence comes from the live pane, with no exit event required: an agent renders only on the pane it stamped, and one whose pane reverts to a shell or closes is gone on the next snapshot. There is no `offline` status: a dead agent is a reverted shell row or no row, never a retracted store fact. The binding mechanics live in [sidebar.md](../sidebar/sidebar.md#presence-model); this section owns what the rollup contributes.
-
-**Stamped-pane binding decides what renders; the captured pid feeds the reaper.** RimZ records the pid best-effort on each lifecycle event (`RIMZ_AGENT_PID=$PPID`, falling back to a process-ancestor walk, plus a platform process-start token to defeat pid reuse), and the reaper reads *pidless* as one ghost signal. Stamped-pane binding already keeps a stale agent off a stranger's pane, so the pid never gates rendering.
-
-**Per-tool activity rides a runtime heartbeat.** The durable event log is turn-grained, so `last_activity` would otherwise advance only at turn boundaries. The hook touches a per-agent heartbeat ([`agent_activity`](../../../crates/rimz/src/agent_activity.rs)) on every progress-proving event (each completed tool call, the turn boundaries, subagent start and stop), and the snapshot folds the freshest touch into `last_activity`. A pre-tool event or a blocked wait touches nothing, and the heartbeat is keyed by the event's own session: a backgrounded subagent's progress touches the *child's* heartbeat, and a parent blocked on an ask keeps its `last_activity` frozen until it acts. The signal does three things:
-
-- It keeps a busy agent's row animating.
-- It escalates a `running` agent silent past the configurable stall window (30 minutes by default) to the `!` attention state.
-- It recovers an answered keyless ask: once `last_activity` passes `waiting_since`, `is_awaiting_input` reads false, so an agent whose prompt was answered in its own UI returns to `running` without waiting for the next turn boundary.
-
-Like every heartbeat it is latency, not truth: a missing file just leaves `last_activity` at the event-log timestamp.
-
-**Estimated active time accumulates observable root-session work.** Hook ingestion opens or advances a working span on turn starts, tool progress, and compaction progress, and freezes it on waits, turn ends or interruptions, parked background work, session exit, and provider-error markers. Each `(kind, agent_id)` record lives under runtime `active-time/`, updates under a per-record flock, and publishes by atomic rename; sidebar and RimZ process restarts preserve the accumulator while the room runtime survives.
-
-An open span extends from its latest progress signal by at most `[agents.attention] active_grace_secs` (180 seconds by default), so a silent process freezes instead of fabricating work. Later progress credits that capped tail and resumes from the new observation without bridging the idle gap. The projection stamps only root `AgentState` rows; nested subagents keep their existing start-to-now elapsed clock.
-
-**Session death converges to the durable log.** After a publishing commit, the debounced write-path reaper appends an `Ended` observation and stamps `ended_at` for every root session whose death is provable from the store plus the process table. Death is provable when a recorded owner is dead, when a pidless or daemon-owned session is inactive past the ghost TTL, when an older session was replaced by a different process in the same pane or by a newer paneless remnant in the same worktree, when a newer fresh-lineage conversation supersedes it after `/clear` or `/new`, when a `FollowLatest` adapter reports a distinct newer id on the exact same pane and identified live agent process, when a same-instance fork succeeds an error-rested predecessor, or when a provider-linked compact continuation names the predecessor on that same pane and process incarnation. Superseded roots end under the single `ReapedSuperseded` reason. Rebirth materialization appends the same signal for every lost session an accepted recovery plan does not seed.
-
-The supersession rules are the delicate part, because a child can report a distinct conversation id from the same process mid-turn. Same-process and fresh-lineage switches therefore keep an older owner authoritative while it holds an open turn; a rested owner can yield, while a provably different replacement process still supersedes it regardless. Before applying those shared rules, the writer reaper attaches each raw-running or raw-waiting root's context sidecar. A current provider turn error or completed/interrupted settle can therefore certify that a raw-active rollup is actually rested; background `TurnPhase::Parked` is durable and already carried by the rollup. A `budget_park` is enrichment instead: only readers that fold the budget ledger treat it as rested. A missing or stale sidecar leaves raw lifecycle status in charge. The compact-continuation rule bypasses the open-turn guard because the successor names the exact predecessor and matches its pane and agent-process incarnation. A fork has no such exact link: it retires only a same-instance predecessor already rested by a current provider error or raw `Failed` status. A clean `Success` or `Idle` predecessor, or a raw-active predecessor rested by a completed or interrupted settle certificate, remains a valid sibling and is never reaped by the fork. Daemon-owned roots still fail the same-instance supersession proofs, known pane or process-start mismatches fail every same-instance proof, and any later predecessor hook invalidates an older certificate by advancing `last_activity`. Supersession bypasses live-roster protection because the successor proves the predecessor yielded the slot; dead and stale candidates retain roster protection for crash recovery. Runtime expel and the snapshot-time view reap apply the store-only liveness and shared supersession rules as latency shims during the debounce window; the durable writer's sidecar read supplies the provider-rest evidence those store-only paths do not have.
-
-An agent holding its own distinct pane is kept, and subagents leave transitively with their parent. Already-ended rows are skipped and never supersede an active row, so repeated reaps append nothing and a retained stamp cannot retire its replacement. This workspace-local convergence complements the cross-workspace `rimz gc`.
-
-Address resolution enforces the same physical-instance boundary during convergence: when a live pane is bound to one session, a different root stamped on that pane is a shadowed audit record and contributes no recipient to role, kind, name, broadcast, pane, prefix, or exact-session addressing. Exact addresses miss shadowed roots like ended sessions, while durable history and message audit surfaces retain them.
-
-Worktree removal appends a durable `Ended` observation for every matching non-live root session and bypasses live-roster protection, because successful removal is affirmative evidence that the session can no longer run there. A later lifecycle event for the same session id, including native resume registration, clears the end stamp as usual.
-
-## Attribution
-
-`rimz agents attribution` reads `RuntimeScope::Audit`, so a teammate remains eligible after its pane exits and the runtime projection hides it from live cards. Lane filtering applies to root records before the attribution fold. Launched children then join through their durable parent link regardless of their own lane stamp; no multiplexer observation participates in correctness.
-
-`AgentState.worktree_branches` accumulates non-empty launch branches and accepted lifecycle branch observations; `worktree_branch` is the latest accepted branch for display. Launch records stamp the real Git branch, and the event wire retains both `worktree_path` and `worktree_branch` on every lifecycle frame. A frame's branch is accepted only when its path is absent or matches the projected checkout path, so progress from a foreign checkout cannot change branch credit while the agent's checkout stays pinned. Attribution alone applies `AttributionScope.branch` to root membership after lifetime admission; roots without evidence for that branch are excluded, while launched children follow their admitted parent without a separate branch check. The other seat-fold consumers remain lifetime-scoped only. Figures stay whole-identity, so an identity observed on several branches can report its full effort on each. The rollup cache version bump rebuilds membership from the active log plus carryover, not rotated archives; there is no archive backfill, and legacy carryover records without branch evidence remain excluded under a branch filter.
-
-Selection decides which lane a report covers; a lane lifetime decides which of that lane's records still belong to it. `worktree::lane_lifetimes` resolves one pure `agents::attribution::LaneLifetimes` snapshot per report from the distinct `worktree_path` values the records carry: a path that no longer exists admits nothing, a path holding a [worktree marker](../harness/worktrees.md#the-one-rule-rimz-touches-only-what-it-marked) admits records registered at or after its `created_at`, and a path that exists without a marker stays unbounded. The snapshot is a required parameter of the shared fold, so the four consumers of the seat fold cannot omit lifetime admission: the attribution CLI, `agents show` seat effort, `teams show` member cost, and the sidebar's finished-cohort receipt. An unreadable checkout is excluded from seat totals instead of falling back to unbounded history; CLI handlers warn once per path on stderr, while the sidebar logs the omission and publishes the remaining figures.
-
-Admission runs before the fold splits roots from launched children, so each record is judged by its own stamped checkout and its own registration timestamp: an excluded parent is not revived by an admitted child, and an admitted child does not follow an excluded parent out. A record with no `registered_at` carries no birth to compare and is excluded from a marked lane. Provider-native subagents and peers are never filtered directly; they reach a report only through an admitted parent's identity. Nothing is rewritten or deleted: the same audit records, event log, and provider transcripts remain, and addressing an excluded session by name still reports it through the single-record path in `agents show`. `AttributionScope::since` publishes the boundary when the selected roots share one marked checkout, resolved from the selection rather than from what survived it, so an emptied lane still names the timestamp that emptied it.
-
-A logical member can span several session records. Provider compaction continuations and `/clear` conversations mint fresh session ids while the same contributor keeps its seat, so attribution folds by provider kind plus the first available stable slot: team and role, launch group and ordinal, explicit name, pane id, then session id. Pane-backed children join the seat that launched them, deduplicate child continuations, and merge with provider-native children into one task-grouped subagent breakdown; an orphan whose parent has left the audit rollup is omitted. The member's `cost_usd` and token split are all-in across its seat and every child, while active time, asks, tool calls, compactions, and messages remain seat-only.
-
-The figures keep their source boundaries. The audit rollup supplies identity, timestamps, tool calls, compaction counts, and the parent/type identity of provider subagents. RimZ's append-only conversation transcript supplies per-session prompt, agent-message, and ask counts; matched system nudges are sender-stamped and excluded, while sender handles on received agent messages provide best-effort sent counts. Historical system nudges written before sender stamping remain indistinguishable from user prompts. Each session's adapter parses its provider transcript once, and the shared price book supplies the four-way token split and dollars from those same entries. Provider-native child spend arrives inside the parent transcript; pane-backed child spend arrives from each child's transcript and folds into the same member total. Companion child transcript entries retain their child id through that deduplication fold, so attribution can group child cost by durable task without changing the all-in parent total; missing, long, or whitespace-bearing task labels group as `other` rather than exposing task descriptions. The same deduplicated entries also populate member and document model rows, splitting all-in tokens and cost by transcript model id; blank or missing ids share the unnamed row, and rows with neither tokens nor a price are omitted. Per-session active-time sidecars supply estimated active seconds under the configured silence grace. Runtime GC can remove those sidecars before the audit record or provider transcript disappears, so an unavailable active-time figure stays `null`; absent transcript pricing likewise stays `null` rather than becoming zero.
-
-Within the selected scope, membership drops only a seat that never opened a turn and has no active time, asks, messages, tool calls, compactions, subagents, tokens, or recorded cost. The audit rollup's durable `turn_started_at` keeps a contributor eligible after runtime GC removes its active-time sidecar, including adapters whose transcripts supply no spend or named-tool signal. A promptless launch leaves it unset until a real turn opens; a launch with a prompt opens a turn immediately. A resting registration or successful compaction reset advances the boundary only after a prior turn has opened, so binding, adoption, reset, failure, and reap do not turn an untouched launch into a contributor. The panel and JSON retain opened-turn rows without statistics; Markdown requires a recorded contribution.
+Estimated active time accumulates a root session's observable work. Hook ingestion opens or advances a working span on turn starts, tool progress, and compaction progress, and freezes it on waits, turn ends and interruptions, parked background work, session exit, and provider-error markers. An open span extends past its latest progress signal by at most `[agents.attention] active_grace_secs` (180 seconds by default), so a silent process stops accruing instead of fabricating work; later progress credits that capped tail and resumes without bridging the gap. Each `(kind, agent_id)` record lives under the runtime `active-time/` directory, updates under a per-record flock, and publishes by atomic rename, so the accumulator survives sidebar and RimZ restarts while the room runtime lives. Only root rows carry it; a nested subagent shows its start-to-now elapsed clock.
 
 ## Enrichment
 
-The store and explicit events decide routing, ranking, and state; enrichment paints the row. `task`, `context_pct`, `context_window`, and `total_tokens` are enrichment: display-only and redactable. A missing value means "the agent did not report it", never zero. The sidebar still paints a context bar for every observed agent, drawing an unreported gauge at a visible 0% baseline.
+The store and explicit events decide routing, ranking, and state; enrichment paints the row. `task`, `usage.context_pct`, `usage.context_window`, and `usage.total_tokens` are display-only and redactable. A missing value means the agent did not report it, never zero, although the sidebar still draws an unreported context gauge at a visible 0% baseline.
 
-`context_window` is the model's window in tokens, and uniformly across agents it is the model's max **input** tokens. The gauge numerator counts input-side occupancy only (`input + cache`, never output; see [`context_used_tokens`](../../../crates/rimz/src/agents/state.rs)), so a model that splits its window into separate input and output caps scales against the input cap. Each adapter resolves the window its own way: Claude from the payload model id, where `[1m]` widens it; Codex from the rollout's `model_context_window`; OpenCode from its model catalog. The card's identity line renders it (`258k`, `1M`), preferring the fresher out-of-band reading from `AgentContext` when one exists.
+`context_window` is the model's maximum input tokens for every agent. The gauge's numerator counts input-side occupancy only, input plus cache and never output ([`context_used_tokens`](../../../crates/rimz/src/agents/state.rs)), so a model with separate input and output caps scales against the input cap. Each adapter resolves the window its own way (Claude from the payload model id, where `[1m]` widens it; Codex from the rollout's `model_context_window`; OpenCode from its model catalog), and the card's identity line renders it (`258k`, `1M`), preferring a fresher reading from rich context when one exists. The context sources and their reading rules are [adapter.md](./adapter.md#context-sources). These are bare token counts, so `payload_mode`, which gates the content of high-frequency payloads, never hides them.
 
-Where those numbers come from is the adapter's business: the three context sources and their reading rules are [adapter.md](./adapter.md#context-sources). These are bare token counts, so `payload_mode` gates the *content* of high-frequency payloads, never these gauges.
+### Rich context
 
-### Rich context (`AgentContext`)
+Some agents publish far more per-session data out of band than their hooks carry: context-window accounting, the latest message's usage breakdown, cost, rate-limit windows, model display name, thread preview, PR info, version, and effort. `observe_context` normalizes each transport's payload into the provider-neutral [`AgentContext`](../../../crates/rimz/src/agents/context.rs). Every field is an `Option` parsed tolerantly, so a sparse or newer payload still parses and the renderer draws whatever is present. The account and balance subset (plan, metered state, rate-limit windows) feeds the provider dashboard ([providers.md](./providers.md)). `AgentContext` carries no account fingerprint, so a sidecar rewritten on every render can never change which account a session's windows count against; that stays with the rollup's `account_key`.
 
-Some agents publish far richer per-session data out of band than their hooks carry: context-window accounting, the latest message's usage breakdown, cost, rate-limit windows, model display name, thread preview, PR info, version, effort. The transport differs per agent and lives in its adapter doc; `observe_context` normalizes transport payloads into the agent-agnostic [`AgentContext`](../../../crates/rimz/src/agents/context.rs). Every field is `Option` and tolerantly parsed, so a sparse or evolved payload always parses and the renderer draws whatever subset is present. The account and balance subset (plan, metered, rate-limit windows) folds into the provider dashboard; its mapping and aggregation are [providers.md](./providers.md). `AgentContext` carries no account fingerprint: the session's birth `account_key` is identity-lifetime rollup state, so a sidecar rewritten every render can never change which account a session's windows are attributed to.
+Rich context is high-frequency and display-only, so it never rides the event log. CLI producer paths (the statusline feed, hook ingestion, detached refresh helpers, and the Codex stat-gated backstop) write a latest-wins sidecar, one atomic file per `(kind, agent_id)` under the runtime `agent_context/` directory, and `rimz sidebar snapshot` folds each record onto its `AgentState`. The directory sits under the per-user runtime root (mode `0700`), the same exposure as the heartbeat and diff-stats caches. A session-end event removes the sidecar, and `rimz gc` sweeps old files.
 
-This is high-frequency display-only enrichment, so it does **not** ride the event log. RimZ writes a latest-wins per-session sidecar, one atomic file per `(kind, agent_id)` under the runtime `agent_context/` directory, from CLI producer paths (statusline feed, hook ingestion, detached refresh helpers, the Codex stat-gated backstop). `rimz sidebar snapshot` folds each record onto its `AgentState`.
-
-The sidecar lives wholly off the durable path (store first; sidebar wakeups are latency, not truth) and dies with the session: a session-end event removes it, an ended row stays hidden and has no sidecar to enrich, and `rimz gc` sweeps old files. The file sits under the per-uid runtime root (mode `0700`), no broader exposure than the heartbeat or diff-stats caches.
-
-A few `AgentContext` fields reach past display. Turn-error, turn-settle, and native-attention markers feed the shared status projection, which is how every read path agrees about [hookless state](#displayed-status) without inventing durable records.
+A few `AgentContext` fields reach past display: the turn-error, turn-settle, and native-attention markers feed [`effective_status`](#displayed-status) and the sidebar ladder, which is how every read path agrees about state no hook reported without inventing durable records.
 
 ## See also
 
-- [adapter.md](./adapter.md) — where observations come from: the adapter boundary, the hook path, and context sources.
-- [providers.md](./providers.md) — accounts, balances, spend, and pricing.
-- [sidebar.md](../sidebar/sidebar.md) — presence binding, ranking, and how the rollup becomes a row.
-- [the interface legend](../../interface/sidebar.md#reading-the-glyphs) — the glyph, animation, and color for every status and phase.
-- [store.md](../store.md) — the durable event log the rollup replays.
+- [adapter.md](./adapter.md): where observations come from, the hook path, and context sources.
+- [instances.md](./instances.md): binding sessions to panes, pane ownership, and session death.
+- [attribution.md](./attribution.md): durable effort credit folded from the audit rollup.
+- [providers.md](./providers.md): accounts, balances, spend, and pricing.
+- [sidebar.md](../sidebar/sidebar.md): presence binding, ranking, and how the rollup becomes a row.
+- [store.md](../store.md): the durable event log the rollup replays.
