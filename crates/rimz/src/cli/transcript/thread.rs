@@ -188,22 +188,42 @@ pub(super) fn hide_harness_turns(
                     }))
         })
         .collect::<Vec<_>>();
+    let opener_hidden = entries
+        .iter()
+        .zip(&openers)
+        .map(|(entry, openers)| {
+            entry.chat.reply_to.is_empty() && openers.iter().any(|&opener| hidden[opener])
+        })
+        .collect::<Vec<_>>();
     entries
         .into_iter()
         .zip(hidden)
-        .filter_map(|(entry, hidden)| (!hidden).then_some(entry))
+        .zip(opener_hidden)
+        .filter_map(|((mut entry, hidden), fallback_hidden)| {
+            if let LineSource::Log { opener_hidden, .. } = &mut entry.source {
+                *opener_hidden = fallback_hidden;
+            }
+            (!hidden).then_some(entry)
+        })
         .collect()
 }
 
 /// The entries that opened each turn-output entry's turn: its resolved
 /// `reply_to` parents, or, when nothing was recorded (typed prompts), the
-/// latest opener for the same agent session. Other entries open no turn.
+/// latest opener for the same agent session, unless that opener was hidden.
+/// Other entries open no turn.
 pub(super) fn turn_openers(entries: &[RenderEntry]) -> Vec<Vec<usize>> {
     let by_message_id = message_index(entries);
     let mut latest_opener = HashMap::<&AgentKey, usize>::new();
     let mut openers = Vec::with_capacity(entries.len());
     for (index, entry) in entries.iter().enumerate() {
-        let (Some(kind), Some(agent)) = (entry.kind(), entry.agent()) else {
+        let LineSource::Log {
+            kind,
+            agent,
+            opener_hidden,
+            ..
+        } = &entry.source
+        else {
             openers.push(Vec::new());
             continue;
         };
@@ -213,6 +233,11 @@ pub(super) fn turn_openers(entries: &[RenderEntry]) -> Vec<Vec<usize>> {
             | TranscriptKind::SubagentReport
             | TranscriptKind::Wait => {
                 latest_opener.insert(agent, index);
+                Vec::new()
+            }
+            TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error
+                if *opener_hidden =>
+            {
                 Vec::new()
             }
             TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error

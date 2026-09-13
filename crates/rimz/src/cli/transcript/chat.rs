@@ -14,6 +14,7 @@ pub(super) fn render_entry_for_log_entry(
             kind: entry.entry,
             agent: entry_key(entry),
             harness: entry.is_harness(),
+            opener_hidden: false,
         },
         chat: chat_entry_for_log_entry(entry, identities, include_channel),
     }
