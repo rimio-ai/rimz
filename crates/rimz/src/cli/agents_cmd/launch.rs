@@ -877,6 +877,7 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
         || args.launch.cohort.budget.is_some()
         || args.launch.overrides.model.is_some()
         || args.launch.overrides.agent.is_some()
+        || args.launch.overrides.isolation.is_some()
         || args.launch.cohort.description.is_some()
         || args.launch.overrides.system_prompt_file.is_some()
         || !args.launch.overrides.append_system_prompt_files.is_empty()
