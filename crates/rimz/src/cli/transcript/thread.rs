@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::chat::{base_handle, within_window};
 use super::*;
@@ -152,9 +152,21 @@ pub(super) fn assemble_threads(
 
 /// Drops RimZ automation from the human view as whole turns: harness openers,
 /// and the `Assistant`/`Error` output of turns opened only by harness messages.
-/// Asks stay because a blocking question still needs the user.
-pub(super) fn hide_harness_turns(entries: Vec<RenderEntry>) -> Vec<RenderEntry> {
+/// Asks stay because a blocking question still needs the user, and so does the
+/// output of a turn that asked one. `asked_ids` names the messages whose turns
+/// asked in the full log, since superseded asks leave the view before this runs.
+pub(super) fn hide_harness_turns(
+    entries: Vec<RenderEntry>,
+    asked_ids: &HashSet<String>,
+) -> Vec<RenderEntry> {
     let openers = turn_openers(&entries);
+    // A turn that asked the user ends in a reply to their answer.
+    let asked_turns = entries
+        .iter()
+        .zip(&openers)
+        .filter(|(entry, _)| entry.kind() == Some(TranscriptKind::Ask))
+        .flat_map(|(_, openers)| openers.iter().copied())
+        .collect::<HashSet<_>>();
     let hidden = entries
         .iter()
         .zip(&openers)
@@ -164,7 +176,16 @@ pub(super) fn hide_harness_turns(entries: Vec<RenderEntry>) -> Vec<RenderEntry> 
                     entry.kind(),
                     Some(TranscriptKind::Assistant | TranscriptKind::Error)
                 ) && !openers.is_empty()
-                    && openers.iter().all(|&opener| entries[opener].is_harness()))
+                    && openers.iter().all(|&opener| {
+                        let opener_entry = &entries[opener];
+                        opener_entry.is_harness()
+                            && !asked_turns.contains(&opener)
+                            && opener_entry
+                                .chat
+                                .message_id
+                                .as_ref()
+                                .is_none_or(|id| !asked_ids.contains(id))
+                    }))
         })
         .collect::<Vec<_>>();
     entries
