@@ -78,12 +78,24 @@ upward-dependencies = ["address"]
 surface-budget = 928
 
 [[module]]
+path = "crates/rimz/src/agents/adapters/antigravity"
+surface-budget = 1
+
+[[module]]
 path = "crates/rimz/src/agents/adapters/codex"
 surface-budget = 8
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/claude"
 surface-budget = 5
+
+[[module]]
+path = "crates/rimz/src/agents/adapters/copilot"
+surface-budget = 1
+
+[[module]]
+path = "crates/rimz/src/agents/adapters/cursor"
+surface-budget = 1
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/kimi"
@@ -1643,6 +1655,36 @@ reason = "Kimi retains append/cursor attribution and a full-snapshot path; Qwen 
 kind = "item"
 key = "agents::adapters::kimi::install::MANAGED_INTEGRATION"
 reason = "Kimi's additive TOML hook merger and Qwen's existing ManagedSource over JSON/statusline machinery are distinct installs. The pass-2 report_files duplication belongs to Copilot/Cursor, not these adapters (pass 19c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::copilot::CopilotAdapter"
+reason = "Registry registration is the only outside-provider interface; hook payloads, usage wire, paths and install stay adapter-local (pass 20c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::cursor::CursorAdapter"
+reason = "Registry registration is the only outside-provider interface; hook constants, statusline projection and the testkit discovery body live behind it (pass 20c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::antigravity::AntigravityAdapter"
+reason = "Registry registration is the only outside-provider interface; the hook catalog rows pair each spec with install data and stay private (pass 20c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::copilot::payloads::CopilotHookPayload"
+reason = "Stays pub(super), with NormalizedToolCall(s) and CopilotHookError: parse_payload, normalized_tool_calls and selected return them to mod.rs, so private_interfaces refutes the private narrowing. Raw tool_name/tool_args/tool_calls are private so the normalized view is the one way in (pass 20c)."
+
+[[verdict]]
+kind = "pass-through"
+key = "agents::adapters::copilot::paths::validated_transcript_path"
+reason = "Five production callers (otel, subagent, spend, two in mod.rs) share the provider transcript-validation boundary; the _from twin takes injected roots for tests. Inlining duplicates the boundary (pass 20c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::install_report::report_files"
+reason = "One ordered (path, existed) row builder for the multi-file installers (Copilot, Cursor, Antigravity); single-file ManagedSource and Kimi reports build one row inline and gain nothing from it (pass 20c)."
 
 [[verdict]]
 kind = "item"
