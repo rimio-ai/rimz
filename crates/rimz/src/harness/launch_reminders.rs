@@ -30,7 +30,11 @@ impl Default for LaunchReminders {
 const SANDBOX_REMINDER_BODY: &str = concat!(
     "This pane runs in a bubblewrap sandbox. `/tmp` is the room's: shared with teammates and ",
     "subagents, separate from the host's `/tmp`, removed when the room closes; the host state ",
-    "path stays reachable. Scratch files go under `/tmp/scratchpad`."
+    "path stays reachable. Any file another agent must find (a report for your caller, a file ",
+    "for a teammate, a hand-off) goes under `/tmp/scratchpad`: it is the room's shared scratch ",
+    "and the one path they look in. Your harness may name a session-specific scratchpad and say ",
+    "to use `/tmp` only when asked; this is that ask. Files only you read may stay in the ",
+    "session scratchpad."
 );
 
 const SUBAGENT_REMINDER_BODY: &str = concat!(
