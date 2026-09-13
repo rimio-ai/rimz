@@ -377,7 +377,13 @@ fn chat_view_with_mode(
 ) -> Result<RenderedChat> {
     let current = current_channel(workspace);
     let target = resolve_run_target(paths, target)?;
-    let entries = dedup_asks(rimz::transcript::read_all(paths)?);
+    let log = rimz::transcript::read_all(paths)?;
+    let asked_ids = log
+        .iter()
+        .filter(|entry| entry.entry == TranscriptKind::Ask)
+        .flat_map(|entry| entry.reply_to.iter().map(ToString::to_string))
+        .collect::<HashSet<_>>();
+    let entries = dedup_asks(log);
     if entries.is_empty() {
         return Ok(RenderedChat {
             channel: None,
@@ -436,7 +442,7 @@ fn chat_view_with_mode(
     );
     entries.sort_by(|left, right| compare_optional_timestamps(left.chat.at, right.chat.at));
     if mode.hidden == Hidden::Skip {
-        entries = thread::hide_harness_turns(entries);
+        entries = thread::hide_harness_turns(entries, &asked_ids);
     }
 
     if entries.is_empty() {

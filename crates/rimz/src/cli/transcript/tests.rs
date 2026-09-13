@@ -720,8 +720,12 @@ fn harness_turn_output_hides_with_its_opener() {
     push(Assistant, None, "Slice B is running", None, &[2]);
     push(Wait, Some("@rimz"), "wait", Some(3), &[]);
     push(Assistant, None, "unlinked wait reply", None, &[]);
+    push(Wait, Some("@rimz"), "digest", Some(5), &[]);
+    push(Ask, None, "superseded ask", None, &[5]);
+    push(Assistant, None, "superseded reply", None, &[5]);
     push(Wait, Some("@rimz"), "stage", Some(4), &[]);
     push(Ask, None, "blocking ask", None, &[4]);
+    push(Assistant, None, "asked reply", None, &[4]);
     push(Assistant, None, "mixed reply", None, &[2, 1]);
     for entry in &logged {
         rimz::transcript::append(&paths, entry).expect("append");
@@ -752,22 +756,35 @@ fn harness_turn_output_hides_with_its_opener() {
         let human = view(false, flat, None);
         assert_eq!(
             texts(&human),
-            ["user prompt", "user reply", "blocking ask", "mixed reply"]
+            [
+                "user prompt",
+                "user reply",
+                "superseded reply",
+                "blocking ask",
+                "asked reply",
+                "mixed reply"
+            ]
         );
         let mut out = Vec::new();
         render_lines_to(&mut out, &human, &TimeZone::UTC, Prose::Raw).expect("render");
         let rendered = String::from_utf8(out).expect("utf8");
-        for hidden in ["Slice B is running", "unlinked wait reply", "report"] {
+        for hidden in [
+            "Slice B is running",
+            "unlinked wait reply",
+            "report",
+            "superseded ask",
+        ] {
             assert!(!rendered.contains(hidden), "{rendered}");
         }
-        let last_visible = if flat { "mixed reply" } else { "blocking ask" };
+        let last_visible = if flat { "mixed reply" } else { "asked reply" };
         assert_eq!(texts(&view(false, flat, Some(1))), [last_visible]);
     }
     let threaded = entries_for_view(&view(false, false, None));
     assert_eq!(threaded[0].entry.chat.text, "user prompt");
     assert_eq!(threaded[1].entry.chat.text, "user reply");
     assert_eq!(threaded[0].block, threaded[1].block);
-    assert_eq!(texts(&view(true, true, None)).len(), logged.len());
+    // JSON keeps harness turns; only the superseded ask dedups.
+    assert_eq!(texts(&view(true, true, None)).len(), logged.len() - 1);
 }
 
 #[test]
