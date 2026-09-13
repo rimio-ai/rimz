@@ -71,7 +71,7 @@ pub struct NotificationAgent {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LinkAlert {
+pub(crate) struct LinkAlert {
     pub tier: LinkTier,
     pub rtt_ms: Option<u32>,
     pub miss_pct: u16,
@@ -84,7 +84,7 @@ pub struct LinkAlert {
 /// episode (degraded held past `LINK_DEGRADED_HOLD_MS`, recovered past
 /// `LINK_RECOVERY_HOLD_MS`) and emits a [`LinkAlert`] at each edge.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct LinkNotificationState {
+pub(crate) struct LinkNotificationState {
     seeded: bool,
     degraded_since_ms: Option<u64>,
     active_since_ms: Option<u64>,
@@ -277,14 +277,14 @@ struct PendingNotification {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct NotificationState {
+pub(crate) struct NotificationState {
     last_notified_at_ms: BTreeMap<AgentKey, u64>,
     pending_since_ms: Option<u64>,
     pending: Vec<PendingNotification>,
 }
 
 impl NotificationState {
-    pub fn evaluate(
+    pub(crate) fn evaluate(
         &mut self,
         snapshot: &SidebarSnapshot,
         opened: &[OpenedUnread],

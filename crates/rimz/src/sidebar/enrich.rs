@@ -39,7 +39,7 @@ use super::timing::{LINK_STATS_EXPIRE, LINK_STATS_STALE};
 #[cfg(test)]
 mod tests;
 
-pub(crate) fn read_auto_continue_resume_messages(
+pub(super) fn read_auto_continue_resume_messages(
     store: Option<&Store>,
     config: &crate::config::ResumeConfig,
     outcomes: &[ResumeOutcome],
@@ -352,7 +352,7 @@ pub struct FoldOpts<'a> {
 
 /// Probed managed-server liveness for the rc badge. `None` means no probe was available this tick (no pane frame, or an absent or stale reap cache).
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct RemoteControlServerHealth {
+pub(super) struct RemoteControlServerHealth {
     /// A managed host pane exists *and* the provider's record shows it still
     /// serving. Pane presence alone outlives the child that answers for it.
     pub claude_host_serving: Option<bool>,
@@ -399,7 +399,7 @@ struct LazyPairingLogKey {
 
 static LOGGED_LAZY_PAIRINGS: OnceLock<Mutex<HashMap<LazyPairingLogKey, u64>>> = OnceLock::new();
 
-/// Renderer-independent sidebar projection. Call [`project_local`] before a
+/// Renderer-independent sidebar projection. Call `project_local` before a
 /// snapshot reaches rendering or notification evaluation.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -449,7 +449,7 @@ pub fn enrich_workspace(
 }
 
 /// Apply the renderer-owned pane exclusion, own-view, and presence verdict.
-pub fn project_local(
+pub(crate) fn project_local(
     workspace: WorkspaceSnapshot,
     frame: Option<&PaneFrame>,
     exclude: Option<&PaneId>,
@@ -913,7 +913,7 @@ pub fn provider_panels_from_caches(
 /// Apply the resolved config and already-resolved accounts onto the snapshot:
 /// the per-provider `⇅ rc` flags, the dashboard aggregates, and each agent
 /// row's context-severity verdict.
-pub(crate) fn fold_machine_config_with(
+pub(super) fn fold_machine_config_with(
     mut snapshot: SidebarSnapshot,
     config: &crate::config::MachineConfig,
     accounts: BTreeMap<String, crate::agents::AgentAccount>,
