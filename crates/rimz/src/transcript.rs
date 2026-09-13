@@ -338,7 +338,7 @@ pub fn workspaces_with_channel(channel: &str) -> Vec<KnownWorkspace> {
 }
 
 /// [`workspaces_with_channel`] over an explicit state root, for tests.
-pub fn workspaces_with_channel_under(state_root: &Path, channel: &str) -> Vec<KnownWorkspace> {
+fn workspaces_with_channel_under(state_root: &Path, channel: &str) -> Vec<KnownWorkspace> {
     let known = match known_workspaces_under(&workspaces_dir_under(state_root)) {
         Ok(known) => known,
         Err(err) => {

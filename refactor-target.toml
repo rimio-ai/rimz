@@ -189,7 +189,8 @@ upward-dependencies = ["sidebar::refresh"]
 # Loop hosts and check ownership cross the scheduler/CLI/room seams.
 # The validated exec envelope establishes cleanup context before artifact I/O.
 # Sandbox env pins rebuild shell argv while preserving post-rc account stages.
-surface-budget = 513
+# The typed team.stage payload and its flip reader feed transcript rendering.
+surface-budget = 516
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -317,7 +318,8 @@ surface-budget = 33
 [[module]]
 path = "crates/rimz/src/transcript.rs"
 # Human rendering and statistics share harness classification and its sender sentinel.
-surface-budget = 17
+# The CLI locates a named channel's workspace from transcript evidence.
+surface-budget = 19
 
 [[module]]
 path = "crates/rimz/src/trust.rs"
