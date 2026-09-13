@@ -242,7 +242,7 @@ pub fn record_failure_tail(paths: &StatePaths, run_id: &RunId, tail: &str) -> Re
     .map(|(record, ())| record)
 }
 
-pub fn timeout(paths: &StatePaths, run_id: &RunId) -> Result<RunRecord> {
+pub(super) fn timeout(paths: &StatePaths, run_id: &RunId) -> Result<RunRecord> {
     mark_terminal(paths, run_id, RunStatus::TimedOut).map(|(record, _wrote)| record)
 }
 

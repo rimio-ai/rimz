@@ -136,7 +136,7 @@ pub enum AgentProcessCompileErr {
     InvalidEnvKey { kind: String, key: String },
 }
 
-pub type AgentProcessResult<T> = std::result::Result<T, AgentProcessCompileErr>;
+type AgentProcessResult<T> = std::result::Result<T, AgentProcessCompileErr>;
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct CompiledAgentProcess {
@@ -156,7 +156,7 @@ pub struct CompiledAgentProcess {
 
 impl CompiledAgentProcess {
     /// Keep mount-planning inputs identical in the final provider environment.
-    pub fn pin_env(&mut self, pins: BTreeMap<String, crate::sandbox::EnvPin>) {
+    pub(super) fn pin_env(&mut self, pins: BTreeMap<String, crate::sandbox::EnvPin>) {
         for (key, pin) in pins {
             match pin {
                 crate::sandbox::EnvPin::Set(value) => {
@@ -443,7 +443,7 @@ impl<'de> Deserialize<'de> for ProviderAccountState {
 }
 
 impl ProviderAccountState {
-    pub fn binding(&self) -> Option<&crate::agents::ProviderAccountBinding> {
+    fn binding(&self) -> Option<&crate::agents::ProviderAccountBinding> {
         match self {
             Self::Unbound => None,
             Self::Pending { binding } | Self::Finalized { binding } => Some(binding),
@@ -646,7 +646,7 @@ pub fn compile_provider_argv(
 }
 
 /// Compile provider argv, launch environment, and login-shell wrapper together.
-pub fn compile_agent_process(
+fn compile_agent_process(
     project_root: &Path,
     request: &ExecRequest,
     cwd: &Path,
@@ -789,7 +789,7 @@ pub fn compile_managed_agent_process(
 /// Pending stages re-enter through the login shell once; finalized stages
 /// execute raw provider argv after the adapter verifies the effective binding.
 /// `reminders` controls model identity, team context, and subagent policy text.
-pub fn compile_agent_process_stage_with_extra_env(
+pub(super) fn compile_agent_process_stage_with_extra_env(
     project_root: &Path,
     request: &ExecRequest,
     cwd: &Path,
@@ -1061,7 +1061,7 @@ fn validate_exec_request(request: &ExecRequest) -> Result<(), ExecWireErr> {
 
 /// The RIMZ_* identity env for one invocation (kind, run id, identity fields).
 /// Callers merge trust env and adapter launch env around it.
-pub fn exec_identity_env(request: &ExecRequest) -> BTreeMap<String, String> {
+fn exec_identity_env(request: &ExecRequest) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
     env.insert(
         crate::harness::launch::ENV_AGENT_KIND.to_owned(),
@@ -1095,7 +1095,7 @@ pub fn exec_identity_env(request: &ExecRequest) -> BTreeMap<String, String> {
 }
 
 /// Fills each unset launch parameter from its identity env var, the inverse
-/// of [`exec_identity_env`]. `identity_env` owns lookup and validation; a
+/// of `exec_identity_env`. `identity_env` owns lookup and validation; a
 /// malformed ordinal stays unset.
 pub fn fill_launch_identity_env(
     params: &mut crate::agents::LaunchParams,
@@ -1131,7 +1131,7 @@ fn effective_launch_env(overrides: &BTreeMap<String, String>) -> BTreeMap<String
 /// The inputs today are trusted project config, adapter pins, and run ids; a
 /// future secret-bearing launch source needs a two-stage re-exec channel that
 /// does not place assignments in argv.
-pub fn login_shell_argv(
+fn login_shell_argv(
     env: &BTreeMap<String, String>,
     unset: &BTreeSet<String>,
     agent_argv: &[String],

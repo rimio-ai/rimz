@@ -41,7 +41,7 @@ pub enum RunWakeErr {
     Recv(#[source] std::io::Error),
 }
 
-pub type Result<T> = std::result::Result<T, RunWakeErr>;
+type Result<T> = std::result::Result<T, RunWakeErr>;
 
 #[derive(Debug, PartialEq, Eq)]
 enum RunWakeOutcome {
@@ -93,7 +93,7 @@ pub struct RunWaiter {
     socket_guard: sock::SocketGuard,
 }
 
-pub type RunObserver<'a> = dyn FnMut(&RunRecord) -> anyhow::Result<()> + 'a;
+type RunObserver<'a> = dyn FnMut(&RunRecord) -> anyhow::Result<()> + 'a;
 
 impl RunWaiter {
     pub fn bind(

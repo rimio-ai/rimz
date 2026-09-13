@@ -21,7 +21,7 @@ use crate::ids::AgentKind;
 
 const BUILTIN_PEER: &str = "claude,codex";
 const PERMISSION_MODE_NAMES: &[&str] = &["auto", "ask", "yolo", "plan"];
-pub const MAX_PROFILE_DEPTH: usize = 16;
+const MAX_PROFILE_DEPTH: usize = 16;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LayoutSpec {
@@ -50,7 +50,7 @@ impl LayoutSpec {
     }
 
     /// Every mutable agent cell, in layout order (duplicates included).
-    pub fn agent_cells_mut(&mut self) -> impl Iterator<Item = &mut AgentCell> {
+    pub(super) fn agent_cells_mut(&mut self) -> impl Iterator<Item = &mut AgentCell> {
         self.columns
             .iter_mut()
             .flat_map(|column| column.rows.iter_mut())
@@ -459,7 +459,7 @@ pub enum LayoutErr {
     },
 }
 
-pub type Result<T> = std::result::Result<T, LayoutErr>;
+pub(crate) type Result<T> = std::result::Result<T, LayoutErr>;
 
 /// Resolve agent prompt files against the directory of the config source that
 /// declared them. `~` expands to the home directory and a relative path roots
@@ -467,7 +467,7 @@ pub type Result<T> = std::result::Result<T, LayoutErr>;
 /// combining config sources so a drop-in `team.toml` keeps paths relative to
 /// its own directory. Pure — the file's existence is checked at the launch
 /// entry point, so a moved prompt never breaks an unrelated config read.
-pub fn resolve_prompt_paths(
+pub(crate) fn resolve_prompt_paths(
     profiles: &mut ProfilesConfig,
     teams: &mut TeamsConfig,
     source_dir: &Path,
@@ -486,7 +486,7 @@ pub fn resolve_prompt_paths(
 }
 
 /// Resolve prompt files declared by profiles against their config source.
-pub fn resolve_profile_prompt_paths(profiles: &mut ProfilesConfig, source_dir: &Path) {
+pub(crate) fn resolve_profile_prompt_paths(profiles: &mut ProfilesConfig, source_dir: &Path) {
     for profile in profiles.0.values_mut() {
         if let Some(path) = profile.system_prompt_file.as_mut() {
             *path = resolve_prompt_path(path, source_dir);
@@ -506,7 +506,7 @@ fn resolve_prompt_path(path: &Path, config_dir: &Path) -> PathBuf {
     }
 }
 
-pub fn validate_config(
+pub(crate) fn validate_config(
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
     teams: &TeamsConfig,
@@ -527,7 +527,7 @@ pub fn validate_config(
 
 /// Validate profile names and cell-name collisions without resolving every
 /// profile chain or requiring team role bindings to close over the namespace.
-pub fn validate_profile_namespace(
+fn validate_profile_namespace(
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
     teams: &TeamsConfig,
@@ -544,7 +544,7 @@ pub fn validate_profile_namespace(
 }
 
 /// Validate the profile namespace dedicated to the `rimz subagents` doorway.
-pub fn validate_subagent_profile_namespace(
+pub(crate) fn validate_subagent_profile_namespace(
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
     teams: &TeamsConfig,
@@ -562,7 +562,7 @@ pub fn validate_subagent_profile_namespace(
     Ok(())
 }
 
-pub fn validate_subagent_allowlists(
+pub(crate) fn validate_subagent_allowlists(
     profiles: &ProfilesConfig,
     subagent_profiles: &ProfilesConfig,
     commands: &CommandsConfig,
@@ -587,7 +587,7 @@ pub fn validate_subagent_allowlists(
 }
 
 /// Resolve every profile chain in a standalone profile namespace.
-pub fn validate_profile_chains(profiles: &ProfilesConfig) -> Result<()> {
+pub(crate) fn validate_profile_chains(profiles: &ProfilesConfig) -> Result<()> {
     for name in profiles.0.keys() {
         resolve_profile(name, profiles)?;
     }
@@ -596,7 +596,7 @@ pub fn validate_profile_chains(profiles: &ProfilesConfig) -> Result<()> {
 
 /// The team a launch spec names, for the whole-team form (`forge`) and the
 /// single-role form (`forge.planner`). `None` when the spec names no team.
-pub fn spec_team<'a>(spec: &'a str, teams: &TeamsConfig) -> Option<&'a str> {
+pub(super) fn spec_team<'a>(spec: &'a str, teams: &TeamsConfig) -> Option<&'a str> {
     let spec = spec.trim();
     if teams.0.contains_key(spec) {
         return Some(spec);
@@ -657,7 +657,7 @@ pub fn parse_layout_spec(
     parse_layout_spec_validated(raw, profiles, commands, None)
 }
 
-pub fn resolve_spec(
+pub(super) fn resolve_spec(
     arg: Option<&str>,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
@@ -666,7 +666,7 @@ pub fn resolve_spec(
     resolve_spec_with_agent_override(arg, profiles, profiles, commands, teams, None)
 }
 
-pub fn resolve_spec_with_agent_override(
+pub(super) fn resolve_spec_with_agent_override(
     arg: Option<&str>,
     profiles: &ProfilesConfig,
     team_profiles: &ProfilesConfig,
@@ -1172,7 +1172,7 @@ pub fn default_tab_title(
     title
 }
 
-pub fn is_known_spec_token(
+pub(super) fn is_known_spec_token(
     raw: &str,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
@@ -1378,7 +1378,7 @@ fn path_command_cell(raw: &str) -> Option<Cell> {
 /// the typed launch params it declares. Layout resolution builds profile cells
 /// through this, and relaunch replays a stored profile name through it to
 /// recover the same posture.
-pub fn profile_cell(name: &str, profiles: &ProfilesConfig) -> Result<AgentCell> {
+pub(super) fn profile_cell(name: &str, profiles: &ProfilesConfig) -> Result<AgentCell> {
     profile_cell_with_base_override(name, profiles, None)
 }
 
@@ -1656,7 +1656,7 @@ fn validate_team_names(teams: &TeamsConfig) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn validate_team_stages(name: &str, team: &Team) -> Result<()> {
+pub(super) fn validate_team_stages(name: &str, team: &Team) -> Result<()> {
     let mut stages = BTreeSet::new();
     for stage in &team.stages {
         if stage == crate::config::DONE_STAGE {
