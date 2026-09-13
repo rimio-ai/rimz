@@ -569,8 +569,7 @@ fn the_sandbox_binds_and_pins_the_room_account_home() {
         sandbox.plan.mounts.iter().any(
             |mount| matches!(mount, crate::sandbox::Mount::Bind { source, .. } if source == &home)
         ),
-        "{:?}",
-        sandbox.plan.mounts
+        "the named account home is bind-mounted"
     );
     assert_eq!(
         sandbox.pins.get("CODEX_HOME"),
