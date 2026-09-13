@@ -26,7 +26,7 @@ The harness runs the fleet: spawn, address, message, and reclaim. It is a produc
 | Page | What it owns |
 | --- | --- |
 | [fleet.md](./harness/fleet.md) | The area map and the launch core: the rules that shape the design, the state-machine index, the layout IR, the exec wrapper, the address grammar, resume planning, and pane reclamation. |
-| [scripting.md](./harness/scripting.md) | Supervised `-p` runs: the durable run record, the completion fold, the wake socket, verification and retry, and the output projections. |
+| [scripting.md](./harness/scripting.md) | Supervised `-p` runs: the durable run record and exit codes, the completion fold, the wake socket and deadlines, verification and retry, the output projections, background joins, and run-pane reclamation. |
 | [subagents.md](./harness/subagents.md) | Agent-launched children: agent-only launch, fanout, wait, and stop; the shell-readable list and profile catalog; direct-parent stamps; and the boundary with provider-native subagents. |
 | [loops.md](./harness/loops.md) | Loop scheduling: the task catalog and its sources, elder firing, the fire gate ladder, run history, and the assist log. |
 | [budget.md](./harness/budget.md) | Dollar caps: the scopes, the ledgers on disk, the verdict, the human waiver, the pane interrupt, and the fail-fast gate. |
