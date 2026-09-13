@@ -372,4 +372,56 @@ mod tests {
         );
         assert_eq!(fresh_reason(true, true), None);
     }
+
+    #[test]
+    fn relaunch_request_leaves_supervised_fields_at_launch_defaults() {
+        let mut agent = rimz::testkit::agent_state("claude", "a1", jiff::Timestamp::UNIX_EPOCH);
+        agent.name = Some("otter".to_owned());
+        agent.role = Some("coder".to_owned());
+        let posture = ResumePosture {
+            launch: rimz::harness::plan::ResumeLaunchPosture {
+                args: vec!["--model".to_owned(), "opus".to_owned()],
+                system_prompt_file: Some("/prompts/coder.md".into()),
+                model: Some("opus".to_owned()),
+                ..Default::default()
+            },
+            degraded: None,
+        };
+        let action = ExecAction::Resume {
+            session_id: "a1".to_owned(),
+            extra_args: Vec::new(),
+        };
+
+        let request = relaunch_request(&agent, &posture, action, None);
+
+        assert_eq!(
+            request,
+            ExecRequest {
+                kind: agent.kind.clone(),
+                action: ExecAction::Resume {
+                    session_id: "a1".to_owned(),
+                    extra_args: posture.launch.args.clone(),
+                },
+                system_prompt_file: posture.launch.system_prompt_file.clone(),
+                append_system_prompt_files: Vec::new(),
+                skills: None,
+                provider_account: rimz::harness::launch::ProviderAccountState::Unbound,
+                run_id: None,
+                worktree_path: None,
+                close_pane_on_exit: true,
+                exit_on_run_completion: false,
+                subagent: false,
+                identity: rimz::harness::launch::ExecIdentity {
+                    name: Some("otter".to_owned()),
+                    name_explicit: agent.name_explicit,
+                    launch_id: None,
+                    params: rimz::agents::LaunchParams {
+                        role: Some("coder".to_owned()),
+                        model: Some("opus".to_owned()),
+                        ..Default::default()
+                    },
+                },
+            }
+        );
+    }
 }
