@@ -1736,9 +1736,19 @@ fn hook_install_merges_idempotently_and_uninstalls_only_owned_entries() {
     std::fs::write(&config_path, original_config).unwrap();
 
     let report = install::install_into(&path, &config_path, &state_path).expect("install");
-    assert_eq!(report.files.len(), 3);
-    assert!(report.files[..2].iter().all(|file| file.existed));
-    assert!(!report.files[2].existed);
+    let files: Vec<_> = report
+        .files
+        .iter()
+        .map(|file| (file.path.as_path(), file.existed))
+        .collect();
+    assert_eq!(
+        files,
+        [
+            (path.as_path(), true),
+            (config_path.as_path(), true),
+            (state_path.as_path(), false)
+        ]
+    );
     assert_eq!(report.installed_events.len(), CURSOR_HOOKS.len());
     assert!(install::hooks_installed_at(&path));
     assert!(install::statusline_installed_at(&config_path));
@@ -1808,7 +1818,19 @@ fn hook_install_merges_idempotently_and_uninstalls_only_owned_entries() {
     assert_eq!(preview.files[0].candidate, once);
     assert_eq!(preview.files[1].candidate, config_once);
     let uninstall = install::uninstall_from(&path, &config_path, &state_path).expect("uninstall");
-    assert_eq!(uninstall.files.len(), 3);
+    let files: Vec<_> = uninstall
+        .files
+        .iter()
+        .map(|file| (file.path.as_path(), file.existed))
+        .collect();
+    assert_eq!(
+        files,
+        [
+            (path.as_path(), true),
+            (config_path.as_path(), true),
+            (state_path.as_path(), true)
+        ]
+    );
     assert_eq!(uninstall.removed_events.len(), CURSOR_HOOKS.len());
     assert!(!install::managed_artifacts_at(&path));
     let uninstalled: Value =
