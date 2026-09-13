@@ -861,7 +861,6 @@ pub(super) fn resume_command(
         rimz_bin,
         runtime,
         &crate::harness::launch::ExecRequest {
-            kind: identity.kind.clone(),
             action: crate::harness::launch::ExecAction::Resume {
                 session_id: identity.session_id.to_string(),
                 extra_args: posture.args.clone(),
@@ -869,12 +868,7 @@ pub(super) fn resume_command(
             system_prompt_file: posture.system_prompt_file.clone(),
             append_system_prompt_files: posture.append_system_prompt_files.clone(),
             skills: posture.skills.clone(),
-            provider_account: crate::harness::launch::ProviderAccountState::Unbound,
-            run_id: None,
-            worktree_path: None,
             close_pane_on_exit: true,
-            exit_on_run_completion: false,
-            subagent: false,
             identity: crate::harness::launch::ExecIdentity {
                 name: identity.name.clone(),
                 name_explicit: identity.name_explicit,
@@ -887,6 +881,7 @@ pub(super) fn resume_command(
                 ),
                 params,
             },
+            ..crate::harness::launch::ExecRequest::bare_launch(identity.kind.clone(), Vec::new())
         },
     );
     result.unwrap_or_else(|err| unreachable!("serializing canonical exec request: {err}"))
