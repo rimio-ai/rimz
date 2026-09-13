@@ -13,7 +13,7 @@ mod session;
 mod statusline;
 mod transcript;
 
-pub(crate) use crate::agents::capabilities::*;
+use crate::agents::capabilities::*;
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -240,7 +240,7 @@ const CURSOR_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
     },
 };
 
-pub(super) const CURSOR_HOOKS: &[HookEventSpec] = &[
+const CURSOR_HOOKS: &[HookEventSpec] = &[
     HookEventSpec::lifecycle(
         "sessionStart",
         r#"{"conversation_id":"c1","session_id":"c1","cursor_version":"1.7"}"#
@@ -291,32 +291,19 @@ pub(super) const CURSOR_HOOKS: &[HookEventSpec] = &[
     )
     .progress(),
 ];
-pub(super) const RIMZ_HOOK_COMMAND: &str =
-    "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source cursor";
-pub(super) const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source cursor";
+const RIMZ_HOOK_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source cursor";
+const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source cursor";
 const RIMZ_STATUS_LINE_COMMAND: &str = "rimz statusline feed --source cursor";
 const RIMZ_STATUS_LINE_MARKER: &str = "rimz statusline feed --source cursor";
-pub(super) const RETAINED_RENDERING_KEYS: &[&str] = &["padding", "updateIntervalMs", "timeoutMs"];
+const RETAINED_RENDERING_KEYS: &[&str] = &["padding", "updateIntervalMs", "timeoutMs"];
 
 #[derive(Clone, Debug, Default)]
-pub struct CursorAdapter;
+pub(in crate::agents) struct CursorAdapter;
 
 fn cursor_project_dir(value: Option<&OsStr>) -> Option<PathBuf> {
     let value = value.filter(|value| !value.is_empty())?;
     let path = PathBuf::from(value);
     path.is_absolute().then_some(path)
-}
-
-#[cfg(feature = "testkit")]
-#[doc(hidden)]
-pub fn discover_local_sessions_under(
-    cursor_home: &Path,
-    workspaces: &[&Path],
-) -> Vec<LocalSessionObservation> {
-    workspaces
-        .iter()
-        .flat_map(|workspace| session::discover_under(cursor_home, workspace))
-        .collect()
 }
 
 impl crate::agents::capabilities::CoreCapability for CursorAdapter {
@@ -529,7 +516,10 @@ impl crate::agents::capabilities::SessionCapability for CursorAdapter {
         home: &Path,
         workspaces: &[&Path],
     ) -> Vec<LocalSessionObservation> {
-        discover_local_sessions_under(home, workspaces)
+        workspaces
+            .iter()
+            .flat_map(|workspace| session::discover_under(home, workspace))
+            .collect()
     }
 
     fn discover_local_sessions(&self, workspaces: &[&Path]) -> Vec<LocalSessionObservation> {

@@ -17,7 +17,7 @@ pub(super) struct StatuslinePayload {
     pub session_id: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     session_name: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_model_lossy")]
+    #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
     model: Option<Model>,
     #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     version: Option<String>,
@@ -25,7 +25,7 @@ pub(super) struct StatuslinePayload {
     output_style: Option<String>,
     #[serde(default, deserialize_with = "deserialize_named_field_lossy")]
     vim: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_context_lossy")]
+    #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
     context_window: Option<ContextWindow>,
 }
 
@@ -51,7 +51,7 @@ struct ContextWindow {
     used_percentage: Option<f64>,
     #[serde(default, deserialize_with = "deserialize_optional_f64_lossy")]
     remaining_percentage: Option<f64>,
-    #[serde(default, deserialize_with = "deserialize_optional_usage_lossy")]
+    #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
     current_usage: Option<CurrentUsage>,
 }
 
@@ -214,31 +214,6 @@ pub(super) fn normalize_model(model: String) -> String {
     } else {
         model
     }
-}
-
-fn deserialize_optional_model_lossy<'de, D>(deserializer: D) -> Result<Option<Model>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    deserialize_optional_object_lossy(deserializer)
-}
-
-fn deserialize_optional_context_lossy<'de, D>(
-    deserializer: D,
-) -> Result<Option<ContextWindow>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    deserialize_optional_object_lossy(deserializer)
-}
-
-fn deserialize_optional_usage_lossy<'de, D>(
-    deserializer: D,
-) -> Result<Option<CurrentUsage>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    deserialize_optional_object_lossy(deserializer)
 }
 
 fn deserialize_optional_object_lossy<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
