@@ -407,7 +407,7 @@ The producer's shrink-confirmation path bypasses `pane-topology.json` and reads 
 
 `rimz start` always carries the `rimzd` runtime view, so `open_sidebar` births a two-tab layout: the runtime dashboard first, then the focused working tab. Writing that order into the birth layout avoids a visible post-birth tab move.
 
-The runtime view is `sidebar | content | runtime`. What fills the columns, how its panes are identified by launch command, and how repair rebuilds them are in [rimzd.md](./rimzd.md#identity-is-the-command-not-the-pane-id). Each managed Zellij pane carries its joined launch argv as an explicit pane name for that identity. tmux births multiple content or runtime panes as equal-height rows, with at most one row of rounding drift.
+The runtime view is `sidebar | content | runtime`. What fills the columns, how its panes are identified by launch command, and how repair rebuilds them are in [rimzd.md](./rimzd.md#how-managed-panes-are-identified). Each managed Zellij pane carries its joined launch argv as an explicit pane name for that identity. tmux births multiple content or runtime panes as equal-height rows, with at most one row of rounding drift.
 
 Scheduled loop runs split against the loop panel with Zellij's native stack, anchored through the panel's CLI pane context with `--near-current-pane`, so attached-client focus and the active tab stay put. tmux maps the stack to equal-height rows in the target column, computing each row from pane geometry and resizing only panes in that column, so the sidebar and neighbouring columns never move. Panel recreation and the new-tab fallback are in [rimzd.md → the loop zone](./rimzd.md#the-loop-zone).
 
