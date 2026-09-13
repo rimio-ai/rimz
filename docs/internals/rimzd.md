@@ -1,123 +1,181 @@
 # The rimzd view
 
-`rimzd` is the background view RimZ owns in a managed room: a tmux window or Zellij tab, forced to the first position and out of the user's focus, holding the sidebar renderer and the long-lived processes the room depends on. RimZ specifies its panes, births them with the room, and rebuilds any that disappear.
+`rimzd` is the background view RimZ owns in a managed room: a tmux window or Zellij tab that holds a sidebar and the long-lived processes the room depends on, kept out of the user's focus. RimZ specifies its panes, births them with the room, and rebuilds any that disappear. The view leads the tab order when the room is born with it; tmux moves it back to the front on every later `rimz start`, while a Zellij tab added to a running session is appended and stays where it lands ([multiplexers.md](./multiplexers.md#the-daemon-view-and-resumed-births)).
 
-Two modules carry it. [`daemon_view.rs`](../../crates/rimz/src/daemon_view.rs) builds the pane specification, classifies live panes against it, and repairs the difference. [`daemon_content.rs`](../../crates/rimz/src/daemon_content.rs) runs the middle column, where a small supervisor holds the configured command. The user-facing surface is the `[daemon]` table in [configuration.md](../guide/configuration.md#daemon-view).
+Two modules carry it. [`daemon_view.rs`](../../crates/rimz/src/daemon_view.rs) builds the pane specification, matches live panes against it, and repairs the difference. [`daemon_content.rs`](../../crates/rimz/src/daemon_content.rs) runs the supervisor that holds each middle-column command. Users shape the view through the `[daemon]` table in [configuration.md](../guide/configuration.md#daemon-view).
 
 ## What the view contains
 
-Three columns: the sidebar on the left, content in the middle, runtime on the right. A room born on tmux with `codex` on PATH and remote control off lists like this, with the room's staged binary path shortened to `rimz`:
+The view has three columns, the sidebar on the left, content in the middle, and a runtime column on the right whose panes stack top to bottom:
 
 ```text
-%3  0,0    72x24  rimz sidebar serve --mux tmux --workspace-id ws_37e27d… --session-name rimz-demo
-%2  73,0   1x24   rimz daemon content --slot 0 --worktree-root /tmp/rimzd-demo
-%4  75,0   5x11   rimz codex app-server serve --workspace-id ws_37e27d… --session-name rimz-demo
-%5  75,12  5x12   rimz loop watch --hold
+┌─────────┬──────────────────┬─────────────────────┐
+│ sidebar │ content slot 0   │ Codex broker        │
+│         ├──────────────────┼─────────────────────┤
+│         │ content slot 1   │ Claude host         │
+│         │ …                ├─────────────────────┤
+│         │                  │ loop panel          │
+└─────────┴──────────────────┴─────────────────────┘
 ```
 
-The runtime column stacks vertically (`%4` above `%5` at the same `x`), and the content column sits between it and the sidebar. Four kinds of managed pane can appear:
+The sidebar is the room's ordinary renderer, kept to one per view by [sidebar reconcile](./multiplexers.md#one-sidebar-per-view). The other four kinds of pane are managed by this module, each launched from a fixed argv (`rimz` below is the room's resolved RimZ binary):
 
-| Pane | Column | Present when | Runs from |
-| --- | --- | --- | --- |
-| Content slot | Middle | Always; one per resolved `[[daemon.pane]]`, or one default | Worktree root |
-| Codex app-server broker | Right | `codex` resolves on PATH | Worktree root |
-| Claude remote-control host | Right | Remote control is enabled and Claude probes ready | Project root |
-| Loop panel | Right | Always | Worktree root |
+| Pane | Column | Argv | Present when | Runs from |
+| --- | --- | --- | --- | --- |
+| Content slot | Middle | `rimz daemon content --slot <n> --worktree-root <path>` | Always: one per resolved `[[daemon.pane]]`, or one default | Worktree root |
+| Codex app-server broker | Runtime | `rimz codex app-server serve --workspace-id <id> --session-name <name>` | `codex` resolves on `PATH` | Worktree root |
+| Claude remote-control host | Runtime | The host argv from Claude's readiness probe (`claude remote-control --spawn worktree`, optionally behind `env CLAUDE_CONFIG_DIR=<home>`) | `[remote_control] claude = true` and the probe reports ready | Project root |
+| Loop panel | Runtime | `rimz loop watch --hold` | Always | Worktree root |
 
-The Claude host runs from the project root so a session started from the phone carves its own worktree off the canonical repo rather than the current checkout ([remote.md](../guide/remote.md)). The broker holds one warm, already-handshaked `codex app-server` so context enrichment skips the cold-spawn handshake ([performance.md](./performance.md)). The loop panel is always in the spec because scheduled runs need a stable anchor to stack against, even in a room that has never run a task.
-
-## Identity is the command, not the pane id
-
-Managed panes are matched by their launch command. Zellij pane ids are positional and get reused, and the supervisors and remote-control hosts here put children in the foreground, so neither the id nor the current foreground command survives as an identity. Each spawn therefore carries its joined argv as the pane title, and `matching_managed_panes` tests the spawn command, the foreground command, and the title against a marker, accepting a match on any of the three.
-
-The markers are the taxonomy: `ContentSlot(n)`, `CodexAppServer`, `ClaudeRemoteControl`, and `LoopPanel`. A content slot matches on `daemon content` plus its `--slot` value, so slot 0 and slot 1 never collide. The Claude marker parses the command rather than substring-matching it: a token whose file name is `claude` must be followed by `remote-control`, which keeps `nvim remote-control.md` out of the managed set.
-
-Two similarly named predicates in `pane` answer different questions, and the difference matters at call sites. `command_is_host` asks whether a command line is a managed *host* — the broker or the Claude host only, never a content supervisor or the loop panel. `pane_is_host` asks whether a *pane* belongs to the dashboard at all, and any pane in the `rimzd` view qualifies. The sidebar uses the second to tell a daemon view from a working one; the Zellij pane classifier uses the first to recognize a host that re-execs after launch.
+The Claude host runs from the project root so a session started from the phone carves its own worktree off the canonical repository instead of the current checkout ([remote.md](../guide/remote.md#answer-asks-from-your-phone)); its readiness checks are in [adapter_claude.md](./agents/adapter_claude.md#readiness). The broker keeps one handshaked `codex app-server` warm for context enrichment ([adapter_codex.md](./agents/adapter_codex.md#app-server-enrichment)). The loop panel is in the specification even in a room that has never run a task, because scheduled runs need a stable pane to stack against ([the loop zone](#the-loop-zone)).
 
 ## Building the specification
 
-`daemon_view_spec` takes `DaemonViewSpecParams` and returns the `DaemonView` the mux consumes: content panes, host panes, and the loop panel. It is a pure function of its inputs, so the birth path and the repair path build the same spec from the same facts.
+`daemon_view_spec` takes `DaemonViewSpecParams` and returns the `DaemonView` the mux consumes: content panes, host panes, and the loop panel. It is a pure function of its inputs, so birth and every repair path build the same specification from the same facts.
 
-Conditionality lives entirely in the inputs. `codex_present` decides the broker. `claude_host_argv` arrives already resolved from `ReadinessSnapshot::probe`, which is `Some` only when remote control is enabled for Claude and the probe reports ready, so the spec never re-derives the policy. Host order is broker first, then Claude.
+Every condition arrives resolved in the inputs. `codex_present` decides the broker. `claude_host_argv` comes from `ReadinessSnapshot::claude_host_argv`, which is `Some` only when Claude remote control is enabled and the probe returned a ready result with a host argv, so the specification never re-derives remote-control policy. Hosts are ordered broker first, then Claude. The content pane count is the length of `daemon_content::resolve_content` over the current `[daemon]` table.
 
-`rimz start` is the only entry point that births the view: start carries remote-control readiness into room birth, while attach and web-session entry carry no background-view request and inherit whatever is already there. Repair holds the same line: it restores missing panes into a view that exists, and creates nothing when the view is gone.
+`rimz start` is the only entry point that births the view. It prepares and probes remote-control readiness before any session side effect, refuses to start when an enabled, installed host is blocked (`ReadinessSnapshot::start_gate`), and hands the snapshot to room birth. Attach and web-session entry carry no view request and inherit whatever view exists. Repair holds the same line: it restores missing panes into a view that exists and creates nothing when the view is gone.
 
-## The content column and its supervisor
+## How managed panes are identified
 
-The mux never runs your configured command directly. It runs `rimz daemon content --slot <n> --worktree-root <path>`, a hidden subcommand whose whole job is to hold one child and swap it when the configuration changes ([`cli/daemon.rs`](../../crates/rimz/src/cli/daemon.rs)).
+Managed panes are matched by their launch command. A pane id cannot serve: Zellij pane ids are positional and get reused. The foreground command cannot serve either, because a content supervisor or the Claude host puts a child in the foreground. A pane listing offers three strings per pane, and `matching_managed_panes` accepts a pane in the `rimzd` view when any one of them matches a marker:
 
-That indirection is what makes edits apply in place. The pane's launch command names a slot, not a command, so the child underneath can change without the view specification changing and without repair seeing anything move. `resolve_slot` reads the current `[daemon]` config and answers what slot `n` should be running: the reserved token `stats` expands to `rimz stats --refresh --hold` ([stats.md](./stats.md)), any other command is split with `shlex` and run without a shell, and a relative `cwd` is joined onto the worktree root. An unparseable or empty command is skipped with a warning, and a configuration where every pane is skipped falls back to the single default stats pane — the same result as no configuration at all.
+| String | Zellij | tmux |
+| --- | --- | --- |
+| Spawn command | The command Zellij launched the pane with | `pane_start_command` |
+| Foreground command | The presence plugin's last observed command | `pane_current_command` |
+| Title | The layout's pane name, set to the joined argv at birth and at repair | `@rimz_title`, set to the joined argv when repair spawns the pane |
 
-The supervisor watches the parent directory of `config.toml` rather than the file, which catches the atomic rename RimZ writes with. Changes debounce for 300ms, then it re-resolves its slot and compares argv and cwd. Equal means no action. Different means it spawns the replacement first and terminates the old child only once the new one is up, so a command that fails to spawn leaves the working child in place. Teardown is a ladder: `SIGTERM`, a 300ms grace, then `SIGKILL`. `SIGINT` is registered to a flag the loop ignores, so `Ctrl-C` in the pane does not take the supervisor down.
+The markers are the taxonomy of `ManagedPaneMarker`:
 
-Pane *count* is the one thing this cannot absorb. The number of content panes is fixed in the specification at birth, so adding or removing `[[daemon.pane]]` entries takes effect when the room restarts.
+| Marker | Matches a command that | Column |
+| --- | --- | --- |
+| `ContentSlot(n)` | contains the tokens `daemon content` and `--slot n` | Content |
+| `CodexAppServer` | contains `app-server` | Runtime |
+| `ClaudeRemoteControl` | has a token whose file name is `claude`, immediately followed by `remote-control` | Runtime |
+| `LoopPanel` | contains `loop watch` | Runtime |
+
+A content slot matches its own `--slot` value, so slot 0 and slot 1 never collide. The Claude marker parses tokens (`pane::command_is_claude_host`) where the others test substrings, which keeps `nvim remote-control.md` out of the managed set.
+
+Two broader predicates in [`pane.rs`](../../crates/rimz/src/pane.rs) classify panes outside this module, and they answer different questions:
+
+| Predicate | True when | Used by |
+| --- | --- | --- |
+| `command_is_host(command)` | The command line contains `remote-control` or `app-server` (a substring test that ignores content supervisors and the loop panel) | Zellij's daemon-host pane classifier (`mux/zellij/raw_pane.rs`), which also checks the spawn command for hosts that re-exec; tab status, to drop hosts from a tab's work panes |
+| `pane_is_host(pane)` | The pane is in the `rimzd` view, or its spawn or foreground command passes `command_is_host` | The sidebar frame, to tell a daemon view from a working one; tmux reconcile, to mark a view occupied; store pane binding and view reaping, to skip infrastructure panes |
+
+## The content supervisor
+
+The mux never runs a configured command directly. A content pane runs `rimz daemon content --slot <n> --worktree-root <path>`, a hidden subcommand ([`cli/daemon.rs`](../../crates/rimz/src/cli/daemon.rs)) that holds one child and swaps it when the configuration changes. The pane's launch command names a slot instead of a command, so the child can change while the specification, the pane's identity, and repair all stay still.
+
+`resolve_slot` answers what slot `n` runs now:
+
+- The reserved command `stats` expands to `rimz stats --refresh --hold` ([stats.md](./stats.md)).
+- Any other command is split with `shlex` and run without a shell.
+- An absolute `cwd` is used as written, a relative one is joined onto the worktree root, and an absent one means the worktree root.
+- An empty or unparseable command is skipped with a warning. When every pane is skipped, or the table is empty, the result is the single default stats pane.
+- A slot past the end of the resolved list also runs the default stats pane.
+
+The supervisor watches the directory holding `config.toml`, which catches the atomic rename RimZ writes with. After a change it waits out a 300 ms debounce (`CONFIG_RELOAD_DEBOUNCE`), rereads `[daemon]`, resolves its slot again, and compares argv and cwd. Equal means no action. Different means it spawns the replacement first and terminates the old child only once the new one is running, so a command that fails to spawn leaves the working child in place. A config file that cannot be read or parsed also keeps the current child; a missing file means the default table.
+
+Termination is a ladder: `SIGTERM`, a 300 ms grace (`CHILD_SIGNAL_GRACE`), then `SIGKILL`. `SIGHUP` and `SIGTERM` to the supervisor terminate its child that way and exit. `SIGINT` sets a flag nothing reads, so `Ctrl-C` in the pane leaves the supervisor running. When the child exits on its own, the supervisor exits with the child's status, the pane closes, and the next repair pass spawns the slot again.
+
+The pane count follows the specification, which only a repair or a birth rebuilds. A `[[daemon.pane]]` entry added to a running room creates a new slot in the next specification, and repair spawns it under the preceding slot: within the elder's 30-second repair interval, or at the next `rimz start`. A removed entry leaves its slot pane outside the specification; repair ignores unmatched panes, and the orphaned supervisor resolves past the end of the list and runs the stats pane until the room is reborn.
 
 ## Reconciliation
 
-`managed_pane_reconciliation` diffs the spec against a pane listing and returns two lists. For each spec pane, it collects live panes matching that marker, ordered by pane creation ordinal:
+`managed_pane_reconciliation` diffs the specification against a pane listing and returns a spawn list and a close list. For each pane in the specification, it collects the live panes matching that marker, ordered by pane creation ordinal:
 
 - No match: the pane goes on the spawn list.
 - One match: nothing to do.
 - Several matches: the oldest survives and the rest go on the close list.
 
-Keeping the oldest makes the outcome stable under repeated passes — a pass that races another pass converges on the same survivor rather than trading places. Panes matching no marker are untouched, so a shell you opened in the view stays.
+Keeping the oldest makes repeated passes stable, so two racing passes converge on the same survivor. Panes that match no marker in the specification are left alone, so a shell a user opened in the view stays.
 
-One rule sits outside the loop: when the spec carries no Claude host, every live Claude host pane goes on the close list. Turning remote control off therefore removes the pane instead of orphaning it.
+One rule sits outside that loop. When the specification carries no Claude host, every live Claude host pane goes on the close list, so turning remote control off removes the pane.
 
 ## Repair
 
-`repair_daemon_view` applies that diff, one pane at a time, against authoritative pane listings.
+`repair_daemon_view` applies the diff one pane at a time, planning each step from an authoritative pane listing (`PaneReadConsistency::RequireAuthoritative`, 3-second `REPAIR_LIST_TIMEOUT`).
 
-The pass starts by refusing two situations. If no live pane carries the `rimzd` view name, the view is closed, and a closed view is treated as deliberate: there is no anchor to rebuild against and nothing is created until the next `rimz start`. If the authoritative listing fails or times out (3 seconds), the pass returns `Retry` rather than acting on cached topology, so stale truth never drives a close or a spawn.
+The pass does nothing in two situations. When the listing fails or times out, it returns `Retry` instead of acting on cached topology, so stale truth never drives a close or a spawn. When no live pane carries the `rimzd` view name, the view is closed; a closed view is treated as deliberate, leaves no anchor to rebuild against, and gets nothing until the next `rimz start`.
 
-Otherwise closes come first, then spawns, and each spawn is its own round trip: place one pane, wait for its marker to appear in a fresh listing (5 attempts, 100ms apart), and plan the next placement from that new listing. This is what lets a wholly missing runtime column rebuild as a column — the first restored pane becomes the anchor the second one places against. A pane that never settles ends the pass with `Retry`.
+Otherwise closes run first, then spawns, and each spawn is its own round trip: place one pane, wait for its marker to appear in a fresh listing (`SETTLE_ATTEMPTS`, 5 attempts, `SETTLE_POLL`, 100 ms apart), and plan the next placement from that listing. Each restored pane is therefore an anchor for the next, which is how a wholly missing runtime column comes back as one column. A failed close, a failed split, or a pane that never settles ends the pass with `Retry`. A repaired pane carries close-on-exit like its layout-born twin, so a managed command that exits removes its pane for the next pass to respawn.
 
-A repaired pane carries close-on-exit like its layout-born twin, so an exited managed command removes its pane instead of leaving a held pane for the next repair pass to route around.
+Placement follows specification order within a column:
 
-Placement follows the spec order within a column. A missing pane is placed *below* the nearest preceding live member of its own column, falling back to any live member. When the column has no members at all, it is created to the right of its structural neighbor: content splits off the sidebar, and runtime splits off the first live content pane, or the sidebar if content is gone too.
+1. A missing pane splits below the nearest preceding live member of its column.
+2. With no preceding member, it splits below the first live member of its column.
+3. With an empty column, the column is created to the right of its structural neighbour: content splits off the sidebar, and runtime splits off the first live content pane, else the sidebar.
+4. With none of those alive, it splits right of any pane in the view.
 
-Placement is decided when a pane is created and never revisited. A pane the specification is satisfied with stays where it is, so panes an older binary placed differently keep their position until they are closed or the view is reborn.
+Placement is decided when a pane is created and never revisited. A pane that satisfies the specification stays where it is, even if a different binary would have placed it elsewhere, until it closes or the view is reborn.
 
-The outcome is `Converged` or `Retry`, and callers use it as backpressure rather than an error.
+The outcome is `Converged` or `Retry`. Callers treat `Retry` as backpressure to try again later; neither outcome is an error.
 
 ## Who repairs, and when
 
-Three callers drive repair, all best-effort.
+Four callers drive repair, all best-effort:
 
-Room birth repairs when `open_background_view` reports the view already running, which is the ordinary case for a `rimz start` against a live room.
+| Caller | When | Scope |
+| --- | --- | --- |
+| Room birth (`room/birth.rs`, `launch_background_view`) | `rimz start` finds the view already running (`BackgroundViewLaunch::AlreadyRunning`) | The whole view, from the specification start just built |
+| Elder tracker (`DaemonRepairTracker`) | The elected sidebar elder's cache-refresh tick, at most every 30 seconds (`DAEMON_VIEW_REPAIR_TTL` in `sidebar_pane/app/cache_refresh.rs`) | The whole view |
+| Remote-control toggle (`remote_control::apply_runtime_toggle`) | `rimz config set remote_control.claude <bool>`, for every known workspace with a live session | The whole view, through `ensure_daemon_view_with_readiness`, so the Claude host appears or closes at once |
+| Loop zone (`daemon_view::ensure_loop_panel`) | A scheduled run fires and the loop panel is missing | The loop panel alone ([the loop zone](#the-loop-zone)) |
 
-The elected sidebar elder owns the steady state through `DaemonRepairTracker`, called on its cache-refresh tick with a 30-second floor. The tracker exists to make the common case free. It holds a `DaemonViewInputsStamp` — the config generation, the workspace roots, and stamped paths for the `rimz`, `claude`, and `codex` binaries plus Claude's settings file — and rebuilds the specification only when that stamp changes. Workspace freshness metadata is deliberately excluded, because ordinary CLI and hook traffic rewrites `updated_at` constantly and none of it changes the view.
+The toggle, the elder, and the loop zone each run `remote_control::prepare_hosts` before `ReadinessSnapshot::probe`, so a host precondition the pass can restore is restored before readiness judges it.
 
-With a stable stamp and no repair outstanding, the tracker reads the sidebar's own published pane frame instead of the backend. A frame for this session, fresh within the pane TTL, that already satisfies the specification ends the tick with no work and no child processes. A missing, stale, or unsatisfied frame escalates to the authoritative path, and a `Retry` outcome latches until a later tick clears it.
+The elder tracker is built to make the common tick free. Election is in [state.md](./sidebar/state.md#renderers-the-producer-and-consumers). The tracker holds a `DaemonViewInputsStamp` and rebuilds the specification only when the stamp changes:
 
-The third caller is the loop zone, which repairs the panel alone.
+| Stamp field | Source |
+| --- | --- |
+| `config_generation` | `MachineConfig::load_stamp_generation`, a hash over the stamped per-machine config files and `~/.agents` fragments |
+| `workspace` | The workspace record's `project_root` and `worktree_root`, leaving out `updated_at`, which ordinary CLI and hook traffic rewrites |
+| `rimz_bin`, `claude_bin`, `codex_bin` | Stamped paths of the RimZ executable and of `claude` and `codex` as resolved on `PATH` |
+| `claude_settings` | Stamped path of Claude's settings file under the room's Claude login |
+
+A rebuilt specification always gets one authoritative repair. With a stable stamp and no repair outstanding, the tracker reads the sidebar's published pane frame instead of the backend: a frame for this session, fresh within `EVENT_PANE_TTL` (10 seconds), that already satisfies the specification ends the tick with no work and no child processes. A missing, stale, or unsatisfied frame escalates to `repair_daemon_view`, and a `Retry` outcome keeps the repair outstanding until a later tick converges. When the workspace's state paths or record cannot be read, the tick is skipped.
 
 ## The loop zone
 
-`split_into_loop_zone` asks `daemon_view::ensure_loop_panel` for the workspace's oldest live loop panel and splits the run pane against it with `SplitPlacement::Stacked`, so run output lands in the runtime column.
+A scheduled run lands in the runtime column. `split_into_loop_zone` ([`cli/supervised/pane.rs`](../../crates/rimz/src/cli/supervised/pane.rs)) asks `ensure_loop_panel` for the workspace's oldest live loop panel and splits the run pane against it with `SplitPlacement::Stacked`. Which fires land there, and the new-tab fallback, are in [loops.md](./harness/loops.md#where-a-scheduled-run-lands).
 
-Fire time is the one moment repair runs outside the elder's tick. `ensure_loop_panel` takes the workspace and looks up the panel cheaply. When the panel is gone, it builds the effective spec itself, preparing hosts before probing readiness in the same order as the elder. If the view survives, it recreates just that pane through the same authoritative placement and settle path a full repair uses, then the run stacks under it. Which fires land here, and where a run goes when the view is gone, are in [loops.md](./harness/loops.md#where-a-scheduled-run-lands).
+`ensure_loop_panel` repairs at fire time, outside the elder's tick:
+
+1. Look for the panel in a listing that prefers authoritative truth, bounded by `LOOP_PANEL_LOOKUP_TIMEOUT` (500 ms). A failed lookup returns `None`, and the run opens a new tab.
+2. When the panel is gone, build the effective specification the way the elder does, preparing hosts before probing readiness.
+3. List again authoritatively; return the panel if another pass restored it meanwhile.
+4. Place the loop panel with the same anchor rules and settle wait as a full repair, and return it. A closed view leaves no anchor, and a failed listing, split, or settle also returns `None`; the run then opens a new tab.
 
 ## Where the code lives
 
 | File | What it holds |
 | --- | --- |
-| [`daemon_view.rs`](../../crates/rimz/src/daemon_view.rs) | Spec construction, markers and matching, reconciliation, the repair step machine, the elder tracker |
-| [`daemon_view/tests.rs`](../../crates/rimz/src/daemon_view/tests.rs) | Planner, reconciliation, identity, and tracker contracts |
-| [`daemon_content.rs`](../../crates/rimz/src/daemon_content.rs) | Slot resolution, the supervisor loop, config watching, child teardown |
+| [`daemon_view.rs`](../../crates/rimz/src/daemon_view.rs) | Specification, markers and matching, reconciliation, repair and placement, `ensure_loop_panel`, the elder tracker |
+| [`daemon_view/tests.rs`](../../crates/rimz/src/daemon_view/tests.rs) | Specification, planner, reconciliation, identity, and tracker tests |
+| [`daemon_content.rs`](../../crates/rimz/src/daemon_content.rs) | Slot resolution, the supervisor loop, config watching, child termination |
 | [`cli/daemon.rs`](../../crates/rimz/src/cli/daemon.rs) | The hidden `rimz daemon content` entry point |
 | [`config/daemon.rs`](../../crates/rimz/src/config/daemon.rs) | `DaemonConfig` and `DaemonPane` |
+| [`pane.rs`](../../crates/rimz/src/pane.rs) | `VIEW_NAME`, the host markers, `command_is_host`, `command_is_claude_host`, `pane_is_host` |
+| [`remote_control.rs`](../../crates/rimz/src/remote_control.rs) | `ReadinessSnapshot`, `prepare_hosts`, `apply_runtime_toggle` |
+| [`room/mod.rs`](../../crates/rimz/src/room/mod.rs), [`room/birth.rs`](../../crates/rimz/src/room/birth.rs) | The start-time specification and birth-time repair |
+| [`sidebar_pane/app/cache_refresh.rs`](../../crates/rimz/src/sidebar_pane/app/cache_refresh.rs) | The elder tick that calls the tracker |
+| [`cli/supervised/pane.rs`](../../crates/rimz/src/cli/supervised/pane.rs) | `split_into_loop_zone` |
 | [`mux/mod.rs`](../../crates/rimz/src/mux/mod.rs) | `DaemonView`, `HostPane`, and `BackgroundViewOptions`, the backend-facing types |
+| [`mux/tmux/backend.rs`](../../crates/rimz/src/mux/tmux/backend.rs), [`mux/zellij/backend.rs`](../../crates/rimz/src/mux/zellij/backend.rs) | `open_background_view` on each backend |
 
 ## Tests
 
-The planner and reconciliation tests are pure: they build a spec, hand it a synthetic pane listing, and assert the next step. That covers the cases hardest to reach live — a runtime column chaining back from empty, identity surviving foreground command churn, surplus panes closing down to the oldest, and a closed view staying closed. The tracker tests drive `maintain_with` directly with injected build and repair closures, so stamp invalidation and frame classification are checked without a mux.
+The planner and reconciliation tests in `daemon_view/tests.rs` are pure: they build a specification, hand it a synthetic pane listing, and assert the next step. They cover the cases hardest to reach live: a runtime column chaining back from empty, identity surviving foreground command churn, surplus panes closing down to the oldest, and a closed view staying closed. The tracker tests drive `maintain_with` directly with injected build and repair closures, so stamp invalidation and frame classification run without a mux. Slot resolution and reload comparison are unit tests in `daemon_content.rs`.
 
-Run them with `cargo xtask test daemon`. Backend placement itself belongs to the live-backend tier ([multiplexers.md](./multiplexers.md)).
+Run them with `cargo xtask test 'daemon_view::'` and `cargo xtask test 'daemon_content::'`. Backend placement belongs to the live-backend tier ([multiplexers.md](./multiplexers.md)).
 
 ## See also
 
-- [configuration.md](../guide/configuration.md#daemon-view) — the `[daemon]` table as users write it.
-- [multiplexers.md](./multiplexers.md) — how each backend births the view, names panes, and degrades stacking.
-- [stats.md](./stats.md) — the default content pane.
-- [performance.md](./performance.md) — the Codex broker's place in the enrichment path.
+- [configuration.md](../guide/configuration.md#daemon-view): the `[daemon]` table as users write it.
+- [multiplexers.md](./multiplexers.md#the-daemon-view-and-resumed-births): how each backend births the view and stacks its panes.
+- [stats.md](./stats.md): the default content pane.
+- [adapter_codex.md](./agents/adapter_codex.md#app-server-enrichment): the broker's place in Codex enrichment.
+- [adapter_claude.md](./agents/adapter_claude.md#remote-control): the Claude host and its readiness.
