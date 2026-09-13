@@ -73,6 +73,7 @@ Children of a team member share companion tabs named `<view> subagents`, with nu
 | Result | one status digest from `@rimz` after the fleet settles; read the response files it lists, or `rimz subagents wait @…` for the text | `--wait[=DURATION]` joins inline when it reaches the result |
 | Checkout | parent's checkout | fixed |
 | Deadline | 30 minutes | `--timeout`, then `[agents.subagents] timeout` |
+| Isolation | parent's recorded `--isolation` override, else machine `agents.isolation` | `--isolation host\|sandbox` |
 | Pane after completion | closes when the run settles | `--keep` holds it until `stop` or `rimz gc` |
 | Address | minted petname | fixed |
 
