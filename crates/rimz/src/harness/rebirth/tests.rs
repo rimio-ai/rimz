@@ -333,7 +333,7 @@ fn recover_ends_only_agents_not_resumed_without_overwriting_worktree_gone_reason
     let mut machine = MachineConfig::default();
     machine.resume.max = 1;
     let plan = fixture.inspect_with(&machine, false);
-    let resumed = plan.planned.base_resumed().clone();
+    let resumed = plan.planned.resumed_keys();
     assert_eq!(resumed.len(), 1);
 
     let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
@@ -417,6 +417,46 @@ fn rebirth_recovery_globally_orders_fresher_flat_before_team() {
     let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
     assert_eq!(outcome.resume.tabs[0].cwd, flat_worktree);
     assert_eq!(outcome.resume.tabs[1].cwd, team_worktree);
+}
+
+#[test]
+fn sandbox_requirement_follows_resumed_agents_effective_isolation() {
+    let dir = tempfile::tempdir().expect("worktrees");
+    let live = dir.path().join("live");
+    let missing = dir.path().join("missing");
+    let fixture = Fixture::new(&[("live", &live, true), ("missing", &missing, false)]);
+    let stamp_sandbox = |id: &str| {
+        let store = Store::open(fixture.paths.clone(), fixture.runtime.clone()).expect("store");
+        let mut observation = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from(id)),
+            LifecycleSignal::Registered,
+        );
+        observation.launch.isolation = Some(Isolation::Sandbox);
+        store
+            .append_event(&crate::EventEnvelope::agent_lifecycle(
+                fixture.paths.workspace_id.clone(),
+                "rimz-test",
+                "claude",
+                "SessionStart",
+                &observation,
+            ))
+            .expect("isolation event");
+    };
+    let mut sandbox_machine = MachineConfig::default();
+    sandbox_machine.agents.isolation = Isolation::Sandbox;
+
+    assert!(!fixture.inspect(false).preview().requires_sandbox());
+    assert!(
+        fixture
+            .inspect_with(&sandbox_machine, false)
+            .preview()
+            .requires_sandbox()
+    );
+    stamp_sandbox("missing");
+    assert!(!fixture.inspect(false).preview().requires_sandbox());
+    stamp_sandbox("live");
+    assert!(fixture.inspect(false).preview().requires_sandbox());
+    assert!(!fixture.inspect(true).preview().requires_sandbox());
 }
 
 #[test]

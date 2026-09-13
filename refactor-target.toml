@@ -190,7 +190,8 @@ upward-dependencies = ["sidebar::refresh"]
 # The validated exec envelope establishes cleanup context before artifact I/O.
 # Sandbox env pins rebuild shell argv while preserving post-rc account stages.
 # The typed team.stage payload and its flip reader feed transcript rendering.
-surface-budget = 517
+# Rebirth reads resumed keys to preflight sandbox-isolated recovered agents.
+surface-budget = 518
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -556,7 +557,7 @@ allowed-dependencies = [
     "utils::path",
     "worktree",
 ]
-surface-budget = 47
+surface-budget = 48
 
 [[module]]
 path = "crates/rimz/src/harness/launch.rs"
