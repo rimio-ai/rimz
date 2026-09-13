@@ -189,7 +189,7 @@ upward-dependencies = ["sidebar::refresh"]
 # Loop hosts and check ownership cross the scheduler/CLI/room seams.
 # The validated exec envelope establishes cleanup context before artifact I/O.
 # Sandbox env pins rebuild shell argv while preserving post-rc account stages.
-surface-budget = 544
+surface-budget = 513
 
 [[module]]
 path = "crates/rimz/src/ids.rs"
@@ -201,7 +201,7 @@ surface-budget = 9
 
 [[module]]
 path = "crates/rimz/src/lib.rs"
-surface-budget = 70
+surface-budget = 69
 
 [[module]]
 path = "crates/rimz/src/main.rs"
@@ -576,7 +576,7 @@ allowed-dependencies = [
 # Validated envelope access establishes failure cleanup before prompt-file I/O.
 # Mount-input pins are reapplied through the compiled shell wrapper.
 # Fresh requests and selectively redacted process plans serve launch inspection.
-surface-budget = 50
+surface-budget = 42
 
 [[module]]
 path = "crates/rimz/src/harness/launch_plan.rs"
@@ -608,7 +608,7 @@ allowed-dependencies = [
     "proc",
     "store",
 ]
-surface-budget = 31
+surface-budget = 30
 
 [[module]]
 path = "crates/rimz/src/harness/run/report.rs"
@@ -630,7 +630,7 @@ allowed-dependencies = [
     "sock",
     "store",
 ]
-surface-budget = 9
+surface-budget = 7
 
 [[module]]
 path = "crates/rimz/src/harness/prompt_compose.rs"
@@ -2045,3 +2045,153 @@ reason = "Field of PaneObservation, floored with PresenceTransition (pass 20b)."
 kind = "item"
 key = "sidebar::presence::projector::PaneEventEligibility"
 reason = "Field of PaneObservation, floored with PresenceTransition (pass 20b)."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch::ENV_AGENT_ID"
+reason = "Read by the integration crate (26 sites) and in-crate ancestry and schedule runner; the key is a cross-crate test contract (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch::ENV_TEAM"
+reason = "Integration journeys and message/transcript tests set this launch identity key through rimz::harness::launch; the key table decodes it in-crate (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch::ENV_LAUNCH_GROUP"
+reason = "Integration journeys and message/transcript tests set this launch identity key through rimz::harness::launch; the key table decodes it in-crate (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch::ENV_LAUNCH_ORDINAL"
+reason = "Integration journeys and message/transcript tests set this launch identity key through rimz::harness::launch; the key table decodes it in-crate (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch::ENV_AGENT_MODEL"
+reason = "Integration journeys and message/transcript tests set this launch identity key through rimz::harness::launch; the key table decodes it in-crate (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch::ENV_AGENT_EFFORT"
+reason = "Integration journeys and message/transcript tests set this launch identity key through rimz::harness::launch; the key table decodes it in-crate (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch::ExecWireErr"
+reason = "Carried by LaunchPlanErr::Wire #[from] and matched by the integration crate; atlas caveat 13 (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch::AgentProcessStageErr"
+reason = "Carried by LaunchPlanErr::Process #[from] and returned by pub stage compilers; atlas caveat 13 (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch::ProgramLookupErr"
+reason = "Source field of pub AgentProcessCompileErr; atlas caveat 13 (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch::AgentProcessCompileErr"
+reason = "Returned by pub provider compilers and carried by AgentProcessStageErr::Compile; atlas caveat 13 (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch::PromptArtifact"
+reason = "Variant field of pub AgentProcessStage and parameter of write_prompt_artifact; atlas caveat 13 (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch::ExecEnvelope"
+reason = "Returned by pub decode_exec_envelope, the production exec decoder; atlas caveat 13 (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::spec::LayoutErr"
+reason = "Source field of pub ConfigErr::Agents, EffectiveConfigErr::Agents and ResolveLaunchError::Layout; private_interfaces refuses pub(crate) (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::spec::parse_layout_spec"
+reason = "Called by config and by binary-crate tests in cli::agents_cmd::launch, which reach the library as an external crate (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::spec::Column"
+reason = "Element type of pub LayoutSpec.columns; atlas caveat 13 (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::spec::RawLayout"
+reason = "Structural grammar family of Column behind parse_layout_structure; kept with Column (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::spec::RawColumn"
+reason = "Structural grammar family of Column behind parse_layout_structure; kept with Column (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::spec::shell"
+reason = "Cell::shell has production callers in spec and a test reader in harness::plan::tests; pub(super) is its floor (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::budget::BudgetParseError"
+reason = "FromStr::Err of pub BudgetSpec and #[from] source in config cap and loop budget errors; E0446 refuses pub(crate) (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::budget::BudgetParkStamp"
+reason = "Pub field type of the budget ledger and scope entries; atlas caveat 13 (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::budget::DailyBudgetLedger"
+reason = "Returned by pub DailyBudgetScope::read_ledger and taken by apply_absolute; atlas caveat 13 (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::budget::BudgetCapSource"
+reason = "Returned by a pub cap-source method; atlas caveat 13 (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::budget::BudgetScopeState"
+reason = "Returned by pub read_scope_state and taken by scope_interrupted; atlas caveat 13 (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::budget::AgentBudgetSpend"
+reason = "Returned by pub agent_budget_spend; atlas caveat 13 (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::budget::ScopeLedgerWriteError"
+reason = "Error type of pub scope ledger writers; atlas caveat 13 (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::budget::TurnScopeEntry"
+reason = "Pub map value of BudgetScopeState.turn; atlas caveat 13 (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::run_wake::RunWakeErr"
+reason = "Error type of pub RunWaiter::bind, which the integration crate calls; atlas caveat 13 (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::run_wake::socket_path"
+reason = "Read by binary-crate supervised tests; gating it behind testkit leaves the RAII socket_guard field and SocketGuard::path dead in the shipped build (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::run_wake::wait_terminal"
+reason = "One-caller observer flag: presentation passes None, streaming passes Some; a split duplicates the wait loop (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::run::report::record_report_messages"
+reason = "One-caller message_id flag pinned by e3798c70c (pass 20a)."
