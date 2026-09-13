@@ -42,30 +42,47 @@ use crate::agents::transcript_fs::{bytes_contains, expand_tilde, home_dir, read_
 
 /// Full typed Claude usage entry.  Fields match the Claude Code JSONL schema
 /// (`camelCase`; `costUSD` is an explicit serde rename).
+///
+/// Fields marked `reject_null` fail the whole entry on an explicit `null`, the
+/// upstream TypeScript/Zod schema rejecting them as non-nullable (the same set
+/// as ccusage's `has_unsupported_null_field`). The check binds to the schema
+/// path, so a same-named nullable field nested elsewhere, such as
+/// `message.usage.iterations[].model`, never drops the entry.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct ClaudeEntry {
     timestamp: Option<String>,
     cwd: Option<String>,
-    #[serde(rename = "costUSD")]
+    #[serde(rename = "costUSD", default, deserialize_with = "reject_null")]
     pub(super) cost_usd: Option<f64>,
     #[serde(default)]
     pub(super) message: ClaudeMessage,
+    #[serde(default, deserialize_with = "reject_null")]
     pub(super) request_id: Option<String>,
+    #[serde(default, deserialize_with = "reject_null")]
     session_id: Option<String>,
+    #[serde(default, deserialize_with = "reject_null")]
     version: Option<String>,
     is_sidechain: Option<bool>,
     pub(super) agent_id: Option<String>,
+    #[serde(
+        rename = "isApiErrorMessage",
+        default,
+        deserialize_with = "reject_null_any"
+    )]
+    _is_api_error_message: (),
 }
 
 #[derive(Default, Deserialize)]
 pub(super) struct ClaudeMessage {
     /// Anthropic message ID (`msg-…`).  The dedup key alongside `requestId`.
+    #[serde(default, deserialize_with = "reject_null")]
     pub(super) id: Option<String>,
+    #[serde(default, deserialize_with = "reject_null")]
     pub(super) model: Option<String>,
     #[serde(default, deserialize_with = "deserialize_claude_content")]
     content: Vec<ClaudeContentBlock>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_message_usage")]
     pub(super) usage: ClaudeUsage,
 }
 
@@ -88,6 +105,28 @@ where
         .iter()
         .filter_map(|block| serde_json::from_value(block.clone()).ok())
         .collect())
+}
+
+/// `message.usage`, rejecting the schema's non-nullable usage fields there only:
+/// `ClaudeUsage` itself stays lenient because iterations flatten it. The usage
+/// object is a handful of counts, so buffering it costs little.
+fn deserialize_message_usage<'de, D>(deserializer: D) -> Result<ClaudeUsage, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    const NON_NULLABLE: &[&str] = &[
+        "speed",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+    ];
+    let usage = serde_json::Value::deserialize(deserializer)?;
+    if NON_NULLABLE
+        .iter()
+        .any(|field| usage.get(field).is_some_and(serde_json::Value::is_null))
+    {
+        return Err(serde::de::Error::custom("unsupported null usage field"));
+    }
+    ClaudeUsage::deserialize(usage).map_err(serde::de::Error::custom)
 }
 
 /// The `message.usage` token counts.  `Option` tolerates both an absent field
@@ -127,6 +166,28 @@ pub(super) struct CacheCreation {
     ephemeral_5m_input_tokens: u64,
     #[serde(default, deserialize_with = "lenient_u64")]
     ephemeral_1h_input_tokens: u64,
+}
+
+/// Deserialize a present field, failing on an explicit `null`; pair it with
+/// `#[serde(default)]` so an absent field stays `None`.
+fn reject_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)?
+        .map(Some)
+        .ok_or_else(|| serde::de::Error::custom("unsupported null field"))
+}
+
+/// [`reject_null`] for a field whose value is otherwise unused.
+fn reject_null_any<'de, D>(deserializer: D) -> Result<(), D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<serde::de::IgnoredAny>::deserialize(deserializer)?
+        .map(drop)
+        .ok_or_else(|| serde::de::Error::custom("unsupported null field"))
 }
 
 /// Deserialize a token count leniently: a mistyped value (float, string, `null`,
@@ -225,33 +286,6 @@ fn env_config_dir(raw: &str) -> Option<PathBuf> {
 
 // ── Validation helpers ────────────────────────────────────────────────────────
 
-/// Return `true` when `entry` carries a `null` at a path that the upstream
-/// TypeScript/Zod schema does not accept as nullable.
-///
-/// These are the same field names rejected by ccusage's `has_unsupported_null_field`,
-/// matched at their schema paths only: a nullable field of the same name nested
-/// elsewhere (`message.usage.iterations[].model`) must not drop the entry.
-/// Skipping them prevents silently including entries with missing cost or IDs.
-fn has_unsupported_null_field(entry: &serde_json::Value) -> bool {
-    const NULL_POINTERS: &[&str] = &[
-        "/costUSD",
-        "/version",
-        "/sessionId",
-        "/requestId",
-        "/isApiErrorMessage",
-        "/message/id",
-        "/message/model",
-        "/message/usage/speed",
-        "/message/usage/cache_read_input_tokens",
-        "/message/usage/cache_creation_input_tokens",
-    ];
-    NULL_POINTERS.iter().any(|pointer| {
-        entry
-            .pointer(pointer)
-            .is_some_and(serde_json::Value::is_null)
-    })
-}
-
 /// Return `false` for entries that would be rejected by the upstream schema:
 /// empty strings for IDs/model, or a `version` that is not a semver prefix.
 fn is_valid_claude_entry(entry: &ClaudeEntry) -> bool {
@@ -298,14 +332,7 @@ pub(super) fn priced_entry(line: &[u8]) -> Option<ClaudeEntry> {
     if line.is_empty() || !bytes_contains(line, USAGE_MARKER) {
         return None;
     }
-    if !bytes_contains(line, b"null") {
-        return serde_json::from_slice(line).ok();
-    }
-    let entry: serde_json::Value = serde_json::from_slice(line).ok()?;
-    if has_unsupported_null_field(&entry) {
-        return None;
-    }
-    serde_json::from_value(entry).ok()
+    serde_json::from_slice(line).ok()
 }
 
 /// Parse a Claude JSONL file into raw `CachedEntry` values, resuming from
@@ -315,7 +342,7 @@ pub(super) fn priced_entry(line: &[u8]) -> Option<ClaudeEntry> {
 /// ### Fast pre-filter
 /// Lines without `"usage":{` are skipped before deserialization — tool-call,
 /// user-message, and summary lines carry no usage object and no `costUSD`.
-/// Lines carrying `null` at an unsupported schema path are also rejected.
+/// Lines carrying `null` at a non-nullable schema path fail deserialization.
 ///
 /// ### Dedup lives downstream
 /// Entries are returned raw, duplicates and sidechain replays included. Batch
@@ -853,6 +880,8 @@ mod tests {
                 r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":-1.0,"message":{"usage":{"input_tokens":1}}}"#,
                 r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":null,"message":{"usage":{"input_tokens":1}}}"#,
                 r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.1,"message":{"id":"msg-1","model":null,"usage":{"input_tokens":1}}}"#,
+                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.1,"message":{"id":"msg-5","usage":{"input_tokens":1,"cache_read_input_tokens":null}}}"#,
+                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.1,"isApiErrorMessage":null,"message":{"id":"msg-6","usage":{"input_tokens":1}}}"#,
                 r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.1,"requestId":"","message":{"id":"msg-2","usage":{"input_tokens":1}}}"#,
                 r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.1,"version":"dev","message":{"id":"msg-3","usage":{"input_tokens":1}}}"#,
                 &claude_line("2026-01-01", 0.5, "msg-4", "req-4"),
