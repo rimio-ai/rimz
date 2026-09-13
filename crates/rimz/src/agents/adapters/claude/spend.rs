@@ -19,8 +19,8 @@
 //! When an older transcript still carries a positive `costUSD`, that authoritative
 //! figure is used verbatim and the table is not consulted.
 //!
-//! Fast pre-filter: skip lines without `"usage":{` and lines where certain
-//! fields carry `:null` (rejected by the upstream TypeScript/Zod schema).
+//! Fast pre-filter: skip lines without `"usage":{`, and lines where certain
+//! schema paths carry `null` (rejected by the upstream TypeScript/Zod schema).
 //! Entries are returned raw. Batch consumers apply the shared
 //! `SidechainDedup` policy in the fleet walk, seat fold, or per-session
 //! selector; live folds retain a contiguous-duplicate window. An incremental
@@ -225,25 +225,31 @@ fn env_config_dir(raw: &str) -> Option<PathBuf> {
 
 // ── Validation helpers ────────────────────────────────────────────────────────
 
-/// Return `true` when `line` contains a `:null` value for a field that the
-/// upstream TypeScript/Zod schema does not accept as nullable.
+/// Return `true` when `entry` carries a `null` at a path that the upstream
+/// TypeScript/Zod schema does not accept as nullable.
 ///
-/// These are the same field names rejected by ccusage's `has_unsupported_null_field`.
+/// These are the same field names rejected by ccusage's `has_unsupported_null_field`,
+/// matched at their schema paths only: a nullable field of the same name nested
+/// elsewhere (`message.usage.iterations[].model`) must not drop the entry.
 /// Skipping them prevents silently including entries with missing cost or IDs.
-fn has_unsupported_null_field(line: &[u8]) -> bool {
-    const NULL_PATTERNS: &[&[u8]] = &[
-        b"\"id\":null",
-        b"\"model\":null",
-        b"\"speed\":null",
-        b"\"costUSD\":null",
-        b"\"version\":null",
-        b"\"sessionId\":null",
-        b"\"requestId\":null",
-        b"\"isApiErrorMessage\":null",
-        b"\"cache_read_input_tokens\":null",
-        b"\"cache_creation_input_tokens\":null",
+fn has_unsupported_null_field(entry: &serde_json::Value) -> bool {
+    const NULL_POINTERS: &[&str] = &[
+        "/costUSD",
+        "/version",
+        "/sessionId",
+        "/requestId",
+        "/isApiErrorMessage",
+        "/message/id",
+        "/message/model",
+        "/message/usage/speed",
+        "/message/usage/cache_read_input_tokens",
+        "/message/usage/cache_creation_input_tokens",
     ];
-    NULL_PATTERNS.iter().any(|p| bytes_contains(line, p))
+    NULL_POINTERS.iter().any(|pointer| {
+        entry
+            .pointer(pointer)
+            .is_some_and(serde_json::Value::is_null)
+    })
 }
 
 /// Return `false` for entries that would be rejected by the upstream schema:
@@ -289,10 +295,17 @@ fn is_semver_prefix(value: &str) -> bool {
 pub(super) fn priced_entry(line: &[u8]) -> Option<ClaudeEntry> {
     const USAGE_MARKER: &[u8] = br#""usage":{"#;
 
-    if line.is_empty() || !bytes_contains(line, USAGE_MARKER) || has_unsupported_null_field(line) {
+    if line.is_empty() || !bytes_contains(line, USAGE_MARKER) {
         return None;
     }
-    serde_json::from_slice(line).ok()
+    if !bytes_contains(line, b"null") {
+        return serde_json::from_slice(line).ok();
+    }
+    let entry: serde_json::Value = serde_json::from_slice(line).ok()?;
+    if has_unsupported_null_field(&entry) {
+        return None;
+    }
+    serde_json::from_value(entry).ok()
 }
 
 /// Parse a Claude JSONL file into raw `CachedEntry` values, resuming from
@@ -302,7 +315,7 @@ pub(super) fn priced_entry(line: &[u8]) -> Option<ClaudeEntry> {
 /// ### Fast pre-filter
 /// Lines without `"usage":{` are skipped before deserialization — tool-call,
 /// user-message, and summary lines carry no usage object and no `costUSD`.
-/// Lines with unsupported null fields are also rejected before deserialization.
+/// Lines carrying `null` at an unsupported schema path are also rejected.
 ///
 /// ### Dedup lives downstream
 /// Entries are returned raw, duplicates and sidechain replays included. Batch
@@ -848,6 +861,25 @@ mod tests {
         let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
         assert_eq!(entries.len(), 1);
         assert!((entries[0].cost_usd - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn nested_null_iteration_model_keeps_main_model_usage() {
+        // Current Claude Code logs `usage.iterations[].model: null` on the main
+        // response; only the schema's top-level `message.model` may reject it.
+        let dir = TempDir::new().unwrap();
+        let file = write_jsonl(
+            dir.path(),
+            "chat.jsonl",
+            &[
+                r#"{"timestamp":"2026-09-12T16:44:35.983Z","message":{"id":"msg-repro","model":"claude-fable-5-1","usage":{"input_tokens":1,"iterations":[{"type":"message","model":null}]}}}"#,
+            ],
+        );
+        let parsed = parse_claude_spend(&file, 0, &no_prices());
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(parsed.entries[0].model.as_deref(), Some("claude-fable-5-1"));
+        assert_eq!(parsed.entries[0].input, 1);
+        assert!(parsed.unknown_models.contains_key("claude-fable-5-1"));
     }
 
     #[test]

@@ -68,7 +68,9 @@ use super::aggregate::{
 /// v22 removes locally fabricated pricing fallbacks, so finalized token-priced
 /// sessions rebuild once against the upstream-only book. v23 applies Claude's
 /// managed contracted rates, so finalized Claude sessions need one cold reprice.
-pub(crate) const SPENDING_CACHE_VERSION: u32 = 23;
+/// v24 rejects Claude null fields only at their schema paths, so finalized
+/// Claude sessions whose nested iteration `model` is null rebuild once.
+pub(crate) const SPENDING_CACHE_VERSION: u32 = 24;
 
 /// On-disk cache persisted at shared state `spending.json`.
 ///
