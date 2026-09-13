@@ -684,7 +684,7 @@ fn tmux_supervised_print_launches_hook_firing_agent_binary() {
     trust_codex_hooks(&env);
     let stub_dir = write_hook_firing_agent(&env, "codex");
     let agent_path = path_with_front(&stub_dir);
-    trust_codex_agent_path(&env, &agent_path);
+    trust_agent_path(&env, "codex", &agent_path);
     let socket = managed_socket(&env.runtime_root);
     let _server = TmuxServerGuard::new(socket.clone());
     let prompt = "summarize the diff; preserve \"quoted\" details\n".repeat(1024);
@@ -748,7 +748,7 @@ fn tmux_resumed_parent_session_switch_keeps_subagent_nested() {
     trust_codex_hooks(&env);
     let stub_dir = write_hook_firing_agent(&env, "codex");
     let agent_path = path_with_front(&stub_dir);
-    trust_codex_agent_path(&env, &agent_path);
+    trust_agent_path(&env, "codex", &agent_path);
     let socket = managed_socket(&env.runtime_root);
     let _server = TmuxServerGuard::new(socket.clone());
     let session = workspace_session(&env);
@@ -1086,7 +1086,7 @@ fn tmux_subagent_nests_under_parent_and_parent_stop_cascades() {
     trust_codex_hooks(&env);
     let stub_dir = write_hook_firing_agent(&env, "codex");
     let agent_path = path_with_front(&stub_dir);
-    trust_codex_agent_path(&env, &agent_path);
+    trust_agent_path(&env, "codex", &agent_path);
     let socket = managed_socket(&env.runtime_root);
     let _server = TmuxServerGuard::new(socket.clone());
     let session = workspace_session(&env);
@@ -1350,7 +1350,7 @@ fn tmux_settled_subagent_reports_to_parent() {
     trust_codex_hooks(&env);
     let stub_dir = write_hook_firing_agent(&env, "codex");
     let agent_path = path_with_front(&stub_dir);
-    trust_codex_agent_path(&env, &agent_path);
+    trust_agent_path(&env, "codex", &agent_path);
     let socket = managed_socket(&env.runtime_root);
     let _server = TmuxServerGuard::new(socket.clone());
     let session = workspace_session(&env);
@@ -1878,7 +1878,7 @@ fn tmux_completed_subagent_status_lingers_until_parent_pane_disappears() {
     trust_codex_hooks(&env);
     let stub_dir = write_hook_firing_agent(&env, "codex");
     let agent_path = path_with_front(&stub_dir);
-    trust_codex_agent_path(&env, &agent_path);
+    trust_agent_path(&env, "codex", &agent_path);
     let socket = managed_socket(&env.runtime_root);
     let _server = TmuxServerGuard::new(socket.clone());
     let session = workspace_session(&env);
@@ -2065,7 +2065,7 @@ fn tmux_supervised_print_returns_failed_when_agent_binary_exits_nonzero() {
     trust_codex_hooks(&env);
     let stub_dir = write_hook_firing_agent(&env, "codex");
     let agent_path = path_with_front(&stub_dir);
-    trust_codex_agent_path(&env, &agent_path);
+    trust_agent_path(&env, "codex", &agent_path);
     let socket = managed_socket(&env.runtime_root);
     let _server = TmuxServerGuard::new(socket.clone());
 
@@ -2155,6 +2155,7 @@ fn named_account_room_launches_into_its_home_and_refuses_cross_account_resume() 
     );
     std::fs::write(&shim, body).expect("write claude shim");
     let agent_path = path_with_front(&stub_dir);
+    trust_agent_path(&env, "claude", &agent_path);
     let socket = managed_socket(&env.runtime_root);
     let _server = TmuxServerGuard::new(socket.clone());
     let session = workspace_session(&env);
@@ -2693,7 +2694,7 @@ fn trust_codex_hooks(env: &Env) {
     std::fs::write(&config, text).expect("write trust state");
 }
 
-fn trust_codex_agent_path(env: &Env, path: &OsStr) {
+fn trust_agent_path(env: &Env, agent: &'static str, path: &OsStr) {
     #[derive(serde::Serialize)]
     struct Config {
         agents: [Agent; 1],
@@ -2706,11 +2707,11 @@ fn trust_codex_agent_path(env: &Env, path: &OsStr) {
 
     let text = toml::to_string(&Config {
         agents: [Agent {
-            name: "codex",
+            name: agent,
             env: std::collections::BTreeMap::from([("PATH", path.to_string_lossy().into_owned())]),
         }],
     })
-    .expect("serialize trusted codex PATH config");
+    .expect("serialize trusted agent PATH config");
     env.write_config(&env.project_root, &text);
     let out = env
         .rimz()
