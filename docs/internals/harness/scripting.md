@@ -65,7 +65,7 @@ Live agent state stays out of the record. `rimz agents show <run-id>` reads the 
 | `Failed` | `1` | a root `TurnEnded` that errored, a session `Ended` before any turn result, the wrapper's process-death backstop, or a pane that failed to open |
 | `VerifyFailed` | `123` | the verify command stayed red through `--max-attempts` total turns |
 | `TimedOut` | `124` | the blocking waiter's `--timeout` elapsed, or the timeout helper found `deadline_at` overdue |
-| `BudgetExceeded` | `125` | the budget-park helper stopped the run's agent mid-turn for crossing its launch `--budget` ([budget.md](./budget.md)) |
+| `BudgetExceeded` | `125` | the budget-park helper stopped the run's agent mid-turn for crossing a dollar cap: its launch `--budget`, the turn cap, or the room or account cap ([budget.md § The park](./budget.md#the-park)) |
 | `Canceled` | `130` | `rimz agents stop`, Ctrl+C on a blocking caller, a `TurnInterrupted` signal, a subagent's parent ending, or store reset |
 
 The parenthesized codes are what a caller exits with when it stops waiting on a live run.
