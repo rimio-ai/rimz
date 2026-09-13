@@ -11,8 +11,8 @@ pub(super) fn logs_agent(
     json: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let target = agent_logs_target(&reference);
+    let workspace = crate::cli::transcript::resolve_view_workspace(Some(&target), None, globals)?;
     let hidden = crate::cli::transcript::Hidden::for_json(json);
     if follow {
         return follow_agent_logs(&workspace, &target, tail, all, json, hidden);

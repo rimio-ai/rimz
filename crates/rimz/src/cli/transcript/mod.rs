@@ -18,7 +18,7 @@ use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
 pub struct TranscriptArgs {
-    /// Agent address, `#channel`, or `@all`. Omit for the current channel.
+    /// Agent address, `#channel`, or `@all`. Omit for the current channel; a `#channel` is found across every known workspace.
     #[arg(add = clap_complete::ArgValueCandidates::new(
         crate::cli::complete::transcript_targets
     ))]
@@ -200,7 +200,8 @@ use thread::entries_for_view;
 #[cfg(test)]
 use {chat::*, scope::*, thread::*};
 pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
+    let workspace =
+        resolve_view_workspace(args.target.as_deref(), args.worktree.as_deref(), globals)?;
     let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing state paths")?;
     let view = chat_view_with_mode(
@@ -241,6 +242,81 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The workspace a view reads: the participant's own, unless the view names a
+/// channel that workspace has no conversation for and exactly one other known
+/// workspace does. `--root` pins the participant's workspace.
+pub(crate) fn resolve_view_workspace(
+    target: Option<&str>,
+    worktree: Option<&str>,
+    globals: &GlobalFlags,
+) -> Result<rimz::ResolvedWorkspace> {
+    let current = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
+    if globals.root.is_some() {
+        return Ok(current);
+    }
+    let Some(channel) = requested_channel(target, worktree) else {
+        return Ok(current);
+    };
+    let paths = rimz::StatePaths::for_workspace(current.workspace_id.clone())
+        .context("preparing state paths")?;
+    let current_has = rimz::transcript::channels(&paths)
+        .is_ok_and(|channels| channels.contains(channel.as_str()));
+    let candidates = if current_has {
+        Vec::new()
+    } else {
+        rimz::transcript::workspaces_with_channel(&channel)
+    };
+    match channel_home(&channel, current_has, candidates)? {
+        ChannelHome::Current => Ok(current),
+        ChannelHome::Elsewhere(known) => {
+            Ok(WorkspaceResolver::resolve(&known.project_root, None).unwrap_or(current))
+        }
+    }
+}
+
+fn requested_channel(target: Option<&str>, worktree: Option<&str>) -> Option<String> {
+    let inline = match target {
+        Some(raw) if raw.starts_with('#') => Some(raw.trim_start_matches('#').to_owned()),
+        Some(raw) => scope::parse_transcript_target(raw)
+            .ok()
+            .and_then(|(_, inline)| inline),
+        None => None,
+    };
+    inline
+        .or_else(|| worktree.map(ToOwned::to_owned))
+        .filter(|channel| !channel.is_empty())
+}
+
+#[derive(Debug)]
+enum ChannelHome {
+    Current,
+    Elsewhere(rimz::workspace::KnownWorkspace),
+}
+
+fn channel_home(
+    channel: &str,
+    current_has: bool,
+    mut candidates: Vec<rimz::workspace::KnownWorkspace>,
+) -> Result<ChannelHome> {
+    if current_has {
+        return Ok(ChannelHome::Current);
+    }
+    match candidates.len() {
+        0 => Ok(ChannelHome::Current),
+        1 => Ok(ChannelHome::Elsewhere(candidates.remove(0))),
+        _ => {
+            let roots = candidates
+                .iter()
+                .map(|known| known.project_root.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!(
+                "#{channel} has conversations in several workspaces: {roots}; run from one of them or pass --root <path>"
+            )
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

@@ -4,6 +4,7 @@
 //! workspace state root. This transcript is distinct from provider-native
 //! transcript and session files.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -12,9 +13,11 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::disk::{atomic, lock, paths::StatePaths};
+use crate::disk::paths::{StatePaths, state_home, workspaces_dir_under};
+use crate::disk::{atomic, lock};
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::ids::{AskId, compose_channel};
+use crate::workspace::{KnownWorkspace, known_workspaces_under};
 
 const FILE_DAYS: u32 = 7;
 const SECONDS_PER_DAY: i64 = 86_400;
@@ -319,6 +322,47 @@ pub fn read_all(paths: &StatePaths) -> Result<Vec<TranscriptEntry>> {
     Ok(entries)
 }
 
+/// The distinct channels stamped on the workspace's transcript entries.
+pub fn channels(paths: &StatePaths) -> Result<BTreeSet<String>> {
+    Ok(read_all(paths)?
+        .into_iter()
+        .filter_map(|entry| entry.channel)
+        .collect())
+}
+
+/// Every known workspace whose transcript log has entries stamped with
+/// `channel`. Best-effort inventory for read commands: transcript evidence
+/// only, unreadable workspaces and logs skipped.
+pub fn workspaces_with_channel(channel: &str) -> Vec<KnownWorkspace> {
+    workspaces_with_channel_under(&state_home(), channel)
+}
+
+/// [`workspaces_with_channel`] over an explicit state root, for tests.
+pub fn workspaces_with_channel_under(state_root: &Path, channel: &str) -> Vec<KnownWorkspace> {
+    let known = match known_workspaces_under(&workspaces_dir_under(state_root)) {
+        Ok(known) => known,
+        Err(err) => {
+            tracing::debug!(error = %err, "cannot enumerate workspaces for channel lookup");
+            return Vec::new();
+        }
+    };
+    known
+        .into_iter()
+        .filter(|workspace| {
+            let Ok(paths) = StatePaths::under(workspace.workspace_id.clone(), state_root) else {
+                return false;
+            };
+            match channels(&paths) {
+                Ok(channels) => channels.contains(channel),
+                Err(err) => {
+                    tracing::debug!(workspace = %workspace.workspace_id, error = %err, "skipping workspace in channel lookup");
+                    false
+                }
+            }
+        })
+        .collect()
+}
+
 /// The agent's latest open native ask: the newest `Ask` entry for
 /// `(kind, agent_id)` with no later `Answer` entry.
 ///
@@ -449,6 +493,50 @@ mod tests {
         let id = WorkspaceId::from_project_root(dir.path());
         let paths = StatePaths::under(id, dir.path()).expect("state paths");
         (dir, paths)
+    }
+
+    #[test]
+    fn workspaces_with_channel_finds_transcript_evidence() {
+        let dir = tempdir().expect("tempdir");
+        let state_root = dir.path().join("state");
+        let mut ids = Vec::new();
+        for (name, channel) in [("alpha", "x"), ("beta", "y")] {
+            let project = dir.path().join(name);
+            fs::create_dir_all(&project).expect("mkdir project");
+            let project = project.canonicalize().expect("canonical project");
+            let id = WorkspaceId::from_project_root(&project);
+            let paths = StatePaths::under(id.clone(), &state_root).expect("state paths");
+            fs::create_dir_all(&paths.root).expect("mkdir workspace");
+            crate::workspace::record::write(
+                &paths,
+                &crate::workspace::record::WorkspaceRecord {
+                    workspace_id: id.clone(),
+                    project_root: project.clone(),
+                    worktree_root: None,
+                    session_name: format!("rimz-{name}"),
+                    root_class: crate::workspace::RootClass::Directory,
+                    rimz_bin: None,
+                    rimz_build: None,
+                    updated_at: Timestamp::UNIX_EPOCH,
+                },
+            )
+            .expect("write record");
+            let mut line = entry(TranscriptKind::Prompt, "hi", "2026-06-01T00:00:00Z");
+            line.channel = Some(channel.to_owned());
+            append(&paths, &line).expect("append");
+            ids.push(id);
+        }
+
+        let found = workspaces_with_channel_under(&state_root, "x");
+
+        assert_eq!(
+            found
+                .iter()
+                .map(|workspace| &workspace.workspace_id)
+                .collect::<Vec<_>>(),
+            [&ids[0]]
+        );
+        assert!(workspaces_with_channel_under(&state_root, "z").is_empty());
     }
 
     fn entry(entry: TranscriptKind, text: &str, at: &str) -> TranscriptEntry {
