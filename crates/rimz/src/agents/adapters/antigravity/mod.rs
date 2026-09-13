@@ -16,7 +16,7 @@ impl crate::agents::capabilities::RuntimeControlCapability for AntigravityAdapte
 #[cfg(test)]
 mod tests;
 
-pub(crate) use crate::agents::capabilities::*;
+use crate::agents::capabilities::*;
 
 use std::path::{Path, PathBuf};
 
@@ -58,14 +58,14 @@ const STATUS_LINE: super::managed_statusline::ManagedStatusLineSpec =
         required_for_install: true,
     };
 
-pub(super) struct AntigravityHook {
+struct AntigravityHook {
     pub(super) hook: HookEventSpec,
     pub(super) config_event: &'static str,
     pub(super) config_matcher: Option<&'static str>,
     pub(super) command: &'static str,
 }
 
-pub(super) const ANTIGRAVITY_HOOKS: [AntigravityHook; 6] = [
+const ANTIGRAVITY_HOOKS: [AntigravityHook; 6] = [
     AntigravityHook {
         hook: HookEventSpec::lifecycle(
             "PreInvocation",
@@ -344,7 +344,7 @@ const ANTIGRAVITY_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
 };
 
 #[derive(Clone, Debug, Default)]
-pub struct AntigravityAdapter;
+pub(in crate::agents) struct AntigravityAdapter;
 
 impl crate::agents::capabilities::CoreCapability for AntigravityAdapter {
     fn spec(&self) -> &'static AgentSpec {
