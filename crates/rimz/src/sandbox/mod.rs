@@ -31,12 +31,9 @@ impl TmpView {
         }
     }
 
-    pub fn current(paths: &StatePaths) -> Self {
-        Self::for_launch(None, paths)
-    }
-
-    /// The view of an agent launched with this `--isolation` override.
-    pub fn for_launch(isolation: Option<Isolation>, paths: &StatePaths) -> Self {
+    /// The view of an agent launched with this `--isolation` override; `None`
+    /// follows current machine policy.
+    pub fn current(isolation: Option<Isolation>, paths: &StatePaths) -> Self {
         let isolation = isolation.unwrap_or_else(|| MachineConfig::load_lenient().agents.isolation);
         Self::new(isolation, paths)
     }

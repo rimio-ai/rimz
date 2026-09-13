@@ -157,7 +157,7 @@ fn report_fleet_with_kind(
         return Ok(ReportOutcome::NothingToReport);
     }
 
-    let view = TmpView::for_launch(parent.isolation, store.paths());
+    let view = TmpView::current(parent.isolation, store.paths());
     let responses = write_response_files(store.paths(), &view, &rows)?;
     let digest_rows = rows
         .iter()
