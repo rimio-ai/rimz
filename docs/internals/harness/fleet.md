@@ -249,7 +249,7 @@ An in-place launch resolves liveness from the pane instead of from an end trace,
 
 Tab titles follow the address vocabulary. A named-channel or worktree launch names its tab `#<NAME>`, and a named team launch names it `team:<name>` and stamps its in-place lane as `<dir>/<team>`. Other launches join their pane names with `+`: profile else kind for agents, executable basename for commands, and shell basename for empty command cells, keeping three tokens before `+…` and omitting the directory suffix (`opus`, `nvim+claude`). An empty layout falls back to `term`. An in-place launch applies that title to its existing tab before exec and pins the pane's own launch name.
 
-Titles are best-effort display. The sidebar producer returns a pane-named tab to the shell's name once no agent remains; tmux also restores inherited automatic naming and clears the pane-name pins. Scoped and user-chosen names that do not match the panes are kept ([multiplexers.md § Reading the room](../multiplexers.md#reading-the-room)). Mux tab names are mutable and live outside the store, so they never form an address.
+Titles are best-effort display. The sidebar producer returns a pane-named tab to the shell's name once no agent remains; tmux also restores inherited automatic naming and clears the pane-name pins. Scoped and user-chosen names that do not match the panes are kept ([multiplexers.md → tab names](../multiplexers.md#tab-names)). Mux tab names are mutable and live outside the store, so they never form an address.
 
 ### Cohort relaunch reconciliation
 

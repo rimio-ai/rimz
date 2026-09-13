@@ -399,7 +399,7 @@ A reload upgrades the Zellij presence plugin only when its identity differs. The
 
 `rimz sidebar repair` converges every view toward exactly one live sidebar: it closes duplicate and orphan sidebars, adds a missing one, and replaces an unclaimed one add-before-close, committing a replacement only after the new pane mounts in the intended view and publishes a current-build heartbeat. It owns the Zellij presence-liveness precondition, and it shares reload's orphan-reap gate. The planner, verdicts, and Zellij mount proof are [multiplexers.md](../multiplexers.md#one-sidebar-per-view) and [in-place repair](../multiplexers.md#in-place-repair).
 
-On Zellij, repair captures one unique fresh client view before changing structure, then restores focus through the same two-phase intent a jump uses: the exact live work pane, or the viewed tab's leftmost work sibling. Unavailable or ambiguous views skip the focus change. Adds and geometry repair in a detached Zellij session wait until a client attaches; tmux mounts splits detached. The daemon view is left alone, because its hosts are managed.
+On Zellij, repair captures one unique fresh client view before changing structure, then restores focus through the same two-phase intent a jump uses: the exact live work pane, or the viewed tab's leftmost work sibling. Unavailable or ambiguous views skip the focus change. Adds and geometry repair in a detached Zellij session wait until a client attaches; tmux mounts splits detached. Repair never closes the daemon view's managed hosts; that view counts as occupied and keeps one sidebar like any working view.
 
 ## Resume-on-rebirth
 

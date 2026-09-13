@@ -1,10 +1,10 @@
 # Multiplexers
 
-RimZ does not implement a terminal. Zellij and tmux already solved persistent sessions, pseudo-terminals, and pane geometry, so RimZ drives one of them and keeps its own job narrow: durable workspace state, the agent model, and the sidebar on top. `crates/rimz/src/mux/` is that seam. Beside it sits one wasm plugin, `crates/rimz-presence-zellij/`, because Zellij has no other way to push events at a host process.
+RimZ does not implement a terminal. Zellij and tmux already provide persistent sessions, pseudo-terminals, and pane geometry, so RimZ drives one of them and keeps its own job to durable workspace state, the agent model, and the sidebar. `crates/rimz/src/mux/` is that seam. Beside it sits one wasm plugin, `crates/rimz-presence-zellij/`, because a plugin is the only way Zellij pushes events to a host process.
 
 Both backends are first class: same store, same CLI, same sidebar model, one test matrix. A feature that lands here lands twice.
 
-This page is the RimZ side of the seam. The upstream surfaces themselves (every Zellij option, every tmux format variable) are catalogued in the externals mirrors, [zellij-reference.md](../externals/mux-adapter/zellij-reference.md) and [tmux-reference.md](../externals/mux-adapter/tmux-reference.md). What a user configures is [configuration → multiplexer room options](../guide/configuration.md#multiplexer-room-options) and the [Zellij and tmux guide](../guide/multiplexer.md).
+This page is the RimZ side of the seam. The upstream surfaces (every Zellij option, every tmux format variable) are catalogued in [zellij-reference.md](../externals/mux-adapter/zellij-reference.md) and [tmux-reference.md](../externals/mux-adapter/tmux-reference.md). What a user configures is in [configuration → multiplexer room options](../guide/configuration.md#multiplexer-room-options) and the [Zellij and tmux guide](../guide/multiplexer.md).
 
 ## The division of labour
 
@@ -15,11 +15,11 @@ This page is the RimZ side of the seam. The upstream surfaces themselves (every 
 | Attach, detach, scrollback, copy mode | Run and wakeup sockets, the trust gate, agent hooks |
 | Session resurrection, where it exists | Rebirth: which agents come back and how |
 
-Three rules follow from that split, and they are the ones to internalize before reading any code in this module.
+Three rules follow from that split. Read them before any code in this module.
 
-**Parity is the rule; fast paths are the exception.** A backend-only capability is always a latency hint layered over shared truth. The Zellij presence plugin and the tmux control-mode watch both push topology, and both are optional: with either channel dead, its backend falls back to polling and passes the same test matrix. Correctness never reads from a push channel.
+**Parity is the rule, and a fast path is a latency hint.** A backend-only capability always sits over shared truth. The Zellij presence plugin and the tmux control-mode watch both push topology, and both are optional: with either channel dead, its backend polls and passes the same test matrix. Correctness never reads from a push channel.
 
-**Cross-backend policy stays pure and above the backends.** [`reconcile.rs`](../../crates/rimz/src/mux/reconcile.rs) owns the one-sidebar-per-view structural planner and its execution accounting, [`width.rs`](../../crates/rimz/src/mux/width.rs) owns sizing arithmetic, and [`sidebar/presence/projector.rs`](../../crates/rimz/src/sidebar/presence/projector.rs) owns the policy that turns normalized presence transitions into typed events, over the vocabulary [`wakeup/events.rs`](../../crates/rimz/src/wakeup/events.rs) defines. Each backend collects native facts and executes native effects. Geometry convergence remains adapter-side because Zellij repairs before structural execution and tmux repairs only after structural success. These policy modules unit-test with no multiplexer installed.
+**Cross-backend policy stays pure and above the backends.** [`reconcile.rs`](../../crates/rimz/src/mux/reconcile.rs) owns the one-sidebar-per-view planner and its execution accounting, [`width.rs`](../../crates/rimz/src/mux/width.rs) owns sizing arithmetic, and [`sidebar/presence/projector.rs`](../../crates/rimz/src/sidebar/presence/projector.rs) turns normalized presence transitions into typed events over the vocabulary in [`wakeup/events.rs`](../../crates/rimz/src/wakeup/events.rs). These modules unit-test with no multiplexer installed. Each backend collects native facts and executes native effects. Geometry convergence stays in the adapters, because Zellij repairs geometry before structural execution and tmux only after structural success.
 
 **Backends stay ignorant of agents.** The CLI hands `open_tab` backend-neutral pane argv and layout geometry. Agent resolution, prompts, and worktree cleanup are already compiled into that argv (`rimz agents exec …`), so no backend knows what an agent kind or a worktree is. The layout IR is in [fleet.md](./harness/fleet.md#the-layout-ir); worktree cleanup is in [worktrees.md](./harness/worktrees.md#who-triggers-removal).
 
@@ -29,33 +29,31 @@ Shared seam, `crates/rimz/src/mux/`:
 
 | Path | Owns |
 | --- | --- |
-| [`mod.rs`](../../crates/rimz/src/mux/mod.rs) | The `MuxBackend` trait, its option and result types, `MuxErr`, and the one env→`PaneId` mapping. |
+| [`mod.rs`](../../crates/rimz/src/mux/mod.rs) | The `MuxBackend` trait, its option and result types, `MuxErr`, and the one env-to-`PaneId` mapping. |
 | [`selection.rs`](../../crates/rimz/src/mux/selection.rs) | Backend selection precedence. |
 | [`command.rs`](../../crates/rimz/src/mux/command.rs) | `CommandSpec`: the bounded subprocess engine every control command runs through. |
-| [`pane_writer.rs`](../../crates/rimz/src/mux/pane_writer.rs) | `PaneWriter`: the per-pane user-scoped runtime advisory write lock, addressed by `RuntimePaths::pane_write_lock`. |
+| [`pane_writer.rs`](../../crates/rimz/src/mux/pane_writer.rs) | `PaneWriter`: the per-pane advisory write lock at `RuntimePaths::pane_write_lock` ([messaging.md → writing to the pane](./harness/messaging.md#writing-to-the-pane)). |
 | [`reconcile.rs`](../../crates/rimz/src/mux/reconcile.rs) | The structural sidebar repair planner, pane-role precedence, and transaction executor. |
 | [`mount_proof.rs`](../../crates/rimz/src/mux/mount_proof.rs) | Current-build heartbeat proof for panes mounted during repair. |
 | [`width.rs`](../../crates/rimz/src/mux/width.rs) | Sidebar sizing: share resolution, native steps, and target spellings. |
+| [`width_target.rs`](../../crates/rimz/src/mux/width_target.rs) | The room-runtime width record every renderer resolves against: its file, its pin flag, and the change broadcast. |
 | [`companion_layout.rs`](../../crates/rimz/src/mux/companion_layout.rs) | Pure bounded column planning and equal-area targets for [subagent companion tabs](./harness/subagents.md#pane-zones). |
 | [`tab_name.rs`](../../crates/rimz/src/mux/tab_name.rs) | Pure pane-derived tab labels, name ownership, and `TabNameIntent`. |
-| [`width_target.rs`](../../crates/rimz/src/mux/width_target.rs) | The room-runtime width record every renderer resolves against: its file, its pin flag, and the change broadcast. |
-| [`focus_anchor.rs`](../../crates/rimz/src/mux/focus_anchor.rs) | The durable two-phase intent behind every RimZ-initiated focus action: nonce, anchor file, pre-action fence, and the five observation verdicts. |
-| [`recovery.rs`](../../crates/rimz/src/mux/recovery.rs) | The guarded process sweep behind room teardown: heuristic kills scoped by uid, session name, ancestry, and process domain. |
+| [`focus_anchor.rs`](../../crates/rimz/src/mux/focus_anchor.rs) | The durable two-phase intent behind every RimZ-initiated focus action ([state.md → focus intent](./sidebar/state.md#focus-intent)). |
+| [`focus_key.rs`](../../crates/rimz/src/mux/focus_key.rs) | Parsing and rendering the `[sidebar] focus_key` and `zoom_key` chords. |
+| [`recovery.rs`](../../crates/rimz/src/mux/recovery.rs) | The guarded process sweep behind room teardown. |
 | [`domain.rs`](../../crates/rimz/src/mux/domain.rs) | `ProcessDomain`: the guard every heuristic process kill passes. |
-| [`focus_key.rs`](../../crates/rimz/src/mux/focus_key.rs) | Parsing and rendering the `[sidebar] focus_key` and `zoom_key` chords both backends bind. |
 | [`capabilities.rs`](../../crates/rimz/src/mux/capabilities.rs) | Static backend facts, such as whether a view is a tab or a window. |
 | [`binaries.rs`](../../crates/rimz/src/mux/binaries.rs) | PATH and live-server binary probes for `rimz doctor`. |
 
-Both backends import named keys and bracketed-paste markers from [`pane::keys`](../../crates/rimz/src/pane/keys.rs). RimZ pane writes use `PaneWriter` to hold one per-pane user-scoped runtime advisory lock across the entire write batch, including paced command segments and the final Enter; `message`, `answer`, and `pane send` share it across workspaces, and steer waits rather than preempting an in-flight write. Identical Zellij pane IDs in separate sessions conservatively share a lock.
-
-Zellij, `crates/rimz/src/mux/zellij/` plus [`zellij.rs`](../../crates/rimz/src/mux/zellij.rs):
+Zellij, [`zellij.rs`](../../crates/rimz/src/mux/zellij.rs) plus `crates/rimz/src/mux/zellij/`:
 
 | Path | Owns |
 | --- | --- |
 | [`backend.rs`](../../crates/rimz/src/mux/zellij/backend.rs) | The `MuxBackend` implementation. |
-| [`layout.rs`](../../crates/rimz/src/mux/zellij/layout.rs) | KDL layout rendering: birth, daemon view, resumed agents, background tabs. Pure `&options → String`. |
+| [`layout.rs`](../../crates/rimz/src/mux/zellij/layout.rs) | KDL layout rendering for birth, the daemon view, resumed agents, and background tabs. Pure `&options → String`. |
 | [`sidebar.rs`](../../crates/rimz/src/mux/zellij/sidebar.rs) | Sidebar birth, in-place recovery, and geometry convergence. |
-| [`presence.rs`](../../crates/rimz/src/mux/zellij/presence.rs) | Plugin materialization, identity, load, retire and upgrade pipes; the reload upgrade outcome. |
+| [`presence.rs`](../../crates/rimz/src/mux/zellij/presence.rs) | Plugin materialization, identity, load, retire and upgrade pipes, and the reload upgrade outcome. |
 | [`pane_topology.rs`](../../crates/rimz/src/mux/zellij/pane_topology.rs) | The topology cache the plugin publishes: schema, path, freshness window, and the desired-presence record beside it. |
 | [`raw_pane.rs`](../../crates/rimz/src/mux/zellij/raw_pane.rs) | Topology projection and sidebar classification. |
 | [`session.rs`](../../crates/rimz/src/mux/zellij/session.rs) | Session discovery, topology-cache reads, the fresh-topology wait reload shares, and serialized-session cache discovery and purge. |
@@ -63,135 +61,142 @@ Zellij, `crates/rimz/src/mux/zellij/` plus [`zellij.rs`](../../crates/rimz/src/m
 | [`reap.rs`](../../crates/rimz/src/mux/zellij/reap.rs) | Pre-attach retirement of orphaned clients from one remote lineage. |
 | [`parse.rs`](../../crates/rimz/src/mux/zellij/parse.rs), [`pane_pid.rs`](../../crates/rimz/src/mux/zellij/pane_pid.rs) | Command-output parsing helpers. |
 
-tmux, `crates/rimz/src/mux/tmux/` plus [`tmux.rs`](../../crates/rimz/src/mux/tmux.rs):
+tmux, [`tmux.rs`](../../crates/rimz/src/mux/tmux.rs) plus `crates/rimz/src/mux/tmux/`:
 
 | Path | Owns |
 | --- | --- |
 | [`backend.rs`](../../crates/rimz/src/mux/tmux/backend.rs) | The `MuxBackend` implementation. |
 | [`window.rs`](../../crates/rimz/src/mux/tmux/window.rs) | Window, pane, and tab-layout command helpers. |
-| [`options.rs`](../../crates/rimz/src/mux/tmux/options.rs) | Room options, key bindings, hooks, sidebar-pane classification. |
+| [`options.rs`](../../crates/rimz/src/mux/tmux/options.rs) | Room options, key bindings, hooks, and sidebar-pane classification. |
 | [`presence.rs`](../../crates/rimz/src/mux/tmux/presence.rs) | The control-mode presence watch. |
 | [`parse.rs`](../../crates/rimz/src/mux/tmux/parse.rs) | Command-output parsers. |
 
-The presence plugin is its own crate; see [the Zellij presence plugin](#the-zellij-presence-plugin).
+Both backends take named keys and bracketed-paste markers from [`pane::keys`](../../crates/rimz/src/pane/keys.rs). The presence plugin is its own crate ([below](#the-zellij-presence-plugin)).
 
-Three modules outside `mux/` complete the picture. [`room/`](../../crates/rimz/src/room/mod.rs) sits above the trait and owns managed identity, birth and reset, the pre-attach health gate, and presence-load ordering. [`sidebar/presence/`](../../crates/rimz/src/sidebar/presence/projector.rs) sits beside it and turns normalized transitions from either backend into typed `SidebarEvent`s. [`wakeup/`](../../crates/rimz/src/wakeup/mod.rs) sits below both and is the wire those events travel on: the renderer heartbeat record, the versioned envelope, and the best-effort datagram send this seam uses without importing the sidebar.
+Three modules outside `mux/` complete the picture. [`room/`](../../crates/rimz/src/room/mod.rs) sits above the trait and owns managed identity, birth and reset, the pre-attach health gate, and presence-load ordering. [`sidebar/presence/`](../../crates/rimz/src/sidebar/presence/projector.rs) turns normalized transitions from either backend into typed `SidebarEvent`s. [`wakeup/`](../../crates/rimz/src/wakeup/mod.rs) sits below both and is the wire those events travel on: the renderer heartbeat record, the versioned envelope, and the best-effort datagram send, which this seam uses without importing the sidebar.
 
 ## Choosing a backend
 
-[`auto_detect_backend`](../../crates/rimz/src/mux/selection.rs) picks one, first match wins:
+[`auto_detect_backend`](../../crates/rimz/src/mux/selection.rs) takes the first match:
 
 1. the `--mux <name>` flag,
-2. the active environment (`ZELLIJ` / `ZELLIJ_PANE_ID`, then `TMUX` / `TMUX_PANE`),
+2. the active environment (`ZELLIJ` or `ZELLIJ_PANE_ID`, then `TMUX` or `TMUX_PANE`),
 3. `[mux] default` from per-machine config, which fails fast when it names an uninstalled backend,
 4. the installed binary, tmux preferred when both are present.
 
-The flag and the environment short-circuit before config is even loaded, so a command run inside a live room always addresses that room.
+The flag and the environment decide before config loads, so a command run inside a live room always addresses that room.
 
-Selection is stable across worktrees: every worktree of one repository resolves to the same session on the same backend. Room identity is path-derived and shared across backends, which means a rival session under the same derived name on the other backend would share the store while its panes stayed unreachable. Four commands guard that: `rimz start`, `rimz reset`, `rimz attach`, and `rimz web` resolve through [`pick_mux_for_session`](../../crates/rimz/src/room/session.rs), so an auto-selected launch lands on the backend that already owns the live room. Start attaches to it; reset tears it down there before rebirthing on the resolved default; web passes the resolved session to the shared ttyd daemon, whose validated shim attaches through its owning backend. [`ensure_single_backend_room`](../../crates/rimz/src/room/session.rs) guards birth itself, refusing an explicit `--mux` that names a backend other than the live room's owner.
+Room identity is path-derived and shared across backends, so every worktree of one repository resolves to the same session name on either backend. A rival session under that name on the other backend would share the store while its panes stayed unreachable. Every entry point that addresses a live room (`rimz start`, `rimz reset`, `rimz attach`, `rimz web`, and supervised pane launches) therefore resolves through [`pick_mux_for_session`](../../crates/rimz/src/room/session.rs), so an auto-selected launch lands on the backend that already owns the room. Start attaches to it, reset tears it down there before rebirthing on the resolved default, and web hands the resolved session to the shared ttyd daemon, whose shim attaches through the owning backend. The session list behind that pick retries up to `LIST_SESSIONS_ATTEMPTS` (3) times, `LIST_SESSIONS_RETRY_DELAY` (250 ms) apart. [`ensure_single_backend_room`](../../crates/rimz/src/room/session.rs) guards birth itself and refuses an explicit `--mux` that names a backend other than the live room's owner.
 
 ## The `MuxBackend` trait
 
-[`MuxBackend`](../../crates/rimz/src/mux/mod.rs) is the whole seam: every Zellij or tmux command in RimZ lives behind one of its methods. They group into seven jobs.
+[`MuxBackend`](../../crates/rimz/src/mux/mod.rs) is the whole seam: every Zellij or tmux command in RimZ lives behind one of its methods.
 
 | Group | Methods | Notes |
 | --- | --- | --- |
-| Session lifecycle | `ensure_session`, `attach_command`, `detach`, `kill_session`, `list_sessions`, `session_liveness`, `version` | `attach_command` hands a `CommandSpec` to the CLI attach runner rather than running it. |
+| Session lifecycle | `name`, `ensure_session`, `attach_command`, `attach_existing_command`, `attach_readonly_command`, `detach`, `kill_session`, `list_sessions`, `list_sessions_within`, `session_liveness`, `version` | The attach methods return a `CommandSpec` for the CLI attach runner instead of running it. |
 | Pane inventory | `list_panes`, `cached_pane_roster`, `client_view` | See [reading the room](#reading-the-room). |
-| Pane I/O | `capture_pane`, `send_keys`, `send_key`, `paste_text` | `paste_text` wraps one bracketed paste and converts logical newlines to CR; tmux loads markers and body together into a unique stdin-fed buffer and pastes it raw, including in copy mode, while Zellij writes bounded 8 KiB byte chunks. On failure, tmux best-effort deletes the buffer and Zellij stops body writes and best-effort writes the closing marker; both return the original error. The submit Enter follows separately as a keystroke. |
-| Structure | `split_pane`, `append_companion_pane`, `open_tab`, `rename_tab`, `open_sidebar`, `open_background_view`, `close_pane`, `close_view_floating_panes` | Callers pass backend-neutral argv and layout geometry. Companion append checks native occupancy before birth and balances best-effort afterward; its `Full` result guarantees no payload ran. Tab rename and optional post-birth placement address a view through a pane anchor. |
+| Pane I/O | `capture_pane`, `send_keys`, `send_key`, `paste_text` | `paste_text` writes one bracketed paste; the submit Enter is a separate `send_key`. Chunking, failure cleanup, and the write lock are in [messaging.md → writing to the pane](./harness/messaging.md#writing-to-the-pane). |
+| Structure | `split_pane`, `append_companion_pane`, `open_tab`, `rename_tab`, `open_sidebar`, `open_background_view`, `close_pane`, `close_view_floating_panes` | Callers pass backend-neutral argv and layout geometry. |
 | Focus and geometry | `focus_pane`, `toggle_fullscreen`, `sidebar_width_step`, `nudge_sidebar_width`, `record_sidebar_width_default`, `register_room_key` | |
 | Health | `probe_session_health`, `ensure_clean_session`, `reconcile_sidebars`, `purge_resurrection_cache`, `resurrection_cache_paths`, `session_accepts_agent_close` | Several default to a no-op because they answer a Zellij-only question. |
-| Presence | `ensure_presence_plugin` | Zellij-only; tmux inherits the no-op default because its control-mode watch already pushes. |
+| Presence | `ensure_presence_plugin` | Zellij only; tmux keeps the no-op default because its control-mode watch already pushes. |
 
-Methods with a sensible cross-backend answer carry a default implementation, so a backend implements only what it does differently. `ensure_clean_session` and `purge_resurrection_cache` exist because Zellij resurrects sessions and tmux does not; tmux takes the no-op and the calling code stays branch-free.
+A method with a sensible cross-backend answer carries a default implementation, so a backend implements only what it does differently. `ensure_clean_session` and `purge_resurrection_cache` exist because Zellij resurrects sessions and tmux does not; tmux takes the no-op and calling code stays branch-free.
 
-Companion-grid planning excludes sidebar chrome before checking occupancy or balancing. tmux recognizes the sidebar's spawn argv as well as its title and current command, decoding the outer quoting of a single shell-command argument so hook-born sidebars remain fixed even before their title arrives.
+Everything correctness-critical stays above the trait and is identical across backends: the store, the run and wakeup sockets, the event schema, the trust gate, and the agent hooks.
 
-`TabOptions::after` requests that a new view open immediately after the view containing an anchor pane; `None` appends. tmux resolves the pane to its window id and uses `new-window -a`. Zellij appends, focuses the new tab long enough to move it left across the required neighbors, then restores an unfocused launch by re-resolving the original pane's current tab position. Placement is best-effort on both backends: failure leaves the new view appended rather than sinking the launch.
+### Structure calls
 
-Everything correctness-critical stays above the trait and is byte-identical across backends: the store, the run and wakeup sockets, the event schema, the trust gate, and the agent hooks.
+`append_companion_pane` checks native occupancy before birth and balances the grid best-effort afterward; a `Full` result guarantees no payload ran. Companion-grid planning excludes sidebar chrome before checking occupancy or balancing, and on Zellij it declines a tab holding a fullscreen or suppressed pane. tmux recognizes the sidebar by its spawn argv as well as its title and current command, decoding the outer quoting of a single shell-command argument, so a hook-born sidebar counts as chrome before its title arrives.
+
+`TabOptions::after` opens a new view immediately after the view containing an anchor pane; `None` appends. tmux resolves the pane to its window id and runs `new-window -a`. Zellij appends, focuses the new tab long enough to move it left past the required neighbours, then restores an unfocused launch by re-resolving the original pane's tab position. Placement is best-effort on both backends: a failure leaves the view appended and the launch continues.
 
 ### Command discipline
 
-Every control command runs through [`CommandSpec`](../../crates/rimz/src/mux/command.rs) under a deadline. On the bound the child is SIGKILLed and the caller gets `MuxErr::Timeout`.
+Every control command runs through [`CommandSpec`](../../crates/rimz/src/mux/command.rs) under a deadline. At the bound the child is SIGKILLed and the caller gets `MuxErr::Timeout`.
 
 | Bound | Value | Why |
 | --- | --- | --- |
-| `COMMAND_TIMEOUT` | 30s | A wedged `zellij action` busy-loops at 100% CPU when its server dies, and would otherwise hang the caller forever. |
-| `LIST_SESSIONS_TIMEOUT` | 3s | A read-only local query on hot paths. |
-| `TAB_RENAME_TIMEOUT` | 2s | Tab status is disposable chrome; a stuck backend drops the enrichment instead of holding a worker on the structural-command bound. |
-| Start-path session probe | 1s | A timeout here is treated as definitive rather than retried against a wedged server, and prints a console note. |
+| `COMMAND_TIMEOUT` | 30 s | A `zellij action` whose server died busy-loops at 100% CPU and would otherwise hang the caller. |
+| `LIST_SESSIONS_TIMEOUT` | 3 s | A read-only local query on hot paths. |
+| `TAB_RENAME_TIMEOUT` | 2 s | Tab status is disposable chrome, so a stuck backend drops the rename instead of holding a worker for the structural bound. |
+| `SESSION_PROBE_TIMEOUT`, then `SESSION_PROBE_RETRY_TIMEOUT` | 1 s, then 3 s | The start-path responsiveness probe (`mux_responsive_preflight` in `cli/room/mod.rs`). A first timeout prints a `note:` line and retries once with the longer bound. |
 
-A healthy command answers in milliseconds, and callers treat mux commands as best-effort, so the bound degrades rather than blocks. When the selected backend is unresponsive at start, RimZ refuses the start with recovery steps; rival-backend and notice probes skip their enrichment and continue.
+A healthy command answers in milliseconds, and most callers treat a mux failure as best-effort, so a bound degrades the caller instead of blocking it. The start path is the exception: when the selected backend also times out on the retry, `rimz start` refuses with the backend's recovery command and the other backend as a fallback. Rival-backend and notice probes skip their enrichment and continue.
 
 ## Identity
 
 ### Pane and view IDs
 
-Raw IDs stay inside the backend adapter, where the native command expects them (Zellij `terminal_3`, `plugin_1`; tmux `%3`). Everywhere else they travel normalized as `zellij:<raw>` or `tmux:<raw>`, through env vars (`RIMZ_PANE_ID`), store events, snapshots, and CLI arguments. [`pane_from_env_value`](../../crates/rimz/src/mux/mod.rs) is the one env→ID mapping, and `ensure_pane_backend` rejects a pane addressed to the wrong backend before any command runs.
+Raw IDs stay inside the backend adapter, where native commands expect them (Zellij `terminal_3`, `plugin_1`; tmux `%3`). Everywhere else they travel normalized as `zellij:<raw>` or `tmux:<raw>`: in env vars (`RIMZ_PANE_ID`), store events, snapshots, and CLI arguments. [`pane_from_env_value`](../../crates/rimz/src/mux/mod.rs) is the one env-to-ID mapping, and `ensure_pane_backend` rejects a pane addressed to the wrong backend before any command runs.
 
-`ViewId` names the view holding a pane (a Zellij tab, a tmux window) by the identity RimZ observes on every fast path: Zellij tab position (`tab_1`), tmux window id (`@3`). `PaneRef.view_id` is the flat read-side seam, and the producer lifts it into `TabFrame.view_id` so sidebar-per-view bookkeeping runs over typed topology.
+`ViewId` names the view holding a pane (a Zellij tab, a tmux window) by the identity RimZ observes on every fast path: Zellij tab position (`tab_1`), tmux window id (`@3`). `PaneRef.view_id` is the flat read-side field, and the producer lifts it into `TabFrame.view_id` so per-view sidebar bookkeeping runs over typed topology.
 
-**A view id is never the view's on-screen label.** Zellij's default tab names are themselves number-shaped (`Tab #16`), so matching a positional `tab_15` against a tab named "Tab #15" joins two unrelated id spaces and lands on the wrong tab in any session that has closed one. The label is sticky, minted at tab creation; `PaneRef.view_name` carries it for display only. Resolve "which view holds this pane?" through the pane id.
+**A view id is never the view's on-screen label.** Zellij's default tab names are number-shaped (`Tab #16`), so matching a positional `tab_15` against a tab named "Tab #15" joins two unrelated id spaces and picks the wrong tab in any session that has closed one. The label is minted at tab creation and does not follow position; `PaneRef.view_name` carries it for display only. Resolve "which view holds this pane?" through the pane id.
 
-Tab renames follow that rule too. `rename_tab` takes a normalized pane anchor, never a display name or positional `ViewId`: tmux accepts the pane directly as a `rename-window` target, while Zellij resolves the pane through an authoritative listing and passes the resulting stable id to `rename-tab-by-id`. Its `TabNameIntent` carries the naming transition:
+### Tab names
+
+`rename_tab` takes a normalized pane anchor, never a display name or a positional `ViewId`. tmux accepts the pane directly as a `rename-window` target; Zellij resolves the pane through an authoritative listing and passes the tab's stable id to `rename-tab-by-id`.
+
+An ordinary launch label is pane-name tokens joined by `+`: `<profile-or-kind>` for agents, the executable basename for commands, and the shell basename for empty command cells. The label keeps the first three tokens and adds `+…` for overflow, with no directory suffix (`opus`, `nvim+claude`).
+
+Each rename carries a `TabNameIntent`:
 
 | Intent | Effect |
 | --- | --- |
-| `Claim { pane_name }` | An in-place launch names the tab and pins the pane's own launch name, not the tab title. tmux clears any restoration marker; Zellij renames the anchor pane by id. |
-| `Status` | Add the projected status glyph. On an automatically named tmux window, arm `@rimz_restore_automatic_rename` before renaming; otherwise just rename. |
+| `Claim { pane_name }` | An in-place launch names the tab and pins the pane's own launch name. tmux clears any restoration marker; Zellij renames the anchor pane by id. |
+| `Status` | Add the projected status glyph. On an automatically named tmux window, arm `@rimz_restore_automatic_rename` first; otherwise just rename. |
 | `Rest` | Clear a stale glyph. If the tmux marker is armed, rename, restore inherited `automatic-rename`, and remove the marker; otherwise just rename. |
-| `Release` | Rename to the shell's name. tmux unconditionally restores inherited `automatic-rename`, removes the marker, and clears `@rimz_title` on every pane in the window. Zellij keeps the pane names and only renames the tab. |
+| `Release` | Rename to the shell's name. tmux restores inherited `automatic-rename`, removes the marker, and clears `@rimz_title` on every pane in the window. Zellij keeps the pane names, renames only the tab, and keeps that explicit name because it has no automatic tab naming. |
 
-The marker remembers only automatic naming interrupted by `Status`, for `Rest` to undo; it is not an ownership record, and `Release` does not depend on it. The elected sidebar producer projects status and release from the tab's contents, rather than relying on an agent-exit hook. The suffix is chrome only, rebuilt from projected agent state; it never becomes identity or durable truth. Name-based birth and resume checks strip known built-in and configured status suffixes before comparing their idempotency keys.
+The marker records only automatic naming that `Status` interrupted, for `Rest` to undo. It is not an ownership record, and `Release` does not read it.
+
+The elected sidebar producer projects `Status`, `Rest`, and `Release` from the tab's contents, without waiting for an agent-exit hook. The status suffix is chrome, rebuilt from projected agent state, and never identity or durable truth. Name-based birth and resume checks strip built-in and configured status suffixes before comparing their idempotency keys.
+
+Ownership decides whether a tab may be released, and it is derived from the name each time. Strip the status suffix, never release scoped `#` and `team:` names (even when a pane shares that name), ignore `…`, and require every remaining `+` token to match a work pane's launch name, in any order. Sidebar chrome and daemon-host panes do not count as work panes. A live agent row or a hosted agent in any work pane, floating panes included, blocks release even when idle, sleeping, or past the success-glyph timeout. A user name that does not match the panes is kept; a user name identical to a pane-derived label follows the same rule. A tab that is not pane-named still has a stale glyph cleared, including a tab left with only chrome or daemon panes.
 
 ### The identity pin
 
-Session birth stamps the room's identity (`RIMZ_WORKSPACE_ID`, `RIMZ_PROJECT_ROOT`, via [`pin_env`](../../crates/rimz/src/workspace.rs)) and the registry's opaque adapter-enrichment environment into the session. Every pane inherits it, and so does every agent and every in-pane hook child. A daemon-routed hook that misses the pin recovers it from the in-pane agent process ([adapter.md](./agents/adapter.md#hooks-resolve-the-room-they-live-in)).
+Session birth stamps the room's identity (`RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT`, through [`pin_env`](../../crates/rimz/src/workspace.rs)) and the registry's adapter-enrichment environment into the session. Every pane inherits it, and so does every agent and every in-pane hook child. A daemon-routed hook that misses the pin recovers it from the in-pane agent process ([adapter.md](./agents/adapter.md#hooks-resolve-the-room-they-live-in)).
 
-Each backend pins at its own birth seam, and they differ in one way worth knowing.
+Each backend pins at its own birth seam, and they differ in whether a live session can be updated:
 
-tmux sets identity and adapter env on `new-session` and re-asserts them idempotently on every ensure, so panes born later carry them. The same seam stamps `COLORTERM=truecolor` when the launching terminal advertises it, because tmux births panes under `tmux-256color` with an empty `COLORTERM` and room apps read RGB capability from the session environment.
+- **tmux** sets identity and adapter env on `new-session` and re-asserts them idempotently on every ensure, so panes born later carry the current values. The same seam stamps `COLORTERM=truecolor` when the launching terminal advertises it, because tmux births panes under `tmux-256color` with an empty `COLORTERM`, and room apps read RGB capability from the session environment.
+- **Zellij** carries the map on the spawning client's environment, from which the per-session server and every pane fork. There is no post-birth re-assert, so a session keeps the environment it was born with until rebirth. Zellij birth also stamps `TERM=xterm-256color` when the spawning environment has no `TERM`, so a non-PTY birth (remote-web prep, a headless launch) still yields panes with usable terminfo.
 
-Zellij carries the map on the spawning client's environment; the per-session server and every pane fork from there, so inheritance is transitive. Zellij has no post-birth re-assert, so a session born before an env field existed keeps its old environment until rebirth. Zellij birth also stamps a `TERM=xterm-256color` fallback when the spawning environment carries none, so a non-PTY birth (remote-web prep, a headless launch) still yields panes with usable terminfo, while a present `TERM` rides through for local terminals.
+Rebirth re-pins on both backends, and resume tabs are ordinary layout panes, so a re-seeded agent inherits the same pin.
 
-Rebirth re-pins on both backends, and resume tabs are ordinary layout panes, so a re-seeded agent inherits the same contract.
-
-Pane launch-name pins are separate from this room identity. tmux stores them in `@rimz_title`, sanitized like window names (`:` and `.` become `-`), and removes them from every pane in a released window. Zellij uses the pane name and retains it on release.
+A pane's launch-name pin is separate from room identity. tmux stores it in the pane option `@rimz_title`, sanitized like window names (`:` and `.` become `-`), and removes it from every pane in a released window. Zellij uses the pane name and keeps it on release.
 
 ### Pane metadata
 
-`list_panes` reports each pane's foreground command, optional spawn command, optional title, cwd, view, and id. The title is the pinned launch name when present, otherwise the multiplexer's pane title; the published pane frame preserves it for tab-name reconciliation.
+`list_panes` reports each pane's id, view, foreground command, optional spawn command, optional title, cwd, and floating flag. The title is the pinned launch name when present, otherwise the multiplexer's pane title; the published pane frame keeps it for tab-name reconciliation.
 
-The sidebar uses foreground for display, spawn for identity only while the pane root still runs the spawn program (or foreground is temporarily unreported), and cwd for worktree grouping ([sidebar.md → presence model](./sidebar/sidebar.md#presence-model)). A foreground shell therefore demotes historical agent birth argv. Foreground, title, and cwd are cross-backend. Spawn stays optional because Zellij omits it for panes created through `action new-pane`, while tmux exposes the static `pane_start_command`. **The parity floor for presence is command plus cwd**, which both backends meet.
+The sidebar uses the foreground command for display, the spawn command for identity only while the pane root still runs the spawn program (or the foreground is briefly unreported), and cwd for worktree grouping ([sidebar.md → presence model](./sidebar/sidebar.md#presence-model)). A foreground shell therefore demotes a pane's historical agent argv. Foreground, title, and cwd exist on both backends. Spawn is optional because Zellij omits it for panes created with `action new-pane`, while tmux exposes the static `pane_start_command`. **The parity floor for presence is command plus cwd**, which both backends meet.
 
-Two Zellij-side wrinkles: the foreground and cwd fields are version-spanning ladders, so the adapter takes the first non-empty field across the names Zellij has emitted, and a layout-named `rimz-sidebar` pane always reports `rimz-sidebar` as its foreground so it filters as chrome even when Zellij omits the command fields.
+Zellij adds two wrinkles. The foreground and cwd fields have changed names across Zellij versions, so the adapter takes the first non-empty field among the names Zellij has emitted. A layout-named `rimz-sidebar` pane always reports `rimz-sidebar` as its foreground, so it filters as chrome even when Zellij omits the command fields.
 
-`list_panes` marks floating panes on both backends. tmux exposes `pane_floating_flag` from 3.7; older supported releases expand the unknown format empty and therefore report tiled. Floating agent panes stay addressable but out of the room-row projection, and a self-closing sidebar view tears down same-view floating panes before its tiled anchor exits.
+tmux exposes `pane_floating_flag` from 3.7; older supported releases expand the unknown format empty and report every pane tiled. Floating agent panes stay addressable but out of the room-row projection, and a self-closing sidebar view closes same-view floating panes before its tiled anchor exits.
 
-Neither backend reports a per-pane process start, so RimZ derives `pane_process_start` itself from the process backend ([produce/panes.rs](../../crates/rimz/src/sidebar/produce/panes.rs)) and uses it as the reused-id reconciliation key. That key guards both backends:
+Neither backend reports a per-pane process start, so RimZ derives `pane_process_start` from the process backend ([produce/panes.rs](../../crates/rimz/src/sidebar/produce/panes.rs)) and uses it as the key that refuses a match against a reused id. Both backends reuse ids:
 
 - Zellij recycles pane ids within one session.
-- tmux `%id`s are unique within a server lifetime, but the RimZ-owned server exits once its last session ends, and the next command births a replacement numbering from `%0` again. A durable record naming `%3` can outlive the pane it described.
+- tmux `%id`s are unique within one server lifetime, but the RimZ server exits when its last session ends, and the next command births a replacement that numbers from `%0` again. A durable record naming `%3` can outlive the pane it described.
 
-The pane PID is only the walk root and metrics binding, because a pane's PID is its shell rather than the agent it launched. Agent liveness uses the agent's own PID, captured best-effort by its hook ([model.md](./agents/model.md)).
+The pane PID is only the process-walk root and the metrics binding, because it is the pane's shell, not the agent it launched. Agent liveness uses the agent's own PID, captured best-effort by its hook ([instances.md](./agents/instances.md#session-death)).
 
 ### Outer-terminal titles
 
-The attached terminal's tab title is RimZ-controlled for every pane RimZ creates. Both backends include the room session and a short pane/process identity rather than accepting the shell's OSC 0/1/2 host-and-path title.
+RimZ sets the attached terminal's title for every pane it creates. Both backends show the room session and a short pane or process identity, and ignore a shell's OSC 0/1/2 host-and-path title.
 
-Zellij computes the outer title from the focused pane. A non-empty layout or `new-pane --name` value takes precedence over the pane grid's OSC-derived title, so birth layouts name shell panes by shell basename, channel shells by channel label, and caller-identified command panes by that identity. Other command panes fall back to the executable basename, and runtime splits follow the same rule.
+Zellij computes the outer title from the focused pane. A non-empty layout or `new-pane --name` value takes precedence over the pane's OSC-derived title, so birth layouts name shell panes by shell basename, channel shells by channel label, and caller-identified command panes by that identity. Other command panes, and runtime splits, fall back to the executable basename.
 
-tmux enables session-scoped `set-titles`. For caller-identified panes the backend writes a pane-scoped `@rimz_title` user option, which terminal escape sequences cannot change; its fixed `set-titles-string` chooses that value and otherwise falls back to `#{pane_current_command}`. The format deliberately excludes `#T`/`#{pane_title}`, which applications can rewrite with OSC title sequences. RimZ's tmux 3.5 floor is already newer than the 3.1 release that added pane-scoped options.
+tmux enables session-scoped `set-titles`. For a caller-identified pane the backend writes `@rimz_title`, which terminal escape sequences cannot change, and the fixed `set-titles-string` shows that value or falls back to `#{pane_current_command}`. The format excludes `#T` and `#{pane_title}`, which applications rewrite with OSC title sequences. Pane-scoped options arrived in tmux 3.1, below RimZ's 3.5 floor.
 
 ## Reading the room
 
-Each backend has one authoritative roster and, optionally, one push channel that makes reads fresher.
-
-Ordinary launch titles are pane-name tokens joined by `+`: `<profile-or-kind>` for agents, the executable basename for commands, and the shell basename for empty command cells. The label keeps the first three tokens and adds `+…` for overflow, without a directory suffix (`opus`, `nvim+claude`). A tab named after its panes returns to the shell's name when no agent remains: tmux also resumes inherited automatic naming, while Zellij keeps the explicit shell name because it has no automatic tab naming.
-
-Ownership is derived, not stored: strip the status suffix, exclude scoped `#` and `team:` names even when a pane shares that name, ignore `…`, and require every remaining `+` token to match a work pane's launch name, regardless of order. Sidebar chrome and daemon-host panes do not count. A live agent row or a hosted agent in any work pane, including a floating pane, blocks release even when idle, sleeping, or past the success-glyph timeout. Channel/worktree names (`#feat`), team names (`team:forge`), and user names that do not match the panes are kept; a user name identical to a pane-derived label follows the same release rule. Stale glyphs still clear on tabs that are not pane-named, including tabs left with only chrome or daemon panes.
+Each backend has one authoritative roster and, optionally, one push channel that keeps reads fresher.
 
 | | Zellij | tmux |
 | --- | --- | --- |
@@ -200,106 +205,107 @@ Ownership is derived, not stored: strip the status suffix, exclude scoped `#` an
 | Client presence | Attached client count, from the plugin's `list_clients()` | Attached client count plus `last_input_ms` from `#{client_activity}` |
 | Idle clock | None; presence is attach-only | Yes |
 
-`PaneListOptions.consistency` selects how much a caller is willing to trust the push channel:
+`PaneListOptions.consistency` says how far a caller trusts the push channel:
 
 | `PaneReadConsistency` | Behaviour |
 | --- | --- |
 | `Cached` (the default) | Use a valid pushed topology, requesting a newer push when needed. |
-| `PreferAuthoritative` | Query mux truth first, fall back to a valid pushed topology. |
+| `PreferAuthoritative` | Query mux truth first, and fall back to a valid pushed topology. |
 | `RequireAuthoritative` | Query mux truth and propagate failure. Only this level licenses a destructive decision from pane absence. |
 
-That last row is the load-bearing one. **Absence in a cache is never proof.** `cached_pane_roster` states the same rule at the trait: a listed pane proves liveness, while `None` or a missing id only permits escalation.
+**Absence in a cache is never proof.** `cached_pane_roster` states the same rule at the trait: a listed pane proves liveness, while `None` or a missing id only permits escalation to an authoritative read.
 
-Both channels feed one shared host projector, [`sidebar/presence/projector.rs`](../../crates/rimz/src/sidebar/presence/projector.rs), which applies identical launch-chrome and sidebar suppression policy and emits the same `SidebarEvent` taxonomy from either backend. Backend-specific state stays minimal: [`TmuxPresenceState`](../../crates/rimz/src/sidebar/presence/tmux.rs) retains only what it takes to normalize out-of-order control-mode lines, and the Zellij side normalizes plugin payloads in [`sidebar::presence`](../../crates/rimz/src/sidebar/presence.rs). The event taxonomy and fusion rules are in [state.md](./sidebar/state.md).
+Both push channels feed the shared projector, [`sidebar/presence/projector.rs`](../../crates/rimz/src/sidebar/presence/projector.rs), which applies one launch-chrome and sidebar suppression policy and emits the same `SidebarEvent` taxonomy for either backend. Backend-specific state stays minimal: [`TmuxPresenceState`](../../crates/rimz/src/sidebar/presence/tmux.rs) keeps only what it needs to normalize out-of-order control-mode lines, and [`sidebar::presence`](../../crates/rimz/src/sidebar/presence.rs) normalizes plugin payloads. Which room change produces which event on each backend is in [state.md → what triggers a mux-derived event](./sidebar/state.md#what-triggers-a-mux-derived-event).
 
-The producer stretches its pane-cache TTL while a backend's presence stamp is fresh, and topology changes still repaint through typed overlays plus a verify-and-publish pair. Stale Zellij topology triggers a cheap plugin pipe and a bounded cache wait; stale tmux presence reverts to the steady poll within the freshness window. The budget math is in [performance.md](./performance.md).
+The producer stretches its pane-cache TTL while a backend's presence stamp is fresh, and topology changes still repaint through typed overlays plus a verifying pull. Stale Zellij topology triggers a cheap plugin pipe and a bounded cache wait; stale tmux presence returns to the steady poll. The budget is in [performance.md](./performance.md).
 
 ## Focus
 
-Focus is the subtlest part of this module, because three different questions hide behind the word.
+Three questions hide behind the word: who is looking at which pane, how RimZ moves focus, and how a keystroke reaches the sidebar from any pane.
 
 ### Who is looking at what
 
-`client_view` reports the panes attached clients are actually looking at. The producer publishes the distinct terminal set as `viewed_panes`, and that gates every side effect that depends on a human looking at a pane: unread focus clears, tab-view sweeps, notification and reminder suppression, focused-tier cadences, and background paint suspension. Several clients viewing the same terminal agree; distinct terminal or plugin views are ambiguous.
+`client_view` reports the panes attached clients are looking at. The producer publishes the distinct terminal set as `viewed_panes`, and that set gates every side effect that depends on a human looking at a pane: unread focus clears, tab-view sweeps, notification and reminder suppression, focused-tier cadences, and background paint suspension. Several clients viewing the same terminal agree; distinct terminal or plugin views are ambiguous.
 
-`ClientView::unique_live_focus` is the resolver: fresh attached-client evidence counts only when every observation names the same live pane. Detailed client rows outrank summarized pane ids, and dead summarized panes do not invalidate one distinct live pane.
+`ClientView::unique_live_focus` resolves a single focus: fresh attached-client evidence counts only when every observation names the same live pane. Detailed client rows outrank summarized pane ids, and dead summarized panes do not invalidate one distinct live pane.
 
-`PaneFrame.focused_pane` is the session presentation register, and its transitions are worth stating explicitly:
+`PaneFrame.focused_pane` is the session's focus register:
 
 | Sample | Effect on `focused_pane` |
 | --- | --- |
 | Fresh, every attached view names one distinct live terminal | Set to that pane |
-| Fresh, empty or plugin-only or dead or distinct | Cleared |
+| Fresh, and empty, plugin-only, dead, or distinct | Cleared |
 | Unavailable | May hold the prior live value |
 | Realtime `FocusChanged` between pulls | Updated |
 
-Hidden tabs carry no RimZ focus state, and the renderer's `UiState::baseline_pane` is only a local highlight and restoration hint. `PaneRef` and pane topology carry no focus bit at all: `rimz pane list` reports identity and process context without a per-tab active mark, hook recovery uses a fresh unique client view to disambiguate plural candidates, and `rimz sidebar focus --toggle` requires the same unambiguous view instead of guessing from the roster. Upstream roster focus marks never enter RimZ's model, diagnostics, binding, or repair decisions. The attached-client sample is the runtime authority.
+The attached-client sample is the only runtime authority for focus. Hidden tabs carry no RimZ focus state, and the renderer's `UiState::baseline_pane` is only a local highlight and restoration hint. `PaneRef` and pane topology carry no focus bit: `rimz pane list` reports identity and process context without an active mark, hook recovery uses a fresh unique client view to choose among plural candidates, and `rimz sidebar focus --toggle` requires the same unambiguous view. Upstream roster focus marks never enter RimZ's model, diagnostics, binding, or repair decisions.
 
 ### Jumping to a pane
 
-`focus_pane` is the one-way jump primitive, and it lands cross-view on both backends: Zellij switches to the containing tab directly, tmux selects the window then the pane.
+`focus_pane` is a one-way jump that crosses views on both backends: Zellij switches to the containing tab directly, and tmux selects the window, then the pane.
 
-Every attached-client jump is wrapped in a two-phase global intent, owned by [`focus_anchor.rs`](../../crates/rimz/src/mux/focus_anchor.rs). `Requested` is durable before dispatch and wakes every renderer before the one-way command, command acceptance moves the same nonce to `Applied`, and a failure clears it. An applied intent supplies a short presentation target without fabricating an attached-client observation.
-
-Native observations then resolve it. The exact unchanged pre-action client map is fenced after the short presentation window and yields unknown rather than snapping selection back to stale evidence. A target observation confirms the intent, a different pane supersedes it, and client replacement, detach, session replacement, or pane closure invalidates it. This separation matters on Zellij, where `action focus-pane-id` can move the visible pane and routed input without a causally matching `ListClients` update.
+Every attached-client jump is wrapped in the two-phase intent in [`focus_anchor.rs`](../../crates/rimz/src/mux/focus_anchor.rs): `Requested` is durable and wakes every renderer before the command, and acceptance moves the same nonce to `Applied`. Native client observations then confirm, supersede, invalidate, or fence it; the phases and verdicts are in [state.md → focus intent](./sidebar/state.md#focus-intent). The separation matters on Zellij, where `action focus-pane-id` can move the visible pane and routed input without a matching `ListClients` update.
 
 ### Room keys
 
-The sidebar's in-pane keys fire only when the sidebar pane is focused, so a room-scoped chord (`[sidebar] focus_key`, default `Alt+p`) reaches it from any pane. The keystroke lands in whatever pane is focused, so the multiplexer intercepts it; both backends run `rimz sidebar focus --toggle`, which focuses this session's `rimz-sidebar` pane or returns to a deterministic working sibling, and only when one unique fresh client view proves the sidebar is current. An unavailable or distinct view returns a non-mutating ambiguity error.
+The sidebar's in-pane keys fire only when its pane is focused, so a room-scoped chord reaches it from any pane. The multiplexer intercepts the keystroke before it lands in the focused pane.
 
-The smart-zoom chord (`[sidebar] zoom_key`, default `Alt+g`) runs `rimz pane zoom`. With one unique attached-client focus it toggles fullscreen for the focused work pane. If that pane is sidebar chrome, RimZ resolves a non-chrome sibling in the same view, records and applies the user focus intent, then fullscreens the sibling. No sibling leaves the view unchanged.
+- **`[sidebar] focus_key`** (default `Alt+p`) runs `rimz sidebar focus --toggle`. It focuses this session's `rimz-sidebar` pane, or returns to a deterministic working sibling when the sidebar is already current, and acts only when one unique fresh client view proves which is current. An unavailable or distinct view returns a non-mutating ambiguity error.
+- **`[sidebar] zoom_key`** (default `Alt+g`) runs `rimz pane zoom`. With one unique attached-client focus it toggles fullscreen for the focused work pane. If that pane is sidebar chrome, RimZ resolves a non-chrome sibling in the same view, records and applies the focus intent, then fullscreens the sibling. With no sibling the view is unchanged.
 
-Both chords are parsed once by [`FocusChord`](../../crates/rimz/src/mux/focus_key.rs) (`Alt` or `Ctrl`, with `M-`/`C-` and `-`/`+` separators). `Alt` is the default because it survives the terminal, Zellij's locked mode, and tmux's prefix; `off` or empty registers nothing. Registration is best-effort at session birth, so a convenience key never blocks a room.
+[`FocusChord`](../../crates/rimz/src/mux/focus_key.rs) parses both chords once (`Alt` or `Ctrl`, with `M-`/`C-` prefixes and `-`/`+` separators). `Alt` is the default because it passes through the terminal, Zellij's locked mode, and tmux's prefix; `off` or an empty value registers nothing. Registration is best-effort at session birth, so a convenience key never blocks a room.
 
-The two backends bind it differently, because a tmux binding and a Zellij binding reach a pane differently:
+The backends bind the chords differently:
 
-- **tmux** binds a server-global root-table key that bakes in no room identity and resolves the pressing pane's session at keypress.
-- **Zellij** routes through the presence plugin. RimZ passes both chords in the plugin's load configuration and the plugin installs them in one runtime `Reconfigure`, each as a `MessagePluginId` action to its own instance. The focus pipe runs the hidden sidebar toggle; the zoom pipe runs the public pane command. This leaves the user's `config.kdl` unchanged and resets when the session ends.
+- **tmux** binds a server-global root-table key that carries no room identity and resolves the pressing pane's session at keypress.
+- **Zellij** routes through the presence plugin. RimZ passes both chords in the plugin's load configuration, and the plugin installs them in one runtime `Reconfigure`, each as a `MessagePluginId` action to its own instance. The focus pipe runs the sidebar toggle and the zoom pipe runs `rimz pane zoom`. The user's `config.kdl` is unchanged, and the bindings end with the session.
 
 ## One sidebar per view
 
-Every working view should hold exactly one live sidebar pane. `reconcile_sidebars` converges toward that, in place, without disturbing working panes and without ever recreating the session.
+Every occupied view should hold exactly one live sidebar pane. `reconcile_sidebars` converges toward that in place, without disturbing working panes and without recreating the session.
 
-The planner in [`reconcile.rs`](../../crates/rimz/src/mux/reconcile.rs) is pure. Each backend groups its native listing into `ViewSidebars` (the view's sidebar panes in mux order, plus whether the view holds working panes or daemon hosts) and supplies native add, close, and verification effects. `plan_reconcile` then emits one verdict per view:
+The planner in [`reconcile.rs`](../../crates/rimz/src/mux/reconcile.rs) is pure. Each backend groups its native listing into `ViewSidebars` (the view's sidebar panes in mux order, plus whether the view holds working panes or daemon hosts) and supplies native add, close, and verification effects. A view is occupied when it holds a working pane or a daemon host, so the [daemon view](./rimzd.md) gets the same verdicts as a working view; reconcile never closes the hosts themselves. `plan_reconcile` emits at most one verdict per view:
 
 | View state | Verdict |
 | --- | --- |
-| Occupied, one sidebar is claimed by a live renderer | `CloseDuplicates` for the rest |
-| Occupied, no sidebar at all | `Add` |
+| Occupied, one sidebar claimed by a live renderer | `CloseDuplicates` for the rest, or nothing when it is the only one |
+| Occupied, no sidebar | `Add` |
 | Occupied, sidebars exist but none is claimed | `Replace`: add first, close the old ones only after the new pane mounts |
 | Orphan (no working pane, no daemon host) | `CloseDuplicates` for every sidebar, so a wedged renderer collapses with its view |
-| The daemon view | Left alone |
+| Orphan, while a live renderer is unlocated | `CloseDuplicates` for all but one sidebar |
 
-The ordinary renderer follows the same empty-view contract without waiting for reconcile: once the last working pane exits, the sidebar closes itself, and both muxes remove a view when its last pane closes. A companion subagent tab therefore collapses naturally after its final child finishes; no separate close-tab primitive participates.
+The renderer applies the same empty-view rule without waiting for reconcile: once the last working pane exits, the sidebar closes itself ([sidebar.md → self-close](./sidebar/sidebar.md#self-close)), and both multiplexers remove a view when its last pane closes. A companion subagent tab therefore collapses after its final child finishes, with no close-tab primitive.
 
-`SidebarLiveness` carries the claims: `claimed_panes` from fresh renderer heartbeats, plus `young_panes` inside the first-heartbeat grace window so a pane that just started is never reaped. `has_unlocated` marks a live renderer whose pane could not be placed, which keeps the planner conservative. On Zellij repair it also carries the presence probe's observation floor, so the pass cannot judge width from topology older than the probe it already awaited. The floorless launch pass still repairs pane count and docking, but leaves width to the renderer rather than blocking attach on a topology dump.
+`SidebarLiveness` carries the claims: `claimed_panes` from fresh renderer heartbeats, plus `young_panes` inside the first-heartbeat grace window so a pane that just started is never reaped. `has_unlocated` marks a live renderer whose pane could not be placed and keeps the planner conservative. On Zellij repair it also carries the presence probe's observation floor, so the pass cannot judge width from topology older than the probe it already awaited. The launch pass has no floor: it still repairs pane count and docking but leaves width to the renderer, so attach does not wait on a topology dump.
 
-Replacement is add-before-close on purpose. [`mount_proof.rs`](../../crates/rimz/src/mux/mount_proof.rs) blocks up to six seconds for the new pane to publish a heartbeat naming the expected build before the old pane is closed. A failed add leaves the user with the sidebar they had, and a stale binary's pane never counts as the repair.
+Replacement is add-before-close. [`mount_proof.rs`](../../crates/rimz/src/mux/mount_proof.rs) waits up to six seconds for the new pane to publish a heartbeat naming the expected build before the old pane closes. A failed add leaves the user with the sidebar they had, and a pane running a stale binary never counts as the repair.
 
-`SidebarRecovery` tallies the pass (`recovered`, `closed`, `failed`, `deferred`, `redocked`, `misdocked`) and the executor stops at the first failure, counting the remaining verdicts as failed. One best-effort pass: a view whose add fails is logged and skipped, never retried, never escalated to a session rebirth.
+`SidebarRecovery` tallies the pass (`recovered`, `closed`, `failed`, `deferred`, `redocked`, `misdocked`). `execute_reconcile_plan` stops at the first failed verdict and counts it and every remaining verdict as `failed`. The pass is one best-effort attempt: nothing retries it, and a failure never escalates to a session rebirth. The next elder tick, toggle, or `rimz sidebar repair` runs a fresh pass.
 
 ### Width
 
-[`width.rs`](../../crates/rimz/src/mux/width.rs) resolves one room target from configured policy and live geometry.
+[`width.rs`](../../crates/rimz/src/mux/width.rs) resolves one room target from configured policy and live geometry, and [`sidebar_pane/app/width_control.rs`](../../crates/rimz/src/sidebar_pane/app/width_control.rs) is the renderer-local controller that converges each pane toward it.
 
-The room-runtime record lives in [`width_target.rs`](../../crates/rimz/src/mux/width_target.rs) and always contains `WidthPermille`, tenths of a percent of the full view, plus a pin flag. An unpinned target follows `theme.display.width_percent` and applies `theme.display.max_cols` whenever live view geometry is known. An `a`/`d` keypress or mouse drag pins the resulting share verbatim, so the explicit choice may exceed the configured cap and keeps its proportion when the terminal changes size. A genuinely new session clears the record and returns to configured policy.
+**The record.** The room-runtime record in [`width_target.rs`](../../crates/rimz/src/mux/width_target.rs) holds a `WidthPermille` (tenths of a percent of the full view) and a pin flag. An unpinned target follows `theme.display.width_percent` (a set value clamps to 10 through 90; unset means 30% for a view wider than 240 columns, otherwise 25%) and applies `theme.display.max_cols` whenever live view geometry is known. An `a`/`d` keypress or a mouse drag pins the resulting share verbatim, so an explicit choice may exceed the cap and keeps its proportion when the terminal resizes. A genuinely new session clears the record and returns to configured policy.
 
-Resolution produces `SidebarTarget`: one share, the configured cap, and whether the user pinned it. That resolved answer crosses the backend seam; `SidebarWidth` policy does not. A width repair renders columns against the proven view geometry it measured, rounding fractional shares up and clamping an unpinned default to the cap, while Zellij layouts spell the same share as a whole percentage. Resolution itself is read-only: only birth geometry from a real terminal probe or a live backend viewport proven for the current event may adopt and rewrite the room share. A geometry-free resolve preserves an existing share rather than blindly re-evaluating the width-keyed default; with no record it returns the narrow policy fallback for that call without persisting it. Columns without geometry use the bare cap because a detached layout's eventual view width is not known yet.
+**Resolution.** Resolving produces a `SidebarTarget`: one share, the configured cap, and whether the user pinned it. That answer crosses the backend seam; `SidebarWidth` policy does not. A width repair renders columns against the view geometry it measured, rounding fractional shares up and clamping an unpinned default to the cap, while Zellij layouts spell the share as a whole percentage. Resolution is read-only except in two cases: birth geometry from a real terminal probe, or a live backend viewport proven for the current event, may adopt and rewrite the room share. A resolve without geometry keeps an existing share; with no record it returns the narrow policy fallback for that call without persisting it. Columns without geometry use the bare cap, because a detached layout's eventual view width is unknown.
 
-Targets keep their exact permille value when published. Every tab receives that same share, but Zellij's relative-only resize API means tabs born on different width lattices can still settle at different columns within one native step. An `a`/`d` keypress moves exactly one backend column step, converts the result to a share, atomically pins it, and broadcasts `WidthTargetChanged`; every renderer resolves that share for its own live view and converges with at most one mux resize in flight.
+**Keypress steps.** Every view receives the same exact permille share. An `a`/`d` keypress moves one backend column step, converts the result to a share, pins it atomically, and broadcasts `WidthTargetChanged`; each renderer resolves the share for its own view and converges with at most one mux resize in flight.
 
-- **tmux** applies the absolute target in one command, so a narrower intent clamps to the 24-column floor.
-- **Zellij** uses the floor of 5% of the view for a wider keypress, so it never targets beyond the next reachable lattice width, and the ceiling for a narrower keypress. It also uses that ceiling as the stop-step width, guaranteeing the nearest-reachable band contains a lattice width when native steps alternate between the floor and ceiling as the pane moves. Each accepted intent issues one relative step per resize-feedback event or one-second backstop. A narrower intent clamps at the 24-column floor and is ignored only once the pane is already there. Missing topology rejects either direction because a fabricated view would pin the wrong room-wide share.
+- **tmux** applies the absolute target in one command, and a narrower intent clamps at the 24-column floor (`MIN_ADJUSTABLE_WIDTH`).
+- **Zellij** resizes only relatively, in steps of about 5% of the view, so views born on different width lattices can settle one native step apart. A wider keypress uses the floor of that step, so it never targets past the next reachable width; a narrower keypress uses the ceiling. The ceiling is also the stop-step width, which keeps a lattice width inside the settled band when native steps alternate between floor and ceiling. Each accepted intent issues one relative step per resize-feedback event or per `FEEDBACK_TIMEOUT` (1 second). A narrower intent clamps at 24 columns and is ignored once the pane is there. Missing topology rejects either direction, because a fabricated view would pin the wrong room-wide share.
 
-The renderer-local controller and reconcile-time repair use the same symmetric nearest-reachable band. For target `t` and backend stop step `s`, a width is settled when its distance from `t` is at most half of `max(s, 1)`; a step is issued only while moving toward `t` can land strictly closer. A backend step that unexpectedly increases the target distance earns one reverse step. The renderer parks a reversal that restores at least the pre-regression distance; reconcile is stateless across invocations and stops after its one reversal. A step whose feedback never arrives is retried once, then its no-progress cycle is retried once after the idle interval. The renderer then parks as unacknowledged until its width moves, a structural change lands, or the target changes, bounding resize actions per renderer when a backend stops answering. tmux supplies a one-column convergence step and therefore lands exactly on `t`; Zellij reserves the ceiling of its relative step from the view, and the renderer widens that estimate when observed feedback is larger.
+**Convergence.** The renderer controller and reconcile-time repair share one settled band. For target `t` and backend stop step `s`, a width is settled when its distance from `t` is at most half of `max(s, 1)`, and a step is issued only while moving toward `t` can land strictly closer. tmux steps one column and lands exactly on `t`. Zellij reserves the ceiling of its relative step, and the renderer widens that estimate when observed feedback is larger. A step that increases the distance earns one reverse step: the renderer parks a reversal that restores at least the prior distance, and reconcile, which keeps no state between invocations, stops after its one reversal.
 
-No progress and bounded step budgets park the renderer rather than spinning. A retryable park uses a five-second backstop to re-probe the viewport and re-derive the target when that proven viewport changes before re-arming convergence. A transient failed resize or an attach after detached birth therefore gets a delayed retry, but two unacknowledged cycles hold until the width moves, a structural change lands, or the target changes. Reconcile remains stateless and relies on its later passes instead.
+**Parking.** The renderer parks instead of spinning. A step whose feedback never arrives is retried once, then its no-progress cycle is retried once after `IDLE_RETRY` (5 seconds), which also re-probes the viewport and re-derives the target if the proven viewport changed. After `MAX_NO_PROGRESS_CYCLES` (2) unacknowledged cycles the renderer holds until its width moves, a structural change lands, or the target changes, and a convergence that spends `MAX_STEPS` (32) steps parks on its step budget. A transient resize failure, or an attach after a detached birth, therefore gets one delayed retry. Reconcile relies on its later passes instead.
 
-Zellij fullscreen is a convergence hold, not geometry to repair. The presence topology carries the fullscreen pane bit and treats any such pane as a tab-wide hold: structural reconcile excludes that tab, and the renderer parks width control without arming its idle retry. A later topology observation with fullscreen cleared releases both paths. RimZ never resizes or redocks against the fullscreen pane's override geometry or its hidden siblings' stale geometry.
+**Structural changes.** Typed pane-open, pane-close, and topology-change events mark a structural resize before their overlay or refetch handling. An off-spec pane converges immediately to the existing target, and continuously tracked sibling counts are the pulled-truth fallback when an event is missed. The marker also keeps a stalled structural correction from being read as a mouse drag.
 
-Typed pane-open, pane-close, and topology-change events mark a structural resize before their normal overlay or refetch handling. An off-spec pane converges immediately to its existing target; continuously tracked sibling counts provide the pulled-truth fallback when an event is missed. The marker also prevents a stalled structural correction from being mistaken for a mouse drag on later resize feedback.
+**Mouse drags.** The settle pass arms only when the measured pane sits outside the settled band. A view change re-resolves from config. Adopting a drag needs positive evidence: backend geometry exists, no structural marker falls within `STRUCTURAL_GUARD_MS` (2 seconds) of the resize, and the sibling observation is at least that much newer than the resize. While evidence is pending, including when geometry is missing, the controller waits without nudging, so it does not fight a real drag. The first measured movement consumes any remembered unacknowledged step: movement toward that step's target is late feedback from RimZ's own nudge and is never adopted, while movement away goes through drag classification. A drag that ends inside the band leaves the share untouched. Otherwise RimZ pins the measured width as the room share and broadcasts it once; the dragged pane keeps its width and other Zellij panes settle at their nearest reachable width.
 
-The one-second settled-resize pass arms only when the measured pane sits outside the nearest-reachable band. A view change re-resolves from config, while mouse adoption requires stronger positive evidence: backend geometry must exist, no recent structural marker may overlap the settle, and the sibling observation must be at least two seconds newer than the resize. While that evidence is pending, including when backend geometry is missing, the controller waits without nudging, so it does not fight a genuine drag. The first measured movement consumes any remembered unacknowledged step: movement toward that step's target is late feedback from RimZ's own nudge and is never adopted, while movement away follows mouse classification. A drag inside the band leaves the shared share untouched. Only the remaining case is adopted: RimZ pins the exact measured width as the room-wide share and broadcasts it once. The dragged pane keeps that width; other Zellij panes settle at their nearest reachable width.
+### The fullscreen hold
+
+Zellij fullscreen holds width convergence; it is not geometry to repair. The presence topology carries each pane's fullscreen bit, and any fullscreen pane holds its whole tab: Zellij geometry repair (`off_spec_sidebars`) skips the tab, and the renderer parks width control without arming its idle retry. A later topology observation with fullscreen cleared releases both. RimZ never resizes or redocks against the fullscreen pane's override geometry or its hidden siblings' stale geometry. Structural verdicts (`Add`, `Replace`, `CloseDuplicates`) still apply to a fullscreen tab.
 
 ## Session lifecycle
 
@@ -307,297 +313,291 @@ The one-second settled-resize pass arms only when the measured pane sits outside
 
 ### The pre-attach health gate
 
-`open_sidebar` is best-effort and can be skipped or fail, so it cannot be the only thing standing between the user and a resurrecting attach. A normal managed entry probes a live session before setup side effects and threads that verdict through birth; when no reusable live verdict exists, birth runs `ensure_clean_session` to create or cleanly rebirth the session. Supervised birth enters through `ensure_clean_session` directly. Both paths must return an attachable verdict before presence load and attach preparation.
+`open_sidebar` is best-effort and can be skipped or fail, so it cannot be the only thing between the user and a resurrecting attach. A normal managed entry probes a live session before setup side effects and threads that verdict through birth; when no reusable live verdict exists, birth runs `ensure_clean_session` to create or cleanly rebirth the session. Supervised birth calls `ensure_clean_session` directly. Both paths must return an attachable verdict before presence load and attach preparation.
 
 | Session state | Gate action | Verdict |
 | --- | --- | --- |
-| Live and responsive | Preserve the room after a bounded direct pane probe | `Healthy` |
-| Live but unresponsive | Preserve the room and refuse attach | `Unresponsive` |
+| Live and responsive | Keep the room after a bounded direct pane probe | `Healthy` |
+| Live but unresponsive | Keep the room and refuse attach | `Unresponsive` |
 | Absent | Birth from the layout | `Reborn` |
 | Exited (Zellij resurrection record) | Delete, then birth from the layout | `Reborn` |
 | Still not live after a rebirth | Nothing further | `Stuck` |
 
 tmux has no resurrection, so its gate is a no-op `Healthy`.
 
-A Zellij IPC socket-path overflow is a separate environment precondition rather than a health verdict: it classifies as `SocketPathTooLong`, reset is not offered, and `rimz doctor` prints the shorter-directory fix.
+A Zellij IPC socket path that overflows is an environment precondition, not a health verdict: it classifies as `SocketPathTooLong`, reset is not offered, and `rimz doctor` prints the shorter-directory fix.
 
 ### Reset
 
-A `Stuck` room needs destructive reset. [`RoomContext::reset`](../../crates/rimz/src/room/mod.rs) gives explicit `rimz reset` and attended stuck recovery the same teardown plus store-reset runtime, while the CLI keeps confirmation and report rendering. Both paths purge the serialized-session cache, reap stale sidebar runtime files, sweep orphaned servers and leaked daemons, then rebirth. That routine is the room's, in [`room/teardown.rs`](../../crates/rimz/src/room/teardown.rs): it drives the backend for the session kill and cache purge, reaps the sidebar's runtime files, and calls the mux process sweep. Every step is best-effort and independent, so a failure in one never blocks the others.
+A `Stuck` room needs a destructive reset. [`RoomContext::reset`](../../crates/rimz/src/room/mod.rs) gives explicit `rimz reset` and attended stuck recovery the same teardown and store reset, while the CLI keeps confirmation and report rendering. The teardown routine in [`room/teardown.rs`](../../crates/rimz/src/room/teardown.rs) kills the session and purges the serialized-session cache through the backend, reaps stale sidebar runtime files, and runs the mux process sweep for orphaned servers and leaked daemons, then the room is reborn. Each step is best-effort and independent, so one failure never blocks the others.
 
-The dangerous step is the process sweep in [`recovery.rs`](../../crates/rimz/src/mux/recovery.rs), which signals processes by heuristic. It is scoped four ways: the real uid, the exact path-derived session name in the command line, an explicit exclusion of this process and its ancestors, and the inherited environment domain. [`ProcessDomain`](../../crates/rimz/src/mux/domain.rs) is that last guard. A process in a foreign domain (a `cargo xtask sandbox`, another runtime root) is not RimZ's to signal, and an unreadable process environment is spared.
+The process sweep in [`recovery.rs`](../../crates/rimz/src/mux/recovery.rs) is the dangerous step, because it signals processes by heuristic. Four scopes bound it: the real uid, the exact path-derived session name in the command line, an exclusion of this process and its ancestors, and the inherited environment domain. [`ProcessDomain`](../../crates/rimz/src/mux/domain.rs) is the last guard: a process in a foreign domain (a `cargo xtask sandbox`, another runtime root) is not RimZ's to signal, and a process whose environment cannot be read is spared.
 
-Without a terminal, `rimz start` fails fast with the `rimz reset` fix rather than destroying a session unattended.
+Without a terminal, `rimz start` fails fast with the `rimz reset` fix instead of destroying a session unattended.
 
 ### Sidebar orphan reaping
 
-Two paths can kill a sidebar process, and both apply the same evidence boundary.
+Two paths kill a sidebar process whose pane is gone, and both require authoritative absence.
 
-The destructive orphan watchdog reads `cached_pane_roster` first as a latency hint. On escalation, one sidebar wins a workspace/session single-flight lock, performs a listing with `RequireAuthoritative`, and atomically publishes mux kind, session, observation stamp, and pane ids so peers consume that exact fresh observation. A sidebar counts at most one strike per observation, resets on presence, preserves strikes on unknown evidence, and terminates only after three distinct authoritative absences. Contention, timeout, stale or mismatched cache, parse failure, and mux failure all stay unknown and cannot trigger a local destructive fallback.
+The supervisor's pane watchdog (`sidebar_pane/supervise.rs`) reads `cached_pane_roster` first as a latency hint. On escalation, one sidebar wins a workspace-and-session single-flight lock, lists with `RequireAuthoritative`, and atomically publishes mux kind, session, observation stamp, and pane ids, so peers consume that same observation. A sidebar counts at most one strike per observation, resets on presence, keeps its strikes on unknown evidence, and exits only after `PANE_GONE_STRIKES` (3) distinct authoritative absences. Lock contention, timeout, a stale or mismatched cache, parse failure, and mux failure all count as unknown and never trigger a local destructive fallback.
 
-Reload and repair reap paneless sidebar processes under the same rule. A fresh cache can prove a pane present and avoid a mux command; omission only nominates a process, and two `RequireAuthoritative` rosters separated by a short delay must both omit its pane before RimZ signals it. A candidate must also prove through its inherited environment that it lives in the invoker's state and mux-socket namespace. Either roster failing aborts the whole reap. A cache omission refuted by either roster records `pane_cache_divergence`; every signalled victim records `sidebar_orphan_reaped` with both observation stamps and the SIGKILL outcome.
+Reload and repair reap paneless sidebar processes ([`reload.rs`](../../crates/rimz/src/reload.rs)). A fresh cache can prove a pane present and skip the mux command, but a cache omission only nominates a process: two `RequireAuthoritative` rosters separated by a short delay must both omit the pane before RimZ signals it. The candidate must also prove, through its inherited environment, that it lives in the invoker's state and mux-socket namespace. If either roster fails, the whole reap aborts. A cache omission that either roster refutes records `pane_cache_divergence`, and every signalled process records `sidebar_orphan_reaped` with both observation stamps and the SIGKILL outcome.
 
 ## Zellij backend
 
-One constraint shapes everything here: **a Zellij layout applies only at session birth, and a layout is the only way to place a left, sized pane at creation.** So RimZ owns the birth layout and treats everything after it as convergence: close stray sidebars by id, add a missing sidebar in place, move it left, and converge its width toward the current tab's live target.
+One constraint shapes this backend: **a Zellij layout applies only at session birth, and a layout is the only way to create a pane already docked left at a set size.** RimZ therefore owns the birth layout and treats everything after it as convergence: close stray sidebars by id, add a missing sidebar in place, move it left, and converge its width toward the room target.
 
-Zellij does not expose a tab-width query, so RimZ infers the viewport from the rightmost tiled pane extent. A viewport is proven by both shape and time: the tab must contain at least two tiled extents, and the topology observation must be no older than the structural event or repair probe whose geometry it is used to judge. The sidebar is the first pane materialized from a layout; until a sibling contributes a second extent, that inference is self-referential and the viewport stays unknown. A completed but pre-event snapshot is likewise unproven. Renderer and reconcile probes retry rather than resolving or resizing from either case. Layout-only birth paths may still use their read-only configured seed, then live convergence adopts the room target once current completed-tab topology proves its geometry.
+Zellij has no tab-width query, so RimZ infers the viewport from the rightmost tiled pane extent. A viewport is proven by shape and by time: the tab holds at least two tiled extents, and the topology observation is no older than the structural event or repair probe it is used to judge. A lone sidebar is the only extent until a sibling mounts, so the inference would measure the sidebar against itself, and the viewport stays unknown; a completed snapshot taken before the event is unproven too. Renderer and reconcile probes retry instead of resolving or resizing from either case. Layout-only birth paths may use their read-only configured seed, and live convergence adopts the room target once current topology proves the geometry.
 
 `ensure_session` is a no-op because Zellij creates sessions lazily. The sidebar launch owns first birth through `attach --create-background` with a generated layout.
 
 ### The birth layout
 
-Every tab is shaped the same way: a left `rimz-sidebar` pane and a focused terminal, above a one-row compact-bar plugin. A `new_tab_template` plus explicit birth tabs carry that shape forward.
+Every tab has the same shape: a left `rimz-sidebar` pane and a focused terminal, above a one-row compact-bar plugin. A `new_tab_template` plus explicit birth tabs carry that shape.
 
-Several details in [`layout.rs`](../../crates/rimz/src/mux/zellij/layout.rs) are load-bearing:
+These details in [`layout.rs`](../../crates/rimz/src/mux/zellij/layout.rs) are load-bearing:
 
-- The sidebar command names the workspace's stable room-bin path rather than one sweepable build generation, so the immutable `new_tab_template` keeps spawning working sidebars after reloads.
-- The sidebar pane is borderless and `close_on_exit`, so work-pane frames can be styled while sidebar hit-testing starts at row 0 and the pane disappears when its process exits.
-- Every sidebar width is spelled as a whole percentage, because Zellij resize-pins fixed-size layout panes. With known geometry the spelling approximates the resolved share for birth; detached birth tabs and the template retain configured percentage policy until a live view exists, and live convergence applies the exact room target.
-- Every tab is born with an explicit focused terminal rather than a `children` placeholder, which nested in a split is never auto-filled and would strand focus on the sidebar alone.
+- The sidebar command names the workspace's stable room-bin path, not one sweepable build generation, so the immutable `new_tab_template` keeps spawning working sidebars after reloads.
+- The sidebar pane is borderless and `close_on_exit`, so work-pane frames can be styled while sidebar hit-testing starts at row 0, and the pane disappears when its process exits.
+- Every sidebar width is a whole percentage, because Zellij pins a fixed-size layout pane against resize. With known geometry the percentage approximates the resolved share; detached birth tabs and the template keep configured percentage policy until a live view exists, and live convergence applies the exact target.
+- Every tab is born with an explicit focused terminal. A `children` placeholder nested in a split is never filled and would leave focus on the sidebar alone.
 - The layout file outlives the create call. Zellij parses `--default-layout` asynchronously, so the temp file stays on disk until the panes materialize.
+- The layout ends with `session_serialization`, `disable_session_metadata`, and `stacked_pane_list false` ([room options](#room-options-and-the-cli-xor-problem)).
 
-Birth branches on the session's liveness, as reported by `zellij list-sessions`:
+Birth branches on the session's liveness from `zellij list-sessions`:
 
 | Liveness | Branch |
 | --- | --- |
-| Live | Before attach, a bounded direct `list-panes` probe must prove the session's control plane responds. A responsive session already carries its sidebar and owns every resize and split since. Separately, sidebar launch trusts a fresh heartbeat; after a stale heartbeat it rebuilds only a room whose presence topology can be inspected and otherwise leaves the sidebar untouched. |
-| `Exited` (`EXITED - attach to resurrect`) | Clean rebirth: delete, then create from the layout. With serialization off this state stops being minted, but the branch stays as defence for sessions serialized before the flag landed. |
+| Live | Before attach, a bounded direct `list-panes` probe must show the control plane responds. A responsive session already has its sidebar and owns every resize and split since. Sidebar launch trusts a fresh heartbeat; after a stale heartbeat it rebuilds only a room whose presence topology can be inspected, and otherwise leaves the sidebar alone. |
+| `Exited` (`EXITED - attach to resurrect`) | Clean rebirth: delete, then create from the layout. With serialization off (the default) Zellij does not mint this state, but a session serialized with it on still can. |
 | Absent | First birth: create from the layout. |
 
-A session can remain in Zellij's live roster while its per-session Screen actor no longer answers control commands. RimZ retries native pane queries within one eight-second total budget and classifies the session separately from a safely rebuildable exited session when none succeeds: it refuses to attach before entering the alternate screen, preserves the room and its panes, and directs the user to inspect with `rimz doctor` or explicitly rebuild with `rimz reset`. tmux needs no equivalent per-session probe because its session roster and pane queries share one server event loop.
+A session can stay in Zellij's live roster while its per-session screen thread no longer answers control commands. RimZ retries native pane queries within one `HEALTH_PROBE_TIMEOUT` (8 seconds) budget. When none succeeds it classifies the session as unresponsive, separate from a rebuildable exited session: it refuses to attach before entering the alternate screen, keeps the room and its panes, and points the user at `rimz doctor` to inspect or `rimz reset` to rebuild. tmux needs no per-session probe, because its session roster and pane queries share one server event loop.
 
 ### Room options and the CLI XOR problem
 
-`<room-options>` combines the RimZ-owned invariants with the optional `[zellij]` keys the user sets in RimZ config. Each maps onto a Zellij `options` flag ([reference → options catalog](../externals/mux-adapter/zellij-reference.md#options-catalog)), and newer flags are version-gated so an older host degrades to its default rather than aborting.
+`<room-options>` combines RimZ's defaults with the optional `[zellij]` keys the user sets in RimZ config. Each maps onto a Zellij `options` flag ([reference → options catalog](../externals/mux-adapter/zellij-reference.md#options-catalog)). Flags newer than the floor are version-gated, so an older host keeps its default instead of aborting.
 
-Mouse options need a second mechanism. Zellij XORs boolean CLI options against values already set in the user's `config.kdl`, so a CLI flag cannot express an absolute room invariant for every user. Birth and attach still pass `--mouse-click-through true` and `--focus-follows-mouse false` as a birth-window hint, but the presence plugin applies RimZ's resolved values through `reconfigure(..., false)`, whose KDL path merges onto the live config absolutely and never writes the user's file. With the defaults, Zellij 0.44 sends the first click through: a single click both focuses the sidebar pane and reaches the renderer, so a jump lands on the first click rather than the second.
+Mouse options need a second mechanism. Zellij XORs boolean CLI options against values already set in the user's `config.kdl`, so a CLI flag cannot set an absolute value for every user. Birth and attach still pass `--mouse-click-through true` and `--focus-follows-mouse false` as a hint for the birth window, and the presence plugin then applies RimZ's resolved values through `reconfigure(..., false)`, whose KDL path merges onto the live config absolutely and never writes the user's file. With the defaults on Zellij 0.44, a single click both focuses the sidebar pane and reaches the renderer, so a jump lands on the first click.
 
-RimZ leaves `advanced_mouse_actions`, `mouse_hover_effects`, `mouse_mode`, and global `pane_frames` to `config.kdl` unless the user sets those keys in RimZ config.
+RimZ leaves `advanced_mouse_actions`, `mouse_hover_effects`, `mouse_mode`, and global `pane_frames` to `config.kdl` unless the user sets them in RimZ config.
 
-**Serialization off.** RimZ disables Zellij session serialization on every birth and attach. Resurrection is worse than useless for a room of agents: agents and scripts cannot restore their running state, so a resurrected room comes back as a wall of held command panes with a dead mouse. With serialization off, a crashed server's session simply vanishes and the next start births a clean, running room; RimZ owns rebirth instead ([resume on rebirth](./sidebar/sidebar.md#resume-on-rebirth)). The birth layout carries `session_serialization false` because Zellij 0.44 drops `options` flags from `attach --create-background` before detached-server initialization; attach still passes the flag and first purges the room's resurrection cache so a corrupt layout cannot block a live session.
+**Serialization off by default.** `[zellij] session_serialization` defaults to `false`, and RimZ passes the configured value on every birth and attach. Resurrection does not help a room of agents: agents and scripts cannot restore their running state, so a resurrected room comes back as a wall of suspended command panes with a dead mouse. With serialization off, a crashed server's session vanishes, the next start births a clean running room, and RimZ owns rebirth ([resume on rebirth](./sidebar/sidebar.md#resume-on-rebirth)). The value is also written into the birth layout, because Zellij 0.44 drops `options` flags from `attach --create-background` before the detached server initializes. Attach first purges the room's resurrection cache, so a corrupt serialized layout cannot block a live session.
 
-**Session metadata off.** RimZ embeds `disable_session_metadata true` in the birth layout and passes it on every birth and attach. That stops Zellij's periodic `session-metadata.kdl` rewrite and its command-discovery `ps` loop, which at roughly 100 panes on 0.44.3 costs a visible share of the Zellij server CPU. `Absent` and `Exited` still converge through the same clean-rebirth gate, so this changes CPU cost rather than room semantics.
+**Session metadata off by default.** `[zellij] disable_session_metadata` defaults to `true` and travels the same two routes. It stops Zellij's periodic `session-metadata.kdl` rewrite and its command-discovery `ps` loop, which at roughly 100 panes on 0.44.3 costs a visible share of Zellij server CPU. `Absent` and `Exited` sessions still converge through the same clean-rebirth gate, so the setting changes CPU cost, not room semantics.
 
 ### In-place repair
 
-Live reinjection resolves a stable tab id from an existing work pane and runs `new-pane --tab-id` with placement unspecified. From there the backend proves rather than assumes, because Zellij's answer arrives before the pane mounts:
+Live reinjection resolves a stable tab id from an existing work pane and runs `new-pane --tab-id` without a placement. Zellij answers before the pane mounts, so the backend verifies each step:
 
-1. Mounted-pane discovery verifies the intended tab; action stdout is only a hint.
-2. Repair requires a fresh current-build heartbeat before an add commits or a replaced pane closes.
-3. A wrong-tab mount is cleaned up and aborts the pass.
-4. Structural move, stack, retry, and verification reads use direct `list-panes --all --json` geometry after completed actions, with fresh presence topology as the recovery fallback.
-5. Each targeted left move crosses one adjacent pane, the current tiled-pane count bounds those swaps, and every step must strictly decrease the sidebar's `pane_x`.
-6. Width convergence starts only after current geometry verifies the full-height left dock.
+1. Mounted-pane discovery verifies the intended tab; the action's stdout is only a hint.
+2. An add commits, or a replaced pane closes, only after a fresh current-build heartbeat.
+3. A pane mounted in the wrong tab is cleaned up and aborts the pass.
+4. Move, stack, retry, and verification reads use direct `list-panes --all --json` geometry after completed actions, with fresh presence topology as the recovery fallback.
+5. Each left move crosses one adjacent pane, the current tiled-pane count bounds the swaps, and every step must strictly decrease the sidebar's `pane_x`.
+6. Width convergence starts only after current geometry verifies a full-height left dock.
 
 A timed-out authoritative read aborts the pass instead of falling back to the topology cache, so stale truth never drives a close or a spawn; the next elder or toggle pass retries.
 
-RimZ passes `auto_layout=false` and `stacked_resize=true`, so `Alt+n` uses Zellij's native focused-pane split along the terminal's real cell-ratio-favorable edge, and closing a pane returns the freed space to the sibling it split from. It also pins `stacked_pane_list=false`: Zellij 0.45's list mode keeps collapsed stack members in `list-panes` but marks the hidden members suppressed and reports the stack's full rectangle for every member. RimZ filters suppressed panes from topology and relies on per-pane geometry, so the classic representation keeps every agent observable with its own rect. The birth tree pins the sidebar and compact bar as tree siblings. When an add nests the new sidebar into one row, the same transaction stacks every surviving work pane into the right column; repair of a pre-existing arbitrary multi-column layout stays report-only.
+RimZ passes `auto_layout=false` and `stacked_resize=true`, so `Alt+n` uses Zellij's native focused-pane split along the edge that suits the terminal's cell ratio, and closing a pane returns its space to the sibling it split from. It also pins `stacked_pane_list=false`. Zellij 0.45's list mode keeps collapsed stack members in `list-panes` but marks them suppressed and reports the stack's full rectangle for every member; RimZ filters suppressed panes and relies on per-pane geometry, so the classic representation keeps every agent observable with its own rectangle. The birth tree makes the sidebar and compact bar tree siblings. When an add nests the new sidebar into one row, the same transaction stacks every surviving work pane into the right column; repair of an arbitrary pre-existing multi-column layout only reports.
 
-The producer's shrink-confirmation path bypasses `pane-topology.json` entirely and reads `zellij action list-panes --all --json`, merging cached foreground command and cwd only as enrichment. If that server query fails, the backend falls back to the topology cache with a debug log. tmux already lists directly from the server, so its authoritative flag is a no-op.
+The producer's shrink-confirmation path bypasses `pane-topology.json` and reads `zellij action list-panes --all --json`, merging cached foreground command and cwd only as enrichment. If that query fails, the backend falls back to the topology cache with a debug log. tmux always lists from the server, so the authoritative flag changes nothing there.
 
 ### The daemon view and resumed births
 
-`rimz start` always carries the `rimzd` runtime view, so `open_sidebar` births a two-tab layout: the runtime dashboard first, then the focused working tab. Zellij can move later tabs one position at a time, but spelling this leading order in the birth layout is free and avoids a visible post-birth move.
+`rimz start` always carries the `rimzd` runtime view, so `open_sidebar` births a two-tab layout: the runtime dashboard first, then the focused working tab. Writing that order into the birth layout avoids a visible post-birth tab move.
 
-The runtime view is `sidebar | content | runtime`, and what fills those columns, how its panes are identified, and how repair rebuilds them are in [rimzd.md](./rimzd.md). What the backends contribute is the placement: tmux births multiple content or runtime panes as equal-height rows, with at most one row of integer-rounding drift.
+The runtime view is `sidebar | content | runtime`. What fills the columns, how its panes are identified by launch command, and how repair rebuilds them are in [rimzd.md](./rimzd.md#identity-is-the-command-not-the-pane-id). Each managed Zellij pane carries its joined launch argv as an explicit pane name for that identity. tmux births multiple content or runtime panes as equal-height rows, with at most one row of rounding drift.
 
-Repair identity differs by backend: every managed Zellij pane carries its joined launch argv as an explicit pane name, so identity survives a supervisor or remote-control host putting a child in the foreground; tmux uses `pane_start_command`, with foreground command and title as fallbacks.
+Scheduled loop runs split against the loop panel with Zellij's native stack, anchored through the panel's CLI pane context with `--near-current-pane`, so attached-client focus and the active tab stay put. tmux maps the stack to equal-height rows in the target column, computing each row from pane geometry and resizing only panes in that column, so the sidebar and neighbouring columns never move. Panel recreation and the new-tab fallback are in [rimzd.md → the loop zone](./rimzd.md#the-loop-zone).
 
-Scheduled loop runs split against the loop panel with Zellij's native stack, anchored through the panel's CLI pane context with `--near-current-pane`, so attached-client focus and the active tab stay untouched; tmux maps the stack to equal-height rows within the target column. It computes each row from pane geometry and resizes only panes sharing that column, so the sidebar width and neighboring columns never move. If the view survives but the panel is gone, the same placement engine recreates the panel first; a missing view or a failed split falls back to a new tab. What decides that a run fires at all is in [loops.md](./harness/loops.md#where-a-scheduled-run-lands).
-
-A reborn session re-seeds its remembered agents: the birth layout spells one `sidebar | agents…` tab per worktree, each agent a command pane running its resume CLI in that worktree, focus on the freshest. Born in a fresh layout they start running rather than suspended, which is the same reason serialization is off. One renderer handles plain, daemon, and resumed births.
+A reborn session re-seeds its remembered agents: the birth layout spells one `sidebar | agents…` tab per worktree, each agent a command pane running its resume CLI in that worktree, with focus on the most recent. Panes born from a fresh layout start running, not suspended, which is the same reason serialization is off. One renderer handles plain, daemon, and resumed births.
 
 ### Tab-switch focus repair
 
-Zellij can restore focus to the sidebar when the user switches tabs, which would strand them on chrome. Repair is a plugin observation plus a host verdict, and the split is deliberate.
+Zellij can restore focus to the sidebar when the user switches tabs, which leaves them on chrome. Repair is a plugin observation plus a host verdict.
 
-On a `Some(old) → Some(new)` tab switch the presence plugin waits for the settle window, serializes one `list_clients()` observation, and publishes `switch-settled` with the active tab, a generation, and the full client views. It publishes no verdict.
+On a `Some(old) → Some(new)` tab switch, the plugin waits the focus settle window, takes one `list_clients()` observation, and publishes `switch-settled` with the active tab, a generation, and the full client views. It publishes no verdict.
 
-The host classifies that observation against the accepted topology. A unique live work view in the active tab is healthy. A plugin view, the active tab's sidebar, or a live terminal in another tab is stranded, but only when the active tab has exactly one sidebar owner and a work sibling. Missing, detached, dead, superseded, foreign, and distinct-pane observations abstain. The accepted client sample independently drives host-side unique-live focus projection.
+The host classifies the observation against the accepted topology. A unique live work view in the active tab is healthy. A plugin view, the active tab's sidebar, or a live terminal in another tab is stranded, but only when the active tab has exactly one sidebar owner and a work sibling. Missing, detached, dead, superseded, foreign, and distinct-pane observations abstain. The same accepted sample also feeds host-side unique-live focus.
 
-The renderer keeps the owner, TTL, client-ambiguity, and focus-intent guards, so automatic repair never overrides an explicit cross-tab jump. The renderer's selection model treats the resulting `from-pane → sidebar → target` transition correctly; see [sidebar.md → selection](./sidebar/sidebar.md#selection-and-jump).
+The renderer keeps its owner, TTL, client-ambiguity, and focus-intent guards, so automatic repair never overrides an explicit cross-tab jump ([sidebar.md → selection and jump](./sidebar/sidebar.md#selection-and-jump)).
 
 ### Zellij backend caveats
 
-These are the upstream quirks the backend works around. The upstream surfaces themselves are in the [reference](../externals/mux-adapter/zellij-reference.md).
+These are the upstream quirks the backend works around. The upstream surfaces are in the [reference](../externals/mux-adapter/zellij-reference.md).
 
-- **Minimum version is 0.44.0**, the floor `rimz doctor` reports as `meets_min_version`. Below it RimZ refuses the Zellij room and points at upgrading Zellij or using tmux. `stack-panes` and `advanced_mouse_actions` are inside the supported floor; `mouse_click_through` and `mouse_hover_effects` stay version-gated for future compatibility.
-- **Pane IDs are positional, not stable.** Zellij exposes no stable per-pane CLI handle, and ids are reused as panes close and reopen. Pane stamps carry `pane_process_start` so reconciliation can refuse a stale match.
-- **`new-pane` answers before the pane mounts, and action stdout can cross clients.** The printed pane id is allocated before the screen thread mounts the pane, and a detached session drops the mount entirely. Reconcile treats the id as a hint, discovers the mounted pane through plugin topology, and cleans up only a pane a fresh topology snapshot proves is a newly-created `rimz-sidebar`.
-- **`new-pane` can mount into a nested row.** A stable-tab add inherits Zellij's tab-local split tree, so the sidebar can report `x=0` with a work pane spanning beneath it. Every add verifies the full-height left-column band and can stack the work panes it just displaced without replacing their processes.
-- **Named-session actions can print a session-not-found banner with exit 0.** A `--session <name>` action against an absent, exited, or still-registering session prints `Session '<name>' not found...` plus an active-session list across stdout or stderr. RimZ classifies it as `MuxErr::SessionNotFound`; best-effort sidebar reconcile and daemon view launch defer quietly while the pre-attach gate owns rebirth.
-- **A detached server can drop pane lifecycle processing until the next attach**, notably a last-pane exit and the relayout after a sibling closes. Reconcile defers adds on detached sessions, and the renderer's tab-empty self-close rides its data-tick backstop rather than resize delivery alone.
-- **A configless server births a setup wizard that silently drops `new-pane` mounts** (layout-born panes mount normally). The test harness seeds a config at the home-relative path Zellij prefers; in production a first-ever user dismisses the wizard once and reconcile retries the dropped mount.
-- **Plugin keybinds pause briefly on 0.44.x.** Zellij's upstream `KeybindPipe` completion path can freeze the UI for about a second before a plugin keybind acts. The focus-key jump still lands.
-- **Session names are short and path-unique** (`rimz-<basename-slug>-<hash6>`), which keeps the room human-scannable while staying under Zellij's macOS AF_UNIX socket budget and distinguishing same-basename roots. When the recorded and current derived names diverge, `rimz start` retires the stale session before rebirth.
+- **Minimum version is 0.44.0** (`MIN_ZELLIJ_VERSION`), which `rimz doctor` reports as `meets_min_version`. Below it RimZ refuses the Zellij room and points at upgrading Zellij or using tmux. `stack-panes` and `advanced_mouse_actions` exist at the floor; `mouse_click_through` and `mouse_hover_effects` stay version-gated.
+- **Pane IDs are positional, not stable.** Zellij has no stable per-pane CLI handle and reuses ids as panes close and reopen. Pane stamps carry `pane_process_start` so reconciliation can refuse a stale match.
+- **`new-pane` answers before the pane mounts, and action stdout can cross clients.** The printed id is allocated before the screen thread mounts the pane, and a detached session can drop the mount entirely. Reconcile treats the id as a hint, discovers the mounted pane through plugin topology, and cleans up only a pane a fresh topology snapshot proves is a new `rimz-sidebar`.
+- **`new-pane` can mount into a nested row.** A stable-tab add inherits the tab's split tree, so the sidebar can report `x=0` with a work pane spanning beneath it. Every add verifies the full-height left column and can stack the work panes it displaced without replacing their processes.
+- **Named-session actions can print a session-not-found banner and exit 0.** A `--session <name>` action against an absent, exited, or still-registering session prints `Session '<name>' not found...` and an active-session list on stdout or stderr. RimZ classifies it as `MuxErr::SessionNotFound`; sidebar reconcile and daemon view launch defer quietly while the pre-attach gate owns rebirth.
+- **A detached server can skip pane lifecycle processing until the next attach**, notably a last-pane exit and the relayout after a sibling closes. Reconcile defers adds on detached sessions, and the renderer's empty-tab self-close relies on its data-tick backstop, not resize delivery alone.
+- **A server with no config file births a setup wizard that drops `new-pane` mounts** (layout-born panes mount normally). The test harness seeds a config at the home-relative path Zellij prefers; in production a first-time user dismisses the wizard once and reconcile retries the mount.
+- **Plugin keybinds pause briefly on 0.44.x.** Zellij's `KeybindPipe` completion path can freeze the UI for about a second before a plugin keybind acts. The focus-key jump still lands.
+- **Session names are short and path-unique** (`rimz-<basename-slug>-<hash6>`): readable, under Zellij's macOS AF_UNIX socket budget, and distinct for same-basename roots. When the recorded and derived names diverge, `rimz start` retires the stale session before rebirth.
 - **The presence plugin reports identity and geometry, not live process state.** RimZ derives cwd, pid, and process start through the process backend and treats the spawn command as identity.
-- **Per-test server isolation in CI.** Tests construct the backend with a private runtime dir, since Zellij locates its server socket under `XDG_RUNTIME_DIR`. This is the parity counterpart of tmux's `with_socket`, and every command flows through the single `ZellijBackend::cmd` chokepoint so one field threads isolation everywhere.
+- **Tests isolate servers per test.** Tests construct the backend with a private runtime dir, since Zellij locates its server socket under `XDG_RUNTIME_DIR`. This is the counterpart of tmux's `with_socket`, and every command goes through the single `ZellijBackend::cmd` chokepoint, so one field threads isolation everywhere.
 
 ## The Zellij presence plugin
 
-tmux hands out a control-mode stream that any process can attach to. Zellij has no such thing: the only way to learn about pane changes as they happen is to run inside the Zellij server as a plugin. `crates/rimz-presence-zellij/` is that plugin, a headless wasm32-wasip1 binary loaded into every Zellij session RimZ manages. It renders nothing.
-
-Its contract is [`crates/rimz-presence-zellij/AGENTS.md`](../../crates/rimz-presence-zellij/AGENTS.md).
+tmux offers a control-mode stream any process can attach to. Zellij does not: the only way to learn about pane changes as they happen is to run inside the Zellij server as a plugin. `crates/rimz-presence-zellij/` is that plugin, a headless wasm32-wasip1 binary loaded into every Zellij session RimZ manages. It renders nothing. Its contract is [`crates/rimz-presence-zellij/AGENTS.md`](../../crates/rimz-presence-zellij/AGENTS.md).
 
 ### The boundary: observations, never verdicts
 
-The plugin publishes Zellij facts. The host derives every meaning.
+The plugin publishes Zellij facts, and the host derives every meaning.
 
 | The plugin owns | The host owns |
 | --- | --- |
 | Merged topology snapshots from Zellij's pane and tab manifests | Pane roles: which pane is a sidebar, which is an agent card |
 | Attached-client observations, including the settled sample after a tab switch | Focus-repair decisions and the `SidebarEvent` taxonomy |
 | Poke timing that Zellij's event model requires | Launch-chrome filtering and topology-writer authority |
-| Capabilities that need plugin-only APIs: the runtime focus keybind, mouse `reconfigure`, hiding or closing itself | Durable cache publication |
+| Capabilities that need plugin-only APIs: runtime keybinds, mouse `reconfigure`, fullscreen toggles, hiding or closing itself | Durable cache publication |
 
-The payoff is release cadence. A product-policy change (what counts as chrome, when a focus is stranded, how an event maps) ships in the `rimz` crate alone and needs no plugin release. Two corollaries follow: carry only facts that originate in Zellij's server state, since a fact derivable from the OS routes host-side through `pane_pid` (the host owns `/proc`, the plugin owns the event stream), and add a wake shape only for a fact that cannot be derived from an accepted snapshot diff.
+The split keeps product policy out of plugin releases: a change to what counts as chrome, when focus is stranded, or how an event maps ships in the `rimz` crate alone. Two rules follow. The plugin carries only facts that originate in Zellij's server state; a fact derivable from the OS goes through `pane_pid` on the host, which owns `/proc`. And a new wake shape is added only for a fact that an accepted snapshot diff cannot produce.
 
-One session holds one plugin. Splitting control features across plugins would multiply lifecycle, permission, and writer-coordination complexity.
+One session holds one plugin. Splitting control features across plugins would multiply lifecycle, permission, and writer-coordination work.
 
 ### Crate shape
 
-The crate splits along the wasm boundary, which is what makes it testable.
+The crate splits along the wasm boundary, which makes it testable.
 
 | Module | Role |
 | --- | --- |
-| [`main.rs`](../../crates/rimz-presence-zellij/src/main.rs) | The wasm shell. Projects Zellij events into the engine, gathers runtime telemetry, and executes returned effects. Compiled only for wasm; host targets build a stub so `--workspace` builds and lints stay green without the wasm toolchain. |
+| [`main.rs`](../../crates/rimz-presence-zellij/src/main.rs) | The wasm shell. Projects Zellij events into the engine, gathers runtime telemetry, and executes returned effects. Compiled only for wasm; host targets build a stub so `--workspace` builds and lints pass without the wasm toolchain. |
 | [`engine.rs`](../../crates/rimz-presence-zellij/src/engine.rs) | The decision engine: room state, poke timing, focus correction, permission gating, topology publication. Returns `Vec<Effect>`. |
 | [`policy.rs`](../../crates/rimz-presence-zellij/src/policy.rs) | Pure helpers and timing state machines: the stable-field hash, poke policy, foreground overlay. Time is injected as Unix milliseconds. |
-| [`wire.rs`](../../crates/rimz-presence-zellij/src/wire.rs) | Every argv and KDL payload the shell sends to the host. |
+| [`wire.rs`](../../crates/rimz-presence-zellij/src/wire.rs) | Every argv and KDL payload the shell sends to the host, and the pipe names. |
 
-`engine`, `policy`, and `wire` contain no `zellij-tile` type, so they compile and unit-test on the host target inside the ordinary workspace test run. `zellij-tile` is a wasm-only dependency, since its shims call extern host functions that exist only inside Zellij's plugin host.
+`engine`, `policy`, and `wire` use no `zellij-tile` type, so they compile and unit-test on the host target in the ordinary workspace test run. `zellij-tile` is a wasm-only dependency, because its shims call extern functions that exist only inside Zellij's plugin host.
 
-The engine returns effects rather than performing them: `RunCommand`, `HideSelf`, `Reconfigure`, `TogglePaneFullscreen`, `CloseSelf`, `Unsubscribe`, `Resubscribe`, `SetTimeout`, `ListClients`. Every decision is therefore a pure function from event to effect list, and the shell stays a projection layer.
-
-Inside the engine, one canonical pane map is the single source of truth. Reducers retain partial manifests, patch event enrichment in place, and publish panes in deterministic tab and key order.
+The engine returns effects instead of performing them: `RunCommand`, `HideSelf`, `Reconfigure`, `TogglePaneFullscreen`, `CloseSelf`, `Unsubscribe`, `Resubscribe`, `SetTimeout`, `ListClients`. Every decision is a pure function from event to effect list, and the shell only projects. Inside the engine one canonical pane map is the source of truth: reducers retain partial manifests, patch event enrichment in place, and publish panes in deterministic tab and key order.
 
 ### What it publishes
 
 The plugin subscribes to ten Zellij events: `PaneUpdate`, `TabUpdate`, `CommandChanged`, `CwdChanged`, `PaneClosed`, `Timer`, `PermissionRequestResult`, `RunCommandResult`, `SessionUpdate`, and `ListClients`.
 
-Everything it publishes travels one way: a fire-and-forget `run_command` fork of `rimz sidebar wake`. Four wake shapes exist:
+Everything it publishes goes one way, as a fire-and-forget `run_command` fork of `rimz sidebar wake --reason <reason>` (`wire::WakeRequest`):
 
-| Shape | Meaning |
+| Reason | Meaning |
 | --- | --- |
-| Announced snapshot | A room change worth an event broadcast. |
-| Silent snapshot | Keepalive and explicit dumps: refresh the cache without broadcasting. |
-| `clients` sample | Raw attached-client observations, as `{ views: [{ client_id, pane_id }] }`. |
-| `switch-settled` | The generation-bearing observation after a tab switch settles. |
+| `panes-changed` | An announced snapshot: a room change worth an event broadcast. |
+| `alive` | A silent snapshot for keepalives and explicit dumps: refresh the cache without broadcasting. Carries plugin telemetry. |
+| `switch-settled` | The generation-bearing client observation after a tab switch settles, with the active tab. |
 
-Each wake after the first manifest may carry the live roster as repeated `--topology` values, bounded to 64 KiB each and omitted entirely above 1 MiB, while stamp and telemetry delivery continues. `rimz sidebar wake` concatenates the chunks in order and normalizes the boundary payload.
+Each wake after the first manifest carries the live roster as repeated `--topology` values, at most 64 KiB each and omitted entirely above 1 MiB, while stamp and telemetry delivery continue. `rimz sidebar wake` concatenates the chunks in order and normalizes the payload. The topology payload includes the raw attached-client observations as `clients: [{ client_id, pane_id }]`, from which the host derives attached-client count, terminal views, and unique-live focus. A payload without `clients` falls back to its `focused_pane` field and keeps the producer-side `client_view` fallback active.
 
-The first manifest after load names every pre-existing pane, so the host accepts it as a baseline and an announced baseline emits only one topology nudge.
+The first manifest after load names every pre-existing pane, so the host accepts it as a baseline, and an announced baseline emits only one topology nudge.
 
-The host derives attached-client count, terminal views, and unique-live focus from `clients`. A legacy `focused_pane` field is accepted only as a fallback when `clients` is absent, and a legacy payload without `clients` keeps producer-side `client_view` fallback active.
-
-Three named pipes reach the plugin from the host:
+Five named pipes reach the plugin from the host:
 
 | Pipe | Effect |
 | --- | --- |
-| `rimz:dump_topology` | Publish one immediate `alive` wake, bypassing the poke floor. Revives and resubscribes a retired same-id clone for that publish. |
-| `rimz:focus_sidebar` | Run the focus-sidebar fork; this is what the focus keybind messages. |
-| `rimz:retire` | Retire this instance if the payload's generation outranks it. |
+| `rimz:dump_topology` | Publish one immediate `alive` wake, bypassing the poke floor. Revives and resubscribes a muted same-id clone for that publish. |
+| `rimz:focus_sidebar` | Fork `rimz sidebar focus --toggle`; the focus keybind sends this. |
+| `rimz:zoom_pane` | Fork `rimz pane zoom`; the zoom keybind sends this. |
+| `rimz:toggle_fullscreen` | Toggle fullscreen on the host-selected pane id (`ZellijBackend::toggle_fullscreen`). |
+| `rimz:retire` | Retire this instance if the payload's writer identity outranks it ([retirement](#retirement)). |
 
 ### Poke discipline
 
-Left unthrottled, a busy room would fork `rimz` on every keystroke-driven event. [`policy.rs`](../../crates/rimz-presence-zellij/src/policy.rs) holds the timing that keeps the channel quiet.
+Unthrottled, a busy room would fork `rimz` on every keystroke-driven event. [`policy.rs`](../../crates/rimz-presence-zellij/src/policy.rs) holds the timing:
 
 | Rule | Value | Purpose |
 | --- | --- | --- |
-| Immediate first poke | 0ms | The first change after quiet is never delayed. |
-| Poke floor | 100ms | Duplicates inside the window collapse into one. |
-| Settle poke | 250ms | Each accepted change schedules one, so a command change cannot strand the pre-change command. |
-| Focus settle | 250ms | The window a tab switch waits before sampling clients. |
-| Keepalive | 60s | Holds the presence stamp fresh while idle and requests a client-list self-heal. |
+| Immediate first poke | 0 ms | The first change after quiet is never delayed. |
+| `POKE_FLOOR_MS` | 100 ms | Duplicates inside the window collapse into one. |
+| `SETTLE_POKE_MS` | 250 ms | Each accepted change schedules one, so a command change cannot strand the pre-change command. |
+| `FOCUS_SETTLE_MS` | 250 ms | How long a tab switch waits before sampling clients. |
+| `KEEPALIVE_MS` | 60 s | Keeps the presence stamp fresh while idle and requests a client-list self-heal. |
 
-Title-only events stay filtered out entirely.
+Title-only events are filtered out.
 
-Client sampling has its own coordinator. Every `PaneUpdate` queues a coalesced general client query before topology deduplication, so a focus-only upstream update refreshes attached truth without storing a focus signature. One untagged `ListClients` request is in flight at a time; the coordinator retains the newest general or switch-settled purpose, expires a missing reply on the keepalive deadline, treats a reply after expiry as a general sample, and re-arms the superseded purpose.
+Client sampling has its own coordinator. Every `PaneUpdate` queues a coalesced general client query before topology deduplication, so an upstream update that changes only focus still refreshes attached-client truth. One untagged `ListClients` request is in flight at a time: the coordinator keeps the newest general or switch-settled purpose, expires a missing reply at the keepalive deadline, treats a reply after expiry as a general sample, and re-arms the superseded purpose.
 
-Every host fork runs from `/`, which decouples the session-lifetime plugin from the cwd of the CLI that loaded it.
+Every host fork runs from `/`, so the session-lifetime plugin does not depend on the cwd of the CLI that loaded it.
 
 ### Loading and permissions
 
-Loading is RimZ-owned and never the user's `config.kdl`, because a layout cannot load plugins.
+RimZ loads the plugin itself, never through the user's `config.kdl`, because a layout cannot load plugins.
 
-The load verb is the idempotent `zellij … action pipe --plugin --skip-plugin-cache`, the one verb that works on a clientless session and carries the cache-bypass bit in Zellij 0.44. Only owner flows use it: room birth and `rimz reload` upgrade and repair. Generic pane and topology readers broadcast the name-only `rimz:dump_topology` pipe instead and never launch a plugin.
+The load verb is the idempotent `zellij … action pipe --plugin --skip-plugin-cache`, the one verb in Zellij 0.44 that works on a clientless session and carries the cache-bypass bit. Only owner flows use it: room birth, and `rimz reload` upgrade and repair. Generic pane and topology readers broadcast the name-only `rimz:dump_topology` pipe instead and never launch a plugin.
 
-Load-time configuration pins the workspace, the session, the room's `rimz` pointer (`workspaces/<id>/rimz`), runtime mouse options, the background launch scope, the lazy-once embedded-wasm digest, and a hash of the configuration itself. Every desired identity is instantiated only through this pipe, so an identity-matching writer is background by construction and receives global pane and tab updates. Changing an identity launches another background writer; the host accepts its proof and retires the old identity.
+Load-time configuration pins the workspace, the session, the room's `rimz` pointer (`workspaces/<id>/rimz`), runtime mouse options, the focus and zoom chords, `launch_scope=background`, the embedded-wasm digest (computed once, lazily), and a hash of the configuration itself. Every desired identity is created only through this pipe, so an identity-matching writer is a background instance and receives global pane and tab updates. Changing an identity launches another background writer; the host accepts its proof and retires the old identity.
 
-The canonical artifact path stays stable across upgrades, while Zellij's compiled-module cache is keyed by that path rather than the wasm bytes. Every plugin-addressed pipe therefore skips the cache; a live identity treats the flag as a no-op, and a missing identity compiles the bytes currently installed at the path. The `launch_scope=background` configuration key gives existing sessions a one-time identity bump, so the same convergence flow repairs writers created through the removed tab-scoped action fallback.
+The canonical artifact path is the same across upgrades, but Zellij keys its compiled-module cache by that path, not the wasm bytes. Every plugin-addressed pipe therefore skips the cache: a live identity treats the flag as a no-op, and a missing identity compiles the bytes currently installed at the path.
 
-RimZ seeds Zellij's `permissions.kdl` cache for its own embedded plugin so the first attach is not interrupted by a prompt, even in a clientless session:
+RimZ seeds Zellij's `permissions.kdl` cache for its embedded plugin, so the first attach shows no prompt, even in a clientless session:
 
-| Permission | What it buys |
+| Permission | What it grants |
 | --- | --- |
 | `ReadApplicationState` | The pane, tab, session, and client manifests. |
 | `RunCommands` | The `rimz sidebar wake`, `rimz sidebar focus`, and `rimz pane zoom` forks. |
 | `Reconfigure` | Runtime mouse options and the optional focus and zoom keybinds, applied without writing `config.kdl`. |
-| `ChangeApplicationState` | The mechanical fullscreen toggle for the host-selected pane id. |
+| `ChangeApplicationState` | The fullscreen toggle for the host-selected pane id. |
 
-The plugin artifact path is canonicalized because Zellij keys the grant on the exact string. The security boundary is in [security.md](../guide/security.md#the-zellij-presence-plugin).
+The artifact path is canonicalized because Zellij keys the grant on the exact string. The security boundary is in [security.md](../guide/security.md#the-zellij-presence-plugin).
 
-A Zellij room requires Zellij 0.44 or newer and a loadable plugin. An older host, a missing artifact, or a denied permission makes the selected Zellij backend fail its precondition, and `rimz doctor` names the first failing fix plus tmux as the alternative backend.
+A Zellij room requires Zellij 0.44 or newer and a loadable plugin. An older host, a missing artifact, or a denied permission fails the Zellij backend's precondition, and `rimz doctor` names the first failing fix plus tmux as the alternative.
 
 ### Build identity and embedding
 
-The plugin is embedded into every RimZ build. Release binaries embed a fresh `cargo xtask build-plugin` artifact; the crates.io crate embeds the vendored `crates/rimz/presence/` wasm. `cargo xtask plugin-refresh` builds that artifact with canonical path remaps (registry mirror cache keys, and the local standard-library sources mapped back onto the `/rustc/<commit-hash>` root the toolchain emits without `rust-src`), bypasses compiler wrappers, and commits provenance beside it: the source-tree digest, wasm digest, and producing rustc version. Repository invariants bind both digests to the current tree and blob, every vendored embed verifies the wasm digest, and `cargo xtask checks` rebuilds with the recorded toolchain and requires byte-for-byte equality.
+Every RimZ build embeds the plugin. Release binaries embed a fresh `cargo xtask build-plugin` artifact; the crates.io crate embeds the vendored wasm in `crates/rimz/presence/`. `cargo xtask plugin-refresh` builds that artifact with canonical path remaps (registry mirror cache keys, and local standard-library sources mapped back onto the `/rustc/<commit-hash>` root the toolchain emits without `rust-src`), bypasses compiler wrappers, and commits provenance beside it: the source-tree digest, the wasm digest, and the producing rustc version. Repository invariants bind both digests to the current tree and blob, every vendored embed verifies the wasm digest, and `cargo xtask checks` rebuilds with the recorded toolchain and requires byte-for-byte equality.
 
-The digest of that wasm is the plugin's build identity, which intentionally makes each build a distinct Zellij plugin identity so an owner can upgrade a clientless session.
+The wasm digest is the plugin's build identity, so each build is a distinct Zellij plugin identity, which lets an owner flow upgrade a clientless session.
 
-The workspace record carries the staged `rimz_bin` plus its `rimz_build` digest as one verified room target. Only room owner claim and reload update the pair: `rimz start`, cwd-based `rimz attach`, and `rimz reload`. Named attach by session preserves the recorded owner, and generic CLI re-records preserve both values. Because the plugin configuration names the stable `rimz` pointer rather than the staged path, a worktree build that asks for topology leaves the configuration string unchanged.
+The workspace record carries the staged `rimz_bin` and its `rimz_build` digest as one verified room target. Only the room owner claim and reload update the pair: `rimz start`, cwd-based `rimz attach`, and `rimz reload`. Attach by session name keeps the recorded owner, and other CLI re-records keep both values. Because the plugin configuration names the stable `rimz` pointer, a worktree build that asks for topology leaves the configuration string unchanged.
 
-Owner flows materialize or refresh the shared embedded wasm artifact. Read-only topology refreshes use only an existing artifact or the beside-executable development fallback. The shared artifact therefore tracks the last owner build, and another session can run those bytes until its own owner refreshes them. The writer gate below makes that benign.
+Owner flows materialize or refresh the shared embedded wasm artifact. Read-only topology refreshes use only an existing artifact or the development fallback beside the executable. The shared artifact therefore tracks the last owner build, and another session can run those bytes until its own owner refreshes them; writer fencing makes that harmless.
 
 ### Writer fencing
 
-Zellij 0.44 runs one wasm instance per connected client and can retain ghosts for departed clients, so a single plugin id can have both the blessed current clone and an older same-id clone. Overlapping writers are therefore normal, and the host arbitrates.
+Zellij 0.44 runs one wasm instance per connected client and can keep instances for departed clients, so one plugin id can have both the current clone and an older same-id clone. Overlapping writers are normal, and the host arbitrates.
 
 Every topology payload carries its plugin build and configuration plus the fallback generation `(loaded_at_ms, plugin_id)`. Owner launches atomically publish the desired identity in `presence-desired.json`.
 
-[`sidebar::presence`](../../crates/rimz/src/sidebar/presence.rs) holds the workspace-runtime `topology-writer.lock` for at most one second, across the desired-record and cache reads, the writer-rank comparison, cache replacement, and conflict update. Lock or write failure rejects the command rather than falling back unlocked.
+[`sidebar::presence`](../../crates/rimz/src/sidebar/presence.rs) holds the workspace-runtime `topology-writer.lock` for at most one second across the desired-record and cache reads, the rank comparison, cache replacement, and conflict update. A lock or write failure rejects the wake; nothing falls back to an unlocked write.
 
-Ranking: a writer matching both desired fields outranks every non-matching writer, then load time and plugin id break ties. Without a desired record, ranking degenerates to generation ordering, and legacy payloads without writer identity rank at the zero generation.
+A writer matching both desired fields outranks every non-matching writer; load time, then plugin id, break ties. Without a desired record, ranking is generation order, and a payload without writer identity ranks at generation zero.
 
-The gate accepts a poke when the cache is absent, the existing same-session cache is stale, or the incoming rank is at least the cached rank. A sole non-matching writer therefore keeps refreshing its own cache, while a desired writer deterministically wins an overlap.
+The gate accepts a wake when the cache is absent, the same-session cache is stale, or the incoming rank is at least the cached rank. A sole non-matching writer therefore keeps refreshing its own cache, and a desired writer wins any overlap.
 
-An accepted write commits before writer-change diagnostics, conflict clearing, presence stamps, telemetry, and event broadcast. A rejected poke skips all of them: no presence stamp, no plugin-presence sample, no topology write, no sidebar event. Rejections update `topology-writer-conflict.json` under the same lock and emit a rate-limited `topology_write_rejected` diagnostic. The reject count restarts whenever either writer changes, while the diagnostic's rate limit spans incidents. An accepted writer with a strictly higher rank removes the superseded sidecar, and doctor ignores an orphaned sidecar once the live cache carries a newer generation. Accepted writer changes emit `topology_writer_changed`.
+An accepted write commits before writer-change diagnostics, conflict clearing, presence stamps, telemetry, and event broadcast. A rejected wake skips all of them: no presence stamp, no plugin-presence sample, no topology write, no sidebar event. A rejection updates `topology-writer-conflict.json` under the same lock and emits a rate-limited `topology_write_rejected` diagnostic. The reject count restarts whenever either writer changes, while the rate limit spans incidents. An accepted writer with a strictly higher rank removes the superseded conflict file, and doctor ignores an orphaned conflict file once the live cache carries a newer generation. An accepted writer change emits `topology_writer_changed`.
 
-The rejected plugin learns about it too. A rejected publish exits with the private stale-writer status (73), and three consecutive rejections retire the losing plugin in place by muting it and unsubscribing. `close_self()` would unload every clone sharing that plugin id, including the blessed one, so a same-id clone mutes instead of closing. Only a successful topology publish resets the streak.
+The rejected plugin learns about it too. A rejected publish exits with the stale-writer status 73, and three consecutive rejections retire the losing plugin in place by muting it and unsubscribing. It mutes instead of calling `close_self()`, which would unload every clone sharing the plugin id, the current one included. Only a successful topology publish resets the streak.
 
 ### Retirement
 
-`rimz reload` converges the plugin only when it must. It reads the fresh topology cache and, when the writer echoes a `build` equal to the embedded-wasm digest and a `config` equal to the desired configuration hash, confirms that the live plugin roster contains only that writer id before counting the session plugin-current. Extra or missing ids run the retire-and-sweep path without reloading the accepted writer, and a failed live listing falls back to full convergence. Any identity mismatch, missing field, or stale cache also converges and reports the upgrade.
+`rimz reload` touches the plugin only when it must. It reads the fresh topology cache, and when the writer echoes a `build` equal to the embedded-wasm digest and a `config` equal to the desired configuration hash, it confirms the live plugin roster contains only that writer id before counting the session current. Extra or missing ids run the retire-and-sweep path without reloading the accepted writer, and a failed live listing falls back to full convergence. An identity mismatch, a missing field, or a stale cache also converges and reports the upgrade.
 
-Retirement requires proof. Reload waits for topology at or after the flow's freshness floor from the expected build and configuration, while session birth uses any matching proof already published by the boot pipe rather than adding a startup wait. The retire broadcast then carries that complete writer identity as JSON, and each instance decides for itself:
+Retirement requires proof that the replacement is alive. Reload waits for topology from the expected build and configuration at or after the flow's freshness floor, while session birth uses any matching proof the boot pipe already published instead of adding a startup wait. The retire broadcast carries that writer identity as JSON, and each instance decides for itself:
 
 | Instance | Response to a retire broadcast |
 | --- | --- |
 | Different build or configuration | `CloseSelf`, regardless of load time |
-| Same identity, outranks the generation | Ignore |
+| Same identity, outranks the payload generation | Ignore |
 | Same identity, different plugin id, outranked | `CloseSelf` |
 | Same identity, same plugin id, outranked | Mute and unsubscribe, revivable through `rimz:dump_topology` |
 
-After the broadcast, the host lists every pane under a bounded deadline and closes each `rimz-presence-zellij` plugin id except the accepted writer, unconditionally unloading later old-wasm instances and command-path zombies while preserving every blessed same-id clone. RimZ then sends the boot pipe again, healing the legacy case where an old path-based retire closed the whole plugin id. A failed or timed-out listing degrades to the cooperative retire alone, leaving manual session restart as the fallback. When a detached or degraded session cannot prove the replacement is alive, RimZ skips retire and retries on a later owner flow.
+After the broadcast, the host lists every pane under a bounded deadline and closes each `rimz-presence-zellij` plugin id except the accepted writer's. That unloads later old-wasm instances and command-path zombies while keeping every same-id clone of the accepted writer. RimZ then sends the boot pipe again, which restores a writer if a retire closed the whole plugin id. A failed or timed-out listing leaves only the cooperative retire, with a manual session restart as the fallback. When a detached or degraded session cannot prove the replacement is alive, RimZ skips retirement and retries on a later owner flow.
 
-`rimz reload` without `--repair` nudges its sidebars, which converge worker-first from the durable workspace record, and touches the presence plugin only when its echoed identity no longer matches the running build. It never changes pane structure. `rimz reload --repair` ensures the plugin first and then requires a post-ensure topology publication before any topology-dependent work; a Zellij session that misses the bounded health proof reports no live presence channel and skips repair, while runtime cleanup still runs.
+`rimz reload` without `--repair` nudges its sidebars, which converge worker-first from the durable workspace record, and touches the plugin only when its echoed identity no longer matches the running build; it never changes pane structure ([sidebar.md → reload and repair](./sidebar/sidebar.md#reload-and-repair)). `rimz reload --repair` ensures the plugin first and requires a post-ensure topology publication before any topology-dependent work. A Zellij session that misses the bounded health proof reports no live presence channel and skips repair, while runtime cleanup still runs.
 
 ### Telemetry and failure reporting
 
-The plugin subscribes to `RunCommandResult` and drains every reply to its command forks. Each reply carries the host's exit code and stderr, so the plugin retains the newest failure as an exit code, the first non-empty stderr line bounded to 200 bytes, and a timestamp. That retained failure is the one channel by which a wake's cause reaches `rimz doctor`.
+The plugin subscribes to `RunCommandResult` and drains the reply to every command fork. Each reply carries the host's exit code and stderr, and the plugin retains the newest failure as an exit code, the first non-empty stderr line (at most 200 bytes), and a timestamp. That retained failure is how a wake's cause reaches `rimz doctor`.
 
-`fold_failure` decides what survives, and the division is the boundary again: the plugin ships observations, the host judges them.
+`fold_failure` decides what the retained failure holds:
 
 | Outcome | Effect on the retained failure |
 | --- | --- |
 | Topology or other failure | Replaces it, stamped with the time |
-| Stale-writer rejection | Left alone; that exit is the fence working, and reporting it would bury the failure the reader is chasing |
-| Success | Left alone, so the evidence outlives the recovery |
+| Stale-writer rejection | None; that exit is the fence working, and recording it would hide the failure being investigated |
+| Success | None, so the evidence outlives the recovery |
 
-A success deliberately does not clear the record. Wakes run far more often than telemetry is sampled, so clearing on success dropped the cause of an intermittent failure before any sample could carry it: the host counted the failure in its window and had nothing to say about it. The host instead takes its cause from the window its counters measure, dropping a stamp older than the window's first sample rather than passing it off as current. The stamp is optional on the wire, so a cause from a plugin loaded before it existed stays usable rather than being dated to the epoch and hidden.
+Success does not clear the record because wakes run far more often than telemetry is sampled; clearing would drop an intermittent failure's cause before any sample carried it. The host instead takes the cause from the window its counters measure and drops a stamp older than the window's first sample. The stamp is optional on the wire, and a failure without one stays usable instead of being dated to the epoch.
 
-Three consecutive fork failures clear the configured `rimz_bin`, retry one `alive` poke through `rimz` on PATH, and reset after a successful fork.
+Three consecutive fork failures clear the configured `rimz_bin` and retry one `alive` wake through `rimz` on PATH; a successful fork resets the count.
 
 The keepalive carries WASM memory pages, uptime, per-bucket command counts (completed, succeeded, stale-writer rejections, topology failures, other failures), the retained failure, and the Zellij version into the rotating `plugin-presence.log.jsonl`. That file is the leak-investigation surface, because it separates plugin linear-memory growth from Zellij-native RSS growth.
 
@@ -607,106 +607,100 @@ The keepalive carries WASM memory pages, uptime, per-bucket command counts (comp
 
 RimZ owns one tmux server per runtime domain, at `<runtime-root>/rimz/tmux/server`, holding one path-derived session per workspace. Every managed command runs `tmux -S <socket> …` through the single [`TmuxBackend::cmd`](../../crates/rimz/src/mux/tmux.rs) chokepoint. The socket is always set, so no command can reach the user's default server, and `cargo xtask invariants` rejects a bare `tmux` argv.
 
-Because the endpoint derives from the resolved runtime root alone, any caller reconstructs it without a workspace or `disk::paths::RuntimePaths` argument. Attach, ttyd, presence, pane I/O, list, reload, GC, sidebar, and doctor all address the same constant. A disposable `XDG_RUNTIME_DIR` yields a different socket and therefore a private server, which is exactly what gives sandboxes and tests their isolation.
+The endpoint derives from the resolved runtime root alone, so any caller reconstructs it without a workspace or `disk::paths::RuntimePaths` argument. Attach, ttyd, presence, pane I/O, list, reload, GC, sidebar, and doctor all address the same path. A disposable `XDG_RUNTIME_DIR` yields a different socket and a private server, which is what isolates sandboxes and tests.
 
-Each managed session is stamped with the concrete `HOME` and `XDG_CONFIG_HOME`/`XDG_DATA_HOME`/`XDG_CACHE_HOME`/`XDG_STATE_HOME`/`XDG_RUNTIME_DIR` of the resolved domain, at birth and on every ensure, so a pane resolves the same store and the same endpoint as the client that created it. Socket identity and stamped environment are two projections of one runtime domain, derived together in [`disk::paths`](../../crates/rimz/src/disk/paths.rs). A server whose sessions disagreed with the socket addressing them would be unreachable in exactly the way this design removes.
+Each managed session is stamped with the concrete `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME`, and `XDG_RUNTIME_DIR` of the resolved domain, at birth and on every ensure, so a pane resolves the same store and endpoint as the client that created it. Socket identity and stamped environment are two projections of one runtime domain, derived together in [`disk::paths`](../../crates/rimz/src/disk/paths.rs).
 
-Routing stays explicit. The ambient default server serves only recordless external sessions and the exact endpoint a process inherits through `$TMUX`; managed commands clear `$TMUX` so an ambient session cannot capture them. `ProcessDomain` resolves a process's endpoint from `$TMUX` when present and from the managed socket otherwise, so the orphan sweep recognizes managed processes and spares anything on the user's own server.
+Routing stays explicit. The user's default server serves only recordless external sessions and the exact endpoint a process inherits through `$TMUX`; managed commands clear `$TMUX` so an ambient session cannot capture them. `ProcessDomain` resolves a process's endpoint from `$TMUX` when present and from the managed socket otherwise, so the orphan sweep recognizes managed processes and spares the user's own server.
 
-Before birth or attach, a read-only `has-session` probe of the legacy default socket reports a same-named session left there by an older release, with the one command that retires it (`tmux -S <default-socket> kill-session -t <session>`). `has-session` cannot start a server, so probing never resurrects a default daemon, and unrelated sessions there stay untouched.
+Before birth or attach, a read-only `has-session` probe of the default socket reports a same-named session left there by a RimZ release that used the default server, with the command that retires it (`tmux -S <default-socket> kill-session -t <session>`). `has-session` cannot start a server, so the probe never starts a default daemon, and unrelated sessions stay untouched.
 
-Workspace reset and cleanup use `kill-session`. `kill-server` is reserved for explicit recovery of the whole RimZ tmux fleet, and is safe to suggest because it is scoped to the RimZ socket. Server-global options and root key bindings are shared across RimZ workspaces, the pre-existing behaviour now confined to RimZ's own server. They die with the last session, so `ensure_session` re-asserts them on every ensure rather than once at first birth.
+Workspace reset and cleanup use `kill-session`. `kill-server` is reserved for explicit recovery of every RimZ tmux room at once, and is safe to suggest because it is scoped to the RimZ socket. Server-global options and root key bindings are shared across RimZ workspaces on that server and die with the last session, so `ensure_session` re-asserts them on every ensure.
 
 ### Every managed client runs from `/`
 
-A tmux server inherits its working directory from the client that births it, and tmux's `spawn.c` performs a pane's `chdir(cwd)` only while `getcwd()` on the server succeeds. A server born in a directory that is later deleted (a disposable worktree, a swept tempdir) silently strands every later pane in that deleted directory, even when RimZ passes an absolute `-c`.
+A tmux server inherits its working directory from the client that births it, and tmux's `spawn.c` applies a pane's `chdir(cwd)` only while `getcwd()` succeeds on the server. A server born in a directory that is later deleted (a disposable worktree, a swept tempdir) places every later pane in that deleted directory, even when RimZ passes an absolute `-c`.
 
-`/` cannot be deleted or unmounted, so birth and rebirth always start from a readable directory. The Zellij plugin host forks from `/` for the same reason.
+`/` cannot be deleted or unmounted, so birth and rebirth always start from a readable directory. The Zellij plugin forks from `/` for the same reason.
 
-Session birth proves the property rather than assuming it: it reads the birth pane's `pane_current_path` back and refuses a mismatch with a socket-scoped `kill-server`. Reading the pane back tests what actually matters and works on every host, where inspecting the daemon's live working directory is only a proxy and is unavailable on some platforms.
+Session birth checks the property: it reads the birth pane's `pane_current_path` back, and on a mismatch fails with `MuxErr::ServerCwdUnusable`, whose message gives the socket-scoped `tmux -S <socket> kill-server` fix. Reading the pane back tests what matters and works on every host; the daemon's own working directory is only a proxy and cannot be read on some platforms.
 
 ### Room options
 
-`ensure_session` applies the per-machine `[tmux]` room options in one batched client call, and the `after-new-window` hook replays window options before docking the sidebar so later windows match the birth window. Session and window options stay scoped to the RimZ session; server-scoped options (clipboard, rich-key handling, focus events) are runtime-global because tmux has no per-session equivalent.
+`ensure_session` applies the per-machine `[tmux]` room options in one batched client call, and the `after-new-window` hook replays window options before docking the sidebar, so later windows match the birth window. Session and window options are scoped to the RimZ session; server-scoped options (clipboard, rich-key handling, focus events) are global to the RimZ server because tmux has no per-session equivalent.
 
-The batch also does five things the option list alone does not express:
+The batch also does what the option list alone cannot express:
 
-- writes `*:sync` at the fixed `terminal-features[240]` index for atomic redraws in pixel pets and TUIs, purging exact `*:sync`/`*:extkeys` entries leaked at other indices by the former append path and collapsing an exact `*:hyperlinks` entry inherited from the user's config,
-- writes `*:extkeys` at `terminal-features[241]` whenever extended keys are enabled and unsets that index when they are disabled,
-- writes `*:hyperlinks` at `terminal-features[242]` so OSC 8 links from the sidebar and panes remain clickable,
-- registers root-table `S-Enter` and `M-Enter` bindings that inject the configured modified-Enter sequence, so agents receive soft newlines even when they do not request modifyOtherKeys,
-- names `ESC[27u` as `user-keys[240]` and binds it to Escape, because tmux passes that modifier-less form into panes verbatim.
+- writes `*:sync` at the fixed `terminal-features[240]` index for atomic redraws in pixel pets and TUIs, removes exact `*:sync` and `*:extkeys` entries found at other indices, and collapses an exact `*:hyperlinks` entry inherited from the user's config,
+- writes `*:extkeys` at `terminal-features[241]` when `extended_keys` is on and unsets that index when it is off,
+- writes `*:hyperlinks` at `terminal-features[242]` so OSC 8 links from the sidebar and panes stay clickable,
+- when `extended_keys` is on (the default), registers root-table `S-Enter` and `M-Enter` bindings that send the configured modified-Enter sequence, so agents receive soft newlines without requesting modifyOtherKeys, and names `ESC[27u` as `user-keys[240]` bound to Escape, because tmux passes that modifier-less form into panes verbatim.
 
-On tmux 3.5.x the same extended-key mode trades clean multiline clipboard paste; tmux 3.6 preserves paste bytes while modified keys still reach agents as CSI-u. Per-option semantics and RimZ's values are in the [reference → options](../externals/mux-adapter/tmux-reference.md#options); the config model is in [configuration.md](../guide/configuration.md#multiplexer-room-options).
+On tmux 3.5.x, extended-key mode breaks clean multiline clipboard paste; tmux 3.6 preserves paste bytes while modified keys still reach agents as CSI-u. Per-option semantics and RimZ's values are in the [reference → options](../externals/mux-adapter/tmux-reference.md#options); the config model is in [configuration.md](../guide/configuration.md#multiplexer-room-options).
 
-An attach launched by RimZ runs with alternate scroll disabled on its terminal and restores the saved prior mode when the client exits. tmux unconditionally disables outer mouse reporting in `tty_start_tty` before its first attached-client repaint restores the requested mouse mode, and terminals with alternate scroll enabled translate wheel ticks in that gap into arrow keys. The CLI uses XTSAVE/XTRESTORE around the client process because a tmux `client-detached` hook runs after teardown has cleared the departed client's tty name; Ghostty 1.3.1 implements those operations for mode 1007, and a terminal that ignores them safely remains with alternate scroll off. A one-shot SSH attach keeps one bracket on the local terminal and marks the remote launch through an environment variable as already bracketed because terminal mode save slots are not a stack; an older remote ignores the marker and performs no inner bracket. Reconnect supervision has no local bracket, so the remote RimZ owns it. The same lifecycle safely covers Zellij attaches.
+When RimZ owns `pane-border-status`, it also writes a `pane-border-format` that fills the `rimz-sidebar` pane's border row with spaces, so work panes carry titled frames while the sidebar reads frameless, the tmux counterpart of Zellij's borderless sidebar. tmux borders are separators plus an optional top or bottom status row, and tmux does not draw the outer window edge, so a closed four-edge pane frame exists only on Zellij.
 
-The waiting RimZ parent mirrors a client's `SIGTSTP` stop and resumes the child with its foreground job, preserving tmux's stock `prefix` + `C-z` suspend behavior. Normal child exit codes pass through unchanged after terminal restoration.
+### Attach and the terminal
 
-When RimZ owns `pane-border-status`, it also writes a `pane-border-format` that floods the `rimz-sidebar` pane's border row with spaces, so work panes carry titled frames while the sidebar reads frameless: the tmux analog of Zellij's borderless sidebar. tmux borders are inter-pane separators plus an optional top or bottom status row, and tmux does not draw the outer window edge, so a closed four-edge pane frame stays Zellij-only.
+An attach launched by RimZ disables alternate scroll on the outer terminal and restores the saved prior mode when the client exits. tmux disables outer mouse reporting in `tty_start_tty` before its first repaint restores the requested mouse mode, and a terminal with alternate scroll enabled turns wheel ticks in that gap into arrow keys. The CLI brackets the client process with XTSAVE and XTRESTORE, because a tmux `client-detached` hook runs after the departed client's tty name is cleared. Ghostty 1.3.1 implements those operations for mode 1007, and a terminal that ignores them is left with alternate scroll off.
+
+Terminal mode save slots are not a stack, so a one-shot SSH attach brackets only the local terminal and marks the remote launch as already bracketed through an environment variable; an older remote ignores the marker and does not bracket. Reconnect supervision has no local bracket, and the remote RimZ owns it. Zellij attaches go through the same lifecycle.
+
+The waiting RimZ parent mirrors a client's `SIGTSTP` stop and resumes the child with its foreground job, keeping tmux's `prefix` + `C-z` suspend. Child exit codes pass through unchanged after terminal restoration.
 
 ### The sidebar and the `after-new-window` hook
 
-tmux has no tab template, so a hook supplies Zellij parity. `open_sidebar` splits a left sidebar into the initial window at the launch seed and installs a session-scoped `after-new-window` hook that re-runs the split in every later window.
+tmux has no tab template, so a hook provides it. `open_sidebar` splits a left sidebar into the initial window at the launch seed and installs a session-scoped `after-new-window` hook that repeats the split in every later window.
 
-The hook reads an absolute-column session option initialized from the resolved room share. Keypresses, adopted mouse drags, view changes, and reconcile passes refresh it, so future windows start at the share rendered for the current view.
+The hook reads an absolute-column session option initialized from the resolved room share. Keypresses, adopted mouse drags, view changes, and reconcile passes refresh it, so a new window starts at the share rendered for the current view.
 
-Two prompt-cleanliness details ride along, both specific to tmux because Zellij births terminals from the layout template at their final size:
+Two details keep the first prompt clean. Both are tmux-only, because Zellij births terminals from the layout at their final size:
 
-- Plain default-shell windows have an empty `pane_start_command`, so after the hook split establishes the final width, the hook respawns only that work pane as the user's shell, avoiding zsh's `PROMPT_SP` end-of-line marker.
-- Pristine birth installs a one-shot `client-attached` hook for the first work shell. The detached session can draw zsh's first prompt before the attaching client applies its final size, and a resize during that draw strands the `PROMPT_SP` `%` marker above the prompt. The hook skips control-mode clients, respawns the birth work pane after the first real client attach, then removes itself. A room born without a probed terminal is healed when the first later attach normalizes its detached geometry and records `default-size`.
+- A plain default-shell window has an empty `pane_start_command`, so after the hook split sets the final width, the hook respawns only that work pane as the user's shell, which avoids zsh's `PROMPT_SP` end-of-line marker.
+- Pristine birth installs a one-shot `client-attached` hook for the first work shell. A detached session can draw zsh's first prompt before the attaching client applies its size, and a resize during that draw leaves the `PROMPT_SP` `%` marker above the prompt. The hook skips control-mode clients, respawns the birth work pane after the first real attach, then removes itself. A room born without a probed terminal is fixed when the first later attach normalizes its detached geometry and records `default-size`.
 
-A quick tmux kill-and-restart still enters the pristine birth path: once the room transition proves the session absent, it purges sidebar heartbeat files and clears the width target from the prior incarnation before creating the replacement session. A fresh-but-dead heartbeat therefore cannot route the new shell through the later reconcile split that strands the `%` marker.
+A quick tmux kill-and-restart still takes the pristine birth path: once the room transition proves the session absent, it purges sidebar heartbeat files and clears the prior width target before creating the replacement. A fresh heartbeat from a dead sidebar therefore cannot send the new shell through the reconcile split that leaves the `%` marker.
 
-Reconcile converges widths only against an attached sized client's geometry or, while detached, the attaching terminal's probe. The detached path first aligns the session `default-size` and every window to that probe so the subsequent attach preserves the geometry, while a daemon reload with neither basis re-asserts structure without changing panes or the recorded width. When `open_tab` temporarily expands a freshly-born window to the widest attached client, it re-asserts the sidebar at that live target before splitting agent columns, then restores tmux autosizing. Layouts compile to tmux command sequences from the same layout IR Zellij uses.
+Reconcile converges widths only against an attached, sized client's geometry or, while detached, the attaching terminal's probe. The detached path first aligns the session `default-size` and every window to that probe so the attach keeps the geometry; a daemon reload with neither basis re-asserts structure without changing panes or the recorded width. When `open_tab` temporarily expands a new window to the widest attached client, it re-asserts the sidebar at the live target before splitting agent columns, then restores tmux autosizing. Layouts compile to tmux command sequences from the same layout IR Zellij uses.
 
-The pane itself is best-effort: a fresh sidebar heartbeat suppresses producer relaunch, while a missing, stale, unreadable, or protocol-mismatched heartbeat lets `rimz start` or `attach` open a new pane. tmux has no resurrection, so `ensure_clean_session` is a no-op and the managed pane is tmux's only renderer. For supervised agent panes the producer derives the wrapper spawn command from the process backend, paralleling its `pane_process_start` derivation, so lazy-registering agents bind and panes group by worktree as on Zellij.
+The pane itself is best-effort: a fresh sidebar heartbeat suppresses a relaunch, while a missing, stale, unreadable, or protocol-mismatched heartbeat lets `rimz start` or `attach` open a new pane. For supervised agent panes the producer derives the wrapper spawn command from the process backend, as it derives `pane_process_start`, so lazily registering agents bind and panes group by worktree as they do on Zellij.
 
 ### The control-mode presence watch
 
-The producer holds one size-excluded control-mode client, [`PresenceWatch`](../../crates/rimz/src/mux/tmux/presence.rs), with a single `refresh-client -B` subscription.
+The elected producer holds one control-mode client, [`PresenceWatch`](../../crates/rimz/src/mux/tmux/presence.rs), started from `sidebar_pane/app/tmux_watch.rs`, with a single `refresh-client -B` subscription.
 
-[`TmuxPresenceState`](../../crates/rimz/src/sidebar/presence/tmux.rs) retains only the native stream state needed to normalize out-of-order lines (panes, current windows, pending inactive panes, floating status, seeding) and feeds pane observations, focus, view switches, and incomplete-layout nudges through the shared host projector. The projector emits `PaneOpened`, `CommandChanged`, and `FocusChanged` under the same launch and sidebar policy as Zellij:
+[`TmuxPresenceState`](../../crates/rimz/src/sidebar/presence/tmux.rs) keeps only the stream state needed to normalize out-of-order lines (panes, current windows, pending inactive panes, floating status, seeding) and feeds pane observations, focus, view switches, and incomplete-layout nudges to the shared projector. Which notification becomes which event is in [state.md → what triggers a mux-derived event](./sidebar/state.md#what-triggers-a-mux-derived-event). Each overlay reaches every fresh sidebar immediately, the producer verifies structural changes with a fresh frame, and the watch refreshes the presence stamp on attach and on each classified line, which puts tmux on the same event-mode pane TTL as Zellij while the stream is alive.
 
-| tmux notification | Emitted event |
-| --- | --- |
-| `%window-pane-changed` | `FocusChanged`, naming the new active pane immediately. Deliberate in-window sidebar focus stays `FocusChanged`, so clicking or keying onto the sidebar is not bounced. |
-| `%session-window-changed` | `FocusStranded` when the destination sidebar has a working sibling, otherwise `FocusChanged`. |
-| Identity-free lines | `PanesChanged`. |
-| Window close or layout shrinkage | `PaneClosed`. |
+The watch follows the control-mode contracts in the [reference → control mode](../externals/mux-adapter/tmux-reference.md#control-mode). It attaches with `-C` and `ignore-size,no-output`, holds stdin open because closing the pipe detaches the client, sends only `refresh-client -B`, drains notifications promptly because tmux force-exits a slow reader, and removes `$TMUX` from the child environment so tmux does not refuse a nested attach. The client is writable, which keeps tmux 3.7 `send-keys` working when the watch is a headless session's only attached client.
 
-Each overlay reaches every fresh sidebar immediately, the producer verifies structural changes with a fresh frame, and the watch refreshes the presence stamp on attach and on each classified line. That puts tmux in the same event-mode pane TTL as Zellij while the stream is alive.
-
-The watch rides the control-mode contracts in the [reference → control mode](../externals/mux-adapter/tmux-reference.md#control-mode). It attaches with `ignore-size,no-output`, holds stdin open because closing the pipe detaches the client, writes only `refresh-client -B` from its command allowlist, drains notifications promptly because tmux force-exits a stale reader, and drops `$TMUX` from the child env so a nested attach is not refused. The writable attach keeps tmux 3.7 `send-keys` usable when a headless session's presence watch is the sole attached client.
-
-A dead, refused, or idle watcher degrades to the tmux poll, and the producer respawns with backoff. That is the parity rule in action: each backend owns an authoritative roster mechanism, while overlays stay latency hints.
+A dead, refused, or idle watch degrades to the tmux poll, and the producer respawns it with backoff.
 
 ### Notification passthrough
 
 Desktop notifications are terminal-local. The sidebar renderer writes OSC 777 and BEL bytes into its pane, SSH carries them to the local terminal, and the terminal decides whether to show a banner or play a sound.
 
-tmux forwards the OSC path when `allow-passthrough` is on, which is RimZ's default, wrapped as DCS passthrough. The sidebar raises its own pane to `all`, so its notification and graphics bytes also pass while its window is hidden.
+tmux forwards OSC 777 wrapped as DCS passthrough when `allow-passthrough` is on, which is RimZ's default. At startup the sidebar raises its own pane's passthrough from `on` to `all` (`escalate_own_pane_passthrough` in `sidebar_pane/pixel/probe.rs`) so kitty graphics reach the terminal while its window is hidden ([pets.md → render tiers](./sidebar/pets.md#render-tiers)); DCS-wrapped notification bytes pass under the same setting.
 
-Zellij currently drops notification OSCs, so `[notifications].desktop = "auto"` disables OSC there and notification handlers stay the portable channel. The full contract is in [notifications.md](./sidebar/notifications.md).
+Zellij drops notification OSCs, so `[notifications].desktop = "auto"` disables OSC there and notification handlers are the portable channel. The full contract is in [notifications.md](./sidebar/notifications.md).
 
 ### tmux backend caveats
 
-- **Minimum version is 3.5.0**, set by the room options `ensure_session` applies across supported hosts (`extended-keys-format` landed in 3.5), and the batched sequence fails at the first unknown option. The command surface alone needs only 3.2. `extended-keys`, `*:extkeys`, the `S-Enter` and `M-Enter` root bindings, and the bare-Esc normalization activate across supported versions. `rimz doctor` reports floor compliance.
-- **Server-less `list_sessions` is empty, not an error.** tmux exits non-zero with `no server running` before the daemon starts; the backend swallows that shape and returns an empty `Vec`, matching the Zellij contract.
-- **A server exits when its last session ends.** The endpoint is a stable path rather than a long-lived daemon, so a leftover socket file is normal and the next command births a replacement. Pane and window ids restart from `%0` and `@0` across that boundary; see [pane metadata](#pane-metadata).
-- **The sidebar self-closes** the same way it does on Zellij, through the normalized pane listing, so a lone sidebar removes itself when its window's last working pane exits. The `after-new-window` hook runs `split-window` and, for plain default-shell tabs, `respawn-pane`, so it never recurses through `new-window`.
+- **Minimum version is 3.5.0** (`MIN_TMUX_VERSION`), set by the room options `ensure_session` applies (`extended-keys-format` arrived in 3.5); the batched sequence fails at the first unknown option. The command surface alone needs only 3.2. `rimz doctor` reports floor compliance.
+- **A server-less `list_sessions` is empty, not an error.** tmux exits non-zero with `no server running` before the server starts; the backend returns an empty `Vec`, matching Zellij.
+- **A server exits when its last session ends.** The endpoint is a stable path, not a long-lived daemon, so a leftover socket file is normal and the next command births a replacement. Pane and window ids restart from `%0` and `@0` across that boundary ([pane metadata](#pane-metadata)).
+- **The sidebar self-closes** as it does on Zellij, through the normalized pane listing, so a lone sidebar removes itself when its window's last working pane exits. The `after-new-window` hook runs `split-window` and, for plain default-shell windows, `respawn-pane`, so it never recurses through `new-window`.
 - **Resumed agents open as windows**, one `new-window` per remembered channel, named `#<channel>` and born `sidebar | agents…` as the hook docks the sidebar. `new-window -n` turns off automatic-rename, so the name is a stable idempotency key and a re-run never doubles a channel.
-- **Per-test server isolation in CI.** Tests point the backend at a private runtime root, so `with_socket` receives the same derived path production would use one domain over. A test that pairs a live server with `rimz` subprocesses builds both from one runtime root, because the subprocess resolves its own endpoint rather than inheriting `$TMUX`.
+- **Tests isolate servers per test.** Tests point the backend at a private runtime root, so `with_socket` receives the same derived path production would use one domain over. A test that pairs a live server with `rimz` subprocesses builds both from one runtime root, because the subprocess resolves its own endpoint instead of inheriting `$TMUX`.
 
 ## What both backends guarantee
 
 - **Detach and reattach are multiplexer features.** RimZ does not reimplement them.
 - **Runtime correctness needs no visible sidebar.** Hooks, `rimz message`, and supervised runs work headless.
-- **The renderer is interchangeable and optional.** The native pane is the default on both backends, and correctness never depends on which renderer, or none, is attached.
+- **The renderer is optional.** The native pane is the default on both backends, and correctness never depends on which renderer, or none, is attached.
 - **The store survives host restart; processes do not**, unless a host supervisor is wired (tmux-resurrect, Zellij resurrect, systemd).
 
 ### What `rimz doctor` reports
 
-The selected backend, versions and floor compliance, PATH-visible backend binaries, backend server-log issues, feature availability, sidebar liveness, RimZ runtime socket headroom, the managed tmux server socket path, any same-named session stranded on the legacy default tmux server with the command that retires it, Zellij IPC socket headroom when Zellij is selected, Zellij 0.45's live kitty-graphics handshake, and any degraded modes.
+The selected backend, versions and floor compliance, PATH-visible backend binaries, backend server-log issues, feature availability, sidebar liveness, RimZ runtime socket headroom, the managed tmux server socket path, any same-named session left on the default tmux server with the command that retires it, Zellij IPC socket headroom when Zellij is selected, Zellij 0.45's live kitty-graphics handshake, and any degraded modes.
 
-Backend adapters own server-log locations. Private doctor collection in [`mux_log.rs`](../../crates/rimz/src/cli/doctor/mux_log.rs) reads a bounded tail, assembles logical multi-line records, stamps each from the backend's line format, and drops everything at or before the `rimz doctor --clear` watermark. Its classifier names and places each issue: ordinary lifecycle records (a client leaving, a closed pane's pty, a late action acknowledgement) are `expected` and fold into counted lines, while everything else stays `investigate`. A record wrapped in a generic header is named by its `Caused by:` chain, so two unrelated failures under one wrapper stay two issues.
+Backend adapters own server-log locations. Doctor's collector in [`mux_log.rs`](../../crates/rimz/src/cli/doctor/mux_log.rs) reads a bounded tail, assembles multi-line records, stamps each from the backend's line format, and drops everything at or before the `rimz doctor --clear` watermark. Its classifier names each issue: ordinary lifecycle records (a client leaving, a closed pane's pty, a late action acknowledgement) are `expected` and fold into counted lines, and everything else is `investigate`. A record wrapped in a generic header is named by its `Caused by:` chain, so two unrelated failures under one wrapper stay two issues.
