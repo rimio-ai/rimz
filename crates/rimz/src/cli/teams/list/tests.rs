@@ -257,6 +257,7 @@ fn catalog_merges_definition_and_live_instance() {
     agent.team = Some("forge".to_owned());
     agent.role = Some("planner".to_owned());
     agent.channel = Some("feat-x".to_owned());
+    agent.isolation = Some(Isolation::Sandbox);
     let snapshot = snapshot(vec![agent]);
     let reports = build_catalog(
         &teams,
@@ -264,7 +265,7 @@ fn catalog_merges_definition_and_live_instance() {
         &CommandsConfig::default(),
         LiveCatalog {
             isolation: Isolation::Host,
-            tmp_dir: Path::new("/tmp"),
+            tmp_dir: Path::new("/state/room/tmp"),
             tasks: &BTreeMap::new(),
             snapshot: &snapshot,
             audit_agents: &[],
@@ -281,6 +282,11 @@ fn catalog_merges_definition_and_live_instance() {
     assert_eq!(reports[0].instances[0].channel, "feat-x");
     assert_eq!(reports[0].instances[0].members.len(), 1);
     assert_eq!(reports[0].instances[0].state, "working");
+    assert_eq!(reports[0].instances[0].isolation, Isolation::Sandbox);
+    assert_eq!(
+        reports[0].instances[0].tmp_dir,
+        Path::new("/state/room/tmp")
+    );
     let json = serde_json::to_value(&reports).unwrap();
     assert_eq!(
         json[0]["roles"][0]["signals"],

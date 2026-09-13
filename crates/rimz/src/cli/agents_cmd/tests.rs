@@ -1310,6 +1310,7 @@ mod launch_options {
             &mut warning_layout,
             LaunchFinalizeOptions {
                 permission_mode: None,
+                isolation: None,
                 preset: &LaunchPreset::default(),
                 passthrough: &[],
                 budget: None,

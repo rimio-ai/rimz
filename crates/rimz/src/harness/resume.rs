@@ -733,6 +733,7 @@ impl ResumeCandidate {
                 parent_agent_id: None,
                 parent_agent_kind: None,
                 launch_depth: None,
+                isolation: None,
             },
             stamped_mode: None,
             cwd: observation.workspace.clone(),

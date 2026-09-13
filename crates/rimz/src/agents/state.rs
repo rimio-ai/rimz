@@ -566,6 +566,10 @@ pub struct AgentState {
     /// explicit restart can reproduce it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<crate::agents::PermissionMode>,
+    /// The launch's `--isolation` override, carried forward like `mode`;
+    /// `None` follows machine `agents.isolation`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<crate::config::Isolation>,
     /// The `[agents.teams]` role this agent launched as (`planner`, `coder`),
     /// stamped by the launch event and carried forward like `profile`. The
     /// agent answers to `@<role>` when that role uniquely names it in scope.
@@ -795,6 +799,8 @@ struct AgentStateWire {
     login: Option<LoginName>,
     #[serde(default)]
     mode: Option<crate::agents::PermissionMode>,
+    #[serde(default)]
+    isolation: Option<crate::config::Isolation>,
     role: Option<String>,
     team: Option<String>,
     launch_group: Option<String>,
@@ -894,6 +900,7 @@ impl From<AgentStateWire> for AgentState {
             profile: wire.profile,
             login: wire.login,
             mode: wire.mode,
+            isolation: wire.isolation,
             role: wire.role,
             team: wire.team,
             launch_group: wire.launch_group,
@@ -981,6 +988,7 @@ impl AgentState {
             profile: None,
             login: None,
             mode: None,
+            isolation: None,
             role: None,
             team: None,
             launch_group: None,

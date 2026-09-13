@@ -303,6 +303,7 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
         subagent,
         force_new_tab: false,
         permission_mode: PermissionMode::Auto,
+        isolation: None,
         agent: None,
         model: None,
         system_prompt_file: None,
@@ -337,6 +338,7 @@ fn supervised_launch_normalizes_model_and_effort_overrides() {
         &workspace,
         &rimz::config::MachineConfig::default(),
         rimz::config::effective::ProfileScope::Agents,
+        None,
     )
     .expect("prepare supervised launch")
     .layout;
@@ -479,6 +481,7 @@ fn unsupported_adapter_keeps_subagent_reminder_in_user_prompt() {
         &workspace,
         &rimz::config::MachineConfig::default(),
         rimz::config::effective::ProfileScope::Subagents,
+        None,
     )
     .expect_err("spec-like prompt");
     assert!(

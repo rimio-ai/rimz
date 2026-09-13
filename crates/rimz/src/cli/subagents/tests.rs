@@ -25,7 +25,15 @@ fn parse(argv: &[&str]) -> SubagentsArgs {
 
 #[test]
 fn launch_implies_supervised_background_defaults() {
-    let args = parse(&["rimz", "claude", "review this", "--effort", "high"]);
+    let args = parse(&[
+        "rimz",
+        "claude",
+        "review this",
+        "--effort",
+        "high",
+        "--isolation",
+        "sandbox",
+    ]);
     let launch = args
         .launch
         .into_agent_launch(&rimz::config::SubagentsConfig::default())
@@ -37,6 +45,8 @@ fn launch_implies_supervised_background_defaults() {
         "review this",
         "--effort",
         "high",
+        "--isolation",
+        "sandbox",
         "-p",
         "--bg",
         "--timeout",

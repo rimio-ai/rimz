@@ -60,6 +60,11 @@ pub struct LaunchParams {
     /// explicit restart can reproduce it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<PermissionMode>,
+    /// A per-launch `--isolation` override of machine `agents.isolation`.
+    /// Stored durably so restart, fork, resume, and subagents reproduce it;
+    /// `None` follows the machine setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<crate::config::Isolation>,
     /// The `[agents.teams]` role the launcher selected, passed through
     /// `RIMZ_AGENT_ROLE`. The reducer projects it to the card handle.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -176,13 +176,18 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
     };
     let adapter = rimz::agents::find_definition(request.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", request.kind))?;
+    let isolation = request
+        .identity
+        .params
+        .isolation
+        .unwrap_or(machine.agents.isolation);
     rimz::sandbox::preflight_skills(
-        machine.agents.isolation,
+        isolation,
         &request.kind,
         request.skills.is_some(),
         adapter.manual_skill(),
     )?;
-    let bwrap = rimz::sandbox::preflight(machine.agents.isolation)?;
+    let bwrap = rimz::sandbox::preflight(isolation)?;
     let ambient_env = rimz::agents::ambient_env();
     let plan = launch_plan::compile(LaunchPlanInputs {
         request: &request,

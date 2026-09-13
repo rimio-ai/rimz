@@ -630,6 +630,7 @@ fn carried_base(
     if let Some(prior) = prior {
         state.launch_id = prior.launch_id.clone();
         state.mode = prior.mode;
+        state.isolation = prior.isolation;
         state.launch_group = prior.launch_group.clone();
         state.launch_ordinal = prior.launch_ordinal;
         state.pane = prior.pane.clone();
@@ -676,6 +677,9 @@ fn fold_launch_params(state: &mut AgentState, launch: &LaunchParams) {
     }
     if let Some(mode) = launch.mode {
         state.mode = Some(mode);
+    }
+    if let Some(isolation) = launch.isolation {
+        state.isolation = Some(isolation);
     }
     if let Some(role) = &launch.role {
         state.role = Some(role.clone());
@@ -853,6 +857,7 @@ fn inherit_launch_identity(
     successor.profile.clone_from(&predecessor.profile);
     successor.login.clone_from(&predecessor.login);
     successor.mode = predecessor.mode;
+    successor.isolation = predecessor.isolation;
     successor.role.clone_from(&predecessor.role);
     successor.team.clone_from(&predecessor.team);
     successor.launch_group.clone_from(&predecessor.launch_group);

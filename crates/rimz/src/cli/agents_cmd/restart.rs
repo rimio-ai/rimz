@@ -49,13 +49,14 @@ pub(in crate::cli) fn restart_resolved(
     let posture = restart_posture(agent, workspace, &machine_config)?;
     let adapter = rimz::agents::find_definition(agent.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
+    let isolation = agent.isolation.unwrap_or(machine_config.agents.isolation);
     rimz::sandbox::preflight_skills(
-        machine_config.agents.isolation,
+        isolation,
         &agent.kind,
         posture.launch.skills.is_some(),
         adapter.manual_skill(),
     )?;
-    rimz::sandbox::preflight(machine_config.agents.isolation)?;
+    rimz::sandbox::preflight(isolation)?;
     let cell = restart_cell(agent, &posture);
 
     // Fail at the entry point if this project's configured launch environment
@@ -215,6 +216,7 @@ pub(super) fn relaunch_request(
         launch_ordinal: agent.launch_ordinal,
         channel: agent.channel.clone(),
         mode: posture.launch.mode,
+        isolation: agent.isolation,
         model: posture.launch.model.clone(),
         effort: posture.launch.effort.clone(),
         budget: posture.launch.budget.clone(),
@@ -289,6 +291,7 @@ fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
             profile: agent.profile.clone(),
             role: agent.role.clone(),
             mode: posture.launch.mode,
+            isolation: agent.isolation,
             model: posture.launch.model.clone(),
             effort: posture.launch.effort.clone(),
             budget: posture.launch.budget.clone(),
@@ -338,6 +341,7 @@ fn append_fresh_launch(
     request.launch.parent_agent_kind = agent.parent_agent_kind.clone();
     request.launch.launch_depth = agent.launch_depth;
     request.launch.mode = mode;
+    request.launch.isolation = agent.isolation;
     request.launch.role = agent.role.clone();
     request.launch.team = agent.team.clone();
     request.launch.launch_group = agent.launch_group.clone();

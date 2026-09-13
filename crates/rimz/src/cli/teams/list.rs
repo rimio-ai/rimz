@@ -501,6 +501,12 @@ fn live_instances(
                 .or_default() += 1;
         }
         let state = instance_state(&status_counts).to_owned();
+        let isolation = unique_value(
+            members
+                .iter()
+                .map(|agent| Some(agent.isolation.unwrap_or(catalog.isolation))),
+        )
+        .unwrap_or(catalog.isolation);
         let members = members
             .iter()
             .map(|agent| {
@@ -545,8 +551,8 @@ fn live_instances(
                 members,
                 worktree,
                 branch,
-                isolation: catalog.isolation,
-                tmp_dir: match catalog.isolation {
+                isolation,
+                tmp_dir: match isolation {
                     Isolation::Sandbox => catalog.tmp_dir.to_path_buf(),
                     Isolation::Host => PathBuf::from("/tmp"),
                 },

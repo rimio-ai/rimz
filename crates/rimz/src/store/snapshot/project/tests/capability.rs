@@ -103,6 +103,7 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
             launch: LaunchParams {
                 profile: Some("codex-coder".to_owned()),
                 mode: Some(crate::agents::PermissionMode::Yolo),
+                isolation: Some(crate::config::Isolation::Sandbox),
 
                 role: Some("coder".to_owned()),
 
@@ -182,6 +183,7 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
     assert_eq!(agent.usage.output_tokens, Some(800));
     assert_eq!(agent.profile.as_deref(), Some("codex-coder"));
     assert_eq!(agent.mode, Some(crate::agents::PermissionMode::Yolo));
+    assert_eq!(agent.isolation, Some(crate::config::Isolation::Sandbox));
     assert_eq!(agent.role.as_deref(), Some("coder"));
     assert_eq!(agent.team.as_deref(), Some("forge"));
     assert_eq!(agent.worktree_path.as_deref(), Some("/tmp/x"));

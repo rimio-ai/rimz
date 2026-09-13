@@ -27,6 +27,9 @@ pub struct TeamsArgs {
     prompt: Option<String>,
     #[command(flatten)]
     launch: agents_cmd::CohortLaunchArgs,
+    /// Run the cohort under this isolation instead of machine `agents.isolation`.
+    #[arg(long, value_name = "host|sandbox", requires = "name")]
+    isolation: Option<rimz::config::Isolation>,
     /// Emit the team catalogue as JSON.
     #[arg(long)]
     json: bool,
@@ -93,6 +96,9 @@ struct TeamLaunchArgs {
     prompt: Option<String>,
     #[command(flatten)]
     launch: agents_cmd::CohortLaunchArgs,
+    /// Run the cohort under this isolation instead of machine `agents.isolation`.
+    #[arg(long, value_name = "host|sandbox")]
+    isolation: Option<rimz::config::Isolation>,
 }
 
 #[derive(Debug, Args)]
@@ -185,7 +191,7 @@ pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
                         "--json is only supported with `rimz teams` and `rimz teams list`; use `rimz teams show {name} --json` for one team"
                     );
                 }
-                launch_team(name, args.prompt, args.launch, globals)
+                launch_team(name, args.prompt, args.launch, args.isolation, globals)
             }
             None => {
                 reject_launch_flags_without_name(&args.prompt, &args.launch)?;
@@ -202,7 +208,7 @@ pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
         }
         Some(TeamsSubcmd::List { json }) => list::run(json, globals),
         Some(TeamsSubcmd::Launch(args)) => {
-            launch_team(args.name, args.prompt, args.launch, globals)
+            launch_team(args.name, args.prompt, args.launch, args.isolation, globals)
         }
         Some(TeamsSubcmd::Resume(args)) => {
             let (name, worktree) = team_lane(args.name, args.worktree)?;
@@ -246,6 +252,7 @@ fn launch_team(
     name: String,
     prompt: Option<String>,
     mut launch: agents_cmd::CohortLaunchArgs,
+    isolation: Option<rimz::config::Isolation>,
     globals: &GlobalFlags,
 ) -> Result<()> {
     let (name, worktree) = team_lane(name, launch.worktree)?;
@@ -259,6 +266,10 @@ fn launch_team(
             spec: Some(name),
             prompt,
             cohort: launch,
+            overrides: agents_cmd::LaunchOverrideArgs {
+                isolation,
+                ..Default::default()
+            },
             ..Default::default()
         }),
         globals,
