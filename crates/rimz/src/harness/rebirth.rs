@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use jiff::Timestamp;
 
 use crate::agents::AgentState;
-use crate::config::{MachineConfig, ProfilesConfig, TeamsConfig};
+use crate::config::{Isolation, MachineConfig, ProfilesConfig, TeamsConfig};
 use crate::disk::paths::{RuntimePaths, StatePaths, cache_home};
 use crate::harness::resume::{
     MaterializedRecovery, RecoveryMaterializer, RecoveryPlan, ResumePlan, plan_resume_detailed,
@@ -38,6 +38,7 @@ pub struct RebirthPreview {
     death: Option<LastDeathMarker>,
     pane_count: usize,
     labels: Vec<String>,
+    requires_sandbox: bool,
 }
 
 impl RebirthPreview {
@@ -52,6 +53,12 @@ impl RebirthPreview {
     pub fn labels(&self) -> &[String] {
         &self.labels
     }
+
+    /// Whether recovery resumes an agent whose effective isolation is sandbox,
+    /// so the caller must preflight bubblewrap before choosing to recover.
+    pub const fn requires_sandbox(&self) -> bool {
+        self.requires_sandbox
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -63,6 +70,7 @@ pub struct RebirthPlan {
     crash_roster: Vec<AgentState>,
     crash_cache: CrashCacheSnapshot,
     planned: RecoveryPlan,
+    requires_sandbox: bool,
     empty_tabs: Vec<ResumeTab>,
 }
 
@@ -119,6 +127,7 @@ impl RebirthPlan {
             death: self.death.clone(),
             pane_count,
             labels,
+            requires_sandbox: self.requires_sandbox,
         }
     }
 
@@ -289,6 +298,13 @@ fn inspect_at(
     } else {
         RecoveryPlan::default()
     };
+    let resumed = planned.resumed_keys();
+    let requires_sandbox = audit.as_ref().is_some_and(|(_, projection)| {
+        projection.agents.iter().any(|agent| {
+            resumed.contains(&(agent.kind.clone(), agent.agent_id.clone()))
+                && agent.isolation.unwrap_or(machine.agents.isolation) == Isolation::Sandbox
+        })
+    });
     let empty_tabs = empty_named_channel_tabs(&paths);
     Ok(RebirthPlan {
         paths,
@@ -298,6 +314,7 @@ fn inspect_at(
         crash_roster,
         crash_cache,
         planned,
+        requires_sandbox,
         empty_tabs,
     })
 }

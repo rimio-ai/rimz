@@ -597,9 +597,10 @@ impl RecoveryPlan {
             .collect()
     }
 
-    #[cfg(test)]
-    pub(super) fn base_resumed(&self) -> &BTreeSet<(AgentKind, AgentSessionId)> {
-        &self.base_resumed
+    pub(super) fn resumed_keys(&self) -> BTreeSet<(AgentKind, AgentSessionId)> {
+        let mut keys = self.base_resumed.clone();
+        keys.extend(self.entries.iter().flat_map(RecoveryEntry::resumed_keys));
+        keys
     }
 
     pub(super) fn materialize(

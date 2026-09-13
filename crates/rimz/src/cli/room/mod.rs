@@ -725,6 +725,9 @@ fn birth_managed_room(
                     report_previous_session_death(death);
                 }
                 let choice = prompt_recover_or_fresh(&preview, resume_prompt)?;
+                if choice == RebirthChoice::Recover && preview.requires_sandbox() {
+                    rimz::sandbox::preflight(rimz::config::Isolation::Sandbox)?;
+                }
                 NormalRebirth::Selected {
                     plan: Box::new(plan),
                     choice,

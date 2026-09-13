@@ -4,7 +4,7 @@
 
 ## Launch and preflight
 
-`rimz config set agents.isolation sandbox` probes bubblewrap before writing. Start and launch preflights refuse non-Linux systems, missing `bwrap`, or a failed mount probe, with a fix rather than a host-mode fallback. `rimz doctor` reports the mode, binary/version, probe verdict, and fix; in host mode the diagnostic is informational.
+`rimz config set agents.isolation sandbox` probes bubblewrap before writing. Start and launch preflights refuse non-Linux systems, missing `bwrap`, or a failed mount probe, with a fix rather than a host-mode fallback. Start also preflights sandbox when a rebirth it is about to recover includes an agent whose recorded `--isolation` override (or machine policy) is sandbox. `rimz doctor` reports the mode, binary/version, probe verdict, and fix; in host mode the diagnostic is informational.
 
 The exec wrapper takes the launch's recorded `--isolation` override (`LaunchParams.isolation`, carried in the exec envelope), else current machine policy, and wraps only the ready provider process, using the absolute bubblewrap path that its preflight probed. A trusted provider `PATH` override does not change the wrapper binary. Qwen's login-shell reentry runs first on the host; its finalized exec builds the one view. Each pane gets one RimZ sandbox, not nested wrappers. Subagents launch through the multiplexer and build their own view with their own profile, sharing room tmp; without their own `--isolation` they inherit the parent's recorded override. Restart, fork, and rebirth replay the recorded override and otherwise pick up the current isolation setting.
 
