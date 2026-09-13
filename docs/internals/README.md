@@ -44,7 +44,7 @@ The harness runs the fleet: spawn, address, message, and reclaim. It is a produc
 | --- | --- |
 | [sidebar.md](./sidebar/sidebar.md) | Rendering mechanics: presence, ranking, layout, and recovery. |
 | [state.md](./sidebar/state.md) | The data plane: the producer/consumer split, the published caches, push channels, fusion, and timing. |
-| [notifications.md](./sidebar/notifications.md) | Best-effort attention alerts over the same state. |
+| [notifications.md](./sidebar/notifications.md) | The push path over unread episodes: producer policy, renderer bell and banner, reminders, handlers, and the notification trace log. |
 | [pets.md](./sidebar/pets.md) | The dashboard pet: action projection, animation tracks, asset loading, and the pixel and cell-art render tiers. |
 
 ## Single-doc subsystems

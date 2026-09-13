@@ -20,7 +20,7 @@ Three surfaces carry workspace identity through one [`DiagSink`](../../crates/ri
 | --- | --- | --- | --- |
 | `diag.log.jsonl` | state dir | typed sidebar anomalies, rate-limited | this doc |
 | `diag-frames/` | state dir, `0700` | prior/offending pane-frame pairs | [Frame captures](#frame-captures) |
-| `notify.log.jsonl` | state dir | notification emits, bell decisions, unread transitions | [notifications.md](./sidebar/notifications.md) |
+| `notify.log.jsonl` | state dir | notification emits, bell decisions, unread transitions | [notifications.md](./sidebar/notifications.md#the-trace-log) |
 | `plugin-presence.log.jsonl` | state dir | Zellij presence-plugin keepalive telemetry | [below](#zellij-presence-plugin-telemetry) |
 | `focus-repairs.log.jsonl` | account-global state root | automatic focus-repair evidence and outcomes | [state.md](./sidebar/state.md) |
 | `binding.log.jsonl` | runtime dir | pane-binding decisions | [sidebar.md](./sidebar/sidebar.md) |
