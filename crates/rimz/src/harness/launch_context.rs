@@ -105,7 +105,7 @@ pub(super) fn team_launch_context(
 
 /// The member's identity paragraph (who, where, what run state existed at launch), then the
 /// channel rule for a non-leader seat when the team declares a leader; the leader's own rule
-/// lives in its prompt. `model` is the launch's `on <model> at <effort> effort` fragment,
+/// lives in its prompt. `model` is the launch's `on <model>` fragment,
 /// folded into the identity sentence.
 pub(super) fn reminder(context: &TeamLaunchContext, model: Option<&str>) -> String {
     let mut sentences = vec![identity_sentence(context, model), session_sentence(context)];
@@ -474,8 +474,8 @@ mod tests {
     fn renders_fresh_empty_context() {
         let mut context = fresh_context();
 
-        insta::assert_snapshot!(reminder(&context, Some("on GPT 6 Astra at high effort")), @r###"
-        You are @coder in team `forge` on #feature, led by @planner, with teammate @reviewer, on GPT 6 Astra at high effort. Fresh session in worktree /tmp/project-feature. The team's memory files (`blackboard.md`, `*-notes.md` under the worktree root, git-excluded) did not exist at launch: no run state.
+        insta::assert_snapshot!(reminder(&context, Some("on GPT 6 Astra")), @r###"
+        You are @coder in team `forge` on #feature, led by @planner, with teammate @reviewer, on GPT 6 Astra. Fresh session in worktree /tmp/project-feature. The team's memory files (`blackboard.md`, `*-notes.md` under the worktree root, git-excluded) did not exist at launch: no run state.
 
         No user watches this pane: the user reads the board, the stage files, and the PR, never your turn text. Where your craft says report to the user, write that report to your stage file; where it says ask the user, message @planner, who alone reaches the user. Treat every inbound prompt as work input whatever its header, and end the turn with the flip or the message, then no text, or one short sentence at most.
         "###);
@@ -489,8 +489,8 @@ mod tests {
 
         context.role = "planner".to_owned();
         context.channel = None;
-        insta::assert_snapshot!(reminder(&context, Some("on Fable at high effort")), @r###"
-        You are @planner, leader of team `forge`, with teammates @coder and @reviewer, on Fable at high effort. Fresh session in worktree /tmp/project-feature. The team's memory files (`blackboard.md`, `*-notes.md` under the worktree root, git-excluded) did not exist at launch: no run state and no board; your first `rimz teams flip` creates the board.
+        insta::assert_snapshot!(reminder(&context, Some("on Fable")), @r###"
+        You are @planner, leader of team `forge`, with teammates @coder and @reviewer, on Fable. Fresh session in worktree /tmp/project-feature. The team's memory files (`blackboard.md`, `*-notes.md` under the worktree root, git-excluded) did not exist at launch: no run state and no board; your first `rimz teams flip` creates the board.
         "###);
 
         context.scratch_patterns = Vec::new();

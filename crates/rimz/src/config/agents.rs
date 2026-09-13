@@ -162,7 +162,7 @@ pub struct Profile {
     /// `None` allows all specs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagents: Option<Vec<String>>,
-    /// Whether launches through this profile include their model and effort in the RimZ reminder. Unset means on.
+    /// Whether launches through this profile include their model in the RimZ reminder. Unset means on.
     #[serde(
         default,
         rename = "model-reminder",

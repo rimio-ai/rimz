@@ -510,8 +510,7 @@ fn process_compiler_joins_catalog_and_team_context_in_one_occurrence() {
         project.path(),
     )
     .expect("team context");
-    let team_reminder =
-        crate::harness::launch_context::reminder(&context, Some("on GPT 6 Astra at high effort"));
+    let team_reminder = crate::harness::launch_context::reminder(&context, Some("on GPT 6 Astra"));
 
     for kind in ["claude", "codex"] {
         let mut invocation = team_request(kind);
@@ -623,7 +622,8 @@ fn process_compiler_appends_model_line_for_native_adapters() {
                 let text = parse_toml_string_or_raw(&occurrences[0].value);
                 assert_eq!(text.matches("<system_reminder>").count(), 1);
                 assert_eq!(text.matches("</system_reminder>").count(), 1);
-                assert_eq!(text.contains("GPT 6 Astra at high effort."), model);
+                assert_eq!(text.contains("GPT 6 Astra."), model);
+                assert!(!text.contains("high effort"));
                 assert_eq!(text.contains("You are a subagent:"), subagent);
                 assert_eq!(text.contains("team `forge`"), !subagent);
                 assert_eq!(text.contains("Subagents are disabled"), !subagent);

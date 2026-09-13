@@ -429,7 +429,7 @@ fn explain_prints_the_plan_without_side_effects() {
     );
     let reminder = report["prompt"]["reminder"].as_str().unwrap();
     assert!(reminder.starts_with("<system_reminder>\nYou are @worker, running on"));
-    assert!(reminder.contains("at high effort."));
+    assert!(!reminder.contains("effort"));
     assert!(reminder.contains("- `scout` (codex): Inspect the code"));
     assert!(reminder.ends_with("\n</system_reminder>"));
     assert!(

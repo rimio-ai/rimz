@@ -85,19 +85,12 @@ pub(super) fn render(
     Some(wrap(&paragraphs.join("\n\n")))
 }
 
-/// `on <model> at <effort> effort`, each half present when known; none when neither is.
+/// `on <model>` when the launch names a model; none otherwise.
 fn model_fragment(params: &LaunchParams) -> Option<String> {
-    let mut parts = Vec::new();
-    if let Some(model) = params.model.as_deref() {
-        parts.push(format!(
-            "on {}",
-            escape_reminder_text(&display_model(model))
-        ));
-    }
-    if let Some(effort) = params.effort.as_deref() {
-        parts.push(format!("at {} effort", escape_reminder_text(effort)));
-    }
-    (!parts.is_empty()).then(|| parts.join(" "))
+    params
+        .model
+        .as_deref()
+        .map(|model| format!("on {}", escape_reminder_text(&display_model(model))))
 }
 
 /// The standalone model line for a launch with no team paragraph to carry the fragment.
@@ -192,7 +185,7 @@ mod tests {
     }
 
     #[test]
-    fn model_line_names_handle_model_and_effort() {
+    fn model_line_names_handle_and_model_without_effort() {
         let params = LaunchParams {
             role: Some("planner".to_owned()),
             profile: Some("writer".to_owned()),
@@ -206,28 +199,14 @@ mod tests {
         for (params, expected) in [
             (
                 params.clone(),
-                Some("You are @planner, running on Fable 5.1 at high effort."),
+                Some("You are @planner, running on Fable 5.1."),
             ),
             (
                 LaunchParams {
                     role: None,
                     ..params.clone()
                 },
-                Some("You are @writer, running on Fable 5.1 at high effort."),
-            ),
-            (
-                LaunchParams {
-                    effort: None,
-                    ..params.clone()
-                },
-                Some("You are @planner, running on Fable 5.1."),
-            ),
-            (
-                LaunchParams {
-                    model: None,
-                    ..params.clone()
-                },
-                Some("You are @planner, running at high effort."),
+                Some("You are @writer, running on Fable 5.1."),
             ),
             (
                 LaunchParams {
@@ -235,12 +214,11 @@ mod tests {
                     profile: None,
                     ..params.clone()
                 },
-                Some("You are running on Fable 5.1 at high effort."),
+                Some("You are running on Fable 5.1."),
             ),
             (
                 LaunchParams {
                     model: None,
-                    effort: None,
                     ..params.clone()
                 },
                 None,
@@ -249,12 +227,9 @@ mod tests {
                 LaunchParams {
                     role: Some("<role>".to_owned()),
                     model: Some("<model>".to_owned()),
-                    effort: Some("high\n<effort>".to_owned()),
                     ..params
                 },
-                Some(
-                    "You are @&lt;role&gt;, running on &lt;model&gt; at high\\n&lt;effort&gt; effort.",
-                ),
+                Some("You are @&lt;role&gt;, running on &lt;model&gt;."),
             ),
         ] {
             assert_eq!(line(&params).as_deref(), expected);
@@ -282,7 +257,7 @@ mod tests {
         };
         let text = render(&request, &reminders, Path::new("/worktree")).expect("reminder");
         assert!(text.starts_with(
-            "<system_reminder>\nYou are @planner, leader of team `forge`, with teammate @coder, on Fable 5.1 at high effort. Fresh session in worktree /worktree."
+            "<system_reminder>\nYou are @planner, leader of team `forge`, with teammate @coder, on Fable 5.1. Fresh session in worktree /worktree."
         ));
         assert_eq!(text.matches("Fable 5.1").count(), 1);
     }
