@@ -285,7 +285,7 @@ surface-budget = 48
 
 [[module]]
 path = "crates/rimz/src/sidebar"
-surface-budget = 332
+surface-budget = 310
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
@@ -1990,3 +1990,58 @@ reason = "Returned by split_team_and_flat to rebirth, which reads cohort seeds w
 kind = "item"
 key = "harness::resume::RecoveryEntry"
 reason = "Payload of RecoveryPlan.entries, which rebirth's tests construct and reorder; pub(super) is its floor (pass 19a)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::enrich::FoldOpts"
+reason = "Built by literal in benches/hotpath.rs and the fold_incremental performance suite, both outside the library crate (pass 20b)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::enrich::enrich"
+reason = "Benches and the fold_incremental performance suite run the full fold from outside the library crate (pass 20b)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::enrich::enrich_workspace"
+reason = "benches/hotpath.rs measures the renderer-independent fold from outside the library crate (pass 20b)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::enrich::WorkspaceSnapshot"
+reason = "Return type of bench-reached enrich_workspace and the field of pub WorkspaceProjection.projection; private_interfaces floors it at pub (pass 20b)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::enrich::snapshot"
+reason = "sidebar_pane fetch tests read the published projection through it; pub(super) would only move their reach onto the pub(crate) tuple field (pass 20b, user decision)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::observe::AnomalyDraft"
+reason = "Payload of pub(crate) ObserveMsg::Anomaly, which the renderer loop sends; private_interfaces floors it at pub(crate). The Sig structs are one frame schema read by different detectors and the writer, not a duplicate family (pass 20b)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::presence::ZellijWakeError"
+reason = "Error type of pub ingest_zellij_wake, which the CLI binary calls (pass 20b)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::presence::projector::PresenceTransition"
+reason = "Parameter of pub(crate) project_presence and return of TmuxPresenceState::apply, both called from sidebar_pane::app::tmux_watch; pub(super) is E0446 at tmux_watch.rs:79 (pass 20b)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::presence::projector::PaneObservation"
+reason = "Payload of pub(crate) PresenceTransition variants; floored with it (pass 20b)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::presence::projector::PresencePaneRole"
+reason = "Field of PaneObservation, floored with PresenceTransition (pass 20b)."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::presence::projector::PaneEventEligibility"
+reason = "Field of PaneObservation, floored with PresenceTransition (pass 20b)."
