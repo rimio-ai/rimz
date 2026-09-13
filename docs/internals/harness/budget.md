@@ -6,7 +6,7 @@
 
 A budget is a dollar cap RimZ enforces itself, at a scale the provider has no concept of: this agent, this room, this login. Crossing one **parks** the agent. RimZ presses Esc in its pane, marks the ledger, and leaves everything else alone. The CLI keeps running, the session files stay where the provider put them, and the turn's work up to the interrupt is already in the transcript.
 
-The engine can do this because the spend already exists. Agents write transcripts, the spending walk prices them, and the producer publishes per-room and per-account tallies ([providers.md](../agents/providers.md#live-cost-coverage)). Budgets read those numbers and turn a reading into a stop.
+The engine can do this because the spend already exists. Agents write transcripts, the spending walk prices them, and the producer publishes per-room and per-account tallies ([spending.md](../agents/spending.md#live-cost-coverage)). Budgets read those numbers and turn a reading into a stop.
 
 Two rules shape the module, and between them they explain most of its shape.
 
@@ -58,7 +58,7 @@ Account scopes carry one more precondition. `[accounts.budget].<kind>` is honore
 
 Each scope reads a different tally, and each read is guarded against reading the wrong day.
 
-**An agent's session spend** is `total_cost_usd`: the card's cumulative cost, admitted only when its coverage `contributes_to_live_spend()`, and only when finite and non-negative. Coverage that describes a window rather than a session never reaches a budget ([providers.md § Live cost coverage](../agents/providers.md#live-cost-coverage)).
+**An agent's session spend** is `total_cost_usd`: the card's cumulative cost, admitted only when its coverage `contributes_to_live_spend()`, and only when finite and non-negative. Coverage that describes a window rather than a session never reaches a budget ([spending.md § Live cost coverage](../agents/spending.md#live-cost-coverage)).
 
 **An agent's `/day` spend** subtracts a `day_baseline` from that same cumulative number. The baseline is stamped on first evaluation of a date and re-stamped when the date changes, so one long-lived session measures each calendar day separately without the provider ever resetting its counter.
 
@@ -170,7 +170,8 @@ Both queue the configured continue prompt after lifting a park, and only to agen
 ## See also
 
 - [budget.md](../../guide/budget.md): the user-facing model, the five scopes, and what a park means in practice.
-- [providers.md](../agents/providers.md#daily-dollar-caps): account cap eligibility, the spend caches, and cost coverage.
+- [providers.md](../agents/providers.md#daily-dollar-caps): account cap eligibility.
+- [spending.md](../agents/spending.md): the spend caches and cost coverage.
 - [scripting.md](./scripting.md): supervised runs and the exit-code contract that carries `125`.
 - [loops.md](./loops.md): the fire gate ladder and the `Budget` auto-continue park class.
 - [messaging.md](./messaging.md): delivery gates, the `automated` flag, and what a waiving message looks like.

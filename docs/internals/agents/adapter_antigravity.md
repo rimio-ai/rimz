@@ -1,6 +1,6 @@
 # Antigravity adapter
 
-> Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Accounts, balances, and spend are in [providers.md](./providers.md); the raw upstream protocol is in [antigravity-reference.md](../../externals/agent-adapter/antigravity-reference.md).
+> Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md); the raw upstream protocol is in [antigravity-reference.md](../../externals/agent-adapter/antigravity-reference.md).
 
 Antigravity support targets `agy` 1.1.2. RimZ owns stock interactive launch, permission-mode flags, model presets, exact conversation resume, process identity, safe lifecycle hooks, derived subagent cards, custom-statusline context, validated local-session discovery, idle account and quota enrichment, transcript history, assistant streaming, and supervised completion.
 

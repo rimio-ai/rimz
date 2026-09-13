@@ -1,6 +1,6 @@
 # Claude Code adapter
 
-> Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Accounts, balances, and spend are in [providers.md](./providers.md); the raw upstream protocol is in [claude-reference.md](../../externals/agent-adapter/claude-reference.md).
+> Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md); the raw upstream protocol is in [claude-reference.md](../../externals/agent-adapter/claude-reference.md).
 
 This page maps Claude Code onto RimZ's internal types: which hook carries which signal, how a Claude session launches, how Task-tool children become rows, where context, account, and spend figures come from, and how RimZ hosts `claude remote-control`. The code lives in [`agents/adapters/claude/`](../../../crates/rimz/src/agents/adapters/claude/mod.rs), and `ClaudeAdapter` in `mod.rs` implements every capability trait.
 
@@ -222,7 +222,7 @@ The stamp reads the credentials file, not the token the Claude process sends, an
 
 ## Cost
 
-[`spend.rs`](../../../crates/rimz/src/agents/adapters/claude/spend.rs) parses Claude's full-history spend, read-only and sidebar-safe, and the [`SpendingWalker`](../../../crates/rimz/src/agents/spending/mod.rs) aggregates it into the configured headline window and trailing 7d, 30d, and 365d windows ([providers.md](./providers.md#cost-history)). The fleet walk reads every `**/*.jsonl` under each config root's `projects/`.
+[`spend.rs`](../../../crates/rimz/src/agents/adapters/claude/spend.rs) parses Claude's full-history spend, read-only and sidebar-safe, and the [`SpendingWalker`](../../../crates/rimz/src/agents/spending/mod.rs) aggregates it into the configured headline window and trailing 7d, 30d, and 365d windows ([spending.md](./spending.md#cost-history)). The fleet walk reads every `**/*.jsonl` under each config root's `projects/`.
 
 A Claude session spans several files, and the spec's `ThreadKey::SessionDir` makes the session directory the thread. The per-session seat fold resolves the main transcript plus every `subagents/*.jsonl` companion in either layout: `<session_id>.jsonl` beside `<session_id>/subagents/`, or `<session_id>/chat.jsonl` inside it.
 
@@ -230,7 +230,7 @@ Claude replays parent messages into each subagent file, so the walk deduplicates
 
 Pricing works per request:
 
-- Current transcripts carry no `costUSD`, so each `message.usage` is priced through the [price book](./providers.md#token-pricing), with input, output, 5-minute cache creation, 1-hour cache creation, and cache read each at their own rate.
+- Current transcripts carry no `costUSD`, so each `message.usage` is priced through the [price book](./spending.md#token-pricing), with input, output, 5-minute cache creation, 1-hour cache creation, and cache read each at their own rate.
 - A transcript line that still logs a positive `costUSD` uses that figure verbatim for the top-level request.
 - Each `advisor_message` in `message.usage.iterations` is a separately billed request with its own model and tokens, and becomes a child entry keyed `<message.id>:advisor:<n>`, priced independently.
 - When machine managed settings define `modelPricing` ([upstream](../../externals/agent-adapter/claude-reference.md#project-storage-and-managed-pricing)), [`managed_pricing.rs`](../../../crates/rimz/src/agents/adapters/claude/managed_pricing.rs) overlays its contracted rows and optional multiplier on the list book for spend, the session-cumulative fold, and child costs. Unreadable or invalid settings leave the list book as is.

@@ -311,7 +311,8 @@ Adding a [`LifecycleSignal`](../../../crates/rimz/src/agents/lifecycle.rs) varia
 
 - [model.md](./model.md): what happens to an observation: the rollup, the state machine, and the displayed-status projection.
 - [instances.md](./instances.md): how a session binds to its pane, including lazy registration.
-- [providers.md](./providers.md): the account, balance, spend, and pricing half of an integration.
+- [providers.md](./providers.md): the account and balance half of an integration.
+- [spending.md](./spending.md): the spend parser's consumer and the price book.
 - [plugin.md](./plugin.md): the third-party process-plugin manifest, wire, and probes.
 - [agent-adapters.md](../../contributing/agent-adapters.md): the step-by-step integration playbook and deliverables checklist.
 - [agent-support.md](../../reference/agent-support.md): the published capability, wiring, and lifecycle-hook matrices.

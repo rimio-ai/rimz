@@ -120,7 +120,7 @@ Room tmp and rewritten skill copies are sibling concerns to the runtime tier: `S
 
 ### Account-global caches
 
-Under `~/.local/state/rimz/shared/` for the data (`accounts.json`, `rate_limits.json`, `credits.json`, `provider-spending.json`, `spending.json`, `pricing-cache.json`) and `$XDG_RUNTIME_DIR/rimz/shared/` for the election locks and the spending service socket. Data persists so the provider dashboard opens warm after a reboot; locks are runtime because they mean nothing once the process holding them is gone. What each file carries is [state.md → Published lanes](./sidebar/state.md#published-lanes) and [providers.md](./agents/providers.md).
+Under `~/.local/state/rimz/shared/` for the data (`accounts.json`, `rate_limits.json`, `credits.json`, `provider-spending.json`, `spending.json`, `pricing-cache.json`) and `$XDG_RUNTIME_DIR/rimz/shared/` for the election locks and the spending service socket. Data persists so the provider dashboard opens warm after a reboot; locks are runtime because they mean nothing once the process holding them is gone. What each file carries is [state.md → Published lanes](./sidebar/state.md#published-lanes), [providers.md](./agents/providers.md), and [spending.md](./agents/spending.md).
 
 ## The event log
 

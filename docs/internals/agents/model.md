@@ -16,7 +16,7 @@ AgentState, one per (kind, agent_id)
 sidebar row                                                      sidebar.md
 ```
 
-Everything on this page is provider-neutral. An integration that emits well-formed observations gets the state machine, ranking, liveness, and attention routing without code of its own. Which native event carries which signal is each adapter's page ([adapter_claude.md](./adapter_claude.md), [adapter_codex.md](./adapter_codex.md), and eleven siblings). How a session binds to a pane and when RimZ declares it dead is [instances.md](./instances.md). Accounts, spend, and pricing are [providers.md](./providers.md), and the credit report built over the audit rollup is [attribution.md](./attribution.md). The commitments behind the model are in [DESIGN.md](../../../DESIGN.md).
+Everything on this page is provider-neutral. An integration that emits well-formed observations gets the state machine, ranking, liveness, and attention routing without code of its own. Which native event carries which signal is each adapter's page ([adapter_claude.md](./adapter_claude.md), [adapter_codex.md](./adapter_codex.md), and eleven siblings). How a session binds to a pane and when RimZ declares it dead is [instances.md](./instances.md). Accounts and balances are [providers.md](./providers.md), spend and pricing [spending.md](./spending.md), and the credit report built over the audit rollup is [attribution.md](./attribution.md). The commitments behind the model are in [DESIGN.md](../../../DESIGN.md).
 
 ## Terms
 
@@ -290,6 +290,7 @@ A few `AgentContext` fields reach past display: the turn-error, turn-settle, and
 - [adapter.md](./adapter.md): where observations come from, the hook path, and context sources.
 - [instances.md](./instances.md): binding sessions to panes, pane ownership, and session death.
 - [attribution.md](./attribution.md): durable effort credit folded from the audit rollup.
-- [providers.md](./providers.md): accounts, balances, spend, and pricing.
+- [providers.md](./providers.md): accounts and balances.
+- [spending.md](./spending.md): spend and pricing.
 - [sidebar.md](../sidebar/sidebar.md): presence binding, ranking, and how the rollup becomes a row.
 - [store.md](../store.md): the durable event log the rollup replays.
