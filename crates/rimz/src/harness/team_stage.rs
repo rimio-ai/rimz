@@ -235,6 +235,7 @@ pub fn flip(request: FlipRequest<'_>) -> Result<FlipReceipt, FlipErr> {
         from: from.as_deref(),
         to: request.to,
         owner,
+        leader: request.team.leader.as_deref(),
         by: request.by.name(),
         self_owned: matches!(&request.by, Flipper::Member { role, .. } if Some(*role) == owner),
         note: Some(request.note),
@@ -296,6 +297,7 @@ pub fn rewake(
             from: Some(&stage.name),
             to: &stage.name,
             owner,
+            leader: team.leader.as_deref(),
             by: REWAKE_BY,
             self_owned: false,
             note: None,
@@ -374,6 +376,8 @@ struct StageOpening<'a> {
     from: Option<&'a str>,
     to: &'a str,
     owner: Option<&'a str>,
+    /// The declared leader; `None` when the team declares none, so no seat gets a channel rule.
+    leader: Option<&'a str>,
     by: &'a str,
     self_owned: bool,
     note: Option<&'a str>,
@@ -444,6 +448,7 @@ fn open_stage(
                 opening.by,
                 opening.note,
                 opening.rewake,
+                opening.leader.filter(|leader| *leader != owner),
             ),
             target_scope: None,
             current_channel: Some(opening.channel.to_owned()),
@@ -491,32 +496,43 @@ fn open_stage(
     Ok((event, delivery))
 }
 
+/// `leader` is set only for an owner who is not the leader: the seat's channel rule rides on
+/// every stage open so it is the freshest text in the turn, launch reminder or not.
 fn stage_open_body(
     from: Option<&str>,
     to: &str,
     by: &str,
     note: Option<&str>,
     rewake: bool,
+    leader: Option<&str>,
 ) -> String {
-    if rewake {
-        return format!(
+    let mut body = if rewake {
+        format!(
             "The team resumed at stage {to}, which is yours. Nothing flipped since the board's last Progress line: reread blackboard.md and continue from where it stops."
-        );
-    }
-    let mut body = match from {
-        Some(from) if from == to => {
-            format!("@{by} re-opened {to}. It is still yours: pick it up from blackboard.md.")
-        }
-        Some(from) => format!(
-            "@{by} flipped the stage {from} -> {to}. {to} is yours: pick it up from blackboard.md."
-        ),
-        None => {
-            format!("@{by} opened the stage {to}. {to} is yours: pick it up from blackboard.md.")
+        )
+    } else {
+        match from {
+            Some(from) if from == to => {
+                format!("@{by} re-opened {to}. It is still yours: pick it up from blackboard.md.")
+            }
+            Some(from) => format!(
+                "@{by} flipped the stage {from} -> {to}. {to} is yours: pick it up from blackboard.md."
+            ),
+            None => {
+                format!(
+                    "@{by} opened the stage {to}. {to} is yours: pick it up from blackboard.md."
+                )
+            }
         }
     };
     if let Some(note) = note {
         body.push_str("\n\nNote: ");
         body.push_str(note);
+    }
+    if let Some(leader) = leader {
+        body.push_str(&format!(
+            "\n\nYour report goes in your stage file and anything for the user to @{leader}; end the turn with the flip and no pane text."
+        ));
     }
     body
 }
@@ -813,21 +829,55 @@ mod tests {
                 "Implement",
                 "planner",
                 Some("plan ready"),
-                false
+                false,
+                None
             ),
             "@planner flipped the stage Plan -> Implement. Implement is yours: pick it up from blackboard.md.\n\nNote: plan ready"
         );
         assert_eq!(
-            stage_open_body(None, "Explore", "planner", Some("opened"), false),
+            stage_open_body(None, "Explore", "planner", Some("opened"), false, None),
             "@planner opened the stage Explore. Explore is yours: pick it up from blackboard.md.\n\nNote: opened"
         );
         assert_eq!(
-            stage_open_body(Some("Implement"), "Implement", "user", Some("retry"), false),
+            stage_open_body(
+                Some("Implement"),
+                "Implement",
+                "user",
+                Some("retry"),
+                false,
+                None
+            ),
             "@user re-opened Implement. It is still yours: pick it up from blackboard.md.\n\nNote: retry"
         );
         assert_eq!(
-            stage_open_body(Some("Implement"), "Implement", "rimz", None, true),
+            stage_open_body(Some("Implement"), "Implement", "rimz", None, true, None),
             "The team resumed at stage Implement, which is yours. Nothing flipped since the board's last Progress line: reread blackboard.md and continue from where it stops."
+        );
+    }
+
+    #[test]
+    fn stage_notices_carry_the_channel_rule_for_a_non_leader_owner() {
+        assert_eq!(
+            stage_open_body(
+                Some("Plan"),
+                "Implement",
+                "planner",
+                Some("plan ready"),
+                false,
+                Some("planner")
+            ),
+            "@planner flipped the stage Plan -> Implement. Implement is yours: pick it up from blackboard.md.\n\nNote: plan ready\n\nYour report goes in your stage file and anything for the user to @planner; end the turn with the flip and no pane text."
+        );
+        assert_eq!(
+            stage_open_body(
+                Some("Implement"),
+                "Implement",
+                "rimz",
+                None,
+                true,
+                Some("planner")
+            ),
+            "The team resumed at stage Implement, which is yours. Nothing flipped since the board's last Progress line: reread blackboard.md and continue from where it stops.\n\nYour report goes in your stage file and anything for the user to @planner; end the turn with the flip and no pane text."
         );
     }
 }

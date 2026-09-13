@@ -199,7 +199,13 @@ Note: implementation paused after the first check
 The team resumed at stage Implement, which is yours. Nothing flipped since the board's last Progress line: reread blackboard.md and continue from where it stops.
 ```
 
-If the leader opens a board at a stage another role owns, the first sentence instead starts `@planner opened the stage Explore. Explore is yours: pick it up from blackboard.md.` Explicit signal subscriptions still receive the loop's signal body, independently of this direct notice.
+If the leader opens a board at a stage another role owns, the first sentence instead starts `@planner opened the stage Explore. Explore is yours: pick it up from blackboard.md.` When the team declares a `leader` and the owner is another role, every one of these bodies ends with the seat's channel rule, so it is the freshest text of the turn rather than a launch-time reminder only:
+
+```text
+Your report goes in your stage file and anything for the user to @planner; end the turn with the flip and no pane text.
+```
+
+Explicit signal subscriptions still receive the loop's signal body, independently of this direct notice.
 
 Delivery always parks at the owner's next done boundary; flip has no interrupt option. A flip to a stage the caller owns sends no message: carry on. An owner with no live member is not an error: the board and signal land, and the receipt says the owner will be woken on resume. When the current owner registers after resume, restart, single-member restart, or room rebirth, RimZ emits and delivers a re-wait with `from == to` and `by = "rimz"`, without editing the board or ledger.
 
