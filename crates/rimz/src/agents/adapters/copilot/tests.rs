@@ -713,7 +713,16 @@ fn two_file_install_wraps_idempotently_and_restores_the_exact_json_value() {
     );
     assert_eq!(preview.planned_events.len(), COPILOT_HOOKS.len());
 
-    install::install(&hooks, &settings).unwrap();
+    let report = install::install(&hooks, &settings).unwrap();
+    let files: Vec<_> = report
+        .files
+        .iter()
+        .map(|file| (file.path.as_path(), file.existed))
+        .collect();
+    assert_eq!(
+        files,
+        [(hooks.as_path(), false), (settings.as_path(), true)]
+    );
     assert!(install::installed(&hooks, &settings));
     assert!(install::managed(&hooks, &settings));
     assert_eq!(
@@ -738,7 +747,13 @@ fn two_file_install_wraps_idempotently_and_restores_the_exact_json_value() {
         "reinstall must not nest the managed wrapper"
     );
 
-    install::uninstall(&hooks, &settings).unwrap();
+    let report = install::uninstall(&hooks, &settings).unwrap();
+    let files: Vec<_> = report
+        .files
+        .iter()
+        .map(|file| (file.path.as_path(), file.existed))
+        .collect();
+    assert_eq!(files, [(hooks.as_path(), true), (settings.as_path(), true)]);
     assert!(!hooks.exists());
     let restored: Value = serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
     assert_eq!(restored["theme"], "dark");

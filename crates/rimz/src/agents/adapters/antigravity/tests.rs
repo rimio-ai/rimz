@@ -242,7 +242,19 @@ fn hook_install_round_trips_existing_and_absent_statuslines() {
         assert_eq!(preview.planned_events, ANTIGRAVITY_EVENT_NAMES);
         assert_eq!(preview.status_line_change, Some(change));
         assert!(!preview.files[0].candidate.contains("PreToolUse"));
-        install::install(&hooks_path, &settings_path).unwrap();
+        let report = install::install(&hooks_path, &settings_path).unwrap();
+        let files: Vec<_> = report
+            .files
+            .iter()
+            .map(|file| (file.path.as_path(), file.existed))
+            .collect();
+        assert_eq!(
+            files,
+            [
+                (hooks_path.as_path(), true),
+                (settings_path.as_path(), true)
+            ]
+        );
         assert!(install::installed(&hooks_path, &settings_path));
         let mut hooks = read_json(&hooks_path);
         assert_eq!(hooks["mine"]["Stop"][0]["command"], "my-stop");
@@ -273,11 +285,19 @@ fn hook_install_round_trips_existing_and_absent_statuslines() {
         install::install(&hooks_path, &settings_path).unwrap();
         assert_eq!(std::fs::read_to_string(&hooks_path).unwrap(), once.0);
         assert_eq!(std::fs::read_to_string(&settings_path).unwrap(), once.1);
+        let report = install::uninstall(&hooks_path, &settings_path).unwrap();
+        assert_eq!(report.removed_events, ANTIGRAVITY_EVENT_NAMES);
+        let files: Vec<_> = report
+            .files
+            .iter()
+            .map(|file| (file.path.as_path(), file.existed))
+            .collect();
         assert_eq!(
-            install::uninstall(&hooks_path, &settings_path)
-                .unwrap()
-                .removed_events,
-            ANTIGRAVITY_EVENT_NAMES
+            files,
+            [
+                (hooks_path.as_path(), true),
+                (settings_path.as_path(), true)
+            ]
         );
         assert!(!install::managed(&hooks_path, &settings_path));
         let restored_hooks = read_json(&hooks_path);
