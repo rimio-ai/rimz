@@ -1,182 +1,206 @@
 # Diagnostics
 
-RimZ records what goes wrong as typed evidence, so a transient fault leaves something to debug after it heals. A roster that empties and refills over two seconds, a spend figure that blinks to zero, a card that outlives its pane: each is invisible an hour later. RimZ captures the evidence at the moment it happens and keeps it where the investigation will look.
+RimZ records what goes wrong as typed evidence, so a transient fault leaves something to debug after it heals. A roster that empties and refills over two seconds, a spend figure that blinks to zero, or a card that outlives its pane is invisible an hour later unless something wrote it down at the moment it happened.
 
-The boundary that makes this safe: **correctness reads the store, CAS rules, and caches; diagnostics are evidence for a human.** No correctness path reads a diagnostic record back.
+One boundary makes this safe: **correctness reads the store, CAS rules, and caches, and no correctness path reads a diagnostic record back.** Diagnostics are evidence for a human, and every write is best-effort.
 
-Evidence has two destinations. The default is a durable per-workspace log on the box, always on. The second is off-box error reporting to a Sentry project, compiled only into dev builds and dormant until a contributor opts in. Both are best-effort enrichment beside the running system: neither holds a correctness path.
-
-Most of this doc is the local log and the [frame-stream observer](#the-frame-stream-observer) that feeds it. [Off-box error reporting](#off-box-error-reporting) is the smaller, opt-in sibling at the end.
+Evidence has two destinations. The default is a durable log on the box, always on, which most of this page describes along with the [frame-stream observer](#the-frame-stream-observer) that feeds it. The second is [off-box error reporting](#off-box-error-reporting) to a Sentry project, compiled only into dev builds and dormant until a contributor opts in.
 
 ## Where diagnostics land
 
-Workspace-scoped diagnostic logs land under `~/.local/state/rimz/workspaces/<workspace-id>/`; cross-workspace focus repairs land beside the account-global assist history. Persistent state is the right home because the job is investigation after the pane, mux session, or machine has gone away: runtime caches under `$XDG_RUNTIME_DIR` die with the session, while these records survive reboot like store records.
-
-The `diag/` module owns a family of append-only JSONL surfaces sharing the [`disk::rotating`](../../crates/rimz/src/disk/rotating.rs) append, decoded-visit, and generation-path helper. Workspace diagnostic files rotate at 1 MiB to one kept generation (`<name>.1.jsonl`); the account-global focus-repair log uses the assist history's 4 MiB ceiling. Every surface appends best-effort and visits decoded records from the retained generation through the active file without collecting them internally. A failed write logs at debug rather than surfacing on a RimZ path, and missing files and malformed lines contribute no records.
-
-Three surfaces carry workspace identity through one [`DiagSink`](../../crates/rimz/src/diag.rs). A disabled sink is a no-op with the same methods, so emitting callsites need no `#[cfg]` or branch.
+Diagnostic logs live in persistent state because an investigation starts after the pane, mux session, or machine has gone away. Workspace logs land under `~/.local/state/rimz/workspaces/<workspace-id>/`, which survives reboot like the store; runtime files under `$XDG_RUNTIME_DIR` die with the session.
 
 | Surface | Location | Records | Owner |
 | --- | --- | --- | --- |
-| `diag.log.jsonl` | state dir | typed sidebar anomalies, rate-limited | this doc |
-| `diag-frames/` | state dir, `0700` | prior/offending pane-frame pairs | [Frame captures](#frame-captures) |
-| `notify.log.jsonl` | state dir | notification emits, bell decisions, unread transitions | [notifications.md](./sidebar/notifications.md#the-trace-log) |
-| `plugin-presence.log.jsonl` | state dir | Zellij presence-plugin keepalive telemetry | [below](#zellij-presence-plugin-telemetry) |
-| `focus-repairs.log.jsonl` | account-global state root | automatic focus-repair evidence and outcomes | [state.md](./sidebar/state.md) |
-| `binding.log.jsonl` | runtime dir | pane-binding decisions | [sidebar.md](./sidebar/sidebar.md) |
-| `topology-writer-conflict.json` | runtime dir | latest Zellij topology writer conflict | [multiplexers.md](./multiplexers.md#the-zellij-presence-plugin) |
+| `diag.log.jsonl` | workspace state dir | typed anomaly records, rate-limited | this page |
+| `diag-frames/` | workspace state dir, `0700` | prior and offending pane-frame pairs | [Frame captures](#frame-captures) |
+| `notify.log.jsonl` | workspace state dir | notification emits, bell decisions, unread transitions | [notifications.md](./sidebar/notifications.md#the-trace-log) |
+| `plugin-presence.log.jsonl` | workspace state dir | Zellij presence-plugin keepalive samples | [below](#zellij-presence-plugin-telemetry) |
+| `focus-repairs.log.jsonl` | account-global state root, beside the assist history | automatic focus-repair evidence and outcomes | [state.md](./sidebar/state.md) |
+| `binding.log.jsonl` | workspace runtime dir | pane-binding decisions | [sidebar.md](./sidebar/sidebar.md) |
+| `topology-writer-conflict.json` | workspace runtime dir | latest Zellij topology writer conflict | [multiplexers.md](./multiplexers.md#the-zellij-presence-plugin) |
 
-The notification trace and pane-binding logs are owned by their own subsystems; they share the rotating helper and nothing else. The rest of this doc is `diag.log.jsonl`.
+The `diag/` module owns the JSONL surfaces, and all of them share the append, decoded-visit, and generation-path helper in [`disk::rotating`](../../crates/rimz/src/disk/rotating.rs). A log rotates to one kept generation (`<name>.1.jsonl`): workspace logs at 1 MiB, the focus-repair log at the assist history's 4 MiB. A failed append logs at debug and the calling path continues. A reader visits the retained generation, then the active file, and skips missing files and malformed lines.
+
+The first three surfaces carry workspace identity through one [`DiagSink`](../../crates/rimz/src/diag.rs). A disabled sink keeps the same methods and does nothing, so emitting callsites need no `#[cfg]` or branch. The notification trace and the binding log belong to their own subsystems and share only the rotating helper; the rest of this page is `diag.log.jsonl` and its captures.
 
 ### Zellij presence-plugin telemetry
 
-`plugin-presence.log.jsonl` records the presence plugin's keepalive from inside the Zellij server process ([`plugin_presence.rs`](../../crates/rimz/src/diag/plugin_presence.rs)): the exact `(loaded_at_ms, plugin_id)` generation, plugin build, WASM pages and bytes, uptime, completed and successful `run_command` replies, stale topology-writer rejections, genuine publication failures, and the Zellij version.
+`plugin-presence.log.jsonl` holds the samples the presence plugin's keepalive delivers ([`plugin_presence.rs`](../../crates/rimz/src/diag/plugin_presence.rs), appended from `sidebar::presence`). Each sample carries the exact `(loaded_at_ms, plugin_id)` generation and plugin build; the rest of its fields are listed in [multiplexers.md](./multiplexers.md#the-zellij-presence-plugin).
 
-Doctor lists the presence-plugin panes currently loaded in the live session, joins each id to its newest telemetry generation, and classifies the result as active, rejected, or inactive against the desired plugin build. Live-listing failures report as unavailable rather than treating retained telemetry as live truth.
+`rimz doctor` lists the presence-plugin panes loaded in the live session and joins each id to its newest telemetry generation. A plugin is active when it is the fresh topology cache's writer, rejected when it is the stale writer in `topology-writer-conflict.json`, and inactive otherwise; a build that differs from the desired plugin build is marked outdated. When the live listing fails, Doctor reports the probe unavailable rather than presenting retained telemetry as live.
 
-Read it this way: memory growth and stale-writer rejections are informational, multiple loaded plugins point to `rimz reload`, and a recent genuine failure delta stays actionable. Pages climbing while the Zellij server's RSS climbs attributes the leak to the plugin's WASM linear memory; pages flat while server RSS climbs attributes the growth to Zellij-native state on the plugin command path. Legacy rows stay readable, with their missing build and unsplit failure count reported as unknown.
+Memory growth and stale-writer rejections are informational, several loaded plugins point to `rimz reload`, and a recent genuine failure delta is actionable. Pages climbing with the Zellij server's RSS put a leak in the plugin's WASM linear memory; flat pages under climbing RSS put the growth in Zellij-native state on the plugin command path. Samples that lack a build or split failure counts report those fields as unknown.
 
 ## The record envelope
 
-Every line in `diag.log.jsonl` is a `rimz.diag.v1` JSON object from [`record.rs`](../../crates/rimz/src/diag/record.rs): workspace id, session name, optional sidebar instance id, Unix milliseconds, severity, the writer's `build` id, an optional suppression count, and a tagged event.
+Every line in `diag.log.jsonl` is one `DiagEnvelope` from [`record.rs`](../../crates/rimz/src/diag/record.rs):
 
-The `build` id, also stamped on every published pane frame, is a digest of the writing executable read from its linker-provided build-id note ([`build_id.rs`](../../crates/rimz/src/build_id.rs)). Records and frames written by overlapping old and new builds during an upgrade therefore stay distinguishable in place. A producer that reads a prior frame stamped by a different build records `mixed_build_writers`, marking the upgrade-overlap window where a stale writer can regress fresh state. `rimz doctor` separately checks fresh heartbeats against the running binary and warns when more than one build id is actively writing.
+| Field | Meaning |
+| --- | --- |
+| `v` | schema version, `rimz.diag.v1`; readers drop other versions |
+| `build` | build id of the writing executable |
+| `workspace_id`, `session_name` | the room the writer served |
+| `instance_id` | sidebar instance id, when a renderer wrote it |
+| `at_ms` | Unix milliseconds |
+| `severity` | `info`, `warn`, or `error`, derived from the event ([Severity](#severity)) |
+| `suppressed_since_last` | records the rate limit swallowed since the last one written, omitted when zero ([Volume and retention](#volume-and-retention)) |
+| `event` | the tagged event; `event.kind` names it ([Event taxonomy](#event-taxonomy)) |
 
-Most records are anomaly-only. Routine fetch ticks, successful paints, and stable cache hits write nothing. Sidebar width interactions and stable work-boundary moves are intentional trace exceptions: the width records trace accepted or rejected keypresses, controller steps, and terminal outcomes; `work_pane_boundary_moved` preserves otherwise transient geometry drift.
+The `build` id is a digest of the executable read from its linker-provided build-id note ([`build_id.rs`](../../crates/rimz/src/build_id.rs)), and every published pane frame carries the same stamp. Records written by an old and a new build during an upgrade therefore stay distinguishable in place. A producer that reads a prior frame stamped by a different build records `mixed_build_writers`, marking the overlap window where a stale writer can regress fresh state; `rimz doctor` separately warns when fresh heartbeats show more than one build writing.
 
-Pure projection layers return diagnostics as data; impure callers append them through the `DiagSink`. Store reducers and the renderer gate carry no disk-write API, and the observer's writer thread emits through the same sink, so every anomaly source shares one envelope and one file.
+Records are anomaly-only: routine fetch ticks, successful paints, and stable cache hits write nothing. Two kinds are deliberate traces. The sidebar width records trace each accepted or rejected keypress, controller step, and terminal outcome, and `work_pane_boundary_moved` preserves geometry drift that would otherwise leave no trace.
+
+Pure projection layers return diagnostics as data, and impure callers append them through the `DiagSink`. Store reducers and the renderer gate carry no disk-write API, and the observer's writer thread emits through the same sink, so every source shares one envelope and one file.
 
 ## Event taxonomy
 
-The emitter is the triage pointer. Producer kinds describe pane-source truth, renderer kinds describe one node's hold and refresh behaviour, supervisor kinds describe process lifecycle, projection kinds describe binding and grouping, and `frame_anomaly` is the rendered symptom as the [observer](#the-frame-stream-observer) judged it.
+The emitter is the triage pointer. Producer kinds describe pane-source truth, renderer kinds one node's holds and refreshes, supervisor kinds process lifecycle, projection kinds binding and grouping, and `frame_anomaly` the rendered symptom as the [observer](#the-frame-stream-observer) judged it.
 
 | Event | Emitter | Evidence |
 | --- | --- | --- |
-| `frame_rejected`, `resolution_fallback`, `frame_shrink_verified`, `pane_count_drop`, `pane_carry_forward`, `pane_carry_refuted`, `carry_forward_expired`, `hosted_carry_dropped`, `duplicate_pane_id`, `foreign_session_pane` | `sidebar::produce::panes` / `sidebar::frame` | Ok-but-empty frames, missing-own-pane reads, and pane drops with affected views; a pane-resolution path falling back with its reason; liveness-guarded carried panes, forced re-pulls that refute an omission, carry expiry, hosted-agent carry declines, duplicate ids, foreign-session leaks |
-| `gate_hold`, `gate_release`, `fetch_failure`, `health_alert`, `link_alert`, `producer_elected`, `producer_demoted`, `renderer_panic`, `renderer_exit` | `sidebar_pane::app` | Renderer-side holds, degraded refresh episodes, remote-link degraded and recovered episodes, producer handoff, panics that would otherwise vanish with the pane, clean self-close and give-up exits with cause |
-| `sidebar_width_intent`, `sidebar_width_nudge`, `sidebar_width_settle` | `sidebar_pane::app` | Intent verdicts, serialized controller nudges, learned feedback, and terminal outcomes for `a`/`d` width control |
-| `work_pane_boundary_moved` | `sidebar::presence` / `sidebar_pane::app::tmux_watch` | Before/after horizontal geometry for stable work-pane sets when the view and sidebar widths did not change |
-| `tick_budget_breach` | `sidebar::meter` | Sustained over-budget producer ticks: worst in-process wall time, mux wait, fold bytes, spawns, declared budgets, streak length, episode `since_ms`, and recovery ([performance.md](./performance.md#the-tick-budget)) |
-| `tool_loop_escalated` | `cli::hooks` | One diagnostic record when a named tool's consecutive identical argument signature reaches the configured attention threshold |
-| `renderer_signal_death`, `renderer_orphan_reaped`, `supervisor_convergence`, `supervisor_preflight_rejected`, `self_close_rejected` | `sidebar_pane::supervise` | Abnormal signal or non-panic worker exit with its stderr tail; supervisor reap after fresh mux listings omit the owning pane; a supervisor re-exec onto a target build, a preflight that refused one with its reason, and a self-close the supervisor declined with the sibling count |
-| `pane_cache_divergence`, `sidebar_orphan_reaped`, `subagent_orphan_reaped`, `subagent_orphan_repair_failed` | `reload` / `sidebar repair` | A fresh pane cache omitted a sidebar process that authoritative mux truth proved alive; a sidebar reap after two authoritative omissions; or a subagent repair attempt after its parent stayed durably ended or absent beyond the wrapper watchdog window, including the repair error when pane reclamation failed |
-| `client_reaped` | `cli::room::attach_exec` | Stale mux clients killed during attach, with the killed pids, client counts before and after, and whether the reap settled or timed out |
-| `row_conflict`, `newborn_quarantined`, `group_migration`, `local_session_bind_rejected`, `ghost_session_bind` | `store::snapshot::view` | Duplicate agent identity suppression, newborn known-command unknown-cwd quarantine, cwd-driven pane moves, contained evidence-free/stale local-session rejections, and an old exact session stamp contradicted by a newer durable launch |
-| `frame_anomaly` | `sidebar::observe` writer thread | Detector verdicts on the rendered stream: flaps, oscillations, resets, per-frame consistency violations, and elder cross-checks such as `dead_pid` and `agent_card_without_process`, each carrying its detector key, evidence, frame stamp, and the writer's role |
+| `frame_rejected`, `frame_shrink_verified`, `pane_count_drop`, `pane_carry_forward`, `pane_carry_refuted`, `carry_forward_expired`, `hosted_carry_dropped`, `foreign_session_pane` | `sidebar::produce::panes` | Ok-but-empty frames and missing-own-pane reads, verified shrinks, pane drops with affected views, carried and refuted panes, carry expiry, hosted-agent carry declines, foreign-session leaks |
+| `resolution_fallback` | `sidebar::produce` | A pane-resolution snapshot falling back to the rollup, with its reason |
+| `duplicate_pane_id` | `sidebar::frame`, `store::snapshot::view` projection | A pane id listed twice |
 | `mixed_build_writers` | `sidebar::produce::panes` | A prior published frame stamped by a different build than the producing process |
-| `topology_writer_changed`, `topology_write_rejected` | `sidebar::presence` | Zellij topology writer generation flips and rejected stale attempts, with plugin id, loaded-at generation, accepted writer, and reject count |
+| `gate_hold`, `gate_release`, `fetch_failure`, `health_alert`, `link_alert`, `producer_elected`, `producer_demoted` | `sidebar_pane::app` | Renderer-side holds and releases, failed fetches, degraded refresh episodes, remote-link degraded and recovered episodes, producer handoff |
+| `group_migration` | `sidebar_pane::app::state` (elder only) | A pane whose group changed between committed snapshots, with cwd before and after |
+| `renderer_panic`, `renderer_exit` | `sidebar_pane::app`; `renderer_exit` also `sidebar_pane::supervise` | Panics that would otherwise vanish with the pane; self-close and give-up exits with their cause |
+| `sidebar_width_intent`, `sidebar_width_nudge`, `sidebar_width_settle` | `sidebar_pane::app::width_control` | Intent verdicts, controller nudges, learned feedback, and terminal outcomes for `a`/`d` width control |
+| `renderer_signal_death`, `renderer_orphan_reaped`, `supervisor_convergence`, `supervisor_preflight_rejected`, `self_close_rejected` | `sidebar_pane::supervise` | A signal or non-panic worker exit with its stderr tail; a worker reaped after fresh mux listings omit its pane; a re-exec onto a target build, or a preflight that refused one with its reason; a declined self-close with the sibling count |
+| `work_pane_boundary_moved` | `sidebar::presence` (Zellij), `sidebar::presence::tmux` | Before and after horizontal geometry for a stable work-pane set whose view and sidebar widths did not change |
+| `topology_writer_changed`, `topology_write_rejected` | `sidebar::presence` | Zellij topology writer generation flips and rejected stale writers, with plugin id, loaded-at generation, accepted writer, and reject count |
+| `tick_budget_breach` | `sidebar::meter` | Sustained over-budget producer ticks: last and worst wall time, mux wait, fold bytes, spawns, declared budgets, streak length, episode `since_ms`, and recovery ([performance.md](./performance.md#the-tick-budget)) |
+| `frame_anomaly` | `sidebar::observe` writer thread | Detector verdicts on the rendered stream, each with its detector key, evidence, frame stamp, and the writer's role |
+| `row_conflict`, `newborn_quarantined`, `local_session_bind_rejected`, `ghost_session_bind` | `store::snapshot::view` | Duplicate agent identity suppression, a newborn known-command pane held until its cwd resolves, a contained evidence-free or stale local-session bind, and an old exact session stamp contradicted by a newer durable launch |
+| `pane_cache_divergence`, `sidebar_orphan_reaped` | `reload` (`rimz reload`, `rimz sidebar repair`) | A fresh pane cache omitted a sidebar process that authoritative mux truth proved alive; a sidebar reaped after two authoritative omissions |
+| `subagent_digest_backstopped`, `subagent_orphan_reaped`, `subagent_orphan_repair_failed` | hidden subagent helpers started by `harness::orphan_sweep` | A fleet digest the normal wrapper path missed, queued from durable run records; a child closed after its parent launch stayed ended or absent past `ORPHAN_GRACE`, or the repair error when that failed ([subagents.md](./harness/subagents.md#backstops)) |
+| `client_reaped` | `cli::room::attach_exec` | Stale mux clients killed during attach, with killed pids, client counts before and after, and whether the reap settled or timed out |
+| `tool_loop_escalated` | `cli::hooks::lifecycle` | A named tool's consecutive identical argument signature reaching the configured attention threshold |
+
+The schema also keeps `fetch_fold_stats`, which no current code path emits; Doctor still reads retained records of it as expected.
 
 The carry kinds attribute a pane-source fault precisely, and the distinction matters when reading a log:
 
-- `pane_carry_forward` marks a mux omission that survived a forced direct re-pull while process liveness proved the omitted panes alive. The source under-reported, the producer carried the panes, the record is `warn`, and the frame pair is captured.
-- `pane_carry_refuted` marks an initial listing the forced re-pull corrected. The first read lied and truth healed within one produce, so the record is `info` with no frame pair: the log line is the evidence.
-- `carry_forward_expired` marks liveness proof running out, when a carried pane drops after `PANE_CARRY_TTL` (30s).
-- `hosted_carry_dropped` marks a prior hosted lazy-agent stamp the producer declined to restore. Its `reason` names a positive absence probe, a pane start regression, a foreground-kind mismatch, or TTL expiry. Doctor marks `probe_reports_absent` and `carry_expired` expected, because positive absence or expiry makes dropping a stale stamp correct; `start_regressed` and `foreground_kind_mismatch` stay investigative evidence of contradictory identity.
+- `pane_carry_forward` marks a mux omission that survived a forced direct re-pull while process liveness proved the omitted panes alive. The source under-reported, the producer carried the panes, and the frame pair is captured.
+- `pane_carry_refuted` marks an initial listing that the forced re-pull corrected. Truth healed within one produce, so no frame pair is captured and the log line is the evidence.
+- `carry_forward_expired` marks a carried pane dropping when its liveness proof runs out after `PANE_CARRY_TTL` (30s).
+- `hosted_carry_dropped` marks a prior hosted lazy-agent stamp the producer declined to restore. Its `reason` is `probe_reports_absent` or `carry_expired`, where dropping a stale stamp is correct and Doctor marks the record expected, or `start_regressed` or `foreground_kind_mismatch`, which stay investigative evidence of contradictory identity.
 
-See [sidebar.md](./sidebar/sidebar.md#honest-reads-across-a-mux-hiccup) for the guard these records come from.
+[sidebar.md](./sidebar/sidebar.md#honest-reads-across-a-mux-hiccup) describes the guards these records come from.
 
-**Severity follows the event.** An active `health_alert`, `link_alert`, or `tick_budget_breach` is `warn` and its recovery edge is `info`. `renderer_panic`, `renderer_signal_death`, and `ghost_session_bind` are `error`. `local_session_bind_rejected` is `info` because the guard contained the bad bind. `renderer_exit` is `info` for `self_close_empty_tab` and `warn` for `degraded_gave_up`. Verified-benign transitions (`producer_elected`, `frame_shrink_verified`, `pane_carry_refuted`, `supervisor_convergence`, the width traces) and the boundary-move audit are `info`; the rest are `warn` for a live fault. The mapping is pinned by test in [`record/tests.rs`](../../crates/rimz/src/diag/record/tests.rs).
+### Severity
+
+Severity follows the event, and for a few kinds the event's own fields. `DiagEvent::severity` holds the mapping, pinned by test in [`record/tests.rs`](../../crates/rimz/src/diag/record/tests.rs).
+
+| Severity | Events |
+| --- | --- |
+| `error` | `renderer_panic`, `renderer_signal_death`, `ghost_session_bind` |
+| `warn` | `frame_rejected`, `pane_count_drop`, `pane_carry_forward`, `carry_forward_expired`, `duplicate_pane_id`, `foreign_session_pane`, `row_conflict`, `gate_hold`, `fetch_failure`, `frame_anomaly`, `tool_loop_escalated`, `topology_write_rejected`, `renderer_orphan_reaped`, `sidebar_orphan_reaped`, `subagent_orphan_reaped`, `subagent_orphan_repair_failed`, `pane_cache_divergence`, `supervisor_preflight_rejected`, `self_close_rejected` |
+| `warn` while active, `info` on recovery | `health_alert`, `link_alert`, `tick_budget_breach` (recovery sets `recovered_after_ms`) |
+| depends on a field | `client_reaped`: `warn` unless `settled`. `hosted_carry_dropped`: `warn` for `start_regressed` and `foreground_kind_mismatch`. `renderer_exit`: `warn` for `degraded_gave_up`. Each is `info` otherwise |
+| `info` | `frame_shrink_verified`, `resolution_fallback`, `pane_carry_refuted`, `gate_release`, `producer_elected`, `producer_demoted`, `local_session_bind_rejected`, `group_migration`, `newborn_quarantined`, `mixed_build_writers`, `topology_writer_changed`, `supervisor_convergence`, `subagent_digest_backstopped`, `work_pane_boundary_moved`, the three width traces, `fetch_fold_stats` |
+
+Filter on the kind as well as the severity: `mixed_build_writers` and `newborn_quarantined` are `info` yet often explain a `warn` beside them.
 
 ## The frame-stream observer
 
-Every sidebar renderer carries an observer that watches its own committed frame stream, the fused and gated `SidebarSnapshot` sequence the renderer actually paints, and records an evidence-rich `frame_anomaly` when the stream misbehaves: a roster that empties and refills, a duplicated card, a phantom row, a value that bounces between two figures, a card whose pane or process is gone.
+Every sidebar renderer carries an observer that watches its own committed frame stream, the fused and gated `SidebarSnapshot` sequence the renderer paints, and records an evidence-rich `frame_anomaly` when the stream misbehaves: a roster that empties and refills, a duplicated card, a phantom row, a value that bounces between two figures, a card whose pane or process is gone.
 
-The observer is an instrument beside the render path. It reads the stream and emits records, and the rendered frame is byte-identical whether the observer is present or absent.
+The observer reads the stream and emits records; it never changes what the renderer commits or paints. It exists because this class of bug heals itself within seconds and leaves nothing behind. A caught anomaly becomes a detector test ([below](#from-anomaly-to-regression-test)), and a detection that proves reliable becomes a prevention guard, either renderer-side in the [commit gate](../../crates/rimz/src/sidebar_pane/app/gate.rs) or at the source in producer frame validation.
 
-It exists because this bug class is transient and self-healing, so a flap visible for two seconds leaves nothing to debug later. Each anomaly caught live becomes a synthetic regression test over recorded signatures ([below](#from-anomaly-to-regression-test)), and a detection that proves reliable graduates into a prevention guard, either renderer-side in the [commit gate](../../crates/rimz/src/sidebar_pane/app/gate.rs) or at the source in producer frame validation.
+[`sidebar/observe`](../../crates/rimz/src/sidebar/observe.rs) owns the signature (`sig.rs`), the detectors (`detect.rs`), and the writer thread (`writer.rs`). The anomaly vocabulary is `AnomalyKind` in the record schema, and the windows live in [`timing.rs`](../../crates/rimz/src/sidebar/timing.rs) under the `OBSERVE_*` prefix.
 
-Three graduations are in place:
+### The commit point
 
-- **The pane carry-forward guard** came from the partial-read flap. The observer recorded it, the episode became a recorded-signature test, and the producer now repairs the fault before publication.
-- **The spend blink** followed the same path. The producer keeps the prior non-zero spend cache across an empty transcript-discovery pass, and the commit gate carries the last non-zero dashboard spend across a bounded consumer-side zero read.
-- **The shared-pane identity flap** graduated at the source. The observer recorded one pane card alternating between two co-resident sessions, and the producer now pins same-pane registration ties to a stable primary.
+Every mutation of the rendered snapshot passes through one chokepoint, `observe_commit` in [`app::loop_state`](../../crates/rimz/src/sidebar_pane/app/loop_state.rs), reached by both the pull path and the event-overlay path, so the observer runs exactly once per committed fold.
 
-[`sidebar/observe`](../../crates/rimz/src/sidebar/observe.rs) owns the signature, the detectors, and the writer thread. The anomaly vocabulary is the `frame_anomaly` arm of the record schema, and the windows live in [`timing.rs`](../../crates/rimz/src/sidebar/timing.rs) under the `OBSERVE_*` prefix.
+After each commit it reduces the snapshot to a compact `FrameSig` and runs every pure detector inline, in microseconds, before the loop moves on. The signature holds row identities sorted by row id, card kinds, pane ids and pids, group keys and rendered order, watched values, own-view and active-event context, and the gate and health streaks.
 
-### The commit-point contract
+- The row signature leaves out renderer-local presentation state (unread stamp, selection, scroll), so presentation churn reads as unchanged content.
+- The signature also carries scalars from the un-fused pulled snapshot: `pulled_rows`, pulled row and pane membership, the pulled frame stamp, and pulled dashboard aggregates. Every record therefore shows whether the producer's published truth already held the anomaly or this instance's fusion and gating introduced it.
+- Detectors send drafts over a bounded 64-slot channel to the writer thread. A full channel drops the draft and stamps the drop count as `dropped_msgs` on the next draft that gets through, so the render thread never waits on the observer.
 
-Every mutation of the rendered snapshot flows through one chokepoint in the serve loop (`observe_commit` in [`app::loop_state`](../../crates/rimz/src/sidebar_pane/app/loop_state.rs), reached by both the pull path and the event-overlay path), so the observer hooks exactly once per committed fold.
-
-After each commit it reduces the snapshot to a compact `FrameSig`: row identities sorted by row id, card kinds, pane ids and pids, group keys and rendered order, watched values, own-view and active-event context, and the gate and health streaks. It then runs every pure detector inline, in microseconds, before the loop moves on.
-
-- The row signature carries no renderer-local presentation state (unread stamp, selection, scroll), so presentation churn reads as the same row content. Group signatures also carry rendered row order for the scoped order-flap detector.
-- Each signature carries compact identities and scalars from the un-fused pulled snapshot: `pulled_rows`, pulled row and pane membership, the pulled frame stamp, and pulled dashboard aggregates. Every record therefore shows whether the producer's published truth already held the anomaly or that instance's fusion and gating introduced it.
-- Detection emits small drafts over a bounded 64-slot channel to one background writer thread. A full channel drops the draft and stamps the accumulated drop count on the next record that gets through. The render thread never waits on the observer.
-
-The windowed family holds during `OBSERVE_WARMUP` (10s) after the first frame-backed commit, because startup and reload transients are expected and a re-exec re-arms the grace. It also holds while the committed fold is frameless before the first pane frame. A frameless incoming fold over a frame-backed render is gate-held and records `gate_hold`, but shares the gate's bounded wall-clock escape hatch rather than freezing the prior frame indefinitely. Published fast folds remain paintable without recovering producer health; only a completed producer fold ends that refresh-failure episode. Consumer renderers have no produce lane, so their next successful published read is authoritative recovery. A committed frameless fold that still carries rows fires `frameless_rows` immediately. Windows measure receiver-clock time, like the event store's TTLs.
+The windowed detectors stay off during `OBSERVE_WARMUP` (10s) after the first frame-backed commit, because startup and reload transients are expected, and they stay off while the committed fold has no pane frame. The per-frame checks run from the first commit.
 
 ### Windowed detectors
 
-The windowed family recognizes back-and-forth motion a user would describe: rendered, gone, rendered again. Under heavy-fleet mux enumeration churn a published pane frame can briefly drop and re-list one pane; carry-and-verify mitigates that gap while letting genuine closes through, so a residual row-presence flap stays a diagnostic record rather than a wrong frame.
+The windowed family recognizes the back-and-forth motion a user would describe: rendered, gone, rendered again. Windows measure receiver-clock time, like the event store's TTLs.
 
 | Detector | Window | Fires on | Stays quiet when |
 | --- | --- | --- | --- |
 | `roster_flap` | 10s | A populated roster empties while own-view still counts working siblings, then refills inside the window | Active `PaneClosed` events cover every vanished row's pane (a genuinely emptied tab is [self-close](./sidebar/sidebar.md#self-close) territory) |
-| `row_presence_flap`, `short_lived_row` | 7s | One row disappears and returns inside the window, or a row is born and vanishes inside it (the phantom card, group key recorded) | A `PaneClosed` justifies the absence, the row's group had its idle tail hidden at either edge (ranking churn legitimately rotates rows through the cap), or the pane was rebound to a new identity |
-| `value_oscillation` | 5s | A watched per-row value returns to its exact prior figure after differing: status, context %, token total, group key, or model | The field's first appearance, since enrichment warm-up is `None` to value, never an oscillation |
-| `aggregate_oscillation` | 12s | A dashboard figure returns to its prior value after differing: cockpit or workspace spend year, provider spend year, or a provider mana window % | First appearance stays quiet; a figure the snapshot could not supply reads `<none>` and `pulled_via` stays absent, so an unavailable tally is legible as its own state beside a real `0` |
+| `row_presence_flap`, `short_lived_row` | 7s | One row disappears and returns inside the window, or a row is born and vanishes inside it (the phantom card, group key recorded) | A `PaneClosed` justifies the absence, the row's group had its idle tail hidden at either edge (ranking churn rotates rows through the cap), or the pane was rebound to a new identity |
+| `value_oscillation` | 5s | A watched per-row value returns to its exact prior figure after differing: status, context %, token total, group key, or model | The field's first appearance, since enrichment warm-up goes from `None` to a value |
+| `aggregate_oscillation` | 12s | A dashboard figure returns to its prior value after differing: cockpit or workspace spend year, provider spend year, or a provider mana window % | First appearance; a figure the snapshot could not supply reads `<none>` with `pulled_via` absent, so an unavailable tally stays distinct from a real `0` |
 | `order_flap` | 7s | Rendered row order inside one group returns to its prior order after differing, with unchanged visible membership | The visible set changed, as in a real re-rank or a cap tail rotation |
-| `status_churn` | 30s | Four or more status transitions on one row inside the window, a rate verdict deliberately wider than the oscillation window | A quick `running → idle → running` turn boundary, which is normal pace |
+| `status_churn` | 30s | Four or more status transitions on one row inside the window | A single `running → idle → running` turn boundary |
 
-A windowed record stamps the frame that **caused** the anomaly, not the frame that revealed it. `row_presence_flap` fires when the row returns but carries the frame the row went missing on, because that missing edge is what the producer records describe and what every renderer observing the fault shares. Each renderer returns on its own pull cadence, so recovery frames differ between them. The `produced_at_ms` join therefore reaches the producer records for the same episode, and Doctor folds the renderers' copies of one fault into one incident.
+Under heavy mux enumeration churn a published pane frame can briefly drop and re-list one pane. Carry-and-verify covers most of that gap while letting genuine closes through, so a residual row-presence flap stays a diagnostic record.
 
-A spend tally that drops from a non-zero figure straight to zero fires `aggregate_reset` immediately on the edge rather than waiting out a window, carrying the prior figure and the pulled value. It covers only the monetary tallies, whose trailing-year figure never legitimately drops to zero in place; provider mana windows are excluded because their zero is a normal rate-limit roll. A transient zero that returns inside the window still records `aggregate_oscillation`.
+A windowed record stamps the frame that **caused** the anomaly, not the frame that revealed it. `row_presence_flap` fires when the row returns but carries the frame the row went missing on, because every renderer observing the fault shares that frame while each returns on its own pull cadence. The `produced_at_ms` join therefore reaches the producer records for the same episode, and Doctor folds the renderers' copies of one fault into one incident.
+
+`aggregate_reset` fires on the edge, without a window, when a spend tally drops from a non-zero figure straight to zero, and carries the prior figure and the pulled value. It covers only the monetary tallies, whose trailing-year figure never legitimately drops to zero in place; a provider mana window rolling to zero is normal. A transient zero that returns inside the window also records `aggregate_oscillation`.
 
 ### Per-frame checks
 
-The consistency family checks each committed frame alone, with no window. Each compares fields the view-model contract says must agree.
+The consistency family checks each committed frame alone. Each check compares fields the view-model contract says must agree.
 
-- **One pane, one row.** Two rows sharing a pane id (`duplicate_pane_rows`) or a row id (`duplicate_row_id`) violate the binding rule directly. This is the duplicated-cards bug as a single-frame verdict.
-- **Counts agree.** Each group's `status_counts` histogram re-tallies from its rows (`status_count_mismatch`). With hidden rows the declared counts may exceed the visible tally, because counts span the cap by design; with no hidden rows they match exactly.
-- **Children stay nested.** A rollup child renders inside its parent's card. A child id surfacing as a top-level row (`subagent_top_level_leak`) or rendered both nested and top-level (`subagent_double_render`) is a projection error.
-- **Rows imply a frame.** The pane frame admits every card, so rows on a frameless fold (`frameless_rows`) are unreachable by contract.
+| Detector | Violation |
+| --- | --- |
+| `duplicate_pane_rows`, `duplicate_row_id` | Two rows share a pane id or a row id, breaking one pane, one row. This is the duplicated-card bug as a single-frame verdict |
+| `status_count_mismatch` | A group's `status_counts` histogram disagrees with a re-tally of its rows. With hidden rows the declared counts may exceed the visible tally, because counts span the cap; with none they match exactly |
+| `subagent_top_level_leak`, `subagent_double_render` | A rollup child surfaces as a top-level row, or renders both nested and top-level |
+| `frameless_rows` | A fold with no pane frame still carries rows, which the contract makes unreachable because the pane frame admits every card |
 
 ### Real-world cross-checks
 
-The writer thread re-verifies the latest roster against the world every `OBSERVE_CROSSCHECK_TTL` (5s), reading only what the producer already published (the workspace pane frame through the stat-gated cache read) and process liveness. The observer adds no mux call of its own; the producer remains the only external puller ([state.md](./sidebar/state.md#renderers-the-producer-and-consumers)).
+The writer thread re-verifies the latest roster against the world every `OBSERVE_CROSSCHECK_TTL` (5s). It reads only what the producer already published (the workspace pane frame through the stat-gated cache read) and process liveness, so the producer stays the only external puller ([state.md](./sidebar/state.md#renderers-the-producer-and-consumers)).
 
-- **Cards fit the frame.** Every roster pane id appears in the published frame (`row_pane_missing_from_frame`), and the roster never exceeds the frame's pane count (`cards_exceed_panes`). The comparison runs only when the roster's fold stamp equals the frame's `produced_at_ms`, since a producer republish between fold and read is normal skew.
-- **PIDs are alive.** A row's pane pid is checked through the process backend with the start-time pid-reuse guard (`dead_pid`). A pid must stay dead across `OBSERVE_DEADPID_CONFIRMATIONS` (2) consecutive passes before it logs, so a just-exited process the next frame removes leaves no record. Platforms without process metrics skip the check.
-- **Agent cards host an agent.** An agent row whose live pane root authoritatively hosts no process of that kind logs `agent_card_without_process` after `OBSERVE_HOSTLESS_AGENT_CONFIRMATIONS` (2) consecutive passes. Unreadable or branching process trees are indeterminate and stay silent; dead roots remain `dead_pid`'s verdict.
+| Detector | Fires when |
+| --- | --- |
+| `row_pane_missing_from_frame`, `cards_exceed_panes` | A roster pane id is absent from the published frame, or the roster outnumbers the frame's panes. Runs only when the roster's fold stamp equals the frame's `produced_at_ms`, since a republish between fold and read is normal skew |
+| `dead_pid` | A row's pane pid, checked through the process backend with the start-time pid-reuse guard, stays dead for `OBSERVE_DEADPID_CONFIRMATIONS` (2) consecutive passes. Platforms without process metrics skip it |
+| `agent_card_without_process` | An agent row's live pane root authoritatively hosts no process of that kind for `OBSERVE_HOSTLESS_AGENT_CONFIRMATIONS` (2) consecutive passes. Unreadable or branching process trees stay silent, and dead roots are `dead_pid`'s verdict |
 
 ### Roles and cost
 
-Every renderer runs the inline detectors on its own stream, because each node fuses its own events and gates its own frames, so a flap exists only in the renderer that painted it. The elected elder's writer additionally runs the real-world cross-checks, so the room pays the process and cache reads once. The split is one policy function on the writer thread, and every record carries the writer's elder-or-consumer role.
+Every renderer runs the inline detectors on its own stream, because each node fuses its own events and gates its own frames, so a flap can exist only in the renderer that painted it. Only the elected elder's writer runs the cross-checks, so the room pays for the process and cache reads once. `crosscheck_enabled` on the writer thread makes that split, and every record carries the writer's `role` (`elder` or `consumer`).
 
-The cost envelope (one O(rows) signature pass per committed fold, a bounded channel, one throttled cross-check pass) is budgeted in [performance.md](./performance.md#everything-else).
+The cost (one O(rows) signature pass per committed fold, a bounded channel, one throttled cross-check pass) is budgeted in [performance.md](./performance.md#everything-else).
 
 ### From anomaly to regression test
 
 A `frame_anomaly` record carries enough to rebuild the stream that produced it: the frame stamp and pulled-truth scalars, row and pane identities, edge timestamps, the event summary, and the judging window.
 
-A confirmed anomaly becomes a test in [`observe/detect/tests.rs`](../../crates/rimz/src/sidebar/observe/detect/tests.rs) under `mod recorded_episodes`. A signature builder reconstructs the minimal committed sequence from the record's evidence (a warm frame, the offending frame, the restoring frame), and the assertion pins the exact recorded verdict down to its evidence values, alongside the verdicts that must stay absent.
-
-Encode the fixture from the log record, not the frame capture: records survive rotation, while captures churn through the eight-pair ring. The module comment cites the source workspace and date, so a failing replay points back at its originating episode.
+Encode a confirmed anomaly as a test in [`observe/detect/tests.rs`](../../crates/rimz/src/sidebar/observe/detect/tests.rs). The `sig` and `row` builders there reconstruct the minimal committed sequence from the record's evidence (a warm frame, the offending frame, the restoring frame), and the assertion pins the recorded verdict and its evidence values alongside the verdicts that must stay absent; `row_presence_flap_stamps_the_frame_the_row_went_missing_on` has this shape. Build the fixture from the log record rather than the frame capture, because records outlive the eight-pair capture ring.
 
 ## Volume and retention
 
 One condition can write several records, and one record can stand for many occurrences. Read counts through these rules.
 
-- **Identity rate limit.** Emissions rate-limit per identity, the record's kind plus its salient evidence fields ([`identity_key`](../../crates/rimz/src/diag/record.rs)), over a 30-second window, flushing the suppressed counter onto the next record of that identity. A steady per-tick repeat collapses to one periodic line carrying the tally. A per-kind ceiling of 120 records per window bounds a pathological burst. Sidebar width traces bypass identity suppression so each interaction stays ordered, while the kind ceiling still applies.
-- **The observer adds no second limit.** Its writer thread emits every draft it receives, so the sink's identity window is the one cooldown a `frame_anomaly` passes. A separate `dropped_msgs` counter reports drafts the bounded channel shed under load.
-- **One fault, many instances.** Every renderer records its own stream, so one published-frame problem records once per instance while a node-local fusion or gating problem records on one. The distinct `instance_id` count inside an episode separates the two.
-- **Captures churn faster than records.** The frame ring turns over within hours in a busy room, so copy `diag-frames/` pairs out at the start of an investigation. Log records carry enough evidence to reconstruct an episode after its captures rotate.
+- **Identity rate limit.** The sink admits one record per identity per 30-second window, where the identity is the kind plus its salient evidence fields ([`identity_key`](../../crates/rimz/src/diag/record.rs)). Suppressed repeats are counted onto the next record of that identity as `suppressed_since_last`, so a per-tick repeat collapses to one periodic line carrying the tally.
+- **Kind ceiling.** Each kind admits at most 120 records per window. Drops past the ceiling are added to the next admitted record's `suppressed_since_last`.
+- **Kinds that skip the identity limit.** `health_alert`, `renderer_panic`, `renderer_exit`, `producer_elected`, `producer_demoted`, `client_reaped`, `topology_write_rejected`, and the three width traces go through `emit_unlimited`: only the kind ceiling applies, so each occurrence is its own line.
+- **The observer adds no limit of its own.** Its writer thread emits every draft it receives through the sink; `dropped_msgs` separately counts drafts the full channel shed.
+- **One fault, many instances.** Every renderer records its own stream, so a published-frame problem records once per renderer while a node-local fusion or gating problem records on one. The count of distinct `instance_id` values inside an episode separates the two.
+- **Captures churn faster than records.** The capture ring can turn over within hours in a busy room, so copy `diag-frames/` pairs out at the start of an investigation.
 
 ## Frame captures
 
-The captures that pair with the carry, drop, and reject records live in `diag-frames/`, a private `0700` ring beside the log holding the last eight prior/offending pane-frame pairs. Each pair is one `frame.<at_ms>.<seq>.<kind>.json` file written as a disposable cache (atomic rename, no fsync), so a capture joins its log record by timestamp and kind.
+`frame_rejected`, `pane_count_drop`, and `pane_carry_forward` records name their capture in `frames_ref`. Captures live in `diag-frames/`, a private `0700` ring beside the log that keeps the last eight prior/offending pairs. Each pair is one `frame.<at_ms>.<seq>.<kind>.json` file holding `prior` and `offending`, written as a disposable cache (atomic rename, no fsync).
 
-Frame captures may contain command lines, cwd values, and other pane metadata. They receive the same local-filesystem privacy boundary as the rest of the workspace state directory.
+Frame captures may contain command lines, cwd values, and other pane metadata. They sit behind the same local-filesystem privacy boundary as the rest of the workspace state directory.
 
 ## Reading the log
 
-`rimz doctor` applies the history watermark first, then prints the latest twelve evidence incidents for the current workspace. Cross-sidebar frame anomalies collapse only when session, build, event identity, and produced-frame stamp match; other active and recovery records share a normalized identity within a 60-second episode, with a later recurrence starting a new incident.
+`rimz doctor` prints the latest twelve incidents from the current workspace's log, after dropping records at or before the history watermark. An incident folds records by identity. Cross-sidebar frame anomalies collapse only when session, build, event identity, and produced-frame stamp all match; other records, active and recovery edges alike, share a normalized identity and join an incident while they arrive within 60 seconds of its last record, so a fault that keeps repeating stays one incident and a recurrence after a quiet minute starts a new one.
 
-Each row preserves source severity separately from `investigate`, `contained`, `recovered`, or `expected` state and `alarm`, `warn`, or `info` impact, plus record and distinct-observer counts, suppression totals, dropped-message counts, occurrence range, build staleness, and retained evidence references. Only investigative warn and alarm incidents affect Doctor's health tally; incomplete evidence stays investigative, while retained routine fetch-fold totals and positively benign hosted-carry drops are expected. The human report gives a table row to each investigative incident and folds settled states into one counted line, so a settled incident stays available without competing for attention. `--json` carries every field of every incident.
+Each incident keeps the source severity apart from its state (`investigate`, `contained`, `recovered`, `expected`) and impact (`alarm`, `warn`, `info`), plus record and distinct-observer counts, suppression totals, dropped-message counts, occurrence range, build staleness, and evidence references. Only investigative `warn` and `alarm` incidents count against Doctor's health tally. Incomplete evidence stays investigative, while `fetch_fold_stats` records and benign `hosted_carry_dropped` reasons are expected. The human report gives each investigative incident a table row and folds settled states into one counted line; `--json` carries every field of every incident.
 
-`rimz doctor --clear` writes `doctor-cleared.json` beside the diagnostic log and filters diagnostics, the last incident marker, durable message failures, and multiplexer server-log records at or before its `cleared_at` timestamp. The JSONL logs, incident archive, and event log stay untouched, so deleting the watermark restores the full retained history.
+`rimz doctor --clear` writes the watermark `doctor-cleared.json` beside the log. Doctor then hides diagnostics, the last incident marker, durable message failures, and multiplexer server-log records at or before its `cleared_at` timestamp. The logs, incident archive, and event log are untouched, so deleting the watermark restores the full retained history.
 
-The file stays plain JSONL for direct inspection. A kind census is the fastest orientation on an unfamiliar log:
+The log is plain JSONL. A kind census is the fastest orientation on an unfamiliar one (sample output):
 
 ```console
 $ DIAG=~/.local/state/rimz/workspaces/<workspace-id>/diag.log.jsonl
@@ -198,41 +222,39 @@ jq -r '[(.at_ms|tostring), .severity, .event.kind, (.instance_id // "-")] | join
 jq 'select(.at_ms > 1781070540000 and .at_ms < 1781070550000)' "$DIAG"                          # window slice
 jq 'select(.event.kind == "frame_anomaly") | .event.anomaly' "$DIAG"                            # observer evidence
 jq 'select(.event.kind == "renderer_signal_death") | .event.stderr_excerpt' "$DIAG"             # crash tail
-jq 'select(.event.kind == "renderer_exit") | .event.cause' "$DIAG"                              # clean exit cause
+jq 'select(.event.kind == "renderer_exit") | .event.cause' "$DIAG"                              # exit cause
 ```
 
 ## Investigating an episode
 
 One pass over the log answers an episode's three questions in order: what the user saw, where truth went wrong, and why.
 
-1. **Build the timeline.** Run the timeline one-liner above, or `rimz doctor` for the tail, and cluster records by `at_ms`. An episode reads as a burst across kinds. Copy the matching `diag-frames/` pairs out now, before the ring churns.
-2. **Locate the fault: published truth or local fold.** Every `frame_anomaly` carries the pulled snapshot's scalars beside the rendered ones. For `row_presence_flap`, read the missing-edge frame stamp and `pulled_row_present`/`pulled_pane_present`: false membership attributes the gap to pulled truth, true membership attributes it to the renderer's committed fold. The distinct `instance_id` count is a second attribution signal.
-3. **Attribute the cause.** Producer records in the same window name it: the carry kinds with the semantics above, `frame_rejected` for held implausible reads, `pane_count_drop` for published shrinks, `gate_hold` for renderer-side holds. The frame stamp (`produced_at_ms`) joins producer records, observer records, and capture filenames across the episode.
-4. **Diff the captures.** Each capture file holds the last good frame beside the offending one. `jq '{prior: (.prior.tabs | length), offending: (.offending.tabs | length)}'` shows a whole-tab omission at a glance.
-5. **Encode the episode** as a recorded-signature regression test ([above](#from-anomaly-to-regression-test)).
+1. **Build the timeline.** Run the timeline one-liner above, or `rimz doctor` for the recent incidents, and cluster records by `at_ms`. An episode reads as a burst across kinds. Copy the matching `diag-frames/` pairs out now, before the ring turns over.
+2. **Locate the fault in published truth or the local fold.** Every `frame_anomaly` carries the pulled snapshot's scalars beside the rendered ones. For `row_presence_flap`, read the missing-edge frame stamp and `gap_evidence.pulled_row_present` and `pulled_pane_present`: false membership puts the gap in pulled truth, true membership in the renderer's committed fold. The distinct `instance_id` count is a second signal.
+3. **Attribute the cause.** Producer records in the same window name it: the carry kinds as described above, `frame_rejected` for held implausible reads, `pane_count_drop` for published shrinks, `gate_hold` for renderer-side holds. The frame stamp (`produced_at_ms`) joins producer records, observer records, and capture filenames across the episode.
+4. **Diff the captures.** Each capture holds the last good frame beside the offending one; `jq '{prior: (.prior.tabs | length), offending: (.offending.tabs | length)}'` shows a whole-tab omission at a glance.
+5. **Encode the episode** as a detector test ([above](#from-anomaly-to-regression-test)).
 
-Two shapes worth recognizing:
+Two shapes are worth recognizing.
 
-**A long run of `gate_hold` for `agent_demoted_to_process`** where every matching `gate_release` carries `via_escape_hatch: true` means the rollup repeatedly presented the same live agent pane as a bare process with unchanged or missing foreground-command evidence. Real in-place exits whose foreground command changed commit immediately. A nearby `hosted_carry_dropped` means the producer's hosted-stamp carry declined and its `reason` names the source guard; no nearby record means the carry restored the stamp, and the next investigation instruments the rollup bind guard instead. Reject count is evidence only: the gate holds until the `ACCEPT_REGRESSION_AFTER` (1s) settling window ends, wakes the loop at that deadline, and forces one non-skippable fold.
+**A long run of `gate_hold` with rule `agent_demoted_to_process`**, where every matching `gate_release` carries `via_escape_hatch: true`, means the rollup kept presenting the same live agent pane as a bare process with unchanged or missing foreground-command evidence. A real exit whose foreground command changed commits at once. A nearby `hosted_carry_dropped` means the producer's hosted-stamp carry declined, and its `reason` names the source guard; with no such record the carry restored the stamp, and the next step is instrumenting the rollup bind guard. The reject count is evidence only: the gate holds until `ACCEPT_REGRESSION_AFTER` (1s) has passed since the first reject, then releases through the escape hatch.
 
-**A partial read**, where a pane source reports fourteen panes as six, omitting two whole tabs while their processes live:
+**A partial read**, where a pane source reports fourteen panes as six by omitting two whole tabs whose processes live. The carry-forward guard answers this before publication, so a healthy log shows `pane_carry_forward` under a steady roster. When the guard misses, the log reads:
 
 | Records | Reading |
 | --- | --- |
 | `pane_count_drop` with eight removed panes | The shrink published; the capture pair preserves both frames |
-| 5x `row_presence_flap`, gone to back in 2.26s, no `PaneClosed` events, `pulled_rows` back at full count | Every instance painted the flap; pulled truth had already recovered, so the rendered gap was the published partial frame propagating |
-
-The carry-forward guard now answers this shape before publication, so the same fault records `pane_carry_forward` under a steady roster. A `row_presence_flap` recorded beside carry records means the guard missed. This episode persists as a recorded-episode regression test.
+| five `row_presence_flap`, gone to back in 2.26s, no `PaneClosed` events, `pulled_rows` back at full count | Every instance painted the flap; pulled truth had already recovered, so the rendered gap was the published partial frame propagating |
 
 ## Inspecting live card state
 
 Card-content questions (a wrong gauge, a missing cost, a card resting in the wrong shape) are answered from the same read path the renderer runs, before any raw file is opened. Rendered-frame anomalies (flicker, duplicate rows, missing tabs) take the [episode workflow](#investigating-an-episode) instead.
 
-`rimz workspace resolve <path>` names the workspace for any project path and prints its `workspace_id`. Every worktree of a repository resolves to the repository's own workspace, so a `rimz-worktrees/<branch>` checkout maps to the main repository's state and runtime directories. State lives under `$XDG_STATE_HOME/rimz/workspaces/<id>/` and runtime files under `$XDG_RUNTIME_DIR/rimz/<id>/`, a layout owned by [`disk/paths.rs`](../../crates/rimz/src/disk/paths.rs).
+`rimz workspace resolve <path>` prints the `workspace_id` for any project path. Every worktree of a repository resolves to the repository's own workspace, so a `rimz-worktrees/<branch>` checkout maps to the main repository's directories. State lives under `$XDG_STATE_HOME/rimz/workspaces/<id>/` and runtime files under `$XDG_RUNTIME_DIR/rimz/<id>/`, a layout owned by [`disk/paths.rs`](../../crates/rimz/src/disk/paths.rs).
 
-`rimz sidebar snapshot --json --no-produce`, run from anywhere inside the workspace or with `--workspace-id` from outside it, prints the fused `SidebarSnapshot` a node renders: the event-fresh rollup folded over the published pane frame plus the per-session sidecars ([state.md](./sidebar/state.md)). `--no-produce` keeps the read passive, with no mux or git forks, so inspection never perturbs the room. Omit it to pay one producing refresh when no fresh producer cache exists.
+`rimz sidebar snapshot --json --no-produce` prints the fused `SidebarSnapshot` a node renders: the event-fresh rollup folded over the published pane frame plus the per-session sidecars ([state.md](./sidebar/state.md)). Run it inside the workspace, or pass `--workspace-id` from outside. `--no-produce` keeps the read passive, with no mux or git forks, so inspection never perturbs the room; without it the command may pay one producing refresh.
 
-`rimz sidebar frame` prints the rendered frame itself through the same passive read when a producer frame exists, falling back to one producing refresh otherwise. ANSI color is stripped when stdout is piped; `--expand` expands every card, reveals every capped worktree row, and grows the output so large fleets do not clip.
+`rimz sidebar frame` prints the rendered frame through the same passive read when a producer frame exists, and falls back to one producing refresh otherwise. ANSI color is stripped when stdout is piped. `--expand` expands every card and reveals every capped worktree row, so large fleets do not clip.
 
 ```sh
 rimz sidebar snapshot --json --no-produce | jq '
@@ -242,7 +264,7 @@ rimz sidebar snapshot --json --no-produce | jq '
     observed_at: .context.observed_at }'
 ```
 
-The split inside that one object is the provenance map. Bare row fields (`status`, `context_pct`, `total_tokens`, `compaction_count`) are rollup truth derived from hooks and transcript tails, while everything under `context` is the latest statusline or app-server sidecar, stamped `observed_at`. A figure wrong in only one of the two halves names the half to debug.
+The split inside that one object is the provenance map. Bare row fields (`status`, `context_pct`, `total_tokens`, `compaction_count`) are rollup truth derived from hooks and transcript tails, while everything under `context` is the latest statusline or app-server sidecar, stamped `observed_at`. A figure wrong in only one half names the half to debug.
 
 Raw sidecars confirm what a producer actually wrote. Filenames are digests because session ids are free strings, so scan by record content:
 
@@ -252,50 +274,56 @@ jq -r '[.kind, .agent_id, .context.session_name] | @tsv' agent_context/ctx.*.jso
 jq . agent_context/ctx.<digest>.json                                                # the full record
 ```
 
-The store's own view without the sidecar fold is the published checkpoint plus log tail ([store.md](./store.md#the-read-path)). Comparing it against the snapshot attributes a wrong figure to the rollup, the sidecar, or the fold. The renderer-side derivations a card dispute usually hinges on live on the view model: the gauge-source preference is [`AgentCard::context_gauge_percent`](../../crates/rimz/src/store/snapshot/row.rs) and the card-shape predicates sit in [`agent_card/mod.rs`](../../crates/rimz/src/sidebar_pane/render/sections/agent_card/mod.rs).
+The store's own view without the sidecar fold is the published checkpoint plus log tail ([store.md](./store.md#the-read-path)); comparing it against the snapshot attributes a wrong figure to the rollup, the sidecar, or the fold. The renderer-side derivations a card dispute usually hinges on live on the view model: the gauge-source preference is [`AgentCard::context_gauge_percent`](../../crates/rimz/src/store/snapshot/row.rs), and the card-shape predicates sit in [`agent_card/mod.rs`](../../crates/rimz/src/sidebar_pane/render/sections/agent_card/mod.rs).
 
 ## Off-box error reporting
 
-Off-box error reporting routes RimZ diagnostics to a Sentry project, so an operator watches a fleet's health without tailing every box.
+Off-box error reporting sends RimZ's warnings, errors, and panics to a Sentry project, so a contributor can watch a fleet's health without tailing every box. It is best-effort enrichment and never holds a correctness path.
 
-The reporting code compiles only under the dev-only `sentry` cargo feature. A shipped binary omits it entirely and any `[sentry]` config is inert. In an opted-in dev build it captures the warnings and errors RimZ raises, the panics it hits, the sidebar render-worker signal deaths the supervisor observes, and the agent conditions it observes (rate limits, spend limits, provider overload, and other turn-ending API failures, reported at warning level). Reporting is best-effort enrichment: it never holds a correctness path, and it stays dormant until a DSN resolves.
+The code compiles only under the dev-only `sentry` cargo feature. A shipped binary omits it and ignores any `[sentry]` config. Without the feature, [`observability`](../../crates/rimz/src/observability.rs) is a no-op with the same surface, so `main.rs` and the CLI dispatch are identical in both builds; with it, [`observability/reporting.rs`](../../crates/rimz/src/observability/reporting.rs) is the live implementation.
 
-Without the feature, [`observability`](../../crates/rimz/src/observability.rs) is a no-op with the same surface, so `main.rs` and the CLI dispatch are identical in both builds. With the feature on, [`observability/reporting.rs`](../../crates/rimz/src/observability/reporting.rs) is the live implementation.
+An opted-in build reports the `warn!` and `error!` events RimZ raises, the panics it hits, sidebar render-worker signal deaths the supervisor observes, and the agent conditions it observes (rate limits, spend limits, provider overload, and other turn-ending API failures) at warning level.
 
 ### Opting in
 
-`cargo xtask install-dev` is the contributor shortcut: it installs the Cargo tools listed in [`scripts/install-dev-tools.sh`](../../scripts/install-dev-tools.sh), including `cargo-insta` for reviewing and accepting snapshot changes, then installs the optimized `profiling` host profile with the feature on and, when `sentry-cli` is installed and authenticated, retries a failed upload of that binary's debug files up to three times. The upload stays best-effort: an unavailable Sentry service never turns a successful binary install into a failed command.
+`cargo xtask install-dev` is the contributor shortcut. After installing the Cargo tools in [`scripts/install-dev-tools.sh`](../../scripts/install-dev-tools.sh), it installs the optimized `profiling` host profile with the feature on, then runs `sentry-cli debug-files upload` on the binary. A failed upload is retried up to three times, one second apart; when `sentry-cli` cannot start at all it warns once without retrying. Either way the install succeeds.
 
-Reporting turns on when a DSN resolves from `RIMZ_SENTRY_DSN` or the per-machine `[sentry]` config, with the env value winning and an empty value counting as unset. The DSN lives per-machine, never in the committed `.rimz/config.toml`, so a clone or pull cannot redirect a contributor's telemetry, and the DSN stays off the [project trust surface](./harness/trust.md).
+Reporting turns on when a DSN resolves from `RIMZ_SENTRY_DSN` or the per-machine `[sentry] dsn`; the env value wins, and an empty value counts as unset. The DSN lives only in per-machine config, never in the committed `.rimz/config.toml`, so a clone or pull cannot redirect a contributor's telemetry, and it stays off the [project trust surface](./harness/trust.md#the-executable-surface).
 
-`RIMZ_SENTRY_ENVIRONMENT` (or `[sentry] environment`) tags the deployment. Unset, it defaults by build profile: an installed release reports as `production` while dev, profiling, and CI builds report as `development`, keeping contributor noise off the production dashboard. The config shape lives in [configuration.md](../guide/configuration.md#off-box-error-reporting); the data boundary in [security.md](../guide/security.md#off-box-error-reporting).
+`RIMZ_SENTRY_ENVIRONMENT` (or `[sentry] environment`) tags the deployment. Unset, it follows the build profile: a `release` build reports as `production`, and dev, profiling, and CI builds as `development`, keeping contributor noise off the production dashboard. The config shape is in [configuration.md](../guide/configuration.md#off-box-error-reporting) and the user-facing data boundary in [security.md](../guide/security.md#off-box-error-reporting).
 
 With no DSN, no client is created and RimZ makes no network calls. A malformed DSN yields `Reporting::InvalidDsn`, logged with the fix once the subscriber is live and otherwise inert, so a telemetry typo never degrades or blocks a command.
 
 ### One init point covers every process
 
-`main` creates the Sentry client once, before the tracing subscriber, and holds the guard for the whole process. The guard flushes pending events on drop, which covers short-lived hook subprocesses. Every RimZ subcommand runs through that one `main`, including the CLI, the `hooks feed` subprocess where agent conditions are observed, and the `sidebar serve` loop. The wasm presence plugin is a separate binary with no HTTP stack and reports nothing.
+`main` creates the Sentry client once, before the tracing subscriber, and holds the guard for the whole process. The guard flushes pending events on drop, which covers short-lived hook subprocesses. Every RimZ subcommand runs through that `main`, including the `hooks feed` subprocess where agent conditions are observed and the `sidebar serve` loop. The wasm presence plugin is a separate binary with no HTTP stack and reports nothing.
 
-A live workspace pin (`RIMZ_WORKSPACE_ID`) becomes a `workspace` scope tag, so one machine-wide DSN still filters per repository. Once the command parses, `set_command_scope` adds a `command` tag and a `build` tag (the same build id the diagnostics log stamps) plus a structured `rimz` context grouping the command, build, and, when a process serves exactly one, the agent kind and session.
+A live workspace pin (`RIMZ_WORKSPACE_ID`) becomes a `workspace` scope tag, so one machine-wide DSN still filters per repository. Once the command parses, `set_command_scope` adds `command` and `build` tags (the same build id the diagnostics log stamps) and a structured `rimz` context with the command, the build, and, when the process serves exactly one, the agent kind and session.
 
-The client reports under the `rimz@<build id>` release, the same executable digest, so one identity tracks regressions across builds, `resolve --in-next-release` reopens on a real new build, and any uploaded debug files stay keyed. The profiling profile embeds DWARF line tables and frame pointers in one self-contained binary, so the uploaded file matches the GNU build-id that release carries.
+The client reports under the `rimz@<build id>` release. One identity therefore tracks regressions across builds, `resolve --in-next-release` reopens on a genuinely new build, and uploaded debug files stay keyed. The profiling profile embeds DWARF line tables and frame pointers in one self-contained binary, so the uploaded file matches the GNU build-id that release carries.
 
 ### The tracing bridge is the capture path
 
-RimZ already speaks diagnostics through `tracing`. The Sentry layer joins the subscriber alongside the stderr formatter and turns each `warn!` and `error!` into a Sentry event whose level mirrors the tracing level. The sidebar health target `rimz::sidebar::health` is the exception and stays local, because the durable `health_alert` and `renderer_exit` records already carry that episode.
+The Sentry layer joins the tracing subscriber beside the stderr formatter and turns each `warn!` and `error!` into a Sentry event at the same level. The sidebar health target `rimz::sidebar::health` stays local, because the durable `health_alert` and `renderer_exit` records already carry that episode. With no DSN the layer is omitted and the subscriber is unchanged.
 
-Breadcrumbs work by allowlist. Each deliberate seed is an `info!` on the dedicated `rimz::trail` target and rides along on the next event, so a warning arrives with the trail that led to it. An unmarked `info!` is ignored, so a stray field (a socket path, a cwd) never rides off-box as breadcrumb data. The layer carries its own `INFO` filter, which keeps the global max-level hint at `INFO`, so `debug!` and `trace!` are never constructed and the breadcrumb trail stays a cold-path concern the `sidebar serve` hot loop never feeds. Callsites attach a searchable `tags.operation` and pass the error as `&dyn Error`, so an event names the operation that failed and carries the error's exception and stacktrace. With no DSN the layer is omitted entirely and behaviour is byte-for-byte the prior subscriber.
+Breadcrumbs work by allowlist. Each deliberate seed is an `info!` on the `rimz::trail` target and rides along on the next event, so a warning arrives with the trail that led to it. An unmarked `info!` is ignored, so a stray field (a socket path, a cwd) never leaves the box as breadcrumb data. The layer carries its own `INFO` filter, which keeps the global max-level hint at `INFO`: `debug!` and `trace!` are never constructed, and the `sidebar serve` hot loop never feeds the trail. Callsites attach a searchable `tags.operation` and pass the error as `&dyn Error`, so an event names the failed operation and carries the error's exception and stacktrace.
 
-Agent-generated conditions ride the same path. When the hook lifecycle merges a fresh turn-error marker (`merge_turn_error_marker` in [`transcript.rs`](../../crates/rimz/src/cli/hooks/lifecycle/transcript.rs) reports the merge changed state), it emits one `warn!` under `rimz::agent::turn_error` carrying the agent kind and the [`TurnErrorClass`](../../crates/rimz/src/agents/context.rs). Gating on the transition keeps it to one event per condition rather than one per poll, and the warning level marks it as observed, not a RimZ fault.
+Agent-generated conditions ride the same path. When `merge_turn_error_marker` in [`transcript.rs`](../../crates/rimz/src/cli/hooks/lifecycle/transcript.rs) reports that a fresh turn-error marker changed state, the hook lifecycle emits one `warn!` on `rimz::agent::turn_error` with the agent kind and the [`TurnErrorClass`](../../crates/rimz/src/agents/context.rs). Gating on the transition keeps it to one event per condition rather than one per poll.
 
-The sidebar crash path uses the same bridge in dev builds only. A normal render panic records `renderer_panic` locally and rides Sentry's panic integration from inside the worker, while a signal or abort death makes the supervisor write `renderer_signal_death` locally and emit one `error!` under `rimz::sidebar::crash` with the `sidebar.render_crash` operation tag, the signal or exit code, and the worker stderr tail ([`supervise.rs`](../../crates/rimz/src/sidebar_pane/supervise.rs)). A release install compiles without the feature, so the supervisor still writes the local diagnostic and sends nothing off-box.
+The sidebar crash path uses the bridge too. A render panic records `renderer_panic` locally and reaches Sentry through its panic integration from inside the worker. A signal or abort death makes the supervisor write `renderer_signal_death` locally and emit one `error!` on `rimz::sidebar::crash` with the `sidebar.render_crash` operation tag, the signal or exit code, and the worker stderr tail ([`supervise.rs`](../../crates/rimz/src/sidebar_pane/supervise.rs)). Without the feature the supervisor still writes the local record and sends nothing.
 
-`before_send` shapes every bridge event from its tracing target before it leaves the box. It tags `rimz::agent::turn_error` as `fault=agent` and every other event `fault=rimz`, so triage filters observed provider conditions from RimZ bugs. It pins a stable fingerprint (namespace, target, `operation`, and the static message), so an unsymbolicated release stack cannot split one callsite across issues and one resolve sticks. And it enforces a budget of five events per minute per fingerprint, so a `warn!` on a per-frame sidebar path can never flood the channel. A panic or manual capture carries no target, so it keeps Sentry's default grouping and is never throttled.
+`before_send` shapes every bridge event from its tracing target before it leaves the box:
+
+- It tags `rimz::agent::turn_error` events `fault=agent` and every other event `fault=rimz`, so triage separates observed provider conditions from RimZ bugs.
+- It pins a stable fingerprint (namespace, target, `operation`, and the static message), so an unsymbolicated release stack cannot split one callsite across issues and one resolve sticks.
+- It allows five events per minute per fingerprint, so a `warn!` on a per-frame sidebar path cannot flood the project.
+
+A panic or manual capture carries no target, so it keeps Sentry's default grouping and is never throttled.
 
 ### What stays off the wire
 
-Personal data is off by default and the hostname is stripped in `before_send`.
+Sentry's default personal-data collection is off, and `before_send` strips the hostname.
 
-Events carry RimZ error text and a stacktrace, the file paths appearing in those errors, the `rimz@<build>` release, the running `command` and `build` id, the `fault` class, the agent kind, the session id and turn-error class, the `operation` that failed, and, for a failed account-usage probe, the `provider` tag and the request's host authority (never its path or query). The `workspace` tag scopes them to a repository, and the curated `rimz::trail` breadcrumb seeds trail an event with the steps before it.
+Events carry RimZ error text and a stacktrace, the file paths that appear in those errors, the `rimz@<build>` release, the `command` and `build` tags, the `fault` class, the agent kind, the session id and turn-error class, the failed `operation`, and, for a failed account-usage probe, the `provider` tag and the request's host authority (never its path or query). The `workspace` tag scopes them to a repository, and the `rimz::trail` breadcrumbs trail an event with the steps before it.
 
-Hook payloads, prompts, and transcripts are never forwarded. A network failure is swallowed by the transport, the same small rustls-backed `ureq` client RimZ uses for pricing, and never surfaces on a RimZ path.
+Hook payloads, prompts, and transcripts are never forwarded. The transport is the same small rustls-backed `ureq` client RimZ uses for pricing, and it swallows network failures so they never surface on a RimZ path.
