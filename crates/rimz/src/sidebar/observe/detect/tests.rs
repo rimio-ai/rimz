@@ -246,6 +246,27 @@ fn pending_roster_records_structural_and_stamp_changes() {
 }
 
 #[test]
+fn failed_anomaly_send_preserves_carried_drop_count() {
+    let (tx, _rx) = std::sync::mpsc::sync_channel(0);
+    let duplicate = || sig(0, vec![row("a", "p1", "main"), row("a", "p2", "main")]);
+    let mut observer = Observer {
+        dropped_msgs: 3,
+        ..Observer::default()
+    };
+
+    observer.observe_into(duplicate(), &tx);
+    assert_eq!(
+        observer.dropped_msgs, 5,
+        "the failed anomaly send carries the prior drop count, then the failed roster send adds one"
+    );
+    observer.observe_into(duplicate(), &tx);
+    assert_eq!(
+        observer.dropped_msgs, 7,
+        "a consecutive full-channel commit keeps accumulating without losing the carried count or pending roster retry"
+    );
+}
+
+#[test]
 fn single_frame_invariants_fire_without_warmup() {
     let mut observer = Observer::default();
     let drafts = observer.observe(sig(

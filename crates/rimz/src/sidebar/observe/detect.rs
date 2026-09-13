@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::mpsc::SyncSender;
 
 use crate::diag::record::RowPresenceGapEvidence;
 use crate::sidebar::timing::{
@@ -7,7 +8,7 @@ use crate::sidebar::timing::{
 };
 
 use super::sig::{FrameSig, RosterRowSig, RosterSig, RowSig, StatusCountSig};
-use super::{AnomalyDraft, AnomalyKind, WatchedField, cap_vec};
+use super::{AnomalyDraft, AnomalyKind, ObserveMsg, WatchedField, cap_vec};
 
 #[derive(Debug, Default)]
 pub struct Observer {
@@ -23,11 +24,33 @@ pub struct Observer {
     last_roster_rows: Vec<RosterRowSig>,
     last_roster_panes_produced_at_ms: Option<u64>,
     pending_roster: Option<RosterSig>,
-    pub dropped_msgs: u32,
+    dropped_msgs: u32,
 }
 
 impl Observer {
-    pub fn observe(&mut self, sig: FrameSig) -> Vec<AnomalyDraft> {
+    /// Detect on one committed frame and hand the drafts and any pending roster
+    /// to the writer without blocking. A full channel drops the message and
+    /// counts it, and the count rides on the next draft that gets through.
+    pub fn observe_into(&mut self, sig: FrameSig, tx: &SyncSender<ObserveMsg>) {
+        for draft in self.observe(sig) {
+            let carried_drops = draft.dropped_msgs;
+            if tx.try_send(ObserveMsg::Anomaly(Box::new(draft))).is_err() {
+                self.dropped_msgs = self
+                    .dropped_msgs
+                    .saturating_add(carried_drops)
+                    .saturating_add(1);
+            }
+        }
+        if let Some(roster) = self.pending_roster_update() {
+            if tx.try_send(ObserveMsg::Roster(roster)).is_ok() {
+                self.clear_roster_update();
+            } else {
+                self.dropped_msgs = self.dropped_msgs.saturating_add(1);
+            }
+        }
+    }
+
+    fn observe(&mut self, sig: FrameSig) -> Vec<AnomalyDraft> {
         if sig.panes_produced_at_ms.is_some() && self.first_frame_at_ms.is_none() {
             self.first_frame_at_ms = Some(sig.at_ms);
         }
@@ -56,11 +79,11 @@ impl Observer {
         drafts
     }
 
-    pub fn pending_roster_update(&self) -> Option<RosterSig> {
+    fn pending_roster_update(&self) -> Option<RosterSig> {
         self.pending_roster.clone()
     }
 
-    pub fn clear_roster_update(&mut self) {
+    fn clear_roster_update(&mut self) {
         self.pending_roster = None;
     }
 

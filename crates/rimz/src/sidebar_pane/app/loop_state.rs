@@ -1774,27 +1774,7 @@ impl LoopState {
             self.health.failure_streak,
             now_ms,
         );
-        for draft in self.observer.observe(sig) {
-            let carried_drops = draft.dropped_msgs;
-            if self
-                .observe_tx
-                .try_send(ObserveMsg::Anomaly(Box::new(draft)))
-                .is_err()
-            {
-                self.observer.dropped_msgs = self
-                    .observer
-                    .dropped_msgs
-                    .saturating_add(carried_drops)
-                    .saturating_add(1);
-            }
-        }
-        if let Some(roster) = self.observer.pending_roster_update() {
-            if self.observe_tx.try_send(ObserveMsg::Roster(roster)).is_ok() {
-                self.observer.clear_roster_update();
-            } else {
-                self.observer.dropped_msgs = self.observer.dropped_msgs.saturating_add(1);
-            }
-        }
+        self.observer.observe_into(sig, &self.observe_tx);
     }
 }
 
