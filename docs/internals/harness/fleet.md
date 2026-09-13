@@ -69,7 +69,7 @@ The harness is a product area spanning several source modules, and the eight pag
 | fleet.md (this page) | Spawn, address, resume, reclaim | [`harness/`](../../../crates/rimz/src/harness), [`address.rs`](../../../crates/rimz/src/address.rs) |
 | [scripting.md](./scripting.md) | Supervised `-p` runs | [`store/run.rs`](../../../crates/rimz/src/store/run.rs), [`harness/run.rs`](../../../crates/rimz/src/harness/run.rs), [`run_wake.rs`](../../../crates/rimz/src/harness/run_wake.rs), [`cli/supervised/`](../../../crates/rimz/src/cli/supervised) |
 | [subagents.md](./subagents.md) | Agents launching supervised children | [`cli/subagents/`](../../../crates/rimz/src/cli/subagents), [`harness/plan.rs`](../../../crates/rimz/src/harness/plan.rs) |
-| [loops.md](./loops.md) | Scheduled tasks and unattended recovery | [`harness/schedule/`](../../../crates/rimz/src/harness/schedule), [`auto_continue.rs`](../../../crates/rimz/src/harness/auto_continue.rs), [`auto_redeem.rs`](../../../crates/rimz/src/harness/auto_redeem.rs) |
+| [loops.md](./loops.md) | Scheduled tasks, signals, waits, and the assist log | [`harness/schedule/`](../../../crates/rimz/src/harness/schedule), [`assist_log.rs`](../../../crates/rimz/src/harness/assist_log.rs) |
 | [budget.md](./budget.md) | Dollar caps and the park they produce | [`harness/budget.rs`](../../../crates/rimz/src/harness/budget.rs), [`cli/budget.rs`](../../../crates/rimz/src/cli/budget.rs) |
 | [messaging.md](./messaging.md) | Getting text into a running agent | [`message/`](../../../crates/rimz/src/message) |
 | [worktrees.md](./worktrees.md) | RimZ-owned Git worktrees | [`worktree.rs`](../../../crates/rimz/src/worktree.rs) |
@@ -97,7 +97,8 @@ Every file below is under `harness/` except the top-level `address.rs`, the petn
 | [`budget.rs`](../../../crates/rimz/src/harness/budget.rs) | Dollar caps and their parks. See [budget.md](./budget.md). |
 | [`store/run.rs`](../../../crates/rimz/src/store/run.rs), [`run.rs`](../../../crates/rimz/src/harness/run.rs), [`run_wake.rs`](../../../crates/rimz/src/harness/run_wake.rs), [`run_timeout.rs`](../../../crates/rimz/src/harness/run_timeout.rs) | The durable supervised-run record, its transitions, the waiter that receives its wake, and deadline detection. See [scripting.md](./scripting.md). |
 | [`schedule.rs`](../../../crates/rimz/src/harness/schedule.rs), [`schedule/`](../../../crates/rimz/src/harness/schedule) | Loop tasks and their runner. See [loops.md](./loops.md). |
-| [`auto_continue.rs`](../../../crates/rimz/src/harness/auto_continue.rs), [`auto_redeem.rs`](../../../crates/rimz/src/harness/auto_redeem.rs), [`assist_log.rs`](../../../crates/rimz/src/harness/assist_log.rs) | Unattended recovery and its audit trail. See [loops.md § Recovery the elder runs](./loops.md#recovery-the-elder-runs). |
+| [`auto_continue.rs`](../../../crates/rimz/src/harness/auto_continue.rs), [`auto_redeem.rs`](../../../crates/rimz/src/harness/auto_redeem.rs) | Unattended recovery of parked turns and spent windows. See [providers.md § Auto-continue](../agents/providers.md#auto-continue) and [§ Auto-redeem](../agents/providers.md#auto-redeem). |
+| [`assist_log.rs`](../../../crates/rimz/src/harness/assist_log.rs) | The audit trail every unattended intervention appends to. See [loops.md § The assist log](./loops.md#the-assist-log). |
 | [`idle_compact.rs`](../../../crates/rimz/src/harness/idle_compact.rs) | The elder's idle compaction check. See [messaging.md § Idle compaction](./messaging.md#idle-compaction). |
 
 The CLI side lives in [`cli/agents_cmd/`](../../../crates/rimz/src/cli/agents_cmd) (launch placement, reconciliation, restart, resume, fork, stop, and the hidden `exec` wrapper), [`cli/supervised/`](../../../crates/rimz/src/cli/supervised) (the run driver both `agents -p` and loop fires call), and [`cli/loop_cmd/`](../../../crates/rimz/src/cli/loop_cmd). Those handlers parse flags, execute effects, and render; the harness keeps provider and durable-state rules.
@@ -117,7 +118,7 @@ Six state machines carry most of the area's behaviour. Each has one owning type 
 | Worktree removal | `ProtectionSet::assess` | [worktrees.md § The assessment](./worktrees.md#the-assessment) |
 | Project trust | `TrustState` | [trust.md § States](./trust.md#states) |
 
-Two decision trees behave like state machines without an enum: the [deliberate-exit classification](#reclaiming-a-pane) that decides what happens when an agent process ends, and the [park class](./loops.md#recovery-the-elder-runs) that decides when a stopped agent may resume itself.
+Two decision trees behave like state machines without an enum: the [deliberate-exit classification](#reclaiming-a-pane) that decides what happens when an agent process ends, and the [park class](../agents/providers.md#auto-continue) that decides when a stopped agent may resume itself.
 
 ## Launching a fleet
 
@@ -398,7 +399,7 @@ After the trace, the wrapper settles in one of three ways, depending on what the
 
 - [scripting.md](./scripting.md): supervised `-p` runs: the run record, the wake socket, verify and retry, output formats.
 - [subagents.md](./subagents.md): agent-launched children, their parent stamp, and `--keep`.
-- [loops.md](./loops.md): scheduled tasks: the task catalog, elder firing, the fire gate ladder, and the recovery automation the elder runs.
+- [loops.md](./loops.md): scheduled tasks: the task catalog, elder firing, the fire gate ladder, signals and waits, and the assist log.
 - [budget.md](./budget.md): dollar caps: the scopes, the ledgers, the verdict, the waiver, and the gate.
 - [messaging.md](./messaging.md): how text reaches a pane.
 - [worktrees.md](./worktrees.md): the Git worktrees a launch can land in.
