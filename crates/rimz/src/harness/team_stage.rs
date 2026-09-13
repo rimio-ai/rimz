@@ -51,7 +51,7 @@ impl StageSignal {
     }
 
     /// A registration re-wake reopens the current stage without a flip.
-    pub fn is_rewake(&self) -> bool {
+    fn is_rewake(&self) -> bool {
         self.by == REWAKE_BY
     }
 
