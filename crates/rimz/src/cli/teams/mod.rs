@@ -28,7 +28,12 @@ pub struct TeamsArgs {
     #[command(flatten)]
     launch: agents_cmd::CohortLaunchArgs,
     /// Run the cohort under this isolation instead of machine `agents.isolation`.
-    #[arg(long, value_name = "host|sandbox", requires = "name")]
+    #[arg(
+        long,
+        value_name = "host|sandbox",
+        requires = "name",
+        conflicts_with = "resume"
+    )]
     isolation: Option<rimz::config::Isolation>,
     /// Emit the team catalogue as JSON.
     #[arg(long)]
@@ -97,7 +102,7 @@ struct TeamLaunchArgs {
     #[command(flatten)]
     launch: agents_cmd::CohortLaunchArgs,
     /// Run the cohort under this isolation instead of machine `agents.isolation`.
-    #[arg(long, value_name = "host|sandbox")]
+    #[arg(long, value_name = "host|sandbox", conflicts_with = "resume")]
     isolation: Option<rimz::config::Isolation>,
 }
 
@@ -473,6 +478,17 @@ mod tests {
         assert_eq!(verb.name, "forge");
         assert_eq!(verb.prompt.as_deref(), Some("ship"));
         assert_eq!(verb.launch, bare.launch);
+        for argv in [
+            &["rimz", "forge", "--resume", "--isolation", "host"][..],
+            &["rimz", "launch", "forge", "--resume", "--isolation", "host"],
+        ] {
+            let error = TeamsHarness::try_parse_from(argv).expect_err("resume replays isolation");
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{argv:?}"
+            );
+        }
     }
 
     #[test]

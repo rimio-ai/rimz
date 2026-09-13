@@ -674,6 +674,7 @@ mod parse {
             (&["rimz", "--", "term"], "missing agent spec"),
             (&["rimz", "--model", "opus"], "require an agent spec"),
             (&["rimz", "--fresh"], "require an agent spec"),
+            (&["rimz", "--isolation", "sandbox"], "require an agent spec"),
             (&["rimz", "-p", "--max-turns", "3"], "require an agent spec"),
         ] {
             let args = parse_agents(argv);
