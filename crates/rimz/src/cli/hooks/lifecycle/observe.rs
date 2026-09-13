@@ -87,7 +87,7 @@ fn record_mapped_lifecycle_observation(
     // process environment would overwrite the child's carried identity.
     if observation.parent_agent_id.is_none() && observation.agent_name.is_none() {
         observation.agent_name = agent_identity_env(
-            &observation,
+            observation.agent_pid,
             rimz::harness::launch::ENV_AGENT_NAME,
             validate_agent_name_env,
         );
@@ -105,8 +105,8 @@ fn record_mapped_lifecycle_observation(
             } else {
                 (None, None)
             };
-        fill_root_launch_identity(&mut observation, configured_identity, |observation, var| {
-            agent_identity_env(observation, var, validate_non_empty_identity_env)
+        fill_root_launch_identity(&mut observation, configured_identity, |agent_pid, var| {
+            agent_identity_env(agent_pid, var, validate_non_empty_identity_env)
         });
     }
     if observation.worktree_path.is_none() {

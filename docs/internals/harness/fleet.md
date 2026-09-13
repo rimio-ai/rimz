@@ -153,7 +153,7 @@ The compile path is the seam the whole harness hangs off, and it runs in a fixed
 
 Restart, fork, and resume stop after step 1 and replay only profile-declared settings, through the shared posture seam under [Resume](#resume-and-rebirth).
 
-A trailing launch prompt attaches to exactly one agent identity: a named team's configured `leader` role, its first declared role by default, or otherwise the first unambiguous agent cell. Team and multi-cell launches stamp each member's cohort and order (`launch_group` and `launch_ordinal`, exported as `RIMZ_LAUNCH_GROUP` and `RIMZ_LAUNCH_ORDINAL`), so the sidebar keeps cards in definition order and resume can match a cohort later.
+A trailing launch prompt attaches to exactly one agent identity: a named team's configured `leader` role, its first declared role by default, or otherwise the first unambiguous agent cell. Team and multi-cell launches stamp each member's cohort and order (`launch_group` and `launch_ordinal`, exported as `RIMZ_LAUNCH_GROUP` and `RIMZ_LAUNCH_ORDINAL`), so the sidebar keeps cards in definition order and resume can match a cohort later. One private key table in `harness/launch.rs` maps each env-backed launch parameter to its `RIMZ_*` key: `exec_identity_env` encodes the pane env through it, and the lifecycle hook decodes a root session's unset parameters back through `fill_launch_identity_env`.
 
 `launch::compile_agent_process` is the provider-process compiler. It selects launch, resume, or fork argv from the request, composes trusted project, adapter, and RimZ identity environment in that order, applies the login-shell wrapper, and retains the raw provider argv for PATH preflight. The exec wrapper supplies any materialized prompt argv and environment at the final provider boundary.
 
