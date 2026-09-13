@@ -603,6 +603,7 @@ surface-budget = 8
 path = "crates/rimz/src/harness/run.rs"
 allowed-dependencies = [
     "agents",
+    "config",
     "disk::lock",
     "disk::paths",
     "forge",

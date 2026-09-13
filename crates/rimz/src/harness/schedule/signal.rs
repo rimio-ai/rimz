@@ -402,7 +402,7 @@ pub fn run_watcher(store: &Store, workspace: &ResolvedWorkspace, name: &str) -> 
     };
     let timeout = task_timeout(task.entry())?.unwrap_or(std::time::Duration::from_secs(30 * 60));
     let output_path = wait_output_path(store.paths(), name);
-    let view = TmpView::current(store.paths());
+    let view = TmpView::current(None, store.paths());
     let file = OpenOptions::new()
         .append(true)
         .open(&output_path)
