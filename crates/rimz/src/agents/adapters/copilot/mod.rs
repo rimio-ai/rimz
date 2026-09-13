@@ -12,13 +12,13 @@ mod account_usage;
 mod install;
 mod otel;
 mod paths;
-pub(crate) mod payloads;
+mod payloads;
 mod spend;
 mod statusline;
 mod subagent;
 mod transcript;
 
-pub(crate) use crate::agents::capabilities::*;
+use crate::agents::capabilities::*;
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -244,7 +244,7 @@ const COPILOT_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
     },
 };
 
-pub(super) const COPILOT_HOOKS: &[HookEventSpec] = &[
+const COPILOT_HOOKS: &[HookEventSpec] = &[
     HookEventSpec::lifecycle(
         "sessionStart",
         r#"{"sessionId":"sess-1","source":"startup"}"#,
@@ -317,7 +317,7 @@ const STATUS_LINE: ManagedStatusLineSpec = ManagedStatusLineSpec {
 };
 
 #[derive(Clone, Debug, Default)]
-pub struct CopilotAdapter;
+pub(in crate::agents) struct CopilotAdapter;
 
 impl crate::agents::capabilities::CoreCapability for CopilotAdapter {
     fn spec(&self) -> &'static AgentSpec {

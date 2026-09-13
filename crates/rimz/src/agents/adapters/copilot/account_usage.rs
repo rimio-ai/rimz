@@ -19,7 +19,7 @@ const PLUGIN_VERSION: &str = "copilot-chat/0.26.7";
 const USER_AGENT: &str = "GitHubCopilotChat/0.26.7";
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum CopilotUsageErr {
+pub(super) enum CopilotUsageErr {
     #[error("Copilot account-usage credentials are unavailable")]
     NoCredentials,
     #[error("Copilot credential state is unavailable")]
@@ -219,7 +219,7 @@ fn fetch_usage_with_url(url: &str, token: &str) -> Result<AccountUsageSnapshot> 
 }
 
 fn parse_usage_response(body: &str) -> Result<AccountUsageSnapshot> {
-    UsageWire::from_json(body)?.into_snapshot()
+    serde_json::from_str::<UsageWire>(body)?.into_snapshot()
 }
 
 #[derive(Default, Deserialize)]
@@ -272,10 +272,6 @@ struct LegacyQuotas {
 }
 
 impl UsageWire {
-    fn from_json(body: &str) -> Result<Self> {
-        Ok(serde_json::from_str(body)?)
-    }
-
     fn into_snapshot(self) -> Result<AccountUsageSnapshot> {
         let plan = self
             .copilot_plan

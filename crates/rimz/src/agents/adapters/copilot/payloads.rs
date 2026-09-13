@@ -7,7 +7,7 @@ use crate::agents::transcript_fs::deserialize_optional_string_lossy;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct CopilotHookPayload {
+pub(super) struct CopilotHookPayload {
     #[serde(alias = "session_id")]
     pub session_id: Option<String>,
     #[serde(alias = "transcript_path")]
@@ -18,16 +18,16 @@ pub(crate) struct CopilotHookPayload {
     pub prompt: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     #[serde(alias = "tool_name")]
-    pub tool_name: Option<String>,
+    tool_name: Option<String>,
     #[serde(
         alias = "tool_args",
         alias = "tool_input",
         deserialize_with = "deserialize_optional_tool_args",
         default
     )]
-    pub tool_args: Option<Value>,
+    tool_args: Option<Value>,
     #[serde(default, alias = "tool_calls")]
-    pub tool_calls: Vec<CopilotToolCall>,
+    tool_calls: Vec<CopilotToolCall>,
     pub source: Option<String>,
     pub recoverable: Option<bool>,
     pub error: Option<CopilotHookError>,
@@ -35,7 +35,7 @@ pub(crate) struct CopilotHookPayload {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
-pub(crate) struct CopilotToolCall {
+struct CopilotToolCall {
     #[serde(
         alias = "toolName",
         alias = "tool_name",
@@ -53,12 +53,12 @@ pub(crate) struct CopilotToolCall {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct NormalizedToolCall<'a> {
+pub(super) struct NormalizedToolCall<'a> {
     pub name: Option<&'a str>,
     pub args: Option<&'a Value>,
 }
 
-pub(crate) struct NormalizedToolCalls<'a> {
+pub(super) struct NormalizedToolCalls<'a> {
     calls: Vec<NormalizedToolCall<'a>>,
 }
 
@@ -66,7 +66,7 @@ impl CopilotHookPayload {
     /// Present both Copilot hook wire shapes through one adapter-local view.
     /// A batched ask wins selection so lifecycle and detail extraction agree
     /// even when another call appears first.
-    pub(crate) fn normalized_tool_calls(&self) -> NormalizedToolCalls<'_> {
+    pub(super) fn normalized_tool_calls(&self) -> NormalizedToolCalls<'_> {
         let legacy =
             (self.tool_name.is_some() || self.tool_args.is_some()).then_some(NormalizedToolCall {
                 name: self.tool_name.as_deref(),
@@ -84,7 +84,7 @@ impl CopilotHookPayload {
 }
 
 impl<'a> NormalizedToolCalls<'a> {
-    pub(crate) fn selected(&self) -> Option<NormalizedToolCall<'a>> {
+    pub(super) fn selected(&self) -> Option<NormalizedToolCall<'a>> {
         self.calls
             .iter()
             .copied()
@@ -92,7 +92,7 @@ impl<'a> NormalizedToolCalls<'a> {
             .or_else(|| self.calls.first().copied())
     }
 
-    pub(crate) fn any_named(&self, names: &[&str]) -> bool {
+    pub(super) fn any_named(&self, names: &[&str]) -> bool {
         self.calls
             .iter()
             .any(|call| call.name.is_some_and(|name| names.contains(&name)))
@@ -101,13 +101,13 @@ impl<'a> NormalizedToolCalls<'a> {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(untagged)]
-pub(crate) enum CopilotHookError {
+pub(super) enum CopilotHookError {
     Detail { message: Option<String> },
     Message(String),
 }
 
 impl CopilotHookError {
-    pub(crate) fn into_message(self) -> Option<String> {
+    pub(super) fn into_message(self) -> Option<String> {
         match self {
             Self::Detail { message, .. } => message,
             Self::Message(message) => Some(message),
@@ -115,7 +115,7 @@ impl CopilotHookError {
     }
 }
 
-pub(crate) fn parse_payload(payload: &Value) -> CopilotHookPayload {
+pub(super) fn parse_payload(payload: &Value) -> CopilotHookPayload {
     serde_json::from_value(payload.clone()).unwrap_or_default()
 }
 
