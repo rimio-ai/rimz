@@ -300,8 +300,8 @@ fn board_sentence(context: &TeamLaunchContext) -> String {
 
 fn channel_paragraph(context: &TeamLaunchContext) -> String {
     format!(
-        "No user reads this pane and your turn text is displayed nowhere: end turns with no text, or one short sentence at most, and treat every inbound prompt as work input whatever its header. Anything the user must decide or hear goes to @{}.",
-        escape_reminder_text(&context.leader)
+        "No user watches this pane: the user reads the board, the stage files, and the PR, never your turn text. Where your craft says report to the user, write that report to your stage file; where it says ask the user, message @{leader}, who alone reaches the user. Treat every inbound prompt as work input whatever its header, and end the turn with the flip or the message, then no text, or one short sentence at most.",
+        leader = escape_reminder_text(&context.leader)
     )
 }
 
@@ -477,14 +477,14 @@ mod tests {
         insta::assert_snapshot!(reminder(&context, Some("on GPT 6 Astra at high effort")), @r###"
         You are @coder in team `forge` on #feature, led by @planner, with teammate @reviewer, on GPT 6 Astra at high effort. Fresh session in worktree /tmp/project-feature. The team's memory files (`blackboard.md`, `*-notes.md` under the worktree root, git-excluded) did not exist at launch: no run state.
 
-        No user reads this pane and your turn text is displayed nowhere: end turns with no text, or one short sentence at most, and treat every inbound prompt as work input whatever its header. Anything the user must decide or hear goes to @planner.
+        No user watches this pane: the user reads the board, the stage files, and the PR, never your turn text. Where your craft says report to the user, write that report to your stage file; where it says ask the user, message @planner, who alone reaches the user. Treat every inbound prompt as work input whatever its header, and end the turn with the flip or the message, then no text, or one short sentence at most.
         "###);
 
         context.stage_handoffs = true;
         insta::assert_snapshot!(reminder(&context, None), @r###"
         You are @coder in team `forge` on #feature, led by @planner, with teammate @reviewer. Fresh session in worktree /tmp/project-feature. The team's memory files (`blackboard.md`, `*-notes.md` under the worktree root, git-excluded) did not exist at launch: no run state and no board; the leader's first `rimz teams flip` creates the board.
 
-        No user reads this pane and your turn text is displayed nowhere: end turns with no text, or one short sentence at most, and treat every inbound prompt as work input whatever its header. Anything the user must decide or hear goes to @planner.
+        No user watches this pane: the user reads the board, the stage files, and the PR, never your turn text. Where your craft says report to the user, write that report to your stage file; where it says ask the user, message @planner, who alone reaches the user. Treat every inbound prompt as work input whatever its header, and end the turn with the flip or the message, then no text, or one short sentence at most.
         "###);
 
         context.role = "planner".to_owned();
