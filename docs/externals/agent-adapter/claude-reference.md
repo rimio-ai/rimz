@@ -123,7 +123,7 @@ These are the events the [`ClaudeAdapter`](../../../crates/rimz/src/agents/adapt
 
 Compaction uses `PreCompact` as the opener. `PostCompact` closes with a known trigger when it arrives, and `SessionStart` with `source = "compact"` is triggerless close evidence so RimZ still closes and counts the bracket when `PostCompact` is missed.
 
-**Model field format.** Only `SessionStart` can receive `model`, and upstream does not guarantee it is present. Observed extended-context launches may carry the capability marker `claude-opus-4-8[1m]`, which signals a 1,000,000-token context window. RimZ strips the marker at reduce time ([model.md → The rollup](../../internals/agents/model.md#the-rollup)) and uses it to derive the window divisor ([adapter_claude.md → Context and transcript](../../internals/agents/adapter_claude.md#context-and-transcript)).
+**Model field format.** Only `SessionStart` can receive `model`, and upstream does not guarantee it is present. Observed extended-context launches may carry the capability marker `claude-opus-4-8[1m]`, which signals a 1,000,000-token context window. RimZ strips the marker at reduce time ([model.md → The rollup](../../internals/agents/model.md#the-rollup)) and uses it to derive the window divisor ([adapter_claude.md → Context window](../../internals/agents/adapter_claude.md#context-window)).
 
 **Decision shapes RimZ renders.** A `PermissionRequest` answer:
 

@@ -135,7 +135,7 @@ A `subagent_stopped` resolves the child row, and the sidebar keeps that `✓` or
 
 A pane-backed launched child that never reaches `subagent_stopped` (it timed out, was stopped, or its provider died mid-turn) resolves through `ended` instead: `failed` for an observed end, `idle` for a reaped one. Either way the retained child row is at rest, which keeps it out of the parent's live-child count ([subagents.md](../harness/subagents.md#the-lifecycle-end-to-end)).
 
-Providers whose hooks identify a child only at its brackets fold `subagent_started` and `subagent_stopped` and keep the child's per-tool work on its heartbeat. Codex hooks carry the child's identity on prompt, tool, permission, and compaction events as well, so those signals fold onto the child row ([adapter_codex.md](./adapter_codex.md)).
+Providers whose hooks identify a child only at its brackets fold `subagent_started` and `subagent_stopped` and keep the child's per-tool work on its heartbeat. Codex hooks carry the child's identity on prompt, tool, permission, and compaction events as well, and Claude stamps the child's `agent_id` on every payload fired inside it, so those signals fold onto the child row ([adapter_codex.md](./adapter_codex.md), [adapter_claude.md](./adapter_claude.md#subagents)).
 
 ### Waiting and asks
 
