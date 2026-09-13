@@ -91,7 +91,7 @@ pub struct TranscriptEntry {
 }
 
 impl TranscriptEntry {
-    /// RimZ-authored automation: fleet digests, waits and signals, and headerless system prompts. Human rendering and conversation counts skip these.
+    /// RimZ-authored automation: fleet digests, waits and signals, and headerless system prompts. Human rendering skips these and the `Assistant`/`Error` output of the turns they open; conversation counts skip these.
     pub fn is_harness(&self) -> bool {
         matches!(
             self.entry,

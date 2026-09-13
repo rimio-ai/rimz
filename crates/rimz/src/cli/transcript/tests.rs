@@ -57,8 +57,11 @@ fn render_entry(
     text: &str,
 ) -> RenderEntry {
     RenderEntry {
-        kind,
-        agent: agent_key(),
+        source: LineSource::Log {
+            kind,
+            agent: agent_key(),
+            harness: false,
+        },
         chat: ChatLine {
             from: from.to_owned(),
             to: to.map(ToOwned::to_owned),
@@ -71,6 +74,13 @@ fn render_entry(
             answers: Vec::new(),
         },
     }
+}
+
+fn with_agent(mut entry: RenderEntry, agent: AgentKey) -> RenderEntry {
+    if let LineSource::Log { agent: key, .. } = &mut entry.source {
+        *key = agent;
+    }
+    entry
 }
 
 fn entry(at: &str, text: &str) -> RenderEntry {
@@ -346,8 +356,10 @@ fn thread_assembly_unions_multi_parent_turns_and_orphans_stay_flat() {
 
 #[test]
 fn unlinked_turn_outputs_join_the_latest_opener_for_their_agent() {
-    let mut other_agent_output = assistant_entry("2026-06-28T04:05:00Z", "other agent");
-    other_agent_output.agent = agent_key_for("codex", "sess-2");
+    let other_agent_output = with_agent(
+        assistant_entry("2026-06-28T04:05:00Z", "other agent"),
+        agent_key_for("codex", "sess-2"),
+    );
     let entries = vec![
         entry("2026-06-28T04:00:00Z", "first prompt"),
         assistant_entry("2026-06-28T04:01:00Z", "first reply"),
@@ -460,18 +472,7 @@ fn flat_and_last_apply_to_display_order() {
 #[test]
 fn subagent_reports_and_waits_are_json_only_and_do_not_consume_the_human_last_slot() {
     let project = tempfile::TempDir::new().expect("project tempdir");
-    let workspace_id = rimz::WorkspaceId::from_project_root(project.path());
-    let workspace = rimz::ResolvedWorkspace {
-        workspace_id: workspace_id.clone(),
-        project_root: project.path().to_path_buf(),
-        cwd_project_root: None,
-        root_class: rimz::workspace::RootClass::Directory,
-        worktree_root: project.path().to_path_buf(),
-        worktree_branch: None,
-        session_name: "transcript-hidden-test".to_owned(),
-        mux_hint: None,
-    };
-    let paths = rimz::StatePaths::under(workspace_id, project.path()).expect("state paths");
+    let (workspace, paths) = temp_workspace(&project);
     let prompt = log_entry(
         "claude",
         "receiver",
@@ -680,6 +681,108 @@ fn threaded_render_formats_markdown_behind_the_spine() {
     assert!(out.contains("│ • first item"), "{out}");
     assert!(out.contains("│ • second item"), "{out}");
     assert!(!out.contains("**"), "{out}");
+}
+
+fn temp_workspace(project: &tempfile::TempDir) -> (rimz::ResolvedWorkspace, rimz::StatePaths) {
+    let workspace_id = rimz::WorkspaceId::from_project_root(project.path());
+    let workspace = rimz::ResolvedWorkspace {
+        workspace_id: workspace_id.clone(),
+        project_root: project.path().to_path_buf(),
+        cwd_project_root: None,
+        root_class: rimz::workspace::RootClass::Directory,
+        worktree_root: project.path().to_path_buf(),
+        worktree_branch: None,
+        session_name: "transcript-hidden-test".to_owned(),
+        mux_hint: None,
+    };
+    let paths = rimz::StatePaths::under(workspace_id, project.path()).expect("state paths");
+    (workspace, paths)
+}
+
+#[test]
+fn harness_turn_output_hides_with_its_opener() {
+    use TranscriptKind::{Ask, Assistant, Prompt, SubagentReport, Wait};
+    let project = tempfile::TempDir::new().expect("project tempdir");
+    let (workspace, paths) = temp_workspace(&project);
+    let msg = |index: u64| rimz::ids::MessageId::parse(&message_id(index)).expect("message id");
+    let mut logged = Vec::new();
+    let mut push = |kind, from: Option<&str>, text, id: Option<u64>, parents: &[u64]| {
+        let mut entry = log_entry("claude", "receiver", kind, from, text);
+        entry.at = ts(&format!("2026-06-01T00:00:{:02}Z", logged.len()));
+        entry.message_id = id.map(msg);
+        entry.reply_to = parents.iter().copied().map(msg).collect();
+        logged.push(entry);
+    };
+    push(Prompt, None, "user prompt", Some(1), &[]);
+    push(Assistant, None, "user reply", None, &[1]);
+    push(SubagentReport, Some("@rimz"), "report", Some(2), &[]);
+    push(Assistant, None, "Slice B is running", None, &[2]);
+    push(Wait, Some("@rimz"), "wait", Some(3), &[]);
+    push(Assistant, None, "unlinked wait reply", None, &[]);
+    push(Wait, Some("@rimz"), "stage", Some(4), &[]);
+    push(Ask, None, "blocking ask", None, &[4]);
+    push(Assistant, None, "mixed reply", None, &[2, 1]);
+    for entry in &logged {
+        rimz::transcript::append(&paths, entry).expect("append");
+    }
+    let view = |json: bool, flat: bool, last: Option<usize>| {
+        chat_view_with_mode(
+            &workspace,
+            &paths,
+            Some("@all"),
+            None,
+            last,
+            false,
+            ViewMode {
+                hidden: Hidden::for_json(json),
+                flat,
+            },
+        )
+        .expect("view")
+    };
+    let texts = |view: &RenderedChat| {
+        selected_lines(view)
+            .into_iter()
+            .map(|line| line.text)
+            .collect::<Vec<_>>()
+    };
+
+    for flat in [true, false] {
+        let human = view(false, flat, None);
+        assert_eq!(
+            texts(&human),
+            ["user prompt", "user reply", "blocking ask", "mixed reply"]
+        );
+        let mut out = Vec::new();
+        render_lines_to(&mut out, &human, &TimeZone::UTC, Prose::Raw).expect("render");
+        let rendered = String::from_utf8(out).expect("utf8");
+        for hidden in ["Slice B is running", "unlinked wait reply", "report"] {
+            assert!(!rendered.contains(hidden), "{rendered}");
+        }
+        let last_visible = if flat { "mixed reply" } else { "blocking ask" };
+        assert_eq!(texts(&view(false, flat, Some(1))), [last_visible]);
+    }
+    let threaded = entries_for_view(&view(false, false, None));
+    assert_eq!(threaded[0].entry.chat.text, "user prompt");
+    assert_eq!(threaded[1].entry.chat.text, "user reply");
+    assert_eq!(threaded[0].block, threaded[1].block);
+    assert_eq!(texts(&view(true, true, None)).len(), logged.len());
+}
+
+#[test]
+fn turn_openers_resolve_reply_to_then_fall_back() {
+    let entries = vec![
+        linked(entry("2026-06-28T04:00:00Z", "first"), Some(1), &[]),
+        entry("2026-06-28T04:01:00Z", "second"),
+        linked(assistant_entry("2026-06-28T04:02:00Z", "link"), None, &[1]),
+        assistant_entry("2026-06-28T04:03:00Z", "fallback"),
+        linked(assistant_entry("2026-06-28T04:04:00Z", "lost"), None, &[9]),
+    ];
+
+    assert_eq!(
+        turn_openers(&entries),
+        [vec![], vec![], vec![0], vec![1], vec![]]
+    );
 }
 
 fn log_entry(
@@ -1039,8 +1142,10 @@ fn ask_context_repeated_from_preceding_message_renders_once() {
 #[test]
 fn intervening_sender_breaks_ask_continuation() {
     let assistant = assistant_entry("2026-06-28T04:00:00Z", "First brief.");
-    let mut other = assistant_entry("2026-06-28T04:05:00Z", "Other agent.");
-    other.agent = agent_key_for("codex", "sess-2");
+    let mut other = with_agent(
+        assistant_entry("2026-06-28T04:05:00Z", "Other agent."),
+        agent_key_for("codex", "sess-2"),
+    );
     other.chat.from = "@codex".to_owned();
     let mut ask = ask_entry("2026-06-28T04:06:00Z", "");
     ask.chat.questions = vec![rimz::transcript::AskQuestion {
@@ -1271,8 +1376,10 @@ fn card_lines_wrap_with_spine_and_option_hanging_indent() {
 #[test]
 fn answer_without_matching_agent_ask_stays_plain() {
     let ask = ask_entry("2026-06-28T18:00:00Z", "Native question?");
-    let mut answer = answer_entry("2026-06-28T18:01:00Z", "allow");
-    answer.agent = agent_key_for("codex", "sess-2");
+    let mut answer = with_agent(
+        answer_entry("2026-06-28T18:01:00Z", "allow"),
+        agent_key_for("codex", "sess-2"),
+    );
     answer.chat.to = Some("@codex".to_owned());
 
     let out = render(&[ask, answer], jiff::civil::date(2026, 6, 28));

@@ -91,9 +91,37 @@ type AgentKey = (AgentKind, AgentSessionId);
 
 #[derive(Clone, Debug)]
 pub(crate) struct RenderEntry {
-    kind: TranscriptKind,
-    agent: AgentKey,
+    source: LineSource,
     pub(crate) chat: ChatLine,
+}
+
+#[derive(Clone, Debug)]
+enum LineSource {
+    Log {
+        kind: TranscriptKind,
+        agent: AgentKey,
+        harness: bool,
+    },
+}
+
+impl RenderEntry {
+    fn kind(&self) -> Option<TranscriptKind> {
+        match &self.source {
+            LineSource::Log { kind, .. } => Some(*kind),
+        }
+    }
+
+    fn agent(&self) -> Option<&AgentKey> {
+        match &self.source {
+            LineSource::Log { agent, .. } => Some(agent),
+        }
+    }
+
+    fn is_harness(&self) -> bool {
+        match &self.source {
+            LineSource::Log { harness, .. } => *harness,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,10 +133,6 @@ pub(crate) enum Hidden {
 impl Hidden {
     pub(crate) fn for_json(json: bool) -> Self {
         if json { Self::Show } else { Self::Skip }
-    }
-
-    fn includes(self, entry: &TranscriptEntry) -> bool {
-        self == Self::Show || !entry.is_harness()
     }
 }
 
@@ -283,34 +307,18 @@ fn chat_view_with_mode(
         &identities,
         &live_root_keys,
     )?;
-    let filtered: Vec<&TranscriptEntry> = entries
+    let mut entries: Vec<_> = entries
         .iter()
         .filter(|entry| entry_in_scope(entry, &scope, &identities))
-        .filter(|entry| mode.hidden.includes(entry))
-        .collect();
-    if filtered.is_empty() {
-        let empty_message = empty_scope_message(&scope, target.as_deref());
-        return Ok(RenderedChat {
-            channel: scope.channel,
-            focus: scope.focus,
-            entries: Vec::new(),
-            archive_prefix: 0,
-            archived_hidden: 0,
-            newest_archived_at: None,
-            empty_message: Some(empty_message),
-            last,
-            flat: mode.flat,
-        });
-    }
-
-    let mut entries: Vec<_> = filtered
-        .into_iter()
         .filter_map(|entry| {
             let render = render_entry_for_log_entry(entry, &identities, scope.include_channel);
             entry_matches_focus(entry, &render.chat, &scope, &identities).then_some(render)
         })
         .collect();
     entries.sort_by(|left, right| compare_optional_timestamps(left.chat.at, right.chat.at));
+    if mode.hidden == Hidden::Skip {
+        entries = thread::hide_harness_turns(entries);
+    }
 
     if entries.is_empty() {
         let empty_message = empty_scope_message(&scope, target.as_deref());

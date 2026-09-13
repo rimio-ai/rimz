@@ -10,8 +10,11 @@ pub(super) fn render_entry_for_log_entry(
     include_channel: bool,
 ) -> RenderEntry {
     RenderEntry {
-        kind: entry.entry,
-        agent: entry_key(entry),
+        source: LineSource::Log {
+            kind: entry.entry,
+            agent: entry_key(entry),
+            harness: entry.is_harness(),
+        },
         chat: chat_entry_for_log_entry(entry, identities, include_channel),
     }
 }
@@ -189,13 +192,16 @@ pub(super) fn render_display_chat_to(
     let mut brands = BrandColors::default();
     for display in entries {
         let entry = &display.entry;
-        let handle = match entry.kind {
-            TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error => {
+        let Some(agent) = entry.agent() else {
+            continue;
+        };
+        let handle = match entry.kind() {
+            Some(TranscriptKind::Assistant | TranscriptKind::Ask | TranscriptKind::Error) => {
                 entry.chat.from.as_str()
             }
             _ => entry.chat.to.as_deref().unwrap_or(entry.chat.from.as_str()),
         };
-        brands.insert(handle, entry.agent.0.clone());
+        brands.insert(handle, agent.0.clone());
     }
     let mut last_date = Some(today);
     let mut first_entry = true;
@@ -233,7 +239,7 @@ pub(super) fn render_display_chat_to(
             follows_day_delimiter = true;
             last_group = None;
         }
-        let is_ask = entry.kind == TranscriptKind::Ask;
+        let is_ask = entry.kind() == Some(TranscriptKind::Ask);
         let continuation = last_group.as_ref().is_some_and(|group| {
             if is_ask {
                 group.matches_without_window(display, grouped, entry_date)
@@ -326,7 +332,7 @@ fn write_entry_content(
     if !continuation {
         write_entry_header(out, entry, grouped, brands, tz, show_date)?;
     }
-    if entry.kind == TranscriptKind::Ask {
+    if entry.kind() == Some(TranscriptKind::Ask) {
         write_ask_card(out, entry, answer, !suppress_ask_context, prose, width)
     } else if entry.chat.error {
         write_body_lines_with(
@@ -364,16 +370,16 @@ pub(super) fn pair_answers(entries: &[RenderEntry]) -> AnswerPairs {
     let mut folded = AnswerPairs::default();
     let mut open_by_agent: HashMap<AgentKey, Vec<usize>> = HashMap::new();
     for (index, entry) in entries.iter().enumerate() {
-        match entry.kind {
-            TranscriptKind::Ask => {
-                open_by_agent
-                    .entry(entry.agent.clone())
-                    .or_default()
-                    .push(index);
+        let Some(agent) = entry.agent() else {
+            continue;
+        };
+        match entry.kind() {
+            Some(TranscriptKind::Ask) => {
+                open_by_agent.entry(agent.clone()).or_default().push(index);
             }
-            TranscriptKind::Answer => {
+            Some(TranscriptKind::Answer) => {
                 let mut by_agent = || {
-                    let stack = open_by_agent.get_mut(&entry.agent)?;
+                    let stack = open_by_agent.get_mut(agent)?;
                     while let Some(ask) = stack.pop() {
                         if !folded.answer_by_ask.contains_key(&ask) {
                             return Some(ask);
