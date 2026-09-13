@@ -1872,17 +1872,18 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     };
     let same_kind = original.kind == base.kind;
 
+    // The base supplies the engine (kind, model, effort); the original keeps the role.
     original.kind.clone_from(&base.kind);
+    original.layers.retain(|layer| !base.layers.contains(layer));
     original.layers.extend_from_slice(&base.layers);
-    dedup_first(&mut original.layers);
+    if base.launch.effort.is_some() {
+        original.launch.effort.clone_from(&base.launch.effort);
+    }
     if original.skills.is_none() {
         original.skills.clone_from(&base.skills);
     }
-    // Keep the portable-field merge aligned with ResolvedProfile::fill_missing.
+    // Keep the role-field merge aligned with ResolvedProfile::fill_missing.
     original.launch.mode = original.launch.mode.or(base.launch.mode);
-    if original.launch.effort.is_none() {
-        original.launch.effort.clone_from(&base.launch.effort);
-    }
     if original.launch.budget.is_none() {
         original.launch.budget.clone_from(&base.launch.budget);
     }
@@ -1901,7 +1902,7 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     }
 
     if same_kind {
-        if original.launch.model.is_none() {
+        if base.launch.model.is_some() {
             original.launch.model.clone_from(&base.launch.model);
         }
         if original.args.is_none() {
