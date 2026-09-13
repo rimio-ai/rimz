@@ -908,6 +908,62 @@ fn flip_json_carries_stage() {
     assert!(json.get("to").is_none());
 }
 
+fn known_workspace(root: &str) -> rimz::workspace::KnownWorkspace {
+    rimz::workspace::KnownWorkspace {
+        workspace_id: rimz::WorkspaceId::from_project_root(std::path::Path::new(root)),
+        project_root: root.into(),
+        session_name: root.to_owned(),
+        root_class: rimz::workspace::RootClass::Directory,
+        rimz_bin: None,
+        updated_at: jiff::Timestamp::UNIX_EPOCH,
+    }
+}
+
+#[test]
+fn channel_home_prefers_current_then_one_known_workspace() {
+    assert!(matches!(
+        channel_home("x", true, vec![known_workspace("/a")]).unwrap(),
+        ChannelHome::Current
+    ));
+    assert!(matches!(
+        channel_home("x", false, Vec::new()).unwrap(),
+        ChannelHome::Current
+    ));
+    assert!(matches!(
+        channel_home("x", false, vec![known_workspace("/a")]).unwrap(),
+        ChannelHome::Elsewhere(known) if known.project_root == std::path::Path::new("/a")
+    ));
+    assert_eq!(
+        channel_home(
+            "x",
+            false,
+            vec![known_workspace("/a"), known_workspace("/b")]
+        )
+        .unwrap_err()
+        .to_string(),
+        "#x has conversations in several workspaces: /a, /b; run from one of them or pass --root <path>"
+    );
+}
+
+#[test]
+fn requested_channel_reads_target_then_worktree_flag() {
+    for (target, worktree, expected) in [
+        (Some("#chat"), None, Some("chat")),
+        (Some("@codex#chat"), Some("other"), Some("chat")),
+        (Some("@all#chat"), None, Some("chat")),
+        (Some("@codex"), Some("flag"), Some("flag")),
+        (None, Some("flag"), Some("flag")),
+        (Some("@codex"), None, None),
+        (Some("#"), None, None),
+    ] {
+        assert_eq!(
+            requested_channel(target, worktree).as_deref(),
+            expected,
+            "{target:?} {worktree:?}"
+        );
+    }
+}
+
 fn log_entry(
     kind: &str,
     session_id: &str,
