@@ -1380,7 +1380,10 @@ fn provider_account_stage_validates_and_reenters_once() {
         &LaunchReminders::default(),
     )
     .expect_err("unresolved account mismatches");
-    assert!(err.is_finalized_provider_mismatch());
+    assert!(matches!(
+        err,
+        AgentProcessStageErr::FinalizedProviderMismatch
+    ));
     assert!(!format!("{err:?}").contains("owner"));
 
     let unbound = request(
