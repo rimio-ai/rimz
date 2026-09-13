@@ -14,7 +14,7 @@ Read the shape first: [DESIGN.md](../../DESIGN.md) states the attention problem,
 | [instances.md](./agents/instances.md) | Agent instances: binding sessions to panes, local session observations, same-pane ownership, launch identity across conversations, and session death. |
 | [attribution.md](./agents/attribution.md) | Effort attribution: lane and lifetime admission, the seat fold, figure sources, and membership. |
 | [adapter.md](./agents/adapter.md) | The adapter layer: the registry, the capability traits, the hook path, install, context sources, and declared coverage. |
-| [plugin.md](./agents/plugin.md) | Third-party plugin loading, the canonical process wire, derived descriptors, and probe execution. |
+| [plugin.md](./agents/plugin.md) | Process-plugin loading, the derived spec and coverage, canonical hook ingest, probe execution, and invalid-manifest policy. |
 | [adapter_claude.md](./agents/adapter_claude.md), [adapter_codex.md](./agents/adapter_codex.md), [adapter_amp.md](./agents/adapter_amp.md), [adapter_copilot.md](./agents/adapter_copilot.md), [adapter_kimi.md](./agents/adapter_kimi.md), [adapter_pi.md](./agents/adapter_pi.md), [adapter_opencode.md](./agents/adapter_opencode.md), [adapter_antigravity.md](./agents/adapter_antigravity.md), [adapter_cursor.md](./agents/adapter_cursor.md), [adapter_droid.md](./agents/adapter_droid.md), [adapter_kiro.md](./agents/adapter_kiro.md), [adapter_qwen.md](./agents/adapter_qwen.md), [adapter_grok.md](./agents/adapter_grok.md) | Per-kind adapter mappings: how each native event, transcript, and account surface folds onto RimZ's types. |
 | [providers.md](./agents/providers.md) | Accounts, balances, spend, and the token-pricing table behind the provider dashboard. |
 
