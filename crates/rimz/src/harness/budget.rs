@@ -430,7 +430,7 @@ impl BudgetLedger {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum BudgetVerdict {
+enum BudgetVerdict {
     Under { spend_usd: f64, cap_usd: f64 },
     Park { spend_usd: f64, cap_usd: f64 },
     Waived { spend_usd: f64, cap_usd: f64 },
@@ -534,7 +534,7 @@ pub fn agent_budget_spend(
 }
 
 /// Pure budget decision plus day/waiver bookkeeping. The caller owns IO.
-pub fn evaluate(
+fn evaluate(
     agent: &AgentState,
     ledger: &mut BudgetLedger,
     now: Timestamp,
@@ -602,7 +602,7 @@ pub fn evaluate(
 
 /// Stamp ledger park projections onto agent state for producer and consumer
 /// folds. This reads runtime cache files only.
-pub fn project_parks(
+pub(crate) fn project_parks(
     snapshot: &mut SidebarSnapshot,
     runtime: &RuntimePaths,
     config: &MachineConfig,
@@ -1294,7 +1294,7 @@ pub fn workspace_day_cache(
 
 /// Attach daily-cap summaries after the spending overlay has stamped the
 /// room's live local-day figure.
-pub fn project_budget_views(
+pub(crate) fn project_budget_views(
     snapshot: &mut SidebarSnapshot,
     runtime: &RuntimePaths,
     config: &MachineConfig,
@@ -1416,7 +1416,7 @@ fn spawn_budget_park(
     true
 }
 
-pub fn budget_ledger_path(
+fn budget_ledger_path(
     runtime: &RuntimePaths,
     kind: &AgentKind,
     agent_id: &AgentSessionId,
@@ -1499,7 +1499,7 @@ impl ScopeLedgerFile {
     }
 }
 
-pub fn scope_state_path(runtime: &RuntimePaths) -> PathBuf {
+fn scope_state_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join("budget.scopes.json")
 }
 
@@ -1510,7 +1510,7 @@ pub fn read_scope_state(runtime: &RuntimePaths) -> BudgetScopeState {
         .unwrap_or_default()
 }
 
-pub fn write_scope_state(
+fn write_scope_state(
     runtime: &RuntimePaths,
     state: &BudgetScopeState,
 ) -> crate::disk::atomic::Result<()> {
