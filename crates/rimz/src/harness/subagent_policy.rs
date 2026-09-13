@@ -1,7 +1,6 @@
 //! What a `rimz subagents` caller may launch.
 
 use crate::agents::AgentState;
-use crate::agents::model_display::display_model_short;
 use crate::config::{CommandsConfig, ProfilesConfig};
 use crate::harness::spec::LayoutErr;
 
@@ -82,27 +81,16 @@ pub fn reminder(catalog: &SubagentCatalog) -> String {
     }
 }
 
+/// Name and description only: bare model codenames and effort levels do not tell the caller
+/// which profile is cheaper or stronger, so the description carries that choice.
 fn reminder_profile(profile: &SubagentProfile) -> String {
-    // The model names the line it runs on; the agent kind is only worth showing without one.
-    let runs_on = profile
-        .model
-        .as_deref()
-        .map(display_model_short)
-        .or_else(|| profile.agent.clone());
-    let details = [runs_on.as_deref(), profile.effort.as_deref()]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" · ");
-    let details = (!details.is_empty()).then(|| format!(" ({details})"));
     let description = profile
         .description
         .as_deref()
         .map(|description| format!(": {description}"));
     format!(
-        "- `{}`{}{}",
+        "- `{}`{}",
         profile.name,
-        details.as_deref().unwrap_or_default(),
         description.as_deref().unwrap_or_default()
     )
 }
@@ -296,21 +284,8 @@ mod tests {
         assert_eq!(
             text,
             "Subagents: launch them through Skill(rimz-subagents), which also says how their results come back. Profiles you may launch:\n\
-             - `explorer` (Sonnet · low): Finds files and traces code paths\n\
+             - `explorer`: Finds files and traces code paths\n\
              - `lint`"
-        );
-        let SubagentCatalog::Available(mut specs) = available else {
-            unreachable!("built as available");
-        };
-        specs[0].model = None;
-        assert_eq!(
-            reminder_profile(&specs[0]),
-            "- `explorer` (claude · low): Finds files and traces code paths"
-        );
-        specs[0].model = Some("gpt-6-astra".to_owned());
-        assert_eq!(
-            reminder_profile(&specs[0]),
-            "- `explorer` (Astra · low): Finds files and traces code paths"
         );
         assert_eq!(
             reminder(&SubagentCatalog::Disabled),
