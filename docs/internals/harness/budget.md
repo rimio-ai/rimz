@@ -10,7 +10,7 @@ The engine reads spend that already exists. Agents write transcripts, the spendi
 
 Whether an agent is parked is answered by its ledger, never by its pane. The Esc keypress is only what makes the park visible to the agent. If the keypress fails, the ledger still says parked and a later tick interrupts again, so correctness never depends on the keypress landing.
 
-`budget.rs` never writes to the store. Evaluation runs in the sidebar producer, and the [sidebar is read-only on the store](../sidebar/state.md), so the module writes cache-class ledger files only and hands every durable effect to the hidden `rimz agents budget-park` helper, which owns the pane keypress and the supervised-run transition. `cargo xtask invariants` enforces the boundary: `ensure_sidebar_library_boundaries` lists `budget.rs` among the harness modules in the sidebar import graph and fails the build when one of them imports a store writer, the run-wake sender, or the broker.
+`budget.rs` never writes to the store. Evaluation runs in the sidebar producer, and the [sidebar is read-only on the store](../sidebar/state.md#the-shape-of-the-problem), so the module writes cache-class ledger files only and hands every durable effect to the hidden `rimz agents budget-park` helper, which owns the pane keypress and the supervised-run transition. `cargo xtask invariants` enforces the boundary: `ensure_sidebar_library_boundaries` lists `budget.rs` among the harness modules in the sidebar import graph and fails the build when one of them imports a store writer, the run-wake sender, or the broker.
 
 ## The scopes
 
