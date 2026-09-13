@@ -253,6 +253,7 @@ impl DailyBudgetScope {
         }
     }
 
+    #[cfg(any(test, feature = "testkit"))]
     pub fn ledger_path(&self, runtime: &RuntimePaths) -> PathBuf {
         self.file(runtime).path
     }

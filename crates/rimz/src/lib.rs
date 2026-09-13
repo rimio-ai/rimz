@@ -70,7 +70,6 @@ pub use crate::agents::{
     SpendTally, SpendWindow, SpendWindowMode,
 };
 pub use crate::disk::paths::{RuntimePaths, StatePaths};
-pub use crate::harness::run_wake::RunWakeErr;
 pub use crate::ids::{
     AskId, EventId, MessageId, MuxName, PaneId, RunId, SidebarInstanceId, ViewKind, WorkspaceId,
 };

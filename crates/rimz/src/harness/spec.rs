@@ -114,7 +114,8 @@ pub enum Cell {
 }
 
 impl Cell {
-    pub fn agent(kind: AgentKind) -> Self {
+    #[cfg(test)]
+    pub(super) fn agent(kind: AgentKind) -> Self {
         Self::Agent(AgentCell {
             kind,
             args: Vec::new(),
@@ -126,7 +127,7 @@ impl Cell {
         })
     }
 
-    pub fn shell() -> Self {
+    pub(super) fn shell() -> Self {
         Self::Command { argv: Vec::new() }
     }
 

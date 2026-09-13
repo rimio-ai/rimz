@@ -280,12 +280,6 @@ pub enum AgentProcessStageErr {
     EmptyReentry,
 }
 
-impl AgentProcessStageErr {
-    pub fn is_finalized_provider_mismatch(&self) -> bool {
-        matches!(self, Self::FinalizedProviderMismatch)
-    }
-}
-
 /// The identity a `rimz agents exec` pane carries in its structured request
 /// and as RIMZ_* env for lifecycle hooks and peer
 /// attribution.
@@ -387,7 +381,8 @@ pub enum ExecAction {
 }
 
 impl ExecAction {
-    pub fn extra_args(&self) -> &[String] {
+    #[cfg(test)]
+    pub(super) fn extra_args(&self) -> &[String] {
         match self {
             Self::Launch { extra_args, .. }
             | Self::Resume { extra_args, .. }
@@ -1000,7 +995,10 @@ fn plan_exec_argv(
     })
 }
 
-/// Check the visible envelope, then restore the launch prompt from its artifact.
+/// Test-facing reader: check the visible envelope, then restore the launch
+/// prompt from its artifact. Production decodes through
+/// [`decode_exec_envelope`].
+#[cfg(any(test, feature = "testkit"))]
 pub fn decode_exec_request(
     visible_kind: &str,
     visible_worktree_path: Option<&Path>,

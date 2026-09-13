@@ -121,6 +121,7 @@ impl RunCancellation {
         Self::default()
     }
 
+    #[cfg(any(test, feature = "testkit"))]
     pub fn request(&self) {
         self.requested.store(true, Ordering::SeqCst);
     }
