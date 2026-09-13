@@ -129,6 +129,22 @@ impl std::fmt::Display for Isolation {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("isolation must be `host` or `sandbox`")]
+pub struct IsolationParseError;
+
+impl std::str::FromStr for Isolation {
+    type Err = IsolationParseError;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        match raw {
+            "host" => Ok(Self::Host),
+            "sandbox" => Ok(Self::Sandbox),
+            _ => Err(IsolationParseError),
+        }
+    }
+}
+
 /// A named agent profile. `agent` is a base reference: either a built-in agent
 /// kind or another profile that resolves to one.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

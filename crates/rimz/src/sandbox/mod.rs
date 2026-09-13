@@ -32,7 +32,13 @@ impl TmpView {
     }
 
     pub fn current(paths: &StatePaths) -> Self {
-        Self::new(MachineConfig::load_lenient().agents.isolation, paths)
+        Self::for_launch(None, paths)
+    }
+
+    /// The view of an agent launched with this `--isolation` override.
+    pub fn for_launch(isolation: Option<Isolation>, paths: &StatePaths) -> Self {
+        let isolation = isolation.unwrap_or_else(|| MachineConfig::load_lenient().agents.isolation);
+        Self::new(isolation, paths)
     }
 
     pub fn agent_path(&self, host: &Path) -> PathBuf {

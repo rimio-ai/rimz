@@ -207,6 +207,9 @@ pub(crate) struct LaunchOverrideArgs {
     /// Reasoning effort for the launched agents (provider-specific levels).
     #[arg(long, value_name = "LEVEL")]
     pub(crate) effort: Option<String>,
+    /// Run the launched agents under this isolation instead of machine `agents.isolation`.
+    #[arg(long, value_name = "host|sandbox")]
+    pub(crate) isolation: Option<rimz::config::Isolation>,
     /// Extra argv appended to every launched agent cell.
     #[arg(last = true)]
     pub(crate) passthrough: Vec<String>,
@@ -215,7 +218,7 @@ pub(crate) struct LaunchOverrideArgs {
 #[derive(Debug, Default, PartialEq, Args)]
 #[command(group = clap::ArgGroup::new("launch-overrides")
     .multiple(true)
-    .args(["ask", "yolo", "model", "agent", "system_prompt_file", "append_system_prompt_files", "effort", "passthrough"])
+    .args(["ask", "yolo", "model", "agent", "system_prompt_file", "append_system_prompt_files", "effort", "isolation", "passthrough"])
     .conflicts_with("resume"))]
 pub(crate) struct AgentLaunchArgs {
     /// Inline spec, named team, or team role (`claude,codex+term`, `forge.planner`).
@@ -877,6 +880,7 @@ fn into_supervised_request(
     request.agent =
         rimz::harness::plan::normalized_preset_value(args.launch.overrides.agent.as_deref());
     request.model = args.launch.overrides.model;
+    request.isolation = args.launch.overrides.isolation;
     request.system_prompt_file = system_prompt_file;
     request.append_system_prompt_files = append_system_prompt_files;
     request.effort = args.launch.overrides.effort;

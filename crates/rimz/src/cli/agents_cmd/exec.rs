@@ -16,7 +16,12 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let run_context = run_exec_context(envelope.request(), &invocation)?;
     let launch_identity = exec_launch_identity(envelope.request())?;
     let machine_config = crate::cli::machine_config();
-    let isolation = machine_config.agents.isolation;
+    let isolation = envelope
+        .request()
+        .identity
+        .params
+        .isolation
+        .unwrap_or(machine_config.agents.isolation);
     let adapter = rimz::agents::find_definition(envelope.request().kind.as_str());
     let bwrap = rimz::sandbox::preflight_skills(
         isolation,

@@ -53,6 +53,7 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
             profile: Some("codex-coder".to_owned()),
             login: None,
             mode: Some(crate::agents::PermissionMode::Yolo),
+            isolation: Some(crate::config::Isolation::Sandbox),
             role: Some("coder".to_owned()),
             model: Some("gpt-5.6-sol".to_owned()),
             effort: Some("xhigh".to_owned()),

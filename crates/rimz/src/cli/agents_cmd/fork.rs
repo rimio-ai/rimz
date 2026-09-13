@@ -25,6 +25,9 @@ pub(super) struct ForkArgs {
     /// Leave focus on the launching pane.
     #[arg(long)]
     pub(super) bg: bool,
+    /// Run the fork under this isolation instead of the source agent's.
+    #[arg(long, value_name = "host|sandbox")]
+    pub(super) isolation: Option<rimz::config::Isolation>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,13 +66,17 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", seed.kind))?;
     let effective = rimz::config::effective::load(&config, &workspace.project_root)?;
     let posture = fork_posture(&seed, &effective.profiles)?;
+    if args.isolation.is_some() {
+        seed.launch.isolation = args.isolation;
+    }
+    let isolation = seed.launch.isolation.unwrap_or(config.agents.isolation);
     rimz::sandbox::preflight_skills(
-        config.agents.isolation,
+        isolation,
         &seed.kind,
         posture.launch.skills.is_some(),
         adapter.manual_skill(),
     )?;
-    rimz::sandbox::preflight(config.agents.isolation)?;
+    rimz::sandbox::preflight(isolation)?;
     if let Some(reason) = &posture.degraded {
         writeln!(
             crate::cli::render::err(),
@@ -288,6 +295,7 @@ fn validate_fork_source(
         launch: rimz::agents::LaunchParams {
             profile: agent.profile.clone(),
             mode: agent.mode,
+            isolation: agent.isolation,
             channel: agent.channel.clone(),
             ..rimz::agents::LaunchParams::default()
         },

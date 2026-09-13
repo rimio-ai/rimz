@@ -177,6 +177,7 @@ fn finalize<'a>(
         layout,
         LaunchFinalizeOptions {
             permission_mode: None,
+            isolation: None,
             preset,
             passthrough,
             budget: None,
@@ -561,6 +562,7 @@ fn cli_prompt_replaces_profile_path_and_requires_replacement_support() {
         &mut resolved.layout,
         LaunchFinalizeOptions {
             permission_mode: None,
+            isolation: None,
             preset: &crate::agents::LaunchPreset {
                 system_prompt_file: Some(cli_prompt.clone()),
                 ..Default::default()
@@ -595,6 +597,7 @@ fn cli_prompt_replaces_profile_path_and_requires_replacement_support() {
         &mut resolved.layout,
         LaunchFinalizeOptions {
             permission_mode: None,
+            isolation: None,
             preset: &crate::agents::LaunchPreset::default(),
             passthrough: &[],
             budget: None,
@@ -784,6 +787,7 @@ fn resolved_launch_finalizes_profile_cli_and_passthrough_precedence() {
         &mut resolved.layout,
         LaunchFinalizeOptions {
             permission_mode: Some(PermissionMode::Yolo),
+            isolation: None,
             preset: &preset,
             passthrough: &passthrough,
             budget: Some("2/day".parse().expect("budget")),
@@ -840,6 +844,7 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
         &mut resolved.layout,
         LaunchFinalizeOptions {
             permission_mode: Some(PermissionMode::Yolo),
+            isolation: Some(crate::config::Isolation::Sandbox),
             preset: &preset,
             passthrough: &[],
             budget: None,
@@ -847,14 +852,18 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
         },
     )
     .expect("finalize launch");
-    let modes = resolved
+    let launches = resolved
         .layout
         .agent_cells()
-        .map(|cell| cell.launch.mode)
+        .map(|cell| (cell.launch.mode, cell.launch.isolation))
         .collect::<Vec<_>>();
+    let sandbox = Some(crate::config::Isolation::Sandbox);
     assert_eq!(
-        modes,
-        [Some(PermissionMode::Ask), Some(PermissionMode::Yolo)]
+        launches,
+        [
+            (Some(PermissionMode::Ask), sandbox),
+            (Some(PermissionMode::Yolo), sandbox)
+        ]
     );
 
     let mut resolved = resolve_launch(&launch, &machine.agents.commands, Some("claude"), None)
@@ -863,6 +872,7 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
         &mut resolved.layout,
         LaunchFinalizeOptions {
             permission_mode: Some(PermissionMode::Auto),
+            isolation: None,
             preset: &preset,
             passthrough: &[],
             budget: None,
@@ -889,6 +899,7 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
         &mut resolved.layout,
         LaunchFinalizeOptions {
             permission_mode: Some(PermissionMode::Auto),
+            isolation: None,
             preset: &preset,
             passthrough: &[],
             budget: None,
@@ -932,6 +943,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
         &mut layout,
         LaunchFinalizeOptions {
             permission_mode: Some(PermissionMode::Yolo),
+            isolation: None,
             preset: &crate::agents::LaunchPreset {
                 model: Some("override-model".to_owned()),
                 effort: Some("xhigh".to_owned()),
@@ -1268,6 +1280,7 @@ fn supervised_turn_limit_renders_supported_adapter_and_fails_fast() {
         &mut layout,
         LaunchFinalizeOptions {
             permission_mode: None,
+            isolation: None,
             preset: &preset,
             passthrough: &[],
             budget: None,
@@ -1294,6 +1307,7 @@ fn supervised_turn_limit_renders_supported_adapter_and_fails_fast() {
         &mut layout,
         LaunchFinalizeOptions {
             permission_mode: None,
+            isolation: None,
             preset: &preset,
             passthrough: &[],
             budget: None,
@@ -1339,6 +1353,7 @@ fn finalization_handles_mixed_cells_without_leaking_state() {
         &mut layout,
         LaunchFinalizeOptions {
             permission_mode: Some(PermissionMode::Yolo),
+            isolation: None,
             preset: &Default::default(),
             passthrough: &["--debug".to_owned()],
             budget: Some("2/day".parse().expect("budget")),

@@ -118,8 +118,12 @@ pub(super) fn launch_layout(
     for (index, cell) in layout.agent_cells().enumerate() {
         let adapter = rimz::agents::find_definition(cell.kind.as_str())
             .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", cell.kind))?;
+        let isolation = cell
+            .launch
+            .isolation
+            .unwrap_or(machine_config.agents.isolation);
         rimz::sandbox::preflight_skills(
-            machine_config.agents.isolation,
+            isolation,
             &cell.kind,
             cell.skills.is_some(),
             adapter.manual_skill(),
@@ -138,8 +142,8 @@ pub(super) fn launch_layout(
             &request,
             &workspace.worktree_root,
         )?;
+        rimz::sandbox::preflight(isolation)?;
     }
-    rimz::sandbox::preflight(machine_config.agents.isolation)?;
     // Resolve where the launch lands before any side effect — the live-session
     // probe, worktree creation, the store append, the sidebar build — so an
     // invalid `--new-pane` (a multi-cell layout, or run outside a room) refuses
@@ -409,6 +413,11 @@ fn launch_resume_layout(
         rimz::harness::resume::resume_session_present,
     )
     .map_err(|err| cohort_resume_error(err, spec, scope.as_deref(), &agents, teams))?;
+    for seed in &plan.seeds {
+        if let rimz::harness::plan::CohortSeed::Resume(agent) = seed {
+            rimz::sandbox::preflight(agent.isolation.unwrap_or(machine_config.agents.isolation))?;
+        }
+    }
     let cwd = plan
         .cwd
         .clone()

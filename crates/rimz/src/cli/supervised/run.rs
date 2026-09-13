@@ -69,6 +69,7 @@ pub(super) fn prepare_supervised_launch_layout(
     workspace: &rimz::ResolvedWorkspace,
     machine_config: &rimz::config::MachineConfig,
     scope: rimz::config::effective::ProfileScope,
+    isolation: Option<rimz::config::Isolation>,
 ) -> Result<rimz::harness::plan::ResolvedLaunch> {
     let effective = rimz::config::effective::load(machine_config, &workspace.project_root)?;
     let mut resolved = rimz::harness::plan::resolve_launch(
@@ -96,6 +97,7 @@ pub(super) fn prepare_supervised_launch_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
             permission_mode: Some(request.permission_mode),
+            isolation,
             preset: &preset,
             passthrough: &request.passthrough,
             budget: request.budget,
@@ -460,8 +462,19 @@ fn prepare_supervised(
             }
         }
     }
-    let resolved =
-        prepare_supervised_launch_layout(request, &spec, &workspace, &machine_config, scope)?;
+    let isolation = request.isolation.or_else(|| {
+        caller
+            .filter(|_| request.subagent)
+            .and_then(|caller| caller.isolation)
+    });
+    let resolved = prepare_supervised_launch_layout(
+        request,
+        &spec,
+        &workspace,
+        &machine_config,
+        scope,
+        isolation,
+    )?;
     let team_name = resolved.team_name;
     let layout = resolved.layout;
     let agent_cells = layout.agent_cells().collect::<Vec<_>>();
@@ -474,13 +487,14 @@ fn prepare_supervised(
     let agent_cell = agent_cells[0];
     let adapter = rimz::agents::find_definition(&agent_cell.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent_cell.kind))?;
+    let isolation = isolation.unwrap_or(machine_config.agents.isolation);
     rimz::sandbox::preflight_skills(
-        machine_config.agents.isolation,
+        isolation,
         &agent_cell.kind,
         agent_cell.skills.is_some(),
         adapter.manual_skill(),
     )?;
-    rimz::sandbox::preflight(machine_config.agents.isolation)?;
+    rimz::sandbox::preflight(isolation)?;
     let prompt = supervised_prompt(request, adapter);
     let worktree_launch = request.worktree.is_some() || request.from_pr.is_some();
     if worktree_launch && !crate::cli::confirm_cross_repo_worktree(&workspace)? {

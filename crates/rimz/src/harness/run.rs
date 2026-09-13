@@ -48,6 +48,9 @@ pub struct SupervisedRunRequest {
     pub subagent: bool,
     pub force_new_tab: bool,
     pub permission_mode: PermissionMode,
+    /// The launch's `--isolation` override; a subagent without one inherits
+    /// its parent's.
+    pub isolation: Option<crate::config::Isolation>,
     pub agent: Option<String>,
     pub model: Option<String>,
     pub system_prompt_file: Option<PathBuf>,
@@ -88,6 +91,7 @@ impl SupervisedRunRequest {
             subagent: false,
             force_new_tab: false,
             permission_mode,
+            isolation: None,
             agent: None,
             model: None,
             system_prompt_file: None,

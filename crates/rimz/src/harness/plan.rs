@@ -21,6 +21,7 @@ use crate::store::{
 #[derive(Clone, Copy, Debug)]
 pub struct LaunchFinalizeOptions<'a> {
     pub permission_mode: Option<PermissionMode>,
+    pub isolation: Option<crate::config::Isolation>,
     pub preset: &'a crate::agents::LaunchPreset,
     pub passthrough: &'a [String],
     pub budget: Option<BudgetSpec>,
@@ -77,6 +78,7 @@ pub(super) struct ResumeLaunchIdentity {
     pub parent_agent_id: Option<AgentSessionId>,
     pub parent_agent_kind: Option<crate::ids::AgentKind>,
     pub launch_depth: Option<u8>,
+    pub isolation: Option<crate::config::Isolation>,
 }
 
 impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
@@ -96,6 +98,7 @@ impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
             parent_agent_id: agent.parent_agent_id.clone(),
             parent_agent_kind: agent.parent_agent_kind.clone(),
             launch_depth: agent.launch_depth,
+            isolation: agent.isolation,
         }
     }
 }
@@ -467,6 +470,9 @@ fn finalize_agent_cell(
     warnings: &mut Vec<LaunchFinalizeWarning>,
 ) -> std::result::Result<(), LaunchFinalizeError> {
     let adapter = crate::agents::find_definition(&cell.kind);
+    if options.isolation.is_some() {
+        cell.launch.isolation = options.isolation;
+    }
     if let Some(permission_mode) = options.permission_mode
         && cell.launch.mode.is_none()
         && let Some(adapter) = adapter
@@ -852,6 +858,7 @@ pub(super) fn resume_command(
         launch_ordinal: identity.launch_ordinal,
         channel: channel.map(ToOwned::to_owned),
         mode: posture.mode,
+        isolation: identity.isolation,
         model: posture.model.clone(),
         effort: posture.effort.clone(),
         budget: posture.budget.clone(),

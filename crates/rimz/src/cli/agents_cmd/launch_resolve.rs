@@ -78,6 +78,7 @@ pub(super) fn resolve_finalized_layout(
         &mut resolved.layout,
         LaunchFinalizeOptions {
             permission_mode: interactive_permission_mode_from_flags(overrides.ask, overrides.yolo)?,
+            isolation: overrides.isolation,
             preset: &preset,
             passthrough: &overrides.passthrough,
             budget,

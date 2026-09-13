@@ -149,6 +149,9 @@ struct SubagentLaunchArgs {
     /// Reasoning effort for the child.
     #[arg(long, value_name = "LEVEL")]
     effort: Option<String>,
+    /// Run the child under this isolation instead of inheriting the parent's.
+    #[arg(long, value_name = "host|sandbox")]
+    isolation: Option<rimz::config::Isolation>,
     /// Stop the child after this duration.
     #[arg(long, value_parser = crate::cli::supervised::parse_timeout)]
     timeout: Option<Duration>,
@@ -397,6 +400,7 @@ impl FanoutTask {
             model: self.model,
             agent: self.agent,
             effort: self.effort,
+            isolation: None,
             timeout,
             wait: None,
             keep: fanout.keep,
@@ -453,6 +457,7 @@ impl SubagentLaunchArgs {
                 model: self.model,
                 agent: self.agent,
                 effort: self.effort,
+                isolation: self.isolation,
                 passthrough: self.passthrough,
                 ..Default::default()
             },
@@ -473,6 +478,7 @@ fn reject_launch_flags_without_spec(args: &SubagentLaunchArgs) -> Result<()> {
         || args.model.is_some()
         || args.agent.is_some()
         || args.effort.is_some()
+        || args.isolation.is_some()
         || args.timeout.is_some()
         || args.wait.is_some()
         || args.keep
