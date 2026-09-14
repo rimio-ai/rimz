@@ -239,6 +239,7 @@ fn duration_minutes(row: &Value, detail: &Value) -> Option<f64> {
         "time_unit_minute" | "minute" | "minutes" | "m" => 1.0,
         "time_unit_hour" | "hour" | "hours" | "h" => 60.0,
         "time_unit_day" | "day" | "days" | "d" => 1_440.0,
+        "time_unit_week" | "week" | "weeks" | "w" => 10_080.0,
         _ => return None,
     };
     Some(duration * multiplier)
@@ -396,6 +397,9 @@ mod tests {
                 "limits":[{
                     "detail":{"limit":100,"used":50},
                     "window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"}
+                },{
+                    "detail":{"limit":100,"used":10},
+                    "window":{"duration":1,"timeUnit":"TIME_UNIT_WEEK"}
                 }]
             })
             .to_string(),
@@ -405,6 +409,7 @@ mod tests {
         assert_eq!(windows[0].duration_mins, Some(10_080));
         assert_eq!(windows[1].duration_mins, Some(300));
         assert_eq!(windows[1].used_percentage, Some(50));
+        assert_eq!(windows[2].duration_mins, Some(10_080));
     }
 
     #[test]
