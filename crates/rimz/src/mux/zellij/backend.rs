@@ -530,7 +530,15 @@ impl ZellijBackend {
         {
             merge_topology_enrichment(&mut cache, prior);
         }
-        cache.scrub_launch_chrome();
+        for pane in &mut cache.panes {
+            if pane
+                .pane_command
+                .as_deref()
+                .is_some_and(crate::pane::command_is_launch_chrome)
+            {
+                pane.pane_command = None;
+            }
+        }
         Ok(cache)
     }
 

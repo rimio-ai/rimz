@@ -128,7 +128,7 @@ pub fn ingest_zellij_wake(
             .as_ref()
             .is_none_or(|existing| incoming.writer != existing.writer);
         let mut cache = incoming.clone();
-        cache.scrub_launch_chrome();
+        sanitize_topology_cache(&mut cache);
         transitions = derive_zellij_transitions(
             existing.as_ref(),
             &cache,
@@ -599,6 +599,18 @@ fn clear_superseded_conflict(
         Err(source) => return Err(ZellijWakeError::ConflictClear { path, source }),
     }
     Ok(())
+}
+
+fn sanitize_topology_cache(cache: &mut PaneTopologyCache) {
+    for pane in &mut cache.panes {
+        if pane
+            .pane_command
+            .as_deref()
+            .is_some_and(command_is_launch_chrome)
+        {
+            pane.pane_command = None;
+        }
+    }
 }
 
 fn write_plugin_presence_sample(

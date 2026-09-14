@@ -248,7 +248,7 @@ surface-budget = 4
 
 [[module]]
 path = "crates/rimz/src/pane"
-surface-budget = 42
+surface-budget = 43
 
 [[module]]
 path = "crates/rimz/src/proc"

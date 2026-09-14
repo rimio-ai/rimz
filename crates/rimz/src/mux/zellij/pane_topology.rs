@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::RuntimePaths;
 use crate::ids::{MuxClientId, MuxName, PaneId};
 use crate::mux::{ClientView, PRESENCE_STAMP_FRESH, PaneListing};
-use crate::pane::{ClientPaneView, PaneRef, SIDEBAR_CHROME_TITLE, command_is_launch_chrome};
+use crate::pane::{ClientPaneView, PaneRef, SIDEBAR_CHROME_TITLE};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneTopologyCache {
@@ -34,20 +34,6 @@ pub struct PaneTopologyCache {
 }
 
 impl PaneTopologyCache {
-    /// Clear every foreground command that is `rimz agents <spec>` launch
-    /// chrome, so no consumer reads the launcher as a pane tenant.
-    pub(crate) fn scrub_launch_chrome(&mut self) {
-        for pane in &mut self.panes {
-            if pane
-                .pane_command
-                .as_deref()
-                .is_some_and(command_is_launch_chrome)
-            {
-                pane.pane_command = None;
-            }
-        }
-    }
-
     pub(crate) fn projected_session_focus(&self) -> Option<PaneId> {
         let clients = self.clients.clone().map(TopologyClients::into_client_view);
         project_session_focus(&self.panes, clients.as_ref(), self.focused_pane)
