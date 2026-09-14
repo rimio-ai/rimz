@@ -64,9 +64,19 @@ The contract rules, each owned by [`crates/rimz/src/agents/AGENTS.md`](../../cra
 
 Install is the visible security step ([adapter.md → Hook install](../internals/agents/adapter.md#hook-install)): declare one `managed_integration` so it drives install, preview, uninstall, installed, partial-artifact, upgrade, wiring-path, wrapped-statusline, and trust reporting. `ManagedSource` implements this Interface for shared backends; custom provider file transactions stay in that provider's `install.rs`. Include every installed hook command in the [trust hash](../internals/harness/trust.md).
 
+Install meets the machine, and five traps have each cost an upgrade pass a review round:
+
+- **Refusals block only the named install.** An install that refuses on this machine (a CLI too old for the hook surface, a missing prerequisite) returns the reason from `ManagedIntegration::install_blocker`. Detected installs in `rimz start`, `rimz setup`, and a bare `rimz hooks install` then skip the adapter, and `rimz hooks install <kind>` still refuses. A refusal raised from preview instead aborts every agent's install. Check it with `rimz hooks install --dry-run` and no agent named.
+- **Closed event schemas need a version gate.** Before adding an event to the installed catalog, check whether the oldest supported release validates hook event names against a closed set. If it does, a new event invalidates or strips the user's hooks on that release, so the event waits for an install-time version probe instead of shipping unconditionally.
+- **Resolve provider paths from the pane's env.** When install, `installed()`, or a reader resolves a provider path from env (config home, statusline file, session store), resolve it the way the agent pane sees it. tmux panes carry `disk::paths::runtime_domain_env()`, which pins an unset `XDG_CONFIG_HOME` to `$HOME/.config`, while Zellij panes inherit the launching shell. Cover both with an out-of-process test that installs from a shell without `XDG_CONFIG_HOME` and checks `installed()` under the pinned env, and grep `crates/rimz/tests/integration/common` for fixtures that hardcode the old path.
+- **Several user hook files can shadow each other.** When the agent merges hooks from more than one user file, confirm which file wins per event before choosing where install writes; a later user save can copy the merged set into the file that shadows RimZ's entries.
+- **An in-process plugin's PID is not always the agent's.** A plugin or extension runtime can run in a child process, so `process.pid` there names the runtime and its parent names the agent CLI. Confirm which process the `RIMZ_AGENT_PID` stamp names.
+
 ## Step 6 — Wire launch, resume, and presets
 
 From the worksheet's launch row: `permission_args` for the four [`PermissionMode`](../../crates/rimz/src/harness/run.rs)s, `render_preset` (reject any `agents.toml` preset field the agent cannot render, so launch intent is never silently dropped), `resume_command` and `fork_command`, `compact_command` (declare the native manual command and use `CompactInstruction::Trailing` only when upstream verifies that it accepts summary guidance, or document a registry exception when the agent only compacts automatically), and `launch_command`/`launch_env`/`default_launch_model` where the stock invocation needs shaping. When the provider has a verified native delegation control, implement `lockdown_subagent_args` or `lockdown_subagent_env` so it overrides conflicting profile values without erasing unrelated settings; otherwise keep the prompt-only default.
+
+Prove the launch `PromptStyle` live once: launch with a trivial prompt under a disposable `HOME` and confirm the pane submits it. An argv snapshot only proves the shape. OpenCode's and Kiro's TUIs silently dropped a `PositionalAfterDoubleDash` prompt that every unit test accepted, and a Commander root command treats a prompt equal to a subcommand name as that subcommand. Try a prompt that starts with `-` too, and name any form that has no working argv in the internals doc.
 
 ## Step 7 — Wire context enrichment
 
@@ -82,6 +92,8 @@ The provider half of the integration is [providers.md → Adding a provider](../
 
 `spend.rs` is sidebar-safe by construction: read-only, and the `ensure_spend_parser_boundaries` invariant grep ([`xtask/src/invariants.rs`](../../xtask/src/invariants.rs)) rejects store-write, run-wake, and broker imports in any spend path.
 
+Spend results are cached per file stat, so a `spend.rs` change reaches only transcripts parsed after it. A change that drops, adds, or reprices entries for transcripts already on disk bumps `SPENDING_CACHE_VERSION` in [`spending/cache.rs`](../../crates/rimz/src/agents/spending/cache.rs) with a one-line reason, and any branch that must clear entries an earlier parse cached returns `replace_entries: true`.
+
 ## Step 9 — Test it
 
 Before a lifecycle field gates behaviour, inventory each adapter's durable set/clear producers and test the field across persisted-cache advancement with an empty delta; display-derived observations are not durable reset evidence.
@@ -95,6 +107,13 @@ The required set, consolidated from [adapter.md → Adding an agent](../internal
 - PID attribution
 - context mapping from a fixture transcript tail and a fixture transport payload, including the fresh-session zero and unreadable-unknown cases
 - the spend fixture parsing to real entries
+
+Four rules keep those tests honest:
+
+- **A new mapping's test fails without the mapping.** Give the payload a fallback input that would classify differently, so removing the new match arm turns the test red.
+- **A keyed wait is tested across the settle.** A wait's clearing event must be dropped once the turn settles, because an unnamed `ToolUsed` on a settled row reopens a turn ([`lifecycle.rs`](../../crates/rimz/src/agents/lifecycle.rs) `reconcile_activity`). Test open, settle, then close.
+- **"An adapter without capability X" is an unregistered kind.** A shared test that borrows a real built-in as the negative case breaks the day that built-in gains the capability; use `"unregistered"`.
+- **Shared pins move with the definition.** Changing presets, hook events, or coverage marks moves counts and snapshots outside the adapter: the inline snapshot in `agents::conformance::render_preset_characterization`, the per-agent block in `cli/coverage.rs` `coverage_pins_agent_matrix`, the managed hook counts in `crates/rimz/tests/integration/hooks.rs`, and the adapter's own catalog test. Run `cargo xtask test 'agents::conformance' 'cli::coverage'` and the adapter's integration hooks test before the gate, and update each pin in the commit that moves it.
 
 Conformance, definition validation, and registry uniqueness tests enroll the adapter automatically — no opt-in. Unit tests follow the one-home rule: inline `#[cfg(test)] mod tests` until the size gate moves them to a sibling ([rust-conventions.md → Tests](./rust-conventions.md#tests)).
 
@@ -117,8 +136,9 @@ Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, f
 - [ ] `payloads.rs` typed wire · `spend.rs` · `account.rs` (± `oauth_usage.rs`) · install surface
 - [ ] Private module in `adapters/mod.rs`, one composed entry in `registry::BUILTINS`
 - [ ] `decode_hook` · typed canonical facts · explicit `HookReply` · complete classification corpus
-- [ ] One managed integration covering install / preview / uninstall / `hooks_installed`
-- [ ] `permission_args` · `render_preset` · `resume_command` · `compact_command` with verified instruction support
+- [ ] One managed integration covering install / preview / uninstall / `hooks_installed` · machine refusals through `install_blocker` · provider paths checked under the tmux-pinned and inherited pane env
+- [ ] `permission_args` · `render_preset` · `resume_command` · `compact_command` with verified instruction support · launch prompt style proven live
+- [ ] Spend changes to existing transcripts bump `SPENDING_CACHE_VERSION` · shared pins (conformance preset snapshot, coverage matrix, integration hook counts) moved in the same commit
 - [ ] `launch_reminders` coverage declared from `append_system_text_channel`
 - [ ] Context source(s): tail parse, `observe_context` transport, or payload-stamped gauge
 - [ ] `probe_account` · `spending_sources` + `parse_spend` · positive-cost conformance fixture

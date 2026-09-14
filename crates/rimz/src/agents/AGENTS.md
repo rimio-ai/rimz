@@ -45,6 +45,8 @@ Nothing under `agents` imports `store`: Store folds the agent model, and agent r
 
 Golden every stdout shape in the adapter's `tests` module with inline `insta::assert_*_snapshot!(... @"...")`: the neutral no-op and malformed-payload handling. Cover install/uninstall, lifecycle mapping, ask classification, and PID attribution.
 
+A test for a new typed mapping must fail with that mapping removed: give the payload a fallback input that would classify differently. A shared test that needs an adapter lacking some capability uses an unregistered kind (`"unregistered"`), never a real built-in that may gain it.
+
 Declare both halves of the support contract in the descriptor. `coverage` states the mechanism: every integration concern as wired, partial (no native signal, reconstructed by derivation, with the gap named), or unsupported. `user_coverage` states the behavior: every user capability as full, partial (what lands, plus the limit), or unsupported, written in what the user sees and when.
 
 `conformance.rs` enforces completeness on both and grounds them one-directionally — a full capability rests on wired mechanism, an unsupported capability on unsupported mechanism — while cross-checking each concern claim against capabilities, installed events, the classification corpus, and the realtime-cost spend fixture. A wired concern still rolls up to partial when the user-visible result is incomplete or arrives late; that judgement is the adapter's.
