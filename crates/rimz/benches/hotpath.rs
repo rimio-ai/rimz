@@ -10,6 +10,10 @@ static ALLOC: divan::AllocProfiler = divan::AllocProfiler::system();
 
 const FLEET: usize = 40;
 const HISTORY_EVENTS: usize = 2_000;
+/// Rotated history rows in the fold benches: the main room's carryover shape
+/// (~1,500 rows of ~8 KB JSON each).
+const HISTORY_CARRYOVER: usize = 1_500;
+const CARRYOVER_PROMPT_BYTES: usize = 2_500;
 const SPENDING_FILES: usize = 4;
 const SPENDING_ENTRIES_PER_FILE: usize = 5_000;
 const SPENDING_NOW_SECS: u64 = 1_780_394_400;
@@ -255,16 +259,31 @@ fn consumer_adopt_fixture(warm_parse: bool) -> ConsumerAdoptFixture {
     }
 }
 
-fn fold_fixture() -> FoldFixture {
+/// A warm cursor over `FLEET` live agents and `history_carryover` rotated
+/// history rows (production-weight: each carries a `CARRYOVER_PROMPT_BYTES`
+/// prompt), with one appended lifecycle frame when `append` is set.
+fn fold_fixture(history_carryover: usize, append: bool) -> FoldFixture {
     let workspace = BenchWorkspace::new();
+    if history_carryover > 0 {
+        let store = rimz::Store::open(workspace.paths.clone(), workspace.runtime.clone())
+            .expect("open store");
+        rimz::testkit::fleet::seed_history_carryover(
+            &store,
+            history_carryover,
+            CARRYOVER_PROMPT_BYTES,
+        )
+        .expect("stage carryover");
+    }
     workspace.seed_fleet(FLEET, HISTORY_EVENTS);
     let mut cursor = rimz::sidebar::consumer::RollupCursor::new();
     cursor.fold(&workspace.paths).expect("cold fold");
-    rimz::store::event_log::append(
-        &workspace.paths.events_log,
-        &rimz::testkit::fleet::registered_lifecycle(&workspace.paths.workspace_id, 0),
-    )
-    .expect("append delta");
+    if append {
+        rimz::store::event_log::append(
+            &workspace.paths.events_log,
+            &rimz::testkit::fleet::registered_lifecycle(&workspace.paths.workspace_id, 0),
+        )
+        .expect("append delta");
+    }
     FoldFixture {
         paths: workspace.paths.clone(),
         cursor,
@@ -407,12 +426,24 @@ fn fuse_owned_no_overlay(bencher: Bencher) {
         });
 }
 
-#[divan::bench(sample_count = 20, sample_size = 1, skip_ext_time)]
-fn rollup_fold_warm(bencher: Bencher) {
+/// One appended frame folded onto a warm cursor, at an empty and at a
+/// production-sized (`HISTORY_CARRYOVER`) rotation carryover.
+#[divan::bench(args = [0, HISTORY_CARRYOVER], sample_count = 20, sample_size = 1, skip_ext_time)]
+fn rollup_fold_warm(bencher: Bencher, history_carryover: usize) {
     bencher
-        .with_inputs(fold_fixture)
+        .with_inputs(|| fold_fixture(history_carryover, true))
         .bench_local_values(|mut fixture| {
             divan::black_box(fixture.cursor.fold(&fixture.paths).expect("warm fold"));
+        });
+}
+
+/// A warm cursor re-served with nothing appended — the idle wakeup.
+#[divan::bench(args = [0, HISTORY_CARRYOVER], sample_count = 20, sample_size = 1, skip_ext_time)]
+fn rollup_fold_unchanged(bencher: Bencher, history_carryover: usize) {
+    bencher
+        .with_inputs(|| fold_fixture(history_carryover, false))
+        .bench_local_values(|mut fixture| {
+            divan::black_box(fixture.cursor.fold(&fixture.paths).expect("unchanged fold"));
         });
 }
 

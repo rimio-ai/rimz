@@ -231,6 +231,37 @@ pub mod fleet {
         Ok(())
     }
 
+    /// Stage `agents` retained history sessions into `agents.carryover.json`
+    /// through a real rotation, each row carrying a `prompt_bytes` prompt so a
+    /// row weighs what a production carryover row does (kilobytes, not bytes).
+    /// History ids (`history-{i}`) never collide with the live fleet's slots.
+    pub fn seed_history_carryover(
+        store: &crate::Store,
+        agents: usize,
+        prompt_bytes: usize,
+    ) -> crate::store::Result<()> {
+        let paths = store.paths();
+        let prompt = "p".repeat(prompt_bytes);
+        for i in 0..agents {
+            let mut observation = registered_observation(i);
+            observation.agent_id = Some(AgentSessionId::from(format!("history-{i}")));
+            observation.prompt = Some(prompt.clone());
+            observation.transcript_path = Some(format!("/history/transcripts/history-{i}.jsonl"));
+            event_log::append(
+                &paths.events_log,
+                &EventEnvelope::agent_lifecycle(
+                    paths.workspace_id.clone(),
+                    format!("history-{i}"),
+                    "claude",
+                    "UserPromptSubmit",
+                    &observation,
+                ),
+            )?;
+        }
+        store.rotate_event_log(1, None)?;
+        Ok(())
+    }
+
     /// Append lifecycle frames bound to synthetic panes with real worktree paths.
     pub fn seed_fleet_store_with_panes(
         paths: &StatePaths,
