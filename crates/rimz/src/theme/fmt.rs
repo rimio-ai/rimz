@@ -76,7 +76,7 @@ pub fn dollars2(usd: f64) -> String {
     format!("${}.{:02}", group_thousands(cents / 100), cents % 100)
 }
 
-pub fn dollars_cap(usd: f64) -> String {
+pub(crate) fn dollars_cap(usd: f64) -> String {
     let cents = (usd.max(0.0) * 100.0).round() as u64;
     if cents.is_multiple_of(100) {
         format!("${}", group_thousands(cents / 100))

@@ -128,7 +128,7 @@ impl Palette {
 
     /// A palette-role tone at the palette's depth — a provider brand pinned to a
     /// scheme role tracks the active palette.
-    pub fn role_tone(&self, role: PaletteRole) -> Tone {
+    pub(crate) fn role_tone(&self, role: PaletteRole) -> Tone {
         rgb_color(self.raw.role_rgb(role), self.depth)
     }
 
