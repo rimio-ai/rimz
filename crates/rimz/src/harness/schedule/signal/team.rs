@@ -237,13 +237,8 @@ mod tests {
         );
         for gate in [DeliveryGate::Done, DeliveryGate::Any, DeliveryGate::Resume] {
             for row in &rows {
-                let mut queued = MessageRecord::new(
-                    event.workspace_id.clone(),
-                    row,
-                    "work".to_owned(),
-                    true,
-                    gate,
-                );
+                let mut queued =
+                    MessageRecord::new(event.workspace_id.clone(), row, "work".to_owned(), gate);
                 queued.agent_id = AgentSessionId::from("launch_provisional");
                 queued.not_before = Some("2099-01-01T00:00:00Z".parse().unwrap());
                 assert!(derive(&event, &rows, &[queued]).is_empty());
@@ -267,7 +262,6 @@ mod tests {
             event.workspace_id.clone(),
             &docs,
             "work".to_owned(),
-            true,
             DeliveryGate::Resume,
         );
         let sleeping = BTreeSet::from([

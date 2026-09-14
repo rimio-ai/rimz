@@ -48,7 +48,6 @@ impl Queue {
             self.workspace_id.clone(),
             &agent(),
             "next".to_owned(),
-            true,
             DeliveryGate::Done,
         );
         record.message_id = message_id(id);

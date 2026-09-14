@@ -135,7 +135,6 @@ fn workspace_migrate_moves_store_and_rewrites_workspace_ids() {
         old_id.clone(),
         &agent,
         "pending message".to_owned(),
-        true,
         DeliveryGate::Done,
     );
     let pending_message_id = pending_message.message_id.clone();
@@ -146,7 +145,6 @@ fn workspace_migrate_moves_store_and_rewrites_workspace_ids() {
         old_id.clone(),
         &agent,
         "delivered message".to_owned(),
-        true,
         DeliveryGate::Done,
     );
     let delivered_message_id = delivered_message.message_id.clone();

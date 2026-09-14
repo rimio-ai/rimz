@@ -12,7 +12,6 @@ fn compact_event(
         workspace.clone(),
         &agent("claude", agent_id, AgentStatus::Idle, 0),
         "/compact".to_owned(),
-        true,
         DeliveryGate::Any,
     );
     message.message_id = message_id(id);
@@ -258,7 +257,6 @@ fn compact_marker_without_native_turn_starts_persists_but_does_not_latch() {
         workspace,
         &unhooked,
         "/compact".to_owned(),
-        true,
         DeliveryGate::Done,
     )
     .with_body(MessageBody::Command);

@@ -48,7 +48,6 @@ fn dynamic_completion_reads_live_handles_and_message_ids() {
         env.workspace_id.clone(),
         agent,
         "review the completion path".to_owned(),
-        true,
         DeliveryGate::Done,
     );
     let message_id = message.message_id.to_string();

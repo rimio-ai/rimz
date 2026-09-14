@@ -610,7 +610,6 @@ mod tests {
             workspace_id(),
             &agent,
             "/compact".to_owned(),
-            true,
             rimz::store::message::DeliveryGate::Done,
         )
         .with_body(rimz::store::message::MessageBody::Command);
@@ -618,7 +617,6 @@ mod tests {
             workspace_id(),
             &agent,
             "real prompt".to_owned(),
-            true,
             rimz::store::message::DeliveryGate::Done,
         );
         store

@@ -110,7 +110,6 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
         workspace.workspace_id.clone(),
         &agent,
         "first".to_owned(),
-        true,
         rimz::store::message::DeliveryGate::Done,
     )
     .with_in_reply_to(vec![parent.clone()]);
@@ -118,7 +117,6 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
         workspace.workspace_id.clone(),
         &agent,
         "second".to_owned(),
-        true,
         rimz::store::message::DeliveryGate::Done,
     );
     let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
@@ -268,7 +266,6 @@ fn harness_notices_retain_delivery_attribution_in_transcripts() {
             workspace.workspace_id.clone(),
             &agent,
             "child result".to_owned(),
-            true,
             rimz::store::message::DeliveryGate::Done,
         )
         .with_sender(sender);
@@ -304,7 +301,6 @@ fn mixed_submit_records_stray_text_as_direct_input() {
         workspace.workspace_id.clone(),
         &agent,
         "child result".to_owned(),
-        true,
         rimz::store::message::DeliveryGate::Done,
     )
     .with_sender(rimz::store::message::MessageSender::Subagent {
@@ -347,7 +343,6 @@ fn user_message_header_records_prompt_without_envelope() {
         workspace.workspace_id.clone(),
         &agent,
         "from a human".to_owned(),
-        true,
         rimz::store::message::DeliveryGate::Done,
     );
     let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
@@ -479,7 +474,6 @@ fn agent_message_does_not_answer_open_ask() {
         workspace.workspace_id.clone(),
         &agent,
         "new context".to_owned(),
-        true,
         rimz::store::message::DeliveryGate::Done,
     );
     let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
@@ -642,7 +636,6 @@ fn unheadered_system_batch_keeps_each_confirmed_message_causal() {
         workspace.workspace_id.clone(),
         &agent,
         "\nfirst\n".to_owned(),
-        true,
         rimz::store::message::DeliveryGate::Done,
     )
     .with_sender(rimz::store::message::MessageSender::System);
@@ -650,7 +643,6 @@ fn unheadered_system_batch_keeps_each_confirmed_message_causal() {
         workspace.workspace_id.clone(),
         &agent,
         "\nsecond\n".to_owned(),
-        true,
         rimz::store::message::DeliveryGate::Done,
     )
     .with_sender(rimz::store::message::MessageSender::System);

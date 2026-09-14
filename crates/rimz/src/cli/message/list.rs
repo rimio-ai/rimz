@@ -557,7 +557,6 @@ mod tests {
             workspace_id(),
             &snapshot.agents[0],
             "work".to_owned(),
-            true,
             DeliveryGate::Done,
         );
         let message = MessageListRow::from_record(message);
@@ -581,7 +580,6 @@ mod tests {
                 workspace_id(),
                 &receiver,
                 "read plan".to_owned(),
-                true,
                 DeliveryGate::Done,
             )
             .with_after(vec![condition.clone()]),
@@ -591,7 +589,6 @@ mod tests {
                 workspace_id(),
                 &receiver,
                 "read plan".to_owned(),
-                true,
                 DeliveryGate::Done,
             )
             .with_after(vec![AfterCondition {
@@ -610,7 +607,6 @@ mod tests {
             workspace_id(),
             &agent("sess-coder", AgentStatus::Idle),
             "work".to_owned(),
-            true,
             DeliveryGate::Done,
         )
         .with_channel(Some("project".to_owned()))
@@ -626,7 +622,6 @@ mod tests {
             workspace_id(),
             &agent("sess-coder", AgentStatus::Idle),
             "work".to_owned(),
-            true,
             DeliveryGate::Done,
         )
         .with_channel(Some("project".to_owned()));
@@ -643,7 +638,6 @@ mod tests {
             workspace_id(),
             &receiver,
             "work".to_owned(),
-            true,
             DeliveryGate::Done,
         );
         let message = MessageListRow::from_record(message);
@@ -846,7 +840,6 @@ mod tests {
             workspace_id(),
             &agent(id, AgentStatus::Idle),
             text.to_owned(),
-            true,
             DeliveryGate::Done,
         )
         .with_channel(channel.map(ToOwned::to_owned))

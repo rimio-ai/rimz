@@ -246,7 +246,6 @@ fn message_record_round_trips_current_schema_and_reads_legacy_defaults() {
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
         &receiver,
         "next".to_owned(),
-        false,
         DeliveryGate::Any,
     )
     .with_address(Some("@coder#docs".to_owned()))
@@ -267,6 +266,7 @@ fn message_record_round_trips_current_schema_and_reads_legacy_defaults() {
     .with_not_before(Some(now + jiff::SignedDuration::from_secs(60)))
     .with_after(vec![after_condition(&upstream, Some(now))])
     .with_auto_compact(Some(AutoCompact::Percent(70)));
+    record.enter = false;
     record.status = MessageStatus::Delivered;
     record.enqueued_at = now - jiff::SignedDuration::from_secs(120);
     record.updated_at = now;
@@ -347,7 +347,6 @@ fn requeue_preserves_intent_and_rearms_dependencies() {
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
         &receiver,
         "next".to_owned(),
-        false,
         DeliveryGate::Any,
     )
     .with_address(Some("@coder#docs".to_owned()))
@@ -368,6 +367,7 @@ fn requeue_preserves_intent_and_rearms_dependencies() {
         Some(now),
     )])
     .with_auto_compact(Some(AutoCompact::Tokens(120_000)));
+    original.enter = false;
     original.status = MessageStatus::Errored;
     original.enqueued_at = now - jiff::SignedDuration::from_secs(120);
     original.updated_at = now;
@@ -433,7 +433,6 @@ fn wait_deadline_arms_queue_retry_schedule_and_sent_reconciliation() {
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
         &agent("s1", None),
         "next".to_owned(),
-        true,
         DeliveryGate::Done,
     );
     let now = Timestamp::from_second(1_000).unwrap();
@@ -507,7 +506,6 @@ fn delivery_policy_is_per_body_and_sent_time_survives_legacy_records() {
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
         &agent("legacy", None),
         "next".to_owned(),
-        true,
         DeliveryGate::Done,
     );
     sent.status = MessageStatus::Sent;
@@ -637,14 +635,12 @@ fn queue_head_selects_oldest_deliverable_record_per_lane() {
             ws.clone(),
             &provisional,
             "first".to_owned(),
-            true,
             DeliveryGate::Done,
         );
         let mut newer = MessageRecord::new(
             ws.clone(),
             &registered,
             "second".to_owned(),
-            true,
             DeliveryGate::Done,
         );
         older.message_id = message_id(1);
@@ -684,17 +680,11 @@ fn queue_head_selects_oldest_deliverable_record_per_lane() {
             ws.clone(),
             &receiver,
             "later".to_owned(),
-            true,
             DeliveryGate::Done,
         )
         .with_not_before(Some(now + jiff::SignedDuration::from_secs(60)));
-        let mut ready = MessageRecord::new(
-            ws.clone(),
-            &receiver,
-            "now".to_owned(),
-            true,
-            DeliveryGate::Done,
-        );
+        let mut ready =
+            MessageRecord::new(ws.clone(), &receiver, "now".to_owned(), DeliveryGate::Done);
         future.message_id = message_id(1);
         ready.message_id = message_id(2);
         let pending = [future, ready.clone()];
@@ -720,7 +710,6 @@ fn queue_head_selects_oldest_deliverable_record_per_lane() {
             ws.clone(),
             &receiver,
             "after planner".to_owned(),
-            true,
             DeliveryGate::Done,
         )
         .with_after(vec![after_condition(&upstream, None)]);
@@ -728,7 +717,6 @@ fn queue_head_selects_oldest_deliverable_record_per_lane() {
             ws.clone(),
             &receiver,
             "plain".to_owned(),
-            true,
             DeliveryGate::Done,
         );
         waiting.message_id = message_id(1);
@@ -752,17 +740,11 @@ fn queue_head_selects_oldest_deliverable_record_per_lane() {
 
     {
         let receiver = agent("real-session", Some("lucid-atlas"));
-        let mut deferred = MessageRecord::new(
-            ws.clone(),
-            &receiver,
-            "old".to_owned(),
-            true,
-            DeliveryGate::Done,
-        );
+        let mut deferred =
+            MessageRecord::new(ws.clone(), &receiver, "old".to_owned(), DeliveryGate::Done);
         deferred.message_id = message_id(1);
         deferred.retry_after = Some(now + jiff::SignedDuration::from_secs(60));
-        let mut newer =
-            MessageRecord::new(ws, &receiver, "new".to_owned(), true, DeliveryGate::Done);
+        let mut newer = MessageRecord::new(ws, &receiver, "new".to_owned(), DeliveryGate::Done);
         newer.message_id = message_id(2);
         let pending = [deferred.clone(), newer];
 
@@ -1016,7 +998,6 @@ fn delivery_message(
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
         agent,
         format!("message {id}"),
-        true,
         gate,
     )
     .with_channel(channel.map(ToOwned::to_owned));
@@ -1084,7 +1065,6 @@ fn align_submitted_prompt_consumes_human_header() {
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
         &recipient,
         "ship it".to_owned(),
-        true,
         crate::store::message::DeliveryGate::Done,
     );
     let prompt = "Type: USER_MESSAGE\nFrom: @user\nContent:\nship it";
@@ -1108,7 +1088,6 @@ fn align_submitted_prompt_consumes_harness_report_header() {
             WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
             &recipient,
             "ship it".to_owned(),
-            true,
             crate::store::message::DeliveryGate::Done,
         )
         .with_sender(MessageSender::Harness { notice });
@@ -1141,14 +1120,12 @@ fn align_submitted_prompt_separates_stray_composer_text() {
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
         &recipient,
         "first".to_owned(),
-        true,
         crate::store::message::DeliveryGate::Done,
     );
     let second = MessageRecord::new(
         first.workspace_id.clone(),
         &recipient,
         "second".to_owned(),
-        true,
         crate::store::message::DeliveryGate::Done,
     );
     let first_prompt = "Type: USER_MESSAGE\nFrom: @user\nContent:\nfirst";
@@ -1176,7 +1153,6 @@ fn align_submitted_prompt_rejects_a_truncated_record() {
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
         &recipient,
         "ship it".to_owned(),
-        true,
         crate::store::message::DeliveryGate::Done,
     );
 
@@ -1196,7 +1172,6 @@ fn align_submitted_prompt_requires_exact_system_text() {
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
         &recipient,
         "continue".to_owned(),
-        true,
         crate::store::message::DeliveryGate::Done,
     )
     .with_sender(MessageSender::System);

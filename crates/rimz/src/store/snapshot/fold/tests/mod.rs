@@ -57,7 +57,6 @@ fn message_event(workspace: &WorkspaceId, fixture: MessageEventFixture<'_>) -> E
         workspace.clone(),
         &agent("claude", fixture.agent_id, AgentStatus::Idle, 0),
         "continue".to_owned(),
-        true,
         fixture.gate,
     );
     message.message_id = message_id(fixture.id);

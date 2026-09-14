@@ -1749,7 +1749,6 @@ fn duplicate_cursor_session_end_is_idempotent_beyond_audit_end_stamps() {
         env.workspace_id.clone(),
         agent,
         "queued work".to_owned(),
-        true,
         rimz::store::message::DeliveryGate::Done,
     );
     let message_id = message.message_id.clone();

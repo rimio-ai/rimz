@@ -167,7 +167,6 @@ fn message_list_hides_system_traffic_unless_asked() {
             env.workspace_id.clone(),
             agent,
             "system traffic".to_owned(),
-            true,
             DeliveryGate::Done,
         )
         .with_channel(Some("docs".to_owned()))
@@ -257,7 +256,6 @@ fn terminal_history_list_and_show_preserve_content_and_channel_fallback() {
         env.workspace_id.clone(),
         agent,
         "pre-history body".to_owned(),
-        true,
         DeliveryGate::Done,
     )
     .with_channel(Some("docs".to_owned()));
@@ -474,7 +472,6 @@ fn message_when_latches_met_dwell_and_schedules_future_trip() {
         env.workspace_id.clone(),
         agent,
         "due".to_owned(),
-        true,
         DeliveryGate::Done,
     )
     .with_when(vec![condition(60)]);
@@ -482,7 +479,6 @@ fn message_when_latches_met_dwell_and_schedules_future_trip() {
         env.workspace_id.clone(),
         agent,
         "future".to_owned(),
-        true,
         DeliveryGate::Done,
     )
     .with_when(vec![condition(3_600)]);
@@ -603,7 +599,6 @@ fn scheduled_message_parks_and_sweep_delivers_due_work() {
         env.workspace_id.clone(),
         agent,
         "due now".to_owned(),
-        true,
         DeliveryGate::Done,
     )
     .with_not_before(Some(due_at));
@@ -739,7 +734,6 @@ fn resume_gate_waits_for_recovery_then_delivers() {
         env.workspace_id.clone(),
         agent,
         "continue".to_owned(),
-        true,
         DeliveryGate::Resume,
     )
     .with_pane_id(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
@@ -1123,7 +1117,6 @@ fn agent_wait_refuses_existing_reply_wait_cycle_before_enqueue() {
         snapshot.workspace_id.clone(),
         coder,
         "answer the review".to_owned(),
-        true,
         DeliveryGate::Done,
     )
     .with_address(Some("@coder".to_owned()))
@@ -2653,7 +2646,6 @@ fn subagent_report_fixture(joined: &[bool]) -> (Env, MessageRecord, PathBuf) {
         env.workspace_id.clone(),
         parent,
         "@first completed: first result\n@second completed: second result".to_owned(),
-        true,
         DeliveryGate::Done,
     )
     .with_channel(parent.channel())
@@ -3522,7 +3514,6 @@ fn queued_delivery_batches_compatible_prompts() {
             env.workspace_id.clone(),
             agent,
             text.to_owned(),
-            true,
             DeliveryGate::Done,
         )
         .with_channel(Some("feature-batch".to_owned()))
@@ -3874,7 +3865,6 @@ fn command_delivery_parks_without_spending_an_attempt_when_compaction_starts_aft
         env.workspace_id.clone(),
         &agent,
         "/compact".to_owned(),
-        true,
         DeliveryGate::Done,
     )
     .with_body(MessageBody::Command);
@@ -3979,7 +3969,6 @@ fn boundary_dispatch_parks_behind_a_claimed_record() {
         env.workspace_id.clone(),
         agent,
         "/compact".to_owned(),
-        true,
         DeliveryGate::Done,
     );
     command.body = MessageBody::Command;
@@ -5739,7 +5728,6 @@ fn seed_channel_message(
         env.workspace_id.clone(),
         agent,
         text.to_owned(),
-        true,
         DeliveryGate::Done,
     )
     .with_channel(channel.map(str::to_owned));
@@ -5779,7 +5767,6 @@ fn queue_direct_channel_message(env: &Env, channel: &str, text: &str) -> String 
         env.workspace_id.clone(),
         agent,
         text.to_owned(),
-        true,
         DeliveryGate::Done,
     )
     .with_channel(Some(channel.to_owned()));
@@ -5801,7 +5788,6 @@ fn deliver_direct_channel_message(env: &Env, channel: &str, text: &str) -> Strin
         env.workspace_id.clone(),
         agent,
         text.to_owned(),
-        true,
         DeliveryGate::Done,
     )
     .with_channel(Some(channel.to_owned()));

@@ -146,7 +146,6 @@ fn user_input_requires_plain_human_delivery() {
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
         &agent("human", None),
         "prompt".to_owned(),
-        true,
         DeliveryGate::Done,
     );
     assert!(human.is_user_input());
@@ -289,7 +288,6 @@ fn when_condition_reports_mismatch_gone_and_preserves_latch() {
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
         &receiver,
         "next".to_owned(),
-        true,
         DeliveryGate::Done,
     )
     .with_after(vec![after_condition(&watched, Some(now))])
@@ -413,7 +411,6 @@ fn after_condition_requires_an_open_gate_and_quiescent_ready_queue() {
         WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
         &upstream,
         "work".to_owned(),
-        true,
         DeliveryGate::Done,
     );
     assert!(

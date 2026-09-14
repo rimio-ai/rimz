@@ -605,7 +605,6 @@ fn queue_channel_message(env: &Env, channel: &str, text: &str) -> rimz::MessageI
         env.workspace_id.clone(),
         agent,
         text.to_owned(),
-        true,
         DeliveryGate::Done,
     )
     .with_channel(Some(channel.to_owned()));
