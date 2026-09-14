@@ -68,7 +68,7 @@ use super::{
     read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
     stop_payload_errored,
 };
-use crate::agents::{TurnErrorClass, TurnSettle, TurnSettleOutcome};
+use crate::agents::{TurnSettle, TurnSettleOutcome};
 use crate::transcript::AskQuestion;
 
 /// Everything `const` about Claude Code, in one place. See
@@ -603,13 +603,8 @@ impl crate::agents::capabilities::HookCapability for ClaudeAdapter {
                     .last_assistant_message
                     .as_deref()
                     .and_then(statusline::cap_turn_error_label);
-                let class = match error {
-                    "rate_limit" => TurnErrorClass::PausedRateLimit,
-                    "overloaded" => TurnErrorClass::PausedOverloaded,
-                    _ => TurnErrorClass::classify_label(label.as_deref()),
-                };
                 Some(AgentTurnError {
-                    class,
+                    class: statusline::classify_api_error(Some(error), None, label.as_deref()),
                     at: Timestamp::now(),
                     label,
                 })
