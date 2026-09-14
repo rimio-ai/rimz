@@ -536,6 +536,7 @@ impl crate::agents::capabilities::HookCapability for QwenAdapter {
             let class = match failure.error {
                 QwenStopError::RateLimit => TurnErrorClass::PausedRateLimit,
                 QwenStopError::ServerError => TurnErrorClass::PausedOverloaded,
+                QwenStopError::LoopDetected => TurnErrorClass::Failed,
                 _ => TurnErrorClass::classify_label(label.as_deref()),
             };
             decoded.set_turn_error(Some(AgentTurnError {

@@ -1049,4 +1049,12 @@ fn stop_failure_maps_retryable_classes() {
             .class,
         TurnErrorClass::PausedOverloaded
     );
+    assert_eq!(
+        hook_output(&adapter, "StopFailure", &json!({"error":"loop_detected"}))
+            .turn_error()
+            .cloned()
+            .unwrap()
+            .class,
+        TurnErrorClass::Failed
+    );
 }
