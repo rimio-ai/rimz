@@ -76,7 +76,7 @@ fn default_root_class() -> RootClass {
 }
 
 impl WorkspaceRecord {
-    pub fn from_resolved(workspace: &ResolvedWorkspace) -> Self {
+    pub(crate) fn from_resolved(workspace: &ResolvedWorkspace) -> Self {
         Self {
             workspace_id: workspace.workspace_id.clone(),
             project_root: workspace.project_root.clone(),
@@ -98,7 +98,7 @@ pub fn write(paths: &StatePaths, record: &WorkspaceRecord) -> Result<()> {
 }
 
 #[must_use = "durability barrier; check the result"]
-pub fn write_path(path: &Path, record: &WorkspaceRecord) -> Result<()> {
+pub(super) fn write_path(path: &Path, record: &WorkspaceRecord) -> Result<()> {
     write_temp_then_rename(path, record)?;
     Ok(())
 }
