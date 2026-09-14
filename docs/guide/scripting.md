@@ -206,7 +206,7 @@ if [ "$winner" = "$a" ]; then rimz agents stop "$b"; else rimz agents stop "$a";
 The commands you type interactively are the same primitives a script calls, so anything you do at the keyboard runs on a schedule or in CI unchanged.
 
 - `rimz pane capture <ref>` reads a pane's visible text — untrusted terminal output your script matches against bounded patterns before acting on it.
-- `rimz pane send <ref>` types literal text and named keys into the agent's own UI, the same explicit input path as `rimz message --steer`.
+- `rimz pane send <ref>` types literal text and named keys into the agent's own UI, raw with no paste markers, and waits for any in-flight `rimz message` write to the same pane ([send text and keys](../reference/cli/pane.md#send-text-and-keys)).
 - `rimz message --steer @<agent> "continue"` is the first-class nudge for wrapper scripts; `rimz message @<agent> --on done "open a PR summary"` hands follow-up work to a running agent at its next turn boundary. The full delivery model is [Messaging](./messaging.md).
 - `rimz transcript <ref>` reads back what happened as a timestamped log.
 

@@ -234,7 +234,7 @@ Totals across a fleet of 2 to 5 rooms:
 
 Against the agents it tracks, that overhead is a rounding error. One developer's week of Claude and Codex sessions produced 1.23 GiB of transcript JSONL (about 177 MiB a day), with each agent process resident at 250 to 340 MiB (Claude) or 50 to 65 MiB (Codex). RimZ watched the same fleet with tens of MiB of durable state, a resident set about the size of one agent process, one fsync a second per room, and one pricing refresh a week.
 
-Remote render-stream bytes sit outside this budget: SSH carries whatever the visible full-screen TUIs repaint. Idle RimZ surfaces send close to nothing, and a busy agent TUI commonly sends tens of KB/s. `rimz pane bandwidth` attributes that rate per pane.
+Remote render-stream bytes sit outside this budget: SSH carries whatever the visible full-screen TUIs repaint. Idle RimZ surfaces send close to nothing, and a busy agent TUI commonly sends tens of KB/s. `rimz pane bandwidth` reports each pane's producer write rate beside the room's SSH socket payload (`WIRE(ssh)`), which is usually far below the per-pane sum ([reference](../reference/cli/pane.md#bandwidth)).
 
 ## What's optimized
 
