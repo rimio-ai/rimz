@@ -13,9 +13,9 @@ use super::protocol::{CanonicalEvent, Envelope};
 use crate::agents::capabilities::{
     ContextCapability as _, CoreCapability as _, HookCapability as _,
 };
+use crate::agents::lifecycle::PriorTurnIds;
 use crate::agents::{
-    AgentStatus, ConcernCoverage, HookCoverage, LifecycleSignal, LifecycleState, PriorTurnIds,
-    TurnPhase, step,
+    AgentStatus, ConcernCoverage, HookCoverage, LifecycleSignal, LifecycleState, TurnPhase, step,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

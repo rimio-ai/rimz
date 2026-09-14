@@ -1077,7 +1077,10 @@ fn lifecycle_projection(
         _ if next.status == AgentStatus::Waiting => prior.and_then(|p| p.open_ask.clone()),
         _ => None,
     };
-    let started_turn_id = signal.started_turn_id(prior.and_then(|p| p.started_turn_id.as_deref()));
+    let started_turn_id = match &signal {
+        lifecycle::LifecycleSignal::TurnStarted { turn_id } => turn_id.clone(),
+        _ => prior.and_then(|p| p.started_turn_id.clone()),
+    };
     let interrupted_turn_id = match &signal {
         lifecycle::LifecycleSignal::TurnInterrupted { turn_id } => turn_id.clone(),
         lifecycle::LifecycleSignal::Registered => None,

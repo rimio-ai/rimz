@@ -214,9 +214,10 @@ impl EventFollower {
                 _ if transition.next.status != crate::agents::AgentStatus::Waiting => None,
                 _ => prior.and_then(|state| state.open_ask_key.clone()),
             };
-            let started_turn_id = observation
-                .signal
-                .started_turn_id(prior.and_then(|state| state.started_turn_id.as_deref()));
+            let started_turn_id = match &observation.signal {
+                LifecycleSignal::TurnStarted { turn_id } => turn_id.clone(),
+                _ => prior.and_then(|state| state.started_turn_id.clone()),
+            };
             let interrupted_turn_id = match &observation.signal {
                 LifecycleSignal::TurnInterrupted { turn_id } => turn_id.clone(),
                 LifecycleSignal::Registered => None,

@@ -255,16 +255,6 @@ impl LifecycleSignal {
         matches!(self, Self::Registered | Self::SubagentStarted)
     }
 
-    /// The started-turn id a record carries after this signal: a turn start
-    /// replaces it (an id-less start clears it, restoring the uncorrelated
-    /// fallback), and every other signal keeps the prior id.
-    pub fn started_turn_id(&self, prior: Option<&str>) -> Option<String> {
-        match self {
-            Self::TurnStarted { turn_id } => turn_id.clone(),
-            _ => prior.map(ToOwned::to_owned),
-        }
-    }
-
     /// Stable serde tag for runtime wakeups and diagnostics.
     pub const fn tag(&self) -> &'static str {
         match self {
@@ -381,7 +371,7 @@ pub struct Transition {
 /// id-bearing signals against. Both are absent for providers without turn ids.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PriorTurnIds<'a> {
-    /// The most recent turn start's id ([`LifecycleSignal::started_turn_id`]).
+    /// The most recent turn start's id; an id-less start clears it.
     pub started: Option<&'a str>,
     /// The most recently interrupted turn's id.
     pub interrupted: Option<&'a str>,

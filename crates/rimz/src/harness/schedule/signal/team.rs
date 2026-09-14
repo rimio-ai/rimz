@@ -157,7 +157,7 @@ mod tests {
         let transition = crate::agents::step(
             Some(&state),
             None,
-            crate::agents::PriorTurnIds::default(),
+            crate::agents::lifecycle::PriorTurnIds::default(),
             &signal,
         );
         LifecycleEvent::new(
