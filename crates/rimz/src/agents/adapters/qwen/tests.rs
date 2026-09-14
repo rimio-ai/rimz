@@ -69,6 +69,10 @@ fn launch_and_permission_argv_match_qwen_cli() {
         Some(vec!["qwen".to_owned()])
     );
     assert_eq!(
+        adapter.spec().launch.permission_args(PermissionMode::Ask),
+        ["--approval-mode", "default"]
+    );
+    assert_eq!(
         adapter.spec().launch.permission_args(PermissionMode::Auto),
         ["--approval-mode", "auto-edit"]
     );

@@ -108,7 +108,7 @@ static QWEN_DESCRIPTOR: AgentSpec = AgentSpec {
             after_id: &["--fork-session"],
         }),
         permission: super::LaunchPermissionArgs {
-            ask: &[],
+            ask: &["--approval-mode", "default"],
             auto: &["--approval-mode", "auto-edit"],
             yolo: &["--approval-mode", "yolo"],
             plan: &["--approval-mode", "plan"],
