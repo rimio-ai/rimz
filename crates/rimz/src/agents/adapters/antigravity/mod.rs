@@ -1,4 +1,4 @@
-//! Antigravity CLI 1.1.2 launch, hook, statusline, local-session, and transcript adapter.
+//! Antigravity CLI 1.2.2 launch, hook, statusline, local-session, and transcript adapter.
 //!
 //! RimZ installs only hooks with documented observer-neutral output. The
 //! policy-changing `PreToolUse` decision channel stays untouched; disjoint
@@ -105,7 +105,7 @@ const ANTIGRAVITY_HOOKS: [AntigravityHook; 6] = [
         .progress(),
         config_event: "PostToolUse",
         config_matcher: Some(
-            "^(view_file|list_dir|find_by_name|grep_search|search_web|read_url_content|manage_task|schedule|list_permissions|ask_permission|invoke_subagent|define_subagent|send_message|manage_subagents|ask_question|generate_image)$",
+            "^(view_file|list_dir|find_by_name|grep_search|search_web|read_url_content|manage_task|schedule|list_permissions|ask_permission|invoke_subagent|define_subagent|send_message|manage_subagents|ask_question|generate_image|manage_inbox|read_resource|browser_.*)$",
         ),
         command: "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostToolUse:observed",
     },
@@ -211,6 +211,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
         compact_command: None,
         presets: super::PresetMatchers {
             model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
+            effort: Some(super::StaticPresetMatcher::Flag(&["--effort"])),
             ..super::PresetMatchers::EMPTY
         },
     },
@@ -271,11 +272,12 @@ const ANTIGRAVITY_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     account_spend: ConcernCoverage::Unsupported {
         reason: "quota is work-metered and no cumulative billing ledger is published",
     },
-    tool_stats: ConcernCoverage::Unsupported {
-        reason: "tool statistics are not integrated for this adapter",
+    tool_stats: ConcernCoverage::Partial {
+        via: "PostToolUse toolCall names on matched tools",
+        gap: "releases before 1.2 omit toolCall, and transcript history is not counted",
     },
     remote_control: ConcernCoverage::Unsupported {
-        reason: "no CLI remote-control host is documented",
+        reason: "agy remote-control serves a browser daemon, not a pane session RimZ can drive",
     },
 };
 
@@ -598,12 +600,13 @@ fn decode_lifecycle_fields(
                 "PostToolUse:mutating" if !failed => (true, false),
                 _ => (false, false),
             };
+            let name = tool.tool_name();
             (
                 tool.common,
                 Some(LifecycleSignal::ToolUsed {
                     mutates,
                     edits,
-                    name: None,
+                    name,
                     native_key: None,
                     turn_id: None,
                 }),
