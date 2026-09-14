@@ -30,7 +30,7 @@ These pages answer a specific question about the shipped product: what a command
 | [worktree.md](./cli/worktree.md) | `rimz worktree`: creating, entering, landing, removing, and sweeping RimZ-owned Git worktrees. |
 | [loop.md](./cli/loop.md) | `rimz loop`: clock, signal, and watch tasks, waits and checks, and run forensics. |
 | [hooks-trust.md](./cli/hooks-trust.md) | `rimz hooks` and `rimz trust`: installing and removing agent hooks, and granting or revoking project trust. |
-| [config.md](./cli/config.md) | `rimz config`, `list-themes`, and `list-pets`: reading and editing the machine config set by dotted key. |
+| [config.md](./cli/config.md) | `rimz config`, `list-themes`, and `list-pets`: the config files and key routing, `init`, `get`, `set` value parsing and refusals, and the theme and pet pickers. |
 | [maintenance.md](./cli/maintenance.md) | `coverage`, `workspace`, `update`, `reload`, `reset`, `gc`, `uninstall`, and `ping`: inspecting, repairing, and sweeping a room. |
 
 ## Agents
