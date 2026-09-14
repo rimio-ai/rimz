@@ -195,7 +195,7 @@ Grok Plan adds no arguments because Grok's `/plan` is an interactive command wit
 | Copilot | `--model <model>` | `--effort <level>` |
 | Droid | refused | refused |
 | Cursor | `--model <model>` | refused |
-| Amp | `--mode <model>` | `--effort <level>` |
+| Amp | `--mode <model>` | refused |
 | Kiro | `--model <model>` | `--effort <level>` |
 | Qwen | `--model <model>` | refused |
 | Kimi | `--model <model>` | refused |
