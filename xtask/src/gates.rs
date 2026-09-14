@@ -94,7 +94,15 @@ pub(crate) fn fmt(root: &Path) -> Result<()> {
 
 pub(crate) fn lint(root: &Path) -> Result<()> {
     for args in LINT_ARG_SETS {
-        run(root, "cargo", args.iter().copied())?;
+        let captured = capture_cargo_task(root, "lint", args.iter().copied(), &[], &[])?;
+        if !captured.status.success() {
+            report_task_failure(
+                "lint",
+                &failure_detail(&captured.output),
+                "cargo xtask lint",
+            );
+            bail!("lint failed");
+        }
     }
     Ok(())
 }
@@ -591,7 +599,26 @@ fn report_task_failure(name: &str, detail: &str, invocation: &str) {
 fn report_failure(prefix: &str, name: &str, detail: &str, invocation: &str) {
     eprintln!("{prefix}: fail at {name}");
     eprintln!("{detail}");
-    eprintln!("NEXT: fix the {name} errors above, then rerun `{invocation}`");
+    if compiler_died_without_diagnostic(detail) {
+        eprintln!(
+            "NEXT: rustc was killed (likely host out of memory); retry when other builds finish or set CARGO_BUILD_JOBS=2, then rerun `{invocation}`"
+        );
+    } else {
+        eprintln!("NEXT: fix the {name} errors above, then rerun `{invocation}`");
+    }
+}
+
+/// Cargo appends `due to N previous errors` to its `could not compile` line
+/// whenever rustc emitted an error-level diagnostic. The bare line means the
+/// compiler exited without one: killed by a signal (reported by cargo as
+/// `signal: 9`, by sccache as text or as a silent exit 2), which on a busy host
+/// is the out-of-memory killer. Any real diagnostic keeps the fix-it hint.
+fn compiler_died_without_diagnostic(output: &str) -> bool {
+    let mut compile_failures = output
+        .lines()
+        .filter(|line| line.trim_start().starts_with("error: could not compile `"))
+        .peekable();
+    compile_failures.peek().is_some() && compile_failures.all(|line| !line.contains(" due to "))
 }
 
 #[expect(
@@ -1199,6 +1226,47 @@ error[E0599]: no method named `run`
 warning: unused variable
   --> src/x.rs:3:1"
         );
+    }
+
+    // Captured from cargo 1.9x with rustc SIGKILLed directly, under sccache's
+    // text report, under sccache's silent exit 2, and a real type error.
+    #[test]
+    fn a_compile_without_diagnostics_reads_as_a_killed_compiler() {
+        let killed = "\
+error: could not compile `toy` (lib test)
+
+Caused by:
+  process didn't exit successfully: `rustc --crate-name toy` (signal: 9, SIGKILL: kill)
+warning: build failed, waiting for other jobs to finish...
+error: command `cargo test --no-run --message-format json-render-diagnostics` exited with code 101";
+        let sccache_text = "\
+sccache: Compile terminated by signal 9
+error: could not compile `toy` (lib)
+
+Caused by:
+  process didn't exit successfully: `sccache clippy-driver --crate-name toy` (exit status: 2)";
+        let sccache_bare = "\
+error: could not compile `rimz` (lib test)
+
+Caused by:
+  process didn't exit successfully: `sccache rustc --crate-name rimz` (exit status: 2)";
+        let real = "\
+error[E0308]: mismatched types
+ --> src/lib.rs:1:20
+error: could not compile `toy` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `toy` (lib) due to 1 previous error; 2 warnings emitted";
+
+        for output in [killed, sccache_text, sccache_bare] {
+            assert!(compiler_died_without_diagnostic(output), "{output}");
+        }
+        assert!(!compiler_died_without_diagnostic(real));
+        assert!(!compiler_died_without_diagnostic(&format!(
+            "{real}\n{sccache_bare}"
+        )));
+        assert!(!compiler_died_without_diagnostic(
+            "Summary [   1.0s] 3 tests run: 2 passed, 1 failed"
+        ));
     }
 
     #[test]
