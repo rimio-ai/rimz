@@ -2,7 +2,7 @@
 
 `rimz accounts` declares, lists, and removes the named provider accounts a room can launch into. A named account is a separate provider home: RimZ launches Claude with `CLAUDE_CONFIG_DIR`, and Codex with `CODEX_HOME`, set to that home, so credentials, settings, and transcripts stay apart. The `default` account is the provider's own home, resolved the way the provider CLI resolves it, and is never declared.
 
-The commands work inside or outside a room. `add` and `remove` write the machine `config.toml`, and `add` also writes into the account home; no command touches a running room. A room picks its accounts when it is born, with `rimz start --account` ([Accounts at start](./getting-started.md#accounts)), and changes them only through `rimz reset --account` ([maintenance](./maintenance.md)). The workflow is in the [accounts guide](../../guide/accounts.md).
+The commands work inside or outside a room. `add` and `remove` write the machine `config.toml`, and `add` also writes into the account home; no command touches a running room. A room picks its accounts when it is born, with `rimz start --account` ([Accounts at start](./getting-started.md#accounts)), and changes them only through `rimz reset --account` ([Reset a wedged room](./maintenance.md#reset-a-wedged-room)). The workflow is in the [accounts guide](../../guide/accounts.md).
 
 ```sh
 rimz accounts add claude work                        # declare, create the home, install hooks

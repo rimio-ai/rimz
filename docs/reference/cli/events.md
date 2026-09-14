@@ -16,7 +16,7 @@ rimz events follow
 rimz events follow --replay | jq 'select(.event == "signal")'
 ```
 
-`follow` starts at the live edge and prints only what is appended after it starts. `--replay` first prints the current log generation from its beginning, then keeps following. The log rotates into an archive once it reaches 64 MiB, or when you run [`rimz workspace rotate-events`](./maintenance.md#workspace-store-tools), and archived generations are never replayed. A follower that is already running when the log rotates reads the rest of the old generation before it moves to the new one, so it misses nothing.
+`follow` starts at the live edge and prints only what is appended after it starts. `--replay` first prints the current log generation from its beginning, then keeps following. The log rotates into an archive once it reaches 64 MiB, or when you run [`rimz workspace rotate-events`](./maintenance.md#rotate-the-event-log), and archived generations are never replayed. A follower that is already running when the log rotates reads the rest of the old generation before it moves to the new one, so it misses nothing.
 
 | Flag | Effect |
 | --- | --- |

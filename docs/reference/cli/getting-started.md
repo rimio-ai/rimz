@@ -28,7 +28,7 @@ rimz start [PATH] [launch options] [--account <KIND=NAME>]...
 rimz attach [SESSION] [launch options]
 ```
 
-Bare `rimz` is `rimz start .`. `rimz start [PATH]` resolves the room for `PATH` (default `.`), creates its session if none is running, launches the sidebar, and attaches. A running session is reattached as it is, on the backend it runs under; start never replaces or restarts it, and a `--mux` naming the other backend fails and prints both fixes (attach to the running room, or reset it). [`rimz reset`](./maintenance.md#update-reload-reset-gc-and-uninstall) is the command that rebuilds a room.
+Bare `rimz` is `rimz start .`. `rimz start [PATH]` resolves the room for `PATH` (default `.`), creates its session if none is running, launches the sidebar, and attaches. A running session is reattached as it is, on the backend it runs under; start never replaces or restarts it, and a `--mux` naming the other backend fails and prints both fixes (attach to the running room, or reset it). [`rimz reset`](./maintenance.md#reset-a-wedged-room) is the command that rebuilds a room.
 
 | Launch option | Effect |
 | --- | --- |
@@ -227,4 +227,4 @@ Each row carries a glyph: `✓` healthy, `!` degraded but working, `✗` broken,
 
 `--clear` stamps the workspace, so records written before that moment stay out of this and every later report. The diagnostic files, server logs, and event log stay on disk. It fails when the current directory does not resolve to a workspace.
 
-How to read each section and fix what it flags is the [troubleshooting guide](../../guide/troubleshooting.md#start-with-rimz-doctor). Static adapter coverage is a separate command, [`rimz coverage`](./maintenance.md#adapter-coverage).
+How to read each section and fix what it flags is the [troubleshooting guide](../../guide/troubleshooting.md#start-with-rimz-doctor). Static adapter coverage is a separate command, [`rimz coverage`](./maintenance.md#check-adapter-coverage).
