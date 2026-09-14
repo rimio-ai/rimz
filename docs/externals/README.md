@@ -23,7 +23,7 @@ Each page names its upstream sources and the version or commit it was last refre
 | [droid-reference.md](./agent-adapter/droid-reference.md) | Factory Droid CLI | 0.218.2 (JSON-RPC: `@factory/droid-sdk` 0.9.1) | [adapter_droid.md](../internals/agents/adapter_droid.md) |
 | [grok-reference.md](./agent-adapter/grok-reference.md) | Grok Build | 0.1.220-alpha.4 | [adapter_grok.md](../internals/agents/adapter_grok.md) |
 | [kimi-reference.md](./agent-adapter/kimi-reference.md) | Kimi Code | 0.42.0 (tag `@moonshot-ai/kimi-code@0.42.0`, 2026-09-09) | [adapter_kimi.md](../internals/agents/adapter_kimi.md) |
-| [kiro-reference.md](./agent-adapter/kiro-reference.md) | Kiro CLI | 2.12.1 | [adapter_kiro.md](../internals/agents/adapter_kiro.md) |
+| [kiro-reference.md](./agent-adapter/kiro-reference.md) | Kiro CLI | 2.21.4 (2026-09-11; engine `@kiro/agent` 0.63.3; turn-order captures: 2.12.1) | [adapter_kiro.md](../internals/agents/adapter_kiro.md) |
 | [opencode-reference.md](./agent-adapter/opencode-reference.md) | OpenCode | 1.18.30 | [adapter_opencode.md](../internals/agents/adapter_opencode.md) |
 | [pi-reference.md](./agent-adapter/pi-reference.md) | Pi | 0.85.1 | [adapter_pi.md](../internals/agents/adapter_pi.md) |
 | [qwen-reference.md](./agent-adapter/qwen-reference.md) | Qwen Code | 0.19.10 | [adapter_qwen.md](../internals/agents/adapter_qwen.md) |
