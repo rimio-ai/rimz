@@ -200,16 +200,6 @@ pub enum SurfaceDiffKind {
     Changed,
 }
 
-impl SurfaceDiffKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Added => "added",
-            Self::Removed => "removed",
-            Self::Changed => "changed",
-        }
-    }
-}
-
 /// Read the current trust state for `project_root`. The executable-surface
 /// hash is recomputed every call; that's the auto-revoke contract.
 pub fn status(project_root: &Path) -> Result<TrustReport> {
@@ -321,7 +311,7 @@ pub fn status_with_roots(project_root: &Path, config_root: &Path) -> Result<Trus
     })
 }
 
-pub fn grant_with_roots(project_root: &Path, config_root: &Path) -> Result<TrustReport> {
+pub(crate) fn grant_with_roots(project_root: &Path, config_root: &Path) -> Result<TrustReport> {
     let workspace_id = WorkspaceId::from_project_root(project_root);
     let config_path = project_root.join(CONFIG_REL);
     let record_path = trust_record_path(config_root, &workspace_id);
@@ -372,7 +362,7 @@ pub fn grant_with_roots(project_root: &Path, config_root: &Path) -> Result<Trust
     })
 }
 
-pub fn revoke_with_roots(project_root: &Path, config_root: &Path) -> Result<TrustReport> {
+fn revoke_with_roots(project_root: &Path, config_root: &Path) -> Result<TrustReport> {
     let workspace_id = WorkspaceId::from_project_root(project_root);
     let record_path = trust_record_path(config_root, &workspace_id);
     match std::fs::remove_file(&record_path) {
@@ -388,7 +378,7 @@ pub fn revoke_with_roots(project_root: &Path, config_root: &Path) -> Result<Trus
     status_with_roots(project_root, config_root)
 }
 
-pub fn birth_prompt_with_roots(
+fn birth_prompt_with_roots(
     project_root: &Path,
     config_root: &Path,
 ) -> Result<Option<BirthPromptOffer>> {
@@ -412,7 +402,7 @@ pub fn birth_prompt_with_roots(
     }))
 }
 
-pub fn dismiss_birth_prompt_offer_with_roots(
+fn dismiss_birth_prompt_offer_with_roots(
     project_root: &Path,
     config_root: &Path,
     offer: &BirthPromptOffer,
@@ -443,7 +433,7 @@ fn dismiss_birth_prompt_hash_with_roots(
 /// the agent process; [`AgentEnv::Blocked`] names the trust state so the
 /// launcher refuses at the entry point with the fix.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AgentEnv {
+pub(crate) enum AgentEnv {
     /// No `[[agents]]` entry with env vars names this kind.
     Unconfigured,
     /// The workspace is trusted; inject these vars into the agent process.
@@ -455,15 +445,11 @@ pub enum AgentEnv {
 /// Resolve the `[[agents]]` env for `kind` under the trust gate. Entries
 /// sharing a name merge in declaration order; later entries win on key
 /// collisions. Values are injected literally — no shell expansion.
-pub fn agent_env(project_root: &Path, kind: &str) -> Result<AgentEnv> {
+pub(crate) fn agent_env(project_root: &Path, kind: &str) -> Result<AgentEnv> {
     agent_env_with_roots(project_root, &config_home(), kind)
 }
 
-pub fn agent_env_with_roots(
-    project_root: &Path,
-    config_root: &Path,
-    kind: &str,
-) -> Result<AgentEnv> {
+fn agent_env_with_roots(project_root: &Path, config_root: &Path, kind: &str) -> Result<AgentEnv> {
     let Some(config) = read_project_config(&project_root.join(CONFIG_REL))? else {
         return Ok(AgentEnv::Unconfigured);
     };
@@ -497,7 +483,7 @@ pub fn agent_env_with_roots(
 /// [`ProjectLogins::Blocked`] names the trust state so birth refuses with the
 /// fix rather than silently falling back to the provider's own account.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ProjectLogins {
+pub(crate) enum ProjectLogins {
     /// The project names no account for any kind.
     Unconfigured,
     /// The workspace is trusted; birth selects these accounts by default.
@@ -506,11 +492,11 @@ pub enum ProjectLogins {
     Blocked(TrustState),
 }
 
-pub fn project_logins(project_root: &Path) -> Result<ProjectLogins> {
+pub(crate) fn project_logins(project_root: &Path) -> Result<ProjectLogins> {
     project_logins_with_roots(project_root, &config_home())
 }
 
-pub fn project_logins_with_roots(project_root: &Path, config_root: &Path) -> Result<ProjectLogins> {
+fn project_logins_with_roots(project_root: &Path, config_root: &Path) -> Result<ProjectLogins> {
     let Some(config) = read_project_config(&project_root.join(CONFIG_REL))? else {
         return Ok(ProjectLogins::Unconfigured);
     };
@@ -1044,7 +1030,7 @@ fn surface_diff_for_record(
     Ok(executable_surface_diff(&granted, current))
 }
 
-pub fn executable_surface_diff(granted: &Value, current: &Value) -> Vec<SurfaceDiffEntry> {
+fn executable_surface_diff(granted: &Value, current: &Value) -> Vec<SurfaceDiffEntry> {
     let mut entries = Vec::new();
     diff_value(&mut Vec::new(), Some(granted), Some(current), &mut entries);
     entries
