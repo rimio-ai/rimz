@@ -152,7 +152,7 @@ fn decode_resolved<T>(
         Ok(decoded) => Ok(decoded),
         Err(err) => {
             if let Some(path) = resolved.evictable_cache {
-                let _ = remove_cached_asset(&path);
+                let _ = remove_cached_asset_path(&path);
             }
             Err(AssetErr::Decode(err))
         }
@@ -291,10 +291,6 @@ fn remote_cache_file(url: &str) -> String {
     }
     name.push_str(".webp");
     name
-}
-
-pub(crate) fn remove_cached_asset(path: &Path) -> Result<(), AssetErr> {
-    remove_cached_asset_path(path)
 }
 
 pub(crate) fn builtin_pet_url(pet: Pet) -> String {
