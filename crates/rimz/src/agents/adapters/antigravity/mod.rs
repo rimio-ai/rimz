@@ -274,7 +274,7 @@ const ANTIGRAVITY_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     },
     tool_stats: ConcernCoverage::Partial {
         via: "PostToolUse toolCall names on matched tools",
-        gap: "releases before 1.2 omit toolCall, and transcript history is not counted",
+        gap: "releases that omit toolCall send no name, and transcript history is not counted",
     },
     remote_control: ConcernCoverage::Unsupported {
         reason: "agy remote-control serves a browser daemon, not a pane session RimZ can drive",

@@ -48,7 +48,7 @@ Google moves the consumer terminal experience from Gemini CLI to Antigravity CLI
 
 The SDK hosts its own agent runtime and does not observe a stock `agy` process. Antigravity 2.0 shares the conversation ID namespace and can export conversations into the CLI, but its process and app-data root (`~/.gemini/antigravity`) are separate.
 
-Several upstream surfaces on this page have no RimZ binding at this baseline: print-mode `json` and `stream-json` output, `PostToolUse.toolCall`, `PreToolUse` decisions, the statusline `quota`, `cost`, and `conversation_title` fields, `--effort`, remote control, and the undocumented `SessionStart` hook variant. What RimZ leaves unsupported, and why, is in the internals page's [Known gaps](../../internals/agents/adapter_antigravity.md#known-gaps).
+Several upstream surfaces on this page have no RimZ binding at this baseline: print-mode `json` and `stream-json` output, `PreToolUse` decisions, the statusline `quota`, `cost`, and `conversation_title` fields, remote control, and the undocumented `SessionStart` hook variant. What RimZ leaves unsupported, and why, is in the internals page's [Known gaps](../../internals/agents/adapter_antigravity.md#known-gaps).
 
 ## Install and launch
 

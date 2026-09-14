@@ -42,7 +42,7 @@ pub(super) struct PostToolPayload {
     #[serde(flatten)]
     pub common: CommonPayload,
     pub error: Option<Value>,
-    /// Absent before the 1.2 hook contract added the completed tool call.
+    /// The completed tool call; releases that omit it keep unnamed tool progress.
     #[serde(rename = "toolCall")]
     pub tool_call: Option<ToolCall>,
 }
