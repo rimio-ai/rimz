@@ -673,7 +673,7 @@ The elected producer holds one control-mode client, [`PresenceWatch`](../../crat
 
 The watch follows the control-mode contracts in the [reference → control mode](../externals/mux-adapter/tmux-reference.md#control-mode). It attaches with `-C` and `ignore-size,no-output`, holds stdin open because closing the pipe detaches the client, sends only `refresh-client -B`, drains notifications promptly because tmux force-exits a slow reader, and removes `$TMUX` from the child environment so tmux does not refuse a nested attach. The client is writable, which keeps tmux 3.7 `send-keys` working when the watch is a headless session's only attached client.
 
-From tmux 3.7 a window's layout string repeats each floating pane, once inside the tiled tree and once in a trailing `<...>` suffix ([reference → layout strings](../externals/mux-adapter/tmux-reference.md#layout-strings)). The reader drops the suffix's ids and reports the tiled panes, so a window holding a floating pane keeps typed layout changes; the floating panes themselves arrive through the subscription.
+From tmux 3.7 a window's layout string repeats each floating pane, once inside the tiled tree and once in a trailing `<...>` suffix ([reference → layout strings](../externals/mux-adapter/tmux-reference.md#layout-strings)). The reader drops the suffix's ids and reports the tiled panes, so a window holding a floating pane keeps typed layout changes; the floating panes themselves arrive through the subscription. A zoomed window writes no suffix, so its floating panes still appear as leaves there; the consumer already skips panes it knows are floating.
 
 A dead, refused, or idle watch degrades to the tmux poll, and the producer respawns it with backoff.
 

@@ -320,9 +320,10 @@ impl TmuxPresenceState {
         let closed = self
             .panes
             .iter()
-            // A tmux layout change reports tiled panes only. Preserve floating
-            // panes here and nudge the authoritative poll below because this
-            // notification cannot prove whether one opened or closed.
+            // A tmux layout change reports tiled panes (floating ones too while
+            // zoomed). Preserve floating panes here and nudge the authoritative
+            // poll below because this notification cannot prove whether one
+            // opened or closed.
             .filter(|(pane, entry)| {
                 entry.window == window
                     && !entry.floating

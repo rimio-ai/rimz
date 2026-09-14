@@ -45,7 +45,9 @@ pub enum ControlLine {
     LayoutChange {
         window: String,
         window_width: u64,
-        /// Tiled panes only; floating panes arrive through the subscription.
+        /// Tiled panes, except in a zoomed window, where tmux writes no floating
+        /// suffix and floating panes appear as leaves; floating panes arrive
+        /// through the subscription.
         panes: Vec<TmuxLayoutPane>,
     },
     WindowPaneChanged {
@@ -280,7 +282,8 @@ fn layout_geometry(layout: &str) -> Option<LayoutGeometry> {
     let window_width = parser.parse_cell()?;
     // tmux 3.7 lists each floating pane twice: as a leaf of the root cell and
     // again in a trailing `<leaf,...>` suffix. Only the suffix marks them, so
-    // drop its ids to report the tiled panes alone.
+    // drop its ids to report the tiled panes alone. A zoomed window writes no
+    // suffix, so its floating panes stay in the list.
     let tiled = parser.panes.len();
     if parser.peek() == Some(b'<') {
         parser.parse_floating_suffix()?;
