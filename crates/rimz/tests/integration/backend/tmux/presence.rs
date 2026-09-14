@@ -131,3 +131,67 @@ fn presence_watch_streams_typed_lines_and_ends_with_the_server() {
     wait_for_presence_stream_end(&rx);
     drain.join().expect("drain thread");
 }
+
+/// tmux 3.7 appends floating panes to every layout string of their window. The
+/// reader must still surface the tiled layout rather than degrade each change in
+/// that window to a nudge, and must keep the floating pane out of it.
+#[test]
+fn presence_watch_reads_layout_changes_beside_floating_panes() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    if !server.supports_floating_panes() {
+        eprintln!("tmux predates 3.7 floating panes; skipping test");
+        return;
+    }
+    server.ensure_with_shell("floating-layout");
+    let watch = rimz::mux::tmux::PresenceWatch::attach(&server.socket, "floating-layout")
+        .expect("attach control client");
+    server.wait_for_control_client("floating-layout");
+    let (rx, drain) = spawn_presence_drain(watch);
+    let window_id = server.display("floating-layout:0", "#{window_id}");
+    let floating = server.stdout(&[
+        "new-pane",
+        "-d",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "-t",
+        "floating-layout:0",
+        "sleep",
+        "120",
+    ]);
+    let split = server.stdout(&[
+        "split-window",
+        "-d",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "-t",
+        "floating-layout:0.0",
+        "sleep",
+        "120",
+    ]);
+    let line = recv_presence_line_until(
+        &rx,
+        Duration::from_secs(5),
+        "layout change naming the split",
+        |line| {
+            matches!(
+                line,
+                rimz::mux::tmux::ControlLine::LayoutChange { panes, .. }
+                    if panes.iter().any(|pane| pane.id == split)
+            )
+        },
+    );
+    let rimz::mux::tmux::ControlLine::LayoutChange { window, panes, .. } = line else {
+        unreachable!("the matcher accepts only layout changes");
+    };
+    assert_eq!(window, window_id);
+    assert!(
+        panes.iter().all(|pane| pane.id != floating),
+        "floating pane {floating} leaked into the tiled layout: {panes:?}",
+    );
+    server.tmux(&["kill-server"]);
+    wait_for_presence_stream_end(&rx);
+    drain.join().expect("drain thread");
+}
