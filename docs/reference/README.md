@@ -20,7 +20,7 @@ These pages answer a specific question about the shipped product: what a command
 | [message.md](./cli/message.md) | `rimz message`: parking text for the next turn boundary, steering a live turn, scheduling and cross-agent conditions, fan-out, the message header, reply waits, statuses, and the inbox verbs. |
 | [wait.md](./cli/wait.md) | `rimz wait`: a self-only wakeup after a delay, a process exit, or a watched command. |
 | [transcript.md](./cli/transcript.md) | `rimz transcript`: rendering a channel or one agent from RimZ's durable transcript log. |
-| [pane.md](./cli/pane.md) | `rimz pane`: listing, capturing, sending to, and focusing panes. |
+| [pane.md](./cli/pane.md) | `rimz pane`: pane targets, listing, capturing, sending text and keys, focus, zoom, split, detach, and per-pane bandwidth. |
 | [events.md](./cli/events.md) | `rimz events`: following lifecycle transitions as JSON lines, the event schema, and emitting signals. |
 | [accounts.md](./cli/accounts.md) | `rimz accounts`: declaring named provider accounts as separate provider homes. |
 | [stats.md](./cli/stats.md) | `rimz stats`: account-global token and dollar history, windows, and breakdowns. |
