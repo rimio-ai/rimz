@@ -193,10 +193,10 @@ Allocation per operation is the steadier regression signal; medians move with ho
 | `hotpath::fuse` 40 agents | 99.9 µs | 80.9 KB | 2026-07-05 |
 | `hotpath::fuse_owned_no_overlay` 40 agents | 74.7 µs | 819 B | not recorded |
 | `hotpath::rollup_fold_warm` 40 agents | 129 µs | 637.1 KB | 2026-07-05 |
-| `hotpath::rollup_fold_warm` 40 agents, 0 / 1,500 carryover rows, re-parsing carryover | 537 µs / 24.19 ms | 973.4 KB / 89.6 MB | 2026-09-14 |
-| `hotpath::rollup_fold_warm` 40 agents, 0 / 1,500 carryover rows, shared carryover parse | 930 µs / 2.46 ms | 645.6 KB / 646.2 KB | 2026-09-14 |
-| `hotpath::rollup_fold_unchanged` 40 agents, 0 / 1,500 carryover rows, cloning the held rollup | 591 µs / 5.47 ms | 120.4 KB / 15.96 MB | 2026-09-14 |
-| `hotpath::rollup_fold_unchanged` 40 agents, 0 / 1,500 carryover rows, layered rollup | 674 µs / 2.88 ms | 712 B / 1.38 KB | 2026-09-14 |
+| `hotpath::rollup_fold_warm` 40 agents, 0 / 1,500 carryover rows, re-parsing carryover | 70.8 µs / 16.52 ms | 989 KB / 90.11 MB | 2026-09-14 |
+| `hotpath::rollup_fold_warm` 40 agents, 0 / 1,500 carryover rows, shared carryover parse | 56.9 µs / 79.8 µs | 655.6 KB / 655.6 KB | 2026-09-14 |
+| `hotpath::rollup_fold_unchanged` 40 agents, 0 / 1,500 carryover rows, cloning the held rollup | 10.95 µs / 1.92 ms | 121.6 KB / 16.03 MB | 2026-09-14 |
+| `hotpath::rollup_fold_unchanged` 40 agents, 0 / 1,500 carryover rows, layered rollup | 2.24 µs / 2.99 µs | 0 B / 0 B | 2026-09-14 |
 | `hotpath::enrich_cached` 40 agents | 610 µs | 1.21 MB | 2026-07-05 |
 | `hotpath::consumer_adopt_parse_cached` 40 agents | 116 µs | 125.2 KB | 2026-07-18 |
 | `hotpath::consumer_adopt_changed_file` 40 agents | 329 µs | 226.9 KB | 2026-07-18 |

@@ -64,7 +64,7 @@ pub(super) fn refresh_cohort_spend_for(
     let prices = crate::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
     let groups = compute_cohort_effort(
         &snapshot.worktree_groups,
-        &agents.to_vec(),
+        &agents.iter().collect::<Vec<_>>(),
         runtime,
         snapshot.now,
         active_grace_secs,
@@ -87,14 +87,14 @@ pub(super) fn refresh_cohort_spend_for(
 
 fn compute_cohort_effort(
     groups: &[SidebarWorktreeGroup],
-    agents: &[AgentState],
+    agents: &[&AgentState],
     runtime: &RuntimePaths,
     now: jiff::Timestamp,
     active_grace_secs: u32,
     prices: &crate::agents::PriceBook,
     memo: &mut EffortParseMemo,
 ) -> BTreeMap<String, SidebarCohortEffort> {
-    let lifetimes = crate::worktree::lane_lifetimes(agents.iter());
+    let lifetimes = crate::worktree::lane_lifetimes(agents.iter().copied());
     for (path, reason) in lifetimes.unreadable() {
         tracing::debug!(
             path = %path.display(),
@@ -102,8 +102,7 @@ fn compute_cohort_effort(
             "sidebar cohort-spend lane sessions left out of seat totals"
         );
     }
-    let agent_refs = agents.iter().collect::<Vec<_>>();
-    let slots = crate::agents::attribution::slot_groups(&agent_refs, &lifetimes);
+    let slots = crate::agents::attribution::slot_groups(agents, &lifetimes);
     let active = active_time::read_for_keys(
         runtime,
         agents
@@ -288,7 +287,7 @@ mod tests {
 
         let computed = compute_cohort_effort(
             std::slice::from_ref(&group),
-            &agents,
+            &agents.iter().collect::<Vec<_>>(),
             &runtime,
             jiff::Timestamp::UNIX_EPOCH,
             180,
@@ -324,7 +323,7 @@ mod tests {
         std::fs::write(git_dir.join("rimz-worktree.json"), "invalid marker").unwrap();
         let unreadable = compute_cohort_effort(
             &[group],
-            &agents,
+            &agents.iter().collect::<Vec<_>>(),
             &runtime,
             jiff::Timestamp::UNIX_EPOCH,
             180,
@@ -416,7 +415,7 @@ mod tests {
         let compute = |memo: &mut EffortParseMemo| {
             compute_cohort_effort(
                 std::slice::from_ref(&group),
-                &agents,
+                &agents.iter().collect::<Vec<_>>(),
                 &runtime,
                 marker.created_at,
                 180,
