@@ -72,18 +72,14 @@ fn message_record() -> MessageRecord {
     message
 }
 
-fn params_value(event: &EventEnvelope) -> Value {
-    serde_json::from_str(event.params.get()).expect("event params decode")
-}
-
 #[test]
 fn lifecycle_event_uses_flat_compact_wire_shape() {
     let (observation, expected_rich_params) = rich_lifecycle_observation();
     let rich =
         EventEnvelope::agent_lifecycle(workspace(), "session", "claude", "Stop", &observation);
-    assert_eq!(params_value(&rich), expected_rich_params);
+    assert_eq!(rich.params_value(), expected_rich_params);
     assert!(
-        params_value(&rich).get("turn_error").is_none(),
+        rich.params_value().get("turn_error").is_none(),
         "sidecar-only turn errors stay out of durable events"
     );
 
@@ -99,7 +95,7 @@ fn lifecycle_event_uses_flat_compact_wire_shape() {
         &minimal_observation,
     );
     assert_eq!(
-        params_value(&minimal),
+        minimal.params_value(),
         json!({
             "event_name": "SessionStart",
             "agent_id": "sess-minimal",
@@ -319,7 +315,7 @@ fn launch_event_uses_flat_compact_wire_shape() {
         &AgentKind::new_unchecked("codex"),
         rich_payload.clone(),
     );
-    assert_eq!(params_value(&rich), expected_rich_params);
+    assert_eq!(rich.params_value(), expected_rich_params);
 
     let minimal_payload: AgentLaunchPayload = serde_json::from_value(json!({
         "agent_id": "launch-minimal",
@@ -335,7 +331,7 @@ fn launch_event_uses_flat_compact_wire_shape() {
         minimal_payload,
     );
     assert_eq!(
-        params_value(&minimal),
+        minimal.params_value(),
         json!({
             "agent_id": "launch-minimal", "agent_name": "coder", "state": "starting",
         })
@@ -373,7 +369,7 @@ fn attach_event_uses_typed_compact_wire_shape() {
     assert_eq!(event.source_kind, "agent");
     assert_eq!(event.method, "agent.attached");
     assert_eq!(
-        params_value(&event),
+        event.params_value(),
         json!({
             "agent_id": "sess-1",
             "launch_id": "launch-1",
@@ -407,7 +403,7 @@ fn attach_event_uses_typed_compact_wire_shape() {
 fn session_boundaries_decode_to_typed_kinds() {
     let rebirth = EventEnvelope::session_rebirth(workspace(), "session");
     assert_eq!(rebirth.method, "session.rebirth");
-    assert_eq!(params_value(&rebirth), json!({}));
+    assert_eq!(rebirth.params_value(), json!({}));
     assert!(matches!(rebirth.kind(), EventKind::SessionRebirth));
 
     let death_payload = SessionDeathPayload {
@@ -426,7 +422,7 @@ fn session_boundaries_decode_to_typed_kinds() {
     );
     assert_eq!(death.method, "session.death");
     assert_eq!(
-        params_value(&death),
+        death.params_value(),
         json!({
             "cause": "crash",
             "lost_agents": [{
@@ -451,7 +447,7 @@ fn message_event_redacts_text_and_preserves_audit_metadata() {
         Some(reason),
     );
     assert_eq!(
-        params_value(&event),
+        event.params_value(),
         json!({
             "message_id": "msg_0123456789abcdef", "address": "@reviewer#docs",
             "kind": "claude", "agent_id": "sess-1", "agent_name": "amber-atlas",
@@ -492,7 +488,7 @@ fn unresolved_message_event_preserves_raw_target() {
         12,
         "receiver not found".to_owned(),
     );
-    let params = params_value(&event);
+    let params = event.params_value();
     assert_eq!(params["address"], "@reviwer#docs");
     assert!(params.get("sender").is_none());
 

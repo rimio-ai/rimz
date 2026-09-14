@@ -536,8 +536,9 @@ impl EventEnvelope {
         }
     }
 
-    /// Decode raw params for audit/reporting call sites that need ad-hoc fields.
-    /// Hot reducers use [`kind`](Self::kind) to parse only the typed event they need.
+    /// Decode raw params into an untyped value for test assertions.
+    /// Production readers use [`kind`](Self::kind) to parse the typed event they need.
+    #[cfg(any(test, feature = "testkit"))]
     pub fn params_value(&self) -> Value {
         serde_json::from_str(self.params.get()).expect("RawValue guarantees params JSON is valid")
     }
