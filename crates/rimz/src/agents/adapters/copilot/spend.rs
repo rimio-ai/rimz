@@ -107,6 +107,8 @@ struct ModelMetric {
     usage: Option<TokenUsage>,
     #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
     token_details: Option<TokenDetails>,
+    #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
+    total_nano_aiu: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
@@ -160,10 +162,16 @@ struct ModelCounters {
     cache_write: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cache_read: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    nano_aiu: Option<u64>,
 }
 
 impl ModelCounters {
-    fn from_parts(usage: Option<TokenUsage>, details: Option<TokenDetails>) -> Self {
+    fn from_parts(
+        usage: Option<TokenUsage>,
+        details: Option<TokenDetails>,
+        nano_aiu: Option<u64>,
+    ) -> Self {
         let usage = usage.unwrap_or_default();
         let details = details.unwrap_or_default();
         let cache_read = details
@@ -193,6 +201,7 @@ impl ModelCounters {
             output,
             cache_write,
             cache_read,
+            nano_aiu,
         }
     }
 
@@ -210,6 +219,7 @@ impl ModelCounters {
             output: counter_delta(self.output, &mut baseline.output),
             cache_write: counter_delta(self.cache_write, &mut baseline.cache_write),
             cache_read: counter_delta(self.cache_read, &mut baseline.cache_read),
+            nano_aiu: counter_delta(self.nano_aiu, &mut baseline.nano_aiu),
         }
     }
 }
@@ -220,6 +230,13 @@ struct CopilotSpendState {
     cwd: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     models: BTreeMap<String, ModelCounters>,
+}
+
+/// GitHub bills one AI credit, a billion nano AI units, at one US cent.
+const USD_PER_NANO_AIU: f64 = 0.01 / 1_000_000_000.0;
+
+pub(super) fn ai_credit_usd(nano_aiu: u64) -> Option<f64> {
+    (nano_aiu > 0).then_some(nano_aiu as f64 * USD_PER_NANO_AIU)
 }
 
 pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> SpendParse {
@@ -261,6 +278,11 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
                 };
                 for (model, current) in shutdown_models(*data) {
                     let baseline = state.models.entry(model.clone()).or_default();
+                    // A cursor written before credits were tracked has token
+                    // baselines but no credit baseline, so its first credit
+                    // delta would be the whole cumulative total.
+                    let credits_have_baseline =
+                        baseline.nano_aiu.is_some() || *baseline == ModelCounters::default();
                     let delta = current.delta_from(baseline);
                     if delta.total() == 0 {
                         continue;
@@ -271,7 +293,13 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
                                 delta.cache_write.unwrap_or(0),
                                 delta.cache_read.unwrap_or(0),
                             );
-                    let cost_usd = price_split(prices, &model, split, ts_secs, &mut unknown_models)
+                    let cost_usd = delta
+                        .nano_aiu
+                        .filter(|_| credits_have_baseline)
+                        .and_then(ai_credit_usd)
+                        .or_else(|| {
+                            price_split(prices, &model, split, ts_secs, &mut unknown_models)
+                        })
                         .unwrap_or(0.0);
                     entries.push(CachedEntry {
                         dedup_key: Some(dedup_key(
@@ -302,7 +330,11 @@ fn shutdown_models(data: ShutdownData) -> Vec<(String, ModelCounters)> {
                 let model = non_empty(model)?;
                 Some((
                     model,
-                    ModelCounters::from_parts(metric.usage, metric.token_details),
+                    ModelCounters::from_parts(
+                        metric.usage,
+                        metric.token_details,
+                        metric.total_nano_aiu,
+                    ),
                 ))
             })
             .collect();
@@ -324,7 +356,12 @@ fn shutdown_models(data: ShutdownData) -> Vec<(String, ModelCounters)> {
         })
     });
     model
-        .map(|model| vec![(model, ModelCounters::from_parts(usage, data.token_details))])
+        .map(|model| {
+            vec![(
+                model,
+                ModelCounters::from_parts(usage, data.token_details, None),
+            )]
+        })
         .unwrap_or_default()
 }
 
@@ -481,8 +518,48 @@ mod tests {
                     .dedup_key
                     .as_deref()
                     .is_some_and(|key| key.starts_with("copilot:"))
-                && entry.cost_usd > 0.0
         }));
+        let metered = parsed
+            .entries
+            .iter()
+            .map(|entry| entry.cost_usd)
+            .collect::<Vec<_>>();
+        let expected = [268_560_000_u64, 43_440_000, 266_785_000].map(|nano| nano as f64 * 1e-11);
+        assert!(
+            metered
+                .iter()
+                .zip(expected)
+                .all(|(actual, expected)| (actual - expected).abs() < 1e-12),
+            "credit deltas price each shutdown: {metered:?}"
+        );
+    }
+
+    #[test]
+    fn metered_credits_price_unknown_models_and_legacy_cursors_fall_back() {
+        let first = r#"{"type":"session.shutdown","id":"one","timestamp":"2026-07-14T06:00:00Z","data":{"modelMetrics":{"known-model":{"usage":{"inputTokens":100,"outputTokens":10}},"unknown-model":{"totalNanoAiu":500000000,"usage":{"inputTokens":5,"outputTokens":2}}}}}"#;
+        let second = r#"{"type":"session.shutdown","id":"two","timestamp":"2026-07-14T07:00:00Z","data":{"modelMetrics":{"known-model":{"totalNanoAiu":900000000,"usage":{"inputTokens":200,"outputTokens":20}},"unknown-model":{"totalNanoAiu":700000000,"usage":{"inputTokens":9,"outputTokens":3}}}}}"#;
+        let (_dir, path) = transcript(&format!("{first}\n"));
+        let prices = PriceBook::from_litellm_json(
+            r#"{"known-model":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000002}}"#,
+        );
+        let cold = parse(&path, None, &prices);
+        assert_eq!(cold.entries[1].model.as_deref(), Some("unknown-model"));
+        assert!((cold.entries[1].cost_usd - 0.005).abs() < 1e-12);
+        assert!(cold.unknown_models.is_empty());
+
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writeln!(file, "{second}").unwrap();
+        let resumed = parse(&path, Some(&cold.cursor), &prices);
+        let known = &resumed.entries[0];
+        assert_eq!(known.model.as_deref(), Some("known-model"));
+        assert!(
+            (known.cost_usd - 0.00012).abs() < 1e-12,
+            "a baseline without credits prices the token delta"
+        );
+        assert!((resumed.entries[1].cost_usd - 0.002).abs() < 1e-12);
     }
 
     #[test]
