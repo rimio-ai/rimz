@@ -314,7 +314,7 @@ impl crate::agents::capabilities::HookCapability for KiroAdapter {
         let signal = match event_name {
             // Kiro's payload carries no start source.
             "SessionStart" => SessionSource::Startup.session_start_signal(),
-            "UserPromptSubmit" => LifecycleSignal::TurnStarted,
+            "UserPromptSubmit" => LifecycleSignal::TurnStarted { turn_id: None },
             "PostToolUse" => LifecycleSignal::ToolUsed {
                 mutates: self.spec().tool_mutates(payload),
                 edits: self.spec().tool_edits_files(payload),
@@ -326,6 +326,7 @@ impl crate::agents::capabilities::HookCapability for KiroAdapter {
             "Stop" => LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
+                turn_id: None,
             },
             _ => return Ok(decoded),
         };

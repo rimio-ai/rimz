@@ -365,7 +365,7 @@ fn kimi_root_signal(
     };
     match event_name {
         "SessionStart" => Some(LifecycleSignal::Registered),
-        "UserPromptSubmit" => Some(LifecycleSignal::TurnStarted),
+        "UserPromptSubmit" => Some(LifecycleSignal::TurnStarted { turn_id: None }),
         "PreToolUse"
             if parsed.tool_name.as_deref() == Some("AskUserQuestion")
                 && !parsed.question_background() =>
@@ -397,10 +397,12 @@ fn kimi_root_signal(
         "Stop" | "Interrupt" => Some(LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
+            turn_id: None,
         }),
         "StopFailure" => Some(LifecycleSignal::TurnEnded {
             errored: true,
             parked_on_background: false,
+            turn_id: None,
         }),
         "SessionEnd" => Some(LifecycleSignal::Ended),
         "PreCompact" => Some(LifecycleSignal::Compacting),

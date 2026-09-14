@@ -134,6 +134,7 @@ fn pi_session_envelopes_and_bridge_events_converge_on_one_rich_child() {
             LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
+                turn_id: None,
             },
         );
         child_settled.launch.model = Some("gpt-5.6-sol".to_owned());

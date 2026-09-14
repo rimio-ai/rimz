@@ -342,7 +342,7 @@ fn correlate_subagent_observation(
     }
     if !matches!(
         observation.signal,
-        LifecycleSignal::TurnStarted
+        LifecycleSignal::TurnStarted { .. }
             | LifecycleSignal::TurnEnded { .. }
             | LifecycleSignal::ToolUsed { .. }
     ) {
@@ -384,7 +384,7 @@ fn correlate_subagent_observation(
     }
     if !matches!(
         observation.signal,
-        LifecycleSignal::TurnStarted
+        LifecycleSignal::TurnStarted { .. }
             | LifecycleSignal::TurnEnded {
                 parked_on_background: false,
                 ..
@@ -472,10 +472,11 @@ fn correlate_subagent_observation(
 
 fn normalize_correlated_subagent_signal(observation: &mut AgentLifecycleObservation) {
     observation.signal = match observation.signal {
-        LifecycleSignal::TurnStarted => LifecycleSignal::SubagentStarted,
+        LifecycleSignal::TurnStarted { .. } => LifecycleSignal::SubagentStarted,
         LifecycleSignal::TurnEnded {
             errored,
             parked_on_background: false,
+            ..
         } => LifecycleSignal::SubagentStopped { errored },
         ref signal => signal.clone(),
     };

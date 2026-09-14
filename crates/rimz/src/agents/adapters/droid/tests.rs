@@ -4,7 +4,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::agents::lifecycle::{LifecycleState, TurnPhase, step};
+use crate::agents::lifecycle::{LifecycleState, PriorTurnIds, TurnPhase, step};
 use crate::agents::testkit::{hook_lifecycle, hook_output, hook_signal};
 use crate::agents::transcript::TranscriptCursor;
 use crate::agents::{AgentHookClass, AgentStatus, TranscriptPosition, TranscriptRole};
@@ -105,9 +105,12 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
         "UserPromptSubmit",
         &json!({"session_id": "sess-1", "prompt": "  fix auth  "}),
     );
-    assert_eq!(prompt.signal, LifecycleSignal::TurnStarted);
+    assert_eq!(
+        prompt.signal,
+        LifecycleSignal::TurnStarted { turn_id: None }
+    );
     assert_eq!(prompt.prompt.as_deref(), Some("fix auth"));
-    let running = step(None, None, None, &prompt.signal).next;
+    let running = step(None, None, PriorTurnIds::default(), &prompt.signal).next;
     assert_eq!(running.status, AgentStatus::Running);
     assert_eq!(running.phase, TurnPhase::Reasoning);
 
@@ -137,7 +140,8 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
         stop.signal,
         LifecycleSignal::TurnEnded {
             errored: false,
-            parked_on_background: false
+            parked_on_background: false,
+            turn_id: None,
         }
     );
     let prior = LifecycleState {
@@ -146,7 +150,9 @@ fn lifecycle_maps_basic_turn_tools_compaction_and_end() {
         compacting: false,
     };
     assert_eq!(
-        step(Some(&prior), None, None, &stop.signal).next.status,
+        step(Some(&prior), None, PriorTurnIds::default(), &stop.signal)
+            .next
+            .status,
         AgentStatus::Success
     );
 
@@ -629,7 +635,7 @@ fn notification_types_drive_asks_and_interrupts_through_step() {
                 native_key: None,
             }
         );
-        let waiting = step(Some(&running), None, None, &signal).next;
+        let waiting = step(Some(&running), None, PriorTurnIds::default(), &signal).next;
         assert_eq!(waiting.status, AgentStatus::Waiting, "{kind}");
 
         let answered = hook_signal(
@@ -638,7 +644,9 @@ fn notification_types_drive_asks_and_interrupts_through_step() {
             &json!({"session_id": "sess-1", "tool_name": "Execute"}),
         );
         assert_eq!(
-            step(Some(&waiting), None, None, &answered).next.status,
+            step(Some(&waiting), None, PriorTurnIds::default(), &answered)
+                .next
+                .status,
             AgentStatus::Running,
             "{kind}"
         );
@@ -659,7 +667,9 @@ fn notification_types_drive_asks_and_interrupts_through_step() {
     };
     for prior in [running, waiting] {
         assert_eq!(
-            step(Some(&prior), None, None, &interrupted).next.status,
+            step(Some(&prior), None, PriorTurnIds::default(), &interrupted)
+                .next
+                .status,
             AgentStatus::Idle
         );
     }
@@ -706,9 +716,14 @@ fn compaction_close_routes_to_the_compacted_session() {
         compacting: true,
     };
     assert!(
-        !step(Some(&compacting), None, None, &close.signal)
-            .next
-            .compacting
+        !step(
+            Some(&compacting),
+            None,
+            PriorTurnIds::default(),
+            &close.signal
+        )
+        .next
+        .compacting
     );
 
     let resumed = hook_lifecycle(

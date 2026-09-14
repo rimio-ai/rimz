@@ -1501,7 +1501,7 @@ fn emitted_signal_reaches_the_matching_wait_consumer() {
         .unwrap();
     for signal in [
         rimz::agents::LifecycleSignal::Registered,
-        rimz::agents::LifecycleSignal::TurnStarted,
+        rimz::agents::LifecycleSignal::TurnStarted { turn_id: None },
     ] {
         let mut observation = rimz::agents::AgentLifecycleObservation::new(
             Some(AgentSessionId::from("sess-signal-live")),

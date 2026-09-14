@@ -71,6 +71,7 @@ fn native_hooks_normalize_lifecycle() {
         turn_id: None,
     };
     let ended = |errored, parked_on_background| LifecycleSignal::TurnEnded {
+        turn_id: None,
         errored,
         parked_on_background,
     };
@@ -79,7 +80,10 @@ fn native_hooks_normalize_lifecycle() {
         "PreInvocation",
         &with(&common, [("invocationNum", json!(0))]),
     );
-    assert_eq!(started.signal, LifecycleSignal::TurnStarted);
+    assert_eq!(
+        started.signal,
+        LifecycleSignal::TurnStarted { turn_id: None }
+    );
     assert_eq!(started.agent_id.as_deref(), Some(SESSION_ID));
     assert_eq!(started.worktree_path.as_deref(), Some("/workspace/project"));
     assert_eq!(
@@ -244,6 +248,7 @@ fn untyped_stop_errors_stay_terminal_and_cannot_arm_recovery() {
             LifecycleSignal::TurnEnded {
                 errored: true,
                 parked_on_background: false,
+                turn_id: None,
             }
         );
     }

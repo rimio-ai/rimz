@@ -14,7 +14,8 @@ use crate::agents::capabilities::{
     ContextCapability as _, CoreCapability as _, HookCapability as _,
 };
 use crate::agents::{
-    AgentStatus, ConcernCoverage, HookCoverage, LifecycleSignal, LifecycleState, TurnPhase, step,
+    AgentStatus, ConcernCoverage, HookCoverage, LifecycleSignal, LifecycleState, PriorTurnIds,
+    TurnPhase, step,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -356,7 +357,12 @@ fn replay(adapter: &PluginAdapter, path: &Path) -> Result<ReplayCheckReport, Str
             states.remove(&agent_id);
             "ended".into()
         } else {
-            let transition = step(states.get(&agent_id), None, None, &observation.signal);
+            let transition = step(
+                states.get(&agent_id),
+                None,
+                PriorTurnIds::default(),
+                &observation.signal,
+            );
             states.insert(agent_id, transition.next);
             state_label(&transition.next)
         };

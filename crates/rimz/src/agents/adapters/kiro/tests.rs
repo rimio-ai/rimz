@@ -54,7 +54,10 @@ fn native_hooks_decode_session_turn_tool_and_stop() {
         match event {
             "SessionStart" => assert!(matches!(observation.signal, LifecycleSignal::Registered)),
             "UserPromptSubmit" => {
-                assert!(matches!(observation.signal, LifecycleSignal::TurnStarted));
+                assert!(matches!(
+                    observation.signal,
+                    LifecycleSignal::TurnStarted { .. }
+                ));
                 assert_eq!(observation.prompt.as_deref(), Some("fix the build"));
             }
             "PostToolUse" => assert!(matches!(

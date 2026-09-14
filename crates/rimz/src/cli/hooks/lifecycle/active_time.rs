@@ -88,7 +88,7 @@ fn active_time_op(
     }
     match signal {
         Some(
-            LifecycleSignal::TurnStarted
+            LifecycleSignal::TurnStarted { .. }
             | LifecycleSignal::ToolUsed { .. }
             | LifecycleSignal::Compacting
             | LifecycleSignal::CompactionEnded { failed: false, .. },
@@ -132,11 +132,15 @@ mod tests {
     fn mapping_covers_every_lifecycle_signal_and_bare_progress() {
         let cases = [
             (LifecycleSignal::Registered, None),
-            (LifecycleSignal::TurnStarted, Some(ActiveTimeOp::Progress)),
+            (
+                LifecycleSignal::TurnStarted { turn_id: None },
+                Some(ActiveTimeOp::Progress),
+            ),
             (
                 LifecycleSignal::TurnEnded {
                     errored: false,
                     parked_on_background: false,
+                    turn_id: None,
                 },
                 Some(ActiveTimeOp::Stop),
             ),
@@ -144,6 +148,7 @@ mod tests {
                 LifecycleSignal::TurnEnded {
                     errored: false,
                     parked_on_background: true,
+                    turn_id: None,
                 },
                 Some(ActiveTimeOp::Stop),
             ),

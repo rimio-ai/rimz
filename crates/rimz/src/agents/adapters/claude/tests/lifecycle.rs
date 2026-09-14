@@ -56,6 +56,7 @@ fn final_message_fallback_reads_only_at_output_checkpoints() {
         LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
+            turn_id: None,
         },
     );
     let message = final_message_for_lifecycle(&payload, &stopped, |_| {
@@ -358,7 +359,10 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
         &json!({ "session_id": "sess-1", "prompt": "fix auth flow" }),
     );
     assert_eq!(prompt.agent_id.as_deref(), Some("sess-1"));
-    assert_eq!(prompt.signal, LifecycleSignal::TurnStarted);
+    assert_eq!(
+        prompt.signal,
+        LifecycleSignal::TurnStarted { turn_id: None }
+    );
     assert_eq!(prompt.task.as_deref(), Some("fix auth flow"));
 
     for (tool, expected) in [
@@ -484,6 +488,7 @@ fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
             LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
+                turn_id: None,
             },
         ),
         (
@@ -492,6 +497,7 @@ fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
             LifecycleSignal::TurnEnded {
                 errored: true,
                 parked_on_background: false,
+                turn_id: None,
             },
         ),
         (
@@ -505,6 +511,7 @@ fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
             LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: true,
+                turn_id: None,
             },
         ),
         (
@@ -518,6 +525,7 @@ fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
             LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
+                turn_id: None,
             },
         ),
         (
@@ -531,6 +539,7 @@ fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
             LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: true,
+                turn_id: None,
             },
         ),
         (
@@ -545,6 +554,7 @@ fn session_start_stop_background_and_end_events_map_to_rollup_signals() {
             LifecycleSignal::TurnEnded {
                 errored: true,
                 parked_on_background: true,
+                turn_id: None,
             },
         ),
     ] {

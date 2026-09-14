@@ -135,6 +135,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             Some(TurnEnded {
                 errored: false,
                 parked_on_background: false,
+                turn_id: None,
             }),
         ),
         (
@@ -143,6 +144,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             Some(TurnEnded {
                 errored: true,
                 parked_on_background: false,
+                turn_id: None,
             }),
         ),
         (
@@ -237,6 +239,7 @@ fn messageless_stop_keeps_raw_turn_error_empty() {
         LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
+            turn_id: None,
         }
     );
 }
@@ -249,7 +252,10 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
         &json!({ "session_id": "sess-1", "prompt": "fix auth flow" }),
     );
     assert_eq!(prompt.agent_id.as_deref(), Some("sess-1"));
-    assert_eq!(prompt.signal, LifecycleSignal::TurnStarted);
+    assert_eq!(
+        prompt.signal,
+        LifecycleSignal::TurnStarted { turn_id: None }
+    );
     assert_eq!(prompt.task.as_deref(), Some("fix auth flow"));
 
     let start = hook_lifecycle(

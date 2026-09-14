@@ -22,6 +22,8 @@ Grok is an eagerly registered stock-TUI adapter. RimZ launches `grok`, installs 
 
 Grok 1.0 fires exactly one turn report per turn: `Stop` for a clean end, `StopFailure` for an API error, or `StopCancelled` for a cancel, turn cap, or stalled turn. A child session fires its own hooks with its own `sessionId` and a `subagentType` field, never `Stop`, and no envelope names the parent: shared subagent correlation joins the child through the `SubagentStart` record the parent fired. Supervised final messages prefer the report's `lastAssistantMessage` and fall back to the transcript tail for `Stop`.
 
+A cancelled turn's report is dispatched off Grok's command loop, so it can land after the next `UserPromptSubmit`, and an interrupt that kills a slow `Stop` hook sends `StopCancelled` after the `Stop`. Root `UserPromptSubmit`, `Stop`, `StopFailure`, and `StopCancelled` therefore carry `promptId` as the turn id, and the state machine ignores a report for any turn other than the one started last, or a cancel for a turn that already reported ([late turn reports](./model.md#late-turn-reports)). Child reports carry no turn id, since subagent correlation resolves them.
+
 Grok uses three naming conventions on one surface: hook config keys are PascalCase, the stdin field is `hookEventName`, and the field's values are snake_case. The classifier accepts snake_case, camelCase, and PascalCase, then returns the canonical PascalCase name before shared lifecycle dispatch.
 
 Notification classification is exact: `permission_prompt` plus `Tool permission requested` or `Diff review requested` is Permission; `Plan approval requested` is PlanApproval; and `elicitation_dialog` plus `User question requested` is Question. Near matches and `agent_error` do not open an ask. Human answers stay in Grok's native pane, and hook stdout stays empty.
@@ -72,6 +74,6 @@ Run `rimz coverage` for the current wired/partial/unsupported matrix. The gaps b
 - **Realtime cost is completed-turn only.** Native or locally estimated dollars land when `turn_completed` writes usage, never mid-turn.
 - **Child usage that lands after the parent's prompt closed** reaches only Grok's session ledger, never a parent `turn_completed`, so fleet spend undercounts it.
 - **Cache writes are folded into fresh input.** `inputTokens` also includes `cacheCreationTokens`; the Responses backend reports that bucket as zero and per-model rows omit it, so RimZ keeps the cache-read split only.
-- **A late `StopCancelled`** that lands after the next prompt already started can idle the new turn until its next tool event; the report carries no turn identity RimZ correlates.
+- **A turn report without `promptId`** falls back to arrival order, so on a release that omits it a late `StopCancelled` can still idle the next turn, and an interrupted bash-mode command can still clear a success card.
 - **Plan launches and `--no-subagents`** stay unwired: plan mode is not enforced by the launch flag, and Grok honours `--no-subagents` only in the TUI, not headless runs.
 - **Background parking, remote control, and ACP structured answers** have no native signal. Human answers stay in Grok's pane.

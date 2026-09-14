@@ -88,6 +88,7 @@ fn doctor_json_folds_one_row_per_agent() {
         LifecycleSignal::TurnEnded {
             errored: true,
             parked_on_background: false,
+            turn_id: None,
         },
         Some("main"),
     );
@@ -95,7 +96,7 @@ fn doctor_json_folds_one_row_per_agent() {
         &env,
         "codex",
         "codex-session-xyz",
-        LifecycleSignal::TurnStarted,
+        LifecycleSignal::TurnStarted { turn_id: None },
         Some("feature-migration"),
     );
 

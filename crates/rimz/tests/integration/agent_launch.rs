@@ -829,7 +829,10 @@ fn launch_identity_and_parentage_survive_event_log_rotation() {
             &workspace.session_name,
             kind.as_str(),
             "UserPromptSubmit",
-            &AgentLifecycleObservation::new(Some(agent_id.clone()), LifecycleSignal::TurnStarted),
+            &AgentLifecycleObservation::new(
+                Some(agent_id.clone()),
+                LifecycleSignal::TurnStarted { turn_id: None },
+            ),
         ))
         .expect("append first post-rotation lifecycle event");
 

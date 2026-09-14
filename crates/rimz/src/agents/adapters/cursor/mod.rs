@@ -389,7 +389,7 @@ impl crate::agents::capabilities::HookCapability for CursorAdapter {
             .flatten();
         let signal = match event_name {
             "sessionStart" => LifecycleSignal::Registered,
-            "beforeSubmitPrompt" => LifecycleSignal::TurnStarted,
+            "beforeSubmitPrompt" => LifecycleSignal::TurnStarted { turn_id: None },
             "postToolUse" if self.spec().tool_mutates(payload) => LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits: self.spec().tool_edits_files(payload),
@@ -403,6 +403,7 @@ impl crate::agents::capabilities::HookCapability for CursorAdapter {
             "stop" => LifecycleSignal::TurnEnded {
                 errored: parsed.stop_outcome() == payloads::StopOutcome::Error,
                 parked_on_background: false,
+                turn_id: None,
             },
             "sessionEnd" => LifecycleSignal::Ended,
             "preCompact" => LifecycleSignal::Compacting,

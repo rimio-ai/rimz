@@ -393,7 +393,7 @@ fn answer_plan_rejects_mismatched_answers() {
 #[test]
 fn extension_dialog_waits_until_its_own_prompt_end() {
     use crate::agents::AgentStatus;
-    use crate::agents::lifecycle::{LifecycleState, TurnPhase, step};
+    use crate::agents::lifecycle::{LifecycleState, PriorTurnIds, TurnPhase, step};
 
     let start = json!({
         "session_id": "sess-1",
@@ -430,7 +430,7 @@ fn extension_dialog_waits_until_its_own_prompt_end() {
         phase: TurnPhase::Reasoning,
         compacting: false,
     };
-    let waiting = step(Some(&running), None, None, &wait).next;
+    let waiting = step(Some(&running), None, PriorTurnIds::default(), &wait).next;
     assert_eq!(waiting.status, AgentStatus::Waiting);
 
     // A parallel sibling tool finishing keeps the dialog's wait open.
@@ -439,9 +439,14 @@ fn extension_dialog_waits_until_its_own_prompt_end() {
         &json!({ "session_id": "sess-1", "tool_call_id": "call-2", "tool_name": "read" }),
     );
     assert_eq!(
-        step(Some(&waiting), Some("ui_prompt:1"), None, &sibling.signal)
-            .next
-            .status,
+        step(
+            Some(&waiting),
+            Some("ui_prompt:1"),
+            PriorTurnIds::default(),
+            &sibling.signal
+        )
+        .next
+        .status,
         AgentStatus::Waiting
     );
 
@@ -455,7 +460,12 @@ fn extension_dialog_waits_until_its_own_prompt_end() {
         closed,
         LifecycleSignal::ToolUsed { name: None, .. }
     ));
-    let resumed = step(Some(&waiting), Some("ui_prompt:1"), None, &closed);
+    let resumed = step(
+        Some(&waiting),
+        Some("ui_prompt:1"),
+        PriorTurnIds::default(),
+        &closed,
+    );
     assert_eq!(resumed.next.status, AgentStatus::Running);
     assert!(resumed.waiting_cleared);
 

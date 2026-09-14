@@ -117,7 +117,7 @@ impl SignalSet {
     pub const fn contains(self, signal: &LifecycleSignal) -> bool {
         let bit = match signal {
             LifecycleSignal::Registered => Self::REGISTERED.0,
-            LifecycleSignal::TurnStarted => Self::TURN_STARTED.0,
+            LifecycleSignal::TurnStarted { .. } => Self::TURN_STARTED.0,
             LifecycleSignal::TurnEnded { .. } => Self::TURN_ENDED.0,
             LifecycleSignal::TurnInterrupted { .. } => Self::TURN_INTERRUPTED.0,
             LifecycleSignal::SubagentStarted => Self::SUBAGENT_STARTED.0,
@@ -174,6 +174,7 @@ mod tests {
             LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
+                turn_id: None,
             },
             Transition {
                 next: LifecycleState {
@@ -203,6 +204,7 @@ mod tests {
         let turn_end = LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
+            turn_id: None,
         };
         assert!(DELIVERY_CHECKPOINT.contains(&turn_end));
         assert!(DELIVERY_CHECKPOINT.contains(&LifecycleSignal::TurnInterrupted { turn_id: None }));
@@ -218,7 +220,7 @@ mod tests {
                 failed: true,
             })
         );
-        assert!(!DELIVERY_CHECKPOINT.contains(&LifecycleSignal::TurnStarted));
+        assert!(!DELIVERY_CHECKPOINT.contains(&LifecycleSignal::TurnStarted { turn_id: None }));
         assert!(
             CONDITION_CHECKPOINT.contains(&LifecycleSignal::AwaitingInput {
                 kind: super::super::AskKind::Question,

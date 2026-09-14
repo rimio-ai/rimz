@@ -668,7 +668,7 @@ mod tests {
 
         let mut real_observation = AgentLifecycleObservation::new(
             Some(agent.agent_id.clone()),
-            LifecycleSignal::TurnStarted,
+            LifecycleSignal::TurnStarted { turn_id: None },
         );
         real_observation.prompt =
             Some("Type: USER_MESSAGE\nFrom: @user\nContent:\nreal prompt".to_owned());

@@ -180,7 +180,10 @@ fn lifecycle_transition(
         prior
             .and_then(|agent| agent.open_ask.as_ref())
             .and_then(|ask| ask.native_key.as_deref()),
-        prior.and_then(|agent| agent.interrupted_turn_id.as_deref()),
+        lifecycle::PriorTurnIds {
+            started: prior.and_then(|agent| agent.started_turn_id.as_deref()),
+            interrupted: prior.and_then(|agent| agent.interrupted_turn_id.as_deref()),
+        },
         &observation.signal,
     ))
 }
@@ -366,7 +369,14 @@ fn append_adoption(
             lifecycle_transition(agents, &intent.agent_kind, &observation)
                 .expect("derived adoption has child identity")
         },
-        |primary| lifecycle::step(Some(&primary.next), None, None, &observation.signal),
+        |primary| {
+            lifecycle::step(
+                Some(&primary.next),
+                None,
+                lifecycle::PriorTurnIds::default(),
+                &observation.signal,
+            )
+        },
     );
     let prior_status = primary_transition
         .map(|primary| primary.next.status)
@@ -613,7 +623,7 @@ mod tests {
     #[test]
     fn lifecycle_receipt_carries_appended_event_and_suppressed_diagnostics() {
         let (_dir, store) = test_store();
-        let started = observation(LifecycleSignal::TurnStarted);
+        let started = observation(LifecycleSignal::TurnStarted { turn_id: None });
         let appended = store
             .append_agent_lifecycle(AgentLifecycleIntent {
                 session_name: "rimz-test",
@@ -628,7 +638,10 @@ mod tests {
             Some(&appended.events[0].event_id)
         );
         assert_eq!(appended.events.len(), 1);
-        assert_eq!(appended.events[0].signal, LifecycleSignal::TurnStarted);
+        assert_eq!(
+            appended.events[0].signal,
+            LifecycleSignal::TurnStarted { turn_id: None }
+        );
 
         let proof = observation(LifecycleSignal::ToolUsed {
             mutates: false,
@@ -671,11 +684,77 @@ mod tests {
     }
 
     #[test]
+    fn late_turn_reports_leave_the_started_turn_on_ingest_and_replay() {
+        let (_dir, store) = test_store();
+        let append = |event_name, signal| {
+            store
+                .append_agent_lifecycle(AgentLifecycleIntent {
+                    session_name: "rimz-test",
+                    agent_kind: AgentKind::new_unchecked("grok"),
+                    event_name,
+                    observation: &observation(signal),
+                    spawned_subagents: &[],
+                })
+                .expect("append lifecycle event")
+        };
+        let turn_id = |id: &str| Some(id.to_owned());
+        let dropped = |receipt: &AgentLifecycleReceipt| {
+            receipt
+                .transition
+                .is_some_and(|transition| matches!(transition.kind, TransitionKind::Ignored { .. }))
+        };
+        append(
+            "UserPromptSubmit",
+            LifecycleSignal::TurnStarted {
+                turn_id: turn_id("prompt-1"),
+            },
+        );
+        append(
+            "UserPromptSubmit",
+            LifecycleSignal::TurnStarted {
+                turn_id: turn_id("prompt-2"),
+            },
+        );
+
+        let late = append(
+            "StopCancelled",
+            LifecycleSignal::TurnInterrupted {
+                turn_id: turn_id("prompt-1"),
+            },
+        );
+        assert!(dropped(&late), "{late:?}");
+        let agent = &store.snapshot().unwrap().agents[0];
+        assert_eq!(agent.status, AgentStatus::Running);
+        assert_eq!(agent.started_turn_id.as_deref(), Some("prompt-2"));
+
+        let completed = LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: turn_id("prompt-2"),
+        };
+        assert!(!dropped(&append("Stop", completed)));
+        let killed_stop_hook = append(
+            "StopCancelled",
+            LifecycleSignal::TurnInterrupted {
+                turn_id: turn_id("prompt-2"),
+            },
+        );
+        assert!(dropped(&killed_stop_hook), "{killed_stop_hook:?}");
+        assert_eq!(
+            store.snapshot().unwrap().agents[0].status,
+            AgentStatus::Success
+        );
+    }
+
+    #[test]
     fn read_only_tool_uses_latest_durable_waiting_state() {
         let (_dir, store) = test_store();
         let kind = AgentKind::new_unchecked("claude");
         for (event_name, signal) in [
-            ("UserPromptSubmit", LifecycleSignal::TurnStarted),
+            (
+                "UserPromptSubmit",
+                LifecycleSignal::TurnStarted { turn_id: None },
+            ),
             (
                 "PermissionRequest",
                 LifecycleSignal::AwaitingInput {
@@ -866,7 +945,11 @@ mod tests {
             .expect("freeze accounts");
         append("claude", "before", LifecycleSignal::Registered);
         append("claude", "resumed", LifecycleSignal::Registered);
-        append("claude", "unseen", LifecycleSignal::TurnStarted);
+        append(
+            "claude",
+            "unseen",
+            LifecycleSignal::TurnStarted { turn_id: None },
+        );
         append("codex", "other", LifecycleSignal::Registered);
 
         assert_eq!(login("before"), Some(None));
@@ -882,7 +965,7 @@ mod tests {
         let pane = PaneId::from_parts(MuxName::Tmux, "%1");
         let mut parent = AgentLifecycleObservation::new(
             Some(AgentSessionId::from("parent")),
-            LifecycleSignal::TurnStarted,
+            LifecycleSignal::TurnStarted { turn_id: None },
         );
         parent.pane_id = Some(pane.clone());
         store

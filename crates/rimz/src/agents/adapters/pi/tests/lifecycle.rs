@@ -1,7 +1,7 @@
 use super::*;
 
 use crate::agents::AgentStatus;
-use crate::agents::lifecycle::{LifecycleState, TurnPhase, step};
+use crate::agents::lifecycle::{LifecycleState, PriorTurnIds, TurnPhase, step};
 
 #[test]
 fn lifecycle_signals_map_every_wired_event() {
@@ -15,7 +15,7 @@ fn lifecycle_signals_map_every_wired_event() {
         (
             "before_agent_start",
             json!({ "session_id": "sess-1", "prompt": "fix auth" }),
-            Some(LifecycleSignal::TurnStarted),
+            Some(LifecycleSignal::TurnStarted { turn_id: None }),
         ),
         (
             "session_before_compact",
@@ -89,7 +89,9 @@ fn lifecycle_signals_map_every_wired_event() {
         &json!({ "session_id": "sess-1", "tool_name": "edit" }),
     );
     assert_eq!(
-        step(Some(&running), None, None, &edit.signal).next.phase,
+        step(Some(&running), None, PriorTurnIds::default(), &edit.signal)
+            .next
+            .phase,
         TurnPhase::Acting
     );
 }
@@ -115,6 +117,7 @@ fn settled_boundary_is_terminal_and_agent_end_is_not() {
             LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
+                turn_id: None,
             },
         ),
         (
@@ -126,6 +129,7 @@ fn settled_boundary_is_terminal_and_agent_end_is_not() {
             LifecycleSignal::TurnEnded {
                 errored: true,
                 parked_on_background: false,
+                turn_id: None,
             },
         ),
         (
@@ -133,6 +137,7 @@ fn settled_boundary_is_terminal_and_agent_end_is_not() {
             LifecycleSignal::TurnEnded {
                 errored: true,
                 parked_on_background: false,
+                turn_id: None,
             },
         ),
     ] {

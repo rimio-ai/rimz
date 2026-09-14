@@ -68,6 +68,7 @@ fn fold_lifecycle_maps_each_disposition_to_its_run_status() {
             LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
+                turn_id: None,
             },
             RunStatus::Completed,
         ),
@@ -75,6 +76,7 @@ fn fold_lifecycle_maps_each_disposition_to_its_run_status() {
             LifecycleSignal::TurnEnded {
                 errored: true,
                 parked_on_background: false,
+                turn_id: None,
             },
             RunStatus::Failed,
         ),
@@ -103,6 +105,7 @@ fn lifecycle_completion_writes_terminal_record_once() {
         LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
+            turn_id: None,
         },
     );
     let completed = record_lifecycle(
@@ -137,6 +140,7 @@ fn subagent_observation_does_not_complete_parent_run() {
         LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
+            turn_id: None,
         },
     );
     observation.parent_agent_id = Some(AgentSessionId::from("sess-parent"));
@@ -160,7 +164,7 @@ fn same_kind_child_process_does_not_complete_bound_parent_run() {
     let (_dir, paths, record) = setup();
     let parent = AgentLifecycleObservation::new(
         Some(AgentSessionId::from("sess-parent")),
-        LifecycleSignal::TurnStarted,
+        LifecycleSignal::TurnStarted { turn_id: None },
     );
     record_lifecycle(&paths, &record.run_id, "claude", &parent, None).unwrap();
 
@@ -169,6 +173,7 @@ fn same_kind_child_process_does_not_complete_bound_parent_run() {
         LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
+            turn_id: None,
         },
     );
     let update = record_lifecycle(
@@ -239,6 +244,7 @@ fn verify_transitions_reopen_completed_runs_and_finish_once() {
         LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
+            turn_id: None,
         },
     );
     record_lifecycle(&paths, &record.run_id, "claude", &completed, None)
@@ -306,7 +312,7 @@ fn lifecycle_and_assistant_messages_require_matching_live_root_run() {
     let (_dir, paths, record) = setup();
     let started = AgentLifecycleObservation::new(
         Some(AgentSessionId::from("sess-1")),
-        LifecycleSignal::TurnStarted,
+        LifecycleSignal::TurnStarted { turn_id: None },
     );
 
     assert!(
@@ -353,7 +359,7 @@ fn record_lifecycle_folds_transcript_path_on_run_writes() {
 
     let mut started = AgentLifecycleObservation::new(
         Some(AgentSessionId::from("sess-1")),
-        LifecycleSignal::TurnStarted,
+        LifecycleSignal::TurnStarted { turn_id: None },
     );
     started.transcript_path = Some("/tmp/first.jsonl".to_owned());
     assert!(
@@ -391,6 +397,7 @@ fn record_lifecycle_folds_transcript_path_on_run_writes() {
         LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
+            turn_id: None,
         },
     );
     stopped.transcript_path = Some("/tmp/second.jsonl".to_owned());
@@ -417,7 +424,7 @@ fn record_lifecycle_folds_first_late_transcript_path() {
 
     let started = AgentLifecycleObservation::new(
         Some(AgentSessionId::from("sess-1")),
-        LifecycleSignal::TurnStarted,
+        LifecycleSignal::TurnStarted { turn_id: None },
     );
     record_lifecycle(&paths, &record.run_id, "codex", &started, None).unwrap();
     let running = load(&paths, &record.run_id).unwrap();

@@ -43,7 +43,7 @@ fn late_tool_of_interrupted_turn_does_not_keep_the_old_pane_root_running() {
             5,
             "UserPromptSubmit",
             "old",
-            LifecycleSignal::TurnStarted,
+            LifecycleSignal::TurnStarted { turn_id: None },
             None,
         ),
         codex_lifecycle(
@@ -79,7 +79,7 @@ fn late_tool_of_interrupted_turn_does_not_keep_the_old_pane_root_running() {
             1,
             "UserPromptSubmit",
             "new",
-            LifecycleSignal::TurnStarted,
+            LifecycleSignal::TurnStarted { turn_id: None },
             None,
         ),
         codex_lifecycle(
@@ -89,6 +89,7 @@ fn late_tool_of_interrupted_turn_does_not_keep_the_old_pane_root_running() {
             LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
+                turn_id: None,
             },
             None,
         ),

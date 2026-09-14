@@ -58,7 +58,7 @@ fn first_post_rotation_event_reduces_against_the_carried_agent() {
         "claude",
         "UserPromptSubmit",
         "agent-1",
-        lifecycle::LifecycleSignal::TurnStarted,
+        lifecycle::LifecycleSignal::TurnStarted { turn_id: None },
     );
 
     let merged = agent_rollup_with_carryover(&[turn_started], vec![carried.clone()]);
@@ -179,7 +179,7 @@ fn sticky_rebirth_unstamps_carryover_before_a_later_delta_hydrates_it() {
         "claude",
         "UserPromptSubmit",
         "agent-1",
-        lifecycle::LifecycleSignal::TurnStarted,
+        lifecycle::LifecycleSignal::TurnStarted { turn_id: None },
     );
     let delta_events = decode_events(std::slice::from_ref(&turn_started));
     let warm = fold_delta(

@@ -97,10 +97,11 @@ mod tests {
     fn signals() -> Vec<LifecycleSignal> {
         vec![
             LifecycleSignal::Registered,
-            LifecycleSignal::TurnStarted,
+            LifecycleSignal::TurnStarted { turn_id: None },
             LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
+                turn_id: None,
             },
             LifecycleSignal::TurnInterrupted { turn_id: None },
             LifecycleSignal::SubagentStarted,

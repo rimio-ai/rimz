@@ -37,6 +37,7 @@ fn compact_incident(with_side_fork: bool) -> SidebarSnapshot {
         LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
+            turn_id: None,
         },
         |observation| observation.origin = Some(crate::agents::SessionOrigin::Fresh),
     )];
@@ -66,7 +67,7 @@ fn compact_incident(with_side_fork: bool) -> SidebarSnapshot {
         1,
         "UserPromptSubmit",
         "continuation",
-        LifecycleSignal::TurnStarted,
+        LifecycleSignal::TurnStarted { turn_id: None },
         |observation| {
             observation.prompt = Some("continue".to_owned());
             observation.usage.total_tokens = Some(123);
@@ -149,7 +150,7 @@ fn compaction_event_stamps_then_a_later_event_clears_the_marker() {
         "claude",
         "UserPromptSubmit",
         "sess-1",
-        LifecycleSignal::TurnStarted,
+        LifecycleSignal::TurnStarted { turn_id: None },
     );
     let compact = lifecycle_at(
         &ws,
@@ -177,6 +178,7 @@ fn compaction_event_stamps_then_a_later_event_clears_the_marker() {
         LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
+            turn_id: None,
         },
     );
     let after_stop = reduce_agent_states(&[prompt, compact, stop]);
@@ -200,7 +202,7 @@ fn compaction_end_stays_orthogonal_to_display_status() {
             "codex",
             "UserPromptSubmit",
             "auto",
-            LifecycleSignal::TurnStarted,
+            LifecycleSignal::TurnStarted { turn_id: None },
         ),
         lifecycle_at(
             &ws,
@@ -229,7 +231,7 @@ fn compaction_end_stays_orthogonal_to_display_status() {
             "codex",
             "UserPromptSubmit",
             "manual",
-            LifecycleSignal::TurnStarted,
+            LifecycleSignal::TurnStarted { turn_id: None },
         ),
         lifecycle_at(
             &ws,
@@ -258,7 +260,7 @@ fn compaction_end_stays_orthogonal_to_display_status() {
             "codex",
             "UserPromptSubmit",
             "successful-manual",
-            LifecycleSignal::TurnStarted,
+            LifecycleSignal::TurnStarted { turn_id: None },
         ),
         lifecycle_at(
             &ws,
@@ -268,6 +270,7 @@ fn compaction_end_stays_orthogonal_to_display_status() {
             LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
+                turn_id: None,
             },
         ),
         lifecycle_at(

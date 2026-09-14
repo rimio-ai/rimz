@@ -449,13 +449,14 @@ impl crate::agents::capabilities::HookCapability for PiAdapter {
         let tool_name = payload.get("tool_name").and_then(Value::as_str);
         let signal = match event_name {
             "session_start" => Some(LifecycleSignal::Registered),
-            "before_agent_start" => Some(LifecycleSignal::TurnStarted),
+            "before_agent_start" => Some(LifecycleSignal::TurnStarted { turn_id: None }),
             "agent_settled" if parsed.stop_reason.as_deref() == Some("aborted") => {
                 Some(LifecycleSignal::TurnInterrupted { turn_id: None })
             }
             "agent_settled" => Some(LifecycleSignal::TurnEnded {
                 errored: payloads::agent_end_errored(&parsed),
                 parked_on_background: false,
+                turn_id: None,
             }),
             "tool_call" => ask_kind.map(|kind| LifecycleSignal::AwaitingInput {
                 kind,

@@ -180,7 +180,10 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
         "chat_message",
         &json!({ "session_id": "ses_1", "prompt": "  fix auth  " }),
     );
-    assert_eq!(prompt.signal, LifecycleSignal::TurnStarted);
+    assert_eq!(
+        prompt.signal,
+        LifecycleSignal::TurnStarted { turn_id: None }
+    );
     assert_eq!(prompt.prompt.as_deref(), Some("fix auth"));
     assert_eq!(prompt.task.as_deref(), Some("fix auth"));
 
@@ -202,6 +205,7 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
         LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
+            turn_id: None,
         }
     );
     let proposed_plan = hook_lifecycle(
@@ -228,6 +232,7 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
         LifecycleSignal::TurnEnded {
             errored: true,
             parked_on_background: false,
+            turn_id: None,
         }
     );
 

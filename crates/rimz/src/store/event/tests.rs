@@ -132,7 +132,7 @@ fn lifecycle_event_projection_owns_carry_forward_wire_fields() {
     full.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%1"));
 
     assert_eq!(observation_for_event(&full), full);
-    full.signal = LifecycleSignal::TurnStarted;
+    full.signal = LifecycleSignal::TurnStarted { turn_id: None };
     let projected = observation_for_event(&full);
     let full_keys = serde_json::to_value(&full)
         .expect("full observation serializes")
@@ -162,6 +162,7 @@ fn lifecycle_event_projection_owns_carry_forward_wire_fields() {
     full.signal = LifecycleSignal::TurnEnded {
         errored: false,
         parked_on_background: false,
+        turn_id: None,
     };
     assert_eq!(
         observation_for_event(&full).transcript_path.as_deref(),

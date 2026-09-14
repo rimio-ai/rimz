@@ -430,10 +430,10 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
                     .as_deref()
                     .is_some_and(|prompt| !prompt.trim().is_empty()) =>
             {
-                LifecycleSignal::TurnStarted
+                LifecycleSignal::TurnStarted { turn_id: None }
             }
             "sessionStart" => LifecycleSignal::Registered,
-            "userPromptSubmitted" => LifecycleSignal::TurnStarted,
+            "userPromptSubmitted" => LifecycleSignal::TurnStarted { turn_id: None },
             "permissionRequest" => LifecycleSignal::AwaitingInput {
                 kind: AskKind::Permission,
                 ask_id: None,
@@ -468,6 +468,7 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
             "agentStop" => LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
+                turn_id: None,
             },
             "preCompact" => LifecycleSignal::Compacting,
             "sessionEnd" => LifecycleSignal::Ended,

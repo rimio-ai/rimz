@@ -216,7 +216,7 @@ fn compact_delivery_ack_after_a_prompt_does_not_rearm_the_rollup() {
         auto: Some(false),
         failed: false,
     });
-    append_lifecycle(LifecycleSignal::TurnStarted);
+    append_lifecycle(LifecycleSignal::TurnStarted { turn_id: None });
     assert!(
         q.confirm_delivered_for_card(
             &sent.kind,

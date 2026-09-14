@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::agents::lifecycle::{TurnPhase, step};
+use crate::agents::lifecycle::{PriorTurnIds, TurnPhase, step};
 use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output};
 use crate::agents::{AgentErr, AgentStatus, LocalSessionProjection};
 use md5::{Digest as _, Md5};
@@ -536,7 +536,9 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
         Some("/tmp/transcript.jsonl")
     );
     assert_eq!(
-        step(None, None, None, &registered.signal).next.status,
+        step(None, None, PriorTurnIds::default(), &registered.signal)
+            .next
+            .status,
         AgentStatus::Idle
     );
 
@@ -547,7 +549,7 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
     );
     assert_eq!(prompt.task.as_deref(), Some("fix auth"));
     assert_eq!(prompt.prompt.as_deref(), Some("fix auth"));
-    let running = step(None, None, None, &prompt.signal).next;
+    let running = step(None, None, PriorTurnIds::default(), &prompt.signal).next;
     assert_eq!(running.status, AgentStatus::Running);
     assert_eq!(running.phase, TurnPhase::Reasoning);
 
@@ -588,6 +590,7 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
             LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
+                turn_id: None,
             },
         ),
         (
@@ -599,6 +602,7 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
             LifecycleSignal::TurnEnded {
                 errored: true,
                 parked_on_background: false,
+                turn_id: None,
             },
         ),
     ] {
@@ -624,7 +628,12 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
     assert_eq!(compacting.usage.context_pct, Some(84));
     assert_eq!(compacting.usage.context_window, Some(200_000));
     assert_eq!(compacting.usage.total_tokens, None);
-    let transition = step(Some(&running), None, None, &compacting.signal);
+    let transition = step(
+        Some(&running),
+        None,
+        PriorTurnIds::default(),
+        &compacting.signal,
+    );
     assert!(transition.next.compacting);
     assert_eq!(transition.next.status, AgentStatus::Running);
 

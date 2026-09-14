@@ -804,6 +804,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     state.user_turn_started_at = lifecycle.user_turn_started_at;
     state.waiting_since = lifecycle.waiting_since;
     state.open_ask = lifecycle.open_ask;
+    state.started_turn_id = lifecycle.started_turn_id;
     state.interrupted_turn_id = lifecycle.interrupted_turn_id;
     state.compacting_since = lifecycle.compacting_since;
     state.compaction_count = lifecycle.compaction_count;
@@ -962,6 +963,7 @@ struct LifecycleProjection {
     user_turn_started_at: Option<Timestamp>,
     waiting_since: Option<Timestamp>,
     open_ask: Option<crate::agents::OpenAsk>,
+    started_turn_id: Option<String>,
     interrupted_turn_id: Option<String>,
 }
 
@@ -982,7 +984,10 @@ fn lifecycle_projection(
         prior
             .and_then(|p| p.open_ask.as_ref())
             .and_then(|ask| ask.native_key.as_deref()),
-        prior.and_then(|p| p.interrupted_turn_id.as_deref()),
+        lifecycle::PriorTurnIds {
+            started: prior.and_then(|p| p.started_turn_id.as_deref()),
+            interrupted: prior.and_then(|p| p.interrupted_turn_id.as_deref()),
+        },
         &signal,
     );
     let compacting_since = if next.compacting {
@@ -1002,7 +1007,7 @@ fn lifecycle_projection(
             auto: Some(false),
             failed: false,
         } => Some(timestamp),
-        lifecycle::LifecycleSignal::TurnStarted => None,
+        lifecycle::LifecycleSignal::TurnStarted { .. } => None,
         _ => prior.and_then(|p| p.compacted_awaiting_prompt),
     };
     let mut tool_calls = prior.map_or_else(BTreeMap::new, |p| p.tool_calls.clone());
@@ -1041,7 +1046,7 @@ fn lifecycle_projection(
         prior.and_then(|p| p.turn_started_at)
     };
     // A delivered prompt opens a provider turn but continues the user's task.
-    let harness_prompt = matches!(signal, lifecycle::LifecycleSignal::TurnStarted)
+    let harness_prompt = matches!(signal, lifecycle::LifecycleSignal::TurnStarted { .. })
         && prompt.is_some_and(crate::store::message::prompt_is_harness_delivered);
     let user_turn_started_at = if (opened_turn && !harness_prompt) || resets_context {
         Some(timestamp)
@@ -1072,6 +1077,7 @@ fn lifecycle_projection(
         _ if next.status == AgentStatus::Waiting => prior.and_then(|p| p.open_ask.clone()),
         _ => None,
     };
+    let started_turn_id = signal.started_turn_id(prior.and_then(|p| p.started_turn_id.as_deref()));
     let interrupted_turn_id = match &signal {
         lifecycle::LifecycleSignal::TurnInterrupted { turn_id } => turn_id.clone(),
         lifecycle::LifecycleSignal::Registered => None,
@@ -1089,6 +1095,7 @@ fn lifecycle_projection(
         user_turn_started_at,
         waiting_since,
         open_ask,
+        started_turn_id,
         interrupted_turn_id,
     }
 }

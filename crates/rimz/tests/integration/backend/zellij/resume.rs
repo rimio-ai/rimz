@@ -81,7 +81,7 @@ fn self_wait_steers_to_live_consumer_when_idle_and_working() {
             ))
             .expect("seed bound live agent");
         for signal in std::iter::once(LifecycleSignal::Registered)
-            .chain(working.then_some(LifecycleSignal::TurnStarted))
+            .chain(working.then_some(LifecycleSignal::TurnStarted { turn_id: None }))
         {
             let mut observation = AgentLifecycleObservation::new(Some(agent_id.clone()), signal);
             observation.agent_name = Some("planner".to_owned());
