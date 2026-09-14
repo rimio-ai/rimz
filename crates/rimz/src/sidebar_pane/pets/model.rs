@@ -78,14 +78,6 @@ impl AnimationSet {
     }
 }
 
-impl std::ops::Index<PetTrack> for AnimationSet {
-    type Output = Animation;
-
-    fn index(&self, track: PetTrack) -> &Self::Output {
-        self.get(track)
-    }
-}
-
 static ANIMATIONS: LazyLock<AnimationSet> = LazyLock::new(|| {
     let row = |row: usize, count: usize| (0..count).map(|col| row * 8 + col).collect::<Vec<_>>();
     let run_right = row(1, 8);
@@ -177,7 +169,11 @@ mod tests {
             (PetTrack::Jumping, (32..37).collect()),
             (PetTrack::Failed, (40..48).collect()),
         ] {
-            assert_eq!(animations[track].sprites, expected, "{track:?} sheet row");
+            assert_eq!(
+                animations.get(track).sprites,
+                expected,
+                "{track:?} sheet row"
+            );
         }
     }
 
