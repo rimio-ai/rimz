@@ -61,10 +61,10 @@ const PANE_PROBE_WAIT_STEP: Duration = Duration::from_millis(25);
 const PANE_PROBE_WAIT_STEPS: u32 = 20;
 const PANE_GONE_STRIKES: u8 = 3;
 const SELF_CLOSE_RECONFIRM_DELAY: Duration = Duration::from_millis(500);
-pub const RELOAD_EXIT_CODE: i32 = 100;
+pub(super) const RELOAD_EXIT_CODE: i32 = 100;
 #[cfg(test)]
 const PANIC_EXIT_CODE: i32 = 101;
-pub const RESPAWN_EXIT_CODE: i32 = 102;
+pub(super) const RESPAWN_EXIT_CODE: i32 = 102;
 pub const SELF_CLOSE_EXIT_CODE: i32 = 103;
 const RESPAWN_BACKOFF_INITIAL: Duration = Duration::from_secs(1);
 const RESPAWN_BACKOFF_MAX: Duration = Duration::from_secs(60);
