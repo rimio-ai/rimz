@@ -489,7 +489,7 @@ One Amp process can host several threads: `amp.activeThread` names the focused t
 
 ## Supervised runs and stream JSON
 
-`amp -x, --execute [message]` runs one turn without the TUI. The prompt comes from the argument or stdin, only the last assistant message is printed, and Amp exits. Redirecting stdout turns execute mode on. Execute mode archives a new thread when it finishes; `--no-archive-after-execute` leaves it unarchived (the flag applies to `amp review` too). The baseline CLI refuses to continue an archived thread: `amp threads continue <T-id> -x …` prints `This thread is archived and cannot be continued.` (checked 2026-09-14).
+`amp -x, --execute [message]` runs one turn without the TUI. The prompt comes from the argument or stdin, only the last assistant message is printed, and Amp exits. Execute mode reads stdin even when the prompt is an argument, so a non-interactive `amp -x "<prompt>"` with nothing piped fails with `Timeout while reading from stdin`; redirect stdin from `/dev/null` (checked on 0.0.1789344113, 2026-09-14). Redirecting stdout turns execute mode on. Execute mode archives a new thread when it finishes; `--no-archive-after-execute` leaves it unarchived (the flag applies to `amp review` too). The baseline CLI refuses to continue an archived thread: `amp threads continue <T-id> -x …` prints `This thread is archived and cannot be continued.` (checked 2026-09-14).
 
 ```sh
 amp --execute "prompt" --stream-json --plugin-ready-timeout 30
