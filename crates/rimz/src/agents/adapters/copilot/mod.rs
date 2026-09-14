@@ -438,7 +438,7 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
                 kind: AskKind::Permission,
                 ask_id: None,
                 detail: None,
-                native_key: None,
+                native_key: tool.and_then(|tool| tool.command_key()),
             },
             "preToolUse" => match self
                 .spec()
@@ -462,7 +462,7 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
                 mutates: tools.any_named(self.spec().tools.mutating),
                 edits: tools.any_named(self.spec().tools.editing),
                 name: None,
-                native_key: None,
+                native_key: tool.and_then(|tool| tool.command_key()),
                 turn_id: None,
             },
             "agentStop" => LifecycleSignal::TurnEnded {

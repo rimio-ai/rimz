@@ -1039,9 +1039,11 @@ fn copilot_uuid_child_hooks_join_through_the_start_record_agent_id() {
         "userPromptSubmitted",
         serde_json::json!({"prompt":"View README.md and report its first line"}),
     );
+    // Copilot 1.0.83 raises the child's permission prompt on the parent
+    // session, narrowing the call's arguments to `toolInput.command`.
     parent(
         "permissionRequest",
-        serde_json::json!({"toolName":"bash","toolInput":{"command":"ls"}}),
+        serde_json::json!({"hookName":"permissionRequest","toolName":"bash","toolInput":{"command":"ls"},"permissionSuggestions":[]}),
     );
     assert_eq!(
         state("parent-session").unwrap().status,
@@ -1049,14 +1051,21 @@ fn copilot_uuid_child_hooks_join_through_the_start_record_agent_id() {
     );
     child(
         "postToolUse",
-        serde_json::json!({"toolName":"bash","toolArgs":"{}"}),
+        serde_json::json!({"toolName":"bash","toolArgs":{"command":"pwd","mode":"sync"}}),
     );
-    // The child's hooks carry its own session id, so only the parent's next
-    // hook (the completed task call below) clears the parent's permission wait.
     assert_eq!(
         state("parent-session").unwrap().status,
-        rimz::agents::AgentStatus::Waiting
+        rimz::agents::AgentStatus::Waiting,
+        "a different child call must not clear the parent's ask"
     );
+    child(
+        "postToolUse",
+        serde_json::json!({"toolName":"bash","toolArgs":{"command":"ls","description":"List files","initial_wait":30,"mode":"sync"}}),
+    );
+    let answered = state("parent-session").unwrap();
+    assert_eq!(answered.status, rimz::agents::AgentStatus::Running);
+    assert!(answered.open_ask.is_none());
+    assert!(!answered.is_awaiting_input());
     child("agentStop", serde_json::json!({"stopReason":"end_turn"}));
 
     let joined = state(child_id).expect("the UUID child joins its parent");

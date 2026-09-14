@@ -131,7 +131,7 @@ A parked row is still `running`, so an `ended` fails it like any other running r
 
 ### Subagents
 
-A `subagent_stopped` resolves the child row, and the sidebar keeps that `✓` or `!` through the parent's user-authored turn ([sidebar.md](../sidebar/sidebar.md#sub-agent-lists)). A child owns its own `agent_id`, so its signals never move the parent's status or phase.
+A `subagent_stopped` resolves the child row, and the sidebar keeps that `✓` or `!` through the parent's user-authored turn ([sidebar.md](../sidebar/sidebar.md#sub-agent-lists)). A child owns its own `agent_id`, so its signals never move the parent's status or phase, with one exception. Some providers raise a child's native prompt on the parent session. When a child's `tool_used` carries the native key of the parent's open ask, Store appends a derived `SubagentAskAnswered` `tool_used` with that key to the parent, which clears the wait like the parent's own answer edge. Keys are call identities, so a child's unrelated tool never clears a real parent ask, and a keyless ask never clears from a child.
 
 A pane-backed launched child that never reaches `subagent_stopped` (it timed out, was stopped, or its provider died mid-turn) resolves through `ended` instead: `failed` for an observed end, `idle` for a reaped one. Either way the retained child row is at rest, which keeps it out of the parent's live-child count ([subagents.md](../harness/subagents.md#the-lifecycle-end-to-end)).
 
