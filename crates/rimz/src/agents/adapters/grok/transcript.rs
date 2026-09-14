@@ -554,6 +554,7 @@ pub(super) struct Summary {
     pub generated_title: Option<String>,
     pub agent_name: Option<String>,
     pub reasoning_effort: Option<String>,
+    pub session_kind: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -564,6 +565,12 @@ pub(super) struct SummaryInfo {
 }
 
 impl Summary {
+    pub(super) fn is_subagent(&self) -> bool {
+        self.session_kind
+            .as_deref()
+            .is_some_and(|kind| kind.starts_with("subagent"))
+    }
+
     pub(super) fn title(&self) -> Option<String> {
         self.generated_title
             .as_deref()

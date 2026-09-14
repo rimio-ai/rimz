@@ -34,6 +34,23 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
         offset,
         state: None,
     };
+    let summary = transcript::read_summary(path);
+    let origin = summary
+        .as_ref()
+        .and_then(|summary| origin_path(summary.info.cwd.as_deref()));
+    // A child's turns are already folded into its parent's `turn_completed`
+    // usage, so pricing the child's own transcript would count them twice.
+    if summary
+        .as_ref()
+        .is_some_and(transcript::Summary::is_subagent)
+    {
+        return SpendParse {
+            origin,
+            cursor,
+            replace_entries: rewound,
+            ..SpendParse::default()
+        };
+    }
     let fallback_session_id = path
         .parent()
         .and_then(Path::file_name)
@@ -45,8 +62,6 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
         prices,
         &mut unknown_models,
     );
-    let origin =
-        transcript::read_summary(path).and_then(|summary| origin_path(summary.info.cwd.as_deref()));
     SpendParse {
         entries,
         origin,
@@ -458,6 +473,15 @@ mod tests {
                 .total_cost_usd,
             Some(0.25)
         );
+
+        std::fs::write(
+            session.join("summary.json"),
+            r#"{"info":{"id":"s1"},"session_kind":"subagent_fork"}"#,
+        )
+        .unwrap();
+        let child = parse(&path, None, &PriceBook::fixture());
+        assert!(child.entries.is_empty());
+        assert_eq!(child.cursor.offset, parsed.cursor.offset);
     }
 
     #[test]
