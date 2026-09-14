@@ -223,6 +223,19 @@ fn filled_cells(percent: u8, width: usize) -> usize {
     ((percent.min(100) as usize) * width.max(1) + 50) / 100
 }
 
+/// The cell a sub-cap tick occupies on a `width`-cell bar: the ends are reserved
+/// for exactly 0% and exactly 100%, so any partial budget lands on an interior cell.
+fn tick_cell(percent: u8, width: usize) -> usize {
+    let last = width.max(1) - 1;
+    match percent {
+        0 => 0,
+        100.. => last,
+        partial => filled_cells(partial, width)
+            .max(1)
+            .min(last.saturating_sub(1)),
+    }
+}
+
 /// Quantize a percentage to the nearest horizontal half cell.
 pub(super) fn filled_half_cells(fill_pct: f64, width: usize) -> (usize, bool) {
     let fill_pct = fill_pct.clamp(0.0, 100.0);
@@ -582,7 +595,8 @@ pub(in crate::sidebar_pane::render) struct ManaTick {
 /// 0% remaining — the budget fully spent — the whole empty track turns red;
 /// any nonzero remaining budget keeps at least one filled cell.
 /// Ticks use each sub-cap's own 0–100 remaining axis across the full width,
-/// independently of the parent fill, including on a fully spent track.
+/// independently of the parent fill, including on a fully spent track. The end
+/// cells belong to exactly 0% and exactly 100%; any partial reading sits inside.
 /// Collisions keep the lowest remaining percentage.
 pub(in crate::sidebar_pane::render) fn mana_bar_spans(
     theme: &Theme,
@@ -595,7 +609,7 @@ pub(in crate::sidebar_pane::render) fn mana_bar_spans(
     let filled = filled_cells(remaining_pct, width).max(usize::from(remaining_pct > 0));
     let mut ticks: Vec<_> = ticks
         .iter()
-        .map(|tick| (filled_cells(tick.remaining_pct, width).min(width - 1), tick))
+        .map(|tick| (tick_cell(tick.remaining_pct, width), tick))
         .collect();
     ticks.sort_unstable_by_key(|(cell, tick)| (*cell, tick.remaining_pct));
     ticks.dedup_by_key(|(cell, _)| *cell);
