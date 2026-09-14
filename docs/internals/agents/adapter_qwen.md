@@ -11,11 +11,11 @@ Only the registry reaches the concrete adapter. Effective selection, Alibaba quo
 | Native event | RimZ signal |
 | --- | --- |
 | `SessionStart` | register; `compact` closes compaction, while `startup` and `clear` mark fresh lineage |
-| `UserPromptSubmit` | turn started; a present-but-blank prompt is an internal continuation and stays inside the current turn |
+| `UserPromptSubmit` | turn started; the card prompt prefers `submitted_prompt` (the typed text, 0.23 and newer) over the expanded `prompt`, and a present-but-blank `prompt` is an internal continuation that stays inside the current turn |
 | gate-tool `PreToolUse` | plan/question wait keyed by `tool_use_id`; matcher-scoped to `ask_user_question` and `exit_plan_mode` |
 | `PostToolUse` / `PostToolUseFailure` | completed tool activity |
 | `PermissionRequest` | permission wait; the plan/question gate tools classify as plan/question waits |
-| `Stop` / `StopFailure` | clean or failed turn end; pending `background_tasks` or `crons` keep the parent parked |
+| `Stop` / `StopFailure` | clean or failed turn end; `rate_limit` and `server_error` pause, `loop_detected` fails, other errors classify by label; pending `background_tasks` or `crons` keep the parent parked |
 | `SubagentStart` / `SubagentStop` | child bracket; both ends best-effort add model and description from the child metadata sidecar |
 | `PreCompact` / `PostCompact` | compaction bracket |
 | `SessionEnd` | ended |
@@ -24,9 +24,11 @@ Only the registry reaches the concrete adapter. Effective selection, Alibaba quo
 
 **Subagents.** The child id is `agent_id`, the parent is the hook's root `session_id`, and `agent_type` labels the child. At both `SubagentStart` and `SubagentStop`, RimZ best-effort reads `<project>/subagents/<parent-session-id>/agent-<agent_id>.meta.json`; `persistedCliFlags.model` supplies the model and `description` supplies the child task description. Qwen Code 0.21 and newer write that sidecar before the start hook, so running children receive the enrichment immediately; older releases may not expose it until stop. This wires the native child bracket and renders the tree.
 
+**Hook process ownership.** The installed command exports `RIMZ_AGENT_PID=$PPID`. Qwen Code 0.23 runs `StopFailure`, `MessageDisplay`, and `SessionDelete` hooks under a detached `node --input-type=commonjs --eval` supervisor so they outlive Qwen, so that parent is the supervisor rather than Qwen. Hook ingress recognizes the supervisor by its argv and substitutes its parent when that parent is a live Qwen process; an orphaned supervisor reports no owner, which keeps the session's prior runtime owner instead of recording a pid that exits a moment later.
+
 ## Launch and resume
 
-RimZ preserves Qwen's configured model by default because `security.auth.selectedType` can route to provider-specific catalogs; an `agents.toml` model preset adds `--model` explicitly. For `system-prompt-file`, the exec wrapper sets `QWEN_SYSTEM_MD` to the user's resolved absolute base path when there are no fragments and to a content-addressed composed artifact when fragments exist. Qwen reads that file as the verbatim replacement base prompt, so prompt contents never enter process argv. A user-supplied `--system-prompt` in raw profile `args` retains Qwen's higher CLI precedence and deliberately bypasses the typed file replacement. Manual compaction sends `/compress` (`/summarize` is Qwen's alias).
+Permission modes map to `--approval-mode`: Ask passes `default`, Auto `auto-edit`, Yolo `yolo`, and Plan `plan`. Ask is explicit because Qwen Code 0.23 defaults to the `auto` classifier when neither the flag nor `tools.approvalMode` is set. RimZ preserves Qwen's configured model by default because `security.auth.selectedType` can route to provider-specific catalogs; an `agents.toml` model preset adds `--model` explicitly. For `system-prompt-file`, the exec wrapper sets `QWEN_SYSTEM_MD` to the user's resolved absolute base path when there are no fragments and to a content-addressed composed artifact when fragments exist. Qwen reads that file as the verbatim replacement base prompt, so prompt contents never enter process argv. A user-supplied `--system-prompt` in raw profile `args` retains Qwen's higher CLI precedence and deliberately bypasses the typed file replacement. Manual compaction sends `/compress` (`/summarize` is Qwen's alias).
 
 ## Context and transcript
 
@@ -42,7 +44,7 @@ Each visible `user`/`assistant` record carries the Google `Content` shape, so re
 
 The account and quota probes share one effective-selection resolver over Qwen's JSONC settings. It joins `security.auth.selectedType`, `model.name`, the selected `model.baseUrl`, `modelProviders`, the top-level `providerProtocol` map, each model's exact endpoint, and its declared `envKey`; the transport protocol alone never decides the billing provider. Credential values resolve from the process environment, then `${QWEN_HOME:-~/.qwen}/.env`, then settings `env`. Values stay in memory only. The account key is a domain-separated SHA-256 fingerprint of provider, region, credential variable name, and secret bytes, so the same key has one identity across supported sources while a rotation in the same region changes identity; neither the credential nor fingerprint reaches logs or rendered output.
 
-An exact official Coding Plan model endpoint plus its declared credential key, normally `BAILIAN_CODING_PLAN_API_KEY`, selects Alibaba International or China and produces a sub-provider account scope. Recognized direct OpenAI, Anthropic, and Gemini API-key selections are unmetered; missing selection is logged out, while custom endpoints, ADC/external managers, ambiguous provider records, and unevaluable credentials remain unavailable for a short-TTL retry.
+An exact official Coding Plan model endpoint plus its declared credential key, normally `BAILIAN_CODING_PLAN_API_KEY`, selects Alibaba International or China and produces a sub-provider account scope. Recognized direct OpenAI (the `openai` and `openai-responses` auth types), Anthropic, and Gemini API-key selections are unmetered; missing selection is logged out, while custom endpoints, ADC/external managers, ambiguous provider records, and unevaluable credentials remain unavailable for a short-TTL retry.
 
 **Alibaba quota enrichment is experimental.** RimZ posts the selected API key to that region's fixed Alibaba console host and normalizes an explicitly active instance into authoritative 5-hour, 7-day, and 30-day windows. The transport accepts neither browser cookies, endpoint overrides, redirects, nor alternate-region fallback. The rate-limit cache carries the exact scope and credential fingerprint that produced the windows; a region, provider, or key switch replaces the entry, so prior truth neither paints nor controls the new account.
 
@@ -66,7 +68,9 @@ The transcript groups explicit and implicit cache hits in `cachedContentTokenCou
 
 Run `rimz coverage` for the current wired/partial/unsupported matrix. The gaps below are the ones with a reason worth recording.
 
-- **The runtime sidecar stays unread.** Hooks bind the session to the pane through the hook child process and `RIMZ_AGENT_PID`. Qwen's `<session>.runtime.json` can establish that binding before the first hook and recover it after hook gaps, but consuming it needs a shared adapter-owned pane/session attribution seam with descendant-process and PID-reuse validation. The adapter leaves it deferred rather than adding a Qwen-only binding path.
+- **The runtime sidecar stays unread.** Hooks bind the session to the pane through the hook child process and `RIMZ_AGENT_PID`. Qwen's `<session>.runtime.json` can establish that binding before the first hook and recover it after hook gaps, but consuming it needs a shared adapter-owned pane/session attribution seam with descendant-process and PID-reuse validation. Qwen Code 0.23 adds a live session registry (`qwen sessions ps`) with the same shape of problem. The adapter leaves both deferred rather than adding a Qwen-only binding path.
+- **`SessionDelete` and nested subagent lineage stay unmapped.** RimZ has no provider-neutral signal for a deleted session, and meta `parentAgentId` could parent a child under another subagent but the store and sidebar tree have not been proven for that shape, so every child still parents to the root session.
+- **A child's errored close is not typed.** `SubagentStop` fires before Qwen patches the meta `status`, and the payload carries no status field.
 - **Dual output stays optional.** `--json-file` plus `--input-file` can improve prompt and permission coverage, but adopting it changes pane launch ownership and adds control-channel races. Hooks and the native pane remain the current decision path.
 - **Multi-provider endpoints, subscription metering, and provider-specific off-book pricing** are the declared cost gaps.
 - **Concurrent subagent delivery is unproven.** Qwen warns that concurrent-agent hooks are registered at session scope rather than firing scope; live fixtures still need to pin concurrent delivery and parent correlation.
