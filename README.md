@@ -343,7 +343,7 @@ Every other agent is **experimental**: wired and tested against its documented s
 |-------------|-----------------|:-----:|:----:|:-------:|:-------:|:---:|:---------:|
 | Claude Code | 🟢 Supported     |   ●   |  ●   |    ●    |    ●    |  ●  |     ●     |
 | Codex       | 🟢 Supported     |   ●   |  ●   |    ●    |    ●    |  ●  |     ●     |
-| Pi          | 🟡 Alpha         |   ●   |  ●   |    ●    |    ●    |  ●  |     ●     |
+| Pi          | 🟡 Alpha         |   ●   |  ●   |    ●    |    ●    |  ●  |     ◐     |
 | OpenCode    | 🟡 Alpha         |   ●   |  ●   |    ●    |    ●    |  ●  |     ●     |
 | Antigravity | ⚪ Experimental  |   ●   |  ◐   |    ◐    |    ●    |  ◐  |     ◐     |
 | Copilot     | ⚪ Experimental  |   ●   |  ◐   |    ◐    |    ◐    |  ●  |     ◐     |

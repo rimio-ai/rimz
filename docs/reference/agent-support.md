@@ -58,7 +58,7 @@ One row per agent, in tier order. Run `rimz coverage` for the limit behind every
 | --- | :--: | :--: | :--: | :--: | :--: | :--: |
 | Claude Code | ● | ● | ● | ● | ● | ● |
 | Codex | ● | ● | ● | ● | ● | ● |
-| Pi | ● | ● | ● | ● | ● | ● |
+| Pi | ● | ● | ● | ● | ● | ◐ |
 | OpenCode | ● | ● | ● | ● | ● | ● |
 | Antigravity | ● | ◐ | ◐ | ● | ◐ | ◐ |
 | Copilot | ● | ◐ | ◐ | ◐ | ● | ◐ |
@@ -287,7 +287,7 @@ RimZ folds eleven lifecycle signals into every agent's state. The table names th
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Claude | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Codex | `SessionStart` | `UserPromptSubmit` | `Stop` / `Interrupt` | `PostToolUse` | `PermissionRequest`; `Stop` + rollout `Plan` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | ◐ derived | ◐ derived |
-| Pi | `session_start` | `before_agent_start` | `agent_settled` (`agent_end` before Pi 0.80.4) | `tool_execution_end` | `tool_call` | `subagent_started` | `subagent_stopped` | `session_before_compact` | `session_compact`; `session_compact_failed` | `session_shutdown` | ◐ derived |
+| Pi | `session_start` | `before_agent_start` | `agent_settled` (`agent_end` before Pi 0.80.4) | `tool_execution_end` | `tool_call`; `ui_prompt_start` (Pi 0.84.4+) | `subagent_started` | `subagent_stopped` | `session_before_compact` | `session_compact`; `session_compact_failed` | `session_shutdown` | ◐ derived |
 | OpenCode | `session_created` | `chat_message` | `session_idle` | `tool_after` | `permission_ask`; `session_idle` + plan turn | `SubagentStart` | `SubagentStop` | `session_compacting` | `session_compacted` | `session_ended` | ◐ derived |
 | Antigravity | ◐ first `PreInvocation` + local discovery | `PreInvocation` | `Stop` | `PostToolUse` | ◐ statusline permission marker + transcript question | ◐ child `PreInvocation` + parent transcript | ◐ child `Stop` + parent transcript | ✗ | ✗ | ◐ derived | ◐ derived |
 | Copilot | `sessionStart` | `userPromptSubmitted` | `agentStop` | `postToolUse` | `permissionRequest` | ◐ child `userPromptSubmitted` + parent transcript | ◐ child `agentStop` + parent transcript | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
