@@ -99,8 +99,8 @@ Each lane's cost and the bound that holds it down. Reproducible figures come fro
 
 | Operation | Cost | Bound |
 | --- | --- | --- |
-| Snapshot rollup | O(1) from `snapshots/latest.json`; O(delta bytes) when writes outran the cache | The `(generation, offset)` freshness stamp; a long-lived `RollupCursor` holds the parsed base |
-| Event-log fold | Warm cursor: one stat plus the appended frames | Guard test `delta_fold_is_o_new_bytes` |
+| Snapshot rollup | O(1) from `snapshots/latest.json`; O(delta bytes) when writes outran the cache | The `(generation, offset)` freshness stamp; a long-lived `RollupCursor` holds the parsed base, and the rotation carryover beneath it is parsed once per file identity per thread and shared, never copied, by every fold |
+| Event-log fold | Warm cursor: one stat of the log and one of the carryover, plus the appended frames; the projection clones only the rows it keeps. Unchanged log: shared handles only | Guard tests `delta_fold_is_o_new_bytes` and `warm_fold_parses_unchanged_carryover_zero_times` |
 | Consumer unchanged check | Metadata stamps on five inputs after an adoption; the full input set after a fallback | A matching stamp skips the fold; `CONSUMER_UNCHANGED_BACKSTOP_MS` forces one anyway ([state.md](./sidebar/state.md#the-skip-memo)) |
 | Workspace projection | Producer: one enrichment and one serialize per changed fold. Consumer: one parse-cached clone plus its local projection | Adoption requires an exact source match; any mismatch falls back to a full local fold with no mux read ([state.md](./sidebar/state.md#adoption-and-fallback)) |
 | Pane roster (producer) | Zellij: one topology read plus a `zellij pipe` nudge. tmux: one `list-panes` call | `SNAPSHOT_CACHE_TTL` while a client drives it, `EVENT_PANE_TTL` while the presence stamp is fresh; one attempt per data tick |
@@ -175,7 +175,7 @@ The deterministic gates pin exact integers. They live in `crates/rimz/tests/inte
 | `store_fsync.rs` | The warm write path's fsync count |
 | `store_bytes.rs` | A lifecycle frame at 1 KiB or less |
 | `produce_budget.rs` | Zero subprocess spawns for a warm produce with fresh inputs, and for a produce over stale or missing heavy caches; a warm produce at fleet scale under 50 ms |
-| `fold_incremental.rs` | Warm folds and produces read O(new bytes) |
+| `fold_incremental.rs` | Warm folds and produces read O(new bytes); a warm or unchanged fold parses zero carryover bytes, and a replaced carryover re-parses once |
 | `consumer_enrichment.rs`, `enrichment_cadence.rs`, `spending_incremental.rs` | Unchanged-room consumer cost, per-enrichment TTL stamps, and O(delta) spend IO |
 
 The `cargo xtask invariants` check `ensure_sidebar_library_boundaries` keeps store writers, the run-wake sender, and the broker out of the sidebar data plane's imports, so the producer cannot grow write-side machinery unnoticed.
@@ -262,7 +262,7 @@ Every writer that knows about a change pushes: store and sidecar writers post a 
 
 ### No reader pays for history
 
-The rollup persists a raw fold base with its `(generation, offset)` stamp, and catch-up seeks to the offset and folds only new frames ([`fold.rs`](../../crates/rimz/src/store/snapshot/fold.rs), [store.md → The read path](./store.md#the-read-path)). Runtime projection, resume outcomes, and smart-compact dedupe ride the same fold instead of rescanning `events.log.jsonl`. A `(path, mtime, len)` parse cache on `snapshot.json`, `latest.json`, and `rollup.json` returns `Arc<T>` handles, so an unchanged file costs neither a re-parse nor a deep clone ([`disk/parse_cache.rs`](../../crates/rimz/src/disk/parse_cache.rs)).
+The rollup persists a raw fold base with its `(generation, offset)` stamp, and catch-up seeks to the offset and folds only new frames ([`fold.rs`](../../crates/rimz/src/store/snapshot/fold.rs), [store.md → The read path](./store.md#the-read-path)). Runtime projection, resume outcomes, and smart-compact dedupe ride the same fold instead of rescanning `events.log.jsonl`. A `(path, mtime, len)` parse cache on `snapshot.json`, `latest.json`, and `rollup.json`, and a full-identity `(len, mtime, dev, ino)` one on `agents.carryover.json`, return `Arc<T>` handles, so an unchanged file costs neither a re-parse nor a deep clone ([`disk/parse_cache.rs`](../../crates/rimz/src/disk/parse_cache.rs)). The carryover's cached form is fold-ready (identities backfilled, rows key-sorted), and a cursor holds the merged rollup as that shared carryover beneath the live rows that win the merge, so a fold thread retains one copy of history however many times it folds. A corrupt carryover is never cached: every fold reports it until the file is replaced.
 
 The spend walk is incremental in three layers: the walker's directory index stats only active frontiers and reconciles fully every 15 minutes, the disk cache keeps a cursor per file so a grown file parses only its appended suffix, and the one elected walker holds the only parsed cache, so workspace requests borrow instead of cloning. Aggregation uses hash collections for session uniqueness and keeps deterministic order only in the published maps. The cache layout is [spending.md → The incremental cache](./agents/spending.md#the-incremental-cache).
 

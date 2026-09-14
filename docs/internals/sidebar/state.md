@@ -155,6 +155,8 @@ A frameless fold, which a cold consumer or a CLI caller wanting rollup metadata 
 
 A consumer adopts `workspace-projection.json` only when the publication describes the same world it sees: matching schema version (`SNAPSHOT_VERSION`), matching session name, and an exact match on the source tuple of rollup generation, rollup offset, pane-frame topology stamp, pane-frame metrics stamp, and config generation. On a match it clones the parse-cached projection and applies its own `project_local`. On any miss, including an absent, corrupt, or mixed-build file, it runs the full local fold, which costs no mux read and no git fork.
 
+The miss rate rises with write load by construction. The consumer's rollup offset is the live log length at its read, while the producer stamps its publication with the extent of its own last fold, and every commit sends its `StoreDelta` wakeup before the debounced checkpoint publish. During a burst a consumer wakes ahead of the producer's republish, so it falls back. A stale projection is never adopted to avoid that; the fallback is the freshness path, and it stays cheap because the consumer's cursor folds only the appended frames over a carryover parsed once per file identity.
+
 The producer serializes the projection once per fold and republishes only when the bytes change, so a quiet room writes nothing while time-window verdicts still land when they flip.
 
 ### The skip memo
