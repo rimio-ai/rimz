@@ -52,7 +52,7 @@ Two flags tune the posture:
 
 ```sh
 rimz remote connect dev --no-reconnect   # one ssh run, no supervisor, no health probe
-rimz remote connect dev --reset          # attach a fresh room (passes --no-resume through)
+rimz remote connect dev --reset          # a room born now comes up empty (passes --no-resume through)
 ```
 
 `rimz remote reset dev` is the shorthand for that last one. The link supervisor and its reconnect policy are in [the internals](../internals/remote.md).
