@@ -691,7 +691,8 @@ fn two_file_install_wraps_idempotently_and_restores_the_exact_json_value() {
     let original_statusline = json!({
         "type": "command",
         "command": "printf user-status",
-        "padding": 0
+        "padding": 0,
+        "refreshInterval": 5
     });
     std::fs::write(
         &settings,
@@ -733,6 +734,7 @@ fn two_file_install_wraps_idempotently_and_restores_the_exact_json_value() {
     assert_eq!(installed["theme"], "dark");
     assert_eq!(installed["statusLine"]["command"], STATUS_LINE_COMMAND);
     assert_eq!(installed["statusLine"]["padding"], 0);
+    assert_eq!(installed["statusLine"]["refreshInterval"], 5);
     assert_eq!(
         installed["statusLine"]["_rimz_wrapped"],
         original_statusline
