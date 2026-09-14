@@ -52,7 +52,7 @@ One row per module at the granularity `survey` ranks (`store/snapshot`, `agents/
 | `mux/zellij` | holds; landed pass-10 | `173682d90` | 30 | presence lifecycle deepened; topology schema is the public wire; socket, pane_pid, parse and reap interiors hold. |
 | `pane` | landed pass-3; pass-5 | — | — | owns `ClientPaneView`; interior a candidate. |
 | `proc` | holds; landed pass-19b | `ecb57065f` | 30 | process/platform facts and shell selection; platform seams, bounded execution, spawn accounting and pane-probe abstention hold. |
-| `remote` | landed pass-8; pass-16 | — | — | classifier and thresholds over `ids::LinkTier`; interior a candidate. |
+| `remote` | holds; landed pass-21a | `d9d30b10b` | 30 | pure transitions here, drivers in `cli/remote`: rehoming the supervisor machines (`MasterState`, `RetryCause`, `OutageState`, `LinkSupervisor`) is a testability move with a flat escaping surface, not a candidate; `LinkStats`, `SessionLinkUpdate`, `AckOutcome`, `AliasErr` floored by signature; renderer/sidebar-only link helpers `pub(crate)`. |
 | `remote_control` | holds; landed pass-15c | `0175c3c6b` | 30 | one enable preflight; typed snapshot, batch toggle and advisories hold. |
 | `room` | holds; landed pass-15c | `0175c3c6b` | 30 | constructors, birth, ordered teardown (session kill, resurrection purge, runtime sweep, process sweep) and seven liveness policies hold. |
 | `sidebar` | landed pass-4 | — | — | producer election, fusion, refresh lanes, own cadences; interiors have their own rows. |
@@ -78,7 +78,6 @@ One row per module at the granularity `survey` ranks (`store/snapshot`, `agents/
 | `forge` | landed pass-8 | — | — | owns the PR-state record in `forge::pr_state`. |
 | `osc` | landed pass-8 | — | — | L5 policy over config and mux capabilities. |
 | `build_id` | landed pass-8 | — | — | no crate imports. |
-| `cli/remote` | candidate | — | — | pin, thin; pins are the prerequisite of a `remote` pass. |
 
 ## Admission intents
 

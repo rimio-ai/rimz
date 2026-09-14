@@ -267,7 +267,7 @@ surface-budget = 11
 
 [[module]]
 path = "crates/rimz/src/remote"
-surface-budget = 177
+surface-budget = 176
 
 [[module]]
 path = "crates/rimz/src/remote_control.rs"
@@ -803,6 +803,26 @@ reason = "TaskFire keeps ten explicit inputs; CLI owns the spawn."
 kind = "item"
 key = "remote::link::link_tier"
 reason = "Classifier and thresholds are remote policy over a store-owned tier; stays at L5 with the protocol."
+
+[[verdict]]
+kind = "item"
+key = "remote::link::LinkStats"
+reason = "Type of the pub `stats` field on LinkStatsFile and LinkProbe, both read by the binary; narrowing is E0446."
+
+[[verdict]]
+kind = "item"
+key = "remote::link::SessionLinkUpdate"
+reason = "Return type of SessionLinkState::advance and begin_session, which cli/remote drives; narrowing is a private-interface lint."
+
+[[verdict]]
+kind = "item"
+key = "remote::link::AckOutcome"
+reason = "Return type of LinkMonitor::record_ack, which cli/remote drives; narrowing is a private-interface lint."
+
+[[verdict]]
+kind = "item"
+key = "remote::aliases::AliasErr"
+reason = "Error type of every pub RemoteAliases operation the binary calls; narrowing is a private-interface lint."
 
 [[verdict]]
 kind = "item"
