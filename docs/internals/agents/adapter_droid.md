@@ -4,6 +4,8 @@
 
 Factory Droid reports basic lifecycle through native `settings.json` hooks. RimZ installs a slim additive hook set into `~/.factory/settings.json`; it leaves Droid's user-owned `statusLine` and persistent autonomy settings untouched. The adapter is intentionally interactive-only: supervised `rimz agents droid -p` launches the stock TUI with a positional prompt and completes from the native `Stop` hook rather than replacing the TUI with a separate exec transport.
 
+Only the registry reaches the concrete adapter. Custom-model config, payloads, hook-process attribution, transcript telemetry, installation, and spend stay private to the Droid adapter; other modules consume the provider-neutral capabilities.
+
 ## Hooks and lifecycle
 
 | Native event | `LifecycleSignal` | Notes |

@@ -4,6 +4,8 @@
 
 Grok is an eagerly registered stock-TUI adapter. RimZ launches `grok`, installs passive global hooks in `${GROK_HOME:-~/.grok}/hooks/rimz.json`, and enriches each session from its durable `updates.jsonl`, `summary.json`, `signals.json`, and optional `events.jsonl` files. ACP and provider-private billing APIs stay outside this adapter.
 
+Only the registry reaches the concrete adapter. The hook catalog, context refresh, account probe, paths, payloads, transcript folding, installation, and spend stay private to the Grok adapter; other modules consume the provider-neutral capabilities.
+
 ## Hooks and lifecycle
 
 | Native event | RimZ signal |

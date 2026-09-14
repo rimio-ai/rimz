@@ -4,6 +4,8 @@
 
 This doc is the single home for everything OpenCode-specific. OpenCode's integration surface is an in-process TypeScript plugin, so the adapter ships [`plugin.ts`](../../../crates/rimz/src/agents/adapters/opencode/plugin.ts), embedded at compile time and installed as `~/.config/opencode/plugin/rimz.ts`. The plugin subscribes to OpenCode hooks and bus events, flattens them into a RimZ-authored snake-case envelope, and spawns `rimz hooks feed --source opencode` with `RIMZ_AGENT_PID` set to the OpenCode process. OpenCode publishes native permission and question prompts as `permission.asked` and `question.asked`; their `*.replied`/`question.rejected` outcomes clear waiting and record the native answer while OpenCode's UI remains responsible for collecting it. The plugin never reads RimZ's stdout. The typed `permission.ask` plugin hook is not wired: OpenCode last invoked it in 1.0.223, and every release from 1.17.19 (the oldest that forwards RimZ's environment to the plugin) publishes `permission.asked` instead. The adapter is verified against OpenCode 1.18.30.
 
+Only the registry reaches the concrete adapter. Account probes, database access, payloads, transcript paging, and spend stay private to the OpenCode adapter; other modules consume the provider-neutral capabilities.
+
 ## Hooks and lifecycle
 
 Native surface → internal mapping; the upstream hooks, bus payloads, SQLite schema, and auth shape are in [opencode-reference.md](../../externals/agent-adapter/opencode-reference.md).

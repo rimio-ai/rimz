@@ -1,3 +1,6 @@
+//! Pi questionnaire asks: questions from the `ask_user_question` tool input,
+//! answers from its tool details, and the key plan that answers in the pane.
+
 use serde::Deserialize;
 use serde_json::Value;
 
