@@ -253,6 +253,7 @@ fn turn_end_reports_settle_the_turn_through_the_state_machine() {
         let late = prompt(event, payload);
         let ids = PriorTurnIds {
             started: Some("p2"),
+            superseded: Some("p1"),
             interrupted: None,
         };
         assert_eq!(

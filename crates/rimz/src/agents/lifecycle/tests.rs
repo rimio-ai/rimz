@@ -235,8 +235,8 @@ fn interrupted_turn_ignores_only_its_own_trailing_tool_completion() {
         turn_id: turn_id.map(ToOwned::to_owned),
     };
     let trailing_ids = PriorTurnIds {
-        started: None,
         interrupted: Some("turn-1"),
+        ..PriorTurnIds::default()
     };
     let trailing = step(Some(&idle), None, trailing_ids, &tool(Some("turn-1")));
     assert_eq!(trailing.next, idle);
@@ -261,6 +261,7 @@ fn turn_reports_correlate_with_the_started_turn_id() {
     let success = state(AgentStatus::Success, TurnPhase::Idle, false);
     let started = PriorTurnIds {
         started: Some("prompt-2"),
+        superseded: Some("prompt-1"),
         interrupted: None,
     };
     let ended = |errored, turn_id: Option<&str>| LifecycleSignal::TurnEnded {
@@ -278,7 +279,7 @@ fn turn_reports_correlate_with_the_started_turn_id() {
         assert_eq!(
             dropped.kind,
             TransitionKind::Ignored {
-                reason: "turn report for a turn other than the one started last",
+                reason: "turn report for a turn a later start superseded",
             },
             "{late:?}"
         );
@@ -312,6 +313,12 @@ fn turn_reports_correlate_with_the_started_turn_id() {
             AgentStatus::Failed,
         ),
         (running, started, ended(false, None), AgentStatus::Success),
+        (
+            running,
+            started,
+            ended(false, Some("prompt-3")),
+            AgentStatus::Success,
+        ),
         (success, started, canceled(None), AgentStatus::Idle),
         (
             running,
@@ -951,4 +958,38 @@ fn lifecycle_wire_tags_and_legacy_defaults_are_stable() {
         .unwrap(),
         serde_json::json!({ "signal": "compaction_ended", "auto": false, "failed": true })
     );
+}
+
+#[test]
+fn only_a_start_with_a_new_id_supersedes_the_started_turn() {
+    let start = |turn_id: Option<&str>| LifecycleSignal::TurnStarted {
+        turn_id: turn_id.map(ToOwned::to_owned),
+    };
+    let fold = |ids: &(Option<String>, Option<String>), signal: &LifecycleSignal| {
+        let prior = PriorTurnIds {
+            started: ids.0.as_deref(),
+            superseded: ids.1.as_deref(),
+            interrupted: None,
+        };
+        turn_ids_after(prior, signal)
+    };
+    let owned = |id: &str| Some(id.to_owned());
+
+    let first = fold(&(None, None), &start(Some("p1")));
+    assert_eq!(first, (owned("p1"), None));
+    let second = fold(&first, &start(Some("p2")));
+    assert_eq!(second, (owned("p2"), owned("p1")));
+    assert_eq!(fold(&second, &start(Some("p2"))), second);
+    assert_eq!(
+        fold(
+            &second,
+            &LifecycleSignal::TurnInterrupted {
+                turn_id: owned("p2")
+            }
+        ),
+        second
+    );
+    let idless = fold(&second, &start(None));
+    assert_eq!(idless, (None, owned("p2")));
+    assert_eq!(fold(&idless, &start(None)), idless);
 }

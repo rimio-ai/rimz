@@ -6,7 +6,7 @@ use std::io;
 
 use crate::agents::AgentState;
 use crate::agents::lifecycle::{
-    LifecycleEvent, LifecycleSignal, LifecycleState, PriorTurnIds, step,
+    LifecycleEvent, LifecycleSignal, LifecycleState, PriorTurnIds, step, turn_ids_after,
 };
 use crate::disk::paths::StatePaths;
 use crate::ids::{AgentKind, AgentSessionId};
@@ -24,6 +24,7 @@ struct FollowState {
     lifecycle: LifecycleState,
     open_ask_key: Option<String>,
     started_turn_id: Option<String>,
+    superseded_turn_id: Option<String>,
     interrupted_turn_id: Option<String>,
 }
 
@@ -77,6 +78,7 @@ impl EventFollower {
                     lifecycle: agent.lifecycle(),
                     open_ask_key: open_ask_key(&agent),
                     started_turn_id: agent.started_turn_id,
+                    superseded_turn_id: agent.superseded_turn_id,
                     interrupted_turn_id: agent.interrupted_turn_id,
                 };
                 (key, state)
@@ -183,13 +185,15 @@ impl EventFollower {
             let kind = AgentKind::new_unchecked(envelope.source.clone());
             let key = (kind.clone(), agent_id.clone());
             let prior = self.states.get(&key);
+            let turn_ids = PriorTurnIds {
+                started: prior.and_then(|state| state.started_turn_id.as_deref()),
+                superseded: prior.and_then(|state| state.superseded_turn_id.as_deref()),
+                interrupted: prior.and_then(|state| state.interrupted_turn_id.as_deref()),
+            };
             let transition = step(
                 prior.map(|state| &state.lifecycle),
                 prior.and_then(|state| state.open_ask_key.as_deref()),
-                PriorTurnIds {
-                    started: prior.and_then(|state| state.started_turn_id.as_deref()),
-                    interrupted: prior.and_then(|state| state.interrupted_turn_id.as_deref()),
-                },
+                turn_ids,
                 &observation.signal,
             );
             events.push(FollowEvent::Lifecycle(LifecycleEvent::new(
@@ -214,10 +218,8 @@ impl EventFollower {
                 _ if transition.next.status != crate::agents::AgentStatus::Waiting => None,
                 _ => prior.and_then(|state| state.open_ask_key.clone()),
             };
-            let started_turn_id = match &observation.signal {
-                LifecycleSignal::TurnStarted { turn_id } => turn_id.clone(),
-                _ => prior.and_then(|state| state.started_turn_id.clone()),
-            };
+            let (started_turn_id, superseded_turn_id) =
+                turn_ids_after(turn_ids, &observation.signal);
             let interrupted_turn_id = match &observation.signal {
                 LifecycleSignal::TurnInterrupted { turn_id } => turn_id.clone(),
                 LifecycleSignal::Registered => None,
@@ -230,6 +232,7 @@ impl EventFollower {
                     lifecycle: transition.next,
                     open_ask_key,
                     started_turn_id,
+                    superseded_turn_id,
                     interrupted_turn_id,
                 },
             );
@@ -350,6 +353,41 @@ mod tests {
             Some(crate::agents::AgentStatus::Running)
         );
         assert_eq!(event.status, crate::agents::AgentStatus::Success);
+    }
+
+    #[test]
+    fn late_report_for_a_superseded_turn_is_ignored_from_the_seed_and_the_log() {
+        let (_dir, store, paths) = fixture();
+        let start = |id: &str| LifecycleSignal::TurnStarted {
+            turn_id: Some(id.to_owned()),
+        };
+        append(&store, start("prompt-1"));
+        append(&store, start("prompt-2"));
+        let mut seeded = EventFollower::open(paths.clone(), false).unwrap();
+        let late = LifecycleSignal::TurnInterrupted {
+            turn_id: Some("prompt-1".to_owned()),
+        };
+        append(&store, late);
+
+        let seeded_events = seeded.poll().unwrap().events;
+        let replayed_events = EventFollower::open(paths, true)
+            .unwrap()
+            .poll()
+            .unwrap()
+            .events;
+        for events in [seeded_events, replayed_events] {
+            let FollowEvent::Lifecycle(late) = events.last().unwrap() else {
+                panic!("lifecycle")
+            };
+            assert!(
+                matches!(
+                    late.transition,
+                    crate::agents::LifecycleTransition::Ignored { .. }
+                ),
+                "{late:?}"
+            );
+            assert_eq!(late.status, crate::agents::AgentStatus::Running);
+        }
     }
 
     #[test]
