@@ -233,6 +233,23 @@ fn maps_prompts_and_permission_requests_to_lifecycle_signals() {
             LifecycleSignal::TurnStarted
         );
     }
+    for (payload, label) in [
+        (
+            json!({"prompt":"Review the diff\n<file contents>","submitted_prompt":"/review"}),
+            "/review",
+        ),
+        (
+            json!({"prompt":"fix the bug","submitted_prompt":""}),
+            "fix the bug",
+        ),
+    ] {
+        assert_eq!(
+            hook_lifecycle(&adapter, "UserPromptSubmit", &payload)
+                .prompt
+                .as_deref(),
+            Some(label)
+        );
+    }
     for (tool_name, kind) in [
         ("ask_user_question", AskKind::Question),
         ("exit_plan_mode", AskKind::PlanApproval),
