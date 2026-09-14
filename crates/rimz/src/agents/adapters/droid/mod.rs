@@ -354,7 +354,7 @@ impl crate::agents::capabilities::HookCapability for DroidAdapter {
                 None => return Ok(decoded),
             },
             "SessionStart" => session_start.source.session_start_signal(),
-            "UserPromptSubmit" => LifecycleSignal::TurnStarted,
+            "UserPromptSubmit" => LifecycleSignal::TurnStarted { turn_id: None },
             "PostToolUse" => LifecycleSignal::ToolUsed {
                 mutates: self.spec().tool_mutates(payload),
                 edits: self.spec().tool_edits_files(payload),
@@ -365,6 +365,7 @@ impl crate::agents::capabilities::HookCapability for DroidAdapter {
             "Stop" => LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
+                turn_id: None,
             },
             "PreCompact" => LifecycleSignal::Compacting,
             "SessionEnd" => LifecycleSignal::Ended,

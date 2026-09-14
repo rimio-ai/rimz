@@ -449,7 +449,7 @@ impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
                 detail: parsed.title.clone(),
                 native_key: None,
             }),
-            "chat_message" => Some(LifecycleSignal::TurnStarted),
+            "chat_message" => Some(LifecycleSignal::TurnStarted { turn_id: None }),
             "session_idle" if parsed.plan_proposed == Some(true) => {
                 Some(LifecycleSignal::AwaitingInput {
                     kind: AskKind::PlanApproval,
@@ -461,10 +461,12 @@ impl crate::agents::capabilities::HookCapability for OpencodeAdapter {
             "session_idle" => Some(LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
+                turn_id: None,
             }),
             "session_error" => Some(LifecycleSignal::TurnEnded {
                 errored: true,
                 parked_on_background: false,
+                turn_id: None,
             }),
             "permission_replied" | "question_replied" | "question_rejected" => {
                 Some(LifecycleSignal::ToolUsed {

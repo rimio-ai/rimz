@@ -8,7 +8,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::capabilities::ManualSkill;
-use super::lifecycle::{LifecycleSignal, LifecycleSignalKind, LifecycleState, TurnPhase, step};
+use super::lifecycle::{
+    LifecycleSignal, LifecycleSignalKind, LifecycleState, PriorTurnIds, TurnPhase, step,
+};
 use super::registry::BUILTINS;
 use super::{
     AdapterConformance, AgentDefinition, AgentHookClass, AskReply, CapabilityLevel,
@@ -871,7 +873,7 @@ fn awaiting_input_projects_to_waiting() {
             let transition = step(
                 Some(&prior),
                 None,
-                None,
+                PriorTurnIds::default(),
                 &LifecycleSignal::AwaitingInput {
                     kind: ask_kind,
                     ask_id: None,
@@ -1354,7 +1356,7 @@ fn observes_turn_lifecycle(adapter: &AgentDefinition, samples: &[ClassificationS
                     matches!(
                         obs.signal,
                         LifecycleSignal::Registered
-                            | LifecycleSignal::TurnStarted
+                            | LifecycleSignal::TurnStarted { .. }
                             | LifecycleSignal::TurnEnded { .. }
                     )
                 })

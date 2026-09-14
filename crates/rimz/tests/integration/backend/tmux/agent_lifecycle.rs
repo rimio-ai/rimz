@@ -673,8 +673,10 @@ fn self_wait_steers_to_live_consumer_when_idle_and_working() {
             })
             .expect("register live target");
         if status == AgentStatus::Running {
-            let observation =
-                AgentLifecycleObservation::new(Some(agent_id.into()), LifecycleSignal::TurnStarted);
+            let observation = AgentLifecycleObservation::new(
+                Some(agent_id.into()),
+                LifecycleSignal::TurnStarted { turn_id: None },
+            );
             store
                 .append_agent_lifecycle(AgentLifecycleIntent {
                     session_name: &workspace.session_name,

@@ -127,11 +127,15 @@ fn attribution_scopes_to_the_checkout_branch() {
         ("unknown", None),
     ] {
         observe(id, branch, LifecycleSignal::Registered);
-        observe(id, branch, LifecycleSignal::TurnStarted);
+        observe(id, branch, LifecycleSignal::TurnStarted { turn_id: None });
     }
     git(&["checkout", "-qb", "feat/x"]);
     observe("feature-only", Some("feat/x"), LifecycleSignal::Registered);
-    observe("feature-only", Some("feat/x"), LifecycleSignal::TurnStarted);
+    observe(
+        "feature-only",
+        Some("feat/x"),
+        LifecycleSignal::TurnStarted { turn_id: None },
+    );
     observe(
         "switched",
         Some("feat/x"),
@@ -143,8 +147,10 @@ fn attribution_scopes_to_the_checkout_branch() {
             turn_id: None,
         },
     );
-    let mut foreign =
-        AgentLifecycleObservation::new(Some("feature-only".into()), LifecycleSignal::TurnStarted);
+    let mut foreign = AgentLifecycleObservation::new(
+        Some("feature-only".into()),
+        LifecycleSignal::TurnStarted { turn_id: None },
+    );
     foreign.worktree_path = Some(env.home_root.join("librarian").display().to_string());
     foreign.worktree_branch = Some("main".to_owned());
     store
@@ -209,7 +215,10 @@ fn attribution_scopes_to_the_checkout_branch() {
         "feat/other",
         other.to_str().expect("fixture path"),
     ]);
-    for signal in [LifecycleSignal::Registered, LifecycleSignal::TurnStarted] {
+    for signal in [
+        LifecycleSignal::Registered,
+        LifecycleSignal::TurnStarted { turn_id: None },
+    ] {
         let mut observation = AgentLifecycleObservation::new(Some("other-session".into()), signal);
         observation.worktree_path = Some(other.display().to_string());
         observation.worktree_branch = Some("feat/other".to_owned());
@@ -661,7 +670,10 @@ fn attribution_markdown_drops_opened_turns_without_recorded_contributions() {
             &workspace.session_name,
             "claude",
             "UserPromptSubmit",
-            &AgentLifecycleObservation::new(Some(session.into()), LifecycleSignal::TurnStarted),
+            &AgentLifecycleObservation::new(
+                Some(session.into()),
+                LifecycleSignal::TurnStarted { turn_id: None },
+            ),
         ))
         .expect("open attribution turn");
 
@@ -976,7 +988,10 @@ fn attribution_warns_only_for_unreadable_checkouts_in_its_fold() {
         ("sess-broken-one", "broken", &broken),
         ("sess-broken-two", "broken", &broken),
     ] {
-        for signal in [LifecycleSignal::Registered, LifecycleSignal::TurnStarted] {
+        for signal in [
+            LifecycleSignal::Registered,
+            LifecycleSignal::TurnStarted { turn_id: None },
+        ] {
             let mut observation = AgentLifecycleObservation::new(Some(session.into()), signal);
             observation.launch.channel = Some(channel.to_owned());
             observation.worktree_path = Some(path.display().to_string());

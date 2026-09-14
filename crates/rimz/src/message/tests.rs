@@ -323,14 +323,17 @@ fn delivery_checkpoint_recognizes_turn_boundaries() {
     assert!(checkpoint.contains(&LifecycleSignal::TurnEnded {
         errored: false,
         parked_on_background: false,
+        turn_id: None,
     }));
     assert!(checkpoint.contains(&LifecycleSignal::TurnEnded {
         errored: true,
         parked_on_background: false,
+        turn_id: None,
     }));
     assert!(checkpoint.contains(&LifecycleSignal::TurnEnded {
         errored: false,
         parked_on_background: true,
+        turn_id: None,
     }));
     assert!(!checkpoint.contains(&LifecycleSignal::Registered));
     assert!(checkpoint.contains(&LifecycleSignal::CompactionEnded {

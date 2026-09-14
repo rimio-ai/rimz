@@ -688,6 +688,7 @@ fn turn_error_class(event_name: &str, error: Option<&str>, label: Option<&str>) 
 const TURN_COMPLETED: LifecycleSignal = LifecycleSignal::TurnEnded {
     errored: false,
     parked_on_background: false,
+    turn_id: None,
 };
 
 fn lifecycle_signal(
@@ -697,9 +698,13 @@ fn lifecycle_signal(
     child_gate: bool,
 ) -> Option<LifecycleSignal> {
     let inside_child = payload.subagent_type.is_some();
+    // `promptId` correlates a root turn's report with its start, because a
+    // canceled turn's report can land after the next prompt. Child turns
+    // resolve through subagent correlation, which carries no turn identity.
+    let turn_id = || (!inside_child).then(|| payload.prompt_id.clone()).flatten();
     Some(match event_name {
         "SessionStart" => LifecycleSignal::Registered,
-        "UserPromptSubmit" => LifecycleSignal::TurnStarted,
+        "UserPromptSubmit" => LifecycleSignal::TurnStarted { turn_id: turn_id() },
         "PostToolUse" => {
             let tool = payload.tool_name.as_deref();
             LifecycleSignal::ToolUsed {
@@ -724,26 +729,33 @@ fn lifecycle_signal(
             native_key: payload.prompt_id.clone(),
         },
         "Stop" => match payload.reason.as_deref() {
-            Some("end_turn") => TURN_COMPLETED,
+            Some("end_turn") => LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+                turn_id: turn_id(),
+            },
             // Releases before `StopCancelled` and `StopFailure` replaced these.
-            Some("cancelled") => LifecycleSignal::TurnInterrupted { turn_id: None },
+            Some("cancelled") => LifecycleSignal::TurnInterrupted { turn_id: turn_id() },
             Some("error") => LifecycleSignal::TurnEnded {
                 errored: true,
                 parked_on_background: false,
+                turn_id: turn_id(),
             },
             Some(_) | None => return None,
         },
         "StopFailure" => LifecycleSignal::TurnEnded {
             errored: true,
             parked_on_background: false,
+            turn_id: turn_id(),
         },
         // A child cannot rest idle, so its unfinished turn resolves the child:
         // failed when the runtime cut it off, settled when the user declined.
         "StopCancelled" if inside_child => LifecycleSignal::TurnEnded {
             errored: payload.cancelled_by.as_deref() != Some("user"),
             parked_on_background: false,
+            turn_id: None,
         },
-        "StopCancelled" => LifecycleSignal::TurnInterrupted { turn_id: None },
+        "StopCancelled" => LifecycleSignal::TurnInterrupted { turn_id: turn_id() },
         "SubagentStart" => LifecycleSignal::SubagentStarted,
         "SubagentStop" if child_gate => TURN_COMPLETED,
         "SubagentStop" => LifecycleSignal::SubagentStopped {

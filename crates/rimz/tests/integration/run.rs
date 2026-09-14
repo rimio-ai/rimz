@@ -2362,13 +2362,13 @@ fn agents_cli_routes_launch_role_to_successful_same_instance_successor() {
             "first",
             "coder-card",
             SessionOrigin::Fresh,
-            LifecycleSignal::TurnStarted,
+            LifecycleSignal::TurnStarted { turn_id: None },
         ),
         (
             "second",
             "second-card",
             SessionOrigin::Fresh,
-            LifecycleSignal::TurnStarted,
+            LifecycleSignal::TurnStarted { turn_id: None },
         ),
         (
             "successful",
@@ -2377,6 +2377,7 @@ fn agents_cli_routes_launch_role_to_successful_same_instance_successor() {
             LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
+                turn_id: None,
             },
         ),
     ] {
@@ -2845,6 +2846,7 @@ fn create_finished_subagent(
                 LifecycleSignal::TurnEnded {
                     errored: false,
                     parked_on_background: false,
+                    turn_id: None,
                 },
             ),
         ))
@@ -2893,7 +2895,10 @@ fn register_running_wait_agent(env: &Env, store: &rimz::Store, name: &str, sessi
             &workspace.session_name,
             "codex",
             "UserPromptSubmit",
-            &AgentLifecycleObservation::new(Some(agent_id), LifecycleSignal::TurnStarted),
+            &AgentLifecycleObservation::new(
+                Some(agent_id),
+                LifecycleSignal::TurnStarted { turn_id: None },
+            ),
         ))
         .expect("start wait agent turn");
 }
@@ -3152,7 +3157,7 @@ fn assert_wait_rechecks_parent_turn(settle_without_hook: bool) {
             "UserPromptSubmit",
             &AgentLifecycleObservation::new(
                 Some(AgentSessionId::from("parent-session")),
-                LifecycleSignal::TurnStarted,
+                LifecycleSignal::TurnStarted { turn_id: None },
             ),
         ))
         .expect("start parent turn");
@@ -3231,6 +3236,7 @@ fn assert_wait_rechecks_parent_turn(settle_without_hook: bool) {
                     LifecycleSignal::TurnEnded {
                         errored: false,
                         parked_on_background: false,
+                        turn_id: None,
                     },
                 ),
             ))

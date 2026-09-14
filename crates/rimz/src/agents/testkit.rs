@@ -55,7 +55,7 @@ pub(crate) fn hook_signal(
 pub(crate) fn all_signals() -> Vec<LifecycleSignal> {
     let mut signals = vec![
         LifecycleSignal::Registered,
-        LifecycleSignal::TurnStarted,
+        LifecycleSignal::TurnStarted { turn_id: None },
         LifecycleSignal::TurnInterrupted {
             turn_id: Some("turn-1".to_owned()),
         },
@@ -89,6 +89,7 @@ pub(crate) fn all_signals() -> Vec<LifecycleSignal> {
             signals.push(LifecycleSignal::TurnEnded {
                 errored,
                 parked_on_background,
+                turn_id: None,
             });
         }
     }

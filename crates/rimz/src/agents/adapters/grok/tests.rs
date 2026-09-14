@@ -186,7 +186,7 @@ fn lifecycle_maps_exact_asks_legacy_stop_reasons_and_parent_fired_subagent_stop(
 #[test]
 fn turn_end_reports_settle_the_turn_through_the_state_machine() {
     use crate::agents::AgentStatus;
-    use crate::agents::lifecycle::{LifecycleState, TurnPhase, step};
+    use crate::agents::lifecycle::{LifecycleState, PriorTurnIds, TurnPhase, step};
 
     let adapter = GrokAdapter;
     let running = LifecycleState {
@@ -218,9 +218,47 @@ fn turn_end_reports_settle_the_turn_through_the_state_machine() {
     ] {
         let signal = hook_signal(&adapter, event, &payload);
         assert_eq!(
-            step(Some(&running), None, None, &signal).next.status,
+            step(Some(&running), None, PriorTurnIds::default(), &signal)
+                .next
+                .status,
             status,
             "{event} {payload}"
+        );
+    }
+
+    let prompt = |event, payload: Value| hook_signal(&adapter, event, &payload);
+    assert_eq!(
+        prompt(
+            "UserPromptSubmit",
+            json!({"sessionId":"s1","promptId":"p2","prompt":"next"})
+        ),
+        LifecycleSignal::TurnStarted {
+            turn_id: Some("p2".to_owned())
+        }
+    );
+    for (event, payload) in [
+        (
+            "Stop",
+            json!({"sessionId":"s1","promptId":"p1","reason":"end_turn"}),
+        ),
+        (
+            "StopFailure",
+            json!({"sessionId":"s1","promptId":"p1","error":"unknown"}),
+        ),
+        (
+            "StopCancelled",
+            json!({"sessionId":"s1","promptId":"p1","reason":"user_interrupt"}),
+        ),
+    ] {
+        let late = prompt(event, payload);
+        let ids = PriorTurnIds {
+            started: Some("p2"),
+            interrupted: None,
+        };
+        assert_eq!(
+            step(Some(&running), None, ids, &late).next,
+            running,
+            "{event} for p1 after p2 started: {late:?}"
         );
     }
 
@@ -290,11 +328,12 @@ fn child_session_hooks_resolve_the_child_without_claiming_a_parent() {
             hook_signal(
                 &adapter,
                 "StopCancelled",
-                &json!({"sessionId":"child-1","subagentType":"explore","reason":"no_progress","cancelledBy":cancelled_by})
+                &json!({"sessionId":"child-1","subagentType":"explore","promptId":"child-prompt","reason":"no_progress","cancelledBy":cancelled_by})
             ),
             LifecycleSignal::TurnEnded {
                 errored,
                 parked_on_background: false,
+                turn_id: None,
             }
         );
     }

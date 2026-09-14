@@ -763,6 +763,10 @@ pub struct AgentState {
     /// no identity and therefore replay with this field absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_ask: Option<OpenAsk>,
+    /// Provider turn id of the session's most recent turn start. A turn report
+    /// carrying another id is a late report from an earlier turn and is dropped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_turn_id: Option<String>,
     /// Provider turn id most recently canceled for this session. A matching
     /// trailing tool completion is ignored instead of reopening the turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -891,6 +895,8 @@ struct AgentStateWire {
     #[serde(default)]
     open_ask: Option<OpenAsk>,
     #[serde(default)]
+    started_turn_id: Option<String>,
+    #[serde(default)]
     interrupted_turn_id: Option<String>,
     compacting_since: Option<Timestamp>,
     #[serde(default)]
@@ -970,6 +976,7 @@ impl From<AgentStateWire> for AgentState {
             user_turn_started_at: wire.user_turn_started_at,
             waiting_since: wire.waiting_since,
             open_ask: wire.open_ask,
+            started_turn_id: wire.started_turn_id,
             interrupted_turn_id: wire.interrupted_turn_id,
             compacting_since: wire.compacting_since,
             compaction_count: wire.compaction_count,
@@ -1061,6 +1068,7 @@ impl AgentState {
             user_turn_started_at: None,
             waiting_since: None,
             open_ask: None,
+            started_turn_id: None,
             interrupted_turn_id: None,
             compacting_since: None,
             compaction_count: 0,

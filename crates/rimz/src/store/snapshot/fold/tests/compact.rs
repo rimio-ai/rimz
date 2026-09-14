@@ -205,7 +205,7 @@ fn carryover_compact_stamp_does_not_precede_earlier_lifecycle_events() {
             "claude",
             "UserPromptSubmit",
             "predecessor",
-            LifecycleSignal::TurnStarted,
+            LifecycleSignal::TurnStarted { turn_id: None },
         ),
     )
     .unwrap();
@@ -302,7 +302,7 @@ fn compact_marker_needs_no_tokens_and_delayed_delivery_cannot_rearm_it() {
     assert_eq!(agents[0].last_compact_command_tokens, None);
 
     for (signal, expected) in [
-        (LifecycleSignal::TurnStarted, None),
+        (LifecycleSignal::TurnStarted { turn_id: None }, None),
         (LifecycleSignal::Registered, Some(sent.timestamp)),
     ] {
         event_log::append(&paths.events_log, &sent).unwrap();
@@ -457,7 +457,7 @@ fn manual_compaction_successor_marker_survives_rotation_until_a_prompt() {
             "codex",
             "UserPromptSubmit",
             "successor",
-            LifecycleSignal::TurnStarted,
+            LifecycleSignal::TurnStarted { turn_id: None },
         ),
     )
     .unwrap();
@@ -513,7 +513,7 @@ fn linked_successor_carries_the_compact_marker_without_a_trigger_bit() {
             "codex",
             "UserPromptSubmit",
             "successor",
-            LifecycleSignal::TurnStarted,
+            LifecycleSignal::TurnStarted { turn_id: None },
         ),
     )
     .unwrap();

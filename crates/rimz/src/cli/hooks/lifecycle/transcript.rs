@@ -233,7 +233,7 @@ pub(super) fn record_conversation(
     };
 
     match &observation.signal {
-        LifecycleSignal::TurnStarted => {
+        LifecycleSignal::TurnStarted { .. } => {
             let mut entries = Vec::new();
             let mut matched_ids = Vec::new();
             let mut delivered_cursor = 0;

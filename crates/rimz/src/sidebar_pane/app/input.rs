@@ -362,7 +362,11 @@ mod tests {
 
         let status = crate::wakeup::events::SidebarEvent::StoreDelta {
             event_method: Some("agent.lifecycle".to_owned()),
-            agent_signal: Some(crate::agents::LifecycleSignal::TurnStarted.tag().to_owned()),
+            agent_signal: Some(
+                crate::agents::LifecycleSignal::TurnStarted { turn_id: None }
+                    .tag()
+                    .to_owned(),
+            ),
         };
         assert!(!status.requests_producer_verification());
     }

@@ -690,6 +690,7 @@ fn message_after_rejects_cycles_then_delivers_cross_agent_relay() {
         LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
+            turn_id: None,
         },
         |_| {},
     );
@@ -5270,7 +5271,7 @@ fn register_role_agent(
             kind,
             "UserPromptSubmit",
             session_id,
-            LifecycleSignal::TurnStarted,
+            LifecycleSignal::TurnStarted { turn_id: None },
             |observation| {
                 observation.agent_name = Some(format!("{role}-agent"));
                 observation.launch.role = Some(role.to_owned());

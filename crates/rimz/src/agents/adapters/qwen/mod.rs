@@ -660,7 +660,7 @@ fn lifecycle_signal(
             prompt
                 .as_deref()
                 .is_none_or(|prompt| !prompt.trim().is_empty())
-                .then_some(LifecycleSignal::TurnStarted)
+                .then_some(LifecycleSignal::TurnStarted { turn_id: None })
         }
         "PostToolUse" => Some(LifecycleSignal::ToolUsed {
             mutates: spec.tool_mutates(payload),
@@ -702,11 +702,13 @@ fn lifecycle_signal(
             Some(LifecycleSignal::TurnEnded {
                 errored: stop_payload_errored(payload),
                 parked_on_background: has_pending_work(&stop.background_tasks, &stop.crons),
+                turn_id: None,
             })
         }
         "StopFailure" => Some(LifecycleSignal::TurnEnded {
             errored: true,
             parked_on_background: false,
+            turn_id: None,
         }),
         "SubagentStart" => Some(LifecycleSignal::SubagentStarted),
         "SubagentStop" => Some(LifecycleSignal::SubagentStopped { errored: false }),

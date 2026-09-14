@@ -2,7 +2,7 @@ use super::*;
 
 use std::collections::BTreeSet;
 
-use crate::agents::lifecycle::{TurnPhase, step};
+use crate::agents::lifecycle::{PriorTurnIds, TurnPhase, step};
 use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output};
 use crate::agents::{AgentErr, AgentHookClass, AgentStatus};
 use serde_json::json;
@@ -130,47 +130,65 @@ fn lifecycle_signals_drive_the_shared_state_machine() {
     assert_eq!(registered.signal, LifecycleSignal::Registered);
     assert_eq!(registered.worktree_path.as_deref(), Some("/tmp/work"));
     assert_eq!(registered.origin, None);
-    let mut state = step(None, None, None, &registered.signal).next;
+    let mut state = step(None, None, PriorTurnIds::default(), &registered.signal).next;
 
     let started = observation(
         "userPromptSubmitted",
         json!({"sessionId":"s","prompt":"  fix auth  "}),
     );
     assert_eq!(started.task.as_deref(), Some("fix auth"));
-    state = step(Some(&state), None, None, &started.signal).next;
+    state = step(Some(&state), None, PriorTurnIds::default(), &started.signal).next;
     assert_eq!(state.status, AgentStatus::Running);
     assert_eq!(state.phase, TurnPhase::Reasoning);
 
     let tool = observation("postToolUse", json!({"sessionId":"s","toolName":"edit"}));
-    state = step(Some(&state), None, None, &tool.signal).next;
+    state = step(Some(&state), None, PriorTurnIds::default(), &tool.signal).next;
     assert_eq!(state.phase, TurnPhase::Acting);
 
     let compacting = observation("preCompact", json!({"sessionId":"s","trigger":"auto"}));
-    state = step(Some(&state), None, None, &compacting.signal).next;
+    state = step(
+        Some(&state),
+        None,
+        PriorTurnIds::default(),
+        &compacting.signal,
+    )
+    .next;
     assert!(state.compacting);
-    state = step(Some(&state), None, None, &LifecycleSignal::TurnStarted).next;
+    state = step(
+        Some(&state),
+        None,
+        PriorTurnIds::default(),
+        &LifecycleSignal::TurnStarted { turn_id: None },
+    )
+    .next;
     assert!(
         !state.compacting,
         "the next lifecycle edge closes the bracket"
     );
 
     let stopped = observation("agentStop", json!({"sessionId":"s"}));
-    state = step(Some(&state), None, None, &stopped.signal).next;
+    state = step(Some(&state), None, PriorTurnIds::default(), &stopped.signal).next;
     assert_eq!(state.status, AgentStatus::Success);
 
     let ended = observation("sessionEnd", json!({"sessionId":"s"}));
-    state = step(Some(&state), None, None, &ended.signal).next;
+    state = step(Some(&state), None, PriorTurnIds::default(), &ended.signal).next;
     assert_eq!(state.status, AgentStatus::Success);
 }
 
 #[test]
 fn batched_ask_waits_and_post_tool_completion_clears_before_assistant_output() {
-    let mut state = step(None, None, None, &LifecycleSignal::TurnStarted).next;
+    let mut state = step(
+        None,
+        None,
+        PriorTurnIds::default(),
+        &LifecycleSignal::TurnStarted { turn_id: None },
+    )
+    .next;
     let ask = observation(
         "preToolUse",
         json!({"sessionId":"s","toolCalls":[{"name":"view"},{"name":"ask_user"}]}),
     );
-    state = step(Some(&state), None, None, &ask.signal).next;
+    state = step(Some(&state), None, PriorTurnIds::default(), &ask.signal).next;
     assert_eq!(state.status, AgentStatus::Waiting);
 
     let answered = observation(
@@ -187,7 +205,13 @@ fn batched_ask_waits_and_post_tool_completion_clears_before_assistant_output() {
             turn_id: None,
         }
     );
-    state = step(Some(&state), None, None, &answered.signal).next;
+    state = step(
+        Some(&state),
+        None,
+        PriorTurnIds::default(),
+        &answered.signal,
+    )
+    .next;
     assert_eq!(state.status, AgentStatus::Running);
 }
 
@@ -197,27 +221,36 @@ fn native_prompt_before_registration_keeps_the_turn_running() {
         "userPromptSubmitted",
         json!({"sessionId":"s","prompt":"start first"}),
     );
-    let mut state = step(None, None, None, &started.signal).next;
+    let mut state = step(None, None, PriorTurnIds::default(), &started.signal).next;
     assert_eq!(state.status, AgentStatus::Running);
 
     let session_start = observation(
         "sessionStart",
         json!({"sessionId":"s","source":"startup","initialPrompt":"start first"}),
     );
-    assert_eq!(session_start.signal, LifecycleSignal::TurnStarted);
+    assert_eq!(
+        session_start.signal,
+        LifecycleSignal::TurnStarted { turn_id: None }
+    );
     assert_eq!(session_start.origin, Some(SessionOrigin::Fresh));
     assert!(
         session_start.prompt.is_none(),
         "the duplicate signal carries no prompt"
     );
-    state = step(Some(&state), None, None, &session_start.signal).next;
+    state = step(
+        Some(&state),
+        None,
+        PriorTurnIds::default(),
+        &session_start.signal,
+    )
+    .next;
     assert_eq!(state.status, AgentStatus::Running);
     assert_eq!(state.phase, TurnPhase::Reasoning);
 
     state = step(
         Some(&state),
         None,
-        None,
+        PriorTurnIds::default(),
         &observation("agentStop", json!({"sessionId":"s"})).signal,
     )
     .next;
@@ -232,11 +265,22 @@ fn promptless_session_start_registers_idle() {
     ] {
         let session_start = observation("sessionStart", payload);
         assert_eq!(session_start.signal, LifecycleSignal::Registered);
-        let running = step(None, None, None, &LifecycleSignal::TurnStarted).next;
+        let running = step(
+            None,
+            None,
+            PriorTurnIds::default(),
+            &LifecycleSignal::TurnStarted { turn_id: None },
+        )
+        .next;
         assert_eq!(
-            step(Some(&running), None, None, &session_start.signal)
-                .next
-                .status,
+            step(
+                Some(&running),
+                None,
+                PriorTurnIds::default(),
+                &session_start.signal
+            )
+            .next
+            .status,
             AgentStatus::Idle,
         );
     }

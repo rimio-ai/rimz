@@ -164,7 +164,7 @@ impl CanonicalEvent {
                 NormalizedCanonicalEvent::lifecycle(LifecycleSignal::Registered, true)
             }
             Self::TurnStart { prompt } => NormalizedCanonicalEvent {
-                signal: Some(LifecycleSignal::TurnStarted),
+                signal: Some(LifecycleSignal::TurnStarted { turn_id: None }),
                 prompt: prompt.clone(),
                 progress: true,
                 ..NormalizedCanonicalEvent::default()
@@ -177,6 +177,7 @@ impl CanonicalEvent {
                 signal: Some(LifecycleSignal::TurnEnded {
                     errored: *errored,
                     parked_on_background: false,
+                    turn_id: None,
                 }),
                 turn_error: errored.then(|| error_message.clone()).flatten(),
                 final_message: last_assistant_message.clone(),

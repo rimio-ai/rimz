@@ -620,7 +620,7 @@ impl crate::agents::capabilities::HookCapability for CodexAdapter {
             let root_identity_event = parent_agent_id.is_none()
                 && matches!(
                     signal,
-                    LifecycleSignal::Registered | LifecycleSignal::TurnStarted
+                    LifecycleSignal::Registered | LifecycleSignal::TurnStarted { .. }
                 );
             let compact_continuation = parent_agent_id.is_none()
                 && parts
@@ -1245,7 +1245,7 @@ fn map_codex_lifecycle_signal(
     match event_name {
         "SessionStart" => Some(parts.session_start.as_ref()?.source.session_start_signal()),
         "SubagentStart" => Some(LifecycleSignal::SubagentStarted),
-        "UserPromptSubmit" => Some(LifecycleSignal::TurnStarted),
+        "UserPromptSubmit" => Some(LifecycleSignal::TurnStarted { turn_id: None }),
         "SubagentStop" => Some(LifecycleSignal::SubagentStopped {
             errored: stop_payload_errored(payload) || turn_error.is_some(),
         }),
@@ -1258,6 +1258,7 @@ fn map_codex_lifecycle_signal(
         "Stop" => Some(LifecycleSignal::TurnEnded {
             errored: stop_payload_errored(payload) || turn_error.is_some(),
             parked_on_background: false,
+            turn_id: None,
         }),
         "PermissionRequest" => Some(LifecycleSignal::AwaitingInput {
             kind: AskKind::Permission,

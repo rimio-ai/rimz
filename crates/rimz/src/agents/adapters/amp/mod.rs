@@ -307,7 +307,7 @@ impl crate::agents::capabilities::HookCapability for AmpAdapter {
         };
         let signal = match event_name {
             "session_start" => LifecycleSignal::Registered,
-            "agent_start" => LifecycleSignal::TurnStarted,
+            "agent_start" => LifecycleSignal::TurnStarted { turn_id: None },
             "tool_result" => LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits: parsed
@@ -322,6 +322,7 @@ impl crate::agents::capabilities::HookCapability for AmpAdapter {
                 status => LifecycleSignal::TurnEnded {
                     errored: status != Some("done"),
                     parked_on_background: false,
+                    turn_id: None,
                 },
             },
             "permission_ask" => LifecycleSignal::AwaitingInput {

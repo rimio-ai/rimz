@@ -291,7 +291,7 @@ mod tests {
         registered.timestamp = registered_at;
         let started = AgentLifecycleObservation::new(
             Some(AgentSessionId::from("agent-0")),
-            LifecycleSignal::TurnStarted,
+            LifecycleSignal::TurnStarted { turn_id: None },
         );
         let mut started = EventEnvelope::agent_lifecycle(
             workspace_id,

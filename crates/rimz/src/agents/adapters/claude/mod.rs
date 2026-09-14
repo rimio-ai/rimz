@@ -957,7 +957,7 @@ fn map_claude_lifecycle_signal(
 ) -> Option<LifecycleSignal> {
     match event_name {
         "SessionStart" => Some(parts.session_start.as_ref()?.source.session_start_signal()),
-        "UserPromptSubmit" => Some(LifecycleSignal::TurnStarted),
+        "UserPromptSubmit" => Some(LifecycleSignal::TurnStarted { turn_id: None }),
         "SubagentStart" => Some(LifecycleSignal::SubagentStarted),
         // The published SubagentStop payload has no outcome or exit-code
         // field, so close the bracket without inventing an error state.
@@ -967,6 +967,7 @@ fn map_claude_lifecycle_signal(
             parked_on_background: parts.stop.as_ref().is_some_and(|stop| {
                 has_pending_background(&stop.background_tasks, &stop.session_crons)
             }),
+            turn_id: None,
         }),
         "PermissionRequest" => spec
             .blocking_tool_kind(

@@ -43,10 +43,11 @@ fn wait_delay_arms_instance_for_the_calling_agent() {
     assert_eq!(target.handle, "@planner#project");
 
     for signal in [
-        LifecycleSignal::TurnStarted,
+        LifecycleSignal::TurnStarted { turn_id: None },
         LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
+            turn_id: None,
         },
     ] {
         let observation =
@@ -653,13 +654,14 @@ fn self_wait_queues_with_any_gate_for_working_and_idle_targets() {
         // The idle target rests after a finished turn, so only the wake in
         // flight can keep `agents wait` open once the wait row is consumed.
         let turn: &[LifecycleSignal] = if working {
-            &[LifecycleSignal::TurnStarted]
+            &[LifecycleSignal::TurnStarted { turn_id: None }]
         } else {
             &[
-                LifecycleSignal::TurnStarted,
+                LifecycleSignal::TurnStarted { turn_id: None },
                 LifecycleSignal::TurnEnded {
                     errored: false,
                     parked_on_background: false,
+                    turn_id: None,
                 },
             ]
         };

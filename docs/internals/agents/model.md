@@ -68,6 +68,7 @@ Each event is a partial update. `carried_base` clones the prior row, `assemble_a
 | counters | `tool_calls`, `compaction_count` | Incremented from durable events, so replay reproduces them. |
 | turn boundaries | `turn_started_at`, `user_turn_started_at` | Advanced by the signals in [the edge table](#edges); otherwise carried. |
 | open ask | `waiting_since`, `open_ask`, `interrupted_turn_id` | `waiting_since` and `open_ask` live only while the row is `waiting`. `interrupted_turn_id` is recorded by `turn_interrupted` and cleared by `registered` or a newly opened turn. |
+| turn identity | `started_turn_id` | Replaced by every `turn_started`, cleared by one that carries no provider turn id, otherwise carried. |
 | compaction | `compacting_since`, `compacted_awaiting_prompt` | `compacting_since` marks an open [compaction bracket](#the-compaction-bracket). `compacted_awaiting_prompt` is set by a sent compact command or a successful manual close, cleared only by `turn_started`, and consulted only for adapters with a native turn-start hook. |
 
 Five of these rules need their reason stated:
@@ -105,11 +106,11 @@ ended                 running or waiting ──► failed (a reaped end rests at
 | Signal | Status | Also |
 | --- | --- | --- |
 | `registered` | any → `idle` | Establishes a row. On a row that has opened a turn, advances both turn boundaries, which retires the prior turn's subagents (a `/clear`). |
-| `turn_started` | any → `running` | Opens the `reasoning` phase and stamps `turn_started_at`. `user_turn_started_at` advances only for a user-authored prompt, not a harness-delivered one. On a `parked` row it resumes the same turn and keeps both boundaries. |
-| `turn_ended` clean | → `success` | Rests the phase. |
+| `turn_started` | any → `running` | Records the provider turn id when known. Opens the `reasoning` phase and stamps `turn_started_at`. `user_turn_started_at` advances only for a user-authored prompt, not a harness-delivered one. On a `parked` row it resumes the same turn and keeps both boundaries. |
+| `turn_ended` clean | → `success` | Rests the phase. A [late report](#late-turn-reports) is ignored. |
 | `turn_ended` errored | → `failed` | The error bit wins over the parked bit. |
 | `turn_ended` clean, `parked_on_background` | → `running` | Moves the phase to `parked` ([turn endings](#turn-endings-and-parked-turns)). |
-| `turn_interrupted` | any → `idle` | The provider or user canceled the turn, which closes it with no result. Records the provider turn id when known. |
+| `turn_interrupted` | any → `idle` | The provider or user canceled the turn, which closes it with no result. Records the provider turn id when known. A [late report](#late-turn-reports) is ignored. |
 | `awaiting_input` | any → `waiting` | Rests the phase, stamps `waiting_since`, and opens the ask ([`AskKind`](../../../crates/rimz/src/agents/lifecycle.rs): permission, plan approval, or question). A repeat restamps it. |
 | `subagent_started` | → `running` | Establishes the child row under the child's own id and opens `reasoning`. A child already at `success` or `failed` holds its verdict, so a late reordered start is ignored. |
 | `subagent_stopped` | any → `success` or `failed` | The child's verdict, by its error bit. |
@@ -120,6 +121,10 @@ ended                 running or waiting ──► failed (a reaped end rests at
 | `lost` | held | A legacy `rimz.agent-lost` marker kept parseable for log replay; `step` ignores it. |
 
 An `ended` mid-turn delivered nothing, so it takes the failed disposition of [`terminal_disposition`](../../../crates/rimz/src/agents/lifecycle.rs), which supervised runs share. A run record that already holds a more specific terminal outcome, such as `timed_out` or `canceled`, keeps it ([scripting.md](../harness/scripting.md)). An open compaction bracket closes with the row. Runtime views hide an ended row, and audit views keep it for explicit resume.
+
+### Late turn reports
+
+An adapter whose provider names each turn attaches that id to `turn_started`, `turn_ended`, and `turn_interrupted`. A turn report whose id differs from the row's `started_turn_id` belongs to an earlier turn that reported late, and `step` ignores it, so the turn in progress keeps its status. A `turn_interrupted` for the started turn after that turn already resolved to `success` or `failed` is ignored too, because a cancel cannot undo a delivered verdict. A later `turn_ended` for the same turn still applies. When the report or the row has no id, the edges above apply unchanged. Grok is the adapter that sends ids ([adapter_grok.md](./adapter_grok.md#hooks-and-lifecycle)).
 
 ### Turn endings and parked turns
 

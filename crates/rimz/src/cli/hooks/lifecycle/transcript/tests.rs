@@ -90,6 +90,7 @@ fn one_terminal_extraction_is_shared_when_run_and_conversation_both_need_it() {
     let terminal = recorded(LifecycleSignal::TurnEnded {
         errored: false,
         parked_on_background: false,
+        turn_id: None,
     });
     let message = assistant_message_for_lifecycle(&terminal, true, || {
         calls.set(calls.get() + 1);
@@ -120,7 +121,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
         true,
         rimz::store::message::DeliveryGate::Done,
     );
-    let mut started = recorded(LifecycleSignal::TurnStarted);
+    let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
     started.observation.prompt = Some(
         "Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nfirst\n\nType: AGENT_MESSAGE\nFrom: @reviewer\nContent:\nsecond"
             .to_owned(),
@@ -155,6 +156,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
         &recorded(LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
+            turn_id: None,
         }),
         conversation_input(Some("done"), &[], &[]),
     )
@@ -199,7 +201,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
         vec![first.message_id, second.message_id]
     );
 
-    let mut hand_typed = recorded(LifecycleSignal::TurnStarted);
+    let mut hand_typed = recorded(LifecycleSignal::TurnStarted { turn_id: None });
     hand_typed.waiting_cleared = true;
     hand_typed.observation.prompt = Some("typed directly".to_owned());
     record_conversation(
@@ -270,7 +272,7 @@ fn harness_notices_retain_delivery_attribution_in_transcripts() {
             rimz::store::message::DeliveryGate::Done,
         )
         .with_sender(sender);
-        let mut started = recorded(LifecycleSignal::TurnStarted);
+        let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
         started.observation.prompt = Some(format!(
             "Type: {header}\nFrom: @rimz\nContent:\nchild result"
         ));
@@ -309,7 +311,7 @@ fn mixed_submit_records_stray_text_as_direct_input() {
         kind: rimz::ids::AgentKind::new_unchecked("codex"),
         name: "lucid-atlas".to_owned(),
     });
-    let mut started = recorded(LifecycleSignal::TurnStarted);
+    let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
     started.observation.prompt = Some(
         "Type: SUBAGENT_REPORT\nFrom: @lucid-atlas\nContent:\nchild resultdo you still".to_owned(),
     );
@@ -348,7 +350,7 @@ fn user_message_header_records_prompt_without_envelope() {
         true,
         rimz::store::message::DeliveryGate::Done,
     );
-    let mut started = recorded(LifecycleSignal::TurnStarted);
+    let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
     started.observation.prompt =
         Some("Type: USER_MESSAGE\nFrom: @user\nContent:\nfrom a human".to_owned());
 
@@ -409,7 +411,7 @@ fn launched_child_brief_is_attributed_to_parent() {
     );
     run.subagent = true;
     rimz::harness::run::create(store.paths(), &run).unwrap();
-    let mut started = recorded(LifecycleSignal::TurnStarted);
+    let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
     started.observation.agent_id = Some(rimz::ids::AgentSessionId::from("child-session"));
     started.observation.prompt = Some("  inspect the infra  ".to_owned());
 
@@ -480,7 +482,7 @@ fn agent_message_does_not_answer_open_ask() {
         true,
         rimz::store::message::DeliveryGate::Done,
     );
-    let mut started = recorded(LifecycleSignal::TurnStarted);
+    let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
     started.waiting_cleared = true;
     started.observation.prompt =
         Some("Type: AGENT_MESSAGE\nFrom: @planner\nContent:\nnew context".to_owned());
@@ -513,7 +515,7 @@ fn prompt_without_waiting_transition_does_not_answer_stale_ask() {
     );
     ask.id = Some(rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap());
     rimz::transcript::append(store.paths(), &ask).unwrap();
-    let mut started = recorded(LifecycleSignal::TurnStarted);
+    let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
     started.observation.prompt = Some("new task".to_owned());
 
     record_conversation(
@@ -545,7 +547,7 @@ fn idless_ask_does_not_capture_prompt() {
         String::new(),
     );
     rimz::transcript::append(store.paths(), &ask).unwrap();
-    let mut started = recorded(LifecycleSignal::TurnStarted);
+    let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
     started.waiting_cleared = true;
     started.observation.prompt = Some("new task".to_owned());
 
@@ -584,7 +586,7 @@ fn prompt_after_answered_ask_starts_a_new_turn() {
     answer.entry = rimz::transcript::TranscriptKind::Answer;
     rimz::transcript::append(store.paths(), &ask).unwrap();
     rimz::transcript::append(store.paths(), &answer).unwrap();
-    let mut started = recorded(LifecycleSignal::TurnStarted);
+    let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
     started.waiting_cleared = true;
     started.observation.prompt = Some("next task".to_owned());
 
@@ -652,7 +654,7 @@ fn unheadered_system_batch_keeps_each_confirmed_message_causal() {
         rimz::store::message::DeliveryGate::Done,
     )
     .with_sender(rimz::store::message::MessageSender::System);
-    let mut started = recorded(LifecycleSignal::TurnStarted);
+    let mut started = recorded(LifecycleSignal::TurnStarted { turn_id: None });
     started.observation.prompt = Some("first\n\n\n\nsecond".to_owned());
 
     record_conversation(
@@ -715,10 +717,12 @@ fn cursor_response_hook_is_the_only_assistant_text_authority() {
         LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
+            turn_id: None,
         },
         LifecycleSignal::TurnEnded {
             errored: true,
             parked_on_background: false,
+            turn_id: None,
         },
         LifecycleSignal::TurnInterrupted { turn_id: None },
     ] {

@@ -124,7 +124,7 @@ fn forked_pane_lifecycle(
 fn turn_started_lifecycle(workspace_id: &WorkspaceId, agent_id: &str) -> EventEnvelope {
     let observation = AgentLifecycleObservation::new(
         Some(AgentSessionId::from(agent_id)),
-        LifecycleSignal::TurnStarted,
+        LifecycleSignal::TurnStarted { turn_id: None },
     );
     EventEnvelope::agent_lifecycle(
         workspace_id.clone(),
@@ -464,6 +464,7 @@ fn cleanly_rested_primary_is_not_reaped_by_a_fork() {
         LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
+            turn_id: None,
         },
     );
     completed.timestamp = now - Duration::from_secs(2);
@@ -492,6 +493,7 @@ fn failed_primary_is_reaped_by_a_fork() {
         LifecycleSignal::TurnEnded {
             errored: true,
             parked_on_background: false,
+            turn_id: None,
         },
     );
     failed.timestamp = now - Duration::from_secs(2);

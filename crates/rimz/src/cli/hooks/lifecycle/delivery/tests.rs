@@ -20,7 +20,7 @@ fn workspace() -> ResolvedWorkspace {
 fn turn_started() -> RecordedLifecycle {
     let mut observation = AgentLifecycleObservation::new(
         Some(rimz::ids::AgentSessionId::from("sess-1")),
-        LifecycleSignal::TurnStarted,
+        LifecycleSignal::TurnStarted { turn_id: None },
     );
     observation.worktree_path = Some("/tmp/hooks-test/worktree".to_owned());
     RecordedLifecycle {

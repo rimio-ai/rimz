@@ -801,7 +801,7 @@ mod tests {
         attached.set_routing(decoded.routing().clone());
         attached.attach_lifecycle(AgentLifecycleObservation::new(
             None,
-            super::super::LifecycleSignal::TurnStarted,
+            super::super::LifecycleSignal::TurnStarted { turn_id: None },
         ));
         assert_eq!(
             attached.event_agent_id().map(AgentSessionId::as_str),

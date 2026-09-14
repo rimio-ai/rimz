@@ -103,20 +103,30 @@ pub enum LifecycleSignal {
     /// than `compact`, Pi `session_start`).
     Registered,
     /// A user turn began (`UserPromptSubmit`). On a parked running row this
-    /// resumes the same logical turn instead of opening a fresh boundary.
-    TurnStarted,
+    /// resumes the same logical turn instead of opening a fresh boundary. When
+    /// the provider supplies its turn id, a later turn report carrying a
+    /// different id belongs to an earlier turn and is dropped.
+    TurnStarted {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
+    },
     /// A turn ended. `errored` always wins (the failure is the attention
     /// signal); a clean end with `parked_on_background` is the main thread
     /// parking on still-in-flight work, not a true turn end, so it stays
-    /// running rather than painting a false success.
+    /// running rather than painting a false success. A `turn_id` that differs
+    /// from the open turn's marks a late report from an earlier turn.
     TurnEnded {
         errored: bool,
         parked_on_background: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
     },
     /// A turn was canceled by the user or provider. This closes the turn
     /// without reporting either success or failure and leaves the session idle.
     /// When the provider supplies its turn id, a later tool completion with the
     /// same id is trailing output from the canceled turn rather than new work.
+    /// Like a turn end, a report for another turn is dropped, and so is a
+    /// cancel for a turn that already reported its verdict.
     TurnInterrupted {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         turn_id: Option<String>,
@@ -209,6 +219,7 @@ impl LifecycleSignal {
             LifecycleSignal::TurnEnded {
                 errored,
                 parked_on_background,
+                ..
             } if !parked_on_background => Some(if *errored {
                 TerminalDisposition::Failed
             } else {
@@ -225,7 +236,7 @@ impl LifecycleSignal {
     pub(super) const fn kind(&self) -> LifecycleSignalKind {
         match self {
             Self::Registered => LifecycleSignalKind::Registered,
-            Self::TurnStarted => LifecycleSignalKind::TurnStarted,
+            Self::TurnStarted { .. } => LifecycleSignalKind::TurnStarted,
             Self::TurnEnded { .. } | Self::TurnInterrupted { .. } => LifecycleSignalKind::TurnEnded,
             Self::SubagentStarted => LifecycleSignalKind::SubagentStarted,
             Self::SubagentStopped { .. } => LifecycleSignalKind::SubagentStopped,
@@ -244,11 +255,21 @@ impl LifecycleSignal {
         matches!(self, Self::Registered | Self::SubagentStarted)
     }
 
+    /// The started-turn id a record carries after this signal: a turn start
+    /// replaces it (an id-less start clears it, restoring the uncorrelated
+    /// fallback), and every other signal keeps the prior id.
+    pub fn started_turn_id(&self, prior: Option<&str>) -> Option<String> {
+        match self {
+            Self::TurnStarted { turn_id } => turn_id.clone(),
+            _ => prior.map(ToOwned::to_owned),
+        }
+    }
+
     /// Stable serde tag for runtime wakeups and diagnostics.
     pub const fn tag(&self) -> &'static str {
         match self {
             Self::Registered => "registered",
-            Self::TurnStarted => "turn_started",
+            Self::TurnStarted { .. } => "turn_started",
             Self::TurnEnded { .. } => "turn_ended",
             Self::TurnInterrupted { .. } => "turn_interrupted",
             Self::SubagentStarted => "subagent_started",
@@ -356,12 +377,22 @@ pub struct Transition {
     pub opened_turn: bool,
 }
 
+/// Provider turn ids the prior record remembers, which [`step`] correlates
+/// id-bearing signals against. Both are absent for providers without turn ids.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PriorTurnIds<'a> {
+    /// The most recent turn start's id ([`LifecycleSignal::started_turn_id`]).
+    pub started: Option<&'a str>,
+    /// The most recently interrupted turn's id.
+    pub interrupted: Option<&'a str>,
+}
+
 /// Fold one [`LifecycleSignal`] onto the prior [`LifecycleState`]. Pure and
 /// total: any `(prev, signal)` pair returns a `Transition` and never panics.
 pub fn step(
     prev: Option<&LifecycleState>,
     open_ask_key: Option<&str>,
-    interrupted_turn_id: Option<&str>,
+    turn_ids: PriorTurnIds<'_>,
     signal: &LifecycleSignal,
 ) -> Transition {
     let prior_status = prev.map(|p| p.status);
@@ -370,16 +401,19 @@ pub fn step(
     let mut kind = TransitionKind::Normal;
 
     // `Lost` is kept as an ignored marker for backward-compatible log replay.
-    if matches!(signal, LifecycleSignal::Lost) {
+    let ignored = if matches!(signal, LifecycleSignal::Lost) {
+        Some("session lost (legacy replay marker)")
+    } else {
+        stale_turn_report(signal, prior_status, turn_ids.started)
+    };
+    if let Some(reason) = ignored {
         return Transition {
             next: LifecycleState {
                 status: prior_status.unwrap_or(AgentStatus::Idle),
                 phase: prior_phase,
                 compacting: was_compacting,
             },
-            kind: TransitionKind::Ignored {
-                reason: "session lost (legacy replay marker)",
-            },
+            kind: TransitionKind::Ignored { reason },
             compaction_closed: false,
             waiting_cleared: false,
             opened_turn: false,
@@ -393,7 +427,7 @@ pub fn step(
         signal,
         prior_status,
         open_ask_key,
-        interrupted_turn_id,
+        turn_ids.interrupted,
         &mut kind,
     );
     let phase = map_phase(signal, prior_phase, status);
@@ -426,19 +460,52 @@ pub fn step(
     }
 }
 
+/// Why a turn report must not touch the row, when it carries a provider turn id
+/// the row can correlate. A report for a turn other than the last started one
+/// arrived late (Grok dispatches a canceled turn's report off its command loop,
+/// so it can land after the next prompt). A cancel for the started turn after
+/// that turn already reported its verdict cannot un-report it; a later verdict
+/// for the same turn still applies, since a continuation round reports again.
+fn stale_turn_report(
+    signal: &LifecycleSignal,
+    prior_status: Option<AgentStatus>,
+    started_turn_id: Option<&str>,
+) -> Option<&'static str> {
+    let (LifecycleSignal::TurnEnded {
+        turn_id: Some(report),
+        ..
+    }
+    | LifecycleSignal::TurnInterrupted {
+        turn_id: Some(report),
+    }) = signal
+    else {
+        return None;
+    };
+    let started = started_turn_id?;
+    if report != started {
+        return Some("turn report for a turn other than the one started last");
+    }
+    (matches!(signal, LifecycleSignal::TurnInterrupted { .. })
+        && matches!(
+            prior_status,
+            Some(AgentStatus::Success | AgentStatus::Failed)
+        ))
+    .then_some("turn cancel after its turn already reported")
+}
+
 fn opened_turn(
     signal: &LifecycleSignal,
     prior_status: Option<AgentStatus>,
     prior_phase: TurnPhase,
     status: AgentStatus,
 ) -> bool {
-    if matches!(signal, LifecycleSignal::TurnStarted)
+    if matches!(signal, LifecycleSignal::TurnStarted { .. })
         && prior_status == Some(AgentStatus::Running)
         && prior_phase == TurnPhase::Parked
     {
         return false;
     }
-    matches!(signal, LifecycleSignal::TurnStarted)
+    matches!(signal, LifecycleSignal::TurnStarted { .. })
         || (matches!(signal, LifecycleSignal::SubagentStarted) && status == AgentStatus::Running)
         || (status == AgentStatus::Running
             && !matches!(
@@ -464,7 +531,7 @@ fn map_status(
 ) -> AgentStatus {
     match signal {
         LifecycleSignal::Registered => AgentStatus::Idle,
-        LifecycleSignal::TurnStarted => AgentStatus::Running,
+        LifecycleSignal::TurnStarted { .. } => AgentStatus::Running,
         LifecycleSignal::SubagentStarted => match prior_status {
             Some(terminal @ (AgentStatus::Success | AgentStatus::Failed)) => {
                 *kind = TransitionKind::Ignored {
@@ -487,6 +554,7 @@ fn map_status(
         LifecycleSignal::TurnEnded {
             errored,
             parked_on_background,
+            ..
         } => {
             if *errored {
                 AgentStatus::Failed
@@ -612,7 +680,9 @@ fn map_phase(signal: &LifecycleSignal, prior_phase: TurnPhase, status: AgentStat
     // parks it; any other boundary rests it. Compaction preserves the phase
     // like it preserves the status.
     let phase = match signal {
-        LifecycleSignal::TurnStarted | LifecycleSignal::SubagentStarted => TurnPhase::Reasoning,
+        LifecycleSignal::TurnStarted { .. } | LifecycleSignal::SubagentStarted => {
+            TurnPhase::Reasoning
+        }
         LifecycleSignal::AwaitingInput { .. } => TurnPhase::Idle,
         // A shell command during the reasoning phase is work, but the turn has
         // still written nothing — the thinking head carries forward. Anywhere else a
@@ -629,6 +699,7 @@ fn map_phase(signal: &LifecycleSignal, prior_phase: TurnPhase, status: AgentStat
         LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: true,
+            ..
         } => TurnPhase::Parked,
         LifecycleSignal::Compacting => prior_phase,
         LifecycleSignal::CompactionEnded { .. } => prior_phase,

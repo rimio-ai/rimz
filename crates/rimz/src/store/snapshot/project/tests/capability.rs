@@ -65,7 +65,7 @@ fn projected_lifecycle_events_preserve_schema_owned_lifetime_fields() {
         EventEnvelope::agent_lifecycle(workspace(), "session", "codex", "SessionStart", &identity);
 
     let mut progress = identity;
-    progress.signal = LifecycleSignal::TurnStarted;
+    progress.signal = LifecycleSignal::TurnStarted { turn_id: None };
     let progress = crate::store::event::observation_for_event(&progress);
     let progress = EventEnvelope::agent_lifecycle(
         workspace(),

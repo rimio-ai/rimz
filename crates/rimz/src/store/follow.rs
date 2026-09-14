@@ -5,7 +5,9 @@ use std::fs;
 use std::io;
 
 use crate::agents::AgentState;
-use crate::agents::lifecycle::{LifecycleEvent, LifecycleSignal, LifecycleState, step};
+use crate::agents::lifecycle::{
+    LifecycleEvent, LifecycleSignal, LifecycleState, PriorTurnIds, step,
+};
 use crate::disk::paths::StatePaths;
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::ids::{EventId, WorkspaceId};
@@ -21,6 +23,7 @@ type AgentKey = (AgentKind, AgentSessionId);
 struct FollowState {
     lifecycle: LifecycleState,
     open_ask_key: Option<String>,
+    started_turn_id: Option<String>,
     interrupted_turn_id: Option<String>,
 }
 
@@ -73,6 +76,7 @@ impl EventFollower {
                 let state = FollowState {
                     lifecycle: agent.lifecycle(),
                     open_ask_key: open_ask_key(&agent),
+                    started_turn_id: agent.started_turn_id,
                     interrupted_turn_id: agent.interrupted_turn_id,
                 };
                 (key, state)
@@ -182,7 +186,10 @@ impl EventFollower {
             let transition = step(
                 prior.map(|state| &state.lifecycle),
                 prior.and_then(|state| state.open_ask_key.as_deref()),
-                prior.and_then(|state| state.interrupted_turn_id.as_deref()),
+                PriorTurnIds {
+                    started: prior.and_then(|state| state.started_turn_id.as_deref()),
+                    interrupted: prior.and_then(|state| state.interrupted_turn_id.as_deref()),
+                },
                 &observation.signal,
             );
             events.push(FollowEvent::Lifecycle(LifecycleEvent::new(
@@ -207,6 +214,9 @@ impl EventFollower {
                 _ if transition.next.status != crate::agents::AgentStatus::Waiting => None,
                 _ => prior.and_then(|state| state.open_ask_key.clone()),
             };
+            let started_turn_id = observation
+                .signal
+                .started_turn_id(prior.and_then(|state| state.started_turn_id.as_deref()));
             let interrupted_turn_id = match &observation.signal {
                 LifecycleSignal::TurnInterrupted { turn_id } => turn_id.clone(),
                 LifecycleSignal::Registered => None,
@@ -218,6 +228,7 @@ impl EventFollower {
                 FollowState {
                     lifecycle: transition.next,
                     open_ask_key,
+                    started_turn_id,
                     interrupted_turn_id,
                 },
             );
@@ -315,7 +326,7 @@ mod tests {
         let (_dir, store, paths) = fixture();
         append(&store, LifecycleSignal::Registered);
         let mut follower = EventFollower::open(paths, false).unwrap();
-        append(&store, LifecycleSignal::TurnStarted);
+        append(&store, LifecycleSignal::TurnStarted { turn_id: None });
         assert_eq!(follower.poll().unwrap().events.len(), 1);
 
         store.rotate_event_log(1, None).unwrap();
@@ -324,6 +335,7 @@ mod tests {
             LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
+                turn_id: None,
             },
         );
         let batch = follower.poll().unwrap();
@@ -343,7 +355,7 @@ mod tests {
     fn adapter_ask_without_id_does_not_hold_a_sibling_tool_waiting() {
         let (_dir, store, paths) = fixture();
         append(&store, LifecycleSignal::Registered);
-        append(&store, LifecycleSignal::TurnStarted);
+        append(&store, LifecycleSignal::TurnStarted { turn_id: None });
         append(
             &store,
             LifecycleSignal::AwaitingInput {

@@ -133,7 +133,7 @@ fn append(env: &Env, signal: LifecycleSignal) {
 fn events_follow_replays_then_streams_across_rotation_without_a_gap() {
     let env = Env::new();
     append(&env, LifecycleSignal::Registered);
-    append(&env, LifecycleSignal::TurnStarted);
+    append(&env, LifecycleSignal::TurnStarted { turn_id: None });
 
     let mut child = env
         .rimz()
@@ -157,7 +157,10 @@ fn events_follow_replays_then_streams_across_rotation_without_a_gap() {
     let second = next_event(&recv);
     assert_eq!(first.signal, LifecycleSignal::Registered);
     assert_eq!(first.prior_status, None);
-    assert_eq!(second.signal, LifecycleSignal::TurnStarted);
+    assert_eq!(
+        second.signal,
+        LifecycleSignal::TurnStarted { turn_id: None }
+    );
     assert_eq!(second.prior_status, Some(rimz::agents::AgentStatus::Idle));
 
     append(
@@ -165,6 +168,7 @@ fn events_follow_replays_then_streams_across_rotation_without_a_gap() {
         LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
+            turn_id: None,
         },
     );
     let ended = next_event(&recv);
@@ -173,9 +177,12 @@ fn events_follow_replays_then_streams_across_rotation_without_a_gap() {
     env.store()
         .rotate_event_log(1, None)
         .expect("rotate event log");
-    append(&env, LifecycleSignal::TurnStarted);
+    append(&env, LifecycleSignal::TurnStarted { turn_id: None });
     let resumed = next_event(&recv);
-    assert_eq!(resumed.signal, LifecycleSignal::TurnStarted);
+    assert_eq!(
+        resumed.signal,
+        LifecycleSignal::TurnStarted { turn_id: None }
+    );
     assert_eq!(
         resumed.prior_status,
         Some(rimz::agents::AgentStatus::Success)

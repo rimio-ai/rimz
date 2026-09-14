@@ -12,7 +12,7 @@ pub(super) fn confirm_sent_message_for_lifecycle(
     session_name: &str,
 ) -> Vec<rimz::store::message::MessageRecord> {
     let ack = match recorded.observation.signal {
-        LifecycleSignal::TurnStarted => rimz::store::writer::DeliveryAck::TurnStarted {
+        LifecycleSignal::TurnStarted { .. } => rimz::store::writer::DeliveryAck::TurnStarted {
             prompt: recorded
                 .observation
                 .prompt
@@ -55,7 +55,11 @@ pub(super) fn record_user_input_for_lifecycle(
     supervised: bool,
     state_root: Option<&std::path::Path>,
 ) {
-    if recorded.observation.signal != LifecycleSignal::TurnStarted || supervised {
+    if !matches!(
+        recorded.observation.signal,
+        LifecycleSignal::TurnStarted { .. }
+    ) || supervised
+    {
         return;
     }
     if !delivered.is_empty() && !delivered.iter().any(|record| record.is_user_input()) {

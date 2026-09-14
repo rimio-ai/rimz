@@ -49,7 +49,7 @@ pub(super) fn recover_focused_pane_binding(
     }
     if !matches!(
         observation.signal,
-        LifecycleSignal::Registered | LifecycleSignal::TurnStarted
+        LifecycleSignal::Registered | LifecycleSignal::TurnStarted { .. }
     ) {
         return;
     }
@@ -85,7 +85,7 @@ pub(super) fn recover_focused_pane_binding(
     };
     let phase = match observation.signal {
         LifecycleSignal::Registered => HookPaneRecoveryPhase::Registered,
-        LifecycleSignal::TurnStarted => HookPaneRecoveryPhase::TurnStarted,
+        LifecycleSignal::TurnStarted { .. } => HookPaneRecoveryPhase::TurnStarted,
         _ => return,
     };
     if HookPaneRecoveryContext::new(

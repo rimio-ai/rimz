@@ -230,7 +230,7 @@ fn maps_prompts_and_permission_requests_to_lifecycle_signals() {
     for payload in [json!({"session_id":"s1","prompt":"fix the bug"}), json!({})] {
         assert_eq!(
             hook_signal(&adapter, "UserPromptSubmit", &payload),
-            LifecycleSignal::TurnStarted
+            LifecycleSignal::TurnStarted { turn_id: None }
         );
     }
     for (payload, label) in [
@@ -464,7 +464,8 @@ fn maps_lifecycle_context_background_and_subagents() {
         parked.signal,
         LifecycleSignal::TurnEnded {
             errored: false,
-            parked_on_background: true
+            parked_on_background: true,
+            turn_id: None,
         }
     );
     assert_eq!(parked.usage.context_pct, Some(100));

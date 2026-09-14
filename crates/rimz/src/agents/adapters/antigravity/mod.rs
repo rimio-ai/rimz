@@ -587,7 +587,8 @@ fn decode_lifecycle_fields(
             };
             (
                 invocation.common,
-                (invocation.invocation_num == Some(0)).then_some(LifecycleSignal::TurnStarted),
+                (invocation.invocation_num == Some(0))
+                    .then_some(LifecycleSignal::TurnStarted { turn_id: None }),
             )
         }
         "PostToolUse:edit" | "PostToolUse:mutating" | "PostToolUse:observed" => {
@@ -623,6 +624,7 @@ fn decode_lifecycle_fields(
                 fully_idle.map(|fully_idle| LifecycleSignal::TurnEnded {
                     errored: failed,
                     parked_on_background: !fully_idle && !failed,
+                    turn_id: None,
                 }),
             )
         }
@@ -663,7 +665,7 @@ fn observation_with_prompt_reader(
     let transcript_path = common
         .transcript_path
         .filter(|path| !path.trim().is_empty());
-    let prompt = matches!(signal, LifecycleSignal::TurnStarted)
+    let prompt = matches!(signal, LifecycleSignal::TurnStarted { .. })
         .then(|| prompt_reader(Path::new(transcript_path.as_deref()?), agent_id.as_str()))
         .flatten();
     let mut observation = AgentLifecycleObservation::new(Some(agent_id.as_str().into()), signal);

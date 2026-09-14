@@ -154,7 +154,12 @@ mod tests {
         let mut state = member.lifecycle();
         state.status = prior;
         state.phase = TurnPhase::Idle;
-        let transition = crate::agents::step(Some(&state), None, None, &signal);
+        let transition = crate::agents::step(
+            Some(&state),
+            None,
+            crate::agents::PriorTurnIds::default(),
+            &signal,
+        );
         LifecycleEvent::new(
             EventId::new(),
             jiff::Timestamp::UNIX_EPOCH,
@@ -200,6 +205,7 @@ mod tests {
         LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
+            turn_id: None,
         }
     }
 
@@ -315,6 +321,7 @@ mod tests {
             LifecycleSignal::TurnEnded {
                 errored: true,
                 parked_on_background: false,
+                turn_id: None,
             },
         );
         let rows = [member];

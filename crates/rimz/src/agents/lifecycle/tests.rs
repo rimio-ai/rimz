@@ -7,6 +7,7 @@ fn terminal_disposition_table_pins_every_signal() {
             LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
+                turn_id: None,
             },
             Some(TerminalDisposition::Completed),
         ),
@@ -14,6 +15,7 @@ fn terminal_disposition_table_pins_every_signal() {
             LifecycleSignal::TurnEnded {
                 errored: true,
                 parked_on_background: false,
+                turn_id: None,
             },
             Some(TerminalDisposition::Failed),
         ),
@@ -21,6 +23,7 @@ fn terminal_disposition_table_pins_every_signal() {
             LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: true,
+                turn_id: None,
             },
             None,
         ),
@@ -28,6 +31,7 @@ fn terminal_disposition_table_pins_every_signal() {
             LifecycleSignal::TurnEnded {
                 errored: true,
                 parked_on_background: true,
+                turn_id: None,
             },
             None,
         ),
@@ -37,7 +41,7 @@ fn terminal_disposition_table_pins_every_signal() {
         ),
         (LifecycleSignal::Ended, Some(TerminalDisposition::Failed)),
         (LifecycleSignal::Registered, None),
-        (LifecycleSignal::TurnStarted, None),
+        (LifecycleSignal::TurnStarted { turn_id: None }, None),
         (LifecycleSignal::SubagentStarted, None),
         (LifecycleSignal::SubagentStopped { errored: false }, None),
         (LifecycleSignal::SubagentStopped { errored: true }, None),
@@ -106,6 +110,7 @@ fn turn_end(errored: bool, parked_on_background: bool) -> LifecycleSignal {
     LifecycleSignal::TurnEnded {
         errored,
         parked_on_background,
+        turn_id: None,
     }
 }
 
@@ -116,7 +121,7 @@ fn assert_next(
     signal: LifecycleSignal,
     expected: LifecycleState,
 ) -> Transition {
-    let transition = step(prev.as_ref(), None, None, &signal);
+    let transition = step(prev.as_ref(), None, PriorTurnIds::default(), &signal);
     assert_eq!(transition.next, expected, "{label}");
     transition
 }
@@ -139,7 +144,7 @@ fn root_turn_edges_follow_the_contract() {
     let started = assert_next(
         "turn start",
         Some(idle),
-        LifecycleSignal::TurnStarted,
+        LifecycleSignal::TurnStarted { turn_id: None },
         reasoning,
     );
     assert!(started.opened_turn);
@@ -215,7 +220,7 @@ fn interrupted_turn_ignores_only_its_own_trailing_tool_completion() {
     let interrupted = step(
         Some(&running),
         None,
-        None,
+        PriorTurnIds::default(),
         &LifecycleSignal::TurnInterrupted {
             turn_id: Some("turn-1".to_owned()),
         },
@@ -229,7 +234,11 @@ fn interrupted_turn_ignores_only_its_own_trailing_tool_completion() {
         native_key: None,
         turn_id: turn_id.map(ToOwned::to_owned),
     };
-    let trailing = step(Some(&idle), None, Some("turn-1"), &tool(Some("turn-1")));
+    let trailing_ids = PriorTurnIds {
+        started: None,
+        interrupted: Some("turn-1"),
+    };
+    let trailing = step(Some(&idle), None, trailing_ids, &tool(Some("turn-1")));
     assert_eq!(trailing.next, idle);
     assert_eq!(
         trailing.kind,
@@ -240,9 +249,86 @@ fn interrupted_turn_ignores_only_its_own_trailing_tool_completion() {
     assert!(!trailing.opened_turn);
 
     for signal in [tool(Some("turn-2")), tool(None)] {
-        let progress = step(Some(&idle), None, Some("turn-1"), &signal);
+        let progress = step(Some(&idle), None, trailing_ids, &signal);
         assert_eq!(progress.next.status, AgentStatus::Running);
         assert!(progress.opened_turn);
+    }
+}
+
+#[test]
+fn turn_reports_correlate_with_the_started_turn_id() {
+    let running = state(AgentStatus::Running, TurnPhase::Reasoning, false);
+    let success = state(AgentStatus::Success, TurnPhase::Idle, false);
+    let started = PriorTurnIds {
+        started: Some("prompt-2"),
+        interrupted: None,
+    };
+    let ended = |errored, turn_id: Option<&str>| LifecycleSignal::TurnEnded {
+        errored,
+        parked_on_background: false,
+        turn_id: turn_id.map(ToOwned::to_owned),
+    };
+    let canceled = |turn_id: Option<&str>| LifecycleSignal::TurnInterrupted {
+        turn_id: turn_id.map(ToOwned::to_owned),
+    };
+
+    for late in [ended(false, Some("prompt-1")), canceled(Some("prompt-1"))] {
+        let dropped = step(Some(&running), None, started, &late);
+        assert_eq!(dropped.next, running, "{late:?}");
+        assert_eq!(
+            dropped.kind,
+            TransitionKind::Ignored {
+                reason: "turn report for a turn other than the one started last",
+            },
+            "{late:?}"
+        );
+    }
+    let repeated_cancel = step(Some(&success), None, started, &canceled(Some("prompt-2")));
+    assert_eq!(repeated_cancel.next, success);
+    assert_eq!(
+        repeated_cancel.kind,
+        TransitionKind::Ignored {
+            reason: "turn cancel after its turn already reported",
+        }
+    );
+
+    for (prior, ids, report, expected) in [
+        (
+            running,
+            started,
+            canceled(Some("prompt-2")),
+            AgentStatus::Idle,
+        ),
+        (
+            running,
+            started,
+            ended(false, Some("prompt-2")),
+            AgentStatus::Success,
+        ),
+        (
+            success,
+            started,
+            ended(true, Some("prompt-2")),
+            AgentStatus::Failed,
+        ),
+        (running, started, ended(false, None), AgentStatus::Success),
+        (success, started, canceled(None), AgentStatus::Idle),
+        (
+            running,
+            PriorTurnIds::default(),
+            canceled(Some("prompt-1")),
+            AgentStatus::Idle,
+        ),
+    ] {
+        let applied = step(Some(&prior), None, ids, &report);
+        assert_eq!(
+            applied.next.status, expected,
+            "{prior:?} {ids:?} {report:?}"
+        );
+        assert!(
+            !matches!(applied.kind, TransitionKind::Ignored { .. }),
+            "{report:?}"
+        );
     }
 }
 
@@ -253,14 +339,14 @@ fn parked_wait_and_answered_prompt_preserve_boundary_facts() {
     let wait = assert_next(
         "parked wait",
         Some(parked),
-        LifecycleSignal::TurnStarted,
+        LifecycleSignal::TurnStarted { turn_id: None },
         reasoning,
     );
 
     let prompt = assert_next(
         "live prompt",
         Some(reasoning),
-        LifecycleSignal::TurnStarted,
+        LifecycleSignal::TurnStarted { turn_id: None },
         reasoning,
     );
     assert_eq!((wait.opened_turn, prompt.opened_turn), (false, true));
@@ -295,7 +381,7 @@ fn keyed_wait_clears_only_for_the_matching_tool() {
     let sibling = step(
         Some(&waiting),
         Some("ask-call"),
-        None,
+        PriorTurnIds::default(),
         &tool(Some("sibling-call")),
     );
     assert_eq!(
@@ -324,7 +410,12 @@ fn keyed_wait_clears_only_for_the_matching_tool() {
         ("keyless tool", Some("ask-call"), tool(None)),
         ("keyless ask", None, tool(Some("sibling-call"))),
     ] {
-        let transition = step(Some(&waiting), open_ask_key, None, &signal);
+        let transition = step(
+            Some(&waiting),
+            open_ask_key,
+            PriorTurnIds::default(),
+            &signal,
+        );
         assert_eq!(transition.next.status, AgentStatus::Running, "{label}");
         assert!(transition.waiting_cleared, "{label}");
         assert!(!transition.opened_turn, "{label}");
@@ -380,7 +471,7 @@ fn activity_evidence_reconciles_only_running_and_resting_states() {
                     matches!(signal, LifecycleSignal::CompactionEnded { .. }),
                 )
             });
-            let transition = step(previous.as_ref(), None, None, &signal);
+            let transition = step(previous.as_ref(), None, PriorTurnIds::default(), &signal);
             assert_eq!(transition.next.status, expected, "{prior:?} + {signal:?}");
             assert_eq!(
                 transition.kind,
@@ -425,7 +516,12 @@ fn subagent_and_terminal_edges_follow_the_contract() {
 
     for terminal in [AgentStatus::Success, AgentStatus::Failed] {
         let prior = state(terminal, TurnPhase::Idle, false);
-        let late_start = step(Some(&prior), None, None, &LifecycleSignal::SubagentStarted);
+        let late_start = step(
+            Some(&prior),
+            None,
+            PriorTurnIds::default(),
+            &LifecycleSignal::SubagentStarted,
+        );
         assert_eq!(late_start.next, prior, "{terminal:?}");
         assert_eq!(
             late_start.kind,
@@ -440,7 +536,7 @@ fn subagent_and_terminal_edges_follow_the_contract() {
     let running_start = step(
         Some(&reasoning),
         None,
-        None,
+        PriorTurnIds::default(),
         &LifecycleSignal::SubagentStarted,
     );
     assert_eq!(running_start.next, reasoning);
@@ -600,7 +696,7 @@ fn compaction_bracket_follows_trigger_and_counts_one_close() {
     let ordinary = assert_next(
         "ordinary close",
         Some(state(AgentStatus::Running, TurnPhase::Acting, true)),
-        LifecycleSignal::TurnStarted,
+        LifecycleSignal::TurnStarted { turn_id: None },
         reasoning,
     );
     assert_eq!(
@@ -741,7 +837,7 @@ fn all_state_signal_pairs_preserve_machine_invariants() {
 
     for prev in states {
         for signal in &signals {
-            let transition = step(prev.as_ref(), None, None, signal);
+            let transition = step(prev.as_ref(), None, PriorTurnIds::default(), signal);
             if !matches!(signal, LifecycleSignal::Lost)
                 && transition.next.status != AgentStatus::Running
             {
@@ -762,7 +858,10 @@ fn all_state_signal_pairs_preserve_machine_invariants() {
 fn lifecycle_wire_tags_and_legacy_defaults_are_stable() {
     let signals = [
         (LifecycleSignal::Registered, "registered"),
-        (LifecycleSignal::TurnStarted, "turn_started"),
+        (
+            LifecycleSignal::TurnStarted { turn_id: None },
+            "turn_started",
+        ),
         (turn_end(false, true), "turn_ended"),
         (
             LifecycleSignal::TurnInterrupted { turn_id: None },

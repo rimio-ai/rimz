@@ -812,6 +812,7 @@ mod tests {
                 LifecycleSignal::TurnEnded {
                     errored: false,
                     parked_on_background: false,
+                    turn_id: None,
                 },
                 "agent.idle",
                 false,
@@ -820,6 +821,7 @@ mod tests {
                 LifecycleSignal::TurnEnded {
                     errored: true,
                     parked_on_background: false,
+                    turn_id: None,
                 },
                 "agent.failed",
                 true,
@@ -864,7 +866,9 @@ mod tests {
             );
         }
         assert_eq!(
-            lifecycle_signal(&lifecycle_event(LifecycleSignal::TurnStarted)),
+            lifecycle_signal(&lifecycle_event(LifecycleSignal::TurnStarted {
+                turn_id: None
+            })),
             None
         );
     }

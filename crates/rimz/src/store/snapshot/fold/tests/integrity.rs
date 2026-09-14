@@ -80,10 +80,11 @@ proptest::proptest! {
             .map(|&(kind, event, agent_id)| {
                 // The explicit signal each event name stamps in production.
                 let signal = match event {
-                    1 => lifecycle::LifecycleSignal::TurnStarted,
+                    1 => lifecycle::LifecycleSignal::TurnStarted { turn_id: None },
                     2 => lifecycle::LifecycleSignal::TurnEnded {
                         errored: false,
                         parked_on_background: false,
+                        turn_id: None,
                     },
                     3 => lifecycle::LifecycleSignal::Ended,
                     _ => lifecycle::LifecycleSignal::Registered,
