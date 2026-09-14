@@ -426,7 +426,7 @@ Every clock and probe in the module has an environment override, which keeps the
 
 ## Invariants worth preserving
 
-- Keep `remote/` pure. Parsing, argv, classification, and state machines belong there with unit tests; processes, threads, clocks, and terminal writes belong in `cli/remote/`.
+- Keep `remote/` pure. Parsing, argv, classification, and state machines belong there with unit tests; processes, threads, clocks, and terminal writes belong in `cli/remote/`. The one exception is `remote/web.rs`, whose `bind_local_relay` and `reserve_forward_port` bind loopback listeners to pick free local ports: the relay keeps the listener it bound, and the forward port is probed and released for SSH to bind.
 - Prove the transport before painting success. The background master's `-O check` is the proof; reachability dials are presentation and pacing only.
 - Keep the child alive if and only if the master is alive. The pinned `ControlPersist=no`, `ConnectionAttempts=1`, and `ClearAllForwardings=yes` options exist so inherited SSH configuration cannot break that.
 - Require all three guards before killing a session as a zombie: established, blacked out, and independently reachable.
