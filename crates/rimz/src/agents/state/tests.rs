@@ -306,7 +306,7 @@ fn compacting_marker_expires_after_delivery_window() {
 #[test]
 fn compaction_marker_requires_durable_turn_starts_and_never_expires() {
     let now = Timestamp::from_second(1_000_000).unwrap();
-    for (kind, guarded) in [("claude", true), ("kiro", false)] {
+    for (kind, guarded) in [("claude", true), ("unregistered", false)] {
         let mut agent = AgentState::stub(kind, "sess-compact", AgentStatus::Idle);
         assert!(!agent.compaction_unprompted(now));
         agent.compacted_awaiting_prompt = Some(Timestamp::from_second(1).unwrap());

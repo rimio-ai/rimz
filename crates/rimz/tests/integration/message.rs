@@ -3917,34 +3917,6 @@ fn command_delivery_parks_without_spending_an_attempt_when_compaction_starts_aft
 }
 
 #[test]
-fn agents_compact_refuses_an_adapter_without_durable_turn_starts() {
-    let env = Env::new();
-    register_role_agent(
-        &env,
-        "kiro",
-        "sess-kiro-compact",
-        "coder",
-        false,
-        Some(TRACE_PANE),
-    );
-    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "kiro")]);
-    let trace = env.project_root.join("kiro-compact.log");
-    let output = traced_rimz(&env, &trace)
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .args(["agents", "compact", "@coder-agent"])
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("reports no durable turn starts"),
-        "{output:?}"
-    );
-    assert!(output.stdout.is_empty());
-    assert!(env.store().list_messages().unwrap().is_empty());
-    assert_no_report_pane_write(&trace);
-}
-
-#[test]
 fn pane_writer_lock_is_shared_across_workspaces_and_released_on_drop() {
     use rimz::disk::lock::WorkspaceLock;
     use rimz::disk::paths::RuntimePaths;

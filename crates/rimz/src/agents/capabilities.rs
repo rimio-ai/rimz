@@ -56,8 +56,8 @@ pub trait HookCapability: CoreCapability {
     }
 
     /// Decode one native hook payload into every normalized hook output.
-    /// An agent with no native hook decoder (Kiro) classifies every event as
-    /// unknown, which the shared hook path reads as "nothing to record".
+    /// An agent with no native hook decoder classifies every event as unknown,
+    /// which the shared hook path reads as "nothing to record".
     fn decode_hook(&self, event_name: &str, _payload: &Value) -> Result<HookOutput> {
         Ok(HookOutput::new(ClassifiedHook {
             class: AgentHookClass::Unknown,

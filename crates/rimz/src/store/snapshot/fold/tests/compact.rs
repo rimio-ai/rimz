@@ -239,16 +239,16 @@ fn carryover_compact_stamp_does_not_precede_earlier_lifecycle_events() {
 }
 
 #[test]
-fn kiro_compact_marker_persists_without_lifecycle_events_but_does_not_latch() {
+fn compact_marker_without_native_turn_starts_persists_but_does_not_latch() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
     let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
     paths.ensure_dirs().unwrap();
-    let kiro = agent("kiro", "sess-kiro", AgentStatus::Idle, 0);
+    let unhooked = agent("unregistered", "sess-unhooked", AgentStatus::Idle, 0);
     write_carryover(
         &paths.agents_carryover,
         &EventCarryover {
-            agents: vec![kiro.clone()],
+            agents: vec![unhooked.clone()],
             agent_identity: Default::default(),
             resume_outcomes: Vec::new(),
         },
@@ -256,7 +256,7 @@ fn kiro_compact_marker_persists_without_lifecycle_events_but_does_not_latch() {
     .unwrap();
     let mut command = MessageRecord::new(
         workspace,
-        &kiro,
+        &unhooked,
         "/compact".to_owned(),
         true,
         DeliveryGate::Done,

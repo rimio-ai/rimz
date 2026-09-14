@@ -639,6 +639,21 @@ pub(super) fn transcript_for_session(
     transcript_for_session_under(&super::install::engine_home(login_env)?, session_id)
 }
 
+/// The reply that closed the latest turn: the last `Say` record, when no user
+/// prompt follows it. Kiro writes the turn's assistant records before it runs
+/// the `Stop` hook.
+pub(super) fn last_reply(session_id: &str, login_env: &BTreeMap<String, String>) -> Option<String> {
+    let path = transcript_for_session(session_id, login_env)?;
+    last_reply_in(&fs::read_to_string(path).ok()?)
+}
+
+pub(super) fn last_reply_in(lines: &str) -> Option<String> {
+    messages(lines)
+        .pop()
+        .filter(|message| message.role == TranscriptRole::Assistant)
+        .map(|message| message.text)
+}
+
 pub(super) fn valid_transcript(path: &Path, session_id: &str) -> bool {
     let Some(session) = path.parent() else {
         return false;

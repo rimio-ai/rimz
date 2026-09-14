@@ -380,6 +380,7 @@ impl Env {
                 .join("rimz.ts"),
             "qwen" => self.home_root.join(".qwen").join("settings.json"),
             "grok" => self.home_root.join(".grok/hooks/rimz.json"),
+            "kiro" => self.home_root.join(".kiro/hooks/rimz.json"),
             other => panic!("unknown agent `{other}`"),
         }
     }
@@ -418,7 +419,7 @@ impl Env {
         };
         match source {
             "codex" => text.contains("rimz hooks feed --source codex"),
-            "claude" | "pi" | "qwen" | "grok" => text.contains("_rimz_managed"),
+            "claude" | "pi" | "qwen" | "grok" | "kiro" => text.contains("_rimz_managed"),
             "copilot" => {
                 text.contains("_rimz_managed")
                     && std::fs::read_to_string(self.copilot_settings_path()).is_ok_and(|settings| {
