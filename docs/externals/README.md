@@ -25,7 +25,7 @@ Each page names its upstream sources and the version or commit it was last refre
 | [kimi-reference.md](./agent-adapter/kimi-reference.md) | Kimi Code | 0.23.6 | [adapter_kimi.md](../internals/agents/adapter_kimi.md) |
 | [kiro-reference.md](./agent-adapter/kiro-reference.md) | Kiro CLI | 2.12.1 | [adapter_kiro.md](../internals/agents/adapter_kiro.md) |
 | [opencode-reference.md](./agent-adapter/opencode-reference.md) | OpenCode | 1.18.30 | [adapter_opencode.md](../internals/agents/adapter_opencode.md) |
-| [pi-reference.md](./agent-adapter/pi-reference.md) | Pi | 0.84.3 | [adapter_pi.md](../internals/agents/adapter_pi.md) |
+| [pi-reference.md](./agent-adapter/pi-reference.md) | Pi | 0.85.1 | [adapter_pi.md](../internals/agents/adapter_pi.md) |
 | [qwen-reference.md](./agent-adapter/qwen-reference.md) | Qwen Code | 0.19.10 | [adapter_qwen.md](../internals/agents/adapter_qwen.md) |
 
 The provider-neutral contracts every adapter page feeds are [model.md](../internals/agents/model.md) for lifecycle and status, [adapter.md](../internals/agents/adapter.md) for the adapter layer, and [providers.md](../internals/agents/providers.md) for accounts and spend.
