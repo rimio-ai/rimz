@@ -91,6 +91,9 @@ export default function rimz(pi) {
   const verdictBySession = new Map();
   const nameBySession = new Map();
   const messagePushBySession = new Map();
+  const uiPromptBySession = new Map();
+  const openQuestionnaires = new Set();
+  let uiPromptSeq = 0;
   let isPrimary = false;
   let childParentId;
   let childStopFed = false;
@@ -375,6 +378,7 @@ export default function rimz(pi) {
   pi.on("agent_settled", (_ev, ctx) => {
     const id = sessionId(ctx);
     const verdict = verdictBySession.get(id) ?? {};
+    openQuestionnaires.clear();
     feed("agent_settled", ctx, verdict);
     feedChildStop(ctx, verdict);
     verdictBySession.delete(id);
@@ -406,14 +410,48 @@ export default function rimz(pi) {
     }
     feed("session_info_changed", ctx, {});
   });
-  pi.on("tool_execution_end", (ev, ctx) =>
+  pi.on("tool_execution_end", (ev, ctx) => {
+    openQuestionnaires.delete(ev?.toolCallId);
     feed("tool_execution_end", ctx, {
       tool_call_id: ev?.toolCallId,
       tool_name: ev?.toolName,
       is_error: ev?.isError === true,
       tool_details: ev?.toolName === "ask_user_question" ? ev?.result?.details : undefined,
-    }),
-  );
+    });
+  });
+  // Pi 0.84.4+ brackets every ctx.ui dialog. Only a dialog inside a run is an
+  // attention wait: an idle slash-command dialog is answered by the user who
+  // just typed it, and a wait opened outside a turn would have no boundary to
+  // close it. The questionnaire's own dialog is already the tool_call ask.
+  pi.on("ui_prompt_start", (ev, ctx) => {
+    try {
+      const id = sessionId(ctx);
+      if (!id || ctx?.hasUI !== true || ctx?.mode === "rpc" || ctx?.isIdle?.() === true) return;
+      if (openQuestionnaires.size > 0) return;
+      uiPromptSeq += 1;
+      const key = `ui_prompt:${uiPromptSeq}`;
+      uiPromptBySession.set(id, key);
+      feed("ui_prompt_start", ctx, {
+        ui_prompt_id: key,
+        ui_prompt_kind: ev?.kind,
+        ui_prompt_title: text(ev?.title),
+        has_ui: true,
+      });
+    } catch {
+      // A prompt that outlives its runner has no row left to mark waiting.
+    }
+  });
+  pi.on("ui_prompt_end", (_ev, ctx) => {
+    try {
+      const id = sessionId(ctx);
+      const key = uiPromptBySession.get(id);
+      if (!key) return;
+      uiPromptBySession.delete(id);
+      feed("ui_prompt_end", ctx, { ui_prompt_id: key });
+    } catch {
+      // See ui_prompt_start.
+    }
+  });
   pi.on("model_select", (ev, ctx) => feed("model_select", ctx, { model: ev?.model?.id }));
   pi.on("thinking_level_select", (ev, ctx) =>
     feed("thinking_level_select", ctx, { effort: ev?.level }),
@@ -450,6 +488,8 @@ export default function rimz(pi) {
     costBySession.delete(id);
     verdictBySession.delete(id);
     nameBySession.delete(id);
+    uiPromptBySession.delete(id);
+    openQuestionnaires.clear();
     const messagePush = messagePushBySession.get(id);
     if (messagePush?.timer) clearTimeout(messagePush.timer);
     messagePushBySession.delete(id);
@@ -464,6 +504,7 @@ export default function rimz(pi) {
   // spawn error, a missing binary — resolves to "let the tool run".
   pi.on("tool_call", (ev, ctx) =>
     new Promise((resolve) => {
+      if (ev?.toolName === "ask_user_question") openQuestionnaires.add(ev?.toolCallId);
       const allow = () => resolve(undefined);
       try {
         const child = spawnRimz("pipe");
