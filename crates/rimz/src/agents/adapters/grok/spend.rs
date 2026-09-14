@@ -15,6 +15,27 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
     let Some((bytes, next)) = read_transcript_lines(path, from) else {
         return SpendParse::stalled(resume);
     };
+    let summary = transcript::read_summary(path);
+    let origin = summary
+        .as_ref()
+        .and_then(|summary| origin_path(summary.info.cwd.as_deref()));
+    // A child's turns are already folded into its parent's `turn_completed`
+    // usage, so pricing the child's own transcript would count them twice.
+    // Replacing clears entries cached before the child was recognised.
+    if summary
+        .as_ref()
+        .is_some_and(transcript::Summary::is_subagent)
+    {
+        return SpendParse {
+            origin,
+            cursor: SpendCursor {
+                offset: next,
+                state: None,
+            },
+            replace_entries: true,
+            ..SpendParse::default()
+        };
+    }
     let suffix = String::from_utf8_lossy(&bytes);
     let rewound = resume.is_some() && transcript::contains_rewind(&suffix);
     // A rewind invalidates the suffix, so re-fold the whole transcript from the
@@ -34,23 +55,6 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
         offset,
         state: None,
     };
-    let summary = transcript::read_summary(path);
-    let origin = summary
-        .as_ref()
-        .and_then(|summary| origin_path(summary.info.cwd.as_deref()));
-    // A child's turns are already folded into its parent's `turn_completed`
-    // usage, so pricing the child's own transcript would count them twice.
-    if summary
-        .as_ref()
-        .is_some_and(transcript::Summary::is_subagent)
-    {
-        return SpendParse {
-            origin,
-            cursor,
-            replace_entries: rewound,
-            ..SpendParse::default()
-        };
-    }
     let fallback_session_id = path
         .parent()
         .and_then(Path::file_name)
@@ -481,7 +485,20 @@ mod tests {
         .unwrap();
         let child = parse(&path, None, &PriceBook::fixture());
         assert!(child.entries.is_empty());
+        assert!(child.replace_entries);
         assert_eq!(child.cursor.offset, parsed.cursor.offset);
+        let mut grown = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        std::io::Write::write_all(
+            &mut grown,
+            with_prompt(&row("p2", 2_500_000_000)).as_bytes(),
+        )
+        .unwrap();
+        let resumed = parse(&path, Some(&parsed.cursor), &PriceBook::fixture());
+        assert!(resumed.entries.is_empty());
+        assert!(resumed.replace_entries);
     }
 
     #[test]
