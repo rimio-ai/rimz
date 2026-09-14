@@ -5,9 +5,8 @@
 //! client, then shells out to
 //! `rimz hooks feed --source opencode`, posts a RimZ-owned snake_case payload
 //! on stdin. Current permission and question prompts arrive through
-//! `permission.asked` and `question.asked` bus events; the compatibility
-//! `permission.ask` hook reads stdout on older releases and leaves OpenCode's
-//! `output.status` at `ask` on the neutral path. Native reply bus events record
+//! `permission.asked` and `question.asked` bus events, and the plugin never
+//! reads RimZ's stdout. Native reply bus events record
 //! answers and clear waiting after the user responds in OpenCode's own TUI.
 //! A root `session_idle` after a plan-agent turn derives a native plan-approval
 //! wait that the next prompt clears after the user switches modes in the TUI.
@@ -154,7 +153,7 @@ const OPENCODE_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "session_ended (session.deleted + dispose sweep)",
     },
     idle_notification: ConcernCoverage::Partial {
-        via: "turn-end + permission.ask/question.asked + stall window",
+        via: "turn-end + permission.asked/question.asked + stall window",
         gap: "no idle Notification hook; no idle-timeout nudge",
     },
     context_usage: ConcernCoverage::Wired {

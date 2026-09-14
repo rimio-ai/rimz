@@ -682,7 +682,11 @@ fn plugin_source_pins_rimz_wire_contract() {
     assert!(PLUGIN_SOURCE.contains("agent_version: sessionID ? sessions.get(sessionID)?.version"));
     assert!(PLUGIN_SOURCE.contains("model_display_name: currentGauge?.modelDisplayName"));
     assert!(!PLUGIN_SOURCE.contains("server_url: input.serverUrl"));
-    assert!(PLUGIN_SOURCE.contains("permission.ask"));
+    // The typed `permission.ask` hook last fired in OpenCode 1.0.223; the
+    // plugin observes the bus only and never reads a decision from stdout.
+    assert!(!PLUGIN_SOURCE.contains("\"permission.ask\":"));
+    assert!(!PLUGIN_SOURCE.contains("output.status"));
+    assert!(PLUGIN_SOURCE.contains("stdio: [\"pipe\", \"ignore\", \"ignore\"]"));
     assert!(PLUGIN_SOURCE.contains("permission.asked"));
     assert!(PLUGIN_SOURCE.contains("permission.replied"));
     assert!(PLUGIN_SOURCE.contains("question.asked"));
@@ -695,7 +699,6 @@ fn plugin_source_pins_rimz_wire_contract() {
     assert!(PLUGIN_SOURCE.contains("agents.get(sessionID) === \"plan\""));
     assert!(PLUGIN_SOURCE.contains("Promise.allSettled"));
     assert!(PLUGIN_SOURCE.contains("endRoot(sessionID, \"dispose\")"));
-    assert!(PLUGIN_SOURCE.contains("{\"status\":\"deny\"}"));
     assert!(PLUGIN_SOURCE.contains("export const RimzPlugin"));
     assert!(PLUGIN_SOURCE.contains("server: RimzPlugin"));
     // The gauge carries a catalog-resolved context window on every envelope,

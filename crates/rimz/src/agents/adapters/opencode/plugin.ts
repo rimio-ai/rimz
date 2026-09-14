@@ -73,46 +73,36 @@ export const RimzPlugin: Plugin = async (input) => {
     };
   }
 
-  function spawnRimz(payload: Envelope, collectStdout: boolean): Promise<string> {
+  function spawnRimz(payload: Envelope): Promise<void> {
     const child = spawn(RIMZ, RIMZ_ARGS, {
       cwd: payload.cwd,
       env: {
         ...process.env,
         RIMZ_AGENT_PID: String(process.pid),
       },
-      stdio: ["pipe", collectStdout ? "pipe" : "ignore", "ignore"],
+      stdio: ["pipe", "ignore", "ignore"],
     });
     child.on("error", () => {});
     child.stdin.on("error", () => {});
     child.stdin.end(`${JSON.stringify(payload)}\n`);
 
     return new Promise((resolve) => {
-      let stdout = "";
-      if (collectStdout) {
-        child.stdout?.on("data", (chunk) => {
-          stdout += String(chunk);
-        });
-      }
-      child.on("error", () => resolve(""));
-      child.on("close", () => resolve(stdout));
+      child.on("error", () => resolve());
+      child.on("close", () => resolve());
     });
   }
 
   function send(payload: Envelope): void {
-    void spawnRimz(payload, false);
+    void spawnRimz(payload);
   }
 
-  async function ask(payload: Envelope): Promise<string> {
-    return await spawnRimz(payload, true);
-  }
-
-  function endRoot(sessionID: string, reason: "deleted" | "dispose"): Promise<string> {
+  function endRoot(sessionID: string, reason: "deleted" | "dispose"): Promise<void> {
     const payload = base("session_ended", sessionID, { reason });
     roots.delete(sessionID);
     gauge.delete(sessionID);
     agents.delete(sessionID);
     sessions.delete(sessionID);
-    return spawnRimz(payload, false);
+    return spawnRimz(payload);
   }
 
   async function refreshSessionInfo(sessionID: string): Promise<boolean> {
@@ -377,9 +367,9 @@ export const RimzPlugin: Plugin = async (input) => {
         return;
       }
 
-      // Current OpenCode publishes native permission prompts on the bus. The
-      // legacy `permission.ask` plugin hook remains below for older releases,
-      // but 1.17.18 no longer calls it from the permission service.
+      // OpenCode publishes native permission prompts on the bus. The typed
+      // `permission.ask` plugin hook last fired in 1.0.223, below every release
+      // RimZ supports, so the bus event is the only permission source.
       if (type === "permission.asked") {
         const sessionID = properties.sessionID;
         if (typeof sessionID !== "string") return;
@@ -501,26 +491,6 @@ export const RimzPlugin: Plugin = async (input) => {
 
     "experimental.session.compacting": async (hookInput) => {
       send(base("session_compacting", hookInput.sessionID));
-    },
-
-    "permission.ask": async (permission, output) => {
-      const stdout = await ask(base("permission_ask", permission.sessionID, {
-        request_id: (permission as any).id,
-        tool_name: permission.type,
-        permission_type: permission.type,
-        title: permission.title,
-      }));
-      try {
-        const parsed = JSON.parse(stdout);
-        // Decision shape: {"status":"deny"} or {"status":"allow"}.
-        if (parsed?.status === "deny") {
-          output.status = "deny";
-        } else if (parsed?.status === "allow") {
-          output.status = "allow";
-        }
-      } catch {
-        output.status = "ask";
-      }
     },
 
     dispose: async () => {
