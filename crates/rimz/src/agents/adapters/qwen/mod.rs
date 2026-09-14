@@ -5,6 +5,7 @@ mod alibaba_usage;
 mod ask;
 mod install;
 mod payloads;
+mod process;
 mod selection;
 mod spend;
 mod statusline;
@@ -479,6 +480,12 @@ impl crate::agents::capabilities::LaunchCapability for QwenAdapter {
 }
 
 impl crate::agents::capabilities::HookCapability for QwenAdapter {
+    fn hook_ingress(&self, pid: Option<u32>) -> super::HookIngressDecision {
+        super::HookIngressDecision::Accept(super::HookIngressAcceptance::agent(
+            pid.and_then(process::hook_owner_pid),
+        ))
+    }
+
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
         let tool = matches!(event_name, "PermissionRequest" | "PreToolUse")
             .then(|| parse_tool_use(payload));
