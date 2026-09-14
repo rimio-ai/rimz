@@ -247,7 +247,7 @@ A delivery, signal, or watch prompt goes through `compose_wait`: the wait line, 
 | Trigger | Wait and evidence lines |
 | --- | --- |
 | timer | `waited <delay> [<name>]` |
-| watch | `WatchVerdict::label`, the name, and `output (<size>, <line count>): <agent-visible path>` whenever a path is present, including for empty output; the tail is never inlined |
+| watch | `WatchVerdict::label`, the name, and `output (<size>, <line count>): <agent-visible path>` when a path is present and the file is non-empty; the tail is never inlined |
 | signal | `waited on <subject>`, `fired [<name>]`, and compact JSON with the fired `signal` name; the subject adds branch and PR for forge signals, the handle for agents, or the instance for teams |
 | manual fire | `fired by hand` |
 
@@ -412,7 +412,7 @@ A watcher-originated fire runs `rimz loop run <name> --signal-json …` and wait
 
 Cancel removes the row first, then `stop_watcher` sends SIGTERM to the lock holder's process group, stopping the watcher and its command together. Non-positive PIDs are rejected, and an absent process counts as stopped. If a watcher dies without firing, the elder's watch-lost rule fires the `Lost` verdict after the 30-second grace, with the output file's tail as evidence.
 
-`signal::wait_output_path` derives `<StatePaths.tmp_dir>/rimz-waits/<name>.output` for arming, watching, and lost-watcher evidence. `WatchOutcome::measured` records the file's byte size and line count, and maps the host path through `sandbox::TmpView::current` (machine policy, since no recipient is known yet) to the agent-visible `output_path`: `/tmp/rimz-waits/<name>.output` under sandbox isolation, the host path otherwise. A failed measurement warns and records a zero summary. Room teardown removes the file; in a long-lived room gc prunes it only when there is no catalog row, no running watcher, and no write in the 14-day retention. The run record keeps the tail for `rimz loop logs`.
+`signal::wait_output_path` derives `<StatePaths.tmp_dir>/rimz-waits/<name>.output` for arming, watching, and lost-watcher evidence. `WatchOutcome::measured` records the file's byte size and line count, and maps the host path through `sandbox::TmpView::current` (machine policy, since no recipient is known yet) to the agent-visible `output_path`: `/tmp/rimz-waits/<name>.output` under sandbox isolation, the host path otherwise. A failed measurement warns and records a zero summary, which leaves the output segment out of the wait message like an empty file. Room teardown removes the file; in a long-lived room gc prunes it only when there is no catalog row, no running watcher, and no write in the 14-day retention. The run record keeps the tail for `rimz loop logs`.
 
 ## Waits
 
