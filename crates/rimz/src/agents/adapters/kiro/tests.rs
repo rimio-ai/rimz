@@ -9,7 +9,7 @@ use crate::agents::{
     AgentErr, AgentHookClass, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
     TranscriptPosition, TranscriptRole,
 };
-use serde_json::{Value, json};
+use serde_json::json;
 
 fn local_state(observation: &LocalSessionObservation) -> &LocalSessionState {
     let LocalSessionProjection::Lifecycle(state) = &observation.projection else {
@@ -19,63 +19,78 @@ fn local_state(observation: &LocalSessionObservation) -> &LocalSessionState {
 }
 
 #[test]
-fn native_hooks_are_explicitly_unsupported() {
+fn native_hooks_decode_session_turn_tool_and_stop() {
     let agent = crate::agents::find_definition("kiro").expect("Kiro definition");
     let definition = agent.spec();
-    assert!(
-        !definition
-            .lifecycle_hooks
-            .iter()
-            .any(|(_, coverage)| coverage.is_native())
-    );
-    assert!(!definition.has_wired_hook_install());
-    assert!(
-        !agent
-            .decode_hook("unknown", &json!({}))
-            .expect("unknown hook decodes")
-            .records_progress()
-    );
-    assert!(agent.conformance().classification.is_empty());
+    assert!(definition.has_wired_hook_install());
     assert!(matches!(
         definition.concern_coverage(IntegrationConcern::TurnLifecycle),
-        ConcernCoverage::Partial { .. }
+        ConcernCoverage::Wired { .. }
     ));
 
-    for event in ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"] {
-        let payload = json!({ "session_id": "sess_redacted", "prompt": "ignored" });
+    let session = json!({ "session_id": "sess_redacted", "cwd": "/workspace/project" });
+    let cases = [
+        ("SessionStart", session.clone()),
+        (
+            "UserPromptSubmit",
+            json!({ "session_id": "sess_redacted", "prompt": "fix the build" }),
+        ),
+        (
+            "PostToolUse",
+            json!({ "session_id": "sess_redacted", "tool_name": "fs_write", "tool_response": "ok" }),
+        ),
+        ("Stop", session),
+    ];
+    for (event, payload) in cases {
+        let decoded = agent.decode_hook(event, &payload).expect("hook decodes");
+        assert_eq!(decoded.class(), AgentHookClass::Lifecycle, "{event}");
+        assert!(decoded.records_progress(), "{event}");
+        assert_eq!(decoded.json_reply().cloned(), None, "{event} stays neutral");
+        let observation = decoded.lifecycle().cloned().expect("lifecycle observation");
         assert_eq!(
-            agent
-                .decode_hook(event, &payload)
-                .expect("test hook decodes")
-                .class(),
-            AgentHookClass::Unknown
+            observation.agent_id.as_ref().map(|id| id.as_str()),
+            Some("sess_redacted")
         );
-        assert!(
-            agent
-                .decode_hook(event, &payload)
-                .expect("test hook decodes")
-                .lifecycle()
-                .cloned()
-                .is_none()
-        );
-        assert_eq!(
-            agent
-                .decode_hook(event, &Value::Null)
-                .expect("test hook decodes")
-                .json_reply()
-                .cloned(),
-            None
-        );
+        match event {
+            "SessionStart" => assert!(matches!(observation.signal, LifecycleSignal::Registered)),
+            "UserPromptSubmit" => {
+                assert!(matches!(observation.signal, LifecycleSignal::TurnStarted));
+                assert_eq!(observation.prompt.as_deref(), Some("fix the build"));
+            }
+            "PostToolUse" => assert!(matches!(
+                observation.signal,
+                LifecycleSignal::ToolUsed {
+                    mutates: true,
+                    edits: true,
+                    ..
+                }
+            )),
+            _ => assert!(matches!(
+                observation.signal,
+                LifecycleSignal::TurnEnded { errored: false, .. }
+            )),
+        }
     }
 
-    assert!(
-        agent
-            .decode_hook("Stop", &json!({}))
-            .expect("test hook decodes")
-            .final_message()
-            .map(str::to_owned)
-            .is_none()
+    let unknown = agent
+        .decode_hook("PreToolUse", &json!({}))
+        .expect("unknown hook decodes");
+    assert!(!unknown.records_progress());
+    assert!(unknown.lifecycle().is_none());
+}
+
+#[test]
+fn stop_final_message_is_the_reply_that_closed_the_turn() {
+    let shell = include_str!("tests/fixtures/stock_shell_2_21_4/messages.jsonl");
+    assert_eq!(
+        session::last_reply_in(shell).as_deref(),
+        Some("redacted reply")
     );
+    let awaiting = format!(
+        "{shell}{{\"id\":\"u\",\"timestamp\":\"2026-09-14T05:49:00Z\",\"payload\":{{\"type\":\"user\",\"content\":\"next\"}}}}\n"
+    );
+    assert!(session::last_reply_in(&awaiting).is_none());
+    assert!(session::last_reply_in("").is_none());
 }
 
 #[test]
@@ -634,29 +649,66 @@ fn workspace_hash_and_resume_parser_are_exact() {
 }
 
 #[test]
-fn hook_install_refuses_but_legacy_owned_files_can_be_removed() {
-    let login_env = crate::agents::ambient_env();
-    for result in [
-        KiroAdapter.install_hooks(&login_env).map(|_| ()),
-        KiroAdapter.preview_hook_install(&login_env).map(|_| ()),
+fn hook_install_writes_reclaims_and_removes_the_managed_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hooks/rimz.json");
+    let current = Some(crate::agents::version::CliVersion::new(2, 21, 4));
+
+    let preview = install::preview_at(&path, current).unwrap();
+    assert!(!preview.files[0].existed);
+    assert_eq!(preview.files[0].candidate, HOOK_SOURCE);
+    let report = install::install_at(&path, current).unwrap();
+    assert!(!report.files[0].existed);
+    assert_eq!(
+        report.installed_events,
+        ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"]
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), HOOK_SOURCE);
+    assert!(KIRO_MANAGED_SOURCE.installed_at(&path));
+    assert!(install::install_at(&path, None).unwrap().files[0].existed);
+
+    let removed = install::uninstall_from(&path).unwrap();
+    assert!(removed.files[0].existed);
+    assert_eq!(removed.removed_events.len(), 4);
+    assert!(!path.exists());
+}
+
+#[test]
+fn hook_install_refuses_releases_before_global_hooks() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hooks/rimz.json");
+    let old = Some(crate::agents::version::CliVersion::new(2, 12, 1));
+    for err in [
+        install::install_at(&path, old).map(|_| ()).unwrap_err(),
+        install::preview_at(&path, old).map(|_| ()).unwrap_err(),
     ] {
-        let err = result.expect_err("Kiro v3 hook install must fail");
         assert!(
-            err.to_string()
-                .contains("does not execute standalone hook configs")
+            err.to_string().contains("upgrade to 2.13.0 or later"),
+            "{err}"
         );
     }
-    assert!(!KiroAdapter.hooks_installed(&login_env));
+    assert!(!path.exists());
+    assert!(install::install_at(&path, Some(install::MIN_GLOBAL_HOOKS)).is_ok());
+}
 
+#[test]
+fn legacy_owned_hook_file_is_reclaimed_and_removed() {
+    let legacy = r#"{"version":"v1","hooks":[{"action":{"command":"/old/rimz hooks feed --source kiro --event Stop"}}]}"#;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hooks/rimz.json");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(
-        &path,
-        r#"{"version":"v1","hooks":[{"action":{"command":"/old/rimz hooks feed --source kiro --event Stop"}}]}"#,
-    )
-    .unwrap();
+
+    std::fs::write(&path, legacy).unwrap();
     assert!(install::managed_at(&path));
+    assert!(!KIRO_MANAGED_SOURCE.installed_at(&path));
+    let preview = install::preview_at(&path, None).unwrap();
+    assert!(preview.files[0].existed);
+    assert_eq!(preview.files[0].original.as_deref(), Some(legacy));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), legacy);
+    assert!(install::install_at(&path, None).unwrap().files[0].existed);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), HOOK_SOURCE);
+
+    std::fs::write(&path, legacy).unwrap();
     let removed = install::uninstall_from(&path).unwrap();
     assert!(removed.files[0].existed);
     assert_eq!(
@@ -667,7 +719,7 @@ fn hook_install_refuses_but_legacy_owned_files_can_be_removed() {
 }
 
 #[test]
-fn legacy_cleanup_preserves_unowned_files() {
+fn user_hook_file_is_refused_and_preserved() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hooks/rimz.json");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -675,6 +727,8 @@ fn legacy_cleanup_preserves_unowned_files() {
     std::fs::write(&path, user_config).unwrap();
 
     assert!(!install::managed_at(&path));
+    assert!(install::install_at(&path, None).is_err());
+    assert!(install::preview_at(&path, None).is_err());
     let report = install::uninstall_from(&path).unwrap();
     assert!(report.files[0].existed);
     assert!(report.removed_events.is_empty());
@@ -682,28 +736,23 @@ fn legacy_cleanup_preserves_unowned_files() {
 }
 
 #[test]
-fn hooks_path_prefers_override_then_kiro_home() {
+fn hooks_path_prefers_override_then_home_and_ignores_kiro_home() {
     let override_path = OsStr::new("/tmp/override.json");
-    let kiro_home = OsStr::new("/tmp/kiro");
     let home = OsStr::new("/home/user");
     assert_eq!(
-        install::resolve_hooks_path(Some(override_path), Some(kiro_home), Some(home)).unwrap(),
+        install::resolve_hooks_path(Some(override_path), Some(home)).unwrap(),
         std::path::PathBuf::from("/tmp/override.json")
     );
     assert_eq!(
-        install::resolve_hooks_path(None, Some(kiro_home), Some(home)).unwrap(),
-        std::path::PathBuf::from("/tmp/kiro/hooks/rimz.json")
-    );
-    assert_eq!(
-        install::resolve_hooks_path(None, None, Some(home)).unwrap(),
+        install::resolve_hooks_path(None, Some(home)).unwrap(),
         std::path::PathBuf::from("/home/user/.kiro/hooks/rimz.json")
     );
     assert!(matches!(
-        install::resolve_hooks_path(None, None, None),
+        install::resolve_hooks_path(None, None),
         Err(AgentErr::Install { .. })
     ));
     assert_eq!(
-        install::resolve_home(Some(kiro_home), Some(home)).unwrap(),
+        install::resolve_home(Some(OsStr::new("/tmp/kiro")), Some(home)).unwrap(),
         std::path::PathBuf::from("/tmp/kiro")
     );
     assert_eq!(

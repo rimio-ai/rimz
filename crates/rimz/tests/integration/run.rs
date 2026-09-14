@@ -391,7 +391,7 @@ fn qwen_supervised_run_exits_125_before_recording_when_exact_quota_is_spent() {
 }
 
 #[test]
-fn kiro_supervised_run_fails_before_recording_or_launching() {
+fn kiro_supervised_run_requires_hooks_before_recording_or_launching() {
     let env = Env::new();
     let out = env
         .rimz()
@@ -401,20 +401,20 @@ fn kiro_supervised_run_fails_before_recording_or_launching() {
 
     assert!(
         !out.status.success(),
-        "unsupported Kiro print run should fail\nstdout:\n{}\nstderr:\n{}",
+        "Kiro print run without hooks should fail\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("verified executable turn-lifecycle signal"),
-        "error should name the missing completion contract\nstderr:\n{stderr}"
+        stderr.contains("run `rimz hooks install kiro`"),
+        "error should name the hook install fix\nstderr:\n{stderr}"
     );
     assert!(
         rimz::harness::run::list(env.store().paths())
             .expect("list runs")
             .is_empty(),
-        "unsupported run must fail before creating state"
+        "refused run must fail before creating state"
     );
 }
 

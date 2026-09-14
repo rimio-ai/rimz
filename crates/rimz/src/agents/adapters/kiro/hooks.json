@@ -1,0 +1,9 @@
+{"_rimz_managed": "RimZ-owned hook file, edits are overwritten by rimz hooks install",
+  "version": "v1",
+  "hooks": [
+    {"name": "rimz-session-start", "trigger": "SessionStart", "action": {"type": "command", "command": "rimz hooks feed --source kiro || true"}, "timeout": 10},
+    {"name": "rimz-user-prompt-submit", "trigger": "UserPromptSubmit", "action": {"type": "command", "command": "rimz hooks feed --source kiro || true"}, "timeout": 10},
+    {"name": "rimz-post-tool-use", "trigger": "PostToolUse", "action": {"type": "command", "command": "rimz hooks feed --source kiro || true"}, "timeout": 10},
+    {"name": "rimz-stop", "trigger": "Stop", "action": {"type": "command", "command": "rimz hooks feed --source kiro || true"}, "timeout": 10}
+  ]
+}

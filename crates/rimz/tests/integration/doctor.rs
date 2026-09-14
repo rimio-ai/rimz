@@ -146,7 +146,7 @@ fn doctor_json_folds_one_row_per_agent() {
 #[test]
 fn doctor_json_reports_agent_hook_install_and_trust_states() {
     let env = Env::new();
-    let stub_dir = stub_agent_binaries(&env, &["codex", "claude", "kiro"]);
+    let stub_dir = stub_agent_binaries(&env, &["codex", "claude", "kiro-cli"]);
     let report = doctor_json(
         &env.rimz()
             .args(["doctor", "--json"])
@@ -167,12 +167,10 @@ fn doctor_json_reports_agent_hook_install_and_trust_states() {
         "names the claude wiring command"
     );
     let kiro = hook(hooks, "kiro");
-    assert_eq!(kiro["status"]["state"], "unsupported");
+    assert_eq!(kiro["status"]["state"], "not_installed");
     assert!(
-        kiro["status"]["reason"]
-            .as_str()
-            .is_some_and(|reason| reason.contains("does not execute standalone hook configs")),
-        "Kiro reports the verified hook limitation: {kiro}"
+        fix(kiro).contains("rimz hooks install kiro"),
+        "names the kiro wiring command: {kiro}"
     );
     let grok = hook(hooks, "grok");
     assert_eq!(grok["status"]["state"], "not_detected");

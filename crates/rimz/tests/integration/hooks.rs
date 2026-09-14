@@ -64,31 +64,101 @@ fn run_claude_lifecycle(env: &Env, payload: Value) {
 }
 
 #[test]
-fn kiro_hook_install_refuses_and_legacy_uninstall_still_cleans_up() {
+fn kiro_global_hook_install_gates_version_reclaims_legacy_and_routes_neutrally() {
     let env = Env::new();
-    let path = env.home_root.join(".kiro/hooks/rimz.json");
+    let path = env.agent_config_path("kiro");
+    let bin = env.home_root.join("kiro-bin");
+    std::fs::create_dir_all(&bin).expect("mkdir Kiro stub dir");
+    let search_path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let stub_version = |version: &str| {
+        let stub = bin.join("kiro-cli");
+        std::fs::write(&stub, format!("#!/bin/sh\necho 'kiro-cli {version}'\n"))
+            .expect("write Kiro stub");
+        std::fs::set_permissions(
+            &stub,
+            <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
+        )
+        .expect("chmod Kiro stub");
+    };
+    let install = || {
+        env.rimz()
+            .args(["hooks", "install", "kiro"])
+            .env("PATH", &search_path)
+            .output()
+            .expect("spawn Kiro install")
+    };
 
-    for args in [
-        vec!["hooks", "install", "kiro"],
-        vec!["hooks", "install", "--dry-run", "kiro"],
-    ] {
-        let out = env.rimz().args(args).output().expect("spawn Kiro install");
-        assert!(!out.status.success(), "unsupported install must fail");
-        assert!(
-            String::from_utf8_lossy(&out.stderr)
-                .contains("does not execute standalone hook configs"),
-            "stderr should explain the verified limitation: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        assert!(!path.exists(), "refused install must not write config");
-    }
+    stub_version("2.12.1");
+    let out = install();
+    assert!(!out.status.success(), "pre-2.13 install must refuse");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("upgrade to 2.13.0 or later"),
+        "stderr names the minimum release: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!path.exists(), "refused install must not write config");
 
     std::fs::create_dir_all(path.parent().expect("hook parent")).expect("mkdir hook parent");
     std::fs::write(
         &path,
-        r#"{"version":"v1","hooks":[{"action":{"command":"rimz hooks feed --source kiro --event Stop"}}]}"#,
+        r#"{"version":"v1","hooks":[{"action":{"command":"/old/rimz hooks feed --source kiro --event Stop"}}]}"#,
     )
     .expect("write legacy hook");
+    stub_version("2.21.4");
+    let out = install();
+    assert!(
+        out.status.success(),
+        "Kiro install stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(env.agent_hooks_installed("kiro"));
+    let installed: Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("read Kiro hooks")).expect("JSON");
+    let hooks = installed["hooks"].as_array().expect("hook list");
+    assert_eq!(hooks.len(), 4);
+    assert!(
+        hooks
+            .iter()
+            .all(|hook| hook["action"]["command"] == "rimz hooks feed --source kiro || true")
+    );
+
+    let run = |payload: Value| {
+        let output = env.run_installed_hook("kiro", &payload.to_string());
+        assert_hook_succeeded_neutral("kiro", output);
+    };
+    let session = "sess_33333333-3333-4333-8333-333333333333";
+    run(json!({
+        "hook_event_name": "SessionStart",
+        "session_id": session,
+        "cwd": env.project_root
+    }));
+    run(json!({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": session,
+        "cwd": env.project_root,
+        "prompt": "inspect the durable branch"
+    }));
+    assert_eq!(env.snapshot_json()["agents"][0]["status"], "running");
+    run(json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": session,
+        "cwd": env.project_root,
+        "tool_name": "fs_write",
+        "tool_response": "ok"
+    }));
+    run(json!({
+        "hook_event_name": "Stop",
+        "session_id": session,
+        "cwd": env.project_root
+    }));
+    let settled = env.snapshot_json();
+    assert_eq!(settled["agents"][0]["kind"], "kiro");
+    assert_eq!(settled["agents"][0]["status"], "success");
+
     let out = env
         .rimz()
         .args(["hooks", "uninstall", "kiro"])
@@ -96,10 +166,10 @@ fn kiro_hook_install_refuses_and_legacy_uninstall_still_cleans_up() {
         .expect("spawn Kiro uninstall");
     assert!(
         out.status.success(),
-        "legacy uninstall failed: {}",
+        "Kiro uninstall stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(!path.exists(), "legacy owned file should be removed");
+    assert!(!path.exists(), "managed hook file should be removed");
 }
 
 #[test]

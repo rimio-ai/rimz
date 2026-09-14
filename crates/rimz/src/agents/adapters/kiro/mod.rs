@@ -1,16 +1,16 @@
-//! Kiro CLI v3 launch, local-session, transcript, and live-state adapter.
+//! Kiro CLI v3 native-hook, local-session, transcript, and live-state adapter.
 //!
-//! Kiro CLI 2.12.1 does not execute the documented standalone hook configs in
-//! a stock v3 session. Keep launch, resume, and process identity available;
-//! executable hook installation stays unsupported. The stock structured
-//! session store supplies validated pulled truth for live display and history.
+//! Since Kiro CLI 2.13.0 the global `~/.kiro/hooks/` files fire in every
+//! workspace, so a managed hook file reports session, turn, and tool
+//! lifecycle. The stock structured session store still supplies the newborn
+//! card before the first prompt, approval waits, cancel and failure outcomes,
+//! context percentage, and history.
 
 mod install;
 mod session;
 // Capabilities this agent has no behavior for; every method keeps its
 // default from `agents::capabilities`.
 impl crate::agents::capabilities::AccountCapability for KiroAdapter {}
-impl crate::agents::capabilities::HookCapability for KiroAdapter {}
 impl crate::agents::capabilities::RuntimeControlCapability for KiroAdapter {}
 
 #[cfg(test)]
@@ -26,12 +26,16 @@ use super::definition::{
     HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability, ThreadKey,
     ToolClassification, UserCoverage,
 };
+use super::hook_types::{HookEventSpec, SessionSource, decode_catalog_hook};
+use super::lifecycle::LifecycleSignal;
+use super::managed_source::ManagedSource;
 use super::{
-    LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx, LocalSessionObservation,
-    RefreshTrigger, TranscriptMessage, TranscriptStat,
+    AgentLifecycleObservation, HookOutput, HookRouting, LocalContextPatch, LocalContextRefresh,
+    LocalContextRefreshCtx, LocalSessionObservation, RefreshTrigger, Result, TranscriptMessage,
+    TranscriptStat, optional_payload_string, sanitize_user_prompt,
 };
-
-const HOOK_INSTALL_UNAVAILABLE: &str = "the v3 engine does not execute standalone hook configs (verified against Kiro CLI 2.12.1); re-enable after a pinned v3 release provides a reproducible native hook contract";
+use crate::ids::AgentSessionId;
+use serde_json::Value;
 
 static KIRO_DESCRIPTOR: AgentSpec = AgentSpec {
     kind: "kiro",
@@ -108,9 +112,8 @@ static KIRO_DESCRIPTOR: AgentSpec = AgentSpec {
 };
 
 const KIRO_COVERAGE: CoverageAnnotations = CoverageAnnotations {
-    turn_lifecycle: ConcernCoverage::Partial {
-        via: "ordered stock-v3 session store records",
-        gap: "pulled display truth; no executable hook or uncaptured failure/cancel shapes",
+    turn_lifecycle: ConcernCoverage::Wired {
+        via: "SessionStart/UserPromptSubmit/Stop",
     },
     permission: ConcernCoverage::Partial {
         via: "unresolved pending_interaction tool_approval records",
@@ -126,10 +129,10 @@ const KIRO_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         reason: "native prompt choreography is not mapped",
     },
     compaction: ConcernCoverage::Unsupported {
-        reason: "no stock-TUI compaction hook; compaction rotates the session id",
+        reason: "no compaction hook; /compact leaves only a tombstone record afterwards",
     },
     subagents: ConcernCoverage::Unsupported {
-        reason: "v3 hooks do not fire in subagents and publish no child lifecycle",
+        reason: "default subagents skip hooks and publish no child lifecycle",
     },
     launch_reminders: ConcernCoverage::Unsupported {
         reason: "no additive system-text launch channel is implemented",
@@ -142,8 +145,8 @@ const KIRO_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         gap: "no SessionEnd hook; v3 Stop is turn end, not session end",
     },
     idle_notification: ConcernCoverage::Partial {
-        via: "successful session_pause and turn_end records",
-        gap: "pulled state has no native notification wakeup",
+        via: "Stop hook plus session_pause and turn_end records",
+        gap: "no native Notification event",
     },
     context_usage: ConcernCoverage::Partial {
         via: "latest contextUsage session_metadata percentage",
@@ -155,8 +158,8 @@ const KIRO_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     rich_context: ConcernCoverage::Unsupported {
         reason: "hooks publish no model, effort, context, or transcript contract",
     },
-    hook_install: ConcernCoverage::Unsupported {
-        reason: HOOK_INSTALL_UNAVAILABLE,
+    hook_install: ConcernCoverage::Wired {
+        via: "~/.kiro/hooks/rimz.json",
     },
     account_spend: ConcernCoverage::Unsupported {
         reason: "whoami schema and credit ledger are unpublished",
@@ -171,8 +174,8 @@ const KIRO_COVERAGE: CoverageAnnotations = CoverageAnnotations {
 
 const KIRO_USER_COVERAGE: UserCoverage = UserCoverage {
     state: CapabilityLevel::Partial {
-        shows: "the card follows turns from Kiro's own session store",
-        limit: "state is read rather than reported, so cancels can read as ordinary stops",
+        shows: "the card follows every turn and tool call as Kiro reports it",
+        limit: "cancels and failures show only once Kiro's session store records them",
     },
     live: CapabilityLevel::Partial {
         shows: "a context-fill percentage",
@@ -195,37 +198,31 @@ const KIRO_USER_COVERAGE: UserCoverage = UserCoverage {
 };
 
 const KIRO_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
-    registered: HookCoverage::Derived {
-        via: "validated local session metadata",
-        gap: "provider store discovery replaces an executable registration hook",
+    registered: HookCoverage::Native {
+        event: "SessionStart",
     },
-    turn_started: HookCoverage::Derived {
-        via: "ordered turn_start records",
-        gap: "pulled provider state, not an installed hook",
+    turn_started: HookCoverage::Native {
+        event: "UserPromptSubmit",
     },
-    turn_ended: HookCoverage::Derived {
-        via: "verified successful turn_end/session_pause records",
-        gap: "failure and cancellation records remain uncaptured",
-    },
-    tool_used: HookCoverage::Derived {
-        via: "verified tool_call/tool_result records",
-        gap: "only observed stock-v3 tool vocabulary is classified",
+    turn_ended: HookCoverage::Native { event: "Stop" },
+    tool_used: HookCoverage::Native {
+        event: "PostToolUse",
     },
     awaiting_input: HookCoverage::Derived {
         via: "unresolved pending_interaction tool approval",
         gap: "native prompt is visible but has no structured RimZ answer route",
     },
     subagent_started: HookCoverage::Absent {
-        reason: "v3 hooks do not fire in subagents",
+        reason: "default subagents skip hooks",
     },
     subagent_stopped: HookCoverage::Absent {
-        reason: "v3 hooks do not fire in subagents",
+        reason: "default subagents skip hooks",
     },
     compacting: HookCoverage::Absent {
-        reason: "no stock-TUI compaction hook",
+        reason: "no compaction hook",
     },
     compaction_ended: HookCoverage::Absent {
-        reason: "no stock-TUI compaction hook",
+        reason: "no compaction hook",
     },
     ended: HookCoverage::Derived {
         via: "pane liveness + rollup reaper",
@@ -236,6 +233,43 @@ const KIRO_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
         gap: "native hooks do not report mux-session death",
     },
 };
+
+const KIRO_HOOKS: &[HookEventSpec] = &[
+    HookEventSpec::lifecycle(
+        "SessionStart",
+        r#"{"session_id":"sess_redacted","hook_event_name":"SessionStart"}"#,
+    )
+    .progress(),
+    HookEventSpec::lifecycle(
+        "UserPromptSubmit",
+        r#"{"session_id":"sess_redacted","hook_event_name":"UserPromptSubmit","prompt":"ping"}"#,
+    )
+    .progress(),
+    HookEventSpec::lifecycle(
+        "PostToolUse",
+        r#"{"session_id":"sess_redacted","hook_event_name":"PostToolUse","tool_name":"fs_write"}"#,
+    )
+    .progress(),
+    HookEventSpec::lifecycle(
+        "Stop",
+        r#"{"session_id":"sess_redacted","hook_event_name":"Stop"}"#,
+    )
+    .progress(),
+];
+
+/// Carries [`super::managed_source::RIMZ_MANAGED_MARKER`] on its first line;
+/// the v3 hook schema accepts the extra top-level key. Each command swallows a
+/// feed failure because a `Stop` hook exiting 1 continues the turn.
+const HOOK_SOURCE: &str = include_str!("hooks.json");
+
+const KIRO_MANAGED_SOURCE: ManagedSource = ManagedSource::new(
+    "kiro",
+    HOOK_SOURCE,
+    KIRO_HOOKS,
+    "hook file",
+    install::hooks_path,
+    true,
+);
 
 #[derive(Clone, Debug, Default)]
 pub struct KiroAdapter;
@@ -248,6 +282,7 @@ impl crate::agents::capabilities::CoreCapability for KiroAdapter {
     #[cfg(test)]
     fn conformance(&self) -> super::AdapterConformance {
         super::AdapterConformance {
+            classification: super::hook_types::catalog_classification_corpus(KIRO_HOOKS),
             local_session: Some(session::fixture_observation()),
             ..super::AdapterConformance::default()
         }
@@ -268,6 +303,48 @@ impl crate::agents::capabilities::LaunchCapability for KiroAdapter {
 
     fn skills_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         Some(self.config_home(env)?.join("skills"))
+    }
+}
+
+impl crate::agents::capabilities::HookCapability for KiroAdapter {
+    fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
+        let mut decoded = decode_catalog_hook(KIRO_HOOKS, event_name, None);
+        let agent_id = optional_payload_string(payload, &["session_id"]).map(AgentSessionId::from);
+        decoded.set_routing(HookRouting::session(agent_id.clone()));
+        let signal = match event_name {
+            // Kiro's payload carries no start source.
+            "SessionStart" => SessionSource::Startup.session_start_signal(),
+            "UserPromptSubmit" => LifecycleSignal::TurnStarted,
+            "PostToolUse" => LifecycleSignal::ToolUsed {
+                mutates: self.spec().tool_mutates(payload),
+                edits: self.spec().tool_edits_files(payload),
+                name: None,
+                native_key: None,
+                turn_id: None,
+            },
+            // Cancelled and failed turns settle from the session store.
+            "Stop" => LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+            },
+            _ => return Ok(decoded),
+        };
+        let mut observation = AgentLifecycleObservation::new(agent_id.clone(), signal)
+            .with_worktree_from_payload(payload);
+        if event_name == "UserPromptSubmit" {
+            let prompt = optional_payload_string(payload, &["prompt"]);
+            observation.task = sanitize_user_prompt(prompt.as_deref());
+            observation.prompt = sanitize_user_prompt(prompt.as_deref());
+        }
+        if event_name == "Stop" {
+            decoded.set_final_message(
+                agent_id
+                    .as_ref()
+                    .and_then(|id| session::last_reply(id.as_str(), &super::ambient_env())),
+            );
+        }
+        decoded.attach_lifecycle(observation);
+        Ok(decoded)
     }
 }
 
