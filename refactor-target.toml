@@ -76,7 +76,8 @@ upward-dependencies = ["address"]
 # Native skill roots and user-only markers belong to the same capability seam.
 # Model sub-cap matching and parent-axis headroom are shared with the renderer.
 # Turn completion is shared by reply waits and `agents wait`, apart from the delivery gate.
-surface-budget = 986
+# Store's fold and follower pass the prior record's turn ids to `lifecycle::step`.
+surface-budget = 987
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
