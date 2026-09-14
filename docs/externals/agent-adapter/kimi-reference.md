@@ -1,356 +1,457 @@
 # Kimi Code protocol reference
 
-> RimZ's adapter mapping lives in [adapter_kimi.md](../../internals/agents/adapter_kimi.md). The agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md), and the account, balance, spend, and pricing contract is [providers.md](../../internals/agents/providers.md).
+This page mirrors the Kimi Code surfaces an adapter binds to: the CLI and its launch flags, the data root and session files, command hooks, the durable per-agent `wire.jsonl` records, approvals and questions, subagents and background tasks, OAuth login and managed usage, prompt mode, and resume and fork. It records what Kimi Code ships. How RimZ maps these surfaces onto its own types, and which of them it wires, is in [adapter_kimi.md](../../internals/agents/adapter_kimi.md); the provider-neutral lifecycle contract is [model.md](../../internals/agents/model.md), and accounts and spend are in [providers.md](../../internals/agents/providers.md).
 
-This is the single home for the upstream protocol surface of [`MoonshotAI/kimi-code`](https://github.com/MoonshotAI/kimi-code) relevant to RimZ: lifecycle hooks, durable agent records, session identity and storage, approvals and questions, context and token usage, authentication and quota, subagents, resume and fork behavior, permission modes, and non-interactive execution.
+**Baseline.** Kimi Code **0.42.0** (npm `@moonshot-ai/kimi-code` `latest`, tag `@moonshot-ai/kimi-code@0.42.0`, commit [`6954d2c8bf94a5c7fc29cc6ae35b15d042cc4dcb`](https://github.com/MoonshotAI/kimi-code/tree/6954d2c8bf94a5c7fc29cc6ae35b15d042cc4dcb), published 2026-09-09), agent-record protocol **1.5**. Docs and source were read 2026-09-13, and the host binary (`kimi --version` prints `0.42.0`) matches the baseline. Source anchors are paths at that commit: `core/` abbreviates `packages/agent-core-v2/src/`, `cli/` abbreviates `apps/kimi-code/src/cli/`, and `oauth/` abbreviates `packages/oauth/src/`. Every CLI surface (the TUI, `kimi -p`, `kimi acp`, `kimi web`) runs on the `agent-core-v2` engine; the legacy engine and its `KIMI_CODE_LEGACY_FLAG` fallback are gone.
 
-Coverage is depth on viable adapter inputs and breadth as an index. The hook payloads and `wire.jsonl` records are detailed enough to implement typed parsers. The SDK, local server, and ACP surfaces are indexed so an implementer can distinguish them from observation of the stock terminal UI.
-
-## Refresh target and product identity
-
-This mirror was refreshed against Kimi Code **0.23.6**, package release commit [`b5c236d00fd5d825a814bb5ceef0cd54a2acff96`](https://github.com/MoonshotAI/kimi-code/tree/b5c236d00fd5d825a814bb5ceef0cd54a2acff96), and agent-record protocol **1.4**. `kimi --version` prints the product version; the replacement has no `kimi info` command. Each persisted agent log carries its own protocol version in the metadata record.
-
-The executable is `kimi`. The official installer and Homebrew package install a standalone binary; the npm package remains an alternate installation path. The application root is `~/.kimi-code`, not the retired Python CLI's `~/.kimi` root. The old [`MoonshotAI/kimi-cli`](https://github.com/MoonshotAI/kimi-cli) repository is a legacy product and is outside this reference. `kimi migrate` imports supported legacy configuration and sessions; OAuth credentials, MCP authorizations, and legacy plugins are not migrated.
-
-Feature-gate the adapter on its explicitly tested Kimi Code semver range and the new data root. Do not use the executable name alone: both generations publish `kimi`.
+**Product identity.** The executable is `kimi`, the application root is `~/.kimi-code`, and the package is [`MoonshotAI/kimi-code`](https://github.com/MoonshotAI/kimi-code). The retired Python [`MoonshotAI/kimi-cli`](https://github.com/MoonshotAI/kimi-cli) also installs a `kimi` executable, uses `~/.kimi`, and speaks a different Wire protocol; it is outside this page. `kimi migrate` imports a legacy installation's config, MCP servers, REPL history, skills, and sessions, and does not copy OAuth credentials, MCP authorizations, or plugins ([migration guide](https://moonshotai.github.io/kimi-code/en/guides/migration.html)).
 
 ## Upstream sources
 
-Re-fetch the published pages and compare the pinned source when refreshing this mirror. Published docs describe the supported interface; pinned source resolves payload details the docs omit.
+The docs site is unversioned and trails the source in places; each disagreement is flagged at its claim. The generated `packages/agent-core-v2/docs/wire-manifest.d.ts` is the version-exact catalog of durable record types, and `CHANGELOG.md` under `apps/kimi-code/` is the per-release change list.
 
 | Surface | Source |
 | --- | --- |
-| Repository, install, and release | <https://github.com/MoonshotAI/kimi-code>, [`apps/kimi-code/package.json`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/apps/kimi-code/package.json) |
-| CLI options and subcommands | <https://moonshotai.github.io/kimi-code/en/reference/kimi-command.html>, [`cli/options.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/apps/kimi-code/src/cli/options.ts) |
-| Hooks | <https://moonshotai.github.io/kimi-code/en/customization/hooks.html>, [`hooks/types.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/agent-core/src/session/hooks/types.ts), [`hooks/engine.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/agent-core/src/session/hooks/engine.ts), [`hooks/runner.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/agent-core/src/session/hooks/runner.ts) |
-| Sessions and data locations | <https://moonshotai.github.io/kimi-code/en/guides/sessions.html>, <https://moonshotai.github.io/kimi-code/en/configuration/data-locations.html> |
-| Session index and store | [`session-index.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/agent-core/src/session/store/session-index.ts), [`session-store.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/agent-core/src/session/store/session-store.ts) |
-| Durable agent records | [`records/types.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/agent-core/src/agent/records/types.ts), [`records/persistence.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/agent-core/src/agent/records/persistence.ts), [`records/migration/index.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/agent-core/src/agent/records/migration/index.ts), [`loop/events.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/agent-core/src/loop/events.ts) |
-| Live event protocol | [`protocol/events.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/protocol/src/events.ts) |
-| Approvals and questions | [`protocol/approval.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/protocol/src/approval.ts), [`protocol/question.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/protocol/src/question.ts) |
+| Repository, releases, changelog | <https://github.com/MoonshotAI/kimi-code>, [`apps/kimi-code/CHANGELOG.md`](https://github.com/MoonshotAI/kimi-code/blob/6954d2c8bf94a5c7fc29cc6ae35b15d042cc4dcb/apps/kimi-code/CHANGELOG.md), <https://moonshotai.github.io/kimi-code/en/release-notes/changelog.html> |
+| CLI options and subcommands | <https://moonshotai.github.io/kimi-code/en/reference/kimi-command.html>, [`cli/commands.ts`](https://github.com/MoonshotAI/kimi-code/blob/6954d2c8bf94a5c7fc29cc6ae35b15d042cc4dcb/apps/kimi-code/src/cli/commands.ts), [`cli/options.ts`](https://github.com/MoonshotAI/kimi-code/blob/6954d2c8bf94a5c7fc29cc6ae35b15d042cc4dcb/apps/kimi-code/src/cli/options.ts) |
+| Hooks | <https://moonshotai.github.io/kimi-code/en/customization/hooks.html>, [`core/features/externalHooks/`](https://github.com/MoonshotAI/kimi-code/tree/6954d2c8bf94a5c7fc29cc6ae35b15d042cc4dcb/packages/agent-core-v2/src/features/externalHooks) |
+| Sessions and data locations | <https://moonshotai.github.io/kimi-code/en/guides/sessions.html>, <https://moonshotai.github.io/kimi-code/en/configuration/data-locations.html>, [`core/workspace/sessionLifecycle/sessionLifecycleService.ts`](https://github.com/MoonshotAI/kimi-code/blob/6954d2c8bf94a5c7fc29cc6ae35b15d042cc4dcb/packages/agent-core-v2/src/workspace/sessionLifecycle/sessionLifecycleService.ts), [`core/session/sessionMetadata/`](https://github.com/MoonshotAI/kimi-code/tree/6954d2c8bf94a5c7fc29cc6ae35b15d042cc4dcb/packages/agent-core-v2/src/session/sessionMetadata) |
+| Durable agent records | [`packages/agent-core-v2/docs/wire-manifest.d.ts`](https://github.com/MoonshotAI/kimi-code/blob/6954d2c8bf94a5c7fc29cc6ae35b15d042cc4dcb/packages/agent-core-v2/docs/wire-manifest.d.ts), [`core/wire/`](https://github.com/MoonshotAI/kimi-code/tree/6954d2c8bf94a5c7fc29cc6ae35b15d042cc4dcb/packages/agent-core-v2/src/wire), [`core/persistence/backends/node-fs/appendLogStore.ts`](https://github.com/MoonshotAI/kimi-code/blob/6954d2c8bf94a5c7fc29cc6ae35b15d042cc4dcb/packages/agent-core-v2/src/persistence/backends/node-fs/appendLogStore.ts) |
+| Approvals, questions, permission modes | <https://moonshotai.github.io/kimi-code/en/guides/interaction.html>, <https://moonshotai.github.io/kimi-code/en/reference/tools.html>, [`core/agent/toolApproval/toolApprovalService.ts`](https://github.com/MoonshotAI/kimi-code/blob/6954d2c8bf94a5c7fc29cc6ae35b15d042cc4dcb/packages/agent-core-v2/src/agent/toolApproval/toolApprovalService.ts), [`core/agent/tools/ask-user-question/`](https://github.com/MoonshotAI/kimi-code/tree/6954d2c8bf94a5c7fc29cc6ae35b15d042cc4dcb/packages/agent-core-v2/src/agent/tools/ask-user-question) |
 | Configuration and environment | <https://moonshotai.github.io/kimi-code/en/configuration/config-files.html>, <https://moonshotai.github.io/kimi-code/en/configuration/env-vars.html> |
-| Agents and subagents | <https://moonshotai.github.io/kimi-code/en/customization/agents.html>, [`session/subagent-host.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/agent-core/src/session/subagent-host.ts) |
-| OAuth storage and managed usage | [`oauth/storage.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/oauth/src/storage.ts), [`oauth/managed-usage.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/oauth/src/managed-usage.ts) |
-| ACP | <https://moonshotai.github.io/kimi-code/en/reference/kimi-acp.html>, [`packages/acp-adapter`](https://github.com/MoonshotAI/kimi-code/tree/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/acp-adapter) |
+| Agents, subagents, background tasks | <https://moonshotai.github.io/kimi-code/en/customization/agents.html>, [`core/session/subagent/`](https://github.com/MoonshotAI/kimi-code/tree/6954d2c8bf94a5c7fc29cc6ae35b15d042cc4dcb/packages/agent-core-v2/src/session/subagent), [`core/agent/task/`](https://github.com/MoonshotAI/kimi-code/tree/6954d2c8bf94a5c7fc29cc6ae35b15d042cc4dcb/packages/agent-core-v2/src/agent/task) |
+| OAuth, regions, managed usage | [`oauth/region.ts`](https://github.com/MoonshotAI/kimi-code/blob/6954d2c8bf94a5c7fc29cc6ae35b15d042cc4dcb/packages/oauth/src/region.ts), [`oauth/storage.ts`](https://github.com/MoonshotAI/kimi-code/blob/6954d2c8bf94a5c7fc29cc6ae35b15d042cc4dcb/packages/oauth/src/storage.ts), [`oauth/managed-kimi-code.ts`](https://github.com/MoonshotAI/kimi-code/blob/6954d2c8bf94a5c7fc29cc6ae35b15d042cc4dcb/packages/oauth/src/managed-kimi-code.ts), [`oauth/managed-usage.ts`](https://github.com/MoonshotAI/kimi-code/blob/6954d2c8bf94a5c7fc29cc6ae35b15d042cc4dcb/packages/oauth/src/managed-usage.ts) |
+| Local server | <https://moonshotai.github.io/kimi-code/en/reference/server-api.html>, [`packages/kap-server`](https://github.com/MoonshotAI/kimi-code/tree/6954d2c8bf94a5c7fc29cc6ae35b15d042cc4dcb/packages/kap-server) |
+| ACP | <https://moonshotai.github.io/kimi-code/en/reference/kimi-acp.html>, [`packages/acp-server`](https://github.com/MoonshotAI/kimi-code/tree/6954d2c8bf94a5c7fc29cc6ae35b15d042cc4dcb/packages/acp-server) |
 
-## Recommended adapter shape
+## CLI
 
-Keep the stock interactive `kimi` TUI in the pane. Use command hooks as the lifecycle and blocking-wait channel: Kimi Code now exposes `PermissionRequest`, `PermissionResult`, and `Interrupt` in addition to session, prompt, tool, stop, compaction, and subagent hooks. Bind the pane to the exact session from `SessionStart`, then resolve the session directory through `session_index.jsonl`.
+`kimi` with no arguments creates a new session and opens the terminal UI. The official installer places a standalone executable at `~/.kimi-code/bin/kimi`; the npm package is an alternate install path.
 
-Tail `agents/main/wire.jsonl` as durable transcript and usage enrichment. Its records restore agent state; they are not the old Python Wire event stream. In particular, the file contains `turn.prompt`, context messages and loop events, usage records, config changes, and compaction records, but it does not persist the live `turn.ended`, approval-request, question-request, or subagent-lifecycle event union. Hooks remain the primary source for those boundaries.
-
-| RimZ need | Primary surface | Backstop / note |
-| --- | --- | --- |
-| Pane-to-session binding | `SessionStart.session_id` + `cwd` | exact lookup in `session_index.jsonl` |
-| Turn start and prompt | `UserPromptSubmit.prompt` | durable `turn.prompt.input` confirms the prompt |
-| Clean turn close | `Stop` | `Stop` is blockable and fires only at a normal model stop; keep RimZ stdout neutral |
-| Failed or cancelled close | `StopFailure` / `Interrupt` | pane death and the next prompt reconcile missed delivery |
-| Tool work and acting | `PostToolUse` / `PostToolUseFailure` | durable `context.append_loop_event` carries `tool.call` and `tool.result` |
-| Permission wait | `PermissionRequest` | `PermissionResult` closes it; correlate by `tool_call_id` |
-| User question | `PreToolUse` for `AskUserQuestion` | correlated post-tool hook closes it; the hook API has no separate question event |
-| Plan approval | `PermissionRequest` for `ExitPlanMode` | tool input plus the plan file supplies the plan body |
-| Compaction | `PreCompact` / `PostCompact` | durable full-compaction records provide recovery evidence |
-| Context and tokens | durable `usage.record` plus `agent.status.updated` when hosted | model and split are stored in each usage record |
-| Subagents | session `state.json` agent map plus child `wire.jsonl` | hooks name the profile but omit child id; live SDK events carry the exact id |
-| Model | `config.update` and `usage.record.model` | launch `--model` and effective config identify the alias |
-| Auth/account | configured provider plus credential presence | keep token bytes out of output, logs, and hashes |
-| Kimi Code quota | authenticated `GET https://api.kimi.com/coding/v1/usages` | fixed OAuth-token host; limits plus optional Booster balance/monthly cap |
-| Supervised run | `-p/--prompt --output-format stream-json` | prompt mode applies auto permission and rejects `--yolo`, `--auto`, and `--plan` |
-| Native resume | `--session <id>` / `--resume <id>` | `--continue` selects the worktree's most recent session |
-| Native fork | interactive `/fork` | no documented fork launch flag |
-
-Treat hooks and file tails as at-least-once inputs. Deduplicate by session plus stable turn/tool identifiers or persisted file offset. Parse unknown hook fields, record types, and nested payload fields forward-compatibly.
-
-## Executable, launch flags, and process binding
-
-`kimi` with no arguments creates a new session and starts the stock TUI. Relevant launch flags are:
+### Launch flags
 
 | Flag | Meaning |
 | --- | --- |
-| `--version`, `-V` | print the Kimi Code version |
-| `--session [id]`, `-S` | resume an id, or open the picker when no id is supplied |
-| `--resume [id]`, `-r` | hidden alias for `--session` |
-| `--continue`, `-c` | resume the current working directory's latest session |
-| `--model <alias>`, `-m` | select a configured model alias for this launch |
-| `--prompt <text>`, `-p` | run one prompt without opening the TUI |
-| `--output-format text\|stream-json` | choose prompt-mode output; valid only with `--prompt` |
-| `--yolo`, `-y` | auto-approve regular tool calls; plan exit still asks |
-| `--auto` | handle approvals automatically and suppress user questions |
-| `--plan` | start or resume in plan mode |
-| `--skills-dir <path>` | replace discovered skill directories; repeatable |
-| `--add-dir <path>` | add workspace scope; repeatable |
+| `-V`, `--version` | print the version |
+| `-S`, `--session [id]` | resume that session; bare `--session` opens the picker |
+| `-r`, `--resume [id]` | hidden alias for `--session` |
+| `-c`, `--continue` | resume the working directory's most recent session |
+| `-m`, `--model <alias>` | model alias for this launch; defaults to `default_model` in `config.toml` |
+| `-p`, `--prompt <text>` | run one prompt non-interactively (see [Prompt mode](#prompt-mode)) |
+| `--output-format text\|stream-json` | prompt-mode output; `KIMI_MODEL_OUTPUT_FORMAT` sets the default and the flag wins |
+| `-y`, `--yolo` | start in `yolo` permission mode (UI name "Ask When Needed"); hidden aliases `--yes`, `--auto-approve` |
+| `--auto` | start in `auto` permission mode (UI name "Never Ask") |
+| `--plan` | start in plan mode |
+| `--agent <name>` | main-agent profile for the new session |
+| `--agent-file <path>` | load one Markdown agent definition and select it for the new session |
+| `--skills-dir <dir>` | load skills from this directory instead of the discovered user and project directories; repeatable |
+| `--add-dir <dir>` | add a workspace directory; repeatable |
 
-`--continue` conflicts with `--session`; `--yolo` conflicts with `--auto`. Prompt mode conflicts with `--yolo`, `--auto`, and `--plan`, because it applies auto permission itself. The retired `--afk`, `--print`, `--input-format`, `--final-message-only`, `--quiet`, `--work-dir`, `--agent`, `--agent-file`, and `--wire` interfaces do not belong to Kimi Code.
+`validateOptions` in `cli/options.ts` rejects these combinations: `--continue` with `--session`; `--yolo` with `--auto`; `--prompt` with `--yolo`, `--auto`, or `--plan`; `--output-format` without `--prompt`; `--agent` or `--agent-file` with `--session` or `--continue` (the agent is bound at session creation and restored on resume); `--agent` with `--agent-file`; and a bare `--session` in prompt mode.
 
-The normal process argv contains no generated session id, and the runtime sets its process title to `kimi-code`. Bind the pane through `SessionStart.session_id`, and use pane/process liveness as instance truth. The official standalone installer places the executable under `~/.kimi-code/bin`; `/new` and `/sessions` switch identity in-process and produce the corresponding session hooks.
+### Subcommands
 
-## Configuration and trust surface
+| Command | Purpose |
+| --- | --- |
+| `kimi login [--region mainland-cn\|global]` | RFC 8628 device-code login; the docs page says it takes no flags, but the 0.42.0 binary accepts `--region` |
+| `kimi fork [sessionId] [--cwd <path>] [-y]` | fork a session (default: the most recent for the directory) and print `Forked to <id>` |
+| `kimi session list [--cwd] [--all] [--archived] [--limit n] [--json]` | list sessions, most recently updated first |
+| `kimi export [sessionId] [-o path] [-y] [--no-include-global-log]` | package a session directory as a ZIP |
+| `kimi web` | run the local server and open the web UI (see [Other hosts](#other-hosts-sdk-kimi-web-and-acp)) |
+| `kimi rc`, `kimi remote` | `kimi web` through Kimi Remote Control |
+| `kimi acp [--login [--region]]` | Agent Client Protocol over stdio |
+| `kimi provider add\|remove\|list\|catalog` | manage LLM providers non-interactively |
+| `kimi doctor` | validate `config.toml` and `tui.toml` |
+| `kimi vis [sessionId]` | open the session visualizer in a browser |
+| `kimi migrate [--run] [--config-only]` | import a legacy `kimi-cli` installation |
+| `kimi upgrade`, `kimi update` | upgrade the installation |
+| `kimi server` | deprecated; prints a notice and exits 1, except `kimi server kill`, which stops a server started before 0.28.0 |
 
-The default root is `$KIMI_CODE_HOME`, falling back to `~/.kimi-code`; all configuration and session paths move with it. The only user config file is `$KIMI_CODE_HOME/config.toml`. Kimi Code has no `--config-file`, inline `--config`, or `KIMI_SHARE_DIR` override.
+`kimi fork` and `kimi session list` ship in the binary but are absent from the CLI reference page.
 
-Hooks are executable configuration:
+### Process identity
 
-```toml
-[[hooks]]
-event = "SessionStart"
-command = "rimz hooks feed --source kimi"
-timeout = 10
+The runtime sets `process.title` to `kimi-code` (`PROCESS_NAME` in `apps/kimi-code/src/constant/app.ts`), so process listings can show either `kimi` or `kimi-code`. The argv of an interactive launch carries no generated session id. `/new` and `/sessions` switch sessions inside the same process, so a pane's session identity comes from hooks, not from argv.
 
-[[hooks]]
-event = "PermissionRequest"
-matcher = ".*"
-command = "rimz hooks feed --source kimi"
-timeout = 10
-```
+## Data root and sessions
 
-Each entry accepts `event`, `command`, optional regex `matcher`, and optional `timeout` in seconds. Published configuration accepts only those four keys and validates timeout as 1–600 seconds. The internal hook type also supports `cwd` and `env`, but they are not part of the documented user configuration surface at 0.23.6.
-
-Commands execute through the platform shell with the session project directory as cwd. Matching rules run in parallel; duplicate `(cwd, command)` pairs run once per trigger. Kimi Code exposes no project-level hook tier or hook trust prompt. Include installed command, matcher, and timeout fields in RimZ's trust hash, preview the exact diff, preserve unrelated entries, and reserve hook stdout for Kimi's decision channel.
-
-## Session identity and durable files
-
-The data root contains:
+The data root is `$KIMI_CODE_HOME`, falling back to `~/.kimi-code`, and every path below moves with it. The user config file is `$KIMI_CODE_HOME/config.toml`; there is no `--config-file` flag or inline config override. The layout, from the [data locations](https://moonshotai.github.io/kimi-code/en/configuration/data-locations.html) page and the session lifecycle source:
 
 ```text
-$KIMI_CODE_HOME/                       # default ~/.kimi-code
+$KIMI_CODE_HOME/                          # default ~/.kimi-code
 ├── config.toml
 ├── tui.toml
+├── region                                # install-channel region marker
 ├── session_index.jsonl
+├── workspaces.json
 ├── credentials/
-│   └── kimi-code.json
+│   ├── <name>.json                       # managed provider OAuth tokens
+│   └── mcp/
 ├── sessions/
 │   └── wd_<slug>_<sha256-prefix>/
-│       └── <session-id>/
+│       └── session_<uuid>/
 │           ├── state.json
-│           ├── agents/
-│           │   ├── main/wire.jsonl
-│           │   └── agent-0/wire.jsonl
-│           ├── tasks/
-│           └── logs/kimi-code.log
-└── logs/kimi-code.log
+│           ├── upcoming-goals.json
+│           ├── logs/kimi-code.log
+│           └── agents/
+│               ├── main/
+│               │   ├── wire.jsonl
+│               │   ├── plans/<id>.md
+│               │   ├── tasks/
+│               │   └── cron/
+│               └── agent-0/
+│                   └── wire.jsonl
+├── plugins/
+├── user-history/<md5(workDir)>.jsonl
+├── logs/kimi-code.log
+└── bin/
 ```
 
-Each append-only `session_index.jsonl` line carries `sessionId`, absolute `sessionDir`, and `workDir`. Later valid lines win for the same id. Validate that the indexed directory stays inside `$KIMI_CODE_HOME/sessions` and ends in the stated session id. The index workdir can be stale, so use `state.json.workDir` as the authoritative workspace check; `state.json` carries no separate session-id field. Do not reimplement the bucket key to find a bound session.
+The session directory key is `wd_<slug>_<hash>`: `slug` is the lowercased basename of the working directory with runs outside `[a-z0-9._-]` replaced by `-`, capped at 40 characters, and `hash` is the first 12 hex characters of the SHA-256 of the normalized path (`encodeWorkDirKey` in `core/_base/utils/workdir-slug.ts`). A session id is `session_<uuid>`.
 
-The bucket key is `wd_<slug>_<first-12-hex-of-sha256>`. A normal session id is `session_<uuid>`. `state.json` carries creation/update metadata, title, last prompt, work directory, fork origin, custom metadata, and an `agents` map. Each agent entry carries its home directory, agent type, parent id, and optional swarm item.
+Background tasks and scheduled tasks persist per agent under `agents/<agent-id>/tasks/` and `agents/<agent-id>/cron/` (`AgentTaskPersistence` in `core/agent/task/persist.ts`, rooted by `core/agent/task/taskService.ts`); a session-level `tasks/` directory written by older releases is read as a fallback. The data locations page still places `tasks/` and `cron/` at the session root.
+
+### `session_index.jsonl`
+
+The index is an append-only JSONL file at the data root. A session create appends `{"sessionId","sessionDir","workDir"}` with an absolute `sessionDir`, and a delete appends a tombstone `{"sessionId","deleted":true}` (`appendSessionIndexEntry` and the delete path in `sessionLifecycleService.ts`). A later line for the same id supersedes an earlier one. The default session list reads a minidb-backed read model (`[database]` config, `KIMI_CODE_PERSISTENCE_MINIDB_READMODEL`), and `session_index.jsonl` remains the file-level index.
+
+### `state.json`
+
+`state.json` is the session metadata document, version `2` (`SESSION_META_VERSION` in `core/session/sessionMetadata/sessionMetadata.ts`):
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `id` | string | session id |
+| `version` | number | `2` |
+| `cwd` | string | working directory |
+| `title`, `titleKind`, `isCustomTitle` | string, `replaceable`\|`generated`\|`custom`, boolean | session title and its provenance |
+| `lastPrompt` | string | most recent prompt text |
+| `createdAt`, `updatedAt`, `archivedAt` | epoch ms | timestamps |
+| `archived` | boolean | archived flag |
+| `forkedFrom` | string | source session id of a fork |
+| `lastTurnReason` | `completed`\|`cancelled`\|`failed` | how the last turn ended |
+| `agents` | object | agent id to `{homedir, type, parentAgentId, forkedFrom, labels, swarmItem}`, where `type` is `main`, `sub`, or `independent` |
+| `custom` | object | caller metadata |
+
+Older metadata used `workDir` for the working directory and carried no `id`. `normalizeSessionMeta` in `core/session/sessionMetadata/sessionMetadataService.ts` reads `workDir` as `cwd` and fills `id` from the session directory; the service writes the normalized document back when it adds missing `agents` or `custom` maps or migrates the title fields, so a reader must accept either shape on disk.
 
 ## Command hooks
 
-A hook receives one JSON object on stdin. All keys are snake_case. Common fields are:
+Command hooks are the lifecycle and approval channel of the stock terminal UI. A hook receives one JSON object on stdin, and its exit code and stdout decide the outcome for the three blockable events.
+
+### Configuration
+
+Hooks are `[[hooks]]` entries in `$KIMI_CODE_HOME/config.toml`:
+
+```toml
+[[hooks]]
+event = "PermissionRequest"
+matcher = ".*"
+command = "notify-approval"
+timeout = 10
+```
+
+| Key | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `event` | string | yes | one of the events in the [catalog](#event-catalog) |
+| `matcher` | string | no | JavaScript regex tested against the event's matcher value; empty or omitted matches everything; an invalid regex never matches |
+| `command` | string | yes | shell command |
+| `timeout` | integer | no | seconds, 1 to 600, default 30 |
+
+`HookDefSchema` in `core/features/externalHooks/configSection.ts` is strict: any other key fails config loading. An enabled plugin can also declare hooks in its manifest with the same four fields; a plugin hook runs with the plugin root as its working directory and receives `KIMI_CODE_HOME` and `KIMI_PLUGIN_ROOT` in its environment ([plugins](https://moonshotai.github.io/kimi-code/en/customization/plugins.html#hooks-in-plugins)). There is no project-level hook file and no hook trust prompt.
+
+Every matching hook for an event runs in parallel. Hooks with the same working directory and `command` run once per trigger (`runMatchedHooks` in `internal/matchHooks.ts` keys on `(cwd, command)`; the docs say identical `command` values run once, which is the same rule for `config.toml` hooks, whose working directory is always the session directory). Commands run through the platform shell with the session's project directory as working directory. On non-Windows platforms a hook runs in its own process group; on timeout or abort it receives `SIGTERM` and then `SIGKILL` 100 ms later (`runHook` in `internal/runHook.ts`).
+
+### Input payload
+
+Every payload carries these fields; top-level keys are converted from camelCase to snake_case, and nested objects such as `tool_input` and `display` keep their own casing:
 
 ```json
 {
-  "hook_event_name": "PermissionRequest",
-  "session_id": "01J...",
-  "cwd": "/absolute/project/path"
+  "hook_event_name": "PreToolUse",
+  "session_id": "session_2f1c9a4e-8d0b-4c7a-9f3e-5b6d7e8f9a01",
+  "session_title": "Fix the login page",
+  "client_type": "kimi_code_cli",
+  "cwd": "/path/to/project"
 }
 ```
 
-The common payload carries no transcript path, model, permission mode, agent id, parent id, pid, or timestamp. Hook commands inherit the ordinary environment; RimZ stamps the owner pid in its installed command when process attribution requires it.
+`session_title` is absent until the session has a title. The common payload carries no agent id, transcript path, permission mode, pid, or timestamp. Hooks registered on the agent scope (tool, permission, prompt, turn, stop, compaction, and task hooks) fire for subagents as well as the main agent, with the root `session_id`; only `PermissionRequest` and `PermissionResult` add an `agent_id` (`AgentExternalHooksService` is contributed per agent in `externalHooksFeature.ts`).
 
 ### Event catalog
 
-| Event | Matcher | Event-specific fields | Adapter use |
-| --- | --- | --- | --- |
-| `SessionStart` | `startup` or `resume` | `source` | register and bind the session |
-| `UserPromptSubmit` | submitted text parts joined as text | `prompt: ContentPart[]` | open the user turn; blockable |
-| `PreToolUse` | tool name | `tool_name`, `tool_input`, `tool_call_id` | early work/question/plan evidence; blockable |
-| `PostToolUse` | tool name | tool identity/input, `tool_output` | completed work; output is text-truncated to 2,000 characters |
-| `PostToolUseFailure` | tool name | tool identity/input, structured `error` | failed or denied tool work |
-| `PermissionRequest` | tool name | `turn_id`, `tool_call_id`, `tool_name`, `action`, `tool_input`, `display` | open a native approval wait |
-| `PermissionResult` | tool name | request identity/action, `decision`, optional scope/feedback/label or error | close the approval wait |
-| `Stop` | empty | `stop_hook_active` | normal turn close; blockable once |
-| `StopFailure` | error name | `error_type`, `error_message` | failed turn close |
-| `Interrupt` | empty | `turn_id`, `reason: "cancelled"` | user-cancelled turn close |
-| `SessionEnd` | `exit` | `reason` | remove the session |
-| `SubagentStart` | profile name | `agent_name`, prompt preview | parent activity; prompt truncated to 500 characters |
-| `SubagentStop` | profile name | `agent_name`, response preview | parent activity; response truncated to 500 characters |
-| `PreCompact` | `manual` or `auto` | `trigger`, `token_count` | open compaction bracket |
-| `PostCompact` | `manual` or `auto` | `trigger`, `estimated_token_count` | close compaction bracket |
-| `Notification` | for example `task.completed` | sink/type/title/body/severity/source fields | background-task activity delivered into context |
+"Awaited" means Kimi Code waits for the hook before continuing; the rest are fire-and-forget. Fields are in addition to the common payload.
 
-`PermissionRequest` and `PermissionResult` are observation-only and fire only when the approval runtime actually asks its RPC client. Policy-approved, YOLO-approved, auto-approved, and statically denied calls do not produce an open native approval panel. Decisions are `approved`, `rejected`, `cancelled`, or `error`; `scope: "session"` means approve-for-session.
+| Event | Matcher value | Awaited | Blockable | Event fields |
+| --- | --- | --- | --- | --- |
+| `SessionStart` | `startup` or `resume` | yes | no | `source`, `model`, `profile` |
+| `SessionEnd` | `exit` or `archive` | yes | no | `reason` |
+| `SessionHeartbeat` | empty | no | no | `uptime_ms`; every 60 s, only while a `SessionHeartbeat` hook is configured |
+| `UserPromptSubmit` | text parts joined with spaces | yes | yes | `prompt` (content-part array), `is_steer` |
+| `UserPromptQueued` | queued prompt text | no | no | `prompt_id`, `prompt`, `queue_length` |
+| `TurnStarted` | origin kind (`user`, `task`, `system_trigger`, ...) | no | no | `turn_id`, `origin_kind`, `origin_name`, `prompt` |
+| `PreToolUse` | tool name | yes | yes | `tool_name`, `tool_input`, `tool_call_id` |
+| `PostToolUse` | tool name | no | no | `tool_name`, `tool_input`, `tool_call_id`, `tool_output` (text parts, first 2,000 characters) |
+| `PostToolUseFailure` | tool name | no | no | `tool_name`, `tool_input`, `tool_call_id`, `error` (Kimi error payload) |
+| `PermissionRequest` | tool name | no | no | `id`, `agent_id`, `turn_id`, `tool_call_id`, `tool_name`, `action`, `display`, `tool_input` |
+| `PermissionResult` | tool name | no | no | the request fields plus `decision`, optional `scope`, `feedback`, `selected_label`, `error` |
+| `Stop` | empty | yes | yes | `stop_hook_active` (always `false`) |
+| `StopFailure` | error name | no | no | `error_type`, `error_message` |
+| `Interrupt` | empty | no | no | `turn_id`, `reason: "cancelled"` |
+| `SubagentStart` | profile name | yes | no | `agent_name`, `prompt` |
+| `SubagentStop` | profile name | no | no | `agent_name`, `response` |
+| `TaskStarted` | task kind (`agent`, `process`, `question`) | no | no | `task_id`, `kind`, `description`, `status`, `detached`, `started_at` |
+| `PreCompact` | `manual` or `auto` | yes | no | `trigger`, `token_count` |
+| `PostCompact` | `manual` or `auto` | no | no | `trigger`, `estimated_token_count` |
+| `Notification` | notification type, for example `task.completed` | no | no | `sink: "context"`, `agent_id`, `notification_type`, `title`, `body`, `severity` (`info`\|`warning`), `source_kind`, `source_id` |
 
-Subagent hooks name the profile but omit the generated child id, parent tool-call id, parent agent id, and background flag. Join them with `state.json` and child records, or use the live SDK event surface, before claiming child-row identity.
+Payload sources are `agent/agentExternalHooksService.ts` and `session/sessionExternalHooksService.ts` under `core/features/externalHooks/`. The events fire at these boundaries:
+
+- `SessionStart` fires when a session is created (`startup`) or reopened (`resume`). A fork does not fire it at creation; the fork fires `resume` when it is opened.
+- `UserPromptSubmit` fires only for prompts whose origin kind is `user`, including steers into a running turn (`is_steer: true`). `SubagentStart` and `SubagentStop` carry the full prompt text and the subagent's full result summary.
+- `Stop` fires when a step finishes with a finish reason other than `tool_calls` or `filtered` and no requests are pending, so it runs before the turn closes.
+- `StopFailure` fires when a turn ends with reason `failed` and an error. `Interrupt` fires when a turn ends with reason `cancelled` (the docs add that timeouts and programmatic aborts do not fire it). A turn blocked by `UserPromptSubmit` fires neither `Stop`, `StopFailure`, nor `Interrupt`.
+- `PermissionRequest` and `PermissionResult` fire only when the permission policy resolves to ask; see [Approvals](#approvals).
 
 ### Output and exit semantics
 
-| Result | Native behavior |
+| Hook result | Behaviour |
 | --- | --- |
-| exit `0`, empty stdout | allow with no injected text |
-| exit `0`, plain stdout | allow; blockable prompt/stop callers may append it as context |
-| exit `0`, structured deny below | block a blockable event |
+| exit `0`, empty stdout | allow |
+| exit `0`, plain stdout | allow; only `UserPromptSubmit` uses it, appending the text to context |
+| exit `0`, JSON with `hookSpecificOutput.permissionDecision: "deny"` | block; `permissionDecisionReason` is the reason |
 | exit `2` | block; trimmed stderr is the reason |
-| another non-zero exit | fail open |
-| timeout, spawn failure, invalid matcher, abort, or engine error | fail open |
+| any other exit, timeout, spawn failure, abort | allow (fail open) |
 
-Structured output accepts a top-level `message`, a nested `hookSpecificOutput.message`, and this deny shape:
+Structured stdout is a JSON object; `message` or `hookSpecificOutput.message` supplies the text `UserPromptSubmit` appends, and the deny shape is:
 
 ```json
 {
   "hookSpecificOutput": {
     "permissionDecision": "deny",
-    "permissionDecisionReason": "explanation"
+    "permissionDecisionReason": "Please use rg instead of grep"
   }
 }
 ```
 
-Only `UserPromptSubmit`, `PreToolUse`, and `Stop` act on a block. A blocked `Stop` appends the reason as a synthetic user message and permits exactly one corrective continuation; the only emitted call has `stop_hook_active: false`. The neutral RimZ response is empty stdout with exit 0.
+A block acts only on the three blockable events, and the first blocking result wins; a block without a reason becomes `Blocked by <event> hook`.
 
-## Durable agent records
+| Event | Effect of a block | Effect of allow text |
+| --- | --- | --- |
+| `UserPromptSubmit` | the turn skips the model call and ends with reason `blocked`; the reason is appended as an assistant message with origin `hook_result` | each allowing hook's text is appended as a user message wrapped in `<hook_result hook_event="UserPromptSubmit">` |
+| `PreToolUse` | the tool does not run and returns the reason as its error result | ignored |
+| `Stop` | the reason is appended as a user message (origin `system_trigger`, name `stop_hook`) and the loop continues; later `Stop` triggers in the same turn skip the hooks | ignored |
 
-`agents/<agent-id>/wire.jsonl` is an ordered agent-state log. Each line is one record with its fields at the top level:
+`PreCompact` is awaited but its result is ignored.
+
+## Agent records
+
+Each agent writes an ordered record log at `agents/<agent-id>/wire.jsonl`. The log restores agent state on resume and is the durable transcript, model, and token source for a stock terminal session. It is unrelated to the Python CLI's `{timestamp, message:{type, payload}}` Wire envelope.
+
+### File format
+
+The first line is a metadata record, and every later line is one record with its payload spread at the top level, an `agentId`, and an optional millisecond `time`:
 
 ```json
-{"type":"metadata","protocol_version":"1.4","created_at":1770000000000}
-{"type":"turn.prompt","input":[{"type":"text","text":"fix the parser"}],"origin":{"kind":"user"},"time":1770000000100}
-{"type":"context.append_loop_event","event":{"type":"tool.call","uuid":"...","turnId":"1","step":1,"stepUuid":"...","toolCallId":"...","name":"Bash","args":{"command":"cargo check"}},"time":1770000000200}
+{"type":"metadata","protocol_version":"1.5","created_at":1788000000000}
+{"type":"turn.prompt","agentId":"main","input":[{"type":"text","text":"fix the parser"}],"origin":{"kind":"user"},"promptId":"prompt_01","time":1788000000100}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"tool.call","uuid":"...","turnId":"1","step":1,"stepUuid":"...","toolCallId":"call_01","name":"Bash","args":{"command":"cargo check"}},"time":1788000000200}
 ```
 
-This is not the Python CLI's `{timestamp,message:{type,payload}}` Wire envelope. The metadata `protocol_version` gates record migration; the release uses the agent-record version written by `AgentRecords`. Unknown record types and fields remain forward-compatible.
+`protocol_version` is `1.5` (`WIRE_PROTOCOL_VERSION` in `core/wire/migration/migration.ts`). On read, Kimi Code migrates older records forward through 1.0 to 1.5 and refuses a log whose version is newer than its own. The 1.4 to 1.5 migration adds `wallClockResumedAt` to active `goal.create` and `goal.update` records and changes nothing else.
 
-The file writer batches pending records, appends complete newline-terminated JSON, fsyncs the file, and syncs the directory on first creation. Rewrites open with truncation. A reader tolerates only a malformed final unterminated line; malformed complete lines are corruption. A tailer holds an incomplete suffix, tracks file identity and offset, and restarts safely after rewrite or truncation.
+The node-fs append log (`core/persistence/backends/node-fs/appendLogStore.ts`) batches pending records and appends them with a durable write. A rewrite, used by undo, fork truncation, and repair, replaces the file atomically. A reader treats an unparseable final line without a newline as a torn tail. An unparseable complete line truncates the log to its valid prefix: `repairWireJournal` in `core/wire/repair.ts` saves the original as `wire.jsonl.bak` (once) and rewrites `wire.jsonl`.
 
-Adapter-relevant record families are:
+### Records an adapter reads
 
 | Record | Key fields | Meaning |
 | --- | --- | --- |
-| `metadata` | `protocol_version`, `created_at` | file format gate |
-| `turn.prompt` / `turn.steer` | `input`, `origin` | turn input; `origin.kind: "user"` identifies genuine human input |
-| `turn.cancel` | optional `turnId` | durable cancellation request |
-| `config.update` | cwd/model/profile/thinking fields | effective agent configuration |
-| `permission.set_mode` | `mode` | `manual`, `yolo`, or `auto` |
-| `permission.record_approval_result` | turn/tool/action/result | durable answered approval; no open-request record |
-| `full_compaction.begin` / `.cancel` / `.complete` | source/instruction and bracket | full-context compaction recovery |
-| `context.append_message` | `message` | model-facing transcript message |
-| `context.append_loop_event` | recorded loop event | step, content, tool call, and tool result |
-| `context.clear` | no payload | reset the model context and its token count |
-| `context.apply_compaction` | summary and token counts | rebuilt context state |
-| `usage.record` | `model`, four-way `usage`, optional `usageScope` | additive per-request token accounting; `turn` also contributes to current-turn usage, while `session` covers work such as full compaction |
-| `llm.request` | provider/model/alias, effective options and hashes | request reconstruction and model attribution |
-| `llm.tools_snapshot` | hash and tool schemas | content-addressed request tool table |
+| `metadata` | `protocol_version`, `created_at` | format version |
+| `turn.prompt`, `turn.steer` | `input` (content parts), `origin` (object with `kind`), `promptId` on prompts | turn input; `origin.kind: "user"` marks human input |
+| `turn.ended` | `turnId`, `reason` (`completed`\|`cancelled`\|`failed`\|`blocked`), optional `error`, `durationMs`, `stopReason` | turn close |
+| `turn.cancel` | optional `turnId`, `target` (`active`\|`queued`), `reason` (`user_cancelled`\|`aborted`) | cancellation request |
+| `turn.step.retrying` | `turnId`, `step`, `failedAttempt`, `nextAttempt`, `maxAttempts`, `delayMs`, `errorName`, `errorMessage`, optional `statusCode` | provider retry wait |
+| `turn.step.interrupted` | `turnId`, `step`, `reason`, optional `message` | interrupted step |
+| `config.update` | `modelAlias`, `profileName`, `thinkingEffort`, `systemPrompt`, `environmentDisclosure.cwd`, `disallowedTools` | effective agent configuration |
+| `profile.bind` | `modelAlias`, `profileName`, `thinkingEffort`, `systemPrompt`, `activeToolNames`, `subagents` | profile bound at agent creation |
+| `llm.request` | `kind` (`loop`\|`compaction`), `provider`, `model`, `modelAlias`, `thinkingEffort`, sampling and output limits, `systemPromptHash`, `toolsHash`, `messageCount` | one provider request |
+| `usage.record` | `model`, `usage`, optional `usageScope` (`session`\|`turn`) | token accounting for one request |
+| `context.append_loop_event` | `event` | step, content, and tool events (below) |
+| `context.append_message` | `message` (`role`, `content`, `toolCalls`, `origin`, ...) | model-facing context message |
+| `context.clear` | none | context reset |
+| `context.apply_compaction` | `summary` or `contextSummary`, `compactedCount`, optional `tokensBefore`, `tokensAfter` | compacted context |
+| `context.undo` | `count` | undo of recent context |
+| `full_compaction.begin`, `.cancel`, `.complete` | `source` (`manual`\|`auto`), optional `instruction` on begin | full-compaction bracket |
+| `interaction.request` | `id`, `kind` (`approval`\|`question`\|`user_tool`), optional `toolCallId`, `request` | a prompt shown to the user |
+| `interaction.resolved` | `id`, `response` | its answer or cancellation |
+| `permission.set_mode` | `mode` (`manual`\|`yolo`\|`auto`) | permission mode change |
+| `permission.record_approval_result` | `turnId`, `toolCallId`, `toolName`, `action`, optional `sessionApprovalRule`, `result` | answered approval |
+| `plan_mode.enter`, `.exit`, `.cancel`, `plan.revision` | plan `id`; revision `version`, `key`, `sha256`, `bytes` | plan mode and plan files |
+| `task.started`, `task.terminated` | `info` (task info), optional `outputTail` on terminated | background task lifecycle |
+| `forked` | none | fork marker appended to each agent log of a forked session |
 
-Recorded loop events are `step.begin`, `step.end`, `content.part`, `tool.call`, and `tool.result`. Normal assistant turns are reconstructed from ordered text `content.part` records between the step boundaries; thinking parts and tool plumbing are not chat messages. `context.append_message` carries model-facing context and explicit injected assistant output, not the ordinary assistant-turn reconstruction. Retry, interruption, deltas, and progress are live-only SDK events.
+The wire manifest's payload sketches omit `context.apply_compaction`'s shared base fields; `contextCompactionBaseShape` in `core/agent/contextMemory/contextEvents.ts` defines `tokensBefore` and `tokensAfter`. The manifest also flattens `origin` to its `kind` values, while the file stores the origin object.
 
-Record `time` is an optional millisecond timestamp. Absence leaves the normalized message or spend row without a time; seconds and file modification times are not timestamp fallbacks.
+### Loop events
 
-`step.end.usage` and `usage.record.usage` split `inputOther`, `output`, `inputCacheRead`, and `inputCacheCreation`. Context fill replaces its prior value with the sum of all four fields from the latest nonzero `step.end.usage`, resets on `context.clear`, and becomes `context.apply_compaction.tokensAfter` when compaction lands. Every `usage.record` is additive session spend. `usageScope: "turn"` also updates current-turn usage, while the missing/default `session` scope accounts for work outside a turn such as full compaction; it is not a cumulative session-total record.
+`context.append_loop_event.event` is one of `step.begin`, `step.end`, `content.part`, `tool.call`, or `tool.result`. Each carries `uuid`, `turnId` (a string), and `step`; `tool.call` and `tool.result` carry `toolCallId`, and `tool.call` carries `name` and `args`. `step.end` carries `finishReason` and, for a step that completed normally, `usage` plus request timing fields (`endMachineStep` and `finishMachineStepProjection` in `core/agent/loop/loopService.ts`); an interrupted or errored step ends with `finishReason` `interrupted` or `error` and no `usage`. Assistant text is the ordered text `content.part` events between step boundaries; thinking parts and tool plumbing are separate part types.
 
-`wire.jsonl` does not durably record clean `turn.ended`, `PermissionRequest`, unanswered questions, or the live `agent.status.updated` snapshot. Hooks and pane/process truth supply those facts. Never parse the file as the old Python Wire protocol.
+### Tokens and context
 
-## Blocking approvals, questions, and plan review
+`TokenUsage` (`core/human/llm/usage.ts`) splits `inputOther`, `output`, `inputCacheRead`, and `inputCacheCreation`, with an optional provider `raw` object. Every `usage.record` accounts for one request; `usageScope: "turn"` marks a request inside a turn, and a missing or `session` scope marks work outside a turn, such as full compaction. `step.end.usage` repeats the step's split. The live `agent.status.updated` event (model, `contextTokens`, `maxContextTokens`, plan, swarm, and tower modes) reaches SDK, server, and ACP clients and is not written to `wire.jsonl`. `[token_counting] strategy` (`measured+estimated` default, `measured`, `estimated`) chooses how the reported context size is derived; its `token_counting.*` records are listed below.
 
-The terminal UI keeps the native prompt. RimZ observes it and routes the user to the pane; ordinary messaging continues through pane send.
+Kimi Code records tokens and no per-request price.
 
-Approval hooks correlate on `tool_call_id`. `PermissionRequest` carries a structured `display` object and the original tool input; `PermissionResult` closes it with `approved`, `rejected`, `cancelled`, or `error`. The durable `permission.record_approval_result` is a restart backstop for completed approvals, not open-wait truth.
+### Other record types
 
-`AskUserQuestion` is a tool whose protocol request supports one to four questions. Each question has text, optional header, two to four options, and optional multi-select; the RPC layer assigns stable ids and adds the free-text choice. The question protocol accepts single, multi, other, multi-with-other, and skipped answers. Command hooks expose the original tool input rather than a separate `QuestionRequest` event, so a stock-pane adapter opens the foreground question wait from `PreToolUse` for `AskUserQuestion` and closes it from the correlated post-tool hook, interrupt, or turn/session end. `background: true` registers a background question task and returns immediately, so it must not park the main row.
+The manifest indexes 60 durable types. The rest, one line each: `cron.add`, `cron.cursor`, `cron.delete` (scheduled prompts); `file_history.checkpoint`, `file_history.tracked` (turn file history); `goal.create`, `goal.update`, `goal.clear` (goal mode); `interruptionReminder.recorded`; `llm.tools_snapshot` (content-addressed tool schemas); `mcp.tools_discovered`; `plugin.session_start`; `prompt.accepted`, `prompt.steered`, `prompt.completed`, `prompt.aborted` (prompt queue resolution); `runtime.set_binding`; `swarm_mode.enter`, `swarm_mode.exit`; `task.waitDelivered`; `token_counting.measured`, `.rebased`, `.truncated`, `.turn_recorded`; `tools.register_user_tool`, `tools.unregister_user_tool`, `tools.set_active_tools`, `tools.reset_active_tools`, `tools.update_store`; `tower_mode.enter`, `tower_mode.exit`.
 
-Plan mode writes plans under `agents/main/plans/<id>.md`. `ExitPlanMode` uses the normal approval runtime and always asks outside auto mode, including YOLO mode. Classify its `PermissionRequest` as `PlanApproval`; use its input/plan id to read the plan file when the body is needed.
+## Approvals, questions, and plan mode
 
-## Native-event mapping
+The terminal UI renders every prompt natively. Hooks observe approvals; questions have no hook of their own; and the durable `interaction.*` records cover both.
 
-| Kimi observation | RimZ signal or enrichment | Note |
+### Permission modes
+
+| Mode | UI name | Behaviour |
 | --- | --- | --- |
-| `SessionStart` | `registered` | bind session and record tail |
-| `UserPromptSubmit` | `turn_started` | prompt is an array of content parts |
-| `PostToolUse` / `PostToolUseFailure` | `tool_used` | successful `Write` and `Edit` prove file editing; failure clears a native wait without claiming mutation |
-| `PermissionRequest` | `awaiting_input(Permission)` | specialize `ExitPlanMode` to plan approval |
-| `PreToolUse(AskUserQuestion)` | `awaiting_input(Question)` | close on correlated post-tool event |
-| `PermissionResult` / post-tool result | clear wait | does not end the turn |
-| `Stop` | clean `turn_ended` | neutral hook output preserves the native stop |
-| `StopFailure` | errored `turn_ended` | keep error name as enrichment, not a closed enum |
-| `Interrupt` | interrupted turn marker | projection settles the row to idle |
-| `PreCompact` / `PostCompact` | `compacting` / `compaction_ended` | trigger is `manual` or `auto` |
-| `SessionEnd` | `ended` | pane/process liveness remains the backstop |
-| `usage.record` | model and token enrichment | exact model accompanies every usage record |
-| session agent map and child records | subagent enrichment | hook-only child identity remains partial |
+| `manual` | Always Ask (default) | read-only tools run; editing, shell, and other actions ask |
+| `yolo` | Ask When Needed | routine tool calls run; sensitive files (`.env`, SSH keys), dangerous shell commands, and plan exit still ask; the agent can ask questions |
+| `auto` | Never Ask | every approval is decided automatically, including plan exit; the agent never asks questions |
 
-Kimi Code built-in editing tools are `Write` and `Edit`; the shell tool is `Bash`. The old `WriteFile`, `StrReplaceFile`, and `Shell` names belong to the retired Python CLI.
+Source: [interaction guide](https://moonshotai.github.io/kimi-code/en/guides/interaction.html#the-three-permission-modes). The dangerous-command guard (`[permission] dangerous_command_guard`, `KIMI_CODE_DANGEROUS_COMMAND_GUARD`, on by default) asks before commands such as `shutdown`, `reboot`, or `rm -rf` in `manual` and `yolo` and is inactive in `auto` (`core/agent/permissionPolicy/policies/dangerous-command-ask.ts`). `default_permission_mode` and `default_plan_mode` in `config.toml` set the launch defaults.
 
-## Context, model, tokens, and cost
+### Approvals
 
-`config.update` records the effective model alias, cwd, thinking effort, profile, and system prompt. Separate records carry permission and plan-mode changes. `llm.request` adds the provider, model id, alias, effective thinking/sampling/output controls, and request hashes. `usage.record` stores the model plus the four-way token split. This removes the old adapter's need to price model-less status updates against a guessed default.
+An approval opens when the permission policy resolves a tool call to ask (`requestToolApproval` in `core/agent/toolApproval/toolApprovalService.ts`). Policy-approved, mode-approved, and statically denied calls open nothing and fire no hook. The sequence is:
 
-The live SDK emits partial `agent.status.updated` events with model, context tokens, maximum context tokens, context ratio, plan/swarm/permission modes, and usage totals. That event surface is available to SDK, server, web, and ACP clients; it is not persisted wholesale to the stock pane's agent record. A stock-pane observer derives context from ordered durable step-end, clear, and compaction boundaries; only turn-scoped usage supplies the current-turn token split.
+1. Kimi Code builds the request `{id: "approval_<uuid>", sessionId, agentId, turnId, toolCallId, toolName, action, display}`, where `action` is the tool's description (default `Approve <tool>`) and `display` is a typed rendering of the input (`kind: "generic"` with `summary` and `detail` when the tool supplies none).
+2. It dispatches `PermissionApprovalRequested` (the `PermissionRequest` hook, with `tool_input` added) and writes `interaction.request` with `kind: "approval"`.
+3. On the answer it writes `interaction.resolved`, dispatches `PermissionApprovalResolved` (the `PermissionResult` hook) with `decision` `approved`, `rejected`, or `cancelled`, optional `scope: "session"` (approve for the session), `feedback`, and `selected_label`, and writes `permission.record_approval_result`.
+4. If the request throws, `PermissionResult` fires with `decision: "error"` and `error`.
 
-Kimi Code records tokens but no universal per-request USD price. The server protocol's `SessionUsage.total_cost_usd` currently has no local pricing source for a stock session. Walk records in order so each usage row inherits the latest `llm.request` provider and canonical model when its own model is an alias. Price only an identified model; an unknown alias remains unknown at zero dollars rather than inheriting a guessed Kimi model. Keep Kimi subscription quota units distinct from billable tokens and dollars.
+A user cancellation of the turn throws before step 3, so a cancelled turn can leave a `PermissionRequest` without a `PermissionResult`; the turn's `Interrupt` hook and `turn.ended` record close it. Open interactions for a turn are resolved as cancelled when the turn ends (`cancelInteractionsForTurn` in `core/agent/interaction/interactionWiring.ts`).
 
-## Subagents and background work
+### Questions
 
-The built-in main profile exposes `coder`, `explore`, and `plan` subagents. A generated child id such as `agent-0` gets its own home and `wire.jsonl`. `state.json.agents` carries each child's parent id and type; the live event protocol adds exact `subagent.spawned`, `.started`, `.suspended`, `.completed`, and `.failed` events with profile, parent tool-call ids, background flag, result, usage, and context tokens where applicable.
+`AskUserQuestion` is a tool (`core/agent/tools/ask-user-question/ask-user-question.ts`). Its input:
 
-Command hooks expose only profile name plus truncated prompt/response. Therefore hook-only child rows remain partial until the adapter joins the session agent map and child logs. Parent activity can update immediately from the hooks.
+| Field | Type | Constraint |
+| --- | --- | --- |
+| `questions` | array | 1 to 4 items; question texts unique |
+| `questions[].question` | string | required |
+| `questions[].header` | string | default `""` |
+| `questions[].options` | array of `{label, description}` | 2 to 4; labels unique within the question; the UI adds an "Other" choice |
+| `questions[].multi_select` | boolean | default `false` |
+| `background` | boolean | default `false` |
 
-Background task records live under `<session>/tasks/`. Statuses are `running`, `completed`, `failed`, `timed_out`, `killed`, or `lost`. `Notification` hooks announce terminal background status when the result is delivered into context. Preserve a parent as parked only after joining task state; a normal `Stop` hook does not carry the active-task set.
+A foreground question shows through the interaction runtime and writes `interaction.request` with `kind: "question"`; its hook footprint is `PreToolUse` and then `PostToolUse` or `PostToolUseFailure` for `AskUserQuestion`. `background: true` starts a background task of kind `question` (`TaskStarted` fires), returns a task id at once, and delivers the answer to the agent in a later turn. In `auto` mode the agent does not ask, and a dismissed question counts as no answer.
 
-## Authentication, account, and quota
+### Plan mode
 
-`kimi login` and `/login` use the RFC 8628 device-code flow. The default managed provider is `managed:kimi-code`; its token is stored at `$KIMI_CODE_HOME/credentials/kimi-code.json`, with directory mode 0700 and file mode 0600. Writes use temp file, fsync, and rename. The JSON contains access and refresh tokens, numeric epoch-seconds expiry, scope, token type, and original lifetime. A refresh token still proves a managed login after access expiry, while a read-only usage client sends the access token only when `expires_at` remains safely in the future and leaves refresh to Kimi Code. Never log, render, hash, or copy token values.
+Plan mode writes plan files at `agents/<agent-id>/plans/<id>.md` (`planService.ts`) and records `plan_mode.*` and `plan.revision`. `ExitPlanMode` goes through the approval runtime, so it fires `PermissionRequest` with `tool_name: "ExitPlanMode"` in `manual` and `yolo` modes; in `auto` mode the exit is approved automatically and marked auto-approved in the tool result and transcript.
 
-For the managed provider, `/usage` calls:
+## Subagents and background tasks
+
+The built-in subagent profiles are `coder` (the default), `explore` (read-only), and `plan` (no shell); none of them can dispatch further subagents ([agents](https://moonshotai.github.io/kimi-code/en/customization/agents.html)). A spawned child gets an id such as `agent-0`, a `state.json.agents` entry with `type: "sub"` and its `parentAgentId`, and its own `agents/<agent-id>/wire.jsonl`. A `[secondary_model]` pool can bind subagents to a different model, so a child's model comes from its own `config.update` and `llm.request` records. Subagent runs time out after `[subagent] timeout_ms` (`KIMI_SUBAGENT_TIMEOUT_MS`, default 2 hours; no timeout in prompt mode); `AgentSwarm` children use `[swarm] timeout_ms`.
+
+The hooks name the child's profile and carry no child id, parent tool-call id, or background flag. The live event bus carries the exact identity: `subagent.spawned` (with `callerAgentId`, `description`, `swarmIndex`, `runInBackground`, `model`, `thinkingEffort`, `taskId`), `subagent.started`, `subagent.suspended`, `subagent.completed` (`resultSummary`, `usage`, `contextTokens`), and `subagent.failed` (`error`), keyed by `subagentId` (`core/session/subagent/mirrorAgentRun.ts`). These events reach SDK, server, and ACP clients and are not written to `wire.jsonl`.
+
+Background work (shell commands, background subagents, background questions) is tracked as tasks. A task has a kind (`agent`, `process`, or `question`) and a status of `running`, `completed`, `failed`, `timed_out`, `killed`, or `lost` (`core/agent/task/types.ts`). Task records persist as `agents/<agent-id>/tasks/<task_id>.json` with output at `tasks/<task_id>/output.log`, and the owning agent's log records `task.started` and `task.terminated`. `TaskStarted` fires on start, and a terminal status delivered into context fires `Notification` with a `task.*` type. A foreground shell command that reaches its timeout moves to the background (`[background] bash_auto_background_on_timeout`, default on). A resumed session warns the model that tasks from the previous process may still be running.
+
+## Authentication and managed usage
+
+`kimi login`, `/login`, and `kimi acp --login` run the RFC 8628 device-code flow for the managed provider `managed:kimi-code`. Kimi Code has two regions, each a bundle of endpoints (`KIMI_REGION_PROFILES` in `oauth/region.ts`):
+
+| Region | OAuth host | Managed API base |
+| --- | --- | --- |
+| `mainland-cn` (kimi.com, default) | `https://auth.kimi.com` | `https://api.kimi.com/coding/v1` |
+| `global` (kimi.ai) | `https://auth.kimi.ai` | `https://api.kimi.ai/coding/v1` |
+
+`resolveKimiRegion` picks the first match: `KIMI_CODE_OAUTH_HOST` or `KIMI_OAUTH_HOST`; the `oauthHost` persisted in the managed provider's OAuth reference in `config.toml`; a default-slot reference (mainland); the `$KIMI_CODE_HOME/region` marker written by the installer (`mainland-cn` or `global`, read only before the first login); then `mainland-cn`. `KIMI_CODE_BASE_URL` overrides the managed API base.
+
+### Credentials
+
+Login writes the provider entry `[providers."managed:kimi-code"]` (`type = "kimi"`, the base URL, and an `oauth` reference with `storage` and `key`) and stores the token in `credentials/` (`applyManagedKimiCodeConfig` and `resolveKimiCodeOAuthKey` in `oauth/managed-kimi-code.ts`):
+
+- The default slot, used when the OAuth host is `https://auth.kimi.com` and the base is `https://api.kimi.com/coding/v1`, has key `oauth/kimi-code` and file `credentials/kimi-code.json`.
+- Any other host and base pair, including a `global` login, has key `oauth/kimi-code-env-<16 hex>`, where the hex is the SHA-256 prefix of `{"oauthHost","baseUrl"}`, and file `credentials/kimi-code-env-<16 hex>.json`.
+
+`FileTokenStorage` (`oauth/storage.ts`) creates the directory with mode 0700 and each file with mode 0600, writing to a temp file, fsyncing, and renaming. The file holds `access_token`, `refresh_token`, `expires_at` (epoch seconds), `scope`, `token_type`, and `expires_in`. Kimi Code refreshes the access token itself.
+
+### Usage endpoint
+
+`/usage` and the server's `GET /api/v1/oauth/usage` call the managed base's `/usages` with the stored access token (`fetchManagedUsage` in `oauth/managed-usage.ts`, 8 s timeout):
 
 ```text
-GET https://api.kimi.com/coding/v1/usages
-Authorization: Bearer <resolved OAuth token>
+GET https://api.kimi.com/coding/v1/usages        # api.kimi.ai for a global login
+Authorization: Bearer <access token>
 Accept: application/json
 ```
 
-The tolerant parser accepts a summary at `usage`, limit rows at `limits[]` or `limits[].detail`, and reset spelling variants. It also accepts `boosterWallet`: `balance.type == "BOOSTER"`, fixed-point balance and remaining amounts, monthly limit enablement, monthly limit/used money objects, and currency. Preserve source units and currencies; do not infer USD when the response declares another currency. HTTP 401 or 403 is an auth failure, 404 means usage is unavailable for the provider, and timeouts/network failures are enrichment failures.
+HTTP 401 is an authorization failure and 404 means the endpoint is unavailable for the account. The payload, with numbers as decimal strings:
 
-The OAuth bearer's recipient is fixed to `api.kimi.com`; model-provider and managed-base overrides are model routing, not authority to receive this credential. Follow no redirects and refuse a non-official effective managed base before loading the token.
+```json
+{
+  "usage": {"used": "40", "limit": "1000", "resetTime": "2026-08-03T05:20:51Z"},
+  "limits": [
+    {"window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"},
+     "detail": {"used": "1", "limit": "100", "resetTime": "2026-08-01T10:00:00Z"}}
+  ],
+  "boosterWallet": {
+    "balance": {"type": "BOOSTER", "amount": "500000000", "amountLeft": "125000000"},
+    "monthlyChargeLimitEnabled": true,
+    "monthlyChargeLimit": {"priceInCents": "500", "currency": "USD"},
+    "monthlyUsed": {"priceInCents": "125", "currency": "USD"}
+  }
+}
+```
 
-The top-level `usage` object is Kimi Code's weekly bucket. Detail rows describe duration as `window.duration` plus `TIME_UNIT_SECOND`, `TIME_UNIT_MINUTE`, `TIME_UNIT_HOUR`, or `TIME_UNIT_DAY`; published payloads may retain the corresponding lowercase literal aliases. Map the enum explicitly, including 300 `TIME_UNIT_MINUTE` as five hours, and preserve the provider reset rather than deriving one.
+| Field | Meaning |
+| --- | --- |
+| `usage` | the plan's weekly bucket; the payload carries no window for it |
+| `limits[].window` | `duration` plus `timeUnit` of `TIME_UNIT_MINUTE`, `TIME_UNIT_HOUR`, `TIME_UNIT_DAY`, or `TIME_UNIT_WEEK`; the five-hour limit arrives as 300 minutes |
+| `limits[].detail`, `usage` | `used`, `limit`, `resetTime` (ISO 8601), optional `name` |
+| `boosterWallet.balance` | `type: "BOOSTER"`; `amount` and `amountLeft` are fixed point at 1,000,000 units per cent |
+| `boosterWallet.monthlyChargeLimit`, `.monthlyUsed` | `priceInCents` and ISO `currency`; a cap of 0 means unlimited |
 
-## Headless and supervised runs
+`parseManagedUsagePayload` ignores a limit row whose `timeUnit` is outside those four and falls back to USD when no currency is present.
 
-Use prompt mode for one supervised turn:
+## Prompt mode
+
+`kimi -p "<prompt>"` runs one prompt without the terminal UI:
 
 ```sh
 kimi -p "Run the focused checks" --output-format stream-json
 ```
 
-Text mode sends assistant text to stdout and thinking/tool progress to stderr. Stream JSON emits assistant messages, tool calls, and tool results as one JSON object per stdout line; thinking and progress remain on stderr. Prompt mode applies auto permission, so it never opens human approvals or questions and rejects explicit `--yolo`, `--auto`, and `--plan` flags.
+Prompt mode applies the `auto` permission policy, so it opens no approvals or questions; static deny rules still apply. In `text` format, assistant text goes to stdout, and thinking, tool progress, and the resume notice go to stderr. In `stream-json` format, stdout carries one JSON object per line (`cli/prompt-render.ts`):
 
-The CLI does not publish the old Python `0`/`1`/`75` exit-code contract. Normal success is zero; startup, auth, provider, and turn failures follow the Node CLI error path, while goal mode additionally maps blocked or paused terminal goals to distinct non-zero codes. Treat exact failure codes beyond success as release-sensitive and live-test them before promising a supervised-run mapping.
+| Line | Shape |
+| --- | --- |
+| version (first line) | `{"role":"meta","type":"system.version","version":"0.42.0"}`; `text` format writes `kimi version <v>` to stderr instead |
+| assistant | `{"role":"assistant","content":"...","tool_calls":[{"type":"function","id","function":{"name","arguments"}}]}`; hook result text is also written as an assistant line |
+| tool result | `{"role":"tool","tool_call_id":"...","content":"..."}` |
+| retry | `{"role":"meta","type":"turn.step.retrying","failed_attempt","next_attempt","max_attempts","delay_ms","error_name","error_message","status_code"}` |
+| resume hint | `{"role":"meta","type":"session.resume_hint","session_id","command":"kimi -r <id>","content"}` |
 
-## Resume, clear, and fork
+Thinking is not written to the JSON stream, and tool progress stays on stderr. When the main turn ends with background tasks or subagents pending, `[background] print_background_mode` decides what happens (env `KIMI_CODE_BACKGROUND_PRINT_BACKGROUND_MODE`, [config files](https://moonshotai.github.io/kimi-code/en/configuration/config-files.html#background)): `steer` (default) feeds each completion back as a new turn until none are pending, `drain` waits for them without feeding results back, and `exit` exits at once.
 
-`kimi --continue` resumes the newest indexed session for the current directory. `kimi --session <id>` resumes an exact id; bare `--session` opens the selector. The hidden `--resume` alias is equivalent.
+Exit codes: `0` on success. A failed, cancelled, or hook-blocked turn, a startup, auth, or provider error, or an option conflict exits `1` after writing the error to stderr (`main.ts`). A goal created with `kimi -p "/goal ..."` exits `0` when complete, `3` when blocked, and `6` when paused (`GOAL_EXIT_CODES` in `cli/goal-prompt.ts`).
 
-`/new` and its `/clear` alias create and switch to a new session. `/sessions` and `/resume` switch to an existing session. `/compact` compacts the current agent context. `/fork` copies the session into a new id, drops the TUI upcoming-goal queue, rewrites agent home paths, and appends fork markers to every agent record. There is no documented non-interactive fork flag.
+## Resume and fork
 
-## SDK, local server, and ACP index
+`kimi --continue` resumes the working directory's most recent session, `kimi --session <id>` (or `-r <id>`) resumes an exact id, and a bare `--session` opens the picker. Inside the terminal UI, `/new` (alias `/clear`) creates and switches to a new session, `/sessions` (alias `/resume`) switches to an existing one, `/compact` compacts the current context, and `/undo` rewinds recent turns.
 
-The Node SDK exposes exact live `Event` objects stamped with `agentId` and `sessionId`, structured approval and question handlers, session creation/resume/fork, and context/status APIs. It is the richest integration surface when RimZ owns the process, but it is not an observation channel for an independently running stock TUI.
+A fork copies a session into a new id and leaves the current session active: `/fork` in the terminal UI prints a `kimi --resume <id>` command, and `kimi fork [sessionId]` does the same from a shell and prints `Forked to <id>`. The copy excludes `state.json`, `logs/`, and `upcoming-goals.json`, writes a new `state.json` with `forkedFrom`, and appends a `forked` record to each agent log. Forking a session whose turn is running fails with an error. ACP clients fork through `session/fork`.
 
-`kimi server` exposes authenticated REST and WebSocket APIs plus the web UI. Its session status vocabulary is `idle`, `running`, `awaiting_approval`, `awaiting_question`, and `aborted`. The default server is loopback-only and bearer-authenticated. `--dangerous-bypass-auth` grants filesystem, shell, and session access to every reachable client and is outside a safe adapter path.
+## Other hosts: SDK, `kimi web`, and ACP
 
-`kimi acp` exposes Agent Client Protocol over stdio for IDE clients. It maps approvals, questions, sessions, modes, and tool events into ACP. Like the local server, it is an alternate host for a session rather than a passive feed from the stock pane.
+These surfaces host a session inside Kimi Code's engine for a client; none of them observes a separately running terminal UI.
 
-## Implementation checklist and live verification gaps
+- The Node SDK (`packages/node-sdk`, `@moonshot-ai/kimi-code-sdk`) creates, resumes, and forks sessions and exposes the live event bus (including `agent.status.updated` and `subagent.*`), approval and question handlers, and context and status APIs. There is no published SDK reference page.
+- `kimi web` runs the local REST and WebSocket server (`packages/kap-server`) and opens the web UI. It binds `127.0.0.1:58627` by default, taking the next free port when busy, and requires the bearer token printed at startup (`kimi web rotate-token` replaces it). `--host` binds all interfaces or a named host; `--dangerous-bypass-auth` turns off bearer authentication on every route. The session list filters on `activity.status` values `running`, `approval`, `question`, `failed`, and `idle`; the `event.session.status_changed` event keeps the legacy values `idle`, `running`, `awaiting_approval`, `awaiting_question`, and `aborted` ([server API](https://moonshotai.github.io/kimi-code/en/reference/server-api.html)).
+- `kimi acp` speaks Agent Client Protocol over stdio, with `loadSession`, `session/list`, `session/resume`, `session/close`, `session/delete`, and `session/fork`, and maps approvals, questions, modes, and tool events into ACP ([kimi acp](https://moonshotai.github.io/kimi-code/en/reference/kimi-acp.html)).
 
-1. Gate the Kimi kind on a tested `MoonshotAI/kimi-code` version and refuse the retired Python protocol with the migration fix.
-2. Install the canonical hook set into `$KIMI_CODE_HOME/config.toml`, preserve unrelated hooks, and include executable fields in the trust hash.
-3. Parse every hook into a Kimi-native enum before mapping it to `AgentLifecycleObservation`; keep neutral stdout empty.
-4. Resolve the exact session directory from `KIMI_CODE_HOME`, parsed `session_index.jsonl`, hook cwd, and hook session id.
-5. Tail `agents/main/wire.jsonl` with typed top-level agent records, newline safety, rewrite detection, and metadata-version gating.
-6. Use `PermissionRequest` and `PermissionResult` for approval waits; correlate question waits through `AskUserQuestion` tool hooks.
-7. Parse `config.update`, `usage.record`, `llm.request`, and loop-event records for model, context, token, tool, and transcript enrichment.
-8. Join `state.json.agents` with child records before declaring exact subagent rows; join `tasks/` before declaring background parking.
-9. Probe OAuth/account state without exposing credentials and treat managed quota/Booster data as best-effort enrichment.
-10. Implement `-p --output-format stream-json` with stdout/stderr separation and release-pinned exit-code tests.
-11. Golden-test hook stdin/stdout, record metadata and samples, approval resolution, session switching, trust diffs, and malformed/unknown fields.
+## Upstream scope
 
-Before declaring the new adapter complete, live-verify:
-
-- the minimum supported Kimi Code version and agent-record protocol version;
-- hook ordering for normal stop, provider failure, user interrupt, blocked stop continuation, and session switching;
-- approval and question ordering for approve, approve-for-session, reject, dismiss, and interrupt;
-- exact `state.json`, `session_index.jsonl`, and child-agent behavior across `/new`, `/sessions`, `/fork`, and resume;
-- record rewrite/truncation behavior across undo, fork, and compaction;
-- model/context/token attribution after `--model`, `/model`, provider refresh, and resume;
-- background task and subagent status across foreground, background, timeout, failure, and process exit;
-- managed usage and Booster payloads for each plan RimZ renders;
-- prompt-mode error and goal exit codes on the minimum and newest supported releases;
-- protocol collision handling, so a legacy `MoonshotAI/kimi-cli` executable is refused with a migration message instead of silently misparsed.
+Kimi Code publishes no hook for questions, no agent id on most hooks, and no durable `agent.status.updated` snapshot; a stock terminal session exposes identity for subagents only through `state.json.agents` and the child logs. Goal mode, tower mode, swarm mode, cron, and Remote Control are shipped surfaces this page indexes without depth. Which surfaces RimZ leaves unwired, and why, is in the Kimi adapter's [Known gaps](../../internals/agents/adapter_kimi.md#known-gaps).
