@@ -437,7 +437,7 @@ The dial has four built-in modes: `low`, `medium`, `high`, and `ultra`. Each mod
 | `--features <value>` | `fast` (faster serving at a premium) or `pro` (GPT-5.6 Pro, OpenAI API only) |
 | `--fast` | alias for `--features fast` |
 
-The baseline `amp --help` lists no `--effort` flag, and no docs page read for this baseline documents one. Whether the CLI accepts `--effort` is unverified.
+The baseline `amp --help` lists no `--effort` flag, and no docs page read for this baseline documents one. The baseline CLI rejects it: `amp --effort high version` prints `error: unknown option '--effort'` and exits 1 (checked 2026-09-14).
 
 The modes `smart`, `deep`, and `rush` are deprecated. Existing threads in them keep working; new threads spawned from them start in the replacement mode: `rush` becomes `low`, `smart` and `deep` become `medium`.
 
@@ -489,7 +489,7 @@ One Amp process can host several threads: `amp.activeThread` names the focused t
 
 ## Supervised runs and stream JSON
 
-`amp -x, --execute [message]` runs one turn without the TUI. The prompt comes from the argument or stdin, only the last assistant message is printed, and Amp exits. Redirecting stdout turns execute mode on. Execute mode archives a new thread when it finishes; `--no-archive-after-execute` leaves it unarchived (the flag applies to `amp review` too).
+`amp -x, --execute [message]` runs one turn without the TUI. The prompt comes from the argument or stdin, only the last assistant message is printed, and Amp exits. Redirecting stdout turns execute mode on. Execute mode archives a new thread when it finishes; `--no-archive-after-execute` leaves it unarchived (the flag applies to `amp review` too). The baseline CLI refuses to continue an archived thread: `amp threads continue <T-id> -x …` prints `This thread is archived and cannot be continued.` (checked 2026-09-14).
 
 ```sh
 amp --execute "prompt" --stream-json --plugin-ready-timeout 30
@@ -700,10 +700,10 @@ Neither the docs nor the baseline binary settle these. Each needs a capture agai
 2. How `tool.call` results from several plugins compose, and what a handler exception does.
 3. Whether `awaiting-approval` brackets a plugin's `ctx.ui.confirm` and a permission rule's `ask` the same way, and its order relative to `tool.call`.
 4. Whether built-in subagent work fires plugin events, and under which thread ID.
-5. Which process runs a system plugin, and so whether a plugin's PID identifies the Amp CLI; no payload carries a PID or pane.
+5. *(Settled 2026-09-14 on the baseline build.)* A system plugin runs in a child process, `amp run <tmp>/amp-plugin-runtime-*/plugin-runtime.ts`, whose parent is the Amp CLI; the plugin's `process.pid` is that runtime and `process.ppid` is the CLI. No payload carries a PID or pane.
 6. Execute-mode exit codes for success, error, cancellation, permission denial, and plugin-readiness expiry.
 7. The schemas of `amp usage`, `amp threads usage`, `amp threads export`, and `amp threads raw` output.
-8. Whether the CLI accepts `--effort`.
-9. Whether `amp threads continue` resumes a thread that execute mode archived.
+8. *(Settled 2026-09-14: the baseline CLI rejects `--effort` as an unknown option.)*
+9. *(Settled 2026-09-14: it does not; the CLI refuses archived threads.)*
 10. How the TUI changes the focused thread since the sidebar's removal, and whether a focus change still fires `session.start`.
 11. Whether the baseline build still writes the [private thread cache](#private-local-thread-cache).
