@@ -250,7 +250,7 @@ These commands touch RimZ's own state, never your project files. Each one says e
 
 ### Start a room clean
 
-To skip recovering prior agents when a room is reborn, pass the global `--no-resume`. The room comes up empty instead of seeding the fleet you left; your durable records stay untouched, so a later start without the flag can still bring the agents back.
+To skip recovering prior agents when a room is reborn, pass `--no-resume` to `rimz`, `rimz start`, or `rimz attach`. The room comes up empty instead of seeding the fleet you left; your durable records stay untouched, so a later start without the flag can still bring the agents back.
 
 ```sh
 rimz --no-resume    # come up empty: skip recovering prior agents
