@@ -16,9 +16,9 @@
 //!    that same projection early.
 //!
 //! Lookups are pure and network-free: [`cached_book`] memoizes the merged
-//! embedded and on-disk cache data by file stamp, and [`PriceBook::price`]
+//! embedded and on-disk cache data by file stamp, and `PriceBook::price`
 //! resolves a model by exact match then a boundary-aware fuzzy scan. The only
-//! network is the gated refresh in [`load_for_spending`]: a weekly refresh,
+//! network is the gated refresh in `load_for_spending`: a weekly refresh,
 //! plus an escalating unknown-model chase when a transcript names a priceable
 //! model the current book cannot resolve.
 
@@ -37,7 +37,7 @@ use serde::{Deserialize, Serialize};
 
 use super::spending::is_priceable_model_name;
 
-pub(crate) const CACHE_CREATE_1H_INPUT_MULTIPLIER: f64 = 2.0;
+const CACHE_CREATE_1H_INPUT_MULTIPLIER: f64 = 2.0;
 const DEFAULT_LONG_CONTEXT_THRESHOLD_TOKENS: u64 = 200_000;
 
 /// The token counts one priced request consumed. Providers fill the fields
@@ -62,7 +62,7 @@ pub struct TokenSplit {
 
 impl TokenSplit {
     /// The uncached case: fresh input and output only.
-    pub fn new(input: u64, output: u64) -> Self {
+    pub(super) fn new(input: u64, output: u64) -> Self {
         Self {
             input,
             output,
@@ -71,7 +71,7 @@ impl TokenSplit {
     }
 
     /// Add 5-minute cache-creation and cache-read counts.
-    pub fn cached(self, cache_write: u64, cache_read: u64) -> Self {
+    pub(super) fn cached(self, cache_write: u64, cache_read: u64) -> Self {
         Self {
             cache_write,
             cache_read,
@@ -80,13 +80,13 @@ impl TokenSplit {
     }
 
     /// Mark the turn as fast/priority, applying the model's fast multiplier.
-    pub fn fast(self, fast: bool) -> Self {
+    pub(super) fn fast(self, fast: bool) -> Self {
         Self { fast, ..self }
     }
 
     /// The request consumed no tokens at all. The tier flags are not counts, so
     /// a `fast` turn with empty usage is still empty.
-    pub fn is_empty(&self) -> bool {
+    pub(super) fn is_empty(&self) -> bool {
         self.input == 0
             && self.output == 0
             && self.cache_write == 0
@@ -97,7 +97,7 @@ impl TokenSplit {
 
 /// Per-token costs in USD for one model.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Pricing {
+pub(super) struct Pricing {
     /// Cost per (uncached) input token.
     pub input: f64,
     /// Cost per output token (output already includes reasoning tokens).
@@ -142,7 +142,7 @@ pub struct Pricing {
 }
 
 impl Pricing {
-    pub(crate) const fn empty() -> Self {
+    pub(super) const fn empty() -> Self {
         Self {
             input: 0.0,
             output: 0.0,
@@ -160,7 +160,7 @@ impl Pricing {
         }
     }
 
-    pub(crate) const fn from_base_rates(
+    pub(super) const fn from_base_rates(
         input: f64,
         output: f64,
         cache_create: Option<f64>,
@@ -182,7 +182,7 @@ impl Pricing {
         }
     }
 
-    pub(crate) fn cost_of(self, split: TokenSplit) -> f64 {
+    pub(super) fn cost_of(self, split: TokenSplit) -> f64 {
         let TokenSplit {
             input,
             output,
@@ -227,7 +227,7 @@ impl Pricing {
 
     /// Price session-cumulative token totals at base rates. A session sum loses
     /// the per-request boundaries needed to apply long-context tiers exactly.
-    pub(crate) fn session_cost(
+    pub(super) fn session_cost(
         self,
         input: u64,
         output: u64,
@@ -279,7 +279,7 @@ impl PriceBook {
         }
     }
 
-    pub(crate) fn derive_with_exact_overrides(
+    pub(super) fn derive_with_exact_overrides(
         &self,
         mut map: impl FnMut(Pricing) -> Pricing,
         overrides: impl IntoIterator<Item = (String, Pricing)>,
@@ -299,7 +299,7 @@ impl PriceBook {
         }
     }
 
-    pub(crate) fn identity(&self) -> Arc<()> {
+    pub(super) fn identity(&self) -> Arc<()> {
         Arc::clone(&self.identity)
     }
 
@@ -336,7 +336,7 @@ impl PriceBook {
     }
 
     /// Resolve the price for `model`: exact match, then a longest-key fuzzy scan.
-    pub fn price(&self, model: &str) -> Option<Pricing> {
+    pub(super) fn price(&self, model: &str) -> Option<Pricing> {
         let key = model.trim();
         if let Some(price) = self.entries.get(key) {
             return Some(*price);
@@ -365,7 +365,7 @@ impl PriceBook {
     /// Resolve only an exact stored model id. Capacity and locally estimated
     /// spend use this conservative path so a related model cannot lend another
     /// selector its limits or rates.
-    pub fn exact_price(&self, model: &str) -> Option<Pricing> {
+    pub(super) fn exact_price(&self, model: &str) -> Option<Pricing> {
         self.entries.get(model.trim()).copied()
     }
 
@@ -397,7 +397,7 @@ impl PriceBook {
 /// snapshot — the returned book is always usable.
 ///
 /// `cache_path` is the producer's persistent shared `pricing-cache.json`.
-pub fn load_for_spending(cache_path: &Path, unknown_models: &BTreeSet<String>) -> PriceBook {
+pub(super) fn load_for_spending(cache_path: &Path, unknown_models: &BTreeSet<String>) -> PriceBook {
     let mut cache = read_cache(cache_path);
     let mut book = PriceBook::assembled(&cache);
     let pending = unpriced_subset(&book, unknown_models);
@@ -548,7 +548,7 @@ impl Default for PricingCache {
     }
 }
 
-pub(crate) fn tiered_cost(tokens: u64, base: f64, above: Option<f64>) -> f64 {
+fn tiered_cost(tokens: u64, base: f64, above: Option<f64>) -> f64 {
     if tokens == 0 {
         return 0.0;
     }
